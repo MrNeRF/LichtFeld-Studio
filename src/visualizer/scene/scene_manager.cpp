@@ -9,7 +9,9 @@
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/mesh_data.hpp"
+#include "core/native_fs.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
 #include "core/scene_merge.hpp"
@@ -1027,7 +1029,7 @@ namespace lfs::vis {
                 }
             }
 
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             state::SceneLoaded::Type file_type = state::SceneLoaded::Type::PLY;
             if (ext == ".sog" || lfs::io::is_ssog_path(path)) {
@@ -1343,7 +1345,7 @@ namespace lfs::vis {
             }
 
             // RAD assets always enter LOD mode; availability still reflects tree presence.
-            auto add_ext = path.extension().string();
+            auto add_ext = lfs::core::path_to_utf8(path.extension());
             std::transform(add_ext.begin(), add_ext.end(), add_ext.begin(), ::tolower);
             const auto* splat_for_cropbox = scene_.getNodeById(node_id);
             if (splat_for_cropbox) {
@@ -1752,6 +1754,10 @@ namespace lfs::vis {
             (removed_type == core::NodeType::CROPBOX || removed_type == core::NodeType::ELLIPSOID) &&
             selection_.isNodeSelected(id);
         bool removes_camera_nodes = false;
+        bool removes_scene_model_resources =
+            node_to_remove->type == core::NodeType::SPLAT ||
+            node_to_remove->type == core::NodeType::POINTCLOUD;
+        bool removes_mesh_nodes = node_to_remove->type == core::NodeType::MESH;
         std::vector<core::NodeId> ids_to_deselect;
         std::vector<core::Uuid> uuids_to_remove;
         const core::Uuid removed_uuid = node_to_remove->uuid;
@@ -1761,6 +1767,10 @@ namespace lfs::vis {
                 if (const auto* node = scene_.getNodeById(id)) {
                     uuids_to_remove.push_back(node->uuid);
                     removes_camera_nodes = removes_camera_nodes || node->type == core::NodeType::CAMERA;
+                    removes_scene_model_resources = removes_scene_model_resources ||
+                                                    node->type == core::NodeType::SPLAT ||
+                                                    node->type == core::NodeType::POINTCLOUD;
+                    removes_mesh_nodes = removes_mesh_nodes || node->type == core::NodeType::MESH;
                     for (const core::NodeId child_id : node->children) {
                         collect(child_id);
                     }
@@ -1773,9 +1783,15 @@ namespace lfs::vis {
             removes_camera_nodes = node_to_remove->type == core::NodeType::CAMERA;
         }
 
-        drainGpuForTensorRelease();
-        if (auto* rendering = services().renderingOrNull()) {
-            rendering->releaseSceneModelResources();
+        if (removes_scene_model_resources) {
+            drainGpuForTensorRelease();
+            if (auto* rendering = services().renderingOrNull()) {
+                rendering->releaseSceneModelResources();
+            }
+        } else if (removes_mesh_nodes) {
+            if (auto* rendering = services().renderingOrNull()) {
+                rendering->clearVulkanMeshFrame();
+            }
         }
 
         auto detached_models = scene_.detachSplatModelsForRemoval(id, keep_children);
@@ -3254,8 +3270,11 @@ namespace lfs::vis {
             // Camera uids key the viewport caches and selection, so an additive import must not reuse them.
             int first_uid = 0;
             for (const auto& camera : scene_.getAllCameras()) {
-                if (camera)
-                    first_uid = std::max(first_uid, camera->uid() + 1);
+                if (!camera)
+                    continue;
+                if (camera->uid() == std::numeric_limits<int>::max())
+                    throw std::overflow_error("No camera uid is left above the scene's highest one");
+                first_uid = std::max(first_uid, camera->uid() + 1);
             }
             auto result = lfs::io::read_colmap_cameras_only(sparse_path, 1.0f, first_uid);
             if (!result) {
@@ -3384,7 +3403,7 @@ namespace lfs::vis {
             if (checkpoint_params.dataset.data_path.empty()) {
                 throw std::runtime_error("Checkpoint has no dataset path and none provided");
             }
-            if (!std::filesystem::exists(checkpoint_params.dataset.data_path)) {
+            if (!lfs::core::native_fs::exists(checkpoint_params.dataset.data_path)) {
                 throw std::runtime_error("Dataset path does not exist: " +
                                          lfs::core::path_to_utf8(checkpoint_params.dataset.data_path));
             }
@@ -3856,7 +3875,7 @@ namespace lfs::vis {
             if (!splat_paths_.empty()) {
                 info.source_path = splat_paths_.begin()->second;
                 // Determine specific type from extension
-                auto ext = info.source_path.extension().string();
+                auto ext = lfs::core::path_to_utf8(info.source_path.extension());
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
                 if (lfs::io::is_ssog_path(info.source_path)) {
                     info.source_type = "SSOG";
@@ -4958,9 +4977,17 @@ namespace lfs::vis {
 
         auto history_options_with_payload = history_options;
         std::vector<core::Uuid> payload_uuids;
-        for (const auto child_id : group->children) {
-            collectSubtreeUuids(scene_, child_id, payload_uuids);
+        for (const core::NodeId id : removal_plan.removed) {
+            const auto* node = scene_.getNodeById(id);
+            if (node && node->type != core::NodeType::SPLAT) {
+                payload_uuids.push_back(node->uuid);
+            }
         }
+        // The splat models are detached and attached to this snapshot after a
+        // successful merge. Cloning them here only duplicates their full payload
+        // during the peak-memory merge operation; on failure the untouched scene
+        // already owns the originals, so this snapshot is discarded. Retain the
+        // small payloads of removed helper nodes, such as crop boxes.
         history_options_with_payload.payload_uuids = std::move(payload_uuids);
         auto history_before = op::SceneGraphPatchEntry::captureStateByIds(
             *this, scene_.getRootNodes(), history_options_with_payload);
@@ -4980,7 +5007,23 @@ namespace lfs::vis {
         };
         collect_splats(group_id, glm::mat4{1.f});
 
-        auto merged_model = core::Scene::mergeSplatsWithTransforms(splats);
+        std::unique_ptr<core::SplatData> merged_model;
+        try {
+            merged_model = core::Scene::mergeSplatsWithTransforms(splats);
+        } catch (const core::MemoryAllocationError& error) {
+            LOG_ERROR("Failed to merge group '{}': {}", group_name, error.what());
+            try {
+                lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+                    .error = core::to_error(error.failure(), LFS_SOURCE_SITE_CURRENT()),
+                    .surface = lfs::ErrorSurface::Toast,
+                    .actions = {},
+                    .operation_id = lfs::OperationId::generate(),
+                });
+            } catch (...) {
+                LOG_ERROR("Unable to publish the merge allocation failure notification");
+            }
+            return {};
+        }
         if (!merged_model) {
             LOG_WARN("Failed to merge group '{}'", group_name);
             return {};
@@ -5410,6 +5453,7 @@ namespace lfs::vis {
     }
 
     bool SceneManager::copySelectedGaussians() {
+        LOG_TIMER("SceneManager::copySelectedGaussians");
         clipboard_.clear();
         gaussian_clipboard_.reset();
         clipboard_kind_ = ClipboardKind::None;
@@ -5432,6 +5476,7 @@ namespace lfs::vis {
         const auto add_selected_chunk = [&](const lfs::core::SplatData& src,
                                             lfs::core::Tensor mask,
                                             const glm::mat4& world_transform) {
+            LOG_TIMER("SceneManager::copySelectedGaussians.prepare_chunk");
             if (mask.numel() != static_cast<size_t>(src.size()))
                 return;
 
@@ -5442,8 +5487,12 @@ namespace lfs::vis {
             if (mask.count_nonzero() == 0)
                 return;
 
-            auto extracted = std::make_unique<lfs::core::SplatData>(
-                lfs::core::extract_by_mask(src, mask));
+            std::unique_ptr<lfs::core::SplatData> extracted;
+            {
+                LOG_TIMER("SceneManager::copySelectedGaussians.extract");
+                extracted = std::make_unique<lfs::core::SplatData>(
+                    lfs::core::extract_by_mask(src, mask));
+            }
             if (extracted->size() == 0)
                 return;
 
@@ -5505,11 +5554,27 @@ namespace lfs::vis {
         if (chunks_with_transforms.empty())
             return false;
 
-        auto merged = lfs::core::Scene::mergeSplatsWithTransforms(chunks_with_transforms);
-        if (!merged || merged->size() == 0)
+        const auto& [single_chunk, single_transform] = chunks_with_transforms.front();
+        const bool can_copy_single_chunk =
+            chunks_with_transforms.size() == 1 && single_transform == glm::mat4{1.0f} &&
+            (!single_chunk->lod_tree || !single_chunk->lod_tree->has_tree());
+
+        std::unique_ptr<lfs::core::SplatData> merged;
+        const lfs::core::SplatData* clipboard_source = nullptr;
+        if (can_copy_single_chunk) {
+            clipboard_source = single_chunk;
+        } else {
+            LOG_TIMER("SceneManager::copySelectedGaussians.merge");
+            merged = lfs::core::Scene::mergeSplatsWithTransforms(chunks_with_transforms);
+            clipboard_source = merged.get();
+        }
+        if (!clipboard_source || clipboard_source->size() == 0)
             return false;
 
-        gaussian_clipboard_ = cloneSplatDataToCpu(*merged);
+        {
+            LOG_TIMER("SceneManager::copySelectedGaussians.copy_to_cpu");
+            gaussian_clipboard_ = cloneSplatDataToCpu(*clipboard_source);
+        }
         clipboard_kind_ = ClipboardKind::Gaussians;
 
         LOG_INFO("Copied {} Gaussians", gaussian_clipboard_->size());

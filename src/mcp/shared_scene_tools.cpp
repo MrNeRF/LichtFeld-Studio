@@ -69,8 +69,10 @@ namespace lfs::mcp {
                     return std::unexpected("max_iterations must be 1 or greater");
                 params.optimization.iterations = static_cast<size_t>(max_iterations);
             }
-            if (args.contains("output_path"))
+            if (args.contains("output_path")) {
                 params.dataset.output_path = args["output_path"].get<std::string>();
+                params.dataset.output_path_explicit = !params.dataset.output_path.empty();
+            }
             if (args.contains("min_track_length")) {
                 const int min_track = args["min_track_length"].get<int>();
                 if (min_track < 0)
@@ -107,7 +109,7 @@ namespace lfs::mcp {
                     .required = {"path"}},
                 .metadata = command_metadata(backend, "scene", true)},
             [backend](const json& args) -> json {
-                std::filesystem::path path = args["path"].get<std::string>();
+                std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
 
                 core::param::TrainingParameters params;
                 params.dataset.data_path = path;
@@ -147,7 +149,7 @@ namespace lfs::mcp {
                     .required = {"path"}},
                 .metadata = command_metadata(backend, "scene", true)},
             [backend](const json& args) -> json {
-                std::filesystem::path path = args["path"].get<std::string>();
+                std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 auto result = backend.load_checkpoint(path);
                 if (!result)
                     return json{{"error", result.error()}};
@@ -166,7 +168,7 @@ namespace lfs::mcp {
                     .required = {"path"}},
                 .metadata = command_metadata(backend, "scene", false, true)},
             [backend](const json& args) -> json {
-                std::filesystem::path path = args["path"].get<std::string>();
+                std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const bool include_provenance = args.value("include_provenance", true);
                 auto result = backend.save_ply(path, include_provenance);
                 if (!result)

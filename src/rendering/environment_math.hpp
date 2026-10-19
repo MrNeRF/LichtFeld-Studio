@@ -40,6 +40,16 @@ namespace lfs::rendering::envmath {
         return {v.x * inv, v.y * inv, v.z * inv};
     }
 
+    // Inverse of equirectUvForDirection; UV uses top-left image coordinates.
+    LFS_ENV_HD Vec3 equirectDirectionForUv(const float u, const float v) {
+        const float longitude = (u - 0.5f) * (2.0f * kPi);
+        const float latitude = (0.5f - v) * kPi;
+        const float cos_latitude = std::cos(latitude);
+        return normalized({std::sin(longitude) * cos_latitude,
+                           std::sin(latitude),
+                           -std::cos(longitude) * cos_latitude});
+    }
+
     LFS_ENV_HD Vec3 mix(const Vec3& a, const Vec3& b, const float t) {
         return {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t};
     }
@@ -92,12 +102,7 @@ namespace lfs::rendering::envmath {
 
         Vec3 local_dir;
         if (equirectangular_view) {
-            const float lon = (tex_u - 0.5f) * (2.0f * kPi);
-            const float lat = (tex_v - 0.5f) * kPi;
-            const float cos_lat = std::cos(lat);
-            local_dir = normalized({std::sin(lon) * cos_lat,
-                                    std::sin(lat),
-                                    -std::cos(lon) * cos_lat});
+            local_dir = equirectDirectionForUv(tex_u, 1.0f - tex_v);
         } else {
             const float px = tex_u * width;
             const float py = tex_v * height;

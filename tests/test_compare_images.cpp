@@ -9,10 +9,12 @@
 #include "training/metrics/compare_images.hpp"
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
+#include <set>
 #include <torch/torch.h>
 
 namespace fs = std::filesystem;
@@ -65,7 +67,8 @@ namespace {
                          .max_width = p.max_width,
                          .cuda_stream = p.stream,
                          .output_uint8 = p.output_uint8,
-                         .skip_blob_cache = p.skip_blob_cache});
+                         .skip_blob_cache = p.skip_blob_cache,
+                         .mask_grayscale = p.mask_grayscale});
         });
     }
 
@@ -161,6 +164,43 @@ TEST(CompareImages, PairsDatasetSubFoldersByRelativePath) {
     EXPECT_TRUE(nested.unmatched.empty());
 
     EXPECT_TRUE(lfs::training::pair_images_by_name(reference, test).pairs.empty());
+}
+
+// Catches plain folders with one subfolder per camera searched only at their top level when the COLMAP model passed
+// with --colmap names the images with their subfolders, so no image pairs.
+TEST(CompareImages, ColmapNamesWithFoldersPairCameraSubFolders) {
+    if (!torch::cuda::is_available())
+        GTEST_SKIP() << "CUDA not available";
+    install_image_loader();
+    const auto reference = fresh_directory("lfs_compare_camera_folders_reference");
+    const auto test = fresh_directory("lfs_compare_camera_folders_test");
+    const auto model = fresh_directory("lfs_compare_camera_folders_model");
+    {
+        std::ofstream cameras(model / "cameras.txt");
+        std::ofstream images(model / "images.txt");
+        for (size_t i = 0; i < NAMES.size(); ++i) {
+            const auto folder = "cam" + std::to_string(i);
+            const auto source = BICYCLE / "images_8" / (NAMES[i] + ".JPG");
+            for (const auto& root : {reference, test}) {
+                fs::create_directories(root / folder);
+                fs::copy_file(source, root / folder / source.filename());
+            }
+            const auto [width, height, channels] = lfs::core::get_image_info(source);
+            cameras << i + 1 << " PINHOLE " << width << ' ' << height << ' ' << width << ' ' << width << ' '
+                    << 0.5f * width << ' ' << 0.5f * height << '\n';
+            images << i + 1 << " 1 0 0 0 0 0 " << i << ' ' << i + 1 << ' ' << folder << '/' << NAMES[i] << ".JPG\n\n";
+        }
+    }
+    std::ofstream(model / "points3D.txt").put('\n');
+
+    auto params = compare(reference, test, fresh_directory("lfs_compare_camera_folders_output"));
+    params.colmap_path = model;
+    const auto result = lfs::training::compare_image_sets(params, std::nullopt);
+    ASSERT_TRUE(result) << result.error().detail();
+    ASSERT_EQ(result->metrics.views.size(), 2u);
+    EXPECT_TRUE(result->unmatched.empty());
+    EXPECT_EQ(result->metrics.views[0].image_name, "cam0/" + NAMES[0] + ".JPG");
+    EXPECT_FLOAT_EQ(result->metrics.psnr, 100.0f);
 }
 
 // Catches a COLMAP dataset folder read as a plain image folder, or a plain folder given cameras it has not.
@@ -275,7 +315,7 @@ TEST(CompareImages, ScoresRealImagesAndResizesTheTestSet) {
     EXPECT_TRUE(fs::exists(output / "larger" / "compare_report.txt"));
     EXPECT_FALSE(fs::exists(output / "larger" / "metrics.csv"));
     EXPECT_TRUE(fs::exists(output / "larger" / "compare_images" / (NAMES[0] + ".png")));
-    EXPECT_TRUE(fs::exists(output / "larger" / "compare_images" / (NAMES[0] + "_flip.png")));
+    EXPECT_TRUE(fs::exists(output / "larger" / "compare_images" / "flip" / (NAMES[0] + ".png")));
 
     params.evaluation.enable_save_eval_images = false;
     ASSERT_TRUE(lfs::training::compare_image_sets(params, std::nullopt));
@@ -381,6 +421,71 @@ TEST(CompareImages, DistortedReferencesCompareInEitherSpace) {
     EXPECT_FALSE(lfs::training::compare_image_sets(compare(reference, pinhole, output / "other"), std::nullopt));
 }
 
+// Catches renders made at one --max-width compared at full size because the undistorted grids of their references
+// differ: each render was then upscaled to its own grid and lost detail, instead of every reference being capped at
+// the renders' size like the training images were.
+TEST(CompareImages, PinholeRendersAtOneMaxWidthCapEveryReference) {
+    if (!torch::cuda::is_available())
+        GTEST_SKIP() << "CUDA not available";
+    install_image_loader();
+    const auto root = fresh_directory("lfs_compare_capped_renders");
+    const auto reference = root / "reference";
+    copy_images_to("images_8", reference / "images");
+    const auto [width, height, channels] = lfs::core::get_image_info(reference / "images" / (NAMES[0] + ".JPG"));
+    const float focal = 0.8f * static_cast<float>(width);
+    const std::array<std::vector<float>, 2> radial{{{-0.08f, 0.02f}, {-0.14f, 0.04f}}};
+    {
+        const auto sparse = reference / "sparse" / "0";
+        fs::create_directories(sparse);
+        std::ofstream cameras(sparse / "cameras.txt");
+        std::ofstream images(sparse / "images.txt");
+        for (size_t i = 0; i < NAMES.size(); ++i) {
+            cameras << i + 1 << ' '
+                    << std::format("OPENCV {} {} {} {} {} {} {} {} 0 0", width, height, focal, focal, 0.5f * width,
+                                   0.5f * height, radial[i][0], radial[i][1])
+                    << '\n';
+            images << i + 1 << " 1 0 0 0 0 0 " << i << ' ' << i + 1 << ' ' << NAMES[i] << ".JPG\n\n";
+        }
+        std::ofstream(sparse / "points3D.txt").put('\n');
+    }
+
+    const int cap = width / 2;
+    const auto renders = root / "renders";
+    fs::create_directories(renders);
+    const auto loader = lfs::training::make_eval_image_loader(lfs::core::param::TrainingParameters{});
+    std::set<int> grid_widths;
+    for (size_t i = 0; i < NAMES.size(); ++i) {
+        const auto full = lfs::core::compute_undistort_params(
+            focal, focal, 0.5f * width, 0.5f * height, width, height,
+            Tensor::from_vector(radial[i], {radial[i].size()}, lfs::core::Device::CPU), Tensor(),
+            CameraModelType::PINHOLE);
+        grid_widths.insert(full.dst_width);
+        const auto capped = lfs::core::prepare_undistort_params(full, width, height, -1, cap);
+        lfs::io::LoadParams load;
+        load.resize_factor = -1;
+        load.max_width = cap;
+        load.undistort = &capped;
+        load.decode_float = true;
+        load.decode_16bit = true;
+        load.skip_blob_cache = true;
+        save_png16(renders / (NAMES[i] + ".png"),
+                   loader->load_image_immediate(reference / "images" / (NAMES[i] + ".JPG"), load));
+    }
+    ASSERT_EQ(grid_widths.size(), 2u);
+
+    auto params = compare(reference, renders, root / "output");
+    params.evaluation.undistort = true;
+    params.evaluation.eval_space = EvalSpace::Undistorted;
+    const auto result = lfs::training::compare_image_sets(params, std::nullopt);
+    ASSERT_TRUE(result) << result.error().detail();
+    ASSERT_EQ(result->metrics.views.size(), 2u);
+    for (const auto& view : result->metrics.views) {
+        EXPECT_EQ(std::max(view.width, view.height), cap) << view.image_name;
+        ASSERT_TRUE(view.psnr) << view.image_name;
+        EXPECT_GT(*view.psnr, 50.0f) << view.image_name;
+    }
+}
+
 // Catches a mask folder or a box mask that does not restrict the scored pixels, masks that need cameras
 // accepted without them, and a test image of another shape compared anyway.
 TEST(CompareImages, MasksAndShapeMismatch) {
@@ -429,4 +534,38 @@ TEST(CompareImages, MasksAndShapeMismatch) {
     EXPECT_FALSE(mismatch->metrics.valid);
     for (const auto& view : mismatch->metrics.views)
         EXPECT_NE(view.skipped_reason.find("but its reference is"), std::string::npos) << view.skipped_reason;
+}
+
+// Catches the mask's scores left flat beside the extra pixel sets, or nested without them.
+TEST(CompareImages, JsonNestsEveryPixelSetUnderItsName) {
+    const auto keys = [](const nlohmann::ordered_json& object) {
+        std::vector<std::string> names;
+        for (const auto& item : object.items())
+            names.push_back(item.key());
+        return names;
+    };
+    lfs::training::CompareResult result;
+    result.metrics.valid = true;
+    result.metrics.psnr = 30.0f;
+    auto& view = result.metrics.views.emplace_back(
+        lfs::training::ViewMetrics{.image_name = "a.exr", .width = 8, .height = 4, .psnr = 30.0f, .evaluated_pixel_fraction = 0.25f});
+    const CompareParameters params;
+
+    const auto flat = lfs::training::compare_json(params, result);
+    EXPECT_EQ(keys(flat.at("images").at("a.exr")),
+              (std::vector<std::string>{"width", "height", "bit_depth", "evaluated_pixel_fraction", "psnr", "ssim", "lpips", "flip"}));
+    EXPECT_EQ(keys(flat.at("mean")), (std::vector<std::string>{"psnr", "ssim", "lpips", "flip"}));
+
+    using lfs::core::param::EvalPixelSet;
+    view.sets[EvalPixelSet::Mask] = lfs::training::MaskSetMetrics{.psnr = 30.0f, .evaluated_pixel_fraction = 0.25f};
+    view.sets[EvalPixelSet::Unmasked] = lfs::training::MaskSetMetrics{.psnr = 28.0f, .evaluated_pixel_fraction = 1.0f};
+    result.metrics.sets = view.sets;
+    const auto nested = lfs::training::compare_json(params, result);
+    const auto& image = nested.at("images").at("a.exr");
+    EXPECT_EQ(keys(image), (std::vector<std::string>{"width", "height", "bit_depth", "masked", "unmasked"}));
+    EXPECT_FLOAT_EQ(image.at("masked").at("psnr"), 30.0f);
+    EXPECT_FLOAT_EQ(image.at("masked").at("evaluated_pixel_fraction"), 0.25f);
+    EXPECT_FLOAT_EQ(image.at("unmasked").at("psnr"), 28.0f);
+    EXPECT_EQ(keys(nested.at("mean")), (std::vector<std::string>{"masked", "unmasked"}));
+    EXPECT_FLOAT_EQ(nested.at("mean").at("masked").at("psnr"), 30.0f);
 }

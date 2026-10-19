@@ -288,7 +288,6 @@ body {
 #quality-display,
 #quality-input {
     position: relative;
-    z-index: 1;
     width: 100%;
     text-align: right;
     font-size: 12dp;

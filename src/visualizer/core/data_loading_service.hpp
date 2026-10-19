@@ -34,6 +34,7 @@ namespace lfs::vis {
         void processPendingImports();
         bool hasPendingImports() const { return !pending_imports_.empty(); }
         void cancelPendingImports() { pending_imports_.clear(); }
+        void rejectPendingImports(const std::string& reason);
 
         // Loading operations
         std::expected<void, std::string> loadPLY(const std::filesystem::path& path);

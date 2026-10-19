@@ -22,6 +22,7 @@ namespace lfs::training::kernels {
         constexpr int VERTICAL_TILE_HEIGHT = 8;
         constexpr std::array<double, 4> RIDGE_SIGMAS{0.8, 1.2, 1.8, 2.5};
         constexpr float STRUCTURE_RESPONSE_CAP = 4.0f;
+        constexpr uint32_t INVALID_RESPONSE_BITS = 0x7fc00001u;
 
         __global__ void densification_weight_kernel(float* error, const float* structure, size_t n, float gain) {
             const size_t i = blockIdx.x * static_cast<size_t>(blockDim.x) + threadIdx.x;
@@ -50,11 +51,26 @@ namespace lfs::training::kernels {
             return scale * (0.2126f * image[i] + 0.7152f * image[n + i] + 0.0722f * image[2 * n + i]);
         }
 
-        // Rows of the band are image rows first_row + r, reflected at the image border.
         template <typename T>
-        __global__ void hessian_horizontal(const T* input, float* horizontal, const int height, const int width,
+        __device__ bool photo_keeps(const T value, const MaskPhotoMode mode) {
+            if (mode == MaskPhotoMode::BinaryGt0)
+                return value > 0;
+            if constexpr (std::is_same_v<T, uint8_t>)
+                return value > 250;
+            else
+                return value > kMaskKeepMin;
+        }
+
+        __device__ float invalid_response() { return __uint_as_float(INVALID_RESPONSE_BITS); }
+        __device__ bool is_invalid_response(const float value) {
+            return __float_as_uint(value) == INVALID_RESPONSE_BITS;
+        }
+
+        // Rows of the band are image rows first_row + r, reflected at the image border.
+        template <typename T, typename MaskT>
+        __global__ void hessian_horizontal(const T* input, const MaskT* mask, float* horizontal, const int height, const int width,
                                            const int first_row, const size_t band_stride,
-                                           const DerivativeFilter filter) {
+                                           const DerivativeFilter filter, const MaskPhotoMode mode) {
             __shared__ float tile[HORIZONTAL_TILE_WIDTH + 2 * MAX_FILTER_RADIUS];
             const int tiles_per_row = (width + HORIZONTAL_TILE_WIDTH - 1) / HORIZONTAL_TILE_WIDTH;
             const int band_row = blockIdx.x / tiles_per_row;
@@ -65,12 +81,27 @@ namespace lfs::training::kernels {
             for (int j = threadIdx.x; j < HORIZONTAL_TILE_WIDTH + 2 * filter.radius; j += blockDim.x) {
                 const int source_x = tile_x + j - filter.radius;
                 const int reflected_x = source_x >= 0 && source_x < width ? source_x : reflect_index(source_x, width);
-                tile[j] = luminance_at(input, n, row * width + reflected_x);
+                const int source = row * width + reflected_x;
+                if constexpr (std::is_void_v<MaskT>)
+                    tile[j] = luminance_at(input, n, source);
+                else
+                    tile[j] = photo_keeps(mask[source], mode) ? luminance_at(input, n, source) : invalid_response();
             }
             __syncthreads();
             const int x = tile_x + threadIdx.x;
             if (x >= width)
                 return;
+            if constexpr (!std::is_void_v<MaskT>) {
+                for (int k = -filter.radius; k <= filter.radius; ++k) {
+                    if (is_invalid_response(tile[threadIdx.x + k + filter.radius])) {
+                        const size_t i = static_cast<size_t>(band_row) * width + x;
+                        horizontal[i] = invalid_response();
+                        horizontal[band_stride + i] = invalid_response();
+                        horizontal[2 * band_stride + i] = invalid_response();
+                        return;
+                    }
+                }
+            }
             float g = 0.0f, d1 = 0.0f, d2 = 0.0f;
             for (int k = -filter.radius; k <= filter.radius; ++k) {
                 const float value = tile[threadIdx.x + k + filter.radius];
@@ -86,6 +117,7 @@ namespace lfs::training::kernels {
         }
 
         // The band holds the horizontal responses of image rows first_row - radius onwards.
+        template <bool Masked>
         __global__ void hessian_vertical(const float* horizontal, float* output,
                                          const int height, const int width, const int first_row,
                                          const size_t band_stride, const DerivativeFilter filter,
@@ -108,6 +140,16 @@ namespace lfs::training::kernels {
             const int x = tile_x + threadIdx.x, y = tile_y + threadIdx.y;
             if (x >= width || y >= height)
                 return;
+            if constexpr (Masked) {
+                for (int k = -filter.radius; k <= filter.radius; ++k) {
+                    const int source = (threadIdx.y + k + filter.radius) * VERTICAL_TILE_WIDTH + threadIdx.x;
+                    if (is_invalid_response(tile[0][source])) {
+                        if (first_scale)
+                            output[y * width + x] = 0.0f;
+                        return;
+                    }
+                }
+            }
             float hxx = 0.0f, hxy = 0.0f, hyy = 0.0f;
             for (int k = -filter.radius; k <= filter.radius; ++k) {
                 const int source = (threadIdx.y + k + filter.radius) * VERTICAL_TILE_WIDTH + threadIdx.x;
@@ -128,38 +170,58 @@ namespace lfs::training::kernels {
             output[i] = first_scale ? response : fmaxf(output[i], response);
         }
 
-        template <typename T>
-        __global__ void structure_sum(const float* data, const T* image, float* partial, const int n) {
+        template <typename T, typename MaskT>
+        __global__ void structure_sum(const float* data, const T* image, const MaskT* mask,
+                                      float* partial, const int n, const MaskPhotoMode mode) {
             float sum = 0.0f, minimum = std::numeric_limits<float>::infinity(), maximum = -std::numeric_limits<float>::infinity();
+            float valid_count = 0.0f;
             for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += blockDim.x * gridDim.x) {
+                if constexpr (!std::is_void_v<MaskT>) {
+                    if (!photo_keeps(mask[i], mode))
+                        continue;
+                }
                 sum += data[i];
+                if constexpr (!std::is_void_v<MaskT>)
+                    valid_count += 1.0f;
                 const float luminance = luminance_at(image, n, i);
                 minimum = fminf(minimum, luminance);
                 maximum = fmaxf(maximum, luminance);
             }
             sum = lfs::core::warp_ops::block_reduce_sum(sum);
+            if constexpr (!std::is_void_v<MaskT>)
+                valid_count = lfs::core::warp_ops::block_reduce_sum(valid_count);
             minimum = lfs::core::warp_ops::block_reduce_min(minimum);
             maximum = lfs::core::warp_ops::block_reduce_max(maximum);
             if (threadIdx.x == 0) {
                 partial[blockIdx.x] = sum;
                 partial[1024 + blockIdx.x] = minimum;
                 partial[2048 + blockIdx.x] = maximum;
+                if constexpr (!std::is_void_v<MaskT>)
+                    partial[3072 + blockIdx.x] = valid_count;
             }
         }
 
+        template <bool Masked>
         __global__ void normalize_structure(float* data, const float* partial, const int blocks, const int n) {
             __shared__ float inv_mean;
             float sum = 0.0f, minimum = std::numeric_limits<float>::infinity(), maximum = -std::numeric_limits<float>::infinity();
+            float valid_count = 0.0f;
             for (int i = threadIdx.x; i < blocks; i += blockDim.x) {
                 sum += partial[i];
+                if constexpr (Masked)
+                    valid_count += partial[3072 + i];
                 minimum = fminf(minimum, partial[1024 + i]);
                 maximum = fmaxf(maximum, partial[2048 + i]);
             }
             sum = lfs::core::warp_ops::block_reduce_sum(sum);
+            if constexpr (Masked)
+                valid_count = lfs::core::warp_ops::block_reduce_sum(valid_count);
             minimum = lfs::core::warp_ops::block_reduce_min(minimum);
             maximum = lfs::core::warp_ops::block_reduce_max(maximum);
             if (threadIdx.x == 0)
-                inv_mean = sum > 0.0f && maximum > minimum ? static_cast<float>(n) / sum : 0.0f;
+                inv_mean = sum > 0.0f && maximum > minimum
+                               ? (Masked ? valid_count : static_cast<float>(n)) / sum
+                               : 0.0f;
             __syncthreads();
             const int i = blockIdx.x * blockDim.x + threadIdx.x;
             if (i < n)
@@ -220,29 +282,42 @@ namespace lfs::training::kernels {
         return std::min(aligned, padded_height);
     }
 
-    void RidgeWorkspace::ensure_size(const size_t band_rows, const size_t width) {
+    void RidgeWorkspace::ensure_size(const size_t band_rows, const size_t width, const bool masked) {
         const lfs::core::TensorShape shape{3, band_rows + 2 * MAX_FILTER_RADIUS, width};
         if (!horizontal.is_valid() || horizontal.shape() != shape)
             horizontal = lfs::core::Tensor::empty(shape, lfs::core::Device::CUDA);
-        if (!reduction.is_valid())
-            reduction = lfs::core::Tensor::empty({3072}, lfs::core::Device::CUDA);
+        if (!reduction.is_valid() || reduction.numel() < (masked ? 4096 : 3072))
+            reduction = lfs::core::Tensor::empty({masked ? 4096u : 3072u}, lfs::core::Device::CUDA);
     }
 
     void ridge_structure_map(const lfs::core::Tensor& image, lfs::core::Tensor& output,
-                             RidgeWorkspace& workspace) {
+                             RidgeWorkspace& workspace, const lfs::core::Tensor& photometric_mask,
+                             const MaskPhotoMode mask_mode) {
         using namespace lfs::core;
         LFS_ASSERT(image.device() == Device::CUDA && image.ndim() == 3 && image.shape()[0] == 3);
         LFS_ASSERT(image.is_contiguous() && image.shape()[1] > 0 && image.shape()[2] > 0);
         LFS_ASSERT(image.dtype() == DataType::Float32 || image.dtype() == DataType::UInt8);
         const int height = static_cast<int>(image.shape()[1]);
         const int width = static_cast<int>(image.shape()[2]);
+        const Tensor mask = photometric_mask.is_valid() && photometric_mask.ndim() == 3
+                                ? photometric_mask.squeeze(0)
+                                : photometric_mask;
+        const bool masked = mask.is_valid() && mask.numel() > 0;
+        if (masked) {
+            LFS_ASSERT(mask.device() == Device::CUDA && mask.ndim() == 2 &&
+                       mask.shape()[0] == static_cast<size_t>(height) &&
+                       mask.shape()[1] == static_cast<size_t>(width));
+            LFS_ASSERT(mask.dtype() == DataType::Float32 || mask.dtype() == DataType::UInt8 || mask.dtype() == DataType::Bool);
+        }
         const int n = height * width;
         const int band_rows = static_cast<int>(workspace.band_rows(static_cast<size_t>(height), static_cast<size_t>(width)));
-        workspace.ensure_size(static_cast<size_t>(band_rows), static_cast<size_t>(width));
+        workspace.ensure_size(static_cast<size_t>(band_rows), static_cast<size_t>(width), masked);
         const size_t band_stride = workspace.horizontal.numel() / 3;
         LFS_ASSERT((output.shape() == TensorShape{static_cast<size_t>(height), static_cast<size_t>(width)}));
         LFS_ASSERT(output.dtype() == DataType::Float32 && output.device() == Device::CUDA);
         const auto stream = image.stream();
+        if (masked)
+            mask.sync_to_stream(stream);
         workspace.horizontal.set_stream(stream);
         workspace.reduction.set_stream(stream);
         output.set_stream(stream);
@@ -271,31 +346,97 @@ namespace lfs::training::kernels {
                 const int rows = std::min(band_rows, (height - first_row + VERTICAL_TILE_HEIGHT - 1) / VERTICAL_TILE_HEIGHT * VERTICAL_TILE_HEIGHT);
                 const int horizontal_blocks = horizontal_tiles * (rows + 2 * filter.radius);
                 if (image.dtype() == DataType::UInt8) {
-                    hessian_horizontal<<<horizontal_blocks, HORIZONTAL_TILE_WIDTH, 0, stream>>>(
-                        image.ptr<uint8_t>(), workspace.horizontal.ptr<float>(), height, width, first_row - filter.radius, band_stride, filter);
-                    LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.hessian_horizontal_u8");
+                    if (!masked) {
+                        hessian_horizontal<uint8_t, void><<<horizontal_blocks, HORIZONTAL_TILE_WIDTH, 0, stream>>>(
+                            image.ptr<uint8_t>(), nullptr, workspace.horizontal.ptr<float>(), height, width,
+                            first_row - filter.radius, band_stride, filter, mask_mode);
+                        LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.hessian_horizontal_u8");
+                    } else if (mask.dtype() == DataType::Float32) {
+                        hessian_horizontal<uint8_t, float><<<horizontal_blocks, HORIZONTAL_TILE_WIDTH, 0, stream>>>(
+                            image.ptr<uint8_t>(), mask.ptr<float>(), workspace.horizontal.ptr<float>(), height, width,
+                            first_row - filter.radius, band_stride, filter, mask_mode);
+                        LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.hessian_horizontal_u8");
+                    } else {
+                        hessian_horizontal<uint8_t, uint8_t><<<horizontal_blocks, HORIZONTAL_TILE_WIDTH, 0, stream>>>(
+                            image.ptr<uint8_t>(), mask.ptr<uint8_t>(), workspace.horizontal.ptr<float>(), height, width,
+                            first_row - filter.radius, band_stride, filter, mask_mode);
+                        LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.hessian_horizontal_u8");
+                    }
                 } else {
-                    hessian_horizontal<<<horizontal_blocks, HORIZONTAL_TILE_WIDTH, 0, stream>>>(
-                        image.ptr<float>(), workspace.horizontal.ptr<float>(), height, width, first_row - filter.radius, band_stride, filter);
-                    LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.hessian_horizontal_f32");
+                    if (!masked) {
+                        hessian_horizontal<float, void><<<horizontal_blocks, HORIZONTAL_TILE_WIDTH, 0, stream>>>(
+                            image.ptr<float>(), nullptr, workspace.horizontal.ptr<float>(), height, width,
+                            first_row - filter.radius, band_stride, filter, mask_mode);
+                        LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.hessian_horizontal_f32");
+                    } else if (mask.dtype() == DataType::Float32) {
+                        hessian_horizontal<float, float><<<horizontal_blocks, HORIZONTAL_TILE_WIDTH, 0, stream>>>(
+                            image.ptr<float>(), mask.ptr<float>(), workspace.horizontal.ptr<float>(), height, width,
+                            first_row - filter.radius, band_stride, filter, mask_mode);
+                        LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.hessian_horizontal_f32");
+                    } else {
+                        hessian_horizontal<float, uint8_t><<<horizontal_blocks, HORIZONTAL_TILE_WIDTH, 0, stream>>>(
+                            image.ptr<float>(), mask.ptr<uint8_t>(), workspace.horizontal.ptr<float>(), height, width,
+                            first_row - filter.radius, band_stride, filter, mask_mode);
+                        LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.hessian_horizontal_f32");
+                    }
                 }
-                hessian_vertical<<<vertical_tiles*(rows / VERTICAL_TILE_HEIGHT), vertical_threads, 0, stream>>>(
-                    workspace.horizontal.ptr<float>(), output.ptr<float>(), height, width, first_row, band_stride, filter, first_scale);
-                LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.hessian_vertical");
+                if (masked) {
+                    hessian_vertical<true><<<vertical_tiles*(rows / VERTICAL_TILE_HEIGHT), vertical_threads, 0, stream>>>(
+                        workspace.horizontal.ptr<float>(), output.ptr<float>(), height, width, first_row, band_stride, filter, first_scale);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.hessian_vertical");
+                } else {
+                    hessian_vertical<false><<<vertical_tiles*(rows / VERTICAL_TILE_HEIGHT), vertical_threads, 0, stream>>>(
+                        workspace.horizontal.ptr<float>(), output.ptr<float>(), height, width, first_row, band_stride, filter, first_scale);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.hessian_vertical");
+                }
             }
             first_scale = false;
         }
         const int reduction_blocks = std::min(blocks, 1024);
         if (image.dtype() == DataType::UInt8) {
-            structure_sum<<<reduction_blocks, BLOCK_SIZE, 0, stream>>>(output.ptr<float>(), image.ptr<uint8_t>(), workspace.reduction.ptr<float>(), n);
-            LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.sum_u8");
+            if (!masked) {
+                structure_sum<uint8_t, void><<<reduction_blocks, BLOCK_SIZE, 0, stream>>>(
+                    output.ptr<float>(), image.ptr<uint8_t>(), nullptr, workspace.reduction.ptr<float>(), n, mask_mode);
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.sum_u8");
+            } else if (mask.dtype() == DataType::Float32) {
+                structure_sum<uint8_t, float><<<reduction_blocks, BLOCK_SIZE, 0, stream>>>(
+                    output.ptr<float>(), image.ptr<uint8_t>(), mask.ptr<float>(), workspace.reduction.ptr<float>(), n, mask_mode);
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.sum_u8");
+            } else {
+                structure_sum<uint8_t, uint8_t><<<reduction_blocks, BLOCK_SIZE, 0, stream>>>(
+                    output.ptr<float>(), image.ptr<uint8_t>(), mask.ptr<uint8_t>(), workspace.reduction.ptr<float>(), n, mask_mode);
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.sum_u8");
+            }
         } else {
-            structure_sum<<<reduction_blocks, BLOCK_SIZE, 0, stream>>>(output.ptr<float>(), image.ptr<float>(), workspace.reduction.ptr<float>(), n);
-            LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.sum_f32");
+            if (!masked) {
+                structure_sum<float, void><<<reduction_blocks, BLOCK_SIZE, 0, stream>>>(
+                    output.ptr<float>(), image.ptr<float>(), nullptr, workspace.reduction.ptr<float>(), n, mask_mode);
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.sum_f32");
+            } else if (mask.dtype() == DataType::Float32) {
+                structure_sum<float, float><<<reduction_blocks, BLOCK_SIZE, 0, stream>>>(
+                    output.ptr<float>(), image.ptr<float>(), mask.ptr<float>(), workspace.reduction.ptr<float>(), n, mask_mode);
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.sum_f32");
+            } else {
+                structure_sum<float, uint8_t><<<reduction_blocks, BLOCK_SIZE, 0, stream>>>(
+                    output.ptr<float>(), image.ptr<float>(), mask.ptr<uint8_t>(), workspace.reduction.ptr<float>(), n, mask_mode);
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.sum_f32");
+            }
         }
-        normalize_structure<<<blocks, BLOCK_SIZE, 0, stream>>>(output.ptr<float>(), workspace.reduction.ptr<float>(), reduction_blocks, n);
+        if (masked) {
+            normalize_structure<true><<<blocks, BLOCK_SIZE, 0, stream>>>(
+                output.ptr<float>(), workspace.reduction.ptr<float>(), reduction_blocks, n);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.ridge");
+        } else {
+            normalize_structure<false><<<blocks, BLOCK_SIZE, 0, stream>>>(
+                output.ptr<float>(), workspace.reduction.ptr<float>(), reduction_blocks, n);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.ridge");
+        }
         nvtxRangePop();
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.ridge");
+    }
+
+    void ridge_structure_map(const lfs::core::Tensor& image, lfs::core::Tensor& output,
+                             RidgeWorkspace& workspace) {
+        ridge_structure_map(image, output, workspace, {}, MaskPhotoMode::BinaryGt0);
     }
 
     void structure_photometric_weight(const lfs::core::Tensor& structure, const lfs::core::Tensor& base_weight,

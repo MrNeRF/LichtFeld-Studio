@@ -43,6 +43,7 @@
 #include "python/gil.hpp"
 #include "python/runner.hpp"
 #include "tinyply.hpp"
+#include "visualizer/gui/html_viewer_export.hpp"
 
 namespace fs = std::filesystem;
 using namespace lfs::core;
@@ -848,10 +849,6 @@ TEST_F(PythonIOTest, RejectsMalformedTransformsCameraContractsBeforeCameraConstr
     expect_rejected(std::move(invalid));
 
     invalid = valid;
-    invalid["fl_x"] = 0.0;
-    expect_rejected(std::move(invalid));
-
-    invalid = valid;
     invalid["frames"][0]["transform_matrix"][2] = nlohmann::json::array({0.0, 0.0, 1.0});
     expect_rejected(std::move(invalid));
 
@@ -862,6 +859,74 @@ TEST_F(PythonIOTest, RejectsMalformedTransformsCameraContractsBeforeCameraConstr
     invalid = valid;
     invalid["frames"][0]["transform_matrix"][3] = nlohmann::json::array({0.0, 0.0, 1.0, 1.0});
     expect_rejected(std::move(invalid));
+}
+
+TEST_F(PythonIOTest, SkipsTransformsFramesWithInvalidFocalLengthsAndWarnsOnce) {
+    const fs::path dataset_dir = temp_dir / "invalid_focal_frames";
+    write_png(dataset_dir / "valid.png", 64, 64);
+    write_png(dataset_dir / "zero.png", 64, 64);
+    write_png(dataset_dir / "negative.png", 64, 64);
+    write_png(dataset_dir / "nonfinite.png", 64, 64);
+    const nlohmann::json identity_matrix = {
+        {1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0},
+    };
+    const auto frame = [&](const char* name, const double focal) {
+        return nlohmann::json{
+            {"file_path", name},
+            {"fl_x", focal},
+            {"fl_y", 50.0},
+            {"w", 64},
+            {"h", 64},
+            {"transform_matrix", identity_matrix}};
+    };
+    auto nonfinite_frame = frame("nonfinite.png", 50.0);
+    nonfinite_frame.erase("fl_x");
+    nonfinite_frame["camera_angle_x"] = 1e-40;
+    write_text_file(dataset_dir / "transforms.json", nlohmann::json{
+                                                         {"frames", nlohmann::json::array({frame("valid.png", 50.0), frame("zero.png", 0.0), frame("negative.png", -2.0),
+                                                                                           nonfinite_frame})}}
+                                                         .dump());
+
+    auto& localization = lfs::event::LocalizationManager::getInstance();
+    constexpr auto warning_key = "io.dataset_camera_invalid_focal";
+    localization.setOverride(warning_key, "Localized invalid focal warning: {} camera(s) ({})");
+    struct RestoreWarning {
+        ~RestoreWarning() {
+            lfs::event::LocalizationManager::getInstance().clearOverride("io.dataset_camera_invalid_focal");
+        }
+    } restore_warning;
+
+    auto result = Loader::create()->load(dataset_dir);
+    ASSERT_TRUE(result) << result.error().format();
+    const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+    ASSERT_EQ(cameras.size(), 1u);
+    EXPECT_EQ(cameras.front()->image_name(), "valid.png");
+    EXPECT_FLOAT_EQ(cameras.front()->focal_x(), 50.0f);
+    EXPECT_FLOAT_EQ(cameras.front()->focal_y(), 50.0f);
+    const std::string localized_warning =
+        "Localized invalid focal warning: 3 camera(s) (zero.png, negative.png, nonfinite.png)";
+    EXPECT_EQ(std::count(result->warnings.begin(), result->warnings.end(), localized_warning), 1);
+}
+
+TEST_F(PythonIOTest, TransformsDatasetWithOnlyInvalidFocalLengthsReturnsClearError) {
+    const fs::path dataset_dir = temp_dir / "all_invalid_focals";
+    write_png(dataset_dir / "zero.png", 64, 64);
+    const nlohmann::json identity_matrix = {
+        {1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0},
+    };
+    write_text_file(dataset_dir / "transforms.json", nlohmann::json{
+                                                         {"frames", nlohmann::json::array({{{"file_path", "zero.png"}, {"fl_x", 0.0}, {"fl_y", 50.0}, {"w", 64}, {"h", 64}, {"transform_matrix", identity_matrix}}})}}
+                                                         .dump());
+
+    const auto result = Loader::create()->load(dataset_dir);
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.error().message.find("focal"), std::string::npos);
 }
 
 class TransformsMaskTest : public PythonIOTest {
@@ -889,6 +954,70 @@ protected:
                         "end_header\n0 0 -2 255 0 0\n1 0 -2 0 255 0\n");
     }
 };
+
+class TransformsImagePathTest : public TransformsMaskTest {};
+
+TEST_F(TransformsImagePathTest, WindowsSeparatorsLoadBothFramesFromFolderAndJson) {
+    const auto root = temp_dir / "image_separators";
+    write_dataset(root, {{{"file_path", "images\\front\\first.png"}},
+                         {{"file_path", "images\\back\\second.png"}}});
+    write_png(root / "images/front/first.png", 2, 2);
+    write_png(root / "images/back/second.png", 2, 2);
+
+    for (const auto& source : {root, root / "transforms.json"}) {
+        SCOPED_TRACE(lfs::core::path_to_utf8(source));
+        auto result = Loader::create()->load(source);
+        ASSERT_TRUE(result) << result.error().format();
+        const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+        ASSERT_EQ(cameras.size(), 2u);
+        EXPECT_EQ(cameras[0]->image_path(), root / "images/front/first.png");
+        EXPECT_EQ(cameras[1]->image_path(), root / "images/back/second.png");
+    }
+}
+
+TEST_F(TransformsImagePathTest, ForwardSlashesAndExtensionlessPngStillLoad) {
+    const auto root = temp_dir / "image_controls";
+    write_dataset(root, {{{"file_path", "images/front/first.png"}},
+                         {{"file_path", "./train/second"}}});
+    write_png(root / "images/front/first.png", 2, 2);
+    write_png(root / "train/second.png", 2, 2);
+
+    auto result = Loader::create()->load(root);
+    ASSERT_TRUE(result) << result.error().format();
+    const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+    ASSERT_EQ(cameras.size(), 2u);
+    EXPECT_EQ(cameras[0]->image_path(), root / "images/front/first.png");
+    EXPECT_EQ(cameras[1]->image_path(), root / "./train/second.png");
+}
+
+TEST_F(TransformsImagePathTest, ImagesFolderFallbackAcceptsBothSeparatorStyles) {
+    const auto root = temp_dir / "images_fallback";
+    write_dataset(root, {{{"file_path", "first.png"}},
+                         {{"file_path", "nested\\second.png"}}});
+    write_png(root / "images/first.png", 2, 2);
+    write_png(root / "images/nested/second.png", 2, 2);
+
+    auto result = Loader::create()->load(root);
+    ASSERT_TRUE(result) << result.error().format();
+    const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+    ASSERT_EQ(cameras.size(), 2u);
+    EXPECT_EQ(cameras[0]->image_path(), root / "images/first.png");
+    EXPECT_EQ(cameras[1]->image_path(), root / "images/nested/second.png");
+}
+
+#ifndef _WIN32
+TEST_F(TransformsImagePathTest, ExistingLiteralBackslashFilenameTakesPrecedence) {
+    const auto root = temp_dir / "literal_image";
+    const auto literal_image = root / "images\\frame.png";
+    write_dataset(root, {{{"file_path", "images\\frame.png"}}});
+    write_png(literal_image, 2, 2);
+    write_png(root / "images/frame.png", 2, 2);
+
+    auto result = Loader::create()->load(root);
+    ASSERT_TRUE(result) << result.error().format();
+    EXPECT_EQ(std::get<LoadedScene>(result->data).cameras.front()->image_path(), literal_image);
+}
+#endif
 
 TEST_F(TransformsMaskTest, ExplicitPathsOverrideDiscoveryForFolderAndJson) {
     const auto root = temp_dir / "explicit_masks";
@@ -1981,6 +2110,105 @@ TEST_F(PythonIOTest, HtmlExportCancellationKeepsExistingTarget) {
     expect_existing_target_and_no_temp_files(output_path, existing_contents);
 }
 
+TEST_F(PythonIOTest, HtmlExportEmbedsBackgroundColor) {
+    auto splat = create_test_splat(200, 0);
+    const fs::path output_path = temp_dir / "custom_bg.html";
+
+    HtmlExportOptions options;
+    options.output_path = output_path;
+    options.kmeans_iterations = 1;
+    options.background_color = glm::vec3(0.2f, 0.4f, 0.6f);
+
+    auto result = export_html(splat, options);
+    ASSERT_TRUE(result.has_value()) << "Failed to export HTML: " << result.error().format();
+    EXPECT_TRUE(fs::exists(output_path));
+
+    std::ifstream file(output_path);
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    EXPECT_TRUE(content.find("\"background\":{\"color\":[0.200000,0.400000,0.600000]}") != std::string::npos)
+        << "Should embed the specified background color";
+}
+
+TEST_F(PythonIOTest, HtmlExportSanitizesNonFiniteColor) {
+    auto splat = create_test_splat(200, 0);
+    const fs::path output_path = temp_dir / "non_finite_bg.html";
+
+    HtmlExportOptions options;
+    options.output_path = output_path;
+    options.kmeans_iterations = 1;
+    options.background_color = glm::vec3(std::numeric_limits<float>::quiet_NaN(),
+                                         std::numeric_limits<float>::infinity(),
+                                         0.5f);
+
+    auto result = export_html(splat, options);
+    ASSERT_TRUE(result.has_value()) << "Failed to export HTML: " << result.error().format();
+    EXPECT_TRUE(fs::exists(output_path));
+
+    std::ifstream file(output_path);
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    EXPECT_TRUE(content.find("\"background\":{\"color\":[0.000000,0.000000,0.500000]}") != std::string::npos)
+        << "Should treat non-finite color channels as 0.0";
+}
+
+TEST(HtmlExportBackgroundColorTest, ViewportNonBlackTakesPrecedence) {
+    const glm::vec3 viewport_bg{0.2f, 0.4f, 0.6f};
+    lfs::core::param::OptimizationParameters opt_params;
+    opt_params.bg_mode = lfs::core::param::BackgroundMode::SolidColor;
+    opt_params.bg_color = {1.0f, 1.0f, 1.0f};
+
+    const auto resolved = lfs::vis::gui::resolve_html_export_background_color(viewport_bg, opt_params);
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(*resolved, viewport_bg);
+}
+
+TEST(HtmlExportBackgroundColorTest, ViewportBlackFallsBackToSolidColorTraining) {
+    const glm::vec3 viewport_bg{0.0f, 0.0f, 0.0f};
+    lfs::core::param::OptimizationParameters opt_params;
+    opt_params.bg_mode = lfs::core::param::BackgroundMode::SolidColor;
+    opt_params.bg_color = {1.0f, 1.0f, 1.0f};
+
+    const auto resolved = lfs::vis::gui::resolve_html_export_background_color(viewport_bg, opt_params);
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(*resolved, glm::vec3(1.0f, 1.0f, 1.0f));
+}
+
+TEST(HtmlExportBackgroundColorTest, ViewportBlackSkipsNonSolidColorTraining) {
+    const glm::vec3 viewport_bg{0.0f, 0.0f, 0.0f};
+
+    for (auto mode : {lfs::core::param::BackgroundMode::Random,
+                      lfs::core::param::BackgroundMode::Image,
+                      lfs::core::param::BackgroundMode::Modulation}) {
+        lfs::core::param::OptimizationParameters opt_params;
+        opt_params.bg_mode = mode;
+        opt_params.bg_color = {1.0f, 1.0f, 1.0f};
+
+        const auto resolved = lfs::vis::gui::resolve_html_export_background_color(viewport_bg, opt_params);
+        ASSERT_TRUE(resolved.has_value());
+        EXPECT_EQ(*resolved, glm::vec3(0.0f, 0.0f, 0.0f));
+    }
+}
+
+TEST(HtmlExportBackgroundColorTest, NoViewportUsesSolidColorTraining) {
+    lfs::core::param::OptimizationParameters opt_params;
+    opt_params.bg_mode = lfs::core::param::BackgroundMode::SolidColor;
+    opt_params.bg_color = {0.8f, 0.8f, 0.8f};
+
+    const auto resolved = lfs::vis::gui::resolve_html_export_background_color(std::nullopt, opt_params);
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(*resolved, glm::vec3(0.8f, 0.8f, 0.8f));
+}
+
+TEST(HtmlExportBackgroundColorTest, NoViewportSkipsNonSolidColorTraining) {
+    lfs::core::param::OptimizationParameters opt_params;
+    opt_params.bg_mode = lfs::core::param::BackgroundMode::Random;
+    opt_params.bg_color = {0.8f, 0.8f, 0.8f};
+
+    const auto resolved = lfs::vis::gui::resolve_html_export_background_color(std::nullopt, opt_params);
+    EXPECT_FALSE(resolved.has_value());
+}
+
 TEST_F(PythonIOTest, RadSaveCancellationKeepsExistingTarget) {
     auto splat = create_test_splat(200, 0);
     const fs::path output_path = temp_dir / "keep_existing_on_cancel.rad";
@@ -2522,7 +2750,7 @@ namespace {
         if (!fs::exists(dir, ec)) {
             return false;
         }
-        for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        for (std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(dir), ec), end; !ec && it != end; it.increment(ec)) {
             std::error_code file_ec;
             if (!it->is_regular_file(file_ec) || file_ec) {
                 continue;

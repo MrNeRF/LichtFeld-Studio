@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "preprocessing/preprocess.hpp"
+#include "core/native_fs.hpp"
 #include "preprocessing/lens_priors.hpp"
 
 #include "core/camera.hpp"
@@ -59,7 +60,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace fs = std::filesystem;
+namespace fs = lfs::core::native_fs;
 
 namespace {
 
@@ -144,7 +145,7 @@ namespace {
     }
 
     bool is_image_file(const fs::path& path) {
-        const auto ext = lower_copy(path.extension().string());
+        const auto ext = lower_copy(lfs::core::path_to_utf8(path.extension()));
         return ext == ".jpg" || ext == ".jpeg" || ext == ".png" ||
                ext == ".bmp" || ext == ".tif" || ext == ".tiff" ||
                ext == ".webp";
@@ -274,7 +275,7 @@ namespace {
     };
 
     std::string sha256_file(const fs::path& path) {
-        std::ifstream input(path, std::ios::binary);
+        std::ifstream input(lfs::core::native_fs::native_path(path), std::ios::binary);
         if (!input)
             throw std::runtime_error("Could not open " + path_to_string(path) + " for hashing");
 
@@ -632,15 +633,15 @@ namespace {
             throw std::runtime_error("Images directory does not exist: " + path_to_string(images_dir));
 
         std::vector<fs::path> images;
-        const auto add_if_image = [&images](const fs::directory_entry& entry) {
+        const auto add_if_image = [&images, &images_dir](const std::filesystem::directory_entry& entry) {
             if (entry.is_regular_file() && is_image_file(entry.path()))
-                images.push_back(entry.path());
+                images.push_back(lfs::core::native_fs::entry_path(images_dir, entry.path()));
         };
         if (recursive) {
-            for (fs::recursive_directory_iterator it(images_dir), end; it != end; ++it)
+            for (std::filesystem::recursive_directory_iterator it(lfs::core::native_fs::traversal_path(images_dir)), end; it != end; ++it)
                 add_if_image(*it);
         } else {
-            for (fs::directory_iterator it(images_dir), end; it != end; ++it)
+            for (std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(images_dir)), end; it != end; ++it)
                 add_if_image(*it);
         }
         std::sort(images.begin(), images.end());

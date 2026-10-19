@@ -6,6 +6,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/property_registry.hpp"
@@ -272,8 +273,8 @@ namespace lfs::python {
 
                 const auto asset_path = core::utf8_to_path(path);
                 std::error_code file_size_error;
-                if (std::filesystem::is_regular_file(asset_path, file_size_error)) {
-                    const auto file_size = std::filesystem::file_size(asset_path, file_size_error);
+                if (lfs::core::native_fs::is_regular_file(asset_path, file_size_error)) {
+                    const auto file_size = lfs::core::native_fs::file_size(asset_path, file_size_error);
                     if (!file_size_error && file_size > MAX_RENDERED_ASSET_PREVIEW_BYTES) {
                         LOG_DEBUG("Skipping rendered asset preview for '{}' ({} MB exceeds {} MB budget)",
                                   path,
@@ -282,7 +283,7 @@ namespace lfs::python {
                         return std::nullopt;
                     }
                 }
-                auto ext = asset_path.extension().string();
+                auto ext = lfs::core::path_to_utf8(asset_path.extension());
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
                 if (ext == ".ckpt" || ext == ".resume") {
                     auto checkpoint_result = core::load_checkpoint_splat_data(
@@ -936,6 +937,21 @@ namespace lfs::python {
           prop_(&settings_, "render_settings") {}
 
     void PyRenderSettings::set(const std::string& name, nb::object value) {
+        set_impl(name, std::move(value), true);
+    }
+
+    void PyRenderSettings::_set_without_session_dirty(
+        const std::string& name, nb::object value) {
+        set_impl(name, std::move(value), false);
+    }
+
+    void PyRenderSettings::set_impl(
+        const std::string& name, nb::object value,
+        const bool mark_session_dirty) {
+        std::optional<std::any> previous_value;
+        if (mark_session_dirty) {
+            previous_value = prop_.get_value(name);
+        }
         prop_.setattr(name, value);
         if (name == "raster_backend") {
             const auto backend = static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend);
@@ -959,6 +975,10 @@ namespace lfs::python {
         // preset.
         if (const auto applied = vis::get_render_settings()) {
             settings_ = *applied;
+        }
+        if (previous_value &&
+            !prop_.values_equal(name, *previous_value, prop_.get_value(name))) {
+            markProjectSessionChapterCommitted("VIEW");
         }
         request_redraw();
     }
@@ -1084,7 +1104,7 @@ namespace lfs::python {
         [[nodiscard]] std::string normalizeExportImageFormat(std::string format,
                                                              const std::filesystem::path& path) {
             if (format.empty()) {
-                format = path.extension().string();
+                format = lfs::core::path_to_utf8(path.extension());
             }
             if (!format.empty() && format.front() == '.') {
                 format.erase(format.begin());
@@ -1106,7 +1126,7 @@ namespace lfs::python {
                 throw std::invalid_argument("export path is empty");
             }
 
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -1964,6 +1984,8 @@ Args:
             .def_prop_ro("__property_group__", &PyRenderSettings::property_group)
             .def("get", &PyRenderSettings::get, nb::arg("name"), "Get property value by name")
             .def("set", &PyRenderSettings::set, nb::arg("name"), nb::arg("value"), "Set property value by name")
+            .def("_set_without_session_dirty", &PyRenderSettings::_set_without_session_dirty,
+                 nb::arg("name"), nb::arg("value"))
             .def("prop_info", &PyRenderSettings::prop_info, nb::arg("name"))
             .def("get_all_properties", &PyRenderSettings::get_all_properties,
                  "Get all property descriptors as Python Property objects")

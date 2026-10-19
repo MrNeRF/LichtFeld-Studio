@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 #include <limits>
+#include <vector>
 
 namespace {
 
@@ -487,6 +488,39 @@ TEST(ViewportTest, OrthographicUnprojectMatchesProjectedWorldPoint) {
     EXPECT_NEAR(unprojected.x, world_point.x, 1e-4f);
     EXPECT_NEAR(unprojected.y, world_point.y, 1e-4f);
     EXPECT_NEAR(unprojected.z, world_point.z, 1e-4f);
+}
+
+// Fails if an orthographic eye inside the scene is left in place: the rasterizer culls every splat behind it.
+TEST(ViewportTest, OrthographicEyeSetbackPutsEveryTransformedBoundsCornerInFront) {
+    lfs::rendering::FrameView view;
+    view.orthographic = true;
+    view.translation = glm::vec3(0.0f, 0.5f, 0.0f);
+    const glm::vec3 target(1.0f, 0.0f, 1.0f);
+    view.rotation = lfs::rendering::makeVisualizerLookAtRotation(view.translation, target);
+    const glm::vec3 forward = lfs::rendering::dataCameraToWorldFromVisualizerRotation(view.rotation)[2];
+    ASSERT_NEAR(glm::dot(forward, glm::normalize(target - view.translation)), 1.0f, 1e-5f);
+
+    const glm::vec3 local_min(-4.0f, -1.0f, -4.0f);
+    const glm::vec3 local_max(4.0f, 2.0f, 4.0f);
+    glm::mat4 shifted(1.0f);
+    shifted[3] = glm::vec4(-6.0f, 0.0f, -6.0f, 1.0f);
+    const std::vector<glm::mat4> transforms{glm::mat4(1.0f), shifted};
+    const float setback = lfs::rendering::orthographicEyeSetback(view, local_min, local_max, &transforms);
+    ASSERT_GT(setback, 0.0f);
+
+    const glm::vec3 eye = view.translation - forward * setback;
+    for (const auto& transform : transforms) {
+        for (int corner = 0; corner < 8; ++corner) {
+            const glm::vec3 local{(corner & 1) ? local_max.x : local_min.x,
+                                  (corner & 2) ? local_max.y : local_min.y,
+                                  (corner & 4) ? local_max.z : local_min.z};
+            const glm::vec3 world = glm::vec3(transform * glm::vec4(local, 1.0f));
+            EXPECT_GE(glm::dot(world - eye, forward), lfs::rendering::DEFAULT_NEAR_PLANE) << "corner=" << corner;
+        }
+    }
+
+    view.translation = eye - forward;
+    EXPECT_EQ(lfs::rendering::orthographicEyeSetback(view, local_min, local_max, &transforms), 0.0f);
 }
 
 TEST(ViewportTest, OrthographicUnprojectRejectsInvalidScale) {

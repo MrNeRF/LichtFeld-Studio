@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/gallery_scene_publication.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -369,7 +370,7 @@ namespace lfs::vis::gui {
                     } else if (const auto path = pj::resolve_path_reference(document->references(),
                                                                             source.source_path.parent_path(),
                                                                             reference.uuid);
-                               path && std::filesystem::is_regular_file(*path)) {
+                               path && lfs::core::native_fs::is_regular_file(*path)) {
                         publication.environment_source = *path;
                     }
                     break;
@@ -386,7 +387,7 @@ namespace lfs::vis::gui {
     void copyLazyChunkToFile(const lfs::io::project::LazyChunkValue& source,
                              const std::filesystem::path& destination,
                              const std::function<bool()>& canceled) {
-        std::ofstream output(destination, std::ios::binary | std::ios::trunc);
+        std::ofstream output(lfs::core::native_fs::native_path(destination), std::ios::binary | std::ios::trunc);
         output.exceptions(std::ios::badbit | std::ios::failbit);
         const auto copied = source.visit_stream([&](std::istream& input, const std::uint64_t size) -> lfs::Result<void> {
             std::vector<char> buffer(1024 * 1024);
@@ -416,11 +417,11 @@ namespace lfs::vis::gui {
                  request.nodes.size(), lfs::core::path_to_utf8(request.path),
                  static_cast<int>(request.format));
         throwIfCanceled(canceled, "Scene preparation canceled.");
-        if (!std::filesystem::create_directory(request.path))
+        if (!lfs::core::native_fs::create_directory(request.path))
             throw std::runtime_error("The gallery preparation directory already exists.");
         request.created_directory = true;
-        std::filesystem::permissions(request.path, std::filesystem::perms::owner_all,
-                                     std::filesystem::perm_options::replace);
+        lfs::core::native_fs::permissions(request.path, std::filesystem::perms::owner_all,
+                                          std::filesystem::perm_options::replace);
         auto nodes = nlohmann::json::array();
         std::vector<std::pair<core::Uuid, std::filesystem::path>> embedded_files;
         namespace pj = lfs::io::project;
@@ -589,7 +590,7 @@ namespace lfs::vis::gui {
                 uint64_t(image.width) * image.height > 8'388'608)
                 throw std::runtime_error("Choose an HDR background with at most 8 million pixels for gallery upload.");
             static_assert(std::endian::native == std::endian::little);
-            std::ofstream background(request.path / "environment.lfsenv", std::ios::binary);
+            std::ofstream background(lfs::core::native_fs::native_path(request.path / "environment.lfsenv"), std::ios::binary);
             background.exceptions(std::ios::badbit | std::ios::failbit);
             background.write("LFSENV1\0", 8);
             const uint32_t width = image.width, height = image.height;
@@ -623,7 +624,7 @@ namespace lfs::vis::gui {
         checked(writer->plan_commit(commit_options));
         uint64_t planned_bytes = 4 * 1024 * 1024;
         for (const auto& [id, file] : embedded_files)
-            planned_bytes += std::filesystem::file_size(file);
+            planned_bytes += lfs::core::native_fs::file_size(file);
         checked(writer->preflight(planned_bytes));
         const auto chapter = [&](pj::Fourcc type, const auto& value) {
             const auto bytes = value.to_bytes();
@@ -649,11 +650,11 @@ namespace lfs::vis::gui {
         chapter(pj::FOURCC_SEQR, document.sequencer());
         chapter(pj::FOURCC_METR, document.metrics());
         for (const auto& [id, file] : embedded_files) {
-            const auto bytes = std::filesystem::file_size(file);
+            const auto bytes = lfs::core::native_fs::file_size(file);
             auto target = writer->begin_chunk({pj::FOURCC_DSRC, id}, {.expected_stream_bytes = bytes});
             if (!target)
                 throw std::runtime_error(std::string(target.error().user_message()));
-            std::ifstream input(file, std::ios::binary);
+            std::ifstream input(lfs::core::native_fs::native_path(file), std::ios::binary);
             input.exceptions(std::ios::badbit);
             std::vector<char> buffer(1024 * 1024);
             uint64_t copied = 0;
@@ -671,16 +672,16 @@ namespace lfs::vis::gui {
         auto verified_project = pj::ProjectDocument::open(request.path / "project.licht");
         if (!verified_project)
             throw std::runtime_error(std::string(verified_project.error().user_message()));
-        std::ofstream manifest(request.path / "manifest.json.tmp", std::ios::binary | std::ios::trunc);
+        std::ofstream manifest(lfs::core::native_fs::native_path(request.path / "manifest.json.tmp"), std::ios::binary | std::ios::trunc);
         manifest.exceptions(std::ios::badbit | std::ios::failbit);
         manifest << metadata.dump();
         manifest.close();
-        std::filesystem::rename(request.path / "manifest.json.tmp", request.path / "manifest.json");
+        lfs::core::native_fs::rename(request.path / "manifest.json.tmp", request.path / "manifest.json");
         const auto elapsed = std::chrono::duration<double, std::milli>(
                                  std::chrono::steady_clock::now() - preparation_started)
                                  .count();
         LOG_INFO("gallery stage=preparation_end node_count={} payload_bytes={} staging_path={} elapsed_ms={:.1f}",
-                 nodes.size(), std::filesystem::file_size(request.path / "project.licht"),
+                 nodes.size(), lfs::core::native_fs::file_size(request.path / "project.licht"),
                  lfs::core::path_to_utf8(request.path), elapsed);
     }
 

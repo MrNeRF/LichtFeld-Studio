@@ -259,21 +259,8 @@ namespace lichtfeld::Strings {
         inline constexpr const char* PLY_SEQUENCE_LABEL = "scene.ply_sequence_label";
         inline constexpr const char* KEYFRAME_NODE_LABEL = "scene.keyframe_node_label";
         inline constexpr const char* SAVE_TO_DISK = "scene.save_to_disk";
-        inline constexpr const char* HISTORY = "scene.history";
         inline constexpr const char* LOGGING = "scene.logging";
-        inline constexpr const char* HISTORY_SHARED = "scene.history_shared";
-        inline constexpr const char* HISTORY_EMPTY = "scene.history_empty";
-        inline constexpr const char* HISTORY_NOTE = "scene.history_note";
-        inline constexpr const char* UNDO_STACK = "scene.undo_stack";
-        inline constexpr const char* REDO_STACK = "scene.redo_stack";
-        inline constexpr const char* NOTHING_RECORDED = "scene.nothing_recorded";
-        inline constexpr const char* NO_ENTRIES_IN_STACK = "scene.no_entries_in_stack";
-        inline constexpr const char* LOG_MIRROR = "scene.log_mirror";
         inline constexpr const char* LOG_LEVEL = "scene.log_level";
-        inline constexpr const char* LOG_EXPORT = "scene.log_export";
-        inline constexpr const char* LOG_COPY = "scene.log_copy";
-        inline constexpr const char* LOG_NOTE = "scene.log_note";
-        inline constexpr const char* NO_LOGS = "scene.no_logs";
         inline constexpr const char* LOG_TRACE = "scene.log_trace";
         inline constexpr const char* LOG_DEBUG = "scene.log_debug";
         inline constexpr const char* LOG_INFO = "scene.log_info";
@@ -603,7 +590,6 @@ namespace lichtfeld::Strings {
     } // namespace InputSettings
 
     namespace DebugInfo {
-        inline constexpr const char* CLEAR_HISTORY = "debug_info.clear_history";
     } // namespace DebugInfo
 
     namespace TrainingParams {
@@ -658,6 +644,9 @@ namespace lichtfeld::Strings {
         inline constexpr const char* SUPPORTED_BY = "startup.supported_by";
         inline constexpr const char* CLICK_TO_CONTINUE = "startup.click_to_continue";
         inline constexpr const char* LOADED_PLUGINS = "startup.loaded_plugins";
+        inline constexpr const char* PLUGIN_INVALID_MANIFEST = "startup.plugin_invalid_manifest";
+        inline constexpr const char* PLUGIN_INCOMPATIBLE_API = "startup.plugin_incompatible_api";
+        inline constexpr const char* PLUGIN_LOAD_FAILED = "startup.plugin_load_failed";
         inline constexpr const char* DROP_FILES_TITLE = "startup.drop_files_title";
         inline constexpr const char* DROP_FILES_SUBTITLE = "startup.drop_files_subtitle";
         inline constexpr const char* DROP_FILES_HINT = "startup.drop_files_hint";
@@ -722,9 +711,14 @@ namespace lichtfeld::Strings {
         inline constexpr const char* ESTIMATED_FRAMES = "video_extractor.estimated_frames";
         inline constexpr const char* INPUT_VIDEO = "video_extractor.input_video";
         inline constexpr const char* VIDEO = "video_extractor.video";
+        inline constexpr const char* VIDEOS = "video_extractor.videos";
+        inline constexpr const char* ADD_VIDEOS = "video_extractor.add_videos";
+        inline constexpr const char* REMOVE_VIDEO = "video_extractor.remove_video";
+        inline constexpr const char* CLEAR_VIDEOS = "video_extractor.clear_videos";
         inline constexpr const char* NO_FILE = "video_extractor.no_file";
         inline constexpr const char* BROWSE = "video_extractor.browse";
         inline constexpr const char* OUTPUT = "video_extractor.output";
+        inline constexpr const char* OUTPUT_ROOT = "video_extractor.output_root";
         inline constexpr const char* NO_DIR = "video_extractor.no_dir";
         inline constexpr const char* SELECT_FOLDER = "video_extractor.select_folder";
         inline constexpr const char* SETTINGS = "video_extractor.settings";
@@ -768,6 +762,14 @@ namespace lichtfeld::Strings {
         inline constexpr const char* CANDIDATES_READOUT_FMT = "video_extractor.candidates_readout_fmt";
         inline constexpr const char* SHARPNESS_MODE_DESC_THRESHOLD = "video_extractor.sharpness_mode_desc_threshold";
         inline constexpr const char* SHARPNESS_MODE_DESC_WINDOW = "video_extractor.sharpness_mode_desc_window";
+        inline constexpr const char* OVERWRITE_PROMPT = "video_extractor.overwrite_prompt";
+        inline constexpr const char* OVERWRITE_PROMPT_METADATA = "video_extractor.overwrite_prompt_metadata";
+        inline constexpr const char* OVERWRITE_PROMPT_FRAMES_METADATA = "video_extractor.overwrite_prompt_frames_metadata";
+        inline constexpr const char* OVERWRITE_CANCEL = "video_extractor.overwrite_cancel";
+        inline constexpr const char* OVERWRITE_DELETE = "video_extractor.overwrite_delete";
+        inline constexpr const char* OVERWRITE_PROCEED = "video_extractor.overwrite_proceed";
+        inline constexpr const char* OVERWRITE_DELETE_ERROR = "video_extractor.overwrite_delete_error";
+        inline constexpr const char* CONTINUE_BATCH_ON_FAILURE = "video_extractor.continue_batch_on_failure";
     } // namespace VideoExtractor
 
     namespace Mesh2Splat {
@@ -912,7 +914,11 @@ namespace lichtfeld::Strings {
         inline constexpr const char* EXPORT_CANCELLED = "runtime.export_cancelled";
         inline constexpr const char* NO_SPLAT_DATA = "runtime.no_splat_data";
         inline constexpr const char* EXPORT_STREAMED_LOD = "runtime.export_streamed_lod";
+        inline constexpr const char* EXPORT_EXTENSION_REQUIRED = "runtime.export_extension_required";
+        inline constexpr const char* EXPORT_EXTENSION_WARNING = "runtime.export_extension_warning";
+        inline constexpr const char* EXPORT_SH_DEGREE_CLAMPED = "runtime.export_sh_degree_clamped";
         inline constexpr const char* VIDEO_ENCODER_UNAVAILABLE = "runtime.video_encoder_unavailable";
+        inline constexpr const char* VIDEO_ENCODER_PROBE_FAILED = "runtime.video_encoder_probe_failed";
         inline constexpr const char* SCENE_MANAGER_UNAVAILABLE = "runtime.scene_manager_unavailable";
         inline constexpr const char* NO_MODEL_SELECTED = "runtime.no_model_selected";
         inline constexpr const char* NO_SCENE_MANAGER = "runtime.no_scene_manager";

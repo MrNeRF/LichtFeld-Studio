@@ -228,10 +228,9 @@ namespace lfs::io::project {
             }
         }
 
-        // Payload records use the fast level; index chunks retain level 3. Below
-        // compress; above it, ZSTD_compressStream2 with a bounded output window
-        // so peak transient RAM is ~input + final-compressed + window, not
-        // input + ZSTD_compressBound(~input).
+        // Payload records use the fast level; index chunks retain level 3. Large
+        // framed payloads write records into one bounded slot allocation, then
+        // compact them in place before the container write.
         constexpr std::size_t ZSTD_STREAM_THRESHOLD_BYTES = 8ull * 1024 * 1024;
         constexpr std::size_t ZSTD_STREAM_OUT_WINDOW_BYTES = 8ull * 1024 * 1024;
         constexpr int ZSTD_FIXED_LEVEL = 3;
@@ -273,16 +272,23 @@ namespace lfs::io::project {
             return out;
         }
 
-        lfs::Result<std::vector<std::byte>>
+        lfs::Result<std::size_t>
         compress_zstd(const std::span<const std::byte> input,
+                      const std::span<std::byte> output,
                       const std::filesystem::path& path,
                       const std::string_view field,
                       const int compression_level = ZSTD_FIXED_LEVEL) {
             if (input.size() < ZSTD_STREAM_THRESHOLD_BYTES) {
                 const std::size_t bound = ZSTD_compressBound(input.size());
-                std::vector<std::byte> compressed(bound);
+                if (output.size() < bound) {
+                    return writer_error(
+                        lfs::ErrorCode::ResourceExhausted, path,
+                        "There is not enough memory to compress this project payload.",
+                        "framed compression output slot is smaller than ZSTD_compressBound",
+                        field);
+                }
                 const std::size_t result = ZSTD_compress(
-                    compressed.data(), compressed.size(), input.data(),
+                    output.data(), output.size(), input.data(),
                     input.size(), compression_level);
                 if (ZSTD_isError(result)) {
                     return writer_error(
@@ -292,8 +298,7 @@ namespace lfs::io::project {
                                     ZSTD_getErrorName(result)),
                         field);
                 }
-                compressed.resize(result);
-                return compressed;
+                return result;
             }
 
             ZSTD_CCtx* cctx = ZSTD_createCCtx();
@@ -340,11 +345,7 @@ namespace lfs::io::project {
                     field);
             }
 
-            std::vector<std::byte> compressed;
-            // Conservative reserve: mature CKPT payloads compress ~10–20%.
-            compressed.reserve(input.size());
-            std::vector<std::byte> out_window(ZSTD_STREAM_OUT_WINDOW_BYTES);
-
+            std::size_t output_bytes = 0;
             std::size_t in_pos = 0;
             while (in_pos < input.size()) {
                 const std::size_t chunk = std::min(ZSTD_STREAM_OUT_WINDOW_BYTES,
@@ -356,7 +357,19 @@ namespace lfs::io::project {
                 std::size_t remaining = 1;
                 while (zin.pos < zin.size ||
                        (mode == ZSTD_e_end && remaining != 0)) {
-                    ZSTD_outBuffer zout{out_window.data(), out_window.size(), 0};
+                    if (output_bytes >= output.size()) {
+                        free_cctx();
+                        return writer_error(
+                            lfs::ErrorCode::ResourceExhausted, path,
+                            "There is not enough memory to compress this project payload.",
+                            "framed compression exceeded its bounded output slot",
+                            field);
+                    }
+                    const std::size_t output_window = std::min(
+                        ZSTD_STREAM_OUT_WINDOW_BYTES,
+                        output.size() - output_bytes);
+                    ZSTD_outBuffer zout{
+                        output.data() + output_bytes, output_window, 0};
                     remaining =
                         ZSTD_compressStream2(cctx, &zout, &zin, mode);
                     if (ZSTD_isError(remaining)) {
@@ -368,9 +381,7 @@ namespace lfs::io::project {
                                         ZSTD_getErrorName(remaining)),
                             field);
                     }
-                    compressed.insert(compressed.end(), out_window.begin(),
-                                      out_window.begin() +
-                                          static_cast<std::ptrdiff_t>(zout.pos));
+                    output_bytes += zout.pos;
                     if (mode != ZSTD_e_end && zin.pos == zin.size) {
                         break;
                     }
@@ -378,10 +389,33 @@ namespace lfs::io::project {
                 in_pos += chunk;
             }
             free_cctx();
+            return output_bytes;
+        }
+
+        lfs::Result<std::vector<std::byte>> compress_zstd(
+            const std::span<const std::byte> input,
+            const std::filesystem::path& path, const std::string_view field,
+            const int compression_level = ZSTD_FIXED_LEVEL) {
+            std::vector<std::byte> compressed(ZSTD_compressBound(input.size()));
+            auto result = compress_zstd(input, compressed, path, field,
+                                        compression_level);
+            if (!result) {
+                return std::move(result).error();
+            }
+            compressed.resize(*result);
             return compressed;
         }
 
-        lfs::Result<std::vector<std::byte>> frame_zstd(
+        struct FramedPayload {
+            std::unique_ptr<std::byte[]> bytes;
+            std::size_t size = 0;
+
+            [[nodiscard]] std::span<const std::byte> view() const noexcept {
+                return {bytes.get(), size};
+            }
+        };
+
+        lfs::Result<FramedPayload> frame_zstd(
             const std::span<const std::byte> input,
             const std::filesystem::path& path, const std::string_view field,
             const int compression_level = ZSTD_FIXED_LEVEL) {
@@ -392,7 +426,43 @@ namespace lfs::io::project {
                                     "The framed project payload is empty.",
                                     "framed payloads require at least one record", field);
             }
-            std::vector<std::vector<std::byte>> records(record_count);
+            const std::size_t largest_record = std::min(
+                detail::FRAMED_RECORD_TARGET_BYTES, input.size());
+            const std::size_t record_slot_bytes =
+                ZSTD_compressBound(largest_record);
+            const auto record_slots_bytes = detail::checked_multiply(
+                record_count, record_slot_bytes, path, 0, field);
+            if (!record_slots_bytes) {
+                return std::move(record_slots_bytes).error();
+            }
+            const auto table_bytes = detail::checked_multiply(
+                record_count, detail::FRAMED_RECORD_BYTES, path, 0, field);
+            if (!table_bytes) {
+                return std::move(table_bytes).error();
+            }
+            const auto payload_offset = detail::checked_add(
+                detail::FRAMED_HEADER_BYTES, *table_bytes, path, 0, field);
+            if (!payload_offset) {
+                return std::move(payload_offset).error();
+            }
+            const auto framed_capacity = detail::checked_add(
+                *payload_offset, *record_slots_bytes, path, 0, field);
+            if (!framed_capacity ||
+                *framed_capacity > std::numeric_limits<std::size_t>::max()) {
+                return writer_error(
+                    lfs::ErrorCode::ResourceExhausted, path,
+                    "There is not enough memory to compress this project payload.",
+                    "bounded record slots exceed size_t", field);
+            }
+            auto framed = std::make_unique_for_overwrite<std::byte[]>(
+                static_cast<std::size_t>(*framed_capacity));
+            std::vector<std::size_t> record_sizes(record_count);
+            const auto bytes = std::span<std::byte>(
+                framed.get(), static_cast<std::size_t>(*framed_capacity));
+            put_bytes(bytes, 0, detail::FRAMED_MAGIC);
+            put_u16(bytes, 8, detail::FRAMED_VERSION);
+            put_u16(bytes, 10, 0);
+            put_u32(bytes, 12, static_cast<std::uint32_t>(record_count));
             std::atomic<std::size_t> next{0};
             std::mutex error_mutex;
             std::optional<lfs::Error> first_error;
@@ -428,16 +498,21 @@ namespace lfs::io::project {
                                 const std::size_t offset = index * detail::FRAMED_RECORD_TARGET_BYTES;
                                 const std::size_t size = std::min(
                                     detail::FRAMED_RECORD_TARGET_BYTES, input.size() - offset);
+                                const std::size_t slot_offset =
+                                    static_cast<std::size_t>(*payload_offset) +
+                                    index * record_slot_bytes;
                                 auto compressed = compress_zstd(
-                                    input.subspan(offset, size), path, field,
-                                    compression_level);
+                                    input.subspan(offset, size),
+                                    std::span<std::byte>(framed.get() + slot_offset,
+                                                         record_slot_bytes),
+                                    path, field, compression_level);
                                 if (!compressed) {
                                     std::scoped_lock lock(error_mutex);
                                     if (!first_error)
                                         first_error = std::move(compressed).error();
                                     return;
                                 }
-                                records[index] = std::move(*compressed);
+                                record_sizes[index] = *compressed;
                             }
                         } catch (const std::bad_alloc&) {
                             publish_worker_error(
@@ -478,34 +553,21 @@ namespace lfs::io::project {
                 return std::move(*first_error);
             const auto compressed_at = std::chrono::steady_clock::now();
 
-            std::size_t total = detail::FRAMED_HEADER_BYTES +
-                                record_count * detail::FRAMED_RECORD_BYTES;
-            for (const auto& record : records) {
-                auto checked = detail::checked_add(total, record.size(), path,
-                                                   total, field);
-                if (!checked)
-                    return std::move(checked).error();
-                total = *checked;
-            }
-            std::vector<std::byte> framed(total);
-            const auto bytes = std::span<std::byte>(framed);
-            put_bytes(bytes, 0, detail::FRAMED_MAGIC);
-            put_u16(bytes, 8, detail::FRAMED_VERSION);
-            put_u16(bytes, 10, 0);
-            put_u32(bytes, 12, static_cast<std::uint32_t>(record_count));
-            std::size_t cursor = detail::FRAMED_HEADER_BYTES +
-                                 record_count * detail::FRAMED_RECORD_BYTES;
+            std::size_t cursor = static_cast<std::size_t>(*payload_offset);
             for (std::size_t index = 0; index < record_count; ++index) {
                 const std::size_t source_offset = index * detail::FRAMED_RECORD_TARGET_BYTES;
                 const std::size_t uncompressed = std::min(
                     detail::FRAMED_RECORD_TARGET_BYTES, input.size() - source_offset);
                 const std::size_t table_offset = detail::FRAMED_HEADER_BYTES +
                                                  index * detail::FRAMED_RECORD_BYTES;
-                put_u64(bytes, table_offset, records[index].size());
+                const std::size_t slot_offset =
+                    static_cast<std::size_t>(*payload_offset) +
+                    index * record_slot_bytes;
+                std::memmove(framed.get() + cursor,
+                             framed.get() + slot_offset, record_sizes[index]);
+                put_u64(bytes, table_offset, record_sizes[index]);
                 put_u64(bytes, table_offset + 8, uncompressed);
-                std::copy(records[index].begin(), records[index].end(),
-                          framed.begin() + static_cast<std::ptrdiff_t>(cursor));
-                cursor += records[index].size();
+                cursor += record_sizes[index];
             }
             const auto assembled_at = std::chrono::steady_clock::now();
             const auto milliseconds = [](const auto begin, const auto end) {
@@ -516,8 +578,11 @@ namespace lfs::io::project {
                 field, input.size(), record_count, compression_level,
                 milliseconds(started, compressed_at),
                 milliseconds(compressed_at, assembled_at),
-                milliseconds(started, assembled_at), framed.size());
-            return framed;
+                milliseconds(started, assembled_at), cursor);
+            return FramedPayload{
+                .bytes = std::move(framed),
+                .size = cursor,
+            };
         }
 
         std::array<std::byte, SUPERBLOCK_BYTES>
@@ -2087,7 +2152,7 @@ namespace lfs::io::project {
                 "chunk_key"));
         }
 
-        std::vector<std::byte> compressed;
+        std::optional<FramedPayload> compressed;
         std::span<const std::byte> stored = payload;
         ChunkWriteOptions placed_options = options;
         if (options.compression == Compression::ByteShuffleZstdFramed) {
@@ -2103,8 +2168,8 @@ namespace lfs::io::project {
                 if (!result) {
                     return status_failure(std::move(result).error());
                 }
-                compressed = std::move(*result);
-                stored = compressed;
+                compressed.emplace(std::move(*result));
+                stored = compressed->view();
             }
         }
         if (placed_options.compression == Compression::ZstdFramed) {
@@ -2113,8 +2178,8 @@ namespace lfs::io::project {
             if (!result) {
                 return status_failure(std::move(result).error());
             }
-            compressed = std::move(*result);
-            stored = compressed;
+            compressed.emplace(std::move(*result));
+            stored = compressed->view();
         } else if (placed_options.compression != Compression::Stored &&
                    placed_options.compression != Compression::ZstdFramed &&
                    placed_options.compression != Compression::ByteShuffleZstdFramed) {

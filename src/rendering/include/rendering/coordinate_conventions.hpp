@@ -27,14 +27,13 @@ namespace lfs::rendering {
     // Dataset / import / export cameras keep the existing local axes:
     //   +X = right, +Y = down, +Z = forward.
     //
-    // The rasterizer camera basis is different again:
-    //   +X = right, +Y = up, +Z = forward.
+    // The rasterizer camera uses the dataset local axes (+Y down, +Z forward).
     //
     // Visualizer <-> dataset flips Y/Z in both local camera space and the
     // visualizer-facing world basis. Raw scene/model data stays in dataset
     // coordinates and gets this basis change once at the visualizer boundary.
     //
-    // Visualizer <-> raster flips local Z only.
+    // Visualizer <-> raster flips local Y/Z (dataCameraToWorldFromVisualizerRotation).
     inline const glm::mat3 VISUALIZER_TO_DATA_CAMERA_AXES{1, 0, 0, 0, -1, 0, 0, 0, -1};
     inline const glm::mat3 DATA_TO_VISUALIZER_CAMERA_AXES = VISUALIZER_TO_DATA_CAMERA_AXES;
     inline const glm::mat4 DATA_TO_VISUALIZER_CAMERA_AXES_4{1, 0, 0, 0,

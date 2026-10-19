@@ -16,6 +16,7 @@
 #include "core/image_loader.hpp"
 #include "core/legacy_settings_migration.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/pinned_memory_allocator.hpp"
@@ -40,6 +41,7 @@
 #include "gui/gpu_memory_query.hpp"
 #include "io/loader.hpp"
 #include "io/video/video_encoder.hpp"
+#include "io/video/video_export_schedule.hpp"
 #include "mcp/mcp_http_server.hpp"
 #include "mcp/mcp_tools.hpp"
 #include "preprocessing/preprocess.hpp"
@@ -53,7 +55,6 @@
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
 #include "visualizer/input/input_bindings.hpp"
 #include "visualizer/preferences.hpp"
-#include <cmath>
 #include <condition_variable>
 #include <cuda_runtime.h>
 #include <curand.h>
@@ -97,7 +98,8 @@ namespace lfs::app {
                  .max_width = p.max_width,
                  .cuda_stream = p.stream,
                  .output_uint8 = p.output_uint8,
-                 .skip_blob_cache = p.skip_blob_cache});
+                 .skip_blob_cache = p.skip_blob_cache,
+                 .mask_grayscale = p.mask_grayscale});
         });
     }
 
@@ -217,7 +219,7 @@ namespace lfs::app {
                 auto external = io::project::resolve_path_reference(
                     document->references(), path.parent_path(),
                     **dataset_ref);
-                if (external && std::filesystem::is_directory(*external)) {
+                if (external && lfs::core::native_fs::is_directory(*external)) {
                     dataset_root = std::move(*external);
                 }
             }
@@ -251,6 +253,25 @@ namespace lfs::app {
                     lfs::ErrorCode::NotFound,
                     "The project's dataset is neither reachable nor embedded",
                     LFS_SOURCE_SITE_CURRENT()));
+            }
+
+            if (!params.init_path) {
+                auto initialization = document->project().training_initialization();
+                if (!initialization) {
+                    return lfs::Status::failure(std::move(initialization).error());
+                }
+                if (*initialization && (*initialization)->init_reference_uuid) {
+                    const auto& uuid = *(*initialization)->init_reference_uuid;
+                    const auto init_path = io::project::resolve_path_reference(
+                        document->references(), path.parent_path(), uuid);
+                    std::error_code error;
+                    if (init_path && core::native_fs::is_regular_file(*init_path, error)) {
+                        params.init_path = core::path_to_utf8(*init_path);
+                    } else {
+                        LOG_WARN("Training initialization file '{}' is unavailable; using the dataset point cloud.",
+                                 init_path ? core::path_to_utf8(*init_path) : uuid.to_string());
+                    }
+                }
             }
 
             // Without -o, exports land beside the project.
@@ -304,7 +325,7 @@ namespace lfs::app {
             if (checkpoint_params.dataset.data_path.empty()) {
                 return std::unexpected("Checkpoint has no dataset path and none provided via --data-path");
             }
-            if (!std::filesystem::exists(checkpoint_params.dataset.data_path)) {
+            if (!lfs::core::native_fs::exists(checkpoint_params.dataset.data_path)) {
                 return std::unexpected(std::format("Dataset path does not exist: {}", core::path_to_utf8(checkpoint_params.dataset.data_path)));
             }
 
@@ -503,7 +524,7 @@ namespace lfs::app {
             // still denotes the checkpoint's dataset (including path aliases).
             std::error_code dataset_error;
             const bool same_dataset = cli_params.dataset.data_path.empty() ||
-                                      std::filesystem::equivalent(
+                                      lfs::core::native_fs::equivalent(
                                           cli_params.dataset.data_path,
                                           checkpoint_params.dataset.data_path, dataset_error);
             const auto snapshot_source_path = same_dataset
@@ -518,11 +539,11 @@ namespace lfs::app {
                     dataset_ref && *dataset_ref) {
                     auto external = io::project::resolve_path_reference(
                         recovery_document.document().references(), path.parent_path(), **dataset_ref);
-                    if (external && std::filesystem::is_directory(*external)) {
+                    if (external && lfs::core::native_fs::is_directory(*external)) {
                         resolved_dataset = std::move(*external);
                     }
                 }
-                if (!resolved_dataset && std::filesystem::is_directory(checkpoint_dataset_path)) {
+                if (!resolved_dataset && lfs::core::native_fs::is_directory(checkpoint_dataset_path)) {
                     resolved_dataset = checkpoint_dataset_path;
                 }
                 if (!resolved_dataset) {
@@ -1263,7 +1284,7 @@ namespace lfs::app {
 
             // Load the trained scene.
             std::shared_ptr<core::SplatData> model;
-            const auto load_ext = cfg.load_path.extension().string();
+            const auto load_ext = lfs::core::path_to_utf8(cfg.load_path.extension());
             if (load_ext == ".resume") {
                 auto splat_result = core::load_checkpoint_splat_data(cfg.load_path);
                 if (!splat_result) {
@@ -1319,13 +1340,13 @@ namespace lfs::app {
             }
 
             const float duration = timeline.clipDuration();
-            const int total_frames = static_cast<int>(std::ceil(duration * cfg.fps)) + 1;
+            const int total_frames = lfs::io::video::videoExportFrameCount(duration, cfg.fps);
             LOG_INFO("Rendering {} frame(s) ({:.2f}s @ {}fps) from {} to {}",
                      total_frames, duration, cfg.fps,
                      core::path_to_utf8(cfg.camera_path), core::path_to_utf8(cfg.output_path));
 
             for (int frame = 0; frame < total_frames; ++frame) {
-                const float t = std::min(static_cast<float>(frame) / static_cast<float>(cfg.fps), duration);
+                const float t = lfs::io::video::videoExportSampleTime(frame, cfg.fps);
                 const auto cam_state = timeline.evaluate(t);
 
                 const glm::mat4 data_view = rendering::dataWorldToCameraFromVisualizerPose(
@@ -1653,12 +1674,12 @@ namespace lfs::app {
                 });
 
             for (const auto& vp : params->view_paths) {
-                if (!std::filesystem::exists(vp)) {
+                if (!lfs::core::native_fs::exists(vp)) {
                     LOG_ERROR("File not found: {}", lfs::core::path_to_utf8(vp));
                     return 1;
                 }
             }
-            if (!params->dataset.data_path.empty() && !std::filesystem::exists(params->dataset.data_path)) {
+            if (!params->dataset.data_path.empty() && !lfs::core::native_fs::exists(params->dataset.data_path)) {
                 LOG_ERROR("Dataset not found: {}", lfs::core::path_to_utf8(params->dataset.data_path));
                 return 1;
             }

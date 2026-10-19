@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Plugin manager for discovery, loading, and lifecycle."""
+from _lfs_path_io import logical_path, native_path, open
 
 import importlib.machinery
 import importlib.util
@@ -13,7 +14,7 @@ import time
 import traceback
 import types
 import uuid
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Callable, Dict, List, Optional
 
 from .capabilities import CapabilityRegistry
@@ -28,6 +29,8 @@ from .errors import PluginError, PluginLoadCancelled, PluginVersionError
 from .installer import (
     PluginInstaller,
     PluginSourceInfo,
+    _install_digest,
+    _localized_progress,
     clone_from_url,
     prepare_archive_from_download_url,
     prepare_github_archive,
@@ -36,6 +39,7 @@ from .installer import (
     parse_github_url,
     uninstall_plugin,
     update_plugin,
+    verify_archive_sha256,
     write_plugin_source_metadata,
 )
 from .plugin import PluginInfo, PluginInstance, PluginState, validate_plugin_name
@@ -107,6 +111,7 @@ class PluginManager:
         self._on_plugin_unloaded: List[Callable] = []
         self._on_plugin_changed: List[Callable] = []
         self._registry: Optional[RegistryClient] = None
+        self._discovery_errors: Dict[str, str] = {}
 
     @classmethod
     def instance(cls) -> "PluginManager":
@@ -251,12 +256,12 @@ class PluginManager:
                     if self._plugins.get(plugin.info.name) is plugin:
                         del self._plugins[plugin.info.name]
             if published and target_dir is not None and target_dir.exists():
-                shutil.rmtree(target_dir, ignore_errors=True)
+                shutil.rmtree(native_path(target_dir, force_extended=True), ignore_errors=True)
             if staging_dir.exists() and staging_dir.parent == self._plugins_dir and staging_dir.name.startswith("."):
-                shutil.rmtree(staging_dir, ignore_errors=True)
+                shutil.rmtree(native_path(staging_dir, force_extended=True), ignore_errors=True)
             raise
             if staging_dir.exists() and staging_dir.parent == self._plugins_dir and staging_dir.name.startswith("."):
-                shutil.rmtree(staging_dir, ignore_errors=True)
+                shutil.rmtree(native_path(staging_dir, force_extended=True), ignore_errors=True)
             raise
 
     @staticmethod
@@ -270,8 +275,10 @@ class PluginManager:
         new_root = str(target_dir)
 
         def rebase(path: str) -> str:
-            if path == old_root or path.startswith(old_root + os.sep):
-                return new_root + path[len(old_root):]
+            logical = logical_path(path)
+            if logical == old_root or logical.startswith(old_root + os.sep):
+                relocated = new_root + logical[len(old_root):]
+                return native_path(relocated) if logical != path else relocated
             return path
 
         plugin.info.path = target_dir
@@ -351,7 +358,7 @@ class PluginManager:
 
             # The old tree is the rollback point until every replacement step,
             # including metadata and optional reload, has completed.
-            shutil.rmtree(backup_dir)
+            shutil.rmtree(native_path(backup_dir, force_extended=True))
             committed = True
             return current_info.name
         except Exception:
@@ -359,7 +366,7 @@ class PluginManager:
                 if moved_venv and new_venv.exists() and not old_venv.exists():
                     new_venv.replace(old_venv)
                 if plugin_dir.exists():
-                    shutil.rmtree(plugin_dir)
+                    shutil.rmtree(native_path(plugin_dir, force_extended=True))
                 if backup_dir.exists() and not plugin_dir.exists():
                     backup_dir.replace(plugin_dir)
             except Exception:
@@ -367,9 +374,9 @@ class PluginManager:
             raise
         finally:
             if staging_dir.exists():
-                shutil.rmtree(staging_dir, ignore_errors=True)
+                shutil.rmtree(native_path(staging_dir, force_extended=True), ignore_errors=True)
             if committed and backup_dir.exists():
-                shutil.rmtree(backup_dir, ignore_errors=True)
+                shutil.rmtree(native_path(backup_dir, force_extended=True), ignore_errors=True)
 
     def get_active_plugins_snapshot(self) -> List[tuple]:
         """Return thread-safe snapshot of active plugins."""
@@ -379,6 +386,7 @@ class PluginManager:
 
     def discover(self) -> List[PluginInfo]:
         """Scan plugins directory for valid plugins."""
+        self._discovery_errors = {}
         if not self._plugins_dir.exists():
             self._plugins_dir.mkdir(parents=True, exist_ok=True)
 
@@ -389,7 +397,12 @@ class PluginManager:
                     plugins.append(self._parse_manifest(entry))
                 except Exception as e:
                     _log.warning("Skipping plugin '%s': invalid manifest. %s", entry.name, e)
+                    self._discovery_errors[entry.name] = str(e)
         return plugins
+
+    def get_discovery_errors(self) -> Dict[str, str]:
+        """Return reasons installed plugins were omitted by the last scan."""
+        return dict(self._discovery_errors)
 
     def pre_register(self, discovered: List[PluginInfo]) -> None:
         """Pre-register discovered plugins so load() skips re-discovery."""
@@ -574,8 +587,8 @@ class PluginManager:
         paths_to_add = []
         venv_site = self._get_venv_site_packages(plugin)
         if venv_site and venv_site.exists():
-            paths_to_add.append(str(venv_site))
-        paths_to_add.append(str(plugin.info.path))
+            paths_to_add.append(native_path(venv_site))
+        paths_to_add.append(native_path(plugin.info.path))
 
         # Persistently add paths so lazy imports work later
         plugin.sys_paths = []
@@ -592,11 +605,11 @@ class PluginManager:
         code = compile(source_code, str(entry_file), "exec")
 
         module = types.ModuleType(module_name)
-        module.__file__ = str(entry_file)
-        module.__loader__ = importlib.machinery.SourceFileLoader(module_name, str(entry_file))
+        module.__file__ = native_path(entry_file)
+        module.__loader__ = importlib.machinery.SourceFileLoader(module_name, native_path(entry_file))
         module.__package__ = module_name
-        module.__path__ = [str(plugin.info.path)]
-        module.__spec__ = importlib.util.spec_from_file_location(module_name, entry_file, loader=module.__loader__, submodule_search_locations=[str(plugin.info.path)])
+        module.__path__ = [native_path(plugin.info.path)]
+        module.__spec__ = importlib.util.spec_from_file_location(module_name, entry_file, loader=module.__loader__, submodule_search_locations=[native_path(plugin.info.path)])
         module.__lfs_plugin_name__ = plugin.info.name
 
         sys.modules[module_name] = module
@@ -953,10 +966,26 @@ class PluginManager:
         transport: str = "archive",
         source_info: Optional[PluginSourceInfo] = None,
         should_cancel: Optional[Callable[[], bool]] = None,
+        sha256: Optional[str] = None,
     ) -> str:
-        """Install a plugin from GitHub using the selected transport."""
+        """Install a plugin archive or GitHub checkout using the selected transport."""
         self._raise_if_cancelled(should_cancel)
         mode = self._normalize_install_transport(transport)
+        url, digest = _install_digest(url, sha256 or (source_info.checksum if source_info else None))
+        if mode == "git" and digest:
+            raise PluginError(_localized_progress(
+                "plugin_marketplace.error.digest_requires_archive",
+                "SHA-256 verification requires archive install transport.",
+            ))
+        if not digest:
+            warning = _localized_progress(
+                "plugin_marketplace.warning.unverified_source",
+                "Warning: this plugin source has no SHA-256 digest; its archive is unverified.",
+            )
+            if on_progress:
+                on_progress(warning)
+            else:
+                _log.warning(warning)
         if mode == "git":
             # Git cloning chooses its target from the repository name before
             # the manifest is available. Hold the predicted name lock for that
@@ -982,28 +1011,45 @@ class PluginManager:
             self._validate_plugin_name(predicted_name)
         except (PluginError, ValueError):
             predicted_name = None
+        archive_validator = (lambda archive: verify_archive_sha256(archive, digest)) if digest else None
         if predicted_name:
             with self._plugin_lifecycle(predicted_name):
                 if should_cancel is None:
-                    staging_dir, source_info = prepare_github_archive(
-                        url, self._plugins_dir, on_progress
-                    )
+                    if archive_validator is None:
+                        staging_dir, source_info = prepare_github_archive(
+                            url, self._plugins_dir, on_progress
+                        )
+                    else:
+                        staging_dir, source_info = prepare_github_archive(
+                            url, self._plugins_dir, on_progress,
+                            archive_validator=archive_validator,
+                        )
                 else:
                     staging_dir, source_info = prepare_github_archive(
-                        url, self._plugins_dir, on_progress, should_cancel=should_cancel
+                        url, self._plugins_dir, on_progress,
+                        should_cancel=should_cancel,
+                        archive_validator=archive_validator,
                     )
-                return self._finalize_new_plugin_install(
-                    staging_dir, source_info, on_progress, auto_load, should_cancel
-                )
         else:
-            if should_cancel is None:
-                staging_dir, source_info = prepare_github_archive(
-                    url, self._plugins_dir, on_progress
-                )
-            else:
-                staging_dir, source_info = prepare_github_archive(
-                    url, self._plugins_dir, on_progress, should_cancel=should_cancel
-                )
+            source_url = url
+            if "#" in url:
+                source_url = url.split("#", 1)[0]
+            archive_kwargs = {
+                "temp_prefix": ".plugin-",
+                "on_progress": on_progress,
+                "archive_validator": archive_validator,
+            }
+            if should_cancel is not None:
+                archive_kwargs["should_cancel"] = should_cancel
+            staging_dir = prepare_archive_from_download_url(
+                source_url, self._plugins_dir, **archive_kwargs
+            )
+            source_info = PluginSourceInfo(
+                transport="archive",
+                origin=url,
+                archive_url=source_url,
+                checksum=digest,
+            )
         return self._finalize_new_plugin_install(
             staging_dir, source_info, on_progress, auto_load, should_cancel
         )
@@ -1182,6 +1228,15 @@ class PluginManager:
             raise PluginError(f"No git install method available for {plugin_id}")
 
         if version_info.download_url:
+            if not version_info.checksum:
+                warning = _localized_progress(
+                    "plugin_marketplace.warning.unverified_source",
+                    "Warning: this plugin source has no SHA-256 digest; its archive is unverified.",
+                )
+                if on_progress:
+                    on_progress(warning)
+                else:
+                    _log.warning(warning)
             source_info = PluginSourceInfo(
                 transport="archive",
                 origin=repo_url or version_info.download_url,
@@ -1194,7 +1249,7 @@ class PluginManager:
                 "temp_prefix": f".{plugin_id.replace(':', '-')}-",
                 "on_progress": on_progress,
                 "archive_validator": (
-                    (lambda path: self._verify_registry_archive_checksum(path, version_info, plugin_id))
+                    (lambda archive: self._verify_registry_archive_checksum(archive, version_info, plugin_id))
                     if version_info.checksum
                     else None
                 ),
@@ -1211,17 +1266,41 @@ class PluginManager:
             )
 
         if repo_url:
+            if not version_info.checksum:
+                warning = _localized_progress(
+                    "plugin_marketplace.warning.unverified_source",
+                    "Warning: this plugin source has no SHA-256 digest; its archive is unverified.",
+                )
+                if on_progress:
+                    on_progress(warning)
+                else:
+                    _log.warning(warning)
             install_url = f"{repo_url}@{version_info.git_ref}" if version_info.git_ref else repo_url
             if should_cancel is None:
-                staging_dir, source_info = prepare_github_archive(
-                    install_url, self._plugins_dir, on_progress
+                validator = (
+                    lambda archive: self._verify_registry_archive_checksum(archive, version_info, plugin_id)
+                    if version_info.checksum else None
                 )
+                if validator is None:
+                    staging_dir, source_info = prepare_github_archive(
+                        install_url, self._plugins_dir, on_progress
+                    )
+                else:
+                    staging_dir, source_info = prepare_github_archive(
+                        install_url, self._plugins_dir, on_progress,
+                        archive_validator=validator,
+                    )
             else:
+                validator = (
+                    lambda archive: self._verify_registry_archive_checksum(archive, version_info, plugin_id)
+                    if version_info.checksum else None
+                )
                 staging_dir, source_info = prepare_github_archive(
                     install_url,
                     self._plugins_dir,
                     on_progress,
                     should_cancel=should_cancel,
+                    archive_validator=validator,
                 )
             source_info = PluginSourceInfo(
                 transport=source_info.transport,
@@ -1244,11 +1323,11 @@ class PluginManager:
 
     def _verify_registry_archive_checksum(
         self,
-        archive_path: Path,
+        archive: bytes,
         version_info: RegistryVersionInfo,
         plugin_id: str,
     ) -> None:
-        if version_info.checksum and not self.registry.verify_checksum(archive_path, version_info.checksum):
+        if version_info.checksum and not self.registry.verify_checksum(archive, version_info.checksum):
             raise PluginError(f"Checksum verification failed for {plugin_id}")
 
     def _update_archive_plugin_from_registry(
@@ -1287,7 +1366,7 @@ class PluginManager:
                 temp_prefix=f".{plugin_dir.name}-",
                 on_progress=on_progress,
                 archive_validator=(
-                    (lambda path: self._verify_registry_archive_checksum(path, version_info, plugin_id))
+                    (lambda archive: self._verify_registry_archive_checksum(archive, version_info, plugin_id))
                     if version_info.checksum
                     else None
                 ),

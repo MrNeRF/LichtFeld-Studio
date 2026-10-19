@@ -43,6 +43,10 @@ namespace lfs::app {
                     return it->second;
                 }
             }
+            if (node.type == core::NodeType::CAMERA_GROUP) {
+                // Restore stores 0. The scene tree counts camera children.
+                return scene_.getCameraTrainingCounts(node.id).total;
+            }
             return node.gaussian_count.load(std::memory_order_acquire);
         }
 

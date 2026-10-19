@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Persistent gallery work queue. Network and disk transfers run off the UI thread."""
 from __future__ import annotations
+from _lfs_path_io import native_path, open
 
 import copy
 from contextlib import contextmanager
@@ -16,7 +17,7 @@ import threading
 import uuid
 import time
 import urllib.error
-from pathlib import Path
+from _lfs_path_io import Path
 
 from .private_directory import mkdir_private
 from .portal_account import PortalHTTPError, PortalProtocolError, _locked_sidecar
@@ -332,7 +333,7 @@ class GallerySync:
                     raise ValueError("Gallery transfer history is too large to save. Keep the recovery folder for help.")
             temporary = None
             try:
-                with tempfile.NamedTemporaryFile(mode="w", dir=self.root, delete=False) as file:
+                with tempfile.NamedTemporaryFile(mode="w", dir=native_path(self.root), delete=False) as file:
                     temporary = Path(file.name)
                     file.write(encoded)
                     file.flush()
@@ -347,7 +348,7 @@ class GallerySync:
                     path_identity.validate()
                     if len(check) > 2 and file_stamp(path_identity.path) != check[2]:
                         raise ValueError("The local project changed. Review it before updating.")
-                os.replace(temporary, self._journal)
+                os.replace(native_path(temporary), native_path(self._journal))
                 self._journal_seen = True
                 self._disk_digest = hashlib.sha256(encoded.encode()).hexdigest()
             finally:
@@ -676,7 +677,7 @@ class GallerySync:
         identity = (self.account.base_url, snap.email, snap.connected_since, snap.signed_in)
         with self._lock:
             if identity != self._poster_identity or not snap.signed_in:
-                shutil.rmtree(self.root / "posters", ignore_errors=True)
+                shutil.rmtree(native_path(self.root / "posters", force_extended=True), ignore_errors=True)
                 self._poster_entries.clear()
                 self._storage_hosts = None
                 self._poster_identity = identity
@@ -732,7 +733,7 @@ class GallerySync:
                         return
                     if status == 304 and old and old.is_file():
                         # LRU access must not change the image decoder's revision.
-                        os.utime(old, ns=(time.time_ns(), old.stat().st_mtime_ns))
+                        os.utime(native_path(old), ns=(time.time_ns(), old.stat().st_mtime_ns))
                         continue
                     if status == 304:
                         continue
@@ -743,7 +744,7 @@ class GallerySync:
                         stale.unlink(missing_ok=True)
                     destination = folder / f"{scene_id}-{revision}.png"
                     destination.write_bytes(data)
-                    os.utime(destination, ns=(time.time_ns(), destination.stat().st_mtime_ns))
+                    os.utime(native_path(destination), ns=(time.time_ns(), destination.stat().st_mtime_ns))
                     self._poster_entries[scene_id] = {"path": str(destination), "etag": tag}
                     self._trim_poster_cache(cache_limit)
             except (OSError, ValueError, PortalHTTPError, PortalProtocolError) as exc:
@@ -1345,6 +1346,8 @@ class GallerySync:
                 source_identity.validate()
                 _require_project(project_path, project_id)
                 digest = hashlib.sha256()
+                # The I/O-aware Path supplies the native spelling via __fspath__;
+                # retain the PathLike contract for temporary-file wrappers.
                 with open(project_path, "rb") as source, tempfile.NamedTemporaryFile(dir=directory, delete=False) as output:
                     temporary = Path(output.name)
                     while block := source.read(4 * 1024 * 1024):
@@ -1362,7 +1365,7 @@ class GallerySync:
                 source_identity.validate()
                 _require_project(project_path, project_id)
                 backup_identity.validate()
-                os.replace(temporary, backup)
+                os.replace(native_path(temporary), native_path(backup))
                 temporary = None
                 with self._lock:
                     record.update(state="ready", backupPath=str(backup), sha256=digest.hexdigest())
@@ -1579,7 +1582,7 @@ class GallerySync:
                 if file_stamp(target) != expected_stamp:
                     raise ValueError("The local project changed. Keep the backup and review both files.")
                 digest = hashlib.sha256()
-                with source.open("rb") as incoming, tempfile.NamedTemporaryFile(dir=target_identity.canonical_path.parent, delete=False) as output:
+                with source.open("rb") as incoming, tempfile.NamedTemporaryFile(dir=native_path(target_identity.canonical_path.parent), delete=False) as output:
                     temporary = Path(output.name)
                     while chunk := incoming.read(gallery_validation.CHUNK_BYTES):
                         self._client()
@@ -1595,7 +1598,7 @@ class GallerySync:
                 expected_project = record.get("project") or _project_uuid(source)
                 _require_project(source, expected_project)
                 _require_project(target, expected_project)
-                os.replace(temporary, target_identity.canonical_path)
+                os.replace(native_path(temporary), native_path(target_identity.canonical_path))
                 restored = True
                 record["undoRestored"] = True
                 if record.get("previousLink") and record.get("appliedLink"):
@@ -1727,9 +1730,9 @@ class GallerySync:
         try:
             try:
                 if path.is_dir():
-                    os.rmdir(path.name, dir_fd=directory)
+                    os.rmdir(native_path(path.name), dir_fd=directory)
                 else:
-                    os.unlink(path.name, dir_fd=directory)
+                    os.unlink(native_path(path.name), dir_fd=directory)
             except FileNotFoundError:
                 pass
         finally:
@@ -2103,7 +2106,7 @@ class GallerySync:
                     output.flush()
                     os.fsync(output.fileno())
                 self._client()
-                os.replace(temporary, target)
+                os.replace(native_path(temporary), native_path(target))
                 job["settingsEnvironment"] = {"state": "ready", "path": str(target)}
             except Exception as exc:
                 job["settingsEnvironment"] = {"state": "failed", "message": friendly_error(exc)}

@@ -13,6 +13,11 @@
 
 namespace lfs::vis {
 
+    [[nodiscard]] inline bool externalFloatingWindowsEnabled(bool has_renderer, bool launch_safe_mode,
+                                                             bool environment_safe_mode, bool opted_in) {
+        return has_renderer && !launch_safe_mode && !environment_safe_mode && opted_in;
+    }
+
     [[nodiscard]] inline bool automaticWindowStatePersistenceEnabled() {
         return !lfs::core::environment::flag("LFS_SAFE_MODE", false);
     }
@@ -140,6 +145,26 @@ namespace lfs::vis {
             return centerWindowOnDisplay(window, *intersected_display, minimum_width, minimum_height);
         }
         return window;
+    }
+
+    [[nodiscard]] inline WindowRectangle defaultFloatingWindowRectangle(
+        const WindowRectangle& window, const WindowRectangle& parent,
+        const WindowRectangle& display) {
+        const auto centered = centerWindowOnDisplay(window, parent, 320, 180);
+        return clampWindowIntoDisplay(centered, display, 320, 180);
+    }
+
+    // Detached RmlUi panels have no OS title bar to recover an inaccessible
+    // window. Require a usable part of their own title bar on a live display.
+    [[nodiscard]] inline WindowRectangle recoverFloatingWindowRectangle(
+        const WindowRectangle& window, const std::vector<WindowRectangle>& displays,
+        const WindowRectangle& fallback_display) {
+        const auto recovered = recoverWindowRectangle(window, displays, fallback_display, 96, 64, 320, 180);
+        const WindowRectangle title{recovered.x, recovered.y, recovered.width, std::min(30, recovered.height)};
+        if (windowRectangleVisible(title, displays, 96, std::min(24, title.height)))
+            return recovered;
+        const auto target = displayWithLargestIntersection(recovered, displays).value_or(fallback_display);
+        return clampWindowIntoDisplay(recovered, target, 320, 180);
     }
 
 } // namespace lfs::vis

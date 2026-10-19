@@ -102,9 +102,6 @@ class HelpMenu:
 
     def menu_items(self):
         items = [menu_operator(GettingStartedOperator)]
-        if lf.ui.is_windows_platform():
-            items.append(menu_separator())
-            items.append(menu_operator(SetDefaultAppOperator))
         items.append(menu_separator())
         items.append(menu_operator(BugReportOperator))
         items.append(menu_operator(AboutOperator))

@@ -17,6 +17,7 @@ set(LFS_CORE_CUDA_SOURCES
     kernels/sh_layout.cu
     kernels/initial_scales.cu
     kernels/image_quantize.cu
+    kernels/mask_normalization.cu
     sh_value_quant_kernels.cu
     tensor_debug.cu
 )

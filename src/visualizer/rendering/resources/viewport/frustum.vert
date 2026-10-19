@@ -1,4 +1,7 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#define LFS_EQUIRECT_GLSL
+#include "../../../../rendering/rasterizer/vulkan/shader/src/slang/equirect_projection.inc"
 
 // Generates thick frustum-edge quads for each camera instance.
 
@@ -30,8 +33,6 @@ layout(push_constant) uniform FrustumPush {
     vec4 viewport_panel;
     vec4 projection;
 } pc;
-
-const float PI = 3.14159265358979323846;
 
 const vec3 PTS[5] = vec3[5](
     vec3(-0.5, -0.5, -1.0),
@@ -72,11 +73,9 @@ bool projectEquirect(vec3 view, vec2 panel_pos, vec2 panel_size, out vec2 screen
     if (depth <= 1e-6) {
         return false;
     }
-    vec3 dir = view / depth;
-    float ndc_x = atan(dir.x, -dir.z) / PI;
-    float ndc_y = -asin(clamp(dir.y, -1.0, 1.0)) / (PI * 0.5);
-    screen = panel_pos + vec2((ndc_x * 0.5 + 0.5) * panel_size.x,
-                              (ndc_y * 0.5 + 0.5) * panel_size.y);
+    vec2 uv = lfs_equirect_uv(view / depth);
+    vec2 ndc = 2.0 * uv - 1.0;
+    screen = panel_pos + (ndc * 0.5 + 0.5) * panel_size;
     return true;
 }
 

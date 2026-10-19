@@ -296,7 +296,8 @@ namespace {
         double encode_ms = 0.0;
         try {
             encode_ms = measure_ms([&] {
-                encoded = loader.encode_to_jpeg2k(tensor, nullptr, high_throughput);
+                encoded = loader.encode_to_jpeg2k(
+                    tensor, lfs::io::RgbLayout::HWC, nullptr, high_throughput);
             });
         } catch (const std::exception& e) {
             throw std::runtime_error(name + " encode failed: " + e.what() + "\n" +

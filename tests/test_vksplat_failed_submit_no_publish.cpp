@@ -33,6 +33,7 @@ namespace {
         int end_calls = 0;
         int begin_calls = 0;
         int reset_cb_calls = 0;
+        int wait_semaphore_calls = 0;
         VkResult first_submit_result = VK_ERROR_DEVICE_LOST;
         VkResult query_result = VK_NOT_READY;
         int query_calls = 0;
@@ -93,6 +94,11 @@ namespace {
             if (value != nullptr) {
                 *value = 0;
             }
+            return VK_SUCCESS;
+        }
+        static VKAPI_ATTR VkResult VKAPI_CALL wait_semaphores(
+            VkDevice, const VkSemaphoreWaitInfo*, uint64_t) {
+            ++active()->wait_semaphore_calls;
             return VK_SUCCESS;
         }
     };
@@ -195,7 +201,7 @@ namespace {
         d.queue_submit = &SubmitScript::queue_submit;
         d.reset_command_buffer = &SubmitScript::reset_cb;
         d.get_semaphore_counter_value = &SubmitScript::get_sem;
-        // wait_semaphores unused when pending is empty / counter is 0.
+        d.wait_semaphores = &SubmitScript::wait_semaphores;
         return d;
     }
 
@@ -272,4 +278,24 @@ TEST(VksplatTimestampTest, MissingProfilingResultsNeverBlockOrFailRendering) {
     } catch (const lfs::Exception& error) {
         EXPECT_EQ(error.error().code(), lfs::ErrorCode::DeviceLost);
     }
+}
+
+TEST(VksplatCommandBatchTest, SplitFrameSubmissionBurstDoesNotWaitForSlotReuse) {
+    SubmitScript script;
+    script.first_submit_result = VK_SUCCESS;
+    BindSubmit bind(script);
+
+    TestablePipeline pipeline;
+    pipeline.install_fake_handles();
+    pipeline.setVulkanDispatch(make_scripted_dispatch());
+
+    const VkSemaphore semaphore = fakeVkHandle<VkSemaphore>(0xCDEF);
+    // Measured split frames submit thirteen command batches across both panes.
+    for (std::uint64_t value = 1; value <= 13; ++value) {
+        pipeline.beginCommandBatch();
+        pipeline.endCommandBatch(/*use_fence=*/false, semaphore, value);
+    }
+
+    EXPECT_EQ(script.submit_calls, 13);
+    EXPECT_EQ(script.wait_semaphore_calls, 0);
 }

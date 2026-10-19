@@ -57,6 +57,15 @@ A `CKPT` chapter is resumable project state only while `SCNG` identifies the
 training-model node and binds that node to the checkpoint instance. Ordinary
 scene splats do not retain optimizer or training-session state.
 
+`PROJ.training_initialization` is optional. It stores `data_origin` (three finite
+floats), optional `scene_center` (three finite floats), and optional
+`init_reference_uuid` bound to a `REFS` row with key/kind `training_init`.
+The path and fingerprint live only in `REFS`. Untrained GUI reopen restores these
+values; a missing init file warns and falls back to the restored point cloud.
+Headless dataset-project adoption uses the stored init unless `--init` overrides
+it, and recomputes the origin and center on import. Older projects may omit the
+object; the format version is unchanged.
+
 Switching a completed or paused training session to Edit Mode is an explicit
 conversion: the current trained model becomes an editable splat, the training
 binding is removed from `SCNG`, and the formerly resumable `CKPT` is retired by
@@ -83,6 +92,9 @@ crashes happen, and files outlive programs.
   layout, sequencer, camera, …); each chapter is the single source of truth for its fields.
 - The `PROJ` chapter may optionally carry a `license` object with a non-empty `identifier` and an
   optional `notice`; omitted `license` means that no project license is declared.
+- Deprecated: the `GUIL` panel registry's `active_tabs.scene_panel` (the former Scene/History
+  tab). LichtFeld Studio no longer writes it and ignores it when reading; projects saved by
+  earlier versions may still carry it.
 - **Autosave & recovery.** A periodic autosave writes to a separate `<project>.licht.autosave`
   sidecar. Recovery validates that sidecar against the master head and can materialize it into a
   retained recovery session before the next durable save. Compaction and recovery publication

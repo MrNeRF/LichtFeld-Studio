@@ -32,7 +32,7 @@ namespace lfs::io::cuda {
         size_t height,
         size_t width,
         size_t channels,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr, bool exact_mask_alpha = false);
 
     // Fused kernel: uint8 CHW -> float32 CHW normalized [0,1]
     void launch_uint8_chw_to_float32_chw(
@@ -48,7 +48,7 @@ namespace lfs::io::cuda {
         size_t height,
         size_t width,
         size_t channels,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr, bool exact_mask_alpha = false);
 
     // Fused kernel: float32 HWC [0,1] -> uint16 HWC [0, 65535]
     void launch_float32_hwc_to_uint16_hwc(
@@ -66,7 +66,7 @@ namespace lfs::io::cuda {
         size_t height,
         size_t width,
         size_t channels,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr, bool exact_mask_alpha = false);
 
     // Fused kernel: float32 CHW normals [-1,1] -> float32 HWC [0,1]
     void launch_normal_chw_to_jpeg2k_hwc(

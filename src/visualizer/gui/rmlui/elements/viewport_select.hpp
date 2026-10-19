@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "form_control_layout.hpp"
 #include <RmlUi/Core/ComputedValues.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/Elements/ElementFormControlSelect.h>
@@ -32,9 +33,9 @@ namespace lfs::vis::gui {
 
     // Contexts include off-screen shadow padding. Native selects only know the
     // context size, so correct their popup before its children are rendered.
-    class ViewportSelect : public Rml::ElementFormControlSelect {
+    class ViewportSelect : public FormControlLayout<Rml::ElementFormControlSelect> {
     public:
-        explicit ViewportSelect(const Rml::String& tag) : Rml::ElementFormControlSelect(tag) {}
+        explicit ViewportSelect(const Rml::String& tag) : FormControlLayout(tag) {}
 
     protected:
         void OnRender() override {

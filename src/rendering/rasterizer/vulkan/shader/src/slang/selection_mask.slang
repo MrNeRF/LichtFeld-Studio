@@ -158,6 +158,18 @@ bool project_gut_splat(
         mean2d += weight * image_points[i];
     }
     if (is_equirectangular_camera(cam)) {
+        // Near a pole the unscented mean leaves the sigma-point box and no
+        // longer sits on the band that is drawn. Use the projected center.
+        float2 lo = image_points[0];
+        float2 hi = image_points[0];
+        for (uint i = 1u; i < NUM_SIGMA_POINTS; ++i) {
+            lo.x = min(lo.x, image_points[i].x);
+            lo.y = min(lo.y, image_points[i].y);
+            hi.x = max(hi.x, image_points[i].x);
+            hi.y = max(hi.y, image_points[i].y);
+        }
+        if (mean2d.x < lo.x || mean2d.x > hi.x || mean2d.y < lo.y || mean2d.y > hi.y)
+            mean2d = image_points[0];
         mean2d.x = wrap_image_x(mean2d.x, cam);
     }
 
@@ -359,14 +371,49 @@ bool project_ring_splat(
 }
 
 [ForceInline]
-bool primitive_hit(float2 position, float4 primitive, uint mode)
+bool x_in_range(float x, float x0, float x1)
 {
-    if (mode == SELECTION_MODE_RECTANGLE) {
-        return position.x >= primitive.x && position.x <= primitive.z &&
-               position.y >= primitive.y && position.y <= primitive.w;
+    return x >= x0 && x <= x1;
+}
+
+// Circle hits already wrap longitude. Rectangle and lasso must test the same
+// seam copies. The pixel-center shift stores that sample half a pixel outside
+// x=0, so a strip that covers the left edge includes it.
+[ForceInline]
+bool equirect_seam_x(float x, float x0, float x1, float width)
+{
+    if (x0 <= 0.0f)
+        x0 -= 0.5f;
+    return x_in_range(x, x0, x1) || x_in_range(x - width, x0, x1) || x_in_range(x + width, x0, x1);
+}
+
+[ForceInline]
+bool primitive_hit(float2 position, float4 primitive, SelectionUniforms uniforms)
+{
+    if (uniforms.mode == SELECTION_MODE_RECTANGLE) {
+        const bool equirect = base_camera_model(uniforms.camera_model) == uint(CameraModel::EQUIRECTANGULAR);
+        float y0 = primitive.y;
+        float y1 = primitive.w;
+        // The pole sample is stored half a pixel outside y=0 after the
+        // pixel-center shift. A strip covering that edge includes it.
+        if (equirect && uniforms.image_height > 0u) {
+            if (y0 <= 0.0f)
+                y0 -= 0.5f;
+            if (y1 >= float(uniforms.image_height))
+                y1 += 0.5f;
+        }
+        if (position.y < y0 || position.y > y1)
+            return false;
+        if (equirect && uniforms.image_width > 0u)
+            return equirect_seam_x(position.x, primitive.x, primitive.z, float(uniforms.image_width));
+        return x_in_range(position.x, primitive.x, primitive.z);
     }
 
     float2 delta = position - primitive.xy;
+    if (base_camera_model(uniforms.camera_model) == uint(CameraModel::EQUIRECTANGULAR)) {
+        const float width = float(uniforms.image_width);
+        delta.x -= round(delta.x / width) * width;
+    }
     return dot(delta, delta) <= primitive.z;
 }
 
@@ -474,7 +521,7 @@ bool update_ring_pick(uint depth_key, uint splat_idx, SelectionUniforms uniforms
 }
 
 [ForceInline]
-bool polygon_mask_hit(float2 position, SelectionUniforms uniforms)
+bool polygon_mask_contains(float2 position, SelectionUniforms uniforms)
 {
     int ix = int(floor(position.x)) - int(uniforms.aabb_x0);
     int iy = int(floor(position.y)) - int(uniforms.aabb_y0);
@@ -482,6 +529,31 @@ bool polygon_mask_hit(float2 position, SelectionUniforms uniforms)
         return false;
     uint idx = uint(iy) * uniforms.aabb_w + uint(ix);
     return read_byte(polygon_mask, idx) != 0u;
+}
+
+[ForceInline]
+bool polygon_mask_hit(float2 position, SelectionUniforms uniforms)
+{
+    if (polygon_mask_contains(position, uniforms))
+        return true;
+    if (base_camera_model(uniforms.camera_model) != uint(CameraModel::EQUIRECTANGULAR) ||
+        uniforms.image_width == 0u)
+        return false;
+
+    // A pole sample sits half a pixel above row 0 after the pixel-center shift.
+    float2 sample = position;
+    if (sample.y >= -0.5f && sample.y < 0.0f) {
+        sample.y = 0.0f;
+        if (polygon_mask_contains(sample, uniforms))
+            return true;
+    }
+    const float width = float(uniforms.image_width);
+    if (polygon_mask_contains(sample + float2(width, 0.0f), uniforms) ||
+        polygon_mask_contains(sample - float2(width, 0.0f), uniforms))
+        return true;
+    if (sample.x >= -0.5f && sample.x < 0.0f)
+        return polygon_mask_contains(float2(0.0f, sample.y), uniforms);
+    return false;
 }
 
 [shader("compute")]
@@ -525,7 +597,7 @@ void main(
                     selected = polygon_mask_hit(position, uniforms);
                 } else {
                     for (uint primitive_idx = 0u; primitive_idx < uniforms.primitive_count; ++primitive_idx) {
-                        if (primitive_hit(position, primitives[primitive_idx], uniforms.mode)) {
+                        if (primitive_hit(position, primitives[primitive_idx], uniforms)) {
                             selected = true;
                             break;
                         }

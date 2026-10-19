@@ -3,6 +3,7 @@
 
 #include "timeline.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "interpolation.hpp"
 #include "io/atomic_output.hpp"
@@ -423,8 +424,8 @@ namespace lfs::sequencer {
                     throw std::runtime_error(
                         "Timeline clip_duration is outside the supported range");
                 }
-                if (loaded_duration == 0.0f)
-                    loaded_duration = DEFAULT_CLIP_DURATION_SECONDS;
+                // An explicit 0 is a duration. The clamp below matches setClipDuration.
+                // Only a missing key keeps DEFAULT_CLIP_DURATION_SECONDS.
             }
             float real_end_time = 0.0f;
             for (auto it = loaded_keyframes.rbegin();
@@ -461,7 +462,7 @@ namespace lfs::sequencer {
             }
 
             std::error_code size_error;
-            const uintmax_t file_size = std::filesystem::file_size(path_fs, size_error);
+            const uintmax_t file_size = lfs::core::native_fs::file_size(path_fs, size_error);
             if (size_error || file_size == 0 || file_size > MAX_TIMELINE_JSON_BYTES)
                 throw std::runtime_error("Timeline JSON is empty or exceeds the 16 MiB input budget");
             std::vector<char> json_bytes(static_cast<size_t>(file_size) + 1);

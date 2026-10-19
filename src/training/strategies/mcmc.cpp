@@ -196,7 +196,7 @@ namespace lfs::training {
         } else {
             weights = zero_frozen_scores(*_splat_data, _error_score_max.clamp_min(1e-12f));
         }
-        return apply_crop_damping_to_scores(*_optimizer, weights);
+        return roi_share_sampling_weights(*_optimizer, apply_crop_damping_to_scores(*_optimizer, weights));
     }
 
     void MCMC::ensure_ratio_workspace_size(const size_t required) {

@@ -8,13 +8,6 @@ from .layouts.menus import keymap_shortcut, menu_action, menu_separator, registe
 __lfs_menu_classes__ = ["ViewMenu"]
 
 
-def _tr_fallback(key: str, fallback: str) -> str:
-    result = lf.ui.tr(key)
-    if result and result != key:
-        return result
-    return fallback
-
-
 @register_menu
 class ViewMenu:
     """View menu for the menu bar."""
@@ -141,17 +134,33 @@ class ViewMenu:
             )
 
         return [
-            menu_submenu(f"{tr('menu.view.theme')} · {active_theme_label}", theme_items),
-            menu_submenu(tr("menu.view.ui_scale"), scale_items),
+            menu_action(tr("menu.view.home_view"), lf.go_home,
+                        shortcut=keymap_shortcut(lf.keymap.Action.CAMERA_RESET_HOME)),
+            menu_action(tr("input_settings.action.camera_set_home"), lf.set_home,
+                        shortcut=keymap_shortcut(lf.keymap.Action.CAMERA_SET_HOME)),
+            menu_action(tr("toolbar.reset_home"), lf.reset_home,
+                        shortcut=keymap_shortcut(lf.keymap.Action.CAMERA_RESTORE_HOME)),
+            menu_separator(),
+            menu_toggle(tr("menu.view.split_view"), lf.toggle_independent_split_view,
+                        lf.ui.get_split_view_mode() == "independent_dual"),
+            menu_action(tr("ui.hide_ui"), lf.toggle_ui,
+                        shortcut=keymap_shortcut(lf.keymap.Action.TOGGLE_UI)),
             menu_separator(),
             menu_toggle(
-                tr("menu.view.performance_hud"),
-                lf.ui.toggle_vram_hud,
+                tr("menu.view.performance_hud"), lf.ui.toggle_vram_hud,
                 bool(getattr(lf.ui, "is_perf_hud_visible", lambda: False)()),
                 shortcut=keymap_shortcut(lf.keymap.Action.TOGGLE_PERFORMANCE_HUD),
             ),
-            menu_action(_tr_fallback("image_preview.reset_view", "Reset View"), lf.reset_camera),
-            menu_action(_tr_fallback("main_panel.console", "Console"), lf.ui.toggle_system_console),
+            menu_toggle(
+                tr("scene.logging"),
+                lambda: lf.ui.set_panel_enabled("lfs.logging", not lf.ui.is_panel_enabled("lfs.logging")),
+                lf.ui.is_panel_enabled("lfs.logging"),
+            ),
+            menu_separator(),
+            menu_submenu(tr("preferences.appearance"), [
+                menu_submenu(f"{tr('menu.view.theme')} · {active_theme_label}", theme_items),
+                menu_submenu(tr("menu.view.ui_scale"), scale_items),
+            ]),
         ]
 
 

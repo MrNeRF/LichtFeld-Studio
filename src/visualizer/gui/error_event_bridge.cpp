@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/error_event_bridge.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/error.hpp"
 #include "core/error_bus.hpp"
@@ -176,19 +177,24 @@ namespace lfs::vis::gui {
         const std::size_t count = e.files.size();
         const std::size_t display_count = std::min(count, MAX_DISPLAY);
 
+        std::string full_list;
+        for (const auto& path : e.files)
+            full_list += std::format("  - {}\n", path);
+        LOG_WARN("Dropped {} item(s) that were not opened:\n{}", count, full_list);
+
         std::string file_list;
         file_list.reserve(display_count * 64);
         for (std::size_t i = 0; i < display_count; ++i) {
             const std::filesystem::path p(e.files[i]);
-            const bool is_dir = std::filesystem::is_directory(p);
+            const bool is_dir = lfs::core::native_fs::is_directory(p);
             file_list += std::format("  - {} ({})\n", lfs::core::path_to_utf8(p.filename()),
                                      is_dir ? LOC(Notif::DIRECTORY) : LOC(Notif::FILE));
         }
         if (count > MAX_DISPLAY) {
-            file_list += std::format("  {} {}\n", LOC(Notif::AND_MORE), count - MAX_DISPLAY);
+            file_list += std::format("  {}\n", LOCF("notification.and_more_in_log", count - MAX_DISPLAY));
         }
 
-        const bool single_dir = count == 1 && std::filesystem::is_directory(e.files[0]);
+        const bool single_dir = count == 1 && lfs::core::native_fs::is_directory(e.files[0]);
         const char* item_type = count == 1 ? (single_dir ? LOC(Notif::DIRECTORY) : LOC(Notif::FILE))
                                            : LOC(Notif::ITEMS);
 

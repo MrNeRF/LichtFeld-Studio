@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Plugin registry client."""
+from _lfs_path_io import native_path, open
 
 import hashlib
 import json
@@ -10,7 +11,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Dict, List, Optional, Tuple
 
 from .environment import value as environment_value
@@ -284,9 +285,10 @@ class RegistryClient:
             supported_features=supported_features,
         )
 
-    def verify_checksum(self, path: Path, expected: str) -> bool:
-        """Verify SHA-256 checksum of a file."""
-        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    def verify_checksum(self, archive: Path | bytes, expected: str) -> bool:
+        """Verify SHA-256 checksum of an archive or its bytes."""
+        data = archive if isinstance(archive, bytes) else Path(archive).read_bytes()
+        actual = hashlib.sha256(data).hexdigest()
         return actual == expected.removeprefix("sha256:")
 
     def _get_index(self) -> Dict:
@@ -359,18 +361,18 @@ class RegistryClient:
         temporary_path = None
         try:
             fd, temporary_path = tempfile.mkstemp(
-                prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+                prefix=f".{path.name}.", suffix=".tmp", dir=native_path(path.parent)
             )
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
                 json.dump(data, stream, ensure_ascii=False)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temporary_path, path)
+            os.replace(native_path(temporary_path), native_path(path))
             temporary_path = None
         finally:
             if temporary_path:
                 try:
-                    os.unlink(temporary_path)
+                    os.unlink(native_path(temporary_path))
                 except OSError:
                     pass
 

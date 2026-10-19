@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -338,6 +339,7 @@ namespace lfs::python {
 
     LFS_PYTHON_RUNTIME_API void set_visualizer(vis::Visualizer* viewer);
     LFS_PYTHON_RUNTIME_API vis::Visualizer* get_visualizer();
+    LFS_PYTHON_RUNTIME_API void markProjectSessionChapterCommitted(std::string_view chapter);
 
     LFS_PYTHON_RUNTIME_API void set_parameter_manager(vis::ParameterManager* pm);
     LFS_PYTHON_RUNTIME_API vis::ParameterManager* get_parameter_manager();
@@ -415,6 +417,7 @@ namespace lfs::python {
         std::string format;
         std::string path;
         std::string error;
+        std::string warning;
     };
 
     struct OverlayImportState {
@@ -704,6 +707,11 @@ namespace lfs::python {
         void* (*get_context)(void* host);
         void (*set_foreground)(void* host, bool fg);
         void (*set_floating)(void* host, bool floating);
+        void* (*native_window)(void* host);
+        void* (*native_graphics)(void* host);
+        bool (*external_allowed)(void* host);
+        bool (*restored_external_bounds)(void* host, float* bounds);
+        bool (*configure_external)(void* host, float x, float y, float w, float h, bool desktop_coordinates);
         void (*mark_content_dirty)(void* host);
         void (*set_input_clip_y)(void* host, float y_min, float y_max);
         void (*set_input)(void* host, const void* input);

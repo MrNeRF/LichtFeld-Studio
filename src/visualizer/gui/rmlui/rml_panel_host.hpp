@@ -50,6 +50,12 @@ namespace lfs::vis::gui {
         void prepareDirect(float w, float h);
         void syncDirectLayout(float w, float h);
         bool ensureContext();
+        SDL_Window* nativeWindow() const;
+        RmlUIManager* manager() const { return manager_; }
+        bool externalAllowed() const { return floating_ && manager_->externalWindowsAllowed(context_name_); }
+        bool restoredExternalBounds(float* bounds) const { return externalAllowed() && manager_->restoredExternalBounds(context_name_, bounds); }
+        bool configureExternal(float x, float y, float w, float h, bool desktop_coordinates);
+        VulkanContext* nativeGraphics() const { return manager_->nativeGraphics(rml_context_); }
         bool ensureDocumentLoaded();
         bool reloadDocument();
         void releaseRendererResources();
@@ -77,8 +83,9 @@ namespace lfs::vis::gui {
             clip_y_max_ = y_max;
         }
         bool needsAnimationFrame() const {
-            return render_needed_ || content_dirty_ || animation_active_ || scheduledUpdateDue() || tooltip_.revealDue();
+            return nativeDragActive() || render_needed_ || content_dirty_ || animation_active_ || scheduledUpdateDue() || tooltip_.revealDue();
         }
+        bool nativeDragActive() const;
         [[nodiscard]] bool needsImmediateAnimationFrame() const {
             return content_height_settling_;
         }
@@ -93,6 +100,19 @@ namespace lfs::vis::gui {
 
     private:
         friend class lfs::vis::WindowInputDispatchTest;
+
+        // Registered after Python on_mount. Panel-specific close handlers run
+        // first; this listener does not stop the click.
+        class CloseButtonListener final : public Rml::EventListener {
+        public:
+            explicit CloseButtonListener(RmlPanelHost* host) : host_(host) {}
+            void ProcessEvent(Rml::Event& event) override;
+
+        private:
+            RmlPanelHost* host_;
+        };
+
+        void bindCloseButton();
         bool scheduledUpdateDue() const {
             return next_update_at_ && std::chrono::steady_clock::now() >= *next_update_at_;
         }
@@ -150,6 +170,8 @@ namespace lfs::vis::gui {
 
         bool foreground_ = false;
         bool floating_ = false;
+        bool desktop_requested_ = false;
+        float desktop_bounds_[4]{};
         float clip_y_min_ = -1.0f;
         float clip_y_max_ = -1.0f;
         const PanelInputState* input_ = nullptr;
@@ -179,8 +201,14 @@ namespace lfs::vis::gui {
         // Per-button capture so scrollbar drags continue when the cursor
         // leaves the panel and the matching Up always reaches RmlUI.
         bool mouse_captured_[3] = {false, false, false};
+        // Element that received the button press. RmlUi sends mouseup only to
+        // the current hover, which is empty once the cursor leaves the panel.
+        Rml::ObserverPtr<Rml::Element> pointer_press_target_[3];
         std::string resize_cursor_override_;
         Rml::Element* live_inspector_resize_target_ = nullptr;
+        CloseButtonListener close_listener_{this};
+        Rml::Element* close_button_ = nullptr;
+        bool close_button_bound_ = false;
         float live_inspector_resize_start_y_ = 0.0f;
         float live_inspector_resize_start_height_ = 0.0f;
         RmlTooltipController tooltip_;

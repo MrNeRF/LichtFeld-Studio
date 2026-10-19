@@ -6,6 +6,7 @@
 
 #include "core/error.hpp"
 #include "core/error_bus.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "io/error.hpp"
 
@@ -108,6 +109,60 @@ namespace lfs::io {
             .message = format_missing_dataset_images_warning(names),
             .fields = lfs::SmallFields{}
                           .add("missing_count", static_cast<std::int64_t>(names.size()))
+                          .add("examples", join_missing_dataset_image_examples(names)),
+        };
+    }
+
+    [[nodiscard]] inline std::string format_unreadable_dataset_images_warning(
+        const std::vector<std::string>& names) {
+        const auto& localization = lfs::event::LocalizationManager::getInstance();
+        if (names.size() == 1) {
+            constexpr std::string_view key = "io.dataset_image_unreadable_one";
+            return localization.hasKey(key)
+                       ? lfs::event::formatLocalized(key, names.front())
+                       : std::format("Dataset image '{}' cannot be read. Its camera remains in the scene, but training may fail when it is used.",
+                                     names.front());
+        }
+        constexpr std::string_view key = "io.dataset_image_unreadable_many";
+        const auto examples = join_missing_dataset_image_examples(names);
+        return localization.hasKey(key)
+                   ? lfs::event::formatLocalized(key, names.size(), examples)
+                   : std::format("{} dataset images cannot be read (examples: {}). Their cameras remain in the scene, but training may fail when they are used.",
+                                 names.size(), examples);
+    }
+
+    inline void notify_unreadable_dataset_images(const std::vector<std::string>& names) {
+        if (names.empty()) {
+            return;
+        }
+        const std::string summary = format_unreadable_dataset_images_warning(names);
+        LOG_WARN("{}", summary);
+        lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+            .error = lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::DataLoss,
+                .domain = lfs::ErrorDomain::IO,
+                .severity = lfs::Severity::Warning,
+                .retryability = lfs::Retryability::NotRetryable,
+                .user_message = summary,
+                .detail = summary,
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+                .fields = lfs::SmallFields{}
+                              .add("unreadable_count", static_cast<std::int64_t>(names.size()))
+                              .add("examples", join_missing_dataset_image_examples(names)),
+            }),
+            .surface = lfs::ErrorSurface::Toast,
+            .actions = {},
+            .operation_id = lfs::OperationId::generate(),
+        });
+    }
+
+    [[nodiscard]] inline Diagnostic unreadable_dataset_images_diagnostic(
+        const std::vector<std::string>& names) {
+        return Diagnostic{
+            .code = lfs::ErrorCode::DataLoss,
+            .message = format_unreadable_dataset_images_warning(names),
+            .fields = lfs::SmallFields{}
+                          .add("unreadable_count", static_cast<std::int64_t>(names.size()))
                           .add("examples", join_missing_dataset_image_examples(names)),
         };
     }

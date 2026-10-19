@@ -19,6 +19,7 @@
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <string>
 #include <vector>
 
 using namespace lfs::core;
@@ -261,6 +262,53 @@ TEST_F(ImageKernelsTest, LanczosInterleavedChannelsMatchPerPlaneGrayscale) {
             for (size_t index = 0; index < expected.size(); ++index)
                 EXPECT_NEAR(got[offset + index], expected[index], 1e-6f) << "channel=" << channel << " index=" << index;
         }
+    }
+}
+
+namespace {
+    // Frees two device blocks sized like the coefficient tables of one resize, filled with NaN, so the resize
+    // that follows gets them back instead of whatever an earlier allocation left there.
+    void poison_coefficient_tables(const int input_h, const int input_w, const int output_h, const int output_w,
+                                   const int kernel_size) {
+        const auto table_bytes = [kernel_size](const int input, const int output) {
+            const auto stride = static_cast<size_t>(std::ceil(2.0 * kernel_size * input / output)) + 1;
+            return static_cast<size_t>(output) * stride * sizeof(float);
+        };
+        void* x = nullptr;
+        void* y = nullptr;
+        ASSERT_EQ(cudaMalloc(&x, table_bytes(input_w, output_w)), cudaSuccess);
+        ASSERT_EQ(cudaMalloc(&y, table_bytes(input_h, output_h)), cudaSuccess);
+        ASSERT_EQ(cudaMemset(x, 0xFF, table_bytes(input_w, output_w)), cudaSuccess);
+        ASSERT_EQ(cudaMemset(y, 0xFF, table_bytes(input_h, output_h)), cudaSuccess);
+        ASSERT_EQ(cudaFree(y), cudaSuccess);
+        ASSERT_EQ(cudaFree(x), cudaSuccess);
+    }
+} // namespace
+
+// Fails if a resample kernel and the coefficient table disagree on which input rows or columns one output pixel
+// covers: the kernel then weights a pixel with a table entry nobody wrote, NaN here, and the whole row turns NaN.
+TEST_F(ImageKernelsTest, LanczosReadsOnlyWrittenCoefficientsOnRealImage) {
+    const auto image = first_dataset_image_float();
+    if (!image.is_valid()) {
+        GTEST_SKIP() << "no decodable images_4 JPEG under data/";
+    }
+    constexpr int KERNEL_SIZE = 3;
+    const int H = static_cast<int>(image.shape()[1]);
+    const int W = static_cast<int>(image.shape()[2]);
+    const auto gray = image.slice(0, 0, 1).reshape({static_cast<size_t>(H), static_cast<size_t>(W)}).contiguous();
+    const auto hwc = image.permute({1, 2, 0}).contiguous();
+    for (int output_h = H / 4; output_h < H; ++output_h) {
+        const int output_w = static_cast<int>(std::lround(static_cast<double>(W) * output_h / H));
+        SCOPED_TRACE(std::to_string(W) + "x" + std::to_string(H) + " -> " + std::to_string(output_w) + "x" +
+                     std::to_string(output_h));
+        poison_coefficient_tables(H, W, output_h, output_w, KERNEL_SIZE);
+        const auto resized_gray = lanczos_resize_grayscale(gray, output_h, output_w, KERNEL_SIZE, nullptr);
+        ASSERT_TRUE(resized_gray.is_valid());
+        ASSERT_TRUE(resized_gray.isfinite().all().item<bool>());
+        poison_coefficient_tables(H, W, output_h, output_w, KERNEL_SIZE);
+        const auto resized_rgb = lanczos_resize(hwc, output_h, output_w, KERNEL_SIZE, nullptr);
+        ASSERT_TRUE(resized_rgb.is_valid());
+        ASSERT_TRUE(resized_rgb.isfinite().all().item<bool>());
     }
 }
 

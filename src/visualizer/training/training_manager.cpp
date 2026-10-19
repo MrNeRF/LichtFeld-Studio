@@ -6,9 +6,11 @@
 #include "core/error.hpp"
 #include "core/error_envelope.hpp"
 #include "core/error_reporter.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/guarded_task.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
 #include "core/reactive/store.hpp"
@@ -18,13 +20,16 @@
 #include "core/tensor.hpp"
 #include "core/tensor/internal/size_bucketed_pool.hpp"
 #include "core/tensor/internal/tensor_ops.hpp"
+#include "gui/gui_manager.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
+#include "training/camera_training_notice.hpp"
 #include "training/control/command_api.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat/Ops.h"
 #include "training/rasterization/gsplat_rasterizer.hpp"
+#include "training/training_cropbox_mask.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/post_work_utils.hpp"
@@ -34,6 +39,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <cuda_runtime.h>
@@ -45,10 +51,101 @@
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <utility>
 
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
+
 namespace lfs::vis {
+
+    namespace {
+#ifdef __GLIBC__
+        std::atomic<training_memory_detail::ClearTrainerTrimHook> clear_trainer_trim_hook{nullptr};
+
+        class HeapTrimWorker {
+        public:
+            HeapTrimWorker()
+                : worker_([this] { run(); }) {}
+
+            ~HeapTrimWorker() {
+                shutdown();
+            }
+
+            void shutdown() {
+                {
+                    std::lock_guard lock(mutex_);
+                    stopping_ = true;
+                }
+                condition_.notify_one();
+                if (worker_.joinable())
+                    worker_.join();
+            }
+
+            void request() {
+                {
+                    std::lock_guard lock(mutex_);
+                    if (stopping_) {
+                        if (worker_.joinable())
+                            return;
+                        stopping_ = false;
+                        worker_ = std::thread([this] { run(); });
+                    }
+                    pending_ = true;
+                }
+                condition_.notify_one();
+            }
+
+        private:
+            void run() {
+                std::unique_lock lock(mutex_);
+                while (true) {
+                    condition_.wait(lock, [this] { return stopping_ || pending_; });
+                    if (stopping_ && !pending_)
+                        return;
+                    pending_ = false;
+                    lock.unlock();
+                    if (const auto hook = clear_trainer_trim_hook.load(std::memory_order_acquire))
+                        hook();
+                    else
+                        (void)malloc_trim(0);
+                    lock.lock();
+                }
+            }
+
+            std::mutex mutex_;
+            std::condition_variable condition_;
+            std::thread worker_;
+            bool pending_ = false;
+            bool stopping_ = false;
+        };
+
+        HeapTrimWorker& heap_trim_worker() {
+            static HeapTrimWorker worker;
+            return worker;
+        }
+
+        void shutdown_heap_trim_worker() {
+            heap_trim_worker().shutdown();
+        }
+#else
+        void shutdown_heap_trim_worker() {}
+#endif
+    } // namespace
+
+    void training_memory_detail::setClearTrainerTrimHookForTesting(ClearTrainerTrimHook hook) noexcept {
+#ifdef __GLIBC__
+        clear_trainer_trim_hook.store(hook, std::memory_order_release);
+#else
+        (void)hook;
+#endif
+    }
+
+    void training_memory_detail::shutdownHeapTrimWorker() noexcept {
+        shutdown_heap_trim_worker();
+    }
 
     using namespace lfs::core::events;
 
@@ -150,10 +247,12 @@ namespace lfs::vis {
             bool completed = false;
             bool stopped = false;
             bool hydrated = false;
+            bool restoring = false;
             int iteration = 0;
             int max_iterations = 0;
             int num_gaussians = 0;
             std::string strategy;
+            std::string restore_error;
         };
 
         LastStoredSessionPublish g_last_stored_session_publish;
@@ -861,7 +960,12 @@ namespace lfs::vis {
         if ((action == TrainingAction::Stop || action == TrainingAction::Resume) && !trainer_ && viewer_ &&
             getState() == TrainingState::Paused) {
             const auto session = viewer_->projectTrainingSessionState();
-            return session.available && !session.hydrated && !session.restoring;
+            if (action == TrainingAction::Stop) {
+                return session.available && !session.hydrated &&
+                       !session.restoring;
+            }
+            return session.available && !session.hydrated &&
+                   !session.restoring && session.error.empty();
         }
         return state_machine_.canPerform(action);
     }
@@ -882,14 +986,28 @@ namespace lfs::vis {
     void TrainerManager::clearStoredSessionPresentation() {
         stored_session_presentation_active_ = false;
         stored_session_presentation_completed_ = false;
+        stored_session_presentation_gut_ = false;
         stored_session_presentation_iteration_ = 0;
         stored_session_presentation_max_iterations_ = 0;
+        stored_session_presentation_max_cap_ = 0;
         stored_session_presentation_strategy_.clear();
     }
 
     void TrainerManager::publishStoredSessionPresentation() {
         if (trainer_) {
+            const auto& last = g_last_stored_session_publish;
+            const bool restore_completed =
+                last.owner == this && last.valid && last.available &&
+                !last.hydrated;
             clearStoredSessionPresentation();
+            if (restore_completed) {
+                auto& generation =
+                    app_store().stored_session_generation;
+                generation.set(generation.get() + 1);
+            }
+            g_last_stored_session_publish = {};
+            g_last_stored_session_publish.owner = this;
+            g_last_stored_session_publish.valid = true;
             return;
         }
         Visualizer::ProjectTrainingSessionState session;
@@ -901,6 +1019,8 @@ namespace lfs::vis {
         desired.owner = this;
         desired.valid = true;
         desired.available = session.available;
+        desired.restoring = session.restoring;
+        desired.restore_error = session.error;
         if (session.available) {
             const core::Scene* scene = scene_;
             if (!scene && viewer_) {
@@ -933,12 +1053,21 @@ namespace lfs::vis {
             last.completed == desired.completed &&
             last.stopped == desired.stopped &&
             last.hydrated == desired.hydrated &&
+            last.restoring == desired.restoring &&
             last.iteration == desired.iteration &&
             last.max_iterations == desired.max_iterations &&
             last.num_gaussians == desired.num_gaussians &&
-            last.strategy == desired.strategy) {
+            last.strategy == desired.strategy &&
+            last.restore_error == desired.restore_error) {
             return;
         }
+
+        const bool restore_state_changed =
+            !last.valid || last.owner != this ||
+            last.available != desired.available ||
+            last.hydrated != desired.hydrated ||
+            last.restoring != desired.restoring ||
+            last.restore_error != desired.restore_error;
 
         if (!session.available) {
             clearStoredSessionPresentation();
@@ -955,6 +1084,10 @@ namespace lfs::vis {
                 python::update_trainer_loaded(false, 0, 0);
                 python::flush_signals();
             }
+            if (restore_state_changed) {
+                app_store().stored_session_generation.set(
+                    app_store().stored_session_generation.get() + 1);
+            }
             g_last_stored_session_publish = desired;
             return;
         }
@@ -965,6 +1098,14 @@ namespace lfs::vis {
         stored_session_presentation_max_iterations_ =
             session.max_iterations;
         stored_session_presentation_strategy_ = desired.strategy;
+        stored_session_presentation_gut_ = false;
+        stored_session_presentation_max_cap_ = 0;
+        if (const auto* params = services().paramsOrNull();
+            params && params->isLoaded()) {
+            const auto& active = params->getActiveParams();
+            stored_session_presentation_gut_ = active.gut;
+            stored_session_presentation_max_cap_ = active.max_cap;
+        }
         const char* const presented_state =
             desired.stopped ? "stopped" : session.completed ? "completed"
                                                             : "paused";
@@ -990,6 +1131,10 @@ namespace lfs::vis {
                 session.iteration, 0.0f,
                 static_cast<std::size_t>(std::max(0, desired.num_gaussians)));
             python::flush_signals();
+        }
+        if (restore_state_changed) {
+            app_store().stored_session_generation.set(
+                app_store().stored_session_generation.get() + 1);
         }
 
         lfs::training::CommandCenter::instance().update_snapshot(
@@ -1036,11 +1181,13 @@ namespace lfs::vis {
         // Pause events and no-thread stops do not run TrainingEnd's clear_snapshot.
         lfs::training::CommandCenter::instance().reset_snapshot();
 
+        [[maybe_unused]] bool released_trainer = false;
         {
             std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
             if (scene_) {
                 scene_->setLiveModelMutex(nullptr);
             }
+            released_trainer = trainer_ != nullptr;
             trainer_.reset();
             trainer_generation_.fetch_add(1, std::memory_order_release);
             // Model tensors retain their own shared ownership while edit/view mode
@@ -1054,6 +1201,15 @@ namespace lfs::vis {
         // Trainer::shutdown() trims before Tensor-valued members are destroyed.
         // Trim again after destruction so those returned blocks do not survive clear.
         lfs::core::Tensor::trim_memory_pool();
+#ifdef __GLIBC__
+        if (released_trainer) {
+            try {
+                heap_trim_worker().request();
+            } catch (const std::system_error& error) {
+                LOG_WARN("Could not schedule background heap trim: {}", error.what());
+            }
+        }
+#endif
 
         if (state_machine_.getState() != TrainingState::Idle && !state_machine_.transitionTo(TrainingState::Idle)) {
             LOG_WARN("Failed to transition to Idle");
@@ -1082,6 +1238,12 @@ namespace lfs::vis {
             return false;
         }
         return getCurrentIteration() == *checkpoint_baseline_iteration_;
+    }
+
+    void TrainerManager::syncCropBox() {
+        if (!trainer_ || !scene_)
+            return;
+        trainer_->setCropBoxSnapshot(lfs::training::resolve_training_cropbox_geom(*scene_));
     }
 
     bool TrainerManager::startTraining() {
@@ -1239,7 +1401,7 @@ namespace lfs::vis {
         if (!trainer_->isInitialized() && params.init_path && !params.init_path->empty()) {
             std::error_code path_error;
             const auto init_path = lfs::core::utf8_to_path(*params.init_path);
-            if (!std::filesystem::exists(init_path, path_error)) {
+            if (!lfs::core::native_fs::exists(init_path, path_error)) {
                 const auto reason = path_error
                                         ? std::format("Cannot access training initialization file '{}': {}",
                                                       *params.init_path,
@@ -1694,6 +1856,7 @@ namespace lfs::vis {
         completion_pending_.store(true, std::memory_order_release);
 
         last_training_error_.clear();
+        syncCropBox();
         auto worker = std::make_unique<std::jthread>(
             [this](const std::stop_token stop_token) {
                 trainingInitializationThreadFunc(stop_token);
@@ -1887,8 +2050,11 @@ namespace lfs::vis {
     int TrainerManager::getMaxGaussians() const {
         if (const auto* params = ready_presentation_params(*this))
             return params->max_cap;
-        if (!trainer_)
+        if (!trainer_) {
+            if (stored_session_presentation_active_)
+                return stored_session_presentation_max_cap_;
             return 0;
+        }
         return trainer_->getParams().optimization.max_cap;
     }
 
@@ -1943,8 +2109,11 @@ namespace lfs::vis {
     bool TrainerManager::isGutEnabled() const {
         if (const auto* params = ready_presentation_params(*this))
             return params->gut;
-        if (!trainer_)
+        if (!trainer_) {
+            if (stored_session_presentation_active_)
+                return stored_session_presentation_gut_;
             return false;
+        }
         return trainer_->getParams().optimization.gut;
     }
 
@@ -2544,6 +2713,23 @@ namespace lfs::vis {
                  stopTraining();
              }));
 
+        keep(typeid(state::SceneChanged), state::SceneChanged::when([this](const auto& event) {
+                 if (!viewer_)
+                     return;
+                 auto* const gui_manager = viewer_->getGuiManager();
+                 if (!gui_manager)
+                     return;
+                 const bool training_active = hasLiveTrainingThread() && (isRunning() || isPaused());
+                 detail::dispatch_camera_training_notice(event.mutation_flags, training_active, [gui_manager] {
+                     gui_manager->enqueueToast({
+                         .title = LOC("window.training"),
+                         .message = LOC("toast.camera_training_next_run"),
+                         .level = gui::ErrorNoticeLevel::Info,
+                         .fingerprint = 0x4c465343414d0001ULL,
+                     });
+                 });
+             }));
+
         // Listen for training progress events - update loss buffer
         keep(typeid(state::TrainingProgress), state::TrainingProgress::when([this](const auto& event) {
                  updateLoss(event.loss);
@@ -2585,6 +2771,11 @@ namespace lfs::vis {
         return trainer_->computeCameraMetrics(*cam, include_ssim, appearance);
     }
 
+    bool TrainerManager::hasInitializedTrainer() const {
+        std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
+        return trainer_ && trainer_->isInitialized();
+    }
+
     lfs::core::param::DatasetConfig& TrainerManager::getEditableDatasetParams() {
         if (auto* const param_mgr = services().paramsOrNull())
             return param_mgr->getDatasetConfig();
@@ -2610,6 +2801,11 @@ namespace lfs::vis {
         if (isDatasetEditable())
             return true;
         return canonical == core::param::canonical_strategy_name(trainer_->getParams().optimization.strategy);
+    }
+
+    bool TrainerManager::rejectsIterationLimit(const std::size_t iterations) const {
+        return isPaused() &&
+               iterations <= static_cast<std::size_t>(std::max(0, getCurrentIteration()));
     }
 
     lfs::core::param::TrainingParameters TrainerManager::getEditableTrainingParams(

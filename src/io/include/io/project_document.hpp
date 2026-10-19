@@ -174,6 +174,9 @@ namespace lfs::io::project {
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
         std::optional<WriterLockLease> writer_lock_lease =
             std::nullopt;
+        // Recovered sessions keep their materialized document on a staging
+        // path while autosaves remain bound to the original master.
+        std::optional<std::filesystem::path> recovery_base_path;
         CommitBoundaryObserver boundary_observer;
     };
 
@@ -391,12 +394,17 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
         save_as(const std::filesystem::path& path,
                 const ProjectDocumentSaveOptions& options = {});
-        // Builds one complete overlay relative to the currently opened
-        // master. It never clears dirty state or regenerates THMB.
+        // Builds one complete overlay relative to the opened master. It never
+        // clears dirty state or regenerates THMB.
         [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
         save_autosave(
             const std::filesystem::path& sidecar_path,
             const ProjectDocumentAutosaveOptions& options);
+        // Carry the selected recovery overlay forward when publishing the
+        // next autosave against its original master.
+        [[nodiscard]] lfs::Result<void>
+        prepare_recovery_autosave(
+            const std::filesystem::path& sidecar_path);
         // Append THMB onto the current source generation without encoding
         // dirty chapters or payloads. Clean proofs are rebound to the new
         // head so a later save can carry the thumbnail forward.
@@ -415,6 +423,14 @@ namespace lfs::io::project {
         stage_hydration(
             lfs::core::Scene& destination,
             const ScenePayloadResolver& external_payloads = {},
+            lfs::core::SplatTensorAllocator splat_allocator = {},
+            std::function<void(std::size_t, std::size_t)> payload_progress = {}) const;
+
+        // Stage only these saved nodes for a partial payload commit after Undo.
+        [[nodiscard]] lfs::Result<ProjectHydrationPlan>
+        stage_payload_hydration_for_nodes(
+            lfs::core::Scene& destination,
+            std::span<const lfs::core::Uuid> node_uuids,
             lfs::core::SplatTensorAllocator splat_allocator = {},
             std::function<void(std::size_t, std::size_t)> payload_progress = {}) const;
 
@@ -444,6 +460,13 @@ namespace lfs::io::project {
             std::span<const ReferenceOwnerBinding> additional_bindings = {}) const;
 
     private:
+        [[nodiscard]] lfs::Result<ProjectHydrationPlan>
+        stage_hydration_filtered(
+            lfs::core::Scene& destination,
+            const ScenePayloadResolver& external_payloads,
+            lfs::core::SplatTensorAllocator splat_allocator,
+            std::function<void(std::size_t, std::size_t)> payload_progress,
+            std::optional<std::span<const lfs::core::Uuid>> node_uuids) const;
         [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
         save_impl(
             const std::filesystem::path& path,

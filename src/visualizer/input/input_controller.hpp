@@ -88,6 +88,21 @@ namespace lfs::vis {
 
         void toggleIndependentSplitView();
 
+        // A UI value drag hides and locks the pointer, so dragging never stops at a
+        // screen edge; the pointer returns to where the drag started.
+        bool beginValueDrag();
+        // Horizontal pointer motion in window points since the previous call; motion
+        // from before a left-button release stays readable after the drag ends.
+        float takeValueDragDelta();
+        void endValueDrag();
+        [[nodiscard]] bool isValueDragActive() const;
+        // Escape, the right button or focus loss ended the last drag; the UI restores the value.
+        [[nodiscard]] bool isValueDragCancelled() const { return value_drag_cancelled_; }
+        // Grab point in window points for each frame of a value drag, including the
+        // frame of its release, so the UI sees a still pointer.
+        std::optional<glm::vec2> takeValueDragPin();
+        [[nodiscard]] std::optional<glm::vec2> valueDragAnchor() const { return value_drag_restore_; }
+
         // Set special input modes
         void setPointCloudMode(bool enabled) {
             point_cloud_mode_ = enabled;
@@ -169,13 +184,21 @@ namespace lfs::vis {
 
         // Event handlers (called by WindowManager)
         void handleMouseButton(int button, int action, double x, double y);
-        void handleMouseMove(double x, double y);
+        // `motion` is the pointer's relative movement. Mouse look follows it, so
+        // it keeps turning while the locked pointer rests at the window edge.
+        void handleMouseMove(double x, double y, std::optional<glm::dvec2> motion = std::nullopt);
         void handleScroll(double xoff, double yoff);
         void handleKey(int key, int action, int mods);
         void handleKey(int physical_key, int logical_key, int scancode, int action, int mods, bool owned_release = false, bool gui_consumed = false);
         void handleFileDrop(const std::vector<std::string>& paths);
         void onWindowFocusLost();
         bool focusSelection();
+        // Moves the active viewport to its home.
+        void goHome();
+        // Makes the active viewport's current view its home.
+        void setHome();
+        // Restores the default home of the active viewport and moves there.
+        void resetHome();
 
     private:
         struct PanelInteractionState {
@@ -204,6 +227,11 @@ namespace lfs::vis {
         bool isPointerOverBlockingUi(double x, double y) const;
         bool isPointerOverUiHover(double x, double y) const;
         bool shouldCameraHandleInput() const;
+        // A physical movement key whose printed character is a different shortcut
+        // is movement for as long as the camera is accepting movement. Checked
+        // on key events only, against the cached movement bindings.
+        [[nodiscard]] bool physicalMovementConsumesLogicalKey(int physical_key, int logical_key, int mods) const;
+        void armPhysicalMovementKey(int physical_key, bool pressed);
         void selectCameraByUid(int uid, bool toggle_selection);
         void updateCameraSpeed(bool increase);
         void updateZoomSpeed(bool increase);
@@ -224,6 +252,12 @@ namespace lfs::vis {
         std::pair<glm::vec3, glm::vec3> computePickRay(double x, double y) const;
         input::ToolMode getCurrentToolMode() const;
         void clearViewportDragState();
+        // Mouse look in fly and drone mode hides and locks the pointer, so it
+        // never stops at a screen edge; the pointer returns to where it started.
+        void lockLookPointer(double x, double y);
+        void syncLookPointerLock(bool restore_position = true);
+        void cancelValueDrag(bool restore_pointer);
+        void releaseValueDrag(bool restore_pointer);
         void clearWasdMomentumViewport();
         void clearSelectedCameraContextMenuGesture();
         void beginPanDrag(const PanelInteractionState& interaction, int button, double x, double y);
@@ -270,6 +304,12 @@ namespace lfs::vis {
         bool camera_view_snap_enabled_ = false;
         int drag_button_ = -1;
         glm::dvec2 last_mouse_pos_{0, 0};
+        glm::dvec2 look_pos_{0, 0};
+        std::optional<glm::vec2> look_pointer_restore_;
+        std::optional<glm::vec2> value_drag_restore_;
+        std::optional<glm::vec2> value_drag_pin_;
+        float value_drag_dx_ = 0.0f;
+        bool value_drag_cancelled_ = false;
         float splitter_start_pos_ = 0.5f;
         double splitter_start_x_ = 0.0;
         Viewport* drag_viewport_ = nullptr;

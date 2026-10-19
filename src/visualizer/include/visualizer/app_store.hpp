@@ -23,12 +23,32 @@ namespace lfs::vis {
 
     class LFS_VIS_API AppStore {
     public:
+        enum class CameraMetricsStatus : std::uint8_t {
+            Available,
+            NeedsInitializedTrainingSession,
+            CalculationFailed
+        };
+
         struct LFS_VIS_API CameraMetrics {
             int camera_id = -1;
             int iteration = -1;
             float psnr = 0.0f;
             std::optional<float> ssim;
             bool used_mask = false;
+            CameraMetricsStatus status = CameraMetricsStatus::Available;
+
+            [[nodiscard]] static CameraMetrics unavailable(
+                const int camera_id,
+                const int iteration,
+                const bool training_session_initialized) {
+                CameraMetrics result;
+                result.camera_id = camera_id;
+                result.iteration = iteration;
+                result.status = training_session_initialized
+                                    ? CameraMetricsStatus::CalculationFailed
+                                    : CameraMetricsStatus::NeedsInitializedTrainingSession;
+                return result;
+            }
 
             bool operator==(const CameraMetrics&) const = default;
         };
@@ -39,13 +59,15 @@ namespace lfs::vis {
             float y = 16.0f;
             bool show_ssim = false;
             int current_camera_id = -1;
+            CameraMetricsStatus metrics_status = CameraMetricsStatus::Available;
 
             [[nodiscard]] bool operator==(const GTMetricsOverlayConfig& other) const noexcept {
                 return visible == other.visible &&
                        std::abs(x - other.x) <= 0.5f &&
                        std::abs(y - other.y) <= 0.5f &&
                        show_ssim == other.show_ssim &&
-                       current_camera_id == other.current_camera_id;
+                       current_camera_id == other.current_camera_id &&
+                       metrics_status == other.metrics_status;
             }
         };
 
@@ -146,6 +168,7 @@ namespace lfs::vis {
             std::string outcome{"idle"};
             std::string format;
             std::string error;
+            std::string warning;
             std::string path;
 
             [[nodiscard]] bool operator==(const ExportProgressState& other) const noexcept {
@@ -155,6 +178,7 @@ namespace lfs::vis {
                        outcome == other.outcome &&
                        format == other.format &&
                        error == other.error &&
+                       warning == other.warning &&
                        path == other.path;
             }
         };
@@ -190,6 +214,7 @@ namespace lfs::vis {
             EvalSsim,
             EvalLpips,
             SceneGeneration,
+            StoredSessionGeneration,
             SelectionGeneration,
             ModeText,
             CameraMetricsValue,
@@ -231,6 +256,7 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<std::optional<float>> eval_ssim;
         lfs::core::reactive::Observable<std::optional<float>> eval_lpips;
         lfs::core::reactive::Observable<std::uint64_t> scene_generation;
+        lfs::core::reactive::Observable<std::uint64_t> stored_session_generation;
         lfs::core::reactive::Observable<std::uint64_t> selection_generation;
         lfs::core::reactive::Observable<std::string> mode_text;
         lfs::core::reactive::Observable<std::optional<CameraMetrics>> camera_metrics;

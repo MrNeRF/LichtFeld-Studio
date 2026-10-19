@@ -274,6 +274,7 @@ namespace lfs::python {
             state["outcome"] = value.outcome;
             state["format"] = value.format;
             state["error"] = value.error;
+            state["warning"] = value.warning;
             state["path"] = value.path;
             return state;
         }
@@ -292,6 +293,7 @@ namespace lfs::python {
             state.outcome = dict_value(dict, "outcome", std::string{"idle"});
             state.format = dict_value(dict, "format", std::string{});
             state.error = dict_value(dict, "error", std::string{});
+            state.warning = dict_value(dict, "warning", std::string{});
             state.path = dict_value(dict, "path", std::string{});
             return state;
         }
@@ -353,6 +355,8 @@ namespace lfs::python {
                                                      : std::optional<float>{nb::cast<float>(value)});
             else if (field == "scene_generation")
                 store.scene_generation.set(nb::cast<std::uint64_t>(value));
+            else if (field == "stored_session_generation")
+                store.stored_session_generation.set(nb::cast<std::uint64_t>(value));
             else if (field == "selection_generation")
                 store.selection_generation.set(nb::cast<std::uint64_t>(value));
             else if (field == "mode_text")
@@ -417,6 +421,8 @@ namespace lfs::python {
                 return nb::cast(store.eval_lpips.get());
             if (field == "scene_generation")
                 return nb::cast(store.scene_generation.get());
+            if (field == "stored_session_generation")
+                return nb::cast(store.stored_session_generation.get());
             if (field == "selection_generation")
                 return nb::cast(store.selection_generation.get());
             if (field == "mode_text")
@@ -480,6 +486,8 @@ namespace lfs::python {
                 return subscribe_observable(store.eval_lpips, std::move(callback));
             if (field == "scene_generation")
                 return subscribe_observable(store.scene_generation, std::move(callback));
+            if (field == "stored_session_generation")
+                return subscribe_observable(store.stored_session_generation, std::move(callback));
             if (field == "selection_generation")
                 return subscribe_observable(store.selection_generation, std::move(callback));
             if (field == "mode_text")

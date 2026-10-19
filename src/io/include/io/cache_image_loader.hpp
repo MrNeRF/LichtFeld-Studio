@@ -21,6 +21,7 @@ namespace lfs::core {
 } // namespace lfs::core
 
 namespace lfs::io {
+    struct MaskedImageFill;
 
     // Memory info
     std::size_t get_total_physical_memory();
@@ -47,6 +48,9 @@ namespace lfs::io {
         bool decode_16bit = false;
         // Keeps floating-point files (EXR, float TIFF) at float precision instead of an integer decode.
         bool decode_float = false;
+        bool mask_grayscale = false;
+        // Cold staging only; never stored in queued requests or cache entries.
+        const MaskedImageFill* masked_fill = nullptr;
     };
 
     // CPU decode at native resolution, then the same GPU Lanczos downscale the nvImageCodec
@@ -54,6 +58,11 @@ namespace lfs::io {
     // until the GPU conversion.
     LFS_IO_API lfs::core::Tensor load_rgb_image_cpu_decoded(
         const std::filesystem::path& path, const LoadParams& params, bool decode_16bit = false);
+    // Standard mask luminance uses bytes; TIFF keeps source precision until the
+    // same downstream byte-grid step used by Camera and the training pipeline.
+    // Returns Float32 [1,H,W].
+    LFS_IO_API lfs::core::Tensor load_mask_image_cpu_decoded(
+        const std::filesystem::path& path, const LoadParams& params);
     // The upload and resize half of load_rgb_image_cpu_decoded, for RGB pixels already decoded on the host by
     // lfs::core::load_image (8-bit) or lfs::core::load_image_u16 (16-bit).
     LFS_IO_API lfs::core::Tensor upload_rgb_image(const unsigned char* data, int width, int height, int channels,
@@ -63,7 +72,7 @@ namespace lfs::io {
     // Same for RGBA sources; returns float32 [4, H, W] with alpha in [0, 1].
     LFS_IO_API lfs::core::Tensor load_rgba_image_cpu_decoded(
         const std::filesystem::path& path, int resize_factor, int max_width, void* cuda_stream = nullptr,
-        bool decode_16bit = false);
+        bool decode_16bit = false, bool exact_mask_alpha = false, const MaskedImageFill* masked_fill = nullptr);
 
     struct CachedImageData {
         std::shared_ptr<lfs::core::Tensor> tensor;

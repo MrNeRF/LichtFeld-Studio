@@ -34,11 +34,14 @@ def test_project_folder_remove_label_uses_sentence_case_in_all_locales():
 def preferences_panel_module(monkeypatch):
     project_root = Path(__file__).parent.parent.parent
     source_python = project_root / "src" / "python"
-    if str(source_python) not in sys.path:
-        sys.path.insert(0, str(source_python))
+    if str(source_python) in sys.path:
+        sys.path.remove(str(source_python))
+    sys.path.insert(0, str(source_python))
 
     state = SimpleNamespace(
         language="it",
+        splat_drag_preferences={"format": "ply", "sh_degree": 3, "up_axis": -2},
+        sidebar_clear_calls=[],
         set_language_calls=[],
         mcp_preferences={
             "enabled": True,
@@ -139,7 +142,18 @@ def preferences_panel_module(monkeypatch):
         setattr(state, name, max(1.0, min(100.0, float(value))))
 
     lf_stub = ModuleType("lichtfeld")
+    state.marketplace_preferences = {"view": "list", "git_checkout": False}
+    state.marketplace_notifications = []
     lf_stub.ui = SimpleNamespace(
+        get_splat_drag_preferences=lambda: dict(state.splat_drag_preferences),
+        set_splat_drag_preferences=lambda values: state.splat_drag_preferences.update(values),
+        get_marketplace_preferences=lambda: dict(state.marketplace_preferences),
+        set_marketplace_view=lambda value: state.marketplace_preferences.update(view=value),
+        set_marketplace_git_checkout=lambda value: state.marketplace_preferences.update(git_checkout=value),
+        reset_marketplace_preferences=lambda: state.marketplace_preferences.update(view="list", git_checkout=False),
+        get_panel_object=lambda _panel_id: SimpleNamespace(
+            reload_marketplace_preferences=lambda: state.marketplace_notifications.append(True)),
+        clear_startup_sidebar=lambda: state.sidebar_clear_calls.append(True),
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
         PanelHeightMode=SimpleNamespace(FILL="fill"),
         PanelOption=SimpleNamespace(DEFAULT_CLOSED="DEFAULT_CLOSED"),
@@ -149,6 +163,8 @@ def preferences_panel_module(monkeypatch):
         get_theme_family=lambda: "lichtfeld",
         get_theme_mode=lambda: "dark",
         get_ui_scale_preference=lambda: 0.0,
+        get_native_floating_windows=lambda: getattr(state, "native_floating_windows", True),
+        set_native_floating_windows=lambda enabled: setattr(state, "native_floating_windows", enabled),
         set_ui_scale=lambda *_a, **_k: None,
         get_mcp_preferences=lambda: dict(state.mcp_preferences),
         get_mcp_port_override=lambda: None,
@@ -217,14 +233,20 @@ def preferences_panel_module(monkeypatch):
         get_viewport_toolbar_position=lambda: state.viewport_toolbar_position,
         set_viewport_toolbar_position=set_viewport_toolbar_position,
         get_zoom_speed_preference=lambda: state.zoom_speed,
-        set_zoom_speed_preference=lambda value: set_speed("zoom_speed", value),
+        set_zoom_speed_preference=lambda value, persist=True: set_speed("zoom_speed", value),
         get_navigation_speed_preference=lambda: state.navigation_speed,
-        set_navigation_speed_preference=lambda value: set_speed("navigation_speed", value),
+        set_navigation_speed_preference=lambda value, persist=True: set_speed("navigation_speed", value),
         remember_camera_navigation=lambda: False,
         set_remember_camera_navigation=lambda _enabled: None,
         remember_camera_view_snap=lambda: False,
         set_remember_camera_view_snap=lambda _enabled: None,
     )
+    state.rendering_defaults = {}
+    lf_stub.ui.get_rendering_defaults_json = lambda: json.dumps(state.rendering_defaults)
+    lf_stub.ui.set_rendering_defaults_json = lambda value: state.rendering_defaults.update(json.loads(value))
+    state.auto_save_on_close = False
+    lf_stub.project_auto_save_on_close_enabled = lambda: state.auto_save_on_close
+    lf_stub.project_set_auto_save_on_close = lambda enabled: setattr(state, "auto_save_on_close", bool(enabled))
     lf_stub.keymap = SimpleNamespace(
         ToolMode=IntEnum(
             "ToolMode",
@@ -253,11 +275,14 @@ def preferences_panel_module(monkeypatch):
             ZOOM_SPEED_DOWN=SimpleNamespace(name="ZOOM_SPEED_DOWN", value=15),
             CAMERA_RESET_HOME=SimpleNamespace(name="CAMERA_RESET_HOME", value=16),
             CAMERA_SET_HOME=SimpleNamespace(name="CAMERA_SET_HOME", value=17),
+            CAMERA_RESTORE_HOME=SimpleNamespace(name="CAMERA_RESTORE_HOME", value=91),
             CAMERA_NEXT_VIEW=SimpleNamespace(name="CAMERA_NEXT_VIEW", value=18),
             CAMERA_PREV_VIEW=SimpleNamespace(name="CAMERA_PREV_VIEW", value=19),
+            CAMERA_FOCUS_SELECTION=SimpleNamespace(name="CAMERA_FOCUS_SELECTION", value=76),
             SELECTION_REPLACE=SimpleNamespace(name="SELECTION_REPLACE", value=20),
             SELECTION_ADD=SimpleNamespace(name="SELECTION_ADD", value=21),
             SELECTION_REMOVE=SimpleNamespace(name="SELECTION_REMOVE", value=22),
+            SELECTION_INTERSECT=SimpleNamespace(name="SELECTION_INTERSECT", value=77),
             SELECT_MODE_CENTERS=SimpleNamespace(name="SELECT_MODE_CENTERS", value=23),
             SELECT_MODE_RECTANGLE=SimpleNamespace(name="SELECT_MODE_RECTANGLE", value=24),
             SELECT_MODE_POLYGON=SimpleNamespace(name="SELECT_MODE_POLYGON", value=25),
@@ -326,9 +351,24 @@ def preferences_panel_module(monkeypatch):
             TOGGLE_SCENE_SELECTION_TRAINING=SimpleNamespace(
                 name="TOGGLE_SCENE_SELECTION_TRAINING", value=84
             ),
+            GROUP_SELECTED_SCENE_NODES=SimpleNamespace(
+                name="GROUP_SELECTED_SCENE_NODES", value=78
+            ),
+            UNGROUP_SELECTED_SCENE_NODE=SimpleNamespace(
+                name="UNGROUP_SELECTED_SCENE_NODE", value=79
+            ),
+            ASSET_GALLERY_PRIMARY=SimpleNamespace(
+                name="ASSET_GALLERY_PRIMARY", value=80
+            ),
+            ASSET_GALLERY_COPY_LINK=SimpleNamespace(
+                name="ASSET_GALLERY_COPY_LINK", value=81
+            ),
+            ASSET_REFRESH=SimpleNamespace(name="ASSET_REFRESH", value=85),
+            TOGGLE_PYTHON_CONSOLE=SimpleNamespace(name="TOGGLE_PYTHON_CONSOLE", value=90),
         ),
         get_available_profiles=lambda: ["Default"],
         get_current_profile=lambda: "Default",
+        bindings_revision=lambda: 0,
         get_tool_mode_name=lambda mode: str(mode),
         get_action_name=lambda value: str(value),
         get_trigger=lambda *_a, **_k: None,
@@ -386,7 +426,9 @@ def preferences_panel_module(monkeypatch):
     lf_stub.file_association_set = file_association_set
 
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
+    sys.modules.pop("lfs_plugins.marketplace_preferences", None)
     sys.modules.pop("lfs_plugins.preferences_panel", None)
+    sys.modules.pop("lfs_plugins.rendering_defaults", None)
     sys.modules.pop("lfs_plugins.keymap_bindings", None)
     sys.modules.pop("lfs_plugins", None)
     module = import_module("lfs_plugins.preferences_panel")
@@ -556,6 +598,36 @@ def test_navigation_speed_preferences_round_trip_and_clamp(preferences_panel_mod
     panel._set_navigation_speed(101)
     assert state.zoom_speed == 1
     assert state.navigation_speed == 100
+
+
+@pytest.mark.parametrize("field", ["zoom_speed", "navigation_speed"])
+def test_speed_scrub_moves_preview_and_write_once_on_commit(preferences_panel_module,
+                                                              monkeypatch, tmp_path, field):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    writes = []
+    reads = []
+    path = tmp_path / "preferences.json"
+    path.write_text(json.dumps({field: getattr(state, field)}))
+
+    def set_speed(value, persist=True):
+        setattr(state, field, float(value))
+        if persist:
+            reads.append(path.read_text())
+            path.write_text(json.dumps({field: float(value)}))
+            writes.append(float(value))
+
+    monkeypatch.setattr(module.lf.ui, f"set_{field}_preference", set_speed)
+    for move in range(20):
+        panel._set_scrub_value(field, 20 + move)
+        assert getattr(state, field) == 20 + move
+    assert writes == []
+    assert reads == []
+    panel._commit_scrub_value(field, getattr(state, field))
+    assert writes == [39.0]
+    assert len(reads) == 1
+    assert json.loads(path.read_text())[field] == 39.0
 
 
 def test_navigation_speed_preferences_reset_with_input_section(preferences_panel_module):
@@ -851,7 +923,8 @@ def test_title_bar_close_listener_discards_unconfirmed_mcp_port(
     document = SimpleNamespace(
         get_element_by_id=lambda element_id: (
             close_button if element_id == "close-btn" else None
-        )
+        ),
+        query_selector_all=lambda _selector: [],
     )
     monkeypatch.setattr(panel, "_dirty_expanded_sections", lambda: None)
     monkeypatch.setattr(panel, "_rebuild_records", lambda: None)
@@ -949,7 +1022,10 @@ def test_safe_mode_reset_does_not_stage_mcp_changes(preferences_panel_module):
     module.lf.set_camera_navigation_mode = lambda *_a, **_k: None
     module.lf.set_camera_view_snap_enabled = lambda *_a, **_k: None
 
+    state.marketplace_preferences.update(view="card", git_checkout=True)
     panel._on_reset_all_settings(None, None, None)
+    assert state.marketplace_preferences == {"view": "list", "git_checkout": False}
+    assert state.sidebar_clear_calls == [True]
 
     assert state.set_mcp_calls == []
     assert state.render_settings.scene_upscaler == "native"
@@ -971,7 +1047,11 @@ def test_safe_mode_disables_preferences_and_status_bar_mcp_controls():
     preferences = (resources / "preferences.rml").read_text(encoding="utf-8")
     status_bar = (resources / "statusbar.rml").read_text(encoding="utf-8")
 
-    assert preferences.count('data-attrif-disabled="mcp_safe_mode"') == 8
+    import re
+    drag_controls = re.findall(r'<(?:input|select)\b[^>]*splat_drag_[^>]*>', preferences)
+    assert drag_controls
+    assert all('data-attrif-disabled="mcp_safe_mode"' in control for control in drag_controls)
+    assert preferences.count('data-attrif-disabled="mcp_safe_mode"') - len(drag_controls) == 8
     assert preferences.count('data-class-disabled="mcp_safe_mode"') == 2
     assert (
         '<button id="mcp-toggle" data-class-is-on="mcp_server_enabled" '
@@ -1125,6 +1205,9 @@ def test_preferences_close_retains_the_mounted_document(preferences_panel_module
         def get_element_by_id(self, _element_id):
             return None
 
+        def query_selector_all(self, _selector):
+            return []
+
     document = Document()
     panel._rebuild_records = lambda: None
     panel._load_mcp_preferences = lambda: None
@@ -1261,3 +1344,209 @@ def test_navigation_defaults_do_not_modify_current_project(preferences_panel_mod
     assert state.new_project_navigation_calls[-1] == ("data_z", False)
     assert state.navigation_up_calls == []
     assert state.navigation_up_axis == "legacy_y"
+
+def test_interface_reset_disables_external_windows_without_resetting_input(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    state.native_floating_windows = True
+    calls = []
+    module.lf.ui.reset_layout = lambda: calls.append('layout')
+    module.lf.ui.clear_startup_sidebar = lambda: calls.append('clear_sidebar')
+    module.lf.ui.set_scene_graph_selection_markers = lambda _enabled: None
+    module.lf.keymap.reset_to_default = lambda: calls.append('input')
+    panel._reset_section('interface')
+    assert state.native_floating_windows is False
+    assert calls == ['clear_sidebar', 'layout']
+
+
+def test_appearance_reset_preserves_native_window_mode(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    state.native_floating_windows = False
+    module.lf.ui.set_theme = lambda _theme: None
+    panel._reset_section('appearance')
+    assert state.native_floating_windows is False
+
+
+def test_window_mode_change_refreshes_preferences_state(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    before = panel._state()
+    state.native_floating_windows = False
+    assert panel._state() != before
+    dirty = []
+    panel._handle = SimpleNamespace(dirty=dirty.append)
+    panel._dirty_selection()
+    assert 'native_floating_windows' in dirty
+
+
+def test_save_on_close_change_invalidates_preferences_state(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    before = panel._state()
+    module.lf.project_set_auto_save_on_close(True)
+    assert state.auto_save_on_close is True
+    assert panel._state() != before
+
+
+def test_default_app_settings_preserve_registration_step(preferences_panel_module):
+    module, _state = preferences_panel_module
+    calls = []
+    module.lf.ui.register_file_associations = lambda: calls.append("register")
+    module.lf.ui.open_file_association_settings = lambda: calls.append("open")
+    module.PreferencesPanel._open_default_app_settings()
+    assert calls == ["register", "open"]
+
+
+def test_marketplace_preferences_apply_and_reset_independently(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._set_marketplace_preference("view", "card")
+    panel._set_marketplace_preference("git_checkout", True)
+    assert state.marketplace_preferences == {"view": "card", "git_checkout": True}
+    assert len(state.marketplace_notifications) == 2
+    panel._reset_section("marketplace")
+    assert state.marketplace_preferences == {"view": "list", "git_checkout": False}
+    assert len(state.marketplace_notifications) == 3
+    assert state.set_language_calls == []
+
+
+@pytest.mark.parametrize("git_available", [False, True])
+def test_marketplace_git_checkout_requires_git_without_changing_saved_choice(preferences_panel_module, monkeypatch, git_available):
+    module, state = preferences_panel_module
+    monkeypatch.setattr(module.shutil, "which", lambda _: "/usr/bin/git" if git_available else None)
+    panel = module.PreferencesPanel()
+    assert panel._marketplace_git_available is git_available
+    panel._set_marketplace_preference("git_checkout", True)
+    assert state.marketplace_preferences["git_checkout"] is git_available
+    state.marketplace_preferences["git_checkout"] = True
+    reopened = module.PreferencesPanel()
+    assert reopened._marketplace_git_available is git_available
+    assert state.marketplace_preferences["git_checkout"] is True
+    reopened._set_marketplace_preference("git_checkout", False)
+    assert state.marketplace_preferences["git_checkout"] is False
+
+
+def test_splat_drag_preferences_convert_ui_values_and_respect_safe_mode(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._set_splat_drag_preference("sh_degree", "2")
+    assert state.splat_drag_preferences["sh_degree"] == 2
+    assert panel._get_splat_drag_preference("sh_degree") == "2"
+    panel._mcp_safe_mode = True
+    panel._set_splat_drag_preference("sh_degree", "1")
+    assert state.splat_drag_preferences["sh_degree"] == 2
+
+
+@pytest.mark.parametrize("axis", [-2, 2, -3, 3])
+def test_drag_up_axis_accepts_the_four_maintainer_options(preferences_panel_module, axis):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._set_splat_drag_preference("up_axis", str(axis))
+    assert state.splat_drag_preferences["up_axis"] == axis
+    assert panel._get_splat_drag_preference("up_axis") == str(axis)
+
+
+@pytest.mark.parametrize("axis", ["0", "1", "-1", "4", "not-an-axis", None])
+def test_drag_up_axis_rejects_unsupported_values(preferences_panel_module, axis):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._set_splat_drag_preference("up_axis", axis)
+    assert state.splat_drag_preferences["up_axis"] == -2
+
+
+def test_drag_up_axis_respects_safe_mode(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._mcp_safe_mode = True
+    panel._set_splat_drag_preference("up_axis", "3")
+    assert state.splat_drag_preferences["up_axis"] == -2
+
+
+@pytest.mark.parametrize("key,value", [("format", "spz"), ("sh_degree", 1), ("up_axis", 3)])
+def test_external_drag_preference_changes_refresh_open_panel(preferences_panel_module, key, value):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._last_state = panel._state()
+    state.splat_drag_preferences[key] = value
+    assert panel._state() != panel._last_state
+    dirty = []
+    panel._handle = SimpleNamespace(dirty=dirty.append)
+    panel._dirty_selection()
+    assert {"splat_drag_format", "splat_drag_sh_degree", "splat_drag_up_axis"} <= set(dirty)
+
+
+@pytest.mark.parametrize("safe_mode", [False, True])
+def test_interface_reset_refreshes_drag_controls_and_respects_safe_mode(preferences_panel_module, safe_mode):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._mcp_safe_mode = safe_mode
+    customized = {"format": "spz", "sh_degree": 1, "up_axis": 3}
+    state.splat_drag_preferences.update(customized)
+    module.lf.ui.set_scene_graph_selection_markers = lambda _enabled: None
+    events = []
+    panel._refresh_selection = lambda: events.append("refresh")
+    module.lf.ui.reset_layout = lambda: events.append("layout")
+    panel._reset_section("interface")
+    expected = customized if safe_mode else {"format": "ply", "sh_degree": 3, "up_axis": -2}
+    assert state.splat_drag_preferences == expected
+    assert events == ["refresh", "layout"]
+
+
+def test_quick_export_offers_only_ply_and_spz_with_plain_translated_labels():
+    from xml.etree import ElementTree
+    root = Path(__file__).resolve().parents[2]
+    document = ElementTree.parse(root / "src/visualizer/gui/rmlui/resources/preferences.rml")
+    select = next(element for element in document.iter("select")
+                  if element.get("data-value") == "splat_drag_format")
+    assert [option.get("value") for option in select] == ["ply", "spz"]
+    for path in (root / "src/visualizer/gui/resources/locales").glob("*.json"):
+        preferences = json.loads(path.read_text(encoding="utf-8"))
+        assert preferences["preferences.drag_ply"] == "PLY", path.name
+        assert preferences["preferences.drag_spz"] == "SPZ", path.name
+
+
+@pytest.mark.parametrize("value", ["-1", "4", "invalid", None])
+def test_drag_sh_limit_rejects_invalid_ui_values(preferences_panel_module, value):
+    module, state = preferences_panel_module
+    module.PreferencesPanel()._set_splat_drag_preference("sh_degree", value)
+    assert state.splat_drag_preferences["sh_degree"] == 3
+
+
+def test_drag_settings_use_one_sh_cap_and_localized_tooltips():
+    from xml.etree import ElementTree
+    root = Path(__file__).resolve().parents[2]
+    document = ElementTree.parse(root / "src/visualizer/gui/rmlui/resources/preferences.rml")
+    cap = next(element for element in document.iter("select")
+               if element.get("data-value") == "splat_drag_sh_degree")
+    assert [option.get("value") for option in cap] == ["0", "1", "2", "3"]
+    text = (root / "src/visualizer/gui/rmlui/resources/preferences.rml").read_text(encoding="utf-8")
+    assert "splat_drag_maximum_quality" not in text
+    assert "splat_drag_ply_sh" not in text and "splat_drag_spz_sh" not in text
+    tooltip_keys = {"preferences.drag_format_hint", "preferences.drag_sh_hint", "preferences.drag_axes_hint"}
+    assert tooltip_keys <= {element.get("data-tooltip") for element in document.iter()}
+    inline = " ".join("".join(element.itertext()) for element in document.iter("span")
+                      if "preferences-description" in element.get("class", ""))
+    assert not any(key in inline for key in tooltip_keys)
+    marker_hint = "preferences.scene_graph_selection_markers_description"
+    marker_row = next(element for element in document.iter("div")
+                      if element.get("data-tooltip") == marker_hint)
+    marker = next(element for element in marker_row.iter("input")
+                  if element.get("data-checked") == "scene_graph_selection_markers")
+    assert marker.get("data-attrif-disabled") == "mcp_safe_mode"
+    assert marker_hint not in inline
+    axes = next(element for element in document.iter()
+                if element.get("data-tooltip") == "preferences.drag_axes_hint")
+    assert axes.get("data-if") == "splat_drag_format == 'ply'"
+    selector = next(element for element in axes.iter("select"))
+    assert selector.get("data-value") == "splat_drag_up_axis"
+    assert [option.get("value") for option in selector] == ["-2", "2", "-3", "3"]
+    assert selector[0].text == "@tr:preferences.drag_axis_default"
+    assert selector.get("data-attrif-disabled") == "mcp_safe_mode"
+    for path in (root / "src/visualizer/gui/resources/locales").glob("*.json"):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert all(data.get(key) for key in tooltip_keys), path.name
+        assert not any("SOG" in data[key].upper() for key in tooltip_keys), path.name
+        assert "-Y" in data["preferences.drag_axis_default"], path.name
+        assert data["preferences"]["scene_graph_selection_markers_description"].strip(), path.name

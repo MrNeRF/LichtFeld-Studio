@@ -6,6 +6,7 @@
 #include "render_pass.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "scene/scene_manager.hpp"
+#include "viewport_request_builder.hpp"
 #include <algorithm>
 
 namespace lfs::vis {
@@ -268,8 +269,7 @@ namespace lfs::vis {
             return {};
         }
 
-        const auto visible_nodes = scene_manager->getScene().getVisibleSplatNodeSlots();
-        if (visible_nodes.size() >= 2) {
+        if (plyComparisonNodes(scene_manager->getScene()).size() >= 2) {
             return {};
         }
 

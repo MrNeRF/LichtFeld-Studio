@@ -497,7 +497,7 @@ namespace lfs::vis {
                  .has_selection = gaussian_selection_visible && ctx.scene_state.has_selection},
             .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(ctx.settings),
             .depth_view = ctx.settings.depth_view,
-            .require_exact_depth = ctx.settings.show_camera_frustums ||
+            .require_exact_depth = ctx.exact_surface_picking || ctx.settings.show_camera_frustums ||
                                    std::any_of(ctx.scene_state.meshes.begin(), ctx.scene_state.meshes.end(),
                                                [](const auto& mesh) { return mesh.mesh != nullptr; }),
             .depth_view_min = ctx.settings.depth_view_min,
@@ -515,7 +515,8 @@ namespace lfs::vis {
         applyGaussianViewVolume(request.filters, ctx);
         request.frame_view.subregion_origin = subregion_origin;
         request.frame_view.subregion_full_size = subregion_full_size;
-        if (ctx.settings.show_camera_frustums && !ctx.training_active && !request.gut && !request.depth_view &&
+        // Align can sample anywhere, including away from camera overlays.
+        if (!ctx.exact_surface_picking && ctx.settings.show_camera_frustums && !ctx.training_active && !request.gut && !request.depth_view &&
             ctx.settings.split_view_mode == SplitViewMode::Disabled &&
             !render_panel && (!source_viewport || source_viewport == &ctx.viewport) &&
             std::none_of(ctx.scene_state.meshes.begin(), ctx.scene_state.meshes.end(),
@@ -609,7 +610,7 @@ namespace lfs::vis {
     std::vector<VulkanMeshDrawItem> buildViewportMeshDrawItems(
         const SceneRenderState& scene_state,
         const RenderSettings& settings,
-        const glm::vec3& camera_position) {
+        const glm::vec3& camera_backward) {
         const bool any_selected_mesh = std::any_of(
             scene_state.meshes.begin(),
             scene_state.meshes.end(),
@@ -621,8 +622,8 @@ namespace lfs::vis {
         const bool dim_non_emphasized =
             settings.desaturate_unselected && (any_selected_mesh || any_selected_node);
 
-        const glm::vec3 headlight_dir = glm::length(camera_position) > 1e-6f
-                                            ? glm::normalize(camera_position)
+        const glm::vec3 headlight_dir = glm::length(camera_backward) > 1e-6f
+                                            ? glm::normalize(camera_backward)
                                             : settings.mesh_light_dir;
 
         std::vector<VulkanMeshDrawItem> items;
@@ -635,6 +636,7 @@ namespace lfs::vis {
             item.mesh = mesh.mesh;
             item.model = mesh.transform;
             item.light_dir = headlight_dir;
+            item.camera_relative_light = true;
             item.light_intensity = settings.mesh_light_intensity;
             item.ambient = settings.mesh_ambient;
             item.backface_culling = settings.mesh_backface_culling;
@@ -650,11 +652,24 @@ namespace lfs::vis {
         return items;
     }
 
+    std::vector<PlyComparisonNode> plyComparisonNodes(const core::Scene& scene) {
+        std::vector<PlyComparisonNode> nodes;
+        for (const auto& slot : scene.getVisibleSplatNodeSlots()) {
+            nodes.push_back({.node = slot.node, .splat_slot = slot.slot_index});
+        }
+        for (const auto& mesh : scene.getVisibleMeshes()) {
+            if (const auto* const node = scene.getNodeById(mesh.node_id)) {
+                nodes.push_back({.node = node, .splat_slot = std::nullopt});
+            }
+        }
+        return nodes;
+    }
+
     const core::SceneNode* plyComparisonNodeForPanel(
         const core::Scene& scene,
         const size_t split_view_offset,
         const SplitViewPanelId panel) {
-        const auto visible_nodes = scene.getVisibleSplatNodeSlots();
+        const auto visible_nodes = plyComparisonNodes(scene);
         const auto pair = plyComparisonPairForOffset(visible_nodes.size(), split_view_offset);
         if (!pair) {
             return nullptr;
@@ -748,7 +763,7 @@ namespace lfs::vis {
         const size_t split_view_offset,
         const SplitViewPanelId panel) {
         PlyComparisonDepthSample sample;
-        const auto visible_nodes = scene.getVisibleSplatNodeSlots();
+        const auto visible_nodes = plyComparisonNodes(scene);
         const auto pair = plyComparisonPairForOffset(visible_nodes.size(), split_view_offset);
         if (!pair) {
             return sample;
@@ -756,7 +771,10 @@ namespace lfs::vis {
         const size_t index = panel == SplitViewPanelId::Right ? pair->second : pair->first;
         const auto& slot = visible_nodes[index];
         sample.node = slot.node;
-        sample.visible_index = static_cast<int>(slot.slot_index);
+        if (!slot.splat_slot) {
+            return sample;
+        }
+        sample.visible_index = static_cast<int>(*slot.splat_slot);
         if (slot.node && hasRenderableGaussians(slot.node->model.get())) {
             sample.model = slot.node->model.get();
             sample.uses_owned_node_model = true;

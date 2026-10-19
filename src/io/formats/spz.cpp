@@ -6,6 +6,7 @@
 #include "coordinate-system-adobe.h"
 #include "core/error.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/splat_data_transform.hpp"
@@ -857,7 +858,7 @@ namespace lfs::io {
             std::chrono::high_resolution_clock::now() - start);
 
         // Get file size
-        auto file_size = std::filesystem::file_size(options.output_path);
+        auto file_size = lfs::core::native_fs::file_size(options.output_path);
         LOG_INFO("SPZ saved: {} gaussians, {:.1f} MB in {}ms",
                  splat_data.size(),
                  static_cast<double>(file_size) / (1024.0 * 1024.0),

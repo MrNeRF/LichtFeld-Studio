@@ -1,4 +1,6 @@
 #include "gs_pipeline.h"
+#include "core/native_fs.hpp"
+#include "core/path_utils.hpp"
 #include "gs_renderer.h"
 #include "perf_timer.h"
 
@@ -50,7 +52,7 @@ namespace {
     }
 
     [[nodiscard]] std::string spirvDiagnosticName(const std::string& spirv_path) {
-        auto name = std::filesystem::path(spirv_path).stem().string();
+        auto name = lfs::core::path_to_utf8(lfs::core::utf8_to_path(spirv_path).stem());
         if (name.empty()) {
             return "unnamed";
         }
@@ -186,7 +188,7 @@ std::vector<uint32_t> loadSpirv(std::string spirv_path) {
             return *it->second;
     }
 
-    std::ifstream file(spirv_path, std::ios::binary | std::ios::ate);
+    std::ifstream file(lfs::core::native_fs::native_path(lfs::core::native_fs::from_utf8(spirv_path)), std::ios::binary | std::ios::ate);
     if (!file) {
         lfs::rendering::throw_vk_setup(
             lfs::ErrorCode::NotFound,
@@ -2009,7 +2011,7 @@ void VulkanGSPipeline::setBandedExport(const bool enabled) {
             for (size_t i = 0; i < count; ++i) {
                 auto* const pipeline = all_compute_pipelines[i];
                 const std::filesystem::path path(pipeline->spirv_path);
-                const std::string name = path.stem().string();
+                const std::string name = lfs::core::path_to_utf8(path.stem());
                 if (!name.starts_with("projection_forward") &&
                     !name.starts_with("rasterize_forward") &&
                     !name.starts_with("macro_raster") &&
@@ -2020,7 +2022,7 @@ void VulkanGSPipeline::setBandedExport(const bool enabled) {
                 auto* const variant_ptr = variant.get();
                 banded_export_pipelines_.emplace_back(pipeline, std::move(variant));
                 createComputePipeline(*variant_ptr,
-                                      (path.parent_path() / (name + "_banded.spv")).string(),
+                                      lfs::core::path_to_utf8((path.parent_path() / (name + "_banded.spv"))),
                                       pipeline->compatible_subgroup_size,
                                       pipeline->expected_workgroup_size_x);
             }

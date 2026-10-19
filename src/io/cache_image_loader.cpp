@@ -4,24 +4,31 @@
 
 #include "io/cache_image_loader.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
+#include "core/cuda/mask_normalization.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include "cuda/masked_image_fill.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "io/nvcodec_image_loader.hpp"
+#include <stb_image.h>
 
 #include <algorithm>
 #include <bit>
 #include <cassert>
+#include <cctype>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <fstream>
 #include <iomanip>
 #include <memory>
 #include <sstream>
+#include <tuple>
 #include <type_traits>
 
 #ifdef __linux__
@@ -53,7 +60,7 @@ namespace lfs::io {
 
     std::size_t get_available_physical_memory() {
 #ifdef __linux__
-        std::ifstream meminfo("/proc/meminfo");
+        std::ifstream meminfo(lfs::core::native_fs::native_path("/proc/meminfo"));
         if (meminfo.is_open()) {
             std::string line;
             while (std::getline(meminfo, line)) {
@@ -224,12 +231,12 @@ namespace lfs::io {
             key << lfs::core::path_to_utf8(path) << ":udr4_" << std::hex << hash;
             if (include_output_format)
                 key << (params.output_uint8 ? "_u8" : "_f32");
-            return key.str();
+            return params.mask_grayscale ? key.str() + "_mask" : key.str();
         }
         auto key = std::format("{}:rf{}_mw{}", lfs::core::path_to_utf8(path), params.resize_factor, params.max_width);
         if (include_output_format)
             key += params.output_uint8 ? "_u8" : "_f32";
-        return key;
+        return params.mask_grayscale ? key + "_mask" : key;
     }
 
     namespace {
@@ -288,9 +295,9 @@ namespace lfs::io {
         }
 
         lfs::core::Tensor lanczos_to_chw(const lfs::core::Tensor& hwc, const int target_width, const int target_height,
-                                         const cudaStream_t stream) {
+                                         const cudaStream_t stream, const bool exact_mask_alpha = false) {
             hwc.sync_to_stream(stream);
-            auto resized = lfs::core::lanczos_resize(hwc, target_height, target_width, LANCZOS_KERNEL_SIZE, stream);
+            auto resized = lfs::core::lanczos_resize(hwc, target_height, target_width, LANCZOS_KERNEL_SIZE, stream, exact_mask_alpha);
             if (!resized.is_valid())
                 throw std::runtime_error("GPU Lanczos resize failed for CPU-decoded image");
             return resized;
@@ -299,7 +306,7 @@ namespace lfs::io {
         // Runs on the staging tensor's stream when the caller passed none, and synchronizes
         // before returning so every staging buffer outlives the kernels reading it.
         lfs::core::Tensor hwc_to_chw(const lfs::core::Tensor& hwc, const int resize_factor, const int max_width,
-                                     const bool output_uint8, const cudaStream_t requested_stream) {
+                                     const bool output_uint8, const cudaStream_t requested_stream, const bool exact_mask_alpha = false) {
             using namespace lfs::core;
             const size_t H = hwc.shape()[0];
             const size_t W = hwc.shape()[1];
@@ -316,9 +323,9 @@ namespace lfs::io {
                     source = Tensor::empty(hwc.shape(), Device::CUDA, DataType::Float32);
                     source.set_stream(stream);
                     cuda::launch_uint16_hwc_to_float32_hwc(
-                        static_cast<const uint16_t*>(hwc.data_ptr()), source.ptr<float>(), H, W, C, stream);
+                        static_cast<const uint16_t*>(hwc.data_ptr()), source.ptr<float>(), H, W, C, stream, exact_mask_alpha);
                 }
-                const auto resized = lanczos_to_chw(source, target_width, target_height, stream);
+                const auto resized = lanczos_to_chw(source, target_width, target_height, stream, exact_mask_alpha);
                 output = output_uint8 ? float_chw_to_uint8(resized, stream) : resized;
             } else {
                 output = Tensor::empty(TensorShape({C, H, W}), Device::CUDA,
@@ -329,11 +336,11 @@ namespace lfs::io {
                         static_cast<const uint16_t*>(hwc.data_ptr()), output.ptr<uint8_t>(), H, W, C, stream);
                 } else if (sixteen_bit) {
                     cuda::launch_uint16_hwc_to_float32_chw(
-                        static_cast<const uint16_t*>(hwc.data_ptr()), output.ptr<float>(), H, W, C, stream);
+                        static_cast<const uint16_t*>(hwc.data_ptr()), output.ptr<float>(), H, W, C, stream, exact_mask_alpha);
                 } else if (output_uint8) {
                     cuda::launch_uint8_hwc_to_uint8_chw(hwc.ptr<uint8_t>(), output.ptr<uint8_t>(), H, W, C, stream);
                 } else {
-                    cuda::launch_uint8_hwc_to_float32_chw(hwc.ptr<uint8_t>(), output.ptr<float>(), H, W, C, stream);
+                    cuda::launch_uint8_hwc_to_float32_chw(hwc.ptr<uint8_t>(), output.ptr<float>(), H, W, C, stream, exact_mask_alpha);
                 }
             }
             synchronize_decode_stream(stream);
@@ -343,20 +350,30 @@ namespace lfs::io {
 
     } // namespace
 
+    const char* masked_image_fill_error() {
+        const auto& localization = lfs::event::LocalizationManager::getInstance();
+        return localization.hasKey("io.mask_fill_failed") ? LOC("io.mask_fill_failed")
+                                                          : "Unable to prepare this image for masked training.";
+    }
+
     lfs::core::Tensor upload_rgb_image(const unsigned char* data, const int width, const int height, const int channels,
                                        const LoadParams& params) {
         assert(data && channels == 3);
         const auto stream = static_cast<cudaStream_t>(params.cuda_stream);
-        return hwc_to_chw(upload_hwc(data, width, height, channels, stream),
-                          params.resize_factor, params.max_width, params.output_uint8, stream);
+        auto staging = upload_hwc(data, width, height, channels, stream);
+        if (params.masked_fill)
+            fill_masked_image(staging, *params.masked_fill, staging.stream());
+        return hwc_to_chw(staging, params.resize_factor, params.max_width, params.output_uint8, stream);
     }
 
     lfs::core::Tensor upload_rgb_image(const std::uint16_t* data, const int width, const int height, const int channels,
                                        const LoadParams& params) {
         assert(data && channels == 3);
         const auto stream = static_cast<cudaStream_t>(params.cuda_stream);
-        return hwc_to_chw(upload_hwc(data, width, height, channels, stream),
-                          params.resize_factor, params.max_width, params.output_uint8, stream);
+        auto staging = upload_hwc(data, width, height, channels, stream);
+        if (params.masked_fill)
+            fill_masked_image(staging, *params.masked_fill, staging.stream());
+        return hwc_to_chw(staging, params.resize_factor, params.max_width, params.output_uint8, stream);
     }
 
     lfs::core::Tensor load_rgb_image_cpu_decoded(
@@ -377,16 +394,92 @@ namespace lfs::io {
         return upload_rgb_image(owned.get(), width, height, channels, params);
     }
 
+    lfs::core::Tensor load_mask_image_cpu_decoded(const std::filesystem::path& path, const LoadParams& params) {
+        using namespace lfs::core;
+        const auto stream = static_cast<cudaStream_t>(params.cuda_stream);
+        const CUDAStreamGuard guard(stream);
+        auto extension = lfs::core::path_to_utf8(path.extension());
+        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+        if (extension == ".tif" || extension == ".tiff") {
+            // The pipeline, Camera and source-RGB fill all need the same UInt16
+            // source values before resizing onto the existing byte cache grid.
+            std::tuple<float*, int, int, int> decoded{nullptr, 0, 0, 0};
+            try {
+                decoded = load_image_float(path);
+            } catch (...) {
+                LOG_DEBUG("TIFF mask precision decode unavailable; retrying the regular decoder");
+            }
+            auto [data, width, height, channels] = decoded;
+            const std::unique_ptr<float, decltype(&free_image_float)> pixels(data, &free_image_float);
+            if (pixels && width > 0 && height > 0 && channels > 0) {
+                const auto cpu = Tensor::from_blob(
+                    pixels.get(), TensorShape({static_cast<size_t>(height), static_cast<size_t>(width), static_cast<size_t>(channels)}),
+                    Device::CPU, DataType::Float32);
+                const auto image = cpu.to(Device::CUDA, stream);
+                synchronize_decode_stream(stream);
+                const auto first = image.slice(2, 0, 1).squeeze(2);
+                auto source = channels < 3
+                                  ? first.contiguous()
+                                  : (first * 77.0f + image.slice(2, 1, 2).squeeze(2) * 150.0f +
+                                     image.slice(2, 2, 3).squeeze(2) * 29.0f) /
+                                        256.0f;
+                const auto [target_w, target_h] = resized_image_dimensions(width, height, params.resize_factor, params.max_width);
+                if (target_w != width || target_h != height)
+                    source = lanczos_resize_grayscale(source, target_h, target_w, 2, stream, true);
+                synchronize_decode_stream(stream);
+                source.set_stream(getCurrentCUDAStream());
+                return source.unsqueeze(0);
+            }
+            // An unusual TIFF still gets the pre-existing byte-decoder fallback.
+        }
+        int width = 0, height = 0, channels = 0;
+        const std::unique_ptr<std::FILE, decltype(&std::fclose)> file(lfs::core::open_file(path, "rb"), &std::fclose);
+        const std::unique_ptr<unsigned char, decltype(&stbi_image_free)> gray(
+            file ? stbi_load_from_file(file.get(), &width, &height, &channels, 1) : nullptr, &stbi_image_free);
+        Tensor cpu;
+        if (gray) {
+            cpu = Tensor::empty({static_cast<size_t>(height), static_cast<size_t>(width)}, Device::CPU, DataType::UInt8);
+            std::memcpy(cpu.data_ptr(), gray.get(), cpu.bytes());
+        } else {
+            // Preserve codecs accepted by the regular image loader but not stb.
+            auto [data, w, h, c] = load_image(path, 1, 0);
+            const std::unique_ptr<unsigned char, decltype(&free_image)> rgb(data, &free_image);
+            if (!data || c != 3)
+                throw std::runtime_error(std::string(lfs::event::LocalizationManager::getInstance().hasKey("io.mask_decode_failed")
+                                                         ? LOC("io.mask_decode_failed")
+                                                         : "Failed to decode mask") +
+                                         ": " + path_to_utf8(path));
+            width = w;
+            height = h;
+            cpu = Tensor::empty({static_cast<size_t>(height), static_cast<size_t>(width)}, Device::CPU, DataType::UInt8);
+            auto* output = cpu.ptr<uint8_t>();
+            for (size_t i = 0; i < cpu.numel(); ++i)
+                output[i] = static_cast<uint8_t>((77 * data[i * 3] + 150 * data[i * 3 + 1] + 29 * data[i * 3 + 2]) >> 8);
+        }
+        const auto bytes = cpu.to(Device::CUDA, stream);
+        const auto [target_w, target_h] = resized_image_dimensions(width, height, params.resize_factor, params.max_width);
+        auto mask = target_w == width && target_h == height
+                        ? lfs::core::cuda::normalize_mask_bytes(bytes)
+                        : lanczos_resize_grayscale(bytes, target_h, target_w, 2, stream, true);
+        synchronize_decode_stream(stream);
+        mask.set_stream(getCurrentCUDAStream());
+        return mask.unsqueeze(0);
+    }
+
     lfs::core::Tensor load_rgba_image_cpu_decoded(
         const std::filesystem::path& path, const int resize_factor, const int max_width, void* const cuda_stream,
-        const bool decode_16bit) {
+        const bool decode_16bit, const bool exact_mask_alpha, const MaskedImageFill* masked_fill) {
         using namespace lfs::core;
         const auto stream = static_cast<cudaStream_t>(cuda_stream);
         const auto finish = [&](const auto* data, const int width, const int height, const int channels) {
             if (!data || channels != 4)
                 throw std::runtime_error("Failed to decode RGBA image: " + path_to_utf8(path));
-            return hwc_to_chw(upload_hwc(data, width, height, channels, stream),
-                              resize_factor, max_width, false, stream);
+            auto staging = upload_hwc(data, width, height, channels, stream);
+            if (masked_fill)
+                fill_masked_image(staging, *masked_fill, staging.stream());
+            return hwc_to_chw(staging, resize_factor, max_width, false, stream, exact_mask_alpha);
         };
         if (decode_16bit) {
             auto [data, width, height, channels] = load_image_with_alpha_u16(path, 1, 0);
@@ -428,12 +521,12 @@ namespace lfs::io {
 
         // Concurrent load - skip caching
         if (is_being_loaded) {
-            return load_rgb_image_cpu_decoded(path, params).to(Device::CPU);
+            return (params.mask_grayscale ? load_mask_image_cpu_decoded(path, params) : load_rgb_image_cpu_decoded(path, params)).to(Device::CPU);
         }
 
         Tensor tensor;
         try {
-            tensor = load_rgb_image_cpu_decoded(path, params).to(Device::CPU);
+            tensor = (params.mask_grayscale ? load_mask_image_cpu_decoded(path, params) : load_rgb_image_cpu_decoded(path, params)).to(Device::CPU);
         } catch (...) {
             std::lock_guard lock(cpu_cache_mutex_);
             image_being_loaded_cpu_.erase(cache_key);
@@ -524,7 +617,7 @@ namespace lfs::io {
             return load_cached_image_from_cpu(path, params);
         }
 
-        return load_rgb_image_cpu_decoded(path, params);
+        return params.mask_grayscale ? load_mask_image_cpu_decoded(path, params) : load_rgb_image_cpu_decoded(path, params);
     }
 
     void CacheLoader::print_cache_status() const {
@@ -545,7 +638,7 @@ namespace lfs::io {
     }
 
     bool CacheLoader::is_jpeg_format(const std::filesystem::path& path) const {
-        std::string ext = path.extension().string();
+        std::string ext = lfs::core::path_to_utf8(path.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
         return ext == ".jpg" || ext == ".jpeg" || ext == ".jp2";
     }
@@ -587,7 +680,7 @@ namespace lfs::io {
         }
 
         lfs::core::Tensor decode_with_cpu_fallback(const std::filesystem::path& path, const LoadParams& params) {
-            return load_rgb_image_cpu_decoded(path, params);
+            return params.mask_grayscale ? load_mask_image_cpu_decoded(path, params) : load_rgb_image_cpu_decoded(path, params);
         }
 
     } // anonymous namespace
@@ -632,6 +725,22 @@ namespace lfs::io {
         if (is_jpeg || is_jpeg2k) {
             try {
                 auto& nvcodec = get_nvcodec_loader();
+
+                if (params.mask_grayscale) {
+                    auto mask = nvcodec.load_image_from_memory_gpu(
+                        jpeg_bytes, params.resize_factor, params.max_width, params.cuda_stream, DecodeFormat::Mask);
+                    if (!from_cache && !params.skip_blob_cache) {
+                        std::lock_guard lock(jpeg_blob_mutex_);
+                        if (has_sufficient_memory(jpeg_bytes.size())) {
+                            evict_jpeg_blobs_if_needed(jpeg_bytes.size());
+                            jpeg_blob_cache_[cache_key] = {
+                                .compressed_data = jpeg_bytes,
+                                .size_bytes = jpeg_bytes.size(),
+                                .last_access = std::chrono::steady_clock::now()};
+                        }
+                    }
+                    return mask.unsqueeze(0);
+                }
 
                 if (from_cache) {
                     if (is_jpeg2k) {
@@ -709,7 +818,7 @@ namespace lfs::io {
                                                                ? tensor.to(DataType::Float32) / 255.0f
                                                                : tensor;
                                 cache_bytes = nvcodec.encode_to_jpeg2k(
-                                    encode_tensor, params.cuda_stream);
+                                    encode_tensor, RgbLayout::CHW, params.cuda_stream);
                             } catch (const std::exception& enc_err) {
                                 LOG_DEBUG("[CacheLoader] JPEG 2000 encode failed: {}", enc_err.what());
                             } catch (...) {

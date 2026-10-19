@@ -6,6 +6,8 @@ from enum import IntEnum
 from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+import json
+import re
 import sys
 
 import pytest
@@ -105,6 +107,13 @@ ACTION_NAMES = (
     "SELECT_ALL_SCENE_NODES",
     "TOGGLE_SCENE_SELECTION_VISIBILITY",
     "TOGGLE_SCENE_SELECTION_TRAINING",
+    "GROUP_SELECTED_SCENE_NODES",
+    "UNGROUP_SELECTED_SCENE_NODE",
+    "ASSET_GALLERY_PRIMARY",
+    "ASSET_GALLERY_COPY_LINK",
+    "ASSET_REFRESH",
+    "TOGGLE_PYTHON_CONSOLE",
+    "CAMERA_RESTORE_HOME",
 )
 
 
@@ -127,16 +136,19 @@ def _install_lf_stub(monkeypatch):
         language=["en"],
         profiles=["Default", "Studio"],
         current_profile=["Default"],
+        bindings_revision=[0],
         capturing=[False],
         waiting_double=[False],
         conflict=[None],
         captured=[],
+        altgr_rejected=[False],
         triggers={},
         cleared=[],
         set_triggers=[],
         started=[],
         cancelled=0,
         section_request="",
+        splat_drag_preferences={"format": "ply", "sh_degree": 3, "up_axis": -2},
         mcp_preferences={
             "enabled": True,
             "expose_network": False,
@@ -188,12 +200,21 @@ def _install_lf_stub(monkeypatch):
         state.cancelled += 1
         state.capturing[0] = False
 
+    def take_altgr_capture_rejection():
+        rejected, state.altgr_rejected[0] = state.altgr_rejected[0], False
+        return rejected
+
     def get_allowed_trigger_kinds(action_value):
         if action_value in (action.CAMERA_ORBIT, action.CAMERA_PAN):
             return ["mouse_button", "mouse_drag"]
         if action_value in (action.CAMERA_ZOOM, action.CAMERA_ROLL, action.BRUSH_RESIZE):
             return ["mouse_scroll"]
-        if action_value in (action.SELECTION_REPLACE, action.SELECTION_ADD, action.SELECTION_REMOVE):
+        if action_value in (
+            action.SELECTION_REPLACE,
+            action.SELECTION_ADD,
+            action.SELECTION_REMOVE,
+            action.SELECTION_INTERSECT,
+        ):
             return ["mouse_button", "mouse_drag"]
         if action_value == action.NODE_PICK:
             return ["mouse_button"]
@@ -225,6 +246,7 @@ def _install_lf_stub(monkeypatch):
         Action=action,
         get_available_profiles=lambda: list(state.profiles),
         get_current_profile=lambda: state.current_profile[0],
+        bindings_revision=lambda: state.bindings_revision[0],
         get_tool_mode_name=lambda mode: f"Mode {mode.name}",
         get_action_name=lambda value: f"Action {value.name}",
         get_trigger_description=lambda value, mode: f"{mode.name}:{value.name}",
@@ -234,6 +256,7 @@ def _install_lf_stub(monkeypatch):
         get_allowed_trigger_kinds=get_allowed_trigger_kinds,
         is_capturing=lambda: state.capturing[0],
         is_waiting_for_double_click=lambda: state.waiting_double[0],
+        take_altgr_capture_rejection=take_altgr_capture_rejection,
         load_profile=lambda name: state.current_profile.__setitem__(0, name),
         save_profile=lambda _name: None,
         reset_to_default=lambda: None,
@@ -246,6 +269,8 @@ def _install_lf_stub(monkeypatch):
     )
 
     lf_stub = ModuleType("lichtfeld")
+    lf_stub.project_auto_save_on_close_enabled = lambda: False
+    lf_stub.project_set_auto_save_on_close = lambda _value: None
     lf_stub.keymap = keymap
     lf_stub.get_camera_navigation_mode = lambda: "orbit"
     lf_stub.get_new_project_navigation_up_axis = lambda: "legacy_y"
@@ -280,6 +305,8 @@ def _install_lf_stub(monkeypatch):
         get_theme_family=lambda: "lichtfeld",
         get_theme_mode=lambda: "dark",
         get_ui_scale_preference=lambda: 0.0,
+        get_native_floating_windows=lambda: getattr(state, "native_floating_windows", False),
+        set_native_floating_windows=lambda enabled: setattr(state, "native_floating_windows", enabled),
         get_zoom_speed_preference=lambda: 0.0,
         set_zoom_speed_preference=lambda _speed: None,
         get_navigation_speed_preference=lambda: 0.0,
@@ -288,6 +315,8 @@ def _install_lf_stub(monkeypatch):
         remember_camera_view_snap=lambda: False,
         scene_graph_selection_markers=lambda: False,
         set_scene_graph_selection_markers=lambda _enabled: None,
+        get_splat_drag_preferences=lambda: dict(state.splat_drag_preferences),
+        set_splat_drag_preferences=lambda values: state.splat_drag_preferences.update(values),
         get_progress_bar_style=lambda: "classic",
         set_progress_bar_style=lambda _style: None,
         get_viewport_chrome_style=lambda: "translucent",
@@ -436,6 +465,9 @@ class _DocStub:
     def get_element_by_id(self, element_id):
         return self.elements.get(element_id)
 
+    def query_selector_all(self, _selector):
+        return []
+
 
 class _EventStub:
     def __init__(self, target):
@@ -451,6 +483,55 @@ def _bind_panel(prefs):
     ctx = SimpleNamespace(create_data_model=lambda name: model if name == "preferences" else None)
     panel.on_bind_model(ctx)
     return panel, model
+
+
+def _cpp_block(source, marker):
+    start = source.index(marker)
+    opening = source.index("{", start)
+    depth = 0
+    for index in range(opening, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[opening + 1:index]
+    raise AssertionError(f"Unclosed C++ block after {marker}")
+
+
+def test_default_actions_with_ui_sections_are_listed_in_editor(keymap_bindings_module):
+    prefs, _state = keymap_bindings_module
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "src/visualizer/input/input_bindings.cpp").read_text()
+    defaults = _cpp_block(source, "Profile InputBindings::createDefaultProfile()")
+    description = _cpp_block(source, "const ActionDescriptor& describe(const Action action)")
+    default_actions = set(re.findall(r"Action::([A-Z][A-Z0-9_]*)", defaults))
+    descriptor_sections = {
+        name: bool(re.search(r"\.ui_section\s*=\s*ActionSection::(?!None\b)", body))
+        for name, body in re.findall(
+            r"static constexpr ActionDescriptor (d_\w+)\{(.*?)\};", description, re.S
+        )
+    }
+    switch = _cpp_block(description, "switch (action)")
+    described = set()
+    pending = []
+    for match in re.finditer(r"case Action::(\w+):|return (d_\w+);", switch):
+        if match.group(1):
+            pending.append(match.group(1))
+        else:
+            if descriptor_sections.get(match.group(2), False):
+                described.update(pending)
+            pending.clear()
+
+    editor_actions = {
+        action.name
+        for actions in prefs.KeymapBindingsSection.BINDING_SECTIONS.values()
+        for action in actions
+    }
+    # No intentionally hidden action currently has both a default and a UI section.
+    intentionally_hidden = set()
+    missing = default_actions & described - editor_actions - intentionally_hidden
+    assert not missing, f"Default UI actions missing from the key map editor: {sorted(missing)}"
 
 
 def test_keymap_section_is_wired_through_preferences(keymap_bindings_module):
@@ -484,6 +565,14 @@ def test_keymap_section_is_wired_through_preferences(keymap_bindings_module):
     panel.on_mount(doc)
     assert doc.elements["bindings-table"].listeners == [("click", section._on_table_click)]
     assert doc.elements["binding-conflict-overlay"].classes["hidden"] is True
+
+
+def test_keymap_altgr_rejection_keeps_capture(keymap_bindings_module):
+    prefs, state = keymap_bindings_module
+    panel, model = _bind_panel(prefs)
+    state.capturing[0] = state.altgr_rejected[0] = True
+    panel.on_update(_DocStub())
+    assert state.capturing[0] and model.funcs["bindings_hint"]() == "input_settings.altgr_capture_unsupported"
 
 
 def test_keymap_builds_profile_and_mode_records(keymap_bindings_module):
@@ -522,6 +611,46 @@ def test_keymap_selecting_the_active_profile_does_not_reload_it(keymap_bindings_
 
     section._set_profile_idx("1")
     assert loads == ["Studio"]
+
+
+def test_python_save_profile_rejects_path_names_without_touching_outside_file(tmp_path):
+    root = Path(__file__).parents[2]
+    source = (root / "src/python/lfs/py_keymap.cpp").read_text()
+    start = source.index('"save_profile",')
+    end = source.index('"export_profile",', start)
+    binding = source[start:end]
+    validate = binding.index("InputBindings::isValidProfileName(name)")
+    error = binding.index("throw nb::value_error", validate)
+    save = binding.index("get_keymap_bindings()->saveProfile(name)")
+    assert validate < error < save
+
+    module_dir = root / "build/src/python"
+    if not any(module_dir.glob("lichtfeld*.so")):
+        return
+    outside = tmp_path / "config/x.json"
+    outside.parent.mkdir(parents=True)
+    outside.write_text("sentinel")
+    script = """
+import sys
+from pathlib import Path
+import lichtfeld
+target = Path(sys.argv[1])
+try:
+    lichtfeld.keymap.save_profile('../x')
+except ValueError:
+    pass
+else:
+    raise AssertionError('unsafe profile name was accepted')
+assert target.read_text() == 'sentinel'
+"""
+    env = dict(__import__("os").environ)
+    env["PYTHONPATH"] = str(module_dir)
+    result = __import__("subprocess").run(
+        [sys.executable, "-c", script, str(outside)],
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert outside.read_text() == "sentinel"
 
 
 def test_keymap_builds_binding_rows_with_capture_state(keymap_bindings_module):
@@ -580,6 +709,69 @@ def test_keymap_ensure_rows_does_not_rebuild_on_first_update(keymap_bindings_mod
     section.on_update(_DocStub())
 
     assert len(binding_rows_calls) == 1
+
+
+def test_keymap_editor_import_export_use_native_json_dialogs(keymap_bindings_module, tmp_path):
+    prefs, state = keymap_bindings_module; section = _bind_panel(prefs)[0]._keymap
+    profile_path, dialog_calls = tmp_path / "roundtrip.json", []
+    prefs.lf.ui.save_json_file_dialog = lambda name: (dialog_calls.append(("save", name)) or str(profile_path))
+    prefs.lf.ui.open_json_file_dialog = lambda: (dialog_calls.append(("open",)) or str(profile_path))
+    key = (prefs.lf.keymap.ToolMode.GLOBAL, prefs.lf.keymap.Action.TOOL_SCALE)
+    state.triggers[key] = {"key": 74}; prefs.lf.keymap.export_profile = lambda path: Path(path).write_text(json.dumps({"scale": state.triggers[key]})) or True
+
+    def import_profile(path):
+        state.triggers[key] = json.loads(Path(path).read_text())["scale"]
+        state.bindings_revision[0] += 1
+        return True
+    prefs.lf.keymap.import_profile = import_profile
+    section._on_export_profile(None, None, None); assert profile_path.exists()
+    state.triggers.clear(); section._on_import_profile(None, None, None)
+    assert state.triggers[key] == {"key": 74} and dialog_calls == [("save", "Default.json"), ("open",)]
+
+
+def test_keymap_editor_clear_one_binding_without_reset(keymap_bindings_module):
+    prefs, state = keymap_bindings_module; section = _bind_panel(prefs)[0]._keymap
+    mode, scale = prefs.lf.keymap.ToolMode.GLOBAL, prefs.lf.keymap.Action.TOOL_SCALE
+    state.triggers[(mode, scale)] = {"type": "key", "key": 52, "modifiers": 0}
+    section._rebuild_binding_rows(mode)
+    row = next(r for r in section._handle.records["binding_rows"] if r.get("action_id") == str(scale.value))
+    assert row["show_clear"] is True and row["clear_label"] == "input_settings.clear_binding"
+
+    button = _ElementStub(); button.attributes = {"data-btn-action": "clear", "data-action-id": str(scale.value), "data-mode-id": str(mode.value)}
+    section._on_table_click(_EventStub(button))
+    assert state.cleared == [(mode, scale)]
+
+
+def test_keymap_rows_follow_api_binding_revision_without_idle_rebuild(keymap_bindings_module):
+    prefs, state = keymap_bindings_module
+    panel, model = _bind_panel(prefs)
+    section = panel._keymap
+    mode = prefs.lf.keymap.ToolMode.GLOBAL
+    action = prefs.lf.keymap.Action.CAMERA_ORBIT
+    prefs.lf.keymap.get_trigger_description = lambda value, selected_mode: str(state.triggers.get((selected_mode, value), "unbound"))
+    rebuilds = []
+    original = model.handle.update_record_list
+
+    def record_rebuild(name, rows):
+        if name == "binding_rows": rebuilds.append(rows)
+        original(name, rows)
+
+    model.handle.update_record_list = record_rebuild
+    section.ensure_binding_rows(); doc = _DocStub()
+    panel.on_update(doc); assert len(rebuilds) == 1
+
+    def changed(desc, count):
+        panel.on_update(doc); assert len(rebuilds) == count
+        row = next(r for r in rebuilds[-1] if r.get("action_id") == str(action.value))
+        assert row["desc_text"] == desc
+        panel.on_update(doc); assert len(rebuilds) == count
+    state.triggers[(mode, action)] = "J"; state.bindings_revision[0] += 1; changed("J", 2)
+    del state.triggers[(mode, action)]; state.bindings_revision[0] += 1; changed("unbound", 3)
+    # An import and a profile switch each update once; idle frames do not rebuild.
+    state.triggers[(mode, action)] = "K"; state.bindings_revision[0] += 1; changed("K", 4)
+    state.current_profile[0] = "Studio"; state.bindings_revision[0] += 1
+    panel.on_update(doc); assert len(rebuilds) == 5
+    panel.on_update(doc); assert len(rebuilds) == 5
 
 
 def test_keymap_marks_conflicting_binding_rows(keymap_bindings_module):
@@ -693,6 +885,20 @@ def test_keymap_capture_conflict_cancel_restores_previous_trigger(keymap_binding
     assert doc.elements["binding-conflict-overlay"].classes["hidden"] is True
 
 
+def test_keymap_unmount_restores_binding_with_pending_conflict(keymap_bindings_module):
+    prefs, state = keymap_bindings_module
+    section = _bind_panel(prefs)[0]._keymap
+    section._doc = _DocStub(with_conflict_overlay=True)
+    mode, action = prefs.lf.keymap.ToolMode.GLOBAL, prefs.lf.keymap.Action.CAMERA_MOVE_BACKWARD
+    previous_trigger = {"type": "key", "key": 83, "modifiers": 0}
+    section._pending_conflict = {"mode": mode, "action": action, "other_mode": mode,
+                                 "other_action": prefs.lf.keymap.Action.CAMERA_MOVE_FORWARD,
+                                 "previous_trigger": previous_trigger}
+    section.on_unmount(); assert state.cleared == [(mode, action)]
+    assert state.set_triggers == [(mode, action, previous_trigger)]
+    assert section._pending_conflict is None
+
+
 def test_keymap_language_change_rebuilds_and_dirties_all(keymap_bindings_module):
     prefs, state = keymap_bindings_module
     panel, _model = _bind_panel(prefs)
@@ -751,6 +957,29 @@ def test_keymap_selection_mode_shows_only_streamlined_depth_actions(keymap_bindi
     assert str(prefs.lf.keymap.Action.DEPTH_ADJUST_SIDE.value) not in action_ids
 
 
+def test_selection_intersect_is_editable_and_accepts_alt_drag_capture(keymap_bindings_module):
+    prefs, state = keymap_bindings_module
+    panel, _model = _bind_panel(prefs)
+    section = panel._keymap
+    action = prefs.lf.keymap.Action.SELECTION_INTERSECT
+    mode = prefs.lf.keymap.ToolMode.SELECTION
+
+    section._rebuild_binding_rows(mode)
+    rows = section._handle.records["binding_rows"]
+    assert str(action.value) in {row["action_id"] for row in rows if not row["is_section"]}
+    assert "mouse_drag" in prefs.lf.keymap.get_allowed_trigger_kinds(action)
+    assert section._capture_prompt(action) == "input_settings.click_or_drag_mouse"
+
+    button = _ElementStub()
+    button.attributes = {
+        "data-btn-action": "rebind",
+        "data-action-id": str(action.value),
+        "data-mode-id": str(mode.value),
+    }
+    section._on_table_click(_EventStub(button))
+    assert state.started == [(mode, action)]
+
+
 def test_keymap_transform_mode_exposes_node_picking(keymap_bindings_module):
     prefs, _state = keymap_bindings_module
     panel, _model = _bind_panel(prefs)
@@ -794,6 +1023,7 @@ def test_keymap_global_mode_exposes_system_sections(keymap_bindings_module):
 
     assert str(prefs.lf.keymap.Action.TOOL_TRANSLATE.value) in action_ids
     assert str(prefs.lf.keymap.Action.TOGGLE_UI.value) in action_ids
+    assert str(prefs.lf.keymap.Action.TOGGLE_PYTHON_CONSOLE.value) in action_ids
     assert str(prefs.lf.keymap.Action.OPEN_PREFERENCES.value) in action_ids
     assert str(prefs.lf.keymap.Action.HISTOGRAM_ZOOM_MARKED.value) in action_ids
     assert str(prefs.lf.keymap.Action.TOGGLE_CAMERA_FRUSTUMS.value) in action_ids

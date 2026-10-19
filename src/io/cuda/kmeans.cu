@@ -115,7 +115,7 @@ namespace lfs::io {
             }
 
             void disable(const char* operation, const cudaError_t status) {
-                LOG_DEBUG("SOG k-means timing disabled after {} failed: {}",
+                LOG_DEBUG("SOG k-means timing disabled after %s failed: %s",
                           operation, cudaGetErrorString(status));
                 if (state_) {
                     state_->enabled = false;
@@ -131,7 +131,7 @@ namespace lfs::io {
                 const auto status = cudaEventDestroy(event);
                 event = nullptr;
                 if (status != cudaSuccess) {
-                    LOG_DEBUG("SOG k-means timing cleanup {} failed: {}",
+                    LOG_DEBUG("SOG k-means timing cleanup %s failed: %s",
                               operation, cudaGetErrorString(status));
                 }
             }
@@ -1565,8 +1565,8 @@ namespace lfs::io {
             lfs::core::sh_swizzled_float_count(static_cast<size_t>(n_points),
                                                static_cast<std::uint32_t>(sh_coeffs)));
         if (shN_swizzled.numel() < required_floats) {
-            LOG_ERROR("kmeans_sh_swizzled input has {} floats but needs at least {} for {} points",
-                      shN_swizzled.numel(), required_floats, n_points);
+            LOG_ERROR("kmeans_sh_swizzled input has %zu floats but needs at least %lld for %d points",
+                      shN_swizzled.numel(), static_cast<long long>(required_floats), n_points);
             return {Tensor(), Tensor()};
         }
 
@@ -1582,7 +1582,7 @@ namespace lfs::io {
             }
             return kmeans_swizzled_bruteforce_impl<45>(shN_swizzled, n_points, k, iterations);
         default:
-            LOG_ERROR("kmeans_sh_swizzled unsupported SH coefficient count {} (dims {}). Supported: 3, 8, 15",
+            LOG_ERROR("kmeans_sh_swizzled unsupported SH coefficient count %d (dims %d). Supported: 3, 8, 15",
                       sh_coeffs, n_dims);
             return {Tensor(), Tensor()};
         }

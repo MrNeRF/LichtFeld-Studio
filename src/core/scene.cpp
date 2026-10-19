@@ -11,6 +11,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/scene_merge.hpp"
 #include "core/sh_value_quant.hpp"
@@ -3011,8 +3012,23 @@ namespace lfs::core {
             cached_visible_selection_mask_visibility_generation_ == visibility_generation)
             return cached_visible_selection_mask_;
 
+        // Visible indices are built on the CUDA selection device. A restored
+        // chapter mask can still be on the host. Tensor::to clones when the
+        // device already matches, so transfer only a mismatch.
+        Tensor selection_on_device;
+        const Tensor* selection_tensor = selection.get();
+        if (selection->device() != Device::CUDA) {
+            selection_on_device = selection->to(Device::CUDA);
+            selection_tensor = &selection_on_device;
+        }
+        Tensor indices_on_device;
+        const Tensor* index_tensor = visible_indices.get();
+        if (visible_indices->device() != selection_tensor->device()) {
+            indices_on_device = visible_indices->to(selection_tensor->device());
+            index_tensor = &indices_on_device;
+        }
         cached_visible_selection_mask_ = std::make_shared<lfs::core::Tensor>(
-            selection->index_select(0, *visible_indices).contiguous());
+            selection_tensor->index_select(0, *index_tensor).contiguous());
         cached_visible_selection_mask_source_ = selection.get();
         cached_visible_selection_mask_model_ = model;
         cached_visible_selection_mask_indices_ = visible_indices.get();
@@ -3831,8 +3847,11 @@ namespace lfs::core {
         const std::string name = it->name;
         selection_groups_.erase(it);
 
-        if (active_selection_group_ == id) {
-            active_selection_group_ = selection_groups_.empty() ? 0 : selection_groups_.back().id;
+        if (selection_groups_.empty()) {
+            next_group_id_ = 1;
+            addSelectionGroup("Group 1", glm::vec3(0.0f));
+        } else if (active_selection_group_ == id) {
+            active_selection_group_ = selection_groups_.back().id;
         }
 
         notifyMutation(MutationType::SELECTION_CHANGED);
@@ -4566,6 +4585,11 @@ namespace lfs::core {
         selection_groups_.swap(state.groups);
         active_selection_group_ = state.active_group_id;
         next_group_id_ = state.next_group_id;
+        if (selection_groups_.empty()) {
+            selection_groups_.push_back(defaultSelectionGroup());
+            active_selection_group_ = selection_groups_.back().id;
+            next_group_id_ = static_cast<uint8_t>(selection_groups_.back().id + 1);
+        }
         has_selection_ = state.has_splat_selection;
         has_point_cloud_selection_ =
             state.has_point_cloud_selection;
@@ -5235,11 +5259,13 @@ namespace lfs::core {
 
             if (layout_rest > 0 && src.shN_raw().is_valid() && src.shN_raw().numel() > 0 &&
                 shN_requires_float_materialize(src)) {
-                lfs::core::Tensor shN_canon = src.shN_canonical();
-                if (shN_canon.device() != src.means_raw().device()) {
-                    shN_canon = shN_canon.to(src.means_raw().device());
+                auto kept_indices = keep_mask.nonzero();
+                if (kept_indices.ndim() == 2) {
+                    kept_indices = kept_indices.squeeze(1);
                 }
-                shN_canon = shN_canon.index_select(0, keep_mask).contiguous();
+                kept_indices = kept_indices.to(lfs::core::DataType::Int32)
+                                   .to(lfs::core::Device::CPU);
+                auto shN_canon = src.shN_canonical_cpu_rows(kept_indices);
                 auto result = std::make_unique<lfs::core::SplatData>(
                     src.get_max_sh_degree(),
                     src.means_raw().index_select(0, keep_mask).contiguous(),
@@ -6425,7 +6451,7 @@ namespace lfs::core {
                 continue;
             }
             std::error_code exists_error;
-            const bool exists = std::filesystem::is_regular_file(image_path, exists_error);
+            const bool exists = lfs::core::native_fs::is_regular_file(image_path, exists_error);
             camera.set_has_image(exists);
             if (!exists) {
                 missing.push_back(camera.image_name().empty()
@@ -6475,6 +6501,8 @@ namespace lfs::core {
         auto* node = getNodeById(id);
         if (node && node->type == NodeType::CAMERA && node->training_enabled != enabled) {
             node->training_enabled = enabled;
+            if (!restore_staging_)
+                pending_mutations_ |= static_cast<uint32_t>(MutationType::CAMERA_TRAINING_CHANGED);
             notifyMutation(MutationType::VISIBILITY_CHANGED);
         }
     }

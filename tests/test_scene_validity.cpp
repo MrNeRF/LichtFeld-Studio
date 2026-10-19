@@ -23,7 +23,6 @@
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/parameters.hpp"
@@ -952,7 +951,6 @@ namespace lfs::python {
     protected:
         void SetUp() override {
             lfs::event::EventBridge::instance().clear_all();
-            core::event::bus().clear_all();
             lfs::vis::services().clear();
             lfs::vis::op::undoHistory().clear();
             set_application_scene(nullptr);
@@ -963,7 +961,6 @@ namespace lfs::python {
             set_application_scene(nullptr);
             lfs::vis::op::undoHistory().clear();
             lfs::vis::services().clear();
-            core::event::bus().clear_all();
             lfs::event::EventBridge::instance().clear_all();
         }
 
@@ -2269,6 +2266,34 @@ namespace lfs::python {
         const auto non_camera_group_counts = scene.getCameraTrainingCounts(cameras);
         EXPECT_EQ(non_camera_group_counts.enabled, 0u);
         EXPECT_EQ(non_camera_group_counts.total, 0u);
+    }
+
+    TEST_F(SceneValidityTest, CameraTrainingToggleIdentifiesEffectiveChanges) {
+        lfs::vis::SceneManager sm;
+        auto& scene = sm.getScene();
+        const auto group = scene.addCameraGroup("Training", core::NULL_NODE, 1);
+        const auto camera = scene.addCamera("frame.png", group, make_test_camera());
+        ASSERT_NE(camera, core::NULL_NODE);
+
+        std::vector<std::uint32_t> changes;
+        auto handler = core::events::state::SceneChanged::when(
+            [&](const auto& event) { changes.push_back(event.mutation_flags); });
+        (void)handler;
+        constexpr std::uint32_t visibility_changed = 1u << 5;
+        constexpr std::uint32_t camera_training_changed = 1u << 9;
+
+        scene.setCameraTrainingEnabled(camera, false);
+        ASSERT_EQ(changes.size(), 1u);
+        EXPECT_EQ(changes.back(), visibility_changed | camera_training_changed);
+        EXPECT_EQ(scene.getActiveCameraCount(), 0u);
+
+        scene.setCameraTrainingEnabled(camera, false);
+        EXPECT_EQ(changes.size(), 1u);
+
+        scene.setCameraTrainingEnabled(camera, true);
+        ASSERT_EQ(changes.size(), 2u);
+        EXPECT_EQ(changes.back(), visibility_changed | camera_training_changed);
+        EXPECT_EQ(scene.getActiveCameraCount(), 1u);
     }
 
     TEST_F(SceneValidityTest, SceneManagerBlocksActiveCameraSubtreeAndAllowsInactiveCameraRemoval) {

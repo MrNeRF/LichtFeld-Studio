@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lfs::core {
@@ -18,6 +19,10 @@ namespace lfs::core {
     [[nodiscard]] LFS_CORE_API lfs::Status
     writeTextFileAtomically(const std::filesystem::path& destination,
                             const std::string& contents);
+    [[nodiscard]] LFS_CORE_API lfs::Result<std::optional<std::filesystem::path>>
+    backupFile(const std::filesystem::path& source,
+               const std::filesystem::path& backup_root,
+               std::string_view category);
 
     /**
      * Per-invocation overrides for the user-owned storage tree.

@@ -5,3 +5,18 @@ body {
     color: @{text};
     @{panel.host_body_decor};
 }
+
+body.native-panel #window-shadow-ambient,
+body.native-panel #window-shadow-key {
+    display: none;
+}
+body.native-panel {
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 100%;
+    height: 100%;
+    background-color: transparent;
+    decorator: none;
+}

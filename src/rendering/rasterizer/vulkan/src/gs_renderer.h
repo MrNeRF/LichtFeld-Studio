@@ -105,8 +105,14 @@ PACK_STRUCT(struct VulkanGSRendererUniforms {
     uint32_t color_tonemapping;
     uint32_t splat_render_profile;
     float rasterization_scale;
+    // Orthographic views move the eye back along the view axis so nothing lies behind it; depth outputs subtract
+    // this distance again, so they stay measured from the viewport camera (match shader).
+    float depth_offset;
+    uint32_t depth_offset_pad0;
+    uint32_t depth_offset_pad1;
+    uint32_t depth_offset_pad2;
 });
-static_assert(sizeof(VulkanGSRendererUniforms) == 208);
+static_assert(sizeof(VulkanGSRendererUniforms) == 224);
 static_assert(offsetof(VulkanGSRendererUniforms, shN_address) % 8 == 0);
 static_assert(offsetof(VulkanGSRendererUniforms, dist_coeffs) % 16 == 0);
 
@@ -508,9 +514,11 @@ protected:
         _ComputePipeline(4),
         _ComputePipeline(4)};
     _ComputePipelinePair pipeline_rasterize_forward = _ComputePipelinePair(15);
-    _ComputePipelinePair pipeline_rasterize_forward_3dgut = _ComputePipelinePair(21);
+    _ComputePipelinePair pipeline_rasterize_forward_3dgut = _ComputePipelinePair(24);
     _ComputePipelinePair pipeline_rasterize_forward_plain = _ComputePipelinePair(15);
-    _ComputePipelinePair pipeline_rasterize_forward_3dgut_plain = _ComputePipelinePair(21);
+    _ComputePipelinePair pipeline_rasterize_forward_3dgut_plain = _ComputePipelinePair(24);
+    _ComputePipelinePair pipeline_rasterize_forward_3dgut_rad = _ComputePipelinePair(24);
+    _ComputePipelinePair pipeline_rasterize_forward_3dgut_plain_rad = _ComputePipelinePair(24);
     _ComputePipelinePair pipeline_rasterize_forward_light = _ComputePipelinePair(15);
     _ComputePipelinePair pipeline_rasterize_forward_light_plain = _ComputePipelinePair(15);
     _ComputePipeline pipeline_tile_batch_descriptors = _ComputePipeline(4);

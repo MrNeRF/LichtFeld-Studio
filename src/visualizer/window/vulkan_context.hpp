@@ -62,7 +62,8 @@ namespace lfs::vis {
         VulkanContext& operator=(const VulkanContext&) = delete;
 
         LFS_VIS_API bool init(SDL_Window* window, int framebuffer_width, int framebuffer_height);
-        void shutdown();
+        void setSceneRuntimeOwnership(bool owns) { owns_scene_runtimes_ = owns; }
+        LFS_VIS_API void shutdown();
         void notifyFramebufferResized(int width, int height, ResizeIntent intent = ResizeIntent::Exact);
         [[nodiscard]] bool hasPendingSwapchainResize() const {
             if (rendererTerminalState() != RendererTerminalState::Running)
@@ -282,7 +283,19 @@ namespace lfs::vis {
                                                   const Frame& frame);
         [[nodiscard]] LFS_VIS_API bool endFrame();
         [[nodiscard]] bool hasActiveFrame() const noexcept { return frame_active_; }
-        [[nodiscard]] LFS_VIS_API std::expected<WindowCapture, std::string> captureAndEndActiveFrameRgba();
+        void requestSceneCapture() noexcept {
+            scene_capture_requested_.store(true, std::memory_order_release);
+        }
+        void cancelSceneCaptureRequest() noexcept {
+            scene_capture_requested_.store(false, std::memory_order_release);
+        }
+        [[nodiscard]] bool sceneCaptureRequested() const noexcept {
+            return scene_capture_requested_.load(std::memory_order_acquire);
+        }
+        [[nodiscard]] LFS_VIS_API bool recordSceneCapture(VkCommandBuffer command_buffer,
+                                                          const Frame& frame);
+        [[nodiscard]] LFS_VIS_API std::expected<WindowCapture, std::string> captureAndEndActiveFrameRgba(
+            bool scene_before_overlays = false);
         [[nodiscard]] bool waitForNextFrameSlot();
         [[nodiscard]] bool waitForCurrentFrameSlot();
         [[nodiscard]] LFS_VIS_API bool waitForSubmittedFrames();
@@ -355,6 +368,7 @@ namespace lfs::vis {
                                          const lfs::core::ExportableBlock& block);
         [[nodiscard]] bool sparseBindingEnabled() const { return sparse_binding_enabled_; }
         [[nodiscard]] bool bufferDeviceAddressEnabled() const { return buffer_device_address_enabled_; }
+        [[nodiscard]] bool geometryShaderEnabled() const { return geometry_shader_enabled_; }
         [[nodiscard]] bool createExternalTimelineSemaphore(
             std::uint64_t initial_value,
             ExternalSemaphore& out,
@@ -477,6 +491,8 @@ namespace lfs::vis {
         VkInstance instance_ = VK_NULL_HANDLE;
         VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
         VkSurfaceKHR surface_ = VK_NULL_HANDLE;
+        bool owns_scene_runtimes_ = true;
+        bool transparent_surface_ = false;
         VkPhysicalDevice physical_device_ = VK_NULL_HANDLE;
         std::array<std::uint8_t, VK_UUID_SIZE> device_uuid_{};
         VkDevice device_ = VK_NULL_HANDLE;
@@ -568,6 +584,14 @@ namespace lfs::vis {
         std::chrono::steady_clock::time_point framebuffer_resize_last_recreate_{};
         bool frame_active_ = false;
         bool frame_rendering_active_ = false;
+        std::atomic_bool scene_capture_requested_{false};
+        struct SceneCaptureStaging {
+            VkBuffer buffer = VK_NULL_HANDLE;
+            VmaAllocation allocation = VK_NULL_HANDLE;
+            VkExtent2D extent{};
+            std::uint32_t image_index = 0;
+        } scene_capture_staging_;
+        void destroySceneCaptureStaging();
         bool frame_suboptimal_ = false;
         // Phase 7B: owner quarantine latch (10 s policy) shared by the six UI waits.
         std::atomic<bool> gpu_wait_quarantined_{false};
@@ -588,6 +612,7 @@ namespace lfs::vis {
         bool external_memory_dedicated_allocation_enabled_ = false;
         bool sparse_binding_enabled_ = false;
         bool buffer_device_address_enabled_ = false;
+        bool geometry_shader_enabled_ = false;
         std::mutex graphics_queue_mutex_;
         std::shared_mutex device_queue_access_mutex_;
         bool swapchain_maintenance1_enabled_ = false;

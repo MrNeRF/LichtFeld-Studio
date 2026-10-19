@@ -253,7 +253,7 @@ TEST_F(FusedRegLossTest, DirectColorRegularizationMatchesCpuReference) {
     const auto after = model->sh0().cpu();
     const float grad = 2.0f * kWeight * delta / 3.0f;
     const float expected_step = -kLearningRate * grad / (std::fabs(grad) + kEpsilon);
-    EXPECT_NEAR(loss.cpu().item<float>(), kSplatCount * kWeight * delta * delta / 3.0f, 1.0e-4f);
+    EXPECT_NEAR(loss.cpu().item<float>(), kWeight * delta * delta / 3.0f, 1.0e-6f);
     EXPECT_NEAR(after.ptr<float>()[0], old[0] + expected_step, 2.0e-5f);
 }
 

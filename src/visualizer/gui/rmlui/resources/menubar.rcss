@@ -233,6 +233,9 @@ body {
 }
 
 .menu-window-btn {
+    /* This bar is cached between input events: a transition cannot finish
+       painting after the pointer leaves. */
+    transition: none;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -246,7 +249,6 @@ body {
     box-sizing: border-box;
     flex-shrink: 0;
     cursor: pointer;
-    transition: background-color 0.12s quadratic-out;
 }
 
 .menu-window-btn img {
@@ -302,6 +304,9 @@ body {
 }
 
 .window-restore-back {
+    width: 11dp;
+    height: 11dp;
+    border-width: 1dp 1dp 0 0;
     left: 5dp;
     top: 3dp;
 }
@@ -354,6 +359,15 @@ body {
 .menu-label {
     padding: 8dp 12dp;
     cursor: pointer;
+}
+
+.access-key {
+    display: inline;
+    text-decoration: none;
+}
+
+.access-keys-visible .access-key {
+    text-decoration: underline;
 }
 
 #bottom-border {
@@ -432,7 +446,7 @@ body {
 
 .menu-item .checkmark {
     width: 16dp;
-    margin-left: 4dp;
+    margin-left: 12dp;
     flex-shrink: 0;
     white-space: nowrap;
     text-align: center;
@@ -450,6 +464,7 @@ body {
     margin-left: 24dp;
     flex-shrink: 0;
     white-space: nowrap;
+    text-align: left;
 }
 
 .menu-item .submenu-arrow {
@@ -492,6 +507,15 @@ body {
 
 .submenu-container.open > .submenu-popup {
     display: flex;
+}
+
+/* A wide portal status yields its words before the viewport tools wrap. The icon stays. */
+body.toolbar-squeeze #menu-portal-connection span {
+    display: none;
+}
+body.toolbar-squeeze #menu-portal-connection {
+    padding: 0 4dp;
+    min-width: 26dp;
 }
 
 /* Keep menus and native window controls reachable in narrow windows. */

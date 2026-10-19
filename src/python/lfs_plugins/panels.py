@@ -30,6 +30,11 @@ class _PanelSpec:
 # Keep the registration contract in one place. The implementation classes use
 # panel_metadata() too, so registration cannot silently drift from the class.
 PANEL_SPECS = {
+    "logging": _PanelSpec(
+        "lfs_plugins.logging_panel", "LoggingPanel", "lfs.logging", "Logging",
+        "FLOATING", 95, "rmlui/logging_panel.rml", "FILL", (960, 600),
+        update_policy="interval", update_interval_ms=200,
+    ),
     "new_project": _PanelSpec(
         "lfs_plugins.import_panels", "NewProjectPanel", "lfs.new_project",
         "New Project", "FLOATING", 11, "rmlui/new_project_panel.rml",
@@ -72,7 +77,7 @@ PANEL_SPECS = {
     ),
     "histogram": _PanelSpec(
         "lfs_plugins.histogram_panel", "HistogramPanel", "lfs.histogram", "Histogram",
-        "BOTTOM_DOCK", 97, "rmlui/histogram_panel.rml", "FILL", (860, 660),
+        "BOTTOM_DOCK", 97, "rmlui/histogram_panel.rml", "FILL", (1000, 300),
         update_policy="dirty", has_poll=True,
     ),
     "scripts": _PanelSpec(
@@ -82,7 +87,13 @@ PANEL_SPECS = {
     ),
     "preferences": _PanelSpec(
         "lfs_plugins.preferences_panel", "PreferencesPanel", "lfs.preferences",
-        "Preferences", "FLOATING", 100, "rmlui/preferences.rml", "FILL", (780, 440), update_policy="dirty",
+        "Preferences", "FLOATING", 100, "rmlui/preferences.rml", "FILL", (780, 440),
+        update_policy="interval", update_interval_ms=100,
+    ),
+    "splat_simplify": _PanelSpec(
+        "lfs_plugins.splat_simplify_panel", "SplatSimplifyPanel", "lfs.splat_simplify",
+        "rendering_panel.section_simplify", "FLOATING", 13, "rmlui/splat_simplify.rml", "CONTENT", (420, 0),
+        update_policy="dirty",
     ),
     "mesh2splat": _PanelSpec(
         "lfs_plugins.mesh2splat_panel", "Mesh2SplatPanel", "native.mesh2splat",
@@ -92,7 +103,7 @@ PANEL_SPECS = {
     "plugin_marketplace": _PanelSpec(
         "lfs_plugins.plugin_marketplace_panel", "PluginMarketplacePanel",
         "lfs.plugin_marketplace", "Plugin Marketplace", "FLOATING", 91,
-        "rmlui/plugin_marketplace.rml", "FILL", (770, 560),
+        "rmlui/plugin_marketplace.rml", "FILL", (840, 600),
         update_policy="dirty",
     ),
     "asset_manager": _PanelSpec(
@@ -255,6 +266,7 @@ def _build_builtin_panel_steps(lf):
         from . import tools as tools_mod
 
         tools_mod.register()
+        _register_lazy_panel(lf, "splat_simplify")
 
     def menus():
         from . import file_menu, edit_menu, tools_menu, view_menu, help_menu
@@ -310,6 +322,9 @@ def _build_builtin_panel_steps(lf):
     def scripts_panel():
         _register_lazy_panel(lf, "scripts")
 
+    def logging_panel():
+        _register_lazy_panel(lf, "logging")
+
     def preferences_panel():
         _register_lazy_panel(lf, "preferences")
 
@@ -350,6 +365,7 @@ def _build_builtin_panel_steps(lf):
         ("image_preview_panel", image_preview_panel),
         ("histogram_panel", histogram_panel),
         ("scripts_panel", scripts_panel),
+        ("logging_panel", logging_panel),
         ("preferences_panel", preferences_panel),
         ("mesh2splat_panel", mesh2splat_panel),
         ("plugin_marketplace_panel", plugin_marketplace_panel),

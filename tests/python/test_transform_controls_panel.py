@@ -161,6 +161,9 @@ def _install_lf_stub(monkeypatch):
         set_visualizer_world_calls=[],
         set_local_calls=[],
         op_calls=[],
+        overlay_sync_requests=[],
+        redraw_requests=[],
+        mouse_down=False,
     )
 
     class _Panel:
@@ -185,6 +188,10 @@ def _install_lf_stub(monkeypatch):
         tr=lambda key: key,
         get_active_tool=lambda: state.active_tool,
         is_ctrl_down=lambda: False,
+        is_shift_down=lambda: False,
+        request_viewport_overlay_sync=lambda: state.overlay_sync_requests.append(True),
+        is_mouse_button_down=lambda button=0: state.mouse_down,
+        request_redraw=lambda delay=0.0: state.redraw_requests.append(delay),
         set_panel_parent=lambda _panel_id, _parent: None,
         get_multi_transform_mode=lambda: state.multi_transform_mode,
         MULTI_TRANSFORM_MODE_SELECTION=0,
@@ -254,9 +261,11 @@ class _DataModelStub:
 
 
 class _ElementStub:
-    def __init__(self):
+    def __init__(self, parent=None):
         self.classes = set()
         self.listeners = []
+        self.focused = False
+        self._parent = parent
 
     def set_class(self, name, active):
         if active:
@@ -267,18 +276,39 @@ class _ElementStub:
     def add_event_listener(self, name, callback):
         self.listeners.append((name, callback))
 
+    def parent(self):
+        return self._parent
+
+    def focus(self):
+        self.focused = True
+
+    def fire(self, name, event):
+        for listener_name, callback in list(self.listeners):
+            if listener_name == name:
+                callback(event)
+
 
 class _DocumentStub:
     def __init__(self):
         self.body = _ElementStub()
         self.wrap = _ElementStub()
+        self.elements = {}
+        self.listeners = []
 
     def get_element_by_id(self, element_id):
         if element_id in {"body", "overlay-body"}:
             return self.body
         if element_id == "transform-block":
             return self.wrap
-        return None
+        return self.elements.get(element_id)
+
+    def add_event_listener(self, name, callback):
+        self.listeners.append((name, callback))
+
+    def fire(self, name, event):
+        for listener_name, callback in list(self.listeners):
+            if listener_name == name:
+                callback(event)
 
 
 @pytest.fixture
@@ -877,6 +907,7 @@ def test_transform_controls_keeps_other_numeric_bindings_live_while_focused(tran
         "transform_show_rotate",
         "transform_show_scale",
         "transform_show_actions",
+        "transform_is_crop",
     ]
     panel._dirty_all()
     assert panel._handle.dirty_calls == previous_bindings
@@ -1108,3 +1139,263 @@ def test_numeric_reset_is_one_undo_step(history_panel):
     state.visualizer_world_transforms["target"] = before.copy()
     panel._reset_single_transform()
     assert history == [({"target": before}, {"target": _translation_matrix(0, 0, 0)})]
+
+
+@pytest.mark.parametrize("shape", ["box", "ellipsoid"])
+@pytest.mark.parametrize("operation,group", [("translate", "pos"), ("rotate", "rot"), ("scale", "scale")])
+def test_crop_numeric_controls_edit_only_volume_with_one_undo_entry(
+    transform_controls_module, history_panel, shape, operation, group
+):
+    module, _ = transform_controls_module
+    panel, state, history = history_panel
+    if operation == "scale":
+        module.lf.decompose_transform = lambda matrix: {
+            **_decompose_transform(matrix),
+            "scale": [math.sqrt(sum(matrix[axis * 4 + row] ** 2 for row in range(3)))
+                      for axis in range(3)],
+        }
+    state.active_tool = "builtin.cropbox"
+    state.selected_names = ["volume"]
+    original = _translation_matrix(.1, .2, .3)
+    state.local_transforms = {"volume": original.copy(), "bicycle": original.copy()}
+    state.visualizer_world_transforms = {name: matrix.copy() for name, matrix in state.local_transforms.items()}
+    volume = SimpleNamespace(locked=False, cropbox=lambda: object() if shape == "box" else None,
+                             ellipsoid=lambda: object() if shape == "ellipsoid" else None)
+    module.lf.get_scene = lambda: SimpleNamespace(get_node=lambda name: volume if name == "volume" else None)
+    module.lf.ui.get_crop_tool_shape = lambda: shape
+    module.lf.ui.get_crop_tool_operation = lambda: operation
+    module.lf.ui.get_transform_space = lambda: 1
+    model = _DataModelStub()
+    panel.bind_model(model)
+    doc = _DocumentStub()
+    panel.update(doc)
+
+    assert "hidden" not in doc.wrap.classes
+    assert model.bound_funcs["transform_is_crop"]()
+    assert model.bound_funcs["transform_show_" + operation]()
+    assert not model.bound_funcs["transform_show_actions"]()
+    panel._set_value(group, 0, "2")
+    panel._set_value(group, 0, "2.5")
+    panel._commit_active_edit()
+
+    assert state.local_transforms["bicycle"] == original
+    assert state.local_transforms["volume"] != original
+    if operation == "scale":
+        # Crop gizmos also scale the existing basis columns, with no translation.
+        expected = original.copy()
+        for row in range(3):
+            expected[row] *= 2.5
+        assert state.local_transforms["volume"] == pytest.approx(expected)
+    assert len(history) == 1
+    assert history[0][0] == {"volume": original}
+    # Selecting another operation refreshes the same numeric overlay.
+    module.lf.ui.get_crop_tool_operation = lambda: "rotate" if operation != "rotate" else "translate"
+    assert panel.update(doc)
+
+
+@pytest.mark.parametrize("selected", [["bicycle"], [], ["bicycle", "other"]])
+def test_crop_numeric_controls_never_edit_parent_selection(transform_controls_module, selected):
+    module, state = transform_controls_module
+    state.active_tool = "builtin.cropbox"
+    state.selected_names = selected
+    parent = SimpleNamespace(cropbox=lambda: None, ellipsoid=lambda: None)
+    module.lf.get_scene = lambda: SimpleNamespace(get_node=lambda name: parent)
+    module.lf.ui.get_crop_tool_operation = lambda: "translate"
+    module.lf.ui.get_crop_tool_shape = lambda: "box"
+    panel = module.TransformControlsController()
+    doc = _DocumentStub()
+    panel.update(doc)
+    panel._set_value("pos", 0, "99")
+    assert "hidden" in doc.wrap.classes
+    assert not panel._editable
+    assert not state.set_local_calls
+    assert not state.set_visualizer_world_calls
+
+
+def test_crop_numeric_controls_respect_volume_lock(transform_controls_module):
+    module, state = transform_controls_module
+    state.active_tool = "builtin.cropbox"
+    state.selected_names = ["volume"]
+    state.local_transforms["volume"] = _translation_matrix(1, 2, 3)
+    state.visualizer_world_transforms["volume"] = _translation_matrix(1, 2, 3)
+    volume = SimpleNamespace(locked=True, cropbox=lambda: object())
+    module.lf.get_scene = lambda: SimpleNamespace(get_node=lambda name: volume)
+    module.lf.ui.get_crop_tool_shape = lambda: "box"
+    module.lf.ui.get_crop_tool_operation = lambda: "translate"
+    panel = module.TransformControlsController()
+    doc = _DocumentStub()
+    panel.update(doc)
+    assert "hidden" not in doc.wrap.classes
+    assert not panel._editable
+    panel._set_value("pos", 0, "99")
+    panel._apply_step("pos_x", 1)
+    assert not state.set_visualizer_world_calls
+    assert not state.set_local_calls
+
+
+def _ui_event(mouse_x=0.0, button=0):
+    params = {"mouse_x": str(mouse_x), "button": str(button)}
+    return SimpleNamespace(get_parameter=lambda name, default="0": params.get(name, default),
+                           stop_propagation=lambda: None)
+
+
+@pytest.fixture
+def value_drag_panel(history_panel):
+    panel, state, history = history_panel
+    lf = sys.modules["lichtfeld"]
+    pointer = SimpleNamespace(locked=False, cancelled=False, pending=0.0, ends=0)
+
+    def begin():
+        pointer.locked, pointer.cancelled = True, False
+        return True
+
+    def take():
+        delta, pointer.pending = pointer.pending, 0.0
+        return delta
+
+    def end():
+        pointer.locked = False
+        pointer.ends += 1
+
+    lf.ui.begin_value_drag = begin
+    lf.ui.take_value_drag_delta = take
+    lf.ui.end_value_drag = end
+    lf.ui.value_drag_state = lambda: "active" if pointer.locked else "cancelled" if pointer.cancelled else "idle"
+    doc = _DocumentStub()
+    for prop in ("pos-x", "scale-x"):
+        doc.elements[f"transform-{prop}"] = _ElementStub(parent=_ElementStub())
+        doc.elements[f"transform-{prop}-drag"] = _ElementStub()
+    panel.mount(doc)
+    state.active_tool = "builtin.translate"
+    state.selected_names = ["target"]
+    state.mouse_down = True
+    for name in ("target", "other"):
+        state.local_transforms[name] = _translation_matrix(.1, 0, 0)
+        state.visualizer_world_transforms[name] = _translation_matrix(.1, 0, 0)
+    panel.update(doc)
+    return panel, state, history, doc, pointer, lf
+
+
+def _start_drag(doc, prop):
+    doc.elements[f"transform-{prop}-drag"].fire("mousedown", _ui_event(100.0))
+    doc.body.fire("mousemove", _ui_event(102.0))
+    doc.body.fire("mousemove", _ui_event(110.0))
+
+
+def _x(state, name="target"):
+    return _translation_from_matrix(state.local_transforms[name])[0]
+
+
+def test_value_drag_scrubs_past_the_window_edge_with_one_undo_entry(value_drag_panel):
+    panel, state, history, doc, pointer, _lf = value_drag_panel
+    before = list(state.local_transforms["target"])
+    _start_drag(doc, "pos-x")
+    # The value follows the pointer from the threshold on; the lock reports the rest.
+    assert pointer.locked and _x(state) == pytest.approx(.1)
+    pointer.pending = 400.0
+    panel.update(doc)
+    assert _x(state) == pytest.approx(2.1)
+    # Any left release ends the lock natively, wherever the hidden pointer is.
+    pointer.pending = 40.0
+    pointer.locked = False
+    state.mouse_down = False
+    panel.update(doc)
+    assert _x(state) == pytest.approx(2.3)
+    assert panel._value_drag is None
+    assert history == [({"target": before}, {"target": state.local_transforms["target"]})]
+
+
+def test_value_drag_click_opens_text_edit(value_drag_panel):
+    panel, state, history, doc, pointer, _lf = value_drag_panel
+    before = list(state.local_transforms["target"])
+    doc.elements["transform-pos-x-drag"].fire("mousedown", _ui_event(100.0))
+    doc.body.fire("mousemove", _ui_event(101.0))
+    doc.body.fire("mouseup", _ui_event(101.0))
+    assert doc.elements["transform-pos-x"].focused
+    assert pointer.ends == 0 and not pointer.locked
+    assert state.local_transforms["target"] == before and history == []
+
+
+def test_value_drag_cancel_restores_without_undo_entry(value_drag_panel):
+    panel, state, history, doc, pointer, _lf = value_drag_panel
+    before = list(state.local_transforms["target"])
+    _start_drag(doc, "pos-x")
+    pointer.pending = 30.0
+    panel.update(doc)
+    assert state.local_transforms["target"] != before
+    # Escape, the right button or focus loss cancel natively.
+    pointer.pending = 20.0
+    pointer.locked, pointer.cancelled = False, True
+    panel.update(doc)
+    assert state.local_transforms["target"] == before
+    assert history == [] and panel._value_drag is None
+
+
+def test_value_drag_shift_accelerates_and_scale_keeps_its_minimum(value_drag_panel):
+    panel, state, _history, doc, pointer, lf = value_drag_panel
+    state.active_tool = "builtin.scale"
+    panel.update(doc)
+    _start_drag(doc, "scale-x")
+    lf.ui.is_shift_down = lambda: True
+    pointer.pending = 20.0
+    panel.update(doc)
+    assert panel._value_drag.value == pytest.approx(2.0)
+    lf.ui.is_shift_down = lambda: False
+    pointer.pending = -1.0e6
+    panel.update(doc)
+    assert panel._value_drag.value == sys.modules["lfs_plugins.transform_controls"].MIN_SCALE
+
+
+def test_value_drag_selection_change_leaves_the_new_node_untouched(value_drag_panel):
+    panel, state, history, doc, pointer, _lf = value_drag_panel
+    before = list(state.local_transforms["target"])
+    _start_drag(doc, "pos-x")
+    pointer.pending = 20.0
+    panel.update(doc)
+    pointer.pending = 200.0
+    state.selected_names = ["other"]
+    panel.update(doc)
+    assert _x(state, "other") == pytest.approx(.1)
+    assert panel._value_drag is None and not pointer.locked
+    assert history == [({"target": before}, {"target": state.local_transforms["target"]})]
+
+
+def test_value_drag_press_released_elsewhere_never_starts_a_drag(value_drag_panel):
+    panel, state, history, doc, pointer, _lf = value_drag_panel
+    doc.elements["transform-pos-x-drag"].fire("mousedown", _ui_event(100.0))
+    # The release landed outside the overlay and never reached it.
+    state.mouse_down = False
+    doc.body.fire("mousemove", _ui_event(130.0))
+    assert panel._value_drag is None and not pointer.locked and history == []
+
+
+def test_held_step_button_schedules_its_repeats(history_panel, monkeypatch):
+    panel, state, history = history_panel
+    module = sys.modules["lfs_plugins.transform_controls"]
+    clock = SimpleNamespace(now=100.0)
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock.now)
+    state.active_tool = "builtin.translate"
+    state.selected_names = ["target"]
+    state.local_transforms["target"] = _translation_matrix(.1, 0, 0)
+    state.visualizer_world_transforms["target"] = _translation_matrix(.1, 0, 0)
+    doc = _DocumentStub()
+    panel.update(doc)
+    state.mouse_down = True
+    panel._on_num_step(None, None, ["pos_x", 1])
+    # A held button sends no events; the first repeat frame is requested up front.
+    assert state.redraw_requests[-1] == pytest.approx(module.STEP_REPEAT_DELAY)
+    assert state.overlay_sync_requests
+    for _ in range(4):
+        # Each requested frame arrives just after it is due.
+        clock.now += state.redraw_requests[-1] + 1e-6
+        panel.update(doc)
+        assert state.redraw_requests[-1] == pytest.approx(module.STEP_REPEAT_INTERVAL, abs=1e-5)
+    # The release lands outside the overlay, so no mouseup reaches it.
+    state.mouse_down = False
+    clock.now += 1.0
+    requests = len(state.redraw_requests)
+    panel.update(doc)
+    panel.update(doc)
+    assert _x(state) == pytest.approx(.1 + 5 * module.TRANSLATE_STEP)
+    assert len(state.redraw_requests) == requests
+    assert len(history) == 1

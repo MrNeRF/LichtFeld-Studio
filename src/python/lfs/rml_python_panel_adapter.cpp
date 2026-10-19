@@ -5,11 +5,13 @@
 #include "rml_python_panel_adapter.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
+#include "gui/vulkan_ui_texture.hpp"
 #include "py_rml.hpp"
 #include "py_ui.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
 #include "python_panel_chrome.hpp"
+#include <SDL3/SDL.h>
 
 #include <RmlUi/Core/Context.h>
 #include <algorithm>
@@ -181,6 +183,7 @@ namespace lfs::vis::gui {
 
         auto* rml_ctx = static_cast<Rml::Context*>(ops.get_context(host_));
         assert(rml_ctx);
+        const ScopedVulkanUiTextureContext textures(ops.native_graphics ? static_cast<VulkanContext*>(ops.native_graphics(host_)) : nullptr);
         try {
             auto py_ctx = lfs::python::PyRmlContext(rml_ctx);
             LOG_TIMER_THRESHOLD(context_name_ + ".on_bind_model", 2.0);
@@ -259,6 +262,8 @@ namespace lfs::vis::gui {
         auto* doc = static_cast<Rml::ElementDocument*>(ops.get_document(host_));
         if (!doc)
             return nullptr;
+
+        const ScopedVulkanUiTextureContext textures(ops.native_graphics ? static_cast<VulkanContext*>(ops.native_graphics(host_)) : nullptr);
 
         if (!isMounted()) {
             assert(isModelBound());
@@ -355,6 +360,12 @@ namespace lfs::vis::gui {
         auto* doc = ensureDocumentInitialized();
         if (!doc)
             return;
+        if (auto* native = nativeWindow()) {
+            int pw = 0, ph = 0;
+            SDL_GetWindowSizeInPixels(native, &pw, &ph);
+            w = static_cast<float>(pw);
+            h = static_cast<float>(ph);
+        }
 
         const auto& ops = lfs::python::get_rml_panel_host_ops();
         if (ops.prepare_layout)
@@ -381,6 +392,9 @@ namespace lfs::vis::gui {
                                                     const PanelDrawContext* ctx) {
         if (!has_draw_ || !doc || !lfs::python::can_acquire_gil())
             return;
+
+        const auto& texture_ops = lfs::python::get_rml_panel_host_ops();
+        const ScopedVulkanUiTextureContext textures(texture_ops.native_graphics ? static_cast<VulkanContext*>(texture_ops.native_graphics(host_)) : nullptr);
 
         assert(isMounted());
 
@@ -420,6 +434,7 @@ namespace lfs::vis::gui {
             return doc;
 
         const auto& ops = lfs::python::get_rml_panel_host_ops();
+        const ScopedVulkanUiTextureContext textures(ops.native_graphics ? static_cast<VulkanContext*>(ops.native_graphics(host_)) : nullptr);
         const auto& current_language =
             lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
         if (!current_language.empty() && current_language != last_language_) {
@@ -514,7 +529,7 @@ namespace lfs::vis::gui {
                                                  const std::string& context_name,
                                                  const std::string& rml_path,
                                                  const std::string& style, bool has_poll,
-                                                 const int height_mode, const bool has_draw)
+                                                 const int height_mode, const bool has_draw, const bool floating)
         : manager_(manager),
           context_name_(context_name),
           rml_path_(rml_path),
@@ -522,7 +537,8 @@ namespace lfs::vis::gui {
           panel_instance_(std::move(panel_instance)),
           has_poll_(has_poll),
           has_draw_(has_draw),
-          height_mode_(height_mode) {
+          height_mode_(height_mode),
+          floating_(floating) {
     }
 
     RmlPythonPanelAdapter::~RmlPythonPanelAdapter() {
@@ -603,9 +619,15 @@ namespace lfs::vis::gui {
         const auto& ops = lfs::python::get_rml_panel_host_ops();
         assert(ops.create && ops.draw_direct && ops.get_document && ops.is_loaded);
 
-        if (!prepareForRender(&ctx))
+        auto* document = prepareForRender(&ctx);
+        if (!document)
             return;
 
+        if (desktop_reopen_scroll_) {
+            if (auto* content = document->GetElementById("content-wrap"))
+                content->SetScrollTop(*desktop_reopen_scroll_);
+            desktop_reopen_scroll_.reset();
+        }
         ops.draw_direct(host_, x, y, w, h);
     }
 
@@ -619,6 +641,85 @@ namespace lfs::vis::gui {
 
         const auto& ops = lfs::python::get_rml_panel_host_ops();
         return ops.draw_direct_cached ? ops.draw_direct_cached(host_, x, y, w, h) : false;
+    }
+
+    SDL_Window* RmlPythonPanelAdapter::nativeWindow() const {
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        return host_ && ops.native_window ? static_cast<SDL_Window*>(ops.native_window(host_)) : nullptr;
+    }
+
+    bool RmlPythonPanelAdapter::detachHost(float x, float y, float w, float h, bool desktop_coordinates) {
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        if (!host_ || nativeWindow() || !ops.external_allowed || !ops.external_allowed(host_) ||
+            !ops.configure_external || !lfs::python::can_acquire_gil())
+            return false;
+        const lfs::python::GilAcquire gil;
+        auto* document = static_cast<Rml::ElementDocument*>(ops.get_document(host_));
+        float scroll = 0;
+        if (document) {
+            if (auto* focused = document->GetContext()->GetFocusElement())
+                focused->Blur();
+            if (auto* content = document->GetElementById("content-wrap"))
+                scroll = content->GetScrollTop();
+            callOnUnload(document);
+        }
+        lfs::python::RmlDocumentRegistry::instance().unregister_document(context_name_);
+        layout_.release_elements();
+        ops.destroy(host_);
+        host_ = nullptr;
+        resetLifecycle();
+        if (!ensureHost() || !ops.configure_external(host_, x, y, w, h, desktop_coordinates))
+            return false;
+        if (auto* reloaded = prepareForRender(nullptr)) {
+            if (auto* content = reloaded->GetElementById("content-wrap"))
+                content->SetScrollTop(scroll);
+        }
+        return nativeWindow() != nullptr;
+    }
+
+    bool RmlPythonPanelAdapter::detachToDesktop(float x, float y, float w, float h) {
+        return detachHost(x, y, w, h, false);
+    }
+
+    bool RmlPythonPanelAdapter::restoreDesktopWindow() {
+        if (desktop_restore_checked_ || !ensureHost())
+            return false;
+        desktop_restore_checked_ = true;
+        if (desktop_reopen_bounds_) {
+            const auto bounds = *desktop_reopen_bounds_;
+            desktop_reopen_bounds_.reset();
+            return detachHost(bounds[0], bounds[1], bounds[2], bounds[3], true);
+        }
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        float bounds[4]{};
+        return ops.restored_external_bounds && ops.restored_external_bounds(host_, bounds) &&
+               detachHost(bounds[0], bounds[1], bounds[2], bounds[3], true);
+    }
+
+    void RmlPythonPanelAdapter::releaseDesktopWindow() {
+        auto* native = nativeWindow();
+        if (!native || !lfs::python::can_acquire_gil())
+            return;
+        int x = 0, y = 0, w = 0, h = 0;
+        SDL_GetWindowPosition(native, &x, &y);
+        SDL_GetWindowSize(native, &w, &h);
+        desktop_reopen_bounds_ = std::array<float, 4>{float(x), float(y), float(w), float(h)};
+        const lfs::python::GilAcquire gil;
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        auto* document = static_cast<Rml::ElementDocument*>(ops.get_document(host_));
+        if (document) {
+            if (auto* focused = document->GetContext()->GetFocusElement())
+                focused->Blur();
+            if (auto* content = document->GetElementById("content-wrap"))
+                desktop_reopen_scroll_ = content->GetScrollTop();
+            callOnUnload(document);
+        }
+        lfs::python::RmlDocumentRegistry::instance().unregister_document(context_name_);
+        layout_.release_elements();
+        ops.destroy(host_);
+        host_ = nullptr;
+        desktop_restore_checked_ = false;
+        resetLifecycle();
     }
 
     bool RmlPythonPanelAdapter::poll(const PanelDrawContext& ctx) {
@@ -736,6 +837,8 @@ namespace lfs::vis::gui {
     }
 
     bool RmlPythonPanelAdapter::needsAnimationFrame() const {
+        if (auto* native = nativeWindow(); native && SDL_GetBooleanProperty(SDL_GetWindowProperties(native), "lfs.drag_handoff", false))
+            return true;
         if (content_dirty_)
             return true;
         if (!host_)

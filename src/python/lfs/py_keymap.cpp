@@ -2,7 +2,9 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/input/input_bindings.hpp"
@@ -13,6 +15,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <cstdint>
+#include <stdexcept>
 
 namespace nb = nanobind;
 
@@ -116,6 +119,7 @@ namespace lfs::python {
             .value("CAMERA_MOVE_DOWN", Action::CAMERA_MOVE_DOWN)
             .value("CAMERA_RESET_HOME", Action::CAMERA_RESET_HOME)
             .value("CAMERA_SET_HOME", Action::CAMERA_SET_HOME)
+            .value("CAMERA_RESTORE_HOME", Action::CAMERA_RESTORE_HOME)
             .value("CAMERA_FOCUS_SELECTION", Action::CAMERA_FOCUS_SELECTION)
             .value("CAMERA_SET_PIVOT", Action::CAMERA_SET_PIVOT)
             .value("CAMERA_NEXT_VIEW", Action::CAMERA_NEXT_VIEW)
@@ -190,6 +194,7 @@ namespace lfs::python {
             .value("ASSET_GALLERY_PRIMARY", Action::ASSET_GALLERY_PRIMARY)
             .value("ASSET_GALLERY_COPY_LINK", Action::ASSET_GALLERY_COPY_LINK)
             .value("ASSET_REFRESH", Action::ASSET_REFRESH)
+            .value("TOGGLE_PYTHON_CONSOLE", Action::TOGGLE_PYTHON_CONSOLE)
             .value("UNGROUP_SELECTED_SCENE_NODE", Action::UNGROUP_SELECTED_SCENE_NODE);
 
         // Expose ToolMode enum
@@ -302,6 +307,9 @@ namespace lfs::python {
                 if (!get_keymap_bindings())
                     return;
                 KeyTrigger trigger{key, modifiers, false};
+                if (!InputBindings::isValidTriggerForAction(action, trigger))
+                    throw nb::value_error(lfs::event::LocalizationManager::getInstance().get(
+                        "input_settings.invalid_binding"));
                 get_keymap_bindings()->setBinding(mode, action, trigger);
             },
             nb::arg("mode"), nb::arg("action"), nb::arg("key"), nb::arg("modifiers") = 0,
@@ -314,6 +322,8 @@ namespace lfs::python {
                     return false;
                 const auto trigger = triggerFromDict(trigger_dict);
                 if (!trigger)
+                    return false;
+                if (!InputBindings::isValidTriggerForAction(action, *trigger))
                     return false;
                 get_keymap_bindings()->setBinding(mode, action, *trigger);
                 return true;
@@ -417,6 +427,9 @@ namespace lfs::python {
         keymap.def(
             "load_profile",
             [](const std::string& name) {
+                if (!InputBindings::isValidProfileName(name))
+                    throw nb::value_error(lfs::event::LocalizationManager::getInstance().get(
+                        "input_settings.invalid_profile_name"));
                 if (!get_keymap_bindings())
                     return;
                 get_keymap_bindings()->loadProfile(name);
@@ -427,9 +440,14 @@ namespace lfs::python {
         keymap.def(
             "save_profile",
             [](const std::string& name) {
+                if (!InputBindings::isValidProfileName(name))
+                    throw nb::value_error(lfs::event::LocalizationManager::getInstance().get(
+                        "input_settings.invalid_profile_name"));
                 if (!get_keymap_bindings())
                     return;
-                get_keymap_bindings()->saveProfile(name);
+                if (!get_keymap_bindings()->saveProfile(name))
+                    throw std::runtime_error(lfs::event::LocalizationManager::getInstance().get(
+                        "input_settings.profile_save_failed"));
             },
             nb::arg("name"),
             "Save current bindings as a named profile");
@@ -502,6 +520,15 @@ namespace lfs::python {
             "Check if waiting for potential double-click");
 
         keymap.def(
+            "take_altgr_capture_rejection",
+            []() {
+                if (!get_keymap_bindings())
+                    return false;
+                return get_keymap_bindings()->takeAltGrCaptureRejection();
+            },
+            "Return and clear an unsupported AltGr capture notice");
+
+        keymap.def(
             "get_captured_trigger",
             []() -> nb::object {
                 if (!get_keymap_bindings())
@@ -541,8 +568,8 @@ namespace lfs::python {
                     return;
                 if (const auto config_dir = InputBindings::getConfigDir()) {
                     const auto saved_path = *config_dir / "Default.json";
-                    if (std::filesystem::exists(saved_path)) {
-                        std::filesystem::remove(saved_path);
+                    if (lfs::core::native_fs::exists(saved_path)) {
+                        lfs::core::native_fs::remove(saved_path);
                     }
                 }
                 get_keymap_bindings()->loadProfile("Default");

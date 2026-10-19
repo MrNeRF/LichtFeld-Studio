@@ -15,7 +15,8 @@ namespace lfs::vis::gui::vram_hud_geometry {
     [[nodiscard]] inline float clampExtent(float requested,
                                            float min_extent,
                                            float visible_extent,
-                                           float position) noexcept {
+                                           float position,
+                                           float trailing_padding = kViewportPadding) noexcept {
         if (!std::isfinite(requested))
             requested = min_extent;
         if (requested <= 0.0f)
@@ -25,7 +26,7 @@ namespace lfs::vis::gui::vram_hud_geometry {
 
         const float leading_padding = position >= 0.0f ? position : kViewportPadding;
         const float max_extent =
-            std::max(1.0f, visible_extent - leading_padding - kViewportPadding);
+            std::max(1.0f, visible_extent - leading_padding - trailing_padding);
         const float effective_min = std::min(min_extent, max_extent);
         return std::clamp(requested, effective_min, max_extent);
     }

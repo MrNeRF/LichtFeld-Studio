@@ -208,13 +208,13 @@ class Theme:
 def theme() -> Theme:
     """Get the current theme"""
 
-def set_theme_vignette_enabled(arg: bool, /) -> None:
+def set_theme_vignette_enabled(enabled: bool, persist: bool = True) -> None:
     """Set theme vignette enabled"""
 
-def set_theme_vignette_intensity(arg: float, /) -> None:
+def set_theme_vignette_intensity(intensity: float, persist: bool = True) -> None:
     """Set theme vignette intensity"""
 
-def set_theme_vignette_style(arg0: float, arg1: float, arg2: float, /) -> None:
+def set_theme_vignette_style(intensity: float, radius: float, softness: float, persist: bool = True) -> None:
     """Set vignette intensity, radius, and softness"""
 
 def remember_camera_navigation() -> bool:
@@ -228,6 +228,12 @@ def remember_camera_view_snap() -> bool:
 
 def set_remember_camera_view_snap(enabled: bool) -> None:
     """Enable or disable camera view snap persistence"""
+
+def take_splat_export_request() -> list[str]: ...
+
+def get_splat_drag_preferences() -> dict: ...
+
+def set_splat_drag_preferences(arg: dict, /) -> None: ...
 
 def scene_graph_selection_markers() -> bool:
     """Return whether Scene Graph selection markers are visible"""
@@ -399,6 +405,16 @@ def get_panel_names(space: PanelSpace = PanelSpace.FLOATING) -> list[str]:
 
 def set_panel_enabled(panel_id: str, enabled: bool) -> None:
     """Enable or disable a panel by id"""
+
+def save_startup_sidebar() -> bool:
+    """
+    Save the right sidebar as a startup default; saved .licht workspaces take precedence.
+    """
+
+def clear_startup_sidebar() -> None:
+    """
+    Clear startup sidebar defaults without changing the current project workspace.
+    """
 
 def reset_layout() -> str:
     """
@@ -1945,6 +1961,11 @@ def open_mesh_file_dialog(start_dir: str = '') -> str:
     Open a file dialog to select a mesh file. Returns empty string if cancelled.
     """
 
+def open_init_file_dialog(start_dir: str = '') -> str:
+    """
+    Open a file dialog to select a training initialization file: a splat, point cloud or mesh. Returns empty string if cancelled.
+    """
+
 def open_checkpoint_file_dialog() -> str:
     """
     Open a file dialog to select a checkpoint file. Returns empty string if cancelled.
@@ -1984,6 +2005,9 @@ def save_laz_file_dialog(default_name: str = 'export') -> str:
     """
     Open a save file dialog for LAZ compressed files. Returns empty string if cancelled.
     """
+
+def save_text_file_dialog(default_name: str = 'lichtfeld_logs') -> str:
+    """Choose a text log export path. Returns empty string if cancelled."""
 
 def save_json_file_dialog(default_name: str = 'config.json') -> str:
     """
@@ -2125,6 +2149,34 @@ def is_ctrl_down() -> bool:
 def is_shift_down() -> bool:
     """Check if Shift is currently held"""
 
+def is_mouse_button_down(button: int = 0) -> bool:
+    """Check if a mouse button is held: 0 left, 1 right, 2 middle"""
+
+def begin_value_drag() -> bool:
+    """
+    Hide and lock the pointer for a value drag from a UI event handler. Motion keeps accumulating past the window edge; returns False when the pointer cannot be locked.
+    """
+
+def take_value_drag_delta() -> float:
+    """
+    Horizontal pointer motion in window points since the previous call during a value drag.
+    """
+
+def value_drag_state() -> str:
+    """
+    'active' while the value drag holds the pointer, 'cancelled' after Escape, the right button or focus loss ended it, otherwise 'idle'.
+    """
+
+def request_viewport_overlay_sync() -> None:
+    """
+    Run the viewport overlay's document sync on the next frame. It does not wake the frame loop; pair it with request_redraw when no input will arrive.
+    """
+
+def end_value_drag() -> None:
+    """
+    Release the value drag pointer lock and return the pointer to where the drag started.
+    """
+
 @overload
 def tr(key: str) -> str:
     """Get localized string by key"""
@@ -2244,7 +2296,7 @@ def clear_gizmo() -> None:
 def get_active_submode() -> str:
     """Get active selection submode"""
 
-def set_selection_mode(mode: str) -> None:
+def set_selection_mode(mode: str, mark_session_dirty: bool = True) -> None:
     """Set selection mode"""
 
 def execute_mirror(axis: str) -> None:
@@ -2365,7 +2417,7 @@ def duplicate_node(name: str) -> None:
     """Duplicate a node and its children"""
 
 def merge_group(name: str) -> None:
-    """Merge group children into a single PLY"""
+    """Merge group children into a single model"""
 
 def save_node_to_disk(node_name: str) -> None:
     """
@@ -2717,6 +2769,14 @@ def supports_system_theme() -> bool:
 def themes() -> list:
     """Get available theme presets with stable ids and UI metadata"""
 
+def get_native_floating_windows() -> bool:
+    """
+    Whether floating panels use native windows on the next application start.
+    """
+
+def set_native_floating_windows(enabled: bool) -> None:
+    """Save the experimental window mode. Requires an application restart."""
+
 def set_ui_scale(scale: float) -> None:
     """Set UI scale (0.0 = auto from OS, or 1.0-4.0)"""
 
@@ -2726,17 +2786,49 @@ def get_ui_scale() -> float:
 def get_ui_scale_preference() -> float:
     """Get saved UI scale preference (0.0 = auto)"""
 
-def set_zoom_speed_preference(speed: float) -> None:
+def set_zoom_speed_preference(speed: float, persist: bool = True) -> None:
     """Set the default camera zoom speed (1-100)"""
 
 def get_zoom_speed_preference() -> float:
     """Get the default camera zoom speed"""
 
-def set_navigation_speed_preference(speed: float) -> None:
+def set_navigation_speed_preference(speed: float, persist: bool = True) -> None:
     """Set the default WASD navigation speed (1-100)"""
 
 def get_navigation_speed_preference() -> float:
     """Get the default WASD navigation speed"""
+
+def get_rendering_defaults_json() -> str:
+    """
+    Get user defaults for new projects; project VIEW values are independent overrides.
+    """
+
+def set_rendering_defaults_json(serialized: str) -> None:
+    """
+    Validate and persist rendering defaults without changing the current project.
+    """
+
+def capture_rendering_defaults() -> None:
+    """
+    Save current project overlay style and LOD cache limits as defaults for new projects.
+    """
+
+def apply_rendering_defaults() -> None:
+    """
+    Explicitly apply user defaults to the current project; other rendering fields are preserved.
+    """
+
+def get_marketplace_preferences() -> dict:
+    """Get Marketplace preferences from the canonical user preferences store"""
+
+def set_marketplace_view(view: str) -> None:
+    """Set the Marketplace layout (card or list)"""
+
+def set_marketplace_git_checkout(enabled: bool) -> None:
+    """Set whether Marketplace installs use Git checkouts"""
+
+def reset_marketplace_preferences() -> None:
+    """Reset Marketplace layout and installation preferences"""
 
 def get_project_manager_preferences() -> dict:
     """
@@ -2804,6 +2896,9 @@ def clear_project_location() -> None:
 
 def get_embed_dataset_by_default() -> bool:
     """Get whether new projects copy datasets into the project by default."""
+
+def mark_project_session_chapter_committed(chapter: str) -> None:
+    """Mark a committed project session setting change for autosave."""
 
 def set_embed_dataset_by_default(enabled: bool) -> bool:
     """Set whether new projects copy datasets into the project by default."""

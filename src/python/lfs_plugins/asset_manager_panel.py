@@ -15,7 +15,7 @@ import time
 import uuid
 import queue
 from datetime import datetime
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 from urllib.parse import quote
 
@@ -1974,7 +1974,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             placeholder.set_class_names("asset-thumbnail-placeholder asset-info-thumbnail-placeholder")
             placeholder.set_attribute("aria-hidden", "true")
             image = placeholder.append_child("img")
-            image.set_attribute("src", "../icon/scene/splat.png")
+            image.set_attribute("src", "../icon/lichtfeld.png")
             image.set_attribute("alt", "")
         placeholder_title = self._get_asset_display_name(asset) if asset else ""
         placeholder_title_changed = placeholder.get_attribute("title", "") != placeholder_title

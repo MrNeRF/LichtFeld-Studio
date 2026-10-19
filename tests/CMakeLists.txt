@@ -35,6 +35,22 @@ endif()
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
+# Deliberately no executable opt-in: exercise extended-path I/O independently
+# of the user's/runner's LongPathsEnabled registry policy.
+if(WIN32 AND (BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS))
+    add_executable(lichtfeld_native_filesystem_tests
+        test_native_filesystem.cpp test_native_logging.cpp native_filesystem_test.manifest)
+    target_compile_features(lichtfeld_native_filesystem_tests PRIVATE cxx_std_23)
+    target_compile_definitions(lichtfeld_native_filesystem_tests PRIVATE
+        LFS_STATIC_BUILD LFS_REQUIRE_LONG_PATHS_DISABLED)
+    target_include_directories(lichtfeld_native_filesystem_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/core/include)
+    target_link_libraries(lichtfeld_native_filesystem_tests PRIVATE
+        GTest::gtest_main spdlog::spdlog xxHash::xxhash shell32)
+    add_test(NAME lichtfeld.native_filesystem COMMAND lichtfeld_native_filesystem_tests)
+    set_tests_properties(lichtfeld.native_filesystem PROPERTIES LABELS "cpu;windows;filesystem" TIMEOUT 30)
+endif()
+
 # Exercise a real EXE/DLL boundary: linking the same static runner into both
 # modules would pass same-module tests but split callback and initialization state.
 # Windows CI enables the focused visualizer tests without the full test suite.
@@ -78,8 +94,14 @@ target_compile_features(lichtfeld_file_dialog_tests PRIVATE cxx_std_23)
 target_include_directories(lichtfeld_file_dialog_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/visualizer
+    ${CMAKE_SOURCE_DIR}/src/core/include
+    ${CMAKE_SOURCE_DIR}/src/geometry/include
 )
-target_link_libraries(lichtfeld_file_dialog_tests PRIVATE GTest::gtest_main)
+# scene_export_path.hpp includes the core event declarations and geometry headers.
+# Declare their header dependencies here, independently of the Linux GTK adapter.
+target_link_libraries(lichtfeld_file_dialog_tests PRIVATE
+    GTest::gtest_main glm::glm nlohmann_json::nlohmann_json
+)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET lfs_visualizer AND TARGET PkgConfig::LFS_GTK3)
     target_sources(lichtfeld_file_dialog_tests PRIVATE
         test_native_save_dialog.cpp
@@ -102,23 +124,47 @@ if(BUILD_VISUALIZER_TESTS)
     # The focused menu-bar suite exercises no GPU code. Windows CI installs
     # the CUDA toolkit but has no display driver, so defer loading nvcuda.dll
     # until a driver API is actually called. Normal application builds retain
-    # their existing eager driver dependency.
+    # their existing eager driver dependency. lfs_mcp and the Python module call
+    # the driver API directly too, and CI imports the module from a plain Python
+    # process where nothing has loaded nvcuda.dll first.
     if(MSVC)
-        target_link_options(lfs_core PRIVATE "/DELAYLOAD:nvcuda.dll")
-        target_link_libraries(lfs_core PRIVATE delayimp)
-        target_link_options(lfs_visualizer PRIVATE "/DELAYLOAD:nvcuda.dll")
-        target_link_libraries(lfs_visualizer PRIVATE delayimp)
+        foreach(_driver_user IN ITEMS lfs_core lfs_visualizer lfs_mcp lfs_py)
+            if(TARGET ${_driver_user})
+                target_link_options(${_driver_user} PRIVATE "/DELAYLOAD:nvcuda.dll")
+                target_link_libraries(${_driver_user} PRIVATE delayimp)
+            endif()
+        endforeach()
+    endif()
+
+    if(WIN32)
+        find_package(PkgConfig REQUIRED)
+        find_package(LibArchive REQUIRED)
+        pkg_check_modules(LFS_PATH_TEST_FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil)
+        add_executable(lichtfeld_native_third_party_tests
+            test_native_third_party_paths.cpp native_filesystem_test.manifest)
+        target_compile_features(lichtfeld_native_third_party_tests PRIVATE cxx_std_23)
+        target_compile_definitions(lichtfeld_native_third_party_tests PRIVATE LFS_STATIC_BUILD)
+        target_include_directories(lichtfeld_native_third_party_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/core/include ${CMAKE_SOURCE_DIR}/src/visualizer)
+        target_link_libraries(lichtfeld_native_third_party_tests PRIVATE
+            GTest::gtest_main RmlUi::RmlUi assimp::assimp LibArchive::LibArchive PkgConfig::LFS_PATH_TEST_FFMPEG shell32)
+        add_test(NAME lichtfeld.native_third_party_paths COMMAND lichtfeld_native_third_party_tests)
+        set_tests_properties(lichtfeld.native_third_party_paths PROPERTIES LABELS "cpu;windows;filesystem" TIMEOUT 30)
     endif()
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
         test_point_cloud_vulkan_projection.cpp
+        test_viewport_grid.cpp
         test_align_transform.cpp
         test_orthographic_zoom.cpp
         test_ui_visibility_transition.cpp
         test_summary_labels.cpp
         test_menu_bar_title.cpp
+        test_preferences_tooltips.cpp
+        test_guide_segment_clipping.cpp
         test_viewport_depth_layout.cpp
         test_panel_layout_render_demand.cpp
+        test_right_panel_tab_picker.cpp
         test_preferences_migration.cpp
         test_python_editor_input.cpp
         test_startup_overlay_geometry.cpp
@@ -128,6 +174,30 @@ if(BUILD_VISUALIZER_TESTS)
     add_executable(lichtfeld_visualizer_tests
         ${LICHTFELD_VISUALIZER_TEST_SOURCES}
     )
+    # Focused RmlUi migration contracts for the retained master interface.
+    add_executable(lichtfeld_rmlui_tests
+        test_rml_text_input_handler.cpp
+        test_rml_text_input_native_keys.cpp
+        test_rml_path_utils.cpp
+        test_rml_static_style_boundaries.cpp
+        test_rml_drag_payload.cpp
+        test_sdl_rml_key_mapping.cpp
+        test_rml_form_control_layout.cpp
+        test_histogram_layout.cpp
+    )
+    target_compile_features(lichtfeld_rmlui_tests PRIVATE cxx_std_23)
+    target_include_directories(lichtfeld_rmlui_tests PRIVATE
+        $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(lichtfeld_rmlui_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+    target_link_libraries(lichtfeld_rmlui_tests PRIVATE
+        lfs_visualizer lfs_core lfs_python_runtime GTest::gtest_main Zep::Zep SDL3::SDL3)
+    if(MSVC)
+        target_link_options(lichtfeld_rmlui_tests PRIVATE "/DELAYLOAD:nvcuda.dll")
+        target_link_libraries(lichtfeld_rmlui_tests PRIVATE delayimp)
+    endif()
+    add_test(NAME lichtfeld.rmlui COMMAND lichtfeld_rmlui_tests)
+    set_tests_properties(lichtfeld.rmlui PROPERTIES LABELS "fast;cpu;ui" TIMEOUT 120
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     target_compile_features(lichtfeld_visualizer_tests PRIVATE cxx_std_23)
     target_include_directories(lichtfeld_visualizer_tests PRIVATE
         $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>
@@ -136,6 +206,7 @@ if(BUILD_VISUALIZER_TESTS)
         PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
     )
     target_link_libraries(lichtfeld_visualizer_tests PRIVATE
+        lfs_io
         lfs_visualizer
         lfs_core
         lfs_python_runtime
@@ -149,7 +220,7 @@ if(BUILD_VISUALIZER_TESTS)
     )
     set_tests_properties(lichtfeld_visualizer_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-        TIMEOUT 30
+        TIMEOUT 300
     )
     if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_PANEL_LAYOUT_TESTS)
         return()
@@ -182,6 +253,7 @@ if(BUILD_UNICODE_TEST_ONLY)
     # Standalone Unicode path tests without CUDA runtime linkage
     add_executable(unicode_path_test
         test_unicode_paths_windows.cpp
+        test_native_filesystem.cpp
         test_project_save_as_paths.cpp
         test_weight_file_paths.cpp
         test_crash_handler.cpp
@@ -258,7 +330,9 @@ endif()
 # unreferenced function sections before resolution. Keep the dependency-heavy
 # chapter coverage in the non-Windows composition.
 set(LICHT_FORMAT_WINDOWS_FILES
+    test_atomic_output.cpp
     test_project_save_as_paths.cpp
+    test_native_fs.cpp
     test_json_chapter_dom.cpp
     test_project_chapters.cpp
     test_project_container.cpp
@@ -309,6 +383,10 @@ else()
 endif()
 
 add_executable(lichtfeld_format_tests ${LICHT_FORMAT_TARGET_FILES})
+if(WIN32 AND MSVC)
+    target_sources(lichtfeld_format_tests PRIVATE native_filesystem_test.manifest)
+endif()
+
 target_include_directories(lichtfeld_format_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/include
     ${CMAKE_SOURCE_DIR}/src/io/include
@@ -477,6 +555,8 @@ set(TEST_FILES
     test_warp_cull_blend.cpp
     test_warp_cull_bwd.cpp
     test_thin_structure.cpp
+    test_mask_thin_structure_guidance.cpp
+    test_mask_edge_guidance.cpp
     test_blob_seeding.cpp
     test_rendered_structure.cpp
     test_gradient_residual.cpp
@@ -564,11 +644,14 @@ set(TEST_FILES
     test_usd_format.cpp
     test_nurec_usdz_format.cpp
     test_unicode_paths_windows.cpp
+    test_native_filesystem.cpp
     test_interleaved_slice_copy.cpp
     test_densification_tensor_ops.cpp
     test_tensor_zero_dimension.cpp
     test_mask_loss.cpp
     test_mask_preprocess_fusion.cpp
+    test_mask_memory_alignment.cpp
+    test_mask_tiff_consistency.cpp
     test_roi_weight_map.cpp
     test_mesh_mask_kernels.cpp
     test_flip.cpp
@@ -615,11 +698,14 @@ set(TEST_FILES
     test_tcp_publisher.cpp
     test_view_info_json.cpp
     test_video_export_utils.cpp
+    test_viewport_point_cloud_export.cpp
+    test_video_export_frame_schedule.cpp
     test_video_frame_extractor_naming.cpp
     test_video_cpu_rgb_conversion.cpp
     test_video_cuda_frame_handoff.cpp
     test_video_hdr_logic.cpp
     test_visualizer_post_work.cpp
+    test_file_association.cpp
     test_panel_registry_animation_demand.cpp
     test_panel_registry_default_closed.cpp
     test_panel_layout_render_demand.cpp
@@ -674,12 +760,19 @@ set(TEST_FILES
     test_scene_upscaler_registry.cpp
     test_selection_rasterization_ops.cpp
     test_rendering_refactor_services.cpp
+    test_higs_exact_depth.cpp
     test_point_cloud_raster_orientation.cpp
     test_point_cloud_vulkan_projection.cpp
+    test_viewport_grid.cpp
     test_theme_registry.cpp
     test_viewport.cpp
     test_navigation_up_axis.cpp
     test_input_controller_focus.cpp
+    test_input_layout_chords.cpp
+    test_keymap_layout_contract.cpp
+    test_keymap_profile_io.cpp
+    test_keymap_upgrade.cpp
+    test_keymap_default_contract.cpp
     test_ordered_input_dispatch.cpp
     test_python_editor_input.cpp
     test_input_controller_dataset_load.cpp
@@ -695,8 +788,10 @@ set(TEST_FILES
     test_lens_priors.cpp
     test_metrics_evaluator.cpp
     test_metrics_eval_mask.cpp
+    test_masked_ssim_metrics.cpp
     test_background_image.cpp
     test_nvcodec_jpeg2k_16bit.cpp
+    test_nvcodec_jpeg2k_chw_layout.cpp
     test_nvcodec_sentinel_validation.cpp
     test_compressed_blob_tier.cpp
     test_pipelined_loader.cpp
@@ -710,6 +805,7 @@ set(TEST_FILES
     test_context_menu_placement.cpp
     test_rml_static_style_boundaries.cpp
     test_preferences_hint_layout.cpp
+    test_preferences_tooltips.cpp
     test_viewport_depth_layout.cpp
     test_viewport_select.cpp
     test_sequencer_regressions.cpp
@@ -717,6 +813,7 @@ set(TEST_FILES
     test_tensor_storage_version.cpp
     test_modal_registry_regression.cpp
     test_training_notifications.cpp
+    test_camera_training_notice.cpp
     test_tensor_nn_ops.cpp
     test_nn_ops.cpp
     test_weight_file_paths.cpp
@@ -738,6 +835,11 @@ set(TEST_FILES
     test_export_env_composite.cpp
     test_image_io.cpp
     test_project_thumbnail_image.cpp
+    test_mask_resized_cache.cpp
+    test_mask_rgb_cache.cpp
+    test_mask_cache_endpoints.cpp
+    test_mask_color_consistency.cpp
+    test_camera_mask_threshold.cpp
     test_camera_thumbnail_policy.cpp
     test_undistort.cpp
     gut_camera_model_cuda.cu
@@ -757,6 +859,7 @@ set(TEST_FILES
     test_splat_simplify.cpp
     test_rml_text_input_handler.cpp
     test_rml_text_input_native_keys.cpp
+    test_x11_input_modifier.cpp
     test_scene_graph_dnd.cpp
     test_rml_im_mode_layout.cpp
     test_rml_python_listener_lifetime.cpp
@@ -773,7 +876,9 @@ set(TEST_FILES
     test_vram_hud_header_click.cpp
     test_ui_visibility_transition.cpp
     test_menu_bar_title.cpp
+    test_guide_segment_clipping.cpp
     test_status_bar_mining.cpp
+    test_right_panel_tab_picker.cpp
     test_rotated_sh_correctness.cpp
     test_splat_raw_payload.cpp
     test_tensor_stream.cpp
@@ -970,6 +1075,7 @@ target_link_libraries(lichtfeld_tests PRIVATE
     vterm
     GTest::gtest
     nanobind-static
+    ZLIB::ZLIB
     ${TORCH_LIBRARIES}
     OpenMeshCore
     assimp::assimp
@@ -1031,6 +1137,31 @@ endif()
 add_test(NAME masked_ssim_noftz COMMAND masked_ssim_noftz_tests
     --gtest_filter=MaskedSSIMWindowTest.SparseSupportRemainsFinite:MaskedSSIMWindowTest.TinyWindowSupportApproachesUnsupported)
 set_tests_properties(masked_ssim_noftz PROPERTIES LABELS "gpu")
+
+# Keep both math modes in separate whole-program CUDA translation units, as in
+# the application's static libraries. RDC would hide the host-stub collision.
+foreach(mode precise fast)
+    add_library(cuda_stub_${mode} STATIC cuda_template_stub_fixture.cu)
+    target_compile_features(cuda_stub_${mode} PRIVATE cuda_std_20)
+    target_include_directories(cuda_stub_${mode} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_definitions(cuda_stub_${mode} PRIVATE LFS_STUB_TEST_VARIANT=${mode})
+    target_link_libraries(cuda_stub_${mode} PRIVATE lfs_core)
+    set_target_properties(cuda_stub_${mode} PROPERTIES CUDA_SEPARABLE_COMPILATION OFF)
+endforeach()
+target_compile_options(cuda_stub_fast PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>)
+
+add_executable(cuda_template_stub_tests test_main.cpp test_cuda_template_stub.cpp)
+target_compile_features(cuda_template_stub_tests PRIVATE cxx_std_23)
+target_include_directories(cuda_template_stub_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(cuda_template_stub_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+target_link_libraries(cuda_template_stub_tests PRIVATE
+    cuda_stub_precise cuda_stub_fast lfs_core GTest::gtest CUDA::cudart)
+add_test(NAME tensor.cuda_template_stub COMMAND cuda_template_stub_tests --gtest_color=no)
+set_tests_properties(tensor.cuda_template_stub PROPERTIES LABELS "tensor;gpu" TIMEOUT 30)
+if(WIN32)
+    set_tests_properties(tensor.cuda_template_stub PROPERTIES ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_core>;PATH=path_list_prepend:${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+endif()
 
 # Tensor-library hardening is intentionally isolated from the default test
 # tiers.  During the hardening phases these oracle tests are expected to expose
@@ -1248,7 +1379,10 @@ endif()
 # Keep every Python tier explicit so new modules cannot silently drift out of
 # the curated suite.
 set(LFS_PYTHON_FAST_TESTS
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_ci_format_push.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_ci_retry_configure.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_gallery_storage.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_icon_export.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_asset_identity.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_bug_report.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_core_abi_stamp.py
@@ -1258,6 +1392,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_histogram_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_http.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_import_dialog_panels.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_settings_version_safety.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_io_hygiene_regressions.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_keymap_bindings.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_new_project_panel.py
@@ -1282,6 +1417,8 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rendering_panel_simplify.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_layout.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_pan_scale.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_camera_identity.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_file_revision.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rmlui_image_sources.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_runtime_state.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scripts_panel.py
@@ -1406,7 +1543,45 @@ add_test(NAME lichtfeld.python.point_cloud_lifetime
     COMMAND ${Python_EXECUTABLE} -m pytest -q
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_point_cloud_lifetime_runtime.py
 )
+
+if(UNIX AND NOT APPLE AND TARGET LichtFeld-Studio)
+    add_test(NAME lichtfeld.python.camera_set_view_validation
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_camera_set_view_validation.py
+    )
+    set_tests_properties(lichtfeld.python.camera_set_view_validation PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>"
+    )
+
+    add_test(NAME lichtfeld.python.scene_export_path
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scene_export_path_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.scene_export_path PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration;io"
+        TIMEOUT 600
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>"
+    )
+endif()
 set_tests_properties(lichtfeld.python.point_cloud_lifetime PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    LABELS "nightly;gpu;integration"
+    TIMEOUT 300
+    RUN_SERIAL TRUE
+    ENVIRONMENT_MODIFICATION "LFS_EXECUTABLE=set:$<TARGET_FILE:${PROJECT_NAME}>"
+)
+
+add_test(NAME lichtfeld.python.point_cloud_first_open
+    COMMAND ${Python_EXECUTABLE} -m pytest -q
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_project_point_cloud_first_open_runtime.py
+)
+set_tests_properties(lichtfeld.python.point_cloud_first_open PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     LABELS "nightly;gpu;integration"
     TIMEOUT 300
@@ -1461,11 +1636,89 @@ if(UNIX AND NOT APPLE AND TARGET LichtFeld-Studio)
         RESOURCE_LOCK lfs_gui_gpu
         ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
     )
+    add_test(NAME lichtfeld.python.mesh_headlight
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh_headlight.py
+    )
+    set_tests_properties(lichtfeld.python.mesh_headlight PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
+
+    add_test(NAME lichtfeld.python.capture_mesh
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_render_capture_mesh.py
+    )
+    set_tests_properties(lichtfeld.python.capture_mesh PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
     add_test(NAME lichtfeld.python.capture_environment
         COMMAND ${Python_EXECUTABLE} -m pytest -q
             ${CMAKE_CURRENT_SOURCE_DIR}/python/test_render_capture_environment.py
     )
     set_tests_properties(lichtfeld.python.capture_environment PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
+    add_test(NAME lichtfeld.python.mesh_depth_view
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh_depth_view_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.mesh_depth_view PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
+    add_test(NAME lichtfeld.python.mesh_empty_split
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh_empty_split_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.mesh_empty_split PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
+    add_test(NAME lichtfeld.python.mesh_removal_keeps_viewport
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh_removal_keeps_viewport_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.mesh_removal_keeps_viewport PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
+    add_test(NAME lichtfeld.python.mesh_panorama
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh_panorama_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.mesh_panorama PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
+    add_test(NAME lichtfeld.python.mesh_split_depth
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh_split_depth_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.mesh_split_depth PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         LABELS "gpu;integration"
         TIMEOUT 300
@@ -1487,6 +1740,17 @@ endif()
 
 # Owns its Xvfb display, GUI process and generated dataset; requires a Linux GPU.
 if(UNIX AND NOT APPLE AND TARGET LichtFeld-Studio)
+    add_test(NAME lichtfeld.python.mcp_ply_sh_degree
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mcp_ply_sh_degree.py
+    )
+    set_tests_properties(lichtfeld.python.mcp_ply_sh_degree PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR};LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>"
+    )
     add_test(NAME lichtfeld.python.dataset_load_training
         COMMAND ${Python_EXECUTABLE} -m pytest -q
             ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mcp_dataset_load_training.py

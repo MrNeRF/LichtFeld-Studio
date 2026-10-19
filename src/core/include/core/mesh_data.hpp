@@ -32,7 +32,7 @@ namespace lfs::core {
         Tensor normals;   // [V, 3] Float32
         Tensor tangents;  // [V, 4] Float32 (xyz + handedness w)
         Tensor texcoords; // [V, 2] Float32
-        Tensor colors;    // [V, 4] Float32
+        Tensor colors;    // [V, 4] Float32, linear RGB
         Tensor indices;   // [F, 3] Int32
 
         std::vector<Material> materials;

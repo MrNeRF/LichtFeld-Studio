@@ -3,7 +3,7 @@
 """Viewport toolbars rendered from a retained RmlUI data model."""
 
 import math
-from pathlib import Path
+from _lfs_path_io import Path
 from urllib.parse import quote
 
 from .depth_view_controls import DepthViewControlsController
@@ -29,6 +29,7 @@ _OVERLAY_DOC_KEY_ATTR = "data-viewport-toolbar-doc-key"
 _toolbar_controller = None
 _MISSING = object()
 _CROP_ROI_DEFAULT = 0.1
+_CROP_ROI_GROWTH_DEFAULT = 0.0
 _SEQUENCER_PANEL_ID = "native.sequencer"
 _HISTOGRAM_PANEL_ID = "lfs.histogram"
 
@@ -162,25 +163,27 @@ def _toggle_bottom_dock_panel(panel_id, visible, set_visible):
 
 
 def _crop_roi_param_state():
-    """Return (available, LR scale, loss weight) from the live parameter owner."""
+    """Return (available, LR scale, loss weight, growth inside) from the live parameter owner."""
     try:
         import lichtfeld as lf
 
         getter = getattr(lf, "optimization_params", None)
         params = getter() if callable(getter) else None
+        unavailable = (False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT, _CROP_ROI_GROWTH_DEFAULT)
         if params is None:
-            return False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT
+            return unavailable
         has_params = getattr(params, "has_params", None)
         if callable(has_params) and not has_params():
-            return False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT
+            return unavailable
 
         lr_scale = float(params.cropbox_lr_scale)
         loss_weight = float(params.cropbox_loss_weight)
-        if not math.isfinite(lr_scale) or not math.isfinite(loss_weight):
-            return False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT
-        return True, lr_scale, loss_weight
+        growth_inside = float(params.cropbox_growth_inside)
+        if not all(math.isfinite(value) for value in (lr_scale, loss_weight, growth_inside)):
+            return unavailable
+        return True, lr_scale, loss_weight, growth_inside
     except (AttributeError, TypeError, ValueError, RuntimeError):
-        return False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT
+        return False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT, _CROP_ROI_GROWTH_DEFAULT
 
 
 def _button_record(button_id, action, value, icon_src, *,
@@ -301,7 +304,7 @@ class _GizmoToolbarController:
             and self._active_selection_submode() in self._SELECTION_VOLUME_MODES
         )
 
-    def snapshot(self, crop_roi_settings_open=False):
+    def snapshot(self, crop_roi_settings_open=False, numeric_overlay_available=True):
         import lichtfeld as lf
         from .op_context import get_context
 
@@ -325,6 +328,7 @@ class _GizmoToolbarController:
                 "show_transform_toolbar": False,
                 "show_mirror_toolbar": False,
                 "show_align_toolbar": False,
+                "show_crop_numeric_controls": False,
                 "show_crop_toolbar": bool(crop_enable_buttons),
                 "show_crop_edit_controls": False,
                 "show_crop_enable_separator": False,
@@ -407,6 +411,7 @@ class _GizmoToolbarController:
         mirror_group_buttons = self._build_mirror_records(mirror_tool_def, active_tool_id, context)
         crop_group_buttons = self._build_crop_group_records(crop_tool_def, active_tool_id, context)
         crop_tool_active = active_tool_id == self._CROP_TOOL_ID
+        crop_numeric_visible = numeric_overlay_available and crop_tool_active and self._crop_numeric_controls_visible(selected_nodes)
         selection_volume_active = self._selection_volume_active(active_tool_id)
         crop_object_buttons = self._build_crop_object_records(active_tool_id) if crop_tool_active else []
         crop_transform_buttons = self._build_crop_transform_records(active_tool_id) if crop_tool_active else []
@@ -427,9 +432,10 @@ class _GizmoToolbarController:
             ),
             "show_mirror_toolbar": active_tool_id == self._MIRROR_TOOL_ID and bool(submode_buttons),
             "show_align_toolbar": align_tool_active and bool(align_action_buttons),
-            "show_crop_toolbar": bool(crop_enable_buttons) or (crop_tool_active and bool(crop_object_buttons)),
-            "show_crop_edit_controls": crop_tool_active and bool(crop_object_buttons),
-            "show_crop_enable_separator": bool(crop_enable_buttons) and crop_tool_active,
+            "show_crop_numeric_controls": crop_numeric_visible,
+            "show_crop_toolbar": not crop_numeric_visible and (bool(crop_enable_buttons) or (crop_tool_active and bool(crop_object_buttons))),
+            "show_crop_edit_controls": crop_tool_active and not crop_numeric_visible and bool(crop_object_buttons),
+            "show_crop_enable_separator": bool(crop_enable_buttons) and crop_tool_active and not crop_numeric_visible,
             "show_selection_volume_gizmos": selection_volume_active and bool(selection_volume_gizmo_buttons),
             "show_transform_space_controls": active_tool_id in self._TRANSFORM_TOOL_IDS and bool(submode_buttons),
             "show_transform_pivot_controls": active_tool_id in self._TRANSFORM_TOOL_IDS and bool(pivot_buttons),
@@ -481,7 +487,7 @@ class _GizmoToolbarController:
             active_submode = tool_def.submodes[0].id
             set_selection_mode = getattr(lf.ui, "set_selection_mode", None)
             if callable(set_selection_mode):
-                set_selection_mode(active_submode)
+                set_selection_mode(active_submode, mark_session_dirty=False)
 
         mode_buttons = []
         for mode in tool_def.submodes:
@@ -497,6 +503,20 @@ class _GizmoToolbarController:
                     tooltip_text=mode.label,
                     action_id=self._SELECTION_MODE_ACTIONS.get(mode.id, ""),
                     selected=selected,
+                    enabled=enabled,
+                )
+            )
+
+        if histogram_mode_available(context):
+            mode_buttons.append(
+                _button_record(
+                    "selection-histogram",
+                    "toggle_histogram",
+                    _HISTOGRAM_PANEL_ID,
+                    _icon_src("histogram.png"),
+                    tooltip_key="toolbar.histogram",
+                    tooltip_text="Histogram",
+                    selected=_panel_enabled(_HISTOGRAM_PANEL_ID),
                     enabled=enabled,
                 )
             )
@@ -570,6 +590,17 @@ class _GizmoToolbarController:
                 enabled=tool_def.can_activate(context),
             )
         ]
+
+    def _crop_numeric_controls_visible(self, selected_nodes):
+        import lichtfeld as lf
+
+        if len(selected_nodes) != 1:
+            return False
+        get_scene = getattr(lf, "get_scene", None)
+        scene = get_scene() if callable(get_scene) else None
+        node = scene.get_node(selected_nodes[0]) if scene else None
+        expected_type = "CROPBOX" if self._active_crop_shape() == "box" else "ELLIPSOID"
+        return node is not None and self._node_type_name(node) == expected_type
 
     def _build_crop_object_records(self, active_tool_id):
         active = active_tool_id == self._CROP_TOOL_ID
@@ -976,7 +1007,7 @@ class _GizmoToolbarController:
 
         if not active_submode and not is_transform_tool and not is_mirror_tool:
             active_submode = tool_def.submodes[0].id
-            lf.ui.set_selection_mode(active_submode)
+            lf.ui.set_selection_mode(active_submode, mark_session_dirty=False)
 
         records = []
         for mode in tool_def.submodes:
@@ -1190,7 +1221,6 @@ class _GizmoToolbarController:
 
 class _UtilityToolbarController:
     _ASSET_MANAGER_PANEL_ID = "lfs.asset_manager"
-    _PREFERENCES_PANEL_ID = "lfs.preferences"
     _PLUGIN_MARKETPLACE_PANEL_ID = "lfs.plugin_marketplace"
     _CAMERA_MODE_SPECS = (
         ("camera-orbit", "orbit", "toolbar.orbit_camera", "Orbit Camera"),
@@ -1216,7 +1246,6 @@ class _UtilityToolbarController:
 
     def snapshot(self):
         import lichtfeld as lf
-        from .histogram_support import histogram_mode_available
 
         try:
             camera_mode = str(lf.get_camera_navigation_mode()).lower()
@@ -1259,18 +1288,25 @@ class _UtilityToolbarController:
                 tooltip_text="Focus Selection",
                 action_id=self._PRIMARY_ACTIONS["focus_selection"],
             ),
+            _button_record("util-set-home", "set_home", "", _icon_src("home-check"),
+                           tooltip_key="input_settings.action.camera_set_home",
+                           tooltip_text="Set Home",
+                           action_id="CAMERA_SET_HOME"),
+            _button_record("util-reset-home", "reset_home", "", _icon_src("home-reset"),
+                           tooltip_key="toolbar.reset_home",
+                           tooltip_text="Reset Home",
+                           action_id="CAMERA_RESTORE_HOME"),
         ]
 
         utility_extra_buttons = [
             _button_record(
-                "util-preferences",
+                "util-asset-manager",
                 "toggle_panel",
-                self._PREFERENCES_PANEL_ID,
-                _icon_src("settings"),
-                tooltip_key="window.preferences",
-                tooltip_text="Preferences",
-                action_id="OPEN_PREFERENCES",
-                selected=_panel_enabled(self._PREFERENCES_PANEL_ID),
+                self._ASSET_MANAGER_PANEL_ID,
+                _icon_src("archive"),
+                tooltip_key="toolbar.asset_manager",
+                tooltip_text="Projects",
+                selected=_panel_enabled(self._ASSET_MANAGER_PANEL_ID),
             ),
             _button_record(
                 "util-viewport-export",
@@ -1281,24 +1317,6 @@ class _UtilityToolbarController:
                 tooltip_text="Viewport Export",
                 selected=self._is_viewport_export_visible(),
             ),
-            _button_record(
-                "util-asset-manager",
-                "toggle_panel",
-                self._ASSET_MANAGER_PANEL_ID,
-                _icon_src("archive"),
-                tooltip_key="toolbar.asset_manager",
-                tooltip_text="Asset Manager",
-                selected=_panel_enabled(self._ASSET_MANAGER_PANEL_ID),
-            ),
-            _button_record(
-                "util-plugin-marketplace",
-                "toggle_panel",
-                self._PLUGIN_MARKETPLACE_PANEL_ID,
-                _icon_src("puzzle"),
-                tooltip_key="menu.tools.plugin_marketplace",
-                tooltip_text="Plugin Marketplace",
-                selected=_panel_enabled(self._PLUGIN_MARKETPLACE_PANEL_ID),
-            )
         ]
         utility_bottom_buttons = []
         if has_render_manager:
@@ -1321,20 +1339,17 @@ class _UtilityToolbarController:
                 )
             )
 
-        if histogram_mode_available(lf.ui.context()):
-            utility_bottom_buttons.append(
-                _button_record(
-                    "util-histogram",
-                    "toggle_panel",
-                    _HISTOGRAM_PANEL_ID,
-                    _icon_src("histogram.png"),
-                    tooltip_key="toolbar.histogram",
-                    tooltip_text="Histogram",
-                    selected=_bottom_dock_panel_selected(
-                        _HISTOGRAM_PANEL_ID, _panel_enabled(_HISTOGRAM_PANEL_ID)
-                    ),
-                )
+        utility_extra_buttons.append(
+            _button_record(
+                "util-plugin-marketplace",
+                "toggle_panel",
+                self._PLUGIN_MARKETPLACE_PANEL_ID,
+                _icon_src("puzzle"),
+                tooltip_key="menu.tools.plugin_marketplace",
+                tooltip_text="Plugin Marketplace",
+                selected=_panel_enabled(self._PLUGIN_MARKETPLACE_PANEL_ID),
             )
+        )
 
         return {
             "camera_mode_buttons": camera_mode_buttons,
@@ -1350,10 +1365,30 @@ class _UtilityToolbarController:
             lf.set_camera_navigation_mode(value)
             return
         if action == "home":
-            lf.reset_camera()
+            lf.go_home()
+            return
+        if action == "set_home":
+            lf.set_home()
             return
         if action == "focus_selection":
             lf.focus_selection()
+            return
+        if action == "reset_home":
+            lf.reset_home()
+            return
+        if action == "toggle_histogram":
+            if not histogram_mode_available(lf.ui.context()):
+                lf.ui.set_panel_enabled(value, False)
+                return
+            if not _panel_enabled(value):
+                select_tool = ToolRegistry.get("builtin.select")
+                if select_tool is not None and select_tool.can_activate(lf.ui.context()):
+                    ToolRegistry.set_active("builtin.select")
+            _toggle_bottom_dock_panel(
+                value,
+                _panel_enabled(value),
+                lambda visible: lf.ui.set_panel_enabled(value, visible),
+            )
             return
         if action == "toggle_sequencer":
             if RuntimeState.trainer_state.value in _TOOLBAR_HIDDEN_STATES:
@@ -1386,6 +1421,7 @@ class _ViewportToolbarController:
         "show_align_toolbar",
         "show_crop_toolbar",
         "show_crop_edit_controls",
+        "show_crop_numeric_controls",
         "show_crop_enable_separator",
         "crop_roi_settings_open",
         "crop_roi_params_available",
@@ -1440,11 +1476,13 @@ class _ViewportToolbarController:
         self._show_align_toolbar = False
         self._show_crop_toolbar = False
         self._show_crop_edit_controls = False
+        self._show_crop_numeric_controls = False
         self._show_crop_enable_separator = False
         self._crop_roi_settings_open = False
         self._crop_roi_params_available = False
         self._cropbox_lr_scale = _CROP_ROI_DEFAULT
         self._cropbox_loss_weight = _CROP_ROI_DEFAULT
+        self._cropbox_growth_inside = _CROP_ROI_GROWTH_DEFAULT
         self._show_selection_volume_gizmos = False
         self._show_transform_space_controls = False
         self._show_transform_pivot_controls = False
@@ -1476,6 +1514,18 @@ class _ViewportToolbarController:
                 "toolbar.outside_roi_loss_weight", "Outside ROI loss weight"
             ),
         )
+        model.bind_func(
+            "label_cropbox_growth_inside",
+            lambda: _ui_label("toolbar.roi_growth_inside", "ROI growth inside"),
+        )
+        model.bind_func(
+            "cropbox_growth_inside_percent",
+            lambda: (
+                f"{round(self._cropbox_growth_inside * 100.0):.0f}%"
+                if self._cropbox_growth_inside > 0.0
+                else _ui_label("toolbar.roi_growth_auto", "Auto")
+            ),
+        )
         model.bind(
             "cropbox_lr_scale",
             lambda: f"{self._cropbox_lr_scale:.3f}",
@@ -1485,6 +1535,11 @@ class _ViewportToolbarController:
             "cropbox_loss_weight",
             lambda: f"{self._cropbox_loss_weight:.3f}",
             lambda value: self._set_crop_roi_param("cropbox_loss_weight", value),
+        )
+        model.bind(
+            "cropbox_growth_inside",
+            lambda: f"{self._cropbox_growth_inside:.2f}",
+            lambda value: self._set_crop_roi_param("cropbox_growth_inside", value),
         )
         model.bind_event("toolbar_action", self._on_toolbar_action)
         self._gt_compare_controls.bind_model(model)
@@ -1619,7 +1674,14 @@ class _ViewportToolbarController:
         self._last_toolbar_signature = signature
 
         utility_state = self._utility.snapshot()
-        gizmo_state = self._gizmo.snapshot(self._crop_roi_settings_open)
+        gizmo_state = self._gizmo.snapshot(
+            self._crop_roi_settings_open,
+            numeric_overlay_available=not (
+                self._viewport_export_controls.visible
+                or self._gt_compare_controls._gt_compare_active()
+                or self._depth_view_controls._depth_view_active()
+            ),
+        )
 
         dirty = False
         if not gizmo_state["crop_settings_buttons"]:
@@ -1630,6 +1692,7 @@ class _ViewportToolbarController:
         dirty |= self._sync_flag("show_align_toolbar", gizmo_state["show_align_toolbar"])
         dirty |= self._sync_flag("show_crop_toolbar", gizmo_state["show_crop_toolbar"])
         dirty |= self._sync_flag("show_crop_edit_controls", gizmo_state["show_crop_edit_controls"])
+        dirty |= self._sync_flag("show_crop_numeric_controls", gizmo_state["show_crop_numeric_controls"])
         dirty |= self._sync_flag("show_crop_enable_separator", gizmo_state["show_crop_enable_separator"])
         dirty |= self._sync_flag("show_selection_volume_gizmos", gizmo_state["show_selection_volume_gizmos"])
         dirty |= self._sync_flag("show_transform_space_controls", gizmo_state["show_transform_space_controls"])
@@ -1665,10 +1728,14 @@ class _ViewportToolbarController:
             # even while hidden. Do not replace live values with UI defaults when
             # training initialization clears selection or detaches the owner.
             return dirty
-        _node_name, _enabled, _available, lr_scale, loss_weight = cropbox_toolbar_signature
+        _node_name, _enabled, _available, lr_scale, loss_weight, growth_inside = cropbox_toolbar_signature
 
         dirty |= self._sync_value("cropbox_lr_scale", float(lr_scale))
         dirty |= self._sync_value("cropbox_loss_weight", float(loss_weight))
+        if self._sync_value("cropbox_growth_inside", float(growth_inside)):
+            dirty = True
+            if self._handle:
+                self._handle.dirty("cropbox_growth_inside_percent")
         return dirty
 
     def _sync_flag(self, name, value):
@@ -1717,6 +1784,8 @@ class _ViewportToolbarController:
             return
 
         self._sync_value(name, parsed)
+        if name == "cropbox_growth_inside" and self._handle:
+            self._handle.dirty("cropbox_growth_inside_percent")
         self._last_toolbar_signature = None
         if self._handle:
             request_update = getattr(self._handle, "request_update", None)
@@ -1839,13 +1908,6 @@ class _ViewportToolbarController:
         can_transform_selection = bool(
             call(False, getattr(lf, "can_transform_selection", None))
         )
-        preferences_enabled = bool(
-            call(
-                False,
-                getattr(lf.ui, "is_panel_enabled", None),
-                _UtilityToolbarController._PREFERENCES_PANEL_ID,
-            )
-        )
         asset_manager_enabled = bool(
             call(
                 False,
@@ -1892,11 +1954,12 @@ class _ViewportToolbarController:
             tool_ids,
             str(call("orbit", lf.get_camera_navigation_mode)).lower() if hasattr(lf, "get_camera_navigation_mode") else "orbit",
             self._viewport_export_controls.visible,
+            self._gt_compare_controls._gt_compare_active(),
+            self._depth_view_controls._depth_view_active(),
             bool(call(False, getattr(lf.ui, "is_sequencer_visible", None))),
             _bottom_dock_panel_space(_SEQUENCER_PANEL_ID),
             call("", getattr(lf.ui, "get_bottom_dock_active_tab", None)),
             bool(histogram_mode_available(ui_context)) if ui_context is not None else False,
-            preferences_enabled,
             asset_manager_enabled,
             plugin_marketplace_enabled,
             bool(call(False, getattr(lf.ui, "is_panel_enabled", None), "lfs.histogram")),
@@ -1912,6 +1975,12 @@ class _ViewportToolbarController:
             return
         action = str(args[0])
         value = str(args[1]) if len(args) > 1 else ""
+        if action == "home" and _event is not None:
+            # Shift-click sets the home, Ctrl-click restores the default, as Shift+H and Ctrl+H do.
+            if _event.get_bool_parameter("ctrl_key"):
+                action = "reset_home"
+            elif _event.get_bool_parameter("shift_key"):
+                action = "set_home"
         if action == "toggle_viewport_export":
             self._gizmo.clear_active_horizontal_tool()
             self._sync_flag("crop_roi_settings_open", False)

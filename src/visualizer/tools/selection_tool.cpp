@@ -21,6 +21,16 @@
 namespace lfs::vis::tools {
 
     namespace {
+        // The tool re-derives its filters from the camera every frame. Only a
+        // changed filter may request a redraw, or the viewport never idles.
+        bool sameSelectionFilter(const RenderSettings& a, const RenderSettings& b) {
+            return a.crop_filter_for_selection == b.crop_filter_for_selection &&
+                   a.show_crop_box == b.show_crop_box && a.show_ellipsoid == b.show_ellipsoid &&
+                   a.depth_filter_enabled == b.depth_filter_enabled &&
+                   a.depth_filter_transform.getRotation() == b.depth_filter_transform.getRotation() &&
+                   a.depth_filter_transform.getTranslation() == b.depth_filter_transform.getTranslation() &&
+                   a.depth_filter_min == b.depth_filter_min && a.depth_filter_max == b.depth_filter_max;
+        }
 
         [[nodiscard]] lfs::rendering::OverlayColor toOverlay(const auto& c) {
             return {c.x, c.y, c.z, c.w};
@@ -266,7 +276,8 @@ namespace lfs::vis::tools {
             return;
         }
 
-        auto settings = rm->getSettings();
+        const auto current = rm->getSettings();
+        auto settings = current;
         settings.crop_filter_for_selection = crop_filter_enabled_;
         if (crop_filter_enabled_) {
             settings.show_crop_box = true;
@@ -278,6 +289,9 @@ namespace lfs::vis::tools {
         settings.depth_filter_transform = lfs::geometry::EuclideanTransform(camera_quat, viewport.camera.t);
         settings.depth_filter_min = glm::vec3(-half_extents, -depth_far_);
         settings.depth_filter_max = glm::vec3(half_extents, -depth_near_);
+        if (sameSelectionFilter(current, settings)) {
+            return;
+        }
         rm->updateSettings(settings);
         rm->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
     }
@@ -306,7 +320,8 @@ namespace lfs::vis::tools {
             return;
         }
 
-        auto settings = rm->getSettings();
+        const auto current = rm->getSettings();
+        auto settings = current;
         settings.crop_filter_for_selection = crop_filter_enabled_;
         if (crop_filter_enabled_) {
             settings.show_crop_box = true;
@@ -320,6 +335,9 @@ namespace lfs::vis::tools {
             settings.depth_filter_transform = lfs::geometry::EuclideanTransform(camera_quat, viewport.camera.t);
             settings.depth_filter_min = glm::vec3(-half_extents, -depth_far_);
             settings.depth_filter_max = glm::vec3(half_extents, -depth_near_);
+        }
+        if (sameSelectionFilter(current, settings)) {
+            return;
         }
         rm->updateSettings(settings);
         rm->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);

@@ -25,5 +25,5 @@ def test_mask_cache_and_eight_bit_staging_assumptions_fail_loudly():
     encode_start = nvcodec.index("NvCodecImageLoader::encode_grayscale_to_jpeg2k")
     encode_end = nvcodec.index("NvCodecImageLoader::decode_jpeg2k_16bit_from_memory_gpu")
     encode_body = nvcodec[encode_start:encode_end]
-    assert "!eight_bit || cuda_stream == nullptr" in encode_body
+    assert "!eight_bit || image.dtype() == DataType::UInt8 || cuda_stream == nullptr" in encode_body
     assert "eight-bit JPEG2000 staging currently requires" in encode_body

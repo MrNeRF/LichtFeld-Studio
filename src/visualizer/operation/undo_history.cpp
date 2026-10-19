@@ -765,6 +765,18 @@ namespace lfs::vis::op {
         }
     }
 
+    void UndoHistory::bindHydratedPayloadStorage(
+        const std::span<const lfs::core::Uuid> node_uuids) {
+        std::lock_guard lock(mutex_);
+        if (redo_stack_.empty()) {
+            return;
+        }
+        if (auto* const patch =
+                dynamic_cast<SceneGraphPatchEntry*>(redo_stack_.back().get())) {
+            patch->bindHydratedPayloadStorage(node_uuids);
+        }
+    }
+
     void UndoHistory::beginTransaction(std::string name) {
         std::unique_lock playback_lock(playback_mutex_);
         {

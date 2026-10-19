@@ -128,6 +128,28 @@ namespace lfs::vis::gui::native_panels {
             widget_->setFloating(space == PanelSpace::Floating);
     }
 
+    SDL_Window* VideoExtractorPanel::nativeWindow() const {
+        return widget_ ? widget_->nativeWindow() : nullptr;
+    }
+
+    bool VideoExtractorPanel::detachToDesktop(float x, float y, float w, float h) {
+        return widget_ && widget_->detachToDesktop(x, y, w, h);
+    }
+
+    bool VideoExtractorPanel::restoreDesktopWindow() {
+        return widget_ && widget_->restoreDesktopWindow();
+    }
+
+    void VideoExtractorPanel::resetDesktopRestoreState() {
+        if (widget_)
+            widget_->resetDesktopRestoreState();
+    }
+
+    void VideoExtractorPanel::releaseDesktopWindow() {
+        if (widget_)
+            widget_->releaseDesktopWindow();
+    }
+
     bool VideoExtractorPanel::needsAnimationFrame() const {
         return widget_ && widget_->needsAnimationFrame();
     }

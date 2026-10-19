@@ -3,7 +3,6 @@
 
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
-#include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
 #include "gui/film_strip_renderer.hpp"
@@ -90,7 +89,6 @@ namespace {
                 previous_home_ = previous;
             setHome(temporary_.path.string().c_str());
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
             lfs::vis::services().clear();
             lfs::vis::op::undoHistory().clear();
             ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
@@ -100,7 +98,6 @@ namespace {
         void TearDown() override {
             lfs::vis::op::undoHistory().clear();
             lfs::vis::services().clear();
-            lfs::core::event::bus().clear_all();
             lfs::event::EventBridge::instance().clear_all();
             lfs::event::LocalizationManager::getInstance().reset();
             setHome(previous_home_ ? previous_home_->c_str() : nullptr);
@@ -1360,6 +1357,43 @@ namespace {
         EXPECT_FALSE(timeline.loadFromJson(file.path.string()));
         ASSERT_EQ(timeline.realKeyframeCount(), 1u);
         EXPECT_FLOAT_EQ(timeline.getKeyframe(0)->time, 9.0f);
+    }
+
+    TEST(SequencerTimelineRegressionTest, ExplicitZeroClipDurationClampsLikeTheSetter) {
+        const nlohmann::json keyframes = nlohmann::json::array({
+            {{"time", 0.0f},
+             {"position", {0.0f, 0.0f, 4.0f}},
+             {"rotation", {1.0f, 0.0f, 0.0f, 0.0f}},
+             {"focal_length_mm", 35.0f},
+             {"easing", static_cast<int>(EasingType::LINEAR)}},
+            {{"time", 0.0f},
+             {"position", {0.4f, 0.0f, 4.0f}},
+             {"rotation", {1.0f, 0.0f, 0.0f, 0.0f}},
+             {"focal_length_mm", 35.0f},
+             {"easing", static_cast<int>(EasingType::LINEAR)}},
+        });
+
+        Timeline reference;
+        reference.addKeyframe(makeKeyframe(0.0f, {0.0f, 0.0f, 4.0f}));
+        reference.addKeyframe(makeKeyframe(0.0f, {0.4f, 0.0f, 4.0f}));
+        reference.setClipDuration(0.0f);
+
+        Timeline explicit_zero;
+        ASSERT_TRUE(explicit_zero.loadFromJson({
+            {"version", 4},
+            {"clip_duration", 0.0f},
+            {"keyframes", keyframes},
+        }));
+        EXPECT_FLOAT_EQ(explicit_zero.clipDuration(), lfs::sequencer::MIN_CLIP_DURATION_SECONDS);
+        EXPECT_FLOAT_EQ(explicit_zero.clipDuration(), reference.clipDuration());
+        EXPECT_EQ(explicit_zero.realKeyframeCount(), 2u);
+
+        Timeline missing_duration;
+        ASSERT_TRUE(missing_duration.loadFromJson({
+            {"version", 4},
+            {"keyframes", keyframes},
+        }));
+        EXPECT_FLOAT_EQ(missing_duration.clipDuration(), lfs::sequencer::DEFAULT_CLIP_DURATION_SECONDS);
     }
 
     TEST(SequencerTimelineRegressionTest, LoadNormalizesCameraAndAnimationQuaternions) {

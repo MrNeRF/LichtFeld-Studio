@@ -112,7 +112,7 @@ TEST(CropDampingStrategyTest, McmcRejectedRowsAreNeverSampledAtZeroScale) {
     strategy._error_score_max = Tensor::ones({8}, Device::CUDA);
 
     auto crop_mask = make_mask(8, 1);
-    strategy.get_optimizer().set_crop_damping_mask(crop_mask);
+    strategy.get_optimizer().set_crop_score_mask(crop_mask);
     strategy.get_optimizer().set_cropbox_lr_scale(0.0f);
     const auto damped_weights = strategy.get_sampling_weights();
     const auto damped_cpu = damped_weights.cpu().to_vector();
@@ -127,7 +127,7 @@ TEST(CropDampingStrategyTest, McmcRejectedRowsAreNeverSampledAtZeroScale) {
 
     strategy.get_optimizer().set_cropbox_lr_scale(1.0f);
     const auto unit_scale_weights = strategy.get_sampling_weights().cpu().to_vector();
-    strategy.get_optimizer().set_crop_damping_mask({});
+    strategy.get_optimizer().set_crop_score_mask({});
     const auto unmasked_weights = strategy.get_sampling_weights().cpu().to_vector();
     EXPECT_EQ(unit_scale_weights, unmasked_weights);
 }
@@ -145,7 +145,7 @@ TEST(CropDampingStrategyTest, IgsPlusRejectedRowsAreNeverSampledAtZeroScale) {
     strategy.initialize(opt_params);
 
     auto crop_mask = make_mask(8, 1);
-    strategy.get_optimizer().set_crop_damping_mask(crop_mask);
+    strategy.get_optimizer().set_crop_score_mask(crop_mask);
     strategy.get_optimizer().set_cropbox_lr_scale(0.0f);
     const auto scores = Tensor::ones({8}, Device::CUDA);
     const auto damped_scores = strategy.damp_densification_scores(scores);
@@ -161,7 +161,7 @@ TEST(CropDampingStrategyTest, IgsPlusRejectedRowsAreNeverSampledAtZeroScale) {
 
     strategy.get_optimizer().set_cropbox_lr_scale(1.0f);
     const auto unit_scale_scores = strategy.damp_densification_scores(scores).cpu().to_vector();
-    strategy.get_optimizer().set_crop_damping_mask({});
+    strategy.get_optimizer().set_crop_score_mask({});
     const auto unmasked_scores = strategy.damp_densification_scores(scores).cpu().to_vector();
     EXPECT_EQ(unit_scale_scores, unmasked_scores);
 }
@@ -363,7 +363,7 @@ TEST(MCMCTest, RelocationWithTinyCropWeightsNeverCopiesFrozenParents) {
     auto params = param::OptimizationParameters::mcmc_defaults();
     params.max_cap = 32;
     strategy.initialize(params);
-    strategy.get_optimizer().set_crop_damping_mask(make_mask(16, 16));
+    strategy.get_optimizer().set_crop_score_mask(make_mask(16, 16));
     // Initial error scores are floored to 1e-12; keep the resulting weight normal.
     strategy.get_optimizer().set_cropbox_lr_scale(
         1.01f * std::numeric_limits<float>::min() / 1e-12f);

@@ -14,6 +14,7 @@
 
 #include "config.slang"
 #include "overlay_flags.inc"
+#include "equirect_projection.inc"
 
 #define LFS_PORTAL_INLINE
 #define LFS_PORTAL_VEC3 float3
@@ -174,11 +175,12 @@ float3 project_point_equirect(float3 point, Camera cam) {
         return {0, 0, -1};
 
     float3 dir = view_point / len;
-    float azimuth = atan2(dir.x, dir.z);
-    float elevation = asin(clamp(dir.y, -1.0f, 1.0f));
+    // Rasterizer camera space is +Y down and +Z forward (see the pinhole projection);
+    // the shared panorama frame is +Y up and -Z forward.
+    float2 uv = lfs_equirect_uv(float3(dir.x, -dir.y, -dir.z));
     return {
-        (azimuth / (2.0f * M_PI) + 0.5f) * float(cam.W),
-        (elevation / M_PI + 0.5f) * float(cam.H),
+        uv.x * float(cam.W),
+        uv.y * float(cam.H),
         len
     };
 }
@@ -504,13 +506,11 @@ WorldRay pixel_to_world_ray(float2 pixel, Camera cam) {
     float3x3 view_to_world_rotation = float3x3(world_view_t);
     float3 camera_origin = -mul(view_to_world_rotation, world_view_t[3]);
     if (cam.model == int(CameraModel::EQUIRECTANGULAR)) {
-        float azimuth = 2.0f * M_PI * (pixel.x / float(cam.W) - 0.5f);
-        float elevation = M_PI * (pixel.y / float(cam.H) - 0.5f);
-        float cos_elevation = cos(elevation);
-        float3 ray_camera = safe_normalize(float3(
-            sin(azimuth) * cos_elevation,
-            sin(elevation),
-            cos(azimuth) * cos_elevation));
+        // Inverse of project_point_equirect. Shared equirect is +Y up at uv.y = 0
+        // and -Z forward; the rasterizer camera is +Y down and +Z forward.
+        float2 equirect_uv = float2(pixel.x / float(cam.W), pixel.y / float(cam.H));
+        float3 shared_dir = lfs_equirect_direction(equirect_uv);
+        float3 ray_camera = float3(shared_dir.x, -shared_dir.y, -shared_dir.z);
         float3 direction = safe_normalize(mul(view_to_world_rotation, ray_camera));
         return { camera_origin, direction, isfinite(dot(camera_origin, camera_origin)) && isfinite(dot(direction, direction)) };
     }
@@ -777,25 +777,48 @@ Splat_2D_AlphaBlend load_splat_alphablend(
 
 [ForceInline]
 Splat_3D_GUT_AlphaBlend load_splat_gut_alphablend(
-    int32_t g_idx,
+    uint g_idx,
+    uint rgb_idx,
     StructuredBuffer<float> xyz_ws,
-    StructuredBuffer<float4> rotations,
-    StructuredBuffer<float> scaling_raw,
-    StructuredBuffer<float> opacity_raw,
+    ByteAddressBuffer rotations,
+    ByteAddressBuffer scaling_raw,
+    ByteAddressBuffer opacity_raw,
     StructuredBuffer<float> rgb,
+    uint lod_flags,
+    bool quantized_pool,
     uint splat_render_profile
 ) {
     float3 g_xyz_ws = read_t3_float3(g_idx, xyz_ws);
-    float4 g_rotation = rotations[g_idx];
-    float3 g_scale = exp(read_t3_float3(g_idx, scaling_raw));
-    float g_opacity = sigmoid_activation(opacity_raw[g_idx]);
-    float3 g_rgb = read_t3_float3(g_idx, rgb);
+    float4 g_rotation;
+    float3 raw_scale;
+    float raw_opacity;
+    // Match the canonical RAD pool layout used by load_gaussian_split_quant.
+    if (quantized_pool) {
+        uint2 rq = rotations.Load2(g_idx * 8u);
+        g_rotation = float4(f16tof32(rq.x & 0xffffu), f16tof32(rq.x >> 16),
+                            f16tof32(rq.y & 0xffffu), f16tof32(rq.y >> 16));
+        uint2 sq = scaling_raw.Load2(g_idx * 8u);
+        raw_scale = float3(f16tof32(sq.x & 0xffffu), f16tof32(sq.x >> 16),
+                           f16tof32(sq.y & 0xffffu));
+        uint word = opacity_raw.Load((g_idx >> 1u) * 4u);
+        raw_opacity = f16tof32((g_idx & 1u) != 0u ? word >> 16 : word & 0xffffu);
+    } else {
+        g_rotation = asfloat(rotations.Load4(g_idx * 16u));
+        raw_scale = asfloat(scaling_raw.Load3(g_idx * 12u));
+        raw_opacity = asfloat(opacity_raw.Load(g_idx * 4u));
+    }
+    float3 g_scale = exp(min(raw_scale, float3(MAX_RAW_SCALE)));
+    const bool spark_rad_opacity = (lod_flags & 4u) != 0u;
+    float g_opacity = spark_rad_opacity ? max(raw_opacity, 0.0f) : sigmoid_activation(raw_opacity);
+    if (spark_rad_opacity && g_opacity > 1.0f)
+        g_opacity = min(g_opacity * 4.0f - 3.0f, 5.0f);
+    float3 g_rgb = read_t3_float3(rgb_idx, rgb);
     if (splat_render_profile == 1u) {
         g_rotation = lfsPortalCompactRotation(g_rotation);
         g_scale = lfsPortalCompactScales(g_scale);
         g_opacity = lfsPortalCompactOpacity(g_opacity);
     }
-    float3x3 rotation = quat_to_rotmat(normalize(g_rotation));
+    float3x3 rotation = quat_to_rotmat(safe_quat_normalize(g_rotation));
     float3 safe_scale = max(g_scale, float3(1e-8f));
     float3x3 inv_scale = float3x3(
         1.0f / safe_scale.x, 0.0f, 0.0f,
@@ -920,6 +943,28 @@ float evaluate_splat_alpha(
 
     float alpha = clipOpacity(g_opacity * val);
     return float(alpha);
+}
+
+[ForceInline]
+float4 evaluate_gut_splat_lod(Splat_3D_GUT_AlphaBlend g, float3 ray_origin, float3 ray_direction,
+                              bool spark_rad, uint profile) {
+    float3 gro = mul(g.iscl_rot, ray_origin - g.xyz_ws);
+    float3 grd = safe_normalize(mul(g.iscl_rot, ray_direction));
+    float3 distance = cross(grd, gro);
+    float sigma_over_2 = 0.5f * dot(distance, distance);
+    float value = exp(-sigma_over_2);
+    float alpha;
+    // Spark RAD leaves (opacity <= 1) blend like ordinary splats; only high-density LOD parents
+    // need the Spark kernel, so the ordinary path keeps its cost.
+    if (spark_rad && g.opacity > 1.0f) {
+        alpha = spark_rad_alpha_from_value(
+            g.opacity, sigma_over_2 > power_threshold_for_spark_rad_opacity(g.opacity) ? 0.0f : value);
+    } else {
+        alpha = clipOpacity(g.opacity * value);
+        if (!spark_rad && profile == 1u && alpha < (1.0f / 255.0f))
+            alpha = 0.0f;
+    }
+    return float4(clamp(g.rgb, float3(0.0f), float3(MAX_BLEND_COLOR)) * alpha, alpha);
 }
 
 [ForceInline]
@@ -1169,7 +1214,7 @@ struct Uniforms {
     // 0 = median depth; > 0 = alpha-weighted (expected) depth, far bound = value.
     float expected_far;
     // Explicit padding to keep dist_coeffs 16-byte aligned; mirrors the C++
-    // struct exactly (208 bytes total). shN_address occupies the former
+    // struct exactly (224 bytes total). shN_address occupies the former
     // uniforms_pad1/pad2 (offset 104, 8-byte aligned).
     uint depth_wave;
     uint64_t shN_address;
@@ -1179,6 +1224,11 @@ struct Uniforms {
     uint color_tonemapping;
     uint splat_render_profile;
     float rasterization_scale;
+    // Distance the orthographic eye was moved back; subtracted from every depth output.
+    float depth_offset;
+    uint depth_offset_pad0;
+    uint depth_offset_pad1;
+    uint depth_offset_pad2;
 }
 
 // mip_filter packs MIP filtering (bit 0), exact depth replay (bit 1),

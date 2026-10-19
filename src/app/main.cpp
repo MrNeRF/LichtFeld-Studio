@@ -30,6 +30,10 @@
 #include <string>
 #include <vector>
 
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
+
 namespace {
     // Apply CUDA driver-level VRAM-reduction knobs BEFORE the primary context exists.
     // Setting these after cudaFree(nullptr) is too late — the driver has already
@@ -162,6 +166,12 @@ namespace {
             } else if constexpr (std::is_same_v<T, lfs::core::args::LichtMode>) {
                 return lfs::app::run_licht_command(mode);
             } else if constexpr (std::is_same_v<T, lfs::core::args::TrainingMode>) {
+#ifdef __GLIBC__
+                // Training workers create many short-lived glibc arenas. Limit their
+                // retained heap without overriding an explicit user setting.
+                if (std::getenv("MALLOC_ARENA_MAX") == nullptr)
+                    (void)mallopt(M_ARENA_MAX, 4);
+#endif
                 LOG_INFO("LichtFeld Studio");
                 LOG_INFO("version {} | tag {}", GIT_TAGGED_VERSION, GIT_COMMIT_HASH_SHORT);
 

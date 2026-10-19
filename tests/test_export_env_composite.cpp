@@ -5,6 +5,7 @@
 // math (environment_math.hpp) that also drives the software video composite,
 // and banded application must equal a single full-image pass.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -29,18 +30,40 @@ namespace {
     using lfs::core::Tensor;
     namespace envmath = lfs::rendering::envmath;
 
-    TEST(EnvironmentImageLoadTest, ProbeReadsHeaderWithoutPixelPayload) {
+    TEST(EnvironmentMathTest, EquirectangularUvUsesForwardCenterAndUpTop) {
+        const auto forward = envmath::equirectDirectionForUv(0.5f, 0.5f);
+        EXPECT_NEAR(forward.x, 0.0f, 1e-6f);
+        EXPECT_NEAR(forward.y, 0.0f, 1e-6f);
+        EXPECT_NEAR(forward.z, -1.0f, 1e-6f);
+
+        const auto top = envmath::equirectDirectionForUv(0.5f, 0.0f);
+        EXPECT_NEAR(top.y, 1.0f, 1e-6f);
+        const auto bottom = envmath::equirectDirectionForUv(0.5f, 1.0f);
+        EXPECT_NEAR(bottom.y, -1.0f, 1e-6f);
+
+        const auto left = envmath::equirectDirectionForUv(0.25f, 0.5f);
+        const auto right = envmath::equirectDirectionForUv(0.75f, 0.5f);
+        EXPECT_LT(left.x, 0.0f);
+        EXPECT_GT(right.x, 0.0f);
+
+        const auto seam = envmath::equirectUvForDirection({0.0f, 0.0f, 1.0f});
+        EXPECT_NEAR(std::min(seam.u, 1.0f - seam.u), 0.0f, 1e-6f);
+        EXPECT_NEAR(seam.v, 0.5f, 1e-6f);
+    }
+
+    TEST(EnvironmentImageLoadTest, MetadataProbeAllowsHeaderOnlyButEnvironmentValidationRequiresPixels) {
         const auto path = std::filesystem::temp_directory_path() / "lfs_environment_header.hdr";
         {
             std::ofstream file(path, std::ios::binary);
             file << "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 4096 +X 8192\n";
         }
-        // Pixel completeness remains the renderer's job; admission only reads metadata.
+        // Generic metadata probing remains header-only. HDR admission rejects an incomplete scanline payload.
         EXPECT_EQ(lfs::core::probe_image_info(path), (std::tuple{8192, 4096, 3}));
-        EXPECT_NO_THROW(lfs::rendering::probeEnvironmentImage(path));
+        EXPECT_THROW(lfs::rendering::probeEnvironmentImage(path), std::runtime_error);
         std::filesystem::remove(path);
         EXPECT_THROW(lfs::rendering::probeEnvironmentImage(path), std::runtime_error);
         EXPECT_THROW(lfs::rendering::probeEnvironmentImage({}), std::runtime_error);
+        lfs::rendering::releaseEnvironmentImageCache();
     }
 
     TEST(EnvironmentImageLoadTest, ExtractsRgbFromRgbaSource) {

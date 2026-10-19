@@ -3,6 +3,7 @@
 
 #include "theme.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "internal/resource_paths.hpp"
 #include "preferences.hpp"
@@ -56,7 +57,7 @@ namespace lfs::vis {
 
         void ensureThemesLoaded();
         const Theme& activeTheme();
-        void applyCurrentTheme(const Theme& theme, std::string_view theme_id);
+        void applyCurrentTheme(const Theme& theme, std::string_view theme_id, bool use_preferences = true);
         bool activateThemePreset(std::string_view theme_id);
         bool loadThemeFamilyVariant(Theme& theme,
                                     const std::filesystem::path& path,
@@ -263,7 +264,7 @@ namespace lfs::vis {
             // RML theme activation and preset hot-reload continue to target
             // the selected preset even if the theme JSON name is customized.
             const std::string active_theme_id = g_current_theme_id;
-            applyCurrentTheme(t, active_theme_id);
+            applyCurrentTheme(t, active_theme_id, false);
         }
     } // namespace
 
@@ -815,7 +816,7 @@ namespace lfs::vis {
 
             try {
                 g_theme_manifest_path = getAssetPath(std::string(THEMES_MANIFEST_ASSET_NAME));
-                g_theme_manifest_mtime = std::filesystem::last_write_time(g_theme_manifest_path);
+                g_theme_manifest_mtime = lfs::core::native_fs::last_write_time(g_theme_manifest_path);
 
                 std::ifstream file;
                 if (!lfs::core::open_file_for_read(g_theme_manifest_path, file))
@@ -884,7 +885,7 @@ namespace lfs::vis {
                 }
 
                 syncThemePresetName(preset);
-                preset.mtime = std::filesystem::last_write_time(preset.path);
+                preset.mtime = lfs::core::native_fs::last_write_time(preset.path);
             } catch (...) {
                 preset.path.clear();
             }
@@ -892,10 +893,10 @@ namespace lfs::vis {
         }
 
         bool hotReloadThemePreset(ThemePresetRecord& preset) {
-            if (!preset.loaded || preset.path.empty() || !std::filesystem::exists(preset.path))
+            if (!preset.loaded || preset.path.empty() || !lfs::core::native_fs::exists(preset.path))
                 return false;
 
-            const auto mtime = std::filesystem::last_write_time(preset.path);
+            const auto mtime = lfs::core::native_fs::last_write_time(preset.path);
             if (mtime == preset.mtime)
                 return false;
 
@@ -988,8 +989,15 @@ namespace lfs::vis {
     }
 
     namespace {
-        void applyCurrentTheme(const Theme& theme, std::string_view theme_id) {
+        void applyCurrentTheme(const Theme& theme, std::string_view theme_id, const bool use_preferences) {
             g_current_theme = theme;
+            if (use_preferences) {
+                const auto vignette = json::parse(UserPreferences::instance().viewportVignette());
+                g_current_theme.vignette.enabled = vignette.value("enabled", g_current_theme.vignette.enabled);
+                g_current_theme.vignette.intensity = vignette.value("intensity", g_current_theme.vignette.intensity);
+                g_current_theme.vignette.radius = vignette.value("radius", g_current_theme.vignette.radius);
+                g_current_theme.vignette.softness = vignette.value("softness", g_current_theme.vignette.softness);
+            }
             g_current_theme_id = std::string(theme_id);
             g_initialized = true;
             if (g_theme_change_cb)
@@ -1079,8 +1087,8 @@ namespace lfs::vis {
         bool active_theme_reloaded = false;
 
         try {
-            if (!g_theme_manifest_path.empty() && std::filesystem::exists(g_theme_manifest_path)) {
-                const auto manifest_mtime = std::filesystem::last_write_time(g_theme_manifest_path);
+            if (!g_theme_manifest_path.empty() && lfs::core::native_fs::exists(g_theme_manifest_path)) {
+                const auto manifest_mtime = lfs::core::native_fs::last_write_time(g_theme_manifest_path);
                 if (manifest_mtime != g_theme_manifest_mtime) {
                     LOG_INFO("Hot-reloading theme manifest");
                     loadThemesFromFiles();
@@ -1096,9 +1104,9 @@ namespace lfs::vis {
         try {
             for (const auto& preset : g_theme_presets) {
                 if (preset.variant_mode.empty() || preset.path.empty() ||
-                    !std::filesystem::exists(preset.path))
+                    !lfs::core::native_fs::exists(preset.path))
                     continue;
-                if (std::filesystem::last_write_time(preset.path) == preset.mtime)
+                if (lfs::core::native_fs::last_write_time(preset.path) == preset.mtime)
                     continue;
 
                 LOG_INFO("Hot-reloading theme family catalog");
@@ -1590,22 +1598,58 @@ namespace lfs::vis {
     }
 
     void setThemeVignetteEnabled(bool enabled) {
-        Theme t = theme();
-        t.vignette.enabled = enabled;
-        applyThemePreservingCurrentId(t);
+        setThemeVignetteEnabled(enabled, true);
     }
 
     void setThemeVignetteIntensity(float intensity) {
-        Theme t = theme();
-        t.vignette.intensity = std::clamp(intensity, 0.0f, 1.0f);
-        applyThemePreservingCurrentId(t);
+        setThemeVignetteIntensity(intensity, true);
     }
 
     void setThemeVignetteStyle(float intensity, float radius, float softness) {
+        setThemeVignetteStyle(intensity, radius, softness, true);
+    }
+
+    void setThemeVignetteEnabled(bool enabled, const bool persist) {
+        Theme t = theme();
+        t.vignette.enabled = enabled;
+        if (persist) {
+            if (auto result = UserPreferences::instance().setViewportVignette(
+                    json{{"enabled", t.vignette.enabled}, {"intensity", t.vignette.intensity}, {"radius", t.vignette.radius}, {"softness", t.vignette.softness}}.dump());
+                !result) {
+                LOG_WARN("Unable to update vignette preferences: {}", lfs::format_for_developer(result.error()));
+                return;
+            }
+        }
+        applyThemePreservingCurrentId(t);
+    }
+
+    void setThemeVignetteIntensity(float intensity, const bool persist) {
+        Theme t = theme();
+        t.vignette.intensity = std::clamp(intensity, 0.0f, 1.0f);
+        if (persist) {
+            if (auto result = UserPreferences::instance().setViewportVignette(
+                    json{{"enabled", t.vignette.enabled}, {"intensity", t.vignette.intensity}, {"radius", t.vignette.radius}, {"softness", t.vignette.softness}}.dump());
+                !result) {
+                LOG_WARN("Unable to update vignette preferences: {}", lfs::format_for_developer(result.error()));
+                return;
+            }
+        }
+        applyThemePreservingCurrentId(t);
+    }
+
+    void setThemeVignetteStyle(float intensity, float radius, float softness, const bool persist) {
         Theme t = theme();
         t.vignette.intensity = std::clamp(intensity, 0.0f, 1.0f);
         t.vignette.radius = std::clamp(radius, 0.0f, 1.0f);
         t.vignette.softness = std::clamp(softness, 0.0f, 1.0f);
+        if (persist) {
+            if (auto result = UserPreferences::instance().setViewportVignette(
+                    json{{"enabled", t.vignette.enabled}, {"intensity", t.vignette.intensity}, {"radius", t.vignette.radius}, {"softness", t.vignette.softness}}.dump());
+                !result) {
+                LOG_WARN("Unable to update vignette preferences: {}", lfs::format_for_developer(result.error()));
+                return;
+            }
+        }
         applyThemePreservingCurrentId(t);
     }
 

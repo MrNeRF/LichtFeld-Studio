@@ -177,3 +177,29 @@ TEST(NvCodecSentinelValidatorTest, SkippedMemberIsRetriedOrFailsHardBeforeReturn
     }
     EXPECT_FALSE(returned_batch) << "a twice-unwritten destination must never be returned";
 }
+
+// A build without the codec extension modules used to report nvImageCodec available and then fail every JPEG,
+// falling back to the CPU image by image. Available must mean a JPEG decodes on the GPU.
+TEST(NvCodecAvailabilityTest, AvailableExactlyWhenADatasetJpegDecodesOnTheGpu) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+        GTEST_SKIP() << "CUDA device unavailable";
+    }
+    const auto paths = find_dataset_jpegs(1);
+    if (paths.size() != 1) {
+        GTEST_SKIP() << "no dataset with images_4 JPEGs under data/";
+    }
+
+    bool decoded = false;
+    try {
+        lfs::io::NvCodecImageLoader loader({.enable_fallback = false, .decoder_pool_size = 1});
+        const auto image = loader.load_image_from_memory_gpu(read_test_jpeg(paths.front()), 1, 0, nullptr,
+                                                             lfs::io::DecodeFormat::RGB, true);
+        decoded = image.is_valid() && image.ndim() == 3 && image.shape()[0] == 3;
+    } catch (const std::exception&) {
+        decoded = false;
+    }
+
+    EXPECT_EQ(lfs::io::NvCodecImageLoader::is_available(), decoded);
+    EXPECT_EQ(lfs::io::NvCodecImageLoader::jpeg_decoder(), decoded ? "nvImageCodec (GPU)" : "CPU");
+}

@@ -6,6 +6,7 @@
 #include "core/export.hpp"
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace lfs::vis::gui {
 
@@ -32,6 +33,7 @@ namespace lfs::vis::gui {
                                                        const std::string& dialogTitle = {});
     LFS_VIS_API std::filesystem::path OpenPointCloudFileDialog(const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path OpenMeshFileDialog(const std::filesystem::path& defaultPath = {});
+    LFS_VIS_API std::filesystem::path OpenInitFileDialog(const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path OpenCheckpointFileDialog(const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path OpenPPISPFileDialog(const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path OpenProjectFileDialog(const std::filesystem::path& defaultPath = {});
@@ -42,6 +44,7 @@ namespace lfs::vis::gui {
     LFS_VIS_API std::filesystem::path OpenXmlFileDialog(const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path OpenLasFileDialog(const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path OpenVideoFileDialog(const std::filesystem::path& defaultPath = {});
+    LFS_VIS_API std::vector<std::filesystem::path> OpenVideoFilesDialog(const std::filesystem::path& defaultPath = {});
 
     LFS_VIS_API std::filesystem::path SaveLasFileDialog(const std::string& defaultName,
                                                         const std::filesystem::path& defaultPath = {});

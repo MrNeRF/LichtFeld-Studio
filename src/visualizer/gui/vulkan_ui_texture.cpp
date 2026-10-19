@@ -431,8 +431,13 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] bool init(VulkanContext& ctx) {
-            if (device != VK_NULL_HANDLE) {
+            if (device != VK_NULL_HANDLE && context == &ctx) {
                 return true;
+            }
+            if (device != VK_NULL_HANDLE) {
+                if (context && !context->waitForSubmittedFrames())
+                    return false;
+                reset();
             }
             this->context = &ctx;
             device = ctx.device();

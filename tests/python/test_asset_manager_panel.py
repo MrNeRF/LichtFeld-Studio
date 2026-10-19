@@ -3430,7 +3430,7 @@ def test_missing_thumbnails_use_the_project_icon(panel_module):
     rcss = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rcss").read_text()
     theme = (root / "src/visualizer/gui/rmlui/resources/asset_manager.theme.rcss").read_text()
     assert 'data-if="asset.shows_placeholder"' in rml
-    assert rml.count('../icon/scene/splat.png') == 3  # gallery, list, and quick look
+    assert rml.count('../icon/lichtfeld.png') == 3  # gallery, list, and quick look
     assert "{{asset.placeholder_label}}" not in rml
     assert "{{quick_look_placeholder}}" not in rml
     assert ".asset-thumbnail-placeholder > img" in rcss
@@ -4602,7 +4602,8 @@ def test_P13_inspector_follows_project_selection_and_closes_when_selection_is_cl
     assert ".asset-shell.inspector-expanded.is-medium .inspector-resize-handle { display: block; }" in rcss
     vertical_handle_rule = rcss.split(".inspector-resize-handle {", 1)[1].split("}", 1)[0]
     assert "width: 8dp;" in vertical_handle_rule
-    assert "margin-left: -4dp; margin-right: -4dp;" in vertical_handle_rule
+    # The results scrollbar runs along the inspector edge; the grab area must not cover it.
+    assert "margin-left: 0; margin-right: -8dp;" in vertical_handle_rule
     assert ".asset-shell.is-narrow .inspector-resize-handle, .asset-shell.is-compact .inspector-resize-handle { display: none; }" in rcss
     side_inspector_rule = rcss.split(
         ".asset-shell.is-wide .asset-inspector, .asset-shell.is-medium .asset-inspector {",
@@ -5119,7 +5120,7 @@ def test_info_poster_is_inserted_updated_and_released(
     assert thumbnail.properties["flex-basis"] == f"{expected_height:.2f}dp"
     placeholder = thumbnail.children[0]
     assert placeholder.properties["display"] == "none"
-    assert thumbnail.children[0].children[0].attributes["src"] == "../icon/scene/splat.png"
+    assert thumbnail.children[0].children[0].attributes["src"] == "../icon/lichtfeld.png"
     assert panel._sync_info_thumbnail(doc) is False
     source = panel._info_thumbnail_source
     panel._selected_asset_ids.clear()

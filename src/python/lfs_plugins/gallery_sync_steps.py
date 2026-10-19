@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Native steps of a gallery update, ordered around a durable recovery copy."""
 from __future__ import annotations
+from _lfs_path_io import open
 
 import copy
 import uuid
 import time
-from pathlib import Path
+from _lfs_path_io import Path
 
 import lichtfeld as lf
 from .gallery_sync import file_stamp, friendly_error

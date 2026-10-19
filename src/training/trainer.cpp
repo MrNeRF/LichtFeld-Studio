@@ -21,10 +21,12 @@
 #include "core/cuda_error.hpp"
 #include "core/cuda_error_typed.hpp"
 #include "core/environment.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/exif.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/number_format.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
@@ -57,6 +59,7 @@
 #include "optimizer/adam_optimizer.hpp"
 #include "python/runner.hpp"
 #include "rasterization/fast_rasterizer.hpp"
+#include "rasterization/gsplat/GeometryFeatures.h"
 #include "rasterization/gsplat/Ops.h"
 #include "rasterization/gsplat_rasterizer.hpp"
 #include "strategies/mcmc.hpp"
@@ -1023,11 +1026,11 @@ namespace lfs::training {
         fused_erank_reg_loss_ = {};
         fused_dc_reg_loss_ = {};
         fused_sh_rest_reg_loss_ = {};
-        cropbox_damping_cached_mask_ = {};
-        cropbox_damping_cached_n_ = 0;
-        cropbox_damping_geom_fp_ = 0;
-        cropbox_damping_cached_scale_ = 1.0f;
-        cropbox_damping_cache_valid_ = false;
+        cropbox_view_reject_ = {};
+        cropbox_score_reject_ = {};
+        cropbox_roi_rows_ = {};
+        cropbox_camera_centres_ = {};
+        roi_camera_rays_ = {};
         depth_loss_scalar_ = {};
         depth_loss_grad_ = {};
         depth_loss_grad_alpha_ = {};
@@ -2022,72 +2025,127 @@ namespace lfs::training {
         if (!result.applied) {
             return;
         }
-        cropbox_damping_cache_valid_ = false;
         strategy_->permute_gaussian_rows(result.permutation);
-        install_cropbox_step_damping(model, strategy_->get_optimizer());
     }
 
-    void Trainer::install_cropbox_step_damping(
+    void Trainer::setCropBoxSnapshot(std::optional<TrainingCropBoxGeometry> geometry) {
+        std::lock_guard lock(cropbox_publish_mutex_);
+        cropbox_published_ = std::move(geometry);
+        cropbox_published_mode_.store(true, std::memory_order_release);
+    }
+
+    void Trainer::refresh_cropbox_snapshot() {
+        if (cropbox_published_mode_.load(std::memory_order_acquire)) {
+            std::lock_guard lock(cropbox_publish_mutex_);
+            cropbox_ = cropbox_published_;
+            return;
+        }
+        cropbox_ = scene_ ? resolve_training_cropbox_geom(*scene_) : std::nullopt;
+    }
+
+    namespace {
+        // Reuses a row buffer across steps; it only grows.
+        lfs::core::Tensor bool_rows(lfs::core::Tensor& buffer, const size_t n) {
+            if (!buffer.is_valid() || buffer.numel() < n) {
+                buffer = lfs::core::Tensor::empty(
+                    {std::max<size_t>(n, buffer.is_valid() ? buffer.numel() * 5 / 4 : 0)},
+                    lfs::core::Device::CUDA, lfs::core::DataType::Bool);
+            }
+            return buffer.slice(0, 0, n);
+        }
+
+        const bool* deleted_rows(const lfs::core::SplatData& model) {
+            const auto& deleted = model.deleted();
+            return deleted.is_valid() && deleted.numel() == static_cast<size_t>(model.size())
+                       ? deleted.ptr<bool>()
+                       : nullptr;
+        }
+    } // namespace
+
+    void Trainer::install_cropbox_view_damping(
+        lfs::core::SplatData& model,
+        AdamOptimizer& optimizer,
+        const lfs::core::Camera& camera) {
+        const float scale = params_.optimization.cropbox_lr_scale;
+        optimizer.set_cropbox_lr_scale(scale);
+        const size_t n = static_cast<size_t>(model.size());
+        if (!cropbox_ || scale == 1.0f || n == 0) {
+            if (optimizer.crop_damping_mask().is_valid())
+                optimizer.set_crop_damping_mask({});
+            return;
+        }
+        const auto means = model.get_means().contiguous();
+        const auto scales = model.scaling_raw().contiguous();
+        auto rejected = bool_rows(cropbox_view_reject_, n);
+        lfs::training::kernels::launch_roi_view_reject_mask(
+            means.ptr<float>(), scales.ptr<float>(), n, cropbox_->model_to_cropbox, cropbox_->world_to_cropbox,
+            camera.cam_position_ptr(), cropbox_->min, cropbox_->max, cropbox_->inverse,
+            deleted_rows(model), rejected.ptr<bool>(), lfs::core::getCurrentCUDAStream());
+        optimizer.set_crop_damping_mask(rejected);
+    }
+
+    bool Trainer::cropbox_contains_camera(const lfs::core::Camera& camera) const {
+        if (!cropbox_)
+            return false;
+        const auto& R = camera.R();
+        const auto& T = camera.T();
+        if (!R.is_valid() || !T.is_valid() || R.device() != lfs::core::Device::CPU ||
+            T.device() != lfs::core::Device::CPU || R.numel() < 9 || T.numel() < 3)
+            return false;
+        const auto r = R.contiguous().to_vector();
+        const auto t = T.contiguous().to_vector();
+        // World-to-camera [R | t]: the camera sits at -R^T t.
+        const glm::vec3 centre(-(r[0] * t[0] + r[3] * t[1] + r[6] * t[2]),
+                               -(r[1] * t[0] + r[4] * t[1] + r[7] * t[2]),
+                               -(r[2] * t[0] + r[5] * t[1] + r[8] * t[2]));
+        const glm::vec3 p = glm::vec3(cropbox_->world_to_cropbox * glm::vec4(centre, 1.0f));
+        return glm::all(glm::greaterThanEqual(p, cropbox_->min)) && glm::all(glm::lessThanEqual(p, cropbox_->max));
+    }
+
+    void Trainer::install_cropbox_score_damping(
         lfs::core::SplatData& model,
         AdamOptimizer& optimizer) {
         const float scale = params_.optimization.cropbox_lr_scale;
+        const float growth_inside = params_.optimization.cropbox_growth_inside;
         optimizer.set_cropbox_lr_scale(scale);
-
-        if (scale == 1.0f || !scene_) {
-            optimizer.set_crop_damping_mask({});
-            cropbox_damping_cache_valid_ = false;
-            return;
-        }
-
-        // rebuild only on cropbox geometry / topology (N) / scale change.
-        // Means drift between densify events is intentionally not a rebuild trigger
-        // (damping is a soft LR scale, not a hard cull).
         const size_t n = static_cast<size_t>(model.size());
-        size_t geom_fp = 0;
-        if (const auto geometry = resolve_training_cropbox_geom(*scene_)) {
-            // FNV-ish fingerprint of crop bounds + inverse flag + a few matrix entries.
-            auto mix = [&](size_t v) {
-                geom_fp ^= v + 0x9e3779b97f4a7c15ull + (geom_fp << 6) + (geom_fp >> 2);
-            };
-            mix(static_cast<size_t>(geometry->inverse));
-            const float* floats = &geometry->min.x;
-            for (int i = 0; i < 6; ++i) {
-                mix(static_cast<size_t>(std::bit_cast<uint32_t>(floats[i])));
-            }
-            const float* m = &geometry->model_to_cropbox[0][0];
-            for (int i = 0; i < 16; ++i) {
-                mix(static_cast<size_t>(std::bit_cast<uint32_t>(m[i])));
-            }
-        } else {
-            optimizer.set_crop_damping_mask({});
-            cropbox_damping_cache_valid_ = false;
+        if (!cropbox_ || n == 0 || !train_dataset_) {
+            optimizer.set_crop_score_mask({});
+            optimizer.set_crop_roi_rows({}, growth_inside);
             return;
         }
-
-        if (cropbox_damping_cache_valid_ &&
-            cropbox_damping_cached_n_ == n &&
-            cropbox_damping_geom_fp_ == geom_fp &&
-            cropbox_damping_cached_scale_ == scale &&
-            cropbox_damping_cached_mask_.is_valid() &&
-            cropbox_damping_cached_mask_.numel() == n) {
-            optimizer.set_crop_damping_mask(cropbox_damping_cached_mask_);
+        // Up to 256 evenly spaced training cameras bound the per-splat test.
+        constexpr size_t kMaxCameras = 256;
+        const auto& cameras = train_dataset_->get_cameras();
+        const size_t stride = std::max<size_t>(1, (cameras.size() + kMaxCameras - 1) / kMaxCameras);
+        std::vector<lfs::core::Tensor> centres;
+        centres.reserve(std::min(cameras.size(), kMaxCameras));
+        for (size_t i = 0; i < cameras.size(); i += stride)
+            centres.push_back(cameras[i]->cam_position().reshape({1, 3}));
+        if (centres.empty()) {
+            optimizer.set_crop_score_mask({});
+            optimizer.set_crop_roi_rows({}, growth_inside);
             return;
         }
-
-        auto crop_mask = compute_training_cropbox_remove_mask(*scene_, model);
-        if (!crop_mask || !crop_mask->is_valid() || crop_mask->numel() == 0) {
-            optimizer.set_crop_damping_mask({});
-            cropbox_damping_cache_valid_ = false;
-            return;
-        }
-
-        cropbox_damping_cached_mask_ = *crop_mask;
-        cropbox_damping_cached_n_ = n;
-        cropbox_damping_geom_fp_ = geom_fp;
-        cropbox_damping_cached_scale_ = scale;
-        cropbox_damping_cache_valid_ = true;
-        ++cropbox_damping_rebuild_count_;
-        optimizer.set_crop_damping_mask(cropbox_damping_cached_mask_);
+        const glm::mat4& w2b = cropbox_->world_to_cropbox;
+        const auto rotation_t = lfs::core::Tensor::from_vector(
+            {w2b[0][0], w2b[0][1], w2b[0][2], w2b[1][0], w2b[1][1], w2b[1][2], w2b[2][0], w2b[2][1], w2b[2][2]},
+            {3, 3}, lfs::core::Device::CUDA);
+        const auto translation = lfs::core::Tensor::from_vector(
+            {w2b[3][0], w2b[3][1], w2b[3][2]}, {1, 3}, lfs::core::Device::CUDA);
+        cropbox_camera_centres_ =
+            (lfs::core::Tensor::cat(centres, 0).matmul(rotation_t) + translation).contiguous();
+        const auto means = model.get_means().contiguous();
+        const auto scales = model.scaling_raw().contiguous();
+        auto rejected = bool_rows(cropbox_score_reject_, n);
+        auto in_roi = bool_rows(cropbox_roi_rows_, n);
+        lfs::training::kernels::launch_roi_relevance_reject_mask(
+            means.ptr<float>(), scales.ptr<float>(), n, cropbox_->model_to_cropbox, cropbox_camera_centres_.ptr<float>(),
+            static_cast<int>(cropbox_camera_centres_.size(0)), cropbox_->min, cropbox_->max,
+            cropbox_->inverse, deleted_rows(model), rejected.ptr<bool>(), in_roi.ptr<bool>(),
+            lfs::core::getCurrentCUDAStream());
+        optimizer.set_crop_score_mask(scale == 1.0f ? lfs::core::Tensor{} : rejected);
+        optimizer.set_crop_roi_rows(growth_inside > 0.0f ? in_roi : lfs::core::Tensor{}, growth_inside);
     }
 
     Trainer::Trainer(lfs::core::Scene& scene)
@@ -2451,7 +2509,7 @@ namespace lfs::training {
         double source_ms = read_ms;
         if (cached) {
             raw = std::move(*cached);
-            LOG_INFO("Depth anchors: loaded {} cached anchors from {}", raw.size(), sidecar.string());
+            LOG_INFO("Depth anchors: loaded {} cached anchors from {}", raw.size(), lfs::core::path_to_utf8(sidecar));
         } else {
             nvtxRangePush("depth_anchors/compute");
             const auto compute_start = std::chrono::steady_clock::now();
@@ -2460,7 +2518,7 @@ namespace lfs::training {
             source_ms = phase_ms(compute_start);
             nvtxRangePop();
             if (!sidecar.empty() && !writeDepthAnchorSidecar(sidecar, raw, fingerprint)) {
-                LOG_WARN("Depth anchors: failed to write sidecar {}", sidecar.string());
+                LOG_WARN("Depth anchors: failed to write sidecar {}", lfs::core::path_to_utf8(sidecar));
             }
         }
         LOG_INFO("Depth anchors: fingerprint {:.1f} ms, {} {:.1f} ms",
@@ -2826,7 +2884,7 @@ namespace lfs::training {
                     "Image background mode requires a background image path");
             }
             std::error_code ec;
-            if (!std::filesystem::is_regular_file(
+            if (!lfs::core::native_fs::is_regular_file(
                     params.optimization.bg_image_path, ec)) {
                 return std::unexpected(std::format(
                     "Image background file does not exist or is not a regular file: '{}'",
@@ -3146,7 +3204,6 @@ namespace lfs::training {
                 evaluator_->set_lpips_weights_path(*lpips_weights_path_);
             if (!params_.optimization.eval_mask.empty()) {
                 const glm::vec3 origin = scene_ ? scene_->getTrainingDataOrigin() : glm::vec3{0.0f};
-                const bool invert = params_.optimization.eval_mask_invert;
                 auto installed = evaluator_->install_eval_mask_source({origin.x, origin.y, origin.z});
                 if (!installed)
                     return std::unexpected(std::string(installed.error().user_message()));
@@ -3164,20 +3221,18 @@ namespace lfs::training {
                         evaluator_->set_eval_points(lfs::training::EvaluationPoints{
                             .means = cloud->means.to(lfs::core::Device::CUDA).to(lfs::core::DataType::Float32).contiguous(),
                             .radius = (*splat)[0],
-                            .close = (*splat)[1],
-                            .invert = invert});
-                        LOG_INFO("Evaluation mask: {} initial points, radius {} px, closed by {} px{}",
-                                 cloud->means.shape()[0], (*splat)[0], (*splat)[1], invert ? " (inverted)" : "");
+                            .close = (*splat)[1]});
+                        LOG_INFO("Evaluation mask: {} initial points, radius {} px, closed by {} px",
+                                 cloud->means.shape()[0], (*splat)[0], (*splat)[1]);
                     } else if (lfs::core::param::is_eval_mask_cropbox(params_.optimization.eval_mask)) {
                         const auto cropbox = scene_ ? lfs::training::resolve_training_cropbox_geom(*scene_) : std::nullopt;
                         if (!cropbox)
                             return std::unexpected("Evaluation mask 'cropbox' needs an enabled crop box on the training model");
-                        const bool cropbox_invert = invert != cropbox->inverse;
                         evaluator_->set_eval_mesh(lfs::training::make_evaluation_box(
-                            lfs::training::training_cropbox_model_corners(*cropbox), cropbox_invert));
-                        LOG_INFO("Evaluation mask: crop box{}", cropbox_invert ? " (inverted)" : "");
+                            lfs::training::training_cropbox_model_corners(*cropbox), cropbox->inverse));
+                        LOG_INFO("Evaluation mask: crop box{}", cropbox->inverse ? " (inverted)" : "");
                     } else {
-                        LOG_INFO("Evaluation mask: {}{}", params_.optimization.eval_mask, invert ? " (inverted)" : "");
+                        LOG_INFO("Evaluation mask: {}", params_.optimization.eval_mask);
                     }
                 }
             }
@@ -3204,7 +3259,7 @@ namespace lfs::training {
                             "Image background mode restored from checkpoint without a path");
                     }
                     std::error_code bg_path_error;
-                    if (!std::filesystem::is_regular_file(
+                    if (!lfs::core::native_fs::is_regular_file(
                             params_.optimization.bg_image_path,
                             bg_path_error)) {
                         return std::unexpected(std::format(
@@ -3538,9 +3593,8 @@ namespace lfs::training {
 
             if (include_ssim) {
                 SSIM ssim_metric(true);
-                snapshot.ssim = ssim_metric.compute(
-                    rendered, gt_image,
-                    ssim_evaluation_mask(mask, prepared->erode_ssim_mask, camera.image_name(), rendered.stream()));
+                snapshot.ssim = ssim_metric.compute_evaluation(
+                    rendered, gt_image, mask, prepared->erode_ssim_mask, camera.image_name());
             }
         } catch (const std::exception& e) {
             return std::unexpected(e.what());
@@ -3785,7 +3839,7 @@ namespace lfs::training {
         // Load/reload background image if needed
         if (bg_mode_is_image && bg_image_path_changed &&
             !params.optimization.bg_image_path.empty() &&
-            std::filesystem::exists(params.optimization.bg_image_path)) {
+            lfs::core::native_fs::exists(params.optimization.bg_image_path)) {
             try {
                 auto& loader = lfs::io::CacheLoader::getInstance();
                 lfs::io::LoadParams load_params{
@@ -4542,7 +4596,7 @@ namespace lfs::training {
         aside += std::format(
             ".corrupt-{}", unix_seconds);
         std::error_code ec;
-        std::filesystem::rename(
+        lfs::core::native_fs::rename(
             destination, aside, ec);
         if (ec) {
             return lfs::from_std_error_code(
@@ -4889,7 +4943,7 @@ namespace lfs::training {
                         std::error_code ec;
                         if (!path.parent_path()
                                  .empty()) {
-                            std::filesystem::
+                            lfs::core::native_fs::
                                 create_directories(
                                     path.parent_path(),
                                     ec);
@@ -4928,7 +4982,7 @@ namespace lfs::training {
                                      ->source_path;
                         } else if (
                             !document_context &&
-                            std::filesystem::exists(
+                            lfs::core::native_fs::exists(
                                 path)) {
                             source_path = path;
                             compact_after_publish =
@@ -4943,7 +4997,7 @@ namespace lfs::training {
                         }
                         bool save_as =
                             !source_path &&
-                            std::filesystem::exists(
+                            lfs::core::native_fs::exists(
                                 path);
                         const auto create_fresh_document =
                             [&]()
@@ -5703,6 +5757,25 @@ namespace lfs::training {
         }
     }
 
+    bool Trainer::service_evaluation_controls(int iteration, std::stop_token stop_token) {
+        if (!pause_requested_.load(std::memory_order_acquire) &&
+            !stop_requested_.load(std::memory_order_acquire) &&
+            !stop_token.stop_requested()) {
+            return true;
+        }
+
+        handle_control_requests(iteration, stop_token);
+        while (is_paused_.load(std::memory_order_acquire) &&
+               !stop_requested_.load(std::memory_order_acquire) &&
+               !stop_token.stop_requested()) {
+            consume_requested_project_snapshot(project_snapshot_iteration());
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            handle_control_requests(iteration, stop_token);
+        }
+        return !stop_requested_.load(std::memory_order_acquire) &&
+               !stop_token.stop_requested();
+    }
+
     inline float inv_weight_piecewise(int step, int max_steps) {
         // Phases by fraction of training
         const float phase = std::max(0.f, std::min(1.f, step / float(std::max(1, max_steps))));
@@ -5780,20 +5853,32 @@ namespace lfs::training {
         thin_structure_weight_buffer_ = {};
     }
 
-    core::Tensor Trainer::get_thin_structure_map(const int camera_uid, const core::Tensor& image, const float weight) {
+    core::Tensor Trainer::get_thin_structure_map(const int camera_uid, const core::Tensor& image, const float weight,
+                                                 const core::Tensor& photometric_mask) {
         if (weight == 0.0f)
             return {};
         using namespace lfs::core;
         LFS_ASSERT(image.ndim() == 3 && image.shape()[0] == 3);
         const size_t height = image.shape()[1], width = image.shape()[2];
-        const ThinStructureMapKey key{camera_uid, height, width, edge_weight_preprocessing_generation_};
+        const bool masked = photometric_mask.is_valid() && photometric_mask.numel() > 0;
+        const auto mask_mode = masked && params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore
+                                   ? kernels::MaskPhotoMode::SegmentAndIgnore
+                                   : kernels::MaskPhotoMode::BinaryGt0;
+        const ThinStructureMapKey key{camera_uid, height, width, edge_weight_preprocessing_generation_,
+                                      masked ? photometric_mask.data_ptr() : nullptr, mask_mode,
+                                      masked ? params_.optimization.mask_threshold : 0.0f,
+                                      masked && params_.optimization.invert_masks};
         if (thin_structure_map_key_ == key) {
             thin_structure_map_buffer_.sync_to_stream(image.stream());
             return thin_structure_map_buffer_;
         }
         if (!thin_structure_map_buffer_.is_valid() || thin_structure_map_buffer_.shape() != TensorShape{height, width})
             thin_structure_map_buffer_ = Tensor::empty({height, width}, Device::CUDA);
-        kernels::ridge_structure_map(image, thin_structure_map_buffer_, thin_structure_workspace_);
+        if (masked)
+            kernels::ridge_structure_map(image, thin_structure_map_buffer_, thin_structure_workspace_,
+                                         photometric_mask, mask_mode);
+        else
+            kernels::ridge_structure_map(image, thin_structure_map_buffer_, thin_structure_workspace_);
         thin_structure_map_key_ = key;
         return thin_structure_map_buffer_;
     }
@@ -6183,6 +6268,20 @@ namespace lfs::training {
                     lfs::training::CommandCenter::instance().drain_enqueued(view);
                 }
 
+                // The crop box for this whole step; refine steps also get fresh score masks.
+                refresh_cropbox_snapshot();
+                if (strategy_) {
+                    auto& optimizer = strategy_->get_optimizer();
+                    if (strategy_->is_refining(iter)) {
+                        install_cropbox_score_damping(strategy_->get_model(), optimizer);
+                    } else {
+                        if (optimizer.crop_score_mask().is_valid())
+                            optimizer.set_crop_score_mask({});
+                        if (optimizer.crop_roi_rows().is_valid())
+                            optimizer.set_crop_roi_rows({}, params_.optimization.cropbox_growth_inside);
+                    }
+                }
+
                 // Training step entering forward/backward/optimizer region (commands blocked)
                 lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::Forward);
 
@@ -6381,7 +6480,6 @@ namespace lfs::training {
                     const size_t model_size_before = static_cast<size_t>(model.size());
                     strategy_->post_backward(iter, r_output);
                     maybe_morton_reorder(iter);
-                    install_cropbox_step_damping(model, strategy_->get_optimizer());
                     fastgs_strategy_hooks_at_start = true;
 
                     if (sparsity_optimizer_ &&
@@ -6428,9 +6526,6 @@ namespace lfs::training {
                     // Post-barrier topology publish (deferred from inside densify).
                     auto& model_after = strategy_->get_model();
                     syncTrainingSceneTopology(scene_, model_after);
-                }
-                if (fastgs_path && in_sparsification) {
-                    install_cropbox_step_damping(strategy_->get_model(), strategy_->get_optimizer());
                 }
 
                 const bool normal_supervision_started = normal_supervision_active(iter);
@@ -6639,6 +6734,11 @@ namespace lfs::training {
                     std::optional<FastRasterizeContext> fast_ctx;
                     std::optional<GsplatRasterizeContext> gsplat_ctx;
 
+                    // A camera inside the crop box weights its pixels by the surface they show, which
+                    // needs the rendered depth.
+                    const bool roi_surface_weights = cropbox_ &&
+                                                     params_.optimization.cropbox_loss_weight < 1.0f &&
+                                                     cropbox_contains_camera(*cam);
                     {
                         LFS_VRAM_SCOPE("train.rasterize_forward");
                         LOG_VRAM_DIFF("train.rasterize_forward");
@@ -6658,7 +6758,8 @@ namespace lfs::training {
                                         (normal_supervision_started && (params_.optimization.normal_loss_weight > 0.f ||
                                                                         params_.optimization.normal_consistency_weight > 0.f))
                                             ? GsplatRenderMode::RGB_D_N
-                                        : (params_.optimization.use_depth_loss && params_.optimization.depth_loss_weight > 0.f)
+                                        : ((params_.optimization.use_depth_loss && params_.optimization.depth_loss_weight > 0.f) ||
+                                           roi_surface_weights)
                                             ? GsplatRenderMode::RGB_D
                                             : GsplatRenderMode::RGB,
                                         true, bg_tile);
@@ -6713,7 +6814,7 @@ namespace lfs::training {
                                   cam->has_normal()) ||
                                  params_.optimization.normal_consistency_weight > 0.0f);
                             const bool render_depth =
-                                render_normal ||
+                                render_normal || roi_surface_weights ||
                                 (params_.optimization.use_depth_loss &&
                                  params_.optimization.depth_loss_weight > 0.0f);
                             const MutationStamp forward_stamp{
@@ -6815,10 +6916,10 @@ namespace lfs::training {
                     };
 
                     lfs::core::Tensor roi_weight;
-                    const auto cropbox_loss_geometry =
-                        scene_ ? resolve_training_cropbox_loss_geom(
-                                     *scene_, params_.optimization.cropbox_loss_weight)
-                               : std::nullopt;
+                    if (strategy_)
+                        install_cropbox_view_damping(strategy_->get_model(), strategy_->get_optimizer(), *cam);
+                    const auto& cropbox_loss_geometry =
+                        params_.optimization.cropbox_loss_weight < 1.0f ? cropbox_ : std::nullopt_t{std::nullopt};
                     if (cropbox_loss_geometry) {
                         LFS_ASSERT_MSG(
                             output.width > 0 && output.height > 0,
@@ -6841,6 +6942,36 @@ namespace lfs::training {
                         cam->world_view_transform().sync_to_stream(roi_stream);
                         cam->cam_position().sync_to_stream(roi_stream);
                         const auto [fx, fy, cx, cy] = cam->get_intrinsics();
+                        // Lens-distorted, fisheye and panoramic GUT cameras weight the pixels
+                        // through their real rays; plain pinholes use the closed form.
+                        const float* roi_rays = nullptr;
+                        if (gsplat_ctx && (gsplat_ctx->camera_model != ::CameraModelType::PINHOLE ||
+                                           gsplat_ctx->radial_ptr || gsplat_ctx->tangential_ptr ||
+                                           gsplat_ctx->thin_prism_ptr)) {
+                            if (gsplat_ctx->camera_rays.is_valid()) {
+                                roi_rays = gsplat_ctx->camera_rays.ptr<float>();
+                            } else {
+                                const lfs::core::TensorShape rays_shape{
+                                    static_cast<size_t>(output.height), static_cast<size_t>(output.width), 3};
+                                if (!roi_camera_rays_.is_valid() || roi_camera_rays_.shape() != rays_shape)
+                                    roi_camera_rays_ = lfs::core::Tensor::empty(rays_shape, lfs::core::Device::CUDA);
+                                gsplat_lfs::geometry_camera_rays(
+                                    roi_camera_rays_.ptr<float>(), output.width, output.height, gsplat_ctx->K_ptr,
+                                    gsplat_ctx->camera_model, gsplat_ctx->radial_ptr, gsplat_ctx->tangential_ptr,
+                                    gsplat_ctx->thin_prism_ptr, roi_stream);
+                                roi_rays = roi_camera_rays_.ptr<float>();
+                            }
+                        }
+                        const bool roi_surface = roi_surface_weights && output.depth.is_valid() &&
+                                                 output.alpha.is_valid() &&
+                                                 output.depth.numel() == roi_shape.elements() &&
+                                                 output.alpha.numel() == roi_shape.elements();
+                        lfs::core::Tensor roi_surface_depth, roi_surface_alpha;
+                        if (roi_surface) {
+                            roi_surface_depth = output.depth.contiguous();
+                            roi_surface_alpha = output.alpha.contiguous();
+                            lfs::core::pin_operands({&roi_surface_depth, &roi_surface_alpha});
+                        }
                         lfs::training::kernels::launch_roi_weight_map(
                             cam->world_view_transform_ptr(),
                             cam->cam_position_ptr(),
@@ -6855,6 +6986,9 @@ namespace lfs::training {
                             cropbox_loss_geometry->max,
                             cropbox_loss_geometry->inverse,
                             params_.optimization.cropbox_loss_weight,
+                            roi_rays,
+                            roi_surface ? roi_surface_depth.ptr<float>() : nullptr,
+                            roi_surface ? roi_surface_alpha.ptr<float>() : nullptr,
                             roi_weight_map_.ptr<float>(),
                             roi_stream);
                         roi_weight = roi_weight_map_;
@@ -6903,23 +7037,26 @@ namespace lfs::training {
                             LOG_VRAM_DIFF("train.photometric_loss");
                             const bool use_mask = params_.optimization.mask_mode != lfs::core::param::MaskMode::None &&
                                                   (cam->has_mask() || (params_.optimization.use_alpha_as_mask && cam->has_alpha()));
-                            const auto structure_map = get_thin_structure_map(
-                                cam->uid(), stable_gt, params_.optimization.thin_structure_weight);
-                            if (use_mask || roi_weight.is_valid() || structure_map.is_valid()) {
-                                lfs::core::Tensor mask;
-                                if (use_mask) {
-                                    if (!composite_target_alpha_ && pipelined_mask_.is_valid() &&
-                                        pipelined_mask_.numel() > 0) {
-                                        mask = pipelined_mask_;
-                                    } else {
-                                        mask = cam->load_and_get_mask(
-                                            params_.dataset.resize_factor,
-                                            params_.dataset.max_width,
-                                            params_.optimization.invert_masks,
-                                            params_.optimization.mask_threshold,
-                                            params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
-                                    }
+                            lfs::core::Tensor mask;
+                            if (use_mask) {
+                                if (!composite_target_alpha_ && pipelined_mask_.is_valid() &&
+                                    pipelined_mask_.numel() > 0) {
+                                    mask = pipelined_mask_;
+                                } else {
+                                    mask = cam->load_and_get_mask(
+                                        params_.dataset.resize_factor,
+                                        params_.dataset.max_width,
+                                        params_.optimization.invert_masks,
+                                        params_.optimization.mask_threshold,
+                                        params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
                                 }
+                            }
+                            const auto structure_map = get_thin_structure_map(
+                                cam->uid(), stable_gt, params_.optimization.thin_structure_weight,
+                                use_mask && params_.optimization.mask_mode != lfs::core::param::MaskMode::AlphaConsistent
+                                    ? mask
+                                    : lfs::core::Tensor{});
+                            if (use_mask || roi_weight.is_valid() || structure_map.is_valid()) {
 
                                 lfs::core::Tensor mask_tile = mask;
 
@@ -7146,25 +7283,25 @@ namespace lfs::training {
                         {
                             LFS_VRAM_SCOPE("train.photometric_loss");
                             LOG_VRAM_DIFF("train.photometric_loss");
-                            const auto structure_map = get_thin_structure_map(
-                                cam->uid(), stable_gt, params_.optimization.thin_structure_weight);
-                            if (use_mask || roi_weight.is_valid() || structure_map.is_valid()) {
-                                lfs::core::Tensor mask;
-                                if (use_mask) {
-                                    if (!composite_target_alpha_ && pipelined_mask_.is_valid() &&
-                                        pipelined_mask_.numel() > 0) {
-                                        mask = pipelined_mask_;
-                                    } else {
-                                        mask = cam->load_and_get_mask(
-                                            params_.dataset.resize_factor,
-                                            params_.dataset.max_width,
-                                            params_.optimization.invert_masks,
-                                            params_.optimization.mask_threshold,
-                                            params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
-                                    }
+                            if (use_mask) {
+                                if (!composite_target_alpha_ && pipelined_mask_.is_valid() &&
+                                    pipelined_mask_.numel() > 0) {
+                                    mask_tile = pipelined_mask_;
+                                } else {
+                                    mask_tile = cam->load_and_get_mask(
+                                        params_.dataset.resize_factor,
+                                        params_.dataset.max_width,
+                                        params_.optimization.invert_masks,
+                                        params_.optimization.mask_threshold,
+                                        params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
                                 }
-
-                                mask_tile = mask;
+                            }
+                            const auto structure_map = get_thin_structure_map(
+                                cam->uid(), stable_gt, params_.optimization.thin_structure_weight,
+                                use_mask && params_.optimization.mask_mode != lfs::core::param::MaskMode::AlphaConsistent
+                                    ? mask_tile
+                                    : lfs::core::Tensor{});
+                            if (use_mask || roi_weight.is_valid() || structure_map.is_valid()) {
 
                                 auto result = compute_photometric_loss_with_mask(
                                     corrected_image, gt_tile, mask_tile, roi_weight, output.alpha,
@@ -7735,9 +7872,19 @@ namespace lfs::training {
                             }
                         }
 
+                        // Growth credit follows the ROI pixel weights, so splats grow where the crop
+                        // box is seen, including the background behind it, not where pixels are ignored.
+                        if (tile_error_map.is_valid() && roi_weight.is_valid() &&
+                            tile_error_map.numel() == roi_weight.numel()) {
+                            tile_error_map.mul_(roi_weight.reshape(tile_error_map.shape()));
+                        }
+
                         if (tile_error_map.is_valid() && params_.optimization.densify_structure_weight > 0.0f) {
                             const auto structure_map = get_thin_structure_map(
-                                cam->uid(), stable_gt, params_.optimization.densify_structure_weight);
+                                cam->uid(), stable_gt, params_.optimization.densify_structure_weight,
+                                use_mask && params_.optimization.mask_mode != lfs::core::param::MaskMode::AlphaConsistent
+                                    ? mask_tile
+                                    : lfs::core::Tensor{});
                             kernels::structure_densification_weight(tile_error_map, structure_map,
                                                                     params_.optimization.densify_structure_weight);
                         }
@@ -8231,7 +8378,8 @@ namespace lfs::training {
                             maybe_morton_reorder(iter);
                         }
                         if (!fastgs_path) {
-                            install_cropbox_step_damping(model, strategy_->get_optimizer());
+                            // Refine may have changed the rows since the forward pass.
+                            install_cropbox_view_damping(model, strategy_->get_optimizer(), *cam);
                         }
 
                         if (update_gaussians_this_iter) {
@@ -8347,12 +8495,22 @@ namespace lfs::training {
                         eval_ppisp_exif_.store(0);
                         eval_ppisp_nearest_.store(0);
                         const auto evaluation_image_loader = getActiveImageLoader();
+                        evaluation_active_.store(true, std::memory_order_release);
+                        auto evaluation_guard = makeScopeGuard([this] {
+                            evaluation_active_.store(false, std::memory_order_release);
+                        });
                         auto metrics = evaluator_->evaluate(iter,
                                                             strategy_->get_model(),
                                                             val_dataset_,
                                                             background_,
-                                                            evaluation_image_loader.get());
-                        if (!metrics.valid) {
+                                                            evaluation_image_loader.get(),
+                                                            [this, iter, stop_token] {
+                                                                return service_evaluation_controls(iter, stop_token);
+                                                            });
+                        service_evaluation_controls(iter, stop_token);
+                        if (metrics.cancelled) {
+                            LOG_INFO("Final evaluation stopped at iteration {}", iter);
+                        } else if (!metrics.valid) {
                             auto error = lfs::make_error(lfs::ErrorInit{
                                 .code = lfs::ErrorCode::FailedPrecondition,
                                 .domain = lfs::ErrorDomain::Training,
@@ -8371,6 +8529,8 @@ namespace lfs::training {
                         }
                         log_eval_appearance();
                         LOG_INFO("{}", metrics.to_string());
+                        for (const auto& line : metrics.mask_set_summaries())
+                            LOG_INFO("{}", line);
                         if (ppisp_ && params_.optimization.ppisp_active() && ppisp_->isFinalized()) {
                             ppisp_->log_eval_diagnostics();
                         }
@@ -8436,7 +8596,7 @@ namespace lfs::training {
                                 std::string folder_name = lfs::io::strip_extension(img_name);
 
                                 auto output_path = params_.dataset.output_path / "timelapse" / folder_name;
-                                std::filesystem::create_directories(output_path);
+                                lfs::core::native_fs::create_directories(output_path);
 
                                 auto stamp = params_.include_provenance ? lfs::core::make_provenance_stamp()
                                                                         : lfs::core::make_minimal_provenance_stamp();
@@ -8598,18 +8758,31 @@ namespace lfs::training {
         return result;
     }
 
-    void Trainer::evaluate_at(const int iteration) {
+    void Trainer::evaluate_at(const int iteration, std::stop_token stop_token) {
         evaluator_->print_evaluation_header(iteration);
         lfs::diagnostics::VramProfiler::instance().mark("evaluation");
         eval_ppisp_applied_.store(0);
         eval_ppisp_exif_.store(0);
         eval_ppisp_nearest_.store(0);
         const auto evaluation_image_loader = getActiveImageLoader();
+        evaluation_active_.store(true, std::memory_order_release);
+        auto evaluation_guard = makeScopeGuard([this] {
+            evaluation_active_.store(false, std::memory_order_release);
+        });
         auto metrics = evaluator_->evaluate(iteration,
                                             strategy_->get_model(),
                                             val_dataset_,
                                             background_,
-                                            evaluation_image_loader.get());
+                                            evaluation_image_loader.get(),
+                                            [this, iteration, stop_token] {
+                                                return service_evaluation_controls(iteration, stop_token);
+                                            });
+        service_evaluation_controls(iteration, stop_token);
+        if (metrics.cancelled) {
+            LOG_INFO("Evaluation stopped at iteration {}", iteration);
+            photometric_loss_.arena().shrink_to_required();
+            return;
+        }
         if (!metrics.valid) {
             auto error = lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::FailedPrecondition,
@@ -8629,6 +8802,8 @@ namespace lfs::training {
         }
         log_eval_appearance();
         LOG_INFO("{}", metrics.to_string());
+        for (const auto& line : metrics.mask_set_summaries())
+            LOG_INFO("{}", line);
         photometric_loss_.arena().shrink_to_required();
     }
 
@@ -8908,6 +9083,8 @@ namespace lfs::training {
                 });
             }
             if (params_.optimization.mask_mode != lfs::core::param::MaskMode::None) {
+                aux_pipeline_config.fill_masked_rgb = true;
+                aux_pipeline_config.mask_keep_high_band = params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
                 aux_pipeline_config.invert_masks = params_.optimization.invert_masks;
                 aux_pipeline_config.mask_threshold = params_.optimization.mask_threshold;
                 if (params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore) {
@@ -8929,6 +9106,7 @@ namespace lfs::training {
             composite_target_alpha_ = params_.optimization.mask_mode == lfs::core::param::MaskMode::None &&
                                       params_.optimization.use_alpha_as_mask && alpha_available;
             if (composite_target_alpha_) {
+                aux_pipeline_config.alpha_is_transparency = true;
                 aux_pipeline_config.use_alpha_as_mask = true;
                 aux_pipeline_config.invert_masks = false;
                 aux_pipeline_config.mask_threshold = 0.0f;
@@ -9154,7 +9332,7 @@ namespace lfs::training {
             if (iter > get_total_iterations() &&
                 evaluator_->is_enabled() &&
                 evaluator_->should_evaluate(current_iteration_.load(), get_total_iterations())) {
-                evaluate_at(current_iteration_.load());
+                evaluate_at(current_iteration_.load(), stop_token);
             }
 
             clearActiveImageLoader();
@@ -9176,10 +9354,17 @@ namespace lfs::training {
         } catch (const lfs::Exception& e) {
             append_terminal_error(e.error());
         } catch (const std::exception& e) {
+            const std::string_view detail = e.what();
+            const bool image_read_error = detail.starts_with("Image probe failed:");
+            const auto& localization = lfs::event::LocalizationManager::getInstance();
             append_terminal_error(lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::Internal,
                 .domain = lfs::ErrorDomain::Training,
-                .user_message = "Training failed.",
+                .user_message = image_read_error
+                                    ? (localization.hasKey("training.unreadable_image")
+                                           ? LOC("training.unreadable_image")
+                                           : "A training image could not be read. Open Details for the file and decoder error.")
+                                    : "Training failed.",
                 .detail = std::format("Training failed: {}", e.what()),
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
@@ -9509,7 +9694,7 @@ namespace lfs::training {
 
     int Trainer::project_snapshot_iteration() const {
         const int current = current_iteration_.load();
-        if (is_paused_.load() && current > 0) {
+        if (is_paused_.load() && !evaluation_active_.load() && current > 0) {
             return current - 1;
         }
         return current;
@@ -9740,7 +9925,7 @@ namespace lfs::training {
         const std::filesystem::path& checkpoint_path) {
         std::error_code error;
         const auto source_bytes =
-            std::filesystem::file_size(
+            lfs::core::native_fs::file_size(
                 checkpoint_path, error);
         if (error) {
             return std::unexpected(
@@ -9751,7 +9936,7 @@ namespace lfs::training {
                     error.message()));
         }
         std::ifstream source(
-            checkpoint_path,
+            lfs::core::native_fs::native_path(checkpoint_path),
             std::ios::binary);
         if (!source) {
             return std::unexpected(

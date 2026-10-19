@@ -26,6 +26,7 @@ namespace Rml {
 } // namespace Rml
 
 namespace lfs::vis::gui {
+    struct GpuMemoryInfo;
     class VramTimelineElement;
 
     class LFS_VIS_API VramHudOverlay {
@@ -47,7 +48,7 @@ namespace lfs::vis::gui {
         void setViewportGeometry(float origin_x, float origin_y, float width, float height);
         [[nodiscard]] bool initializeGeometryAfterLayout();
 
-        void setState(State state);
+        [[nodiscard]] bool setState(State state);
         [[nodiscard]] bool isVisible() const noexcept { return state_.visible || state_.perf_hud.visible; }
         [[nodiscard]] bool needsAnimationFrame() const noexcept {
             return pointer_captured_;
@@ -95,15 +96,15 @@ namespace lfs::vis::gui {
         };
 
         void attachListeners();
-        void apply();
-        void applyCompactStrip();
+        void apply(const GpuMemoryInfo* sampled = nullptr);
+        void applyCompactStrip(const GpuMemoryInfo* sampled = nullptr);
         void applySparklines();
         void pushSparklineSample();
         void pushTimelineSample();
         void applyTimeline();
         void exportTimeline();
         [[nodiscard]] bool sparkline_tick_due() const noexcept;
-        void applySummary(std::size_t process_used, std::size_t process_total);
+        void applySummary(const GpuMemoryInfo& memory, std::size_t process_used, std::size_t process_total);
         void applyLedger();
         void applyCounters();
         void applyAllocations();
@@ -123,6 +124,8 @@ namespace lfs::vis::gui {
         void schedulePersistSave();
         void persistNow();
         void applyPersistedGeometry();
+        void applyDisplayedGeometry();
+        [[nodiscard]] Rml::Vector2f displayExtent() const;
         [[nodiscard]] bool sanitizeGeometry();
         void onHeaderDrag(Rml::Event& event);
         void onResizeDrag(Rml::Event& event);
@@ -139,6 +142,8 @@ namespace lfs::vis::gui {
         std::shared_ptr<const lfs::vis::AppStore::PerfHudSnapshot> last_perf_snapshot_;
         bool last_perf_visible_ = false;
         bool last_perf_expanded_ = true;
+        bool last_tracking_off_summary_ = false;
+        std::string last_tracking_off_summary_key_;
         bool default_collapse_applied_ = false;
         bool ledger_default_collapse_applied_ = false;
 
@@ -355,6 +360,7 @@ namespace lfs::vis::gui {
         bool header_drag_moved_ = false;
         bool dragging_resize_ = false;
         bool pointer_captured_ = false;
+        Rml::Vector2f displayed_extent_{};
         bool geometry_dirty_ = false;
         bool persistence_dirty_ = false;
         int window_seconds_ = 300;

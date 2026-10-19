@@ -61,9 +61,11 @@ def test_histogram_compare_locales_define_required_keys():
         assert "off" in compare, f"{locale_path.name} missing histogram.compare.off"
         assert "summary" in compare, f"{locale_path.name} missing histogram.compare.summary"
         assert "range_value" in compare, f"{locale_path.name} missing histogram.compare.range_value"
-        assert "status_selection" in compare, f"{locale_path.name} missing histogram.compare.status_selection"
+        assert "status_selection" not in compare, f"{locale_path.name} retained a removed histogram action hint"
         assert "bin_tooltip" in compare, f"{locale_path.name} missing histogram.compare.bin_tooltip"
         assert "empty" in compare, f"{locale_path.name} missing histogram.compare.empty"
+        assert "marked" in histogram, f"{locale_path.name} missing histogram.marked"
+        assert "count" in histogram, f"{locale_path.name} missing histogram.count"
 
         empty = compare["empty"]
         assert "title" in empty, f"{locale_path.name} missing histogram.compare.empty.title"

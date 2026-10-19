@@ -33,6 +33,8 @@
 #include "viewport_interaction_context.hpp"
 #include "viewport_interop_service.hpp"
 #include "viewport_overlay_service.hpp"
+#include "visualizer/app_store.hpp"
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -82,6 +84,7 @@ namespace lfs::vis {
 
     class SceneManager;
     struct SceneRenderState;
+    struct FrameContext;
     class TrainerManager;
 
     class LFS_VIS_API RenderingManager {
@@ -293,9 +296,17 @@ namespace lfs::vis {
         [[nodiscard]] lfs::Result<void> updateSettingsFromUser(const RenderSettings& settings);
 
         // Settings management (also used for restoring saved state).
+        void restoreSettingsFromProject(const RenderSettings& settings);
         void updateSettings(const RenderSettings& settings);
         void updateSettings(const RenderSettings& settings, DirtyMask dirty_flags);
         RenderSettings getSettings() const;
+        struct CameraProjectionSettings {
+            bool orthographic;
+            float focal_length_mm;
+            float ortho_scale;
+        };
+        CameraProjectionSettings getCameraProjectionSettings() const;
+        void setOrthographicScale(float scale);
         // The presentation pass reports its actual runtime choice after pipeline
         // preparation. Rendering uses this feedback on the next frame so a failed
         // reconstruction pipeline never receives a reduced-resolution image.
@@ -419,6 +430,7 @@ namespace lfs::vis {
             float psnr = 0.0f;
             std::optional<float> ssim;
             bool used_mask = false;
+            AppStore::CameraMetricsStatus status = AppStore::CameraMetricsStatus::Available;
         };
 
         void clearLatestCameraMetrics();
@@ -508,6 +520,15 @@ namespace lfs::vis {
         [[nodiscard]] std::optional<SplitViewPanelId> getCursorPreviewPanel() const {
             return viewport_overlay_service_.cursorPreview().panel;
         }
+        // True when the active cursor preview already highlights this splat with this preview selection.
+        [[nodiscard]] bool cursorPreviewShows(const int focused_gaussian_id, const bool add_mode,
+                                              const std::optional<SplitViewPanelId> panel,
+                                              const lfs::core::Tensor* const preview_selection) const {
+            const auto& cursor = viewport_overlay_service_.cursorPreview();
+            return cursor.active && cursor.focused_gaussian_id == focused_gaussian_id &&
+                   cursor.add_mode == add_mode && cursor.panel == panel &&
+                   cursor.preview_selection == preview_selection;
+        }
         void getCursorPreviewState(float& x, float& y, float& radius, bool& add_mode) const {
             const auto& cursor = viewport_overlay_service_.cursorPreview();
             x = cursor.x;
@@ -582,6 +603,11 @@ namespace lfs::vis {
         struct VulkanMeshFrame {
             glm::mat4 view_projection{1.0f};
             glm::vec3 camera_position{0.0f};
+            glm::vec3 camera_backward{0.0f, 0.0f, 1.0f};
+            bool depth_view = false;
+            float depth_view_min = 0.0f;
+            float depth_view_max = 1.0f;
+            bool depth_grayscale = false;
             std::vector<lfs::vis::VulkanMeshDrawItem> items;
             std::vector<lfs::vis::VulkanMeshViewportPanel> panels;
             lfs::vis::VulkanEnvironmentParams environment;
@@ -592,6 +618,10 @@ namespace lfs::vis {
         [[nodiscard]] VulkanMeshFrame getVulkanMeshFrame() const {
             std::lock_guard lock(vulkan_mesh_frame_mutex_);
             return vulkan_mesh_frame_;
+        }
+        [[nodiscard]] bool hasVulkanMeshItems() const {
+            std::lock_guard lock(vulkan_mesh_frame_mutex_);
+            return !vulkan_mesh_frame_.items.empty();
         }
         void clearVulkanMeshFrame();
 
@@ -613,6 +643,14 @@ namespace lfs::vis {
         [[nodiscard]] SelectionPreviewMode getSelectionPreviewMode() const {
             return viewport_overlay_service_.selectionPreviewMode();
         }
+        void setExactSurfacePicking(const bool enabled) {
+            if (exact_surface_picking_ == enabled)
+                return;
+            exact_surface_picking_ = enabled;
+            markDirty(DirtyFlag::VIEWPORT, FrameReason::SettingsChange);
+        }
+        void configureSurfacePicking(FrameContext& frame) const;
+
         void setGaussianSelectionVisible(const bool visible) {
             if (gaussian_selection_visible_ == visible)
                 return;
@@ -900,6 +938,10 @@ namespace lfs::vis {
         std::uint64_t point_cloud_last_frame_serial_ = 0;
         std::uint64_t point_cloud_data_revision_ = 0;
         std::uint64_t point_cloud_preview_selection_revision_ = 0;
+        // One texel keeps mesh-only independent panels renderable without
+        // allocating or uploading a full-size background each frame.
+        std::shared_ptr<lfs::core::Tensor> mesh_only_split_background_;
+        glm::vec4 mesh_only_split_background_color_{-1.0f};
         VulkanContext* last_vulkan_context_ = nullptr;
         std::atomic<bool> vksplat_terminal_release_pending_{false};
         std::chrono::steady_clock::time_point vksplat_idle_since_{};
@@ -1028,11 +1070,13 @@ namespace lfs::vis {
 
         ViewportOverlayService viewport_overlay_service_;
         bool gaussian_selection_visible_ = true;
+        bool exact_surface_picking_ = false;
 
         lfs::event::ScopedHandler event_handlers_;
 
         friend class RenderingManagerEventsTest_SceneClearedResetsFrustumLoaderSyncCache_Test;
         friend class SceneManager;
+        friend class AlignDepthIntegrationTest;
         friend struct SplitOutputLifetimeTestAccess;
     };
 

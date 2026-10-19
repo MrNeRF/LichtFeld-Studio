@@ -109,7 +109,7 @@ class _ParamsStub:
         self.ppisp_controller_activation_step = 5678
         self.enable_eval = False
         self.eval_mask = ""
-        self.eval_mask_invert = False
+        self.eval_mask_report = ""
         self.save_steps = [7000]
         self.eval_steps = []
         self.bg_color = (0.0, 0.0, 0.0)
@@ -353,6 +353,29 @@ def test_auto_scale_user_override_survives_camera_change_until_relocked(
     panel._set_auto_scale_steps_locked(False)
     panel._set_auto_scale_steps_locked(True)
     assert params.auto_scaled_for == 800
+
+
+def test_paused_iteration_limit_rejects_current_step_without_scaling(
+    training_panel_module, monkeypatch
+):
+    params = _ParamsStub()
+    params.iterations = 100
+    params.steps_scaler = 2.0
+    params.grow_until_iter = 50
+    monkeypatch.setattr(
+        training_panel_module,
+        "RuntimeState",
+        SimpleNamespace(
+            training_state=SimpleNamespace(value="paused"),
+            iteration=SimpleNamespace(value=100),
+        ),
+    )
+    panel = training_panel_module.TrainingPanel()
+
+    assert panel._set_iterations(params, 99) is False
+    assert params.iterations == 100
+    assert params.steps_scaler == 2.0
+    assert params.grow_until_iter == 50
 
 
 def test_training_panel_progress_updates_bound_value(training_panel_module, monkeypatch):
@@ -914,6 +937,30 @@ def test_training_rml_no_longer_includes_ppisp_auto_toggle():
     assert "label_ppisp_auto" not in content
 
 
+def test_training_rml_makes_every_panel_section_collapsible(training_panel_module):
+    project_root = Path(__file__).parent.parent.parent
+    training_rml = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "training.rml"
+    content = training_rml.read_text()
+
+    panel_blocks = {"basic_params", "advanced_params"}
+    for name in training_panel_module.SECTIONS:
+        if name in panel_blocks:
+            continue
+        dom_name = name.replace("_", "-")
+        assert f'id="hdr-{dom_name}" data-event-click="toggle_section(\'{name}\')"' in content
+        assert f'id="arrow-{dom_name}"' in content
+        assert f'class="section-content collapsed" id="sec-{dom_name}"' in content
+
+
+def test_training_panel_restores_new_sections_collapsed(training_panel_module):
+    panel = training_panel_module.TrainingPanel.__new__(training_panel_module.TrainingPanel)
+    panel._handle = None
+    panel.apply_chrome({"expanded": ["losses", "retired_section"]})
+
+    assert panel._collapsed == training_panel_module.INITIALLY_COLLAPSED - {"losses"}
+    assert panel.capture_chrome()["expanded"] == ["basic_params", "losses"]
+
+
 def test_training_rml_exposes_mrnf_grow_until_iter():
     project_root = Path(__file__).parent.parent.parent
     training_rml = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "training.rml"
@@ -1004,20 +1051,53 @@ def test_browse_background_image_uses_current_image_dialog(training_panel_module
     assert panel._handle.dirty_all_count == 1
 
 
-# Catches a cleared path leaving inversion active or a browse action ignoring its start directory.
-def test_eval_mesh_browser_sets_path_and_clear_resets_invert(
-    training_panel_module, monkeypatch
+# Catches the mesh resolution row showing for splat or point inits, or a file probe on every redraw.
+def test_mesh_resolution_row_follows_the_init_file(training_panel_module, monkeypatch):
+    dataset = SimpleNamespace(init_path="", has_params=lambda: True)
+    probes = []
+
+    def is_mesh_file(path):
+        probes.append(path)
+        return path.endswith(".obj")
+
+    monkeypatch.setattr(
+        training_panel_module,
+        "lf",
+        SimpleNamespace(dataset_params=lambda: dataset, io=SimpleNamespace(is_mesh_file=is_mesh_file)),
+    )
+    panel = training_panel_module.TrainingPanel()
+
+    assert panel._property_view_condition_visible("dep_init_mesh") is False
+    dataset.init_path = "/scan/model.obj"
+    assert panel._property_view_condition_visible("dep_init_mesh") is True
+    assert panel._property_view_condition_visible("dep_init_mesh") is True
+    dataset.init_path = "/scan/points.ply"
+    assert panel._property_view_condition_visible("dep_init_mesh") is False
+    assert probes == ["/scan/model.obj", "/scan/points.ply"]
+
+    training_rml = Path(__file__).parent.parent.parent / "src/visualizer/gui/rmlui/resources/training.rml"
+    content = training_rml.read_text()
+    guard = content.index('<div data-if="dep_init_mesh">')
+    assert guard < content.index("pv_init_mesh_rows") < content.index("</div>", guard + 1)
+
+
+# Catches a cleared path leaving pixel sets listed or a browse action ignoring its start directory.
+def test_eval_mesh_browser_sets_path_and_clear_resets_the_report(
+    training_panel_module, monkeypatch, tmp_path
 ):
     panel = training_panel_module.TrainingPanel()
     panel._handle = _HandleStub()
     params = _ParamsStub()
-    params.eval_mask = "/tmp/current/mask.obj"
-    params.eval_mask_invert = True
+    current_dir = tmp_path / "current"
+    current_dir.mkdir()
+    params.eval_mask = str(current_dir / "mask.obj")
+    selected_path = str(tmp_path / "new" / "mask.ply")
+    params.eval_mask_report = "inverted,mask"
     calls = []
 
     def open_mesh_file_dialog(start_dir):
         calls.append(start_dir)
-        return "/tmp/new/mask.ply"
+        return selected_path
 
     monkeypatch.setattr(
         training_panel_module,
@@ -1029,13 +1109,36 @@ def test_eval_mesh_browser_sets_path_and_clear_resets_invert(
     )
 
     panel._on_action(None, None, ["browse_eval_mask"])
-    assert calls == ["/tmp/current"]
-    assert params.eval_mask == "/tmp/new/mask.ply"
+    assert calls == [str(current_dir)]
+    assert params.eval_mask == selected_path
 
     panel._on_action(None, None, ["clear_eval_mask"])
     assert params.eval_mask == ""
-    assert params.eval_mask_invert is False
+    assert params.eval_mask_report == ""
     assert panel._handle.dirty_all_count == 2
+
+
+# Catches the headline select or the also-score checkboxes writing a list that loses the headline, keeps the headline
+# as an extra set, or stores the plain mask as a report.
+def test_eval_report_headline_and_also_scored_sets(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+    params = _ParamsStub()
+    params.eval_mask = "cropbox"
+    monkeypatch.setattr(training_panel_module, "lf", SimpleNamespace(optimization_params=lambda: params))
+
+    panel._set_eval_also_scored("inverted", True)
+    assert params.eval_mask_report == "mask,inverted"
+    panel._set_eval_also_scored("unmasked", True)
+    assert params.eval_mask_report == "mask,unmasked,inverted"
+    panel._set_eval_report("inverted", training_panel_module._eval_report_sets(params)[1:])
+    assert params.eval_mask_report == "inverted,unmasked"
+    panel._set_eval_also_scored("mask", True)
+    assert params.eval_mask_report == "inverted,mask,unmasked"
+    assert training_panel_module._eval_report_sets(params)[0] == "inverted"
+    panel._set_eval_report("mask", ["unmasked"])
+    panel._set_eval_also_scored("unmasked", False)
+    assert params.eval_mask_report == ""
 
 
 def test_training_panel_no_longer_uses_removed_image_dialog_alias():
@@ -1643,6 +1746,64 @@ def test_paused_stored_session_shows_paused_mode_and_resume(
         runtime.total_iterations._fallback = 0
 
 
+def test_late_restore_failure_notifies_panel_and_keeps_resume_disabled(
+    training_panel_module, monkeypatch
+):
+    session = {
+        "available": True,
+        "iteration": 7000,
+        "max_iterations": 30000,
+        "strategy": "mrnf",
+        "completed": False,
+        "hydrated": False,
+        "restoring": True,
+        "error": "",
+    }
+    monkeypatch.setattr(training_panel_module, "_training_session_state", lambda: session)
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+    model = _ModelStub()
+    runtime = training_panel_module.RuntimeState
+    elapsed = [0.0]
+    scheduled = []
+    monkeypatch.setattr(
+        training_panel_module, "time",
+        SimpleNamespace(monotonic=lambda: elapsed[0], time=lambda: elapsed[0]),
+    )
+    monkeypatch.setattr(panel, "_schedule_deferred_update", scheduled.append)
+    for name in "_sync_auto_scale_markers _sync_text_bufs _update_step_repeat " \
+                "_update_progress _update_save_steps _update_color_swatch " \
+                "_update_loss_graph _update_psnr_graph".split():
+        monkeypatch.setattr(panel, name, lambda *_args: False)
+    monkeypatch.setattr(panel._scrub_fields, "sync_all", lambda: False)
+    panel._bind_visibility(model, lambda: _ParamsStub(), lambda: _DatasetStub())
+    panel._subscribe_reactive_state()
+
+    try:
+        runtime.has_trainer.value = True
+        runtime.trainer_state.value = "paused"
+        panel._handle.request_update_count = 0
+        panel.on_update(None)
+        assert scheduled == []
+        assert model.bindings["show_ctrl_paused"][0]() is False
+        generation = runtime.stored_session_generation.value
+
+        # Simulate a restore that finishes well beyond the old 30-second cap.
+        elapsed[0] = 60.0
+        session.update(restoring=False, error="Project trainer restore failed")
+        runtime.stored_session_generation.value = generation + 1
+
+        assert panel._handle.request_update_count == 1
+        assert model.bindings["show_ctrl_paused"][0]() is False
+        assert model.bindings["show_ctrl_error"][0]() is True
+    finally:
+        panel._unsubscribe_reactive_state()
+        runtime.has_trainer._fallback = False
+        runtime.training_state._fallback = "idle"
+        runtime.iteration._fallback = 0
+        runtime.total_iterations._fallback = 0
+
+
 def test_stopped_stored_session_keeps_stopped_mode_and_edit_controls(
     training_panel_module, monkeypatch
 ):
@@ -1887,6 +2048,48 @@ def test_restored_control_echo_is_not_an_edit(
     assert params.writes == [(prop, changed)]
 
 
+@pytest.mark.parametrize(
+    ("prop", "saved", "control_echo"),
+    [
+        ("init_opacity", 0.5, 0.4999999701976776),
+        ("prune_ratio", 0.6000000238418579, 0.5999999642372131),
+        ("lambda_dssim", 0.2, 0.20000000298023224),
+    ],
+)
+def test_slider_float_echo_does_not_edit_saved_value(
+    training_panel_module, monkeypatch, prop, saved, control_echo
+):
+    class Params:
+        def __init__(self):
+            self.value = saved
+            self.writes = []
+
+        def has_params(self):
+            return True
+
+        def __getattr__(self, name):
+            if name == prop:
+                return self.value
+            raise AttributeError(name)
+
+        def set(self, name, value):
+            self.writes.append((name, value))
+            self.value = value
+
+    params = Params()
+    monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
+    panel = training_panel_module.TrainingPanel()
+    panel._set_slider_prop(prop, control_echo)
+    assert params.writes == []
+    assert params.value == saved
+
+    panel._set_slider_prop(prop, saved + 0.01)
+    assert params.writes == [(prop, saved + 0.01)]
+
+    panel._set_slider_prop(prop, saved + 0.010002)
+    assert params.writes[-1] == (prop, saved + 0.010002)
+
+
 @pytest.mark.parametrize("completed", [False, True])
 @pytest.mark.parametrize("runtime_iteration", [0, 1776])
 def test_stored_session_iteration_does_not_report_a_live_rate(
@@ -2024,7 +2227,7 @@ def ready_panel_settings(training_panel_module, monkeypatch):
     # Use the real native-signal facade for subscription lifetime tests.
     native_state = import_module("lfs_plugins.ui").RuntimeState
     for name in ("training_running", "training_state", "trainer_loaded", "total_iterations",
-                 "loss", "eval_psnr", "scene_generation"):
+                 "loss", "eval_psnr", "scene_generation", "stored_session_generation"):
         setattr(module.RuntimeState, name, getattr(native_state, name))
     for name in ("iteration", "num_gaussians", "language_generation"):
         setattr(module.RuntimeState, name, getattr(native_state, name))

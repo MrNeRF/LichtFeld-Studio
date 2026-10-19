@@ -5,7 +5,6 @@
 #include "core/editor_context.hpp"
 #include "core/error_bus.hpp"
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
@@ -19,7 +18,10 @@
 #include "operation/undo_history.hpp"
 #include "project/session_state.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
+#include "tools/unified_tool_registry.hpp"
+#include "training/training_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/rendering/gt_comparison_cache_utils.hpp"
@@ -55,6 +57,36 @@
 #include <vector>
 
 namespace lfs::vis {
+
+    TEST(CameraMetricsStatusTest, DistinguishesUninitializedSessionFromMetricFailure) {
+        const auto needs_session = AppStore::CameraMetrics::unavailable(17, 7000, false);
+        EXPECT_EQ(needs_session.camera_id, 17);
+        EXPECT_EQ(needs_session.iteration, 7000);
+        EXPECT_EQ(needs_session.status, AppStore::CameraMetricsStatus::NeedsInitializedTrainingSession);
+        EXPECT_FALSE(needs_session.ssim.has_value());
+
+        const auto calculation_failed = AppStore::CameraMetrics::unavailable(17, 7000, true);
+        EXPECT_EQ(calculation_failed.status, AppStore::CameraMetricsStatus::CalculationFailed);
+    }
+
+    TEST(CameraMetricsStatusTest, SuccessfulMetricStateRemainsAvailable) {
+        AppStore::CameraMetrics metrics;
+        metrics.camera_id = 17;
+        metrics.iteration = 7000;
+        metrics.psnr = 28.5f;
+        metrics.ssim = 0.91f;
+        EXPECT_EQ(metrics.status, AppStore::CameraMetricsStatus::Available);
+        EXPECT_FLOAT_EQ(metrics.psnr, 28.5f);
+        ASSERT_TRUE(metrics.ssim.has_value());
+        EXPECT_FLOAT_EQ(*metrics.ssim, 0.91f);
+    }
+
+    TEST(CameraMetricsStatusTest, OverlayConfigTracksUnavailableStatus) {
+        AppStore::GTMetricsOverlayConfig config;
+        EXPECT_EQ(config.metrics_status, AppStore::CameraMetricsStatus::Available);
+        config.metrics_status = AppStore::CameraMetricsStatus::NeedsInitializedTrainingSession;
+        EXPECT_NE(config, AppStore::GTMetricsOverlayConfig{});
+    }
 
     TEST(EnvironmentCompositingTest, EnvironmentIdentityCopyCannotAllocate) {
         // Copying pane metadata into the frame and lazy capture must not need
@@ -296,7 +328,8 @@ namespace lfs::vis {
                     {.resize_factor = p.resize_factor,
                      .max_width = p.max_width,
                      .cuda_stream = p.stream,
-                     .output_uint8 = p.output_uint8});
+                     .output_uint8 = p.output_uint8,
+                     .mask_grayscale = p.mask_grayscale});
             });
             initialized = true;
         }
@@ -311,14 +344,12 @@ namespace lfs::vis {
     protected:
         void SetUp() override {
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
             services().clear();
         }
 
         void TearDown() override {
             services().clear();
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
         }
     };
 
@@ -468,20 +499,54 @@ namespace lfs::vis {
         }
     }
 
+    TEST_F(GTComparisonAsyncTest, UninitializedTrainingSessionPublishesUnavailableCameraMetrics) {
+        struct TrainerServiceGuard {
+            TrainerManager manager;
+            TrainerServiceGuard() { services().set(&manager); }
+            ~TrainerServiceGuard() {
+                app_store().camera_metrics.set(std::nullopt);
+                services().set(static_cast<TrainerManager*>(nullptr));
+                EXPECT_TRUE(manager.clearTrainer());
+            }
+        } trainer_service;
+
+        trainer_service.manager.setTrainer(std::make_unique<lfs::training::Trainer>(scene->getScene()));
+        ASSERT_NE(trainer_service.manager.getTrainer(), nullptr);
+        EXPECT_FALSE(trainer_service.manager.getTrainer()->isInitialized());
+
+        constexpr int camera_id = 17;
+        manager->setCurrentCameraId(camera_id);
+        settings.camera_metrics_mode = RenderSettings::CameraMetricsMode::PSNRSSIM;
+        manager->updateSettings(settings);
+
+        render();
+
+        ASSERT_TRUE(last.rendered || last.image || last.external_image != VK_NULL_HANDLE);
+        const auto published = app_store().camera_metrics.get();
+        ASSERT_TRUE(published.has_value());
+        EXPECT_EQ(published->camera_id, camera_id);
+        EXPECT_EQ(published->iteration, trainer_service.manager.getCurrentIteration());
+        EXPECT_EQ(published->status, AppStore::CameraMetricsStatus::NeedsInitializedTrainingSession);
+        EXPECT_EQ(published->psnr, 0.0f);
+        EXPECT_FALSE(published->ssim.has_value());
+    }
+
     class SceneManagerRenderStateTest : public ::testing::Test {
     protected:
         void SetUp() override {
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
             services().clear();
             op::undoHistory().clear();
+            UnifiedToolRegistry::instance().clearActiveTool();
         }
 
         void TearDown() override {
+            // The crop commands activate the crop box tool in the process-wide registry; a
+            // later input test would otherwise route its drags to the crop box.
+            UnifiedToolRegistry::instance().clearActiveTool();
             op::undoHistory().clear();
             services().clear();
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
         }
     };
 
@@ -1844,6 +1909,33 @@ namespace lfs::vis {
         ASSERT_EQ(state.cropboxes.size(), 1u);
         EXPECT_EQ(state.cropboxes.front().parent_node_index, 0);
         EXPECT_FALSE(scene.hasPreparedCombinedModel());
+    }
+
+    TEST_F(SceneManagerRenderStateTest, PlyComparisonPairsVisibleMeshesAfterSplats) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        auto mesh = std::make_shared<lfs::core::MeshData>();
+        mesh->vertices = lfs::core::Tensor::from_vector(
+            std::vector<float>{0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f}, {3, 3}, lfs::core::Device::CPU);
+        mesh->indices = lfs::core::Tensor::from_vector(
+            std::vector<int32_t>{0, 1, 2}, {1, 3}, lfs::core::Device::CPU);
+        const auto mesh_id = scene.addMesh("mesh", mesh);
+        scene.setNodeVisibility(scene.addMesh("hidden", mesh), false);
+        const auto splat_id = scene.addSplat("splat", makeTestSplat(0.0f));
+
+        const auto nodes = plyComparisonNodes(scene);
+        ASSERT_EQ(nodes.size(), 2u);
+        EXPECT_EQ(nodes[0].node->id, splat_id);
+        EXPECT_TRUE(nodes[0].splat_slot.has_value());
+        EXPECT_EQ(nodes[1].node->id, mesh_id);
+        EXPECT_FALSE(nodes[1].splat_slot.has_value());
+
+        const auto right = resolvePlyComparisonDepthSample(scene, 0, SplitViewPanelId::Right);
+        ASSERT_NE(right.node, nullptr);
+        EXPECT_EQ(right.node->id, mesh_id);
+        EXPECT_EQ(right.model, nullptr);
+        EXPECT_EQ(right.visible_index, -1);
     }
 
     TEST_F(SceneManagerRenderStateTest, PlyComparisonConsolidatedUsesPreparedCombinedWithoutRebuild) {
@@ -3858,6 +3950,34 @@ namespace lfs::vis {
         EXPECT_TRUE(settings.equirectangular);
         EXPECT_EQ(settings.raster_backend, Backend::ThreeDgut);
         EXPECT_TRUE(settings.gut);
+    }
+
+    TEST_F(GTComparisonAsyncTest, EmptyIndependentSplitSkipsMeshPanels) {
+        settings.split_view_mode = SplitViewMode::IndependentDual;
+        manager->updateSettings(settings);
+        const auto deadline = FrameClock::now() + std::chrono::seconds(5);
+        RenderingManager::VulkanMeshFrame frame;
+        do {
+            manager->markDirty(DirtyFlag::SPLIT_VIEW, FrameReason::SettingsChange);
+            render();
+            frame = manager->getVulkanMeshFrame();
+        } while (!frame.split_view.enabled && FrameClock::now() < deadline);
+
+        ASSERT_TRUE(frame.split_view.enabled);
+        EXPECT_TRUE(frame.items.empty());
+        EXPECT_EQ(frame.panels.capacity(), 0u);
+    }
+
+    TEST(MeshDepthSourceTest, UsesOnlyReadyPaneDepth) {
+        VulkanViewportPassParams params;
+        params.split_view.enabled = true;
+        params.mesh_panels.emplace_back();
+        EXPECT_FALSE(meshUsesLeftDepth(params, false));
+        EXPECT_FALSE(meshUsesLeftDepth(params, true));
+        params.split_view.left.depth_blit.depth = std::make_shared<lfs::core::Tensor>();
+        EXPECT_TRUE(meshUsesLeftDepth(params, true));
+        params.mesh_panels.clear();
+        EXPECT_FALSE(meshUsesLeftDepth(params, true));
     }
 
 } // namespace lfs::vis

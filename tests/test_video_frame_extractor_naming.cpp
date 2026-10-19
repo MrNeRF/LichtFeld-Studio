@@ -5,6 +5,7 @@
 #include "core/image_io.hpp"
 #include "gui/windows/video_extractor_dialog.hpp"
 #include "io/video/frame_color_range.hpp"
+#include "io/video/probed_stream_rewind.hpp"
 #include "io/video/video_encoder.hpp"
 #include "io/video_frame_extractor.hpp"
 #include "io/video_player.hpp"
@@ -18,6 +19,9 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/dict.h>
+#include <libavutil/display.h>
+#include <libavutil/error.h>
 #include <libswscale/swscale.h>
 }
 
@@ -28,6 +32,7 @@ extern "C" {
 #include <bit>
 #include <chrono>
 #include <cstddef>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -37,7 +42,12 @@ extern "C" {
 #include <system_error>
 #include <thread>
 #include <tuple>
+#include <utility>
 #include <vector>
+
+#if defined(__linux__)
+#include <sys/stat.h>
+#endif
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
@@ -71,6 +81,19 @@ namespace {
 
         std::filesystem::path path;
     };
+
+#if defined(__linux__)
+    uint64_t processReadChars() {
+        std::ifstream io("/proc/self/io");
+        std::string key;
+        uint64_t value = std::numeric_limits<uint64_t>::max();
+        while (io >> key >> value) {
+            if (key == "rchar:")
+                return value;
+        }
+        return std::numeric_limits<uint64_t>::max();
+    }
+#endif
 
     struct CudaFloatBuffer {
         explicit CudaFloatBuffer(const std::size_t count) {
@@ -171,6 +194,15 @@ namespace {
                 ++count;
         }
         return count;
+    }
+
+    uint64_t hashFile(const std::filesystem::path& path) {
+        std::ifstream input(path, std::ios::binary);
+        uint64_t hash = 14695981039346656037ull;
+        char byte = 0;
+        while (input.get(byte))
+            hash = (hash ^ static_cast<uint8_t>(byte)) * 1099511628211ull;
+        return hash;
     }
 
     nlohmann::json readMetadata(const std::filesystem::path& output_dir) {
@@ -277,6 +309,102 @@ namespace lfs::gui {
             dialog.video_path_ = video;
             return dialog.resolveFilenamePattern(pattern, error);
         }
+        static void firstSourceFrameNumber(VideoExtractorDialog& dialog, const int value) {
+            dialog.first_source_frame_number_ = value;
+        }
+        static void configureBatch(VideoExtractorDialog& dialog,
+                                   const std::vector<std::filesystem::path>& videos,
+                                   const std::filesystem::path& output_root) {
+            dialog.batch_items_.clear();
+            for (const auto& video : videos)
+                dialog.batch_items_.push_back({.video_path = video});
+            dialog.output_dir_ = output_root;
+            dialog.batch_output_root_explicit_ = !output_root.empty();
+            dialog.selected_batch_item_.reset();
+            dialog.refreshBatchOutputDirectories();
+        }
+        static void addBatch(VideoExtractorDialog& dialog,
+                             const std::vector<std::filesystem::path>& videos) {
+            (void)queueBatch(dialog, videos);
+            ASSERT_TRUE(waitForBatchProbes(dialog));
+        }
+        static bool queueBatch(VideoExtractorDialog& dialog,
+                               const std::vector<std::filesystem::path>& videos) {
+            return dialog.addBatchVideos(videos);
+        }
+        static void addFromBrowse(VideoExtractorDialog& dialog,
+                                  std::vector<std::filesystem::path> videos) {
+            dialog.addVideosFromBrowse(std::move(videos));
+            ASSERT_TRUE(waitForBatchProbes(dialog));
+        }
+        static bool waitForBatchProbes(VideoExtractorDialog& dialog) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            for (;;) {
+                dialog.applyCompletedBatchProbes();
+                if (!dialog.batch_probe_active_.load() && !dialog.batch_probe_results_ready_.load())
+                    return true;
+                if (std::chrono::steady_clock::now() >= deadline)
+                    return false;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+        static std::size_t batchItemCount(const VideoExtractorDialog& dialog) {
+            return dialog.batch_items_.size();
+        }
+        static void batchProbeState(VideoExtractorDialog& dialog, const bool active, const bool results_ready) {
+            dialog.batch_probe_active_.store(active);
+            dialog.batch_probe_results_ready_.store(results_ready);
+        }
+        static bool hasDynamicState(const VideoExtractorDialog& dialog) { return dialog.hasDynamicState(); }
+        static void outputRoot(VideoExtractorDialog& dialog, const std::filesystem::path& output_root) {
+            dialog.output_dir_ = output_root;
+            dialog.batch_output_root_explicit_ = true;
+            dialog.refreshBatchOutputDirectories();
+        }
+        static void fps(VideoExtractorDialog& dialog, const float value) { dialog.fps_ = value; }
+        static void sharedOutputSettings(VideoExtractorDialog& dialog, const int width, const int height,
+                                         const bool hdr_to_sdr) {
+            dialog.custom_width_ = width;
+            dialog.custom_height_ = height;
+            dialog.hdr_to_sdr_ = hdr_to_sdr;
+            // Batch parameters re-read both sizes from their fields, as typing leaves them.
+            for (auto [element, value] : {std::pair{dialog.custom_width_input_el_, width},
+                                          std::pair{dialog.custom_height_input_el_, height}}) {
+                if (auto* const input = dynamic_cast<Rml::ElementFormControlInput*>(element))
+                    input->SetValue(std::to_string(value));
+            }
+        }
+        static void selectBatch(VideoExtractorDialog& dialog, const std::size_t index) {
+            dialog.selectBatchItem(index);
+        }
+        static int customWidth(const VideoExtractorDialog& dialog) { return dialog.custom_width_; }
+        static int customHeight(const VideoExtractorDialog& dialog) { return dialog.custom_height_; }
+        static bool hdrToSdr(const VideoExtractorDialog& dialog) { return dialog.hdr_to_sdr_; }
+        static void batchItemSettings(VideoExtractorDialog& dialog, const std::size_t index,
+                                      const double start_time, const double end_time,
+                                      const int rotation, const double duration,
+                                      const double source_fps) {
+            auto& item = dialog.batch_items_.at(index);
+            item.start_time = start_time;
+            item.end_time = end_time;
+            item.end_time_is_auto = false;
+            item.rotation = rotation;
+            item.duration = duration;
+            item.source_fps = source_fps;
+        }
+        static bool buildBatch(VideoExtractorDialog& dialog,
+                               std::vector<VideoExtractionParams>& params,
+                               std::string& error) {
+            return dialog.buildBatchParams(params, error);
+        }
+        static void batchProgress(VideoExtractorDialog& dialog, const int active_index,
+                                  const int current, const int total) {
+            dialog.extracting_.store(true);
+            dialog.active_batch_index_.store(active_index);
+            dialog.updateProgress(current, total);
+        }
+        static void syncBatchList(VideoExtractorDialog& dialog) { dialog.syncBatchList(); }
+        static void syncExtractionStatus(VideoExtractorDialog& dialog) { dialog.syncExtractionStatus(); }
         static bool attach(VideoExtractorDialog& dialog, Rml::ElementDocument* document) {
             dialog.document_ = document;
             dialog.cacheElements();
@@ -325,9 +453,10 @@ namespace lfs::gui {
             else
                 dialog.setExtractionError("Extraction failed");
         }
-        static void cancelOverwrite(VideoExtractorDialog& dialog) { dialog.handleClick("overwrite-no"); }
+        static void cancelOverwrite(VideoExtractorDialog& dialog) { dialog.handleClick("overwrite-cancel"); }
         static bool pending(const VideoExtractorDialog& dialog) { return dialog.pending_params_set_; }
-        static void confirmOverwrite(VideoExtractorDialog& dialog) { dialog.handleClick("overwrite-yes"); }
+        static void deleteExisting(VideoExtractorDialog& dialog) { dialog.handleClick("overwrite-delete"); }
+        static void proceedOverwrite(VideoExtractorDialog& dialog) { dialog.handleClick("overwrite-proceed"); }
         static bool waitIdle(const VideoExtractorDialog& dialog) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
             while (dialog.extracting_.load()) {
@@ -389,7 +518,9 @@ namespace lfs::gui {
 namespace {
     bool writeProbedVideoWithRate(const std::filesystem::path& path, const char* container,
                                   AVCodecID codec_id, int frame_count, int leading_frames,
-                                  int rate_numerator, int rate_denominator, bool variable_rate = false);
+                                  int rate_numerator, int rate_denominator,
+                                  bool variable_rate = false, int frame_pattern_step = 8,
+                                  int rotation_degrees = 0);
 
     class FpsTestRenderInterface final : public Rml::RenderInterface {
     public:
@@ -858,6 +989,40 @@ TEST(VideoEncoderTimingTest, EncodedFramesHaveRequestedDurationAndRate) {
     }
 }
 
+// Fails when samples one keyframe apart seek again (6 seeks at 2 fps), when samples two keyframes apart stop seeking
+// (1 seek at 0.5 fps), or when decoding on selects another frame than a seek would.
+TEST(VideoFrameExtractorOutputNaming, SparseFpsSeeksOnlyAcrossWholeKeyframeIntervals) {
+    if (!cudaAvailable())
+        GTEST_SKIP() << "Requires NVDEC";
+
+    TempDir temp("sparse_seek");
+    const std::filesystem::path video_path = temp.path / "source.mp4";
+    std::string error;
+    // The encoder writes one keyframe per second.
+    ASSERT_TRUE(writeEncodedVideo(video_path, 90, 30, error, 160, 90)) << error;
+
+    for (const auto [fps, seeks, frames] : {std::tuple{2.0, 1, 6u}, std::tuple{0.5, 2, 2u}}) {
+        SCOPED_TRACE(::testing::Message() << "fps=" << fps);
+        const std::filesystem::path output_dir = temp.path / ("frames_" + std::to_string(seeks));
+        std::filesystem::create_directories(output_dir);
+        auto params = extractionParams(video_path, output_dir);
+        params.mode = ExtractionMode::FPS;
+        params.fps = fps;
+        params.end_time = -1.0;
+
+        VideoFrameExtractor extractor;
+        ASSERT_TRUE(extractor.extract(params, error)) << error;
+        const auto metadata = readMetadata(output_dir);
+        const auto& selection = metadata.at("processing").at("frame_selection");
+        ASSERT_EQ(selection.at("strategy"), "keyframe_seek");
+        EXPECT_EQ(selection.at("keyframe_seek_count"), seeks);
+        const auto& written = metadata.at("frames");
+        ASSERT_EQ(written.size(), frames);
+        for (std::size_t i = 0; i < written.size(); ++i)
+            EXPECT_NEAR(written[i].at("timestamp").get<double>(), static_cast<double>(i) / fps, 1e-6);
+    }
+}
+
 TEST(VideoFrameExtractorOutputNaming, IntervalUsesSourceFrameNumbers) {
     if (!cudaAvailable())
         GTEST_SKIP() << "CUDA device required for VideoEncoder-based fixture";
@@ -1138,6 +1303,7 @@ namespace {
                                  "IMG_1234.JPG", "holiday.png", "_DSC8679.JPG", "my_garden.jpeg",
                                  "extraction_metadata.json"})
             EXPECT_FALSE(isGeneratedFrameFilename("frame_%05d", name)) << name;
+        EXPECT_TRUE(isGeneratedFrameFilename("frame_%05d", "frame_00000.png", true));
         EXPECT_TRUE(isGeneratedFrameFilename("clip 50%%_{x}_frame_%05d", "clip 50%_{x}_frame_00003.png"));
         EXPECT_FALSE(isGeneratedFrameFilename("clip 50%%_{x}_frame_%05d", "clip 50%%_{x}_frame_00003.png"));
         EXPECT_TRUE(isGeneratedFrameFilename("shot_", "shot_7.png"));
@@ -1150,6 +1316,47 @@ namespace {
                     << pattern << ' ' << number;
             }
         }
+    }
+
+    TEST(VideoFrameExtractorOutputNaming, FirstSourceFrameNumberOffsetsOutputNames) {
+        TempDir temp("first_source_frame_number");
+        const auto source = temp.path / "clip.mp4";
+        ASSERT_TRUE(writeProbedVideo(source, "mp4", AV_CODEC_ID_MPEG4, 65, 0));
+        auto params = extractionParams(source, temp.path / "frames");
+        params.frame_interval = 30;
+        params.end_time = -1.0;
+        params.first_source_frame_number = 0;
+
+        VideoFrameExtractor extractor;
+        std::string error;
+        ASSERT_TRUE(extractor.extract(params, error)) << error;
+        EXPECT_TRUE(std::filesystem::exists(params.output_dir / "frame_0.png"));
+        EXPECT_TRUE(std::filesystem::exists(params.output_dir / "frame_30.png"));
+        EXPECT_TRUE(std::filesystem::exists(params.output_dir / "frame_60.png"));
+        EXPECT_FALSE(std::filesystem::exists(params.output_dir / "frame_1.png"));
+
+        std::ifstream metadata_file(params.output_dir / "extraction_metadata.json");
+        ASSERT_TRUE(metadata_file.good());
+        EXPECT_EQ(nlohmann::json::parse(metadata_file).at("first_source_frame_number"), 0);
+    }
+
+    TEST(VideoExtractorNaming, ExistingZeroBasedOutputIsDetectedAcrossNumberBases) {
+        TempDir temp("zero_based_existing_output");
+        const auto source = temp.path / "clip.mp4";
+        const auto output = temp.path / "frames";
+        ASSERT_TRUE(writeProbedVideo(source, "mp4", AV_CODEC_ID_MPEG4, 5, 0));
+        std::filesystem::create_directories(output);
+        std::ofstream(output / "frame_00000.png") << "earlier zero-based frame";
+
+        lfs::gui::VideoExtractorDialog dialog;
+        ASSERT_TRUE(dialog.openVideoPath(source));
+        // The default base is one, but zero-based output from an earlier run still conflicts.
+        ASSERT_TRUE(NamingAccess::begin(dialog, output));
+        ASSERT_TRUE(NamingAccess::pending(dialog));
+        NamingAccess::deleteExisting(dialog);
+        ASSERT_TRUE(NamingAccess::waitIdle(dialog));
+        EXPECT_FALSE(std::filesystem::exists(output / "frame_00000.png"));
+        EXPECT_TRUE(std::filesystem::exists(output / "frame_00001.png"));
     }
 
     TEST(VideoExtractorNaming, ExistingImagesInTheOutputFolderAreKept) {
@@ -1172,17 +1379,47 @@ namespace {
         for (const auto& name : existing)
             EXPECT_TRUE(std::filesystem::exists(output / name)) << name;
 
-        // Earlier frames and metadata ask first; confirming removes only those.
+        // Existing generated output asks first. Proceed keeps unrelated generated output.
+        std::ofstream(output / "frame_00001.png") << "old frame";
         std::ofstream(output / "frame_00099.jpg") << "earlier";
         std::ofstream(output / "extraction_metadata.json") << "{}";
         ASSERT_TRUE(NamingAccess::begin(dialog, output));
         ASSERT_TRUE(NamingAccess::pending(dialog));
-        NamingAccess::confirmOverwrite(dialog);
+        NamingAccess::proceedOverwrite(dialog);
+        ASSERT_TRUE(NamingAccess::waitIdle(dialog));
+        EXPECT_GT(std::filesystem::file_size(output / "frame_00001.png"), 100u);
+        EXPECT_TRUE(std::filesystem::exists(output / "frame_00099.jpg"));
+        EXPECT_TRUE(std::filesystem::exists(output / "extraction_metadata.json"));
+        for (const auto& name : existing)
+            EXPECT_TRUE(std::filesystem::exists(output / name)) << name;
+
+        // Deleting existing output leaves metadata alone when this run does not write metadata.
+        ASSERT_TRUE(NamingAccess::begin(dialog, output));
+        ASSERT_TRUE(NamingAccess::pending(dialog));
+        NamingAccess::deleteExisting(dialog);
         ASSERT_TRUE(NamingAccess::waitIdle(dialog));
         EXPECT_FALSE(std::filesystem::exists(output / "frame_00099.jpg"));
+        EXPECT_TRUE(std::filesystem::exists(output / "extraction_metadata.json"));
         EXPECT_TRUE(std::filesystem::exists(output / "frame_00001.png"));
         for (const auto& name : existing)
             EXPECT_TRUE(std::filesystem::exists(output / name)) << name;
+    }
+
+    TEST(VideoExtractorNaming, ZeroBasedExistingOutputAsksBeforeExtraction) {
+        TempDir temp("zero_based_existing_output");
+        const auto source = temp.path / "clip.mp4";
+        ASSERT_TRUE(writeProbedVideo(source, "mp4", AV_CODEC_ID_MPEG4, 5, 0));
+        const auto output = temp.path / "frames";
+        std::filesystem::create_directories(output);
+        std::ofstream(output / "frame_00000.png") << "earlier";
+
+        lfs::gui::VideoExtractorDialog dialog;
+        ASSERT_TRUE(dialog.openVideoPath(source));
+        NamingAccess::firstSourceFrameNumber(dialog, 0);
+        ASSERT_TRUE(NamingAccess::begin(dialog, output));
+        EXPECT_TRUE(NamingAccess::pending(dialog));
+        NamingAccess::cancelOverwrite(dialog);
+        EXPECT_TRUE(std::filesystem::exists(output / "frame_00000.png"));
     }
 
     TEST(VideoExtractorNaming, ResolvedPresetProducesRealFilesAndMetadata) {
@@ -1306,6 +1543,33 @@ namespace {
         choose(2);
         choose(4);
         EXPECT_EQ(input->GetValue(), "{{label}}_{video}_%06d");
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, MetadataOnlyPromptsOnlyWhenItWillBeReplaced) {
+        TempDir temp("metadata_only_conflict");
+        const auto source = temp.path / "source.mp4";
+        ASSERT_TRUE(writeProbedVideo(source, "mp4", AV_CODEC_ID_MPEG4, 5, 0));
+        ASSERT_TRUE(dialog->openVideoPath(source));
+        auto* const metadata_toggle = document->GetElementById("generate-metadata");
+        ASSERT_NE(metadata_toggle, nullptr);
+
+        const auto retained_metadata = temp.path / "retained_metadata";
+        std::filesystem::create_directories(retained_metadata);
+        std::ofstream(retained_metadata / "extraction_metadata.json") << "{}";
+        ASSERT_TRUE(NamingAccess::begin(*dialog, retained_metadata));
+        EXPECT_FALSE(NamingAccess::pending(*dialog));
+        ASSERT_TRUE(NamingAccess::waitIdle(*dialog));
+        EXPECT_TRUE(std::filesystem::exists(retained_metadata / "extraction_metadata.json"));
+
+        metadata_toggle->SetAttribute("checked", "checked");
+        const auto replaced_metadata = temp.path / "replaced_metadata";
+        std::filesystem::create_directories(replaced_metadata);
+        std::ofstream(replaced_metadata / "extraction_metadata.json") << "{}";
+        ASSERT_TRUE(NamingAccess::begin(*dialog, replaced_metadata));
+        EXPECT_TRUE(NamingAccess::pending(*dialog));
+        EXPECT_EQ(document->GetElementById("overwrite-message")->GetInnerRML(),
+                  LOC("video_extractor.overwrite_prompt_metadata"));
+        NamingAccess::cancelOverwrite(*dialog);
     }
 
     TEST_F(VideoExtractorNamingUiTest, SourceChangesRefreshPreviewAndInvalidPatternBlocksRealStart) {
@@ -1458,6 +1722,175 @@ namespace {
         EXPECT_NE(document->GetElementById("pattern-example")->GetInnerRML().find(".jpg"), std::string::npos);
         EXPECT_EQ(std::filesystem::file_size(output / "existing.png"), 1);
     }
+
+    TEST_F(VideoExtractorNamingUiTest, BatchParamsUseSeparateDirectoriesAndPerItemSettings) {
+        const auto root = std::filesystem::path("batch_output");
+        NamingAccess::configureBatch(*dialog,
+                                     {"capture_a/clip.mp4", "capture_b/clip.mp4"},
+                                     root);
+        NamingAccess::batchItemSettings(*dialog, 0, 1.25, 4.5, 90, 12.0, 24.0);
+        NamingAccess::batchItemSettings(*dialog, 1, 0.5, 3.0, 270, 8.0, 30.0);
+
+        std::vector<lfs::gui::VideoExtractionParams> params;
+        std::string error;
+        ASSERT_TRUE(NamingAccess::buildBatch(*dialog, params, error)) << error;
+        ASSERT_EQ(params.size(), 2u);
+        EXPECT_EQ(params[0].output_dir, root / "clip");
+        EXPECT_EQ(params[1].output_dir, root / "clip_2");
+        EXPECT_DOUBLE_EQ(params[0].start_time, 1.25);
+        EXPECT_DOUBLE_EQ(params[0].end_time, 4.5);
+        EXPECT_EQ(params[0].rotation, 90);
+        EXPECT_DOUBLE_EQ(params[1].start_time, 0.5);
+        EXPECT_DOUBLE_EQ(params[1].end_time, 3.0);
+        EXPECT_EQ(params[1].rotation, 270);
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, BatchProbePreservesUnselectedVideoRotationAndFps) {
+        TempDir temp("batch_unselected_rotation");
+        const auto first = temp.path / "first.mp4";
+        const auto portrait = temp.path / "portrait.mp4";
+        ASSERT_TRUE(writeProbedVideoWithRate(first, "mp4", AV_CODEC_ID_MPEG4, 6, 0, 60, 1));
+        ASSERT_TRUE(writeProbedVideoWithRate(portrait, "mp4", AV_CODEC_ID_MPEG4, 6, 0, 24, 1,
+                                             false, 8, 90));
+
+        NamingAccess::addBatch(*dialog, {first, portrait});
+        NamingAccess::outputRoot(*dialog, temp.path / "output");
+        NamingAccess::fps(*dialog, 30.0f);
+
+        std::vector<lfs::gui::VideoExtractionParams> params;
+        std::string error;
+        ASSERT_TRUE(NamingAccess::buildBatch(*dialog, params, error)) << error;
+        ASSERT_EQ(params.size(), 2u);
+        EXPECT_EQ(params[1].rotation, 90);
+        EXPECT_DOUBLE_EQ(params[1].fps, 24.0);
+        EXPECT_GT(params[1].end_time, 0.0);
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, BatchProbesPublishOnlyAfterTheWorkerCompletes) {
+        TempDir temp("batch_probe_async_publish");
+        const auto first = temp.path / "first.mp4";
+        const auto second = temp.path / "second.mp4";
+        ASSERT_TRUE(writeProbedVideoWithRate(first, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30, 1));
+        ASSERT_TRUE(writeProbedVideoWithRate(second, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30, 1));
+
+        ASSERT_TRUE(NamingAccess::queueBatch(*dialog, {first, second}));
+        EXPECT_EQ(NamingAccess::batchItemCount(*dialog), 0u);
+        ASSERT_TRUE(NamingAccess::waitForBatchProbes(*dialog));
+        EXPECT_EQ(NamingAccess::batchItemCount(*dialog), 2u);
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, BatchProbeDoesNotRequireContinuousRedraw) {
+        NamingAccess::batchProbeState(*dialog, true, true);
+        EXPECT_FALSE(NamingAccess::hasDynamicState(*dialog));
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, BatchAddReportsTheNumberOfUnreadableVideos) {
+        TempDir temp("batch_unreadable_videos");
+
+        NamingAccess::addBatch(*dialog, {temp.path / "missing_a.mp4", temp.path / "missing_b.mp4"});
+
+        EXPECT_EQ(NamingAccess::sourceState(*dialog)["error"].get<std::string>(),
+                  "2 videos could not be opened; see log for details.");
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, SelectingBatchItemPreservesSharedOutputSettings) {
+        TempDir temp("batch_shared_settings");
+        const auto first = temp.path / "first.mp4";
+        const auto second = temp.path / "second.mp4";
+        ASSERT_TRUE(writeProbedVideoWithRate(first, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30, 1));
+        ASSERT_TRUE(writeProbedVideoWithRate(second, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 24, 1));
+
+        NamingAccess::addBatch(*dialog, {first, second});
+        NamingAccess::sharedOutputSettings(*dialog, 800, 600, true);
+        NamingAccess::selectBatch(*dialog, 1);
+
+        EXPECT_EQ(NamingAccess::customWidth(*dialog), 800);
+        EXPECT_EQ(NamingAccess::customHeight(*dialog), 600);
+        EXPECT_TRUE(NamingAccess::hdrToSdr(*dialog));
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, DroppedVideoIsAddedWithoutChangingTheBatchOutputRoot) {
+        TempDir temp("batch_drop");
+        const auto first = temp.path / "first.mp4";
+        const auto dropped = temp.path / "dropped.mp4";
+        const auto output_root = temp.path / "output";
+        ASSERT_TRUE(writeProbedVideoWithRate(first, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30, 1));
+        ASSERT_TRUE(writeProbedVideoWithRate(dropped, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30, 1));
+
+        NamingAccess::addBatch(*dialog, {first});
+        NamingAccess::outputRoot(*dialog, output_root);
+        ASSERT_TRUE(dialog->openVideoPath(dropped));
+        ASSERT_TRUE(NamingAccess::waitForBatchProbes(*dialog));
+        EXPECT_EQ(NamingAccess::outputPath(*dialog), output_root);
+
+        std::vector<lfs::gui::VideoExtractionParams> params;
+        std::string error;
+        ASSERT_TRUE(NamingAccess::buildBatch(*dialog, params, error)) << error;
+        ASSERT_EQ(params.size(), 2u);
+        EXPECT_EQ(params[0].output_dir, output_root / "first");
+        EXPECT_EQ(params[1].output_dir, output_root / "dropped");
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, SecondBrowseSelectionPromotesTheExistingVideoToABatch) {
+        TempDir temp("batch_second_browse");
+        const auto first = temp.path / "clip.mp4";
+        const auto second = temp.path / "other" / "clip.mp4";
+        const auto output_root = temp.path / "output";
+        std::filesystem::create_directories(second.parent_path());
+        ASSERT_TRUE(writeProbedVideoWithRate(first, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30, 1));
+        ASSERT_TRUE(writeProbedVideoWithRate(second, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30, 1));
+
+        const auto first_with_dot_segment = first.parent_path() / "." / first.filename();
+        ASSERT_TRUE(dialog->openVideoPath(first_with_dot_segment));
+        NamingAccess::sharedOutputSettings(*dialog, 800, 600, false);
+        NamingAccess::addFromBrowse(*dialog, {second});
+        NamingAccess::outputRoot(*dialog, output_root);
+
+        std::vector<lfs::gui::VideoExtractionParams> params;
+        std::string error;
+        ASSERT_TRUE(NamingAccess::buildBatch(*dialog, params, error)) << error;
+        ASSERT_EQ(params.size(), 2u);
+        EXPECT_EQ(params[0].output_dir, output_root / "clip");
+        EXPECT_EQ(params[1].output_dir, output_root / "clip_2");
+        EXPECT_EQ(params[0].custom_width, 800);
+        EXPECT_EQ(params[1].custom_height, 600);
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, BatchRequiresAnExplicitOutputRoot) {
+        NamingAccess::configureBatch(*dialog, {"capture/clip.mp4"}, {});
+        std::vector<lfs::gui::VideoExtractionParams> params;
+        std::string error;
+        EXPECT_FALSE(NamingAccess::buildBatch(*dialog, params, error));
+        EXPECT_EQ(error, LOC("video_extractor.batch_no_output_root"));
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, BatchRowsDisambiguateDuplicateNamesAndExposePaths) {
+        NamingAccess::configureBatch(*dialog,
+                                     {"capture_a/clip.mp4", "capture_b/clip.mp4"},
+                                     "batch_output");
+        NamingAccess::syncBatchList(*dialog);
+        const auto rows = document->GetElementById("batch-video-list")->GetInnerRML();
+        EXPECT_NE(rows.find("clip.mp4 (1)"), std::string::npos);
+        EXPECT_NE(rows.find("clip.mp4 (2)"), std::string::npos);
+        const auto* const first = document->GetElementById("batch-video-0");
+        ASSERT_NE(first, nullptr);
+        const auto tooltip = first->GetAttribute<Rml::String>("title", "");
+        EXPECT_NE(tooltip.find("capture_a/clip.mp4"), std::string::npos);
+        EXPECT_NE(tooltip.find("batch_output/clip"), std::string::npos);
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, BatchProgressIsGlobalAcrossVideos) {
+        NamingAccess::configureBatch(*dialog,
+                                     {"capture/a.mp4", "capture/b.mp4", "capture/c.mp4"},
+                                     "batch_output");
+        NamingAccess::batchProgress(*dialog, 1, 25, 100);
+        NamingAccess::syncExtractionStatus(*dialog);
+
+        const auto* const progress = document->GetElementById("progress-bar");
+        ASSERT_NE(progress, nullptr);
+        EXPECT_NEAR(std::stof(progress->GetAttribute<Rml::String>("value", "")), 1.25f / 3.0f, 1.0e-4f);
+        EXPECT_NE(document->GetElementById("progress-text")->GetInnerRML().find("2/3"), std::string::npos);
+    }
 } // namespace
 
 TEST(VideoFrameExtractorOutputNaming, TrimmedRangeKeepsOriginalSourceFrameNumbers) {
@@ -1527,7 +1960,9 @@ namespace {
     // the video stream (MPEG-TS, or MPEG-4 Part 2 in MP4 with leading frames before an edit list).
     bool writeProbedVideoWithRate(const std::filesystem::path& path, const char* const container,
                                   const AVCodecID codec_id, const int frame_count, const int leading_frames,
-                                  const int rate_numerator, const int rate_denominator, const bool variable_rate) {
+                                  const int rate_numerator, const int rate_denominator,
+                                  const bool variable_rate, const int frame_pattern_step,
+                                  const int rotation_degrees) {
         AVFormatContext* format = nullptr;
         const std::string path_utf8 = path.string();
         if (avformat_alloc_output_context2(&format, nullptr, container, path_utf8.c_str()) < 0 || !format)
@@ -1548,6 +1983,14 @@ namespace {
                 encoder->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
             ok = avcodec_open2(encoder, codec, nullptr) >= 0 &&
                  avcodec_parameters_from_context(stream->codecpar, encoder) >= 0;
+            if (ok && rotation_degrees != 0) {
+                AVPacketSideData* const display_matrix = av_packet_side_data_new(
+                    &stream->codecpar->coded_side_data, &stream->codecpar->nb_coded_side_data,
+                    AV_PKT_DATA_DISPLAYMATRIX, 9 * sizeof(int32_t), 0);
+                ok = display_matrix != nullptr;
+                if (ok)
+                    av_display_rotation_set(reinterpret_cast<int32_t*>(display_matrix->data), rotation_degrees);
+            }
         }
         if (ok) {
             stream->time_base = encoder->time_base;
@@ -1575,7 +2018,8 @@ namespace {
             ok = av_frame_make_writable(frame) >= 0;
             for (int y = 0; y < frame->height; ++y)
                 for (int x = 0; x < frame->width; ++x)
-                    frame->data[0][y * frame->linesize[0] + x] = static_cast<uint8_t>((x + y + index * 8) & 255);
+                    frame->data[0][y * frame->linesize[0] + x] =
+                        static_cast<uint8_t>((x + y + index * frame_pattern_step) & 255);
             for (int plane = 1; plane < 3; ++plane)
                 for (int y = 0; y < frame->height / 2; ++y)
                     for (int x = 0; x < frame->width / 2; ++x)
@@ -1991,6 +2435,127 @@ TEST(VideoDecoderFallback, OddSizedH264444OpensSeeksAndExtracts) {
 
 TEST(VideoDecoderFallback, H264420StillOpensSeeksAndExtracts) {
     checkDecoderFixture("h264_420.mp4", 64, 48);
+}
+
+TEST(VideoDecoderFallback, LongRawH264PreviewOpenReadsOnlyTheProbeWindow) {
+    TempDir temp("long_raw_h264_probe");
+    const auto source = temp.path / "long_stream.h264";
+    constexpr int frame_count = 300000;
+    ASSERT_TRUE(writeProbedVideoWithRate(source, "h264", AV_CODEC_ID_H264,
+                                         frame_count, 0, 30, 1, false, 3));
+    const auto source_size = std::filesystem::file_size(source);
+    ASSERT_GT(source_size, 8 * 1024 * 1024);
+
+    lfs::io::VideoPlayer player;
+#if defined(__linux__)
+    const auto bytes_before_open = processReadChars();
+#endif
+    ASSERT_TRUE(player.open(source)) << player.takeError();
+#if defined(__linux__)
+    const auto bytes_after_open = processReadChars();
+    ASSERT_NE(bytes_before_open, std::numeric_limits<uint64_t>::max());
+    ASSERT_NE(bytes_after_open, std::numeric_limits<uint64_t>::max());
+    const auto open_read_bytes = bytes_after_open - bytes_before_open;
+    EXPECT_LT(open_read_bytes, source_size / 2)
+        << "VideoPlayer::open read " << open_read_bytes
+        << " of " << source_size << " source bytes";
+#endif
+    EXPECT_NE(player.currentFrameData(), nullptr);
+    EXPECT_DOUBLE_EQ(player.duration(), 0.0);
+    player.close();
+}
+
+TEST(VideoFrameExtractorOutputNaming, TimestampedGeneratedClipKeepsFrameHashes) {
+    TempDir temp("timestamped_frame_hashes");
+    const auto source = temp.path / "timestamped.mp4";
+    constexpr int frame_count = 6;
+    ASSERT_TRUE(writeProbedVideoWithRate(source, "mp4", AV_CODEC_ID_MPEG4,
+                                         frame_count, 0, 25, 1, false, 3));
+
+    auto params = extractionParams(source, temp.path / "frames");
+    params.end_time = -1.0;
+    VideoFrameExtractor extractor;
+    std::string error;
+    ASSERT_TRUE(extractor.extract(params, error)) << error;
+    ASSERT_EQ(countPngFiles(params.output_dir), frame_count);
+
+    const std::vector<uint64_t> expected_hashes{
+        10352205363336413648ull, 7130132853937651006ull,
+        5101170480245039264ull, 7651893699709116084ull,
+        16033737104459939555ull, 3741773652504481905ull};
+    std::vector<uint64_t> hashes;
+    for (int index = 1; index <= frame_count; ++index) {
+        const auto frame = params.output_dir / ("frame_" + std::to_string(index) + ".png");
+        ASSERT_TRUE(std::filesystem::exists(frame));
+        hashes.push_back(hashFile(frame));
+    }
+    EXPECT_EQ(hashes, expected_hashes);
+}
+
+#if defined(__linux__)
+TEST(VideoDecoderFallback, TimestampedInputWithoutDurationKeepsTheExistingError) {
+    TempDir temp("timestamped_without_duration");
+    const auto source = temp.path / "timestamped.ts";
+    ASSERT_TRUE(writeProbedVideoWithRate(source, "mpegts", AV_CODEC_ID_MPEG2VIDEO,
+                                         8, 0, 25, 1, false, 3));
+    const auto fifo = temp.path / "timestamped.fifo";
+    ASSERT_EQ(::mkfifo(fifo.c_str(), 0600), 0);
+
+    std::thread writer([&] {
+        std::ifstream input(source, std::ios::binary);
+        std::ofstream output(fifo, std::ios::binary);
+        output << input.rdbuf();
+    });
+    auto params = extractionParams(fifo, temp.path / "frames");
+    params.end_time = -1.0;
+    VideoFrameExtractor extractor;
+    std::string error;
+    const bool extracted = extractor.extract(params, error);
+    writer.join();
+
+    EXPECT_FALSE(extracted);
+    EXPECT_EQ(error, "Could not determine video duration");
+}
+#endif
+
+TEST(VideoDecoderFallback, RawH264WithoutPacketTimestampsOpensAndExtracts) {
+    TempDir temp("raw_h264_no_timestamps");
+    const auto source = temp.path / "raw_stream.mp4";
+    constexpr int frame_count = 12;
+    ASSERT_TRUE(writeProbedVideoWithRate(source, "h264", AV_CODEC_ID_H264,
+                                         frame_count, 0, 30, 1, false));
+
+    AVFormatContext* format = nullptr;
+    ASSERT_EQ(avformat_open_input(&format, source.string().c_str(), nullptr, nullptr), 0);
+    AVPacket* packet = av_packet_alloc();
+    ASSERT_NE(packet, nullptr);
+    ASSERT_EQ(av_read_frame(format, packet), 0);
+    EXPECT_EQ(packet->pts, AV_NOPTS_VALUE);
+    EXPECT_EQ(packet->dts, AV_NOPTS_VALUE);
+    av_packet_free(&packet);
+    avformat_close_input(&format);
+
+    lfs::io::VideoPlayer player;
+    ASSERT_TRUE(player.open(source)) << player.takeError();
+    EXPECT_NE(player.currentFrameData(), nullptr);
+    const double fps = player.fps();
+    ASSERT_GT(fps, 1.0);
+    ASSERT_LT(fps, 1000.0);
+    EXPECT_DOUBLE_EQ(player.duration(), 0.0);
+    const double seek_time = 5.0 / fps;
+    player.seek(seek_time);
+    EXPECT_NEAR(player.currentTime(), seek_time, 0.001);
+    player.close();
+
+    auto params = extractionParams(source, temp.path / "frames");
+    params.end_time = -1.0;
+    VideoFrameExtractor extractor;
+    std::string error;
+    ASSERT_TRUE(extractor.extract(params, error)) << error;
+    EXPECT_EQ(countPngFiles(params.output_dir), frame_count);
+    for (int number = 1; number <= frame_count; ++number)
+        EXPECT_TRUE(std::filesystem::exists(params.output_dir /
+                                            ("frame_" + std::to_string(number) + ".png")));
 }
 
 TEST(VideoDecoderFallback, FailedReplacementClearsDialogPathsAndCanRecover) {

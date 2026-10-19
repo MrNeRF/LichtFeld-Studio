@@ -78,6 +78,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
     class VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
     class VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
+    class VisualizerImplResetTest_RecoverThenAutosaveEditsForNextRecovery_Test;
     class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
     class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
     class VisualizerImplResetTest_StartupPrunesOlderUnlockedScratchFilesAfterOffer_Test;
@@ -132,9 +133,11 @@ namespace lfs::vis {
             void setRmlResizeDeferring(bool defer) { rmlui_manager_.setResizeDeferring(defer); }
             void prepareInput();
             void prepareLayout();
-            RmlUIManager::InputDispatchResult dispatchInputEvent(const SDL_Event& event) {
-                return rmlui_manager_.dispatchInputEvent(event);
+            bool processNativeWindowEvent(const SDL_Event& event) { return rmlui_manager_.processNativeWindowEvent(event); }
+            bool requestNativeWindowCapture(const std::string& panel_id, std::function<void(lfs::Result<VulkanContext::WindowCapture>)> callback) {
+                return rmlui_manager_.requestNativeWindowCapture(panel_id, std::move(callback));
             }
+            RmlUIManager::InputDispatchResult dispatchInputEvent(const SDL_Event& event);
             void ensureCjkFontsLoaded() { rmlui_manager_.ensureCjkFontsLoaded(); }
 
             // Sub-manager access
@@ -148,6 +151,9 @@ namespace lfs::vis {
             void enqueueToast(ToastRequest request);
             [[nodiscard]] GizmoManager& gizmo() { return gizmo_manager_; }
             [[nodiscard]] const GizmoManager& gizmo() const { return gizmo_manager_; }
+            // Runs the overlay's Python document sync on the next frame even when no
+            // store change or UI event would trigger it.
+            void requestViewportOverlaySync() { rml_viewport_overlay_.requestDocumentSync(); }
             [[nodiscard]] PanelLayoutManager& panelLayout() { return panel_layout_; }
             [[nodiscard]] const PanelLayoutManager& panelLayout() const { return panel_layout_; }
             void focusMainPanelTab(std::string panel_id) { focus_panel_name_ = std::move(panel_id); }
@@ -195,9 +201,7 @@ namespace lfs::vis {
             getWindowStates() const {
                 return window_states_;
             }
-            [[nodiscard]] std::string scenePanelActiveTab() const;
             [[nodiscard]] std::unordered_set<int> visibleCameraUids() const;
-            void setScenePanelActiveTab(std::string_view tab);
             [[nodiscard]] bool selectAllSceneNodesIfFocused();
             [[nodiscard]] bool toggleSceneSelectionVisibilityIfFocused();
             [[nodiscard]] bool toggleSceneSelectionTrainingIfFocused();
@@ -279,6 +283,7 @@ namespace lfs::vis {
             friend class lfs::vis::VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
+            friend class lfs::vis::VisualizerImplResetTest_RecoverThenAutosaveEditsForNextRecovery_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupPrunesOlderUnlockedScratchFilesAfterOffer_Test;
@@ -518,6 +523,7 @@ namespace lfs::vis {
             SceneTreeSessionChrome pending_scene_tree_chrome_;
             uint64_t panel_frame_serial_ = 0;
             uint8_t ui_layout_settle_frames_ = 0;
+            bool ui_layout_changed_during_resize_ = false;
             EditorContextUpdateStamp last_editor_context_update_stamp_;
             glm::vec2 last_ui_layout_work_pos_{-1.0f, -1.0f};
             glm::vec2 last_ui_layout_work_size_{-1.0f, -1.0f};
@@ -546,6 +552,8 @@ namespace lfs::vis {
             RightPanelPointerRegion right_panel_pointer_capture_region_ =
                 RightPanelPointerRegion::None;
             bool right_panel_resize_edge_was_hovered_ = false;
+            // Axis widget hover in the last drawn frame (see GizmoManager::viewportGizmoHover).
+            int drawn_viewport_gizmo_hover_ = -1;
             bool bottom_dock_pointer_live_capture_ = false;
             bool left_dock_pointer_live_capture_ = false;
             bool dock_resize_interaction_active_ = false;

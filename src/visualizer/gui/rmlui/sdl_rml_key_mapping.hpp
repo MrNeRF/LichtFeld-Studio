@@ -226,6 +226,14 @@ namespace lfs::vis::gui {
         return Rml::Input::KI_UNKNOWN;
     }
 
+    inline Rml::Input::KeyIdentifier sdlTextShortcutToRml(SDL_Scancode sc, SDL_Keycode keycode,
+                                                          SDL_Keymod modifiers) {
+        if ((modifiers & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) && !(modifiers & SDL_KMOD_ALT) &&
+            keycode >= SDLK_A && keycode <= SDLK_Z)
+            return sdlKeycodeToRml(keycode);
+        return sdlScancodeToRml(sc);
+    }
+
     inline int sdlModsToRml(const SDL_Keymod sdl_mods) {
         int retval = 0;
         if (sdl_mods & SDL_KMOD_CTRL)

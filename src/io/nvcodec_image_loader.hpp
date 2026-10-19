@@ -7,6 +7,7 @@
 #include "core/tensor.hpp"
 #include <filesystem>
 #include <memory>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -16,13 +17,22 @@ typedef struct nvimgcodecDecoder* nvimgcodecDecoder_t;
 typedef struct nvimgcodecEncoder* nvimgcodecEncoder_t;
 
 namespace lfs::io {
+    struct MaskedImageFill;
 
     /**
      * @brief Output format for image decoding
      */
     enum class DecodeFormat {
-        RGB,      // 3-channel RGB [C,H,W] or [H,W,C]
-        Grayscale // 1-channel grayscale [H,W]
+        RGB,       // 3-channel RGB [C,H,W] or [H,W,C]
+        Grayscale, // 1-channel grayscale [H,W]
+        Mask       // Grayscale with correctly rounded byte mask normalization
+    };
+
+    // Channel order of a 3-channel RGB tensor. Callers state this. A CHW image
+    // whose width is 3 has the same shape pattern as HWC, so the shape cannot decide.
+    enum class RgbLayout {
+        HWC, // interleaved [H, W, 3]
+        CHW  // planar [3, H, W]
     };
 
     /**
@@ -84,7 +94,7 @@ namespace lfs::io {
             int max_width = 0,
             void* cuda_stream = nullptr,
             DecodeFormat format = DecodeFormat::RGB,
-            bool output_uint8 = false);
+            bool output_uint8 = false, const MaskedImageFill* masked_fill = nullptr);
 
         /**
          * @brief Decode JPEG from memory to GPU
@@ -103,7 +113,7 @@ namespace lfs::io {
             int max_width = 0,
             void* cuda_stream = nullptr,
             DecodeFormat format = DecodeFormat::RGB,
-            bool output_uint8 = false);
+            bool output_uint8 = false, const MaskedImageFill* masked_fill = nullptr);
 
         std::vector<lfs::core::Tensor> decode_jpeg_batch_from_spans(
             const std::vector<std::pair<const uint8_t*, size_t>>& jpeg_spans,
@@ -119,9 +129,12 @@ namespace lfs::io {
             int quality = 100,
             void* cuda_stream = nullptr);
 
-        // Encode GPU tensor to JPEG2k bytes (RGB 16bits)
+        // Encode Float32 CUDA RGB to lossless 16-bit JPEG2000.
+        // layout is HWC [H,W,3] or CHW [3,H,W] and is not inferred from the shape.
+        // CHW is permuted once to interleaved RGB. Contiguous HWC is not copied.
         std::vector<uint8_t> encode_to_jpeg2k(
             const lfs::core::Tensor& image,
+            RgbLayout layout,
             void* cuda_stream = nullptr,
             bool high_throughput = true);
 
@@ -157,7 +170,8 @@ namespace lfs::io {
             const std::vector<uint8_t>& jpeg2k_data,
             void* cuda_stream = nullptr,
             bool synchronize = true,
-            bool allow_uint8 = false);
+            bool allow_uint8 = false,
+            bool exact_mask = false);
 
         std::vector<lfs::core::Tensor> decode_jpeg2k_16bit_batch_from_spans(
             const std::vector<std::pair<const uint8_t*, size_t>>& jpeg2k_spans,
@@ -195,9 +209,12 @@ namespace lfs::io {
             void* cuda_stream = nullptr);
 
         /**
-         * @brief Check if nvImageCodec is available and working
+         * @brief Check if nvImageCodec decodes JPEG on this system
          */
         static bool is_available();
+
+        /// The JPEG decoder this process uses, for run records.
+        [[nodiscard]] static std::string_view jpeg_decoder();
 
     private:
         struct Impl;

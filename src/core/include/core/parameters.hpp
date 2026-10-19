@@ -7,6 +7,7 @@
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/mesh2splat.hpp"
+#include "core/path_utils.hpp"
 
 #include <algorithm>
 #include <array>
@@ -75,6 +76,30 @@ namespace lfs::core {
             Sixteen,
             Float,
         };
+
+        // Pixel sets scored with an evaluation mask: the mask, every valid pixel, the valid pixels outside the mask.
+        enum class EvalPixelSet : uint8_t {
+            Mask,
+            Unmasked,
+            Inverted,
+        };
+        inline constexpr std::array kEvalPixelSets{EvalPixelSet::Mask, EvalPixelSet::Unmasked, EvalPixelSet::Inverted};
+
+        // Mesh2Splat allocates resolution^2 * 6 output splats up front: 2048 is already a 2.4 GB buffer.
+        inline constexpr int kMaxInitMeshResolution = 2048;
+
+        // The set's name in eval_mask_report.
+        [[nodiscard]] inline constexpr std::string_view eval_pixel_set_name(const EvalPixelSet set) noexcept {
+            switch (set) {
+            case EvalPixelSet::Mask:
+                return "mask";
+            case EvalPixelSet::Unmasked:
+                return "unmasked";
+            case EvalPixelSet::Inverted:
+                return "inverted";
+            }
+            return "mask";
+        }
 
         [[nodiscard]] inline constexpr std::string_view eval_bit_depth_name(const EvalBitDepth depth) noexcept {
             switch (depth) {
@@ -180,7 +205,7 @@ namespace lfs::core {
         [[nodiscard]] inline std::filesystem::path default_dataset_output_path(
             const std::filesystem::path& dataset_path) {
             auto base_path = dataset_path;
-            auto ext = dataset_path.extension().string();
+            auto ext = lfs::core::path_to_utf8(dataset_path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -229,9 +254,13 @@ namespace lfs::core {
             float late_lr_anneal = 1.0f;
             float scaling_lr_end = 0.005f;
             float rotation_lr = 0.001f;
-            // Adam and refinement signals only; strategy noise, decay, and resets remain crop-unaware.
+            // With an active crop box: Adam steps and refine scores of splats that no camera sees
+            // inside, in front of or behind the box. Strategy noise, decay and resets are unscaled.
             float cropbox_lr_scale = 0.1f;
             float cropbox_loss_weight = 0.1f;
+            // With an active crop box: share of new splats placed inside it (0..1). 0 = auto: growth
+            // follows the ROI-weighted error with no fixed split.
+            float cropbox_growth_inside = 0.0f;
             float lambda_dssim = 0.2f;
             float min_opacity = 0.005f;
             size_t refine_every = 100;
@@ -263,7 +292,7 @@ namespace lfs::core {
             EvalSpace eval_space = EvalSpace::Distorted;       // Reference image space used for evaluation
             EvalBitDepth eval_bit_depth = EvalBitDepth::Auto;  // Grid the render is quantized to for evaluation
             std::string eval_mask = "";                        // Mesh path, bbox:..., cropbox, masks:<folder>, depth:near,far, points:radius,close or points:<file>; empty disables
-            bool eval_mask_invert = false;                     // Score the pixels outside the evaluation mask instead
+            std::string eval_mask_report = "";                 // Pixel sets scored with the mask, comma list of mask, unmasked and inverted; the first is the headline. Empty: the mask
             float eval_mask_opacity = 0.85f;                   // Rendered opacity a pixel needs to count as covered by a splat mask
             bool enable_save_eval_images = true;               // Save during evaluation images
             bool headless = false;                             // Disable visualization during training
@@ -370,6 +399,9 @@ namespace lfs::core {
             int init_num_pts = 100'000; // Number of random points to initialize
             float init_extent = 3.0f;   // Extent of random point cloud
 
+            // Mesh2Splat raster resolution when the init file is a mesh
+            int init_mesh_resolution = Mesh2SplatOptions{}.resolution_target;
+
             // Sparsity optimization parameters
             bool enable_sparsity = false;
             int sparsify_steps = 15000;
@@ -426,6 +458,8 @@ namespace lfs::core {
         [[nodiscard]] LFS_CORE_API std::optional<std::string_view> eval_mask_splat_file(std::string_view spec);
         [[nodiscard]] LFS_CORE_API std::optional<std::array<float, 6>> parse_eval_mask_box(std::string_view spec);
         [[nodiscard]] LFS_CORE_API std::string normalize_eval_mask(std::string_view spec);
+        // The sets of an eval_mask_report list in order, the first being the headline set; empty for an empty list.
+        [[nodiscard]] LFS_CORE_API lfs::Result<std::vector<EvalPixelSet>> parse_eval_pixel_sets(std::string_view list);
 
         struct LFS_CORE_API LoadingParams {
             bool use_cpu_memory = true;
@@ -441,7 +475,7 @@ namespace lfs::core {
         struct LFS_CORE_API DatasetConfig {
             std::filesystem::path data_path = "";
             std::filesystem::path output_path = "";
-            // True when -o/--output-path was given on this process's command line.
+            // True when an output path was explicitly supplied by CLI or runtime API.
             // Runtime-only: to_json, from_json, and PRMS dataset_json omit it.
             bool output_path_explicit = false;
             std::string output_name = "";

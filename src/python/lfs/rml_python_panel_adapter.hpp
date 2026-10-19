@@ -8,6 +8,7 @@
 #include "gui/panel_registry.hpp"
 #include "rml_im_mode_layout.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <nanobind/nanobind.h>
@@ -28,7 +29,7 @@ namespace lfs::vis::gui {
         RmlPythonPanelAdapter(void* manager, nb::object panel_instance,
                               const std::string& context_name, const std::string& rml_path,
                               const std::string& style = {}, bool has_poll = false,
-                              int height_mode = 0, bool has_draw = false);
+                              int height_mode = 0, bool has_draw = false, bool floating = false);
         ~RmlPythonPanelAdapter() override;
 
         bool onViewportDrop(const std::string& type, const std::string& data) override;
@@ -53,9 +54,21 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::string captureChromeJson() const override;
         void applyChromeJson(std::string_view json) override;
         void setForeground(bool fg);
+        SDL_Window* nativeWindow() const override;
+        bool detachToDesktop(float x, float y, float w, float h) override;
+        bool restoreDesktopWindow() override;
+        void releaseDesktopWindow() override;
+        void resetDesktopRestoreState() override {
+            desktop_reopen_bounds_.reset();
+            desktop_restore_checked_ = false;
+        }
         [[nodiscard]] nb::object panelInstance() const { return panel_instance_; }
 
     private:
+        bool detachHost(float x, float y, float w, float h, bool desktop_coordinates);
+        bool desktop_restore_checked_ = false;
+        std::optional<std::array<float, 4>> desktop_reopen_bounds_;
+        std::optional<float> desktop_reopen_scroll_;
         enum class LifecycleState : uint8_t {
             AwaitingModelBind,
             BindingModel,

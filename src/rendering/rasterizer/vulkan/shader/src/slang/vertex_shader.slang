@@ -1098,7 +1098,13 @@ void main(
   #if TILE_CULLING_MODE == 0
     float2 radii = float2(radius);
   #else
+  #if LFS_3DGUT_PROJECTION && EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
+    float extend = spark_rad_opacity_path
+        ? sqrt(2.0f * power_threshold_for_spark_rad_opacity(gauss.opacities))
+        : extend_from_opacity(gauss.opacities);
+  #else
     float extend = no_diff extend_from_opacity(gauss.opacities);
+  #endif
     float2 radii = sqrt(max(splat_dist.cov_vs.xz, float2(0.0f))) * extend;
   #endif
     if (equirectangular_camera) {
@@ -1205,7 +1211,7 @@ void main(
     }
 
     out_xy_vs[out_idx] = splat.xyz_vs.xy;
-    out_depths[out_idx] = splat.xyz_vs.z;
+    out_depths[out_idx] = splat.xyz_vs.z - uniforms.depth_offset;
     out_inv_cov_vs[out_idx] = splat.inv_cov_vs_opac;
     if (uniforms.splat_render_profile == 1u && !spark_rad_opacity_path) {
         splat.rgb = lfsPortalCompactColor(splat.rgb);

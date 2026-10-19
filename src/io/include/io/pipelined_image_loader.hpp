@@ -125,7 +125,12 @@ namespace lfs::io {
         int aux_target_height = 0;
         MaskParams mask_params;
         bool extract_alpha_as_mask = false;
+        bool alpha_is_transparency = false;
         MaskParams alpha_mask_params;
+        bool fill_masked_rgb = true;
+        bool mask_keep_high_band = false;
+        std::optional<lfs::core::Tensor> rgb_mask;
+        std::uint64_t rgb_mask_revision = 0;
         const lfs::core::UndistortParams* undistort = nullptr;
     };
 
@@ -297,7 +302,16 @@ namespace lfs::io {
             int aux_target_height = 0;
             MaskParams mask_params; // Invert/threshold params (only used if is_mask)
             bool alpha_as_mask = false;
+            bool alpha_is_transparency = false;
             MaskParams alpha_mask_params;
+            bool fill_masked_rgb = true;
+            bool mask_keep_high_band = false;
+            std::optional<std::filesystem::path> rgb_mask_path;
+            std::optional<lfs::core::Tensor> rgb_mask;
+            // Cold RGB and its sidecar share the decoded source mask. The sidecar
+            // is queued first so a single cold worker can satisfy the future.
+            std::shared_ptr<std::promise<lfs::core::Tensor>> mask_source_promise;
+            std::shared_future<lfs::core::Tensor> rgb_mask_source;
             const lfs::core::UndistortParams* undistort = nullptr;
         };
 

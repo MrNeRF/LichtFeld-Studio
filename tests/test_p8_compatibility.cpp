@@ -1318,6 +1318,62 @@ namespace {
         return result;
     }
 
+    // Catches PROJ ignoring the init reference, its ownership, and malformed initialization metadata.
+    TEST(ProjectChapterTest, TrainingInitReferenceRoundTripAndValidation) {
+        TemporaryDirectory temporary;
+        const auto init_path = temporary.path / "init points.ply";
+        write_file_bytes(init_path, byte_vector("synthetic init"));
+        auto document = create_document(86'000, "training-init");
+        const auto uuid = require_result(upsert_path_reference(
+            document.edit_references(), temporary.path, init_path, "training_init", "training_init"));
+        EXPECT_EQ(require_result(upsert_path_reference(
+                      document.edit_references(), temporary.path, init_path, "training_init", "training_init", uuid)),
+                  uuid);
+        const Json initialization{
+            {"init_reference_uuid", uuid.to_string()},
+            {"data_origin", {2.0f, 3.0f, 4.0f}},
+            {"scene_center", {0.5f, 0.0f, 0.0f}}};
+        require_status(document.edit_project().dom().set_json("training_initialization", initialization));
+        const auto path = temporary.path / "init.licht";
+        static_cast<void>(require_result(document.save(path, save_options(86'010))));
+        auto reopened = require_result(ProjectDocument::open(path));
+        EXPECT_EQ(reopened.project().dom().get_json("training_initialization"), initialization);
+        EXPECT_EQ(resolve_path_reference(reopened.references(), temporary.path, uuid), init_path);
+        const auto record = require_result(reopened.references().find(uuid));
+        ASSERT_TRUE(record);
+        EXPECT_EQ(record->locator.base, LocatorBase::Project);
+        EXPECT_EQ(record->locator.preferred, "init points.ply");
+        EXPECT_EQ(record->locator.absolute_fallback, init_path.string());
+        EXPECT_EQ(record->fingerprint.kind, FingerprintKind::File);
+        EXPECT_EQ(reopened.project().dom().dump().find(init_path.string()), std::string::npos);
+        EXPECT_EQ(reopened.parameters().dom().dump().find(init_path.string()), std::string::npos);
+        const auto owners = require_result(reopened.reverse_reference_index());
+        EXPECT_EQ(owners.at(uuid), (std::vector<ReferenceOwnerBinding>{{.reference_uuid = uuid,
+                                                                        .chapter = "PROJ",
+                                                                        .owner_uuid = std::nullopt,
+                                                                        .field = "training_initialization.init_reference_uuid"}}));
+
+        for (const auto& invalid : std::vector<Json>{
+                 Json::array(),
+                 Json::object(),
+                 Json{{"data_origin", {1.0f, 2.0f}}},
+                 Json{{"data_origin", {1.0f, "bad", 3.0f}}},
+                 Json{{"data_origin", {1e100, 0.0, 0.0}}},
+                 Json{{"data_origin", {0, 0, 0}}, {"scene_center", {1, 2}}},
+                 Json{{"data_origin", {0, 0, 0}}, {"init_reference_uuid", "bad"}},
+                 Json{{"data_origin", {0, 0, 0}}, {"init_reference_uuid", lfs::core::Uuid{}.to_string()}},
+                 Json{{"data_origin", {0, 0, 0}}, {"init_reference_uuid", fixed_uuid(86'099).to_string()}}}) {
+            SCOPED_TRACE(invalid.dump());
+            require_status(reopened.edit_project().dom().set_json("training_initialization", invalid));
+            EXPECT_FALSE(reopened.reverse_reference_index());
+            EXPECT_FALSE(reopened.save(path, save_options(86'020)));
+        }
+        require_status(reopened.edit_project().dom().set_json("training_initialization", nullptr));
+        EXPECT_TRUE(reopened.reverse_reference_index());
+        static_cast<void>(require_result(reopened.save(path, save_options(86'030))));
+        EXPECT_TRUE(ProjectDocument::open(path));
+    }
+
     TEST(ProjectChapterTest,
          ParameterReferenceBindingsRoundTripThroughDocumentSaveOpen) {
         TemporaryDirectory temporary;

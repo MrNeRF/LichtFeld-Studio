@@ -9,16 +9,19 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
+#include "core/native_fs.hpp"
 #include "core/number_format.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
+#include "core/scene_export_path.hpp"
 #include "core/services.hpp"
 #include "gui/error_event_bridge.hpp"
 #include "gui/gallery_scene_publication.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/html_viewer_export.hpp"
 #include "gui/import_error.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/string_keys.hpp"
@@ -27,6 +30,7 @@
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
+#include "io/video/video_export_schedule.hpp"
 #include "project/session_state.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
@@ -41,6 +45,7 @@
 #include "sequencer/keyframe.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include "training/training_manager.hpp"
+#include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
@@ -726,6 +731,7 @@ namespace lfs::vis::gui {
                     .view_projection = projection * viewport.getViewMatrix(),
                     .camera_position = viewport.translation,
                     .items = {},
+                    .panels = {},
                     .frame_slot = 0,
                     .draw_group = 0,
                     .draw_group_count = 1,
@@ -1648,7 +1654,7 @@ namespace lfs::vis::gui {
         cmd::SequencerExportVideo::when([this](const auto& evt) {
             const auto path = evt.path.empty()
                                   ? SaveMp4FileDialog("camera_path")
-                                  : std::filesystem::path(evt.path);
+                                  : lfs::core::utf8_to_path(evt.path);
             if (path.empty())
                 return;
 
@@ -1657,6 +1663,8 @@ namespace lfs::vis::gui {
             options.height = evt.height;
             options.framerate = evt.framerate;
             options.crf = evt.crf;
+            if (const auto* rendering = viewer_->getRenderingManager())
+                options.spherical_video = rendering->getSettings().equirectangular;
             if (evt.include_provenance) {
                 if (const auto* const scene_manager = viewer_->getSceneManager()) {
                     options.provenance = make_gui_export_stamp(*scene_manager);
@@ -1816,6 +1824,8 @@ namespace lfs::vis::gui {
         auto provenance = include_provenance ? make_gui_export_stamp(*scene_manager)
                                              : core::make_minimal_provenance_stamp();
 
+        const auto background_color = resolve_html_export_background_color();
+
         startAsyncExport(format,
                          path,
                          std::move(splats),
@@ -1825,7 +1835,8 @@ namespace lfs::vis::gui {
                          rad_flip_y,
                          rad_streamable,
                          spz_version,
-                         std::move(provenance), lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
+                         std::move(provenance), lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations,
+                         background_color);
     }
 
     void AsyncTaskManager::startColmapExport(const std::filesystem::path& path) {
@@ -1953,7 +1964,7 @@ namespace lfs::vis::gui {
         publication.path = path;
         publication.format = format;
         try {
-            if (std::filesystem::exists(path) || std::filesystem::is_symlink(path))
+            if (lfs::core::native_fs::exists(path) || lfs::core::native_fs::is_symlink(path))
                 throw std::runtime_error("The gallery preparation directory already exists.");
             auto snapshots = manager->getScene().snapshotVisibleSplats();
             const auto visible = manager->getScene().getVisibleSplatNodeSlots();
@@ -2079,7 +2090,7 @@ namespace lfs::vis::gui {
                 if (cancelled || !error.empty()) {
                     if (owns_directory) {
                         std::error_code ignored;
-                        std::filesystem::remove_all(path, ignored);
+                        lfs::core::native_fs::remove_all(path, ignored);
                     }
                     jobs_.report(job, std::nullopt, cancelled ? "Scene preparation canceled" : "Scene preparation failed", error);
                 } else {
@@ -2106,10 +2117,19 @@ namespace lfs::vis::gui {
                                             bool rad_streamable,
                                             int spz_version,
                                             core::ProvenanceStamp provenance,
-                                            int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
+                                            int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations,
+                                            std::optional<glm::vec3> background_color) {
         if (splats.empty()) {
             LOG_ERROR("No splat data to export");
             publishExportFailureState(format, path, LOC(lichtfeld::Strings::Runtime::NO_SPLAT_DATA));
+            return;
+        }
+
+        if (core::scene_export_path_status(format, path) == core::SceneExportPathStatus::Conflict) {
+            publishExportFailureState(
+                format, path,
+                LOCF(lichtfeld::Strings::Runtime::EXPORT_EXTENSION_REQUIRED,
+                     core::required_scene_export_extension(format)));
             return;
         }
 
@@ -2141,7 +2161,7 @@ namespace lfs::vis::gui {
              rad_flip_y,
              rad_streamable,
              spz_version,
-             provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations](
+             provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations, background_color](
                 std::stop_token stop_token) mutable {
                 bool cancellation_logged = false;
                 jobs_.work(job);
@@ -2297,7 +2317,8 @@ namespace lfs::vis::gui {
                                 .output_path = path,
                                 .kmeans_iterations = 10,
                                 .progress_callback = update_progress,
-                                .provenance = provenance};
+                                .provenance = provenance,
+                                .background_color = background_color};
                             if (auto result = lfs::io::export_html(*splat_data, options); result) {
                                 success = true;
                             } else {
@@ -2422,9 +2443,52 @@ namespace lfs::vis::gui {
         jobs_.requestCancel(
             export_state_.job, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLING));
         publishExportState();
+        if (drag_export_cancel_)
+            drag_export_cancel_();
         if (export_state_.thread && export_state_.thread->joinable()) {
             export_state_.thread->request_stop();
         }
+    }
+
+    bool AsyncTaskManager::beginDragExport(ExportFormat format, std::function<void()> cancel) {
+        if (isExporting() || !beginJob(export_state_.job, JobType::Export, LOC("export.exporting")))
+            return false;
+        {
+            const std::lock_guard lock(export_state_.mutex);
+            export_state_.format = format;
+            export_state_.path.clear();
+            export_state_.commit_uuid.clear();
+        }
+        drag_export_cancel_ = std::move(cancel);
+        publishExportState();
+        return true;
+    }
+
+    std::function<void()> AsyncTaskManager::dragExportWorkerStart() const {
+        return [registry = &jobs_, job = export_state_.job, started = std::make_shared<std::atomic<bool>>(false)] {
+            if (!started->exchange(true))
+                registry->work(job);
+        };
+    }
+
+    void AsyncTaskManager::reportDragExport(float progress, std::string stage) {
+        if (!drag_export_cancel_)
+            return;
+        jobs_.report(export_state_.job, progress, std::move(stage));
+        publishExportState();
+    }
+
+    void AsyncTaskManager::finishDragExport(bool cancelled, std::string error) {
+        if (!drag_export_cancel_)
+            return;
+        drag_export_cancel_ = {};
+        if (cancelled)
+            jobs_.canceled(export_state_.job);
+        else if (!error.empty())
+            jobs_.failed(export_state_.job, std::move(error));
+        else
+            jobs_.completed(export_state_.job);
+        publishExportState();
     }
 
     void AsyncTaskManager::publishExportFailureState(const ExportFormat format,
@@ -2458,10 +2522,20 @@ namespace lfs::vis::gui {
         state.error =
             job ? job->error : std::string{};
         state.outcome = jobOutcome(export_state_.job);
+        bool warn_for_extension = false;
+        std::string_view format_name;
         {
             const std::lock_guard lock(export_state_.mutex);
             state.format = exportProgressFormatName(export_state_.format);
             state.path = lfs::core::path_to_utf8(export_state_.path);
+            if (state.outcome == "completed" && state.error.empty() && !export_state_.path.empty()) {
+                warn_for_extension = core::scene_export_path_status(export_state_.format, export_state_.path) == core::SceneExportPathStatus::Warn;
+                format_name = core::scene_export_format_name(export_state_.format);
+            }
+        }
+        if (state.outcome == "completed" && state.error.empty() && warn_for_extension) {
+            state.warning = LOCF(lichtfeld::Strings::Runtime::EXPORT_EXTENSION_WARNING,
+                                 format_name);
         }
         lfs::vis::app_store().export_progress_state.set(std::move(state));
     }
@@ -2849,6 +2923,10 @@ namespace lfs::vis::gui {
 
                     auto loader = lfs::io::Loader::create();
                     auto result = loader->load(path, load_options);
+                    if (result && std::holds_alternative<lfs::io::LoadedScene>(result->data) &&
+                        !stop_token.stop_requested()) {
+                        lfs::training::preloadInitMesh(local_params);
+                    }
 
                     if (stop_token.stop_requested()) {
                         return;
@@ -3112,6 +3190,11 @@ namespace lfs::vis::gui {
             return;
         }
 
+        auto encoder = lfs::gui::createVideoEncoder();
+        if (!encoder) {
+            fail_start(LOC(lichtfeld::Strings::Runtime::VIDEO_ENCODER_UNAVAILABLE));
+            return;
+        }
         const auto snapshot_result = captureVideoExportSceneSnapshot(
             *scene_manager, sequence ? VideoExportCapture::ImmediateRender : VideoExportCapture::Owned);
         if (!snapshot_result) {
@@ -3128,16 +3211,14 @@ namespace lfs::vis::gui {
         const auto export_options = *validated_options;
         const auto render_settings = rendering_manager->getSettings();
         const float duration = timeline.clipDuration();
-        const int total_frames = static_cast<int>(std::ceil(duration * export_options.framerate)) + 1;
+        const int total_frames = lfs::io::video::videoExportFrameCount(duration, export_options.framerate);
         const int width = export_options.width;
         const int height = export_options.height;
 
         std::vector<lfs::sequencer::CameraState> frame_states;
         frame_states.reserve(total_frames);
-        const float start_time = 0.0f;
-        const float time_step = 1.0f / static_cast<float>(export_options.framerate);
         for (int i = 0; i < total_frames; ++i) {
-            const float time = start_time + static_cast<float>(i) * time_step;
+            const float time = lfs::io::video::videoExportSampleTime(i, export_options.framerate);
             frame_states.push_back(timeline.evaluate(time));
             if (sequence)
                 sequence_frames.push_back(*gui_manager->sequencer().plySequenceFrameIndex(time));
@@ -3169,8 +3250,9 @@ namespace lfs::vis::gui {
         const auto job = video_export_state_.job;
         video_export_state_.thread.emplace(
             [this, job, viewer = viewer_, path, export_options, total_frames, width, height,
-             engine, scene_manager, rendering_manager, render_settings, start_time, time_step,
+             engine, scene_manager, rendering_manager, render_settings,
              sequence_uuid, sequence_frames = std::move(sequence_frames),
+             encoder = std::move(encoder),
              environment_state = video_export_environment_state_.get(),
              mesh_renderer_state = video_export_mesh_renderer_state_.get(),
              snapshot = sequence_uuid ? VideoExportSceneSnapshot{} : *snapshot_result,
@@ -3196,23 +3278,23 @@ namespace lfs::vis::gui {
                     }
                 };
 
-                auto encoder = lfs::gui::createVideoEncoder();
-                if (!encoder) {
-                    error_msg = LOC(lichtfeld::Strings::Runtime::VIDEO_ENCODER_UNAVAILABLE);
+                auto fail_encoder = [this, job, width, height, &error_msg, &cleanup_video_export_state](std::string message) {
+                    error_msg = LOCF(
+                        lichtfeld::Strings::Runtime::VIDEO_ENCODER_PROBE_FAILED,
+                        width,
+                        height,
+                        message);
                     jobs_.report(
                         job, std::nullopt,
-                        LOC(lichtfeld::Strings::Runtime::TASK_FAILED),
+                        LOCF(lichtfeld::Strings::Runtime::TASK_FAILED_DETAIL, error_msg),
                         error_msg);
+                    LOG_ERROR("Failed to initialize encoder: {}", error_msg);
+                    lfs::core::events::state::VideoExportFailed{.error = error_msg}.emit();
                     publishVideoExportOverlayState();
-                    lfs::core::events::state::VideoExportFailed{
-                        .error = LOC(lichtfeld::Strings::Runtime::VIDEO_ENCODER_UNAVAILABLE)}
-                        .emit();
                     cleanup_video_export_state();
-                    jobs_.finishWork(
-                        job, false, error_msg);
+                    jobs_.finishWork(job, false, error_msg);
                     wakeMainThreadForAsyncWork();
-                    return;
-                }
+                };
 
                 jobs_.report(
                     job, std::nullopt,
@@ -3221,20 +3303,7 @@ namespace lfs::vis::gui {
 
                 auto result = encoder->open(path, export_options);
                 if (!result) {
-                    error_msg = result.error();
-                    jobs_.report(
-                        job, std::nullopt,
-                        LOCF(lichtfeld::Strings::Runtime::TASK_FAILED_DETAIL, result.error()),
-                        error_msg);
-                    LOG_ERROR("Failed to open encoder: {}", result.error());
-                    lfs::core::events::state::VideoExportFailed{
-                        .error = result.error()}
-                        .emit();
-                    publishVideoExportOverlayState();
-                    cleanup_video_export_state();
-                    jobs_.finishWork(
-                        job, false, error_msg);
-                    wakeMainThreadForAsyncWork();
+                    fail_encoder(result.error());
                     return;
                 }
 
@@ -3251,7 +3320,7 @@ namespace lfs::vis::gui {
                             [viewer, engine, scene_manager, rendering_manager, environment_state,
                              mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, width, height, sequence_uuid, sequence_frame = sequence_uuid ? sequence_frames[frame] : 0,
                              cam_state = frame_states[frame],
-                             clip_time = start_time + static_cast<float>(frame) * time_step]() mutable
+                             clip_time = lfs::io::video::videoExportSampleTime(frame, export_options.framerate)]() mutable
                             -> std::expected<lfs::core::Tensor, std::string> {
                                 if (sequence_uuid) {
                                     auto& sequencer_ui = viewer->getGuiManager()->sequencerUI();

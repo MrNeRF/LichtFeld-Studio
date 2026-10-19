@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vksplat_viewport_renderer.hpp"
+#include "core/native_fs.hpp"
 #include "rendering/rasterizer/vulkan/src/display_color.h"
 
 #include "lod_page_dequant_cuda.hpp"
@@ -14,6 +15,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
@@ -728,7 +730,7 @@ namespace lfs::vis {
 #endif
 
             for (const auto& path : search_paths) {
-                if (std::filesystem::exists(path / probe_file)) {
+                if (lfs::core::native_fs::exists(path / probe_file)) {
                     return path;
                 }
             }
@@ -744,98 +746,102 @@ namespace lfs::vis {
         [[nodiscard]] std::map<std::string, std::string> makeVkSplatSpirvPaths() {
             const std::filesystem::path root = resolveVkSplatSpirvRoot();
             return {
-                {"projection_forward", (root / "generated/projection_forward.spv").string()},
-                {"projection_forward_3dgut", (root / "generated/projection_forward_3dgut.spv").string()},
-                {"projection_forward_quant", (root / "generated/projection_forward_quant.spv").string()},
+                {"projection_forward", lfs::core::path_to_utf8((root / "generated/projection_forward.spv"))},
+                {"projection_forward_3dgut", lfs::core::path_to_utf8((root / "generated/projection_forward_3dgut.spv"))},
+                {"projection_forward_quant", lfs::core::path_to_utf8((root / "generated/projection_forward_quant.spv"))},
                 {"projection_forward_quant_3dgut",
-                 (root / "generated/projection_forward_quant_3dgut.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_quant_3dgut.spv"))},
                 {"projection_forward_shn_f16",
-                 (root / "generated/projection_forward_shn_f16.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_shn_f16.spv"))},
                 {"projection_forward_shn_f16_3dgut",
-                 (root / "generated/projection_forward_shn_f16_3dgut.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_shn_f16_3dgut.spv"))},
                 {"projection_forward_shn_q16",
-                 (root / "generated/projection_forward_shn_q16.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_shn_q16.spv"))},
                 {"projection_forward_shn_q16_3dgut",
-                 (root / "generated/projection_forward_shn_q16_3dgut.spv").string()},
-                {"selection_mask", (root / "generated/selection_mask.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_shn_q16_3dgut.spv"))},
+                {"selection_mask", lfs::core::path_to_utf8((root / "generated/selection_mask.spv"))},
                 {"selection_polygon_rasterize",
-                 (root / "generated/selection_polygon_rasterize.spv").string()},
-                {"generate_keys_wave", (root / "generated/generate_keys_wave.spv").string()},
-                {"compute_tile_ranges", (root / "generated/compute_tile_ranges.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/selection_polygon_rasterize.spv"))},
+                {"generate_keys_wave", lfs::core::path_to_utf8((root / "generated/generate_keys_wave.spv"))},
+                {"compute_tile_ranges", lfs::core::path_to_utf8((root / "generated/compute_tile_ranges.spv"))},
                 {"compute_tile_ranges_and_batch_counts",
-                 (root / "generated/compute_tile_ranges_and_batch_counts.spv").string()},
-                {"rasterize_forward", (root / "generated/rasterize_forward.spv").string()},
-                {"rasterize_forward_3dgut", (root / "generated/rasterize_forward_3dgut.spv").string()},
-                {"rasterize_forward_plain", (root / "generated/rasterize_forward_plain.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/compute_tile_ranges_and_batch_counts.spv"))},
+                {"rasterize_forward", lfs::core::path_to_utf8((root / "generated/rasterize_forward.spv"))},
+                {"rasterize_forward_3dgut", lfs::core::path_to_utf8((root / "generated/rasterize_forward_3dgut.spv"))},
+                {"rasterize_forward_plain", lfs::core::path_to_utf8((root / "generated/rasterize_forward_plain.spv"))},
                 {"rasterize_forward_3dgut_plain",
-                 (root / "generated/rasterize_forward_3dgut_plain.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_3dgut_plain.spv"))},
+                {"rasterize_forward_3dgut_rad",
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_3dgut_rad.spv"))},
+                {"rasterize_forward_3dgut_plain_rad",
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_3dgut_plain_rad.spv"))},
                 {"rasterize_forward_light",
-                 (root / "generated/rasterize_forward_light.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_light.spv"))},
                 {"rasterize_forward_light_plain",
-                 (root / "generated/rasterize_forward_light_plain.spv").string()},
-                {"tile_batch_descriptors", (root / "generated/tile_batch_descriptors.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_light_plain.spv"))},
+                {"tile_batch_descriptors", lfs::core::path_to_utf8((root / "generated/tile_batch_descriptors.spv"))},
                 {"rasterize_forward_batches",
-                 (root / "generated/rasterize_forward_batches.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_batches.spv"))},
                 {"rasterize_forward_batches_plain",
-                 (root / "generated/rasterize_forward_batches_plain.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_batches_plain.spv"))},
                 {"compose_tile_batches",
-                 (root / "generated/compose_tile_batches.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/compose_tile_batches.spv"))},
                 {"compose_tile_batches_plain",
-                 (root / "generated/compose_tile_batches_plain.spv").string()},
-                {"cumsum_single_pass", (root / "generated/cumsum_single_pass.spv").string()},
-                {"cumsum_block_scan", (root / "generated/cumsum_block_scan.spv").string()},
-                {"cumsum_scan_block_sums", (root / "generated/cumsum_scan_block_sums.spv").string()},
-                {"cumsum_add_block_offsets", (root / "generated/cumsum_add_block_offsets.spv").string()},
-                {"radix_histogram_clear", (root / "generated/radix_histogram_clear.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/compose_tile_batches_plain.spv"))},
+                {"cumsum_single_pass", lfs::core::path_to_utf8((root / "generated/cumsum_single_pass.spv"))},
+                {"cumsum_block_scan", lfs::core::path_to_utf8((root / "generated/cumsum_block_scan.spv"))},
+                {"cumsum_scan_block_sums", lfs::core::path_to_utf8((root / "generated/cumsum_scan_block_sums.spv"))},
+                {"cumsum_add_block_offsets", lfs::core::path_to_utf8((root / "generated/cumsum_add_block_offsets.spv"))},
+                {"radix_histogram_clear", lfs::core::path_to_utf8((root / "generated/radix_histogram_clear.spv"))},
                 {"expected_depth_finalize",
-                 (root / "generated/expected_depth_finalize.spv").string()},
-                {"radix_sort/upsweep_indirect", (root / "radix_sort/upsweep_indirect.spv").string()},
-                {"radix_sort/spine_indirect", (root / "radix_sort/spine_indirect.spv").string()},
-                {"radix_sort/downsweep_indirect", (root / "radix_sort/downsweep_indirect.spv").string()},
-                {"apply_depth_ordering", (root / "generated/apply_depth_ordering.spv").string()},
-                {"visible_flags", (root / "generated/visible_flags.spv").string()},
-                {"prepare_visible_sort", (root / "generated/prepare_visible_sort.spv").string()},
-                {"prepare_tile_sort", (root / "generated/prepare_tile_sort.spv").string()},
-                {"compact_visible_primitives", (root / "generated/compact_visible_primitives.spv").string()},
-                {"lod_map_indices", (root / "generated/lod_map_indices.spv").string()},
-                {"lod_select_threshold", (root / "generated/lod_select_threshold.spv").string()},
-                {"lod_compact_touch", (root / "generated/lod_compact_touch.spv").string()},
-                {"cull_splats", (root / "generated/cull_splats.spv").string()},
-                {"cull_prepare", (root / "generated/cull_prepare.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/expected_depth_finalize.spv"))},
+                {"radix_sort/upsweep_indirect", lfs::core::path_to_utf8((root / "radix_sort/upsweep_indirect.spv"))},
+                {"radix_sort/spine_indirect", lfs::core::path_to_utf8((root / "radix_sort/spine_indirect.spv"))},
+                {"radix_sort/downsweep_indirect", lfs::core::path_to_utf8((root / "radix_sort/downsweep_indirect.spv"))},
+                {"apply_depth_ordering", lfs::core::path_to_utf8((root / "generated/apply_depth_ordering.spv"))},
+                {"visible_flags", lfs::core::path_to_utf8((root / "generated/visible_flags.spv"))},
+                {"prepare_visible_sort", lfs::core::path_to_utf8((root / "generated/prepare_visible_sort.spv"))},
+                {"prepare_tile_sort", lfs::core::path_to_utf8((root / "generated/prepare_tile_sort.spv"))},
+                {"compact_visible_primitives", lfs::core::path_to_utf8((root / "generated/compact_visible_primitives.spv"))},
+                {"lod_map_indices", lfs::core::path_to_utf8((root / "generated/lod_map_indices.spv"))},
+                {"lod_select_threshold", lfs::core::path_to_utf8((root / "generated/lod_select_threshold.spv"))},
+                {"lod_compact_touch", lfs::core::path_to_utf8((root / "generated/lod_compact_touch.spv"))},
+                {"cull_splats", lfs::core::path_to_utf8((root / "generated/cull_splats.spv"))},
+                {"cull_prepare", lfs::core::path_to_utf8((root / "generated/cull_prepare.spv"))},
                 {"projection_forward_survivors",
-                 (root / "generated/projection_forward_survivors.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_survivors.spv"))},
                 {"projection_forward_quant_survivors",
-                 (root / "generated/projection_forward_quant_survivors.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_quant_survivors.spv"))},
                 {"projection_forward_shn_f16_survivors",
-                 (root / "generated/projection_forward_shn_f16_survivors.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_shn_f16_survivors.spv"))},
                 {"projection_forward_shn_q16_survivors",
-                 (root / "generated/projection_forward_shn_q16_survivors.spv").string()},
-                {"prepare_visible_chain", (root / "generated/prepare_visible_chain.spv").string()},
-                {"copy_visible_indices", (root / "generated/copy_visible_indices.spv").string()},
-                {"prepare_stable_depth_sort", (root / "generated/prepare_stable_depth_sort.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_shn_q16_survivors.spv"))},
+                {"prepare_visible_chain", lfs::core::path_to_utf8((root / "generated/prepare_visible_chain.spv"))},
+                {"copy_visible_indices", lfs::core::path_to_utf8((root / "generated/copy_visible_indices.spv"))},
+                {"prepare_stable_depth_sort", lfs::core::path_to_utf8((root / "generated/prepare_stable_depth_sort.spv"))},
                 {"cumsum_block_scan_indirect",
-                 (root / "generated/cumsum_block_scan_indirect.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/cumsum_block_scan_indirect.spv"))},
                 {"cumsum_scan_block_sums_indirect",
-                 (root / "generated/cumsum_scan_block_sums_indirect.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/cumsum_scan_block_sums_indirect.spv"))},
                 {"cumsum_add_block_offsets_indirect",
-                 (root / "generated/cumsum_add_block_offsets_indirect.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/cumsum_add_block_offsets_indirect.spv"))},
                 {"prepare_tile_sort_visible",
-                 (root / "generated/prepare_tile_sort_visible.spv").string()},
-                {"wave_partition", (root / "generated/wave_partition.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/prepare_tile_sort_visible.spv"))},
+                {"wave_partition", lfs::core::path_to_utf8((root / "generated/wave_partition.spv"))},
                 {"wave_partition_visible",
-                 (root / "generated/wave_partition_visible.spv").string()},
-                {"macro_coverage", (root / "generated/macro_coverage.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/wave_partition_visible.spv"))},
+                {"macro_coverage", lfs::core::path_to_utf8((root / "generated/macro_coverage.spv"))},
                 {"generate_macro_keys_wave",
-                 (root / "generated/generate_macro_keys_wave.spv").string()},
-                {"compute_macro_ranges", (root / "generated/compute_macro_ranges.spv").string()},
-                {"macro_batch_prepare", (root / "generated/macro_batch_prepare.spv").string()},
-                {"macro_raster", (root / "generated/macro_raster.spv").string()},
-                {"macro_raster_fp32", (root / "generated/macro_raster_fp32.spv").string()},
-                {"macro_raster_overlays", (root / "generated/macro_raster_overlays.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/generate_macro_keys_wave.spv"))},
+                {"compute_macro_ranges", lfs::core::path_to_utf8((root / "generated/compute_macro_ranges.spv"))},
+                {"macro_batch_prepare", lfs::core::path_to_utf8((root / "generated/macro_batch_prepare.spv"))},
+                {"macro_raster", lfs::core::path_to_utf8((root / "generated/macro_raster.spv"))},
+                {"macro_raster_fp32", lfs::core::path_to_utf8((root / "generated/macro_raster_fp32.spv"))},
+                {"macro_raster_overlays", lfs::core::path_to_utf8((root / "generated/macro_raster_overlays.spv"))},
                 {"macro_raster_overlays_fp32",
-                 (root / "generated/macro_raster_overlays_fp32.spv").string()},
-                {"macro_compose", (root / "generated/macro_compose.spv").string()},
-                {"macro_compose_overlays", (root / "generated/macro_compose_overlays.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/macro_raster_overlays_fp32.spv"))},
+                {"macro_compose", lfs::core::path_to_utf8((root / "generated/macro_compose.spv"))},
+                {"macro_compose_overlays", lfs::core::path_to_utf8((root / "generated/macro_compose_overlays.spv"))},
             };
         }
 
@@ -1806,7 +1812,8 @@ namespace lfs::vis {
             const std::size_t model_num_splats,
             const bool equirectangular,
             const bool gut,
-            const bool mip_filter) {
+            const bool mip_filter,
+            const float eye_setback = 0.0f) {
             uniforms = {};
             uniforms.image_width = static_cast<std::uint32_t>(frame_view.size.x);
             uniforms.image_height = static_cast<std::uint32_t>(frame_view.size.y);
@@ -1849,7 +1856,8 @@ namespace lfs::vis {
             }
             row_major_view[3] = translation.x;
             row_major_view[7] = translation.y;
-            row_major_view[11] = translation.z;
+            row_major_view[11] = translation.z + eye_setback;
+            uniforms.depth_offset = eye_setback;
             for (int row = 0; row < 4; ++row) {
                 for (int col = 0; col < 4; ++col) {
                     uniforms.world_view_transform[4 * row + col] =
@@ -2469,14 +2477,14 @@ namespace lfs::vis {
         const bool same_model =
             lod_page_cache_model_ == &splat_data &&
             lod_page_cache_.configured() &&
-            lod_page_cache_.snapshot().logical_chunks == logical_chunks &&
-            !lod_pool_sizing_dirty_;
+            lod_page_cache_.snapshot().logical_chunks == logical_chunks;
+        const bool sizing_dirty = lod_pool_sizing_dirty_;
         // The VRAM-derived size is computed once per model attach and then
         // sticks: free VRAM keeps moving as the pool's own buffers allocate,
         // and reconfiguring resets the whole cache. The pool budget setting or
         // VRAM fraction changing re-arms the computation.
         std::size_t physical_pages;
-        if (same_model) {
+        if (same_model && !sizing_dirty) {
             physical_pages = lod_page_cache_.snapshot().physical_pages;
         } else {
             physical_pages = requestedLodPhysicalPages(
@@ -2487,9 +2495,8 @@ namespace lfs::vis {
                 lod_page_inputs_.model == &splat_data ? lod_page_inputs_.physical_pages : 0);
             lod_pool_sizing_dirty_ = false;
         }
-        const bool needs_configure =
-            !same_model ||
-            lod_page_cache_.snapshot().physical_pages != physical_pages;
+        const bool needs_configure = detail::lodPageCacheNeedsReconfigure(
+            same_model, sizing_dirty, lod_page_cache_.snapshot().physical_pages, physical_pages);
         if (needs_configure) {
             lod_page_cache_model_ = &splat_data;
             const bool disk_backed =
@@ -7730,6 +7737,28 @@ namespace lfs::vis {
         return depth;
     }
 
+    float VksplatViewportRenderer::orthographicEyeSetback(const lfs::rendering::FrameView& frame_view,
+                                                          const lfs::core::SplatData& splat_data,
+                                                          const lfs::rendering::GaussianSceneState& scene,
+                                                          const bool content_changed) {
+        if (!frame_view.orthographic) {
+            return 0.0f;
+        }
+        const auto& means = splat_data.means_raw();
+        auto& bounds = orthographic_bounds_;
+        if (content_changed || !bounds.valid || bounds.means != means.data_ptr() ||
+            bounds.count != splat_data.size() || bounds.deleted_version != splat_data.deleted_mask_version()) {
+            bounds.has_bounds = lfs::core::compute_bounds(splat_data, bounds.min, bounds.max);
+            bounds.means = means.data_ptr();
+            bounds.count = splat_data.size();
+            bounds.deleted_version = splat_data.deleted_mask_version();
+            bounds.valid = true;
+        }
+        return bounds.has_bounds ? lfs::rendering::orthographicEyeSetback(frame_view, bounds.min, bounds.max,
+                                                                          scene.model_transforms)
+                                 : 0.0f;
+    }
+
     std::expected<lfs::core::Tensor, std::string> VksplatViewportRenderer::buildSelectionMask(
         VulkanContext& context,
         const lfs::core::SplatData& splat_data,
@@ -7820,9 +7849,6 @@ namespace lfs::vis {
         }();
         if (!input_binding) {
             return std::unexpected(input_binding.error());
-        }
-        if (input_binding->model_snapshot_changed) {
-            macro_chain_warmup_pending_ = true;
         }
         // The borrowed Vulkan-external model storage stays resident across selection calls.
         // Stale data is detected via the model snapshot and its CUDA producer stream is ordered
@@ -8136,7 +8162,11 @@ namespace lfs::vis {
                                       num_splats,
                                       request.equirectangular,
                                       request.gut,
-                                      request.mip_filter);
+                                      request.mip_filter,
+                                      request.equirectangular
+                                          ? 0.0f
+                                          : orthographicEyeSetback(request.frame_view, splat_data, request.scene,
+                                                                   force_input_upload));
         VulkanGSSelectionMaskUniforms selection_uniforms{};
         selection_uniforms.num_splats = static_cast<std::uint32_t>(num_splats);
         selection_uniforms.primitive_count = static_cast<std::uint32_t>(request.primitives.size());
@@ -8413,7 +8443,11 @@ namespace lfs::vis {
                                           buffers_.num_splats,
                                           request.equirectangular,
                                           request.gut,
-                                          request.mip_filter);
+                                          request.mip_filter,
+                                          request.equirectangular
+                                              ? 0.0f
+                                              : orthographicEyeSetback(request.frame_view, splat_data, request.scene,
+                                                                       false));
             uniforms.color_exposure = std::isfinite(request.color_exposure) ? std::clamp(request.color_exposure, 0.1f, 8.0f) : 1.0f;
             uniforms.color_tonemapping = static_cast<std::uint32_t>(std::clamp(request.color_tonemapping, 0, 6));
             uniforms.splat_render_profile = request.splat_render_profile == 1 ? 1u : 0u;
@@ -8889,9 +8923,6 @@ namespace lfs::vis {
         if (!input_binding) {
             return std::unexpected(input_binding.error());
         }
-        if (input_binding->model_snapshot_changed) {
-            macro_chain_warmup_pending_ = true;
-        }
         if (lod_request_active) {
             if (auto ok = ensureGpuLodTreeStorage(splat_data); !ok) {
                 static std::string last_gpu_lod_storage_error;
@@ -9102,7 +9133,11 @@ namespace lfs::vis {
                                           buffers_.num_splats,
                                           request.equirectangular,
                                           request.gut,
-                                          request.mip_filter);
+                                          request.mip_filter,
+                                          request.equirectangular
+                                              ? 0.0f
+                                              : orthographicEyeSetback(request.frame_view, splat_data, request.scene,
+                                                                       force_input_upload));
             uniforms.color_exposure = std::isfinite(request.color_exposure) ? std::clamp(request.color_exposure, 0.1f, 8.0f) : 1.0f;
             uniforms.color_tonemapping = static_cast<std::uint32_t>(std::clamp(request.color_tonemapping, 0, 6));
             uniforms.splat_render_profile = request.splat_render_profile == 1 ? 1u : 0u;
@@ -9148,6 +9183,9 @@ namespace lfs::vis {
         // Synchronous exports use the exact instance-count gate and must keep
         // the same raster chain across every band, including a cold first band.
         // Interactive viewport and sequencer previews retain their warmup.
+        // The legacy chain warms renderer initialization once. Every regular
+        // frame rebuilds projection and sort data from current inputs, so an
+        // input snapshot change does not make an already warmed macro chain cold.
         const bool higs_warmup_frame = higs_candidate && macro_chain_warmup_pending_ &&
                                        !deterministic_export;
         const bool higs_active = higs_candidate && !higs_warmup_frame;

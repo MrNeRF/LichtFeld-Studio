@@ -245,6 +245,8 @@ namespace fast_lfs::rasterization::kernels::backward {
                 const float limit = 0.5f / kSh0;
                 const int stride = fused_adam.sh0.n_attributes > 0 ? fused_adam.sh0.n_attributes : 3;
                 const float* coeff = fused_adam.sh0.param + static_cast<uint>(primitive_idx) * static_cast<uint>(stride);
+                // The gradient stays per splat; the reported loss is the mean over splats like the other regularizers.
+                const float reported_loss_weight = fused_adam.dc_reg_weight / (3.0f * static_cast<float>(n_primitives));
                 for (int c = 0; c < 3; ++c) {
                     float delta = 0.0f;
                     if (coeff[c] > limit)
@@ -253,7 +255,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                         delta = coeff[c] + limit;
                     if (colour_reg_mask & (1u << c))
                         sh0_grads[c] += (2.0f * fused_adam.dc_reg_weight / 3.0f) * delta;
-                    dc_loss_local += (fused_adam.dc_reg_weight / 3.0f) * delta * delta;
+                    dc_loss_local += reported_loss_weight * delta * delta;
                 }
             }
         if constexpr (!DISABLED_FEATURES)

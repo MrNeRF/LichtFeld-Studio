@@ -3,7 +3,6 @@
 
 #include "core/cuda/selection_ops.hpp"
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -19,6 +18,7 @@
 #include "tools/tool_base.hpp"
 
 #include <algorithm>
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <memory>
 #include <vector>
@@ -258,7 +258,6 @@ class SelectionServiceInteractionsTest : public ::testing::Test {
 protected:
     void SetUp() override {
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
         lfs::vis::op::undoHistory().clear();
 
@@ -292,7 +291,6 @@ protected:
 
     void TearDown() override {
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
         rendering_manager_.reset();
         scene_manager_.reset();
@@ -1147,6 +1145,42 @@ TEST_F(SelectionServiceInteractionsTest, ViewerSelectionShapesMatchProjectedCent
     }
 }
 
+TEST_F(SelectionServiceInteractionsTest, MissingSelectionGroupStillSelectsLikeANewScene) {
+    auto& scene = scene_manager_->getScene();
+    const lfs::core::Scene fresh;
+    scene.removeSelectionGroup(scene.getActiveSelectionGroup());
+    ASSERT_EQ(scene.getSelectionGroups().size(), fresh.getSelectionGroups().size());
+    ASSERT_FALSE(scene.getSelectionGroups().empty());
+    EXPECT_EQ(scene.getActiveSelectionGroup(), fresh.getActiveSelectionGroup());
+    EXPECT_EQ(scene.getSelectionGroups().front().id, fresh.getSelectionGroups().front().id);
+    EXPECT_EQ(scene.getSelectionGroups().front().name, fresh.getSelectionGroups().front().name);
+    EXPECT_FLOAT_EQ(scene.getSelectionGroups().front().color.x, fresh.getSelectionGroups().front().color.x);
+    EXPECT_FLOAT_EQ(scene.getSelectionGroups().front().color.y, fresh.getSelectionGroups().front().color.y);
+    EXPECT_FLOAT_EQ(scene.getSelectionGroups().front().color.z, fresh.getSelectionGroups().front().color.z);
+
+    service_->setTestingScreenPositions(make_screen_positions({10.0f, 10.0f, 80.0f, 80.0f}));
+    const auto rect = service_->selectRect(
+        0.0f, 0.0f, 50.0f, 50.0f, lfs::vis::SelectionMode::Replace, -1);
+    ASSERT_TRUE(rect.success) << rect.error;
+    EXPECT_EQ(rect.affected_count, 1u);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+
+    const auto mask = service_->applyMask(
+        std::vector<uint8_t>{1, 1}, lfs::vis::SelectionMode::Replace);
+    ASSERT_TRUE(mask.success) << mask.error;
+    EXPECT_EQ(mask.affected_count, 2u);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 1}));
+
+    scene.installRestoreSelectionState({});
+    EXPECT_EQ(scene.getActiveSelectionGroup(), fresh.getActiveSelectionGroup());
+    EXPECT_EQ(scene.getSelectionGroups().front().name, fresh.getSelectionGroups().front().name);
+    const auto restored = service_->applyMask(
+        std::vector<uint8_t>{0, 1}, lfs::vis::SelectionMode::Replace);
+    ASSERT_TRUE(restored.success) << restored.error;
+    EXPECT_EQ(restored.affected_count, 1u);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 1}));
+}
+
 TEST_F(SelectionServiceInteractionsTest, DatasetCameraSelectionKeepsImagePixelCoordinates) {
     using lfs::vis::SelectionMode;
     service_->setTestingViewport({.x = 324, .y = 30, .width = 100, .height = 100, .render_width = 200, .render_height = 200});
@@ -1159,4 +1193,43 @@ TEST_F(SelectionServiceInteractionsTest, DatasetCameraSelectionKeepsImagePixelCo
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
     ASSERT_TRUE(service_->selectBrush(20, 20, 15, SelectionMode::Replace, 3).success);
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+}
+
+// Selection previews are render queries. Repeating one without a change must not request a frame.
+TEST_F(SelectionServiceInteractionsTest, UnchangedSelectionPreviewsRequestNoFrames) {
+    auto& ledger = rendering_manager_->frameDemandLedger();
+    const auto requests_frame = [&] { return !ledger.plan(lfs::vis::FrameClock::now()).empty(); };
+
+    Viewport viewport(100, 100);
+    ToolContext context(rendering_manager_.get(), scene_manager_.get(), &viewport, nullptr);
+    SelectionTool tool;
+    ASSERT_TRUE(tool.initialize(context));
+    tool.setEnabled(true);
+    tool.setDepthFilterEnabled(true);
+    tool.update(context);
+    ASSERT_TRUE(rendering_manager_->getSettings().depth_filter_enabled);
+    (void)requests_frame();
+    tool.update(context);
+    EXPECT_FALSE(requests_frame()) << "depth box";
+
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Polygon, lfs::vis::SelectionMode::Replace, {0.0f, 0.0f}, 0.0f));
+    ASSERT_TRUE(service_->appendInteractivePolygonVertex({30.0f, 0.0f}));
+    service_->refreshInteractivePreview();
+    (void)requests_frame();
+    service_->refreshInteractivePreview();
+    EXPECT_FALSE(requests_frame()) << "open polygon";
+    service_->updateInteractiveSelection({20.0f, 10.0f});
+    service_->refreshInteractivePreview();
+    EXPECT_TRUE(requests_frame()) << "open polygon after a cursor move";
+    service_->cancelInteractiveSelection();
+
+    // Away from the only splat, ring hover finds nothing at either position.
+    service_->updatePassiveRingHoverPreview({90.0f, 90.0f}, lfs::vis::SelectionMode::Replace);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    service_->updatePassiveRingHoverPreview({91.0f, 90.0f}, lfs::vis::SelectionMode::Replace);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    (void)requests_frame();
+    service_->updatePassiveRingHoverPreview({92.0f, 90.0f}, lfs::vis::SelectionMode::Replace);
+    EXPECT_FALSE(requests_frame()) << "ring hover over empty space";
 }

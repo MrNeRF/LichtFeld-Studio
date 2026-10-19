@@ -73,6 +73,7 @@ namespace lfs::vis {
         glm::mat4 projection{1.0f};
         glm::mat4 view_projection{1.0f};
         glm::vec3 view_position{0.0f, 0.0f, 0.0f};
+        glm::vec3 pivot{0.0f, 0.0f, 0.0f};
         int plane = 2;
         float opacity = 1.0f;
         bool orthographic = false;
@@ -133,6 +134,7 @@ namespace lfs::vis {
         glm::mat4 grid_projection{1.0f};
         glm::mat4 grid_view_projection{1.0f};
         glm::vec3 grid_view_position{0.0f, 0.0f, 0.0f};
+        glm::vec3 grid_pivot{0.0f, 0.0f, 0.0f};
         int grid_plane = 2;
         float grid_opacity = 1.0f;
         bool grid_orthographic = false;
@@ -163,8 +165,17 @@ namespace lfs::vis {
         // viewport pass.
         glm::mat4 mesh_view_projection{1.0f};
         glm::vec3 mesh_camera_position{0.0f};
+        glm::vec3 mesh_camera_backward{0.0f, 0.0f, 1.0f};
+        bool mesh_depth_view = false;
+        float mesh_depth_view_min = 0.0f;
+        float mesh_depth_view_max = 1.0f;
+        bool mesh_depth_grayscale = false;
         std::vector<VulkanMeshDrawItem> mesh_items;
         std::vector<VulkanMeshViewportPanel> mesh_panels;
+        // Set only for a requested scene capture. Invoked after scene geometry and
+        // before world/UI overlays are recorded into the window.
+        bool (*record_scene_capture)(void*, VkCommandBuffer) = nullptr;
+        void* scene_capture_context = nullptr;
 
         // GPU-rendered equirect environment background. Replaces the old CPU
         // `renderEnvironmentBackground` per-pixel sampling loop.
@@ -178,6 +189,13 @@ namespace lfs::vis {
         // blit with a two-panel composite (master-style divider/handle/grip in-shader).
         VulkanSplitViewParams split_view;
     };
+
+    [[nodiscard]] inline bool meshUsesLeftDepth(const VulkanViewportPassParams& params,
+                                                const bool split_active) {
+        const auto& left_depth = params.split_view.left.depth_blit;
+        return split_active && !params.mesh_panels.empty() &&
+               (left_depth.depth || left_depth.external_image_view != VK_NULL_HANDLE);
+    }
 
     class LFS_VIS_API VulkanViewportPass {
     public:

@@ -282,6 +282,25 @@ view mode, sort, refresh, and scan status are separate affordances, followed by
 the content region. Preserve that hierarchy even if the toolbar is simplified
 for a narrower panel.
 
+The Histogram is a horizontal bottom panel with a compact wrapping toolbar,
+the shared Rendering scrub control for bin counts, and a labeled log-scale
+checkbox. Keep a Dock/Undock toggle in the toolbar and preserve the selected
+panel location. Range and statistic values use compact scientific notation; numeric
+range inputs and bin scrub text are centered. Shared scrubs accept Tab focus;
+Enter or Space opens numeric editing, Enter commits, Escape cancels, and Tab
+commits before moving to the next control. Use the bottom-dock title bar
+close button without adding a second close control to the toolbar. Keep field
+descriptions in tooltips,
+editable bounds beside the chart, and summary statistics in a flat strip below
+it. Keep a readable minimum chart height and scroll the content area when
+the panel is too short. Controls and statistics remain outside that scroll area.
+Comparison axes need only a compact numeric gutter; the field selectors already
+identify both axes. Size closed selectors to the active label,
+while their popup menus retain enough width for the longer localized options.
+Bar fills use a constant semantic color and opacity; only 2D cell intensity
+encodes density. Cache heatmap geometry, density, and tooltip records separately
+from selection flags so dragging does not rebuild the entire heatmap.
+
 #### Sections and settings
 
 Use `.section-header` with `.text-accent`, a `.section-arrow`, and a matching

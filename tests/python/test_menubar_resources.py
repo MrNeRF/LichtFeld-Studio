@@ -27,11 +27,12 @@ def _theme_size_values(node, key):
 
 
 def test_every_scrollbar_uses_the_theme_size():
-    # Catches a panel or theme drifting back to its own scrollbar width.
+    # Keep intentional family metrics while preventing panels from overriding them.
     themes_dir = PROJECT_ROOT / "src" / "visualizer" / "gui" / "assets" / "themes"
     for theme_path in themes_dir.glob("*.json"):
         theme = json.loads(theme_path.read_text(encoding="utf-8"))
-        assert set(_theme_size_values(theme, "scrollbar_size")) <= {4.0}, theme_path.name
+        expected_scrollbar_size = 6.0 if theme.get("id") == "graphite" else 4.0
+        assert set(_theme_size_values(theme, "scrollbar_size")) <= {expected_scrollbar_size}, theme_path.name
         assert set(_theme_size_values(theme, "grab_min_size")) <= {12.0}, theme_path.name
 
     resources_dir = PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
@@ -88,18 +89,21 @@ def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
 
     assert 'data-class-open="item.submenu_open"' in rml
     assert 'data-attr-data-root-index="item.index"' in rml
-    assert 'data-class-active="item.submenu_open"' in rml
+    assert 'data-class-active="item.keyboard_active"' in rml
     assert 'data-class-open="child.submenu_open"' in rml
     assert 'data-attr-data-child-index="child.index"' in rml
-    assert 'data-for="leaf : child.children"' in rml
+    assert 'data-for="grandchild : child.children"' in rml
+    assert 'data-class-open="grandchild.submenu_open"' in rml
+    assert 'data-attr-data-grandchild-index="grandchild.index"' in rml
+    assert 'data-for="leaf : grandchild.children"' in rml
     assert 'id="dropdown-popup"' in rml
     assert "#dropdown-overlay" in rcss
     assert "#dropdown-container" in rcss
     assert "#dropdown-popup" in rcss
     assert ".submenu-popup" in rcss
-    assert "z-index: 1;" in rcss
-    assert "z-index: 2;" in rcss
-    assert "z-index: 3;" in rcss
+    assert "z-index: 1;" in _rule_body(rcss, "#dropdown-overlay")
+    assert "z-index: 2;" in _rule_body(rcss, "#dropdown-container")
+    assert "z-index: 3;" in _rule_body(rcss, ".submenu-popup")
     assert "#dropdown-container {\n    display: none;\n    position: absolute;\n    top: 0;" in rcss
     assert "width: 100%;" in rcss and "height: 100%;" in rcss
     dropdown_rule = _rule_body(rcss, ".dropdown-popup")
@@ -383,7 +387,7 @@ def test_theme_auto_visibility_and_variant_button_width_are_capability_driven():
     assert "SDL_SYSTEM_THEME_DARK" in theme_cpp
 
 
-def test_all_optional_theme_gradients_reach_rml_consumers():
+def test_optional_theme_gradients_remain_supported_and_active_consumers_resolve():
     theme_cpp = (
         PROJECT_ROOT / "src" / "visualizer" / "theme" / "theme.cpp"
     ).read_text(encoding="utf-8")
@@ -449,48 +453,21 @@ def test_all_optional_theme_gradients_reach_rml_consumers():
         assert f"hashGradient(seed, gradients.{gradient})" in rml_theme_cpp
         assert f"t.gradients.{gradient}" in rml_theme_cpp
         resource = (resources / resource_name).read_text(encoding="utf-8")
-        assert f"@{{{token}}}" in resource
+        # Legacy histogram gradients still parse and hash, but charts now use
+        # solid semantic colors rather than consuming these decorators.
+        if not gradient.startswith("histogram_"):
+            assert f"@{{{token}}}" in resource
 
 
-def test_histogram_history_icons_follow_theme_contrast():
-    resources = (
-        PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
-    )
-    histogram_theme = (resources / "histogram_panel.theme.rcss").read_text(
-        encoding="utf-8"
-    )
-    rml_theme_cpp = (
-        PROJECT_ROOT
-        / "src"
-        / "visualizer"
-        / "gui"
-        / "rmlui"
-        / "rml_theme.cpp"
-    ).read_text(encoding="utf-8")
-
-    assert (
-        ".histogram-history-icon {\n"
-        "    image-color: @{text};\n"
-        "}"
-        in histogram_theme
-    )
-    assert (
-        ".histogram-history-btn:hover .histogram-history-icon {\n"
-        "    image-color: @{primary};\n"
-        "}"
-        in histogram_theme
-    )
-    assert (
-        ".histogram-history-btn:disabled .histogram-history-icon {\n"
-        "    image-color: @{panel.histogram_history_icon_disabled};\n"
-        "}"
-        in histogram_theme
-    )
-    assert (
-        '{"panel.histogram_history_icon_disabled", '
-        "colorToRmlAlpha(p.text_dim, is_light ? 0.68f : 0.52f)}"
-        in rml_theme_cpp
-    )
+def test_histogram_controls_and_chart_follow_semantic_theme_colors():
+    resources = PROJECT_ROOT / "src/visualizer/gui/rmlui/resources"
+    theme = (resources / "histogram_panel.theme.rcss").read_text(encoding="utf-8")
+    rml = (resources / "histogram_panel.rml").read_text(encoding="utf-8")
+    assert "histogram-history-icon" not in rml
+    assert "vertical-gradient" not in theme
+    assert "@{panel.histogram_fill_decor}" not in theme
+    assert "background-color: @{primary};" in theme
+    assert "background-color: @{warning};" in theme
 
 
 def test_signal_family_keeps_a_distinct_visual_language():
@@ -756,7 +733,7 @@ def test_scene_tree_aligns_hierarchy_and_keeps_row_actions_trailing():
     assert "margin-right: 6dp;" in scene_view_rule
 
     tree_rule = _rule_body(scene_rcss, "#tree-container")
-    assert "overflow-y: scroll;" in tree_rule
+    assert "overflow-y: auto;" in tree_rule
 
     node_name_rule = _rule_body(scene_rcss, ".node-name")
     assert "flex-grow: 1;" in node_name_rule
@@ -883,7 +860,6 @@ def test_scene_tree_delete_key_uses_selection_gated_confirmation_path():
     assert "requestDeleteSceneSelectionIfAvailable" in gui_manager
     assert "requestDeleteSelectionIfAvailable" in scene_panel
     assert "tree_el_->selectedCount() == 0" in scene_panel
-    assert "if (active_tab_ == Tab::Scene)" in scene_panel
     assert "tree_el_->requestDeleteSelection();" in scene_panel
     assert "return true;" in scene_panel.split(
         "bool NativeScenePanel::requestDeleteSelectionIfAvailable()", 1
@@ -1075,7 +1051,7 @@ def test_scene_graph_selection_markers_are_optional_user_preferences():
 
     assert "setSceneGraphSelectionMarkers(bool enabled)" in preferences_hpp
     assert 'values["scene_graph_selection_markers"] = enabled' in preferences_cpp
-    assert 'value("scene_graph_selection_markers", false)' in preferences_cpp
+    assert 'field<bool>(impl_->values, "scene_graph_selection_markers", false)' in preferences_cpp
     assert 'data-checked="scene_graph_selection_markers"' in preferences_rml
     assert 'toggle_section(\'scene_graph\')' in preferences_rml
     assert '@tr:preferences.scene_graph' in preferences_rml

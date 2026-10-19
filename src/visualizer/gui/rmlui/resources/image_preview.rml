@@ -12,7 +12,7 @@
            data-for="thumb : thumbs"
            data-class-selected="thumb.selected"
            data-attr-data-index="thumb.index"
-           data-style-decorator="thumb.decorator">
+           data-style-decorator="thumb.decorator ? thumb.decorator : 'none'">
         <span class="thumb-index">{{ thumb.label }}</span>
       </div>
       <div class="filmstrip-virtual-spacer" data-style-height="filmstrip_bottom_spacer_height"></div>

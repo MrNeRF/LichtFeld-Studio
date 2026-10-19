@@ -11,6 +11,7 @@ add_library(lfs_io_cuda STATIC
         cuda/splat_decimate.cu
         cuda/image_format_kernels.cuh
         cuda/image_format_kernels.cu
+        cuda/masked_image_fill.cu
 )
 
 target_include_directories(lfs_io_cuda
@@ -111,7 +112,8 @@ set_target_properties(spz_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Video encoding library (FFmpeg + CUDA for GPU-accelerated encoding)
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
+# Keep pkg-config results separate from FindFFMPEG's cached variables.
+pkg_check_modules(LFS_FFMPEG REQUIRED IMPORTED_TARGET
         libavcodec
         libavformat
         libswscale
@@ -129,6 +131,8 @@ add_library(lfs_video STATIC
         video/color_convert.cu
         video/cuda_frame_handoff.hpp
         video/cuda_frame_handoff.cpp
+        video/video_metadata.hpp
+        video/video_metadata.cpp
         video_frame_extractor.hpp
         video_frame_extractor.cpp
         hdr_tonemap.hpp
@@ -156,7 +160,7 @@ target_include_directories(lfs_video SYSTEM PRIVATE
 target_link_libraries(lfs_video
         PRIVATE
         lfs_core
-        PkgConfig::FFMPEG
+        PkgConfig::LFS_FFMPEG
         spdlog::spdlog
         CUDA::cudart
         CUDA::cuda_driver

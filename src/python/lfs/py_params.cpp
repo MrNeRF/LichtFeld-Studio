@@ -359,6 +359,14 @@ namespace lfs::python {
             throw std::runtime_error("Unsupported property type");
         }
 
+        if (prop_id == "iterations") {
+            if (const auto* tm = get_trainer_manager(); tm &&
+                                                        tm->rejectsIterationLimit(std::any_cast<size_t>(new_value))) {
+                throw std::invalid_argument(
+                    LOC("training.iterations_must_exceed_current"));
+            }
+        }
+
         std::any old_value;
         modify_params([&](auto& p) {
             auto candidate = p;
@@ -592,6 +600,14 @@ namespace lfs::python {
         if (!tm)
             return false;
         return tm->hasTrainer() && tm->isDatasetEditable();
+    }
+
+    std::string PyDatasetConfig::init_path() const {
+        const auto* tm = get_trainer_manager();
+        if (!tm || !tm->hasTrainer())
+            return {};
+        const auto* trainer = tm->getTrainer();
+        return trainer ? trainer->getParams().init_path.value_or(std::string{}) : std::string{};
     }
 
     core::param::DatasetConfig& PyDatasetConfig::params() {
@@ -933,6 +949,11 @@ namespace lfs::python {
                 [](PyOptimizationParams& self, float v) { self.set("cropbox_loss_weight", nb::cast(v)); },
                 "Scales pixel losses for camera rays outside the active crop box")
             .def_prop_rw(
+                "cropbox_growth_inside",
+                [](PyOptimizationParams& self) { return self.params().cropbox_growth_inside; },
+                [](PyOptimizationParams& self, float v) { self.set("cropbox_growth_inside", nb::cast(v)); },
+                "Share of new splats placed inside the active crop box")
+            .def_prop_rw(
                 "lambda_dssim",
                 [](PyOptimizationParams& self) { return self.params().lambda_dssim; },
                 [](PyOptimizationParams& self, float v) { self.set("lambda_dssim", nb::cast(v)); },
@@ -982,10 +1003,14 @@ namespace lfs::python {
                 },
                 "Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range, points or a splat); training is not affected")
             .def_prop_rw(
-                "eval_mask_invert",
-                [](PyOptimizationParams& self) { return self.params().eval_mask_invert; },
-                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_mask_invert = v; }); },
-                "Scores the pixels outside the evaluation mask instead")
+                "eval_mask_report",
+                [](PyOptimizationParams& self) { return self.params().eval_mask_report; },
+                [](PyOptimizationParams&, const std::string& v) {
+                    if (const auto sets = lfs::core::param::parse_eval_pixel_sets(v); !sets)
+                        throw std::invalid_argument(std::format("eval_mask_report: {}", sets.error().user_message()));
+                    modify_params([v](auto& p) { p.eval_mask_report = v; });
+                },
+                "Pixel sets scored with the evaluation mask, comma list of mask, unmasked and inverted; the first is the headline set, whose scores go to metrics.csv, the log and the training panel. Empty: the mask")
             .def_prop_rw(
                 "eval_mask_opacity",
                 [](PyOptimizationParams& self) { return self.params().eval_mask_opacity; },
@@ -1335,6 +1360,9 @@ namespace lfs::python {
             .def_prop_ro(
                 "images", [](const PyDatasetConfig& self) { return self.params().images; },
                 "Subfolder name containing images")
+            .def_prop_ro(
+                "init_path", &PyDatasetConfig::init_path,
+                "Training initialization file; empty when training starts from the dataset's points")
             .def_prop_rw(
                 "test_every",
                 [](const PyDatasetConfig& self) { return self.params().test_every; },

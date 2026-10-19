@@ -23,7 +23,91 @@ The Preferences panel currently exposes:
 - camera navigation mode and axis/view snap;
 - per-setting remember options;
 - MCP server enablement, bind scope, port, and opt-in request logging;
-- interface, layout, and window reset actions.
+- interface, layout, and window reset actions;
+- experimental native floating windows (restart required).
+
+External floating panels are opt-in and disabled by default. Enable the
+experimental setting in Preferences > Interface and restart to allow dragging
+Preferences, Plugin Marketplace, or Video Extractor outside the main application
+window. An explicit allowlist keeps other floating panels, including Asset
+Manager, Histogram, and third-party plugin panels, embedded until arbitrary
+panel-owned textures can migrate safely between Vulkan devices. Opening or
+preloading a panel keeps it embedded and does not allocate an SDL desktop
+surface or an auxiliary GPU device. The host is created only at the boundary
+crossing, or when restoring a saved position outside the main window.
+`LFS_NATIVE_FLOATING_WINDOWS=0` disables the feature for one run. Both
+`--safe-mode` and `LFS_SAFE_MODE` always keep panels embedded, even with an
+explicit feature override. Initialization failures also fall back to embedded
+rendering. With no external hosts, the native rendering pass returns before
+reading preferences or parsing geometry; geometry is parsed only when saving
+changed external rectangles. Moves and resizes update an in-memory rectangle;
+a durable write is deferred until input is released and geometry has been quiet
+for 250 ms. Hiding/closing the panel and application shutdown flush the final
+rectangle immediately. Failed host initialization disables further external
+host creation for the session, with one warning; existing panel state remains
+available in embedded mode.
+
+Desktop rectangles are stored in the user-global `floating_window_geometry`
+object, keyed by RmlUi context name, and never in a project's workspace. Both
+Reset Layout and Reset Window State clear these rectangles, including the
+in-memory reopen positions of closed panels, and center live
+windows inside the main application window. Panels without saved positions also
+start inside the application, fitting their initial size to its available area.
+Reset Interface disables the experiment; Reset Appearance preserves its
+current setting. Preferences stays open.
+Missing-monitor recovery is applied at creation, reopening, and display topology,
+resolution, usable-area, and scale changes. It uses the remaining monitor's full
+usable bounds, retains the saved size when it fits, and shrinks oversized panels.
+The panel's RmlUi title must remain accessible, including between offset monitors.
+Recovered rectangles replace the unavailable positions in global preferences;
+reconnecting a monitor does not automatically move panels back to it.
+
+The desktop host is borderless and transparent: the panel keeps its RmlUi title,
+close button, theme and original dimensions. Its RmlUi title bar moves the window
+and its edges resize it. Confirmation and input popups remain embedded.
+Closing a panel window disables that panel without exiting the
+application and destroys its desktop surface, UI renderer, and auxiliary GPU
+device. Reopening recreates the host from the saved rectangle while retaining
+the panel instance and its state. This experiment covers only the three allowed
+floating panels; docked panels are not yet detachable. Native window integration has been validated on Windows;
+the Linux and macOS paths still require platform testing.
+Main-window focus loss preserves the focused text field and its uncommitted
+value, including when external windows are disabled. Focus cleanup for an
+auxiliary window affects only that window.
+The shared host updates monitor DPI before drawing both Python and C++ panels,
+including Video Extractor. Runtime checks compared its rendered title with
+Preferences on Windows monitors at 96 and 144 DPI.
+
+`render.capture_window` accepts an optional `panel_id` to capture a visible native
+panel. Opt-in Windows regression checks live in
+`tests/python/test_native_floating_windows_runtime.py`; they require an isolated
+running GUI selected by `LFS_NATIVE_WINDOWS_TEST_ENDPOINT` and the matching
+`LFS_NATIVE_WINDOWS_TEST_PROFILE` (the application's `LFS_HOME`).
+
+One-panel cost was measured on Windows with an NVIDIA RTX 5060 Ti, Vulkan,
+Release build, an empty scene, and a fresh isolated profile. For a 1170×633
+panel at the current monitor scale, medians of three WDDM GPU Process Memory
+samples were 270.41 MiB dedicated with Preferences embedded, 395.07 MiB
+detached, 279.21 MiB after close, and 397.76 MiB after reopen. Closing returned
+115.86 MiB dedicated and 66.22 MiB shared in this run. First embedded open took
+78.1 ms, native initialization 209.9 ms, and recreated-host initialization
+245.7 ms. MCP drag-to-visible took 629.2 ms, including the test's 100 ms press
+interval and RPC/frame scheduling. These are single-run observations, not
+latency or zero-retention guarantees. Although the SDL surface, renderer,
+RmlUi render manager and auxiliary graphics device are destroyed, process-wide
+WDDM totals retain some memory. An instrumented ten-cycle run kept live main
+UI allocations around 46 MiB while WDDM dedicated totals rose by about 35 MiB;
+that residual is not fully attributed. Subsequent controls in a remote Windows
+session (one 2560x1600 display at 120 DPI) did not reproduce progressive growth:
+20 close/reopen cycles without captures, 20 main-window captures, repeated cycles
+with captures and a larger main window, and 30 cycles at application UI scale
+1.5 all had stable post-close WDDM totals within each series. Ten additional
+cycles with the VRAM profiler kept Viewer ownership constant after close.
+The earlier local 144-DPI observation remains open; remote-session stability
+does not establish its cause or prove it fixed. Sampled profiler process totals
+can also lag behind host retirement. Other process/driver caches and reserved
+allocator blocks are included in those counters. No additional desktop host or
+GPU device is created merely by opening embedded panels.
 
 The panel can be opened from the Edit menu or with the default `Ctrl+,`
 shortcut. The shortcut is a regular keymap action and can be rebound in Input
@@ -60,6 +144,12 @@ protocol or application code, application domain, retryability, and operation
 id when available. Request parameters, tool names, payloads, free-form messages,
 and error details are deliberately not recorded. Because network addresses can
 identify devices and interfaces, request logging remains an explicit opt-in.
+
+When right-panel tabs overflow, the larger arrow buttons scroll the strip and
+the final dropdown lists every available panel vertically. Selecting a panel
+uses the same active-tab callback as its tab; the choice continues to be saved
+in the project's GUIL chapter. The open picker supports arrow-key navigation
+and does not require plugins to change their panel registration.
 
 Application preferences are stored in `config/preferences.json`. User-global
 UI details that are not project layout, such as HUD state, are written to
@@ -172,6 +262,14 @@ strategy, max cap, init path, and the rest of the LoadFile fields) are kept.
 Adding a splat or mesh onto an existing SplatFiles scene does not start a new
 session. Machine paths (`scene.load_dataset`, `lf.load_dataset`, CLI `-d`)
 do not take this reset.
+
+Preferences > Interface can explicitly save the current right sidebar width,
+scene split and active tab as startup defaults (`sidebar_defaults` in
+`preferences.json`). Clearing these defaults does not change the live workspace.
+They are applied once at application startup. Loading a `.licht` then restores
+its GUIL layout, and never writes back to the startup defaults. New Project keeps
+the current workspace, as before. The Project Manager retains its own independent
+preferences.
 
 `config/layout.json` is a legacy, import-only layout source. New project
 workspace state is not written there.

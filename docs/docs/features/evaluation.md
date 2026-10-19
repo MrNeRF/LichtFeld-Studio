@@ -37,13 +37,17 @@ Everything is written to the output directory:
 ├── metrics_report.txt       best and final scores in plain text
 ├── per_image_metrics.json   every image at every evaluated iteration
 └── eval_step_30000
-    ├── IMG_0001.png               reference | render, unscored pixels black; with a mask three rows:
-    │                              as rendered, mask applied, inverted mask applied
-    ├── IMG_0001_flip.png          FLIP error map, with --eval-flip
-    └── ...
+    ├── IMG_0001.png               ground truth | render, unscored pixels black; with a mask three rows:
+    │                              unmasked, mask applied, inverted mask applied
+    ├── ...
+    └── flip
+        ├── IMG_0001.png           FLIP error map, with --eval-flip
+        └── ...
 ```
 
 Images are named after their input image. When two input images share a name, the later ones get their evaluation index appended.
+
+A caption band above each row names its two images, for example `Ground Truth, Mask` and `Render, Mask`; the image pixels themselves are not drawn over.
 
 `metrics.csv` has the columns `iteration, psnr, ssim, lpips, time_per_image, num_gaussians, normal_angle_deg, depth_absrel, bias_r, bias_g, bias_b, bias_corr_r, bias_corr_g, bias_corr_b, flip`. Columns without a value are left empty.
 
@@ -74,6 +78,8 @@ Images are named after their input image. When two input images share a name, th
 
 `split` is `test` for held-out images and `train` with `--eval-all`. An image that could not be scored keeps its entry with a `skipped_reason`.
 
+With `--eval-mask-report`, every listed pixel set has its own object in the evaluation, named `masked`, `unmasked` and `inverted`, each with that set's `psnr`, `ssim`, `lpips`, `flip` and `evaluated_pixel_fraction` (see [Pixel sets and the headline set](#pixel-sets-and-the-headline-set)). Only `step`, `split`, `bit_depth` and `validity_mask_applied` stay outside them, and the `masked` true/false entry is left out because the object names the set. An image that could not be scored has its `skipped_reason` beside them and no set objects. `metrics.csv` holds the headline set's scores.
+
 ## Metrics
 
 - **PSNR** and **SSIM** measure pixel and structural agreement. Higher is better.
@@ -89,18 +95,98 @@ A mask restricts all metrics to a part of each image, for example the object wit
 | `mesh:<file>` | Pixels covered by a mesh (OBJ, PLY, ...) in the dataset's coordinates. |
 | `bbox:x0,y0,z0,x1,y1,z1` | Pixels covered by an axis-aligned box given by its minimum and maximum corner, in the dataset's coordinates. |
 | `cropbox` | Pixels covered by the training model's crop box, as placed when training starts. |
-| `masks:<folder>` | One mask image per input image, matched by file name. White pixels are scored. |
+| `masks:<folder>` | One mask image per evaluated image, found by the image's name, see [Mask folders](#mask-folders). White pixels are scored. |
 | `depth:near,far` | Rendered pixels that are solid and whose depth lies between `near` and `far`. |
 | `points` or `points:radius,close` | Pixels around the initial point cloud: every point is drawn as a disk of `radius` pixels (default 2) and gaps up to twice `close` pixels (default 3) are closed. |
 | `points:<file>` | Pixels around the points of a splat or point cloud PLY in the dataset's coordinates, drawn like `points` with the default radius and closing. Use it when the initial point cloud is not the subject, for example when the subject is added with `--add-splat`. |
 | `splat:<file>` | Pixels a splat PLY covers when rendered with its positions, sizes, rotations and opacities: pixels whose rendered opacity reaches `--eval-mask-opacity` (default 0.85; 0.5 adds a thin rim of background, values near 1 trim the subject's edges). |
 | `none` | No mask; clears a mask stored in a resumed project. |
 
-`--eval-mask-invert` scores the pixels outside the mask instead. Mesh, box, crop box and point masks follow each camera's lens, including distortion when evaluating distorted images.
+To score the pixels outside the mask, list `inverted` first in `--eval-mask-report`, see below. Mesh, box, crop box and point masks follow each camera's lens, including distortion when evaluating distorted images.
+
+### Pixel sets and the headline set
+
+`--eval-mask-report` lists the pixel sets every view is scored against, all in the same evaluation. It needs `--eval-mask`.
+
+| Set | Pixels | Same scores as |
+|---|---|---|
+| `mask` | The mask, as above. | the evaluation with the mask alone |
+| `unmasked` | Every valid pixel of the view. | `--eval-mask none` |
+| `inverted` | The valid pixels outside the mask. | a mask that covers exactly those pixels |
+
+Only the listed sets are scored. The first one is the headline set: its scores go to `metrics.csv`, to the score lines of the log and of `metrics_report.txt`, to the GUI and to the first table of `compare_report.txt`. The order of the other sets makes no difference. Without `--eval-mask-report`, the mask alone is scored.
+
+| `--eval-mask-report=` | Scored | Headline |
+|---|---|---|
+| (not given) | mask | mask |
+| `mask,unmasked,inverted` | all three | mask |
+| `inverted,mask,unmasked` | all three | inverted |
+| `inverted` | inverted | inverted |
+| `unmasked,mask` | unmasked and mask | unmasked |
+
+Valid pixels are all pixels of the view, except when distorted images are evaluated with `--undistort`: the pixels the undistorted render cannot reach are then left out of every set. `inverted` is the exact complement of the thresholded mask inside the valid pixels; for a mask folder with grey edges it can differ along those edges from masks whose grey values were inverted before thresholding.
+
+Each view is rendered and its reference decoded once for all sets, and SSIM reuses its full-image map. LPIPS and FLIP run once per set, because they blank the pixels outside the set before comparing, so each listed set adds one LPIPS pass (and one FLIP pass with `--eval-flip`) per view. The FLIP error maps show the headline set.
+
+The scores of every listed set are written to `per_image_metrics.json` (example below) and `compare.json`, each set under its own name. The other sets also get their own lines in the log and in `metrics_report.txt`, and their own tables in `compare_report.txt`. In the GUI, **Headline Set** picks the headline set, and **Also Score Mask**, **Also Score Unmasked** and **Also Score Inverted** add the others; they appear once an evaluation mask is set. Without an applied mask the sets are not scored, every pixel is, and a warning says so.
+
+```json
+{
+  "step": 30000,
+  "split": "test",
+  "bit_depth": 8,
+  "validity_mask_applied": false,
+  "masked": {"psnr": 25.41, "ssim": 0.812, "lpips": 0.184, "evaluated_pixel_fraction": 0.62},
+  "unmasked": {"psnr": 23.87, "ssim": 0.781, "lpips": 0.203, "evaluated_pixel_fraction": 1.0},
+  "inverted": {"psnr": 22.95, "ssim": 0.764, "lpips": 0.215, "evaluated_pixel_fraction": 0.38}
+}
+```
 
 `points` uses the points the model was initialized from, either the dataset's sparse points or the file given with `--init`. A resumed project reads them again from there, so that file or dataset must still be in place.
 
 In the GUI, **Browse** picks a mesh, **Mask Folder** a mask folder and **Use Crop Box** the crop box; the text field accepts any of the specifications above.
+
+### Mask folders
+
+`masks:<folder>` is a normal path to the folder that holds the masks; it does not have to be inside the dataset. An absolute path is used as given. A relative path is resolved from the directory the command is started in, not from the dataset, and is stored as an absolute path, so a resumed project still finds it. A folder that does not exist stops the run before anything is evaluated.
+
+Each mask is found from the name the image has in its dataset:
+
+| Images come from | Image name | Example |
+|---|---|---|
+| A COLMAP dataset | The name stored in the model, which is the path below the images folder | `cam_a/frame_0001.exr` |
+| A `transforms.json` dataset | The image's file name | `frame_0001.png` |
+| `compare` with a reference folder | The path below the reference folder | `cam_a/frame_0001.exr` |
+| `compare` with a reference dataset or `--colmap` | The name stored in the COLMAP model | `cam_a/frame_0001.exr` |
+
+The mask folder is searched including its subfolders:
+
+1. The image's path inside the folder comes first, so a folder that mirrors the image layout always works: `eval_masks/cam_a/frame_0001.png`.
+2. Otherwise the file name alone is looked up anywhere in the folder, so a flat folder works too: `eval_masks/frame_0001.png`. If that file name exists in more than one subfolder, the match is ambiguous and the image is reported as having no mask. Mirror the image layout whenever file names repeat across folders.
+
+At each place the mask may be named like the image including its extension (`frame_0001.exr`), with the extension replaced by `.png`, `.jpg`, `.jpeg` or `.mask.png` (`frame_0001.png`), or with one of those appended (`frame_0001.exr.png`). An EXR image can therefore use a PNG mask. Names are matched ignoring case, and `/` and `\` both separate folders.
+
+A mask has the resolution of its image file and is scaled together with the image. White pixels are scored; `--eval-mask-report=inverted` scores the others. Every evaluated image needs a mask: a missing one stops the evaluation and names the image.
+
+For example, a COLMAP dataset whose two cameras both have a `frame_0001`:
+
+```
+dataset/
+├── images/
+│   ├── cam_a/frame_0001.exr
+│   └── cam_b/frame_0001.exr
+└── sparse/0/
+eval_masks/
+├── cam_a/frame_0001.png
+└── cam_b/frame_0001.png
+```
+
+```bash
+LichtFeld-Studio --headless -d dataset -o output --eval --eval-mask masks:eval_masks
+LichtFeld-Studio compare dataset/ renders/ --eval-mask masks:/data/eval_masks
+```
+
+The masks mirror the layout because `frame_0001.png` alone would match both cameras.
 
 ## Distorted images
 
@@ -147,11 +233,11 @@ Any other lens difference stops the comparison. Test cameras placed elsewhere th
 | Flag | Meaning |
 |---|---|
 | `-o <folder>` | Where the reports go; default `<test>_compare` next to the test images. |
-| `--eval-mask`, `--eval-mask-invert`, `--eval-mask-opacity` | `masks:<folder>`, `mesh:<file>`, `bbox:...`, `points:<file>` or `splat:<file>`, as in training. The crop box, depth and initial point masks need a trained model. |
+| `--eval-mask`, `--eval-mask-opacity`, `--eval-mask-report` | `masks:<folder>`, `mesh:<file>`, `bbox:...`, `points:<file>` or `splat:<file>`, as in training. The crop box, depth and initial point masks need a trained model. |
 | `--colmap <sparse>` | COLMAP model with the cameras of a reference folder that is not a dataset, matched by image name. |
 | `--eval-space` | `distorted` or `undistorted`, see above. |
 | `--undistort` | The test folder was rendered with the undistorted reference cameras. |
 | `--eval-bit-depth`, `--eval-flip` | As in training. |
-| `--save-images` | Save reference and test side by side to `compare_images/` (three rows with a mask), and FLIP error maps with `--eval-flip`. |
+| `--save-images` | Save reference and test side by side to `compare_images/` (captioned `Ground Truth` and `Test`, three rows with a mask), and FLIP error maps to `compare_images/flip/` with `--eval-flip`. |
 
-The scores go to `compare.json` (the settings, the mean scores and each image's PSNR, SSIM, LPIPS, FLIP, size, bit depth and scored pixel fraction) and `compare_report.txt` (the table the command prints); a rerun into the same folder replaces them and `compare_images/`. Both image sets are read with the same decoder, so identical files score PSNR 100 and SSIM 1. Values are compared as stored: a linear EXR and an sRGB PNG of the same image do not match.
+The scores go to `compare.json` (the settings, the mean scores and each image's PSNR, SSIM, LPIPS, FLIP, size, bit depth and scored pixel fraction; with `--eval-mask-report` the scores of each pixel set in its own `masked`, `unmasked` or `inverted` object, as in `per_image_metrics.json`) and `compare_report.txt` (the table the command prints); a rerun into the same folder replaces them and `compare_images/`. Both image sets are read with the same decoder, so identical files score PSNR 100 and SSIM 1. Values are compared as stored: a linear EXR and an sRGB PNG of the same image do not match.

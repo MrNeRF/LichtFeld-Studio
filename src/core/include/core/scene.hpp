@@ -126,6 +126,15 @@ namespace lfs::core {
         bool locked = false; // If true, painting with other groups won't overwrite
     };
 
+    // Same group Scene creates for a new scene: id 1, "Group 1", palette red.
+    [[nodiscard]] inline SelectionGroup defaultSelectionGroup() {
+        SelectionGroup group;
+        group.id = 1;
+        group.name = "Group 1";
+        group.color = {1.0f, 0.3f, 0.3f};
+        return group;
+    }
+
     class Scene;
     struct CombinedModelBuildLifetimeRegistry;
 
@@ -281,6 +290,7 @@ namespace lfs::core {
             MODEL_CHANGED = 1 << 6,
             SELECTION_CHANGED = 1 << 7,
             CLEARED = 1 << 8,
+            CAMERA_TRAINING_CHANGED = 1 << 9,
         };
 
         void notifyMutation(MutationType type);

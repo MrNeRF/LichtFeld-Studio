@@ -5,6 +5,7 @@
 #include "gui/panels/python_console_panel.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -18,6 +19,7 @@
 #include "gui/terminal/terminal_input.hpp"
 #include "gui/terminal/terminal_widget.hpp"
 #include "gui/utils/native_file_dialog.hpp"
+#include "python/python_runtime.hpp"
 #include <algorithm>
 
 #include <RmlUi/Core.h>
@@ -1133,8 +1135,12 @@ namespace {
             input->mouse_y >= bounds.y && input->mouse_y < bounds.y + bounds.height;
         if (input->mouse_clicked[0] && hovered)
             pane.splitter_dragging = true;
-        if (!input->mouse_down[0])
+        if (!input->mouse_down[0] && pane.splitter_dragging) {
             pane.splitter_dragging = false;
+            if (auto* const viewer = lfs::python::get_visualizer()) {
+                viewer->projectMarkSessionChapterCommitted("GUIL");
+            }
+        }
 
         if (!pane.splitter_dragging)
             return false;
@@ -1312,6 +1318,9 @@ namespace {
             editor->setText(content);
             editor->setActiveSessionLocator(
                 lfs::core::path_to_utf8(path));
+            if (auto* const viewer = lfs::python::get_visualizer()) {
+                viewer->projectMarkSessionChapterCommitted("EDTR");
+            }
         }
 
         state.setScriptPath(path);
@@ -1338,6 +1347,9 @@ namespace {
         state.setScriptPath(path);
         editor->setActiveSessionLocator(
             lfs::core::path_to_utf8(path));
+        if (auto* const viewer = lfs::python::get_visualizer()) {
+            viewer->projectMarkSessionChapterCommitted("EDTR");
+        }
         state.setModified(false);
         state.addInfo("Saved: " + lfs::core::path_to_utf8(path.filename()));
         return true;
@@ -1709,8 +1721,12 @@ namespace lfs::vis::gui::panels {
         if (auto* editor = state.getEditor()) {
             if (editor->consumeExecuteRequested())
                 execute_python_code(editor->getTextStripped(), state);
-            if (editor->consumeTextChanged())
+            if (editor->consumeTextChanged()) {
                 state.setModified(true);
+                if (auto* const viewer = lfs::python::get_visualizer()) {
+                    viewer->projectMarkSessionChapterCommitted("EDTR");
+                }
+            }
         }
     }
 

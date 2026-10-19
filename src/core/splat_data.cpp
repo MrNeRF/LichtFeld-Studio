@@ -1174,6 +1174,97 @@ namespace lfs::core {
             k);
     }
 
+    Tensor SplatData::shN_canonical_cpu_rows(const Tensor& row_indices) const {
+        const size_t n = static_cast<size_t>(size());
+        const size_t k = max_sh_coeffs_rest();
+        LFS_ASSERT_MSG(_shN.is_valid() && _shN.dtype() == DataType::Float16,
+                       "shN_canonical_cpu_rows requires compact q16 or IEEE-f16 storage");
+        LFS_ASSERT_MSG(row_indices.is_valid() && row_indices.device() == Device::CPU &&
+                           row_indices.ndim() == 1 &&
+                           (row_indices.dtype() == DataType::Int32 ||
+                            row_indices.dtype() == DataType::Int64),
+                       "shN_canonical_cpu_rows requires rank-1 CPU integer row indices");
+
+        const Tensor indices = row_indices.contiguous();
+        const size_t selected = static_cast<size_t>(indices.numel());
+        Tensor out = Tensor::empty_pageable_host({selected, k, SH_CHANNELS}, DataType::Float32);
+        out.zero_();
+        if (selected == 0 || k == 0) {
+            return out;
+        }
+
+        const Tensor codes_cpu = _shN.to_pageable_host().contiguous();
+        const bool quantized = shN_value_quantized() &&
+                               _shN_value_bounds.is_valid() &&
+                               _shN_value_bounds.numel() > 0;
+        Tensor bounds_cpu;
+        const float* bounds = nullptr;
+        if (quantized) {
+            bounds_cpu = _shN_value_bounds.to_pageable_host().contiguous();
+            bounds = bounds_cpu.ptr<float>();
+        }
+
+        const auto source_row = [&](const size_t index) -> size_t {
+            const int64_t row = indices.dtype() == DataType::Int32
+                                    ? static_cast<int64_t>(indices.ptr<int32_t>()[index])
+                                    : indices.ptr<int64_t>()[index];
+            LFS_ASSERT_MSG(row >= 0 && static_cast<size_t>(row) < n,
+                           "shN_canonical_cpu_rows row index is out of range");
+            return static_cast<size_t>(row);
+        };
+
+        auto* const dst = out.ptr<float>();
+        if (quantized) {
+            const auto* const codes = reinterpret_cast<const uint16_t*>(codes_cpu.data_ptr());
+            const uint32_t n_cells = sh_value_quant::n_value_cells_per_prim(
+                static_cast<uint32_t>(k));
+            tbb::parallel_for(
+                tbb::blocked_range<size_t>(0, selected),
+                [&](const tbb::blocked_range<size_t>& range) {
+                    for (size_t output_row = range.begin(); output_row != range.end(); ++output_row) {
+                        const size_t row = source_row(output_row);
+                        const size_t block = row / kShReorderSize;
+                        const size_t lane = row % kShReorderSize;
+                        const float lo = bounds[(row / 256u) * 2u];
+                        const float hi = bounds[(row / 256u) * 2u + 1u];
+                        float* const dst_row = dst + output_row * k * SH_CHANNELS;
+                        for (uint32_t cell = 0; cell < n_cells && cell < k * SH_CHANNELS; ++cell) {
+                            const size_t source_index =
+                                block * static_cast<size_t>(n_cells) * kShReorderSize +
+                                static_cast<size_t>(cell) * kShReorderSize + lane;
+                            dst_row[cell] = decode_q16_host(codes[source_index], lo, hi);
+                        }
+                    }
+                });
+            return out;
+        }
+
+        const auto* const codes = codes_cpu.ptr<__half>();
+        const size_t source_floats = static_cast<size_t>(codes_cpu.numel());
+        const size_t active_floats = k * SH_CHANNELS;
+        tbb::parallel_for(
+            tbb::blocked_range<size_t>(0, selected),
+            [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t output_row = range.begin(); output_row != range.end(); ++output_row) {
+                    const size_t row = source_row(output_row);
+                    float* const dst_row = dst + output_row * active_floats;
+                    for (size_t offset = 0; offset < active_floats; ++offset) {
+                        const auto slot = static_cast<uint32_t>(offset / 4u);
+                        const auto component = static_cast<uint32_t>(offset % 4u);
+                        const size_t source_index =
+                            static_cast<size_t>(sh_swizzled_index(
+                                static_cast<uint32_t>(row), slot, static_cast<uint32_t>(k))) *
+                                4u +
+                            component;
+                        if (source_index < source_floats) {
+                            dst_row[offset] = static_cast<float>(codes[source_index]);
+                        }
+                    }
+                }
+            });
+        return out;
+    }
+
     Tensor SplatData::shN_canonical_cpu_gpu_decoded() const {
         const size_t n = static_cast<size_t>(size());
         const size_t k = max_sh_coeffs_rest();

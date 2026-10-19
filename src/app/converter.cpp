@@ -10,6 +10,7 @@
 #include "core/error.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
@@ -55,21 +56,21 @@ namespace lfs::app {
             std::vector<std::filesystem::path> files;
             if (&valid_extensions[0] == &CONVERT_EXTENSIONS[0] && lfs::io::is_ssog_path(path))
                 return {path};
-            if (std::filesystem::is_directory(path)) {
-                for (const auto& entry : std::filesystem::directory_iterator(path)) {
+            if (lfs::core::native_fs::is_directory(path)) {
+                for (const auto& entry : lfs::core::native_fs::directory_iterator(path)) {
                     if (&valid_extensions[0] == &CONVERT_EXTENSIONS[0] && lfs::io::is_ssog_path(entry.path())) {
-                        files.push_back(entry.path());
+                        files.push_back(lfs::core::native_fs::entry_path(path, entry.path()));
                         continue;
                     }
-                    if (!entry.is_regular_file())
+                    if (!lfs::core::native_fs::entry_is_regular_file(path, entry))
                         continue;
-                    auto ext = entry.path().extension().string();
+                    auto ext = lfs::core::path_to_utf8(entry.path().extension());
                     std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                         return static_cast<char>(std::tolower(c));
                     });
                     for (const auto* valid : valid_extensions) {
                         if (ext == valid) {
-                            files.push_back(entry.path());
+                            files.push_back(lfs::core::native_fs::entry_path(path, entry.path()));
                             break;
                         }
                     }
@@ -157,7 +158,7 @@ namespace lfs::app {
         }
 
         bool isPlyExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -165,7 +166,7 @@ namespace lfs::app {
         }
 
         bool isRadExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -173,7 +174,7 @@ namespace lfs::app {
         }
 
         bool isResumeExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -181,7 +182,7 @@ namespace lfs::app {
         }
 
         bool isLichtExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -378,7 +379,7 @@ namespace lfs::app {
             const std::uint64_t estimated = info->vertex_count * per_splat;
             std::uint64_t budget = 8ull << 30;
 #ifndef _WIN32
-            std::ifstream meminfo("/proc/meminfo");
+            std::ifstream meminfo(lfs::core::native_fs::native_path("/proc/meminfo"));
             std::string line;
             while (std::getline(meminfo, line)) {
                 if (line.starts_with("MemAvailable:")) {
@@ -590,7 +591,7 @@ namespace lfs::app {
             }
             const auto output = generate_converter_output_path(input, output_template, params.format, "_converted");
 
-            if (std::filesystem::exists(output) && !overwrite_all && !params.overwrite) {
+            if (lfs::core::native_fs::exists(output) && !overwrite_all && !params.overwrite) {
                 const auto choice = ask_overwrite(output, std::cin, std::cout);
                 if (choice == OverwriteChoice::NO) {
                     std::println("  Skipped");
@@ -631,7 +632,7 @@ namespace lfs::app {
 
             bool skip = false;
             for (const auto& output : outputs) {
-                if (std::filesystem::exists(output.path) && !overwrite_all && !params.overwrite) {
+                if (lfs::core::native_fs::exists(output.path) && !overwrite_all && !params.overwrite) {
                     const auto choice = ask_overwrite(output.path, std::cin, std::cout);
                     if (choice == OverwriteChoice::NO) {
                         skip = true;

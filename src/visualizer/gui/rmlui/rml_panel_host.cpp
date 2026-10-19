@@ -4,6 +4,8 @@
 
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
+#include "core/path_utils.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
@@ -11,9 +13,13 @@
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "input/sdl_coordinate_utils.hpp"
 #include "internal/resource_paths.hpp"
 #include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer/preferences.hpp"
+#include "window/window_state_utils.hpp"
+#include <SDL3/SDL.h>
 
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 
@@ -124,12 +130,12 @@ namespace lfs::vis::gui {
         }
 
         std::filesystem::path resolveDocumentPath(const std::string& rml_path) {
-            const auto requested_path = std::filesystem::path(rml_path);
+            const auto requested_path = lfs::core::utf8_to_path(rml_path);
             return requested_path.is_absolute() ? requested_path : lfs::vis::getAssetPath(rml_path);
         }
 
         bool isThemeProvidedStaticStylesheet(const std::filesystem::path& rcss_path) {
-            const auto filename = rcss_path.filename().string();
+            const auto filename = lfs::core::path_to_utf8(rcss_path.filename());
             return filename == "components.rcss" || filename == "font_fallback.rcss";
         }
 
@@ -141,14 +147,14 @@ namespace lfs::vis::gui {
 
             const auto normalized_path = rcss_path.lexically_normal();
             std::error_code ec;
-            if (!std::filesystem::exists(normalized_path, ec))
+            if (!lfs::core::native_fs::exists(normalized_path, ec))
                 return;
 
-            const std::string key = normalized_path.generic_string();
+            const std::string key = lfs::core::path_to_generic_utf8(normalized_path);
             if (!loaded_paths.insert(key).second)
                 return;
 
-            const std::string rcss = rml_theme::loadBaseRCSS(normalized_path.string());
+            const std::string rcss = rml_theme::loadBaseRCSS(lfs::core::path_to_utf8(normalized_path));
             if (rcss.empty())
                 return;
 
@@ -234,10 +240,10 @@ namespace lfs::vis::gui {
             auto theme_path = resolveDocumentPath(rml_path_);
             theme_path.replace_extension(".theme.rcss");
             std::error_code ec;
-            if (std::filesystem::exists(theme_path, ec)) {
+            if (lfs::core::native_fs::exists(theme_path, ec)) {
                 if (!panel_theme.empty())
                     panel_theme += "\n";
-                panel_theme += rml_theme::loadBaseRCSS(theme_path.string());
+                panel_theme += rml_theme::loadBaseRCSS(lfs::core::path_to_utf8(theme_path));
             }
         } catch (const std::exception&) {
             // Sibling theme files are optional; missing ones should not produce startup noise.
@@ -253,8 +259,33 @@ namespace lfs::vis::gui {
     bool RmlPanelHost::ensureContext() {
         if (rml_context_)
             return true;
-        rml_context_ = manager_->createContext(context_name_, 100, 100);
+        rml_context_ = manager_->createContext(context_name_, 100, 100, desktop_requested_);
+        if (auto* native = nativeWindow()) {
+            SDL_SetWindowPosition(native, static_cast<int>(desktop_bounds_[0]), static_cast<int>(desktop_bounds_[1]));
+            SDL_SetWindowSize(native, static_cast<int>(desktop_bounds_[2]), static_cast<int>(desktop_bounds_[3]));
+        }
         return rml_context_ != nullptr;
+    }
+
+    bool RmlPanelHost::configureExternal(float x, float y, float w, float h, bool desktop_coordinates) {
+        if (rml_context_ || !externalAllowed() || w <= 0 || h <= 0)
+            return false;
+        if (!desktop_coordinates) {
+            auto* main = manager_->mainWindow();
+            int px = 0, py = 0;
+            SDL_GetWindowPosition(main, &px, &py);
+            const auto scale = input::windowPixelScale(main);
+            x = px + x / scale.x;
+            y = py + y / scale.y;
+            w /= scale.x;
+            h /= scale.y;
+        }
+        desktop_bounds_[0] = x;
+        desktop_bounds_[1] = y;
+        desktop_bounds_[2] = w;
+        desktop_bounds_[3] = h;
+        desktop_requested_ = true;
+        return true;
     }
 
     bool RmlPanelHost::ensureDocumentLoaded() {
@@ -262,6 +293,15 @@ namespace lfs::vis::gui {
             return false;
         syncLocalizedContent();
         return true;
+    }
+
+    SDL_Window* RmlPanelHost::nativeWindow() const {
+        return manager_ ? manager_->nativeWindow(rml_context_) : nullptr;
+    }
+
+    bool RmlPanelHost::nativeDragActive() const {
+        auto* window = nativeWindow();
+        return window && SDL_GetBooleanProperty(SDL_GetWindowProperties(window), "lfs.drag_handoff", false);
     }
 
     // The cached panel texture survives a language switch, so the document has to be
@@ -283,9 +323,11 @@ namespace lfs::vis::gui {
             return false;
 
         const float scroll_top = scroll_el_ ? scroll_el_->GetScrollTop() : 0.0f;
-        // The live resize target belongs to the current document. Never retain
-        // it across UnloadDocument(), where it immediately becomes dangling.
+        // Element pointers belong to the current document. Never retain them
+        // across UnloadDocument(), where they immediately become dangling.
         live_inspector_resize_target_ = nullptr;
+        close_button_ = nullptr;
+        close_button_bound_ = false;
         resize_cursor_override_.clear();
         if (document_) {
             rml_context_->UnloadDocument(document_);
@@ -315,6 +357,8 @@ namespace lfs::vis::gui {
         manual_dropdown_mouse_captured_ = false;
         for (auto& captured : mouse_captured_)
             captured = false;
+        for (auto& pressed : pointer_press_target_)
+            pressed.reset();
 
         if (!loadDocument())
             return false;
@@ -328,7 +372,7 @@ namespace lfs::vis::gui {
         if (document_)
             return true;
         try {
-            const auto requested_path = std::filesystem::path(rml_path_);
+            const auto requested_path = lfs::core::utf8_to_path(rml_path_);
             const auto full_path = requested_path.is_absolute()
                                        ? requested_path
                                        : lfs::vis::getAssetPath(rml_path_);
@@ -358,7 +402,7 @@ namespace lfs::vis::gui {
     }
 
     int RmlPanelHost::renderPadding() const {
-        if (!floating_ || !manager_)
+        if (!floating_ || !manager_ || nativeWindow())
             return 0;
         return static_cast<int>(std::ceil(
             rml_theme::layeredShadowPadding(lfs::vis::theme(), 4) *
@@ -368,6 +412,8 @@ namespace lfs::vis::gui {
     void RmlPanelHost::applyPanelSpaceClass() {
         if (document_)
             document_->SetClass("floating-panel", floating_);
+        if (document_)
+            document_->SetClass("native-panel", nativeWindow() != nullptr);
     }
 
     float RmlPanelHost::computeScrollHeightCap() const {
@@ -443,6 +489,18 @@ namespace lfs::vis::gui {
     }
 
     void RmlPanelHost::syncDirectLayout(float w, float h) {
+        if (auto* native = nativeWindow()) {
+            int pw = 0, ph = 0;
+            SDL_GetWindowSizeInPixels(native, &pw, &ph);
+            w = static_cast<float>(pw);
+            h = static_cast<float>(ph);
+            const float preference = SDL_GetFloatProperty(SDL_GetWindowProperties(native), "lfs.ui_scale", 0.0f);
+            const float ratio = preference > 0 ? preference : std::max(1.0f, SDL_GetWindowDisplayScale(native));
+            if (rml_context_->GetDensityIndependentPixelRatio() != ratio) {
+                rml_context_->SetDensityIndependentPixelRatio(ratio);
+                markContentDirty();
+            }
+        }
         if (w <= 0 || h <= 0)
             return;
 
@@ -727,6 +785,11 @@ namespace lfs::vis::gui {
     }
 
     void RmlPanelHost::resolveDirectRenderHeight(float requested_h, int& ph, float& display_h) const {
+        if (nativeWindow()) {
+            ph = std::clamp(static_cast<int>(requested_h), 1, kMaxFboSize);
+            display_h = static_cast<float>(ph);
+            return;
+        }
         if (height_mode_ == PanelHeightMode::Content) {
             const float ch = last_content_height_;
             if (ch > 0 && requested_h < ch) {
@@ -766,6 +829,15 @@ namespace lfs::vis::gui {
         if (!ensureDocumentLoaded())
             return;
 
+        auto* native = nativeWindow();
+        if (native) {
+            const float density = SDL_GetWindowPixelDensity(native);
+            const auto properties = SDL_GetWindowProperties(native);
+            SDL_SetNumberProperty(properties, "lfs.default_width", static_cast<int>(std::ceil(w / density)));
+            SDL_SetNumberProperty(properties, "lfs.default_height", static_cast<int>(std::ceil(h / density)));
+            syncDirectLayout(w, h);
+        }
+
         const int pw = static_cast<int>(w);
         int ph = 0;
         float display_h = 0.0f;
@@ -780,6 +852,10 @@ namespace lfs::vis::gui {
 
         if (!ensureDocumentLoaded())
             return;
+        if (nativeWindow()) {
+            syncDirectLayout(w, h);
+            manager_->showNativeWindow(rml_context_);
+        }
 
         const int pw = static_cast<int>(w);
         int ph;
@@ -798,6 +874,8 @@ namespace lfs::vis::gui {
     bool RmlPanelHost::drawDirectCached(float x, float y, float w, float h) {
         if (w <= 0 || h <= 0)
             return false;
+        if (nativeWindow())
+            syncDirectLayout(w, h);
         if (!document_ || !rml_context_ || last_fbo_w_ <= 0 || last_fbo_h_ <= 0)
             return false;
         forwardInput(x, y);
@@ -1138,6 +1216,19 @@ namespace lfs::vis::gui {
                                   frame_el_->GetComputedValues().border_radius());
     }
 
+    void RmlPanelHost::CloseButtonListener::ProcessEvent(Rml::Event&) {
+        PanelRegistry::instance().set_panel_enabled(host_->context_name_, false);
+    }
+
+    void RmlPanelHost::bindCloseButton() {
+        if (close_button_bound_ || !document_)
+            return;
+        close_button_bound_ = true;
+        close_button_ = document_->GetElementById("close-btn");
+        if (close_button_)
+            close_button_->AddEventListener("click", &close_listener_);
+    }
+
     bool RmlPanelHost::forwardInput(float panel_x, float panel_y) {
         assert(rml_context_);
 
@@ -1150,6 +1241,7 @@ namespace lfs::vis::gui {
                 render_needed_ |= forwardInput(panel_x, panel_y);
                 input_ = saved; }, false, [this](float x, float y) { return !floating_ && PanelRegistry::instance().isPositionOverFloatingPanel(x, y); }))
             return false;
+        bindCloseButton();
         bool had_input = false;
         const auto& input = *input_;
         auto* const text_input_handler = manager_ ? manager_->getTextInputHandler() : nullptr;
@@ -1178,11 +1270,16 @@ namespace lfs::vis::gui {
                 rml_input::shouldCancelOnEscape(rml_context_->GetFocusElement(), composing)) {
                 had_input |= rml_input::cancelFocusedElement(*rml_context_);
             } else {
+                // Enter ends an edit in a single-line input that already had focus.
+                // An input this key press focused (a scrub field opening its
+                // editor) stays open.
+                auto* const focused_before = rml_context_->GetFocusElement();
                 had_input |= rml_input::processKeyboardEvent(*rml_context_, event, text_input_handler);
                 if (!composing && event.kind == FrameInputEventKind::KeyDown &&
                     (event.scancode == SDL_SCANCODE_RETURN || event.scancode == SDL_SCANCODE_KP_ENTER) &&
-                    rml_input::isSingleLineTextInput(rml_context_->GetFocusElement())) {
-                    rml_context_->GetFocusElement()->Blur();
+                    rml_context_->GetFocusElement() == focused_before &&
+                    rml_input::isSingleLineTextInput(focused_before)) {
+                    focused_before->Blur();
                 }
             }
             sync_text_focus();
@@ -1308,10 +1405,32 @@ namespace lfs::vis::gui {
         }
 
         const auto deliver_button_down = [&](const int button) {
+            auto* const pressed = rml_context_->GetHoverElement();
+            pointer_press_target_[button] =
+                pressed ? pressed->GetObserverPtr() : Rml::ObserverPtr<Rml::Element>{};
             rml_context_->ProcessMouseButtonDown(button, mods);
             mouse_captured_[button] = true;
         };
-        const auto deliver_button_up = [&](const int button) {
+        const auto deliver_button_up = [&](const int button, const int x, const int y) {
+            auto pressed = pointer_press_target_[button];
+            pointer_press_target_[button].reset();
+            // Mouseup goes to the hover element, and a click only when that hover
+            // is still the pressed element. Outside the panel the hover is empty,
+            // so deliver mouseup to the pressed element and leave the click out.
+            if (pressed && rml_context_->GetHoverElement() == nullptr) {
+                Rml::Dictionary parameters;
+                parameters["mouse_x"] = x;
+                parameters["mouse_y"] = y;
+                parameters["button"] = button;
+                parameters["ctrl_key"] = static_cast<int>((mods & Rml::Input::KM_CTRL) != 0);
+                parameters["shift_key"] = static_cast<int>((mods & Rml::Input::KM_SHIFT) != 0);
+                parameters["alt_key"] = static_cast<int>((mods & Rml::Input::KM_ALT) != 0);
+                parameters["meta_key"] = static_cast<int>((mods & Rml::Input::KM_META) != 0);
+                parameters["caps_lock_key"] = static_cast<int>((mods & Rml::Input::KM_CAPSLOCK) != 0);
+                parameters["num_lock_key"] = static_cast<int>((mods & Rml::Input::KM_NUMLOCK) != 0);
+                parameters["scroll_lock_key"] = static_cast<int>((mods & Rml::Input::KM_SCROLLLOCK) != 0);
+                pressed->DispatchEvent(Rml::EventId::Mouseup, parameters);
+            }
             rml_context_->ProcessMouseButtonUp(button, mods);
             mouse_captured_[button] = false;
             had_input = true;
@@ -1332,8 +1451,10 @@ namespace lfs::vis::gui {
                  (event.y >= clip_y_min_ && event.y <= clip_y_max_)) &&
                 hitTestPanelShape(event_x, event_y, logical_w, logical_h);
             if (!event_hovered) {
-                if (event.down && event.button == 0)
+                if (event.down && event.button == 0) {
                     had_input |= blur_focused_element();
+                    had_input |= rml_input::hideOpenSelectBoxes(*rml_context_);
+                }
                 if (!mouse_captured_[event.button])
                     return;
             }
@@ -1341,7 +1462,7 @@ namespace lfs::vis::gui {
             if (event.down)
                 deliver_button_down(event.button);
             else
-                deliver_button_up(event.button);
+                deliver_button_up(event.button, static_cast<int>(event_x), static_cast<int>(event_y));
             sync_text_focus();
             had_input = true;
         };
@@ -1392,6 +1513,7 @@ namespace lfs::vis::gui {
                 beginLiveInspectorResize(mouse_y);
         } else if (!replayed_button_events && input.mouse_clicked[0]) {
             had_input |= blur_focused_element();
+            had_input |= rml_input::hideOpenSelectBoxes(*rml_context_);
         }
 
         if (manual_dropdown_mouse_captured_ &&
@@ -1415,7 +1537,7 @@ namespace lfs::vis::gui {
         for (int button = 0; button < 2; ++button) {
             if (mouse_captured_[button] &&
                 (input.mouse_released[button] || !input.mouse_down[button])) {
-                deliver_button_up(button);
+                deliver_button_up(button, rml_mx, rml_my);
             }
         }
 

@@ -415,6 +415,13 @@ def test_lazy_panel_metadata_matches_real_classes(panels_module):
         ], spec_name
 
 
+def test_preferences_refreshes_external_keymap_changes(panels_module):
+    module, _state = panels_module
+    spec = module.PANEL_SPECS["preferences"]
+    assert spec.update_policy == "interval"
+    assert 0 < spec.update_interval_ms <= 100
+
+
 def test_lichtfeld_import_failure_returns_false_and_skips_steps(monkeypatch):
     """If import lichtfeld fails, return False and do not run any steps."""
     project_root = Path(__file__).parent.parent.parent

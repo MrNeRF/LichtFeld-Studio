@@ -333,6 +333,15 @@ EXPECTED_NUMBER_ROWS = {
         10.0,
         False,
     ),
+    "init_mesh_resolution": (
+        "training.init.mesh_resolution",
+        "training.tooltip.mesh_resolution",
+        0,
+        128,
+        16,
+        2048,
+        True,
+    ),
     "min_opacity": (
         "training.thresholds.min_opacity",
         "training.tooltip.min_opacity",
@@ -460,10 +469,6 @@ EXPECTED_CHECKBOX_ROWS = {
         "training_params.eval_flip",
         "training.tooltip.eval_flip",
     ),
-    "eval_mask_invert": (
-        "training_params.eval_mask_invert",
-        "training.tooltip.eval_mask_invert",
-    ),
 }
 
 
@@ -525,6 +530,7 @@ EXPECTED_ADVANCED_IDS = (
     "late_lr_anneal",
     "cropbox_lr_scale",
     "cropbox_loss_weight",
+    "cropbox_growth_inside",
     "scale_reg_decay_power",
     "erank_reg",
     "dc_reg",
@@ -610,6 +616,7 @@ def test_auto_advanced_roster_and_exclusions_follow_declaration_order(lf):
         "prune_ratio",
         "steps_scaler",
         "eval_mask",
+        "eval_mask_report",
     }
 
     future_group = {
@@ -624,6 +631,24 @@ def test_auto_advanced_roster_and_exclusions_follow_declaration_order(lf):
         "future_scalar",
         "future_enum",
     )
+
+
+def test_registry_placement_groups_auto_rows_and_leaves_new_ones_in_more_parameters(lf):
+    group_info = lf.ui.property_group_info("optimization")
+    resolved = {run.id: run.prop_ids for run in property_view.resolve_runs(group_info)}
+    placed = [
+        prop_id
+        for run_id in property_view.REGISTRY_PLACEMENT
+        for prop_id in resolved[run_id]
+    ]
+    assert sorted(placed) == sorted(EXPECTED_ADVANCED_IDS)
+    assert resolved[property_view.AUTO_ADVANCED_RUN_ID] == ()
+
+    future_group = {
+        "properties": [*group_info["properties"], {"id": "future_scalar", "type": "float"}]
+    }
+    resolved = {run.id: run.prop_ids for run in property_view.resolve_runs(future_group)}
+    assert resolved[property_view.AUTO_ADVANCED_RUN_ID] == ("future_scalar",)
 
 
 def test_strategy_applicability_filters_auto_rows_and_search(lf):

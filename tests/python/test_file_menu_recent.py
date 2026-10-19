@@ -14,6 +14,36 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _all_file_items(file_menu):
+    def walk(items):
+        for item in items:
+            yield item
+            yield from walk(item.get("items", []))
+    return list(walk(file_menu.FileMenu().menu_items()))
+
+
+def test_file_menu_groups_preserve_existing_operators(monkeypatch):
+    module = _load_file_menu(monkeypatch)
+    items = module.FileMenu().menu_items()
+    submenus = {item["label"]: item["items"] for item in items if item["type"] == "submenu"}
+    assert list(submenus) == [
+        "tr:menu.file.open_recent", "tr:menu.file.import", "tr:menu.file.export_menu",
+        "tr:menu.tools.gallery", "tr:menu.file.project_maintenance",
+    ]
+    exports = submenus["tr:menu.file.export_menu"]
+    assert [item["operator_id"].split(".")[-1] for item in exports] == [
+        "ExportOperator", "ExportConfigOperator",
+    ]
+    maintenance = submenus["tr:menu.file.project_maintenance"]
+    assert [item["operator_id"].split(".")[-1] for item in maintenance if "operator_id" in item] == [
+        "EmbedDatasetOperator", "CleanProjectOperator", "CompactProjectOperator",
+    ]
+    assert not any(item.get("type") == "toggle" for item in items)
+    assert [item["label"] for item in submenus["tr:menu.tools.gallery"]] == [
+        "tr:menu.file.open_gallery", "tr:menu.file.publish_to_gallery", "tr:menu.tools.gallery_transfers",
+    ]
+
+
 def _load_file_menu(monkeypatch, recent_paths=()):
     for module_name in list(sys.modules):
         if module_name == "lfs_plugins" or module_name.startswith("lfs_plugins."):
@@ -196,7 +226,7 @@ def _recent_item_callback(file_menu):
 
 def _thumbnail_item(file_menu):
     return next(
-        (item for item in file_menu.FileMenu().menu_items()
+        (item for item in _all_file_items(file_menu)
          if item.get("label") == "tr:menu.file.update_thumbnail_from_view"),
         None,
     )
@@ -361,7 +391,7 @@ def test_file_menu_publishes_current_project_from_review_without_asset_index(
     monkeypatch.setitem(sys.modules, "lfs_plugins.gallery_controller", controller_module)
 
     item = next(
-        item for item in file_menu.FileMenu().menu_items()
+        item for item in _all_file_items(file_menu)
         if item.get("label") == "tr:menu.file.publish_to_gallery"
     )
     assert item["enabled"] is True
@@ -465,7 +495,7 @@ def test_file_menu_linked_project_uses_gallery_primary_action(monkeypatch, tmp_p
     gallery_panel.open_gallery_file_panel = lambda **review: opened.append(review)
     monkeypatch.setitem(sys.modules, "lfs_plugins.gallery_file_panel", gallery_panel)
 
-    item = next(item for item in file_menu.FileMenu().menu_items()
+    item = next(item for item in _all_file_items(file_menu)
                 if item.get("label") == "tr:menu.file.publish_to_gallery")
     item["callback"]()
 
@@ -531,7 +561,7 @@ def _linked_file_publish_harness(monkeypatch, tmp_path, snapshot):
 
     def invoke():
         item = next(
-            item for item in file_menu.FileMenu().menu_items()
+            item for item in _all_file_items(file_menu)
             if item.get("label") == "tr:menu.file.publish_to_gallery"
         )
         item["callback"]()
@@ -714,7 +744,7 @@ def test_file_menu_publish_is_disabled_without_a_scene(monkeypatch):
     file_menu.lf.project_has_path = lambda: False
 
     item = next(
-        item for item in file_menu.FileMenu().menu_items()
+        item for item in _all_file_items(file_menu)
         if item.get("label") == "tr:menu.file.publish_to_gallery"
     )
 
@@ -746,7 +776,7 @@ def test_file_menu_publish_refuses_a_copy_of_another_project(monkeypatch, tmp_pa
     monkeypatch.setitem(sys.modules, "lfs_plugins.gallery_file_panel", gallery_panel)
 
     item = next(
-        item for item in file_menu.FileMenu().menu_items()
+        item for item in _all_file_items(file_menu)
         if item.get("label") == "tr:menu.file.publish_to_gallery"
     )
     item["callback"]()
@@ -769,7 +799,7 @@ def test_file_menu_publish_rejects_missing_saved_project(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "lfs_plugins.gallery_file_panel", gallery_panel)
 
     item = next(
-        item for item in file_menu.FileMenu().menu_items()
+        item for item in _all_file_items(file_menu)
         if item.get("label") == "tr:menu.file.publish_to_gallery"
     )
     item["callback"]()
@@ -860,7 +890,7 @@ def test_open_project_with_confirmation_reports_open_error(monkeypatch):
 
 
 def _compact_project_item(file_menu):
-    for item in file_menu.FileMenu().menu_items():
+    for item in _all_file_items(file_menu):
         if str(item.get("operator_id", "")).endswith("CompactProjectOperator"):
             return item
     raise AssertionError("CompactProjectOperator menu entry missing")

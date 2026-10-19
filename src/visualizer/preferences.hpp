@@ -5,6 +5,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "gui/utils/splat_drag_preferences.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -12,6 +13,12 @@
 #include <string_view>
 
 namespace lfs::vis {
+
+    struct RenderSettings;
+
+    // Snapshot defaults seed new projects; restored VIEW state remains authoritative.
+    [[nodiscard]] LFS_VIS_API std::string renderingDefaultsFromSettings(const RenderSettings& settings);
+    [[nodiscard]] LFS_VIS_API lfs::Status applyRenderingDefaults(RenderSettings& settings, std::string_view serialized);
 
     struct McpPreferenceState {
         bool enabled = true;
@@ -29,13 +36,25 @@ namespace lfs::vis {
         UserPreferences(const UserPreferences&) = delete;
         UserPreferences& operator=(const UserPreferences&) = delete;
 
+        [[nodiscard]] lfs::Status setRenderingDefaults(std::string_view serialized);
+        [[nodiscard]] std::string renderingDefaults();
+        [[nodiscard]] lfs::Status setViewportVignette(std::string_view serialized);
+        [[nodiscard]] std::string viewportVignette();
+        void setSidebarDefaults(float width, float scene_ratio, const std::string& active_tab);
+        [[nodiscard]] std::string sidebarDefaults();
+        void clearSidebarDefaults();
+
         void setThemeName(const std::string& value);
         [[nodiscard]] std::string themeName();
         void setUiScale(float value);
         [[nodiscard]] float uiScale();
-        void setZoomSpeed(float value);
+        void setNativeFloatingWindows(bool enabled);
+        [[nodiscard]] bool nativeFloatingWindows();
+        void setFloatingWindowGeometry(const std::string& value);
+        [[nodiscard]] std::string floatingWindowGeometry();
+        void setZoomSpeed(float value, bool persist = true);
         [[nodiscard]] float zoomSpeed();
-        void setNavigationSpeed(float value);
+        void setNavigationSpeed(float value, bool persist = true);
         [[nodiscard]] float navigationSpeed();
 
         void setLanguage(const std::string& value);
@@ -65,6 +84,12 @@ namespace lfs::vis {
         void setViewportToolbarFreeY(float value);
         [[nodiscard]] float viewportToolbarFreeY();
 
+        void setMarketplaceView(std::string_view value);
+        [[nodiscard]] std::string marketplaceView();
+        void setMarketplaceGitCheckout(bool enabled);
+        [[nodiscard]] bool marketplaceGitCheckout();
+        void resetMarketplacePreferences();
+
         void setProjectManagerDefaultView(std::string_view value);
         [[nodiscard]] std::string projectManagerDefaultView();
         void setOpenProjectManagerAtStartup(bool enabled);
@@ -74,6 +99,9 @@ namespace lfs::vis {
         void setProjectManagerState(std::string_view serialized_state);
         [[nodiscard]] std::string projectManagerState();
         void resetProjectManagerPreferences();
+
+        void setSplatDrag(const SplatDragPreferenceState& state);
+        [[nodiscard]] SplatDragPreferenceState splatDrag();
 
         void setMcp(const McpPreferenceState& state);
         [[nodiscard]] McpPreferenceState mcp();
@@ -101,9 +129,9 @@ namespace lfs::vis {
 
     LFS_VIS_API void saveCameraNavigationPreference(const std::string& mode);
     [[nodiscard]] LFS_VIS_API std::string loadCameraNavigationPreference();
-    LFS_VIS_API void saveZoomSpeedPreference(float speed);
+    LFS_VIS_API void saveZoomSpeedPreference(float speed, bool persist = true);
     [[nodiscard]] LFS_VIS_API float loadZoomSpeedPreference();
-    LFS_VIS_API void saveNavigationSpeedPreference(float speed);
+    LFS_VIS_API void saveNavigationSpeedPreference(float speed, bool persist = true);
     [[nodiscard]] LFS_VIS_API float loadNavigationSpeedPreference();
     LFS_VIS_API void setRememberCameraNavigationPreference(bool enabled);
     [[nodiscard]] LFS_VIS_API bool rememberCameraNavigationPreference();

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/host_metrics.hpp"
+#include "core/native_fs.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -53,7 +54,7 @@ namespace lfs::core::host_metrics {
         bool read_cpu(std::uint64_t& process_ticks,
                       CpuState& sys_ticks,
                       std::vector<CpuState>& cores) {
-            std::ifstream self("/proc/self/stat");
+            std::ifstream self(lfs::core::native_fs::native_path("/proc/self/stat"));
             std::string line;
             if (!self || !std::getline(self, line))
                 return false;
@@ -70,7 +71,7 @@ namespace lfs::core::host_metrics {
                 return false;
             process_ticks = parse_u64(values[11]) + parse_u64(values[12]);
 
-            std::ifstream stat("/proc/stat");
+            std::ifstream stat(lfs::core::native_fs::native_path("/proc/stat"));
             if (!stat)
                 return false;
             std::string name;
@@ -96,7 +97,7 @@ namespace lfs::core::host_metrics {
         }
 
         void read_memory(Sample& result) {
-            std::ifstream statm("/proc/self/statm");
+            std::ifstream statm(lfs::core::native_fs::native_path("/proc/self/statm"));
             std::uint64_t pages = 0;
             if (statm)
                 statm >> pages >> pages;
@@ -104,7 +105,7 @@ namespace lfs::core::host_metrics {
                 result.process_rss_bytes = static_cast<std::size_t>(pages) *
                                            static_cast<std::size_t>(::sysconf(_SC_PAGESIZE));
 
-            std::ifstream meminfo("/proc/meminfo");
+            std::ifstream meminfo(lfs::core::native_fs::native_path("/proc/meminfo"));
             std::string key;
             std::uint64_t value = 0;
             std::string unit;

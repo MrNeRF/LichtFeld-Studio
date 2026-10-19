@@ -438,7 +438,19 @@ namespace lfs::vis::gui {
             row->SetProperty("margin-top", "14dp");
             std::size_t current_count = 0;
             std::size_t total_count = 0;
-            if (extractProgressCounts(current.stage, current_count, total_count)) {
+            if (current.stage.starts_with("Plugin issue|")) {
+                const auto separator = current.stage.find('|', 13);
+                if (separator != std::string::npos) {
+                    const auto reason = current.stage.substr(13, separator - 13);
+                    const auto name = current.stage.substr(separator + 1);
+                    const char* key = reason == "manifest"
+                                          ? lichtfeld::Strings::Startup::PLUGIN_INVALID_MANIFEST
+                                      : reason == "api"
+                                          ? lichtfeld::Strings::Startup::PLUGIN_INCOMPATIBLE_API
+                                          : lichtfeld::Strings::Startup::PLUGIN_LOAD_FAILED;
+                    stage->SetInnerRML(formatRuntime(LOC(key), escapeRmlText(name)));
+                }
+            } else if (extractProgressCounts(current.stage, current_count, total_count)) {
                 stage->SetInnerRML(
                     formatRuntime(LOC(lichtfeld::Strings::Startup::LOADED_PLUGINS), current_count, total_count));
             } else {

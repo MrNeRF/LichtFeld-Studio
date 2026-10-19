@@ -2116,6 +2116,49 @@ namespace {
         }
     }
 
+    TEST(ProjectDocumentTest, EmptySelectionChapterRestoresDefaultGroupWithoutDirty) {
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "empty-selection.licht";
+        auto created = make_empty_document(fixed_uuid(156001), 100);
+        const auto saved = created->save(path, save_options(156001, 200));
+        ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
+        EXPECT_FALSE(reopened->dirty());
+        auto reader = require_result(ProjectReader::open(path));
+        const auto* row = reader.find(FOURCC_SELM, reopened->project_uuid());
+        ASSERT_NE(row, nullptr);
+        auto decoded = require_result(decode_selection_chapter(
+            require_result(reader.read_chunk(*row))));
+        EXPECT_TRUE(decoded.groups().empty());
+        EXPECT_EQ(decoded.active_group_id(), 0);
+
+        Scene live;
+        auto shell = reopened->stage_shell(live);
+        ASSERT_TRUE(shell) << lfs::format_for_developer(shell.error());
+        live.commitRestoreStage(std::move(*shell));
+        const Scene fresh;
+        ASSERT_EQ(live.getSelectionGroups().size(), fresh.getSelectionGroups().size());
+        ASSERT_FALSE(live.getSelectionGroups().empty());
+        EXPECT_EQ(live.getActiveSelectionGroup(), fresh.getActiveSelectionGroup());
+        EXPECT_EQ(live.getSelectionGroups().front().id, fresh.getSelectionGroups().front().id);
+        EXPECT_EQ(live.getSelectionGroups().front().name, fresh.getSelectionGroups().front().name);
+        EXPECT_FLOAT_EQ(live.getSelectionGroups().front().color.x, fresh.getSelectionGroups().front().color.x);
+        EXPECT_FLOAT_EQ(live.getSelectionGroups().front().color.y, fresh.getSelectionGroups().front().color.y);
+        EXPECT_FLOAT_EQ(live.getSelectionGroups().front().color.z, fresh.getSelectionGroups().front().color.z);
+        EXPECT_FALSE(reopened->dirty());
+
+        auto captured = require_result(capture_selection_chapter(live, {}));
+        EXPECT_EQ(
+            require_result(encode_selection_chapter(captured)),
+            require_result(encode_selection_chapter(reopened->selection())));
+
+        auto again = reopened->save(path, save_options(156002, 300));
+        ASSERT_TRUE(again) << lfs::format_for_developer(again.error());
+        EXPECT_EQ(again->rewritten_chunks, 1u);
+        EXPECT_FALSE(reopened->dirty());
+    }
+
     TEST(ProjectDocumentTest,
          DeferredShellExposesUnloadedUnitsAndCommitsHydrationPerNodeUuid) {
         TemporaryDirectory temporary;
@@ -3982,6 +4025,52 @@ namespace {
         EXPECT_EQ(*after, *before);
     }
 
+    TEST(ProjectDocumentTest, AutosaveWriterUsesBoundedNativeSidecarNames) {
+        TemporaryDirectory temporary;
+        std::vector<std::string> names;
+        for (size_t length = 247; length <= 255; ++length)
+            names.push_back(std::string(length - 6, 'x') + ".licht");
+#ifndef _WIN32
+        names.emplace_back("caf\xe9.licht");
+        names.emplace_back("caf\xe8.licht");
+        names.push_back(std::string(248, 'x') + "\xe9.licht");
+        names.push_back(std::string(248, 'x') + "\xe8.licht");
+#endif
+        std::unordered_set<std::string> locks;
+        std::unordered_set<std::string> sidecars;
+        for (const auto& name : names) {
+            SCOPED_TRACE(name.size());
+            const auto master = temporary.path / fs::path(name);
+            const auto sidecar = autosave_sidecar_path(master);
+            EXPECT_TRUE(locks.insert(detail::project_lock_path(master).filename().string()).second);
+            EXPECT_TRUE(sidecars.insert(sidecar.filename().string()).second);
+            if (master.filename().native().size() + 9 <= 255) {
+                auto expected = master;
+                expected += ".autosave";
+                EXPECT_EQ(sidecar, expected);
+            }
+            write_phase_a_fixture(master);
+            auto base = require_result(ProjectReader::open(master));
+            auto document = require_result_ptr(ProjectDocument::open(master));
+            require_status(document->edit_view().dom().set("recovery_marker", std::string{"native-name"}));
+            auto saved = document->save_autosave(sidecar, ProjectDocumentAutosaveOptions{
+                                                              .file_uuid = fixed_uuid(981),
+                                                              .base_explicit_commit_uuid = base.commit().commit_uuid,
+                                                              .autosave_sequence = 1,
+                                                              .snapshot_uuid = fixed_uuid(980),
+                                                              .index_compression = IndexCompression::StoredForDeterministicTests,
+                                                              .disk_reserve_bytes = 0,
+                                                          });
+            ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+            auto overlay = require_result(ProjectReader::open(sidecar));
+            EXPECT_EQ(overlay.superblock().role, ContainerRole::AutosaveSidecar);
+            EXPECT_EQ(overlay.superblock().base_explicit_commit_uuid, base.commit().commit_uuid);
+            require_status(overlay.verify_all());
+            auto unchanged = require_result(ProjectReader::open(master));
+            EXPECT_EQ(unchanged.commit().commit_uuid, base.commit().commit_uuid);
+        }
+    }
+
     TEST(ProjectDocumentTest,
          AutosaveIsCompleteBoundOverlayAndDoesNotMutateMasterOrDirtyState) {
         TemporaryDirectory temporary;
@@ -5323,6 +5412,87 @@ namespace {
             elevated_master.commit().required_writer_capabilities));
     }
 
+    TEST(ProjectDocumentTest, RecoveredAutosaveKeepsSplatAbsentFromMaster) {
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "recovered-new-splat.licht";
+        const fs::path sidecar = autosave_sidecar_path(master);
+        const Uuid project_uuid = fixed_uuid(9901);
+        const Uuid master_splat = fixed_uuid(9902);
+        const Uuid added_splat = fixed_uuid(9903);
+        write_one_splat_document(master, *make_splat(2), project_uuid, master_splat, 9904);
+        ProjectReader base = require_result(ProjectReader::open(master));
+        const auto master_bytes = read_file_bytes(master);
+        {
+            auto session = require_result_ptr(ProjectDocument::open(master));
+            require_status(session->edit_scene_graph().upsert_node(SceneNodeRecord{
+                .uuid = added_splat,
+                .type = "splat",
+                .name = "Added",
+                .child_order = 1,
+                .payload = PayloadBinding{
+                    .fourcc = "SPLT",
+                    .instance_uuid = added_splat,
+                    .source_kind = "ply"},
+            }));
+            require_status(session->set_splat(
+                added_splat, require_result(SplatChapterPayload::capture(
+                                 *make_splat(1), SplatSourceKind::ImportedPly, false))));
+            require_status(session->edit_project().upsert_embed_decision(EmbedDecision{
+                .uuid = added_splat,
+                .node_uuid = added_splat,
+                .payload_fourcc = "SPLT",
+                .decision = "embedded",
+                .reason = "added after the explicit save"}));
+            require_status(session->edit_project().upsert_embedded_payload_provenance(
+                provenance(added_splat, "SPLT", "assets/added.bin", 44)));
+            auto autosaved = session->save_autosave(sidecar, ProjectDocumentAutosaveOptions{
+                                                                 .file_uuid = fixed_uuid(9905),
+                                                                 .base_explicit_commit_uuid = base.commit().commit_uuid,
+                                                                 .autosave_sequence = 1,
+                                                                 .snapshot_uuid = fixed_uuid(9906),
+                                                                 .index_compression = IndexCompression::StoredForDeterministicTests,
+                                                                 .disk_reserve_bytes = 0});
+            ASSERT_TRUE(autosaved) << lfs::format_for_developer(autosaved.error());
+        }
+        RecoverySession recovery = require_result(begin_recovery_session(master, sidecar));
+        const fs::path staging = recovery_session_temp_path(master);
+        require_status(materialize_recovered_project(master, sidecar, staging, recovery));
+        auto recovered = require_result_ptr(ProjectDocument::open(
+            staging, ProjectDocumentOpenOptions{.defer_geometry_payloads = true}));
+        require_status(recovered->prepare_recovery_autosave(sidecar));
+        require_status(recovered->edit_view().dom().set("after_recover", std::string{"kept"}));
+        auto next = recovered->save_autosave(sidecar, ProjectDocumentAutosaveOptions{
+                                                          .file_uuid = fixed_uuid(9907),
+                                                          .base_explicit_commit_uuid = base.commit().commit_uuid,
+                                                          .autosave_sequence = 2,
+                                                          .snapshot_uuid = fixed_uuid(9908),
+                                                          .index_compression = IndexCompression::StoredForDeterministicTests,
+                                                          .disk_reserve_bytes = 0,
+                                                          .writer_lock_lease = recovery.writer_lock(),
+                                                          .recovery_base_path = master});
+        ASSERT_TRUE(next) << lfs::format_for_developer(next.error());
+        EXPECT_EQ(read_file_bytes(master), master_bytes);
+        ProjectReader overlay = require_result(ProjectReader::open(sidecar));
+        EXPECT_EQ(overlay.superblock().autosave_sequence, 2u);
+        const ChunkInfo* kept = overlay.find(FOURCC_SPLT, master_splat);
+        const ChunkInfo* added = overlay.find(FOURCC_SPLT, added_splat);
+        ASSERT_NE(kept, nullptr);
+        ASSERT_NE(added, nullptr);
+        EXPECT_EQ(kept->row_kind, RowKind::SidecarBaseReference);
+        EXPECT_EQ(added->row_kind, RowKind::Live);
+        EXPECT_GT(added->stored_bytes, 0u);
+        recovered.reset();
+        require_status(recovery.release());
+        const fs::path again = temporary.path / "recovered-again.licht";
+        require_status(materialize_recovered_project(master, sidecar, again));
+        auto reopened = require_result_ptr(ProjectDocument::open(again));
+        EXPECT_NE(reopened->find_splat(master_splat), nullptr);
+        EXPECT_NE(reopened->find_splat(added_splat), nullptr);
+        const auto marker = reopened->view().dom().get_json("after_recover");
+        ASSERT_TRUE(marker.has_value());
+        EXPECT_EQ(*marker, "kept");
+    }
+
     TEST(ProjectDocumentTest,
          RecoveredDocumentMergeHoldsMasterLockAndPublishesRecoveredKind) {
         TemporaryDirectory temporary;
@@ -6140,6 +6310,47 @@ namespace {
             }
         }
         EXPECT_GT(reports.back().first, 0u);
+    }
+
+    TEST(ProjectDocumentTest, ScopedUndoHydrationLeavesSiblingPayloadsDeferred) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "scoped-undo-hydration.licht";
+        write_phase_a_fixture(path);
+        auto document = require_result_ptr(ProjectDocument::open(
+            path, ProjectDocumentOpenOptions{.defer_geometry_payloads = true}));
+        const std::array payload_uuids{
+            fixed_uuid(952), fixed_uuid(953), fixed_uuid(954)};
+
+        for (const auto target_uuid : payload_uuids) {
+            Scene live;
+            auto shell = document->stage_shell(live);
+            ASSERT_TRUE(shell) << lfs::format_for_developer(shell.error());
+            live.commitRestoreStage(std::move(*shell));
+            const std::array targets{target_uuid};
+            auto staged = document->stage_payload_hydration_for_nodes(
+                live, targets);
+            ASSERT_TRUE(staged) << lfs::format_for_developer(staged.error());
+            const auto report = ProjectDocument::commit_partial_hydration(
+                live, std::move(*staged), false);
+            EXPECT_EQ(report.hydrated_payload_units, 1u);
+            EXPECT_EQ(report.invalidated_payload_units, 0u);
+
+            for (const auto uuid : payload_uuids) {
+                const auto* node = live.getNodeByUuid(uuid);
+                ASSERT_NE(node, nullptr);
+                const bool selected = uuid == target_uuid;
+                EXPECT_EQ(node->payload_hydration,
+                          selected ? lfs::core::PayloadHydrationState::Loaded
+                                   : lfs::core::PayloadHydrationState::Unloaded);
+                if (node->type == lfs::core::NodeType::SPLAT) {
+                    EXPECT_EQ(static_cast<bool>(node->model), selected);
+                } else if (node->type == lfs::core::NodeType::POINTCLOUD) {
+                    EXPECT_EQ(static_cast<bool>(node->point_cloud), selected);
+                } else if (node->type == lfs::core::NodeType::MESH) {
+                    EXPECT_EQ(static_cast<bool>(node->mesh), selected);
+                }
+            }
+        }
     }
 
     TEST(ProjectDocumentTest,

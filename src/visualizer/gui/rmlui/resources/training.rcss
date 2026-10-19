@@ -166,21 +166,8 @@ body {
     margin-top: 0;
 }
 
-.training-subsection-title {
-    padding-top: 6dp;
-    border-top-width: 1dp;
-    margin-bottom: 4dp;
-    font-size: 12dp;
-    font-weight: bold;
-}
-
 .training-panel-block > .training-subsection:first-child {
     margin-top: 0;
-}
-
-.training-panel-block > .training-subsection:first-child > .training-subsection-title {
-    padding-top: 0;
-    border-top-width: 0;
 }
 
 .training-subsection > .section-header {
@@ -202,6 +189,16 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* Translations exceed the shared 120dp column. Wrap inside that column. */
+.training-scroll-region .prop-label,
+.training-scroll-region .prop-label__text {
+    height: auto;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    word-break: break-word;
 }
 
 .prop-label--with-action > .steps-scale-lock-btn {

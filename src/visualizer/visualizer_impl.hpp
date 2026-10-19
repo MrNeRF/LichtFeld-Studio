@@ -23,6 +23,7 @@
 #include "tools/tool_base.hpp"
 #include "training/training_manager.hpp"
 #include "training/training_progress_publisher.hpp"
+#include "visualizer/scene_capture_job_queue.hpp"
 #include "visualizer/visualizer.hpp"
 #include "window/window_manager.hpp"
 #include <atomic>
@@ -84,6 +85,11 @@ namespace lfs::vis {
         bool postWork(WorkItem work) override;
         bool pumpPostedWorkForProjectWrite() override;
         bool postRenderWork(WorkItem work);
+        bool postSceneCaptureWork(WorkItem work);
+        [[nodiscard]] bool hasActiveSceneCaptureJob() const noexcept {
+            return scene_capture_jobs_.hasActive();
+        }
+        void completeSceneCaptureFrame(bool frame_recorded);
         [[nodiscard]] bool isOnViewerThread() const override {
             return std::this_thread::get_id() == viewer_thread_id_;
         }
@@ -153,6 +159,12 @@ namespace lfs::vis {
         projectHasPath() override;
         lfs::Result<ProjectInfo>
         projectGetInfo() override;
+        void projectMarkSessionChapterCommitted(std::string_view chapter) override;
+        [[nodiscard]] bool projectSessionRestoreInProgress() const override {
+            return applying_project_session_restore_.load(std::memory_order_acquire);
+        }
+        void recoverDeferredProjectPayloadsAfterUndo(
+            std::vector<lfs::core::Uuid> node_uuids);
         ProjectDisplayInfo projectGetDisplayInfo() override;
         lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
         projectGetLicense() override;
@@ -286,8 +298,10 @@ namespace lfs::vis {
         // GUI manager
         std::unique_ptr<gui::GuiManager> gui_manager_;
         JobRegistry job_registry_;
+        friend class AlignDepthIntegrationTest;
         friend class gui::GuiManager;
         friend class project::ProjectLifecycle;
+        friend void installSessionTestInputController(VisualizerImpl& viewer);
         friend class VisualizerImplResetTest_DirectSplatLoadRejectsActiveTrainingWithoutConsent_Test;
         friend class VisualizerImplResetTest_DirectSplatLoadWithoutActiveTrainingStillReplacesScene_Test;
         friend class VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
@@ -308,6 +322,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_LazyCheckpointReopenPreservesAppearance_Test;
         friend class VisualizerImplResetTest_StoredSessionAtPrmsIterationsReportsCompleted_Test;
         friend class VisualizerImplResetTest_StoredSessionBelowPrmsIterationsReportsNotCompleted_Test;
+        friend class VisualizerImplResetTest_StoredPausedSessionReportsSavedGutAndCap_Test;
         friend class VisualizerImplResetTest_StopStoredSessionWithoutResumingKeepsCheckpointAndEntersEditMode_Test;
         friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnAutosave_Test;
         friend class VisualizerImplResetTest_CreateProjectAtWritesBindsAndRegistersMru_Test;
@@ -372,7 +387,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_PendingCloseSuppressesBackgroundAutosave_Test;
         friend class VisualizerImplResetTest_StoppingTrainerBlocksAutosave_Test;
         friend class VisualizerImplResetTest_IdleMaintenanceKeepsEverySave_Test;
-        friend class VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptOrArmAutosave_Test;
+        friend class VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptButArmsAutosave_Test;
         friend class VisualizerImplResetTest_SceneEditStillPromptsAndArmsAutosave_Test;
         friend class VisualizerImplResetTest_ParametersUnchangedRoundTripStaysClean_Test;
         friend class VisualizerImplResetTest_ParametersValueChangeIsHardDirty_Test;
@@ -439,6 +454,9 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_OpeningAnotherProjectAfterHydratedCameraRestoreReplacesTrainer_Test;
         friend class VisualizerImplResetTest_NonDatasetSaveDoesNotBindStaleDatasetPath_Test;
         friend class VisualizerImplResetTest_TrainingCheckpointReopenRestoresPausedResumableState_Test;
+        friend class VisualizerImplResetTest_MissingBackgroundImageRestoreDisablesResume_Test;
+        friend class VisualizerImplResetTest_AvailableBackgroundImageRestoreKeepsResume_Test;
+        friend class StoredSessionRestoreTest_CompletionPublishesOnViewerThread_Test;
         friend class VisualizerImplResetTest_ErrorFinishedCheckpointProjectReopensPausedAndResumable_Test;
         friend class VisualizerImplResetTest_CompletedCheckpointProjectStillReopensFinished_Test;
         friend class VisualizerImplResetTest_EditModeSaveRetainsUnboundCheckpointHistory_Test;
@@ -462,6 +480,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
         friend class VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
         friend class VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
+        friend class VisualizerImplResetTest_RecoverThenAutosaveEditsForNextRecovery_Test;
         friend class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
         friend class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
         friend class VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
@@ -691,6 +710,7 @@ namespace lfs::vis {
         mutable std::mutex work_queue_mutex_;
         std::vector<WorkItem> work_queue_;
         std::vector<WorkItem> render_work_queue_;
+        SceneCaptureJobQueue scene_capture_jobs_;
         std::thread::id viewer_thread_id_;
         bool accepting_work_ = true;
         bool shutdown_started_ = false;
@@ -737,6 +757,7 @@ namespace lfs::vis {
                 ProjectSwitchDisposition::RequireClean;
         bool pending_open_keep_asset_manager_open_ = false;
         bool keep_asset_manager_open_after_restore_ = false;
+        std::atomic_bool applying_project_session_restore_ = false;
         std::vector<lfs::core::events::cmd::LoadFile>
             pending_load_files_;
         int pending_training_completion_refresh_frames_ = 0;

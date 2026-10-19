@@ -714,6 +714,7 @@ class TestRuntimeState:
         assert isinstance(RuntimeState.loss, StateSignal)
         assert isinstance(RuntimeState.psnr, ComputedSignal)
         assert isinstance(RuntimeState.num_gaussians, StateSignal)
+        assert isinstance(RuntimeState.stored_session_generation, StateSignal)
 
     def test_scene_signals_exist(self):
         from lfs_plugins.ui import RuntimeState
