@@ -581,7 +581,7 @@ namespace lfs::core::param {
             .all_strategies()
             .float_prop(&OptimizationParameters::growth_exchange,
                         "growth_exchange", "Growth Exchange", d.growth_exchange, 0.0f, 0.2f,
-                        "While growth runs at the splat cap, share of splats freed per refine so growth can place them where the error is (MRNF)")
+                        "Starting share exchanged at the splat cap, ranked by removal impact and tapered through the remaining growth phase (MRNF)")
             .locale("training.advanced.growth_exchange")
             .tooltip("training.tooltip.growth_exchange")
             .precision(3)

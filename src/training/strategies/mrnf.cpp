@@ -32,7 +32,6 @@
 #include <limits>
 #include <numeric>
 #include <stdexcept>
-#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -49,6 +48,7 @@ namespace lfs::training {
         // The growth exchange frees splats only while the model is at least this full;
         // below it, it waits until growth has refilled the slots freed earlier.
         constexpr double MRNF_EXCHANGE_MIN_CAP_FILL = 0.98;
+        constexpr double MRNF_EXCHANGE_END_SHARE = 1.0 / 8.0;
 
         [[nodiscard]] lfs::core::Tensor compact_bool_indices(
             const lfs::core::Tensor& mask, size_t count) {
@@ -630,7 +630,7 @@ namespace lfs::training {
         if (n > 0 && (_params->max_cap <= 0 || static_cast<int64_t>(n) < int64_t{_params->max_cap}))
             _blob_seeder = std::make_unique<BlobSeeder>(_splat_data->means());
         if (_params->growth_exchange > 0.0f) {
-            LOG_DEBUG("MRNF: growth exchange {:.1f}% of splats per refine at the cap until iter {}",
+            LOG_DEBUG("MRNF: growth exchange starts at {:.1f}% per refine and tapers until iter {}",
                       100.0f * _params->growth_exchange, _params->grow_until_iter);
         }
     }
@@ -854,6 +854,7 @@ namespace lfs::training {
             _refine_weight_max = Tensor();
             _gumbel_scratch.release();
             _densify_n_scratch.release();
+            reset_exchange_state();
             _topology_frozen = true;
             assert(!_refine_weight_max.is_valid());
             assert(_gumbel_scratch.resident_bytes() == 0);
@@ -916,10 +917,11 @@ namespace lfs::training {
         morton::permute_row_tensor(_precomputed_edge_scores, perm);
         morton::permute_row_tensor(_edge_score_sum, perm);
         morton::permute_row_tensor(_free_mask, perm);
-        morton::permute_row_tensor(_exchange_coverage, perm);
-        morton::permute_row_tensor(_exchange_peak, perm);
+        morton::permute_row_tensor(_exchange_importance_sum, perm);
+        morton::permute_row_tensor(_exchange_importance_peak, perm);
         morton::permute_row_tensor(_exchange_birth, perm);
-        morton::permute_row_tensor(_exchange_dominance, perm);
+        morton::permute_row_tensor(_exchange_window_impact_sum, perm);
+        morton::permute_row_tensor(_exchange_window_impact_peak, perm);
         morton::permute_row_tensor(_far_field_mask, perm);
         publish_mean_step_far_mask();
     }
@@ -1004,27 +1006,29 @@ namespace lfs::training {
 
         const Tensor refine_candidates = compute_refine_candidates();
         const bool exchanging = growth_exchange_active(iter);
+        bool exchange_ready = false;
+        size_t quota = 0;
         if (exchanging) {
             update_exchange_importance();
-            // Exchanged slots are left to error-guided growth (the cap - active budget);
-            // only pruned slots go through the opacity-weighted replacement below.
             const size_t active = active_count();
-            if (_exchange_windows > exchange_warmup_windows() &&
-                static_cast<double>(active) >=
-                    MRNF_EXCHANGE_MIN_CAP_FILL * static_cast<double>(_params->max_cap)) {
-                const size_t exchanged = exchange_least_important(
-                    static_cast<size_t>(std::floor(_params->growth_exchange * static_cast<double>(active))),
-                    refine_candidates);
-                LOG_DEBUG("MRNF: exchanged {} splats at iter {}", exchanged, iter);
+            exchange_ready = _exchange_windows > exchange_warmup_windows() &&
+                             static_cast<double>(active) >=
+                                 MRNF_EXCHANGE_MIN_CAP_FILL * static_cast<double>(_params->max_cap);
+            if (exchange_ready) {
+                quota = exchange_quota(iter, active);
             }
-            _exchange_free_before_growth = _free_mask.is_valid()
-                                               ? _free_mask.slice(0, 0, n).clone()
-                                               : Tensor::zeros_bool({n}, Device::CUDA);
-        } else if (_exchange_coverage.is_valid()) {
+        } else if (_exchange_importance_sum.is_valid() || _exchange_importance_peak.is_valid() ||
+                   _exchange_birth.is_valid() || _exchange_window_impact_sum.is_valid() ||
+                   _exchange_window_impact_peak.is_valid() || _exchange_impact_written) {
             reset_exchange_state();
         }
 
-        grow_and_split(iter, pruned_count, refine_candidates);
+        auto growth = grow_and_split(
+            iter, pruned_count, refine_candidates,
+            exchanging && exchange_ready ? quota : 0);
+        const size_t victims_deleted = growth.exchange_victims;
+        if (victims_deleted > 0 && _exchange_first_iter < 0)
+            _exchange_first_iter = iter;
         if (iter >= static_cast<int>(_params->grow_until_iter)) {
             cancel_blob_seeding();
         } else if (_blob_seeds.valid()) {
@@ -1037,10 +1041,18 @@ namespace lfs::training {
             start_blob_seeding();
         }
         if (exchanging) {
-            record_exchange_births();
+            record_exchange_births(growth.split_indices);
         }
 
         enforce_max_cap();
+        if (exchanging) {
+            reset_exchange_window_outputs();
+            if (exchange_ready) {
+                LOG_DEBUG("MRNF growth exchange: quota={}, victims={}, replacements={}, growth={}, active_after={}",
+                          quota, victims_deleted, growth.replacement_count,
+                          growth.growth_count, active_count());
+            }
+        }
         apply_decay(iter);
         ensure_mean_step_far_mask();
 
@@ -1126,75 +1138,104 @@ namespace lfs::training {
         return std::max(MIN_WINDOWS, static_cast<int>((views + every - 1) / every));
     }
 
-    lfs::core::Tensor MRNF::dominance_scratch(const int iter) {
+    size_t MRNF::exchange_quota(const int iter, const size_t active) const {
+        double fraction = static_cast<double>(_params->growth_exchange);
+        if (_exchange_first_iter >= 0) {
+            const int duration = static_cast<int>(_params->grow_until_iter) - _exchange_first_iter;
+            const double u = duration > 0
+                                 ? std::clamp(static_cast<double>(iter - _exchange_first_iter) /
+                                                  static_cast<double>(duration),
+                                              0.0, 1.0)
+                                 : 1.0;
+            constexpr double pi = 3.14159265358979323846;
+            fraction *= MRNF_EXCHANGE_END_SHARE +
+                        (1.0 - MRNF_EXCHANGE_END_SHARE) * 0.5 * (1.0 + std::cos(pi * u));
+        }
+        return static_cast<size_t>(std::floor(fraction * static_cast<double>(active)));
+    }
+
+    std::pair<lfs::core::Tensor, lfs::core::Tensor> MRNF::impact_scratch(const int iter) {
         if (!growth_exchange_active(iter) || !_splat_data || _splat_data->size() == 0) {
             return {};
         }
         const size_t n = static_cast<size_t>(_splat_data->size());
-        if (!_exchange_dominance.is_valid() || _exchange_dominance.numel() != n) {
-            _exchange_dominance = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
+        if (!_exchange_window_impact_sum.is_valid() || _exchange_window_impact_sum.numel() != n) {
+            _exchange_window_impact_sum = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
         }
-        return _exchange_dominance;
+        if (!_exchange_window_impact_peak.is_valid() || _exchange_window_impact_peak.numel() != n) {
+            _exchange_window_impact_peak = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
+        }
+        return {_exchange_window_impact_sum, _exchange_window_impact_peak};
     }
 
-    void MRNF::on_dominance_accumulated(const int /*iter*/) {
-        _exchange_dominance_written = true;
+    void MRNF::on_impact_accumulated(const int /*iter*/) {
+        _exchange_impact_written = true;
+    }
+
+    void MRNF::reset_exchange_window_outputs() {
+        _exchange_window_impact_sum = lfs::core::Tensor();
+        _exchange_window_impact_peak = lfs::core::Tensor();
+        _exchange_impact_written = false;
     }
 
     void MRNF::reset_exchange_state() {
-        _exchange_coverage = lfs::core::Tensor();
-        _exchange_peak = lfs::core::Tensor();
+        _exchange_importance_sum = lfs::core::Tensor();
+        _exchange_importance_peak = lfs::core::Tensor();
         _exchange_birth = lfs::core::Tensor();
-        _exchange_dominance = lfs::core::Tensor();
+        reset_exchange_window_outputs();
         _exchange_free_before_growth = lfs::core::Tensor();
         _exchange_windows = 0;
-        _exchange_dominance_written = false;
+        _exchange_first_iter = -1;
     }
 
     void MRNF::update_exchange_importance() {
         using namespace lfs::core;
         const size_t n = static_cast<size_t>(_splat_data->size());
-        // Row 0 of the densification info sums each splat's blend weights over the window.
-        const Tensor coverage = visibility_accumulator();
-        LFS_ASSERT_MSG(coverage.is_valid() && coverage.numel() == n,
+        const Tensor window_coverage = visibility_accumulator();
+        LFS_ASSERT_MSG(window_coverage.is_valid() && window_coverage.numel() == n,
                        "MRNF growth exchange: coverage does not match the splat count");
-        Tensor peak;
-        if (_exchange_dominance_written) {
-            LFS_ASSERT_MSG(_exchange_dominance.numel() == n,
-                           "MRNF growth exchange: dominance does not match the splat count");
-            peak = _exchange_dominance.clone();
-            _exchange_dominance.zero_();
-            _exchange_dominance_written = false;
+        Tensor primary = window_coverage;
+        Tensor secondary;
+        if (_exchange_impact_written) {
+            LFS_ASSERT_MSG(_exchange_window_impact_sum.numel() == n &&
+                               _exchange_window_impact_peak.numel() == n,
+                           "MRNF growth exchange: impact does not match the splat count");
+            primary = _exchange_window_impact_sum.clone();
+            secondary = _exchange_window_impact_peak.clone();
         }
-        if (!_exchange_coverage.is_valid()) {
-            _exchange_coverage = coverage.clone();
-            _exchange_peak = peak;
+        reset_exchange_window_outputs();
+        if (!_exchange_importance_sum.is_valid()) {
+            _exchange_importance_sum = primary.clone();
+            _exchange_importance_peak = secondary;
             _exchange_birth = Tensor::zeros({n}, Device::CUDA);
             _exchange_windows = 1;
             return;
         }
-        LFS_ASSERT_MSG(_exchange_coverage.numel() == n && _exchange_birth.numel() == n &&
-                           (!_exchange_peak.is_valid() || _exchange_peak.numel() == n),
+        LFS_ASSERT_MSG(_exchange_importance_sum.numel() == n && _exchange_birth.numel() == n &&
+                           (!_exchange_importance_peak.is_valid() || _exchange_importance_peak.numel() == n),
                        "MRNF growth exchange: importance does not match the splat count");
         const float decay = exchange_importance_decay();
-        _exchange_coverage = coverage.maximum(_exchange_coverage.mul(decay));
-        if (!_exchange_peak.is_valid()) {
-            _exchange_peak = peak;
+        _exchange_importance_sum = primary.maximum(_exchange_importance_sum.mul(decay));
+        if (!secondary.is_valid()) {
+            _exchange_importance_peak = Tensor();
+        } else if (!_exchange_importance_peak.is_valid()) {
+            _exchange_importance_peak = secondary;
         } else {
-            _exchange_peak = peak.is_valid() ? peak.maximum(_exchange_peak.mul(decay)) : _exchange_peak.mul(decay);
+            _exchange_importance_peak = secondary.maximum(_exchange_importance_peak.mul(decay));
         }
         ++_exchange_windows;
     }
 
-    size_t MRNF::exchange_least_important(size_t count, const lfs::core::Tensor& refine_candidates) {
+    lfs::core::Tensor MRNF::select_exchange_victims(
+        size_t count,
+        const lfs::core::Tensor& excluded) {
         using namespace lfs::core;
         const size_t n = static_cast<size_t>(_splat_data->size());
-        LFS_ASSERT_MSG(_exchange_coverage.numel() == n && _exchange_birth.numel() == n &&
-                           (!_exchange_peak.is_valid() || _exchange_peak.numel() == n) &&
-                           refine_candidates.numel() == n,
+        LFS_ASSERT_MSG(_exchange_importance_sum.numel() == n && _exchange_birth.numel() == n &&
+                           (!_exchange_importance_peak.is_valid() || _exchange_importance_peak.numel() == n),
                        "MRNF growth exchange: importance does not match the splat count");
         if (count == 0) {
-            return 0;
+            return {};
         }
         Tensor eligible = _free_mask.is_valid() ? _free_mask.slice(0, 0, n).logical_not()
                                                 : Tensor::ones_bool({n}, Device::CUDA);
@@ -1202,57 +1243,49 @@ namespace lfs::training {
             trainable.is_valid()) {
             eligible = eligible.logical_and(trainable);
         }
+        if (excluded.is_valid()) {
+            LFS_ASSERT_MSG(excluded.numel() == n && excluded.dtype() == DataType::Bool,
+                           "MRNF growth exchange: exclusion mask does not match the splat count");
+            eligible = eligible.logical_and(excluded.logical_not());
+        }
         // A splat is ranked only after a full pass over the training views since its birth.
         eligible = eligible.logical_and(
             _exchange_birth < static_cast<float>(_exchange_windows - exchange_warmup_windows()));
         count = std::min(count, static_cast<size_t>(eligible.count_nonzero()));
         if (count == 0) {
-            return 0;
+            return {};
         }
-        // Rank by coverage and by peak blend weight (ineligible rows last) and score each splat
-        // by its higher rank, so only splats that rank low on both are exchanged: large soft
-        // splats (sky, backgrounds) keep their place by coverage, small opaque ones by peak.
+        LFS_ASSERT_MSG(n <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
+                       "MRNF growth exchange exceeds int32 rank capacity");
         const auto ineligible = eligible.logical_not();
-        const auto positions = Tensor::arange(0.0f, static_cast<float>(n), 1.0f, Device::CUDA);
-        const auto rank = [&](const Tensor& importance) {
-            const auto order = importance.masked_fill(ineligible, std::numeric_limits<float>::infinity())
-                                   .sort(0, /*descending=*/false)
-                                   .second;
-            Tensor ranks = Tensor::empty({n}, Device::CUDA);
-            ranks.index_copy_(0, order, positions);
-            return ranks;
-        };
-        Tensor score = rank(_exchange_coverage);
-        if (_exchange_peak.is_valid()) {
-            score = score.maximum(rank(_exchange_peak));
+        const auto primary_order = _exchange_importance_sum
+                                       .masked_fill(ineligible, std::numeric_limits<float>::infinity())
+                                       .sort(0, /*descending=*/false)
+                                       .second;
+        Tensor secondary_order;
+        if (_exchange_importance_peak.is_valid()) {
+            secondary_order = _exchange_importance_peak
+                                  .masked_fill(ineligible, std::numeric_limits<float>::infinity())
+                                  .sort(0, /*descending=*/false)
+                                  .second;
         }
-        const auto victims = score.masked_fill(ineligible, std::numeric_limits<float>::infinity())
-                                 .sort(0, /*descending=*/false)
-                                 .second.slice(0, 0, count)
-                                 .contiguous();
-
-        // grow_and_split grows grow_fraction x its candidates; without any, the exchange would
-        // only shrink the model.
-        Tensor victim_mask = Tensor::zeros_bool({n}, Device::CUDA);
-        victim_mask.index_copy_(0, victims, Tensor::ones_bool({count}, Device::CUDA));
-        const auto growth_candidates =
-            refine_candidates.logical_and(eligible).logical_and(victim_mask.logical_not());
-        if (std::round(static_cast<double>(growth_candidates.count_nonzero()) *
-                       static_cast<double>(_params->grow_fraction)) < 1.0) {
-            return 0;
-        }
-        soft_delete_rows(victims);
-        LFS_COUNTER_ADD("strategy.mrnf.exchanged", static_cast<int64_t>(count));
-        return count;
+        Tensor ranks = Tensor::empty({n}, Device::CUDA, DataType::Int32);
+        Tensor ranked_rows = Tensor::empty({n}, Device::CUDA, DataType::Int64);
+        mrnf_strategy::launch_fused_exchange_ranks(
+            primary_order.ptr<int64_t>(),
+            secondary_order.is_valid() ? secondary_order.ptr<int64_t>() : nullptr,
+            eligible.ptr<bool>(), ranks.ptr<int32_t>(), ranked_rows.ptr<int64_t>(), n);
+        mrnf_strategy::launch_sort_exchange_ranks(ranks.ptr<int32_t>(), ranked_rows.ptr<int64_t>(), n);
+        return ranked_rows.slice(0, 0, count).contiguous();
     }
 
-    void MRNF::record_exchange_births() {
+    void MRNF::record_exchange_births(const lfs::core::Tensor& split_parents) {
         using namespace lfs::core;
         const size_t before = _exchange_free_before_growth.numel();
         const size_t n = static_cast<size_t>(_splat_data->size());
         LFS_ASSERT_MSG(_exchange_free_before_growth.is_valid() && n >= before &&
-                           _exchange_coverage.numel() == before && _exchange_birth.numel() == before &&
-                           (!_exchange_peak.is_valid() || _exchange_peak.numel() == before),
+                           _exchange_importance_sum.numel() == before && _exchange_birth.numel() == before &&
+                           (!_exchange_importance_peak.is_valid() || _exchange_importance_peak.numel() == before),
                        "MRNF growth exchange: importance does not match the splat count");
         // Children landed in previously free slots or in appended rows. They start without
         // importance and are ranked once a full pass has scored them.
@@ -1267,12 +1300,16 @@ namespace lfs::training {
         if (n > before) {
             born = Tensor::cat(std::vector<Tensor>{born, Tensor::ones_bool({n - before}, Device::CUDA)}, 0);
         }
-        extend(_exchange_coverage);
-        extend(_exchange_peak);
+        if (split_parents.is_valid() && split_parents.numel() > 0) {
+            mrnf_strategy::launch_fill_index_mask(
+                split_parents.ptr<int64_t>(), split_parents.numel(), born.ptr<bool>());
+        }
+        extend(_exchange_importance_sum);
+        extend(_exchange_importance_peak);
         extend(_exchange_birth);
-        _exchange_coverage = _exchange_coverage.masked_fill(born, 0.0f);
-        if (_exchange_peak.is_valid()) {
-            _exchange_peak = _exchange_peak.masked_fill(born, 0.0f);
+        _exchange_importance_sum = _exchange_importance_sum.masked_fill(born, 0.0f);
+        if (_exchange_importance_peak.is_valid()) {
+            _exchange_importance_peak = _exchange_importance_peak.masked_fill(born, 0.0f);
         }
         _exchange_birth = _exchange_birth.masked_fill(born, static_cast<float>(_exchange_windows));
         _exchange_free_before_growth = Tensor();
@@ -1438,10 +1475,15 @@ namespace lfs::training {
         return parts.size() == 1 ? parts[0] : lfs::core::Tensor::cat(parts, 0);
     }
 
-    void MRNF::grow_and_split(int iter, int pruned_count, lfs::core::Tensor refine_candidates) {
+    MRNF::GrowthResult MRNF::grow_and_split(
+        int iter,
+        int pruned_count,
+        lfs::core::Tensor refine_candidates,
+        const size_t exchange_quota) {
         LOG_TIMER("MRNF::grow_and_split");
         LFS_VRAM_SCOPE("MRNF::grow_and_split");
         using namespace lfs::core;
+        GrowthResult result;
         const size_t n = static_cast<size_t>(_splat_data->size());
         const size_t current_active = active_count();
         _densify_n_scratch.ensure_n(n, Device::CUDA);
@@ -1466,9 +1508,13 @@ namespace lfs::training {
             refine_candidates = refine_candidates.logical_and(trainable_mask);
         }
 
-        int budget = (_params->max_cap > 0)
-                         ? std::max(0, _params->max_cap - static_cast<int>(current_active))
-                         : INT_MAX;
+        const int physical_budget = (_params->max_cap > 0)
+                                        ? std::max(0, _params->max_cap - static_cast<int>(current_active))
+                                        : INT_MAX;
+        const int exchange_extra = static_cast<int>(std::min(
+            exchange_quota,
+            static_cast<size_t>(INT_MAX - physical_budget)));
+        const int budget = physical_budget + exchange_extra;
         const int requested_replace = std::min(pruned_count, budget);
         int n_grow = 0;
         lfs::core::Tensor above_threshold;
@@ -1563,26 +1609,71 @@ namespace lfs::training {
             }
         }
 
-        std::vector<Tensor> split_parts;
-        if (replace_inds.is_valid() && replace_inds.numel() > 0) {
-            split_parts.push_back(replace_inds);
+        result.replacement_count = replace_inds.is_valid() ? static_cast<int>(replace_inds.numel()) : 0;
+        result.growth_count = growth_inds.is_valid() ? static_cast<int>(growth_inds.numel()) : 0;
+
+        const auto assemble_split_indices = [&]() {
+            std::vector<Tensor> split_parts;
+            if (replace_inds.is_valid() && replace_inds.numel() > 0)
+                split_parts.push_back(replace_inds);
+            if (growth_inds.is_valid() && growth_inds.numel() > 0)
+                split_parts.push_back(growth_inds);
+            if (split_parts.size() == 1)
+                return split_parts[0];
+            if (split_parts.size() > 1)
+                return Tensor::cat(split_parts, 0);
+            return Tensor{};
+        };
+        split_indices = assemble_split_indices();
+
+        if (exchange_quota > 0 && split_indices.is_valid() && split_indices.numel() > 0) {
+            const size_t sampled = split_indices.numel();
+            const size_t over_cap = sampled > static_cast<size_t>(physical_budget)
+                                        ? sampled - static_cast<size_t>(physical_budget)
+                                        : 0;
+            const size_t wanted_victims = std::min(over_cap, exchange_quota);
+            if (wanted_victims > 0) {
+                Tensor excluded = Tensor::zeros_bool({n}, Device::CUDA);
+                mrnf_strategy::launch_fill_index_mask(
+                    split_indices.ptr<int64_t>(), split_indices.numel(), excluded.ptr<bool>());
+                const auto victims = select_exchange_victims(wanted_victims, excluded);
+                if (victims.is_valid() && victims.numel() > 0) {
+                    soft_delete_rows(victims);
+                    result.exchange_victim_indices = victims;
+                    result.exchange_victims = victims.numel();
+                    LFS_COUNTER_ADD("strategy.mrnf.exchanged",
+                                    static_cast<int64_t>(result.exchange_victims));
+                }
+                if (result.exchange_victims < wanted_victims) {
+                    const size_t allowed_total = static_cast<size_t>(physical_budget) + result.exchange_victims;
+                    const size_t allowed_growth = allowed_total > static_cast<size_t>(result.replacement_count)
+                                                      ? allowed_total - static_cast<size_t>(result.replacement_count)
+                                                      : 0;
+                    if (growth_inds.is_valid() && growth_inds.numel() > allowed_growth) {
+                        growth_inds = growth_inds.slice(0, 0, allowed_growth).contiguous();
+                        result.growth_count = static_cast<int>(allowed_growth);
+                        split_indices = assemble_split_indices();
+                    }
+                }
+            }
         }
-        if (growth_inds.is_valid() && growth_inds.numel() > 0) {
-            split_parts.push_back(growth_inds);
-        }
-        if (split_parts.size() == 1) {
-            split_indices = split_parts[0];
-        } else if (split_parts.size() > 1) {
-            split_indices = Tensor::cat(split_parts, 0);
+
+        if (_exchange_importance_sum.is_valid() && _exchange_importance_sum.numel() == n) {
+            _exchange_free_before_growth = _free_mask.is_valid()
+                                               ? _free_mask.slice(0, 0, n).clone()
+                                               : Tensor::zeros_bool({n}, Device::CUDA);
         }
 
         if (!split_indices.is_valid() || split_indices.numel() == 0) {
             publish_vram_attribution();
-            return;
+            return result;
         }
 
         assert(_params->max_cap <= 0 ||
-               current_active + split_indices.numel() <= static_cast<size_t>(_params->max_cap));
+               current_active - result.exchange_victims + split_indices.numel() <=
+                   static_cast<size_t>(_params->max_cap));
+
+        result.split_indices = split_indices;
 
         const size_t K = split_indices.numel();
         const size_t sh_rest = _splat_data->max_sh_coeffs_rest();
@@ -1615,6 +1706,7 @@ namespace lfs::training {
         LFS_GAUGE("model.gaussians.live", active_count());
         LFS_GAUGE("model.gaussians.capacity", static_cast<double>(_splat_data->size()));
         publish_vram_attribution();
+        return result;
     }
 
     std::pair<size_t, size_t> MRNF::split_parents_into_children(
@@ -1979,14 +2071,45 @@ namespace lfs::training {
             compact(_precomputed_edge_scores);
         if (_edge_score_sum.is_valid() && _edge_score_sum.numel() > new_size)
             compact(_edge_score_sum);
-        if (_exchange_coverage.is_valid() && _exchange_coverage.numel() > new_size)
-            compact(_exchange_coverage);
-        if (_exchange_peak.is_valid() && _exchange_peak.numel() > new_size)
-            compact(_exchange_peak);
-        if (_exchange_birth.is_valid() && _exchange_birth.numel() > new_size)
+        const bool has_exchange_state = _exchange_importance_sum.is_valid() ||
+                                        _exchange_importance_peak.is_valid() ||
+                                        _exchange_birth.is_valid();
+        const bool exchange_state_aligned =
+            !has_exchange_state ||
+            (_exchange_importance_sum.is_valid() &&
+             _exchange_importance_sum.numel() == old_size &&
+             _exchange_birth.is_valid() && _exchange_birth.numel() == old_size &&
+             (!_exchange_importance_peak.is_valid() ||
+              _exchange_importance_peak.numel() == old_size));
+        if (!exchange_state_aligned) {
+            reset_exchange_state();
+        } else if (has_exchange_state) {
+            compact(_exchange_importance_sum);
+            if (_exchange_importance_peak.is_valid())
+                compact(_exchange_importance_peak);
             compact(_exchange_birth);
-        if (_exchange_dominance.is_valid() && _exchange_dominance.numel() > new_size)
-            compact(_exchange_dominance);
+        }
+        const bool impact_pair_consistent =
+            _exchange_window_impact_sum.is_valid() == _exchange_window_impact_peak.is_valid();
+        const auto compact_exchange_output = [&](Tensor& output) {
+            if (!output.is_valid())
+                return true;
+            if (output.numel() != old_size) {
+                output = Tensor();
+                return false;
+            }
+            compact(output);
+            return true;
+        };
+        const bool impact_sum_aligned = impact_pair_consistent &&
+                                        compact_exchange_output(_exchange_window_impact_sum);
+        const bool impact_peak_aligned = impact_pair_consistent &&
+                                         compact_exchange_output(_exchange_window_impact_peak);
+        if (!impact_sum_aligned || !impact_peak_aligned) {
+            _exchange_window_impact_sum = Tensor();
+            _exchange_window_impact_peak = Tensor();
+            _exchange_impact_written = false;
+        }
         _edge_view_scores = Tensor();
 
         remap_frozen_ranges_after_compaction(*_splat_data, valid_indices, old_size);
@@ -2817,13 +2940,7 @@ namespace lfs::training {
         std::swap(_edge_view_scores, source._edge_view_scores);
         std::swap(_edge_sample_count, source._edge_sample_count);
         std::swap(_free_mask, source._free_mask);
-        std::swap(_exchange_coverage, source._exchange_coverage);
-        std::swap(_exchange_peak, source._exchange_peak);
-        std::swap(_exchange_birth, source._exchange_birth);
-        std::swap(_exchange_dominance, source._exchange_dominance);
-        std::swap(_exchange_free_before_growth, source._exchange_free_before_growth);
-        std::swap(_exchange_windows, source._exchange_windows);
-        std::swap(_exchange_dominance_written, source._exchange_dominance_written);
+        reset_exchange_state();
         std::swap(_far_field_mask, source._far_field_mask);
         std::swap(_cam_centroid, source._cam_centroid);
         std::swap(_orbit_radius, source._orbit_radius);
@@ -2854,6 +2971,8 @@ namespace lfs::training {
         auto resolved_params = params;
         resolved_params.resolve_mrnf_capacity_defaults();
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(std::move(resolved_params));
+        if (renderer_changed)
+            reset_exchange_state();
         if ((support_changed || renderer_changed) && params.gut && params.opacity_decay_rendered_only)
             LOG_INFO("opacity_decay_rendered_only has no effect with GUT");
         if (_splat_data && (support_changed || renderer_changed)) {

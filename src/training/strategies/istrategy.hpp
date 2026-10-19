@@ -11,6 +11,7 @@
 #include <istream>
 #include <memory>
 #include <ostream>
+#include <utility>
 
 namespace lfs::io {
     class PipelinedImageLoader;
@@ -83,13 +84,10 @@ namespace lfs::training {
         virtual lfs::core::Tensor edge_score_scratch(int /*iter*/) { return {}; }
         virtual void on_edge_score_accumulated(int /*iter*/) {}
 
-        // Optional FastGS dominance contract: a float32 [N] vector that the main
-        // backward raises to each splat's largest per-pixel blend weight (atomic
-        // max). The strategy owns the window and resets the vector itself. The
-        // callback runs only after a backward that wrote the vector, so a window
-        // without dominance data (other rasterizers) is not mistaken for zeros.
-        virtual lfs::core::Tensor dominance_scratch(int /*iter*/) { return {}; }
-        virtual void on_dominance_accumulated(int /*iter*/) {}
+        virtual std::pair<lfs::core::Tensor, lfs::core::Tensor> impact_scratch(int /*iter*/) {
+            return {};
+        }
+        virtual void on_impact_accumulated(int /*iter*/) {}
     };
 
     class ICheckpointStateAdopter {
