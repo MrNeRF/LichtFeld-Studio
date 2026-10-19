@@ -1,9 +1,11 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Getting Started panel with tutorial videos and documentation links."""
+from _lfs_path_io import native_path, open
 
 import os
 import threading
+from functools import partial
 from urllib.parse import parse_qs, quote, urlparse
 
 import lichtfeld as lf
@@ -42,9 +44,9 @@ def _extract_video_id(url):
 
 
 def _download_thumbnail(video_id, on_done):
-    os.makedirs(_CACHE_DIR, exist_ok=True)
+    os.makedirs(native_path(_CACHE_DIR), exist_ok=True)
     path = os.path.join(_CACHE_DIR, f"{video_id}.jpg")
-    if os.path.exists(path):
+    if os.path.exists(native_path(path)):
         on_done(video_id, path)
         return
     try:
@@ -61,11 +63,14 @@ class GettingStartedPanel(Panel):
     """Floating panel displaying tutorial videos and documentation."""
 
     def __init__(self):
+        self._section = "highlights"
         self._handle = None
         self._ready_lock = threading.Lock()
         self._ready_queue = []
         self._thumb_card_map = {}
         self._thumb_update_scheduled = False
+        self._mounted = False
+        self._mount_generation = 0
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("getting_started")
@@ -73,16 +78,33 @@ class GettingStartedPanel(Panel):
             return
 
         model.bind_func("panel_label", lambda: lf.ui.tr("getting_started.title"))
+        for section in ("highlights", "training", "datasets"):
+            binding_name = f"show_{section}"
+            model.bind_func(binding_name,
+                            lambda section=section: self._section == section)
+            model.bind_event(binding_name,
+                             lambda *_args, section=section: self._set_section(section))
         model.bind_event("open_url", self._on_open_url)
         self._handle = model.get_handle()
+
+    def _set_section(self, section):
+        if self._section == section:
+            return
+        self._section = section
+        if self._handle:
+            for name in ("show_highlights", "show_training", "show_datasets"):
+                self._handle.dirty(name)
 
     def on_mount(self, doc):
         super().on_mount(doc)
 
-        self._ready_lock = threading.Lock()
-        self._ready_queue = []
-        self._thumb_card_map = {}
-        self._thumb_update_scheduled = False
+        with self._ready_lock:
+            self._mounted = True
+            self._mount_generation += 1
+            generation = self._mount_generation
+            self._ready_queue.clear()
+            self._thumb_card_map.clear()
+            self._thumb_update_scheduled = False
 
         for card in doc.query_selector_all(".video-card"):
             url = card.get_attribute("data-url", "").strip()
@@ -94,8 +116,21 @@ class GettingStartedPanel(Panel):
             if vid and elem_id:
                 self._thumb_card_map[vid] = elem_id
                 threading.Thread(target=_download_thumbnail,
-                                 args=(vid, self._on_thumb_ready),
+                                 args=(vid, partial(self._on_thumb_ready,
+                                                    generation=generation)),
                                  daemon=True).start()
+
+    def on_unmount(self, doc):
+        with self._ready_lock:
+            self._mounted = False
+            self._mount_generation += 1
+            self._ready_queue.clear()
+            self._thumb_card_map.clear()
+            self._thumb_update_scheduled = False
+
+        doc.remove_data_model("getting_started")
+        self._handle = None
+        super().on_unmount(doc)
 
     def _on_open_url(self, _handle, event, _args):
         target = event.current_target()
@@ -106,23 +141,28 @@ class GettingStartedPanel(Panel):
         if url:
             lf.ui.open_url(url)
 
-    def _on_thumb_ready(self, video_id, path):
+    def _on_thumb_ready(self, video_id, path, generation):
         should_schedule = False
         with self._ready_lock:
+            if not self._mounted or generation != self._mount_generation:
+                return
             self._ready_queue.append((video_id, path))
             if not self._thumb_update_scheduled:
                 self._thumb_update_scheduled = True
                 should_schedule = True
 
         if should_schedule:
-            self._schedule_thumbnail_update()
+            self._schedule_thumbnail_update(generation)
 
-    def _schedule_thumbnail_update(self):
+    def _schedule_thumbnail_update(self, generation):
         def request_update():
             with self._ready_lock:
+                if not self._mounted or generation != self._mount_generation:
+                    return
                 self._thumb_update_scheduled = False
-            if self._handle:
-                rml_widgets.request_model_update(self._handle)
+                handle = self._handle
+            if handle:
+                rml_widgets.request_model_update(handle)
 
         scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
         if not callable(scheduler):
@@ -136,6 +176,8 @@ class GettingStartedPanel(Panel):
                 pass
 
         with self._ready_lock:
+            if not self._mounted or generation != self._mount_generation:
+                return
             self._thumb_update_scheduled = False
         request_redraw = getattr(lf.ui, "request_redraw", None)
         if callable(request_redraw):

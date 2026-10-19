@@ -70,8 +70,8 @@ namespace lfs::vis {
         ThemeVec2 item_spacing = {8.0f, 4.0f};
         ThemeVec2 item_inner_spacing = {4.0f, 4.0f};
         float indent_spacing = 21.0f;
-        float scrollbar_size = 12.0f;
-        float grab_min_size = 16.0f;
+        float scrollbar_size = 4.0f;
+        float grab_min_size = 12.0f;
         float toolbar_button_size = 24.0f;
         float toolbar_padding = 6.0f;
         float toolbar_spacing = 4.0f;
@@ -126,7 +126,7 @@ namespace lfs::vis {
     };
 
     struct ThemeVignette {
-        bool enabled = true;
+        bool enabled = false;
         float intensity = 0.3f;
         float radius = 0.7f;
         float softness = 0.5f;
@@ -146,7 +146,6 @@ namespace lfs::vis {
         ThemeColor icon = {0.47f, 0.63f, 0.78f, 1.0f};
         ThemeColor highlight = {0.31f, 0.47f, 0.7f, 1.0f};
         ThemeColor selection = {0.23f, 0.39f, 0.63f, 1.0f};
-        ThemeColor selection_flash = {0.55f, 0.7f, 0.94f, 1.0f};
     };
 
     struct ThemeGradient {
@@ -181,7 +180,7 @@ namespace lfs::vis {
         ThemeVignette vignette;
         ThemeButton button;
         ThemeOverlay overlay;
-        ThemeGradients gradients;
+        ThemeGradients gradients = {};
 
         // Toolbar
         [[nodiscard]] ThemeColor toolbar_background() const;
@@ -243,10 +242,13 @@ namespace lfs::vis {
     LFS_VIS_API void refreshThemePresentation();
     [[nodiscard]] LFS_VIS_API std::size_t themePresentationRevision();
 
-    // Runtime vignette control (does not persist to theme file)
+    // User-global viewport vignette preference (theme files remain unchanged)
     LFS_VIS_API void setThemeVignetteEnabled(bool enabled);
+    LFS_VIS_API void setThemeVignetteEnabled(bool enabled, bool persist);
     LFS_VIS_API void setThemeVignetteIntensity(float intensity);
+    LFS_VIS_API void setThemeVignetteIntensity(float intensity, bool persist);
     LFS_VIS_API void setThemeVignetteStyle(float intensity, float radius, float softness);
+    LFS_VIS_API void setThemeVignetteStyle(float intensity, float radius, float softness, bool persist);
 
     // Persistence
     LFS_VIS_API bool saveTheme(const Theme& t, const std::string& path);

@@ -3,6 +3,7 @@
 
 #include "core/nn.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 
 #include <cuda_runtime.h>
 #include <nlohmann/json.hpp>
@@ -249,7 +250,7 @@ TEST_F(NnOpsTest, ConvWaitsForPrecomputedWeightTaps) {
         ~Streams() {
             for (auto stream : {producer, consumer}) {
                 if (stream) {
-                    cudaStreamSynchronize(stream);
+                    CudaMemoryPool::instance().release_stream(stream);
                     cudaStreamDestroy(stream);
                 }
             }

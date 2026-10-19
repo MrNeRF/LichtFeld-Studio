@@ -10,7 +10,6 @@
 
 namespace lfs::vis::gui {
 
-    class StartupOverlay;
     class GizmoManager;
     class GuiManager;
     class SequencerUIManager;
@@ -30,6 +29,11 @@ namespace lfs::vis::gui::native_panels {
     class VideoExtractorPanel : public IPanel {
     public:
         explicit VideoExtractorPanel(lfs::gui::IVideoExtractorWidget* widget);
+        SDL_Window* nativeWindow() const override;
+        bool detachToDesktop(float x, float y, float w, float h) override;
+        bool restoreDesktopWindow() override;
+        void releaseDesktopWindow() override;
+        void resetDesktopRestoreState() override;
         void draw(const PanelDrawContext& ctx) override;
         PanelRenderCapabilities renderCapabilities() const override;
         PanelDirectRenderResult renderDirect(const PanelDirectRenderRequest& request,
@@ -50,17 +54,6 @@ namespace lfs::vis::gui::native_panels {
         void setForcedHeight(float h);
         void setPanelSpace(PanelSpace space);
         lfs::gui::IVideoExtractorWidget* widget_;
-    };
-
-    class StartupOverlayPanel : public IPanel {
-    public:
-        StartupOverlayPanel(StartupOverlay* overlay, const bool* drag_hovering);
-        void draw(const PanelDrawContext& ctx) override;
-        bool poll(const PanelDrawContext& ctx) override;
-
-    private:
-        StartupOverlay* overlay_;
-        const bool* drag_hovering_;
     };
 
     class SelectionOverlayPanel : public IPanel {

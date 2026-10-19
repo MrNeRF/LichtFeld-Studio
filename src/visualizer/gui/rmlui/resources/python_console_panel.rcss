@@ -34,7 +34,6 @@ body {
     display: flex;
     align-items: center;
     min-height: 34dp;
-    height: 34dp;
     padding: 4dp 0;
     border-bottom-width: 1dp;
     border-bottom-color: rgb(55, 59, 70);
@@ -47,11 +46,11 @@ body {
     background-color: rgb(24, 25, 32);
 }
 
+/* Actions wrap onto more rows when the console is narrow or the UI scale is large. */
 .toolbar-row {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     flex: 1;
-    height: 24dp;
     min-width: 0;
     padding: 0 4dp 0 2dp;
     gap: 4dp;
@@ -60,10 +59,10 @@ body {
 
 .toolbar-actions {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     flex: 1;
     min-width: 0;
-    height: 24dp;
     gap: 4dp;
     overflow: hidden;
 }
@@ -490,7 +489,6 @@ button.disabled {
     overflow: hidden;
     white-space: pre;
     font-family: "JetBrains Mono";
-    background-color: rgb(30, 30, 30);
 }
 
 .terminal-row {
@@ -556,7 +554,6 @@ button.disabled {
 }
 
 .pkg-row {
-    font-family: "JetBrains Mono";
     font-size: 12dp;
 }
 

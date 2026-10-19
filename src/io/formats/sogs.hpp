@@ -6,8 +6,20 @@
 
 // Re-export public API
 #include "io/exporter.hpp"
+#include "io/filesystem_utils.hpp"
+#include <algorithm>
+#include <string>
+#include <string_view>
 
 namespace lfs::io {
+
+    inline bool is_sog_license_member(std::string_view name) {
+        if (name.find('/') != std::string_view::npos)
+            return false;
+        std::string lower(name);
+        detail::ascii_lower_inplace(lower);
+        return lower == "license" || lower == "license.txt" || lower == "license.md";
+    }
 
     inline constexpr size_t MAX_METADATA_BYTES = 16ULL * 1024 * 1024;
     inline constexpr size_t MAX_ENCODED_IMAGE_BYTES = 512ULL * 1024 * 1024;
@@ -34,9 +46,12 @@ namespace lfs::io {
     // Bounded entry access shared by directory and bundle readers.
     using SogEntryReader = std::function<Result<std::vector<uint8_t>>(const std::string&, size_t)>;
     Result<SogDirectoryReconstruct> prepare_sog_entries(const SogEntryReader&, const std::string& prefix);
-    std::unique_ptr<SogSink> make_sog_archive(const std::filesystem::path&);
+    // WebP members are always stored; store_every_member also stores the JSON members, so a streaming server can
+    // hand out any member as an exact byte range of the archive.
+    std::unique_ptr<SogSink> make_sog_archive(const std::filesystem::path&, bool store_every_member = false);
 
     // Internal: Loading function (not in public API)
-    Result<SplatData> load_sog(const std::filesystem::path& filepath);
+    Result<SplatData> load_sog(const std::filesystem::path& filepath,
+                               std::optional<std::vector<uint8_t>>* license_bytes = nullptr);
 
 } // namespace lfs::io

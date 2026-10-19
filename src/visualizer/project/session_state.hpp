@@ -50,9 +50,10 @@ namespace lfs::vis {
             float centre_speed = 0.002f;
             float roll_speed = 0.01f;
             float translate_speed = 0.0005f;
-            float wasd_speed = 8.0f;
+            float wasd_speed = 10.0f;
             float max_wasd_speed = 100.0f;
             std::optional<float> ortho_scale;
+            std::optional<float> ortho_extent_world;
 
             friend bool operator==(
                 const PanelCameraProjectState&,
@@ -79,7 +80,8 @@ namespace lfs::vis {
 
         [[nodiscard]] LFS_VIS_API PanelCameraProjectState
         capturePanelCameraProjectState(
-            const Viewport& viewport);
+            const Viewport& viewport,
+            std::optional<float> fallback_ortho_scale = {});
         LFS_VIS_API void applyPanelCameraProjectState(
             Viewport& viewport,
             const PanelCameraProjectState& state);
@@ -94,10 +96,19 @@ namespace lfs::vis {
 
         struct PreparedGuiSessionRestore {
             lfs::io::project::ProjectSessionChapters chapters;
+            struct UnsupportedSetting {
+                std::string field;
+                std::string value;
+                std::string fallback;
+                std::string chapter;
+                std::string path;
+                std::string identity;
+            };
+            std::vector<UnsupportedSetting> unsupported_settings;
             // REFS-resolved paths (open-time). Apply injects these into live
             // owners; VIEW/SEQR chapters store UUIDs, not raw machine paths.
-            std::optional<std::filesystem::path> environment_map_path;
-            std::optional<std::filesystem::path> ply_sequence_directory;
+            std::optional<std::filesystem::path> environment_map_path = std::nullopt;
+            std::optional<std::filesystem::path> ply_sequence_directory = std::nullopt;
             std::uint64_t ticket = 0;
         };
 

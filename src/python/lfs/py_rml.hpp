@@ -94,6 +94,8 @@ namespace lfs::python {
         // CSS properties
         bool set_property(const std::string& name, const std::string& value);
         void remove_property(const std::string& name);
+        std::string get_property(const std::string& name);
+        float measure_text(const std::string& text);
 
         // Animation
         bool animate(const std::string& property, const std::string& target_value, float duration,
@@ -130,6 +132,7 @@ namespace lfs::python {
         bool focus();
         void blur();
         bool select();
+        bool set_selection_range(int start, int end);
         void submit(const std::string& name = "", const std::string& value = "");
 
         Rml::Element* raw() { return elem_; }
@@ -247,6 +250,19 @@ namespace lfs::python {
 
     private:
         std::unordered_map<std::string, Rml::ElementDocument*> documents_;
+    };
+
+    // While a panel's update hook runs, dirty marks on that panel's own document
+    // are drawn in the same frame and must not ask for another one.
+    class DocumentUpdateScope {
+    public:
+        explicit DocumentUpdateScope(Rml::ElementDocument* doc);
+        ~DocumentUpdateScope();
+        DocumentUpdateScope(const DocumentUpdateScope&) = delete;
+        DocumentUpdateScope& operator=(const DocumentUpdateScope&) = delete;
+
+    private:
+        Rml::ElementDocument* previous_ = nullptr;
     };
 
     bool consume_document_dirty(Rml::ElementDocument* doc);

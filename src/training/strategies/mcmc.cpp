@@ -118,19 +118,7 @@ namespace lfs::training {
 
             if (state->is_joint()) {
                 // Joint codec: encode true zeros under current bounds via optimizer API.
-                auto idx_cpu = indices.cpu();
-                std::vector<int64_t> host_idx;
-                host_idx.reserve(indices.numel());
-                if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
-                    const auto* p = idx_cpu.ptr<int64_t>();
-                    host_idx.assign(p, p + indices.numel());
-                } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
-                    const auto* p = idx_cpu.ptr<int32_t>();
-                    for (size_t i = 0; i < indices.numel(); ++i)
-                        host_idx.push_back(static_cast<int64_t>(p[i]));
-                }
-                if (!host_idx.empty())
-                    optimizer.reset_state_at_indices(param_type, host_idx);
+                optimizer.reset_state_at_indices(param_type, indices);
             }
 
             // grad is transient (re-zeroed each step); only the contiguous case is handled here.
@@ -208,7 +196,7 @@ namespace lfs::training {
         } else {
             weights = zero_frozen_scores(*_splat_data, _error_score_max.clamp_min(1e-12f));
         }
-        return apply_crop_damping_to_scores(*_optimizer, weights);
+        return roi_share_sampling_weights(*_optimizer, apply_crop_damping_to_scores(*_optimizer, weights));
     }
 
     void MCMC::ensure_ratio_workspace_size(const size_t required) {
@@ -980,9 +968,6 @@ namespace lfs::training {
                 ensure_capacity_direct(_splat_data->opacity_raw());
 
                 // noise is generated inside inject_noise_kernel (no buffer).
-
-                LOG_INFO("Pre-allocated capacity: {}/{} Gaussians ({:.1f}%)",
-                         current_size, capacity, 100.0f * current_size / capacity);
             } catch (const std::exception& e) {
                 LOG_WARN("Failed to pre-allocate capacity: {}. Continuing without pre-allocation.", e.what());
             }
@@ -1007,8 +992,6 @@ namespace lfs::training {
             ensure_deleted_mask_size(*_splat_data);
         }
         _error_score_windows = 0;
-
-        LOG_INFO("MCMC strategy initialized with {} Gaussians", _splat_data->size());
     }
 
     void MCMC::permute_gaussian_rows(const lfs::core::Tensor& perm) {

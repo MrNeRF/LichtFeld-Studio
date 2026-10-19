@@ -314,6 +314,10 @@ namespace lfs::core {
         // to CPU first and unpacks there, avoiding a full canonical SH allocation on CUDA.
         Tensor shN_canonical_cpu() const;
 
+        // Decode selected rows of compact q16 / IEEE-f16 SH directly into a host-side
+        // canonical tensor. Row indices must be a rank-1 CPU integer tensor.
+        Tensor shN_canonical_cpu_rows(const Tensor& row_indices) const;
+
         // Host-side variant for export paths. When resident q16/IEEE-f16 SH is on CUDA,
         // decode it in bands directly into canonical [N, K, 3] host output memory.
         Tensor shN_canonical_cpu_gpu_decoded() const;

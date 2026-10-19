@@ -361,7 +361,6 @@ def test_all_good_registers_in_order_with_rendering_first(panels_module):
         "ResumeCheckpointPanel",
         "ExportPanel",
         "AboutPanel",
-        "AccountPanel",
         "BugReportPanel",
         "GettingStartedPanel",
         "ImagePreviewPanel",
@@ -375,11 +374,22 @@ def test_all_good_registers_in_order_with_rendering_first(panels_module):
     for panel_name in expected_panels:
         assert panel_name in state.registered, f"missing register_class for {panel_name}"
 
+    assert ("lfs.asset_manager", True) in state.enabled
+
     # Overlays step should have registered its hook.
     assert any(effect[0] == "hook" for effect in state.side_effects)
 
     # Image preview callback hookup is part of image_preview_panel step.
     assert any(effect[0] == "camera_preview" for effect in state.side_effects)
+
+
+def test_project_manager_auto_open_does_not_wait_for_startup_overlay(panels_module):
+    module, state = panels_module
+    state.lf.ui.is_startup_visible = lambda: True
+
+    assert module.register_builtin_panels() is True
+
+    assert ("lfs.asset_manager", True) in state.enabled
 
 
 def test_lazy_panel_metadata_matches_real_classes(panels_module):
@@ -403,6 +413,13 @@ def test_lazy_panel_metadata_matches_real_classes(panels_module):
         assert [getattr(lazy, field) for field in fields] == [
             getattr(real, field) for field in fields
         ], spec_name
+
+
+def test_preferences_refreshes_external_keymap_changes(panels_module):
+    module, _state = panels_module
+    spec = module.PANEL_SPECS["preferences"]
+    assert spec.update_policy == "interval"
+    assert 0 < spec.update_interval_ms <= 100
 
 
 def test_lichtfeld_import_failure_returns_false_and_skips_steps(monkeypatch):

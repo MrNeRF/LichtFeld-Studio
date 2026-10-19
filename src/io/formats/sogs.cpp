@@ -11,7 +11,9 @@
 #include "sogs.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/error_reporter.hpp"
+#include "core/file_extensions.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/sh_value_quant_kernels.hpp"
@@ -20,6 +22,7 @@
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "cuda/kmeans.hpp"
 #include "cuda/morton_encoding.hpp"
+#include "formats/archive_member_names.hpp"
 #include "io/atomic_output.hpp"
 #include "io/error.hpp"
 #include <algorithm>
@@ -970,7 +973,8 @@ namespace lfs::io {
         }
 
         std::expected<SplatData, std::string> read_sog_bundle(
-            const std::filesystem::path& path) {
+            const std::filesystem::path& path,
+            std::optional<std::vector<uint8_t>>* license_bytes) {
 
             LOG_INFO("Reading SOG bundle: {}", lfs::core::path_to_utf8(path));
 
@@ -981,7 +985,7 @@ namespace lfs::io {
                 LOG_TIMER_DEBUG("SOG load: archive read");
 
                 std::error_code file_error;
-                const uintmax_t archive_size = std::filesystem::file_size(path, file_error);
+                const uintmax_t archive_size = lfs::core::native_fs::file_size(path, file_error);
                 if (file_error) {
                     return std::unexpected(std::format(
                         "Failed to inspect SOG archive: {}", file_error.message()));
@@ -1043,7 +1047,7 @@ namespace lfs::io {
                         return std::unexpected(std::format(
                             "SOG archive contains more than {} entries", MAX_ARCHIVE_ENTRIES));
                     }
-                    const char* const pathname = archive_entry_pathname(entry);
+                    const char* const pathname = archive_member_name(entry);
                     if (!pathname) {
                         return std::unexpected("SOG archive entry has no valid pathname");
                     }
@@ -1081,7 +1085,9 @@ namespace lfs::io {
                                           filename == "sh0.webp" ||
                                           filename == "shN_centroids.webp" ||
                                           filename == "shN_labels.webp";
-                    if (!is_metadata && !is_image) {
+                    const bool is_license = license_bytes && !license_bytes->has_value() &&
+                                            is_sog_license_member(filename) && size <= 64 * 1024;
+                    if (!is_metadata && !is_image && !is_license) {
                         if (archive_read_data_skip(a) != ARCHIVE_OK) {
                             const char* detail = archive_error_string(a);
                             return std::unexpected(std::format(
@@ -1118,6 +1124,10 @@ namespace lfs::io {
 
                     if (is_metadata) {
                         metadata_json.assign(reinterpret_cast<const char*>(data.get()), size);
+                    } else if (is_license) {
+                        license_bytes->emplace();
+                        if (size)
+                            license_bytes->value().assign(data.get(), data.get() + size);
                     } else {
                         encoded_images.emplace(
                             filename, EncodedImage{std::move(data), size});
@@ -1233,16 +1243,39 @@ namespace lfs::io {
         }
     }
 
-    static Result<SplatData> read_sog_directory(const std::filesystem::path& path) {
+    static Result<SplatData> read_sog_directory(
+        const std::filesystem::path& path,
+        std::optional<std::vector<uint8_t>>* license_bytes) {
+        if (license_bytes) {
+            std::vector<std::filesystem::path> candidates;
+            for (const auto& entry : lfs::core::native_fs::directory_iterator(path)) {
+                if (is_sog_license_member(core::path_to_utf8(entry.path().filename())) &&
+                    lfs::core::native_fs::is_regular_file(lfs::core::native_fs::entry_symlink_status(path, entry)))
+                    candidates.push_back(lfs::core::native_fs::entry_path(path, entry.path()));
+            }
+            std::sort(candidates.begin(), candidates.end());
+            for (const auto& candidate : candidates) {
+                const auto size = lfs::core::native_fs::file_size(candidate);
+                if (size > 64 * 1024)
+                    continue;
+                std::vector<uint8_t> bytes(static_cast<size_t>(size));
+                std::ifstream file(lfs::core::native_fs::native_path(candidate), std::ios::binary);
+                if (size && !file.read(reinterpret_cast<char*>(bytes.data()),
+                                       static_cast<std::streamsize>(size)))
+                    return make_error(ErrorCode::READ_FAILURE, "Cannot read complete SOG license", candidate);
+                *license_bytes = std::move(bytes);
+                break;
+            }
+        }
         auto ready = prepare_sog_entries([&](const std::string& name, size_t limit) -> Result<std::vector<uint8_t>> {
             const auto file_path = path / core::utf8_to_path(name);
             std::error_code ec;
-            const auto size = std::filesystem::file_size(file_path, ec);
+            const auto size = lfs::core::native_fs::file_size(file_path, ec);
             if (ec)
                 return make_error(ErrorCode::READ_FAILURE, ec.message(), file_path);
             if (!size || size > limit)
                 return make_error(ErrorCode::CORRUPTED_DATA, "Invalid SOG entry size", file_path);
-            std::ifstream file(file_path, std::ios::binary);
+            std::ifstream file(lfs::core::native_fs::native_path(file_path), std::ios::binary);
             std::vector<uint8_t> bytes(static_cast<size_t>(size));
             if (!file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size)))
                 return make_error(ErrorCode::READ_FAILURE, "Cannot read complete SOG entry", file_path);
@@ -1254,20 +1287,23 @@ namespace lfs::io {
         return (*ready)();
     }
 
-    Result<SplatData> load_sog(const std::filesystem::path& path) {
+    Result<SplatData> load_sog(const std::filesystem::path& path,
+                               std::optional<std::vector<uint8_t>>* license_bytes) {
         try {
-            if (!std::filesystem::exists(path))
+            if (license_bytes)
+                license_bytes->reset();
+            if (!lfs::core::native_fs::exists(path))
                 return make_error(ErrorCode::PATH_NOT_FOUND, "SOG file/directory does not exist", path);
-            if (path.extension() == ".sog") {
-                auto result = read_sog_bundle(path);
+            if (core::has_extension(path, ".sog") && !lfs::core::native_fs::is_directory(path)) {
+                auto result = read_sog_bundle(path, license_bytes);
                 if (!result)
                     return make_error(ErrorCode::DECODING_FAILED, result.error(), path);
                 return std::move(*result);
             }
             if (path.filename() == "meta.json")
-                return read_sog_directory(path.parent_path());
-            if (std::filesystem::is_directory(path))
-                return read_sog_directory(path);
+                return read_sog_directory(path.parent_path(), license_bytes);
+            if (lfs::core::native_fs::is_directory(path))
+                return read_sog_directory(path, license_bytes);
             return make_error(ErrorCode::UNSUPPORTED_FORMAT, "Unknown SOG format", path);
         } catch (const std::bad_alloc&) {
             return make_error(ErrorCode::RESOURCE_EXHAUSTED, "SOG input exceeds available memory", path);
@@ -1336,11 +1372,13 @@ namespace lfs::io {
         class SogArchive final : public SogSink {
             struct archive* a_ = nullptr;
             std::filesystem::path output_path_;
+            bool store_every_member_ = false;
             bool valid_ = false;
 
         public:
-            explicit SogArchive(const std::filesystem::path& output_path)
-                : output_path_(output_path) {}
+            explicit SogArchive(const std::filesystem::path& output_path, const bool store_every_member = false)
+                : output_path_(output_path),
+                  store_every_member_(store_every_member) {}
 
             Result<void> open() override {
                 a_ = archive_write_new();
@@ -1348,7 +1386,8 @@ namespace lfs::io {
                     return make_error(ErrorCode::ARCHIVE_CREATION_FAILED, "Failed to allocate archive structure", output_path_);
                 }
 
-                if (archive_write_set_format_zip(a_) != ARCHIVE_OK) {
+                if (archive_write_set_format_zip(a_) != ARCHIVE_OK ||
+                    !use_utf8_zip_member_names(a_)) {
                     return make_error(ErrorCode::ARCHIVE_CREATION_FAILED,
                                       std::format("Failed to set ZIP format: {}", archive_error_string(a_) ? archive_error_string(a_) : "unknown error"), output_path_);
                 }
@@ -1356,7 +1395,7 @@ namespace lfs::io {
                 // Use wide-character API on Windows for proper Unicode path handling
                 int result;
 #ifdef _WIN32
-                result = archive_write_open_filename_w(a_, output_path_.wstring().c_str());
+                result = archive_write_open_filename_w(a_, lfs::core::native_fs::native_path(output_path_).c_str());
 #else
                 result = archive_write_open_filename(a_, output_path_.c_str());
 #endif
@@ -1413,14 +1452,14 @@ namespace lfs::io {
                 const auto now = std::chrono::system_clock::now();
                 const auto time_t = std::chrono::system_clock::to_time_t(now);
 
-                archive_entry_set_pathname(entry, filename.c_str());
+                set_archive_member_name(entry, filename.c_str());
                 archive_entry_set_size(entry, static_cast<la_int64_t>(size));
                 archive_entry_set_filetype(entry, AE_IFREG);
                 archive_entry_set_perm(entry, 0644);
                 archive_entry_set_mtime(entry, time_t, 0);
 
                 const bool is_webp = filename.size() >= 5 && filename.compare(filename.size() - 5, 5, ".webp") == 0;
-                const int compression_result = is_webp
+                const int compression_result = is_webp || store_every_member_
                                                    ? archive_write_zip_set_compression_store(a_)
                                                    : archive_write_zip_set_compression_deflate(a_);
                 if (compression_result != ARCHIVE_OK) {
@@ -1588,6 +1627,23 @@ namespace lfs::io {
     } // anonymous namespace
 
     Result<void> encode_sog(const SplatData& splat_data, const SogEncodeOptions& options_in, SogSink& archive) {
+        if (splat_data.has_deleted_mask()) {
+            const auto visible_count = static_cast<size_t>(splat_data.visible_count());
+            if (visible_count == 0) {
+                return make_error(ErrorCode::EMPTY_DATASET, "No visible splats to write", options_in.output_path);
+            }
+            if (visible_count < splat_data.size()) {
+                auto compacted = splat_data.clone();
+                compacted.apply_deleted();
+                if (compacted.size() != visible_count) {
+                    return make_error(ErrorCode::INVALID_DATASET,
+                                      "Failed to prepare visible splats for SOG export",
+                                      options_in.output_path);
+                }
+                return encode_sog(compacted, options_in, archive);
+            }
+        }
+
         SogEncodeOptions options = options_in;
         if (!options.provenance) {
             options.provenance = core::make_minimal_provenance_stamp();
@@ -2062,16 +2118,25 @@ namespace lfs::io {
                 }
             });
             pack_ms += milliseconds(means_pack_started, std::chrono::steady_clock::now());
-            constexpr int OVERLAPPED_WEBP_METHOD = 4;
-            constexpr float OVERLAPPED_WEBP_QUALITY = 100.0f;
-            constexpr int CRITICAL_WEBP_METHOD = 1;
-            constexpr float CRITICAL_CENTROIDS_WEBP_QUALITY = 100.0f;
-            constexpr float CRITICAL_LABELS_WEBP_QUALITY = 90.0f;
+            constexpr int MEANS_L_WEBP_METHOD = 2;
+            constexpr float MEANS_L_WEBP_QUALITY = 25.0f;
+            constexpr int MEANS_U_WEBP_METHOD = 2;
+            constexpr float MEANS_U_WEBP_QUALITY = 25.0f;
+            constexpr int QUATS_WEBP_METHOD = 4;
+            constexpr float QUATS_WEBP_QUALITY = 75.0f;
+            constexpr int SCALES_WEBP_METHOD = 5;
+            constexpr float SCALES_WEBP_QUALITY = 75.0f;
+            constexpr int SH0_WEBP_METHOD = 4;
+            constexpr float SH0_WEBP_QUALITY = 0.0f;
+            constexpr int CRITICAL_CENTROIDS_WEBP_METHOD = 4;
+            constexpr float CRITICAL_CENTROIDS_WEBP_QUALITY = 50.0f;
+            constexpr int CRITICAL_LABELS_WEBP_METHOD = 1;
+            constexpr float CRITICAL_LABELS_WEBP_QUALITY = 0.0f;
 
             queue_webp("means_l.webp", means_l, width, height,
-                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
+                       MEANS_L_WEBP_METHOD, MEANS_L_WEBP_QUALITY);
             queue_webp("means_u.webp", means_u, width, height,
-                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
+                       MEANS_U_WEBP_METHOD, MEANS_U_WEBP_QUALITY);
 
             if (!report_progress(0.20f, "Rotations")) {
                 join_sh_kmeans_and_wait_for_webp_encodes();
@@ -2118,7 +2183,7 @@ namespace lfs::io {
             });
             pack_ms += milliseconds(quats_pack_started, std::chrono::steady_clock::now());
             queue_webp("quats.webp", quats, width, height,
-                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
+                       QUATS_WEBP_METHOD, QUATS_WEBP_QUALITY);
 
             if (!report_progress(0.30f, "Scales k-means")) {
                 join_sh_kmeans_and_wait_for_webp_encodes();
@@ -2144,7 +2209,7 @@ namespace lfs::io {
             });
             pack_ms += milliseconds(scales_pack_started, std::chrono::steady_clock::now());
             queue_webp("scales.webp", scales_data, width, height,
-                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
+                       SCALES_WEBP_METHOD, SCALES_WEBP_QUALITY);
 
             if (!report_progress(0.45f, "Colors k-means")) {
                 join_sh_kmeans_and_wait_for_webp_encodes();
@@ -2172,7 +2237,7 @@ namespace lfs::io {
             });
             pack_ms += milliseconds(sh0_pack_started, std::chrono::steady_clock::now());
             queue_webp("sh0.webp", sh0_data, width, height,
-                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
+                       SH0_WEBP_METHOD, SH0_WEBP_QUALITY);
 
             if (auto result = archive_ready_webps(); !result) {
                 return std::unexpected(result.error());
@@ -2251,7 +2316,7 @@ namespace lfs::io {
                 }
 
                 queue_webp("shN_centroids.webp", sh_centroids_buf, centroids_width, centroids_height,
-                           CRITICAL_WEBP_METHOD, CRITICAL_CENTROIDS_WEBP_QUALITY);
+                           CRITICAL_CENTROIDS_WEBP_METHOD, CRITICAL_CENTROIDS_WEBP_QUALITY);
 
                 auto sh_labels_cpu = sh_labels.to_pageable_host();
                 const auto* sh_labels_ptr = static_cast<const int32_t*>(sh_labels_cpu.data_ptr());
@@ -2274,7 +2339,7 @@ namespace lfs::io {
                 pack_ms += milliseconds(sh_labels_pack_started, std::chrono::steady_clock::now());
 
                 queue_webp("shN_labels.webp", sh_labels_buf, width, height,
-                           CRITICAL_WEBP_METHOD, CRITICAL_LABELS_WEBP_QUALITY);
+                           CRITICAL_LABELS_WEBP_METHOD, CRITICAL_LABELS_WEBP_QUALITY);
 
                 sh_n_meta["count"] = actual_palette_size;
                 sh_n_meta["bands"] = sh_degree;
@@ -2411,8 +2476,8 @@ namespace lfs::io {
         }
     }
 
-    std::unique_ptr<SogSink> make_sog_archive(const std::filesystem::path& path) {
-        return std::make_unique<SogArchive>(path);
+    std::unique_ptr<SogSink> make_sog_archive(const std::filesystem::path& path, const bool store_every_member) {
+        return std::make_unique<SogArchive>(path, store_every_member);
     }
 
     Result<void> save_sog(const SplatData& data, const SogSaveOptions& options) {
@@ -2436,7 +2501,7 @@ namespace lfs::io {
         public:
             explicit DirectorySink(std::filesystem::path directory) : directory_(std::move(directory)) {}
             Result<void> add_file(const std::string& name, const void* bytes, size_t size) override {
-                std::ofstream file(directory_ / name, std::ios::binary | std::ios::trunc);
+                std::ofstream file(lfs::core::native_fs::native_path(directory_ / name), std::ios::binary | std::ios::trunc);
                 file.write(static_cast<const char*>(bytes), static_cast<std::streamsize>(size));
                 file.close();
                 if (!file)
@@ -2445,7 +2510,7 @@ namespace lfs::io {
             }
         };
         try {
-            std::filesystem::create_directories(options.output_path);
+            lfs::core::native_fs::create_directories(options.output_path);
             DirectorySink sink(options.output_path);
             return encode_sog(data, options, sink);
         } catch (const std::exception& e) {

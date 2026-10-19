@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/scene.hpp"
+#include "core/transform_utils.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include <optional>
 #include <string>
@@ -43,7 +44,7 @@ namespace lfs::vis::scene_coords {
 
         const glm::mat4 data_world_transform =
             rendering::visualizerWorldTransformToDataWorld(visualizer_world_transform);
-        return glm::inverse(parent_world_transform) * data_world_transform;
+        return core::finiteLocalTransform(parent_world_transform, data_world_transform);
     }
 
     [[nodiscard]] inline std::optional<glm::mat4> nodeLocalTransformFromVisualizerWorld(

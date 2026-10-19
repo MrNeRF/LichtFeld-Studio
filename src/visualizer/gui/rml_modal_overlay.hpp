@@ -9,6 +9,7 @@
 #include "gui/rmlui/rmlui_manager.hpp"
 
 #include <RmlUi/Core/EventListener.h>
+#include <chrono>
 #include <core/export.hpp>
 #include <cstddef>
 #include <deque>
@@ -36,6 +37,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
     class VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
     class VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
+    class VisualizerImplResetTest_RecoverThenAutosaveEditsForNextRecovery_Test;
     class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
     class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
     class VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
@@ -64,10 +66,9 @@ namespace lfs::vis::gui {
         RmlModalOverlay& operator=(const RmlModalOverlay&) = delete;
 
         void enqueue(lfs::core::ModalRequest request);
+        void activatePending();
         void processInput(const PanelInputState& input);
-        void render(int screen_w, int screen_h,
-                    float screen_x, float screen_y,
-                    float vp_x, float vp_y, float vp_w, float vp_h);
+        void render(int screen_w, int screen_h);
         void releaseRendererResources();
         void reloadResources();
         void preload();
@@ -76,9 +77,12 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::optional<ModalSnapshot> current() const;
         [[nodiscard]] std::size_t pending_count() const;
         bool dismiss(const std::string& button_label);
+        bool updateForm(const std::string& key, const std::optional<std::string>& body_rml,
+                        const std::vector<lfs::core::ModalButtonSpec>& buttons);
         [[nodiscard]] bool hasPendingRequest() const;
         [[nodiscard]] bool hasPendingRenderWork() const;
         [[nodiscard]] bool needsAnimationFrame() const;
+        [[nodiscard]] std::optional<double> secondsUntilNextUpdate() const;
         [[nodiscard]] std::string animationDemandDescription() const;
 
     private:
@@ -94,6 +98,7 @@ namespace lfs::vis::gui {
         friend class lfs::vis::VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoverThenAutosaveEditsForNextRecovery_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
@@ -104,6 +109,7 @@ namespace lfs::vis::gui {
         void cacheElements();
 
         void showNext();
+        void updateButtons(const std::vector<lfs::core::ModalButtonSpec>& buttons);
         bool dismissFirstEnabledButton();
         void bindTextInputRevert();
         void cancel();
@@ -143,6 +149,7 @@ namespace lfs::vis::gui {
         int height_ = 0;
         CachedVulkanContextRender direct_cache_;
         bool render_needed_ = true;
+        std::optional<std::chrono::steady_clock::time_point> next_update_at_;
         bool dialog_position_valid_ = false;
         float last_dialog_left_ = 0.0f;
         float last_dialog_top_ = 0.0f;

@@ -95,11 +95,30 @@ namespace lfs::training {
         return popspa_optimizing() ? *popspa_optimizer_ : strategy_->get_optimizer();
     }
 
+    void Trainer::consume_popspa_project_snapshot(const int completed_iteration) {
+        // Each POPSpa iteration has a single capture window and the model does
+        // not change inside it, so a request waits for a running writer here
+        // instead of coalescing past the iteration it asked for.
+        bool request_pending = false;
+        {
+            std::lock_guard lock(project_snapshot_mutex_);
+            request_pending = requested_project_path_.has_value();
+        }
+        if (request_pending && project_writer_in_flight_.load(std::memory_order_acquire))
+            wait_for_project_writer();
+        consume_requested_project_snapshot(completed_iteration);
+    }
+
     core::param::OptimizationParameters Trainer::popspa_step_parameters() const {
         auto opt = params_.optimization;
         opt.lambda_dssim = opt.popspa_ssim_weight;
         opt.scale_reg = 0.0f;
         opt.opacity_reg = 0.0f;
+        opt.erank_reg = 0.0f;
+        opt.dc_reg = 0.0f;
+        opt.sh_rest_reg = 0.0f;
+        opt.thin_structure_weight = 0.0f;
+        opt.gradient_loss_weight = 0.0f;
         opt.use_depth_loss = false;
         opt.normal_loss_weight = 0.0f;
         opt.normal_consistency_weight = 0.0f;
@@ -225,7 +244,7 @@ namespace lfs::training {
             while (!popspa_optimizing() && popspa_controller_.phase() != POPSpaPhase::Complete) {
                 handle_control_requests(completed_iteration, stop_token);
                 while (is_paused_.load() && !stop_requested_.load() && !stop_token.stop_requested()) {
-                    consume_requested_project_snapshot(completed_iteration);
+                    consume_popspa_project_snapshot(completed_iteration);
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     handle_control_requests(completed_iteration, stop_token);
                 }
@@ -266,7 +285,7 @@ namespace lfs::training {
                     const auto view = popspa_controller_.score_view();
                     if (view % 25 == 0 || view == cameras.size())
                         LOG_INFO("POPSpa score pass {}: {}/{} views", phase == POPSpaPhase::FirstScore ? 1 : 2, view, cameras.size());
-                    consume_requested_project_snapshot(completed_iteration);
+                    consume_popspa_project_snapshot(completed_iteration);
                     continue;
                 }
 
@@ -324,7 +343,7 @@ namespace lfs::training {
                 if (scene_)
                     scene_->syncTrainingModelTopology(model.size());
                 LOG_INFO("POPSpa prune: {} -> {} Gaussians", old_size, model.size());
-                consume_requested_project_snapshot(completed_iteration);
+                consume_popspa_project_snapshot(completed_iteration);
             }
             return {};
         } catch (const lfs::Exception& e) {

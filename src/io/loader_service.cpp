@@ -4,6 +4,7 @@
 
 #include "io/loader_service.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
@@ -149,6 +150,7 @@ namespace lfs::io {
             migrated.set_active_sh_degree(active_sh, std::move(shN_bounds));
             if (deleted.is_valid()) {
                 migrated.deleted() = std::move(deleted);
+                migrated.refresh_deleted_count();
             }
             auto lod_tree = std::move(model.lod_tree);
             model = std::move(migrated);
@@ -171,7 +173,7 @@ namespace lfs::io {
 
         // Check if path exists first
         std::error_code ec;
-        if (!std::filesystem::exists(path, ec)) {
+        if (!lfs::core::native_fs::exists(path, ec)) {
             return make_error(ErrorCode::PATH_NOT_FOUND, "", path);
         }
 
@@ -179,7 +181,7 @@ namespace lfs::io {
         auto* loader = registry_->findLoader(path);
         if (!loader) {
             // Build user-friendly error message
-            const bool is_directory = std::filesystem::is_directory(path, ec);
+            const bool is_directory = lfs::core::native_fs::is_directory(path, ec);
             const std::string path_type = is_directory ? "folder" : "file";
             const std::string filename = lfs::core::path_to_utf8(path.filename());
 
@@ -195,7 +197,7 @@ namespace lfs::io {
                     "  - transforms.json (or transforms_train.json)",
                     filename);
             } else {
-                auto ext = path.extension().string();
+                auto ext = lfs::core::path_to_utf8(path.extension());
                 message = std::format(
                     "Cannot open '{}' - unsupported file format.\n\n"
                     "Supported formats:\n"
@@ -210,8 +212,6 @@ namespace lfs::io {
             LOG_ERROR("Unsupported format: {} ({})", lfs::core::path_to_utf8(path), path_type);
             return make_error(ErrorCode::UNSUPPORTED_FORMAT, message, path);
         }
-
-        LOG_INFO("Using {} loader for: {}", loader->name(), lfs::core::path_to_utf8(path));
 
         // Perform the load - let the loader return proper errors
         auto result = loader->load(path, options);

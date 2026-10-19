@@ -298,6 +298,50 @@ TEST_F(SelectionRasterizationOpsTest, CropFilterKeepsOnlyPointsInsideCropBox) {
     EXPECT_EQ(selection.cpu().to_vector_bool(), (std::vector<bool>{true, false, true, true}));
 }
 
+TEST_F(SelectionRasterizationOpsTest, ScopedCropLeavesOtherNodesAndExistingExclusionsUnchanged) {
+    const auto means = make_float32_values({0, 0, 0, 2, 0, 0, 2, 0, 0, 0, 0, 0}, {4, 3});
+    const auto indices = make_int32_values({0, 0, 1, 1});
+    const auto transform = make_float32_values(
+        {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}, {4, 4});
+    const auto min = make_float32_values({-1, -1, -1}, {3});
+    const auto max = make_float32_values({1, 1, 1}, {3});
+    for (const bool inverse : {false, true}) {
+        auto selection = make_bool_mask({1, 1, 1, 0});
+        lfs::rendering::filter_selection_by_crop(
+            selection, means, &transform, &min, &max, inverse,
+            nullptr, nullptr, false, nullptr, &indices, 0);
+        EXPECT_EQ(selection.cpu().to_vector_bool(), (std::vector<bool>{!inverse, inverse, true, false}));
+    }
+}
+
+TEST_F(SelectionRasterizationOpsTest, ScopedEllipsoidIncludesBoundaryAndSupportsInverse) {
+    const auto means = make_float32_values({1, 0, 0, 2, 0, 0, 2, 0, 0, 0, 0, 0}, {4, 3});
+    const auto indices = make_int32_values({1, 1, 0, 1});
+    const auto transform = make_float32_values(
+        {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}, {4, 4});
+    const auto radii = make_float32_values({1, 1, 1}, {3});
+    for (const bool inverse : {false, true}) {
+        auto selection = make_bool_mask({1, 1, 1, 0});
+        lfs::rendering::filter_selection_by_crop(
+            selection, means, nullptr, nullptr, nullptr, false,
+            &transform, &radii, inverse, nullptr, &indices, 1);
+        EXPECT_EQ(selection.cpu().to_vector_bool(), (std::vector<bool>{!inverse, inverse, true, false}));
+    }
+}
+
+TEST_F(SelectionRasterizationOpsTest, ScopedCropDefaultsToFirstNodeWithoutIndexStorage) {
+    const auto means = make_float32_values({0, 0, 0, 2, 0, 0}, {2, 3});
+    const auto transform = make_float32_values(
+        {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}, {4, 4});
+    const auto min = make_float32_values({-1, -1, -1}, {3});
+    const auto max = make_float32_values({1, 1, 1}, {3});
+    auto selection = make_bool_mask({1, 1});
+    lfs::rendering::filter_selection_by_crop(
+        selection, means, &transform, &min, &max, false,
+        nullptr, nullptr, false, nullptr, nullptr, 0);
+    EXPECT_EQ(selection.cpu().to_vector_bool(), (std::vector<bool>{true, false}));
+}
+
 TEST_F(SelectionRasterizationOpsTest, DepthFilterKeepsOnlyPointsInsideCameraSpaceRange) {
     auto selection = make_bool_mask({1, 1, 1, 1, 1});
     const auto means = make_float32_values(
@@ -446,4 +490,54 @@ TEST_F(SelectionRasterizationOpsTest, CropFilterAppliesModelTransformsBeforeWorl
         &transform_indices);
 
     EXPECT_EQ(selection.cpu().to_vector_bool(), (std::vector<bool>{true, false}));
+}
+
+TEST_F(SelectionRasterizationOpsTest, ProjectsSplatsPastTheCappedLaunch) {
+    // The projection launch is capped at 4096 blocks of 256 threads. Rectangle,
+    // polygon (lasso), and brush selection all read this buffer, so a splat past
+    // that prefix still needs a screen position.
+    constexpr size_t kPrefix = 4096u * 256u;
+    constexpr size_t n = kPrefix + 2u;
+    auto means = Tensor::zeros({n, size_t{3}}, Device::CUDA);
+    means.slice(0, n - 1, n)
+        .copy_from(Tensor::from_vector(
+            std::vector<float>{1.0f, 0.0f, 0.0f}, {size_t{1}, size_t{3}}, Device::CUDA));
+
+    const auto positions = lfs::rendering::project_screen_positions_tensor(
+        means, 100, 80, {1, 0, 0, 0, 1, 0, 0, 0, 1}, {0.0f, 0.0f, 5.0f}, 100.0f, 100.0f, false, 1.0f);
+    ASSERT_EQ(positions.size(0), n);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    const auto at = [&](const size_t index) {
+        const auto row = positions.slice(0, index, index + 1).cpu().contiguous();
+        return std::array<float, 2>{row.ptr<float>()[0], row.ptr<float>()[1]};
+    };
+    EXPECT_FLOAT_EQ(at(0)[0], 50.0f);
+    EXPECT_FLOAT_EQ(at(0)[1], 40.0f);
+    EXPECT_FLOAT_EQ(at(kPrefix)[0], 50.0f);
+    EXPECT_FLOAT_EQ(at(kPrefix)[1], 40.0f);
+    EXPECT_FLOAT_EQ(at(n - 1)[0], 70.0f);
+    EXPECT_FLOAT_EQ(at(n - 1)[1], 40.0f);
+
+    auto rect = Tensor::zeros({n}, Device::CUDA, DataType::Bool);
+    auto polygon = Tensor::zeros({n}, Device::CUDA, DataType::Bool);
+    auto brush = Tensor::zeros({n}, Device::CUDA, DataType::Bool);
+    (void)rect.ptr<uint8_t>();
+    (void)polygon.ptr<uint8_t>();
+    (void)brush.ptr<uint8_t>();
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    lfs::rendering::rect_select_tensor(positions, 40.0f, 30.0f, 80.0f, 50.0f, rect);
+    lfs::rendering::polygon_select_tensor(
+        positions,
+        Tensor::from_vector(std::vector<float>{40, 30, 80, 30, 80, 50, 40, 50}, {size_t{4}, size_t{2}}, Device::CUDA),
+        polygon);
+    lfs::rendering::brush_select_tensor(positions, 70.0f, 40.0f, 2.0f, brush);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    EXPECT_TRUE(rect.get_bool({0}));
+    EXPECT_TRUE(rect.get_bool({n - 1}));
+    EXPECT_TRUE(polygon.get_bool({0}));
+    EXPECT_TRUE(polygon.get_bool({n - 1}));
+    EXPECT_FALSE(brush.get_bool({0}));
+    EXPECT_TRUE(brush.get_bool({n - 1}));
 }

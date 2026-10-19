@@ -13,6 +13,7 @@
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui/rmlui/rml_theme.hpp"
 #include "visualizer/post_work_utils.hpp"
+#include "visualizer/preferences.hpp"
 
 #include <algorithm>
 #include <array>
@@ -383,10 +384,13 @@ namespace lfs::python {
         float initial_width = 0.0f;
         float initial_height = 0.0f;
 
+        // A panel without its own id keeps the class id, as unregister_panel expects.
         if (nb::hasattr(panel_class, "id")) {
-            panel_id = parse_string_value(panel_class.attr("id"), "id");
-            if (class_overrides(panel_class, panel_base, "id") && panel_id.empty())
+            auto explicit_id = parse_string_value(panel_class.attr("id"), "id");
+            if (class_overrides(panel_class, panel_base, "id") && explicit_id.empty())
                 throw_value_error("id must not be empty");
+            if (!explicit_id.empty())
+                panel_id = std::move(explicit_id);
         }
 
         if (nb::hasattr(panel_class, "label")) {
@@ -485,7 +489,8 @@ namespace lfs::python {
                 compose_retained_style(style, has_immediate_draw),
                 has_poll,
                 height_mode,
-                has_immediate_draw);
+                has_immediate_draw,
+                to_gui_space(space) == gui::PanelSpace::Floating);
             if (to_gui_space(space) == gui::PanelSpace::Floating)
                 retained_adapter->setForeground(true);
             adapter = retained_adapter;
@@ -523,15 +528,21 @@ namespace lfs::python {
         info.initial_height = initial_height;
 
         const bool registered = invoke_on_viewer(
-            [info = std::move(info)]() mutable {
-                return gui::PanelRegistry::instance().register_panel(std::move(info));
+            [this, info = std::move(info), module_prefix]() mutable {
+                const nb::gil_scoped_acquire acquire;
+                const auto id = info.id;
+                auto adapter = info.panel;
+                if (!gui::PanelRegistry::instance().register_panel(std::move(info)))
+                    return false;
+                // Release the old adapter and its named Rml context before the next draw.
+                panels_[id] = {std::move(adapter), module_prefix};
+                return true;
             },
             false);
         if (!registered) {
             throw_value_error(
                 std::string("register_panel: runtime rejected panel '") + panel_id + "'");
         }
-        panels_[panel_id] = {adapter, module_prefix};
     }
 
     void PyPanelRegistry::unregister_panel(nb::object panel_class) {
@@ -545,26 +556,20 @@ namespace lfs::python {
             panel_id = get_class_id(panel_class);
         }
 
-        if (on_graphics_thread()) {
+        invoke_on_viewer([this, panel_id]() {
+            const nb::gil_scoped_acquire acquire;
             gui::PanelRegistry::instance().unregister_panel(panel_id);
-        } else {
-            schedule_graphics_callback([id = panel_id]() {
-                gui::PanelRegistry::instance().unregister_panel(id);
-            });
-        }
-        panels_.erase(panel_id);
+            panels_.erase(panel_id);
+        });
     }
 
     void PyPanelRegistry::unregister_all() {
         std::lock_guard lock(mutex_);
-        if (on_graphics_thread()) {
+        invoke_on_viewer([this]() {
+            const nb::gil_scoped_acquire acquire;
             gui::PanelRegistry::instance().unregister_all_non_native();
-        } else {
-            schedule_graphics_callback([]() {
-                gui::PanelRegistry::instance().unregister_all_non_native();
-            });
-        }
-        panels_.clear();
+            panels_.clear();
+        });
     }
 
     void PyPanelRegistry::unregister_for_module(const std::string& prefix) {
@@ -582,17 +587,14 @@ namespace lfs::python {
             }
         }
 
-        for (const auto& panel_id : to_remove) {
-            if (on_graphics_thread()) {
+        invoke_on_viewer([this, to_remove = std::move(to_remove), prefix]() {
+            const nb::gil_scoped_acquire acquire;
+            for (const auto& panel_id : to_remove) {
                 gui::PanelRegistry::instance().unregister_panel(panel_id);
-            } else {
-                schedule_graphics_callback([id = panel_id]() {
-                    gui::PanelRegistry::instance().unregister_panel(id);
-                });
+                panels_.erase(panel_id);
+                LOG_INFO("Unregistered panel '{}' for module '{}'", panel_id, prefix);
             }
-            panels_.erase(panel_id);
-            LOG_INFO("Unregistered panel '{}' for module '{}'", panel_id, prefix);
-        }
+        });
     }
 
     void register_ui_panels(nb::module_& m) {
@@ -674,6 +676,18 @@ namespace lfs::python {
             },
             nb::arg("panel_id"), nb::arg("enabled"), "Enable or disable a panel by id");
 
+        m.def("save_startup_sidebar", [] { return invoke_on_viewer([] {
+                                               auto* gui_manager = get_gui_manager();
+                                               if (!gui_manager)
+                                                   return false;
+                                               const auto layout = gui_manager->panelLayout().captureProjectState();
+                                               vis::UserPreferences::instance().setSidebarDefaults(
+                                                   layout.right_panel_width, layout.scene_panel_ratio, layout.active_tab_id);
+                                               return true;
+                                           },
+                                                                   false); }, "Save the right sidebar as a startup default; saved .licht workspaces take precedence.");
+        m.def("clear_startup_sidebar", [] { vis::UserPreferences::instance().clearSidebarDefaults(); }, "Clear startup sidebar defaults without changing the current project workspace.");
+
         m.def(
             "reset_layout", []() -> std::string {
                 return invoke_on_viewer(
@@ -711,6 +725,28 @@ namespace lfs::python {
                     false);
             },
             nb::arg("panel_id"), "Check if a panel is enabled");
+
+        m.def(
+            "get_left_dock_width", []() {
+                return invoke_on_viewer(
+                    [] {
+                        if (auto* const gui_manager = get_gui_manager())
+                            return gui_manager->panelLayout().getLeftDockPreferredWidth();
+                        return 0.0f;
+                    },
+                    0.0f);
+            },
+            "Get the left dock width the user chose, in logical pixels. The dock is "
+            "narrower while the window is too small to fit it.");
+
+        m.def(
+            "set_left_dock_width", [](const float width) {
+                invoke_on_viewer([width] {
+                    if (auto* const gui_manager = get_gui_manager())
+                        gui_manager->panelLayout().setLeftDockWidth(width);
+                });
+            },
+            nb::arg("width"), "Set the left dock width in logical pixels");
 
         m.def(
             "get_main_panel_tabs", []() {
@@ -759,6 +795,15 @@ namespace lfs::python {
                 });
             },
             nb::arg("panel_id"), "Set the active bottom-dock panel id");
+
+        m.def(
+            "set_main_panel_active_tab", [](const std::string& panel_id) {
+                invoke_on_viewer([panel_id] {
+                    if (auto* const gui_manager = get_gui_manager())
+                        gui_manager->focusMainPanelTab(panel_id);
+                });
+            },
+            nb::arg("panel_id"), "Activate a main panel tab by panel id");
 
         m.def(
             "get_panel", [](const std::string& panel_id) {

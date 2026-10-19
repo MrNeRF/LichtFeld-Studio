@@ -189,8 +189,6 @@ namespace lfs::python {
                 callbacks.scene = do_scene;
                 callbacks.selection = do_selection;
                 set_signal_bridge_callbacks(callbacks);
-
-                LOG_INFO("Signal bridge initialized");
             } catch (const std::exception& e) {
                 LOG_ERROR("Failed to initialize signal bridge: {}", e.what());
                 g_initialized = false;
@@ -218,7 +216,6 @@ namespace lfs::python {
             g_app_state = nb::object();
             g_initialized = false;
             g_training = TrainingBuffer{};
-            LOG_INFO("Signal bridge shutdown");
         }
 
     } // namespace

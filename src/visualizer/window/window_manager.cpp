@@ -7,12 +7,18 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "gui/gui_manager.hpp"
+#include "gui/utils/native_drag_scheduler.hpp"
+#include "gui/utils/native_file_drag.hpp"
 #include "input/input_controller.hpp"
+#include "input/sdl_coordinate_utils.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
+#include "rendering/rendering_manager.hpp"
 #include "vulkan_context.hpp"
 #include "vulkan_loader_probe.hpp"
 #include "window_state_utils.hpp"
+#include "x11_input_modifier.hpp"
 #include <SDL3/SDL.h>
 #if defined(__linux__)
 #include <X11/Xatom.h>
@@ -116,6 +122,24 @@ namespace lfs::vis {
             }
         }
 
+#if defined(__linux__)
+        bool ibusXimAvailable() {
+            const char* const input_modifier = SDL_getenv_unsafe("XMODIFIERS");
+            if (!input_modifier || std::strcmp(input_modifier, "@im=ibus") != 0)
+                return false;
+
+            XSetLocaleModifiers("");
+            Display* const display = XOpenDisplay(nullptr);
+            if (!display)
+                return false;
+            XIM const input_method = XOpenIM(display, nullptr, nullptr, nullptr);
+            if (input_method)
+                XCloseIM(input_method);
+            XCloseDisplay(display);
+            return input_method != nullptr;
+        }
+#endif
+
         void configureValidationLayerSearchPath() {
 #ifdef LFS_VULKAN_VALIDATION_LAYER_DIR
 #ifdef _WIN32
@@ -176,6 +200,7 @@ namespace lfs::vis {
             switch (event.type) {
             case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
             case SDL_EVENT_WINDOW_FOCUS_LOST:
+            case SDL_EVENT_WINDOW_FOCUS_GAINED:
             case SDL_EVENT_WINDOW_RESIZED:
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
             case SDL_EVENT_WINDOW_MINIMIZED:
@@ -197,6 +222,8 @@ namespace lfs::vis {
                 return event.key.windowID == target_window_id;
             case SDL_EVENT_TEXT_INPUT:
                 return event.text.windowID == target_window_id;
+            case SDL_EVENT_TEXT_EDITING:
+                return event.edit.windowID == target_window_id;
             case SDL_EVENT_DROP_FILE:
             case SDL_EVENT_DROP_COMPLETE:
                 return event.drop.windowID == target_window_id;
@@ -360,7 +387,9 @@ namespace lfs::vis {
             const bool bottom = area->y >= size.y - kResizeBorder && area->y < size.y;
             const bool titlebar_point = self->isTitlebarDragPoint(area->x, area->y);
 
-            if (!self->isMaximized()) {
+            // Wayland supplies per-edge constraints to SDL. Let the compositor
+            // decide whether a tiled or maximized window can be resized.
+            if (!self->isMaximized() || self->usesWayland()) {
                 unsigned edge_mask = 0;
                 if (left)
                     edge_mask |= kResizeLeft;
@@ -382,7 +411,7 @@ namespace lfs::vis {
             }
 
             if (titlebar_point) {
-                if (self->isMaximized())
+                if (self->isMaximized() && !self->usesWayland())
                     return SDL_HITTEST_NORMAL;
                 if (self->usesEventDrivenTitlebarDrag())
                     return SDL_HITTEST_NORMAL;
@@ -517,7 +546,37 @@ namespace lfs::vis {
           monitor_size_(monitor_width, monitor_height) {
     }
 
+    gui::NativeDragContext& WindowManager::nativeFileDragContext() {
+        if (!native_file_drag_)
+            native_file_drag_ = std::make_unique<gui::NativeDragContext>();
+        return *native_file_drag_;
+    }
+
+    gui::NativeDragScheduler& WindowManager::nativeDragScheduler() {
+        if (!native_drag_scheduler_)
+            native_drag_scheduler_ = std::make_unique<gui::NativeDragScheduler>();
+        return *native_drag_scheduler_;
+    }
+
+    void WindowManager::dispatchNativeDrags(std::function<bool()> frame) {
+        native_transfer_frame_ = std::move(frame);
+        if (native_drag_scheduler_)
+            native_drag_scheduler_->dispatch();
+    }
+
+    bool WindowManager::advanceNativeTransferFrame() {
+        if (!native_transfer_frame_)
+            return false;
+        auto frame = native_transfer_frame_;
+        wakeEventLoop();
+        return frame();
+    }
+
     WindowManager::~WindowManager() {
+        // Release our Wayland proxies/queue while SDL's borrowed display is
+        // still alive. One context also avoids rebinding globals on panel reload.
+        native_file_drag_.reset();
+        SDL_RemoveEventWatch(watchEvent, this);
 #if defined(__linux__)
         if (g_x11_error_owner == this) {
             g_x11_error_owner = nullptr;
@@ -642,7 +701,7 @@ namespace lfs::vis {
         const WindowRectangle target = centeredWindowRectangleOnPrimaryDisplay(1280, 720);
 
         const bool size_set = SDL_SetWindowSize(window_, target.width, target.height);
-        const bool position_set = SDL_SetWindowPosition(window_, target.x, target.y);
+        const bool position_set = is_wayland_ || SDL_SetWindowPosition(window_, target.x, target.y);
         if (!size_set || !position_set) {
             LOG_WARN("Failed to reset window geometry to {}x{} at {},{}: {}",
                      target.width, target.height, target.x, target.y, SDL_GetError());
@@ -666,28 +725,51 @@ namespace lfs::vis {
 
     bool WindowManager::init() {
         configureValidationLayerSearchPath();
+        // Preserve the initiating press when this same gesture activates us.
+        SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
 
         if (shouldPreferX11OnGnome()) {
             SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11,wayland");
             LOG_INFO("GNOME Wayland session detected; preferring X11/Xwayland for native window decorations");
         }
 
+#if defined(__linux__)
+        // SDL's X11 fallback double-encodes UTF-8 when the IBus XIM server is absent.
+        // Keep IBus selected when its XIM server is available for users who rely on an IME.
+        const bool initialized = window::withX11InputModifier(
+            [] { return SDL_getenv_unsafe("XMODIFIERS"); },
+            [](const std::string& value) { return SDL_setenv_unsafe("XMODIFIERS", value.c_str(), 1); },
+            ibusXimAvailable(),
+            [this] {
+                if (!SDL_Init(SDL_INIT_VIDEO)) {
+                    reportSdlVideoInitFailure();
+                    return false;
+                }
+
+                const auto vulkan_info = probeVulkanLoader();
+                if (vulkan_info.enabled && !vulkan_info.loader_available) {
+                    LOG_WARN("Vulkan viewer dependency is enabled, but the loader probe failed: {}", vulkan_info.error);
+                }
+
+                window_ = SDL_CreateWindow(
+                    title_.c_str(),
+                    window_size_.x,
+                    window_size_.y,
+                    SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN |
+                        SDL_WINDOW_BORDERLESS);
+                return true;
+            });
+        if (!initialized)
+            return false;
+#else
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             reportSdlVideoInitFailure();
             return false;
         }
 
-        if (const char* const video_driver = SDL_GetCurrentVideoDriver(); video_driver) {
-            LOG_INFO("SDL video driver: {}", video_driver);
-        }
-
         const auto vulkan_info = probeVulkanLoader();
-        if (vulkan_info.enabled) {
-            if (vulkan_info.loader_available) {
-                LOG_INFO("Vulkan loader available: API {}", formatVulkanApiVersion(vulkan_info.api_version));
-            } else {
-                LOG_WARN("Vulkan viewer dependency is enabled, but the loader probe failed: {}", vulkan_info.error);
-            }
+        if (vulkan_info.enabled && !vulkan_info.loader_available) {
+            LOG_WARN("Vulkan viewer dependency is enabled, but the loader probe failed: {}", vulkan_info.error);
         }
 
         window_ = SDL_CreateWindow(
@@ -696,7 +778,7 @@ namespace lfs::vis {
             window_size_.y,
             SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN |
                 SDL_WINDOW_BORDERLESS);
-
+#endif
         if (!window_) {
             std::cerr << "Failed to create SDL window: " << SDL_GetError() << std::endl;
             SDL_Quit();
@@ -706,6 +788,7 @@ namespace lfs::vis {
             LOG_DEBUG("Failed to set window minimum size: {}", SDL_GetError());
         }
 
+        is_wayland_ = std::strcmp(SDL_GetCurrentVideoDriver(), "wayland") == 0;
         native_titlebar_move_available_ = hasX11NativeMoveSupport(window_);
         if (native_titlebar_move_available_) {
             LOG_DEBUG("Using X11 native titlebar move for borderless window drag");
@@ -720,7 +803,7 @@ namespace lfs::vis {
         }
 
         // Position window on specified monitor (if provided)
-        if (monitor_size_.x > 0 && monitor_size_.y > 0) {
+        if (!is_wayland_ && monitor_size_.x > 0 && monitor_size_.y > 0) {
             const int xpos = monitor_pos_.x + (monitor_size_.x - window_size_.x) / 2;
             const int ypos = monitor_pos_.y + (monitor_size_.y - window_size_.y) / 2;
             SDL_SetWindowPosition(window_, xpos, ypos);
@@ -729,7 +812,7 @@ namespace lfs::vis {
         if (initial_window_state_) {
             auto state = *initial_window_state_;
             sanitizeInitialWindowState(state);
-            const bool position_set = SDL_SetWindowPosition(window_, state.x, state.y);
+            const bool position_set = is_wayland_ || SDL_SetWindowPosition(window_, state.x, state.y);
             const bool size_set = SDL_SetWindowSize(window_, state.width, state.height);
             if (!position_set || !size_set) {
                 LOG_WARN("Failed to restore saved window geometry {}x{} at {},{}: {}",
@@ -742,7 +825,7 @@ namespace lfs::vis {
             const auto target = centeredWindowRectangleOnPrimaryDisplay(
                 window_size_.x, window_size_.y);
             const bool size_set = SDL_SetWindowSize(window_, target.width, target.height);
-            const bool position_set = SDL_SetWindowPosition(window_, target.x, target.y);
+            const bool position_set = is_wayland_ || SDL_SetWindowPosition(window_, target.x, target.y);
             if (!size_set || !position_set) {
                 LOG_WARN("Failed to apply initial window geometry {}x{} at {},{}: {}",
                          target.width, target.height, target.x, target.y, SDL_GetError());
@@ -774,7 +857,7 @@ namespace lfs::vis {
             SDL_Quit();
             return false;
         }
-        LOG_INFO("Vulkan window context initialized");
+        SDL_AddEventWatch(watchEvent, this);
         return true;
     }
 
@@ -851,56 +934,115 @@ namespace lfs::vis {
         return std::chrono::steady_clock::now() - last_window_size_change_time_ <= max_age;
     }
 
+    bool WindowManager::watchEvent(void* userdata, SDL_Event* event) {
+        // Native events are translated on the SDL thread. Focus must be applied
+        // before SDL translates the next key into text; worker events stay queued.
+        if (!SDL_IsMainThread())
+            return true;
+        auto& self = *static_cast<WindowManager*>(userdata);
+        if (!self.pumping_events_ || self.watching_event_)
+            return true;
+        self.watching_event_ = true;
+        self.drainQueuedEvents();
+        self.dispatched_events_.emplace_back(event->type, event->common.timestamp);
+        self.dispatchQueuedEvent(*event);
+        self.watching_event_ = false;
+        return true;
+    }
+
+    void WindowManager::dispatchQueuedEvent(const SDL_Event& event) {
+        const SDL_WindowID id = window_ ? SDL_GetWindowID(window_) : 0;
+        if (auto* gui = services().guiOrNull())
+            gui->prepareInput();
+        if (!shouldSuppressGuiRoutingForResize(event, id))
+            frame_input_.processEvent(event, id);
+        processEvent(event);
+        if (auto* gui = services().guiOrNull())
+            gui->prepareInput();
+    }
+
+    void WindowManager::dispatchPolledEvent(const SDL_Event& event) {
+        const auto token = std::pair(event.type, event.common.timestamp);
+        const auto it = std::find(dispatched_events_.begin(), dispatched_events_.end(), token);
+        if (it != dispatched_events_.end())
+            dispatched_events_.erase(it);
+        else
+            dispatchQueuedEvent(event);
+    }
+
+    bool WindowManager::drainQueuedEvents() {
+        bool drained = false;
+        SDL_Event event;
+        while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_EVENT_FIRST, SDL_EVENT_LAST) > 0) {
+            drained = true;
+            dispatchPolledEvent(event);
+        }
+        return drained;
+    }
+
     void WindowManager::pollEvents() {
         frame_input_.beginFrame();
-        const SDL_WindowID main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
         SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            const bool suppress_gui_route = shouldSuppressGuiRoutingForResize(event, main_window_id);
-            if (!suppress_gui_route)
-                frame_input_.processEvent(event, main_window_id);
-            processEvent(event);
-        }
+        // Drain previously queued events before pumping new native events.
+        drainQueuedEvents();
+        pumping_events_ = true;
+        while (!gui::preserveNativeDragInput() && SDL_PollEvent(&event))
+            dispatchPolledEvent(event);
+        pumping_events_ = false;
+        dispatched_events_.clear();
         if (isManualResizeActive())
             updateManualResize();
         finishTitlebarDragIfReleased();
         frame_input_.finalize(window_);
         suppressFrameInputForManualResize();
+        pinFrameInputForValueDrag();
         flushPendingTitlebarDoubleClick();
     }
 
-    void WindowManager::waitEvents(double timeout_seconds) {
+    void WindowManager::waitEvents(std::optional<double> timeout_seconds) {
+        if (gui::preserveNativeDragInput()) {
+            // SDL's native pump removes WM_LBUTTONUP from OLE's message queue.
+            // Keep rendering during a hover-time export, but let DoDragDrop
+            // consume the release itself when the receiver's GetData returns.
+            pollEvents();
+            SDL_Delay(1);
+            return;
+        }
+        // A native receiver is waiting for our export. Minimized windows and
+        // renderer recovery must not turn the modal frame into an infinite wait.
+        if (native_drag_scheduler_ && native_drag_scheduler_->busy())
+            timeout_seconds = timeout_seconds ? std::min(*timeout_seconds, 0.025) : std::optional<double>{0.025};
         frame_input_.beginFrame();
-        const SDL_WindowID main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
         SDL_Event event;
         if (vulkan_context_ &&
             vulkan_context_->hasPendingSwapchainResize()) {
             const double resize_wait = vulkan_context_->secondsUntilPendingSwapchainResizeReady();
-            timeout_seconds = std::min(timeout_seconds,
-                                       resize_wait > 0.0
-                                           ? std::max(kPendingResizeMinWaitSeconds, resize_wait)
-                                           : 0.0);
+            const double resize_deadline = resize_wait > 0.0
+                                               ? std::max(kPendingResizeMinWaitSeconds, resize_wait)
+                                               : 0.0;
+            timeout_seconds = timeout_seconds ? std::min(*timeout_seconds, resize_deadline)
+                                              : std::optional<double>{resize_deadline};
         }
         if (isManualResizeActive())
-            timeout_seconds = std::min(timeout_seconds, 1.0 / 60.0);
-        const int timeout_ms = static_cast<int>(timeout_seconds * 1000.0);
+            timeout_seconds = timeout_seconds ? std::min(*timeout_seconds, 1.0 / 60.0)
+                                              : std::optional<double>{1.0 / 60.0};
+        const int timeout_ms = drainQueuedEvents() ? 0
+                               : timeout_seconds   ? static_cast<int>(std::ceil(*timeout_seconds * 1000.0))
+                                                   : -1;
+        pumping_events_ = true;
         if (SDL_WaitEventTimeout(&event, timeout_ms)) {
-            bool suppress_gui_route = shouldSuppressGuiRoutingForResize(event, main_window_id);
-            if (!suppress_gui_route)
-                frame_input_.processEvent(event, main_window_id);
-            processEvent(event);
-            while (SDL_PollEvent(&event)) {
-                suppress_gui_route = shouldSuppressGuiRoutingForResize(event, main_window_id);
-                if (!suppress_gui_route)
-                    frame_input_.processEvent(event, main_window_id);
-                processEvent(event);
-            }
+            do {
+                dispatchPolledEvent(event);
+            } while (SDL_PollEvent(&event));
         }
+        pumping_events_ = false;
+        dispatched_events_.clear();
         if (isManualResizeActive())
             updateManualResize();
         finishTitlebarDragIfReleased();
         frame_input_.finalize(window_);
         suppressFrameInputForManualResize();
+        pinFrameInputForValueDrag();
         flushPendingTitlebarDoubleClick();
     }
 
@@ -920,7 +1062,9 @@ namespace lfs::vis {
         // Wake SDL_WaitEventTimeout so queued viewer-thread work is serviced promptly.
         SDL_Event event{};
         event.type = SDL_EVENT_USER;
-        SDL_PushEvent(&event);
+        // Watches run under SDL's watcher mutex. A worker may hold the Python
+        // lock while waking us, so enqueue wakeups without invoking watches.
+        SDL_PeepEvents(&event, 1, SDL_ADDEVENT, 0, 0);
     }
 
     bool WindowManager::shouldSuppressGuiRoutingForResize(const SDL_Event& event,
@@ -955,6 +1099,38 @@ namespace lfs::vis {
 
     void WindowManager::processEvent(const SDL_Event& event) {
         const SDL_WindowID main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
+
+        if (auto* gui = services().guiOrNull()) {
+            if (gui->processNativeWindowEvent(event)) {
+                gui->dispatchInputEvent(event);
+                if (auto* rendering = services().renderingOrNull())
+                    rendering->markDirty(DirtyFlag::OVERLAY, FrameReason::Overlay);
+                return;
+            }
+        }
+
+        if (std::getenv("LFS_TRACE_INPUT") && (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_KEY_DOWN))
+            LOG_INFO("INPUT arrival type={} key={} text={} active={}", event.type,
+                     event.type == SDL_EVENT_KEY_DOWN ? int(event.key.scancode) : 0,
+                     event.type == SDL_EVENT_TEXT_INPUT ? event.text.text : "", SDL_TextInputActive(window_));
+
+        gui::RmlUIManager::InputDispatchResult dispatched;
+        if (eventTargetsWindow(event, main_window_id) && !shouldSuppressGuiRoutingForResize(event, main_window_id)) {
+            if (auto* gui = services().guiOrNull()) {
+                // A value drag owns the hidden pointer; the UI sees it resting at the grab point.
+                const auto anchor = input_controller_ ? input_controller_->valueDragAnchor() : std::nullopt;
+                if (!anchor) {
+                    dispatched = gui->dispatchInputEvent(event);
+                } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+                    SDL_Event pinned = event;
+                    pinned.button.x = anchor->x;
+                    pinned.button.y = anchor->y;
+                    dispatched = gui->dispatchInputEvent(pinned);
+                } else if (event.type != SDL_EVENT_MOUSE_MOTION) {
+                    dispatched = gui->dispatchInputEvent(event);
+                }
+            }
+        }
 
         switch (event.type) {
         case SDL_EVENT_QUIT:
@@ -1054,6 +1230,7 @@ namespace lfs::vis {
             const int mouse_x = static_cast<int>(std::round(event.button.x));
             const int mouse_y = static_cast<int>(std::round(event.button.y));
             const bool titlebar_point = isTitlebarDragPoint(mouse_x, mouse_y);
+            const auto position = glm::vec2(event.button.x, event.button.y) * input::windowPixelScale(window_);
             if (event.button.button == SDL_BUTTON_LEFT) {
                 if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                     const ResizeEdge resize_edge = resizeEdgeAt(mouse_x, mouse_y);
@@ -1088,9 +1265,9 @@ namespace lfs::vis {
                 break;
             const int button = input::sdlMouseButtonToApp(event.button.button);
             const int action = (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) ? input::ACTION_PRESS : input::ACTION_RELEASE;
-            input_router_.beginMouseButton(action, event.button.x, event.button.y);
-            input_controller_->handleMouseButton(button, action, event.button.x, event.button.y);
-            input_router_.endMouseButton(action);
+            input_router_.beginMouseButton(action, position.x, position.y);
+            input_controller_->handleMouseButton(button, action, position.x, position.y);
+            input_router_.endMouseButton(action, position.x, position.y);
             break;
         }
 
@@ -1106,7 +1283,10 @@ namespace lfs::vis {
                 break;
             }
             if (input_controller_) {
-                input_controller_->handleMouseMove(event.motion.x, event.motion.y);
+                const auto scale = input::windowPixelScale(window_);
+                const auto position = glm::vec2(event.motion.x, event.motion.y) * scale;
+                const auto motion = glm::vec2(event.motion.xrel, event.motion.yrel) * scale;
+                input_controller_->handleMouseMove(position.x, position.y, glm::dvec2(motion));
             }
             updateResizeCursor(static_cast<int>(std::round(event.motion.x)),
                                static_cast<int>(std::round(event.motion.y)));
@@ -1127,23 +1307,27 @@ namespace lfs::vis {
             if (!input_controller_)
                 break;
             const int physical_key = input::sdlScancodeToAppKey(event.key.scancode);
-            // Resolve the unmodified layout key so bindings keep modifiers separate
-            // (for example, '=' + Shift stays KEY_EQUAL plus a Shift modifier).
-            int logical_key = input::sdlKeycodeToAppKey(
-                SDL_GetKeyFromScancode(event.key.scancode, SDL_KMOD_NONE, false));
-            if (logical_key == input::KEY_UNKNOWN) {
-                logical_key = physical_key;
-            }
+            // Resolve shortcuts without modifiers (for example, '=' + Shift stays
+            // KEY_EQUAL plus Shift), with the physical top row reserved for digits.
+            const int logical_key = input::sdlShortcutKeyToAppKey(
+                event.key.scancode, SDL_GetKeyFromScancode(event.key.scancode, SDL_KMOD_NONE, false));
             const int action = event.key.down
                                    ? (event.key.repeat ? input::ACTION_REPEAT : input::ACTION_PRESS)
                                    : input::ACTION_RELEASE;
-            const int mods = input::sdlModsToAppMods(event.key.mod);
+            SDL_Keymod sdl_mods = event.key.mod;
+            if ((SDL_GetModState() & SDL_KMOD_MODE) != 0)
+                sdl_mods = static_cast<SDL_Keymod>(sdl_mods | SDL_KMOD_MODE);
+            const int mods = input::sdlModsToAppMods(sdl_mods);
             input_controller_->handleKey(
-                physical_key, logical_key, static_cast<int>(event.key.scancode), action, mods);
+                physical_key, logical_key, static_cast<int>(event.key.scancode), action, mods, dispatched.owned_release, dispatched.consumed);
             break;
         }
 
         case SDL_EVENT_DROP_FILE:
+            if (gui::NativeDragScheduler::outgoingDragActive()) {
+                pending_drop_files_.clear();
+                break;
+            }
             LOG_DEBUG("SDL drop file: window={} data={}", event.drop.windowID,
                       event.drop.data ? event.drop.data : "(null)");
             if (!eventTargetsWindow(event, main_window_id))
@@ -1165,6 +1349,10 @@ namespace lfs::vis {
             break;
 
         case SDL_EVENT_DROP_COMPLETE:
+            if (gui::NativeDragScheduler::outgoingDragActive()) {
+                pending_drop_files_.clear();
+                break;
+            }
             LOG_DEBUG("SDL drop complete: window={} pending_files={}", event.drop.windowID,
                       pending_drop_files_.size());
             if (!eventTargetsWindow(event, main_window_id))
@@ -1202,7 +1390,8 @@ namespace lfs::vis {
                 LOG_WARN("Failed to leave fullscreen: {}", SDL_GetError());
                 return;
             }
-            SDL_SetWindowPosition(window_, windowed_pos_.x, windowed_pos_.y);
+            if (!is_wayland_)
+                SDL_SetWindowPosition(window_, windowed_pos_.x, windowed_pos_.y);
             SDL_SetWindowSize(window_, windowed_size_.x, windowed_size_.y);
             is_fullscreen_ = false;
             LOG_DEBUG("setFullscreen leave requested: restoring windowed pos={}x{}, size={}x{}",
@@ -1266,14 +1455,15 @@ namespace lfs::vis {
     }
 
     bool WindowManager::isTitlebarDragPoint(const int x, const int y) const {
-        if (titlebar_drag_height_px_ <= 0 || y < 0 || y >= titlebar_drag_height_px_)
+        const auto pixel = glm::vec2(x, y) * input::windowPixelScale(window_);
+        if (titlebar_drag_height_px_ <= 0 || pixel.y < 0 || pixel.y >= titlebar_drag_height_px_)
             return false;
 
         for (const auto& rect : titlebar_drag_excluded_rects_) {
             if (rect.w <= 0 || rect.h <= 0)
                 continue;
-            if (x >= rect.x && x < rect.x + rect.w &&
-                y >= rect.y && y < rect.y + rect.h)
+            if (pixel.x >= rect.x && pixel.x < rect.x + rect.w &&
+                pixel.y >= rect.y && pixel.y < rect.y + rect.h)
                 return false;
         }
 
@@ -1322,6 +1512,8 @@ namespace lfs::vis {
     }
 
     void WindowManager::setResizeCursorForEdge(const ResizeEdge edge) {
+        if (gui::NativeDragScheduler::ownsNativeCursor())
+            return;
         if constexpr (!kUseManualBorderlessResize)
             return;
 
@@ -1475,6 +1667,21 @@ namespace lfs::vis {
         wakeEventLoop();
     }
 
+    void WindowManager::pinFrameInputForValueDrag() {
+        const auto pin = input_controller_ ? input_controller_->takeValueDragPin() : std::nullopt;
+        if (!pin)
+            return;
+        const glm::vec2 pixels = *pin * input::windowPixelScale(window_);
+        frame_input_.mouse_x = pixels.x;
+        frame_input_.mouse_y = pixels.y;
+        frame_input_.mouse_dx = 0.0f;
+        frame_input_.mouse_dy = 0.0f;
+        for (auto& event : frame_input_.mouse_button_events) {
+            event.x = pixels.x;
+            event.y = pixels.y;
+        }
+    }
+
     void WindowManager::suppressFrameInputForManualResize() {
         if (!isManualResizeActive())
             return;
@@ -1492,6 +1699,8 @@ namespace lfs::vis {
         frame_input_.mouse_released[2] = false;
         frame_input_.mouse_wheel = 0.0f;
         frame_input_.mouse_wheel_x = 0.0f;
+        frame_input_.mouse_dx = 0.0f;
+        frame_input_.mouse_dy = 0.0f;
         frame_input_.mouse_button_events.clear();
         frame_input_.mouse_moved = false;
     }
@@ -1574,7 +1783,7 @@ namespace lfs::vis {
     }
 
     void WindowManager::normalizeNativeMaximize(const char* const reason) {
-        if (!window_ || is_fullscreen_) {
+        if (!window_ || is_fullscreen_ || is_wayland_) {
             updateWindowSize(reason, ResizeIntent::Exact);
             return;
         }
@@ -1615,6 +1824,14 @@ namespace lfs::vis {
         if (!window_ || is_fullscreen_)
             return;
 
+        // Wayland owns top-level placement and maximize/restore geometry.
+        // Applying work-area bounds ourselves cannot replace a native maximize.
+        if (is_wayland_) {
+            if (!SDL_MaximizeWindow(window_))
+                LOG_WARN("Failed to maximize Wayland window: {}", SDL_GetError());
+            return;
+        }
+
         if (save_restore_geometry) {
             saveBorderlessRestoreGeometry();
         }
@@ -1643,13 +1860,10 @@ namespace lfs::vis {
             return;
         }
 
-        SDL_Rect target_bounds = usable_bounds;
-#if defined(_WIN32)
-        // Windows-only: keep work-area dimensions so the taskbar stays visible.
-        // Ask for the display top; the WM may still clamp managed windows to work-area y.
-        target_bounds.y = display_bounds.y;
-        target_bounds.h = std::min(usable_bounds.h, display_bounds.h);
-#endif
+        // Borderless windows are not constrained by the native non-client area.
+        // Respect the complete work area, including its origin: a top taskbar or
+        // desktop dock moves usable_bounds.y below display_bounds.y.
+        const SDL_Rect target_bounds = usable_bounds;
 
         const bool size_set = SDL_SetWindowSize(window_, target_bounds.w, target_bounds.h);
         const bool position_set = SDL_SetWindowPosition(window_, target_bounds.x, target_bounds.y);

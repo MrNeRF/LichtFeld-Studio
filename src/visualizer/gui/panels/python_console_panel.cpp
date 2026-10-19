@@ -5,6 +5,7 @@
 #include "gui/panels/python_console_panel.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -15,8 +16,11 @@
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/string_keys.hpp"
+#include "gui/terminal/terminal_input.hpp"
 #include "gui/terminal/terminal_widget.hpp"
 #include "gui/utils/native_file_dialog.hpp"
+#include "python/python_runtime.hpp"
+#include <algorithm>
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
@@ -46,6 +50,7 @@
 #include "python/gil.hpp"
 
 #include "core/executable_path.hpp"
+#include "core/number_format.hpp"
 #include "core/services.hpp"
 #include "python/package_manager.hpp"
 #include "python/python_runtime.hpp"
@@ -183,6 +188,7 @@ namespace {
         Rml::Element* reload_button_el = nullptr;
         Rml::Element* vim_button_el = nullptr;
         Rml::Element* stop_button_el = nullptr;
+        Rml::Element* clear_button_el = nullptr;
         Rml::Element* run_status_el = nullptr;
         Rml::Element* syntax_status_el = nullptr;
         Rml::Element* outline_button_el = nullptr;
@@ -253,6 +259,7 @@ namespace {
         pane.reload_button_el = nullptr;
         pane.vim_button_el = nullptr;
         pane.stop_button_el = nullptr;
+        pane.clear_button_el = nullptr;
         pane.run_status_el = nullptr;
         pane.syntax_status_el = nullptr;
         pane.outline_button_el = nullptr;
@@ -299,74 +306,8 @@ namespace {
         pane.manager = nullptr;
     }
 
-    std::optional<lfs::vis::terminal::TerminalKey> terminal_key_from_scancode(int scancode) {
-        using lfs::vis::terminal::TerminalKey;
-        switch (scancode) {
-        case SDL_SCANCODE_RETURN:
-        case SDL_SCANCODE_KP_ENTER:
-            return TerminalKey::Enter;
-        case SDL_SCANCODE_BACKSPACE:
-            return TerminalKey::Backspace;
-        case SDL_SCANCODE_TAB:
-            return TerminalKey::Tab;
-        case SDL_SCANCODE_ESCAPE:
-            return TerminalKey::Escape;
-        case SDL_SCANCODE_UP:
-            return TerminalKey::Up;
-        case SDL_SCANCODE_DOWN:
-            return TerminalKey::Down;
-        case SDL_SCANCODE_RIGHT:
-            return TerminalKey::Right;
-        case SDL_SCANCODE_LEFT:
-            return TerminalKey::Left;
-        case SDL_SCANCODE_HOME:
-            return TerminalKey::Home;
-        case SDL_SCANCODE_END:
-            return TerminalKey::End;
-        case SDL_SCANCODE_PAGEUP:
-            return TerminalKey::PageUp;
-        case SDL_SCANCODE_PAGEDOWN:
-            return TerminalKey::PageDown;
-        case SDL_SCANCODE_DELETE:
-            return TerminalKey::Delete;
-        case SDL_SCANCODE_INSERT:
-            return TerminalKey::Insert;
-        case SDL_SCANCODE_F1:
-            return TerminalKey::F1;
-        case SDL_SCANCODE_F2:
-            return TerminalKey::F2;
-        case SDL_SCANCODE_F3:
-            return TerminalKey::F3;
-        case SDL_SCANCODE_F4:
-            return TerminalKey::F4;
-        case SDL_SCANCODE_F5:
-            return TerminalKey::F5;
-        case SDL_SCANCODE_F6:
-            return TerminalKey::F6;
-        case SDL_SCANCODE_F7:
-            return TerminalKey::F7;
-        case SDL_SCANCODE_F8:
-            return TerminalKey::F8;
-        case SDL_SCANCODE_F9:
-            return TerminalKey::F9;
-        case SDL_SCANCODE_F10:
-            return TerminalKey::F10;
-        case SDL_SCANCODE_F11:
-            return TerminalKey::F11;
-        case SDL_SCANCODE_F12:
-            return TerminalKey::F12;
-        default:
-            return std::nullopt;
-        }
-    }
-
     float console_font_size(const lfs::vis::gui::panels::PythonConsoleState& state) {
         return std::round(std::clamp(14.0f * state.getFontScale(), 12.0f, 34.0f));
-    }
-
-    bool has_key(const lfs::vis::gui::PanelInputState& input, const int scancode) {
-        return std::find(input.keys_pressed.begin(), input.keys_pressed.end(), scancode) !=
-               input.keys_pressed.end();
     }
 
     void mark_dirty(RmlPythonConsolePane& pane) {
@@ -597,6 +538,7 @@ namespace {
         pane.reload_button_el = doc->GetElementById("reload-button");
         pane.vim_button_el = doc->GetElementById("vim-button");
         pane.stop_button_el = doc->GetElementById("stop-button");
+        pane.clear_button_el = doc->GetElementById("clear-button");
         pane.run_status_el = doc->GetElementById("run-status");
         pane.syntax_status_el = doc->GetElementById("syntax-status");
         pane.outline_button_el = doc->GetElementById("outline-button");
@@ -902,40 +844,6 @@ namespace {
         auto& focus = lfs::vis::gui::guiFocusState();
         focus.want_capture_keyboard = true;
         focus.want_text_input = true;
-
-        if (input->key_ctrl && input->key_shift && has_key(*input, SDL_SCANCODE_V)) {
-            terminal.paste(get_clipboard_text());
-            return;
-        }
-
-        const auto process_terminal_key = [&](const int sc, const bool repeated) {
-            if (input->key_ctrl && sc >= SDL_SCANCODE_A && sc <= SDL_SCANCODE_Z) {
-                const char letter = static_cast<char>('A' + (sc - SDL_SCANCODE_A));
-                if (letter == 'C' && terminal.hasSelection()) {
-                    if (!repeated) {
-                        const std::string selection = terminal.getSelection();
-                        if (!selection.empty())
-                            set_clipboard_text(selection);
-                    }
-                } else {
-                    terminal.sendControl(letter);
-                }
-                return;
-            }
-
-            if (const auto key = terminal_key_from_scancode(sc))
-                terminal.sendKey(*key);
-        };
-
-        for (int sc : input->keys_pressed)
-            process_terminal_key(sc, false);
-        for (int sc : input->keys_repeated)
-            process_terminal_key(sc, true);
-
-        if (!input->key_ctrl) {
-            for (const uint32_t cp : input->text_codepoints)
-                terminal.sendCodepoint(cp);
-        }
     }
 
     void sync_terminal_view(RmlPythonConsolePane& pane,
@@ -1112,9 +1020,9 @@ namespace {
         else if (!pane.packages_error.empty())
             status = LOC("status.error");
         else if (pane.packages_search_filter.empty())
-            status = std::format("({})", pane.packages.size());
+            status = std::format("({})", lfs::core::format_count(pane.packages.size()));
         else
-            status = std::format("({} / {})", pane.packages_visible_count, pane.packages.size());
+            status = std::format("({} / {})", lfs::core::format_count(pane.packages_visible_count), lfs::core::format_count(pane.packages.size()));
         set_text(pane, pane.packages_status_label, status);
 
         set_text(pane,
@@ -1168,6 +1076,7 @@ namespace {
 
         set_disabled(pane, pane.reload_button_el, !has_script);
         set_disabled(pane, pane.stop_button_el, !can_stop);
+        set_disabled(pane, pane.clear_button_el, active_tab == 2);
         set_text(pane, pane.run_status_el,
                  can_stop ? LOC(lichtfeld::Strings::PythonConsole::RUNNING)
                           : LOC(lichtfeld::Strings::PythonConsole::PYTHON));
@@ -1226,8 +1135,12 @@ namespace {
             input->mouse_y >= bounds.y && input->mouse_y < bounds.y + bounds.height;
         if (input->mouse_clicked[0] && hovered)
             pane.splitter_dragging = true;
-        if (!input->mouse_down[0])
+        if (!input->mouse_down[0] && pane.splitter_dragging) {
             pane.splitter_dragging = false;
+            if (auto* const viewer = lfs::python::get_visualizer()) {
+                viewer->projectMarkSessionChapterCommitted("GUIL");
+            }
+        }
 
         if (!pane.splitter_dragging)
             return false;
@@ -1246,52 +1159,58 @@ namespace {
         return true;
     }
 
-    void process_console_shortcuts(lfs::vis::gui::panels::PythonConsoleState& state,
-                                   const lfs::vis::gui::PanelInputState* input) {
-        if (!input)
-            return;
+    bool process_console_shortcut(lfs::vis::gui::panels::PythonConsoleState& state,
+                                  const lfs::vis::FrameInputEvent& event) {
+        if (event.kind != lfs::vis::FrameInputEventKind::KeyDown || event.repeat)
+            return false;
+        const bool ctrl = event.modifiers & SDL_KMOD_CTRL;
+        const bool shift = event.modifiers & SDL_KMOD_SHIFT;
 
         const bool terminal_focused =
             (state.getTerminal() && state.getTerminal()->isFocused()) ||
             (state.getOutputTerminal() && state.getOutputTerminal()->isFocused());
         auto* editor = state.getEditor();
 
-        if (!terminal_focused && has_key(*input, SDL_SCANCODE_F5) && editor) {
+        if (!terminal_focused && (event.scancode == SDL_SCANCODE_F5) && editor) {
             execute_python_code(editor->getTextStripped(), state);
+            return true;
         }
 
-        if (!input->key_ctrl || terminal_focused)
-            return;
+        if (!ctrl || terminal_focused)
+            return false;
 
-        if (input->key_shift && has_key(*input, SDL_SCANCODE_O)) {
+        if (shift && (event.scancode == SDL_SCANCODE_O)) {
             if (!state.getScriptPath().empty())
                 load_script(state.getScriptPath(), state);
-            return;
+            return true;
         }
-        if (has_key(*input, SDL_SCANCODE_L)) {
+        if (event.scancode == SDL_SCANCODE_L) {
             state.clear();
-        } else if (has_key(*input, SDL_SCANCODE_R)) {
+        } else if (event.scancode == SDL_SCANCODE_R) {
             reset_python_state(state);
-        } else if (has_key(*input, SDL_SCANCODE_N)) {
+        } else if (event.scancode == SDL_SCANCODE_N) {
             new_script(state);
-        } else if (has_key(*input, SDL_SCANCODE_O)) {
+        } else if (event.scancode == SDL_SCANCODE_O) {
             open_script_dialog(state);
-        } else if (input->key_shift && has_key(*input, SDL_SCANCODE_F)) {
+        } else if (shift && (event.scancode == SDL_SCANCODE_F)) {
             format_editor_script(state);
-        } else if (input->key_shift && has_key(*input, SDL_SCANCODE_I)) {
+        } else if (shift && (event.scancode == SDL_SCANCODE_I)) {
             clean_editor_script(state);
-        } else if (has_key(*input, SDL_SCANCODE_EQUALS) ||
-                   has_key(*input, SDL_SCANCODE_KP_PLUS)) {
+        } else if ((event.scancode == SDL_SCANCODE_EQUALS) ||
+                   (event.scancode == SDL_SCANCODE_KP_PLUS)) {
             state.increaseFontScale();
-        } else if (has_key(*input, SDL_SCANCODE_MINUS) ||
-                   has_key(*input, SDL_SCANCODE_KP_MINUS)) {
+        } else if ((event.scancode == SDL_SCANCODE_MINUS) ||
+                   (event.scancode == SDL_SCANCODE_KP_MINUS)) {
             state.decreaseFontScale();
-        } else if (has_key(*input, SDL_SCANCODE_0) ||
-                   has_key(*input, SDL_SCANCODE_KP_0)) {
+        } else if ((event.scancode == SDL_SCANCODE_0) ||
+                   (event.scancode == SDL_SCANCODE_KP_0)) {
             state.resetFontScale();
-        } else if (has_key(*input, SDL_SCANCODE_C) && can_stop_python_work(state)) {
+        } else if ((event.scancode == SDL_SCANCODE_C) && can_stop_python_work(state)) {
             stop_python_work(state);
+        } else {
+            return false;
         }
+        return true;
     }
 
     void setup_sys_path() {
@@ -1356,6 +1275,8 @@ namespace {
                 } else {
                     output->write(filtered);
                 }
+                if (state.outputVisible())
+                    lfs::python::request_redraw();
             });
         });
     }
@@ -1397,6 +1318,9 @@ namespace {
             editor->setText(content);
             editor->setActiveSessionLocator(
                 lfs::core::path_to_utf8(path));
+            if (auto* const viewer = lfs::python::get_visualizer()) {
+                viewer->projectMarkSessionChapterCommitted("EDTR");
+            }
         }
 
         state.setScriptPath(path);
@@ -1423,6 +1347,9 @@ namespace {
         state.setScriptPath(path);
         editor->setActiveSessionLocator(
             lfs::core::path_to_utf8(path));
+        if (auto* const viewer = lfs::python::get_visualizer()) {
+            viewer->projectMarkSessionChapterCommitted("EDTR");
+        }
         state.setModified(false);
         state.addInfo("Saved: " + lfs::core::path_to_utf8(path.filename()));
         return true;
@@ -1439,7 +1366,7 @@ namespace {
 
     void save_script_dialog(lfs::vis::gui::panels::PythonConsoleState& state) {
         const auto& current = state.getScriptPath();
-        const std::string default_name = current.empty() ? "script" : current.stem().string();
+        const std::string default_name = current.empty() ? "script" : lfs::core::path_to_utf8(current.stem());
         const auto path = lfs::vis::gui::SavePythonFileDialog(default_name);
         if (!path.empty()) {
             save_script(path, state);
@@ -1501,10 +1428,16 @@ namespace lfs::vis::gui::panels {
         }
     }
 
+    bool PythonConsoleState::handleShortcut(const FrameInputEvent& event) {
+        return process_console_shortcut(*this, event);
+    }
+
     void PythonConsoleState::clear() {
         std::lock_guard lock(mutex_);
-        if (output_terminal_) {
+        if (active_tab_ == 0 && output_terminal_) {
             output_terminal_->clear();
+        } else if (active_tab_ == 1 && terminal_) {
+            terminal_->clear();
         }
     }
 
@@ -1529,8 +1462,8 @@ namespace lfs::vis::gui::panels {
         setup_console_output_capture();
 
         addToHistory(code);
-        clear();
         setActiveTab(0);
+        clear();
 
         const auto script_path = script_path_;
         const auto code_chars = code.size();
@@ -1560,11 +1493,21 @@ namespace lfs::vis::gui::panels {
                 }
 
                 lfs::python::SceneContextGuard ctx(scene);
-                const int result = PyRun_SimpleString(code.c_str());
-                if (result != 0) {
+                PyObject* const main_module = PyImport_AddModule("__main__");
+                PyObject* const globals = main_module ? PyModule_GetDict(main_module) : nullptr;
+                PyObject* const result = globals
+                                             ? PyRun_StringFlags(code.c_str(), Py_file_input, globals, globals, nullptr)
+                                             : nullptr;
+                Py_XDECREF(result);
+                if (!result) {
                     success = false;
                     interrupted = PyErr_ExceptionMatches(PyExc_KeyboardInterrupt);
-                    PyErr_Print();
+                    if (PyErr_ExceptionMatches(PyExc_SystemExit)) {
+                        PyErr_Clear();
+                        addError(LOC(lichtfeld::Strings::PythonConsole::SYSTEM_EXIT));
+                    } else {
+                        PyErr_Print();
+                    }
                 }
 
                 script_thread_id_ = 0;
@@ -1717,6 +1660,7 @@ namespace lfs::vis::gui::panels {
             pane.host->syncDirectLayout(w, h);
         }
 
+        state.setVisible(true);
         const int active_tab = std::clamp(state.getActiveTab(), 0, 2);
         if (auto* output = state.getOutputTerminal()) {
             output->setReadOnly(true);
@@ -1745,7 +1689,22 @@ namespace lfs::vis::gui::panels {
             state.setTerminalFocused(active_tab == 1 && terminal->isFocused());
         }
 
-        process_console_shortcuts(state, input);
+        pane.host->setKeyboardHandler([&pane, &state](const lfs::vis::FrameInputEvent& event) {
+            auto* focused = pane.host->getContext()->GetFocusElement();
+            auto* terminal = state.getTerminal();
+            auto* output = state.getOutputTerminal();
+            terminal->setFocused(focused == pane.repl_view);
+            output->setFocused(focused == pane.output_view);
+            if (terminal->isFocused()) {
+                if (std::getenv("LFS_TRACE_INPUT") && event.kind == lfs::vis::FrameInputEventKind::Text)
+                    LOG_INFO("INPUT consumer terminal text={}", event.text);
+                lfs::vis::terminal::processInputEvent(*terminal, event);
+                return true;
+            }
+            if (output->isFocused())
+                return true;
+            return state.handleShortcut(event);
+        });
 
         if (auto* editor = state.getEditor(); editor && editor->needsRmlFrame())
             mark_dirty(pane);
@@ -1762,8 +1721,12 @@ namespace lfs::vis::gui::panels {
         if (auto* editor = state.getEditor()) {
             if (editor->consumeExecuteRequested())
                 execute_python_code(editor->getTextStripped(), state);
-            if (editor->consumeTextChanged())
+            if (editor->consumeTextChanged()) {
                 state.setModified(true);
+                if (auto* const viewer = lfs::python::get_visualizer()) {
+                    viewer->projectMarkSessionChapterCommitted("EDTR");
+                }
+            }
         }
     }
 

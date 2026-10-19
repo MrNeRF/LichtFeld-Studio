@@ -18,18 +18,11 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
-#ifdef _WIN32
-#ifdef LFS_PYTHON_RUNTIME_EXPORTS
-#define LFS_PYTHON_RUNTIME_API __declspec(dllexport)
-#else
-#define LFS_PYTHON_RUNTIME_API __declspec(dllimport)
-#endif
-#else
-#define LFS_PYTHON_RUNTIME_API
-#endif
+#include "python_runtime_api.hpp"
 
 namespace lfs::core {
     class IOperatorCallbacks;
@@ -346,6 +339,7 @@ namespace lfs::python {
 
     LFS_PYTHON_RUNTIME_API void set_visualizer(vis::Visualizer* viewer);
     LFS_PYTHON_RUNTIME_API vis::Visualizer* get_visualizer();
+    LFS_PYTHON_RUNTIME_API void markProjectSessionChapterCommitted(std::string_view chapter);
 
     LFS_PYTHON_RUNTIME_API void set_parameter_manager(vis::ParameterManager* pm);
     LFS_PYTHON_RUNTIME_API vis::ParameterManager* get_parameter_manager();
@@ -415,11 +409,15 @@ namespace lfs::python {
 
     // Overlay state callbacks for Python overlay panels
     struct OverlayExportState {
+        std::string commit_uuid;
         bool active = false;
         float progress = 0.0f;
         std::string stage;
         std::string outcome{"idle"};
         std::string format;
+        std::string path;
+        std::string error;
+        std::string warning;
     };
 
     struct OverlayImportState {
@@ -476,6 +474,11 @@ namespace lfs::python {
     using LoadCameraPathCallback = bool (*)(const std::string&);
     using ClearKeyframesCallback = void (*)();
     using SetPlaybackSpeedCallback = void (*)(float);
+    using GetCameraPathDataCallback = std::string (*)();
+    using SetCameraPathDataCallback = bool (*)(const std::string&);
+    LFS_PYTHON_RUNTIME_API void set_camera_path_data_callbacks(GetCameraPathDataCallback get_cb, SetCameraPathDataCallback set_cb);
+    LFS_PYTHON_RUNTIME_API std::string get_camera_path_data();
+    LFS_PYTHON_RUNTIME_API bool set_camera_path_data(const std::string& value);
 
     LFS_PYTHON_RUNTIME_API void set_sequencer_timeline_callbacks(
         HasKeyframesCallback has_keyframes_cb,
@@ -704,6 +707,11 @@ namespace lfs::python {
         void* (*get_context)(void* host);
         void (*set_foreground)(void* host, bool fg);
         void (*set_floating)(void* host, bool floating);
+        void* (*native_window)(void* host);
+        void* (*native_graphics)(void* host);
+        bool (*external_allowed)(void* host);
+        bool (*restored_external_bounds)(void* host, float* bounds);
+        bool (*configure_external)(void* host, float x, float y, float w, float h, bool desktop_coordinates);
         void (*mark_content_dirty)(void* host);
         void (*set_input_clip_y)(void* host, float y_min, float y_max);
         void (*set_input)(void* host, const void* input);
@@ -721,11 +729,15 @@ namespace lfs::python {
 
     using RmlDocRegisterCallback = void (*)(const char* name, void* doc);
     using RmlDocUnregisterCallback = void (*)(const char* name);
+    using RmlDocPendingCallback = bool (*)(void* doc, bool consume);
 
     LFS_PYTHON_RUNTIME_API void set_rml_doc_registry_callbacks(RmlDocRegisterCallback reg_cb,
                                                                RmlDocUnregisterCallback unreg_cb);
     LFS_PYTHON_RUNTIME_API void register_rml_document(const char* name, void* doc);
     LFS_PYTHON_RUNTIME_API void unregister_rml_document(const char* name);
+    LFS_PYTHON_RUNTIME_API void set_rml_doc_pending_callback(RmlDocPendingCallback callback);
+    LFS_PYTHON_RUNTIME_API bool has_pending_rml_document_updates(void* doc);
+    LFS_PYTHON_RUNTIME_API bool consume_pending_rml_document_updates(void* doc);
 
     // Graphics-thread callback queue - schedule work that touches UI backend resources.
     LFS_PYTHON_RUNTIME_API void set_graphics_thread_id(std::thread::id id);
@@ -776,6 +788,15 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void update_scene(bool has_scene, const char* path);
     LFS_PYTHON_RUNTIME_API void update_selection(bool has_selection, int count);
     LFS_PYTHON_RUNTIME_API void flush_signals();
+
+    // UIList lookup crosses the extension/native layout boundary. Caller holds
+    // the GIL; the returned Python instance is a new reference, or nullptr.
+    using GetUIListInstanceCallback = void* (*)(const char* id);
+    using WrapUIListLayoutCallback = void* (*)(void* layout);
+    LFS_PYTHON_RUNTIME_API void set_uilist_callbacks(GetUIListInstanceCallback get_instance,
+                                                     WrapUIListLayoutCallback wrap_layout);
+    LFS_PYTHON_RUNTIME_API void* get_uilist_instance(const char* id);
+    LFS_PYTHON_RUNTIME_API void* wrap_uilist_layout(void* layout);
 
     // Viewport draw overlay - bridge from visualizer to Python draw handlers
     // view_matrix/proj_matrix: column-major 4x4, others: float arrays

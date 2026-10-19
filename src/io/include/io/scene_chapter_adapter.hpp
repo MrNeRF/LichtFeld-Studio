@@ -22,6 +22,8 @@ namespace lfs::io::project {
     using ScenePayloadBindings =
         std::unordered_map<lfs::core::Uuid, PayloadBinding>;
 
+    class SfmObservationChapterSource;
+
     struct ScenePayloadResolver {
         std::function<lfs::Result<std::unique_ptr<lfs::core::SplatData>>(
             const PayloadBinding&)>
@@ -32,6 +34,7 @@ namespace lfs::io::project {
         std::function<lfs::Result<std::shared_ptr<lfs::core::MeshData>>(
             const PayloadBinding&)>
             mesh;
+        std::shared_ptr<const SfmObservationChapterSource> sfm_observations;
     };
 
     // Detached value-only scene state. Capturing this does not allocate or
@@ -71,7 +74,8 @@ namespace lfs::io::project {
     [[nodiscard]] LFS_IO_API
         lfs::Result<std::unique_ptr<lfs::core::Scene>>
         stage_scene_shell(const SceneGraphChapter& chapter,
-                          lfs::core::Scene& target);
+                          lfs::core::Scene& target,
+                          std::shared_ptr<const SfmObservationChapterSource> sfm_observations = {});
 
     // Transactional convenience wrapper for SCNG alone.
     [[nodiscard]] LFS_IO_API lfs::Result<void>

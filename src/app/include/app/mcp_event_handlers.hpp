@@ -98,6 +98,11 @@ namespace lfs::app {
             return "rad";
         case core::ExportFormat::COLMAP:
             return "colmap";
+        case core::ExportFormat::GALLERY_SCENE:
+        case core::ExportFormat::GALLERY_SOG:
+        case core::ExportFormat::GALLERY_SSOG:
+        case core::ExportFormat::GALLERY_SPZ:
+            return "licht";
         }
         return "unknown";
     }

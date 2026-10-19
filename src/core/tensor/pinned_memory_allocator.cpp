@@ -137,18 +137,6 @@ namespace lfs::core {
             return;
         }
 
-        const Stats before = get_stats();
-        LOG_INFO("Pinned memory stats at shutdown: active={:.2f} MiB, cached={:.2f} MiB, "
-                 "peak={:.2f} MiB, cuda_host={}/{}, fallback={}/{}, evicted={:.2f} MiB/{} blocks",
-                 before.allocated_bytes / static_cast<double>(MIB),
-                 before.cached_bytes / static_cast<double>(MIB),
-                 before.peak_total_bytes / static_cast<double>(MIB),
-                 before.cuda_host_allocs,
-                 before.cuda_host_frees,
-                 before.malloc_fallback_allocs,
-                 before.malloc_fallback_frees,
-                 before.evicted_bytes / static_cast<double>(MIB),
-                 before.evicted_blocks);
         empty_cache_impl(true);
     }
 
@@ -158,6 +146,14 @@ namespace lfs::core {
         }
         if (bytes < MIB) {
             return ((bytes + 511) / 512) * 512;
+        }
+
+        constexpr size_t large_bucket_granularity = 64 * MIB;
+        if (bytes > 128 * MIB) {
+            if (bytes > std::numeric_limits<size_t>::max() - (large_bucket_granularity - 1)) {
+                return bytes;
+            }
+            return ((bytes + large_bucket_granularity - 1) / large_bucket_granularity) * large_bucket_granularity;
         }
 
         size_t rounded = MIB;

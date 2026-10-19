@@ -349,23 +349,6 @@ body {
     text-align: left;
 }
 
-#account-chip {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    height: 16dp;
-    margin-right: 12dp;
-    padding: 0 6dp;
-    border-width: 1dp;
-    border-radius: 8dp;
-    cursor: pointer;
-}
-
-#account-tier {
-    margin-left: 4dp;
-    font-size: 10dp;
-}
-
 #gpu-icon {
     width: 14dp;
     height: 14dp;
@@ -400,12 +383,36 @@ body {
     margin-right: 0;
 }
 
-#fps-value {
-    margin-left: 16dp;
+/* Inline layout avoids recursively measuring nested flex boxes on each FPS update. */
+#fps-group {
+    display: block;
+    margin-left: 12dp;
+}
+
+.fps-metric {
+    display: inline;
+}
+
+.fps-separator {
+    margin: 0 6dp;
+}
+
+.fps-caption {
+    font-size: 12dp;
+}
+
+.fps-number {
+    display: inline-block;
+    margin-left: 3dp;
+    min-width: 1.8em;
+    text-align: right;
+    font-weight: normal;
 }
 
 #fps-label {
-    margin-left: 0;
+    font-size: 12dp;
+    font-weight: bold;
+    margin-right: 8dp;
 }
 
 #git-commit {
@@ -459,8 +466,7 @@ body.fit-1 #status-message-section > .separator:first-child {
     margin-left: 10dp;
 }
 
-body.fit-2 #gpu-model,
-body.fit-2 #account-tier {
+body.fit-2 #gpu-model {
     display: none;
 }
 
@@ -473,7 +479,6 @@ body.fit-3 #time-metric {
 }
 
 body.fit-4 #eval-metric,
-body.fit-4 #fps-label,
 body.fit-4 #wasd-section,
 body.fit-4 #zoom-section {
     display: none;
@@ -517,15 +522,31 @@ body.fit-9 #status-message-section {
     overflow: hidden;
 }
 
+body.fit-9 #status-left {
+    display: none;
+}
+
 body.fit-9 #status-right {
-    flex-shrink: 1;
+    flex: 1 1 0px;
+    margin-left: 4dp;
     min-width: 0;
     overflow: hidden;
 }
 
 body.fit-9 #gpu-mem {
-    flex-shrink: 1;
+    flex: 1 1 0px;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
 }
+/* Metric values keep a minimum width so changing digits do not move their neighbours. */
+#loss-value { min-width: 44dp; }
+#gaussians-value { min-width: 80dp; }
+#step-value { min-width: 100dp; }
+#time-value, #eta-value { min-width: 60dp; }
+
+#mcp-compact { display: none; }
+body.fit-8 #mcp-summary { display: none; }
+body.fit-8 #mcp-compact { display: block; }
+body.fit-8 #mcp-chip { margin-right: 4dp; padding: 0 3dp; }
+body.fit-8 #fps-group { margin-left: 6dp; }

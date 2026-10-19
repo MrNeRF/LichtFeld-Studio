@@ -7,12 +7,14 @@
 #include "core/logger.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
+#include "gui/gui_manager.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/training_setup.hpp"
 #include "undo_history.hpp"
+#include "visualizer_impl.hpp"
 #include <algorithm>
 #include <array>
 #include <cuda_runtime.h>
@@ -160,7 +162,7 @@ namespace lfs::vis::op {
                 flags |= DirtyFlag::SELECTION;
             }
             if (hasFlag(captured, ModifiesFlag::TRANSFORMS)) {
-                flags |= DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY;
+                flags |= DirtyFlag::MESH | DirtyFlag::OVERLAY;
             }
             if (hasFlag(captured, ModifiesFlag::TOPOLOGY)) {
                 flags |= DirtyFlag::SPLATS | DirtyFlag::SELECTION;
@@ -211,6 +213,7 @@ namespace lfs::vis::op {
         void applyNodeMetadataSnapshotUnchecked(SceneManager& scene_manager,
                                                 const SceneGraphNodeMetadataSnapshot& target,
                                                 std::string current_name,
+                                                const int current_order_index,
                                                 const bool emit_reparent_event) {
             auto& scene = scene_manager.getScene();
 
@@ -251,9 +254,12 @@ namespace lfs::vis::op {
                     }
                 }
 
-                // moveNode returns false for a no-op (already at the target slot) as well as a
-                // genuine failure; the parent post-condition below is the authoritative check.
-                (void)scene.moveNode(node->id, desired_parent, target.order_index);
+                // History stores the final slot; moveNode accepts a slot before self-removal.
+                int insertion_index = target.order_index;
+                if (!parent_differs && current_order_index >= 0 && insertion_index > current_order_index)
+                    ++insertion_index;
+                // moveNode also returns false when the node is already at the target slot.
+                (void)scene.moveNode(node->id, desired_parent, insertion_index);
                 node = scene.getMutableNode(current_name);
                 if (!node || node->parent_id != desired_parent) {
                     throw std::runtime_error("Failed to reparent node '" + current_name + "'");
@@ -275,7 +281,10 @@ namespace lfs::vis::op {
             scene.setNodeTransform(current_name, target.local_transform);
             node->visible.set(target.visible, false);
             node->locked.set(target.locked, false);
-            node->training_enabled = target.training_enabled;
+            if (node->type == lfs::core::NodeType::CAMERA)
+                scene.setCameraTrainingEnabled(node->id, target.training_enabled);
+            else
+                node->training_enabled = target.training_enabled;
             node->payload_diverged = target.payload_diverged;
             restorePlyPathForSnapshot(scene_manager, target.uuid, target.source_path);
         }
@@ -296,7 +305,7 @@ namespace lfs::vis::op {
             const auto before = captureNodeMetadataSnapshot(scene_manager, *current_node);
 
             try {
-                applyNodeMetadataSnapshotUnchecked(scene_manager, target, current_name, emit_reparent_event);
+                applyNodeMetadataSnapshotUnchecked(scene_manager, target, current_name, before.order_index, emit_reparent_event);
             } catch (const HistoryCorruptionError&) {
                 throw;
             } catch (...) {
@@ -305,7 +314,8 @@ namespace lfs::vis::op {
                     if (rollback_name.empty()) {
                         throw std::runtime_error("Rollback target node missing");
                     }
-                    applyNodeMetadataSnapshotUnchecked(scene_manager, before, rollback_name, false);
+                    const auto rollback_state = captureNodeMetadataSnapshot(scene_manager, *scene.getNode(rollback_name));
+                    applyNodeMetadataSnapshotUnchecked(scene_manager, before, rollback_name, rollback_state.order_index, false);
                 } catch (const std::exception& rollback_error) {
                     throw HistoryCorruptionError(
                         "Failed to rollback scene node metadata for '" + target.name + "': " +
@@ -393,7 +403,7 @@ namespace lfs::vis::op {
             auto normalized = lfs::core::Tensor::zeros({total_size}, device, dtype);
             const size_t copy_count = std::min(total_size, normalized_dtype.numel());
             if (copy_count > 0 && normalized_dtype.ndim() == 1) {
-                normalized.slice(0, 0, copy_count) = normalized_dtype.slice(0, 0, copy_count);
+                normalized.slice(0, 0, copy_count).copy_from(normalized_dtype.slice(0, 0, copy_count));
             }
             return normalized;
         }
@@ -708,6 +718,7 @@ namespace lfs::vis::op {
             cloned->means = src.means.is_valid() ? src.means.clone() : src.means;
             cloned->colors = src.colors.is_valid() ? src.colors.clone() : src.colors;
             cloned->normals = src.normals.is_valid() ? src.normals.clone() : src.normals;
+            cloned->emit_zero_normals = src.emit_zero_normals;
             cloned->sh0 = src.sh0.is_valid() ? src.sh0.clone() : src.sh0;
             cloned->shN = src.shN.is_valid() ? src.shN.clone() : src.shN;
             cloned->opacity = src.opacity.is_valid() ? src.opacity.clone() : src.opacity;
@@ -819,12 +830,18 @@ namespace lfs::vis::op {
             return snapshot;
         }
 
+        [[nodiscard]] bool isSequencerProjectionNode(const lfs::core::NodeType type) {
+            return type == lfs::core::NodeType::KEYFRAME ||
+                   type == lfs::core::NodeType::KEYFRAME_GROUP;
+        }
+
         SceneGraphNodeSnapshot captureNodeSnapshot(const SceneManager& scene_manager,
                                                    const lfs::core::SceneNode& node,
                                                    const SceneGraphCaptureMode mode,
                                                    const lfs::core::Scene::PerNodeSelectionSlices& selection_slices,
                                                    const std::unordered_set<lfs::core::Uuid>& payload_uuids,
-                                                   const bool capture_all_payloads) {
+                                                   const bool capture_all_payloads,
+                                                   const bool exclude_sequencer_projection) {
             SceneGraphNodeSnapshot snapshot;
             snapshot.uuid = node.uuid;
             snapshot.id = node.id;
@@ -865,6 +882,9 @@ namespace lfs::vis::op {
 
             const bool capture_payload = mode == SceneGraphCaptureMode::FULL &&
                                          (capture_all_payloads || payload_uuids.contains(node.uuid));
+            if (capture_payload) {
+                snapshot.payload_hydration = node.payload_hydration;
+            }
             if (capture_payload && node.model) {
                 snapshot.payload_device = node.model->means_raw().device();
                 snapshot.model = cloneSplatData(*node.model);
@@ -891,10 +911,11 @@ namespace lfs::vis::op {
             }
 
             for (const auto child_id : node.children) {
-                if (const auto* child = scene_manager.getScene().getNodeById(child_id)) {
+                if (const auto* child = scene_manager.getScene().getNodeById(child_id);
+                    child && (!exclude_sequencer_projection || !isSequencerProjectionNode(child->type))) {
                     snapshot.children.push_back(
                         captureNodeSnapshot(scene_manager, *child, mode, selection_slices,
-                                            payload_uuids, capture_all_payloads));
+                                            payload_uuids, capture_all_payloads, exclude_sequencer_projection));
                 }
             }
 
@@ -922,6 +943,7 @@ namespace lfs::vis::op {
             std::vector<PreparedRestoreNode> nodes;
             lfs::core::SplatTensorAllocator combined_model_allocator;
             lfs::core::Scene::PerNodeSelectionSlices selection_slices;
+            bool restores_deferred_payload = false;
         };
 
         void flattenSnapshotTree(const SceneGraphNodeSnapshot& snapshot,
@@ -968,13 +990,15 @@ namespace lfs::vis::op {
             }
             switch (snapshot.type) {
             case lfs::core::NodeType::POINTCLOUD:
-                if (!snapshot.point_cloud) {
+                if (!snapshot.point_cloud &&
+                    snapshot.payload_hydration != lfs::core::PayloadHydrationState::Unloaded) {
                     throw HistoryCorruptionError(
                         "Cannot restore point-cloud node '" + snapshot.name + "': payload is missing");
                 }
                 break;
             case lfs::core::NodeType::MESH:
-                if (!snapshot.mesh) {
+                if (!snapshot.mesh &&
+                    snapshot.payload_hydration != lfs::core::PayloadHydrationState::Unloaded) {
                     throw HistoryCorruptionError(
                         "Cannot restore mesh node '" + snapshot.name + "': payload is missing");
                 }
@@ -1079,6 +1103,8 @@ namespace lfs::vis::op {
 
             for (const auto& item : flattened) {
                 const auto& snapshot = *item.snapshot;
+                plan.restores_deferred_payload |=
+                    snapshot.payload_hydration == lfs::core::PayloadHydrationState::Unloaded;
                 if (snapshot.name.empty()) {
                     throw HistoryCorruptionError(
                         "Cannot restore scene node " + snapshot.uuid.to_string() + ": display name is empty");
@@ -1160,6 +1186,7 @@ namespace lfs::vis::op {
                 desc.type = snapshot.type;
                 desc.name = restored_name;
                 desc.gaussian_count = snapshot.gaussian_count;
+                desc.payload_hydration = snapshot.payload_hydration;
 
                 try {
                     switch (snapshot.type) {
@@ -1173,18 +1200,24 @@ namespace lfs::vis::op {
                         }
                         break;
                     case lfs::core::NodeType::POINTCLOUD:
-                        if (!snapshot.point_cloud) {
+                        if (!snapshot.point_cloud &&
+                            snapshot.payload_hydration != lfs::core::PayloadHydrationState::Unloaded) {
                             throw HistoryCorruptionError(
                                 "Cannot restore point-cloud node '" + snapshot.name + "': payload is missing");
                         }
-                        desc.point_cloud = clonePointCloud(*snapshot.point_cloud);
+                        if (snapshot.point_cloud) {
+                            desc.point_cloud = clonePointCloud(*snapshot.point_cloud);
+                        }
                         break;
                     case lfs::core::NodeType::MESH:
-                        if (!snapshot.mesh) {
+                        if (!snapshot.mesh &&
+                            snapshot.payload_hydration != lfs::core::PayloadHydrationState::Unloaded) {
                             throw HistoryCorruptionError(
                                 "Cannot restore mesh node '" + snapshot.name + "': payload is missing");
                         }
-                        desc.mesh = cloneMeshData(*snapshot.mesh);
+                        if (snapshot.mesh) {
+                            desc.mesh = cloneMeshData(*snapshot.mesh);
+                        }
                         break;
                     case lfs::core::NodeType::CROPBOX:
                         if (!snapshot.cropbox) {
@@ -1583,15 +1616,22 @@ namespace lfs::vis::op {
                     existing->depth_path.clear();
                 }
                 if (existing->parent_id != desired_parent) {
-                    const bool was_locked = existing->locked;
-                    existing->locked.setQuiet(false);
-                    (void)scene.moveNode(existing->id, desired_parent, -1);
-                    existing->locked.setQuiet(was_locked);
-                    existing = scene.getNodeByUuid(snapshot.uuid);
-                    if (!existing || existing->parent_id != desired_parent) {
-                        throw HistoryCorruptionError(
-                            "Failed to reparent existing scene node '" + snapshot.name + "'");
+                    const auto* destination = scene.getNodeById(desired_parent);
+                    if (destination && !lfs::core::isSceneNodeParentCompatible(destination->type, snapshot.type)) {
+                        throw HistoryCorruptionError("Cannot restore parent for scene node '" + snapshot.name + "'");
                     }
+                    for (const auto* ancestor = destination; ancestor; ancestor = scene.getNodeById(ancestor->parent_id)) {
+                        if (ancestor->id == existing->id)
+                            throw HistoryCorruptionError("Cannot restore cyclic parentage for scene node '" + snapshot.name + "'");
+                    }
+                    // History owns the destination local pose; replay must not invert
+                    // a possibly singular parent transform to recompute it.
+                    if (auto* parent = scene.getNodeById(existing->parent_id))
+                        std::erase(parent->children, existing->id);
+                    existing->parent_id = desired_parent;
+                    if (auto* parent = scene.getNodeById(desired_parent))
+                        parent->children.push_back(existing->id);
+                    scene.notifyMutation(lfs::core::Scene::MutationType::NODE_REPARENTED);
                 }
 
                 existing->local_transform.setQuiet(snapshot.local_transform);
@@ -1671,7 +1711,11 @@ namespace lfs::vis::op {
                         "Cannot restore children for missing scene node " + snapshot.uuid.to_string());
                 }
                 for (size_t i = 0; i < snapshot.children.size(); ++i) {
-                    moveForRestore(snapshot.children[i].uuid, parent->id, static_cast<int>(i));
+                    const auto& child = snapshot.children[i];
+                    moveForRestore(child.uuid, parent->id,
+                                   desired.scoped_topology && child.order_index >= 0
+                                       ? child.order_index
+                                       : static_cast<int>(i));
                 }
                 for (const auto& child : snapshot.children) {
                     self(self, child);
@@ -1756,14 +1800,16 @@ namespace lfs::vis::op {
             } else {
                 proof.roots.reserve(scene.getRootNodes().size());
                 for (const auto root_id : scene.getRootNodes()) {
-                    if (const auto* root = scene.getNodeById(root_id)) {
+                    if (const auto* root = scene.getNodeById(root_id);
+                        root && !isSequencerProjectionNode(root->type)) {
                         proof.roots.push_back(root->uuid);
                     }
                 }
             }
             proof.nodes.reserve(proof.scoped ? scoped_uuids.size() : nodes.size());
             for (const auto* node : nodes) {
-                if (!node || (proof.scoped && !scoped_uuids.contains(node->uuid))) {
+                if (!node || (proof.scoped ? !scoped_uuids.contains(node->uuid)
+                                           : isSequencerProjectionNode(node->type))) {
                     continue;
                 }
                 SceneTopologyNodeProof item{
@@ -1821,7 +1867,8 @@ namespace lfs::vis::op {
                     if (const auto* child =
                             scene.getNodeById(
                                 child_id)) {
-                        if (!proof.scoped || scoped_uuids.contains(child->uuid)) {
+                        if (proof.scoped ? scoped_uuids.contains(child->uuid)
+                                         : !isSequencerProjectionNode(child->type)) {
                             item.children.push_back(child->uuid);
                         }
                     }
@@ -1843,13 +1890,101 @@ namespace lfs::vis::op {
             return proof;
         }
 
+        void stripPayloadExtents(SceneTopologyProof& proof) {
+            for (auto& node : proof.nodes) {
+                node.primary_extent = 0;
+                node.secondary_extent = 0;
+            }
+            proof.consolidated_extent = 0;
+        }
+
+        enum class TopologyProofDepth : uint8_t {
+            Payload,
+            NodeLevel,
+        };
+
+        const void* payloadStorageIdentity(const lfs::core::SceneNode& node) noexcept {
+            switch (node.type) {
+            case lfs::core::NodeType::SPLAT:
+                return node.model.get();
+            case lfs::core::NodeType::POINTCLOUD:
+                return node.point_cloud.get();
+            case lfs::core::NodeType::MESH:
+                return node.mesh.get();
+            default:
+                return nullptr;
+            }
+        }
+
         void requireTopologyProof(
             const lfs::core::Scene& scene,
-            const SceneTopologyProof& expected,
+            const SceneTopologyProof& recorded,
             const std::string_view entry_name,
-            const SceneTopologyProof* allowed_compound_transition = nullptr) {
-            const SceneTopologyProof current =
+            const SceneTopologyProof* allowed_compound_transition = nullptr,
+            const TopologyProofDepth depth = TopologyProofDepth::Payload,
+            const std::unordered_map<lfs::core::Uuid, PendingHydratedPayload>* hydrated_nodes = nullptr) {
+            SceneTopologyProof current =
                 captureTopologyProof(scene);
+            if (hydrated_nodes) {
+                for (auto& actual : current.nodes) {
+                    const auto pending = hydrated_nodes->find(actual.uuid);
+                    if (pending == hydrated_nodes->end()) {
+                        continue;
+                    }
+                    const auto* live = scene.getNodeByUuid(actual.uuid);
+                    if (!live || live->payload_hydration != lfs::core::PayloadHydrationState::Loaded ||
+                        live->payload_diverged != pending->second.payload_diverged ||
+                        !pending->second.storage_identity) {
+                        continue;
+                    }
+                    if (payloadStorageIdentity(*live) != pending->second.storage_identity) {
+                        throw std::runtime_error(
+                            "Cannot redo scene history after a deferred payload was replaced");
+                    }
+                    const bool has_payload =
+                        (live->type == lfs::core::NodeType::SPLAT && live->model) ||
+                        (live->type == lfs::core::NodeType::POINTCLOUD && live->point_cloud) ||
+                        (live->type == lfs::core::NodeType::MESH && live->mesh);
+                    if (!has_payload) {
+                        continue;
+                    }
+                    const auto expected = std::ranges::find_if(
+                        recorded.nodes, [&](const auto& node) {
+                            return node.uuid == actual.uuid && node.type == actual.type;
+                        });
+                    if (expected != recorded.nodes.end()) {
+                        if (live->type == lfs::core::NodeType::SPLAT &&
+                            scene.isNodeEffectivelyVisible(live->id)) {
+                            if (actual.primary_extent >= expected->primary_extent) {
+                                const auto added =
+                                    actual.primary_extent - expected->primary_extent;
+                                if (current.consolidated_extent >= added) {
+                                    current.consolidated_extent -= added;
+                                }
+                            } else {
+                                const auto removed =
+                                    expected->primary_extent - actual.primary_extent;
+                                if (current.consolidated_extent <=
+                                    std::numeric_limits<std::size_t>::max() - removed) {
+                                    current.consolidated_extent += removed;
+                                }
+                            }
+                        }
+                        actual.primary_extent = expected->primary_extent;
+                        actual.secondary_extent = expected->secondary_extent;
+                    }
+                }
+            }
+            SceneTopologyProof node_level_expected;
+            if (depth == TopologyProofDepth::NodeLevel) {
+                assert(!allowed_compound_transition &&
+                       "node-level proofs do not support compound topology transitions");
+                node_level_expected = recorded;
+                stripPayloadExtents(node_level_expected);
+                stripPayloadExtents(current);
+            }
+            const SceneTopologyProof& expected =
+                depth == TopologyProofDepth::NodeLevel ? node_level_expected : recorded;
             if (current == expected ||
                 (allowed_compound_transition &&
                  current == *allowed_compound_transition)) {
@@ -1955,7 +2090,7 @@ namespace lfs::vis::op {
                 if (difference.empty()) {
                     return;
                 }
-                throw HistoryCorruptionError(
+                throw HistoryStaleEntryError(
                     "Cannot replay undo entry '" + std::string(entry_name) +
                     "' after scene topology changed (" + difference + ")");
             }
@@ -2028,7 +2163,7 @@ namespace lfs::vis::op {
             if (difference.empty())
                 difference = "unknown topology-proof mismatch";
 
-            throw HistoryCorruptionError(
+            throw HistoryStaleEntryError(
                 "Cannot replay undo entry '" +
                 std::string(entry_name) +
                 "' after scene topology changed (" + difference + ")");
@@ -2049,6 +2184,7 @@ namespace lfs::vis::op {
           locked(other.locked),
           training_enabled(other.training_enabled),
           payload_diverged(other.payload_diverged),
+          payload_hydration(other.payload_hydration),
           gaussian_count(other.gaussian_count),
           centroid(other.centroid),
           order_index(other.order_index),
@@ -2395,8 +2531,9 @@ namespace lfs::vis::op {
         if (selection_mask_storage_.hasChanges() &&
             current_total !=
                 selection_mask_storage_.total_size) {
-            throw HistoryCorruptionError(
-                "Cannot replay selection history after scene topology changed");
+            throw HistoryStaleEntryError(
+                "Cannot replay selection history after scene topology changed "
+                "(recorded and current Gaussian counts differ)");
         }
 
         const size_t total_size = std::max({selection_mask_storage_.total_size,
@@ -2452,6 +2589,10 @@ namespace lfs::vis::op {
             } else {
                 node->model->deleted() = lfs::core::Tensor{};
             }
+            // Sparse replay can write the existing allocation in place. Every
+            // renderer ring slot must observe a new mask version after replay.
+            node->model->notify_deleted_mask_changed();
+            node->model->refresh_deleted_count();
             restored_any = true;
         }
 
@@ -2487,6 +2628,8 @@ namespace lfs::vis::op {
             } else {
                 combined->deleted() = lfs::core::Tensor{};
             }
+            combined->notify_deleted_mask_changed();
+            combined->refresh_deleted_count();
             restored_any = true;
         }
 
@@ -2510,7 +2653,9 @@ namespace lfs::vis::op {
             expected_topology_, name_,
             hasFlag(captured_, ModifiesFlag::TOPOLOGY)
                 ? &topology_before_
-                : nullptr);
+                : nullptr,
+            captured_ == ModifiesFlag::TRANSFORMS ? TopologyProofDepth::NodeLevel
+                                                  : TopologyProofDepth::Payload);
         if (hasFlag(captured_, ModifiesFlag::SELECTION)) {
             applySelection(true);
         }
@@ -2532,7 +2677,9 @@ namespace lfs::vis::op {
     void SceneSnapshot::redo() {
         requireTopologyProof(
             scene_.getScene(),
-            expected_topology_, name_);
+            expected_topology_, name_, nullptr,
+            captured_ == ModifiesFlag::TRANSFORMS ? TopologyProofDepth::NodeLevel
+                                                  : TopologyProofDepth::Payload);
         if (hasFlag(captured_, ModifiesFlag::SELECTION)) {
             applySelection(false);
         }
@@ -2721,7 +2868,7 @@ namespace lfs::vis::op {
         }
 
         const int flat_size = static_cast<int>(element_count_);
-        auto flat = current->contiguous().reshape({flat_size});
+        auto flat = current->contiguous().reshape({flat_size}).clone();
         applyTensorSwapStorage(flat, storage_);
         *current = flat.reshape(tensor_shape_).contiguous();
         if (scene_) {
@@ -3216,7 +3363,7 @@ namespace lfs::vis::op {
     void SceneGraphMetadataEntry::apply(const bool use_after_state) {
         requireTopologyProof(
             scene_.getScene(),
-            expected_topology_, name_);
+            expected_topology_, name_, nullptr, TopologyProofDepth::NodeLevel);
         lfs::core::Scene::Transaction txn(scene_.getScene());
 
         struct AppliedMetadataSnapshot {
@@ -3404,7 +3551,9 @@ namespace lfs::vis::op {
         root_nodes.reserve(unique_ids.size());
         for (const auto id : unique_ids) {
             const auto* node = scene.getNodeById(id);
-            if (!node) {
+            // Sequencer projection nodes are rebuilt by camera-key history.
+            // Scoped scene edits must neither restore nor require their old UUIDs.
+            if (!node || (options.scoped_topology && isSequencerProjectionNode(node->type))) {
                 continue;
             }
 
@@ -3455,7 +3604,7 @@ namespace lfs::vis::op {
             assert(root);
             snapshot.roots.push_back(
                 captureNodeSnapshot(scene_manager, *root, options.mode, selection_slices,
-                                    payload_uuids, capture_all_payloads));
+                                    payload_uuids, capture_all_payloads, options.scoped_topology));
         }
 
         return snapshot;
@@ -3477,7 +3626,8 @@ namespace lfs::vis::op {
                                           const SceneGraphStateSnapshot& current) {
         requireTopologyProof(
             scene_.getScene(),
-            expected_topology_, name_);
+            expected_topology_, name_, nullptr, TopologyProofDepth::Payload,
+            &pending_hydration_nodes_);
         auto& scene = scene_.getScene();
         auto uuids_to_remove = uuidsToRemove(desired, current);
         if (current.complete_root_order) {
@@ -3486,7 +3636,8 @@ namespace lfs::vis::op {
                 collectSnapshotUuids(root, desired_uuids);
             }
             for (const auto* node : scene_.getScene().getNodes()) {
-                if (node && !desired_uuids.contains(node->uuid)) {
+                if (node && !desired_uuids.contains(node->uuid) &&
+                    (!current.scoped_topology || !isSequencerProjectionNode(node->type))) {
                     uuids_to_remove.insert(node->uuid);
                 }
             }
@@ -3496,6 +3647,19 @@ namespace lfs::vis::op {
         // exhausted before the first removal so an invalid snapshot cannot partially
         // replace the live tree.
         auto restore_plan = prepareRestorePlan(scene_, desired, uuids_to_remove);
+        std::unordered_map<lfs::core::Uuid, PendingHydratedPayload> restored_deferred;
+        std::vector<lfs::core::Uuid> restored_deferred_uuids;
+        for (const auto& prepared : restore_plan.nodes) {
+            if (prepared.snapshot->payload_hydration ==
+                lfs::core::PayloadHydrationState::Unloaded) {
+                restored_deferred.emplace(
+                    prepared.snapshot->uuid,
+                    PendingHydratedPayload{
+                        .payload_diverged = prepared.snapshot->payload_diverged,
+                    });
+                restored_deferred_uuids.push_back(prepared.snapshot->uuid);
+            }
+        }
         const auto removal_roots = removalRoots(scene, uuids_to_remove);
         std::unordered_set<lfs::core::Uuid> desired_uuids;
         for (const auto& root : desired.roots)
@@ -3611,6 +3775,14 @@ namespace lfs::vis::op {
         }
         expected_topology_ =
             captureTopologyProof(scene, &desired);
+        pending_hydration_nodes_ = std::move(restored_deferred);
+        if (restore_plan.restores_deferred_payload) {
+            if (auto* gui = services().guiOrNull(); gui && gui->getViewer() &&
+                                                    gui->getViewer()->getSceneManager() == &scene_) {
+                gui->getViewer()->recoverDeferredProjectPayloadsAfterUndo(
+                    std::move(restored_deferred_uuids));
+            }
+        }
     }
 
     void SceneGraphPatchEntry::undo() {
@@ -3619,6 +3791,21 @@ namespace lfs::vis::op {
 
     void SceneGraphPatchEntry::redo() {
         applyState(after_, before_);
+    }
+
+    void SceneGraphPatchEntry::bindHydratedPayloadStorage(
+        const std::span<const lfs::core::Uuid> node_uuids) {
+        const auto& scene = scene_.getScene();
+        for (const auto& uuid : node_uuids) {
+            auto pending = pending_hydration_nodes_.find(uuid);
+            const auto* node = scene.getNodeByUuid(uuid);
+            if (pending == pending_hydration_nodes_.end() || !node ||
+                node->payload_hydration != lfs::core::PayloadHydrationState::Loaded ||
+                node->payload_diverged != pending->second.payload_diverged) {
+                continue;
+            }
+            pending->second.storage_identity = payloadStorageIdentity(*node);
+        }
     }
 
     size_t SceneGraphPatchEntry::estimatedBytes() const {

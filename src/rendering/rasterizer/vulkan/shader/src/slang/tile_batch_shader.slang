@@ -179,7 +179,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             for (uint j = 0u; j < splats_in_round; ++j) {
                 ++local_n_contrib;
                 Splat_2D_AlphaBlend g = collected_splats[j];
-                float4 gauss_rgba = evaluate_splat(g, center_pix_coord);
+                float4 gauss_rgba = evaluate_splat_for_profile(g, center_pix_coord, uniforms.splat_render_profile);
                 if (gauss_rgba.a < ALPHA_THRESHOLD)
                     continue;
 
@@ -226,7 +226,6 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                 }
 
                 gauss_rgba = apply_selection_overlay(gauss_rgba, sel_status, selection_colors);
-                gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_state.flash_intensity);
                 #endif
 
                 float4 new_pixel_state = update_pixel_state(curr_pixel_state, gauss_rgba);
@@ -274,6 +273,7 @@ layout(binding=16) StructuredBuffer<float4> overlay_params;
 void replay_batch(uint range_start,
                   uint range_end,
                   float2 center_pix_coord,
+                  uint splat_render_profile,
 #if LFS_RASTER_OVERLAYS
                   OverlayUniformState overlay_state,
 #endif
@@ -288,7 +288,7 @@ void replay_batch(uint range_start,
             load_splat_alphablend(int32_t(splat_id), xy_vs, inv_cov_vs_opacity, rgb);
         ++local_n_contrib;
 
-        float4 gauss_rgba = evaluate_splat(g, center_pix_coord);
+        float4 gauss_rgba = evaluate_splat_for_profile(g, center_pix_coord, splat_render_profile);
         if (gauss_rgba.a < ALPHA_THRESHOLD)
             continue;
         float splat_depth = read_t1_float(splat_id, depths);
@@ -341,7 +341,6 @@ void replay_batch(uint range_start,
         }
 
         gauss_rgba = apply_selection_overlay(gauss_rgba, sel_status, selection_colors);
-        gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_state.flash_intensity);
         #endif
 
         float4 new_pixel_state = update_pixel_state(curr_pixel_state, gauss_rgba);
@@ -414,6 +413,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             replay_batch(descriptor.y,
                          descriptor.z,
                          center_pix_coord,
+                         uniforms.splat_render_profile,
                       #if LFS_RASTER_OVERLAYS
                          overlay_state,
                       #endif
@@ -432,6 +432,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             replay_batch(descriptor.y,
                          descriptor.z,
                          center_pix_coord,
+                         uniforms.splat_render_profile,
                       #if LFS_RASTER_OVERLAYS
                          overlay_state,
                       #endif

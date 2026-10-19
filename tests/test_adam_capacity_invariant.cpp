@@ -6,6 +6,7 @@
 #include "core/tensor.hpp"
 #include "optimizer/adam_optimizer.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -234,4 +235,29 @@ TEST(AdamCapacityInvariant, SlowPathGrowPreservesPackedMoments) {
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     EXPECT_EQ(packed_after, packed_before)
         << "slow-path realloc must copy existing packed moments";
+}
+
+TEST(AdamScreenShare, HingeDoesNotEnterSecondMoment) {
+    constexpr size_t n = 4;
+    auto splat = create_adam_test_splat(n);
+    AdamConfig cfg;
+    cfg.lr = 1e-2f;
+    cfg.beta1 = 0.9;
+    cfg.beta2 = 0.999;
+    cfg.eps = 0.01;
+    AdamOptimizer opt(splat, cfg);
+    opt.allocate_gradients();
+    opt.get_grad(ParamType::Scaling).fill_(0.0f);
+
+    splat._max_screen_share = Tensor::full({n}, 0.5f, Device::CUDA);
+    opt.set_screen_share_cap(splat._max_screen_share.ptr<float>(), static_cast<int>(n), 0.1f, 1.0f);
+    const auto before = splat.scaling_raw().cpu().contiguous();
+    opt.step(1);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto after = splat.scaling_raw().cpu().contiguous();
+
+    const float hinge = std::log2(0.5f / 0.1f);
+    const float expected_step = static_cast<float>(opt.get_param_lr(ParamType::Scaling)) * hinge;
+    EXPECT_NEAR(before.ptr<float>()[0] - after.ptr<float>()[0], expected_step,
+                expected_step * 0.12f);
 }

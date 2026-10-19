@@ -11,6 +11,7 @@
 #include <istream>
 #include <memory>
 #include <ostream>
+#include <utility>
 
 namespace lfs::io {
     class PipelinedImageLoader;
@@ -44,6 +45,7 @@ namespace lfs::training {
         virtual void permute_gaussian_rows(const lfs::core::Tensor&) {}
 
         virtual bool is_refining(int iter) const = 0;
+        [[nodiscard]] virtual lfs::core::Tensor rendered_support_counts() const { return {}; }
 
         // Get the underlying Gaussian model (reference to Scene-owned data)
         virtual lfs::core::SplatData& get_model() = 0;
@@ -81,6 +83,11 @@ namespace lfs::training {
         // view before adding it to its refine window.
         virtual lfs::core::Tensor edge_score_scratch(int /*iter*/) { return {}; }
         virtual void on_edge_score_accumulated(int /*iter*/) {}
+
+        virtual std::pair<lfs::core::Tensor, lfs::core::Tensor> impact_scratch(int /*iter*/) {
+            return {};
+        }
+        virtual void on_impact_accumulated(int /*iter*/) {}
     };
 
     class ICheckpointStateAdopter {

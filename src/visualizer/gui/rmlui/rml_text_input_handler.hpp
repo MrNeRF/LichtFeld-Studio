@@ -11,12 +11,16 @@
 #include <RmlUi/Core/TextInputContext.h>
 #include <RmlUi/Core/TextInputHandler.h>
 
+#include <functional>
 #include <string_view>
+#include <utility>
 
 namespace lfs::vis::gui {
 
     class LFS_VIS_API RmlTextInputHandler final : public Rml::TextInputHandler {
     public:
+        explicit RmlTextInputHandler(std::function<bool()> accepts_activation = {})
+            : accepts_activation_(std::move(accepts_activation)) {}
         void OnActivate(Rml::TextInputContext* input_context) override;
         void OnDeactivate(Rml::TextInputContext* input_context) override;
         void OnDestroy(Rml::TextInputContext* input_context) override;
@@ -33,6 +37,7 @@ namespace lfs::vis::gui {
         void setCompositionString(std::string_view composition);
         void updateSelection();
 
+        std::function<bool()> accepts_activation_;
         Rml::TextInputContext* input_context_ = nullptr;
         bool composing_ = false;
         int cursor_start_ = -1;

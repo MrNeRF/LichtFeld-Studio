@@ -347,6 +347,7 @@ def _git(root: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *arguments],
         cwd=root,
+        env={**os.environ, "GIT_CEILING_DIRECTORIES": str(root.parent)},
         check=False,
         capture_output=True,
         text=True,
@@ -640,8 +641,10 @@ def _msvc_syntax_command(command: str) -> str:
 
 def _run_one_syntax_check(command: CompileCommand) -> tuple[CompileCommand, int, str]:
     encoding = locale.getpreferredencoding(False) or "utf-8"
+    normalizer = Path(__file__).resolve().parents[1] / "cmake" / "NormalizeMsvcFlags.cmake"
+    launcher = subprocess.list2cmdline(["cmake", "-P", str(normalizer), "--"])
     result = subprocess.run(
-        _msvc_syntax_command(command.command),
+        f"{launcher} {_msvc_syntax_command(command.command)}",
         cwd=command.directory,
         shell=False,
         check=False,

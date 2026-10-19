@@ -4,6 +4,7 @@
 
 #include "drag_drop_native.hpp"
 #include "core/logger.hpp"
+#include "native_drag_scheduler.hpp"
 
 // Platform detection and native includes
 #ifdef _WIN32
@@ -57,6 +58,12 @@ namespace lfs::vis::gui {
             (void)pDataObj;
             (void)grfKeyState;
             (void)pt;
+            if (NativeDragScheduler::outgoingDragActive()) {
+                *pdwEffect = DROPEFFECT_NONE;
+                if (owner_)
+                    owner_->setDragHovering(false);
+                return S_OK;
+            }
             *pdwEffect = DROPEFFECT_COPY;
             if (owner_)
                 owner_->setDragHovering(true);
@@ -67,7 +74,7 @@ namespace lfs::vis::gui {
                                            DWORD* pdwEffect) override {
             (void)grfKeyState;
             (void)pt;
-            *pdwEffect = DROPEFFECT_COPY;
+            *pdwEffect = NativeDragScheduler::outgoingDragActive() ? DROPEFFECT_NONE : DROPEFFECT_COPY;
             return S_OK;
         }
 
@@ -79,6 +86,12 @@ namespace lfs::vis::gui {
 
         HRESULT STDMETHODCALLTYPE Drop(IDataObject* const pDataObj, DWORD /*grfKeyState*/,
                                        POINTL /*pt*/, DWORD* const pdwEffect) override {
+            if (NativeDragScheduler::outgoingDragActive()) {
+                *pdwEffect = DROPEFFECT_NONE;
+                if (owner_)
+                    owner_->setDragHovering(false);
+                return S_OK; // Reject before GetData can start our own export.
+            }
             *pdwEffect = DROPEFFECT_COPY;
             LOG_DEBUG("IDropTarget::Drop called");
 
@@ -132,6 +145,33 @@ namespace lfs::vis::gui {
         NativeDragDrop* owner_;
         ULONG ref_count_ = 1;
     };
+
+#ifdef LFS_NATIVE_DRAG_TESTS
+    int nativeSelfDropContract() {
+        DropTarget target(nullptr);
+        NativeDragScheduler scheduler;
+        bool rejected = true;
+        auto future = scheduler.enqueue([&] {
+            DWORD effect = DROPEFFECT_COPY;
+            POINTL point{};
+            // Null data must remain unread: a self-drop must stop before GetData.
+            target.DragEnter(nullptr, 0, point, &effect);
+            rejected &= effect == DROPEFFECT_NONE;
+            effect = DROPEFFECT_COPY;
+            target.DragOver(0, point, &effect);
+            rejected &= effect == DROPEFFECT_NONE;
+            effect = DROPEFFECT_COPY;
+            target.Drop(nullptr, 0, point, &effect);
+            rejected &= effect == DROPEFFECT_NONE;
+            return FileDragResult{FileDragStatus::Cancelled, {}};
+        });
+        scheduler.dispatch();
+        future.get();
+        DWORD effect = DROPEFFECT_NONE;
+        target.DragEnter(nullptr, 0, POINTL{}, &effect);
+        return rejected && effect == DROPEFFECT_COPY && !NativeDragScheduler::outgoingDragActive() ? 0 : 13;
+    }
+#endif
 
     struct NativeDragDrop::PlatformData {
         HWND hwnd = nullptr;
@@ -285,6 +325,17 @@ namespace lfs::vis::gui {
             return true;
         window_ = window;
 
+        if (SDL_GetPointerProperty(SDL_GetWindowProperties(window),
+                                   SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr)) {
+            // SDL delivers Wayland enter/motion/leave and drop completion events.
+            // File delivery remains on the normal SDL drop path in WindowManager.
+            if (!SDL_AddEventWatch(&NativeDragDrop::waylandEventWatch, this))
+                return false;
+            initialized_ = true;
+            LOG_DEBUG("Native drag-drop initialized (Wayland SDL events)");
+            return true;
+        }
+
         platform_data_ = new PlatformData();
         SDL_PropertiesID props = SDL_GetWindowProperties(window);
         platform_data_->display =
@@ -294,6 +345,8 @@ namespace lfs::vis::gui {
 
         if (!platform_data_->display || !platform_data_->xwindow) {
             LOG_ERROR("Failed to get X11 display/window");
+            delete platform_data_;
+            platform_data_ = nullptr;
             return false;
         }
 
@@ -325,8 +378,9 @@ namespace lfs::vis::gui {
         if (!initialized_)
             return;
 
-        SDL_SetX11EventHook(nullptr, nullptr);
+        SDL_RemoveEventWatch(&NativeDragDrop::waylandEventWatch, this);
         if (platform_data_) {
+            SDL_SetX11EventHook(nullptr, nullptr);
             delete platform_data_;
             platform_data_ = nullptr;
         }
@@ -337,6 +391,16 @@ namespace lfs::vis::gui {
 
     void NativeDragDrop::pollEvents() {
         // XDnD state is tracked from SDL's event hook, nothing to poll.
+    }
+
+    bool SDLCALL NativeDragDrop::waylandEventWatch(void* userdata, SDL_Event* event) {
+        auto* const self = static_cast<NativeDragDrop*>(userdata);
+        if ((event->type == SDL_EVENT_DROP_BEGIN || event->type == SDL_EVENT_DROP_POSITION ||
+             event->type == SDL_EVENT_DROP_COMPLETE) &&
+            event->drop.windowID == SDL_GetWindowID(self->window_)) {
+            self->setDragHovering(event->type != SDL_EVENT_DROP_COMPLETE);
+        }
+        return true;
     }
 
     bool NativeDragDrop::x11EventHook(void* userdata, XEvent* xevent) {
@@ -393,6 +457,8 @@ namespace lfs::vis::gui {
     }
 
     void NativeDragDrop::setDragHovering(bool hovering) {
+        if (hovering && NativeDragScheduler::outgoingDragActive())
+            hovering = false;
         if (drag_hovering_ == hovering)
             return;
 
@@ -400,6 +466,8 @@ namespace lfs::vis::gui {
     }
 
     void NativeDragDrop::handleFileDrop(const std::vector<std::string>& paths) {
+        if (NativeDragScheduler::outgoingDragActive())
+            return;
         if (on_file_drop_) {
             on_file_drop_(paths);
         }

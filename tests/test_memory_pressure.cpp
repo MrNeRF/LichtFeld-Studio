@@ -305,7 +305,7 @@ TEST_F(MemoryPressureTest, PressureLeaseReleasesOnSustainedHeadroom) {
     std::atomic<size_t> fake_free{0};
     coordinator().set_free_memory_probe([&fake_free](MemoryDomain) { return fake_free.load(); });
 
-    coordinator().run_episode(device_failure(0), PressureContext::ImmediateOnly);
+    coordinator().run_episode(device_failure(0), PressureContext::RenderThread);
     EXPECT_TRUE(coordinator().pressure_active());
 
     fake_free.store(target * 2); // well above the 20% hysteresis
@@ -334,4 +334,63 @@ TEST_F(MemoryPressureTest, InjectedFailureThrowsTypedErrorFromTensorPath) {
         Tensor recovered = Tensor::zeros({32 * 1024 * 1024}, Device::CUDA);
         EXPECT_EQ(recovered.numel(), 32u * 1024 * 1024);
     });
+}
+
+TEST_F(MemoryPressureTest, TrainingFailureDoesNotDegradePreview) {
+    coordinator().set_free_memory_probe([](MemoryDomain) -> size_t { return 0; });
+    coordinator().run_episode(device_failure(1024), PressureContext::TrainingThread);
+    EXPECT_EQ(coordinator().episode_count(), 1u);
+    EXPECT_FALSE(coordinator().pressure_active());
+}
+
+TEST_F(MemoryPressureTest, TensorRetryDoesNotDegradePreview) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+        GTEST_SKIP() << "no CUDA device";
+    }
+    coordinator().set_free_memory_probe([](MemoryDomain) -> size_t { return 0; });
+    coordinator().set_allocation_probe([](MemoryDomain, size_t) { return true; });
+    EXPECT_THROW(Tensor::zeros({1024}, Device::CUDA), MemoryAllocationError);
+    EXPECT_EQ(coordinator().episode_count(), 1u);
+    EXPECT_FALSE(coordinator().pressure_active());
+}
+
+TEST_F(MemoryPressureTest, HostFailureDoesNotDegradePreview) {
+    coordinator().set_free_memory_probe([](MemoryDomain) -> size_t { return 0; });
+    auto failure = device_failure();
+    failure.domain = MemoryDomain::PinnedHost;
+    coordinator().run_episode(failure, PressureContext::RenderThread);
+    EXPECT_FALSE(coordinator().pressure_active());
+}
+
+TEST_F(MemoryPressureTest, TrainingFailureDoesNotExtendPreviewRecoveryTarget) {
+    size_t free = 0;
+    coordinator().set_free_memory_probe([&](MemoryDomain) { return free; });
+    coordinator().run_episode(device_failure(), PressureContext::RenderThread);
+    ASSERT_TRUE(coordinator().pressure_active());
+    coordinator().run_episode(device_failure(8ull << 30), PressureContext::ImmediateOnly);
+    free = coordinator().reserve_bytes() * 2;
+    coordinator().maybe_recover();
+    EXPECT_FALSE(coordinator().pressure_active());
+}
+
+TEST_F(MemoryPressureTest, SuccessfulViewerReclaimDoesNotLeavePreviewDegraded) {
+    size_t free = 0;
+    coordinator().set_free_memory_probe([&](MemoryDomain) { return free; });
+    coordinator().register_client(PressureClient{
+        .name = "render-cache",
+        .priority = 10,
+        .domain = MemoryDomain::VulkanDevice,
+        .affinity = PressureAffinity::RenderSafePoint,
+        .estimate = nullptr,
+        .shrink = [&](const PressureRequest& request) {
+            free = request.target_free_bytes;
+            return ReclaimResult{};
+        },
+    });
+    auto failure = device_failure(1024);
+    failure.domain = MemoryDomain::VulkanDevice;
+    coordinator().run_episode(failure, PressureContext::RenderThread);
+    EXPECT_EQ(coordinator().episode_count(), 1u);
+    EXPECT_FALSE(coordinator().pressure_active());
 }

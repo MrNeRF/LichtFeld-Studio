@@ -8,7 +8,9 @@
 #include "training/strategies/improved_gs_plus.hpp"
 #include "training/strategies/mcmc.hpp"
 #include <algorithm>
+#include <cmath>
 #include <gtest/gtest.h>
+#include <limits>
 #include <vector>
 
 using namespace lfs::core;
@@ -110,7 +112,7 @@ TEST(CropDampingStrategyTest, McmcRejectedRowsAreNeverSampledAtZeroScale) {
     strategy._error_score_max = Tensor::ones({8}, Device::CUDA);
 
     auto crop_mask = make_mask(8, 1);
-    strategy.get_optimizer().set_crop_damping_mask(crop_mask);
+    strategy.get_optimizer().set_crop_score_mask(crop_mask);
     strategy.get_optimizer().set_cropbox_lr_scale(0.0f);
     const auto damped_weights = strategy.get_sampling_weights();
     const auto damped_cpu = damped_weights.cpu().to_vector();
@@ -125,7 +127,7 @@ TEST(CropDampingStrategyTest, McmcRejectedRowsAreNeverSampledAtZeroScale) {
 
     strategy.get_optimizer().set_cropbox_lr_scale(1.0f);
     const auto unit_scale_weights = strategy.get_sampling_weights().cpu().to_vector();
-    strategy.get_optimizer().set_crop_damping_mask({});
+    strategy.get_optimizer().set_crop_score_mask({});
     const auto unmasked_weights = strategy.get_sampling_weights().cpu().to_vector();
     EXPECT_EQ(unit_scale_weights, unmasked_weights);
 }
@@ -143,7 +145,7 @@ TEST(CropDampingStrategyTest, IgsPlusRejectedRowsAreNeverSampledAtZeroScale) {
     strategy.initialize(opt_params);
 
     auto crop_mask = make_mask(8, 1);
-    strategy.get_optimizer().set_crop_damping_mask(crop_mask);
+    strategy.get_optimizer().set_crop_score_mask(crop_mask);
     strategy.get_optimizer().set_cropbox_lr_scale(0.0f);
     const auto scores = Tensor::ones({8}, Device::CUDA);
     const auto damped_scores = strategy.damp_densification_scores(scores);
@@ -159,9 +161,111 @@ TEST(CropDampingStrategyTest, IgsPlusRejectedRowsAreNeverSampledAtZeroScale) {
 
     strategy.get_optimizer().set_cropbox_lr_scale(1.0f);
     const auto unit_scale_scores = strategy.damp_densification_scores(scores).cpu().to_vector();
-    strategy.get_optimizer().set_crop_damping_mask({});
+    strategy.get_optimizer().set_crop_score_mask({});
     const auto unmasked_scores = strategy.damp_densification_scores(scores).cpu().to_vector();
     EXPECT_EQ(unit_scale_scores, unmasked_scores);
+}
+
+TEST(ImprovedGSPlusTest, InitializesWhenStopRefinePrecedesStartRefine) {
+    auto splat_data = create_test_splat_data(8);
+    ImprovedGSPlus strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::igs_plus_defaults();
+    opt_params.iterations = 400;
+    opt_params.start_refine = 500;
+    opt_params.stop_refine = 400;
+    opt_params.max_cap = 16;
+    EXPECT_NO_THROW(strategy.initialize(opt_params));
+}
+
+TEST(ImprovedGSPlusTest, RefineWithoutEdgeScoresSkipsDensification) {
+    auto splat_data = create_test_splat_data(8);
+    ImprovedGSPlus strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::igs_plus_defaults();
+    opt_params.iterations = 1000;
+    opt_params.start_refine = 100;
+    opt_params.stop_refine = 800;
+    opt_params.refine_every = 100;
+    opt_params.max_cap = 16;
+    strategy.initialize(opt_params);
+
+    constexpr int kIter = 200;
+    ASSERT_TRUE(strategy.is_refining(kIter));
+    lfs::training::RenderOutput render_output;
+    strategy.pre_step(kIter, render_output);
+    EXPECT_NO_THROW(strategy.post_backward(kIter, render_output));
+    EXPECT_EQ(splat_data.size(), 8u);
+}
+
+TEST(ImprovedGSPlusTest, FinalIterationPreservesOpacityAtResetBoundary) {
+    for (const int iterations : {3000, 6000, 9000, 12000}) {
+        SCOPED_TRACE(iterations);
+        auto splat_data = create_test_splat_data(8);
+        ImprovedGSPlus strategy(splat_data);
+        auto params = param::OptimizationParameters::igs_plus_defaults();
+        params.iterations = iterations;
+        params.max_cap = 16;
+        strategy.initialize(params);
+        const auto before = splat_data.opacity_raw().to_vector();
+
+        RenderOutput render_output;
+        strategy.pre_step(iterations, render_output);
+        strategy.post_backward(iterations, render_output);
+        strategy.step(iterations);
+
+        EXPECT_EQ(splat_data.opacity_raw().to_vector(), before);
+        EXPECT_EQ(splat_data.size(), 8u);
+    }
+}
+
+TEST(ImprovedGSPlusTest, OpacityResetSchedulePreservesExistingBoundaries) {
+    // Non-final reset, adjacent steps, zero, and the refinement cutoff.
+    for (const int iter : {0, 2999, 3000, 3001, 5990, 6000, 15000, 18000}) {
+        SCOPED_TRACE(iter);
+        auto splat_data = create_test_splat_data(8);
+        ImprovedGSPlus strategy(splat_data);
+        auto params = param::OptimizationParameters::igs_plus_defaults();
+        params.iterations = iter == 5990 ? 5990 : 30000;
+        params.max_cap = 16;
+        strategy.initialize(params);
+        splat_data.set_frozen_ranges({{0, 1}});
+        const std::vector<float> opacity{0.5f, -4.0f, -3.0f, -2.0f, -1.0f, 0.0f, 1.0f, 2.0f};
+        splat_data.opacity_raw() = Tensor::from_vector(opacity, {8, 1}, Device::CUDA);
+        auto expected = opacity;
+        if (iter > 0 && iter < params.stop_refine && iter % params.reset_every == 0) {
+            const float reset_logit = std::log(0.1f / 0.9f);
+            for (size_t row = 1; row < expected.size(); ++row)
+                expected[row] = std::min(expected[row], reset_logit);
+        }
+
+        RenderOutput render_output;
+        strategy.pre_step(iter, render_output);
+        strategy.post_backward(iter, render_output);
+
+        EXPECT_EQ(splat_data.opacity_raw().to_vector(), expected);
+    }
+}
+
+TEST(ImprovedGSPlusTest, OpacityResetUsesUpdatedIterationLimit) {
+    auto splat_data = create_test_splat_data(8);
+    ImprovedGSPlus strategy(splat_data);
+    auto params = param::OptimizationParameters::igs_plus_defaults();
+    params.max_cap = 16;
+    strategy.initialize(params);
+    params.iterations = 6000;
+    strategy.set_optimization_params(params);
+    const auto before = splat_data.opacity_raw().to_vector();
+    RenderOutput render_output;
+    strategy.post_backward(6000, render_output);
+    EXPECT_EQ(splat_data.opacity_raw().to_vector(), before);
+
+    params.iterations = 9000;
+    strategy.set_optimization_params(params);
+    strategy.post_backward(6000, render_output);
+    const auto after = splat_data.opacity_raw().to_vector();
+    for (const float value : after)
+        EXPECT_FLOAT_EQ(value, std::log(0.1f / 0.9f));
 }
 
 TEST(MCMCTest, RelocateClearsDeletedMaskOnReusedRows) {
@@ -181,9 +285,14 @@ TEST(MCMCTest, RelocateClearsDeletedMaskOnReusedRows) {
     ASSERT_TRUE(strategy.get_model().has_deleted_mask());
     EXPECT_EQ(strategy.get_model().visible_count(), 9);
 
+    strategy.get_model().refresh_deleted_count();
+    EXPECT_EQ(strategy.get_model().deleted_count(), 3u);
+
     const int relocated = strategy.relocate_gs_test();
     EXPECT_EQ(relocated, 3);
     EXPECT_EQ(strategy.get_model().visible_count(), 12);
+    strategy.get_model().refresh_deleted_count();
+    EXPECT_EQ(strategy.get_model().deleted_count(), 0u);
 
     const auto deleted = strategy.get_model().deleted().to(DataType::Int32).cpu().to_vector();
     ASSERT_EQ(deleted.size(), 12);
@@ -241,4 +350,31 @@ TEST(MCMCTest, AddNewGaussiansExtendsDeletedMask) {
     for (int i = 2; i < 10; ++i) {
         EXPECT_FLOAT_EQ(deleted[i], 0.0f);
     }
+}
+
+TEST(MCMCTest, RelocationWithTinyCropWeightsNeverCopiesFrozenParents) {
+    auto splat_data = create_test_splat_data(16);
+    std::vector<float> positions(16 * 3, 0.0f);
+    for (size_t row = 0; row < 16; ++row)
+        positions[3 * row] = static_cast<float>(row);
+    splat_data.means() = Tensor::from_vector(positions, {16, 3}, Device::CUDA);
+    splat_data.set_frozen_ranges({{0, 4}});
+    MCMC strategy(splat_data);
+    auto params = param::OptimizationParameters::mcmc_defaults();
+    params.max_cap = 32;
+    strategy.initialize(params);
+    strategy.get_optimizer().set_crop_score_mask(make_mask(16, 16));
+    // Initial error scores are floored to 1e-12; keep the resulting weight normal.
+    strategy.get_optimizer().set_cropbox_lr_scale(
+        1.01f * std::numeric_limits<float>::min() / 1e-12f);
+    std::vector<bool> dead(16, false);
+    for (size_t row = 4; row < 15; ++row)
+        dead[row] = true;
+    strategy.remove_gaussians(Tensor::from_vector(dead, {16}, Device::CUDA));
+    ASSERT_EQ(strategy.relocate_gs_test(), 11);
+    const auto result = splat_data.means().to_vector();
+    for (size_t row = 0; row < 4; ++row)
+        EXPECT_FLOAT_EQ(result[3 * row], static_cast<float>(row));
+    for (size_t row = 4; row < 16; ++row)
+        EXPECT_FLOAT_EQ(result[3 * row], 15.0f);
 }

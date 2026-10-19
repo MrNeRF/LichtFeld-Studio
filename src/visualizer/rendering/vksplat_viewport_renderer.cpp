@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vksplat_viewport_renderer.hpp"
+#include "core/native_fs.hpp"
+#include "rendering/rasterizer/vulkan/src/display_color.h"
 
 #include "lod_page_dequant_cuda.hpp"
 
@@ -13,6 +15,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
@@ -224,20 +227,31 @@ namespace lfs::vis {
 
         class RasterizerArenaRenderGuard final {
         public:
-            RasterizerArenaRenderGuard() {
+            RasterizerArenaRenderGuard(
+                lfs::core::RasterizerMemoryArena::RenderHandoffToken* const handoff_token,
+                const bool camera_navigating)
+                : handoff_token_(handoff_token),
+                  camera_navigating_(camera_navigating) {
                 arena_ = &lfs::core::GlobalArenaManager::instance().get_arena();
                 arena_->set_rendering_active(true);
                 render_pending_ = true;
                 try {
-                    // The pending-render flag (set above) keeps the trainer from
-                    // STARTING a new frame, so this bounded wait is normally one
-                    // training iteration. It times out instead of deadlocking on
-                    // refining iterations, where the trainer holds the frame
-                    // while blocked on the exclusive render lock our caller's
-                    // shared lock excludes.
-                    auto frame_id = arena_->try_begin_frame_for(15, true);
+                    // The UI thread barely waits for training: while the trainer
+                    // holds the frame, or its last frame still runs on the GPU,
+                    // this declines. Active waiters in the rendering manager
+                    // reserve the next available window before retrying.
+                    // An unbounded wait would deadlock on refining iterations,
+                    // where the trainer holds the frame while blocked on the
+                    // exclusive render lock our caller's shared lock excludes.
+                    const auto token = handoff_token ? *handoff_token : 0;
+                    auto frame_id = arena_->try_begin_render_frame_for(1, token);
                     if (!frame_id) {
+                        // Explicit edits reserve while actively waiting; parked
+                        // passive previews reserve in queueSharedScratchRetry.
                         throw std::runtime_error("rasterizer arena is busy");
+                    }
+                    if (handoff_token && token != 0) {
+                        *handoff_token = 0;
                     }
                     frame_id_ = *frame_id;
                     frame_active_ = true;
@@ -267,23 +281,29 @@ namespace lfs::vis {
                     return;
                 }
                 if (frame_active_) {
-                    arena_->end_frame(frame_id_, true);
+                    std::optional<std::uint32_t> owed;
+                    if (camera_navigating_) {
+                        const auto stats = arena_->turn_stats();
+                        owed = trainingTurnsPerViewerFrame(stats.viewer_turn_ms + stats.viewer_record_ms, stats.training_step_ms);
+                    }
+                    releaseViewerArenaFrame(*arena_, frame_id_, handoff_token_, owed);
                 }
             }
 
-            // Must be called after the frame's Vulkan submit: the arena's next
-            // tenant waits this timeline value GPU-side before reusing scratch
-            // — neither the chain event nor a device sync can see in-flight
-            // Vulkan work, which lets training kernels overwrite scratch a
-            // running batch still reads (Xid 109 device-lost class).
-            void noteVulkanRelease(cudaExternalSemaphore_t semaphore, std::uint64_t value) const {
+            // Called after Vulkan submission. Queue its completion wait after
+            // the input uploads; the arena admits its next tenant only after
+            // that wait's event completes. A device sync alone cannot observe
+            // Vulkan work still reading the shared scratch.
+            void awaitVulkanRelease(cudaExternalSemaphore_t semaphore, std::uint64_t value, cudaStream_t stream) const {
                 if (arena_ && frame_active_ && semaphore != nullptr) {
-                    arena_->note_external_release(semaphore, value);
+                    arena_->await_external_release(semaphore, value, stream);
                 }
             }
 
         private:
             lfs::core::RasterizerMemoryArena* arena_ = nullptr;
+            lfs::core::RasterizerMemoryArena::RenderHandoffToken* handoff_token_ = nullptr;
+            bool camera_navigating_ = false;
             std::uint64_t frame_id_ = 0;
             bool frame_active_ = false;
             bool render_pending_ = false;
@@ -647,10 +667,12 @@ namespace lfs::vis {
 
         [[nodiscard]] int effectiveRenderShDegree(
             const lfs::core::SplatData& splat_data,
-            const int requested_sh_degree) {
+            const int requested_sh_degree,
+            const std::vector<int>& node_degrees) {
             const int max_model_degree = std::min(3, splat_data.get_max_sh_degree());
             const int active_model_degree = std::clamp(
-                splat_data.get_active_sh_degree(),
+                node_degrees.empty() ? splat_data.get_active_sh_degree()
+                                     : *std::max_element(node_degrees.begin(), node_degrees.end()),
                 0,
                 max_model_degree);
             return std::clamp(requested_sh_degree, 0, active_model_degree);
@@ -709,7 +731,7 @@ namespace lfs::vis {
 #endif
 
             for (const auto& path : search_paths) {
-                if (std::filesystem::exists(path / probe_file)) {
+                if (lfs::core::native_fs::exists(path / probe_file)) {
                     return path;
                 }
             }
@@ -725,97 +747,102 @@ namespace lfs::vis {
         [[nodiscard]] std::map<std::string, std::string> makeVkSplatSpirvPaths() {
             const std::filesystem::path root = resolveVkSplatSpirvRoot();
             return {
-                {"projection_forward", (root / "generated/projection_forward.spv").string()},
-                {"projection_forward_3dgut", (root / "generated/projection_forward_3dgut.spv").string()},
-                {"projection_forward_quant", (root / "generated/projection_forward_quant.spv").string()},
+                {"projection_forward", lfs::core::path_to_utf8((root / "generated/projection_forward.spv"))},
+                {"projection_forward_3dgut", lfs::core::path_to_utf8((root / "generated/projection_forward_3dgut.spv"))},
+                {"projection_forward_quant", lfs::core::path_to_utf8((root / "generated/projection_forward_quant.spv"))},
                 {"projection_forward_quant_3dgut",
-                 (root / "generated/projection_forward_quant_3dgut.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_quant_3dgut.spv"))},
                 {"projection_forward_shn_f16",
-                 (root / "generated/projection_forward_shn_f16.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_shn_f16.spv"))},
                 {"projection_forward_shn_f16_3dgut",
-                 (root / "generated/projection_forward_shn_f16_3dgut.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_shn_f16_3dgut.spv"))},
                 {"projection_forward_shn_q16",
-                 (root / "generated/projection_forward_shn_q16.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_shn_q16.spv"))},
                 {"projection_forward_shn_q16_3dgut",
-                 (root / "generated/projection_forward_shn_q16_3dgut.spv").string()},
-                {"selection_mask", (root / "generated/selection_mask.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_shn_q16_3dgut.spv"))},
+                {"selection_mask", lfs::core::path_to_utf8((root / "generated/selection_mask.spv"))},
                 {"selection_polygon_rasterize",
-                 (root / "generated/selection_polygon_rasterize.spv").string()},
-                {"generate_keys_wave", (root / "generated/generate_keys_wave.spv").string()},
-                {"compute_tile_ranges", (root / "generated/compute_tile_ranges.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/selection_polygon_rasterize.spv"))},
+                {"generate_keys_wave", lfs::core::path_to_utf8((root / "generated/generate_keys_wave.spv"))},
+                {"compute_tile_ranges", lfs::core::path_to_utf8((root / "generated/compute_tile_ranges.spv"))},
                 {"compute_tile_ranges_and_batch_counts",
-                 (root / "generated/compute_tile_ranges_and_batch_counts.spv").string()},
-                {"rasterize_forward", (root / "generated/rasterize_forward.spv").string()},
-                {"rasterize_forward_3dgut", (root / "generated/rasterize_forward_3dgut.spv").string()},
-                {"rasterize_forward_plain", (root / "generated/rasterize_forward_plain.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/compute_tile_ranges_and_batch_counts.spv"))},
+                {"rasterize_forward", lfs::core::path_to_utf8((root / "generated/rasterize_forward.spv"))},
+                {"rasterize_forward_3dgut", lfs::core::path_to_utf8((root / "generated/rasterize_forward_3dgut.spv"))},
+                {"rasterize_forward_plain", lfs::core::path_to_utf8((root / "generated/rasterize_forward_plain.spv"))},
                 {"rasterize_forward_3dgut_plain",
-                 (root / "generated/rasterize_forward_3dgut_plain.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_3dgut_plain.spv"))},
+                {"rasterize_forward_3dgut_rad",
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_3dgut_rad.spv"))},
+                {"rasterize_forward_3dgut_plain_rad",
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_3dgut_plain_rad.spv"))},
                 {"rasterize_forward_light",
-                 (root / "generated/rasterize_forward_light.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_light.spv"))},
                 {"rasterize_forward_light_plain",
-                 (root / "generated/rasterize_forward_light_plain.spv").string()},
-                {"tile_batch_descriptors", (root / "generated/tile_batch_descriptors.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_light_plain.spv"))},
+                {"tile_batch_descriptors", lfs::core::path_to_utf8((root / "generated/tile_batch_descriptors.spv"))},
                 {"rasterize_forward_batches",
-                 (root / "generated/rasterize_forward_batches.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_batches.spv"))},
                 {"rasterize_forward_batches_plain",
-                 (root / "generated/rasterize_forward_batches_plain.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_batches_plain.spv"))},
                 {"compose_tile_batches",
-                 (root / "generated/compose_tile_batches.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/compose_tile_batches.spv"))},
                 {"compose_tile_batches_plain",
-                 (root / "generated/compose_tile_batches_plain.spv").string()},
-                {"cumsum_single_pass", (root / "generated/cumsum_single_pass.spv").string()},
-                {"cumsum_block_scan", (root / "generated/cumsum_block_scan.spv").string()},
-                {"cumsum_scan_block_sums", (root / "generated/cumsum_scan_block_sums.spv").string()},
-                {"cumsum_add_block_offsets", (root / "generated/cumsum_add_block_offsets.spv").string()},
-                {"radix_histogram_clear", (root / "generated/radix_histogram_clear.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/compose_tile_batches_plain.spv"))},
+                {"cumsum_single_pass", lfs::core::path_to_utf8((root / "generated/cumsum_single_pass.spv"))},
+                {"cumsum_block_scan", lfs::core::path_to_utf8((root / "generated/cumsum_block_scan.spv"))},
+                {"cumsum_scan_block_sums", lfs::core::path_to_utf8((root / "generated/cumsum_scan_block_sums.spv"))},
+                {"cumsum_add_block_offsets", lfs::core::path_to_utf8((root / "generated/cumsum_add_block_offsets.spv"))},
+                {"radix_histogram_clear", lfs::core::path_to_utf8((root / "generated/radix_histogram_clear.spv"))},
                 {"expected_depth_finalize",
-                 (root / "generated/expected_depth_finalize.spv").string()},
-                {"radix_sort/upsweep_indirect", (root / "radix_sort/upsweep_indirect.spv").string()},
-                {"radix_sort/spine_indirect", (root / "radix_sort/spine_indirect.spv").string()},
-                {"radix_sort/downsweep_indirect", (root / "radix_sort/downsweep_indirect.spv").string()},
-                {"apply_depth_ordering", (root / "generated/apply_depth_ordering.spv").string()},
-                {"visible_flags", (root / "generated/visible_flags.spv").string()},
-                {"prepare_visible_sort", (root / "generated/prepare_visible_sort.spv").string()},
-                {"prepare_tile_sort", (root / "generated/prepare_tile_sort.spv").string()},
-                {"compact_visible_primitives", (root / "generated/compact_visible_primitives.spv").string()},
-                {"lod_map_indices", (root / "generated/lod_map_indices.spv").string()},
-                {"lod_select_threshold", (root / "generated/lod_select_threshold.spv").string()},
-                {"lod_compact_touch", (root / "generated/lod_compact_touch.spv").string()},
-                {"cull_splats", (root / "generated/cull_splats.spv").string()},
-                {"cull_prepare", (root / "generated/cull_prepare.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/expected_depth_finalize.spv"))},
+                {"radix_sort/upsweep_indirect", lfs::core::path_to_utf8((root / "radix_sort/upsweep_indirect.spv"))},
+                {"radix_sort/spine_indirect", lfs::core::path_to_utf8((root / "radix_sort/spine_indirect.spv"))},
+                {"radix_sort/downsweep_indirect", lfs::core::path_to_utf8((root / "radix_sort/downsweep_indirect.spv"))},
+                {"apply_depth_ordering", lfs::core::path_to_utf8((root / "generated/apply_depth_ordering.spv"))},
+                {"visible_flags", lfs::core::path_to_utf8((root / "generated/visible_flags.spv"))},
+                {"prepare_visible_sort", lfs::core::path_to_utf8((root / "generated/prepare_visible_sort.spv"))},
+                {"prepare_tile_sort", lfs::core::path_to_utf8((root / "generated/prepare_tile_sort.spv"))},
+                {"compact_visible_primitives", lfs::core::path_to_utf8((root / "generated/compact_visible_primitives.spv"))},
+                {"lod_map_indices", lfs::core::path_to_utf8((root / "generated/lod_map_indices.spv"))},
+                {"lod_select_threshold", lfs::core::path_to_utf8((root / "generated/lod_select_threshold.spv"))},
+                {"lod_compact_touch", lfs::core::path_to_utf8((root / "generated/lod_compact_touch.spv"))},
+                {"cull_splats", lfs::core::path_to_utf8((root / "generated/cull_splats.spv"))},
+                {"cull_prepare", lfs::core::path_to_utf8((root / "generated/cull_prepare.spv"))},
                 {"projection_forward_survivors",
-                 (root / "generated/projection_forward_survivors.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_survivors.spv"))},
                 {"projection_forward_quant_survivors",
-                 (root / "generated/projection_forward_quant_survivors.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_quant_survivors.spv"))},
                 {"projection_forward_shn_f16_survivors",
-                 (root / "generated/projection_forward_shn_f16_survivors.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_shn_f16_survivors.spv"))},
                 {"projection_forward_shn_q16_survivors",
-                 (root / "generated/projection_forward_shn_q16_survivors.spv").string()},
-                {"prepare_visible_chain", (root / "generated/prepare_visible_chain.spv").string()},
-                {"copy_visible_indices", (root / "generated/copy_visible_indices.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_shn_q16_survivors.spv"))},
+                {"prepare_visible_chain", lfs::core::path_to_utf8((root / "generated/prepare_visible_chain.spv"))},
+                {"copy_visible_indices", lfs::core::path_to_utf8((root / "generated/copy_visible_indices.spv"))},
+                {"prepare_stable_depth_sort", lfs::core::path_to_utf8((root / "generated/prepare_stable_depth_sort.spv"))},
                 {"cumsum_block_scan_indirect",
-                 (root / "generated/cumsum_block_scan_indirect.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/cumsum_block_scan_indirect.spv"))},
                 {"cumsum_scan_block_sums_indirect",
-                 (root / "generated/cumsum_scan_block_sums_indirect.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/cumsum_scan_block_sums_indirect.spv"))},
                 {"cumsum_add_block_offsets_indirect",
-                 (root / "generated/cumsum_add_block_offsets_indirect.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/cumsum_add_block_offsets_indirect.spv"))},
                 {"prepare_tile_sort_visible",
-                 (root / "generated/prepare_tile_sort_visible.spv").string()},
-                {"wave_partition", (root / "generated/wave_partition.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/prepare_tile_sort_visible.spv"))},
+                {"wave_partition", lfs::core::path_to_utf8((root / "generated/wave_partition.spv"))},
                 {"wave_partition_visible",
-                 (root / "generated/wave_partition_visible.spv").string()},
-                {"macro_coverage", (root / "generated/macro_coverage.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/wave_partition_visible.spv"))},
+                {"macro_coverage", lfs::core::path_to_utf8((root / "generated/macro_coverage.spv"))},
                 {"generate_macro_keys_wave",
-                 (root / "generated/generate_macro_keys_wave.spv").string()},
-                {"compute_macro_ranges", (root / "generated/compute_macro_ranges.spv").string()},
-                {"macro_batch_prepare", (root / "generated/macro_batch_prepare.spv").string()},
-                {"macro_raster", (root / "generated/macro_raster.spv").string()},
-                {"macro_raster_fp32", (root / "generated/macro_raster_fp32.spv").string()},
-                {"macro_raster_overlays", (root / "generated/macro_raster_overlays.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/generate_macro_keys_wave.spv"))},
+                {"compute_macro_ranges", lfs::core::path_to_utf8((root / "generated/compute_macro_ranges.spv"))},
+                {"macro_batch_prepare", lfs::core::path_to_utf8((root / "generated/macro_batch_prepare.spv"))},
+                {"macro_raster", lfs::core::path_to_utf8((root / "generated/macro_raster.spv"))},
+                {"macro_raster_fp32", lfs::core::path_to_utf8((root / "generated/macro_raster_fp32.spv"))},
+                {"macro_raster_overlays", lfs::core::path_to_utf8((root / "generated/macro_raster_overlays.spv"))},
                 {"macro_raster_overlays_fp32",
-                 (root / "generated/macro_raster_overlays_fp32.spv").string()},
-                {"macro_compose", (root / "generated/macro_compose.spv").string()},
-                {"macro_compose_overlays", (root / "generated/macro_compose_overlays.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/macro_raster_overlays_fp32.spv"))},
+                {"macro_compose", lfs::core::path_to_utf8((root / "generated/macro_compose.spv"))},
+                {"macro_compose_overlays", lfs::core::path_to_utf8((root / "generated/macro_compose_overlays.spv"))},
             };
         }
 
@@ -1209,6 +1236,20 @@ namespace lfs::vis {
             }
         }
 
+        // Bit 0 keeps a node undimmed, bit 1 keeps it drawn; nodes past a mask's end keep that bit.
+        void stageForwardNodeMaskCpu(std::vector<std::uint8_t>& dst,
+                                     const std::vector<bool>& emphasized,
+                                     const std::vector<bool>& visible,
+                                     const std::size_t byte_count) {
+            dst.assign(byte_count, 0u);
+            const std::size_t count = std::min(std::max(emphasized.size(), visible.size()), byte_count);
+            for (std::size_t i = 0; i < count; ++i) {
+                const bool undimmed = i >= emphasized.size() || emphasized[i];
+                const bool drawn = i >= visible.size() || visible[i];
+                dst[i] = static_cast<std::uint8_t>((undimmed ? 1u : 0u) | (drawn ? 2u : 0u));
+            }
+        }
+
         void stageSelectionPrimitivesCpu(std::vector<float>& dst,
                                          const std::vector<glm::vec4>& primitives) {
             const std::size_t count = std::max<std::size_t>(primitives.size(), 1u);
@@ -1415,15 +1456,25 @@ namespace lfs::vis {
         // CPU-only build of the model-transform upload payload. H2D is paid
         // only when the bytes differ from the cached copy.
         [[nodiscard]] std::expected<std::vector<float>, std::string> buildModelTransformsCpuFloats(
-            const std::vector<glm::mat4>* const transforms) {
+            const std::vector<glm::mat4>* const transforms,
+            const std::vector<int>* const node_degrees = nullptr) {
             try {
                 const std::size_t count = modelTransformCount(transforms);
+                if (node_degrees && !node_degrees->empty() && node_degrees->size() != count) {
+                    return std::unexpected("VkSplat node SH limits do not match transform slots");
+                }
                 std::vector<float> cpu(count * 16u, 0.0f);
                 for (std::size_t i = 0; i < count; ++i) {
                     const glm::mat4 transform =
                         transforms && i < transforms->size() ? (*transforms)[i] : glm::mat4(1.0f);
                     const auto rows = rowMajorMat4(transform);
                     std::memcpy(cpu.data() + i * 16u, rows.data(), rows.size() * sizeof(float));
+                    // GPU model transforms use only three affine rows. Reserve
+                    // row3.x for degree+1; zero means the model-wide limit.
+                    // Keep CPU transforms intact for camera/culling/exports.
+                    cpu[i * 16u + 12u] = node_degrees && !node_degrees->empty()
+                                             ? static_cast<float>(std::clamp((*node_degrees)[i], 0, 3) + 1)
+                                             : 0.0f;
                 }
                 return cpu;
             } catch (const std::exception& e) {
@@ -1539,7 +1590,7 @@ namespace lfs::vis {
                           glm::vec4(request.overlay.emphasis.dim_non_emphasized ? 1.0f : 0.0f,
                                     transform_indices_enabled ? 1.0f : 0.0f,
                                     static_cast<float>(node_mask_count),
-                                    request.overlay.emphasis.flash_intensity));
+                                    0.0f));
                 writeVec4(dst,
                           CursorFlags,
                           glm::vec4(request.overlay.cursor.enabled ? 1.0f : 0.0f,
@@ -1687,10 +1738,9 @@ namespace lfs::vis {
             const Tensor& tensor,
             const std::string_view label) {
             try {
-                // sync_to_stream (not waitForCUDAStream) so a null/legacy home
-                // stream and any recorded cross-stream uses are ordered before
-                // the render-stream read too; waitForCUDAStream no-ops a nullptr
-                // dependency, leaving default-stream producers unsynchronized.
+                // sync_to_stream (not waitForCUDAStream) so the home stream and
+                // any recorded cross-stream uses are ordered before the
+                // render-stream read, and the read is recorded for the free.
                 tensor.sync_to_stream(stream);
                 return {};
             } catch (const std::exception& e) {
@@ -1715,6 +1765,11 @@ namespace lfs::vis {
                     return std::unexpected(ok.error());
                 }
             }
+            if (splat_data.shN_value_quantized()) {
+                if (auto ok = waitForInputTensorStream(stream, splat_data.shN_value_bounds(), "shN bounds"); !ok) {
+                    return std::unexpected(ok.error());
+                }
+            }
             if (auto ok = waitForInputTensorStream(stream, splat_data.rotation_raw(), "rotation"); !ok) {
                 return std::unexpected(ok.error());
             }
@@ -1723,6 +1778,10 @@ namespace lfs::vis {
             }
             if (auto ok = waitForInputTensorStream(stream, splat_data.opacity_raw(), "opacity"); !ok) {
                 return std::unexpected(ok.error());
+            }
+            if (splat_data.deleted_mask_matches_size()) {
+                if (auto ok = waitForInputTensorStream(stream, splat_data.deleted(), "deleted mask"); !ok)
+                    return std::unexpected(ok.error());
             }
             return {};
         }
@@ -1754,7 +1813,8 @@ namespace lfs::vis {
             const std::size_t model_num_splats,
             const bool equirectangular,
             const bool gut,
-            const bool mip_filter) {
+            const bool mip_filter,
+            const float eye_setback = 0.0f) {
             uniforms = {};
             uniforms.image_width = static_cast<std::uint32_t>(frame_view.size.x);
             uniforms.image_height = static_cast<std::uint32_t>(frame_view.size.y);
@@ -1772,6 +1832,10 @@ namespace lfs::vis {
             uniforms.shN_layout_slots = shN_layout_slots;
             uniforms.camera_model = packedVksplatCameraModel(frame_view, equirectangular, gut);
             uniforms.mip_filter = mip_filter ? 1u : 0u;
+            uniforms.rasterization_scale =
+                std::isfinite(frame_view.rasterization_scale) && frame_view.rasterization_scale > 0.0f
+                    ? frame_view.rasterization_scale
+                    : 1.0f;
 
             const auto intrinsics = frame_view.getCameraIntrinsics();
             uniforms.fx = intrinsics.focal_x;
@@ -1793,7 +1857,8 @@ namespace lfs::vis {
             }
             row_major_view[3] = translation.x;
             row_major_view[7] = translation.y;
-            row_major_view[11] = translation.z;
+            row_major_view[11] = translation.z + eye_setback;
+            uniforms.depth_offset = eye_setback;
             for (int row = 0; row < 4; ++row) {
                 for (int col = 0; col < 4; ++col) {
                     uniforms.world_view_transform[4 * row + col] =
@@ -1876,6 +1941,10 @@ namespace lfs::vis {
             float depth_max = 1.0f;
             std::uint32_t depth_visualization_mode = 0;
             float pad2 = 0.0f;
+            float color_exposure = 1.0f;
+            std::uint32_t color_tonemapping = 0;
+            std::uint32_t splat_render_profile = 0;
+            std::uint32_t color_padding = 0;
         };
 
     } // namespace
@@ -1971,6 +2040,48 @@ namespace lfs::vis {
         }
     }
 
+    void VksplatViewportRenderer::requestArenaHandoff() {
+        auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
+        arena_handoff_token_ = arena.request_render_handoff(arena_handoff_token_);
+    }
+
+    void VksplatViewportRenderer::cancelArenaHandoff() {
+        if (arena_handoff_token_ == 0) {
+            return;
+        }
+        if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
+            arena->cancel_render_handoff(arena_handoff_token_);
+        }
+        arena_handoff_token_ = 0;
+    }
+
+    void VksplatViewportRenderer::setCameraNavigating(const bool navigating) {
+        if (camera_navigating_ && !navigating) {
+            // The last navigation frame kept the next window; hand it back now
+            // instead of letting training wait out the lease.
+            cancelArenaHandoff();
+        }
+        camera_navigating_ = navigating;
+    }
+
+    bool VksplatViewportRenderer::pollArenaHandoff() {
+        renewArenaHandoff();
+        return lfs::core::GlobalArenaManager::instance().get_arena().render_frame_ready(arena_handoff_token_);
+    }
+
+    bool VksplatViewportRenderer::waitForArenaHandoff(const std::chrono::milliseconds timeout) {
+        return waitForViewerArenaWindow(lfs::core::GlobalArenaManager::instance().get_arena(),
+                                        arena_handoff_token_, timeout, kNavigationTrainingGrace);
+    }
+
+    void VksplatViewportRenderer::renewArenaHandoff() {
+        if (arena_handoff_token_ == 0) {
+            return;
+        }
+        auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
+        arena_handoff_token_ = arena.request_render_handoff(arena_handoff_token_);
+    }
+
     void VksplatViewportRenderer::releaseOutputSlot(const OutputSlot output_slot, const bool evict) {
         if (!context_) {
             return;
@@ -2011,6 +2122,46 @@ namespace lfs::vis {
         drainOutputImagePool(false, /*readback_mutex_held=*/true);
         trimOutputImagePoolAged();
         logVramBreakdownIfChanged("preview_release");
+    }
+
+    void VksplatViewportRenderer::retainPublishedSplitImages(const VkImageView left,
+                                                             const VkImageView right) {
+        const std::array views{left, right};
+        if (views[0] == published_split_outputs_[0].view &&
+            views[1] == published_split_outputs_[1].view) {
+            return;
+        }
+        const std::uint64_t consumer = context_ ? context_->lastFrameSubmitSerial() : 0;
+        for (std::size_t panel = 0; panel < views.size(); ++panel) {
+            auto& published = published_split_outputs_[panel];
+            if (published.view == views[panel]) {
+                continue;
+            }
+            std::uint64_t serial = 0;
+            if (views[panel] != VK_NULL_HANDLE) {
+                // Only renderer-owned views belong to this pool. Interop and staged
+                // panels have separate owners; the output ring has a fixed size.
+                for (const auto& logical : ring_.table()) {
+                    for (const auto& slot : logical) {
+                        if (slot.image.view == views[panel]) {
+                            serial = slot.color_pool_serial;
+                        }
+                    }
+                }
+                if (serial != 0) {
+                    [[maybe_unused]] const bool retained = output_pool_.retain(serial);
+                    LFS_VK_DEBUG_ASSERT(retained,
+                                        "Published split image is not owned by the output pool (serial={})",
+                                        serial);
+                }
+            }
+            if (published.serial != 0) {
+                // A partially rendered pair can retire one output while later GUI
+                // frames still sample the previous publication.
+                output_pool_.releaseRetained(published.serial, consumer);
+            }
+            published = {.view = views[panel], .serial = serial};
+        }
     }
 
     void VksplatViewportRenderer::releaseSplitOutputResources() {
@@ -2067,7 +2218,7 @@ namespace lfs::vis {
         stopLodStreaming("LOD scene released before upload completed");
         detachManagedBuffers();
         for (std::size_t ring_slot = 0; ring_slot < kInputRingSize; ++ring_slot) {
-            releaseOpacityCopySlot(*context_, ring_slot);
+            releaseDeletedMaskSlot(*context_, ring_slot);
             auto& overlay = cuda_overlays_[ring_slot];
             context_->destroyExternalBuffer(overlay.buffer);
             overlay = {};
@@ -2111,11 +2262,15 @@ namespace lfs::vis {
     }
 
     void VksplatViewportRenderer::reset() {
+        // Arena boundary callbacks take sync_mutex_ before readback_mutex_. Keep
+        // cancellation in that same order so reset cannot invert the pair.
+        cancelArenaHandoff();
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
+        retainPublishedSplitImages(VK_NULL_HANDLE, VK_NULL_HANDLE);
         live_submit_callback_ = {};
         if (context_ && context_->device() != VK_NULL_HANDLE) {
             const VkDevice device = context_->device();
-            const VkResult idle_result = vkDeviceWaitIdle(device);
+            const VkResult idle_result = lfs::rendering::vk_device_wait_idle_synced(device);
             if (idle_result != VK_SUCCESS) {
                 LOG_ERROR("Vulkan: {}",
                           formatVkCheckFailure(
@@ -2191,7 +2346,7 @@ namespace lfs::vis {
                 LOG_ERROR("VkSplat renderer cleanup during reset failed with an unknown error");
             }
         }
-        for (auto& slot : cuda_opacity_copies_) {
+        for (auto& slot : cuda_deleted_mask_copies_) {
             if (context_) {
                 context_->destroyExternalBuffer(slot.buffer);
             }
@@ -2323,14 +2478,14 @@ namespace lfs::vis {
         const bool same_model =
             lod_page_cache_model_ == &splat_data &&
             lod_page_cache_.configured() &&
-            lod_page_cache_.snapshot().logical_chunks == logical_chunks &&
-            !lod_pool_sizing_dirty_;
+            lod_page_cache_.snapshot().logical_chunks == logical_chunks;
+        const bool sizing_dirty = lod_pool_sizing_dirty_;
         // The VRAM-derived size is computed once per model attach and then
         // sticks: free VRAM keeps moving as the pool's own buffers allocate,
         // and reconfiguring resets the whole cache. The pool budget setting or
         // VRAM fraction changing re-arms the computation.
         std::size_t physical_pages;
-        if (same_model) {
+        if (same_model && !sizing_dirty) {
             physical_pages = lod_page_cache_.snapshot().physical_pages;
         } else {
             physical_pages = requestedLodPhysicalPages(
@@ -2341,9 +2496,8 @@ namespace lfs::vis {
                 lod_page_inputs_.model == &splat_data ? lod_page_inputs_.physical_pages : 0);
             lod_pool_sizing_dirty_ = false;
         }
-        const bool needs_configure =
-            !same_model ||
-            lod_page_cache_.snapshot().physical_pages != physical_pages;
+        const bool needs_configure = detail::lodPageCacheNeedsReconfigure(
+            same_model, sizing_dirty, lod_page_cache_.snapshot().physical_pages, physical_pages);
         if (needs_configure) {
             lod_page_cache_model_ = &splat_data;
             const bool disk_backed =
@@ -3057,6 +3211,7 @@ namespace lfs::vis {
         buffers_.rotations.deviceBuffer = view(InputRotations);
         buffers_.scaling_raw.deviceBuffer = view(InputScalingRaw);
         buffers_.opacity_raw.deviceBuffer = view(InputOpacityRaw);
+        buffers_.deleted_mask.deviceBuffer = {};
         buffers_.page_frames.deviceBuffer = view(InputPageFrames);
         buffers_.quant_pool = true;
         buffers_.shN_f16 = false;
@@ -3155,8 +3310,14 @@ namespace lfs::vis {
             return std::unexpected(ok.error());
         }
         if (!raw_layout->omits_shN) {
-            if (auto ok = requireCudaFloat32ContiguousTensor(shN, "shN"); !ok) {
-                return std::unexpected(ok.error());
+            if (!shN.is_valid() || shN.device() != Device::CUDA || !shN.is_contiguous() ||
+                (shN.dtype() != DataType::Float32 && shN.dtype() != DataType::Float16)) {
+                return std::unexpected("VkSplat LOD page upload expected contiguous CUDA SH rest storage");
+            }
+            if (raw_layout->shN_q16) {
+                if (auto ok = requireCudaFloat32ContiguousTensor(splat_data.shN_value_bounds(), "shN bounds"); !ok) {
+                    return std::unexpected(ok.error());
+                }
             }
         }
         if (auto ok = requireCudaFloat32ContiguousTensor(rotations, "rotation"); !ok) {
@@ -3176,7 +3337,7 @@ namespace lfs::vis {
 
         const auto* const means_src = static_cast<const float*>(means.data_ptr());
         const auto* const sh0_src = static_cast<const float*>(sh0.data_ptr());
-        const auto* const shN_src = static_cast<const float*>(raw_layout->omits_shN ? nullptr : shN.data_ptr());
+        const void* const shN_src = raw_layout->omits_shN ? nullptr : shN.data_ptr();
         const auto* const rotations_src = static_cast<const float*>(rotations.data_ptr());
         const auto* const scaling_src = static_cast<const float*>(scaling.data_ptr());
         const auto* const opacity_src = static_cast<const float*>(opacity.data_ptr());
@@ -3216,13 +3377,17 @@ namespace lfs::vis {
             const LodPageTensorSources sources{
                 .means = means_src + logical_start * 3u,
                 .sh0 = sh0_src + logical_start * 3u,
-                .shN = raw_layout->omits_shN
-                           ? nullptr
-                           : shN_src + logical_start * static_cast<std::size_t>(src_rest) * 3u,
+                .shN = shN_src,
+                .shN_bounds = raw_layout->shN_q16
+                                  ? static_cast<const float2*>(splat_data.shN_value_bounds().data_ptr())
+                                  : nullptr,
                 .rotation = rotations_src + logical_start * 4u,
                 .scaling = scaling_src + logical_start * 3u,
                 .opacity = opacity_src + logical_start,
                 .src_rest = src_rest,
+                .src_splat_offset = static_cast<std::uint32_t>(logical_start),
+                .shN_f16 = raw_layout->shN_f16,
+                .shN_q16 = raw_layout->shN_q16,
                 .count = static_cast<std::uint32_t>(count),
             };
             if (const cudaError_t status = launchLodPageQuantizeFromTensors(
@@ -3285,21 +3450,22 @@ namespace lfs::vis {
         buffers_.shN_committed_bytes = 0;
         detach(buffers_.scaling_raw.deviceBuffer);
         detach(buffers_.opacity_raw.deviceBuffer);
+        detach(buffers_.deleted_mask.deviceBuffer);
     }
 
-    void VksplatViewportRenderer::releaseOpacityCopySlot(VulkanContext& context, const std::size_t ring_slot) {
+    void VksplatViewportRenderer::releaseDeletedMaskSlot(VulkanContext& context, const std::size_t ring_slot) {
         LFS_VK_DEBUG_ASSERT(
-            ring_slot < cuda_opacity_copies_.size(),
-            "VkSplat opacity-copy ring slot must be in range before release (ring_slot={}, ring_size={})",
+            ring_slot < cuda_deleted_mask_copies_.size(),
+            "VkSplat deleted-mask ring slot must be in range before release (ring_slot={}, ring_size={})",
             ring_slot,
-            cuda_opacity_copies_.size());
-        auto& slot = cuda_opacity_copies_[ring_slot];
+            cuda_deleted_mask_copies_.size());
+        auto& slot = cuda_deleted_mask_copies_[ring_slot];
         const VkBuffer released_buffer = slot.buffer.buffer;
 
         if (released_buffer != VK_NULL_HANDLE &&
-            buffers_.opacity_raw.deviceBuffer.buffer == released_buffer &&
-            buffers_.opacity_raw.deviceBuffer.allocation == VK_NULL_HANDLE) {
-            buffers_.opacity_raw.deviceBuffer = {};
+            buffers_.deleted_mask.deviceBuffer.buffer == released_buffer &&
+            buffers_.deleted_mask.deviceBuffer.allocation == VK_NULL_HANDLE) {
+            buffers_.deleted_mask.deviceBuffer = {};
         }
 
         context.destroyExternalBuffer(slot.buffer);
@@ -3616,8 +3782,6 @@ namespace lfs::vis {
                 "vksplat.scratch.arena.grow bytes={}MiB generation={} (stable address)",
                 shared_scratch_.bytes >> 20,
                 shared_scratch_.generation);
-            LOG_INFO("VkSplat shared scratch arena grew to {} MiB (stable address)",
-                     shared_scratch_.bytes >> 20);
             return {};
         }
 
@@ -3669,9 +3833,6 @@ namespace lfs::vis {
             shared_scratch_.bytes >> 20,
             reserve_bytes >> 20,
             shared_scratch_.generation);
-        LOG_INFO("VkSplat shared scratch arena: {} MiB committed, {} MiB reserved (grows in place)",
-                 shared_scratch_.bytes >> 20,
-                 reserve_bytes >> 20);
         return {};
     }
 
@@ -3722,8 +3883,6 @@ namespace lfs::vis {
             shared_scratch_.bytes >> 20,
             shared_scratch_.generation,
             shared_scratch_.imported_buffer.bound_chunks);
-        LOG_INFO("VkSplat shared scratch chunks bound after grow: {} MiB (no re-import)",
-                 shared_scratch_.bytes >> 20);
         return {};
     }
 
@@ -3973,6 +4132,7 @@ namespace lfs::vis {
         RELEASE_PRIVATE_SCRATCH(visible_dispatch);
         RELEASE_PRIVATE_SCRATCH(macro_partials);
         RELEASE_PRIVATE_SCRATCH(macro_active_mask);
+        RELEASE_PRIVATE_SCRATCH(exact_depth_sample_mask);
         RELEASE_PRIVATE_SCRATCH(macro_wave_args);
         RELEASE_PRIVATE_SCRATCH(depth_wave_dispatch);
         RELEASE_PRIVATE_SCRATCH(wave_predicates);
@@ -4081,6 +4241,7 @@ namespace lfs::vis {
 
     void VksplatViewportRenderer::releaseScratchOnIdle(const bool release_shared,
                                                        const bool allow_shared_reclaim) {
+        cancelArenaHandoff();
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
         if (context_ == nullptr) {
             return;
@@ -4142,6 +4303,11 @@ namespace lfs::vis {
     }
 
     void VksplatViewportRenderer::releaseSharedScratchArena() {
+        // CUDA may still have an imported-timeline wait enqueued even after B3
+        // detached the backing. Retire it before reset destroys the semaphore.
+        if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
+            arena->drain_external_release();
+        }
         if (shared_scratch_.installed_in_training_arena && shared_scratch_.block) {
             lfs::core::GlobalArenaManager::instance().clear_external_backing(shared_scratch_.block->device_ptr);
         }
@@ -4354,20 +4520,18 @@ namespace lfs::vis {
             hasOverlayTensor(request.overlay.emphasis.transient_mask.mask, num_splats);
         const bool transform_indices_enabled = hasTransformIndices(request.scene.transform_indices, num_splats);
 
-        // Compare/split view restricts which scene nodes a panel may draw via
-        // request.scene.node_visibility_mask. The forward path reuses the per-node
-        // node_mask buffer (indexed by transform_indices, same as emphasis) to
-        // hard-cull hidden nodes, mirroring the selection-query path. Visibility
-        // culling and emphasis dimming are mutually exclusive in practice (compare
-        // mode clears emphasis), so the restricting mask owns the shared buffer.
+        // Compare/split view and hidden nodes of a consolidated model restrict which
+        // scene nodes may draw via request.scene.node_visibility_mask. Without
+        // per-splat indices every splat belongs to node 0. The node_mask buffer
+        // carries emphasis and culling in separate bits.
         const auto& node_visibility_mask = request.scene.node_visibility_mask;
         const bool node_visibility_restricts =
-            transform_indices_enabled &&
             std::any_of(node_visibility_mask.begin(), node_visibility_mask.end(),
                         [](const bool visible) { return !visible; });
-        const std::vector<bool>& forward_node_mask_source =
-            node_visibility_restricts ? node_visibility_mask
-                                      : request.overlay.emphasis.emphasized_node_mask;
+        const auto& emphasized_node_mask = request.overlay.emphasis.emphasized_node_mask;
+        static const std::vector<bool> kNoCulling;
+        const std::vector<bool>& culling_node_mask = node_visibility_restricts ? node_visibility_mask : kNoCulling;
+        const std::size_t node_mask_count = std::max(emphasized_node_mask.size(), culling_node_mask.size());
 
         // Whether the forward rasterizer must run the overlay/selection path.
         // Projection-only filters such as crop/use, depth hide, and split-view
@@ -4385,7 +4549,6 @@ namespace lfs::vis {
             crop_dims ||
             ellipsoid_dims ||
             emphasis.dim_non_emphasized ||
-            emphasis.flash_intensity > 0.0f ||
             emphasis.focused_gaussian_id >= 0 ||
             request.overlay.cursor.enabled ||
             request.overlay.markers.show_rings ||
@@ -4407,7 +4570,7 @@ namespace lfs::vis {
                                                             : sizeof(std::int32_t),
                                   sizeof(std::int32_t));
         const std::size_t node_mask_region_bytes =
-            alignUp(std::max<std::size_t>(forward_node_mask_source.size(), 1), 4);
+            alignUp(std::max<std::size_t>(node_mask_count, 1), 4);
         const std::size_t overlay_params_region_bytes =
             static_cast<std::size_t>(ParamCount) * 4 * sizeof(float);
         const std::size_t model_transforms_region_bytes =
@@ -4529,13 +4692,16 @@ namespace lfs::vis {
             const bool node_mask_cache_hit =
                 !slot.node_mask_upload_cpu.empty() &&
                 slot.cached_node_mask_output_slot == output_slot &&
-                slot.cached_emphasized_node_mask == forward_node_mask_source;
+                slot.cached_emphasized_node_mask == emphasized_node_mask &&
+                slot.cached_culling_node_mask == culling_node_mask;
             if (!node_mask_cache_hit) {
                 LOG_TIMER("uploadOverlayBindings.prepare_sources.node_mask");
-                stageNodeMaskCpu(slot.node_mask_upload_cpu,
-                                 forward_node_mask_source,
-                                 slot.region_bytes[OverlayNodeMask]);
-                slot.cached_emphasized_node_mask = forward_node_mask_source;
+                stageForwardNodeMaskCpu(slot.node_mask_upload_cpu,
+                                        emphasized_node_mask,
+                                        culling_node_mask,
+                                        slot.region_bytes[OverlayNodeMask]);
+                slot.cached_emphasized_node_mask = emphasized_node_mask;
+                slot.cached_culling_node_mask = culling_node_mask;
                 slot.cached_node_mask_output_slot = output_slot;
                 slot.node_mask_uploaded = false;
             }
@@ -4548,7 +4714,7 @@ namespace lfs::vis {
                     selection_enabled,
                     preview_enabled,
                     transform_indices_enabled,
-                    forward_node_mask_source.size(),
+                    node_mask_count,
                     node_visibility_restricts);
                 if (!overlay_params_cpu) {
                     return std::unexpected(overlay_params_cpu.error());
@@ -4565,7 +4731,8 @@ namespace lfs::vis {
                 // Same output-bytes fingerprint pattern as overlay_params.
                 LOG_TIMER("uploadOverlayBindings.prepare_sources.model_transforms");
                 auto model_transforms_cpu =
-                    buildModelTransformsCpuFloats(request.scene.model_transforms);
+                    buildModelTransformsCpuFloats(request.scene.model_transforms,
+                                                  &request.scene.node_active_sh_degrees);
                 if (!model_transforms_cpu) {
                     return std::unexpected(model_transforms_cpu.error());
                 }
@@ -5093,6 +5260,13 @@ namespace lfs::vis {
         if (!external_layout) {
             return std::unexpected(external_layout.error());
         }
+        // In-place edits preserve tensor addresses. Invalidate every slot so
+        // each buffered copy is refreshed when that slot is next acquired.
+        if (force_upload) {
+            for (auto& snapshot : ring_uploaded_) {
+                snapshot = {};
+            }
+        }
         const auto current_input_snapshot = makeModelInputSnapshot(splat_data);
         const auto& uploaded_input_snapshot = ring_uploaded_[ring_slot];
         const bool input_snapshot_changed =
@@ -5101,15 +5275,9 @@ namespace lfs::vis {
             input_snapshot_changed &&
             matchesExceptDeletedMask(uploaded_input_snapshot, current_input_snapshot);
         const bool input_upload_requested = force_upload || input_snapshot_changed;
-        const bool first_q16_sh_enable =
-            input_snapshot_changed &&
-            uploaded_input_snapshot.valid() &&
-            uploaded_input_snapshot.active_sh_degree <= 0 &&
-            current_input_snapshot.active_sh_degree > 0 &&
-            current_input_snapshot.shn_q16;
 
         std::shared_ptr<VulkanExternalTensorStorage> means_storage, sh0_storage, shN_storage,
-            shN_bounds_storage, rotations_storage, scaling_storage, opacity_storage;
+            shN_bounds_storage, rotations_storage, scaling_storage, opacity_storage, deleted_storage;
         {
             LOG_TIMER("prepareInputs.storage_lookup");
             means_storage = vulkanExternalStorage(splat_data.means_raw());
@@ -5119,11 +5287,12 @@ namespace lfs::vis {
             rotations_storage = vulkanExternalStorage(splat_data.rotation_raw());
             scaling_storage = vulkanExternalStorage(splat_data.scaling_raw());
             opacity_storage = vulkanExternalStorage(splat_data.opacity_raw());
+            if (splat_data.deleted_mask_matches_size() && (n % 4u) == 0u)
+                deleted_storage = vulkanExternalStorage(splat_data.deleted());
         }
-        // Soft deletes only need opacity rewritten; all geometry/color tensors can
-        // still be borrowed from Vulkan-external model storage. Keep that path
-        // narrow so a delete mask costs N floats instead of a full raw-model copy.
-        const bool has_deleted_mask = splat_data.has_deleted_mask();
+        const bool has_deleted_mask = splat_data.deleted_mask_matches_size();
+        const std::size_t mask_bytes = n * sizeof(bool);
+        const std::size_t mask_descriptor_bytes = (mask_bytes + 3u) & ~std::size_t{3u};
         const bool base_inputs_external =
             means_storage && sh0_storage && rotations_storage && scaling_storage;
         // q16-throughout: shN must be exportable pad-dropped codes (+ bounds) for
@@ -5159,7 +5328,7 @@ namespace lfs::vis {
             base_inputs_external &&
             shN_ok &&
             !shN_float_workspace &&
-            (opacity_storage || has_deleted_mask);
+            opacity_storage;
         // Active degree 0 omits shN so the q16 projection pipeline never arms.
         const bool force_viewer_omit_shN = effective_upload_sh_degree <= 0;
         std::optional<decltype(upload_layout)> omit_layout_holder;
@@ -5180,19 +5349,6 @@ namespace lfs::vis {
             use_external_sh
                 ? external_layout
                 : (omit_layout_holder ? **omit_layout_holder : upload_layout);
-        if (first_q16_sh_enable) {
-            LOG_INFO(
-                "VkSplat first q16 SH enable: active_sh={} max_sh={} N={} gen={} "
-                "n_cells={} codes={} bounds={} (generation_checked={})",
-                current_input_snapshot.active_sh_degree,
-                current_input_snapshot.max_sh_degree,
-                current_input_snapshot.count,
-                current_input_snapshot.exportable_generation,
-                q16_bind.n_cells_per_prim,
-                static_cast<const void*>(q16_bind.codes),
-                static_cast<const void*>(q16_bind.bounds),
-                q16_bind.generation_checked);
-        }
 
         std::vector<std::string> input_copy_reasons;
         const auto note_missing_storage =
@@ -5206,14 +5362,9 @@ namespace lfs::vis {
         note_missing_storage(sh0_storage, "sh0");
         note_missing_storage(rotations_storage, "rotation");
         note_missing_storage(scaling_storage, "scaling");
-        if (!has_deleted_mask) {
-            note_missing_storage(opacity_storage, "opacity");
-        }
+        note_missing_storage(opacity_storage, "opacity");
         if (!upload_layout->omits_shN) {
             note_missing_storage(shN_storage, "shN");
-        }
-        if (!can_bind_external && has_deleted_mask) {
-            input_copy_reasons.emplace_back("soft_deleted_mask");
         }
         if (shN_float_workspace) {
             input_copy_reasons.emplace_back("non_external_float_shN_workspace");
@@ -5288,65 +5439,70 @@ namespace lfs::vis {
                 if (auto ok = require_capacity(scaling_storage, layout->scaling_bytes, "scaling"); !ok) {
                     return std::unexpected(ok.error());
                 }
-                if (!has_deleted_mask) {
-                    if (auto ok = require_capacity(opacity_storage, layout->opacity_bytes, "opacity"); !ok) {
+                if (auto ok = require_capacity(opacity_storage, layout->opacity_bytes, "opacity"); !ok) {
+                    return std::unexpected(ok.error());
+                }
+                if (deleted_storage) {
+                    if (auto ok = require_capacity(deleted_storage, mask_descriptor_bytes, "deleted mask"); !ok) {
                         return std::unexpected(ok.error());
                     }
                 }
             }
 
-            auto& opacity_slot = cuda_opacity_copies_[ring_slot];
-            bool opacity_copy_upload_needed = false;
-            if (has_deleted_mask) {
-                const VkBuffer previous_opacity_buffer = opacity_slot.buffer.buffer;
-                const std::size_t previous_opacity_bytes = opacity_slot.bytes;
-                const bool opacity_slot_had_buffer = previous_opacity_buffer != VK_NULL_HANDLE;
+            auto& mask_slot = cuda_deleted_mask_copies_[ring_slot];
+            bool mask_copy_upload_needed = false;
+            if (has_deleted_mask && !deleted_storage) {
+                const VkBuffer previous_mask_buffer = mask_slot.buffer.buffer;
+                const std::size_t previous_mask_bytes = mask_slot.bytes;
                 {
-                    LOG_TIMER("prepareInputs.opacity_copy.ensure_buffer");
+                    LOG_TIMER("prepareInputs.deleted_mask.ensure_buffer");
                     if (auto ok = ensureCudaInteropBuffer(context,
-                                                          opacity_slot.block,
-                                                          opacity_slot.buffer,
-                                                          layout->opacity_bytes,
-                                                          "vulkan.vksplat.opacity_copy",
-                                                          std::format("ring{}.soft_deleted_opacity", ring_slot),
-                                                          "deleted opacity");
+                                                          mask_slot.block,
+                                                          mask_slot.buffer,
+                                                          mask_descriptor_bytes,
+                                                          "vulkan.vksplat.deleted_mask_copy",
+                                                          std::format("ring{}.deleted_mask", ring_slot),
+                                                          "deleted mask");
                         !ok) {
                         return std::unexpected(ok.error());
                     }
                 }
-                opacity_copy_upload_needed =
+                mask_copy_upload_needed =
                     input_upload_requested ||
-                    !opacity_slot_had_buffer ||
-                    opacity_slot.buffer.buffer != previous_opacity_buffer ||
-                    previous_opacity_bytes != layout->opacity_bytes;
-                opacity_slot.bytes = layout->opacity_bytes;
-            } else if (opacity_slot.buffer.buffer != VK_NULL_HANDLE) {
-                LOG_PERF("vksplat.memory.release_opacity_copy ring={} bytes={} reason=no_deleted_mask",
+                    previous_mask_buffer == VK_NULL_HANDLE ||
+                    mask_slot.buffer.buffer != previous_mask_buffer ||
+                    previous_mask_bytes != mask_bytes;
+                mask_slot.bytes = mask_bytes;
+            } else if (mask_slot.buffer.buffer != VK_NULL_HANDLE) {
+                LOG_PERF("vksplat.memory.release_deleted_mask_copy ring={} bytes={} reason=direct_or_no_mask",
                          ring_slot,
-                         static_cast<std::size_t>(opacity_slot.buffer.allocation_size));
-                releaseOpacityCopySlot(context, ring_slot);
+                         static_cast<std::size_t>(mask_slot.buffer.allocation_size));
+                releaseDeletedMaskSlot(context, ring_slot);
             }
 
-            if (has_deleted_mask && exportableDevicePtr(opacity_slot.block) == nullptr) {
-                return std::unexpected("VkSplat deleted-opacity buffer is not mapped");
+            if (has_deleted_mask && !deleted_storage && exportableDevicePtr(mask_slot.block) == nullptr) {
+                return std::unexpected("VkSplat deleted-mask buffer is not mapped");
             }
+            buffers_.opacity_raw.deviceBuffer = makeBorrowedBufferView(
+                opacity_storage->vkBuffer(),
+                opacity_storage->vkBufferSize(),
+                opacity_storage->bytes(),
+                layout->opacity_bytes,
+                opacity_storage->vkOffset());
+            buffers_.deleted_mask.deviceBuffer = deleted_storage
+                                                     ? makeBorrowedBufferView(
+                                                           deleted_storage->vkBuffer(),
+                                                           deleted_storage->vkBufferSize(),
+                                                           deleted_storage->bytes(),
+                                                           mask_descriptor_bytes,
+                                                           deleted_storage->vkOffset())
+                                                 : has_deleted_mask
+                                                     ? makeRegionView(mask_slot.buffer, 0, mask_descriptor_bytes)
+                                                     : _VulkanBuffer{};
 
-            if (has_deleted_mask) {
-                buffers_.opacity_raw.deviceBuffer = makeRegionView(opacity_slot.buffer, 0, layout->opacity_bytes);
-            } else {
-                buffers_.opacity_raw.deviceBuffer = makeBorrowedBufferView(
-                    opacity_storage->vkBuffer(),
-                    opacity_storage->vkBufferSize(),
-                    opacity_storage->bytes(),
-                    layout->opacity_bytes,
-                    opacity_storage->vkOffset());
-            }
-
-            if (has_deleted_mask) {
-                LOG_PERF("vksplat.memory.opacity_copy ring={} bytes={} upload_needed={}",
-                         ring_slot,
-                         layout->opacity_bytes,
-                         opacity_copy_upload_needed);
+            if (has_deleted_mask && !deleted_storage) {
+                LOG_PERF("vksplat.memory.deleted_mask_copy ring={} bytes={} upload_needed={}",
+                         ring_slot, mask_bytes, mask_copy_upload_needed);
             }
 
             {
@@ -5387,11 +5543,11 @@ namespace lfs::vis {
                         return std::unexpected(
                             "VkSplat q16/f16 SH requires a non-zero shN buffer device address");
                     }
-                    const auto n = splat_data.size();
+                    const auto splat_count = splat_data.size();
                     const auto rest = static_cast<std::uint32_t>(splat_data.max_sh_coeffs_rest());
                     const std::size_t need_bytes = layout->shN_q16
-                                                       ? lfs::core::sh_value_quant::sh_value_u16_count(n, rest) * 2u
-                                                       : lfs::core::sh_swizzled_f16_byte_count(n, rest);
+                                                       ? lfs::core::sh_value_quant::sh_value_u16_count(splat_count, rest) * 2u
+                                                       : lfs::core::sh_swizzled_f16_byte_count(splat_count, rest);
                     if (need_bytes > buffers_.shN_committed_bytes) {
                         return std::unexpected(std::format(
                             "VkSplat shN BDA region is smaller than the live index footprint: "
@@ -5478,7 +5634,7 @@ namespace lfs::vis {
                     *retirement_value,
                     std::vector<std::shared_ptr<void>>{
                         means_storage, sh0_storage, shN_storage, shN_bounds_storage,
-                        rotations_storage, scaling_storage, opacity_storage});
+                        rotations_storage, scaling_storage, opacity_storage, deleted_storage});
             }
 
             const cudaStream_t stream = render_stream_;
@@ -5488,15 +5644,16 @@ namespace lfs::vis {
                     return std::unexpected(ok.error());
                 }
             }
-            if (has_deleted_mask && opacity_copy_upload_needed) {
-                LOG_TIMER("prepareInputs.opacity_copy.copyRawOpacity");
-                if (auto ok = vksplat::copyRawOpacityToBuffer(
-                        splat_data,
-                        exportableDevicePtr(opacity_slot.block),
-                        stream);
-                    !ok) {
-                    return std::unexpected(ok.error());
-                }
+            if (has_deleted_mask && !deleted_storage && mask_copy_upload_needed) {
+                LOG_TIMER("prepareInputs.deleted_mask.copy");
+                const cudaError_t status = cudaMemcpyAsync(
+                    exportableDevicePtr(mask_slot.block),
+                    splat_data.deleted().data_ptr(),
+                    mask_bytes,
+                    cudaMemcpyDeviceToDevice,
+                    stream);
+                if (status != cudaSuccess)
+                    return std::unexpected(std::format("VkSplat deleted-mask copy failed: {}", cudaGetErrorString(status)));
             }
             // No CPU sync for live training models anymore: the upload-timeline
             // signal below is enqueued on the render stream after the copies, so
@@ -5530,11 +5687,11 @@ namespace lfs::vis {
             };
         }
 
-        if (cuda_opacity_copies_[ring_slot].buffer.buffer != VK_NULL_HANDLE) {
-            LOG_PERF("vksplat.memory.release_opacity_copy ring={} bytes={} reason=missing_external_storage",
+        if (cuda_deleted_mask_copies_[ring_slot].buffer.buffer != VK_NULL_HANDLE) {
+            LOG_PERF("vksplat.memory.release_deleted_mask_copy ring={} bytes={} reason=missing_external_storage",
                      ring_slot,
-                     static_cast<std::size_t>(cuda_opacity_copies_[ring_slot].buffer.allocation_size));
-            releaseOpacityCopySlot(context, ring_slot);
+                     static_cast<std::size_t>(cuda_deleted_mask_copies_[ring_slot].buffer.allocation_size));
+            releaseDeletedMaskSlot(context, ring_slot);
         }
         ring_uploaded_[ring_slot] = {};
         return std::unexpected(std::format(
@@ -5559,9 +5716,9 @@ namespace lfs::vis {
             buffers_.sorting_gauss_idx_1.deviceBuffer.capacity +
             buffers_.sorting_gauss_idx_2.deviceBuffer.capacity;
 
-        std::size_t opacity_copy_bytes = 0;
-        for (const auto& slot : cuda_opacity_copies_) {
-            opacity_copy_bytes += static_cast<std::size_t>(slot.buffer.allocation_size);
+        std::size_t deleted_mask_copy_bytes = 0;
+        for (const auto& slot : cuda_deleted_mask_copies_) {
+            deleted_mask_copy_bytes += static_cast<std::size_t>(slot.buffer.allocation_size);
         }
         std::size_t overlay_bytes = 0;
         for (const auto& slot : cuda_overlays_) {
@@ -5587,7 +5744,7 @@ namespace lfs::vis {
         signature = mix(signature, pipeline_current);
         signature = mix(signature, pipeline_peak);
         signature = mix(signature, input_view_bytes);
-        signature = mix(signature, opacity_copy_bytes);
+        signature = mix(signature, deleted_mask_copy_bytes);
         signature = mix(signature, overlay_bytes);
         signature = mix(signature, output_image_bytes);
         signature = mix(signature, output_pool_idle_bytes);
@@ -5617,13 +5774,13 @@ namespace lfs::vis {
             top += std::format("{}={:.2f}GiB", entries[i].first, gib(entries[i].second));
         }
 
-        LOG_PERF("vksplat.memory reason={} renderer_owned={:.2f}GiB pipeline_current={:.2f}GiB pipeline_peak={:.2f}GiB input_views={:.2f}GiB opacity_copies={:.2f}GiB overlays={:.2f}GiB outputs={:.2f}GiB output_pool_idle={:.2f}GiB sort_buffers={:.2f}GiB shared_scratch={:.2f}GiB sort_capacity={} top=[{}]",
+        LOG_PERF("vksplat.memory reason={} renderer_owned={:.2f}GiB pipeline_current={:.2f}GiB pipeline_peak={:.2f}GiB input_views={:.2f}GiB deleted_mask_copies={:.2f}GiB overlays={:.2f}GiB outputs={:.2f}GiB output_pool_idle={:.2f}GiB sort_buffers={:.2f}GiB shared_scratch={:.2f}GiB sort_capacity={} top=[{}]",
                  reason,
                  gib(owned_total),
                  gib(pipeline_current),
                  gib(pipeline_peak),
                  gib(input_view_bytes),
-                 gib(opacity_copy_bytes),
+                 gib(deleted_mask_copy_bytes),
                  gib(overlay_bytes),
                  gib(output_image_bytes),
                  gib(output_pool_idle_bytes),
@@ -6057,9 +6214,12 @@ namespace lfs::vis {
             transitionToProducer(output.depth_image.image,
                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                  transfer_write);
+            const auto clear_background = !depth_view && uniforms.splat_render_profile == 0u
+                                              ? lfs::rendering::lfsDisplayTone(glm::max(background, glm::vec3(0)), uniforms.color_tonemapping, uniforms.color_exposure)
+                                              : background;
             VkClearColorValue clear = transparent_background
                                           ? VkClearColorValue{{0.0f, 0.0f, 0.0f, 0.0f}}
-                                          : VkClearColorValue{{background.r, background.g, background.b, 1.0f}};
+                                          : VkClearColorValue{{clear_background.r, clear_background.g, clear_background.b, 1.0f}};
             VkClearColorValue depth_clear{{1.0e10f, 0.0f, 0.0f, 0.0f}};
             VkImageSubresourceRange range{};
             range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -6193,6 +6353,9 @@ namespace lfs::vis {
             .depth_min = depth_min,
             .depth_max = depth_max,
             .depth_visualization_mode = static_cast<std::uint32_t>(depth_visualization_mode),
+            .color_exposure = uniforms.color_exposure,
+            .color_tonemapping = uniforms.color_tonemapping,
+            .splat_render_profile = uniforms.splat_render_profile,
         };
         vkCmdPushConstants(cmd,
                            compose_->pipeline_layout,
@@ -7565,6 +7728,28 @@ namespace lfs::vis {
         return depth;
     }
 
+    float VksplatViewportRenderer::orthographicEyeSetback(const lfs::rendering::FrameView& frame_view,
+                                                          const lfs::core::SplatData& splat_data,
+                                                          const lfs::rendering::GaussianSceneState& scene,
+                                                          const bool content_changed) {
+        if (!frame_view.orthographic) {
+            return 0.0f;
+        }
+        const auto& means = splat_data.means_raw();
+        auto& bounds = orthographic_bounds_;
+        if (content_changed || !bounds.valid || bounds.means != means.data_ptr() ||
+            bounds.count != splat_data.size() || bounds.deleted_version != splat_data.deleted_mask_version()) {
+            bounds.has_bounds = lfs::core::compute_bounds(splat_data, bounds.min, bounds.max);
+            bounds.means = means.data_ptr();
+            bounds.count = splat_data.size();
+            bounds.deleted_version = splat_data.deleted_mask_version();
+            bounds.valid = true;
+        }
+        return bounds.has_bounds ? lfs::rendering::orthographicEyeSetback(frame_view, bounds.min, bounds.max,
+                                                                          scene.model_transforms)
+                                 : 0.0f;
+    }
+
     std::expected<lfs::core::Tensor, std::string> VksplatViewportRenderer::buildSelectionMask(
         VulkanContext& context,
         const lfs::core::SplatData& splat_data,
@@ -7655,9 +7840,6 @@ namespace lfs::vis {
         }();
         if (!input_binding) {
             return std::unexpected(input_binding.error());
-        }
-        if (input_binding->model_snapshot_changed) {
-            macro_chain_warmup_pending_ = true;
         }
         // The borrowed Vulkan-external model storage stays resident across selection calls.
         // Stale data is detected via the model snapshot and its CUDA producer stream is ordered
@@ -7971,7 +8153,11 @@ namespace lfs::vis {
                                       num_splats,
                                       request.equirectangular,
                                       request.gut,
-                                      request.mip_filter);
+                                      request.mip_filter,
+                                      request.equirectangular
+                                          ? 0.0f
+                                          : orthographicEyeSetback(request.frame_view, splat_data, request.scene,
+                                                                   force_input_upload));
         VulkanGSSelectionMaskUniforms selection_uniforms{};
         selection_uniforms.num_splats = static_cast<std::uint32_t>(num_splats);
         selection_uniforms.primitive_count = static_cast<std::uint32_t>(request.primitives.size());
@@ -8235,7 +8421,7 @@ namespace lfs::vis {
         VulkanGSRendererUniforms uniforms{};
         {
             LOG_TIMER("vksplat.selection_overlay.populateUniforms");
-            const int active_sh_degree = effectiveRenderShDegree(splat_data, request.sh_degree);
+            const int active_sh_degree = effectiveRenderShDegree(splat_data, request.sh_degree, request.scene.node_active_sh_degrees);
             const int resident_sh_degree =
                 current_input_sh_degree_ >= 0
                     ? std::min(active_sh_degree, current_input_sh_degree_)
@@ -8248,9 +8434,18 @@ namespace lfs::vis {
                                           buffers_.num_splats,
                                           request.equirectangular,
                                           request.gut,
-                                          request.mip_filter);
+                                          request.mip_filter,
+                                          request.equirectangular
+                                              ? 0.0f
+                                              : orthographicEyeSetback(request.frame_view, splat_data, request.scene,
+                                                                       false));
+            uniforms.color_exposure = std::isfinite(request.color_exposure) ? std::clamp(request.color_exposure, 0.1f, 8.0f) : 1.0f;
+            uniforms.color_tonemapping = static_cast<std::uint32_t>(std::clamp(request.color_tonemapping, 0, 6));
+            uniforms.splat_render_profile = request.splat_render_profile == 1 ? 1u : 0u;
             uniforms.step = static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));
             uniforms.sort_capacity = HIGS_DEPTH_WAVE_INSTANCES;
+            if (request.depth_view || request.require_exact_depth)
+                uniforms.mip_filter |= 2u;
         }
 
         // This pass re-reads the resident sort buffers in shared arena scratch:
@@ -8259,7 +8454,8 @@ namespace lfs::vis {
         std::optional<RasterizerArenaRenderGuard> overlay_arena_guard;
         if (synchronize_input_read && shared_scratch_.block) {
             try {
-                overlay_arena_guard.emplace();
+                renewArenaHandoff();
+                overlay_arena_guard.emplace(&arena_handoff_token_, camera_navigating_);
             } catch (const std::exception& e) {
                 if (context_)
                     context_->noteFailure(e);
@@ -8304,7 +8500,8 @@ namespace lfs::vis {
                             overlay_bindings->preview_mask,
                             overlay_bindings->selection_colors,
                             overlay_bindings->overlay_params,
-                            overlay_bindings->raster_overlays_active);
+                            overlay_bindings->raster_overlays_active,
+                            true, request.exact_depth_sample_mask);
                     } else {
                         renderer_.executeLegacyDepthWaves(
                             uniforms,
@@ -8348,7 +8545,7 @@ namespace lfs::vis {
             if (renderer_.wasTimelineSignalSubmitted(render_complete_timeline_, completion_value)) {
                 last_submitted_render_value_ = completion_value;
                 if (overlay_arena_guard) {
-                    overlay_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
+                    overlay_arena_guard->awaitVulkanRelease(render_complete_cuda_.handle(), completion_value, render_stream_);
                 }
             }
             return std::unexpected(std::format("VkSplat selection overlay pass failed: {}", e.what()));
@@ -8363,7 +8560,7 @@ namespace lfs::vis {
         }
         last_submitted_render_value_ = completion_value;
         if (overlay_arena_guard) {
-            overlay_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
+            overlay_arena_guard->awaitVulkanRelease(render_complete_cuda_.handle(), completion_value, render_stream_);
         }
         if (live_submit_callback_) {
             live_submit_callback_(completion_value);
@@ -8398,7 +8595,8 @@ namespace lfs::vis {
         const lfs::rendering::ViewportRenderRequest& request,
         const bool force_input_upload,
         const OutputSlot output_slot,
-        const bool synchronize_input_upload) {
+        const bool synchronize_input_upload,
+        const bool deterministic_export) {
         const glm::ivec2 size = request.frame_view.size;
         if (size.x <= 0 || size.y <= 0) {
             return std::unexpected("VkSplat received an invalid viewport size");
@@ -8417,7 +8615,7 @@ namespace lfs::vis {
             ~RetirementReconcile() { self->clampOrphanedInputRetirements(); }
         } retirement_reconcile{this};
 
-        const int active_sh_degree = effectiveRenderShDegree(splat_data, request.sh_degree);
+        const int active_sh_degree = effectiveRenderShDegree(splat_data, request.sh_degree, request.scene.node_active_sh_degrees);
         if (auto ok = ensureInitialized(context); !ok) {
             return std::unexpected(ok.error());
         }
@@ -8466,7 +8664,15 @@ namespace lfs::vis {
                     HIGS_DEPTH_WAVE_INSTANCES));
             }
         }
-        if (const auto lod_stats = renderer_.pollDeferredLodSelectionStats()) {
+        bool lod_feedback_changed = false;
+        const auto lod_stats = renderer_.pollDeferredLodSelectionStats();
+        if (lod_stats) {
+            // Start the next frame at the threshold that actually fit. The
+            // gradual controller can refine it, but cannot undo same-frame repair.
+            if (std::isfinite(lod_stats->threshold_scale) && lod_stats->threshold_scale > 1.0f) {
+                gpu_lod_pixel_scale_feedback_ = std::min(
+                    64.0f, gpu_lod_pixel_scale_feedback_ * lod_stats->threshold_scale);
+            }
             gpu_lod_last_candidate_count_ = lod_stats->candidate_count;
             gpu_lod_last_overflow_count_ = lod_stats->overflow_count;
             const bool overflowed =
@@ -8584,6 +8790,11 @@ namespace lfs::vis {
                     0.05f,
                     64.0f);
             }
+            // Keep refining an underfilled cut without waiting for camera input.
+            // Same-frame budget repair already found a fitting cut; retrying its
+            // damped refinement at rest can cycle across a discrete tree level.
+            lod_feedback_changed = lod_stats->threshold_scale <= 1.0f &&
+                                   gpu_lod_pixel_scale_feedback_ != previous_feedback;
             if (overflowed || std::abs(gpu_lod_pixel_scale_feedback_ - previous_feedback) > 0.01f) {
                 LOG_PERF(
                     "vksplat.lod_gpu_selection candidates={} capacity={} overflow={} feedback={:.3f}",
@@ -8702,9 +8913,6 @@ namespace lfs::vis {
         }
         if (!input_binding) {
             return std::unexpected(input_binding.error());
-        }
-        if (input_binding->model_snapshot_changed) {
-            macro_chain_warmup_pending_ = true;
         }
         if (lod_request_active) {
             if (auto ok = ensureGpuLodTreeStorage(splat_data); !ok) {
@@ -8916,7 +9124,14 @@ namespace lfs::vis {
                                           buffers_.num_splats,
                                           request.equirectangular,
                                           request.gut,
-                                          request.mip_filter);
+                                          request.mip_filter,
+                                          request.equirectangular
+                                              ? 0.0f
+                                              : orthographicEyeSetback(request.frame_view, splat_data, request.scene,
+                                                                       force_input_upload));
+            uniforms.color_exposure = std::isfinite(request.color_exposure) ? std::clamp(request.color_exposure, 0.1f, 8.0f) : 1.0f;
+            uniforms.color_tonemapping = static_cast<std::uint32_t>(std::clamp(request.color_tonemapping, 0, 6));
+            uniforms.splat_render_profile = request.splat_render_profile == 1 ? 1u : 0u;
             uniforms.step = static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));
             uniforms.lod_enabled = (lod_indices_present || gpu_lod_render_active) ? 1u : 0u;
             if (lod_logical_indices_present || gpu_lod_render_active) {
@@ -8947,16 +9162,36 @@ namespace lfs::vis {
         const bool higs_candidate =
             !request.gut && renderer_.supportsFloat16Storage() && !synchronize_input_upload &&
             !depth_capture_mode_;
-        // Depth view colorizes the per-pixel median depth. mip_filter bit 1
+        // Depth view and camera-frustum occlusion consume per-pixel median depth.
+        // mip_filter bit 1
         // switches the macro compose to an exact per-pixel replay of the single
         // batch that crosses transmittance 0.5, so the map is smooth instead of
         // quantized to the crossing batch's leading splat. Bit 0 stays the mip
         // anti-aliasing flag; the raster reads them independently.
-        if (request.depth_view) {
+        if (request.depth_view || request.require_exact_depth) {
             uniforms.mip_filter |= 2u;
         }
-        const bool higs_warmup_frame = higs_candidate && macro_chain_warmup_pending_;
+        // Synchronous exports use the exact instance-count gate and must keep
+        // the same raster chain across every band, including a cold first band.
+        // Interactive viewport and sequencer previews retain their warmup.
+        // The legacy chain warms renderer initialization once. Every regular
+        // frame rebuilds projection and sort data from current inputs, so an
+        // input snapshot change does not make an already warmed macro chain cold.
+        const bool higs_warmup_frame = higs_candidate && macro_chain_warmup_pending_ &&
+                                       !deterministic_export;
         const bool higs_active = higs_candidate && !higs_warmup_frame;
+        if ((higs_active || request.gut) && output_slot == OutputSlot::Preview &&
+            request.frame_view.subregion_full_size.y > 0) {
+            // Keep projection and coverage decisions in full-image coordinates.
+            // HiGS also retains the full grid: repartitioning its depth waves
+            // per band changes half-precision blending and median depth.
+            uniforms.mip_filter |= 4u;
+            if (higs_active) {
+                uniforms.grid_width = _CEIL_DIV(uniforms.camera_width, TILE_WIDTH);
+                uniforms.grid_height = _CEIL_DIV(uniforms.camera_height, TILE_HEIGHT);
+            }
+        }
+        renderer_.setBandedExport((uniforms.mip_filter & 4u) != 0u);
         // Capture forces the non-batched per-pixel rasterizer (full pixel_depth
         // coverage); the batched compose only writes a subset of pixels.
         renderer_.setDepthCapture(depth_capture_mode_);
@@ -9037,10 +9272,14 @@ namespace lfs::vis {
                 estimateSharedScratchBytes(active_splat_count, visible_capacity, higs_active,
                                            sort_region_elems, image_width, image_height);
             shared_scratch_attempt_id = ++shared_scratch_attempt_serial_;
+            // Refresh an owned lease at the actual admission point. Frame
+            // preparation can be variable, while the trainer pause remains
+            // bounded if this retry is abandoned before reaching here.
+            renewArenaHandoff();
             if (auto ok = ensureSharedScratchArena(context, required_shared_scratch); ok) {
                 try {
                     if (!shared_arena_guard) {
-                        shared_arena_guard.emplace();
+                        shared_arena_guard.emplace(&arena_handoff_token_, camera_navigating_);
                     }
                     // Pause can detach after ensureSharedScratchArena checked
                     // installation but before this frame acquired ownership.
@@ -9276,7 +9515,8 @@ namespace lfs::vis {
                 if (higs_active) {
                     {
                         LOG_TIMER("vksplat.render.record.executeSortPrimitivesByDepth");
-                        renderer_.executeSortPrimitivesByDepthVisible(uniforms, buffers_, visible_capacity);
+                        renderer_.executeSortPrimitivesByDepthVisible(uniforms, buffers_, visible_capacity,
+                                                                      deterministic_export);
                     }
                     {
                         LOG_TIMER("vksplat.render.record.executeMacroCoverage");
@@ -9367,7 +9607,8 @@ namespace lfs::vis {
                         overlay_bindings->selection_colors,
                         overlay_bindings->overlay_params,
                         overlay_bindings->raster_overlays_active,
-                        /*predicate_waves=*/!export_wave_batch);
+                        /*predicate_waves=*/!export_wave_batch,
+                        request.exact_depth_sample_mask);
                 } else {
                     renderer_.executeLegacyDepthWaves(
                         uniforms,
@@ -9413,7 +9654,7 @@ namespace lfs::vis {
             if (renderer_.wasTimelineSignalSubmitted(render_complete_timeline_, completion_value)) {
                 last_submitted_render_value_ = completion_value;
                 if (shared_arena_guard) {
-                    shared_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
+                    shared_arena_guard->awaitVulkanRelease(render_complete_cuda_.handle(), completion_value, render_stream_);
                 }
                 if (live_submit_callback_) {
                     live_submit_callback_(completion_value);
@@ -9437,7 +9678,7 @@ namespace lfs::vis {
         resident_depth_wave_armed_ = armed_depth_waves;
         resident_sort_bits_ = depth_wave_sort_bits;
         if (shared_arena_guard) {
-            shared_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
+            shared_arena_guard->awaitVulkanRelease(render_complete_cuda_.handle(), completion_value, render_stream_);
         }
         if (live_submit_callback_) {
             live_submit_callback_(completion_value);
@@ -9486,6 +9727,12 @@ namespace lfs::vis {
               gpu_lod_frozen_frames_ < kLodAdmissionFrozenFrames) ||
              !lod_upload_engine_.idle() ||
              lod_fades_active);
+        // The readback describes a previous submission. Keep rendering until
+        // feedback for the current budget is available and its refinement ends.
+        const bool lod_feedback_active =
+            gpu_lod_select_dispatch_active &&
+            (!lod_stats || lod_stats->rendered_capacity != gpu_lod_select_capacity ||
+             lod_feedback_changed);
         return RenderResult{
             .image = output.image.image,
             .image_view = output.image.view,
@@ -9501,7 +9748,7 @@ namespace lfs::vis {
             .completion_semaphore = render_complete_timeline_,
             .completion_value = completion_value,
             .lod_page_generation = lod_page_generation,
-            .lod_streaming_active = lod_streaming_active,
+            .lod_streaming_active = lod_streaming_active || lod_feedback_active,
         };
     }
 

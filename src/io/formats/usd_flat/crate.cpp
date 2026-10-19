@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "crate.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "half.hpp"
 #include <algorithm>
@@ -16,7 +17,9 @@
 #include <utility>
 
 #ifdef _WIN32
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <fcntl.h>
@@ -80,7 +83,7 @@ namespace lfs::io::usd_flat {
             static lfs::Result<MappedFile> open(const std::filesystem::path& path) {
                 MappedFile result;
 #ifdef _WIN32
-                result.file_ = CreateFileW(path.wstring().c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                result.file_ = CreateFileW(lfs::core::native_fs::native_path(path.wstring().c_str()).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                                            FILE_ATTRIBUTE_NORMAL, nullptr);
                 if (result.file_ == INVALID_HANDLE_VALUE) {
                     return make_flat_error("Failed to open USD file: " + lfs::core::path_to_utf8(path));
@@ -99,7 +102,7 @@ namespace lfs::io::usd_flat {
 #else
                 result.fd_ = ::open(path.c_str(), O_RDONLY);
                 if (result.fd_ >= 0) {
-                    struct stat file_status {};
+                    struct stat file_status{};
                     if (::fstat(result.fd_, &file_status) == 0 && file_status.st_size >= 0) {
                         result.size_ = static_cast<std::size_t>(file_status.st_size);
                         if (result.size_ != 0) {
@@ -115,7 +118,7 @@ namespace lfs::io::usd_flat {
                     return result;
                 }
 
-                std::ifstream input(path, std::ios::binary);
+                std::ifstream input(lfs::core::native_fs::native_path(path), std::ios::binary);
                 if (!input) {
                     return make_flat_error("Failed to open USD file: " + lfs::core::path_to_utf8(path));
                 }
@@ -249,40 +252,40 @@ namespace lfs::io::usd_flat {
             output.type_name = type_name;
             if (name == "positions" || name == "positionsh" || name == "scales" || name == "scalesh" ||
                 name == "radiance:sphericalHarmonicsCoefficients" || name == "radiance:sphericalHarmonicsCoefficientsh" || name == "extent") {
-                if (const auto* values = value.as<std::vector<tinyusdz::value::float3>>()) {
-                    append_vec3(*values, output);
-                } else if (const auto* values = value.as<std::vector<tinyusdz::value::point3f>>()) {
-                    append_vec3(*values, output);
-                } else if (const auto* values = value.as<std::vector<tinyusdz::value::double3>>()) {
-                    append_vec3(*values, output);
-                } else if (const auto* values = value.as<std::vector<tinyusdz::value::half3>>()) {
-                    append_half_vec3(*values, output);
-                } else if (const auto* values = value.as<std::vector<tinyusdz::value::point3h>>()) {
-                    append_half_point3(*values, output);
+                if (const auto* float3_values = value.as<std::vector<tinyusdz::value::float3>>()) {
+                    append_vec3(*float3_values, output);
+                } else if (const auto* point3f_values = value.as<std::vector<tinyusdz::value::point3f>>()) {
+                    append_vec3(*point3f_values, output);
+                } else if (const auto* double3_values = value.as<std::vector<tinyusdz::value::double3>>()) {
+                    append_vec3(*double3_values, output);
+                } else if (const auto* half3_values = value.as<std::vector<tinyusdz::value::half3>>()) {
+                    append_half_vec3(*half3_values, output);
+                } else if (const auto* point3h_values = value.as<std::vector<tinyusdz::value::point3h>>()) {
+                    append_half_point3(*point3h_values, output);
                 }
             } else if (name == "orientations" || name == "orientationsh") {
-                if (const auto* values = value.as<std::vector<tinyusdz::value::quatf>>()) {
-                    append_quat(*values, output);
-                } else if (const auto* values = value.as<std::vector<tinyusdz::value::quath>>()) {
-                    append_quat_half(*values, output);
-                } else if (const auto* values = value.as<std::vector<tinyusdz::value::quatd>>()) {
+                if (const auto* quatf_values = value.as<std::vector<tinyusdz::value::quatf>>()) {
+                    append_quat(*quatf_values, output);
+                } else if (const auto* quath_values = value.as<std::vector<tinyusdz::value::quath>>()) {
+                    append_quat_half(*quath_values, output);
+                } else if (const auto* quatd_values = value.as<std::vector<tinyusdz::value::quatd>>()) {
                     output.components = 4;
-                    output.values.resize(values->size() * 4);
-                    for (std::size_t index = 0; index < values->size(); ++index) {
-                        output.values[index * 4 + 0] = static_cast<float>((*values)[index].real);
-                        output.values[index * 4 + 1] = static_cast<float>((*values)[index].imag[0]);
-                        output.values[index * 4 + 2] = static_cast<float>((*values)[index].imag[1]);
-                        output.values[index * 4 + 3] = static_cast<float>((*values)[index].imag[2]);
+                    output.values.resize(quatd_values->size() * 4);
+                    for (std::size_t index = 0; index < quatd_values->size(); ++index) {
+                        output.values[index * 4 + 0] = static_cast<float>((*quatd_values)[index].real);
+                        output.values[index * 4 + 1] = static_cast<float>((*quatd_values)[index].imag[0]);
+                        output.values[index * 4 + 2] = static_cast<float>((*quatd_values)[index].imag[1]);
+                        output.values[index * 4 + 3] = static_cast<float>((*quatd_values)[index].imag[2]);
                     }
                     output.authored = true;
                 }
             } else if (name == "opacities" || name == "opacitiesh") {
-                if (const auto* values = value.as<std::vector<float>>()) {
-                    append_scalar(*values, output);
-                } else if (const auto* values = value.as<std::vector<tinyusdz::value::half>>()) {
-                    append_scalar_half(*values, output);
-                } else if (const auto* values = value.as<std::vector<double>>()) {
-                    append_scalar(*values, output);
+                if (const auto* float_values = value.as<std::vector<float>>()) {
+                    append_scalar(*float_values, output);
+                } else if (const auto* half_values = value.as<std::vector<tinyusdz::value::half>>()) {
+                    append_scalar_half(*half_values, output);
+                } else if (const auto* double_values = value.as<std::vector<double>>()) {
+                    append_scalar(*double_values, output);
                 }
             } else if (name == "radiance:sphericalHarmonicsDegree") {
                 if (const auto* degree = value.as<int>()) {
@@ -382,22 +385,22 @@ namespace lfs::io::usd_flat {
             }
             if (base == "xformOp:translate" || base == "xformOp:scale" || base.rfind("xformOp:rotate", 0) == 0) {
                 std::array<double, 3> vector{};
-                if (const auto value_vector = value.get_value<tinyusdz::value::float3>()) {
+                if (const auto float3_value_vector = value.get_value<tinyusdz::value::float3>()) {
                     for (int index = 0; index < 3; ++index)
-                        vector[static_cast<std::size_t>(index)] = (*value_vector)[index];
-                } else if (const auto value_vector = value.get_value<tinyusdz::value::double3>()) {
+                        vector[static_cast<std::size_t>(index)] = (*float3_value_vector)[index];
+                } else if (const auto double3_value_vector = value.get_value<tinyusdz::value::double3>()) {
                     for (int index = 0; index < 3; ++index) {
-                        vector[static_cast<std::size_t>(index)] = (*value_vector)[index];
+                        vector[static_cast<std::size_t>(index)] = (*double3_value_vector)[index];
                     }
-                } else if (const auto value_vector = value.get_value<tinyusdz::value::half3>()) {
+                } else if (const auto half3_value_vector = value.get_value<tinyusdz::value::half3>()) {
                     for (int index = 0; index < 3; ++index)
-                        vector[static_cast<std::size_t>(index)] = half_to_float((*value_vector)[index].value);
-                } else if (const auto scalar = value.get_value<float>()) {
-                    vector[0] = *scalar;
-                } else if (const auto scalar = value.get_value<double>()) {
-                    vector[0] = *scalar;
-                } else if (const auto scalar = value.get_value<tinyusdz::value::half>()) {
-                    vector[0] = half_to_float(scalar->value);
+                        vector[static_cast<std::size_t>(index)] = half_to_float((*half3_value_vector)[index].value);
+                } else if (const auto float_scalar = value.get_value<float>()) {
+                    vector[0] = *float_scalar;
+                } else if (const auto double_scalar = value.get_value<double>()) {
+                    vector[0] = *double_scalar;
+                } else if (const auto half_scalar = value.get_value<tinyusdz::value::half>()) {
+                    vector[0] = half_to_float(half_scalar->value);
                 }
                 if (base == "xformOp:rotateY") {
                     vector[1] = vector[0];
@@ -460,13 +463,13 @@ namespace lfs::io::usd_flat {
             }
             if (base == "xformOp:orient") {
                 std::array<double, 4> quaternion{};
-                if (const auto quat = value.get_value<tinyusdz::value::quatf>()) {
-                    quaternion = {quat->real, quat->imag[0], quat->imag[1], quat->imag[2]};
-                } else if (const auto quat = value.get_value<tinyusdz::value::quatd>()) {
-                    quaternion = {quat->real, quat->imag[0], quat->imag[1], quat->imag[2]};
-                } else if (const auto quat = value.get_value<tinyusdz::value::quath>()) {
-                    quaternion = {half_to_float(quat->real.value), half_to_float(quat->imag[0].value),
-                                  half_to_float(quat->imag[1].value), half_to_float(quat->imag[2].value)};
+                if (const auto quatf_quat = value.get_value<tinyusdz::value::quatf>()) {
+                    quaternion = {quatf_quat->real, quatf_quat->imag[0], quatf_quat->imag[1], quatf_quat->imag[2]};
+                } else if (const auto quatd_quat = value.get_value<tinyusdz::value::quatd>()) {
+                    quaternion = {quatd_quat->real, quatd_quat->imag[0], quatd_quat->imag[1], quatd_quat->imag[2]};
+                } else if (const auto quath_quat = value.get_value<tinyusdz::value::quath>()) {
+                    quaternion = {half_to_float(quath_quat->real.value), half_to_float(quath_quat->imag[0].value),
+                                  half_to_float(quath_quat->imag[1].value), half_to_float(quath_quat->imag[2].value)};
                 }
                 const double w = quaternion[0], x = quaternion[1], y = quaternion[2], z = quaternion[3];
                 result[0] = 1 - 2 * (y * y + z * z);
@@ -1161,7 +1164,7 @@ namespace lfs::io::usd_flat {
         }
         offset = padded(offset);
         const std::size_t toc_offset = padded(data_base + blob_offset);
-        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        std::ofstream output(lfs::core::native_fs::native_path(path), std::ios::binary | std::ios::trunc);
         if (!output)
             return lfs::Status::failure(make_flat_error("Failed to open USD crate for writing: " + lfs::core::path_to_utf8(path)));
 

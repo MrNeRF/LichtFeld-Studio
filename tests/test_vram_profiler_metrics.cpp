@@ -97,10 +97,12 @@ namespace {
 
     TEST_F(VramProfilerMetricsTest, TopLiveSortedByLiveBytes) {
         auto& p = VramProfiler::instance();
-        // Use recordCurrentBytes (no real pointers needed).
-        p.recordCurrentBytes("test.small", "tensor", 1024, VramAllocationMethod::External);
-        p.recordCurrentBytes("test.large", "tensor", 1024 * 1024 * 32, VramAllocationMethod::External);
-        p.recordCurrentBytes("test.medium", "tensor", 1024 * 1024, VramAllocationMethod::External);
+        // Use recordCurrentBytes (no real pointers needed). Persistent scopes from earlier tests
+        // survive the reset and top_live keeps ten entries, so these must outrank any real sample.
+        constexpr std::size_t kTiB = std::size_t{1} << 40;
+        p.recordCurrentBytes("test.small", "tensor", kTiB, VramAllocationMethod::External);
+        p.recordCurrentBytes("test.large", "tensor", 4 * kTiB, VramAllocationMethod::External);
+        p.recordCurrentBytes("test.medium", "tensor", 2 * kTiB, VramAllocationMethod::External);
 
         const auto snap = p.snapshot();
         std::vector<std::string> test_scopes;
@@ -296,3 +298,17 @@ namespace {
     }
 
 } // namespace
+
+TEST_F(VramProfilerMetricsTest, UnavailableProcessSampleDoesNotBecomeDeviceUsage) {
+    auto& p = VramProfiler::instance();
+    p.updateProcessMemory(0, 500, 1000, "test GPU");
+    auto snapshot = p.snapshot();
+    EXPECT_FALSE(snapshot.process.process_memory_valid);
+    EXPECT_EQ(snapshot.process.process_used, 0u);
+    EXPECT_EQ(snapshot.process.total_used, 500u);
+    p.updateProcessMemory(200, 1700, 1000, "test GPU");
+    snapshot = p.snapshot();
+    EXPECT_TRUE(snapshot.process.process_memory_valid);
+    EXPECT_EQ(snapshot.process.process_used, 200u);
+    EXPECT_EQ(snapshot.process.total_used, 1000u);
+}

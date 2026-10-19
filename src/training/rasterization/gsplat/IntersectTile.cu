@@ -17,7 +17,7 @@ namespace gsplat_lfs {
 
     namespace cg = cooperative_groups;
 
-    template <typename scalar_t>
+    template <typename scalar_t, bool kBatched>
     __global__ void intersect_tile_kernel(
         const bool packed,
         const uint32_t C,
@@ -36,7 +36,7 @@ namespace gsplat_lfs {
         int32_t* __restrict__ tiles_per_gauss,
         int64_t* __restrict__ isect_ids,
         int32_t* __restrict__ flatten_ids,
-        const int64_t max_isects) {
+        const int64_t max_isects, const TileRange tiles) {
         uint32_t idx = cg::this_grid().thread_rank();
         bool first_pass = cum_tiles_per_gauss == nullptr;
         if (idx >= (packed ? nnz : C * N)) {
@@ -65,9 +65,31 @@ namespace gsplat_lfs {
         tile_max.x = min(max(0, (uint32_t)ceil(tile_x + tile_radius_x)), tile_width);
         tile_max.y = min(max(0, (uint32_t)ceil(tile_y + tile_radius_y)), tile_height);
 
+        // Intersection of the original rectangle with a linear tile interval.
+        // Count prefix rectangles in O(1); no new geometric predicate.
+        if constexpr (kBatched) {
+            tile_min.y = max(tile_min.y, tiles.begin / tile_width);
+            tile_max.y = min(tile_max.y, (tiles.end - 1) / tile_width + 1);
+        }
         if (first_pass) {
-            tiles_per_gauss[idx] = static_cast<int32_t>(
-                (tile_max.y - tile_min.y) * (tile_max.x - tile_min.x));
+            if constexpr (!kBatched) {
+                tiles_per_gauss[idx] = static_cast<int32_t>(
+                    (tile_max.y - tile_min.y) * (tile_max.x - tile_min.x));
+                return;
+            }
+            int64_t count = 0;
+            if (tile_max.y > tile_min.y && tile_max.x > tile_min.x) {
+                count = int64_t(tile_max.y - tile_min.y) * (tile_max.x - tile_min.x);
+                if constexpr (kBatched) {
+                    if (tile_min.y == tiles.begin / tile_width)
+                        count -= min(tile_max.x - tile_min.x,
+                                     max(tiles.begin % tile_width, tile_min.x) - tile_min.x);
+                    if (tile_max.y == (tiles.end - 1) / tile_width + 1)
+                        count -= tile_max.x - min(tile_max.x,
+                                                  max((tiles.end - 1) % tile_width + 1, tile_min.x));
+                }
+            }
+            tiles_per_gauss[idx] = static_cast<int32_t>(count);
             return;
         }
 
@@ -84,7 +106,14 @@ namespace gsplat_lfs {
 
         int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_gauss[idx - 1];
         for (int32_t i = tile_min.y; i < tile_max.y; ++i) {
-            for (int32_t j = tile_min.x; j < tile_max.x; ++j) {
+            uint32_t x_begin = tile_min.x, x_end = tile_max.x;
+            if constexpr (kBatched) {
+                if (i == tiles.begin / tile_width)
+                    x_begin = max(x_begin, tiles.begin % tile_width);
+                if (i == (tiles.end - 1) / tile_width)
+                    x_end = min(x_end, (tiles.end - 1) % tile_width + 1);
+            }
+            for (int32_t j = x_begin; j < x_end; ++j) {
                 if (max_isects >= 0 && cur_idx >= max_isects) {
                     return;
                 }
@@ -114,7 +143,7 @@ namespace gsplat_lfs {
         int64_t* isect_ids,
         int32_t* flatten_ids,
         cudaStream_t stream,
-        int64_t max_isects) {
+        int64_t max_isects, TileRange tiles) {
         int64_t n_elements = packed ? nnz : C * N;
 
         uint32_t n_tiles = tile_width * tile_height;
@@ -127,15 +156,21 @@ namespace gsplat_lfs {
         dim3 threads(256);
         dim3 grid((n_elements + threads.x - 1) / threads.x);
 
-        intersect_tile_kernel<float><<<grid, threads, 0, stream>>>(
-            packed,
-            C, N, nnz,
-            camera_ids, gaussian_ids,
-            means2d, radii, depths,
-            cum_tiles_per_gauss,
-            tile_size, tile_width, tile_height, tile_n_bits,
-            tiles_per_gauss, isect_ids, flatten_ids, max_isects);
-        LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.intersect_tile");
+        auto launch = [&]<bool kBatched>() {
+            intersect_tile_kernel<float, kBatched><<<grid, threads, 0, stream>>>(
+                packed,
+                C, N, nnz,
+                camera_ids, gaussian_ids,
+                means2d, radii, depths,
+                cum_tiles_per_gauss,
+                tile_size, tile_width, tile_height, tile_n_bits,
+                tiles_per_gauss, isect_ids, flatten_ids, max_isects, tiles);
+            LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.intersect_tile");
+        };
+        if (tiles.end == UINT32_MAX)
+            launch.template operator()<false>();
+        else
+            launch.template operator()<true>();
     }
 
     __global__ void fill_isect_sentinels_kernel(

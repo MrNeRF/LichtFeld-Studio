@@ -133,6 +133,23 @@ namespace lfs::io {
         std::uint32_t target_chunk_size,
         const RechunkProgressCallback& progress = nullptr,
         std::optional<core::ProvenanceStamp> provenance = {});
+    struct RadPagingOrder {
+        std::vector<std::uint32_t> order; // file position -> source node
+        std::vector<std::uint16_t> child_count;
+        std::vector<std::uint32_t> child_start;
+    };
+    // Spark pages a streamed LOD file in 64K-splat chunks and keeps a bounded
+    // number of them resident. Its own builder lays the tree out so chunk 0
+    // holds the coarsest cut of the whole scene and every later chunk refines
+    // one spatial region; this reproduces that layout for a children-contiguous
+    // tree rooted at node 0. Empty when the root does not reach every node.
+    [[nodiscard]] RadPagingOrder spark_paging_order(
+        std::span<const float> means,
+        std::span<const float> scales,
+        std::span<const float> rotation_wxyz,
+        std::span<const float> opacity,
+        std::span<const std::uint16_t> child_count,
+        std::span<const std::uint32_t> child_start);
     // Exposed for tests: scatter-derive parent/level over a BFS level-ordered,
     // children-contiguous links plane. child_start may be non-monotone across
     // parents within a level (multi-bucket converter layouts).

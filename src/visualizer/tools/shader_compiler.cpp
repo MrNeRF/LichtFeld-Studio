@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/native_fs.hpp"
 #include <glslang/Public/ResourceLimits.h>
 #include <glslang/Public/ShaderLang.h>
 #include <glslang/SPIRV/GlslangToSpv.h>
@@ -90,11 +91,32 @@ namespace {
         std::ifstream file;
         lfs::core::open_file_for_read(path, std::ios::binary, file);
         if (!file) {
-            std::cerr << "Failed to open shader source: " << path << '\n';
+            std::cerr << "Failed to open shader source: " << lfs::core::path_to_utf8(path) << '\n';
             return std::nullopt;
         }
         return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
     }
+
+    class LocalShaderIncluder final : public glslang::TShader::Includer {
+    public:
+        IncludeResult* includeLocal(const char* header, const char* includer, size_t depth) override {
+            if (depth > 32)
+                return nullptr;
+            const auto path = lfs::core::utf8_to_path(includer).parent_path() / lfs::core::utf8_to_path(header);
+            auto text = readTextFile(path);
+            if (!text)
+                return nullptr;
+            auto* owned = new std::string(std::move(*text));
+            return new IncludeResult(lfs::core::path_to_utf8(path), owned->data(), owned->size(), owned);
+        }
+        IncludeResult* includeSystem(const char*, const char*, size_t) override { return nullptr; }
+        void releaseInclude(IncludeResult* result) override {
+            if (result) {
+                delete static_cast<std::string*>(result->userData);
+                delete result;
+            }
+        }
+    };
 
     [[nodiscard]] std::optional<std::vector<std::uint32_t>> compileGlsl(
         const std::filesystem::path& input,
@@ -111,8 +133,9 @@ namespace {
         shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_0);
 
         constexpr auto messages = static_cast<EShMessages>(EShMsgSpvRules | EShMsgVulkanRules);
-        if (!shader.parse(GetDefaultResources(), 450, false, messages)) {
-            std::cerr << "Failed to compile " << input << ":\n"
+        LocalShaderIncluder includer;
+        if (!shader.parse(GetDefaultResources(), 450, false, messages, includer)) {
+            std::cerr << "Failed to compile " << lfs::core::path_to_utf8(input) << ":\n"
                       << shader.getInfoLog() << '\n'
                       << shader.getInfoDebugLog() << '\n';
             return std::nullopt;
@@ -121,7 +144,7 @@ namespace {
         glslang::TProgram program;
         program.addShader(&shader);
         if (!program.link(messages)) {
-            std::cerr << "Failed to link " << input << ":\n"
+            std::cerr << "Failed to link " << lfs::core::path_to_utf8(input) << ":\n"
                       << program.getInfoLog() << '\n'
                       << program.getInfoDebugLog() << '\n';
             return std::nullopt;
@@ -137,13 +160,13 @@ namespace {
         const std::string_view symbol,
         const std::vector<std::uint32_t>& spirv) {
         if (const auto parent = output.parent_path(); !parent.empty()) {
-            std::filesystem::create_directories(parent);
+            lfs::core::native_fs::create_directories(parent);
         }
 
         std::ofstream file;
         lfs::core::open_file_for_write(output, std::ios::binary | std::ios::trunc, file);
         if (!file) {
-            std::cerr << "Failed to open generated header: " << output << '\n';
+            std::cerr << "Failed to open generated header: " << lfs::core::path_to_utf8(output) << '\n';
             return false;
         }
 

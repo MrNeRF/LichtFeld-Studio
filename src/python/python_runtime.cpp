@@ -7,6 +7,7 @@
 #include "core/modal_event.hpp"
 #include "core/operator_callbacks.hpp"
 #include "gil.hpp"
+#include "visualizer/visualizer.hpp"
 
 #include <atomic>
 #include <cassert>
@@ -73,6 +74,8 @@ namespace lfs::python {
         // Sequencer timeline callbacks
         HasKeyframesCallback g_has_keyframes_cb = nullptr;
         SaveCameraPathCallback g_save_camera_path_cb = nullptr;
+        GetCameraPathDataCallback g_get_camera_path_data_cb = nullptr;
+        SetCameraPathDataCallback g_set_camera_path_data_cb = nullptr;
         LoadCameraPathCallback g_load_camera_path_cb = nullptr;
         ClearKeyframesCallback g_clear_keyframes_cb = nullptr;
         SetPlaybackSpeedCallback g_set_playback_speed_cb = nullptr;
@@ -104,6 +107,8 @@ namespace lfs::python {
         GetThumbnailTextureCallback g_get_thumbnail_texture_cb = nullptr;
 
         // Viewport overlay callbacks
+        GetUIListInstanceCallback g_uilist_instance_cb = nullptr;
+        WrapUIListLayoutCallback g_uilist_layout_cb = nullptr;
         HasViewportDrawHandlersCallback g_has_viewport_draw_handlers_cb = nullptr;
         InvokeViewportOverlayCallback g_invoke_viewport_overlay_cb = nullptr;
         SyncViewportOverlayDocumentCallback g_sync_viewport_overlay_document_cb = nullptr;
@@ -349,6 +354,28 @@ namespace lfs::python {
     void set_visualizer(vis::Visualizer* viewer) { g_visualizer.store(viewer); }
     vis::Visualizer* get_visualizer() { return g_visualizer.load(); }
 
+    void markProjectSessionChapterCommitted(
+        const std::string_view chapter) {
+        auto* const viewer = get_visualizer();
+        if (!viewer)
+            return;
+        if (viewer->isOnViewerThread()) {
+            viewer->projectMarkSessionChapterCommitted(chapter);
+            return;
+        }
+        // Panel callbacks can be deferred until after session restore returns.
+        if (viewer->projectSessionRestoreInProgress())
+            return;
+        if (!viewer->acceptsPostedWork())
+            return;
+        const std::string chapter_copy(chapter);
+        viewer->postWork({.run = [viewer, chapter_copy] {
+            if (get_visualizer() == viewer &&
+                !viewer->projectSessionRestoreInProgress())
+                viewer->projectMarkSessionChapterCommitted(chapter_copy);
+        }});
+    }
+
     void set_parameter_manager(vis::ParameterManager* pm) { g_parameter_manager.store(pm); }
     vis::ParameterManager* get_parameter_manager() { return g_parameter_manager.load(); }
 
@@ -550,6 +577,19 @@ namespace lfs::python {
 
     bool save_camera_path(const std::string& path) {
         return g_save_camera_path_cb ? g_save_camera_path_cb(path) : false;
+    }
+
+    void set_camera_path_data_callbacks(GetCameraPathDataCallback get_cb, SetCameraPathDataCallback set_cb) {
+        g_get_camera_path_data_cb = get_cb;
+        g_set_camera_path_data_cb = set_cb;
+    }
+
+    std::string get_camera_path_data() {
+        return g_get_camera_path_data_cb ? g_get_camera_path_data_cb() : "null";
+    }
+
+    bool set_camera_path_data(const std::string& value) {
+        return g_set_camera_path_data_cb ? g_set_camera_path_data_cb(value) : false;
     }
 
     bool load_camera_path(const std::string& path) {
@@ -823,6 +863,22 @@ namespace lfs::python {
     void unregister_rml_document(const char* name) {
         if (g_rml_doc_unregister_cb)
             g_rml_doc_unregister_cb(name);
+    }
+
+    namespace {
+        RmlDocPendingCallback rml_doc_pending_callback = nullptr;
+    }
+
+    void set_rml_doc_pending_callback(RmlDocPendingCallback callback) {
+        rml_doc_pending_callback = callback;
+    }
+
+    bool has_pending_rml_document_updates(void* doc) {
+        return doc && rml_doc_pending_callback && rml_doc_pending_callback(doc, false);
+    }
+
+    bool consume_pending_rml_document_updates(void* doc) {
+        return doc && rml_doc_pending_callback && rml_doc_pending_callback(doc, true);
     }
 
     void set_ensure_initialized_callback(EnsureInitializedCallback cb) {
@@ -1524,6 +1580,19 @@ namespace lfs::python {
         if (g_signal_bridge_callbacks.flush) {
             g_signal_bridge_callbacks.flush();
         }
+    }
+
+    void set_uilist_callbacks(GetUIListInstanceCallback get_instance, WrapUIListLayoutCallback wrap_layout) {
+        g_uilist_instance_cb = get_instance;
+        g_uilist_layout_cb = wrap_layout;
+    }
+
+    void* wrap_uilist_layout(void* layout) {
+        return g_uilist_layout_cb ? g_uilist_layout_cb(layout) : nullptr;
+    }
+
+    void* get_uilist_instance(const char* id) {
+        return g_uilist_instance_cb ? g_uilist_instance_cb(id) : nullptr;
     }
 
     void set_viewport_overlay_callbacks(HasViewportDrawHandlersCallback has_cb,

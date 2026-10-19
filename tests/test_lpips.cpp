@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -286,6 +287,29 @@ TEST_F(LpipsTest, WideImageEstimateCoversNewDeviceAllocations) {
     EXPECT_LT(model->estimated_peak_bytes(512, 6000), required);
     model->release_activations();
     EXPECT_EQ(model->estimated_peak_bytes(512, 6000), required);
+    Tensor::trim_memory_pool();
+}
+
+TEST_F(LpipsTest, MaskedWideImageEstimateCoversMaskBuffers) {
+    auto model = load_model(DataType::Float16);
+    ASSERT_TRUE(model);
+    auto [a, b] = synthetic_pair(512, 6000);
+    const auto mask = Tensor::ones({512, 6000}, Device::CUDA);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    Tensor::trim_memory_pool();
+    const auto required = model->estimated_peak_bytes(512, 6000, true);
+    EXPECT_GT(required, model->estimated_peak_bytes(512, 6000));
+    std::size_t free_before, free_after, total;
+    ASSERT_EQ(cudaMemGetInfo(&free_before, &total), cudaSuccess);
+    if (free_before < required)
+        GTEST_SKIP() << "Not enough free VRAM for the allocation regression";
+    auto value = model->forward(a, b, mask);
+    ASSERT_TRUE(value) << value.error().detail();
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    ASSERT_EQ(cudaMemGetInfo(&free_after, &total), cudaSuccess);
+    if (free_after < free_before)
+        EXPECT_LE(free_before - free_after, required);
+    model->release_activations();
     Tensor::trim_memory_pool();
 }
 
@@ -583,4 +607,112 @@ TEST(EvalMetricsTest, EvalMetricsCsvRow) {
     EXPECT_NE(with.to_csv_row().find("30.000000,0.900000,0.123456,"), std::string::npos);
     with.valid = true;
     EXPECT_NE(with.to_string().find("LPIPS: 0.1235"), std::string::npos);
+}
+
+namespace {
+    struct Region {
+        std::size_t y0, y1, x0, x1;
+    };
+
+    Tensor region_mask(const Tensor& image, const Region& region) {
+        assert(image.ndim() == 4 && image.shape()[0] == 1);
+        const auto height = image.shape()[2];
+        const auto width = image.shape()[3];
+        std::vector<float> values(height * width, 0.0f);
+        for (std::size_t y = region.y0; y < region.y1; ++y)
+            std::fill_n(values.begin() + static_cast<std::ptrdiff_t>(y * width + region.x0), region.x1 - region.x0, 1.0f);
+        return Tensor::from_vector(values, lfs::core::TensorShape({height, width}), Device::CUDA);
+    }
+
+    Tensor keep_region(const Tensor& image, const Tensor& mask) {
+        return image * mask.unsqueeze(0).unsqueeze(0).expand(
+                           {1, 3, static_cast<int>(mask.shape()[0]), static_cast<int>(mask.shape()[1])});
+    }
+
+    Tensor crop(const Tensor& image, const Region& region) {
+        return image.slice(2, region.y0, region.y1).slice(3, region.x0, region.x1).contiguous();
+    }
+
+    struct PathConfig {
+        DataType dtype;
+        std::size_t budget;
+    };
+    constexpr std::array<PathConfig, 4> kAllPaths{{{DataType::Float32, 1536ULL << 20},
+                                                   {DataType::Float32, 64ULL << 20},
+                                                   {DataType::Float16, 1536ULL << 20},
+                                                   {DataType::Float16, 24ULL << 20}}};
+
+    Lpips load_path(const PathConfig& path) {
+        auto loaded = Lpips::load(weights_path(), Device::CUDA, path.dtype,
+                                  lfs::core::nn::models::InputScaling::Identity, path.budget);
+        if (!loaded)
+            throw std::runtime_error(std::string(loaded.error().detail()));
+        return std::move(*loaded);
+    }
+} // namespace
+
+// Catches the masked reduction diverging from the plain spatial mean when every pixel is selected.
+TEST_F(LpipsTest, FullMaskMatchesUnmaskedInEveryPath) {
+    const auto [a, b] = synthetic_pair(257, 319);
+    const auto everything = Tensor::ones(lfs::core::TensorShape({257, 319}), Device::CUDA);
+    for (const auto& path : kAllPaths) {
+        auto model = load_path(path);
+        const auto unmasked = model.forward(a, b);
+        const auto masked = model.forward(a, b, everything);
+        ASSERT_TRUE(unmasked.has_value()) << unmasked.error().detail();
+        ASSERT_TRUE(masked.has_value()) << masked.error().detail();
+        EXPECT_NEAR(*masked, *unmasked, 1e-5f) << "budget " << (path.budget >> 20) << " MiB";
+        model.release_activations();
+    }
+}
+
+// Catches dilution by the unselected area: a mask covering a quarter of the frame must report the
+// LPIPS of that region, not a quarter of it.
+TEST_F(LpipsTest, MaskedValueMatchesTheRegionCrop) {
+    const auto [crop_a_path, crop_b_path] = crop_pair_paths();
+    if (!fs::is_regular_file(crop_a_path) || !fs::is_regular_file(crop_b_path))
+        GTEST_SKIP() << "LPIPS lossless crop pair is absent";
+    const auto a = load_rgb(crop_a_path);
+    const auto b = load_rgb(crop_b_path);
+    constexpr Region region{64, 192, 64, 192};
+    const auto mask = region_mask(a, region);
+    for (const auto dtype : {DataType::Float32, DataType::Float16}) {
+        auto model = load_model(dtype);
+        ASSERT_TRUE(model.has_value());
+        const auto masked = model->forward(keep_region(a, mask), keep_region(b, mask), mask);
+        const auto region_only = model->forward(crop(a, region), crop(b, region));
+        ASSERT_TRUE(masked.has_value()) << masked.error().detail();
+        ASSERT_TRUE(region_only.has_value()) << region_only.error().detail();
+        std::cout << "LPIPS_MASKED masked=" << *masked << " region=" << *region_only << std::endl;
+        EXPECT_NEAR(*masked, *region_only, 0.1f * *region_only);
+        model->release_activations();
+    }
+}
+
+// Catches tile offsets misaligning the per-layer mask weights with the tile interiors.
+TEST_F(LpipsTest, MaskedTilingMatchesUntiled) {
+    const auto [a, b] = synthetic_pair(257, 319);
+    const auto mask = region_mask(a, Region{40, 200, 70, 290});
+    const auto masked_a = keep_region(a, mask);
+    const auto masked_b = keep_region(b, mask);
+    for (std::size_t untiled_index : {0U, 2U}) {
+        auto untiled = load_path(kAllPaths[untiled_index]);
+        auto tiled = load_path(kAllPaths[untiled_index + 1]);
+        ASSERT_LT(tiled.tile_size_for(257, 319) + 224, 319U);
+        const auto expected = untiled.forward(masked_a, masked_b, mask);
+        const auto actual = tiled.forward(masked_a, masked_b, mask);
+        ASSERT_TRUE(expected.has_value()) << expected.error().detail();
+        ASSERT_TRUE(actual.has_value()) << actual.error().detail();
+        EXPECT_NEAR(*actual, *expected, 1e-5f);
+        untiled.release_activations();
+        tiled.release_activations();
+    }
+}
+
+TEST_F(LpipsTest, EmptyMaskIsRejected) {
+    auto model = load_model();
+    ASSERT_TRUE(model.has_value());
+    const auto image = Tensor::full(lfs::core::TensorShape({3, 64, 64}), 0.5f, Device::CUDA);
+    const auto empty = Tensor::zeros(lfs::core::TensorShape({64, 64}), Device::CUDA);
+    EXPECT_FALSE(model->forward(image, image, empty).has_value());
 }

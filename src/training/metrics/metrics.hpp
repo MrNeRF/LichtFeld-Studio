@@ -5,21 +5,32 @@
 #pragma once
 
 #include "../dataset.hpp"
+#include "core/error.hpp"
 #include "core/nn/models/lpips.hpp"
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "training/optimizer/render_output.hpp"
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <expected>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <functional>
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
+
+namespace lfs::io {
+    class MaskDirCache;
+}
 
 namespace lfs::training {
 
@@ -44,18 +55,88 @@ namespace lfs::training {
         float compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
                       const lfs::core::Tensor& mask = {});
 
+        // Preserve complete-window scoring where available; normalize partial windows. Complete windows read the
+        // unmasked SSIM map, which shared_map keeps across calls on the same image pair when given.
+        float compute_evaluation(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
+                                 const lfs::core::Tensor& mask, bool complete_windows_only,
+                                 std::string_view camera_name, lfs::core::Tensor* shared_map = nullptr);
+
     private:
+        float compute_impl(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
+                           const lfs::core::Tensor& mask, bool normalize_windows,
+                           lfs::core::Tensor* shared_map = nullptr);
         bool apply_valid_padding_;
+    };
+
+    // Scores of one pixel set listed in eval_mask_report.
+    struct MaskSetMetrics {
+        std::optional<float> psnr;
+        std::optional<float> ssim;
+        std::optional<float> lpips;
+        std::optional<float> flip;
+        float evaluated_pixel_fraction = 0.0f;
+        std::string skipped_reason;
+    };
+
+    // The scores of every scored pixel set, the headline set's included.
+    struct PixelSetScores {
+        std::array<std::optional<MaskSetMetrics>, lfs::core::param::kEvalPixelSets.size()> by_set;
+
+        [[nodiscard]] std::optional<MaskSetMetrics>& operator[](const lfs::core::param::EvalPixelSet set) {
+            return by_set[static_cast<size_t>(set)];
+        }
+        [[nodiscard]] const std::optional<MaskSetMetrics>& operator[](const lfs::core::param::EvalPixelSet set) const {
+            return by_set[static_cast<size_t>(set)];
+        }
+        [[nodiscard]] bool any() const {
+            return std::ranges::any_of(by_set, [](const auto& set) { return set.has_value(); });
+        }
+    };
+
+    // Key of a pixel set's object in per_image_metrics.json and compare.json.
+    [[nodiscard]] inline constexpr std::string_view pixel_set_json_key(const lfs::core::param::EvalPixelSet set) {
+        return set == lfs::core::param::EvalPixelSet::Mask ? "masked" : lfs::core::param::eval_pixel_set_name(set);
+    }
+
+    [[nodiscard]] inline constexpr std::string_view pixel_set_label(const lfs::core::param::EvalPixelSet set) {
+        switch (set) {
+        case lfs::core::param::EvalPixelSet::Mask:
+            return "Mask";
+        case lfs::core::param::EvalPixelSet::Unmasked:
+            return "Unmasked";
+        case lfs::core::param::EvalPixelSet::Inverted:
+            return "Inverted";
+        }
+        return "Mask";
+    }
+
+    struct ViewMetrics {
+        int index = 0;
+        std::string image_name;
+        int width = 0;
+        int height = 0;
+        std::optional<float> psnr;
+        std::optional<float> ssim;
+        std::optional<float> lpips;
+        std::optional<float> flip;
+        bool masked = false;
+        int bit_depth = 8;
+        float evaluated_pixel_fraction = 0.0f;
+        bool validity_mask_applied = false;
+        std::string skipped_reason;
+        PixelSetScores sets;
     };
 
     struct EvalMetrics {
         float psnr = 0.0f;
         float ssim = 0.0f;
         std::optional<float> lpips;
+        std::optional<float> flip;
         float elapsed_time = 0.0f;
         int num_gaussians = 0;
         int iteration = 0;
         bool valid = false;
+        bool cancelled = false;
         std::optional<float> normal_angle_deg;
         std::optional<float> depth_absrel;
         float bias_r = 0.0f;
@@ -64,17 +145,29 @@ namespace lfs::training {
         float bias_corr_r = 0.0f;
         float bias_corr_g = 0.0f;
         float bias_corr_b = 0.0f;
+        // With scored pixel sets, the fields above are the headline set's.
+        lfs::core::param::EvalPixelSet headline = lfs::core::param::EvalPixelSet::Mask;
+        PixelSetScores sets;
+        std::vector<ViewMetrics> views;
 
         [[nodiscard]] std::string to_string() const {
+            if (cancelled) {
+                return "Evaluation stopped";
+            }
             if (!valid) {
                 return "No valid evaluation images";
             }
             std::stringstream ss;
             ss << std::fixed << std::setprecision(4);
+            if (sets.any())
+                ss << pixel_set_label(headline) << " ";
             ss << "PSNR: " << psnr
                << ", SSIM: " << ssim;
             if (lpips && std::isfinite(*lpips)) {
                 ss << ", LPIPS: " << *lpips;
+            }
+            if (flip && std::isfinite(*flip)) {
+                ss << ", FLIP: " << *flip;
             }
             ss << ", Time: " << elapsed_time << "s/image"
                << ", #GS: " << num_gaussians
@@ -89,8 +182,24 @@ namespace lfs::training {
             return ss.str();
         }
 
+        [[nodiscard]] std::vector<std::string> mask_set_summaries() const {
+            const auto score = [](const std::optional<float>& value) {
+                return value && std::isfinite(*value) ? std::format("{:.4f}", *value) : std::string("-");
+            };
+            std::vector<std::string> lines;
+            for (const auto pixel_set : lfs::core::param::kEvalPixelSets) {
+                const auto& set = sets[pixel_set];
+                if (set && pixel_set != headline)
+                    lines.push_back(std::format("{} PSNR: {}, SSIM: {}, LPIPS: {}{}, pixels: {:.1f}%",
+                                                pixel_set_label(pixel_set), score(set->psnr), score(set->ssim),
+                                                score(set->lpips), set->flip ? ", FLIP: " + score(set->flip) : "",
+                                                100.0f * set->evaluated_pixel_fraction));
+            }
+            return lines;
+        }
+
         static std::string to_csv_header() {
-            return "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b";
+            return "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b,flip";
         }
 
         [[nodiscard]] std::string to_csv_row() const {
@@ -113,12 +222,142 @@ namespace lfs::training {
                 ss << *depth_absrel;
             }
             ss << "," << bias_r << "," << bias_g << "," << bias_b
-               << "," << bias_corr_r << "," << bias_corr_g << "," << bias_corr_b;
+               << "," << bias_corr_r << "," << bias_corr_g << "," << bias_corr_b << ",";
+            if (flip && std::isfinite(*flip)) {
+                ss << *flip;
+            }
             return ss.str();
         }
     };
 
     [[nodiscard]] lfs::core::Tensor image_for_metrics_and_save(const lfs::core::Tensor& image);
+    // 8 or 16 quantizes to that integer grid, 32 (float references) only clamps to [0, 1].
+    [[nodiscard]] lfs::core::Tensor image_for_metrics(const lfs::core::Tensor& image, int bit_depth);
+    [[nodiscard]] int evaluation_bit_depth(const std::filesystem::path& reference,
+                                           lfs::core::param::EvalBitDepth setting);
+
+    struct EvaluationViewInputs {
+        lfs::core::Tensor gt_image;
+        lfs::core::Tensor user_mask;
+        int source_width = 0;
+        int source_height = 0;
+        int bit_depth = 8;
+    };
+
+    struct EvaluationRenderResult {
+        RenderOutput output;
+        lfs::core::Tensor raw_image;
+    };
+
+    struct EvaluationRenderGeometry {
+        int width = 0;
+        int height = 0;
+        float fx = 0.0f;
+        float fy = 0.0f;
+        float cx = 0.0f;
+        float cy = 0.0f;
+        bool undistorted = false;
+    };
+
+    struct PreparedEvaluationView {
+        EvaluationViewInputs inputs;
+        RenderOutput output;
+        lfs::core::Tensor raw_image;
+        lfs::core::Tensor metric_mask;
+        lfs::core::Tensor validity_mask; // [H,W] where the render warped to the source grid has a pixel
+        EvaluationRenderGeometry render_geometry;
+        bool validity_mask_applied = false;
+        bool erode_ssim_mask = false;
+        bool user_mask_applied = false;
+    };
+
+    struct EvaluationMesh {
+        lfs::core::Tensor vertices; // [V,3] CUDA Float32 in the training world frame
+        lfs::core::Tensor indices;  // [F,3] CUDA Int32
+        float z_near = 0.0f;
+        bool invert = false;
+    };
+
+    struct EvaluationPoints {
+        lfs::core::Tensor means; // [N,3] CUDA Float32 in the training world frame
+        int radius = 2;
+        int close = 3;
+    };
+
+    // A splat whose rendered coverage selects the evaluated pixels.
+    struct EvaluationSplat {
+        lfs::core::SplatData model; // CUDA, SH degree 0, in the training world frame
+        float opacity = 0.85f;      // rendered opacity a pixel needs to count as covered
+    };
+
+    struct EvaluationMaskSources {
+        const EvaluationMesh* mesh = nullptr;
+        const EvaluationPoints* points = nullptr;
+        const lfs::io::MaskDirCache* folder = nullptr;
+        const EvaluationSplat* splat = nullptr;
+    };
+
+    [[nodiscard]] lfs::Result<EvaluationMesh> load_evaluation_mesh(
+        const std::filesystem::path& path, const std::array<float, 3>& training_origin);
+
+    // A splat PLY moved into the training frame, kept with its geometry and opacity only.
+    [[nodiscard]] lfs::Result<lfs::core::SplatData> load_evaluation_splat(
+        const std::filesystem::path& path, const std::array<float, 3>& training_origin);
+
+    // Positions [N,3] of a splat or point cloud PLY, moved into the training frame.
+    [[nodiscard]] lfs::Result<lfs::core::Tensor> load_evaluation_points(
+        const std::filesystem::path& path, const std::array<float, 3>& training_origin);
+
+    // Closed box from 8 corners in the training frame, corner index bits = (x, y, z) side; selected exactly like a mesh.
+    [[nodiscard]] EvaluationMesh make_evaluation_box(const std::array<std::array<float, 3>, 8>& corners, bool invert);
+    [[nodiscard]] std::array<std::array<float, 3>, 8> axis_aligned_box_corners(
+        const std::array<float, 6>& box, const std::array<float, 3>& training_origin);
+
+    using EvaluationRenderFn =
+        std::function<lfs::Result<EvaluationRenderResult>(lfs::core::Camera&, float)>;
+    // Receives the dataset view and the camera to render it with, which differs once undistorted or resized.
+    using EvaluationViewRenderFn =
+        std::function<lfs::Result<EvaluationRenderResult>(lfs::core::Camera&, lfs::core::Camera&, float)>;
+
+    // Renders warped into a distorted lens are made at this multiple of the warp's pinhole grid.
+    inline constexpr int kEvaluationWarpSupersample = 2;
+
+    // What MetricsEvaluator::evaluate_views scores against each view's reference image.
+    struct EvaluationViewSource {
+        EvaluationViewRenderFn render;
+        int num_gaussians = 0;
+        // Images that exist at one size, like files, are warped at that size.
+        int warp_supersample = kEvaluationWarpSupersample;
+        std::filesystem::path image_dir;                                   // Where images are saved; empty = <output>/eval_step_<iteration>
+        std::array<std::string, 2> image_labels{"Ground Truth", "Render"}; // Captions in saved images, left first
+    };
+
+    [[nodiscard]] lfs::Error evaluation_error(std::string detail, lfs::core::SourceSite site);
+
+    // SSIM counts only complete windows inside the mask; a mask without any keeps partial windows.
+    [[nodiscard]] lfs::core::Tensor ssim_evaluation_mask(
+        const lfs::core::Tensor& mask, bool complete_windows_only, std::string_view camera_name,
+        cudaStream_t stream);
+
+    [[nodiscard]] lfs::Result<PreparedEvaluationView> prepare_evaluation_view(
+        lfs::core::Camera& camera,
+        const lfs::core::param::TrainingParameters& params,
+        const EvaluationRenderFn& render,
+        const EvaluationViewInputs* cached_inputs = nullptr,
+        lfs::io::PipelinedImageLoader* image_loader = nullptr,
+        const EvaluationMaskSources& mask_sources = {},
+        const lfs::core::Tensor& background = {},
+        int warp_supersample = kEvaluationWarpSupersample);
+
+    // A loader sized for decoding one evaluation image at a time.
+    [[nodiscard]] std::unique_ptr<lfs::io::PipelinedImageLoader> make_eval_image_loader(
+        const lfs::core::param::TrainingParameters& params);
+
+    // Load parameters that decode path the way camera's reference image is decoded for evaluation, so identical
+    // files score identically. undistort=false keeps the image in its own lens when the reference is undistorted.
+    [[nodiscard]] lfs::io::LoadParams evaluation_load_params_like_reference(
+        const std::filesystem::path& path, const lfs::core::Camera& camera,
+        const lfs::core::param::TrainingParameters& params, bool undistort);
 
     [[nodiscard]] std::optional<float> mean_normal_angle_deg(
         const lfs::core::Tensor& rendered_normal,
@@ -135,6 +374,17 @@ namespace lfs::training {
         const lfs::core::Tensor& rendered_depth,
         const std::vector<DepthAbsRelSample>& samples);
 
+    // Configured evaluation steps a run with this last iteration never reaches.
+    [[nodiscard]] std::vector<size_t> unreachable_eval_steps(const std::vector<size_t>& eval_steps,
+                                                             size_t last_iteration);
+
+    // Adds this step's result for one image to the per-image document, which maps
+    // image names to their size and evaluations. An earlier entry for the same
+    // step and split is replaced; entries stay sorted by step. With `pixel_sets` (the run scored extra pixel sets)
+    // the scores of each set sit under its own key: masked, unmasked, inverted.
+    [[nodiscard]] nlohmann::json add_view_evaluation(nlohmann::json document, const ViewMetrics& view, int step,
+                                                     std::string_view split, bool pixel_sets);
+
     // Metrics reporter class
     class MetricsReporter {
     public:
@@ -142,13 +392,21 @@ namespace lfs::training {
 
         void add_metrics(const EvalMetrics& metrics);
 
+        // Adds every evaluated image to <output>/per_image_metrics.json.
+        void write_view_evaluations(const EvalMetrics& metrics, std::string_view split) const;
+
+        void write_training_config(const lfs::core::param::TrainingParameters& params) const;
+
         void save_report() const;
+
+        [[nodiscard]] const std::filesystem::path& per_image_path() const { return per_image_path_; }
 
     private:
         const std::filesystem::path output_dir_;
         std::vector<EvalMetrics> all_metrics_;
         const std::filesystem::path csv_path_;
         const std::filesystem::path txt_path_;
+        const std::filesystem::path per_image_path_;
     };
 
     // Main evaluator class that handles all metrics computation and visualization
@@ -168,6 +426,25 @@ namespace lfs::training {
             _lpips_load_attempted = false;
         }
 
+        void set_eval_mesh(EvaluationMesh mesh) { _eval_mesh = std::move(mesh); }
+        [[nodiscard]] const EvaluationMesh* eval_mesh() const { return _eval_mesh ? &*_eval_mesh : nullptr; }
+
+        void set_eval_mask_folder(std::shared_ptr<const lfs::io::MaskDirCache> folder) {
+            _eval_mask_folder = std::move(folder);
+        }
+        void set_eval_points(EvaluationPoints points) { _eval_points = std::move(points); }
+        void set_eval_splat(EvaluationSplat splat) { _eval_splat = std::move(splat); }
+        // Installs the configured eval_mask when it is a splat or point PLY, a mask folder, a box or a mesh, with
+        // files in a frame whose origin is training_origin. False for masks that need the trained scene: the crop
+        // box, the initial points and depth.
+        [[nodiscard]] lfs::Result<bool> install_eval_mask_source(const std::array<float, 3>& training_origin);
+        [[nodiscard]] EvaluationMaskSources mask_sources() const {
+            return {.mesh = eval_mesh(),
+                    .points = _eval_points ? &*_eval_points : nullptr,
+                    .folder = _eval_mask_folder.get(),
+                    .splat = _eval_splat ? &*_eval_splat : nullptr};
+        }
+
         void set_normal_prior_decode(const lfs::core::Camera::NormalPriorDecode& decode) {
             _normal_prior_decode = decode;
         }
@@ -175,14 +452,27 @@ namespace lfs::training {
         // Check if evaluation is enabled
         bool is_enabled() const { return _params.optimization.enable_eval; }
 
-        // Check if we should evaluate at this iteration
-        bool should_evaluate(const int iteration) const;
+        // Configured eval steps plus the final iteration
+        bool should_evaluate(int iteration, int final_iteration) const;
+
+        // Records the configuration the run trains with next to the per-image results
+        void write_training_config(const lfs::core::param::TrainingParameters& params) const;
 
         // Main evaluation method
         EvalMetrics evaluate(const int iteration,
                              const lfs::core::SplatData& splatData,
                              std::shared_ptr<CameraDataset> val_dataset,
-                             lfs::core::Tensor& background);
+                             lfs::core::Tensor& background,
+                             lfs::io::PipelinedImageLoader* image_loader = nullptr,
+                             std::function<bool()> on_view_boundary = {});
+
+        // Scores what source.render returns for each view against the view's reference image.
+        EvalMetrics evaluate_views(int iteration,
+                                   std::shared_ptr<CameraDataset> val_dataset,
+                                   const EvaluationViewSource& source,
+                                   const lfs::core::Tensor& background,
+                                   lfs::io::PipelinedImageLoader* image_loader = nullptr,
+                                   std::function<bool()> on_view_boundary = {});
 
         // Save final report
         void save_report() const {
@@ -197,6 +487,10 @@ namespace lfs::training {
         }
 
     private:
+        [[nodiscard]] std::string_view evaluated_split() const {
+            return _params.optimization.eval_all ? "train" : "test";
+        }
+
         // Configuration
         const lfs::core::param::TrainingParameters _params;
         lfs::core::Camera::NormalPriorDecode _normal_prior_decode{};
@@ -209,9 +503,9 @@ namespace lfs::training {
         bool _lpips_load_attempted = false;
         std::unique_ptr<MetricsReporter> _reporter;
         AppearanceFn appearance_;
-
-        // Helper functions
-        lfs::core::Tensor load_eval_mask(lfs::core::Camera* cam, lfs::core::Tensor& gt_image,
-                                         bool alpha_as_mask) const;
+        std::optional<EvaluationMesh> _eval_mesh;
+        std::shared_ptr<const lfs::io::MaskDirCache> _eval_mask_folder;
+        std::optional<EvaluationPoints> _eval_points;
+        std::optional<EvaluationSplat> _eval_splat;
     };
 } // namespace lfs::training

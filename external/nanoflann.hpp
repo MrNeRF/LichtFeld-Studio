@@ -1022,6 +1022,41 @@ namespace nanoflann {
             return obj.dataset_.kdtree_get_pt(element, component);
         }
 
+        /// During a build, the coordinates of vAcc_[k] stored per dimension and permuted together with vAcc_,
+        /// so the split scans read memory in order instead of gathering through the dataset.
+        std::vector<ElementType> build_coords_;
+        Size build_count_ = 0;
+
+        void cacheBuildCoordinates(const Derived& obj) {
+            const Size dims = DIM > 0 ? DIM : obj.dim_;
+            build_count_ = vAcc_.size();
+            build_coords_.resize(dims * build_count_);
+            for (Size k = 0; k < build_count_; ++k)
+                for (Size d = 0; d < dims; ++d)
+                    build_coords_[d * build_count_ + k] = dataset_get(obj, vAcc_[k], static_cast<Dimension>(d));
+        }
+
+        void releaseBuildCoordinates() {
+            build_coords_.clear();
+            build_coords_.shrink_to_fit();
+            build_count_ = 0;
+        }
+
+        /// Component of the point at position k of vAcc_.
+        ElementType build_get(const Derived& obj, Offset k, Dimension component) const {
+            return build_coords_.empty() ? dataset_get(obj, vAcc_[k], component)
+                                         : build_coords_[component * build_count_ + k];
+        }
+
+        void build_swap(const Derived& obj, Offset a, Offset b) {
+            std::swap(vAcc_[a], vAcc_[b]);
+            if (build_coords_.empty())
+                return;
+            const Size dims = DIM > 0 ? DIM : obj.dim_;
+            for (Size d = 0; d < dims; ++d)
+                std::swap(build_coords_[d * build_count_ + a], build_coords_[d * build_count_ + b]);
+        }
+
         /**
          * Computes the inde memory usage
          * Returns: memory used by the index
@@ -1035,10 +1070,10 @@ namespace nanoflann {
         void computeMinMax(
             const Derived& obj, Offset ind, Size count, Dimension element,
             ElementType& min_elem, ElementType& max_elem) {
-            min_elem = dataset_get(obj, vAcc_[ind], element);
+            min_elem = build_get(obj, ind, element);
             max_elem = min_elem;
             for (Offset i = 1; i < count; ++i) {
-                ElementType val = dataset_get(obj, vAcc_[ind + i], element);
+                ElementType val = build_get(obj, ind + i, element);
                 if (val < min_elem)
                     min_elem = val;
                 if (val > max_elem)
@@ -1068,12 +1103,12 @@ namespace nanoflann {
 
                 // compute bounding-box of leaf points
                 for (Dimension i = 0; i < dims; ++i) {
-                    bbox[i].low = dataset_get(obj, obj.vAcc_[left], i);
-                    bbox[i].high = dataset_get(obj, obj.vAcc_[left], i);
+                    bbox[i].low = build_get(obj, left, i);
+                    bbox[i].high = build_get(obj, left, i);
                 }
                 for (Offset k = left + 1; k < right; ++k) {
                     for (Dimension i = 0; i < dims; ++i) {
-                        const auto val = dataset_get(obj, obj.vAcc_[k], i);
+                        const auto val = build_get(obj, k, i);
                         if (bbox[i].low > val)
                             bbox[i].low = val;
                         if (bbox[i].high < val)
@@ -1135,12 +1170,12 @@ namespace nanoflann {
 
                 // compute bounding-box of leaf points
                 for (Dimension i = 0; i < dims; ++i) {
-                    bbox[i].low = dataset_get(obj, obj.vAcc_[left], i);
-                    bbox[i].high = dataset_get(obj, obj.vAcc_[left], i);
+                    bbox[i].low = build_get(obj, left, i);
+                    bbox[i].high = build_get(obj, left, i);
                 }
                 for (Offset k = left + 1; k < right; ++k) {
                     for (Dimension i = 0; i < dims; ++i) {
-                        const auto val = dataset_get(obj, obj.vAcc_[k], i);
+                        const auto val = build_get(obj, k, i);
                         if (bbox[i].low > val)
                             bbox[i].low = val;
                         if (bbox[i].high < val)
@@ -1264,14 +1299,14 @@ namespace nanoflann {
             Offset right = count - 1;
             for (;;) {
                 while (left <= right &&
-                       dataset_get(obj, vAcc_[ind + left], cutfeat) < cutval)
+                       build_get(obj, ind + left, cutfeat) < cutval)
                     ++left;
                 while (right && left <= right &&
-                       dataset_get(obj, vAcc_[ind + right], cutfeat) >= cutval)
+                       build_get(obj, ind + right, cutfeat) >= cutval)
                     --right;
                 if (left > right || !right)
                     break; // "!right" was added to support unsigned Index types
-                std::swap(vAcc_[ind + left], vAcc_[ind + right]);
+                build_swap(obj, ind + left, ind + right);
                 ++left;
                 --right;
             }
@@ -1282,14 +1317,14 @@ namespace nanoflann {
             right = count - 1;
             for (;;) {
                 while (left <= right &&
-                       dataset_get(obj, vAcc_[ind + left], cutfeat) <= cutval)
+                       build_get(obj, ind + left, cutfeat) <= cutval)
                     ++left;
                 while (right && left <= right &&
-                       dataset_get(obj, vAcc_[ind + right], cutfeat) > cutval)
+                       build_get(obj, ind + right, cutfeat) > cutval)
                     --right;
                 if (left > right || !right)
                     break; // "!right" was added to support unsigned Index types
-                std::swap(vAcc_[ind + left], vAcc_[ind + right]);
+                build_swap(obj, ind + left, ind + right);
                 ++left;
                 --right;
             }
@@ -1532,6 +1567,7 @@ namespace nanoflann {
             if (Base::size_ == 0)
                 return;
             computeBoundingBox(Base::root_bbox_);
+            this->cacheBuildCoordinates(*this);
             // construct the tree
             if (Base::n_thread_build_ == 1) {
                 Base::root_node_ =
@@ -1546,6 +1582,7 @@ namespace nanoflann {
                 throw std::runtime_error("Multithreading is disabled");
 #endif /* NANOFLANN_NO_THREADS */
             }
+            this->releaseBuildCoordinates();
         }
 
         /** \name Query methods
@@ -1973,6 +2010,7 @@ namespace nanoflann {
             if (Base::size_ == 0)
                 return;
             computeBoundingBox(Base::root_bbox_);
+            this->cacheBuildCoordinates(*this);
             // construct the tree
             if (Base::n_thread_build_ == 1) {
                 Base::root_node_ =
@@ -1987,6 +2025,7 @@ namespace nanoflann {
                 throw std::runtime_error("Multithreading is disabled");
 #endif /* NANOFLANN_NO_THREADS */
             }
+            this->releaseBuildCoordinates();
         }
 
         /** \name Query methods

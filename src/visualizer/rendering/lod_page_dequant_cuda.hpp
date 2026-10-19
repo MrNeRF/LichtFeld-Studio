@@ -44,24 +44,28 @@ namespace lfs::vis {
                                                  std::uint32_t page_splats,
                                                  cudaStream_t stream);
 
-    // fp32 source tensors for the in-core / pinned-root D2D fill path.
-    // Pointers are pre-offset to the page's first splat; layouts match the
+    // Resident source tensors for the in-core D2D fill path.
+    // Attribute pointers are pre-offset to the page's first splat; layouts match the
     // resident SplatData tensors (means [n,3], sh0_raw [n,3] post-transform,
-    // shN canonical [n, rest*3], rotation_raw [n,4] (w,x,y,z), scaling_raw
+    // shN swizzled (fp32, IEEE f16, or q16), rotation_raw [n,4] (w,x,y,z), scaling_raw
     // [n,3] log domain, opacity_raw [n]).
     struct LodPageTensorSources {
         const float* means = nullptr;
         const float* sh0 = nullptr;
-        const float* shN = nullptr; // null when the model has no SH rest
+        const void* shN = nullptr;          // full resident buffer, null without SH rest
+        const float2* shN_bounds = nullptr; // q16 bounds per 256 splats
         const float* rotation = nullptr;
         const float* scaling = nullptr;
         const float* opacity = nullptr;
         std::uint32_t src_rest = 0; // SH-rest coefficients in the shN tensor
-        std::uint32_t count = 0;    // splats in this page
+        std::uint32_t src_splat_offset = 0;
+        std::uint32_t shN_f16 = 0;
+        std::uint32_t shN_q16 = 0;
+        std::uint32_t count = 0; // splats in this page
         std::uint32_t lod_opacity = 0;
     };
 
-    // Quantizes resident fp32 tensors into one canonical pool page (two
+    // Quantizes resident tensors into one canonical pool page (two
     // passes: per-band |max| reduction into the page frame, then the
     // quantizing scatter). Same canonical writers as the streamed path.
     LFS_VIS_API cudaError_t launchLodPageQuantizeFromTensors(const LodPageTensorSources& src,

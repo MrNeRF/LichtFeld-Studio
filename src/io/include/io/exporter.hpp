@@ -9,12 +9,15 @@
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
 #include "io/error.hpp"
+#include "io/export_progress.hpp"
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <future>
+#include <glm/vec3.hpp>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -22,9 +25,6 @@ namespace lfs::io {
 
     using lfs::core::PointCloud;
     using lfs::core::SplatData;
-
-    // Progress callback for export operations (returns false to cancel)
-    using ExportProgressCallback = std::function<bool(float progress, const std::string& stage)>;
 
     // ============================================================================
     // PLY Export
@@ -48,7 +48,7 @@ namespace lfs::io {
         bool async = false;
         ExportProgressCallback progress_callback = nullptr;
         // Additional per-vertex float properties appended after the built-in PLY schema.
-        std::vector<PlyAttributeBlock> extra_attributes;
+        std::vector<PlyAttributeBlock> extra_attributes = {};
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
 
@@ -96,6 +96,16 @@ namespace lfs::io {
 
     [[nodiscard]] LFS_IO_API Result<void> save_ssog(const SplatData&, const SsogSaveOptions&);
 
+    // What a streaming viewer relies on in an SSOG archive, from its ZIP central directory and lod-meta.json alone.
+    struct SsogArchiveSummary {
+        std::vector<std::size_t> counts; // lod-meta.json counts, level 0 finest; empty when the file has none
+        bool webp_stored = true;         // every .webp member is stored uncompressed
+        bool empty_license = false;      // a license member beside lod-meta.json holds no bytes
+    };
+    using ByteRangeReader = std::function<bool(std::uint64_t offset, std::span<std::byte> destination)>;
+    [[nodiscard]] LFS_IO_API Result<SsogArchiveSummary> summarize_ssog_archive(std::uint64_t size,
+                                                                               const ByteRangeReader& read_at);
+
     struct SsogLoadOptions {
         int lod_level = 0; // Negative levels count from the coarsest (-1).
     };
@@ -115,6 +125,7 @@ namespace lfs::io {
         int kmeans_iterations = 10;
         ExportProgressCallback progress_callback = nullptr;
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
+        std::optional<glm::vec3> background_color{};
     };
 
     /**
@@ -135,6 +146,7 @@ namespace lfs::io {
         int compression_level = kSpzExportZstdLevel; // zstd compression level for SPZ v4
         ExportProgressCallback progress_callback = nullptr;
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
+        bool glb = false;                                  // wrap an SPZ v3 payload in a glTF binary (KHR_gaussian_splatting_compression_spz_2)
     };
 
     /**

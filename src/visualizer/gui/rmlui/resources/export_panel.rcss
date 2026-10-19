@@ -70,12 +70,22 @@
     min-height: 20dp;
 }
 
+.ep-model-row.is-group .ep-model-name {
+    font-weight: bold;
+}
+
 .ep-model-row .setting-label {
     flex: 1;
+    min-width: 0;
     overflow: hidden;
 }
 
 .ep-model-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
     font-size: 12dp;
 }
 
@@ -96,6 +106,10 @@
     display: block;
     font-size: 12dp;
     margin-bottom: 4dp;
+}
+
+.ep-error.hidden {
+    display: none;
 }
 
 .ep-buttons {
@@ -121,7 +135,7 @@
     margin: 6dp 0;
 }
 
-.ep-progress fill {
+.ep-progress-wrap.is-exporting .ep-progress fill {
     animation: ep-pulse 1.2s quadratic-in-out infinite alternate;
 }
 

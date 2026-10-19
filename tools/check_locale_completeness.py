@@ -9,6 +9,8 @@ import argparse
 import json
 import re
 import string
+import xml.etree.ElementTree as ET
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOCALES_DIR = PROJECT_ROOT / "src" / "visualizer" / "gui" / "resources" / "locales"
 JSON_KEY_PATTERN = re.compile(r'(?<!\\)"(?:\\.|[^"\\])*"\s*:')
 INDENTED_JSON_KEY_PATTERN = re.compile(r'^( +)"(?:\\.|[^"\\])*"\s*:')
+ALLOWED_MARKUP_TAGS = {"b"}
+RML_NAMED_ENTITIES = {"nbsp": "&#160;"}
 
 
 def flatten_strings(data: dict[str, Any], prefix: str = "") -> dict[str, str]:
@@ -62,6 +66,45 @@ def placeholders(value: str) -> tuple[str, ...]:
     ))
 
 
+def markup_tags(value: str) -> Counter[str]:
+    """Return the inline markup tags of a locale value, raising ET.ParseError for malformed markup."""
+    if "<" not in value:
+        return Counter()
+    fragment = value
+    for entity, replacement in RML_NAMED_ENTITIES.items():
+        fragment = fragment.replace(f"&{entity};", replacement)
+    root = ET.fromstring(f"<locale-fragment>{fragment}</locale-fragment>")
+    return Counter(element.tag for element in root.iter() if element is not root)
+
+
+def markup_findings(locale_name: str, locale: dict[str, str], english: dict[str, str]) -> list[str]:
+    """Reject malformed, unsupported, or English-mismatched inline RML markup."""
+    findings: list[str] = []
+    for key in sorted(locale.keys() & english.keys()):
+        value = locale[key]
+        try:
+            tags = markup_tags(value)
+        except ET.ParseError as error:
+            findings.append(f"{locale_name} has invalid markup for {key}: {value!r} ({error})")
+            continue
+        unsupported = sorted(set(tags) - ALLOWED_MARKUP_TAGS)
+        if unsupported:
+            findings.append(
+                f"{locale_name} has unsupported markup for {key}: {value!r} "
+                f"(tags: {', '.join(unsupported)})"
+            )
+        try:
+            english_tags = markup_tags(english[key])
+        except ET.ParseError:
+            english_tags = Counter()
+        if tags != english_tags:
+            findings.append(
+                f"{locale_name} has mismatched markup for {key}: {value!r} "
+                f"(expected {dict(english_tags)}, got {dict(tags)})"
+            )
+    return findings
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="""Validate shipped locale keys and std::format placeholders against en.json.
@@ -73,6 +116,7 @@ locale and exits with status 1 when a locale:
   - places more than one JSON key on the same physical line;
   - uses odd indentation for a JSON key; or
   - has malformed or mismatched std::format placeholders.
+  - contains malformed, unsupported, or English-mismatched inline markup.
 
 Named placeholders may be reordered to suit the target language. Identical
 non-empty values are allowed as temporary English fallbacks by default; use an
@@ -125,6 +169,9 @@ def main() -> int:
             failures.append(f"{locale_path.name} has JSON layout violations:")
             failures.extend(f"  {finding}" for finding in layout_findings)
         if locale_path == english_path:
+            markup = markup_findings(locale_path.name, english, english)
+            if markup:
+                failures.extend(markup)
             continue
         locale = load_locale(locale_path)
         missing = sorted(english_keys - set(locale))
@@ -135,6 +182,7 @@ def main() -> int:
         if extra:
             failures.append(f"{locale_path.name} has {len(extra)} unexpected key(s):")
             failures.extend(f"  {key}" for key in extra)
+        failures.extend(markup_findings(locale_path.name, locale, english))
         for key in sorted(english_keys & set(locale)):
             try:
                 english_placeholders = placeholders(english[key])

@@ -8,6 +8,7 @@
 #include "gui/panel_registry.hpp"
 #include "rml_im_mode_layout.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <nanobind/nanobind.h>
@@ -28,14 +29,17 @@ namespace lfs::vis::gui {
         RmlPythonPanelAdapter(void* manager, nb::object panel_instance,
                               const std::string& context_name, const std::string& rml_path,
                               const std::string& style = {}, bool has_poll = false,
-                              int height_mode = 0, bool has_draw = false);
+                              int height_mode = 0, bool has_draw = false, bool floating = false);
         ~RmlPythonPanelAdapter() override;
 
+        bool onViewportDrop(const std::string& type, const std::string& data) override;
         void draw(const PanelDrawContext& ctx) override;
         bool poll(const PanelDrawContext& ctx) override;
         void setPollVisibility(bool visible) override;
         bool isVisibleForAnimation() const override;
         void on_visibility_changed(bool visible) override;
+        void on_layout_changed() override;
+        void on_content_changed() override;
         void preload(const PanelDrawContext& ctx) override;
         PanelRenderCapabilities renderCapabilities() const override {
             return {.direct = true};
@@ -50,9 +54,21 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::string captureChromeJson() const override;
         void applyChromeJson(std::string_view json) override;
         void setForeground(bool fg);
+        SDL_Window* nativeWindow() const override;
+        bool detachToDesktop(float x, float y, float w, float h) override;
+        bool restoreDesktopWindow() override;
+        void releaseDesktopWindow() override;
+        void resetDesktopRestoreState() override {
+            desktop_reopen_bounds_.reset();
+            desktop_restore_checked_ = false;
+        }
         [[nodiscard]] nb::object panelInstance() const { return panel_instance_; }
 
     private:
+        bool detachHost(float x, float y, float w, float h, bool desktop_coordinates);
+        bool desktop_restore_checked_ = false;
+        std::optional<std::array<float, 4>> desktop_reopen_bounds_;
+        std::optional<float> desktop_reopen_scroll_;
         enum class LifecycleState : uint8_t {
             AwaitingModelBind,
             BindingModel,
@@ -106,7 +122,11 @@ namespace lfs::vis::gui {
         bool enabled_visible_ = true;
         uint64_t last_scene_gen_ = 0;
         uint64_t last_prepare_frame_ = 0;
-        bool content_dirty_ = false;
+        bool content_dirty_ = true;
+        float layout_width_ = -1.0f;
+        float layout_height_ = -1.0f;
+        float layout_scale_ = -1.0f;
+        float layout_forced_height_ = -1.0f;
         bool has_update_interval_ = false;
         bool dirty_driven_updates_ = false;
         bool warned_non_bool_scene_changed_ = false;

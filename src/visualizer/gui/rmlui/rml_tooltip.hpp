@@ -27,6 +27,8 @@ namespace lfs::vis::gui {
     inline constexpr auto kRmlTooltipReshowDelay = std::chrono::milliseconds(90);
     inline constexpr auto kRmlTooltipReshowGrace = std::chrono::milliseconds(600);
 
+    LFS_VIS_API Rml::Element* propertyTooltipTarget(Rml::Element* item);
+
     LFS_VIS_API std::string resolveRmlTooltip(Rml::Element* hover);
 
     // True while the hovered element is (inside) a native <select> whose popup
@@ -36,7 +38,7 @@ namespace lfs::vis::gui {
     // Per-document tooltip state. Each renderer owns one instance and drives it
     // from its own input/render passes, so the tooltip element lives inside the
     // hovered context and is positioned in that context's local coordinates.
-    class RmlTooltipController {
+    class LFS_VIS_API RmlTooltipController {
     public:
         // Called from input when the hovered tooltip target changes. Pass
         // {} / nullptr when no tooltip should be shown.

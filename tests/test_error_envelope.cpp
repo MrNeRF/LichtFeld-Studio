@@ -55,6 +55,22 @@ TEST(ErrorEnvelopeTest, RoundTripCarriesAllFieldsAndSanitizesPath) {
     EXPECT_EQ(details["native_code"].get<std::int64_t>(), 2);
 }
 
+TEST(ErrorEnvelopeTest, UnicodeDetailPathPreservesFilenameAndHidesDirectories) {
+    const lfs::Error error = lfs::make_error(lfs::ErrorInit{
+        .code = lfs::ErrorCode::NotFound,
+        .domain = lfs::ErrorDomain::IO,
+        .user_message = "Load failed",
+        .detection = LFS_SOURCE_SITE_CURRENT(),
+        .fields = lfs::SmallFields{}.add("path", std::string("C:/secret/\u30d7\u30ed\u30b8\u30a7\u30af\u30c8_\u6d4b\u8bd5.ply")),
+    });
+
+    const nlohmann::json envelope = lfs::core::to_wire_envelope(error);
+
+    ASSERT_TRUE(envelope.contains("details"));
+    EXPECT_EQ(envelope["details"]["path"], "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8_\u6d4b\u8bd5.ply");
+    EXPECT_EQ(envelope.dump().find("secret"), std::string::npos);
+}
+
 TEST(ErrorEnvelopeTest, NeverLeaksPathsDetailOrFrameSources) {
     const std::string body = lfs::core::to_wire_envelope(make_cuda_oom_error()).dump();
 
@@ -210,4 +226,35 @@ TEST(ErrorLatchTest, ConcurrentSetAndGetNeverTears) {
 
     stop.store(true, std::memory_order_relaxed);
     writer.join();
+}
+
+TEST(ErrorEnvelopeTest, PresentationKeyStaysOutOfLogsAndWireMessages) {
+    const auto error = lfs::make_error(lfs::ErrorInit{
+        .code = lfs::ErrorCode::InvalidArgument,
+        .domain = lfs::ErrorDomain::Training,
+        .user_message = "Enable GUT or Undistort in the Training panel.",
+        .detection = LFS_SOURCE_SITE_CURRENT(),
+        .fields = lfs::SmallFields{}
+                      .add("message_key", std::string_view("messages.err_distorted_images"))
+                      .add("camera_id", std::int64_t{7}),
+    });
+    auto contextual = error;
+    contextual = std::move(contextual).with_context("training", LFS_SOURCE_SITE_CURRENT());
+    lfs::core::ErrorLatch stored;
+    stored.set(contextual);
+    const auto returned = stored.get();
+    ASSERT_TRUE(returned.has_value());
+    EXPECT_EQ(returned->user_message(), error.user_message());
+    const auto& field = returned->frames().front().fields.entries().front();
+    EXPECT_EQ(field.key, "message_key");
+    EXPECT_EQ(std::get<std::string>(field.value), "messages.err_distorted_images");
+    const auto log = lfs::format_for_developer(*returned);
+    EXPECT_NE(log.find(error.user_message()), std::string::npos);
+    EXPECT_NE(log.find("camera_id=7"), std::string::npos);
+    EXPECT_EQ(log.find("message_key"), std::string::npos);
+    EXPECT_EQ(log.find("messages.err_"), std::string::npos);
+    const auto wire = lfs::core::to_wire_envelope(*returned);
+    EXPECT_EQ(wire["message"], error.user_message());
+    EXPECT_EQ(wire.dump().find("messages.err_"), std::string::npos);
+    EXPECT_EQ(wire.dump().find("message_key"), std::string::npos);
 }

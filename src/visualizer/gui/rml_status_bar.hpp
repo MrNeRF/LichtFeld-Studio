@@ -8,6 +8,7 @@
 #include "gui/error_surface_types.hpp"
 #include "gui/gpu_memory_query.hpp"
 #include "gui/panel_registry.hpp"
+#include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/status_bar_mining.hpp"
 #include "visualizer/rendering/rendering_types.hpp"
@@ -73,20 +74,25 @@ namespace lfs::vis::gui {
         void reloadResources();
         void render(const PanelDrawContext& ctx, float x, float y, float w, float h,
                     int screen_w, int screen_h);
-        void renderCached(const PanelDrawContext& ctx, float x, float y, float w, float h,
-                          int screen_w, int screen_h);
         [[nodiscard]] LFS_VIS_API bool animationFrameDue(
             std::chrono::steady_clock::time_point now) const;
         [[nodiscard]] LFS_VIS_API std::optional<double> secondsUntilAnimationFrame(
             std::chrono::steady_clock::time_point now) const;
-        void processInput(const PanelInputState& input, float bar_x, float bar_y,
-                          float bar_w, float bar_h);
+        LFS_VIS_API void processInput(const PanelInputState& input, float bar_x, float bar_y,
+                                      float bar_w, float bar_h);
+        void clearTooltip() { tooltip_.setHover({}, nullptr); }
         [[nodiscard]] LFS_VIS_API float overlayHeight() const;
         [[nodiscard]] LFS_VIS_API bool isOverlayPoint(float local_x, float local_y,
                                                       float bar_w) const;
 
     private:
         friend class RmlStatusBarTestAccess;
+        LFS_VIS_API void updateFpsReservedWidths();
+        LFS_VIS_API void positionTooltip(float previous_overlay, float overlay_height, bool place_above);
+        RmlTooltipController tooltip_;
+        int tooltip_mouse_x_ = 0;
+        int tooltip_mouse_y_ = 0;
+        float tooltip_max_overlay_height_ = 0.0f;
 
         struct ProgressBarGeometry {
             float x = 0.0f;
@@ -95,7 +101,7 @@ namespace lfs::vis::gui {
             float h = 0.0f;
         };
 
-        bool updateContent(const PanelDrawContext& ctx, bool force_refresh);
+        bool updateContent(const PanelDrawContext& ctx);
         bool updateTheme();
         bool layoutFits(float reserve_px) const;
         LFS_VIS_API void fitToAvailableWidth(bool allow_expand);
@@ -129,16 +135,16 @@ namespace lfs::vis::gui {
         void removeSaveStep(size_t step);
         void clearSaveStepHover();
         void attachElementListeners();
-        void bindReactiveStore();
+        LFS_VIS_API void bindReactiveStore();
         void markModelDirty();
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
+        bool document_registered_ = false;
         Rml::DataModelHandle model_handle_;
         Rml::EventListener* git_commit_listener_ = nullptr;
         Rml::EventListener* gpu_icon_listener_ = nullptr;
-        Rml::EventListener* account_listener_ = nullptr;
         Rml::EventListener* mcp_toggle_listener_ = nullptr;
         Rml::EventListener* mcp_power_listener_ = nullptr;
         Rml::EventListener* mcp_preferences_listener_ = nullptr;
@@ -241,12 +247,6 @@ namespace lfs::vis::gui {
             std::string zoom_text;
             std::string zoom_color;
             std::string zoom_sep_color;
-            std::string account_label;
-            std::string account_tier;
-            std::string account_tooltip;
-            std::string account_color;
-            bool account_show_tier = false;
-            bool account_membership_required = false;
             std::string lfs_mem_text;
             std::string lfs_mem_color;
             bool show_gpu_model = false;
@@ -255,8 +255,13 @@ namespace lfs::vis::gui {
             std::string gpu_mem_text;
             std::string gpu_mem_color;
             std::string fps_value;
+            std::string fps_view_value;
+            std::string fps_ui_label;
+            std::string fps_view_label;
             std::string fps_color;
             std::string fps_label;
+            bool preview_reduced = false;
+            std::string preview_reduced_text;
             std::string git_commit;
             bool mcp_details_expanded = false;
             std::string mcp_summary;
@@ -287,14 +292,11 @@ namespace lfs::vis::gui {
         bool model_animation_active_ = false;
         bool rml_animation_active_ = false;
         bool animation_active_ = false;
-        bool reactive_fps_available_ = false;
-        float reactive_fps_value_ = 0.0f;
         std::vector<lfs::core::reactive::SubscriptionToken> subscriptions_;
         int fit_level_ = 0;
         float last_dp_ratio_ = 0.0f;
         uint32_t section_signature_ = 0;
         uint32_t last_section_signature_ = 0;
-        std::uint64_t last_runtime_service_revision_ = 0;
         int last_render_w_ = 0;
         int last_render_h_ = 0;
         int last_document_h_ = 0;

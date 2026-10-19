@@ -7,6 +7,7 @@
 #include "core/alloc_counter.hpp"
 #include "core/camera.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include <algorithm>
@@ -232,6 +233,18 @@ namespace lfs::training {
     };
 
     /// Camera dataset - loads images from cameras
+    /// Fraction of cameras whose image is not a JPEG (0.0 = all JPEG, 1.0 = none).
+    [[nodiscard]] inline float non_jpeg_ratio(const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
+        if (cameras.empty())
+            return 0.0f;
+        const auto count = std::count_if(cameras.begin(), cameras.end(), [](const auto& cam) {
+            auto ext = lfs::core::path_to_utf8(cam->image_path().extension());
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            return ext != ".jpg" && ext != ".jpeg";
+        });
+        return static_cast<float>(count) / static_cast<float>(cameras.size());
+    }
+
     class CameraDataset {
     public:
         enum class Split {
@@ -281,8 +294,6 @@ namespace lfs::training {
                     }
                 }
             }
-
-            LOG_INFO("Dataset created with {} images (split: {})", indices_.size(), static_cast<int>(split_));
         }
 
         lfs::core::Camera* get_camera(size_t index) const {
@@ -361,16 +372,7 @@ namespace lfs::training {
         int get_max_width() const { return config_.max_width; }
 
         /// Returns fraction of non-JPEG images (0.0 = all JPEG, 1.0 = none)
-        [[nodiscard]] float get_non_jpeg_ratio() const {
-            if (cameras_.empty())
-                return 0.0f;
-            const auto count = std::count_if(cameras_.begin(), cameras_.end(), [](const auto& cam) {
-                auto ext = cam->image_path().extension().string();
-                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                return ext != ".jpg" && ext != ".jpeg";
-            });
-            return static_cast<float>(count) / static_cast<float>(cameras_.size());
-        }
+        [[nodiscard]] float get_non_jpeg_ratio() const { return non_jpeg_ratio(cameras_); }
 
     private:
         std::vector<std::shared_ptr<lfs::core::Camera>> cameras_;
@@ -390,9 +392,12 @@ namespace lfs::training {
         // Prior-world -> reconstruction-world rotation (row-major), identity unless resolved otherwise
         std::array<float, 9> normal_world_rotation{1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f};
         std::vector<std::array<float, 9>> normal_world_to_camera_by_source;
-        bool invert_masks = false;      // Invert mask values (1.0 - mask)
-        float mask_threshold = 0.0f;    // If > 0, values >= threshold become 1.0
+        bool invert_masks = false;   // Invert mask values (1.0 - mask)
+        float mask_threshold = 0.0f; // If > 0, values >= threshold become 1.0
+        bool alpha_is_transparency = false;
         bool use_alpha_as_mask = false; // Extract alpha channel from RGBA as mask
+        bool fill_masked_rgb = false;
+        bool mask_keep_high_band = false;
     };
 
     // Pipelined DataLoader with GPU batch JPEG decoding
@@ -412,30 +417,9 @@ namespace lfs::training {
               loader_(std::make_shared<lfs::io::PipelinedImageLoader>(config)),
               shutdown_(false) {
 
-            // Canonicalize every source once for this training run. The loader
-            // retains only final encoded blobs in its run-local RAM/spill tier;
-            // normal iteration is decode-only consumption of those blobs.
-            if (dataset_->size() > 0) {
-                std::vector<lfs::io::ImageRequest> run_requests;
-                run_requests.reserve(dataset_->size());
-                const size_t sequence_base =
-                    std::numeric_limits<size_t>::max() - dataset_->size();
-                for (size_t local_idx = 0; local_idx < dataset_->size(); ++local_idx) {
-                    run_requests.push_back(make_request(
-                        dataset_->local_to_source(local_idx), sequence_base + local_idx));
-                }
-                loader_->canonicalize(run_requests);
-
-                // Canonicalization is a named pre-training boundary.  All
-                // decode leases are dead here, so release their ring storage
-                // and trim every transient allocator before the first training
-                // frame can overlap this import phase.
-                loader_->reclaim_idle_decoded_frames();
-                lfs::core::Tensor::trim_memory_pool();
-                LOG_INFO("[PipelinedDataLoader] canonicalization boundary trim complete");
-            }
-
-            // Prefetch initial batch from the now-canonical run cache.
+            // Start with the bounded prefetch window. The loader prepares and
+            // caches each image on first use; scanning the entire dataset here
+            // delays the first training step in proportion to dataset size.
             prefetch_next_batch();
         }
 
@@ -564,12 +548,19 @@ namespace lfs::training {
                 request.params.undistort = request.undistort;
             }
 
-            if (aux_config_.load_masks && cam->has_mask()) {
+            request.fill_masked_rgb = aux_config_.fill_masked_rgb;
+            request.mask_keep_high_band = aux_config_.mask_keep_high_band;
+            if (aux_config_.load_masks && cam->has_in_memory_mask()) {
+                request.rgb_mask = cam->raw_mask_tensor();
+                request.rgb_mask_revision = cam->mask_revision();
+                request.mask_params = {.invert = aux_config_.invert_masks, .threshold = aux_config_.mask_threshold};
+            } else if (aux_config_.load_masks && cam->has_mask()) {
                 request.mask_path = cam->mask_path();
                 request.mask_params.invert = aux_config_.invert_masks;
                 request.mask_params.threshold = aux_config_.mask_threshold;
             } else if (aux_config_.use_alpha_as_mask && cam->has_alpha()) {
                 request.extract_alpha_as_mask = true;
+                request.alpha_is_transparency = aux_config_.alpha_is_transparency;
                 request.alpha_mask_params.invert = aux_config_.invert_masks;
                 request.alpha_mask_params.threshold = aux_config_.mask_threshold;
             }

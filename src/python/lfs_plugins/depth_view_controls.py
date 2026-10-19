@@ -88,6 +88,8 @@ class DepthViewControlsController:
             _DEPTH_SCRUB_SPECS,
             self._get_scrub_value,
             self._set_scrub_value,
+            capture_edit=self._capture_depth_range,
+            restore_edit=self._restore_depth_range,
         )
 
     @property
@@ -262,6 +264,17 @@ class DepthViewControlsController:
         if prop == "depth_view_far_value":
             return self._depth_far
         return self._depth_near
+
+    def _capture_depth_range(self, _prop):
+        # Either endpoint can move the other, so cancellation restores the pair.
+        return lf.get_depth_view_range()
+
+    def _restore_depth_range(self, _prop, value):
+        # Keep the original precision, including ranges narrower than a UI step.
+        lf.set_depth_view_range(*value)
+        self._refresh_state()
+        self._scrub_fields.sync_all()
+        self._dirty_all()
 
     def _set_scrub_value(self, prop, value):
         if prop == "depth_view_far_value":

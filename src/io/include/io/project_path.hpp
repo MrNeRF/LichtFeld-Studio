@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include "core/path_utils.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -66,8 +68,8 @@ namespace lfs::io::project {
     } // namespace detail_path
 
     [[nodiscard]] inline bool isPublishedLichtPath(const std::filesystem::path& path) {
-        const auto filename = detail_path::ascii_lower(path.filename().string());
-        const auto extension = detail_path::ascii_lower(path.extension().string());
+        const auto filename = detail_path::ascii_lower(lfs::core::path_to_utf8(path.filename()));
+        const auto extension = detail_path::ascii_lower(lfs::core::path_to_utf8(path.extension()));
         if (extension != ".licht") {
             return false;
         }
@@ -88,7 +90,7 @@ namespace lfs::io::project {
 
     [[nodiscard]] inline std::optional<std::filesystem::path>
     derivedPublishedMasterPath(const std::filesystem::path& path) {
-        auto name = path.filename().string();
+        auto name = lfs::core::path_to_utf8(path.filename());
         auto lower = detail_path::ascii_lower(name);
         while (true) {
             const auto marker = lower.rfind(".corrupt-");
@@ -112,12 +114,12 @@ namespace lfs::io::project {
                 const auto tag_at = lower.find(tag);
                 if (tag_at != std::string::npos && tag_at > 0) {
                     const auto stem = name.substr(0, tag_at);
-                    return path.parent_path() / (stem + ".licht");
+                    return path.parent_path() / lfs::core::utf8_to_path(stem + ".licht");
                 }
             }
         }
 
-        const auto remainder = path.parent_path() / name;
+        const auto remainder = path.parent_path() / lfs::core::utf8_to_path(name);
         if (isPublishedLichtPath(remainder) && remainder != path) {
             return remainder;
         }
@@ -129,12 +131,12 @@ namespace lfs::io::project {
         if (const auto master = derivedPublishedMasterPath(path)) {
             return std::format(
                 "This path is not a published LichtFeld project. Open '{}' instead.",
-                master->generic_string());
+                lfs::core::path_to_generic_utf8(*master));
         }
         return std::format(
             "'{}' is not a published LichtFeld project "
             "(temporary, autosave, or recovery artifact).",
-            path.filename().string());
+            lfs::core::path_to_utf8(path.filename()));
     }
 
 } // namespace lfs::io::project

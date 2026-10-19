@@ -6,7 +6,10 @@
 
 #include "core/export.hpp"
 #include "core/scene.hpp"
+#include "passes/vulkan_mesh_pass.hpp"
 #include "render_pass.hpp"
+#include <optional>
+#include <vector>
 
 namespace lfs::vis {
 
@@ -37,16 +40,32 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API lfs::rendering::PointCloudRenderRequest buildPointCloudRenderRequest(
         const FrameContext& ctx, glm::ivec2 render_size, const std::vector<glm::mat4>& model_transforms);
 
-    // Visible splat node shown in a PLY-comparison panel, or null when the
-    // scene has fewer than two visible splat slots.
+    // Visible meshes shaded as the viewport draws them; exports reuse this to match it.
+    [[nodiscard]] LFS_VIS_API std::vector<VulkanMeshDrawItem> buildViewportMeshDrawItems(
+        const SceneRenderState& scene_state,
+        const RenderSettings& settings,
+        const glm::vec3& camera_backward);
+
+    struct PlyComparisonNode {
+        const core::SceneNode* node = nullptr;
+        // Combined-model slot of a splat node; empty for a mesh, which the mesh pass draws.
+        std::optional<size_t> splat_slot;
+    };
+
+    // Nodes the PLY comparison pairs, in pair order: visible splat slots, then visible meshes.
+    [[nodiscard]] LFS_VIS_API std::vector<PlyComparisonNode> plyComparisonNodes(const core::Scene& scene);
+
+    // Visible splat or mesh node shown in a PLY-comparison panel, or null when
+    // the scene has fewer than two of them.
     [[nodiscard]] LFS_VIS_API const core::SceneNode* plyComparisonNodeForPanel(
         const core::Scene& scene,
         size_t split_view_offset,
         SplitViewPanelId panel);
 
-    // Scope crop/ellipsoid/selection overlay state to one visible splat node so
+    // Scope scene/crop/ellipsoid/selection overlay state to one visible splat node so
     // a per-node comparison render can use identity transform indices.
     LFS_VIS_API void applyPlyComparisonNodeScope(
+        lfs::rendering::GaussianSceneState& scene,
         lfs::rendering::GaussianFilterState& filters,
         lfs::rendering::GaussianOverlayState& overlay,
         const FrameContext& ctx,

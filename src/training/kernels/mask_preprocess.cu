@@ -27,16 +27,6 @@ namespace lfs::training::kernels {
             return std::min(num_blocks_1d(total), kMaxReduceBlocks);
         }
 
-        /// Float32 band masks are normalized; UInt8 masks retain their 0..255 scale.
-        template <typename MaskT>
-        __device__ __forceinline__ float load_mask_normalized(const MaskT* mask, const int idx) {
-            if constexpr (std::is_same_v<std::remove_cv_t<MaskT>, uint8_t>) {
-                return static_cast<float>(mask[idx]) / 255.0f;
-            } else {
-                return mask[idx];
-            }
-        }
-
         /// mask_as_float from trainer: UInt8/Bool → (v>0)?1:0; Float32 pass-through.
         template <typename MaskT>
         __device__ __forceinline__ float mask_as_float(const MaskT* mask, const int idx) {
@@ -53,9 +43,12 @@ namespace lfs::training::kernels {
             const int idx,
             const MaskPhotoMode mode) {
             if (mode == MaskPhotoMode::SegmentAndIgnore) {
-                const float v = load_mask_normalized(mask, idx);
-                // Keep band (authored > 250) is the only photometric contributor.
-                return v > kMaskKeepMin ? 1.0f : 0.0f;
+                // Comparing authored bytes avoids an unnecessary conversion and
+                // exactly matches the normalized domain at the band midpoints.
+                if constexpr (std::is_same_v<std::remove_cv_t<MaskT>, uint8_t>)
+                    return mask[idx] > 250 ? 1.0f : 0.0f;
+                else
+                    return mask[idx] > kMaskKeepMin ? 1.0f : 0.0f;
             }
             // BinaryGt0 matches the reference weight composition:
             //   UInt8/Bool → (v != 0) as float; Float32 → pass-through.
@@ -73,9 +66,12 @@ namespace lfs::training::kernels {
             const int idx,
             const MaskOpacityMode mode) {
             if (mode == MaskOpacityMode::SegmentAndIgnore) {
-                const float v = load_mask_normalized(mask, idx);
-                // Segment band (authored [128,250]) → BG (penalty), else FG (no penalty).
-                return (v >= kMaskSegmentMin && v <= kMaskKeepMin) ? 1.0f : 0.0f;
+                if constexpr (std::is_same_v<std::remove_cv_t<MaskT>, uint8_t>) {
+                    return mask[idx] >= 128 && mask[idx] <= 250 ? 1.0f : 0.0f;
+                } else {
+                    const float v = mask[idx];
+                    return (v >= kMaskSegmentMin && v <= kMaskKeepMin) ? 1.0f : 0.0f;
+                }
             }
             return 1.0f - mask_as_float(mask, idx);
         }
@@ -95,6 +91,17 @@ namespace lfs::training::kernels {
                 w *= roi_weight[idx];
             }
             out[idx] = w;
+        }
+
+        template <typename MaskT>
+        __global__ void zero_where_photometric_weight_is_zero_kernel(
+            float* __restrict__ values,
+            const MaskT* __restrict__ mask,
+            const int n,
+            const MaskPhotoMode mode) {
+            const int idx = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (idx < n && photo_weight(mask, idx, mode) <= 0.0f)
+                values[idx] = 0.0f;
         }
 
         template <typename MaskT>
@@ -194,6 +201,23 @@ namespace lfs::training::kernels {
         }
 
         template <typename MaskT>
+        void launch_zero_excluded(
+            float* values,
+            const MaskT* mask,
+            const int H,
+            const int W,
+            const MaskPhotoMode mode,
+            cudaStream_t stream) {
+            stream = resolve_stream(stream);
+            const int n = H * W;
+            if (n <= 0)
+                return;
+            zero_where_photometric_weight_is_zero_kernel<MaskT><<<num_blocks_1d(n), kBlock, 0, stream>>>(
+                values, mask, n, mode);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.mask_preprocess.zero_excluded");
+        }
+
+        template <typename MaskT>
         void launch_opacity(
             const float* alpha,
             const MaskT* mask,
@@ -255,6 +279,26 @@ namespace lfs::training::kernels {
         }
 
     } // namespace
+
+    void launch_zero_where_photometric_weight_is_zero_u8(
+        float* values,
+        const uint8_t* mask,
+        const int H,
+        const int W,
+        const MaskPhotoMode mode,
+        cudaStream_t stream) {
+        launch_zero_excluded(values, mask, H, W, mode, stream);
+    }
+
+    void launch_zero_where_photometric_weight_is_zero_f32(
+        float* values,
+        const float* mask,
+        const int H,
+        const int W,
+        const MaskPhotoMode mode,
+        cudaStream_t stream) {
+        launch_zero_excluded(values, mask, H, W, mode, stream);
+    }
 
     void launch_fuse_photometric_mask_weight_u8(
         const uint8_t* mask,

@@ -162,8 +162,9 @@ namespace lfs::core {
         // LFS_VRAM_RESERVE_MB, default 512 MiB, clamped to [128 MiB, device VRAM/4].
         size_t reserve_bytes() const noexcept;
 
-        // Pressure lease: true while the last episode has not been observed to
-        // recover. Degradation clients stay degraded while active.
+        // Preview pressure lease: set only by a device allocation failure at the
+        // render-thread boundary that reclaim could not satisfy. Training/host
+        // failures never activate it or replace its recovery target.
         bool pressure_active() const noexcept;
 
         // Throttled recovery check for the render thread. Cheap no-op unless a

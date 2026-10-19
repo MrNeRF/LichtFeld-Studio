@@ -9,6 +9,7 @@
 #include "lod_page_dequant_cuda.hpp"
 
 #include "core/cuda/sh_layout.cuh"
+#include "core/sh_value_codec.cuh"
 #include "io/formats/rad_dequant_math.hpp"
 
 namespace lfs::vis {
@@ -295,8 +296,30 @@ namespace lfs::vis {
             }
         }
 
+        __device__ float readResidentSh(const LodPageTensorSources& src,
+                                        const std::uint32_t i,
+                                        const std::uint32_t c) {
+            const std::uint32_t splat = src.src_splat_offset + i;
+            if (src.shN_q16) {
+                const float2 bounds = src.shN_bounds[splat / 256u];
+                const auto index = lfs::core::sh_value::shAtU16(splat, c, src.src_rest * 3u);
+                return lfs::core::sh_value::DeviceCodec16::decode(
+                    static_cast<const std::uint16_t*>(src.shN)[index], bounds.x, bounds.y);
+            }
+            const std::uint32_t slots = (src.src_rest * 3u + 3u) / 4u;
+            const std::size_t index =
+                ((static_cast<std::size_t>(splat / kReorder) * slots + c / 4u) *
+                     kReorder +
+                 splat % kReorder) *
+                    4u +
+                c % 4u;
+            return src.shN_f16
+                       ? radmath::halfToFloat(static_cast<const std::uint16_t*>(src.shN)[index])
+                       : static_cast<const float*>(src.shN)[index];
+        }
+
         // Pass 1 of the from-tensors fill: per-band |max| over the page's
-        // canonical shN, accumulated into the page frame via atomicMax on the
+        // resident shN, accumulated into the page frame via atomicMax on the
         // non-negative float bit patterns.
         __global__ void lodPageShBandMaxKernel(const LodPageTensorSources src,
                                                float4* const frame) {
@@ -307,7 +330,7 @@ namespace lfs::vis {
             const std::uint32_t floats = src.src_rest * 3u;
             float band_max[3] = {0.0f, 0.0f, 0.0f};
             for (std::uint32_t c = 0; c < floats; ++c) {
-                const float v = fabsf(src.shN[static_cast<std::size_t>(i) * floats + c]);
+                const float v = fabsf(readResidentSh(src, i, c));
                 const std::uint32_t coeff = c / 3u;
                 const std::uint32_t band = coeff < 3u ? 0u : (coeff < 8u ? 1u : 2u);
                 if (v > band_max[band]) {
@@ -386,7 +409,7 @@ namespace lfs::vis {
                                 const float max_abs =
                                     fmaxf(reinterpret_cast<const float*>(frame)[band], 1e-6f);
                                 b = static_cast<std::uint8_t>(quantizeS8(
-                                    src.shN[static_cast<std::size_t>(i) * active_floats + c],
+                                    readResidentSh(src, i, c),
                                     max_abs));
                             }
                             packed |= static_cast<std::uint32_t>(b) << (comp * 8u);

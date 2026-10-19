@@ -152,10 +152,11 @@ struct VulkanGSPipelineBuffers {
 
     // Raw split SplatData projection inputs used by the Vulkan viewer. These can
     // directly alias Vulkan-external tensor storage during training.
-    Buffer<float> sh0;         // (N, 1, 3) flattened
-    Buffer<float> shN;         // swizzled rest-only SH: [ceil(N/32), active slots, 32] float4
-    Buffer<float> scaling_raw; // (N, 3), log-scale
-    Buffer<float> opacity_raw; // (N, 1), logits
+    Buffer<float> sh0;            // (N, 1, 3) flattened
+    Buffer<float> shN;            // swizzled rest-only SH: [ceil(N/32), active slots, 32] float4
+    Buffer<float> scaling_raw;    // (N, 3), log-scale
+    Buffer<float> opacity_raw;    // (N, 1), logits
+    Buffer<uint8_t> deleted_mask; // (N,), optional soft-delete mask
 
     // Canonical quantized LOD pool (lod_pool_quant.hpp). When quant_pool is
     // set, sh0/shN/rotations/scaling_raw/opacity_raw hold the packed formats
@@ -191,7 +192,7 @@ struct VulkanGSPipelineBuffers {
     Buffer<float> depths;             // (N, 1)
     Buffer<float> inv_cov_vs_opacity; // (N, 4)
     Buffer<float> rgb;                // (N, 3)
-    // 3-bit payload (DIM|NONSELECTABLE|FLASH), one byte per splat. Byte-address
+    // 2-bit payload (DIM|NONSELECTABLE), one byte per splat. Byte-address
     // access rounds the descriptor up to a whole 32-bit word. Projection clears
     // the words before atomically ORing each byte; raster-only refreshes reuse
     // them. With writes disabled, bit 6 is clear and a one-word dummy is bound.
@@ -234,9 +235,10 @@ struct VulkanGSPipelineBuffers {
 
     // HiGS macro raster: half4 partials per (pool batch, render tile, pixel),
     // per-batch active-tile mask, and per-wave raster+compose indirect args.
-    Buffer<uint16_t> macro_partials;    // (pool_batches, 32, 256, 4) halfs
-    Buffer<uint32_t> macro_active_mask; // (total batches,)
-    Buffer<uint32_t> macro_wave_args;   // MacroWaveDispatch: raster + compose command per wave
+    Buffer<uint16_t> macro_partials;          // (pool_batches, 32, 256, 4) halfs
+    Buffer<uint32_t> exact_depth_sample_mask; // one bit per 4x4 output region
+    Buffer<uint32_t> macro_active_mask;       // batch activity header + optional pooled exact-depth ballots
+    Buffer<uint32_t> macro_wave_args;         // MacroWaveDispatch: raster + compose command per wave
 
     // tiles
     Buffer<int32_t> index_buffer_offset;       // N
@@ -280,7 +282,7 @@ struct VulkanGSPipelineBuffers {
     Buffer<uint32_t> lod_gpu_indices;         // [M] GPU-produced physical splat indices
     Buffer<uint32_t> lod_gpu_logical_indices; // [M] GPU-produced logical/model splat indices
     Buffer<float> lod_gpu_weights;            // [M] GPU-produced transition opacity weights
-    Buffer<uint32_t> lod_gpu_counts;          // [0]=selected, [1]=overflow
+    Buffer<uint32_t> lod_gpu_counts;          // selected, overflow, threshold scale, indirect dispatch xyz
     Buffer<uint32_t> lod_chunk_touch;         // [C] per-chunk traversal priority (0xffffffff = in use)
     // GPU-compacted chunk_touch (Phase D): counts[4], protected ids, miss pairs.
     Buffer<uint32_t> lod_compact_counts;

@@ -1,11 +1,13 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "app/include/app/mcp_app_utils.hpp"
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
+#include "core/mesh_data.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "gui/scene_graph_context_actions.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -222,7 +224,6 @@ namespace {
     protected:
         void SetUp() override {
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
             lfs::vis::services().clear();
             lfs::vis::op::undoHistory().clear();
             manager_ = std::make_unique<lfs::vis::SceneManager>();
@@ -237,8 +238,14 @@ namespace {
             lfs::vis::services().clear();
             rendering_.reset();
             manager_.reset();
-            lfs::core::event::bus().clear_all();
             lfs::event::EventBridge::instance().clear_all();
+        }
+
+        void reseed_if_empty(const size_t undo_count, const size_t redo_count) {
+            // Direct reseeding changes topology outside history. Keep an empty
+            // scene intact while the model can still replay undo or redo.
+            if (manager_->getScene().getNodes().empty() && undo_count == 0 && redo_count == 0)
+                seed_scene();
         }
 
         void seed_scene() {
@@ -257,6 +264,99 @@ namespace {
     };
 
     class SceneGraphRegression : public SceneGraphFuzzTest {};
+
+    TEST_F(SceneGraphRegression, NodeSummaryCountsFollowCutUndoRedo) {
+        auto& scene = manager_->getScene();
+        const auto first = scene.addSplat("first", make_cuda_splat(100000, 0.0f));
+        const auto second = scene.addSplat("second", make_cuda_splat(100000, 10.0f));
+        const auto untouched = scene.addSplat("untouched", make_cuda_splat(7, 20.0f));
+        const auto group = scene.addGroup("empty");
+        const auto check = [&](const size_t expected) {
+            lfs::app::SceneNodeCounts counts(scene);
+            EXPECT_EQ(counts.get(*scene.getNodeById(first)), expected);
+            EXPECT_EQ(counts.get(*scene.getNodeById(second)), expected);
+            EXPECT_EQ(counts.get(*scene.getNodeById(untouched)), 7u);
+            EXPECT_EQ(counts.get(*scene.getNodeById(group)), 0u);
+            EXPECT_EQ(scene.getNodeById(first)->model->size(), 100000u);
+            EXPECT_EQ(scene.getTotalGaussianCount(), 200007u);
+            EXPECT_EQ(scene.getActiveGaussianCountsByNode().at(first), expected);
+        };
+        check(100000);
+        std::vector<bool> selected(200007, false);
+        std::fill_n(selected.begin(), 39628, true);
+        std::fill_n(selected.begin() + 100000, 39628, true);
+        scene.setSelectionMask(std::make_shared<Tensor>(
+            Tensor::from_vector(selected, {selected.size()}, Device::CUDA)));
+        ASSERT_TRUE(manager_->cutSelectedGaussians());
+        check(60372);
+        EXPECT_EQ(scene.selectedCount(), 0u);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        check(100000);
+        EXPECT_EQ(scene.selectedCount(), 79256u);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+        check(60372);
+    }
+
+    TEST_F(SceneGraphRegression, NodeSummaryCountsFollowDeleteAndPaste) {
+        auto& scene = manager_->getScene();
+        const auto id = scene.addSplat("source", make_cuda_splat(6, 0.0f));
+        scene.setSelectionMask(std::make_shared<Tensor>(Tensor::from_vector(
+            std::vector<bool>{true, true, false, false, false, false}, {6}, Device::CUDA)));
+        ASSERT_TRUE(manager_->copySelectedGaussians());
+        ASSERT_TRUE(manager_->deleteSelectedGaussiansWithHistory());
+        EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*scene.getNodeById(id)), 4u);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*scene.getNodeById(id)), 6u);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+        EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*scene.getNodeById(id)), 4u);
+        const auto pasted = manager_->pasteGaussians();
+        ASSERT_EQ(pasted.size(), 1u);
+        EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*scene.getNode(pasted.front())), 2u);
+        EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*scene.getNodeById(id)), 4u);
+    }
+
+    TEST_F(SceneGraphRegression, NodeSummaryCountsFollowCropAndCompaction) {
+        auto& scene = manager_->getScene();
+        const auto id = scene.addSplat("source", make_cuda_splat(3, 0.0f));
+        lfs::core::events::cmd::CropPLYEllipsoid{
+            .world_transform = glm::mat4(1.0f),
+            .radii = glm::vec3(0.5f),
+            .inverse = false,
+        }
+            .emit();
+        EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*scene.getNodeById(id)), 1u);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*scene.getNodeById(id)), 3u);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+        EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*scene.getNodeById(id)), 1u);
+        EXPECT_EQ(manager_->applyDeleted(), 2u);
+        EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*scene.getNodeById(id)), 1u);
+        EXPECT_EQ(scene.getNodeById(id)->model->size(), 1u);
+    }
+
+    TEST_F(SceneGraphRegression, EmptyGroupsDoNotOfferMerge) {
+        auto& scene = manager_->getScene();
+        const auto empty = scene.addGroup("empty");
+        EXPECT_FALSE(lfs::vis::gui::showGroupMergeAction(scene, empty));
+        const auto nested = scene.addGroup("nested", empty);
+        EXPECT_FALSE(lfs::vis::gui::showGroupMergeAction(scene, empty));
+        EXPECT_FALSE(lfs::vis::gui::showGroupMergeAction(scene, nested));
+        EXPECT_FALSE(lfs::vis::gui::showGroupMergeAction(scene, lfs::core::NULL_NODE));
+    }
+
+    TEST_F(SceneGraphRegression, PopulatedGroupsKeepMergeAction) {
+        auto& scene = manager_->getScene();
+        const auto group = scene.addGroup("group");
+        const auto nested = scene.addGroup("nested", group);
+        const auto splat = scene.addSplat("source", make_cpu_splat(2, 0.0f), nested);
+        EXPECT_TRUE(lfs::vis::gui::showGroupMergeAction(scene, nested));
+        EXPECT_TRUE(lfs::vis::gui::showGroupMergeAction(scene, group));
+        scene.setNodeVisibility(splat, false);
+        EXPECT_TRUE(lfs::vis::gui::showGroupMergeAction(scene, group));
+        EXPECT_FALSE(lfs::vis::gui::showGroupMergeAction(scene, splat));
+        scene.removeNodeById(splat);
+        EXPECT_FALSE(lfs::vis::gui::showGroupMergeAction(scene, group));
+    }
 
     TEST_F(SceneGraphRegression, BakeTransformUndoRestoresMeans) {
         auto& scene = manager_->getScene();
@@ -399,6 +499,85 @@ namespace {
         EXPECT_TRUE(scene.getNodeById(a)->visible);
     }
 
+    TEST_F(SceneGraphFuzzTest, EmptySceneReseedPreservesPendingUndoAndRedo) {
+        auto& scene = manager_->getScene();
+        auto& history = lfs::vis::op::undoHistory();
+        const auto options = lfs::vis::op::SceneGraphCaptureOptions{
+            .mode = lfs::vis::op::SceneGraphCaptureMode::FULL,
+            .include_selected_nodes = false,
+            .include_scene_context = false,
+        };
+        auto before = lfs::vis::op::SceneGraphPatchEntry::captureStateByIds(
+            *manager_, scene.getRootNodes(), options);
+        const auto group = scene.addGroup("empty group");
+        const auto uuid = scene.getNodeById(group)->uuid;
+        auto after = lfs::vis::op::SceneGraphPatchEntry::captureStateByIds(
+            *manager_, scene.getRootNodes(), options);
+        history.push(std::make_unique<lfs::vis::op::SceneGraphPatchEntry>(
+            *manager_, "Create empty group", std::move(before), std::move(after)));
+        ASSERT_TRUE(manager_->ungroupNode(group));
+        ASSERT_EQ(scene.getNodeCount(), 0u);
+        ASSERT_EQ(history.undoCount(), 2u);
+        ASSERT_EQ(history.redoCount(), 0u);
+        const auto empty = scene_state(*manager_, false);
+
+        reseed_if_empty(history.undoCount(), history.redoCount());
+        ASSERT_EQ(scene_state(*manager_, false), empty);
+        ASSERT_TRUE(history.undo().success);
+        ASSERT_NE(scene.getNodeByUuid(uuid), nullptr);
+        ASSERT_TRUE(history.undo().success);
+        ASSERT_EQ(scene.getNodeCount(), 0u);
+        ASSERT_EQ(history.undoCount(), 0u);
+        ASSERT_EQ(history.redoCount(), 2u);
+
+        reseed_if_empty(history.undoCount(), history.redoCount());
+        ASSERT_EQ(scene_state(*manager_, false), empty);
+        ASSERT_TRUE(history.redo().success);
+        ASSERT_NE(scene.getNodeByUuid(uuid), nullptr);
+        ASSERT_TRUE(history.redo().success);
+        EXPECT_EQ(scene_state(*manager_, false), empty);
+        check_scene_invariants(*manager_);
+
+        history.clear();
+        reseed_if_empty(history.undoCount(), history.redoCount());
+        EXPECT_GT(scene.getNodeCount(), 0u);
+        EXPECT_EQ(history.undoCount(), 0u);
+        EXPECT_EQ(history.redoCount(), 0u);
+        check_scene_invariants(*manager_);
+    }
+
+    TEST_F(SceneGraphFuzzTest, UngroupLastEmptyGroupSupportsRepeatedUndoRedo) {
+        auto& scene = manager_->getScene();
+        const auto group = scene.addGroup("empty group");
+        const auto uuid = scene.getNodeById(group)->uuid;
+        manager_->selectNode(group);
+        const auto before = scene_state(*manager_, false);
+        ASSERT_TRUE(manager_->ungroupNode(group));
+        ASSERT_EQ(scene.getNodeCount(), 0u);
+        const auto after = scene_state(*manager_, false);
+        for (int repeat = 0; repeat < 3; ++repeat) {
+            ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+            EXPECT_EQ(scene_state(*manager_, false), before);
+            ASSERT_NE(scene.getNodeByUuid(uuid), nullptr);
+            ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+            EXPECT_EQ(scene_state(*manager_, false), after);
+            EXPECT_EQ(scene.getNodeCount(), 0u);
+        }
+    }
+
+    TEST_F(SceneGraphFuzzTest, UngroupUndoRejectsUntrackedReseedWithoutChangingScene) {
+        auto& scene = manager_->getScene();
+        ASSERT_TRUE(manager_->ungroupNode(scene.addGroup("empty group")));
+        ASSERT_EQ(scene.getNodeCount(), 0u);
+        seed_scene();
+        const auto before = scene_state(*manager_);
+        const auto result = lfs::vis::op::undoHistory().undo();
+        EXPECT_FALSE(result.success);
+        EXPECT_NE(result.error.find("topology changed"), std::string::npos);
+        EXPECT_EQ(scene_state(*manager_), before);
+        check_scene_invariants(*manager_);
+    }
+
     TEST_F(SceneGraphFuzzTest, GroupSelectedAllowsGroupAndSplatSiblings) {
         auto& scene = manager_->getScene();
         const NodeId first_group = scene.addGroup("first");
@@ -443,6 +622,44 @@ namespace {
         ASSERT_NE(scene.getNode(duplicate_name), nullptr);
         ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
         EXPECT_EQ(scene_state(*manager_), before);
+    }
+
+    TEST_F(SceneGraphRegression, DuplicateCompactedSplatClonesLiveMaskThroughHistoryAndCut) {
+        auto& scene = manager_->getScene();
+        scene.addSplat("before", make_cuda_splat(3, 0.0f));
+        const auto source = scene.addSplat("source", make_cuda_splat(100000, 10.0f));
+        scene.addSplat("after", make_cuda_splat(4, 20.0f));
+        const auto rows = Tensor::arange(0, 100000, 1, Device::CUDA);
+        scene.getNodeById(source)->model->soft_delete(rows.lt(39628));
+        scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+        std::vector<bool> selected(100007, false);
+        std::fill(selected.begin() + 39631, selected.begin() + 100003, true);
+        scene.setSelectionMask(std::make_shared<Tensor>(
+            Tensor::from_vector(selected, {selected.size()}, Device::CUDA)));
+        manager_->selectNode(source);
+        const auto before = scene_state(*manager_, false);
+        const auto name = manager_->duplicateNodeTree(source);
+        ASSERT_FALSE(name.empty());
+        ASSERT_EQ(scene.getNode(name)->model->size(), 60372u);
+        selected.resize(160379, true);
+        EXPECT_EQ(scene.getSelectionMask()->cpu().to_vector_bool(), selected);
+        EXPECT_EQ(scene.selectedCount(), 120744u);
+        EXPECT_EQ(manager_->getSelectedNodeIds(), (std::vector<NodeId>{source}));
+        const auto after = scene_state(*manager_, false);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_EQ(scene_state(*manager_, false), before);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+        EXPECT_EQ(scene_state(*manager_, false), after);
+        EXPECT_EQ(scene.getSelectionMask()->cpu().to_vector_bool(), selected);
+        ASSERT_TRUE(manager_->cutSelectedGaussians());
+        const auto* remaining_copy = scene.getNode(name);
+        EXPECT_TRUE(!remaining_copy || remaining_copy->model->visible_count() == 0);
+        EXPECT_EQ(scene.getNode("before")->model->visible_count(), 3u);
+        EXPECT_EQ(scene.getNode("after")->model->visible_count(), 4u);
+        const auto* remaining_source = scene.getNode("source");
+        EXPECT_TRUE(!remaining_source || remaining_source->model->visible_count() == 0);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_EQ(scene_state(*manager_, false), after);
     }
 
     TEST_F(SceneGraphRegression, DuplicatePreservesEllipsoidChild) {
@@ -508,7 +725,8 @@ namespace {
         EXPECT_EQ(scene.getNodeById(pasted_ellipsoid_id)->local_transform.get(), expected_transform);
     }
 
-    TEST_F(SceneGraphRegression, MergeHonorsEllipsoidCrop) {
+    // An enabled crop shape only filters the view until it is applied, so merging must not crop.
+    TEST_F(SceneGraphRegression, MergeKeepsSplatsOutsideAnUnappliedEllipsoid) {
         auto& scene = manager_->getScene();
         const NodeId group_id = scene.addGroup("ellipsoid_merge");
         const NodeId splat_id = scene.addSplat(
@@ -531,9 +749,9 @@ namespace {
         const auto* merged = scene.getNode("ellipsoid_merge");
         ASSERT_NE(merged, nullptr);
         ASSERT_NE(merged->model, nullptr);
-        EXPECT_EQ(merged->model->size(), 1);
+        EXPECT_EQ(merged->model->size(), 3);
         EXPECT_EQ(merged->model->means_raw().cpu().to_vector(),
-                  (std::vector<float>{-1.0f, 1.0f, -1.0f}));
+                  (std::vector<float>{-2.0f, 0.0f, 0.0f, -1.0f, 1.0f, -1.0f, 0.0f, 2.0f, -2.0f}));
     }
 
     TEST_F(SceneGraphFuzzTest, BatchRemovalRejectsDuplicateIdsAtomically) {
@@ -698,6 +916,115 @@ namespace {
         EXPECT_EQ(scene_state(*manager_), before);
     }
 
+    TEST_F(SceneGraphFuzzTest, CopyPasteNestedNodesPreservesCopyTimeWorldTransform) {
+        seed_scene();
+        auto& scene = manager_->getScene();
+        const auto parent = scene.getNodeIdByName("left");
+        const auto nested = scene.getNodeIdByName("nested");
+        const auto leaf = scene.getNodeIdByName("c");
+        const auto parent_transform =
+            glm::translate(glm::mat4(1.f), glm::vec3(4.f, -3.f, 2.f)) *
+            glm::rotate(glm::mat4(1.f), 0.6f, glm::vec3(0.f, 1.f, 0.f)) *
+            glm::scale(glm::mat4(1.f), glm::vec3(-2.f, 3.f, 0.5f));
+        scene.setNodeTransform(parent, parent_transform);
+        scene.setNodeTransform(nested, glm::translate(glm::mat4(1.f), glm::vec3(1.f, 2.f, 3.f)));
+        scene.setNodeTransform(leaf, glm::rotate(glm::mat4(1.f), 0.3f, glm::vec3(1.f, 0.f, 0.f)));
+        for (const auto source : {leaf, nested}) {
+            const auto expected = scene.getWorldTransform(source);
+            const auto child_local = scene.getNodeById(leaf)->local_transform.get();
+            manager_->selectNode(source);
+            ASSERT_TRUE(manager_->copySelectedNodes());
+            scene.setNodeTransform(parent, glm::translate(parent_transform, glm::vec3(9.f, 0.f, 0.f)));
+            const auto before = scene_state(*manager_);
+            const auto pasted = manager_->pasteNodes();
+            ASSERT_EQ(pasted.size(), 1u);
+            const auto* root = scene.getNode(pasted.front());
+            ASSERT_NE(root, nullptr);
+            EXPECT_EQ(root->parent_id, lfs::core::NULL_NODE);
+            EXPECT_EQ(root->local_transform.get(), expected);
+            if (source == nested) {
+                ASSERT_EQ(root->children.size(), 1u);
+                EXPECT_EQ(scene.getNodeById(root->children.front())->local_transform.get(), child_local);
+            }
+            const auto uuid = root->uuid;
+            ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+            EXPECT_EQ(scene_state(*manager_), before);
+            ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+            ASSERT_NE(scene.getNodeByUuid(uuid), nullptr);
+            EXPECT_EQ(scene.getWorldTransform(scene.getNodeByUuid(uuid)->id), expected);
+            check_scene_invariants(*manager_);
+        }
+    }
+
+    TEST_F(SceneGraphFuzzTest, CopyPasteNestedGroupWithIdentityWorldTransform) {
+        seed_scene();
+        auto& scene = manager_->getScene();
+        const auto parent = scene.getNodeIdByName("left");
+        const auto nested = scene.getNodeIdByName("nested");
+        scene.setNodeTransform(parent, glm::translate(glm::mat4(1.f), glm::vec3(4.f, 0.f, 0.f)));
+        scene.setNodeTransform(nested, glm::translate(glm::mat4(1.f), glm::vec3(-4.f, 0.f, 0.f)));
+        ASSERT_EQ(scene.getWorldTransform(nested), glm::mat4(1.f));
+        manager_->selectNode(nested);
+        ASSERT_TRUE(manager_->copySelectedNodes());
+        const auto pasted = manager_->pasteNodes();
+        ASSERT_EQ(pasted.size(), 1u);
+        EXPECT_EQ(scene.getNode(pasted.front())->local_transform.get(), glm::mat4(1.f));
+    }
+
+    TEST_F(SceneGraphFuzzTest, CopyPasteMultipleNestedNodesKeepsRelativeWorldPlacement) {
+        seed_scene();
+        auto& scene = manager_->getScene();
+        const auto parent = scene.getNodeIdByName("left");
+        scene.setNodeTransform(parent, glm::translate(glm::mat4(1.f), glm::vec3(5.f, 2.f, -3.f)));
+        const auto nested = scene.getNodeIdByName("nested");
+        scene.setNodeTransform(nested, glm::rotate(glm::mat4(1.f), 0.4f, glm::vec3(0.f, 0.f, 1.f)));
+        scene.setNodeTransform(scene.getNodeIdByName("c"),
+                               glm::translate(glm::mat4(1.f), glm::vec3(1.f, 2.f, 3.f)));
+        const auto expected_a = scene.getWorldTransform(scene.getNodeIdByName("a"));
+        const auto expected_c = scene.getWorldTransform(scene.getNodeIdByName("c"));
+        manager_->selectNodes({"a", "c"});
+        ASSERT_TRUE(manager_->copySelectedNodes());
+        ASSERT_TRUE(manager_->removeNodeWithResult(parent));
+        const auto before = scene_state(*manager_);
+        for (int repeat = 0; repeat < 2; ++repeat) {
+            const auto pasted = manager_->pasteNodes();
+            ASSERT_EQ(pasted.size(), 2u);
+            bool found_a = false;
+            bool found_c = false;
+            for (const auto& name : pasted) {
+                const auto* node = scene.getNode(name);
+                ASSERT_NE(node, nullptr);
+                EXPECT_EQ(node->parent_id, lfs::core::NULL_NODE);
+                const auto world = scene.getWorldTransform(node->id);
+                found_a = found_a || world == expected_a;
+                found_c = found_c || world == expected_c;
+            }
+            EXPECT_TRUE(found_a);
+            EXPECT_TRUE(found_c);
+            ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+            EXPECT_EQ(scene_state(*manager_), before);
+        }
+    }
+
+    TEST_F(SceneGraphFuzzTest, CopyPasteNestedGroupPreservesSingularWorldTransform) {
+        seed_scene();
+        auto& scene = manager_->getScene();
+        const auto parent = scene.getNodeIdByName("left");
+        const auto nested = scene.getNodeIdByName("nested");
+        scene.setNodeTransform(parent, glm::scale(glm::mat4(1.f), glm::vec3(0.f, -2.f, 3.f)));
+        scene.setNodeTransform(nested, glm::translate(glm::mat4(1.f), glm::vec3(1.f, 2.f, 3.f)));
+        const auto expected = scene.getWorldTransform(nested);
+        const auto expected_child = scene.getWorldTransform(scene.getNodeIdByName("c"));
+        manager_->selectNode(nested);
+        ASSERT_TRUE(manager_->copySelectedNodes());
+        const auto pasted = manager_->pasteNodes();
+        ASSERT_EQ(pasted.size(), 1u);
+        const auto* root = scene.getNode(pasted.front());
+        EXPECT_EQ(scene.getWorldTransform(root->id), expected);
+        ASSERT_EQ(root->children.size(), 1u);
+        EXPECT_EQ(scene.getWorldTransform(root->children.front()), expected_child);
+    }
+
     TEST_F(SceneGraphFuzzTest, CopyPasteGroupHierarchyCanBeRepeatedAfterSourceDelete) {
         seed_scene();
         const auto& scene = manager_->getScene();
@@ -709,6 +1036,213 @@ namespace {
         ASSERT_TRUE(manager_->removeNodeWithResult(left));
         ASSERT_EQ(manager_->pasteNodes().size(), 1u);
         check_scene_invariants(*manager_);
+    }
+
+    TEST_F(SceneGraphFuzzTest, CopyPasteMeshBelowTransformedAncestorsPreservesWorldVertices) {
+        auto& scene = manager_->getScene();
+        auto& history = lfs::vis::op::undoHistory();
+        for (const auto device : {Device::CPU, Device::CUDA}) {
+            for (const bool copy_group : {false, true}) {
+                SCOPED_TRACE(copy_group ? "nested group" : "mesh directly");
+                SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
+                manager_->clearSelection();
+                history.clear();
+                scene.clear();
+                const auto outer = scene.addGroup("outer");
+                const auto inner = scene.addGroup("inner", outer);
+                auto mesh = std::make_shared<lfs::core::MeshData>();
+                const std::vector<float> vertices{0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f};
+                mesh->vertices = Tensor::from_vector(vertices, {3, 3}, device);
+                mesh->indices = Tensor::from_vector(std::vector<int32_t>{0, 1, 2}, {1, 3}, device);
+                const auto source = scene.addMesh("mesh", mesh, inner);
+                const auto outer_transform =
+                    glm::translate(glm::mat4(1.f), glm::vec3(4.f, -3.f, 2.f)) *
+                    glm::rotate(glm::mat4(1.f), 0.6f, glm::vec3(0.f, 1.f, 0.f)) *
+                    glm::scale(glm::mat4(1.f), glm::vec3(-2.f, 3.f, 0.5f));
+                scene.setNodeTransform(outer, outer_transform);
+                scene.setNodeTransform(inner,
+                                       glm::translate(glm::mat4(1.f), glm::vec3(1.f, 2.f, -3.f)) *
+                                           glm::rotate(glm::mat4(1.f), 0.3f, glm::vec3(1.f, 0.f, 0.f)));
+                scene.setNodeTransform(source,
+                                       glm::translate(glm::mat4(1.f), glm::vec3(-1.f, 0.5f, 2.f)) *
+                                           glm::scale(glm::mat4(1.f), glm::vec3(0.5f, 2.f, 1.f)));
+                const auto expected_world = scene.getWorldTransform(source);
+                manager_->selectNode(copy_group ? inner : source);
+                ASSERT_TRUE(manager_->copySelectedNodes());
+                // Pasting must use copy-time placement even if an ancestor moves.
+                scene.setNodeTransform(outer, glm::translate(outer_transform, glm::vec3(9.f, 1.f, -2.f)));
+                const auto before = scene_state(*manager_);
+                const auto history_before = history.undoCount();
+                const auto pasted = manager_->pasteNodes();
+                ASSERT_EQ(pasted.size(), 1u);
+                ASSERT_EQ(history.undoCount(), history_before + 1);
+                const auto* root = scene.getNode(pasted.front());
+                ASSERT_NE(root, nullptr);
+                EXPECT_EQ(root->parent_id, lfs::core::NULL_NODE);
+                if (copy_group)
+                    ASSERT_EQ(root->children.size(), 1u);
+                const auto* copied = copy_group ? scene.getNodeById(root->children.front()) : root;
+                ASSERT_NE(copied, nullptr);
+                const auto uuid = copied->uuid;
+                const auto verify_mesh = [&] {
+                    const auto* node = scene.getNodeByUuid(uuid);
+                    ASSERT_NE(node, nullptr);
+                    ASSERT_NE(node->mesh, nullptr);
+                    EXPECT_NE(node->mesh.get(), mesh.get());
+                    EXPECT_EQ(node->mesh->vertices.device(), device);
+                    const auto actual_vertices = node->mesh->vertices.cpu().to_vector();
+                    ASSERT_EQ(actual_vertices, vertices);
+                    const auto indices = node->mesh->indices.cpu();
+                    ASSERT_EQ(indices.numel(), 3u);
+                    for (int i = 0; i < 3; ++i)
+                        EXPECT_EQ(indices.ptr<int32_t>()[i], i);
+                    const auto world = scene.getWorldTransform(node->id);
+                    for (size_t i = 0; i < vertices.size(); i += 3) {
+                        const auto expected = expected_world * glm::vec4(vertices[i], vertices[i + 1], vertices[i + 2], 1.f);
+                        const auto actual = world * glm::vec4(actual_vertices[i], actual_vertices[i + 1], actual_vertices[i + 2], 1.f);
+                        for (int axis = 0; axis < 3; ++axis)
+                            EXPECT_NEAR(actual[axis], expected[axis], 1e-5f);
+                    }
+                    check_scene_invariants(*manager_);
+                };
+                verify_mesh();
+                for (int repeat = 0; repeat < 3; ++repeat) {
+                    ASSERT_TRUE(history.undo().success);
+                    EXPECT_EQ(scene_state(*manager_), before);
+                    EXPECT_EQ(scene.getNodeByUuid(uuid), nullptr);
+                    ASSERT_TRUE(history.redo().success);
+                    verify_mesh();
+                }
+            }
+        }
+    }
+
+    TEST_F(SceneGraphFuzzTest, CopyPasteMixedGroupKeepsIndependentMeshPayloadsAndHistory) {
+        seed_scene();
+        auto& scene = manager_->getScene();
+        const auto group = scene.getNodeIdByName("left");
+        const auto nested = scene.getNodeIdByName("nested");
+        auto mesh = std::make_shared<lfs::core::MeshData>();
+        mesh->vertices = Tensor::from_vector({0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f}, {3, 3}, Device::CPU);
+        mesh->indices = Tensor::from_vector(std::vector<int32_t>{0, 1, 2}, {1, 3}, Device::CPU);
+        mesh->normals = Tensor::ones({3, 3}, Device::CPU);
+        mesh->tangents = Tensor::ones({3, 4}, Device::CPU);
+        mesh->texcoords = Tensor::ones({3, 2}, Device::CPU);
+        mesh->colors = Tensor::ones({3, 4}, Device::CPU);
+        mesh->materials.emplace_back();
+        mesh->materials.back().name = "clipboard material";
+        mesh->materials.back().roughness = 0.25f;
+        mesh->materials.back().albedo_tex_path = "texture.png";
+        mesh->submeshes.push_back({0, 3, 0});
+        mesh->texture_images.push_back({{12, 34, 56, 255}, 1, 1, 4});
+        const auto mesh_id = scene.addMesh("nested mesh", mesh, nested);
+        const auto transform = glm::translate(glm::mat4(1.f), glm::vec3(2.f, 3.f, 4.f));
+        scene.setNodeTransform(mesh_id, transform);
+        scene.getNodeById(mesh_id)->visible.setQuiet(false);
+        scene.getNodeById(mesh_id)->locked.setQuiet(true);
+        manager_->selectNode(group);
+        ASSERT_TRUE(manager_->copySelectedNodes());
+        // The clipboard must own the values at copy time, not live source buffers.
+        mesh->vertices.ptr<float>()[3] = 99.f;
+        mesh->indices.ptr<int32_t>()[2] = 0;
+        mesh->normals.ptr<float>()[0] = 99.f;
+        mesh->materials.front().roughness = 0.9f;
+        mesh->submeshes.front().index_count = 0;
+        mesh->texture_images.front().pixels.front() = 99;
+
+        const auto before = scene_state(*manager_);
+        const auto pasted = manager_->pasteNodes();
+        ASSERT_EQ(pasted.size(), 1u);
+        const auto* copied = scene.getNode("nested mesh 1");
+        ASSERT_NE(copied, nullptr);
+        ASSERT_NE(copied->mesh, nullptr);
+        const auto copied_uuid = copied->uuid;
+        EXPECT_EQ(scene.getNodeById(copied->parent_id)->name, "nested 1");
+        EXPECT_EQ(copied->local_transform.get(), transform);
+        EXPECT_FALSE(static_cast<bool>(copied->visible));
+        EXPECT_TRUE(static_cast<bool>(copied->locked));
+        EXPECT_NE(copied->mesh->id(), mesh->id());
+        EXPECT_EQ(copied->mesh->vertices.to_vector(), (std::vector<float>{0, 0, 0, 1, 0, 0, 0, 1, 0}));
+        EXPECT_EQ(copied->mesh->indices.cpu().ptr<int32_t>()[2], 2);
+        EXPECT_EQ(copied->mesh->normals.to_vector(), std::vector<float>(9, 1.f));
+        EXPECT_EQ(copied->mesh->tangents.to_vector(), std::vector<float>(12, 1.f));
+        EXPECT_EQ(copied->mesh->texcoords.to_vector(), std::vector<float>(6, 1.f));
+        EXPECT_EQ(copied->mesh->colors.to_vector(), std::vector<float>(12, 1.f));
+        ASSERT_EQ(copied->mesh->materials.size(), 1u);
+        EXPECT_EQ(copied->mesh->materials.front().name, "clipboard material");
+        EXPECT_FLOAT_EQ(copied->mesh->materials.front().roughness, 0.25f);
+        EXPECT_EQ(copied->mesh->materials.front().albedo_tex_path, "texture.png");
+        ASSERT_EQ(copied->mesh->submeshes.size(), 1u);
+        EXPECT_EQ(copied->mesh->submeshes.front().index_count, 3u);
+        ASSERT_EQ(copied->mesh->texture_images.size(), 1u);
+        EXPECT_EQ(copied->mesh->texture_images.front().pixels, (std::vector<uint8_t>{12, 34, 56, 255}));
+        EXPECT_EQ(scene.getNode("a 1")->model->size(), 2);
+        EXPECT_EQ(scene.getNode("c 1")->model->size(), 2);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_EQ(scene_state(*manager_), before);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+        ASSERT_NE(scene.getNodeByUuid(copied_uuid), nullptr);
+        EXPECT_EQ(scene.getNodeByUuid(copied_uuid)->mesh->texture_images.front().pixels.front(), 12);
+
+        scene.getNodeByUuid(copied_uuid)->mesh->vertices.ptr<float>()[3] = 42.f;
+        scene.getNodeByUuid(copied_uuid)->mesh->texture_images.front().pixels.front() = 42;
+        scene.removeNodeById(group);
+        ASSERT_EQ(manager_->pasteNodes().size(), 1u);
+        const auto* repeated = scene.getNode("nested mesh");
+        ASSERT_NE(repeated, nullptr);
+        ASSERT_NE(repeated->mesh, nullptr);
+        EXPECT_EQ(repeated->mesh->vertices.to_vector(), (std::vector<float>{0, 0, 0, 1, 0, 0, 0, 1, 0}));
+        check_scene_invariants(*manager_);
+    }
+
+    TEST_F(SceneGraphFuzzTest, CopyPasteStandaloneMeshWithoutOptionalAttributesRemainsIndependent) {
+        auto& scene = manager_->getScene();
+        auto mesh = std::make_shared<lfs::core::MeshData>();
+        mesh->vertices = Tensor::ones({3, 3}, Device::CPU);
+        mesh->indices = Tensor::from_vector(std::vector<int32_t>{0, 1, 2}, {1, 3}, Device::CPU);
+        manager_->selectNode(scene.addMesh("mesh", mesh));
+        ASSERT_TRUE(manager_->copySelectedNodes());
+        mesh->vertices = Tensor::zeros({3, 3}, Device::CPU);
+        const auto first = manager_->pasteNodes();
+        ASSERT_EQ(first.size(), 1u);
+        const auto* copied = scene.getNode(first.front());
+        ASSERT_NE(copied->mesh, nullptr);
+        EXPECT_EQ(copied->mesh->vertices.to_vector(), std::vector<float>(9, 1.f));
+        EXPECT_FALSE(copied->mesh->has_normals());
+        EXPECT_FALSE(copied->mesh->has_tangents());
+        EXPECT_FALSE(copied->mesh->has_texcoords());
+        EXPECT_FALSE(copied->mesh->has_colors());
+        copied->mesh->vertices = Tensor::zeros({3, 3}, Device::CPU);
+        const auto second = manager_->pasteNodes();
+        ASSERT_EQ(second.size(), 1u);
+        EXPECT_EQ(scene.getNode(second.front())->mesh->vertices.to_vector(), std::vector<float>(9, 1.f));
+    }
+
+    TEST_F(SceneGraphFuzzTest, CopyPasteMeshOnlyGroupKeepsDeviceAndIndependentStorage) {
+        auto& scene = manager_->getScene();
+        for (const auto device : {Device::CPU, Device::CUDA}) {
+            const auto group = scene.addGroup(device == Device::CPU ? "cpu group" : "gpu group");
+            auto mesh = std::make_shared<lfs::core::MeshData>();
+            mesh->vertices = Tensor::ones({3, 3}, device);
+            mesh->indices = Tensor::from_vector(std::vector<int32_t>{0, 1, 2}, {1, 3}, device);
+            const auto source = scene.addMesh(device == Device::CPU ? "cpu mesh" : "gpu mesh", mesh, group);
+            manager_->selectNode(group);
+            ASSERT_TRUE(manager_->copySelectedNodes());
+            const auto first = manager_->pasteNodes();
+            ASSERT_EQ(first.size(), 1u);
+            const auto* root = scene.getNode(first.front());
+            ASSERT_EQ(root->children.size(), 1u);
+            const auto* copied = scene.getNodeById(root->children.front());
+            ASSERT_NE(copied->mesh, nullptr);
+            EXPECT_EQ(copied->mesh->vertices.device(), device);
+            EXPECT_NE(copied->mesh->vertices.ptr<float>(), mesh->vertices.ptr<float>());
+            EXPECT_NE(copied->mesh->indices.ptr<int32_t>(), mesh->indices.ptr<int32_t>());
+            EXPECT_EQ(copied->mesh->vertices.cpu().to_vector(), std::vector<float>(9, 1.f));
+            EXPECT_NE(copied->mesh->id(), mesh->id());
+            ASSERT_TRUE(manager_->removeNodeWithResult(source));
+            ASSERT_EQ(manager_->pasteNodes().size(), 1u);
+            check_scene_invariants(*manager_);
+        }
     }
 
     TEST_F(SceneGraphFuzzTest, MergeBakesChildWorldTransforms) {
@@ -823,10 +1357,8 @@ namespace {
 
             for (int operation = 0; operation < operations_per_seed; ++operation) {
                 auto nodes = manager_->getScene().getNodes();
-                if (nodes.empty()) {
-                    seed_scene();
-                    nodes = manager_->getScene().getNodes();
-                }
+                reseed_if_empty(undo_frames.size(), redo_frames.size());
+                nodes = manager_->getScene().getNodes();
                 const auto pick = [&](const bool group_only = false) -> const lfs::core::SceneNode* {
                     std::vector<const lfs::core::SceneNode*> candidates;
                     for (const auto* node : nodes)

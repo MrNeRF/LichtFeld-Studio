@@ -1,0 +1,54 @@
+/* Compact log table using the shared utility window and controls. */
+/* Inset scrollbars beyond the floating window's 6dp resize zone. */
+#content-wrap { padding: 0 8dp 8dp; overflow: hidden; min-width: 0; min-height: 0; }
+#content { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.log-filter-bar, .log-settings-bar, .log-actions, .log-footer {
+    display: flex; align-items: center; gap: 8dp; padding: 8dp 12dp;
+    flex-shrink: 0; min-width: 0;
+}
+.log-filter-bar, .log-settings-bar, .log-actions { flex-wrap: wrap; align-items: flex-end; }
+.log-field { display: flex; flex-direction: column; gap: 5dp; min-width: 0; }
+.log-field-label { font-size: 11dp; line-height: 14dp; }
+.log-query-field { flex: 1 1 240dp; min-width: 180dp; }
+.log-source-field { flex: 0 1 180dp; min-width: 140dp; }
+.log-level-field { width: 160dp; }
+.log-number-field { width: 100dp; }
+.log-settings-bar { gap: 16dp; border-bottom-width: 1dp; padding-top: 0; }
+.log-field select { width: 100%; box-sizing: border-box; height: 28dp; min-height: 28dp; font-size: 12dp; }
+.log-action-spacer { flex: 1; }
+.log-wrap { display: flex; height: 28dp; align-items: center; gap: 6dp; flex: 0 0 auto; }
+.log-wrap input[type="checkbox"] { margin: 0; flex-shrink: 0; }
+.log-wrap span { font-size: 12dp; line-height: 16dp; }
+.log-actions .btn { min-width: 74dp; }
+
+.log-search-box { position: relative; display: flex; align-items: center; min-height: 28dp; }
+.log-search-box input[type="text"] {
+    flex: 1; min-width: 0; box-sizing: border-box; height: 28dp; min-height: 28dp;
+    padding: 5dp 10dp; border-width: 1dp; font-size: 12dp; line-height: 16dp;
+}
+.log-placeholder {
+    position: absolute; left: 10dp; right: 10dp; top: 6dp; line-height: 16dp;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+}
+.log-filter-bar .btn, .log-actions .btn, .log-footer .btn {
+    box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
+    height: 28dp; min-height: 28dp; padding: 0 10dp; font-size: 12dp;
+}
+.log-field input.log-limit-input {
+    box-sizing: border-box; width: 100%; height: 28dp; min-height: 28dp;
+    padding: 5dp 10dp; line-height: 16dp; font-size: 12dp;
+}
+.log-column-header, .log-row { display: flex; align-items: flex-start; min-width: 0; }
+.log-column-header { padding: 6dp 12dp; flex-shrink: 0; font-size: 11dp; border-bottom-width: 1dp; }
+#log-scroll { tab-index: auto; flex: 1; min-height: 0; min-width: 0; overflow: auto; }
+.log-row { padding: 5dp 12dp; border-bottom-width: 1dp; font-size: 12dp; line-height: 17dp; }
+.log-time { width: 98dp; min-width: 98dp; font-size: 11dp; }
+.log-level { width: 82dp; min-width: 82dp; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11dp; }
+.log-source { width: 165dp; min-width: 165dp; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11dp; }
+.log-message { flex: 1; min-width: 180dp; white-space: pre-wrap; word-break: break-all; }
+.log-rows--nowrap .log-message { white-space: pre; }
+.log-empty { padding: 32dp 12dp; text-align: center; }
+.log-summary { flex: 1; min-width: 0; font-size: 11dp; }
+.log-footer { border-top-width: 1dp; }
+.log-feedback { padding: 4dp 12dp 8dp; font-size: 11dp; }
+.hidden { display: none; }

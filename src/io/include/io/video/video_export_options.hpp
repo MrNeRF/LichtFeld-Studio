@@ -69,6 +69,7 @@ namespace lfs::io::video {
         int framerate = 30;
         int crf = 18;
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
+        bool spherical_video = false;
     };
 
     [[nodiscard]] inline std::expected<void, std::string> validateVideoEncodingOptions(
@@ -92,8 +93,7 @@ namespace lfs::io::video {
         return {};
     }
 
-    // UI-side bounds for manual WxH entry. The encoder additionally requires even
-    // sides (YUV420) and a packed-RGB pixel budget; 8192x8192 is well inside that.
+    // Manual WxH entry bounds. Encoder capability is checked by the encoder itself.
     inline constexpr int MIN_VIDEO_SIDE = 16;
     inline constexpr int MAX_VIDEO_SIDE = 8192;
 

@@ -85,6 +85,14 @@ class TestTranslationHierarchy:
 class TestRealConvertedGroup:
     """Section 1.5 demo / BINDING FIX 2: py_io is the converted reference group."""
 
+    def test_clear_scene_without_viewer_preserves_typed_error(self, lf):
+        with pytest.raises(lf.Error) as excinfo:
+            lf.clear_scene()
+        assert isinstance(excinfo.value, RuntimeError)
+        assert excinfo.value.code == "Unavailable"
+        assert excinfo.value.domain == "Python"
+        assert "No scene manager" in str(excinfo.value)
+
     def test_io_load_missing_file_is_typed_notfound(self, lf):
         with pytest.raises(lf.NotFoundError) as excinfo:
             lf.io.load("/nonexistent/path/x.ply")

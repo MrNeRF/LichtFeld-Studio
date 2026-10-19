@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "python_editor.hpp"
+#include "input/sdl_coordinate_utils.hpp"
 
 #include "python_lsp_client.hpp"
 
@@ -703,6 +704,7 @@ namespace lfs::vis::editor {
                 case Zep::BufferMessageType::TextChanged:
                 case Zep::BufferMessageType::TextDeleted:
                     owner_.text_changed = true;
+                    owner_.host_text_changed = true;
                     owner_.noteSemanticDirtyRange(
                         static_cast<size_t>(std::max(0l, buffer_message->startLocation.Index())),
                         static_cast<size_t>(std::max(0l, buffer_message->endLocation.Index())));
@@ -877,6 +879,7 @@ namespace lfs::vis::editor {
             buffer->SetText(text);
             suppress_buffer_events = false;
             text_changed = false;
+            host_text_changed = false;
             if (lsp) {
                 document_version = lsp->updateDocument(text);
             }
@@ -1713,6 +1716,8 @@ namespace lfs::vis::editor {
             last_cursor_byte_index = cursor.byte_index;
             last_cursor_line = cursor.line;
             last_cursor_character = cursor.character;
+            // The console reads host_text_changed before this deferred render.
+            text_changed = false;
         }
 
         std::optional<ResolvedEdit> resolveTextEdit(const PythonLspClient::TextEdit& edit,
@@ -1833,11 +1838,11 @@ namespace lfs::vis::editor {
 
             if (changed) {
                 text_changed = true;
+                host_text_changed = true;
                 editor->RequestRefresh();
             }
 
-            request_focus = true;
-            force_unfocused = false;
+            focusEditor();
             clearCompletionState();
             return true;
         }
@@ -2256,8 +2261,10 @@ namespace lfs::vis::editor {
         }
 
         void focusEditor() {
-            request_focus = true;
             force_unfocused = false;
+            request_focus = !rml_element;
+            if (rml_element)
+                rml_element->Focus();
         }
 
         void copySelectionToClipboard() {
@@ -2323,7 +2330,10 @@ namespace lfs::vis::editor {
             }
 
             clearCompletionState();
-            buffer->ClearSelection();
+            if (vim_mode_enabled)
+                buffer->ClearSelection();
+            else
+                clearSelectionAndReturnToDefaultMode();
             window->SetBufferCursor(location);
             mouse_selection_anchor = location;
             mouse_selection_head = location;
@@ -2344,7 +2354,9 @@ namespace lfs::vis::editor {
                 return false;
             }
 
-            if (location == *mouse_selection_anchor) {
+            if (!vim_mode_enabled) {
+                buffer->GetMode()->SetSelection(*mouse_selection_anchor, location);
+            } else if (location == *mouse_selection_anchor) {
                 buffer->ClearSelection();
             } else if (location < *mouse_selection_anchor) {
                 buffer->SetSelection(Zep::GlyphRange(location, *mouse_selection_anchor));
@@ -2745,11 +2757,13 @@ namespace lfs::vis::editor {
             const Zep::ZepBuffer*, std::string>
             session_locators;
 
+        Rml::ObserverPtr<Rml::Element> rml_element;
         bool request_focus = false;
         bool is_focused = false;
         bool force_unfocused = false;
         bool read_only = false;
         bool text_changed = false;
+        bool host_text_changed = false;
         bool suppress_buffer_events = false;
         bool completion_request_pending = false;
         bool manual_completion_requested = false;
@@ -2883,16 +2897,20 @@ namespace lfs::vis::editor {
             Zep::ZepWindow* window,
             const std::string_view text,
             const PythonEditorSessionState& state) {
+            constexpr auto max_long =
+                static_cast<std::size_t>(
+                    std::numeric_limits<long>::max());
+            const auto max_offset = std::min(text.size(), max_long);
             const auto cursor_byte =
-                std::min(
+                static_cast<unsigned long>(std::min(
                     state.cursor_byte,
-                    text.size());
+                    max_offset));
             buffer.ClearSelection();
             if (state.selection_anchor_byte) {
                 const auto anchor =
-                    std::min(
+                    static_cast<unsigned long>(std::min(
                         *state.selection_anchor_byte,
-                        text.size());
+                        max_offset));
                 if (anchor != cursor_byte) {
                     buffer.SetSelection(
                         Zep::GlyphRange{
@@ -2906,10 +2924,6 @@ namespace lfs::vis::editor {
                 }
             }
 
-            constexpr auto max_long =
-                static_cast<std::size_t>(
-                    std::numeric_limits<
-                        long>::max());
             std::vector<Zep::FoldRange> folds;
             folds.reserve(state.folds.size());
             for (const auto& fold :
@@ -2996,10 +3010,9 @@ namespace lfs::vis::editor {
             impl_->applySemanticHighlighting(impl_->getText());
         }
 
-        if (impl_->request_focus) {
-            element.Focus();
-            impl_->force_unfocused = false;
-        }
+        impl_->rml_element = element.GetObserverPtr();
+        if (impl_->request_focus)
+            impl_->focusEditor();
 
         bool element_focused = false;
         if (auto* document = element.GetOwnerDocument()) {
@@ -3050,6 +3063,7 @@ namespace lfs::vis::editor {
             return;
         }
 
+        impl_->rml_element = element.GetObserverPtr();
         const std::string type = event.GetType();
         const auto local_mouse = [&]() {
             const auto offset = element.GetAbsoluteOffset(Rml::BoxArea::Content);
@@ -3065,6 +3079,7 @@ namespace lfs::vis::editor {
             return;
         }
         if (type == "blur") {
+            impl_->request_focus = false;
             impl_->is_focused = false;
             impl_->mouse_pos_valid = false;
             impl_->endMouseSelection();
@@ -3121,7 +3136,7 @@ namespace lfs::vis::editor {
             if (button == 1) {
                 float screen_x = event.GetParameter("mouse_x", 0.0f);
                 float screen_y = event.GetParameter("mouse_y", 0.0f);
-                SDL_GetMouseState(&screen_x, &screen_y);
+                input::mouseStateInPixels(SDL_GetMouseFocus(), &screen_x, &screen_y);
                 if (impl_->handleContextMenuMouseDown(mouse, screen_x, screen_y)) {
                     event.StopPropagation();
                     return;
@@ -3288,8 +3303,8 @@ namespace lfs::vis::editor {
     }
 
     bool PythonEditor::consumeTextChanged() {
-        const bool changed = impl_->text_changed;
-        impl_->text_changed = false;
+        const bool changed = impl_->host_text_changed;
+        impl_->host_text_changed = false;
         return changed;
     }
 
@@ -3381,8 +3396,7 @@ namespace lfs::vis::editor {
     }
 
     void PythonEditor::focus() {
-        impl_->request_focus = true;
-        impl_->force_unfocused = false;
+        impl_->focusEditor();
     }
 
     void PythonEditor::unfocus() {
@@ -3641,6 +3655,7 @@ namespace lfs::vis::editor {
                 active_window);
         }
         impl_->text_changed = false;
+        impl_->host_text_changed = false;
         impl_->setVimModeEnabled(
             state.vim_mode);
         if (active_buffer != nullptr &&

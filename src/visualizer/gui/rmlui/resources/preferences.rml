@@ -8,21 +8,24 @@
     <div class="preferences-nav">
       <button class="btn preferences-nav-item" data-class-active="show_general" data-event-click="show_general">@tr:preferences.general</button>
       <button class="btn preferences-nav-item" data-class-active="show_appearance" data-event-click="show_appearance">@tr:preferences.appearance</button>
+      <button class="btn preferences-nav-item" data-class-active="show_viewport" data-event-click="show_viewport">@tr:preferences.viewport</button>
       <button class="btn preferences-nav-item" data-class-active="show_input" data-event-click="show_input">@tr:preferences.input</button>
       <button class="btn preferences-nav-item" data-class-active="show_interface" data-event-click="show_interface">@tr:preferences.interface</button>
       <button class="btn preferences-nav-item" data-class-active="show_file_associations" data-event-click="show_file_associations" data-if="has_file_associations">@tr:preferences.file_associations</button>
+      <button class="btn preferences-nav-item" data-class-active="show_marketplace" data-event-click="show_marketplace">@tr:preferences.marketplace</button>
       <button class="btn preferences-nav-item" data-class-active="show_mcp" data-event-click="show_mcp">@tr:preferences.mcp</button>
+      <button class="btn preferences-nav-item" data-class-active="show_portal" data-event-click="show_portal">@tr:preferences.portal</button>
     </div>
 
     <div class="preferences-content">
       <div class="preferences-section" data-if="show_general">
         <div class="section-header text-accent" data-class-is-expanded="language_expanded" data-event-click="toggle_section('language')">
           <span class="section-arrow text-accent" data-class-is-expanded="language_expanded">&#x25B6;</span>
-          <span class="text-accent">@tr:preferences.language</span>
+          <span class="text-accent">@tr:preferences.language_title</span>
         </div>
         <div class="section-content" data-if="language_expanded">
           <div class="preferences-row">
-            <span class="preferences-label">@tr:preferences.language</span>
+            <span class="preferences-label">@tr:preferences.language_title</span>
             <select class="preferences-select" data-value="language_idx">
               <option data-for="language : languages" data-attr-value="language.index">{{ language.label }}</option>
             </select>
@@ -33,6 +36,7 @@
           <span class="text-accent">@tr:preferences.projects</span>
         </div>
         <div class="section-content" data-if="project_location_expanded">
+          <div class="preferences-setting preferences-project-location" data-tooltip="preferences.project_location_description">
           <div class="preferences-row">
             <span class="preferences-label">@tr:preferences.project_location</span>
             <div class="preferences-path-control">
@@ -43,13 +47,197 @@
               <button class="btn btn--secondary" data-event-click="use_default_project_location">@tr:preferences.use_default</button>
             </div>
           </div>
-          <span class="preferences-description">{{ project_location_hint }}</span>
-          <span class="preferences-description">@tr:preferences.project_location_description</span>
-          <div class="preferences-row preferences-checkbox-row">
+          <span class="preferences-description preferences-setting-hint">{{ project_location_hint }}</span>
+          </div>
+          <div class="preferences-setting">
+            <div class="preferences-row preferences-checkbox-row">
+              <span class="preferences-label">@tr:menu.file.auto_save_on_close</span>
+              <input type="checkbox" data-checked="auto_save_on_close" />
+            </div>
+          </div>
+          <div class="preferences-setting">
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="preferences.embed_dataset_by_default_description">
             <span class="preferences-label">@tr:preferences.embed_dataset_by_default</span>
             <input type="checkbox" data-checked="embed_dataset_by_default" />
           </div>
-          <span class="preferences-description">@tr:preferences.embed_dataset_by_default_description</span>
+          </div>
+        </div>
+        <div class="section-header text-accent" data-class-is-expanded="project_folders_expanded" data-event-click="toggle_section('project_folders')">
+          <span class="section-arrow text-accent" data-class-is-expanded="project_folders_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.project_folders</span>
+        </div>
+        <div class="section-content" data-if="project_folders_expanded">
+          <div class="preferences-project-folder" data-for="folder : project_folders">
+            <div class="preferences-project-folder-details">
+              <span>{{folder.label}}</span>
+              <span class="preferences-description">{{folder.path}}</span>
+            </div>
+            <button class="btn btn--secondary" data-if="folder.can_remove" data-event-click="remove_project_folder(folder.id)">@tr:projects.action.remove_folder</button>
+          </div>
+          <div class="preferences-project-folder-actions">
+            <button class="btn btn--secondary" data-event-click="add_project_folder">@tr:projects.action.add_folder</button>
+            <button class="btn btn--secondary" data-event-click="rescan_project_folders">@tr:projects.action.rescan_folders</button>
+          </div>
+        </div>
+        <div class="section-header text-accent" data-class-is-expanded="project_manager_expanded" data-event-click="toggle_section('project_manager')">
+          <span class="section-arrow text-accent" data-class-is-expanded="project_manager_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.project_manager_title</span>
+        </div>
+        <div class="section-content" data-if="project_manager_expanded">
+          <div class="preferences-row" data-tooltip="preferences.project_manager_default_view_description">
+            <span class="preferences-label">@tr:preferences.project_manager_default_view</span>
+            <select class="preferences-select" data-value="project_manager_default_view">
+              <option value="remember">@tr:preferences.project_manager_view_remember</option>
+              <option value="gallery">@tr:preferences.project_manager_view_grid</option>
+              <option value="list">@tr:preferences.project_manager_view_list</option>
+            </select>
+          </div>
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="preferences.project_manager_open_at_startup_description">
+            <span class="preferences-label">@tr:preferences.project_manager_open_at_startup</span>
+            <input type="checkbox" data-checked="project_manager_open_at_startup" />
+          </div>
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="preferences.project_manager_remember_state_description">
+            <span class="preferences-label">@tr:preferences.project_manager_remember_state</span>
+            <input type="checkbox" data-checked="project_manager_remember_state" />
+          </div>
+        </div>
+        <div class="section-header text-accent" data-class-is-expanded="gallery_expanded" data-event-click="toggle_section('gallery')">
+          <span class="section-arrow text-accent" data-class-is-expanded="gallery_expanded">&#x25B6;</span>
+          <span>@tr:preferences.gallery.title</span>
+        </div>
+        <div class="section-content" data-if="gallery_expanded">
+          <div class="preferences-row"><span class="preferences-label">@tr:preferences.gallery.format</span>
+            <select class="preferences-select" data-value="gallery_uploadFormat"><option value="auto">@tr:projects.gallery.format.auto</option><option value="studio">@tr:projects.gallery.format.studio</option><option value="sog">@tr:projects.gallery.format.sog</option><option value="ssog">@tr:projects.gallery.format.ssog</option><option value="spz">@tr:projects.gallery.format.spz</option></select></div>
+          <div class="preferences-row"><span class="preferences-label">@tr:preferences.gallery.cache</span><input class="preferences-select" type="text" data-value="gallery_posterCacheMiB" /></div>
+          <span class="preferences-description">{{gallery_preferences_error}}</span>
+        </div>
+      </div>
+
+      <div class="preferences-section" data-if="show_marketplace">
+        <div class="section-header text-accent">@tr:preferences.marketplace</div>
+        <div class="section-content">
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.marketplace_layout</span>
+            <select class="preferences-select" data-value="marketplace_view">
+              <option value="card">@tr:plugin_marketplace.view.grid</option>
+              <option value="list">@tr:plugin_marketplace.view.list</option>
+            </select>
+          </div>
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="preferences.marketplace_git_checkout_description">
+            <span class="preferences-label">@tr:plugin_marketplace.install_as_git_checkout</span>
+            <input type="checkbox" data-checked="marketplace_git_checkout" data-attrif-disabled="!marketplace_git_available" />
+          </div>
+          <div class="preferences-description" data-if="!marketplace_git_available">
+            @tr:preferences.marketplace_git_unavailable
+          </div>
+        </div>
+      </div>
+
+      <div class="preferences-section" data-if="show_portal">
+        <div class="section-header text-accent" data-class-is-expanded="portal_expanded" data-event-click="toggle_section('portal')">
+          <span class="section-arrow text-accent" data-class-is-expanded="portal_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.portal</span>
+        </div>
+        <div class="section-content" data-if="portal_expanded">
+          <div class="preferences-row"><span class="preferences-description">{{portal_connection_status}}</span></div>
+          <div class="preferences-row" data-if="portal_disconnect_visible"><span class="preferences-label">@tr:portal.preferences.connected_since</span><span class="preferences-description">{{portal_connection_since}}</span></div>
+          <div class="preferences-inline-actions">
+            <button class="btn btn--primary" data-if="portal_connect_visible" data-event-click="portal_connect">@tr:portal.status.connect</button>
+            <button class="btn btn--primary" data-if="portal_turn_on_visible" data-event-click="portal_turn_on">@tr:portal.status.turn_on</button>
+            <button class="btn btn--secondary" data-if="portal_disconnect_visible" data-event-click="portal_disconnect">@tr:portal.status.disconnect</button>
+            <button class="btn btn--secondary" data-if="portal_linking" data-event-click="portal_cancel">@tr:portal.status.cancel</button>
+          </div>
+          <div class="preferences-portal-link" data-if="portal_code_visible">
+            <div>
+              <div class="preferences-description">@tr:portal.preferences.code</div>
+              <strong class="preferences-portal-code">{{portal_user_code}}</strong>
+              <div class="preferences-inline-actions">
+                <button class="btn btn--secondary" data-event-click="portal_copy_code">@tr:portal.preferences.copy_code</button>
+                <button class="btn btn--secondary" data-event-click="portal_open">@tr:portal.preferences.open_portal</button>
+              </div>
+            </div>
+            <img class="preferences-portal-qr" data-attr-src="portal_verification_qr" data-attr-alt="portal_qr_alt" />
+          </div>
+        </div>
+      </div>
+
+      <div class="preferences-section" data-if="show_viewport">
+        <div class="section-header text-accent">@tr:preferences.viewport_defaults</div>
+        <span class="preferences-description">@tr:preferences.viewport_defaults_hint</span>
+        <div class="section-header text-accent">@tr:preferences.viewport_style_defaults</div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.coord_axes">
+          <span class="preferences-label">@tr:main_panel.show_coord_axes</span>
+          <input type="checkbox" class="" data-checked="default_show_coord_axes" />
+        </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.pivot">
+          <span class="preferences-label">@tr:main_panel.show_pivot</span>
+          <input type="checkbox" class="" data-checked="default_show_pivot" />
+        </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.grid">
+          <span class="preferences-label">@tr:main_panel.show_grid</span>
+          <input type="checkbox" class="" data-checked="default_show_grid" />
+        </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.camera_frustums">
+          <span class="preferences-label">@tr:main_panel.camera_frustums</span>
+          <input type="checkbox" class="" data-checked="default_show_camera_frustums" />
+        </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.desaturate_unselected">
+          <span class="preferences-label">@tr:main_panel.desaturate_unselected</span>
+          <input type="checkbox" class="" data-checked="default_desaturate_unselected" />
+        </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.desaturate_cropping">
+          <span class="preferences-label">@tr:main_panel.desaturate_cropping</span>
+          <input type="checkbox" class="" data-checked="default_desaturate_cropping" />
+        </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.hide_outside_depth_box">
+          <span class="preferences-label">@tr:main_panel.hide_outside_depth_box</span>
+          <input type="checkbox" class="" data-checked="default_hide_outside_depth_box" />
+        </div>
+        <div class="preferences-row" data-tooltip="tooltip.axes_size">
+          <span class="preferences-label">@tr:main_panel.axes_size</span>
+          <input type="text" class="preferences-select" data-value="default_axes_size" />
+        </div>
+        <div class="preferences-row" data-tooltip="tooltip.grid_opacity">
+          <span class="preferences-label">@tr:main_panel.grid_opacity</span>
+          <input type="text" class="preferences-select" data-value="default_grid_opacity" />
+        </div>
+        <div class="preferences-row" data-tooltip="tooltip.camera_frustum_scale">
+          <span class="preferences-label">@tr:main_panel.camera_frustum_scale</span>
+          <input type="text" class="preferences-select" data-value="default_camera_frustum_scale" />
+        </div>
+        <div class="preferences-row" data-tooltip="tooltip.selection_color_preview">
+          <span class="preferences-label">@tr:main_panel.preview</span>
+          <div class="preferences-color">
+            <div class="color-swatch" data-style-background-color="default_selection_color_preview_swatch" data-event-click="default_color_click('selection_color_preview')"></div>
+            <input type="text" class="preferences-select" data-value="default_selection_color_preview" />
+          </div>
+        </div>
+        <div id="picker-selection_color_preview" class="preferences-color-picker" data-if="default_color_editing == 'selection_color_preview'" data-event-mouseup="default_color_commit" data-event-dragend="default_color_commit">
+          <color-picker data-attr-red="default_picker_r" data-attr-green="default_picker_g" data-attr-blue="default_picker_b" data-event-change="default_picker_change" />
+        </div>
+        <div class="preferences-row" data-tooltip="tooltip.selection_color_center_marker">
+          <span class="preferences-label">@tr:main_panel.center_marker</span>
+          <div class="preferences-color">
+            <div class="color-swatch" data-style-background-color="default_selection_color_center_marker_swatch" data-event-click="default_color_click('selection_color_center_marker')"></div>
+            <input type="text" class="preferences-select" data-value="default_selection_color_center_marker" />
+          </div>
+        </div>
+        <div id="picker-selection_color_center_marker" class="preferences-color-picker" data-if="default_color_editing == 'selection_color_center_marker'" data-event-mouseup="default_color_commit" data-event-dragend="default_color_commit">
+          <color-picker data-attr-red="default_picker_r" data-attr-green="default_picker_g" data-attr-blue="default_picker_b" data-event-change="default_picker_change" />
+        </div>
+        <div class="section-header text-accent">@tr:preferences.viewport_performance_defaults</div>
+        <div class="preferences-row" data-tooltip="tooltip.lod_page_pool_splats">
+          <span class="preferences-label">@tr:rendering_panel.lod_page_pool_splats</span>
+          <input type="text" class="preferences-select" data-value="default_lod_page_pool_splats" />
+        </div>
+        <div class="preferences-row" data-tooltip="tooltip.lod_pool_vram_fraction">
+          <span class="preferences-label">@tr:rendering_panel.lod_pool_vram_fraction</span>
+          <input type="text" class="preferences-select" data-value="default_lod_pool_vram_fraction" />
+        </div>
+        <span class="preferences-description status-error">{{rendering_defaults_error}}</span>
+        <div class="preferences-inline-actions">
+          <button class="btn btn--secondary preferences-apply-defaults" data-event-click="apply_viewport_defaults"
+                  data-tooltip="rendering_panel.apply_defaults_hint">@tr:preferences.apply_viewport_defaults</button>
         </div>
       </div>
 
@@ -99,6 +287,36 @@
             </select>
           </div>
         </div>
+        <div class="section-header text-accent">@tr:main_panel.theme_vignette</div>
+        <div class="setting-row setting-row--aligned" data-tooltip="tooltip.theme_vignette">
+          <span class="setting-row__label-col">@tr:main_panel.theme_vignette</span>
+          <label class="setting-row__control-col setting-row__control-col--checkbox">
+            <input type="checkbox" data-checked="theme_vignette_enabled" />
+          </label>
+        </div>
+        <div data-if="theme_vignette_enabled">
+          <div class="setting-row setting-row--aligned" data-tooltip="tooltip.theme_vignette_intensity">
+            <span class="setting-row__label-col">@tr:main_panel.theme_vignette_intensity</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="theme_vignette_intensity" min="0" max="1" step="0.01" />
+              <span class="slider-value">{{theme_vignette_intensity | format_float(2)}}</span>
+            </div>
+          </div>
+          <div class="setting-row setting-row--aligned" data-tooltip="tooltip.theme_vignette_radius">
+            <span class="setting-row__label-col">@tr:main_panel.theme_vignette_radius</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="theme_vignette_radius" min="0" max="1" step="0.01" />
+              <span class="slider-value">{{theme_vignette_radius | format_float(2)}}</span>
+            </div>
+          </div>
+          <div class="setting-row setting-row--aligned" data-tooltip="tooltip.theme_vignette_softness">
+            <span class="setting-row__label-col">@tr:main_panel.theme_vignette_softness</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="theme_vignette_softness" min="0" max="1" step="0.01" />
+              <span class="slider-value">{{theme_vignette_softness | format_float(2)}}</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="preferences-section" data-if="show_appearance">
@@ -135,6 +353,18 @@
               <option data-for="mode : navigation_modes" data-attr-value="mode.index">{{ mode.label }}</option>
             </select>
           </div>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.new_project_navigation_up</span>
+            <select class="preferences-select" data-value="navigation_up_idx">
+              <option value="0">@tr:preferences.navigation_up_legacy_y</option>
+              <option value="1">@tr:preferences.navigation_up_data_z</option>
+            </select>
+          </div>
+          <div class="preferences-row preferences-checkbox-row">
+            <span class="preferences-label">@tr:preferences.new_project_align_grid</span>
+            <input type="checkbox" data-checked="new_project_align_grid" />
+          </div>
+          <span class="preferences-description">@tr:preferences.new_project_navigation_help</span>
           <div class="setting-row setting-row--aligned" data-tooltip="preferences.zoom_speed_tooltip">
             <span class="setting-row__label-col">@tr:preferences.zoom_speed</span>
             <div class="setting-row__control-col setting-row__control-col--slider">
@@ -175,6 +405,7 @@
           <span class="text-accent">@tr:preferences.key_bindings</span>
         </div>
         <div class="section-content" data-if="key_bindings_expanded">
+          <span class="preferences-description">@tr:preferences.gallery.shortcuts_hint</span>
           <div class="preferences-row">
             <span class="preferences-label">@tr:input_settings.active_profile</span>
             <select id="profile-select" class="preferences-select" data-value="profile_idx"
@@ -201,6 +432,11 @@
                         data-attr-data-btn-action="row.button_action"
                         data-attr-data-action-id="row.action_id"
                         data-attr-data-mode-id="row.mode_id">{{ row.button_label }}</button>
+                <button class="btn btn--secondary preferences-rebind-btn preferences-clear-btn"
+                        data-if="row.show_clear"
+                        data-btn-action="clear"
+                        data-attr-data-action-id="row.action_id"
+                        data-attr-data-mode-id="row.mode_id">{{ row.clear_label }}</button>
               </div>
             </div>
           </div>
@@ -224,6 +460,16 @@
         </div>
         <div class="section-content" data-if="interface_expanded">
           <span class="preferences-description">@tr:preferences.interface_layout_description</span>
+          <span class="preferences-description">@tr:preferences.sidebar_defaults_description</span>
+          <div class="preferences-inline-actions">
+            <button class="btn btn--secondary" data-event-click="save_startup_sidebar">@tr:preferences.save_startup_sidebar</button>
+            <button class="btn btn--secondary" data-event-click="clear_startup_sidebar">@tr:preferences.clear_startup_sidebar</button>
+          </div>
+          <div class="preferences-row preferences-checkbox-row">
+            <span class="preferences-label">@tr:preferences.native_floating_windows</span>
+            <input type="checkbox" data-checked="native_floating_windows"/>
+          </div>
+          <span class="preferences-description">@tr:preferences.native_floating_windows_restart</span>
         </div>
       </div>
 
@@ -233,11 +479,22 @@
           <span class="text-accent">@tr:preferences.scene_graph</span>
         </div>
         <div class="section-content" data-if="scene_graph_expanded">
-          <div class="preferences-row preferences-checkbox-row preferences-interface-option">
+          <div class="preferences-row preferences-checkbox-row preferences-interface-option" data-tooltip="preferences.scene_graph_selection_markers_description">
             <span class="preferences-label">@tr:preferences.scene_graph_selection_markers</span>
             <input type="checkbox" data-checked="scene_graph_selection_markers" data-attrif-disabled="mcp_safe_mode" />
           </div>
-          <span class="preferences-description">@tr:preferences.scene_graph_selection_markers_description</span>
+          <div class="preferences-row" data-tooltip="preferences.drag_format_hint">
+            <span class="preferences-label">@tr:preferences.drag_default</span>
+            <select class="preferences-select" data-attrif-disabled="mcp_safe_mode" data-value="splat_drag_format"><option value="ply">@tr:preferences.drag_ply</option><option value="spz">@tr:preferences.drag_spz</option></select>
+          </div>
+          <div class="preferences-row" data-tooltip="preferences.drag_sh_hint">
+            <span class="preferences-label">@tr:preferences.drag_sh_limit</span>
+            <select class="preferences-select" data-attrif-disabled="mcp_safe_mode" data-value="splat_drag_sh_degree"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select>
+          </div>
+          <div class="preferences-row" data-if="splat_drag_format == 'ply'" data-tooltip="preferences.drag_axes_hint">
+            <span class="preferences-label">@tr:preferences.drag_up_axis</span>
+            <select class="preferences-select" data-attrif-disabled="mcp_safe_mode" data-value="splat_drag_up_axis"><option value="-2">@tr:preferences.drag_axis_default</option><option value="2">@tr:preferences.drag_axis_positive_y</option><option value="-3">@tr:preferences.drag_axis_negative_z</option><option value="3">@tr:preferences.drag_axis_positive_z</option></select>
+          </div>
         </div>
       </div>
 
@@ -248,6 +505,7 @@
         </div>
         <div class="section-content" data-if="file_associations_expanded">
           <span class="preferences-description">@tr:preferences.file_associations_description</span>
+          <button class="btn btn--secondary" data-event-click="open_default_app_settings">@tr:file_association.menu_register</button>
           <div data-for="row : file_associations">
             <div class="preferences-row preferences-checkbox-row">
               <span class="preferences-label">{{ row.label }}</span>
@@ -277,6 +535,13 @@
           </div>
           <span class="preferences-description preferences-warning">@tr:preferences.mcp_network_warning</span>
           <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.mcp_access_token</span>
+            <textarea id="mcp-token" class="preferences-value-selectable" data-value="mcp_token_value" rows="2" readonly="readonly"></textarea>
+          </div>
+          <div class="preferences-inline-actions">
+            <button class="btn" data-event-click="copy_mcp_token">@tr:preferences.mcp_copy_token</button>
+          </div>
+          <div class="preferences-row">
             <span class="preferences-label">@tr:preferences.mcp_port</span>
             <div class="preferences-port-control">
               <input class="preferences-select preferences-port-input" type="text" data-value="mcp_port" maxlength="5"
@@ -284,6 +549,7 @@
               <button class="btn btn--primary preferences-port-confirm" data-event-click="confirm_mcp_port" data-attrif-disabled="mcp_safe_mode" data-class-disabled="mcp_safe_mode">@tr:common.ok</button>
             </div>
           </div>
+          <span class="preferences-description preferences-setting-hint" data-if="mcp_port_override_visible">{{ mcp_port_override_text }}</span>
           <div class="preferences-row preferences-checkbox-row">
             <span class="preferences-label">@tr:preferences.mcp_request_logging</span>
             <input type="checkbox" data-checked="mcp_request_logging" data-attrif-disabled="mcp_safe_mode" />

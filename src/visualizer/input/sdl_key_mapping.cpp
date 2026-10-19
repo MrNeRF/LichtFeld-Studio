@@ -4,6 +4,7 @@
 
 #include "input/sdl_key_mapping.hpp"
 #include "input/key_codes.hpp"
+#include <SDL3/SDL_keyboard.h>
 
 namespace lfs::vis::input {
 
@@ -23,6 +24,8 @@ namespace lfs::vis::input {
         if (scancode == SDL_SCANCODE_KP_0) {
             return KEY_KP_0;
         }
+        if (scancode >= SDL_SCANCODE_F13 && scancode <= SDL_SCANCODE_F24)
+            return KEY_F13 + (scancode - SDL_SCANCODE_F13);
 
         switch (scancode) {
         case SDL_SCANCODE_SPACE: return KEY_SPACE;
@@ -89,6 +92,10 @@ namespace lfs::vis::input {
     }
 
     int sdlKeycodeToAppKey(const SDL_Keycode keycode) {
+        if (keycode >= 'A' && keycode <= 'Z')
+            return KEY_A + static_cast<int>(keycode - 'A');
+        if (keycode >= SDLK_F13 && keycode <= SDLK_F24)
+            return KEY_F13 + static_cast<int>(keycode - SDLK_F13);
         if (keycode >= SDLK_A && keycode <= SDLK_Z)
             return KEY_A + static_cast<int>(keycode - SDLK_A);
 
@@ -172,6 +179,65 @@ namespace lfs::vis::input {
         }
     }
 
+    int sdlShortcutKeyToAppKey(const SDL_Scancode scancode, const SDL_Keycode keycode) {
+        return sdlShortcutKeyToAppKey(scancode, keycode, keycode);
+    }
+
+    int sdlShortcutKeyToAppKey(const SDL_Scancode scancode, const SDL_Keycode keycode,
+                               const SDL_Keycode unshifted_keycode) {
+        // The top number row always uses physical digit positions. For letters
+        // and punctuation, resolve the unshifted layout symbol so holding
+        // Shift does not turn a shortcut into a different key.
+        if (scancode >= SDL_SCANCODE_1 && scancode <= SDL_SCANCODE_0)
+            return sdlScancodeToAppKey(scancode);
+        if (const int unshifted = sdlKeycodeToAppKey(unshifted_keycode);
+            unshifted != KEY_UNKNOWN)
+            return unshifted;
+        if (const int logical = sdlKeycodeToAppKey(keycode); logical != KEY_UNKNOWN)
+            return logical;
+        return sdlScancodeToAppKey(scancode);
+    }
+
+    int sdlPrintedPunctuationToAppKey(const SDL_Keycode keycode) {
+        const int key = sdlKeycodeToAppKey(keycode);
+        switch (key) {
+        case KEY_APOSTROPHE:
+        case KEY_COMMA:
+        case KEY_MINUS:
+        case KEY_PERIOD:
+        case KEY_SLASH:
+        case KEY_SEMICOLON:
+        case KEY_EQUAL:
+        case KEY_LEFT_BRACKET:
+        case KEY_BACKSLASH:
+        case KEY_RIGHT_BRACKET:
+        case KEY_GRAVE_ACCENT:
+            return key;
+        default: return KEY_UNKNOWN;
+        }
+    }
+
+    int sdlPrintedKeyToAppKey(const SDL_Keycode keycode) {
+        const int key = sdlKeycodeToAppKey(keycode);
+        if (key >= KEY_0 && key <= KEY_9)
+            return key;
+        switch (key) {
+        case KEY_APOSTROPHE:
+        case KEY_COMMA:
+        case KEY_MINUS:
+        case KEY_PERIOD:
+        case KEY_SLASH:
+        case KEY_SEMICOLON:
+        case KEY_EQUAL:
+        case KEY_LEFT_BRACKET:
+        case KEY_BACKSLASH:
+        case KEY_RIGHT_BRACKET:
+        case KEY_GRAVE_ACCENT:
+            return key;
+        default: return KEY_UNKNOWN;
+        }
+    }
+
     int sdlModsToAppMods(SDL_Keymod sdl_mods) {
         int mods = KEYMOD_NONE;
         if (sdl_mods & SDL_KMOD_SHIFT)
@@ -182,6 +248,8 @@ namespace lfs::vis::input {
             mods |= KEYMOD_ALT;
         if (sdl_mods & SDL_KMOD_GUI)
             mods |= KEYMOD_SUPER;
+        if (sdl_mods & SDL_KMOD_MODE)
+            mods |= KEYMOD_ALTGR;
         return mods;
     }
 
@@ -195,6 +263,8 @@ namespace lfs::vis::input {
     }
 
     SDL_Scancode appKeyToSdlScancode(int app_key) {
+        if (app_key >= KEY_F13 && app_key <= KEY_F24)
+            return static_cast<SDL_Scancode>(SDL_SCANCODE_F13 + app_key - KEY_F13);
         if (app_key >= KEY_A && app_key <= KEY_Z)
             return static_cast<SDL_Scancode>(SDL_SCANCODE_A + (app_key - KEY_A));
 

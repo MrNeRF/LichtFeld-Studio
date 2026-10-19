@@ -20,6 +20,7 @@ target_link_libraries(lfs_logger
     PRIVATE
         lfs_diagnostics
         spdlog::spdlog
+        xxHash::xxhash
 )
 
 target_compile_definitions(lfs_logger

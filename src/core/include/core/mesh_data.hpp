@@ -32,7 +32,7 @@ namespace lfs::core {
         Tensor normals;   // [V, 3] Float32
         Tensor tangents;  // [V, 4] Float32 (xyz + handedness w)
         Tensor texcoords; // [V, 2] Float32
-        Tensor colors;    // [V, 4] Float32
+        Tensor colors;    // [V, 4] Float32, linear RGB
         Tensor indices;   // [F, 3] Int32
 
         std::vector<Material> materials;
@@ -42,14 +42,7 @@ namespace lfs::core {
 
         MeshData() = default;
 
-        MeshData(Tensor verts, Tensor idx)
-            : vertices(std::move(verts)),
-              indices(std::move(idx)) {
-            assert(vertices.ndim() == 2 && vertices.shape()[1] == 3);
-            assert(vertices.dtype() == DataType::Float32);
-            assert(indices.ndim() == 2 && indices.shape()[1] == 3);
-            assert(indices.dtype() == DataType::Int32);
-        }
+        MeshData(Tensor verts, Tensor idx);
 
         MeshData(const MeshData&) = delete;
         MeshData& operator=(const MeshData&) = delete;
@@ -120,6 +113,7 @@ namespace lfs::core {
         }
 
         void compute_normals();
+        void validate_indices() const;
 
     private:
         static uint64_t next_id();

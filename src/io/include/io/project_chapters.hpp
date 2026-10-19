@@ -103,6 +103,9 @@ namespace lfs::io::project {
         friend bool operator==(const ProjectLicense&, const ProjectLicense&) = default;
     };
 
+    [[nodiscard]] LFS_IO_API std::optional<ProjectLicense>
+    map_sog_license(std::span<const std::uint8_t> bytes);
+
     enum class WorldOriginProvenance : std::uint8_t {
         None,
         CentralizeByPointCloud,
@@ -130,7 +133,7 @@ namespace lfs::io::project {
     struct ReferenceLocator {
         std::string preferred;
         LocatorBase base = LocatorBase::Project;
-        std::optional<std::string> absolute_fallback;
+        std::optional<std::string> absolute_fallback = std::nullopt;
 
         friend bool operator==(const ReferenceLocator&, const ReferenceLocator&) = default;
     };
@@ -193,6 +196,14 @@ namespace lfs::io::project {
         friend bool operator==(const ProvenanceRecord&, const ProvenanceRecord&) = default;
     };
 
+    struct ProjectTrainingInitialization {
+        std::optional<lfs::core::Uuid> init_reference_uuid;
+        std::array<float, 3> data_origin{};
+        std::optional<std::array<float, 3>> scene_center;
+
+        friend bool operator==(const ProjectTrainingInitialization&, const ProjectTrainingInitialization&) = default;
+    };
+
     class LFS_IO_API ProjectChapter {
     public:
         ProjectChapter();
@@ -217,6 +228,9 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<std::optional<lfs::core::Uuid>> dataset_reference() const;
         [[nodiscard]] lfs::Result<void>
         set_dataset_reference(std::optional<lfs::core::Uuid> value);
+        [[nodiscard]] lfs::Result<std::optional<ProjectTrainingInitialization>> training_initialization() const;
+        [[nodiscard]] lfs::Result<void>
+        set_training_initialization(const std::optional<ProjectTrainingInitialization>& value);
         [[nodiscard]] lfs::Result<std::vector<lfs::core::Uuid>> project_lineage() const;
         [[nodiscard]] lfs::Result<void>
         set_project_lineage(std::span<const lfs::core::Uuid> value);
@@ -333,7 +347,7 @@ namespace lfs::io::project {
     struct PayloadBinding {
         std::string fourcc;
         lfs::core::Uuid instance_uuid;
-        std::optional<lfs::core::Uuid> reference_uuid;
+        std::optional<lfs::core::Uuid> reference_uuid = std::nullopt;
         std::string source_kind;
 
         friend bool operator==(const PayloadBinding&, const PayloadBinding&) = default;
@@ -389,6 +403,8 @@ namespace lfs::io::project {
         // camera objects; parsers default this to true.
         bool has_image = true;
         std::string split = "train";
+        // Observations of this camera node in the project's SFMO chapter.
+        std::uint64_t sfm_observation_count = 0;
 
         friend bool operator==(const CameraRecord&, const CameraRecord&) = default;
     };
@@ -397,7 +413,7 @@ namespace lfs::io::project {
         lfs::core::Uuid uuid;
         std::string type;
         std::string name;
-        std::optional<lfs::core::Uuid> parent_uuid;
+        std::optional<lfs::core::Uuid> parent_uuid = std::nullopt;
         std::uint32_t child_order = 0;
         // Column-major, matching glm::mat4 storage.
         std::array<float, 16> local_transform{
@@ -409,11 +425,11 @@ namespace lfs::io::project {
         bool locked = false;
         bool training_enabled = true;
         bool payload_diverged = false;
-        std::optional<GeorefPose> georef_pose;
+        std::optional<GeorefPose> georef_pose = std::nullopt;
         std::optional<PayloadBinding> payload;
-        std::optional<CropBoxRecord> cropbox;
-        std::optional<EllipsoidRecord> ellipsoid;
-        std::optional<CameraRecord> camera;
+        std::optional<CropBoxRecord> cropbox = std::nullopt;
+        std::optional<EllipsoidRecord> ellipsoid = std::nullopt;
+        std::optional<CameraRecord> camera = std::nullopt;
 
         friend bool operator==(const SceneNodeRecord&, const SceneNodeRecord&) = default;
     };
@@ -467,6 +483,8 @@ namespace lfs::io::project {
                                    const ReferenceBindings&) = default;
         };
 
+        // Preserve CLI step locks across in-process replace-load, never in PRMS.
+        std::optional<std::string> cli_step_locked_strategy;
         std::string active_strategy = std::string(lfs::core::param::kStrategyMRNF);
         lfs::core::param::OptimizationParameters mcmc_session;
         lfs::core::param::OptimizationParameters mrnf_session;

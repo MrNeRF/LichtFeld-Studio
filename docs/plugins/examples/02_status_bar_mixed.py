@@ -17,6 +17,7 @@ class StatusBarMixedPanel(lf.ui.Panel):
     space = lf.ui.PanelSpace.STATUS_BAR
     order = 50
     height_mode = lf.ui.PanelHeightMode.CONTENT
+    update_policy = "interval"
     update_interval_ms = 140
     style = """
 body.status-bar-panel {

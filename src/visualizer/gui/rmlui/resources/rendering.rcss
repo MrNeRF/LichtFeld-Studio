@@ -9,8 +9,8 @@ body {
 
 #content-wrap {
     min-width: 0;
-    height: 0;
-    flex-grow: 1;
+    min-height: 0;
+    flex: 1;
     padding: 6dp;
     overflow-x: hidden;
     overflow-y: auto;
@@ -18,7 +18,9 @@ body {
 
 #content {
     min-width: 0;
+    flex-shrink: 0;
 }
+
 .color-picker-popup {
     display: none;
     position: absolute;
@@ -29,6 +31,55 @@ body {
 
 .color-picker-popup.visible {
     display: block;
+}
+
+.selection-groups__title {
+    padding-top: 6dp;
+    margin: 6dp 0 4dp;
+    border-top-width: 1dp;
+    font-size: 12dp;
+    font-weight: bold;
+}
+
+#selection-groups-list {
+    margin-top: 4dp;
+}
+
+.group-row {
+    display: flex;
+    align-items: center;
+    padding: 1dp 4dp;
+    cursor: pointer;
+    transition: background-color 0.1s quadratic-out;
+}
+
+.group-row .lock-btn {
+    width: 20dp;
+    height: 20dp;
+    padding: 2dp;
+    flex-shrink: 0;
+    background-color: transparent;
+    border-width: 0;
+}
+
+.group-row .lock-btn img {
+    width: 14dp;
+    height: 14dp;
+}
+
+.group-row .color-swatch {
+    margin-right: 6dp;
+}
+
+.group-name {
+    flex: 1;
+    font-size: 12dp;
+    overflow: hidden;
+    white-space: nowrap;
+    background-color: transparent;
+    border-width: 0;
+    text-align: left;
+    padding: 0;
 }
 
 .rendering-simplify-stats {
@@ -103,18 +154,38 @@ body {
 
 .rendering-environment-map-picker {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 8dp;
+    gap: 4dp 8dp;
     width: 100%;
     min-width: 0;
 }
 
+/* On a narrow panel the Browse button wraps under the preset instead of
+   running past the panel edge. */
 .rendering-environment-map-picker > select {
-    flex-grow: 1;
-    min-width: 0;
+    flex: 1 1 96dp;
+    min-width: 96dp;
 }
 
 .rendering-environment-map-path {
     display: block;
     min-width: 0;
 }
+
+.rendering-grid-plane {
+    gap: 4dp;
+}
+
+.rendering-grid-plane > button {
+    flex-shrink: 0;
+    padding: 2dp 4dp;
+}
+
+.rendering-default-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6dp;
+    margin: 4dp 0 8dp;
+}
+.rendering-default-actions .btn { flex: 0 1 auto; white-space: normal; }

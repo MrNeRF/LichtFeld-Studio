@@ -37,6 +37,42 @@ protected:
     }
 };
 
+TEST_F(VideoColorConvertTest, Nv12RangesWithPitch) {
+    constexpr int width = 32, height = 16, pitch = 40;
+    std::vector<uint8_t> y(pitch * height), uv(pitch * height / 2), rgb(width * height * 3);
+    for (size_t i = 0; i < y.size(); ++i)
+        y[i] = static_cast<uint8_t>(i * 13);
+    for (size_t i = 0; i < uv.size(); ++i)
+        uv[i] = static_cast<uint8_t>(i * 37);
+    uint8_t *dy = nullptr, *duv = nullptr, *drgb = nullptr;
+    ASSERT_EQ(cudaMalloc(&dy, y.size()), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&duv, uv.size()), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&drgb, rgb.size()), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(dy, y.data(), y.size(), cudaMemcpyHostToDevice), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(duv, uv.data(), uv.size(), cudaMemcpyHostToDevice), cudaSuccess);
+    for (const bool full : {false, true}) {
+        lfs::io::video::nv12ToRgbCuda(dy, duv, drgb, width, height, pitch, pitch, nullptr, full);
+        ASSERT_EQ(cudaMemcpy(rgb.data(), drgb, rgb.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+        for (int row = 0; row < height; ++row) {
+            for (int col = 0; col < width; ++col) {
+                const int luma = y[row * pitch + col];
+                const int chroma = (row / 2) * pitch + (col / 2) * 2;
+                const int u = uv[chroma] - 128, v = uv[chroma + 1] - 128;
+                // Keep the old limited-range integer equations as an exact guard.
+                const int expected[] = {
+                    full ? static_cast<int>(std::round(luma + 1.402 * v)) : (298 * (luma - 16) + 409 * v + 128) >> 8,
+                    full ? static_cast<int>(std::round(luma - 0.344136 * u - 0.714136 * v)) : (298 * (luma - 16) - 100 * u - 208 * v + 128) >> 8,
+                    full ? static_cast<int>(std::round(luma + 1.772 * u)) : (298 * (luma - 16) + 516 * u + 128) >> 8};
+                for (int c = 0; c < 3; ++c)
+                    EXPECT_NEAR(rgb[(row * width + col) * 3 + c], std::clamp(expected[c], 0, 255), full ? 1 : 0);
+            }
+        }
+    }
+    cudaFree(dy);
+    cudaFree(duv);
+    cudaFree(drgb);
+}
+
 TEST_F(VideoColorConvertTest, SolidRedYuv420p) {
     constexpr int WIDTH = 4;
     constexpr int HEIGHT = 4;

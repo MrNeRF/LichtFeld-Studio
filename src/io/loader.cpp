@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/loader.hpp"
+#include "core/file_extensions.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "io/filesystem_utils.hpp"
@@ -44,7 +45,7 @@ namespace lfs::io {
                     return true;
 
                 // Check for SOG files
-                if (path.extension() == ".sog" || path.extension() == ".SOG") {
+                if (core::has_extension(path, ".sog")) {
                     LOG_TRACE("SOG file detected: {}", lfs::core::path_to_utf8(path));
                     return true;
                 }
@@ -62,7 +63,7 @@ namespace lfs::io {
                 }
 
                 // Check other file extensions
-                auto ext = path.extension().string();
+                auto ext = lfs::core::path_to_utf8(path.extension());
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
                 // Check common extensions
@@ -149,7 +150,7 @@ namespace lfs::io {
         }
 
         if (!safe_is_directory(path)) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
             // JSON files might be datasets (transforms.json)
@@ -210,8 +211,8 @@ namespace lfs::io {
         }
 
         // Blender/NeRF markers
-        if (safe_exists(path / "transforms.json") ||
-            safe_exists(path / "transforms_train.json")) {
+        if (safe_exists(path / TRANSFORMS_DATASET_MARKERS[0]) ||
+            safe_exists(path / TRANSFORMS_DATASET_MARKERS[1])) {
             LOG_TRACE("Blender/NeRF dataset detected at: {}", lfs::core::path_to_utf8(path));
             return true;
         }
@@ -240,7 +241,7 @@ namespace lfs::io {
         }
 
         if (!safe_is_directory(path)) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             if (ext == ".json") {
                 return DatasetType::Transforms;
@@ -277,8 +278,8 @@ namespace lfs::io {
         }
 
         // Check for Transforms markers
-        if (safe_exists(path / "transforms.json") ||
-            safe_exists(path / "transforms_train.json")) {
+        if (safe_exists(path / TRANSFORMS_DATASET_MARKERS[0]) ||
+            safe_exists(path / TRANSFORMS_DATASET_MARKERS[1])) {
             return DatasetType::Transforms;
         }
 

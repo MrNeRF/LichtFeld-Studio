@@ -410,4 +410,108 @@ namespace {
         EXPECT_FALSE(seen.count(kindEnc(RadPackedKind::Sh1, RadPackedEncoding::S8)));
     }
 
+    TEST(LodPageDequant, ResidentShLayoutsPreserveColorsAcrossPageAndBlockBoundaries) {
+        // The GUI stores SH in swizzled fp32, IEEE half, or pad-dropped q16.
+        // A non-aligned source offset also crosses the q16 bounds blocks.
+        constexpr std::uint32_t rest = 15;
+        constexpr std::uint32_t offset = kPage + 31;
+        constexpr std::uint32_t count = 257;
+        constexpr std::uint32_t n = offset + count;
+        constexpr std::uint32_t page = 1;
+        std::vector<float2> bounds((n + 255u) / 256u);
+        for (std::size_t b = 0; b < bounds.size(); ++b) {
+            bounds[b] = float2{-2.0f - float(b % 3), 1.0f + float(b % 5)};
+        }
+        DeviceBuffer device_bounds(bounds.size() * sizeof(float2));
+        ASSERT_EQ(cudaMemcpy(device_bounds.ptr, bounds.data(), bounds.size() * sizeof(float2),
+                             cudaMemcpyHostToDevice),
+                  cudaSuccess);
+        for (int format = 0; format < 3; ++format) {
+            SCOPED_TRACE(format); // fp32, IEEE half, q16
+            const std::size_t cells = lfs::core::sh_swizzled_float_count(n, rest);
+            std::vector<float> fp32(cells, 0.0f);
+            std::vector<std::uint16_t> u16(cells, 0);
+            std::vector<float> expected(count * rest * 3u);
+            for (std::uint32_t i = 0; i < n; ++i) {
+                for (std::uint32_t c = 0; c < rest * 3u; ++c) {
+                    float value = float(int((i * 17u + c * 13u) % 251u) - 125) / 64.0f;
+                    const std::size_t swizzled =
+                        lfs::core::sh_swizzled_index(i, c / 4u, rest) * 4u + c % 4u;
+                    fp32[swizzled] = value;
+                    if (format == 1) {
+                        u16[swizzled] = lfs::io::radmath::floatToHalf(value);
+                        value = lfs::io::radmath::halfToFloat(u16[swizzled]);
+                    } else if (format == 2) {
+                        const auto frame = bounds[i / 256u];
+                        const auto code = static_cast<std::uint16_t>(
+                            std::round((value - frame.x) / (frame.y - frame.x) * 65535.0f));
+                        const std::size_t qindex =
+                            (i / 32u) * (rest * 3u * 32u) + c * 32u + i % 32u;
+                        u16[qindex] = code;
+                        value = frame.x + (frame.y - frame.x) * (float(code) / 65535.0f);
+                    }
+                    if (i >= offset) {
+                        expected[(i - offset) * rest * 3u + c] = value;
+                    }
+                }
+            }
+            DeviceBuffer input(cells * (format == 0 ? sizeof(float) : sizeof(std::uint16_t)));
+            ASSERT_EQ(cudaMemcpy(input.ptr, format == 0 ? static_cast<void*>(fp32.data()) : static_cast<void*>(u16.data()),
+                                 cells * (format == 0 ? sizeof(float) : sizeof(std::uint16_t)),
+                                 cudaMemcpyHostToDevice),
+                      cudaSuccess);
+            for (const std::uint32_t dst_rest : {3u, 8u, 15u}) {
+                SCOPED_TRACE(dst_rest);
+                const auto slots = lfs::core::sh_float4_slots_for_rest(dst_rest);
+                DeviceBuffer output(2u * kPage * slots * sizeof(std::uint32_t));
+                DeviceBuffer frames(2u * lfs::vis::lodq::kPageFrameBytes);
+                lfs::vis::LodPageTensorSources src{
+                    .shN = input.ptr,
+                    .shN_bounds = static_cast<const float2*>(device_bounds.ptr),
+                    .src_rest = rest,
+                    .src_splat_offset = offset,
+                    .shN_f16 = format == 1,
+                    .shN_q16 = format == 2,
+                    .count = count,
+                };
+                lfs::vis::LodPoolDeviceView pool{
+                    .shN = static_cast<std::uint32_t*>(output.ptr),
+                    .page_frames = static_cast<float4*>(frames.ptr),
+                    .dst_rest = dst_rest,
+                    .dst_slots = slots,
+                };
+                ASSERT_EQ(lfs::vis::launchLodPageQuantizeFromTensors(src, pool, page, kPage, nullptr),
+                          cudaSuccess);
+                const auto result = readDevice<std::uint32_t>(output.ptr, 2u * kPage * slots);
+                const auto actual_frames = readDevice<lfs::vis::lodq::PageFrame>(frames.ptr, 2);
+                float maxima[3]{};
+                for (std::uint32_t i = 0; i < count; ++i) {
+                    for (std::uint32_t c = 0; c < rest * 3u; ++c) {
+                        const auto band = c < 9u ? 0u : (c < 24u ? 1u : 2u);
+                        maxima[band] = std::max(maxima[band], std::abs(expected[i * rest * 3u + c]));
+                    }
+                }
+                for (int band = 0; band < 3; ++band) {
+                    EXPECT_NEAR(actual_frames[page].sh_max[band], maxima[band], 1e-6f);
+                }
+                for (std::uint32_t i = 0; i < kPage; ++i) {
+                    for (std::uint32_t c = 0; c < slots * 4u; ++c) {
+                        const auto slot_index =
+                            lfs::core::sh_swizzled_index(page * kPage + i, c / 4u, dst_rest);
+                        const auto q = static_cast<std::int8_t>(result[slot_index] >> ((c % 4u) * 8u));
+                        // SH1's final slot also carries coeff4; the projection ignores it.
+                        if (i < count && c < rest * 3u) {
+                            const auto band = c < 9u ? 0u : (c < 24u ? 1u : 2u);
+                            const float decoded = float(q) / 127.0f * maxima[band];
+                            ASSERT_NEAR(decoded, expected[i * rest * 3u + c], maxima[band] / 127.0f)
+                                << "splat=" << i << " component=" << c;
+                        } else {
+                            ASSERT_EQ(q, 0) << "padding splat=" << i << " component=" << c;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
 } // namespace

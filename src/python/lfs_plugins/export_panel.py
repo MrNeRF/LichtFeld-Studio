@@ -3,7 +3,7 @@
 """Export panel for exporting scene nodes."""
 
 import html
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Set
 from enum import IntEnum
 
@@ -28,6 +28,7 @@ class ExportFormat(IntEnum):
     RAD = 6
     COLMAP = 7
     SSOG = 8
+    GLB = 13
 
 
 FORMAT_INFO = (
@@ -35,6 +36,7 @@ FORMAT_INFO = (
     (ExportFormat.SOG, "export.format.sog_supersplat"),
     (ExportFormat.SSOG, "export.format.ssog"),
     (ExportFormat.SPZ, "export.format.spz_niantic"),
+    (ExportFormat.GLB, "export.format.glb_gltf"),
     (ExportFormat.RAD, "export.format.rad_random_access"),
     (ExportFormat.USD, "export.format.usd_openusd"),
     (ExportFormat.NUREC_USDZ, "export.format.usdz_nurec"),
@@ -47,6 +49,7 @@ EXPORT_PROGRESS_FORMAT_NAMES = {
     ExportFormat.SOG: "SOG",
     ExportFormat.SSOG: "SSOG",
     ExportFormat.SPZ: "SPZ",
+    ExportFormat.GLB: "GLB",
     ExportFormat.HTML_VIEWER: "HTML",
     ExportFormat.USD: "USD",
     ExportFormat.NUREC_USDZ: "USDZ",
@@ -65,6 +68,17 @@ def _xml_unescape(text):
 
 def _progress_format_name(fmt):
     return EXPORT_PROGRESS_FORMAT_NAMES.get(fmt, "file")
+
+
+def _exported_count(node):
+    """Splats the export writes: soft-deleted rows are left out."""
+    try:
+        splat = node.splat_data()
+    except Exception:
+        splat = None
+    if splat is None:
+        return int(node.gaussian_count)
+    return int(splat.visible_count())
 
 
 @panel_class("export")
@@ -265,7 +279,7 @@ class ExportPanel(Panel):
     def _show_include_provenance(self):
         if self._format == ExportFormat.COLMAP:
             return False
-        if self._format == ExportFormat.SPZ and self._spz_version == 3:
+        if self._format == ExportFormat.GLB or (self._format == ExportFormat.SPZ and self._spz_version == 3):
             return False
         return True
 
@@ -303,9 +317,9 @@ class ExportPanel(Panel):
     def on_mount(self, doc):
         super().on_mount(doc)
         self._doc = doc
-        self._exporting = False
+        self._cached_export_state = self._export_state()
+        self._exporting = bool(self._cached_export_state.get("active", False))
         self._last_progress = -1.0
-        self._cached_export_state = {}
         self._selection_seeded = False
         self._last_node_key = None
         self._last_colmap_source_path = ""
@@ -333,7 +347,7 @@ class ExportPanel(Panel):
             model_list.add_event_listener("click", self._on_model_toggle)
 
         self._rebuild_format_records()
-        self._rebuild_model_records(self._get_splat_nodes())
+        self._rebuild_model_records(self._scene_nodes())
         self._scrub_fields.mount(doc)
         self._subscribe_reactive_state()
 
@@ -366,7 +380,9 @@ class ExportPanel(Panel):
             rml_widgets.request_model_update(self._handle)
 
     def on_update(self, doc):
-        if self._exporting:
+        # Drag export can start outside this panel. Opening it during that job
+        # must show progress directly, without exposing the manual export form.
+        if self._exporting or self._export_state().get("active", False):
             dirty = self._update_export_progress()
             dirty |= self._scrub_fields.sync_all()
             return dirty
@@ -379,6 +395,18 @@ class ExportPanel(Panel):
             return True
 
         dirty = False
+        requested = lf.ui.take_splat_export_request()
+        if requested:
+            self._selected_nodes = set(requested)
+            self._selection_seeded = True
+            self._pinned_sh_degree = True
+            self._last_node_key = None
+            if self._format == ExportFormat.COLMAP:
+                self._format = ExportFormat.PLY
+                self._rebuild_format_records()
+                self._dirty_model()
+            self._dirty_model("export_label", "can_export", "export_error_text")
+            dirty = True
         current_lang = lf.ui.get_current_language()
         if current_lang != self._last_lang:
             self._last_lang = current_lang
@@ -387,8 +415,10 @@ class ExportPanel(Panel):
             self._last_node_key = None
             dirty = True
 
-        nodes = self._get_splat_nodes()
-        node_key = tuple((n.name, n.gaussian_count) for n in nodes)
+        scene_nodes = self._scene_nodes()
+        splat_nodes = [node for node in scene_nodes if self._is_exportable_splat(node)]
+        # Parentage is in the key so a regroup rebuilds once, and a quiet frame does not.
+        node_key = self._model_structure_key(scene_nodes)
         colmap_source_path = self._get_colmap_sparse_path_raw()
 
         if colmap_source_path != self._last_colmap_source_path:
@@ -396,14 +426,14 @@ class ExportPanel(Panel):
             self._dirty_model("can_export", "export_error_text")
             dirty = True
 
-        if self._sync_selection(nodes):
-            self._rebuild_model_records(nodes)
+        if self._sync_selection(splat_nodes):
+            self._rebuild_model_records(scene_nodes)
             self._dirty_model("export_label", "can_export", "export_error_text")
             dirty = True
 
         if node_key != self._last_node_key:
             self._last_node_key = node_key
-            self._rebuild_model_records(nodes)
+            self._rebuild_model_records(scene_nodes)
             self._dirty_model("show_no_models", "can_export", "export_error_text")
             dirty = True
 
@@ -574,22 +604,162 @@ class ExportPanel(Panel):
             ],
         )
 
+    def _scene_nodes(self):
+        try:
+            scene = lf.get_scene()
+            if scene is None:
+                return []
+            return list(scene.get_nodes())
+        except Exception:
+            return []
+
+    def _is_group_node(self, node):
+        return node.type == lf.scene.NodeType.GROUP
+
+    def _is_exportable_splat(self, node):
+        return node.type == lf.scene.NodeType.SPLAT and int(node.gaussian_count) > 0
+
+    def _node_id(self, node):
+        value = getattr(node, "id", None)
+        return None if value is None else int(value)
+
+    def _parent_id(self, node):
+        value = getattr(node, "parent_id", -1)
+        return -1 if value is None else int(value)
+
+    def _child_ids(self, node):
+        return tuple(int(child) for child in (getattr(node, "children", ()) or ()))
+
+    def _indent(self, depth):
+        # Depth 0 keeps the row's 4dp left padding, so a scene with no group does not shift.
+        return f"{4 + depth * 12}dp"
+
+    def _splat_row(self, node, depth):
+        return {
+            "name": node.name,
+            "selected": node.name in self._selected_nodes,
+            "count_text": f"({_exported_count(node):,})",
+            "is_group": False,
+            "partial": False,
+            "indent": self._indent(depth),
+            "group_id": "",
+        }
+
+    def _group_id_text(self, node):
+        node_id = self._node_id(node)
+        return str(node_id) if node_id is not None else node.name
+
+    def _model_structure_key(self, nodes):
+        parts = []
+        for node in nodes:
+            is_group = self._is_group_node(node)
+            if not is_group and not self._is_exportable_splat(node):
+                continue
+            parts.append((
+                self._node_id(node), node.name, 1 if is_group else 0,
+                self._parent_id(node), int(node.gaussian_count), self._child_ids(node),
+            ))
+        return tuple(parts)
+
+    def _tree(self, nodes):
+        by_id = {}
+        for node in nodes:
+            node_id = self._node_id(node)
+            if node_id is not None:
+                by_id[node_id] = node
+        child_map = {node_id: [] for node_id in by_id}
+        for node in nodes:
+            node_id = self._node_id(node)
+            parent_id = self._parent_id(node)
+            if node_id is not None and parent_id in child_map:
+                child_map[parent_id].append(node)
+        for node_id, node in by_id.items():
+            child_ids = self._child_ids(node)
+            if not child_ids:
+                continue
+            seen = set()
+            ordered = []
+            for child_id in child_ids:
+                child = by_id.get(child_id)
+                if child is None or child_id in seen:
+                    continue
+                ordered.append(child)
+                seen.add(child_id)
+            for child in child_map[node_id]:
+                child_id = self._node_id(child)
+                if child_id not in seen:
+                    ordered.append(child)
+                    seen.add(child_id)
+            child_map[node_id] = ordered
+        roots = [
+            node for node in nodes
+            if self._node_id(node) is None or self._parent_id(node) not in by_id
+        ]
+        return child_map, roots
+
+    def _descendant_splats(self, node, child_map):
+        found = []
+
+        def walk(current):
+            if self._is_exportable_splat(current):
+                found.append(current)
+            for child in child_map.get(self._node_id(current), ()):
+                walk(child)
+
+        for child in child_map.get(self._node_id(node), ()):
+            walk(child)
+        return found
+
+    def _group_splat_names(self, group_id, nodes):
+        child_map, _roots = self._tree(nodes)
+        wanted = str(group_id)
+        for node in nodes:
+            if self._is_group_node(node) and self._group_id_text(node) == wanted:
+                return [splat.name for splat in self._descendant_splats(node, child_map)]
+        return []
+
+    def _model_rows(self, nodes):
+        if not any(self._is_group_node(node) for node in nodes):
+            return [self._splat_row(node, 0) for node in nodes if self._is_exportable_splat(node)]
+
+        child_map, roots = self._tree(nodes)
+        rows = []
+
+        def emit(node, depth):
+            if self._is_group_node(node):
+                splats = self._descendant_splats(node, child_map)
+                if not splats:
+                    return
+                chosen = sum(splat.name in self._selected_nodes for splat in splats)
+                rows.append({
+                    "name": node.name,
+                    "selected": chosen == len(splats),
+                    "partial": 0 < chosen < len(splats),
+                    "is_group": True,
+                    "count_text": f"({sum(_exported_count(splat) for splat in splats):,})",
+                    "indent": self._indent(depth),
+                    "group_id": self._group_id_text(node),
+                })
+                for child in child_map.get(self._node_id(node), ()):
+                    emit(child, depth + 1)
+                return
+            if self._is_exportable_splat(node):
+                rows.append(self._splat_row(node, depth))
+                return
+            for child in child_map.get(self._node_id(node), ()):
+                emit(child, depth)
+
+        for root in roots:
+            emit(root, 0)
+        return rows
+
     def _rebuild_model_records(self, nodes):
         if self._format == ExportFormat.SSOG:
             self._dirty_model("ssog_folder_name")
+        rows = self._model_rows(nodes)
         if self._handle:
-            self._handle.update_record_list(
-                "models",
-                [
-                    {
-                        "name": node.name,
-                        "selected": node.name in self._selected_nodes,
-                        "count_text": f"({node.gaussian_count})",
-                    }
-                    for node in nodes
-                ],
-            )
-        self._has_models = bool(nodes)
+            self._handle.update_record_list("models", rows)
+        self._has_models = any(not row["is_group"] for row in rows)
         self._refresh_sh_degree_bounds(nodes)
 
     # ── Event handlers ────────────────────────────────────────
@@ -636,23 +806,32 @@ class ExportPanel(Panel):
         if checkbox is None:
             return
 
-        if checkbox.has_attribute("checked"):
+        nodes = self._scene_nodes()
+        group_id = checkbox.get_attribute("data-group-id", "")
+        if group_id:
+            names = self._group_splat_names(group_id, nodes)
+            if checkbox.has_attribute("checked"):
+                self._selected_nodes.update(names)
+            else:
+                self._selected_nodes.difference_update(names)
+        elif checkbox.has_attribute("checked"):
             self._selected_nodes.add(node_name)
         else:
             self._selected_nodes.discard(node_name)
 
-        self._rebuild_model_records(self._get_splat_nodes())
+        self._rebuild_model_records(nodes)
         self._dirty_model("can_export", "export_label", "export_error_text")
 
     def _on_select_all(self, _ev):
-        nodes = self._get_splat_nodes()
-        self._selected_nodes = {node.name for node in nodes}
+        nodes = self._scene_nodes()
+        self._selected_nodes = {node.name for node in nodes if self._is_exportable_splat(node)}
         self._rebuild_model_records(nodes)
         self._dirty_model("can_export", "export_label", "export_error_text")
 
     def _on_select_none(self, _ev):
+        nodes = self._scene_nodes()
         self._selected_nodes.clear()
-        self._rebuild_model_records(self._get_splat_nodes())
+        self._rebuild_model_records(nodes)
         self._dirty_model("can_export", "export_label", "export_error_text")
 
     def _on_export(self, _handle, _ev, _args):
@@ -677,17 +856,10 @@ class ExportPanel(Panel):
     # ── Export logic ──────────────────────────────────────────
 
     def _get_splat_nodes(self):
-        nodes = []
         try:
-            scene = lf.get_scene()
-            if scene is None:
-                return nodes
-            for node in scene.get_nodes():
-                if node.type == lf.scene.NodeType.SPLAT and node.gaussian_count > 0:
-                    nodes.append(node)
+            return [node for node in self._scene_nodes() if self._is_exportable_splat(node)]
         except Exception:
-            pass
-        return nodes
+            return []
 
     def _can_export_colmap(self):
         try:
@@ -730,6 +902,8 @@ class ExportPanel(Panel):
             return lf.ui.save_sog_file_dialog(default_name)
         if self._format == ExportFormat.SPZ:
             return lf.ui.save_spz_file_dialog(default_name)
+        if self._format == ExportFormat.GLB:
+            return lf.ui.save_glb_file_dialog(default_name)
         if self._format == ExportFormat.USD:
             return lf.ui.save_usd_file_dialog(default_name)
         if self._format == ExportFormat.NUREC_USDZ:

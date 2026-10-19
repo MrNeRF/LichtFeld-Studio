@@ -11,6 +11,7 @@
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
 #include "core/provenance.hpp"
@@ -47,12 +48,16 @@
 #include "rml_python_panel_adapter.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/editor_context.hpp"
+#include "visualizer/core/services.hpp"
+#include "visualizer/gui/gizmo_manager.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
+#include "visualizer/input/sdl_coordinate_utils.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_context.hpp"
 #include "visualizer/operator/operator_registry.hpp"
+#include "visualizer/operator/ops/align_ops.hpp"
 #include "visualizer/post_work_utils.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
@@ -61,6 +66,7 @@
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/Core.h>
+#include <stdexcept>
 #include <typeinfo>
 
 #include "config.h"
@@ -303,6 +309,38 @@ namespace lfs::python {
             g_project_switch_confirmation_callback;
         nb::object
             g_show_load_file_confirmation_callback;
+        lfs::event::HandlerId g_show_load_file_confirmation_handler_id = 0;
+        bool g_show_load_file_confirmation_with_batch = false;
+
+        void register_load_file_confirmation(nb::object callback, bool with_batch) {
+            using lfs::core::events::cmd::ShowLoadFileConfirmation;
+            if (g_show_load_file_confirmation_handler_id != 0) {
+                lfs::event::EventBridge::instance().unsubscribe(
+                    typeid(ShowLoadFileConfirmation), g_show_load_file_confirmation_handler_id);
+                g_show_load_file_confirmation_handler_id = 0;
+            }
+            g_show_load_file_confirmation_callback = std::move(callback);
+            g_show_load_file_confirmation_with_batch = with_batch;
+            if (!g_show_load_file_confirmation_callback || g_show_load_file_confirmation_callback.is_none())
+                return;
+            g_show_load_file_confirmation_handler_id = ShowLoadFileConfirmation::when([](const auto& event) {
+                nb::gil_scoped_acquire guard;
+                if (!g_show_load_file_confirmation_callback || g_show_load_file_confirmation_callback.is_none())
+                    return;
+                try {
+                    nb::list paths;
+                    for (const auto& path : event.paths)
+                        paths.append(lfs::core::path_to_utf8(path));
+                    if (g_show_load_file_confirmation_with_batch)
+                        g_show_load_file_confirmation_callback(paths, event.is_dataset, event.replace, event.user_batch);
+                    else
+                        g_show_load_file_confirmation_callback(paths, event.is_dataset, event.replace);
+                } catch (const std::exception& error) {
+                    LOG_ERROR("Load-file confirmation callback error: {}", error.what());
+                }
+            });
+        }
+
         nb::object
             g_stop_training_confirmation_callback;
         nb::object g_open_camera_preview_callback;
@@ -514,7 +552,7 @@ namespace lfs::python {
 
             std::filesystem::path icon_path = lfs::core::utf8_to_path(plugin_path) / "icons" / (icon_name + ".png");
 
-            if (!std::filesystem::exists(icon_path)) {
+            if (!lfs::core::native_fs::exists(icon_path)) {
                 icon_path = lfs::vis::getAssetPath("icon/" + icon_name + ".png");
             }
 
@@ -2352,7 +2390,7 @@ namespace lfs::python {
     std::tuple<float, float> PyUILayout::get_mouse_pos() const {
         float x = 0.0f;
         float y = 0.0f;
-        SDL_GetMouseState(&x, &y);
+        lfs::vis::input::mouseStateInPixels(SDL_GetMouseFocus(), &x, &y);
         return {x, y};
     }
     std::tuple<float, float> PyUILayout::get_window_pos() const {
@@ -2710,6 +2748,8 @@ namespace lfs::python {
                         ci.is_submenu_item = nb::cast<bool>(d["is_submenu_item"]);
                     if (d.contains("is_active"))
                         ci.is_active = nb::cast<bool>(d["is_active"]);
+                    if (d.contains("icon"))
+                        ci.icon = nb::cast<std::string>(d["icon"]);
                     vec.push_back(std::move(ci));
                 }
 
@@ -2727,7 +2767,7 @@ namespace lfs::python {
         m.def("get_mouse_screen_pos", []() -> nb::tuple {
             float x = 0.0f;
             float y = 0.0f;
-            SDL_GetMouseState(&x, &y);
+            lfs::vis::input::mouseStateInPixels(SDL_GetMouseFocus(), &x, &y);
             return nb::make_tuple(x, y);
         });
 
@@ -3324,6 +3364,16 @@ namespace lfs::python {
             "Open a file dialog to select a LichtFeld project (.licht). Returns empty string if cancelled.");
 
         m.def(
+            "save_project_file_dialog",
+            [](const std::string& default_name, const std::string& start_dir) -> std::string {
+                const auto result = lfs::vis::gui::SaveProjectFileDialog(
+                    default_name, lfs::core::utf8_to_path(start_dir));
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "project.licht", nb::arg("start_dir") = "",
+            "Choose a destination for a new LichtFeld project. Returns empty string if cancelled.");
+
+        m.def(
             "open_ply_file_dialog",
             [](const std::string& start_dir) -> std::string {
                 std::filesystem::path start_path;
@@ -3348,6 +3398,19 @@ namespace lfs::python {
             },
             nb::arg("start_dir") = "",
             "Open a file dialog to select a mesh file. Returns empty string if cancelled.");
+
+        m.def(
+            "open_init_file_dialog",
+            [](const std::string& start_dir) -> std::string {
+                std::filesystem::path start_path;
+                if (!start_dir.empty()) {
+                    start_path = lfs::core::utf8_to_path(start_dir);
+                }
+                auto result = lfs::vis::gui::OpenInitFileDialog(start_path);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("start_dir") = "",
+            "Open a file dialog to select a training initialization file: a splat, point cloud or mesh. Returns empty string if cancelled.");
 
         m.def(
             "open_checkpoint_file_dialog",
@@ -3421,6 +3484,15 @@ namespace lfs::python {
             "Open a save file dialog for LAZ compressed files. Returns empty string if cancelled.");
 
         m.def(
+            "save_text_file_dialog",
+            [](const std::string& default_name) -> std::string {
+                const auto result = lfs::vis::gui::SaveTextFileDialog(default_name);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "lichtfeld_logs",
+            "Choose a text log export path. Returns empty string if cancelled.");
+
+        m.def(
             "save_json_file_dialog",
             [](const std::string& default_name) -> std::string {
                 auto result = lfs::vis::gui::SaveJsonFileDialog(default_name);
@@ -3482,6 +3554,15 @@ namespace lfs::python {
             },
             nb::arg("default_name") = "export",
             "Open a save file dialog for SPZ files. Returns empty string if cancelled.");
+
+        m.def(
+            "save_glb_file_dialog",
+            [](const std::string& default_name) -> std::string {
+                auto result = lfs::vis::gui::SaveGlbFileDialog(default_name);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "export",
+            "Open a save file dialog for GLB (SPZ glTF) files. Returns empty string if cancelled.");
 
         m.def(
             "save_usd_file_dialog",
@@ -3599,6 +3680,7 @@ namespace lfs::python {
                 }
 
                 lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(it->second)}.emit();
+                markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("tool"), "Switch to a toolbar tool (none, selection, translate, rotate, scale, mirror, align, cropbox)");
 
@@ -3653,6 +3735,61 @@ namespace lfs::python {
             "is_shift_down",
             []() { return (SDL_GetModState() & SDL_KMOD_SHIFT) != 0; },
             "Check if Shift is currently held");
+
+        m.def(
+            "is_mouse_button_down",
+            [](const int button) {
+                constexpr std::array<int, 3> sdl_buttons{SDL_BUTTON_LEFT, SDL_BUTTON_RIGHT, SDL_BUTTON_MIDDLE};
+                if (button < 0 || button >= static_cast<int>(sdl_buttons.size()))
+                    throw nb::value_error("button must be 0 (left), 1 (right) or 2 (middle)");
+                return (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_MASK(sdl_buttons[button])) != 0;
+            },
+            nb::arg("button") = 0, "Check if a mouse button is held: 0 left, 1 right, 2 middle");
+
+        m.def(
+            "begin_value_drag",
+            []() {
+                auto* const controller = vis::InputController::instance();
+                return controller && controller->beginValueDrag();
+            },
+            "Hide and lock the pointer for a value drag from a UI event handler. Motion keeps "
+            "accumulating past the window edge; returns False when the pointer cannot be locked.");
+
+        m.def(
+            "take_value_drag_delta",
+            []() {
+                auto* const controller = vis::InputController::instance();
+                return controller ? controller->takeValueDragDelta() : 0.0f;
+            },
+            "Horizontal pointer motion in window points since the previous call during a value drag.");
+
+        m.def(
+            "value_drag_state",
+            []() -> std::string {
+                const auto* const controller = vis::InputController::instance();
+                if (controller && controller->isValueDragActive())
+                    return "active";
+                return controller && controller->isValueDragCancelled() ? "cancelled" : "idle";
+            },
+            "'active' while the value drag holds the pointer, 'cancelled' after Escape, the right "
+            "button or focus loss ended it, otherwise 'idle'.");
+
+        m.def(
+            "request_viewport_overlay_sync",
+            []() {
+                if (auto* const gui = lfs::python::get_gui_manager())
+                    gui->requestViewportOverlaySync();
+            },
+            "Run the viewport overlay's document sync on the next frame. It does not wake the "
+            "frame loop; pair it with request_redraw when no input will arrive.");
+
+        m.def(
+            "end_value_drag",
+            []() {
+                if (auto* const controller = vis::InputController::instance())
+                    controller->endValueDrag();
+            },
+            "Release the value drag pointer lock and return the pointer to where the drag started.");
 
         // Localization
         m.def(
@@ -3809,7 +3946,8 @@ namespace lfs::python {
                                                 event.path),
                                         event.keep_asset_manager_open,
                                         lfs::core::path_to_utf8(event.create_path),
-                                        event.allow_existing_destination_replacement);
+                                        event.allow_existing_destination_replacement,
+                                        event.stop_training);
                                 } catch (
                                     const std::
                                         exception& error) {
@@ -3825,43 +3963,18 @@ namespace lfs::python {
 
         m.def(
             "on_show_load_file_confirmation",
-            [](nb::object callback) {
-                g_show_load_file_confirmation_callback =
-                    callback;
-                lfs::core::events::cmd::
-                    ShowLoadFileConfirmation::
-                        when([](const auto& event) {
-                            if (g_show_load_file_confirmation_callback &&
-                                !g_show_load_file_confirmation_callback
-                                     .is_none()) {
-                                nb::gil_scoped_acquire
-                                    guard;
-                                try {
-                                    nb::list paths;
-                                    for (const auto& path :
-                                         event.paths) {
-                                        paths.append(
-                                            lfs::core::
-                                                path_to_utf8(
-                                                    path));
-                                    }
-                                    g_show_load_file_confirmation_callback(
-                                        paths,
-                                        event.is_dataset,
-                                        event.replace);
-                                } catch (
-                                    const std::
-                                        exception& error) {
-                                    LOG_ERROR(
-                                        "Load-file confirmation callback error: {}",
-                                        error.what());
-                                }
-                            }
-                        });
-            },
+            [](nb::object callback) { register_load_file_confirmation(std::move(callback), false); },
             nb::arg("callback"),
             "Register callback for a load-file wipe confirmation "
             "(receives paths: list[str], is_dataset: bool, replace: bool)");
+
+        m.def(
+            "on_show_load_file_confirmation_with_batch",
+            [](nb::object callback) { register_load_file_confirmation(std::move(callback), true); },
+            nb::arg("callback"),
+            "Register a load-file confirmation callback with batch provenance "
+            "(receives paths: list[str], is_dataset: bool, replace: bool, user_batch: bool). "
+            "Replaces the callback registered through either load-file confirmation API.");
 
         m.def(
             "on_stop_training_confirmation",
@@ -3994,6 +4107,7 @@ namespace lfs::python {
                         if (auto* const editor = get_editor_context())
                             editor->setActiveTool(tool);
                         lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(tool)}.emit();
+                        markProjectSessionChapterCommitted("VIEW");
                     });
                 }
             },
@@ -4006,6 +4120,7 @@ namespace lfs::python {
                     if (auto* const editor = get_editor_context())
                         editor->setActiveOperator(id, gizmo_type);
                     vis::UnifiedToolRegistry::instance().setActiveTool(id);
+                    markProjectSessionChapterCommitted("VIEW");
                 });
             },
             nb::arg("id"), nb::arg("gizmo_type") = "", "Set active operator with optional gizmo type");
@@ -4130,6 +4245,7 @@ namespace lfs::python {
             "set_gizmo_type", [](const std::string& type) {
                 if (auto* editor = get_editor_context())
                     editor->setGizmoType(type);
+                markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("type"), "Set gizmo type without blocking camera");
 
@@ -4137,6 +4253,7 @@ namespace lfs::python {
             "clear_gizmo", []() {
                 if (auto* editor = get_editor_context())
                     editor->clearGizmo();
+                markProjectSessionChapterCommitted("VIEW");
             },
             "Clear gizmo type");
 
@@ -4151,7 +4268,7 @@ namespace lfs::python {
 
         m.def(
             "set_selection_mode",
-            [](const std::string& mode) {
+            [](const std::string& mode, const bool mark_session_dirty = true) {
                 static const std::unordered_map<std::string, int> MODE_MAP = {
                     {"centers", static_cast<int>(lfs::vis::SelectionSubMode::Centers)},
                     {"rectangle", static_cast<int>(lfs::vis::SelectionSubMode::Rectangle)},
@@ -4164,13 +4281,15 @@ namespace lfs::python {
                 const auto it = MODE_MAP.find(mode);
                 const std::optional<int> selection_mode =
                     it == MODE_MAP.end() ? std::nullopt : std::optional{it->second};
-                invoke_on_viewer([mode, selection_mode] {
+                invoke_on_viewer([mode, selection_mode, mark_session_dirty] {
                     vis::UnifiedToolRegistry::instance().setActiveSubmode(mode);
                     if (selection_mode)
                         lfs::core::events::tools::SetSelectionSubMode{.selection_mode = *selection_mode}.emit();
+                    if (mark_session_dirty)
+                        markProjectSessionChapterCommitted("VIEW");
                 });
             },
-            nb::arg("mode"), "Set selection mode");
+            nb::arg("mode"), nb::arg("mark_session_dirty") = true, "Set selection mode");
 
         m.def(
             "execute_mirror",
@@ -4185,7 +4304,10 @@ namespace lfs::python {
         // Scene panel context menu actions
         m.def(
             "go_to_camera_view",
-            [](int cam_uid) { lfs::core::events::cmd::GoToCamView{.cam_id = cam_uid}.emit(); },
+            [](int cam_uid) {
+                lfs::core::events::cmd::GoToCamView{.cam_id = cam_uid}.emit();
+                markProjectSessionChapterCommitted("VIEW");
+            },
             nb::arg("cam_uid"), "Go to camera view by UID");
 
         m.def(
@@ -4195,7 +4317,13 @@ namespace lfs::python {
 
         m.def(
             "toggle_gt_comparison",
-            []() { lfs::core::events::cmd::ToggleGTComparison{}.emit(); },
+            []() {
+                auto* const rendering = lfs::python::get_rendering_manager();
+                if (!rendering || (!rendering->isGTComparisonActive() && !rendering->hasGTComparisonAvailable())) {
+                    throw std::runtime_error("GT comparison requires a loaded dataset with source images");
+                }
+                lfs::core::events::cmd::ToggleGTComparison{}.emit();
+            },
             "Toggle ground-truth comparison split view");
 
         m.def(
@@ -4238,6 +4366,7 @@ namespace lfs::python {
                     throw nb::value_error("GT comparison mode must be 'rgb', 'normal', or 'depth'");
                 }
                 rm->updateSettings(settings, vis::DirtyFlag::ALL);
+                markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("mode"), "Set ground-truth comparison mode.");
 
@@ -4261,6 +4390,7 @@ namespace lfs::python {
                     break;
                 }
                 rm->updateSettings(settings, vis::DirtyFlag::ALL);
+                markProjectSessionChapterCommitted("VIEW");
                 switch (settings.gt_comparison_mode) {
                 case vis::GTComparisonMode::Normal: return "normal";
                 case vis::GTComparisonMode::Depth: return "depth";
@@ -4289,6 +4419,7 @@ namespace lfs::python {
                 if (auto* const gui = lfs::python::get_gui_manager()) {
                     gui->gizmo().setCropToolShape(shape);
                 }
+                markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("shape"),
             "Set the active crop tool shape: box or ellipsoid");
@@ -4309,6 +4440,7 @@ namespace lfs::python {
                 if (auto* const gui = lfs::python::get_gui_manager()) {
                     gui->gizmo().setCropToolOperation(operation);
                 }
+                markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("operation"),
             "Set the active crop or selection-volume gizmo operation: translate, rotate, or scale");
@@ -4335,6 +4467,97 @@ namespace lfs::python {
                 }
             },
             "Apply the active crop tool primitive through the node-backed crop command path");
+
+        m.def(
+            "can_apply_align",
+            []() -> bool {
+                const auto* scene = lfs::vis::services().sceneOrNull();
+                return scene &&
+                       lfs::vis::op::pointsAreNonDegenerate(lfs::vis::services().getAlignPickedPoints()) &&
+                       lfs::vis::op::resolveAlignSnapTargetWorld(*scene).has_value();
+            },
+            "True when the align tool has 3 non-degenerate points ready to apply");
+
+        m.def(
+            "apply_align",
+            []() -> bool {
+                if (lfs::vis::op::operators().activeModalId() !=
+                    lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::AlignPickPoint)) {
+                    return false;
+                }
+                lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::Apply);
+                lfs::vis::op::ModalEvent evt{};
+                evt.type = lfs::vis::op::ModalEvent::Type::NONE;
+                lfs::vis::op::operators().dispatchModalEvent(evt);
+                return true;
+            },
+            "Request the running align modal to apply the current triangle");
+
+        m.def(
+            "clear_align_points",
+            []() {
+                if (lfs::vis::op::operators().activeModalId() !=
+                    lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::AlignPickPoint)) {
+                    return;
+                }
+                lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::Clear);
+                lfs::vis::op::ModalEvent evt{};
+                evt.type = lfs::vis::op::ModalEvent::Type::NONE;
+                lfs::vis::op::operators().dispatchModalEvent(evt);
+            },
+            "Request the running align modal to clear all picked points");
+
+        m.def("get_align_preview", [] { return lfs::vis::services().getAlignPreviewEnabled(); }, "Whether the alignment result is being previewed");
+        m.def("toggle_align_preview", [] {
+            if (lfs::vis::op::operators().activeModalId() !=
+                lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::AlignPickPoint)) {
+                return;
+            }
+            lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::TogglePreview);
+            lfs::vis::op::ModalEvent event{};
+            lfs::vis::op::operators().dispatchModalEvent(event); }, "Switch between the original scene and the alignment preview");
+
+        m.def(
+            "get_align_axis_snap",
+            []() -> bool { return lfs::vis::services().getAlignAxisSnapEnabled(); },
+            "Whether align plane-normal axis snap is enabled");
+
+        m.def(
+            "set_align_axis_snap",
+            [](const bool enabled) {
+                lfs::vis::services().setAlignAxisSnapEnabled(enabled);
+                if (lfs::vis::services().getAlignPreviewEnabled()) {
+                    lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::RefreshPreview);
+                    lfs::vis::op::ModalEvent event{};
+                    lfs::vis::op::operators().dispatchModalEvent(event);
+                }
+                if (auto* const rm = lfs::vis::services().renderingOrNull()) {
+                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
+                }
+            },
+            nb::arg("enabled"),
+            "Enable or disable align plane-normal axis snap (session lifetime)");
+
+        m.def(
+            "get_align_edge_to_axis",
+            []() -> bool { return lfs::vis::services().getAlignEdgeToAxisEnabled(); },
+            "Whether align edge-to-+X in-plane yaw is enabled");
+
+        m.def(
+            "set_align_edge_to_axis",
+            [](const bool enabled) {
+                lfs::vis::services().setAlignEdgeToAxisEnabled(enabled);
+                if (lfs::vis::services().getAlignPreviewEnabled()) {
+                    lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::RefreshPreview);
+                    lfs::vis::op::ModalEvent event{};
+                    lfs::vis::op::operators().dispatchModalEvent(event);
+                }
+                if (auto* const rm = lfs::vis::services().renderingOrNull()) {
+                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
+                }
+            },
+            nb::arg("enabled"),
+            "Enable or disable align edge-to-+X in-plane yaw (session lifetime)");
 
         m.def(
             "fit_crop_tool",
@@ -4415,7 +4638,7 @@ namespace lfs::python {
         m.def(
             "merge_group",
             [](const std::string& name) { lfs::core::events::cmd::MergeGroup{.name = name}.emit(); },
-            nb::arg("name"), "Merge group children into a single PLY");
+            nb::arg("name"), "Merge group children into a single model");
 
         m.def(
             "save_node_to_disk",
@@ -4691,6 +4914,10 @@ namespace lfs::python {
                 state["stage"] = export_state.stage;
                 state["outcome"] = export_state.outcome;
                 state["format"] = export_state.format;
+                state["path"] = export_state.path;
+                state["error"] = export_state.error;
+                state["warning"] = export_state.warning;
+                state["commit_uuid"] = export_state.commit_uuid;
                 return state;
             },
             "Get current export progress state");
@@ -4720,6 +4947,11 @@ namespace lfs::python {
 
         m.def("dismiss_import", &dismiss_import,
               "Dismiss the import completion overlay");
+        m.def("cancel_gallery_import", [] { return invoke_on_viewer([] {
+                                                auto* gui = get_gui_manager();
+                                                return gui && gui->asyncTasks().requestGalleryImportCancel();
+                                            },
+                                                                    false); }, "Request gallery import cancellation without waiting for its worker");
 
         m.def(
             "get_video_export_state",
@@ -4759,6 +4991,11 @@ namespace lfs::python {
 
         m.def("has_keyframes", &has_keyframes,
               "Check if sequencer has any keyframes");
+
+        m.def("get_camera_path", []() { return nb::module_::import_("json").attr("loads")(get_camera_path_data()); }, "Get the native camera path with clip duration, loop mode and playback speed");
+        m.def("set_camera_path", [](nb::dict value) {
+            const auto json = nb::cast<std::string>(nb::module_::import_("json").attr("dumps")(value, nb::arg("allow_nan") = false));
+            return set_camera_path_data(json); }, nb::arg("value"), "Restore a native camera path including loop mode and playback speed");
 
         m.def("save_camera_path", &save_camera_path,
               nb::arg("path"),
@@ -4824,9 +5061,13 @@ namespace lfs::python {
 
         m.def(
             "delete_keyframe",
-            [](size_t index) { lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = index}.emit(); },
+            [](size_t index) {
+                if (index == 0)
+                    throw nb::value_error("The first keyframe cannot be deleted");
+                lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = index}.emit();
+            },
             nb::arg("index"),
-            "Delete keyframe by index");
+            "Delete keyframe by index; raises ValueError for the protected first keyframe");
 
         m.def(
             "set_keyframe_easing",
@@ -4901,6 +5142,11 @@ namespace lfs::python {
         m.def("get_multi_transform_mode", &get_multi_transform_mode, "Get multi-transform mode (0=Group, 1=Individual)");
 
         m.def("set_multi_transform_mode", &set_multi_transform_mode, nb::arg("mode"), "Set multi-transform mode (0=Group, 1=Individual)");
+
+        m.attr("MULTI_TRANSFORM_MODE_SELECTION") =
+            static_cast<int>(lfs::vis::gui::MultiTransformMode::Selection);
+        m.attr("MULTI_TRANSFORM_MODE_INDIVIDUAL") =
+            static_cast<int>(lfs::vis::gui::MultiTransformMode::Individual);
 
         // Thumbnail system (for Getting Started window)
         m.def("request_thumbnail", &request_thumbnail, nb::arg("video_id"),
@@ -5032,6 +5278,8 @@ namespace lfs::python {
             },
             "Get available theme presets with stable ids and UI metadata");
 
+        m.def("get_native_floating_windows", [] { return vis::UserPreferences::instance().nativeFloatingWindows(); }, "Whether floating panels use native windows on the next application start.");
+        m.def("set_native_floating_windows", [](bool enabled) { vis::UserPreferences::instance().setNativeFloatingWindows(enabled); }, nb::arg("enabled"), "Save the experimental window mode. Requires an application restart.");
         m.def(
             "set_ui_scale",
             [](float scale) {
@@ -5052,16 +5300,20 @@ namespace lfs::python {
 
         m.def(
             "set_zoom_speed_preference",
-            [](const float speed) {
-                vis::saveZoomSpeedPreference(speed);
+            [](const float speed, const bool persist) {
+                vis::saveZoomSpeedPreference(speed, persist);
                 const float zoom_speed = vis::loadZoomSpeedPreference();
                 const float navigation_speed = vis::loadNavigationSpeedPreference();
-                invoke_on_viewer([zoom_speed, navigation_speed] {
+                invoke_on_viewer([zoom_speed, navigation_speed, persist] {
                     if (auto* const controller = vis::InputController::instance())
                         controller->applyNavigationSpeedPreferences(zoom_speed, navigation_speed);
+                    if (persist) {
+                        markProjectSessionChapterCommitted("VIEW");
+                    }
                 });
             },
-            nb::arg("speed"), "Set the default camera zoom speed (1-100)");
+            nb::arg("speed"), nb::arg("persist") = true,
+            "Set the default camera zoom speed (1-100)");
 
         m.def(
             "get_zoom_speed_preference",
@@ -5070,21 +5322,116 @@ namespace lfs::python {
 
         m.def(
             "set_navigation_speed_preference",
-            [](const float speed) {
-                vis::saveNavigationSpeedPreference(speed);
+            [](const float speed, const bool persist) {
+                vis::saveNavigationSpeedPreference(speed, persist);
                 const float zoom_speed = vis::loadZoomSpeedPreference();
                 const float navigation_speed = vis::loadNavigationSpeedPreference();
-                invoke_on_viewer([zoom_speed, navigation_speed] {
+                invoke_on_viewer([zoom_speed, navigation_speed, persist] {
                     if (auto* const controller = vis::InputController::instance())
                         controller->applyNavigationSpeedPreferences(zoom_speed, navigation_speed);
+                    if (persist) {
+                        markProjectSessionChapterCommitted("VIEW");
+                    }
                 });
             },
-            nb::arg("speed"), "Set the default WASD navigation speed (1-100)");
+            nb::arg("speed"), nb::arg("persist") = true,
+            "Set the default WASD navigation speed (1-100)");
 
         m.def(
             "get_navigation_speed_preference",
             []() -> float { return vis::loadNavigationSpeedPreference(); },
             "Get the default WASD navigation speed");
+
+        m.def("get_rendering_defaults_json", [] { return vis::UserPreferences::instance().renderingDefaults(); }, "Get user defaults for new projects; project VIEW values are independent overrides.");
+        m.def("set_rendering_defaults_json", [](const std::string& serialized) {
+            if (auto result = vis::UserPreferences::instance().setRenderingDefaults(serialized); !result)
+                throw nb::value_error(lfs::format_for_developer(result.error()).c_str()); }, nb::arg("serialized"), "Validate and persist rendering defaults without changing the current project.");
+        m.def("capture_rendering_defaults", [] {
+            if (const auto* rendering = get_rendering_manager()) {
+                const auto result = vis::UserPreferences::instance().setRenderingDefaults(vis::renderingDefaultsFromSettings(rendering->getSettings()));
+                if (!result) throw nb::value_error(lfs::format_for_developer(result.error()).c_str());
+            } }, "Save current project overlay style and LOD cache limits as defaults for new projects.");
+        m.def("apply_rendering_defaults", [] {
+            if (auto* rendering = get_rendering_manager()) {
+                auto settings = rendering->getSettings();
+                if (const auto result = vis::applyRenderingDefaults(settings, vis::UserPreferences::instance().renderingDefaults()); !result)
+                    throw nb::value_error(lfs::format_for_developer(result.error()).c_str());
+                if (const auto result = rendering->updateSettingsFromUser(settings); !result)
+                    throw nb::value_error(lfs::format_for_developer(result.error()).c_str());
+            } }, "Explicitly apply user defaults to the current project; other rendering fields are preserved.");
+
+        m.def(
+            "get_marketplace_preferences",
+            [] {
+                auto& preferences = vis::UserPreferences::instance();
+                nb::dict result;
+                result["view"] = preferences.marketplaceView();
+                result["git_checkout"] = preferences.marketplaceGitCheckout();
+                return result;
+            },
+            "Get Marketplace preferences from the canonical user preferences store");
+        m.def(
+            "set_marketplace_view",
+            [](const std::string& view) { vis::UserPreferences::instance().setMarketplaceView(view); },
+            nb::arg("view"), "Set the Marketplace layout (card or list)");
+        m.def(
+            "set_marketplace_git_checkout",
+            [](bool enabled) { vis::UserPreferences::instance().setMarketplaceGitCheckout(enabled); },
+            nb::arg("enabled"), "Set whether Marketplace installs use Git checkouts");
+        m.def(
+            "reset_marketplace_preferences",
+            [] { vis::UserPreferences::instance().resetMarketplacePreferences(); },
+            "Reset Marketplace layout and installation preferences");
+
+        m.def(
+            "get_project_manager_preferences",
+            [] {
+                auto& preferences = vis::UserPreferences::instance();
+                nb::dict result;
+                result["defaultView"] = preferences.projectManagerDefaultView();
+                result["openAtStartup"] = preferences.openProjectManagerAtStartup();
+                result["rememberState"] = preferences.rememberProjectManagerState();
+                return result;
+            },
+            "Get Project Manager preferences from the canonical user preferences store");
+
+        m.def(
+            "set_project_manager_default_view",
+            [](const std::string& view) {
+                vis::UserPreferences::instance().setProjectManagerDefaultView(view);
+            },
+            nb::arg("view"), "Set the default Project Manager view");
+
+        m.def(
+            "set_project_manager_open_at_startup",
+            [](const bool enabled) {
+                vis::UserPreferences::instance().setOpenProjectManagerAtStartup(enabled);
+            },
+            nb::arg("enabled"), "Set whether Project Manager opens at application startup");
+
+        m.def(
+            "set_project_manager_remember_state",
+            [](const bool enabled) {
+                vis::UserPreferences::instance().setRememberProjectManagerState(enabled);
+            },
+            nb::arg("enabled"), "Set whether Project Manager layout state is remembered");
+
+        m.def(
+            "get_project_manager_state",
+            [] { return vis::UserPreferences::instance().projectManagerState(); },
+            "Get remembered Project Manager layout state as JSON");
+
+        m.def(
+            "set_project_manager_state",
+            [](const std::string& state) {
+                vis::UserPreferences::instance().setProjectManagerState(state);
+            },
+            nb::arg("state"), "Set remembered Project Manager layout state from JSON");
+
+        m.def(
+            "reset_project_manager_preferences",
+            [] { vis::UserPreferences::instance().resetProjectManagerPreferences(); },
+            "Reset Project Manager preferences and remembered layout state");
 
         m.def(
             "get_scene_reconstruction_options",
@@ -5164,6 +5511,10 @@ namespace lfs::python {
             },
             "Get effective MCP HTTP server preferences");
 
+        m.def("get_mcp_access_token", []() {
+            nb::gil_scoped_release release;
+            return mcp::mcpBearerToken(); }, "Get the local MCP network access token");
+
         m.def(
             "set_mcp_preferences",
             [](const bool enabled, const bool expose_network, const int port,
@@ -5181,13 +5532,21 @@ namespace lfs::python {
                 return mcp::applyActiveMcpHttpConfig({
                     .enabled = state.enabled,
                     .expose_network = state.expose_network,
-                    .port = state.port,
+                    .port = vis::mcpPortOverride().value_or(state.port),
                     .request_logging = state.request_logging,
                 });
             },
             nb::arg("enabled"), nb::arg("expose_network"), nb::arg("port"),
             nb::arg("request_logging") = false,
             "Persist and immediately apply MCP HTTP server preferences");
+
+        m.def(
+            "get_mcp_port_override",
+            []() -> std::optional<int> {
+                nb::gil_scoped_release release;
+                return vis::mcpPortOverride();
+            },
+            "Get the MCP port set on the command line for this session, or None");
 
         m.def(
             "get_project_location",
@@ -5224,6 +5583,8 @@ namespace lfs::python {
                 }
                 if (!result)
                     return std::string(result.error().user_message());
+                if (auto panel = vis::gui::PanelRegistry::instance().get_panel_instance("lfs.asset_manager"))
+                    panel->on_content_changed();
                 return {};
             },
             nb::arg("path"),
@@ -5234,6 +5595,8 @@ namespace lfs::python {
             [] {
                 nb::gil_scoped_release release;
                 vis::clearProjectLocationPreference();
+                if (auto panel = vis::gui::PanelRegistry::instance().get_panel_instance("lfs.asset_manager"))
+                    panel->on_content_changed();
             },
             "Clear the project location preference so the default is used.");
 
@@ -5248,6 +5611,14 @@ namespace lfs::python {
                 return info && info->embed_dataset_by_default;
             },
             "Get whether new projects copy datasets into the project by default.");
+
+        m.def(
+            "mark_project_session_chapter_committed",
+            [](const std::string& chapter) {
+                markProjectSessionChapterCommitted(chapter);
+            },
+            nb::arg("chapter"),
+            "Mark a committed project session setting change for autosave.");
 
         m.def(
             "set_embed_dataset_by_default",
@@ -5301,6 +5672,9 @@ namespace lfs::python {
                     break;
                 case mcp::McpHttpErrorKind::ListenerFailed:
                     result["error_kind"] = "listener_failed";
+                    break;
+                case mcp::McpHttpErrorKind::CredentialFailed:
+                    result["error_kind"] = "credential_failed";
                     break;
                 }
                 result["error_address"] = status.error_address;
@@ -5392,6 +5766,8 @@ namespace lfs::python {
                 }
             },
             nb::arg("lang_code"), "Set language by code (e.g., 'en', 'de')");
+
+        m.def("resource_directory", []() { return lfs::core::path_to_utf8(lfs::core::getResourceBaseDir()); }, "Directory containing the bundled UI resources");
 
         m.def(
             "get_current_language",
@@ -5505,8 +5881,7 @@ namespace lfs::python {
             }
             g_project_switch_confirmation_callback =
                 nb::object();
-            g_show_load_file_confirmation_callback =
-                nb::object();
+            register_load_file_confirmation(nb::object(), false);
             g_stop_training_confirmation_callback =
                 nb::object();
             g_open_camera_preview_callback = nb::object();
@@ -5720,7 +6095,14 @@ namespace lfs::python {
                 }
                 return rm->getAverageFPS();
             },
-            "Get current FPS");
+            "Get viewport renders in the trailing second (cached and deferred results excluded)");
+
+        m.def(
+            "get_ui_fps", []() -> float {
+                auto* rm = get_rendering_manager();
+                return rm ? rm->getPresentedAverageFPS() : 0.0f;
+            },
+            "Get successful GUI presents in the trailing second (idle-clear frame excluded)");
 
         m.def(
             "get_content_type", []() -> const char* {

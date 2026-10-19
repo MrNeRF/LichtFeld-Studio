@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "depth_anchor_cache.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/camera.hpp"
 #include "core/logger.hpp"
@@ -27,7 +28,7 @@
 namespace lfs::training {
     namespace {
 
-        constexpr int kSchemaVersion = 1;
+        constexpr int kSchemaVersion = 3;
 
         void hash_bytes(std::uint64_t& hash, const void* data, const std::size_t size) {
             const auto* bytes = static_cast<const unsigned char*>(data);
@@ -89,6 +90,25 @@ namespace lfs::training {
         }
 
     } // namespace
+
+    kernels::DepthCameraProjection depth_camera_projection(const lfs::core::Camera& cam) {
+        kernels::DepthCameraProjection p;
+        if (cam.is_undistort_prepared())
+            return p;
+        p.model = static_cast<int>(cam.camera_model_type());
+        auto copy = [](const lfs::core::Tensor& tensor, float* out, size_t count) {
+            if (!tensor.is_valid() || !tensor.numel())
+                return;
+            const auto host = tensor.cpu().contiguous();
+            std::copy_n(host.ptr<float>(), std::min(count, host.numel()), out);
+        };
+        copy(cam.radial_distortion(), p.radial, 6);
+        if (cam.camera_model_type() == lfs::core::CameraModelType::THIN_PRISM_FISHEYE)
+            copy(cam.tangential_distortion(), p.thin_prism, 4);
+        else
+            copy(cam.tangential_distortion(), p.tangential, 2);
+        return p;
+    }
 
     RawDepthAnchorMap computeRawDepthAnchors(
         const lfs::core::Tensor& means_in,
@@ -190,6 +210,30 @@ namespace lfs::training {
         };
 
         std::vector<std::thread> workers;
+        // Producer failures (including depth decoding and partial pool startup)
+        // must wake and join the workers before the exception reaches the caller.
+        struct WorkerJoiner {
+            std::vector<std::thread>& workers;
+            std::mutex& mutex;
+            std::condition_variable& cv;
+            bool& producing;
+
+            void join() {
+                if (!producing) {
+                    return;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    producing = false;
+                }
+                cv.notify_all();
+                for (auto& thread : workers) {
+                    thread.join();
+                }
+            }
+
+            ~WorkerJoiner() { join(); }
+        } joiner{workers, queue_mutex, queue_cv, producing};
         workers.reserve(worker_count);
         for (std::size_t i = 0; i < worker_count; ++i) {
             workers.emplace_back(worker);
@@ -230,14 +274,30 @@ namespace lfs::training {
             const float sx = static_cast<float>(prior_w) / static_cast<float>(cam->camera_width());
             const float sy = static_cast<float>(prior_h) / static_cast<float>(cam->camera_height());
 
+            // The camera's own SfM observations are the points it sees. Projecting the whole cloud also
+            // pairs points hidden behind the visible surface with that surface's prior value, which biased
+            // every fit toward larger depths.
+            const auto& observations = cam->sfm_observations();
+            lfs::core::Tensor observed_points;
+            if (!observations.empty()) {
+                std::vector<float> xyz;
+                xyz.reserve(observations.size() * 3);
+                for (const auto& observation : observations) {
+                    xyz.insert(xyz.end(), {observation.x, observation.y, observation.z});
+                }
+                observed_points = lfs::core::Tensor::from_vector(
+                    xyz, lfs::core::TensorShape({observations.size(), std::size_t{3}}), lfs::core::Device::CUDA);
+            }
+            const bool use_observations = observed_points.is_valid();
+
             // The prior's lazy ops materialize on their own stream; the collect
             // kernel reads raw pointers, so settle the device first (startup only).
             prior.ptr<float>();
             cudaDeviceSynchronize();
 
             auto samples = lfs::training::kernels::collect_depth_anchor_samples(
-                means.ptr<float>(),
-                num_points,
+                use_observations ? observed_points.ptr<float>() : means.ptr<float>(),
+                use_observations ? observations.size() : num_points,
                 cam->world_view_transform_ptr(),
                 cam->focal_x() * sx,
                 cam->focal_y() * sy,
@@ -248,7 +308,7 @@ namespace lfs::training {
                 prior_h,
                 0.01f,
                 aabb_lo,
-                aabb_hi);
+                aabb_hi, nullptr, depth_camera_projection(*cam));
             cam->release_depth_cache();
 
             if (samples.empty()) {
@@ -262,19 +322,13 @@ namespace lfs::training {
             queue_cv.notify_one();
         }
 
-        {
-            std::lock_guard<std::mutex> lock(queue_mutex);
-            producing = false;
-        }
-        queue_cv.notify_all();
-        for (auto& t : workers) {
-            t.join();
-        }
+        joiner.join();
 
         return anchors;
     }
 
     DepthAnchorFingerprint computeAnchorFingerprint(
+        const lfs::core::Tensor& means,
         const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
 
         DepthAnchorFingerprint fingerprint;
@@ -282,6 +336,15 @@ namespace lfs::training {
 
         std::uint64_t hash = 0xcbf29ce484222325ull;
         hash_scalar(hash, kSchemaVersion);
+        // Keep the sidecar layout; invalidate keys made before geometry/content hashing.
+        constexpr std::uint64_t input_revision = 1;
+        hash_scalar(hash, input_revision);
+        const std::uint64_t point_values = means.is_valid() ? means.numel() : 0;
+        hash_scalar(hash, point_values);
+        if (point_values) {
+            const auto host = means.cpu().contiguous();
+            hash_bytes(hash, host.ptr<float>(), point_values * sizeof(float));
+        }
 
         std::vector<const lfs::core::Camera*> depth_cameras;
         depth_cameras.reserve(cameras.size());
@@ -304,6 +367,14 @@ namespace lfs::training {
             hash_scalar(hash, cam->center_y());
             hash_scalar(hash, cam->camera_width());
             hash_scalar(hash, cam->camera_height());
+            const auto projection = depth_camera_projection(*cam);
+            hash_scalar(hash, projection.model);
+            for (float v : projection.radial)
+                hash_scalar(hash, v);
+            for (float v : projection.tangential)
+                hash_scalar(hash, v);
+            for (float v : projection.thin_prism)
+                hash_scalar(hash, v);
 
             const auto pose = cam->world_view_transform().cpu().contiguous();
             if (pose.is_valid() && pose.numel() >= 16) {
@@ -313,13 +384,31 @@ namespace lfs::training {
                 }
             }
 
+            const auto& observations = cam->sfm_observations();
+            hash_scalar(hash, static_cast<std::uint64_t>(observations.size()));
+            for (const auto& observation : observations) {
+                hash_scalar(hash, observation.x);
+                hash_scalar(hash, observation.y);
+                hash_scalar(hash, observation.z);
+            }
+
             std::error_code ec;
-            const auto size = std::filesystem::file_size(cam->depth_path(), ec);
+            const auto size = lfs::core::native_fs::file_size(cam->depth_path(), ec);
             hash_scalar(hash, ec ? std::uint64_t{0} : static_cast<std::uint64_t>(size));
             ec.clear();
-            const auto mtime = std::filesystem::last_write_time(cam->depth_path(), ec);
+            const auto mtime = lfs::core::native_fs::last_write_time(cam->depth_path(), ec);
             const long long ticks = ec ? 0 : static_cast<long long>(mtime.time_since_epoch().count());
             hash_scalar(hash, ticks);
+
+            std::ifstream depth(lfs::core::native_fs::native_path(cam->depth_path()), std::ios::binary);
+            std::array<char, 64 * 1024> buffer;
+            while (depth.read(buffer.data(), buffer.size()) || depth.gcount() > 0) {
+                hash_bytes(hash, buffer.data(), static_cast<std::size_t>(depth.gcount()));
+            }
+            if (!depth.eof() || depth.bad()) {
+                // An incomplete fingerprint must neither reuse nor publish a cache.
+                return {};
+            }
         }
 
         fingerprint.hash = hash;
@@ -340,7 +429,7 @@ namespace lfs::training {
         const std::filesystem::path& path,
         const RawDepthAnchorMap& anchors,
         const DepthAnchorFingerprint& fingerprint) {
-        if (path.empty()) {
+        if (path.empty() || fingerprint.version != kSchemaVersion) {
             return false;
         }
 
@@ -359,7 +448,7 @@ namespace lfs::training {
         }
         lfs::io::ScopedAtomicOutputFile output(path);
         {
-            std::ofstream file(output.temp_path(), std::ios::binary | std::ios::trunc);
+            std::ofstream file(lfs::core::native_fs::native_path(output.temp_path()), std::ios::binary | std::ios::trunc);
             if (!file) {
                 return false;
             }
@@ -375,10 +464,10 @@ namespace lfs::training {
         const std::filesystem::path& path,
         const DepthAnchorFingerprint& expected) {
         std::error_code ec;
-        if (path.empty() || !std::filesystem::exists(path, ec)) {
+        if (expected.version != kSchemaVersion || path.empty() || !lfs::core::native_fs::exists(path, ec)) {
             return std::nullopt;
         }
-        std::ifstream file(path, std::ios::binary);
+        std::ifstream file(lfs::core::native_fs::native_path(path), std::ios::binary);
         if (!file) {
             return std::nullopt;
         }

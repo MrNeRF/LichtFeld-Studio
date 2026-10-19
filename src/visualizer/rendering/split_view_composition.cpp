@@ -198,6 +198,7 @@ namespace lfs::vis {
 
             if (content.gaussian_render.has_value()) {
                 applyPlyComparisonNodeScope(
+                    content.gaussian_render->scene,
                     content.gaussian_render->filters,
                     content.gaussian_render->overlay,
                     ctx,

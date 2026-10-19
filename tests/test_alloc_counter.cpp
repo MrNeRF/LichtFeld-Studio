@@ -40,6 +40,8 @@ TEST(AllocCounterTest, SnapshotAndDeltaApiExists) {
 
 TEST(AllocCounterTest, FreshLargeTensorIncrementsCounter) {
     cuda_warmup();
+    // Earlier tests can leave a cached block of this bucket in the pool.
+    Tensor::trim_memory_pool();
 
     const auto snap = alloc_counter::snapshot();
     auto t = Tensor::zeros({kBucketElems}, Device::CUDA, DataType::Float32);

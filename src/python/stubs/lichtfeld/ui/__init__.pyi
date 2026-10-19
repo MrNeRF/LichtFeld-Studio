@@ -208,13 +208,13 @@ class Theme:
 def theme() -> Theme:
     """Get the current theme"""
 
-def set_theme_vignette_enabled(arg: bool, /) -> None:
+def set_theme_vignette_enabled(enabled: bool, persist: bool = True) -> None:
     """Set theme vignette enabled"""
 
-def set_theme_vignette_intensity(arg: float, /) -> None:
+def set_theme_vignette_intensity(intensity: float, persist: bool = True) -> None:
     """Set theme vignette intensity"""
 
-def set_theme_vignette_style(arg0: float, arg1: float, arg2: float, /) -> None:
+def set_theme_vignette_style(intensity: float, radius: float, softness: float, persist: bool = True) -> None:
     """Set vignette intensity, radius, and softness"""
 
 def remember_camera_navigation() -> bool:
@@ -228,6 +228,12 @@ def remember_camera_view_snap() -> bool:
 
 def set_remember_camera_view_snap(enabled: bool) -> None:
     """Enable or disable camera view snap persistence"""
+
+def take_splat_export_request() -> list[str]: ...
+
+def get_splat_drag_preferences() -> dict: ...
+
+def set_splat_drag_preferences(arg: dict, /) -> None: ...
 
 def scene_graph_selection_markers() -> bool:
     """Return whether Scene Graph selection markers are visible"""
@@ -400,6 +406,16 @@ def get_panel_names(space: PanelSpace = PanelSpace.FLOATING) -> list[str]:
 def set_panel_enabled(panel_id: str, enabled: bool) -> None:
     """Enable or disable a panel by id"""
 
+def save_startup_sidebar() -> bool:
+    """
+    Save the right sidebar as a startup default; saved .licht workspaces take precedence.
+    """
+
+def clear_startup_sidebar() -> None:
+    """
+    Clear startup sidebar defaults without changing the current project workspace.
+    """
+
 def reset_layout() -> str:
     """
     Reset the saved UI layout and apply the default dock arrangement immediately.
@@ -413,6 +429,14 @@ def reset_window_state() -> str:
 def is_panel_enabled(panel_id: str) -> bool:
     """Check if a panel is enabled"""
 
+def get_left_dock_width() -> float:
+    """
+    Get the left dock width the user chose, in logical pixels. The dock is narrower while the window is too small to fit it.
+    """
+
+def set_left_dock_width(width: float) -> None:
+    """Set the left dock width in logical pixels"""
+
 def get_main_panel_tabs() -> list[PanelSummary]:
     """Get all main panel tabs as typed panel summaries"""
 
@@ -424,6 +448,9 @@ def get_bottom_dock_active_tab() -> str:
 
 def set_bottom_dock_active_tab(panel_id: str) -> None:
     """Set the active bottom-dock panel id"""
+
+def set_main_panel_active_tab(panel_id: str) -> None:
+    """Activate a main panel tab by panel id"""
 
 def get_panel(panel_id: str) -> PanelInfo | None:
     """Get typed panel info by id (None if not found)"""
@@ -957,7 +984,17 @@ def poll_operator(id: str) -> bool:
 def get_operator_ids() -> list[str]:
     """Get list of registered operator ids"""
 
-def confirm_dialog(title: str, message: str, buttons: Sequence[str] = ['OK', 'Cancel'], callback: object | None = None) -> None:
+def form_dialog(key: str, title: str, body_rml: str, buttons: list, callback: object, on_change: object | None = None, width: int = 640) -> bool:
+    """
+    Show a form in the shared modal overlay. Escape user text in body_rml; callbacks receive native form values.
+    """
+
+def form_dialog_update(key: str, buttons: list, body_rml: str | None = None) -> bool:
+    """
+    Update a matching live or queued form. Omit body_rml to preserve input focus and values.
+    """
+
+def confirm_dialog(title: str, message: str, buttons: Sequence[str] = ['OK', 'Cancel'], callback: object | None = None, style: str = 'info') -> None:
     """Show a confirmation dialog with custom buttons"""
 
 def input_dialog(title: str, message: str, default_value: str = '', callback: object | None = None) -> None:
@@ -1909,6 +1946,11 @@ def open_project_file_dialog(start_dir: str = '') -> str:
     Open a file dialog to select a LichtFeld project (.licht). Returns empty string if cancelled.
     """
 
+def save_project_file_dialog(default_name: str = 'project.licht', start_dir: str = '') -> str:
+    """
+    Choose a destination for a new LichtFeld project. Returns empty string if cancelled.
+    """
+
 def open_ply_file_dialog(start_dir: str = '') -> str:
     """
     Open a file dialog to select a splat file (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz). Returns empty string if cancelled.
@@ -1917,6 +1959,11 @@ def open_ply_file_dialog(start_dir: str = '') -> str:
 def open_mesh_file_dialog(start_dir: str = '') -> str:
     """
     Open a file dialog to select a mesh file. Returns empty string if cancelled.
+    """
+
+def open_init_file_dialog(start_dir: str = '') -> str:
+    """
+    Open a file dialog to select a training initialization file: a splat, point cloud or mesh. Returns empty string if cancelled.
     """
 
 def open_checkpoint_file_dialog() -> str:
@@ -1959,6 +2006,9 @@ def save_laz_file_dialog(default_name: str = 'export') -> str:
     Open a save file dialog for LAZ compressed files. Returns empty string if cancelled.
     """
 
+def save_text_file_dialog(default_name: str = 'lichtfeld_logs') -> str:
+    """Choose a text log export path. Returns empty string if cancelled."""
+
 def save_json_file_dialog(default_name: str = 'config.json') -> str:
     """
     Open a save file dialog for JSON files. Returns empty string if cancelled.
@@ -1992,6 +2042,11 @@ def save_ssog_file_dialog(default_name: str = 'export') -> str:
 def save_spz_file_dialog(default_name: str = 'export') -> str:
     """
     Open a save file dialog for SPZ files. Returns empty string if cancelled.
+    """
+
+def save_glb_file_dialog(default_name: str = 'export') -> str:
+    """
+    Open a save file dialog for GLB (SPZ glTF) files. Returns empty string if cancelled.
     """
 
 def save_usd_file_dialog(default_name: str = 'export') -> str:
@@ -2094,6 +2149,34 @@ def is_ctrl_down() -> bool:
 def is_shift_down() -> bool:
     """Check if Shift is currently held"""
 
+def is_mouse_button_down(button: int = 0) -> bool:
+    """Check if a mouse button is held: 0 left, 1 right, 2 middle"""
+
+def begin_value_drag() -> bool:
+    """
+    Hide and lock the pointer for a value drag from a UI event handler. Motion keeps accumulating past the window edge; returns False when the pointer cannot be locked.
+    """
+
+def take_value_drag_delta() -> float:
+    """
+    Horizontal pointer motion in window points since the previous call during a value drag.
+    """
+
+def value_drag_state() -> str:
+    """
+    'active' while the value drag holds the pointer, 'cancelled' after Escape, the right button or focus loss ended it, otherwise 'idle'.
+    """
+
+def request_viewport_overlay_sync() -> None:
+    """
+    Run the viewport overlay's document sync on the next frame. It does not wake the frame loop; pair it with request_redraw when no input will arrive.
+    """
+
+def end_value_drag() -> None:
+    """
+    Release the value drag pointer lock and return the pointer to where the drag started.
+    """
+
 @overload
 def tr(key: str) -> str:
     """Get localized string by key"""
@@ -2134,6 +2217,11 @@ def on_project_switch_confirmation(callback: object) -> None:
 def on_show_load_file_confirmation(callback: object) -> None:
     """
     Register callback for a load-file wipe confirmation (receives paths: list[str], is_dataset: bool, replace: bool)
+    """
+
+def on_show_load_file_confirmation_with_batch(callback: object) -> None:
+    """
+    Register a load-file confirmation callback with batch provenance (receives paths: list[str], is_dataset: bool, replace: bool, user_batch: bool). Replaces the callback registered through either load-file confirmation API.
     """
 
 def on_stop_training_confirmation(callback: object) -> None:
@@ -2208,7 +2296,7 @@ def clear_gizmo() -> None:
 def get_active_submode() -> str:
     """Get active selection submode"""
 
-def set_selection_mode(mode: str) -> None:
+def set_selection_mode(mode: str, mark_session_dirty: bool = True) -> None:
     """Set selection mode"""
 
 def execute_mirror(axis: str) -> None:
@@ -2264,6 +2352,33 @@ def apply_crop_tool() -> None:
     Apply the active crop tool primitive through the node-backed crop command path
     """
 
+def can_apply_align() -> bool:
+    """True when the align tool has 3 non-degenerate points ready to apply"""
+
+def apply_align() -> bool:
+    """Request the running align modal to apply the current triangle"""
+
+def clear_align_points() -> None:
+    """Request the running align modal to clear all picked points"""
+
+def get_align_preview() -> bool:
+    """Whether the alignment result is being previewed"""
+
+def toggle_align_preview() -> None:
+    """Switch between the original scene and the alignment preview"""
+
+def get_align_axis_snap() -> bool:
+    """Whether align plane-normal axis snap is enabled"""
+
+def set_align_axis_snap(enabled: bool) -> None:
+    """Enable or disable align plane-normal axis snap (session lifetime)"""
+
+def get_align_edge_to_axis() -> bool:
+    """Whether align edge-to-+X in-plane yaw is enabled"""
+
+def set_align_edge_to_axis(enabled: bool) -> None:
+    """Enable or disable align edge-to-+X in-plane yaw (session lifetime)"""
+
 def fit_crop_tool(use_percentile: bool = False) -> None:
     """
     Fit the active crop tool primitive through the node-backed crop command path
@@ -2302,7 +2417,7 @@ def duplicate_node(name: str) -> None:
     """Duplicate a node and its children"""
 
 def merge_group(name: str) -> None:
-    """Merge group children into a single PLY"""
+    """Merge group children into a single model"""
 
 def save_node_to_disk(node_name: str) -> None:
     """
@@ -2377,6 +2492,9 @@ def get_import_state() -> dict:
 
 def dismiss_import() -> None:
     """Dismiss the import completion overlay"""
+
+def cancel_gallery_import() -> bool:
+    """Request gallery import cancellation without waiting for its worker"""
 
 def get_video_export_state() -> dict:
     """Get current video export progress state"""
@@ -2457,6 +2575,14 @@ def get_sequencer_state() -> SequencerUIState:
 def has_keyframes() -> bool:
     """Check if sequencer has any keyframes"""
 
+def get_camera_path() -> object:
+    """
+    Get the native camera path with clip duration, loop mode and playback speed
+    """
+
+def set_camera_path(value: dict) -> bool:
+    """Restore a native camera path including loop mode and playback speed"""
+
 def save_camera_path(path: str) -> bool:
     """Save camera path to JSON file"""
 
@@ -2490,7 +2616,9 @@ def select_keyframe(index: int) -> None:
     """Select keyframe in timeline"""
 
 def delete_keyframe(index: int) -> None:
-    """Delete keyframe by index"""
+    """
+    Delete keyframe by index; raises ValueError for the protected first keyframe
+    """
 
 def set_keyframe_easing(index: int, easing: int) -> None:
     """
@@ -2552,6 +2680,10 @@ def get_multi_transform_mode() -> int:
 
 def set_multi_transform_mode(mode: int) -> None:
     """Set multi-transform mode (0=Group, 1=Individual)"""
+
+MULTI_TRANSFORM_MODE_SELECTION: int = 0
+
+MULTI_TRANSFORM_MODE_INDIVIDUAL: int = 1
 
 def request_thumbnail(video_id: str) -> None:
     """Request download of a YouTube thumbnail for the given video ID"""
@@ -2637,6 +2769,14 @@ def supports_system_theme() -> bool:
 def themes() -> list:
     """Get available theme presets with stable ids and UI metadata"""
 
+def get_native_floating_windows() -> bool:
+    """
+    Whether floating panels use native windows on the next application start.
+    """
+
+def set_native_floating_windows(enabled: bool) -> None:
+    """Save the experimental window mode. Requires an application restart."""
+
 def set_ui_scale(scale: float) -> None:
     """Set UI scale (0.0 = auto from OS, or 1.0-4.0)"""
 
@@ -2646,17 +2786,72 @@ def get_ui_scale() -> float:
 def get_ui_scale_preference() -> float:
     """Get saved UI scale preference (0.0 = auto)"""
 
-def set_zoom_speed_preference(speed: float) -> None:
+def set_zoom_speed_preference(speed: float, persist: bool = True) -> None:
     """Set the default camera zoom speed (1-100)"""
 
 def get_zoom_speed_preference() -> float:
     """Get the default camera zoom speed"""
 
-def set_navigation_speed_preference(speed: float) -> None:
+def set_navigation_speed_preference(speed: float, persist: bool = True) -> None:
     """Set the default WASD navigation speed (1-100)"""
 
 def get_navigation_speed_preference() -> float:
     """Get the default WASD navigation speed"""
+
+def get_rendering_defaults_json() -> str:
+    """
+    Get user defaults for new projects; project VIEW values are independent overrides.
+    """
+
+def set_rendering_defaults_json(serialized: str) -> None:
+    """
+    Validate and persist rendering defaults without changing the current project.
+    """
+
+def capture_rendering_defaults() -> None:
+    """
+    Save current project overlay style and LOD cache limits as defaults for new projects.
+    """
+
+def apply_rendering_defaults() -> None:
+    """
+    Explicitly apply user defaults to the current project; other rendering fields are preserved.
+    """
+
+def get_marketplace_preferences() -> dict:
+    """Get Marketplace preferences from the canonical user preferences store"""
+
+def set_marketplace_view(view: str) -> None:
+    """Set the Marketplace layout (card or list)"""
+
+def set_marketplace_git_checkout(enabled: bool) -> None:
+    """Set whether Marketplace installs use Git checkouts"""
+
+def reset_marketplace_preferences() -> None:
+    """Reset Marketplace layout and installation preferences"""
+
+def get_project_manager_preferences() -> dict:
+    """
+    Get Project Manager preferences from the canonical user preferences store
+    """
+
+def set_project_manager_default_view(view: str) -> None:
+    """Set the default Project Manager view"""
+
+def set_project_manager_open_at_startup(enabled: bool) -> None:
+    """Set whether Project Manager opens at application startup"""
+
+def set_project_manager_remember_state(enabled: bool) -> None:
+    """Set whether Project Manager layout state is remembered"""
+
+def get_project_manager_state() -> str:
+    """Get remembered Project Manager layout state as JSON"""
+
+def set_project_manager_state(state: str) -> None:
+    """Set remembered Project Manager layout state from JSON"""
+
+def reset_project_manager_preferences() -> None:
+    """Reset Project Manager preferences and remembered layout state"""
 
 def get_scene_reconstruction_options() -> list:
     """Get registered scene reconstruction backends and their presets"""
@@ -2673,8 +2868,14 @@ def reset_scene_reconstruction_preferences() -> None:
 def get_mcp_preferences() -> dict:
     """Get effective MCP HTTP server preferences"""
 
+def get_mcp_access_token() -> str:
+    """Get the local MCP network access token"""
+
 def set_mcp_preferences(enabled: bool, expose_network: bool, port: int, request_logging: bool = False) -> bool:
     """Persist and immediately apply MCP HTTP server preferences"""
+
+def get_mcp_port_override() -> int | None:
+    """Get the MCP port set on the command line for this session, or None"""
 
 def get_project_location() -> str:
     """Get the effective project location."""
@@ -2695,6 +2896,9 @@ def clear_project_location() -> None:
 
 def get_embed_dataset_by_default() -> bool:
     """Get whether new projects copy datasets into the project by default."""
+
+def mark_project_session_chapter_committed(chapter: str) -> None:
+    """Mark a committed project session setting change for autosave."""
 
 def set_embed_dataset_by_default(enabled: bool) -> bool:
     """Set whether new projects copy datasets into the project by default."""
@@ -2727,6 +2931,9 @@ def set_mouse_cursor_hand() -> None:
 
 def set_language(lang_code: str) -> None:
     """Set language by code (e.g., 'en', 'de')"""
+
+def resource_directory() -> str:
+    """Directory containing the bundled UI resources"""
 
 def get_current_language() -> str:
     """Get current language code"""
@@ -2822,7 +3029,14 @@ def is_point_cloud_forced() -> bool:
     """Check if point cloud mode is forced (pre-training mode)"""
 
 def get_fps() -> float:
-    """Get current FPS"""
+    """
+    Get viewport renders in the trailing second (cached and deferred results excluded)
+    """
+
+def get_ui_fps() -> float:
+    """
+    Get successful GUI presents in the trailing second (idle-clear frame excluded)
+    """
 
 def get_content_type() -> str:
     """Get content type (empty, splat_files, dataset)"""

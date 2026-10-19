@@ -15,12 +15,14 @@ namespace lfs::core {
     // ============= Tensor Static Factory Methods =============
 
     Tensor Tensor::linspace(float start, float end, size_t steps, Device device) {
-        LFS_ASSERT_MSG(steps > 0,
-                       "linspace steps must be positive");
         LFS_ASSERT_MSG(device == Device::CPU || device == Device::CUDA,
                        "linspace received an invalid device");
         LFS_ASSERT_MSG(std::isfinite(start) && std::isfinite(end),
                        "linspace endpoints must be finite");
+
+        if (steps == 0) {
+            return Tensor::empty({0}, device);
+        }
 
         if (steps == 1) {
             return Tensor::full({1}, start, device);

@@ -12,12 +12,8 @@
 namespace lfs::vis {
 
     struct RenderAnimationState {
-        static constexpr float SELECTION_FLASH_DURATION_SEC = 0.5f;
-
         std::atomic<bool> pivot_active{false};
         std::atomic<int64_t> pivot_end_ns{0};
-        std::atomic<bool> selection_flash_active{false};
-        std::atomic<int64_t> selection_flash_start_ns{0};
         std::atomic<bool> overlay_active{false};
 
         static int64_t toNs(std::chrono::steady_clock::time_point tp) {
@@ -35,15 +31,6 @@ namespace lfs::vis {
             }
             pivot_active.store(false);
 
-            if (selection_flash_active.load()) {
-                const auto elapsed = std::chrono::steady_clock::now() -
-                                     fromNs(selection_flash_start_ns.load(std::memory_order_acquire));
-                if (std::chrono::duration<float>(elapsed).count() < SELECTION_FLASH_DURATION_SEC) {
-                    return DirtyFlag::MESH | DirtyFlag::OVERLAY;
-                }
-                selection_flash_active.store(false);
-            }
-
             if (overlay_active.load()) {
                 return DirtyFlag::OVERLAY;
             }
@@ -56,28 +43,7 @@ namespace lfs::vis {
             pivot_active.store(true);
         }
 
-        [[nodiscard]] DirtyMask triggerSelectionFlash() {
-            selection_flash_start_ns.store(toNs(std::chrono::steady_clock::now()), std::memory_order_release);
-            selection_flash_active.store(true);
-            return DirtyFlag::MESH | DirtyFlag::OVERLAY;
-        }
-
         void setOverlayAnimationActive(bool active) { overlay_active.store(active); }
-
-        [[nodiscard]] float selectionFlashIntensity() const {
-            if (!selection_flash_active.load()) {
-                return 0.0f;
-            }
-            const float t = std::chrono::duration<float>(
-                                std::chrono::steady_clock::now() -
-                                fromNs(selection_flash_start_ns.load(std::memory_order_acquire)))
-                                .count() /
-                            SELECTION_FLASH_DURATION_SEC;
-            if (t >= 1.0f) {
-                return 0.0f;
-            }
-            return 1.0f - t * t;
-        }
     };
 
 } // namespace lfs::vis

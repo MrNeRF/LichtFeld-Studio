@@ -247,6 +247,12 @@ namespace lfs::core {
                 tensor_ops::launch_masked_select(ptr<int64_t>(), mask.ptr<unsigned char>(),
                                                  result.ptr<int64_t>(), numel(), output_size, stream());
                 break;
+            case DataType::UInt32:
+                tensor_ops::launch_masked_select(reinterpret_cast<const int32_t*>(ptr<uint32_t>()),
+                                                 mask.ptr<unsigned char>(),
+                                                 reinterpret_cast<int32_t*>(result.ptr<uint32_t>()),
+                                                 numel(), output_size, stream());
+                break;
             case DataType::UInt8:
             case DataType::Bool:
                 tensor_ops::launch_masked_select(ptr<uint8_t>(), mask.ptr<unsigned char>(),
@@ -274,6 +280,9 @@ namespace lfs::core {
                 break;
             case DataType::Int64:
                 masked_select_cpu(ptr<int64_t>(), mask.ptr<unsigned char>(), result.ptr<int64_t>(), numel());
+                break;
+            case DataType::UInt32:
+                masked_select_cpu(ptr<uint32_t>(), mask.ptr<unsigned char>(), result.ptr<uint32_t>(), numel());
                 break;
             case DataType::UInt8:
             case DataType::Bool:
@@ -767,6 +776,7 @@ namespace lfs::core {
         Tensor indices_int32 = indices_same_device.dtype() == DataType::Int64
                                    ? indices_same_device.to(DataType::Int32)
                                    : indices_same_device;
+        indices_int32 = indices_int32.contiguous();
         auto flat = flatten();
         Tensor result;
 
@@ -777,15 +787,15 @@ namespace lfs::core {
                 prepare_inputs_for_stream({this, &indices_int32});
             CUDAStreamGuard guard(execution_stream);
             result = empty(indices.shape(), device_, dtype_);
-            tensor_ops::launch_take(flat.ptr<float>(), indices_int32.ptr<int>(),
+            tensor_ops::launch_take(std::as_const(flat).ptr<float>(), std::as_const(indices_int32).ptr<int>(),
                                     result.ptr<float>(), flat.numel(), indices_int32.numel(), result.stream());
             // No sync - tensor operation
         } else {
             pin_operands({&flat, &indices_int32});
             result = empty(indices.shape(), device_, dtype_);
-            const float* src = flat.ptr<float>();
+            const float* src = std::as_const(flat).ptr<float>();
             float* dst = result.ptr<float>();
-            const int* idx = indices_int32.ptr<int>();
+            const int* idx = std::as_const(indices_int32).ptr<int>();
             size_t total = flat.numel();
 
             // IMPORTANT: Use sequential execution to avoid TBB threading issues with CUDA
@@ -2333,6 +2343,12 @@ namespace lfs::core {
                                                   mask_.ptr<unsigned char>(), other.ptr<int64_t>(),
                                                   tensor_->numel(), other.numel(), tensor_->stream());
                 break;
+            case DataType::UInt32:
+                tensor_ops::launch_masked_scatter(
+                    reinterpret_cast<int32_t*>(const_cast<Tensor*>(tensor_)->ptr<uint32_t>()),
+                    mask_.ptr<unsigned char>(), reinterpret_cast<const int32_t*>(other.ptr<uint32_t>()),
+                    tensor_->numel(), other.numel(), tensor_->stream());
+                break;
             case DataType::UInt8:
             case DataType::Bool:
                 tensor_ops::launch_masked_scatter(const_cast<Tensor*>(tensor_)->ptr<uint8_t>(),
@@ -2360,6 +2376,10 @@ namespace lfs::core {
             case DataType::Int64:
                 masked_scatter_cpu(const_cast<Tensor*>(tensor_)->ptr<int64_t>(), mask,
                                    other.ptr<int64_t>(), tensor_->numel());
+                break;
+            case DataType::UInt32:
+                masked_scatter_cpu(const_cast<Tensor*>(tensor_)->ptr<uint32_t>(), mask,
+                                   other.ptr<uint32_t>(), tensor_->numel());
                 break;
             case DataType::UInt8:
             case DataType::Bool:

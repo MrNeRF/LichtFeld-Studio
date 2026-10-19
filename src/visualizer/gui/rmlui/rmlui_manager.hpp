@@ -7,16 +7,25 @@
 #include "config.h"
 #include "core/export.hpp"
 
+#include "gui/panel_layout.hpp"
+#include "window/vulkan_context.hpp"
+#include "window/window_state_utils.hpp"
+#include <RmlUi/Core/EventListener.h>
+#include <RmlUi/Core/ObserverPtr.h>
 #include <RmlUi/Core/Types.h>
+#include <functional>
 
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <vulkan/vulkan.h>
@@ -27,11 +36,13 @@ class RenderInterface_VK;
 namespace Rml {
     class Context;
     class RenderInterface;
+    class FileInterface;
 } // namespace Rml
 
 namespace lfs::vis {
+    class WindowInputDispatchTest;
     class VulkanContext;
-}
+} // namespace lfs::vis
 
 namespace lfs::vis::gui {
 
@@ -41,6 +52,7 @@ namespace lfs::vis::gui {
     enum class RmlCursorRequest : uint8_t;
 
     struct CachedVulkanContextRender {
+        RenderInterface_VK* renderer = nullptr;
         Rml::TextureHandle texture = {};
         int width = 0;
         int height = 0;
@@ -89,23 +101,43 @@ namespace lfs::vis::gui {
         bool released = false;
     };
 
-    class RmlUIManager {
+    class RmlUIManager : public Rml::EventListener {
     public:
-        LFS_VIS_API RmlUIManager();
+        LFS_VIS_API explicit RmlUIManager(SDL_Window* window = nullptr);
         LFS_VIS_API ~RmlUIManager();
 
-        bool initVulkan(SDL_Window* window, lfs::vis::VulkanContext& vulkan_context, float dp_ratio = 1.0f);
-        void shutdown();
+        bool initVulkan(SDL_Window* window, lfs::vis::VulkanContext& vulkan_context, float dp_ratio = 1.0f, bool safe_mode = false);
+        LFS_VIS_API void shutdown();
         [[nodiscard]] bool isInitialized() const { return initialized_; }
 
         float getDpRatio() const { return dp_ratio_; }
         void setDpRatio(float ratio);
+        bool externalWindowsAllowed() const { return native_windows_enabled_; }
+        static bool validatedExternalPanel(std::string_view name) {
+            return name == "lfs.preferences" || name == "lfs.plugin_marketplace" || name == "video_extractor";
+        }
+        bool externalWindowsAllowed(std::string_view name) const {
+            return native_windows_enabled_ && validatedExternalPanel(name);
+        }
+        SDL_Window* mainWindow() const { return window_; }
+        bool restoredExternalBounds(const std::string& name, float* bounds);
 
-        Rml::Context* createContext(const std::string& name, int width, int height);
-        Rml::Context* getContext(const std::string& name);
-        void destroyContext(const std::string& name);
+        LFS_VIS_API Rml::Context* createContext(const std::string& name, int width, int height, bool floating = false);
+        SDL_Window* nativeWindow(const Rml::Context* context) const;
+        VulkanContext* nativeGraphics(const Rml::Context* context) const;
+        void showNativeWindow(Rml::Context* context);
+        void renderNativeWindows();
+        std::optional<double> secondsUntilNativeGeometryFlush() const;
+        void resetNativeWindowGeometry();
+        bool processNativeWindowEvent(const SDL_Event& event);
+        LFS_VIS_API bool requestNativeWindowCapture(const std::string& panel_id, std::function<void(lfs::Result<VulkanContext::WindowCapture>)> callback);
+        LFS_VIS_API Rml::Context* getContext(const std::string& name);
+        LFS_VIS_API void destroyContext(const std::string& name);
 
-        void ensureCjkFontsLoaded();
+        LFS_VIS_API void ensureCjkFontsLoaded();
+        // Registers the system color emoji font as a fallback face once text
+        // above U+FFFF has been shown; the file is read off the UI thread.
+        void serviceEmojiFont();
 
         void setResizeDeferring(bool defer) { resize_deferring_ = defer; }
         [[nodiscard]] bool isResizeDeferring() const { return resize_deferring_; }
@@ -114,7 +146,28 @@ namespace lfs::vis::gui {
 
         RenderInterface_VK* getVulkanRenderInterface() const { return vulkan_render_interface_; }
         RmlTextInputHandler* getTextInputHandler() const { return text_input_handler_.get(); }
+        [[nodiscard]] bool isDispatchingInput() const { return dispatching_input_; }
         SDL_Window* getWindow() const { return window_; }
+
+        // Render passes register geometry and handlers. SDL polling dispatches each
+        // event once, before polling the next event or invoking scene operators.
+        template <typename Handler>
+        bool routeInput(Rml::Context* context, const PanelInputState& input, Handler&& handler, bool exclusive = false,
+                        std::function<bool(float, float)> pointer_blocker = {}) {
+            if (dispatching_input_)
+                return false;
+            return registerInput(context, input, std::forward<Handler>(handler), exclusive, std::move(pointer_blocker));
+        }
+        LFS_VIS_API void activateInput(Rml::Context* context, std::function<void(const PanelInputState&)> handler,
+                                       bool exclusive = true, std::vector<SDL_Scancode> shortcuts = {});
+        LFS_VIS_API void deactivateInput(Rml::Context* context, bool keep_pointer_input = false);
+        struct InputDispatchResult {
+            bool consumed = false;
+            bool owned_release = false;
+        };
+        LFS_VIS_API InputDispatchResult dispatchInputEvent(const SDL_Event& event);
+        LFS_VIS_API void syncTextInput();
+        LFS_VIS_API void ProcessEvent(Rml::Event& event) override;
 
         void queueVulkanContext(Rml::Context* context,
                                 float offset_x = 0.0f,
@@ -127,7 +180,7 @@ namespace lfs::vis::gui {
                                 float clip_y2 = 0.0f);
         void queueCachedVulkanContext(const CachedVulkanContextDraw& draw);
         void releaseCachedVulkanContext(CachedVulkanContextRender& cache);
-        void clearVulkanQueue();
+        void clearVulkanQueue(bool include_native = true);
         [[nodiscard]] bool beginVulkanFrame(VkCommandBuffer command_buffer,
                                             VkExtent2D extent,
                                             VkImage swapchain_image,
@@ -138,9 +191,9 @@ namespace lfs::vis::gui {
         void endVulkanFrame();
 
         LFS_VIS_API void beginFrameCursorTracking();
-        void trackContextFrame(const Rml::Context* context, int window_x, int window_y,
-                               std::optional<RmlRect> active_overlay = std::nullopt);
-        void setContextNeedsPassiveMouseMoveFrames(const Rml::Context* context, bool needs_frames);
+        LFS_VIS_API void trackContextFrame(const Rml::Context* context, int window_x, int window_y,
+                                           std::optional<RmlRect> active_overlay = std::nullopt);
+        LFS_VIS_API void setContextNeedsPassiveMouseMoveFrames(const Rml::Context* context, bool needs_frames);
         // Registers (or clears, on nullopt) the time a context's pending tooltip
         // is due to appear, so the idle loop can wake exactly at that moment.
         void setContextTooltipRevealDeadline(
@@ -150,7 +203,7 @@ namespace lfs::vis::gui {
         // or empty when none is counting down.
         [[nodiscard]] std::optional<double> secondsUntilTooltipReveal() const;
         RmlCursorRequest consumeCursorRequest();
-        [[nodiscard]] bool passiveMouseMoveNeedsRender(float window_x, float window_y) const;
+        [[nodiscard]] LFS_VIS_API bool passiveMouseMoveNeedsRender(float window_x, float window_y) const;
         [[nodiscard]] LFS_VIS_API bool activeOverlayContainsPoint(float window_x,
                                                                   float window_y) const;
         [[nodiscard]] bool activeOverlayOccludesContext(const Rml::Context* context,
@@ -159,8 +212,9 @@ namespace lfs::vis::gui {
 
         // Focus-state aggregators across all live RmlUi contexts so viewport input
         // suppression reflects the actual GUI surface the user is interacting with.
-        [[nodiscard]] bool wantsCaptureKeyboard() const;
-        [[nodiscard]] bool wantsTextInput() const;
+        [[nodiscard]] LFS_VIS_API bool wantsCaptureKeyboard() const;
+        [[nodiscard]] LFS_VIS_API bool wantsModalKeyboardCapture() const;
+        [[nodiscard]] LFS_VIS_API bool wantsTextInput() const;
         [[nodiscard]] bool anyItemActive() const;
         bool refreshLocalizedDocuments();
 
@@ -177,6 +231,21 @@ namespace lfs::vis::gui {
         LFS_VIS_API std::optional<RmlDragPayload> takeReleasedDragPayload();
 
     private:
+        struct NativeWindow;
+        std::unordered_map<const Rml::Context*, std::unique_ptr<NativeWindow>> native_windows_;
+        std::unordered_map<const Rml::Context*, SDL_Window*> context_windows_;
+        SDL_Window* render_window_ = nullptr;
+        bool native_windows_enabled_ = false;
+        bool launch_safe_mode_ = false;
+        std::unique_ptr<NativeWindow> createNativeWindow(const std::string& name, int width, int height);
+        std::function<std::unique_ptr<VulkanContext>()> create_native_graphics_ = [] { return std::make_unique<VulkanContext>(); };
+        void recordNativeGeometry(NativeWindow& native);
+        void flushNativeGeometry();
+        void disableExternalWindows(const std::string& name);
+        std::unordered_map<std::string, WindowRectangle> pending_native_geometry_;
+        std::optional<std::chrono::steady_clock::time_point> native_geometry_deadline_;
+        SDL_Window* contextWindow(const Rml::Context* context) const;
+        friend class lfs::vis::WindowInputDispatchTest;
         struct VulkanContextCommand {
             Rml::Context* context = nullptr;
             std::string context_name;
@@ -207,18 +276,77 @@ namespace lfs::vis::gui {
             std::optional<RmlRect> active_overlay;
         };
 
-        bool initWithRenderInterface(SDL_Window* window,
-                                     float dp_ratio,
-                                     std::unique_ptr<Rml::RenderInterface> render_interface,
-                                     RenderInterface_VK* vulkan_render_interface);
+        LFS_VIS_API bool initWithRenderInterface(SDL_Window* window,
+                                                 float dp_ratio,
+                                                 std::unique_ptr<Rml::RenderInterface> render_interface,
+                                                 RenderInterface_VK* vulkan_render_interface);
+
+        LFS_VIS_API bool registerInput(Rml::Context* context, const PanelInputState& input,
+                                       std::function<void(const PanelInputState&)> handler, bool exclusive,
+                                       std::function<bool(float, float)> pointer_blocker);
+        enum class PointerPressState { None,
+                                       Accepted,
+                                       Blocked };
+        struct InputHandler {
+            std::shared_ptr<std::function<void(const PanelInputState&)>> callback;
+            PanelInputState input;
+            std::function<bool(float, float)> pointer_blocker;
+            PointerPressState pointer_presses[3] = {};
+            Rml::ObserverPtr<Rml::Element> pointer_documents[3];
+            Rml::ObserverPtr<Rml::Element> drag_element;
+            std::vector<SDL_Scancode> shortcuts;
+            uint64_t frame = 0;
+            bool exclusive = false;
+            bool enabled = true;
+            bool persistent = false;
+        };
+        struct KeyOwner {
+            Rml::Context* context = nullptr;
+            Rml::ObserverPtr<Rml::Element> element;
+            bool gui = false;
+        };
+        std::unordered_map<Rml::Context*, InputHandler> input_handlers_;
+        std::unordered_map<SDL_Scancode, KeyOwner> key_owners_;
+        Rml::Context* keyboard_context_ = nullptr;
+        bool keyboard_capture_target_ = false;
+        bool modal_keyboard_capture_ = false;
+        bool popup_state_dirty_ = true;
+        uint64_t input_frame_ = 0;
+        bool dispatching_input_ = false;
+        bool input_mouse_down_[3] = {};
+        FrameInputBuffer dispatch_frame_;
+        PanelInputState dispatch_input_;
+        std::vector<uint64_t> pointer_contexts_;
+        bool focusContext(Rml::Context* context, bool activate = false);
+        void cancelPointerInput(Rml::Context* context, bool unloading = false);
+        void flushInputLifecycle();
+        void destroyContextNow(uint64_t id);
+        Rml::Context* contextById(uint64_t id, bool include_retired = false) const;
+        struct PointerCancellation {
+            uint64_t context_id;
+            Rml::ObserverPtr<Rml::Element> unloaded_drag;
+        };
+        std::vector<PointerCancellation> pending_pointer_cancellations_;
+        std::vector<uint64_t> pending_context_destructions_;
+        std::unordered_map<Rml::Context*, uint64_t> context_ids_;
+        uint64_t next_context_id_ = 1;
+        uint64_t current_drag_context_id_ = 0;
+        bool flushing_input_lifecycle_ = false;
+        bool input_dispatch_active_ = false;
+        bool accepts_text_activation_ = true;
+        std::vector<Rml::ObserverPtr<Rml::Element>> rejected_focus_;
 
         std::unique_ptr<RmlSystemInterface> system_interface_;
+        std::unique_ptr<Rml::FileInterface> file_interface_;
         std::unique_ptr<Rml::RenderInterface> owned_render_interface_;
         RenderInterface_VK* vulkan_render_interface_ = nullptr;
         std::unique_ptr<RmlTextInputHandler> text_input_handler_;
         std::vector<std::vector<std::byte>> font_blobs_;
         bool cjk_fonts_loaded_ = false;
         bool cjk_fonts_load_attempted_ = false;
+        std::future<std::vector<std::byte>> emoji_font_read_;
+        std::string emoji_font_path_;
+        bool emoji_font_settled_ = false;
         std::unordered_map<std::string, Rml::Context*> contexts_;
         std::unordered_map<const Rml::Context*, std::string> context_names_;
         std::unordered_map<const Rml::Context*, TrackedContextFrame> tracked_context_frames_;
@@ -239,6 +367,7 @@ namespace lfs::vis::gui {
         std::uint64_t tracked_context_order_ = 0;
         mutable std::mutex drag_payload_mutex_;
         std::optional<RmlDragPayload> drag_payload_;
+        uint64_t drag_payload_context_id_ = 0;
         std::uint64_t next_drag_payload_token_ = 1;
         SceneGraphElement* active_scene_graph_element_ = nullptr;
     };

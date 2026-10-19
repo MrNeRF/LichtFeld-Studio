@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/error_event_bridge.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/error.hpp"
 #include "core/error_bus.hpp"
@@ -9,6 +10,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/resource_messages.hpp"
 #include "core/source_site.hpp"
 #include "gui/error_surface_types.hpp"
 #include "gui/string_keys.hpp"
@@ -39,7 +41,8 @@ namespace lfs::vis::gui {
                                                 const char* operation, const lfs::core::SourceSite site,
                                                 const lfs::ErrorSurface surface = lfs::ErrorSurface::Modal,
                                                 std::vector<lfs::ErrorAction> actions =
-                                                    operationFailureActions()) {
+                                                    operationFailureActions(),
+                                                lfs::SmallFields fields = {}) {
             lfs::Error base = lfs::make_error(lfs::ErrorInit{
                 .code = code,
                 .domain = domain,
@@ -49,7 +52,7 @@ namespace lfs::vis::gui {
                 .user_message = message,
                 .detail = std::move(message),
                 .detection = site,
-                .fields = lfs::SmallFields{},
+                .fields = std::move(fields),
                 .native = std::nullopt,
             });
 
@@ -82,8 +85,26 @@ namespace lfs::vis::gui {
         };
     }
 
+    std::optional<state::DiskSpaceSaveFailed> projectDiskSpaceFailure(const state::TrainingCompleted& e) {
+        if (e.success || e.user_stopped)
+            return std::nullopt;
+        std::string message = e.error_info ? e.error_info->message : e.error.value_or("");
+        if (!lfs::core::is_disk_space_save_error(message))
+            return std::nullopt;
+        return state::DiskSpaceSaveFailed{.iteration = e.iteration,
+                                          .path = {},
+                                          .error = std::move(message),
+                                          .required_bytes = 0,
+                                          .available_bytes = 0,
+                                          .is_disk_space_error = true,
+                                          .is_project_save = true};
+    }
+
     std::optional<lfs::ErrorNotification>
     translateTrainingCompleted(const state::TrainingCompleted& e) {
+        if (projectDiskSpaceFailure(e)) {
+            return std::nullopt; // the native disk-space modal offers Retry and Change Location
+        }
         if (e.user_stopped) {
             return std::nullopt; // a user-initiated Stop is not a failure
         }
@@ -96,8 +117,12 @@ namespace lfs::vis::gui {
         if (isHostMemorySaveMessage(message)) {
             message = LOCF("runtime.training_save_no_memory", message);
         }
+        lfs::SmallFields fields;
+        if (!e.error_message_key.empty())
+            fields.add("message_key", std::string_view(e.error_message_key));
         return makeNotification(code, lfs::ErrorDomain::Training, lfs::Severity::Error,
-                                std::move(message), error_op::kTrain, LFS_SOURCE_SITE_CURRENT());
+                                std::move(message), error_op::kTrain, LFS_SOURCE_SITE_CURRENT(),
+                                lfs::ErrorSurface::Modal, operationFailureActions(), std::move(fields));
     }
 
     std::optional<lfs::ErrorNotification>
@@ -152,19 +177,24 @@ namespace lfs::vis::gui {
         const std::size_t count = e.files.size();
         const std::size_t display_count = std::min(count, MAX_DISPLAY);
 
+        std::string full_list;
+        for (const auto& path : e.files)
+            full_list += std::format("  - {}\n", path);
+        LOG_WARN("Dropped {} item(s) that were not opened:\n{}", count, full_list);
+
         std::string file_list;
         file_list.reserve(display_count * 64);
         for (std::size_t i = 0; i < display_count; ++i) {
             const std::filesystem::path p(e.files[i]);
-            const bool is_dir = std::filesystem::is_directory(p);
+            const bool is_dir = lfs::core::native_fs::is_directory(p);
             file_list += std::format("  - {} ({})\n", lfs::core::path_to_utf8(p.filename()),
                                      is_dir ? LOC(Notif::DIRECTORY) : LOC(Notif::FILE));
         }
         if (count > MAX_DISPLAY) {
-            file_list += std::format("  {} {}\n", LOC(Notif::AND_MORE), count - MAX_DISPLAY);
+            file_list += std::format("  {}\n", LOCF("notification.and_more_in_log", count - MAX_DISPLAY));
         }
 
-        const bool single_dir = count == 1 && std::filesystem::is_directory(e.files[0]);
+        const bool single_dir = count == 1 && lfs::core::native_fs::is_directory(e.files[0]);
         const char* item_type = count == 1 ? (single_dir ? LOC(Notif::DIRECTORY) : LOC(Notif::FILE))
                                            : LOC(Notif::ITEMS);
 
@@ -208,8 +238,13 @@ namespace lfs::vis::gui {
             }
         };
 
-        state::TrainingCompleted::when(
-            [publish](const auto& e) { publish(translateTrainingCompleted(e)); });
+        state::TrainingCompleted::when([publish](const auto& e) {
+            if (const auto disk_space = projectDiskSpaceFailure(e)) {
+                disk_space->emit();
+                return;
+            }
+            publish(translateTrainingCompleted(e));
+        });
         state::DatasetLoadCompleted::when(
             [publish](const auto& e) { publish(translateDatasetLoadCompleted(e)); });
         state::ConfigLoadFailed::when(

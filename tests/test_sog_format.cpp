@@ -25,11 +25,14 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/uuid.hpp"
 #include "io/cuda/kmeans.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/ply.hpp"
 #include "io/formats/sogs.hpp"
 #include "io/loader.hpp"
+#include "io/project_chapters.hpp"
+#include "io/project_document.hpp"
 
 #include <algorithm>
 #include <random>
@@ -391,6 +394,77 @@ TEST_F(SogFormatTest, LoadsValidatedMinimalDirectory) {
 
     ASSERT_TRUE(result.has_value()) << result.error().message;
     EXPECT_EQ(result->size(), 1);
+}
+
+TEST_F(SogFormatTest, RootLicenseTravelsThroughNativeLoader) {
+    ScopedSogDirectory input;
+    ASSERT_TRUE(write_json(input.path() / "meta.json", minimal_sog_metadata(1)));
+    ASSERT_TRUE(write_base_textures(input.path(), 4, 4));
+    const std::string license =
+        "Title: Example scene.\n"
+        "Author: Example Author (https://example.invalid/user/example)\n"
+        "Source: https://example.invalid/scene/0001\n"
+        "License: CC Attribution (Creative Commons Attribution)\n"
+        "License URL: http://creativecommons.org/licenses/by/4.0/\n"
+        "Requirements: Author must be credited. Commercial use is allowed.";
+    const std::string oversized(64 * 1024 + 1, 'x');
+    std::ofstream(input.path() / "LICENSE.md", std::ios::binary) << oversized;
+    std::ofstream(input.path() / "license.txt", std::ios::binary) << license;
+
+    const auto archive_path = input.path() / "example.sog";
+    auto archive = lfs::io::make_sog_archive(archive_path);
+    ASSERT_TRUE(archive->open());
+    ASSERT_TRUE(archive->add_file("LICENSE.md", oversized.data(), oversized.size()));
+    ASSERT_TRUE(archive->add_file("license.txt", license.data(), license.size()));
+    for (const auto* name : {"meta.json", "means_l.webp", "means_u.webp", "scales.webp", "quats.webp", "sh0.webp"}) {
+        std::ifstream file(input.path() / name, std::ios::binary);
+        const std::string bytes(std::istreambuf_iterator<char>{file}, {});
+        ASSERT_TRUE(archive->add_file(name, bytes.data(), bytes.size()));
+    }
+    ASSERT_TRUE(archive->close());
+
+    for (const auto& path : {input.path(), archive_path}) {
+        std::optional<std::vector<uint8_t>> bytes;
+        auto loaded = lfs::io::load_sog(path, &bytes);
+        ASSERT_TRUE(loaded) << loaded.error().format();
+        ASSERT_TRUE(bytes);
+        EXPECT_EQ(std::string(bytes->begin(), bytes->end()), license);
+        EXPECT_EQ(lfs::io::project::map_sog_license(*bytes),
+                  (lfs::io::project::ProjectLicense{
+                      "CC-BY-4.0", license + "\nCredit: Example Author (https://example.invalid/user/example)"}));
+    }
+
+    auto loader = lfs::io::Loader::create();
+    auto result = loader->load(archive_path);
+    ASSERT_TRUE(result) << result.error().format();
+    ASSERT_TRUE(result->license_bytes);
+    EXPECT_EQ(std::string(result->license_bytes->begin(), result->license_bytes->end()), license);
+
+    auto document = lfs::io::project::ProjectDocument::create(lfs::core::generate_uuid_v4());
+    ASSERT_TRUE(document);
+    const auto project_path = input.path() / "import.licht";
+    ASSERT_TRUE(document->save(project_path));
+    EXPECT_FALSE(document->dirty());
+    ASSERT_TRUE(document->adopt_import_license(result->license_bytes));
+    const auto expected = lfs::io::project::ProjectLicense{
+        "CC-BY-4.0", license + "\nCredit: Example Author (https://example.invalid/user/example)"};
+    EXPECT_EQ(document->project().license().value(), expected);
+    EXPECT_TRUE(document->dirty());
+    ASSERT_TRUE(document->save(project_path));
+    auto reopened = lfs::io::project::ProjectDocument::open(project_path);
+    ASSERT_TRUE(reopened);
+    EXPECT_EQ(reopened->project().license().value(), expected);
+
+    const std::optional<std::vector<uint8_t>> second_bytes = std::vector<uint8_t>{'L', 'i', 'c', 'e', 'n', 's', 'e', ':', ' ', 'O', 't', 'h', 'e', 'r'};
+    ASSERT_TRUE(document->adopt_import_license(second_bytes));
+    EXPECT_EQ(document->project().license().value(), expected);
+
+    auto prelicensed = lfs::io::project::ProjectDocument::create(lfs::core::generate_uuid_v4());
+    ASSERT_TRUE(prelicensed);
+    const lfs::io::project::ProjectLicense authored{"LicenseRef-Existing", "Existing notice"};
+    ASSERT_TRUE(prelicensed->set_license(authored));
+    ASSERT_TRUE(prelicensed->adopt_import_license(result->license_bytes));
+    EXPECT_EQ(prelicensed->project().license().value(), authored);
 }
 
 TEST_F(SogFormatTest, RejectsShortMeansBoundsBeforeReadingTextures) {

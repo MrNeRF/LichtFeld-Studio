@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/exif.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 
 #include <cmath>
@@ -420,6 +421,17 @@ namespace lfs::core {
             return std::nullopt;
         }
         return exif_exposure_ev(fallback);
+    }
+
+    std::vector<std::optional<double>>
+    exif_exposure_ev_for_training_images(const std::span<const std::filesystem::path> image_paths,
+                                         const std::filesystem::path& dataset_root) {
+        std::vector<std::optional<double>> evs(image_paths.size());
+        const auto count = static_cast<std::ptrdiff_t>(image_paths.size());
+#pragma omp parallel for schedule(dynamic, 16)
+        for (std::ptrdiff_t i = 0; i < count; ++i)
+            evs[static_cast<size_t>(i)] = exif_exposure_ev_for_training_image(image_paths[static_cast<size_t>(i)], dataset_root);
+        return evs;
     }
 
 } // namespace lfs::core

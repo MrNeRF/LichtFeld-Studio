@@ -31,11 +31,13 @@
 #define HIGS_TILE_WIDTH 8u
 #define HIGS_TILE_HEIGHT 8u
 #define HIGS_TILE_SIZE (HIGS_TILE_WIDTH * HIGS_TILE_HEIGHT)
+#define HIGS_DEPTH_SAMPLE_TILE_SIZE 4
+#define HIGS_REPLAY_MASK_WORDS_PER_BATCH ((RASTER_BATCH_SIZE / SUBGROUP_SIZE) * HIGS_MACRO_TILE_SIZE_TILES)
 // Macro-tile extent in legacy 16px-tile units (projection rects use that grid).
 #define HIGS_MACRO_T16_W ((HIGS_MACRO_TILE_WIDTH_TILES * HIGS_TILE_WIDTH) / TILE_WIDTH)
 #define HIGS_MACRO_T16_H ((HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT) / TILE_HEIGHT)
 #define HIGS_RASTER_WAVE_BATCHES 16384u
-#define HIGS_RASTER_MAX_WAVES 16u
+#define HIGS_RASTER_MAX_WAVES 64u
 // Drain ring buffer: per-warp shared queue of compacted splat indices,
 // blended in dense batches of this size (reference Bd = 64).
 #define HIGS_DRAIN_BATCH 64u

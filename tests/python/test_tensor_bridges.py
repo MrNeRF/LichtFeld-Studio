@@ -73,6 +73,7 @@ class TestFromDlpack:
 
 
 class TestAddSplatDtype:
+    @pytest.mark.integration
     def test_float16_shn_raises(self, lf):
         scene = lf.get_scene()
         if scene is None or not scene.is_valid():

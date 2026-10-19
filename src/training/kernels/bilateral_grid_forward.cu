@@ -23,8 +23,8 @@ namespace lfs::training::kernels {
 
     __global__ void bilateral_grid_slice_forward_kernel(
         const float* __restrict__ grid,
-        const float* __restrict__ rgb,
-        float* __restrict__ output,
+        const float* rgb,
+        float* output,
         const int L, const int H, const int W,
         const int h, const int w,
         const float* __restrict__ shared_offset) {
@@ -108,8 +108,8 @@ namespace lfs::training::kernels {
     // CHW layout forward kernel
     __global__ void bilateral_grid_slice_forward_chw_kernel(
         const float* __restrict__ grid,
-        const float* __restrict__ rgb,
-        float* __restrict__ output,
+        const float* rgb,
+        float* output,
         const int L, const int H, const int W,
         const int h, const int w,
         const float* __restrict__ shared_offset) {
@@ -241,8 +241,8 @@ namespace lfs::training::kernels {
 
     __global__ void bilateral_grid_slice_forward_exposure_chroma_kernel(
         const float* __restrict__ grid,
-        const float* __restrict__ rgb,
-        float* __restrict__ output,
+        const float* rgb,
+        float* output,
         const int L, const int H, const int W,
         const int h, const int w,
         const float* __restrict__ shared_offset) {
@@ -302,8 +302,8 @@ namespace lfs::training::kernels {
 
     __global__ void bilateral_grid_slice_forward_exposure_chroma_chw_kernel(
         const float* __restrict__ grid,
-        const float* __restrict__ rgb,
-        float* __restrict__ output,
+        const float* rgb,
+        float* output,
         const int L, const int H, const int W,
         const int h, const int w,
         const float* __restrict__ shared_offset) {

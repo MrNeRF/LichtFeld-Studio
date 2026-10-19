@@ -149,7 +149,32 @@ function(_vulkan_add_slang_shader OUT_NAME SRC_FILE)
                 COMMENT "slangc ${OUT_NAME}.spv"
                 VERBATIM
         )
-        set(VULKAN_RASTERIZER_SHADER_OUTPUTS ${VULKAN_RASTERIZER_SHADER_OUTPUTS} ${_out} PARENT_SCOPE)
+        set(_outputs ${_out})
+        # Keep band-origin arithmetic out of interactive shaders. These variants
+        # are loaded lazily when the viewer first exports a banded image.
+        if(OUT_NAME MATCHES "^(projection_forward|rasterize_forward|macro_raster|macro_compose)"
+           OR OUT_NAME STREQUAL "generate_keys_wave")
+                set(_banded_out ${_VULKAN_GENERATED_OUT}/${OUT_NAME}_banded.spv)
+                set(_banded_validation)
+                if(_VULKAN_SPIRV_VAL)
+                        set(_banded_validation COMMAND ${_VULKAN_SPIRV_VAL} ${_banded_out})
+                endif()
+                add_custom_command(
+                        OUTPUT ${_banded_out}
+                        COMMAND ${SLANGC}
+                                ${_VULKAN_SHADER_SRC}/slang/${SRC_FILE}
+                                ${_VULKAN_SLANG_FLAGS} ${_defs}
+                                -DLFS_BANDED_EXPORT_RENDER=1
+                                -I${_VULKAN_SHADER_SRC}/slang
+                                -o ${_banded_out}
+                        ${_banded_validation}
+                        DEPENDS ${_VULKAN_SHADER_SRC}/slang/${SRC_FILE} ${_VULKAN_SLANG_ALL} ${_spirv_validation_dependency}
+                        COMMENT "slangc ${OUT_NAME}_banded.spv"
+                        VERBATIM
+                )
+                list(APPEND _outputs ${_banded_out})
+        endif()
+        set(VULKAN_RASTERIZER_SHADER_OUTPUTS ${VULKAN_RASTERIZER_SHADER_OUTPUTS} ${_outputs} PARENT_SCOPE)
 endfunction()
 
 function(_vulkan_add_glsl_shader OUT_NAME SRC_FILE)
@@ -230,6 +255,9 @@ _vulkan_add_slang_shader(rasterize_forward               alphablend_shader.slang
 _vulkan_add_slang_shader(rasterize_forward_3dgut         alphablend_shader.slang EXPORT_MODE=0 LFS_3DGUT_RASTERIZE=1)
 _vulkan_add_slang_shader(rasterize_forward_plain         alphablend_shader.slang EXPORT_MODE=0 LFS_RASTER_OVERLAYS=0)
 _vulkan_add_slang_shader(rasterize_forward_3dgut_plain   alphablend_shader.slang EXPORT_MODE=0 LFS_3DGUT_RASTERIZE=1 LFS_RASTER_OVERLAYS=0)
+# Spark RAD scenes get their own 3DGUT variants so LOD-parent kernels stay out of the ordinary loop.
+_vulkan_add_slang_shader(rasterize_forward_3dgut_rad       alphablend_shader.slang EXPORT_MODE=0 LFS_3DGUT_RASTERIZE=1 LFS_SPARK_RAD_RASTER=1)
+_vulkan_add_slang_shader(rasterize_forward_3dgut_plain_rad alphablend_shader.slang EXPORT_MODE=0 LFS_3DGUT_RASTERIZE=1 LFS_RASTER_OVERLAYS=0 LFS_SPARK_RAD_RASTER=1)
 _vulkan_add_slang_shader(rasterize_forward_light         alphablend_shader.slang EXPORT_MODE=0 LFS_SKIP_DENSE_TILES=1)
 _vulkan_add_slang_shader(rasterize_forward_light_plain   alphablend_shader.slang EXPORT_MODE=0 LFS_RASTER_OVERLAYS=0 LFS_SKIP_DENSE_TILES=1)
 _vulkan_add_slang_shader(tile_batch_descriptors          tile_batch_shader.slang TILE_BATCH_ENTRY=2)
@@ -249,6 +277,7 @@ _vulkan_add_slang_shader(projection_forward_shn_f16_survivors vertex_shader.slan
 _vulkan_add_slang_shader(projection_forward_shn_q16_survivors vertex_shader.slang EXPORT_MODE=0 LFS_PROJECTION_SURVIVORS=1 LFS_SHN_Q16=1)
 _vulkan_add_slang_shader(prepare_visible_chain        prepare_visible_chain.slang)
 _vulkan_add_slang_shader(copy_visible_indices         copy_visible_indices.slang)
+_vulkan_add_slang_shader(prepare_stable_depth_sort    prepare_stable_depth_sort.slang)
 _vulkan_add_slang_shader(cumsum_block_scan_indirect        cumsum.slang CUMSUM_PHASE=1 CUMSUM_INDIRECT=1)
 _vulkan_add_slang_shader(cumsum_scan_block_sums_indirect   cumsum.slang CUMSUM_PHASE=2 CUMSUM_INDIRECT=1)
 _vulkan_add_slang_shader(cumsum_add_block_offsets_indirect cumsum.slang CUMSUM_PHASE=3 CUMSUM_INDIRECT=1)

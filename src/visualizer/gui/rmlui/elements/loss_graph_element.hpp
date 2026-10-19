@@ -12,11 +12,11 @@
 
 namespace lfs::vis::gui {
 
-    class LossGraphElement : public Rml::Element {
+    class LFS_VIS_API LossGraphElement : public Rml::Element {
     public:
         explicit LossGraphElement(const Rml::String& tag);
 
-        LFS_VIS_API void setData(const std::deque<float>& data);
+        void setData(const std::deque<float>& data);
 
         float getDataMin() const { return data_min_; }
         float getDataMax() const { return data_max_; }

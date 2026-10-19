@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Transform controls controller for the viewport numeric transform overlay."""
 
+from dataclasses import dataclass
 import math
 import time
 from typing import List
@@ -29,6 +30,11 @@ QUAT_EQUIV_EPSILON = 1e-4
 STEP_REPEAT_DELAY = 0.4
 STEP_REPEAT_INTERVAL = 0.05
 
+# A press on a field that moves this far scrubs the value instead of opening text edit.
+VALUE_DRAG_THRESHOLD_PX = 3.0
+# Pointer travel per step of _STEP_CONFIG while scrubbing.
+VALUE_DRAG_PIXELS_PER_STEP = 2.0
+
 _STEP_CONFIG = {
     "pos_x": (TRANSLATE_STEP, TRANSLATE_STEP_FAST),
     "pos_y": (TRANSLATE_STEP, TRANSLATE_STEP_FAST),
@@ -51,6 +57,27 @@ _PIVOT_BOUNDS = 1
 _MISSING = object()
 
 
+@dataclass
+class _ValueDrag:
+    prop: str
+    input_id: str
+    last_x: float
+    value: float = 0.0
+    active: bool = False
+    pointer_locked: bool = False
+
+
+def _accelerated() -> bool:
+    return lf.ui.is_shift_down() or lf.ui.is_ctrl_down()
+
+
+def _event_mouse_x(event) -> float:
+    try:
+        return float(event.get_parameter("mouse_x", "0"))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _ui_label(key: str, fallback: str) -> str:
     tr = getattr(lf.ui, "tr", None)
     if not callable(tr):
@@ -71,6 +98,41 @@ def _quat_dot(a: List[float], b: List[float]) -> float:
 def _same_rotation(a: List[float], b: List[float]) -> bool:
     dot = _quat_dot(a, b)
     return abs(abs(dot) - 1.0) < QUAT_EQUIV_EPSILON
+
+
+def _rotation_matrix_xyz(euler_deg: List[float]):
+    x, y, z = (math.radians(value) for value in euler_deg)
+    cx, cy, cz = math.cos(x), math.cos(y), math.cos(z)
+    sx, sy, sz = math.sin(x), math.sin(y), math.sin(z)
+    return (
+        (cy * cz, -cy * sz, sy),
+        (sx * sy * cz + cx * sz, -sx * sy * sz + cx * cz, -sx * cy),
+        (-cx * sy * cz + sx * sz, cx * sy * sz + sx * cz, cx * cy),
+    )
+
+
+def _rotate_basis_to_euler(transform, current_euler_deg, target_euler_deg):
+    current_rotation = _rotation_matrix_xyz(current_euler_deg)
+    target_rotation = _rotation_matrix_xyz(target_euler_deg)
+    delta = [
+        [sum(target_rotation[row][k] * current_rotation[col][k] for k in range(3)) for col in range(3)]
+        for row in range(3)
+    ]
+    result = list(transform)
+    for offset in (0, 4, 8):
+        basis = [transform[offset + row] for row in range(3)]
+        for row in range(3):
+            result[offset + row] = sum(delta[row][col] * basis[col] for col in range(3))
+    return result
+
+
+def _scale_basis_columns(transform, factors):
+    result = list(transform)
+    for axis, offset in enumerate((0, 4, 8)):
+        result[offset] = transform[offset] * factors[axis]
+        result[offset + 1] = transform[offset + 1] * factors[axis]
+        result[offset + 2] = transform[offset + 2] * factors[axis]
+    return result
 
 
 # Local node transforms are stored in data axes; the overlay displays visualizer axes.
@@ -133,7 +195,10 @@ class TransformControlsController:
         self._handle = None
         self._doc = None
         self._visible = False
+        self._editable = False
         self._active_tool = ""
+        self._crop_active = False
+        self._crop_locked = False
         self._selected = []
         self._transform_space = _SPACE_WORLD
         self._pivot_mode = _PIVOT_ORIGIN
@@ -148,7 +213,10 @@ class TransformControlsController:
         self._step_repeat_last = 0.0
 
         self._focus_active = False
+        self._focused_input_property = None
+        self._focused_input_text = None
         self._escape_revert = w.EscapeRevertController()
+        self._value_drag = None
         self._last_state_key = None
         self._force_dirty = False
 
@@ -159,32 +227,42 @@ class TransformControlsController:
             if len(self._selected) > 1
             else _ui_label("transform.reset_transform", "Reset Transform"),
         )
+        model.bind_func("transform_editable", lambda: self._editable)
         model.bind_func("transform_bake_label", lambda: _ui_label("transform.bake_transform", "Bake Transform"))
         model.bind_func("transform_show_translate", lambda: self._active_tool == "builtin.translate")
         model.bind_func("transform_show_rotate", lambda: self._active_tool == "builtin.rotate")
         model.bind_func("transform_show_scale", lambda: self._active_tool == "builtin.scale")
-        model.bind_func("transform_show_actions", lambda: self._active_tool in _NUMERIC_TRANSFORM_TOOL_IDS)
+        model.bind_func("transform_is_crop", lambda: self._crop_active)
+        model.bind_func("transform_show_actions", lambda: not self._crop_active and self._active_tool in _NUMERIC_TRANSFORM_TOOL_IDS)
         for axis in ("x", "y", "z"):
             idx = _AXIS_INDEX[axis]
             model.bind(
                 f"transform_pos_{axis}_str",
-                lambda i=idx: f"{self._trans[i]:.3f}",
+                lambda i=idx, a=axis: self._numeric_display_value(
+                    f"transform_pos_{a}_str", f"{self._trans[i]:.3f}"
+                ),
                 lambda v, i=idx: self._set_value("pos", i, v),
             )
             model.bind(
                 f"transform_rot_{axis}_str",
-                lambda i=idx: f"{self._euler[i]:.1f}",
+                lambda i=idx, a=axis: self._numeric_display_value(
+                    f"transform_rot_{a}_str", f"{self._euler[i]:.1f}"
+                ),
                 lambda v, i=idx: self._set_value("rot", i, v),
             )
             model.bind(
                 f"transform_scale_{axis}_str",
-                lambda i=idx: f"{self._scale[i]:.3f}",
+                lambda i=idx, a=axis: self._numeric_display_value(
+                    f"transform_scale_{a}_str", f"{self._scale[i]:.3f}"
+                ),
                 lambda v, i=idx: self._set_value("scale", i, v),
             )
 
         model.bind(
             "transform_scale_u_str",
-            lambda: f"{sum(self._scale) / 3.0:.3f}",
+            lambda: self._numeric_display_value(
+                "transform_scale_u_str", f"{sum(self._scale) / 3.0:.3f}"
+            ),
             lambda v: self._set_uniform_scale(v),
         )
 
@@ -207,6 +285,8 @@ class TransformControlsController:
         body = doc.get_element_by_id("body") or doc.get_element_by_id("overlay-body")
         if body:
             body.add_event_listener("mouseup", self._on_step_mouseup)
+            body.add_event_listener("mousemove", self._on_value_drag_move)
+            body.add_event_listener("mouseup", self._on_value_drag_release)
 
         for input_id in (
             "transform-pos-x",
@@ -222,28 +302,52 @@ class TransformControlsController:
         ):
             el = doc.get_element_by_id(input_id)
             if el:
-                el.add_event_listener("focus", self._on_input_focus)
+                value_property = f"{input_id.replace('-', '_')}_str"
+                el.add_event_listener(
+                    "focus",
+                    lambda event, prop=value_property: self._on_input_focus(event, prop),
+                )
                 self._escape_revert.bind(
                     el,
                     input_id,
                     lambda: True,
                     lambda _snapshot: self._cancel_active_edit(),
                 )
-                el.add_event_listener("blur", self._on_input_blur)
+                el.add_event_listener("change", self._on_input_change)
+                el.add_event_listener(
+                    "blur",
+                    lambda event, prop=value_property: self._on_input_blur(event, prop),
+                )
+                field = el.parent()
+                if field is not None:
+                    el.add_event_listener("focus", lambda _event, f=field: f.set_class("is-editing", True))
+                    el.add_event_listener("blur", lambda _event, f=field: f.set_class("is-editing", False))
+            handle = doc.get_element_by_id(f"{input_id}-drag")
+            if handle:
+                prop = input_id.removeprefix("transform-").replace("-", "_")
+                handle.add_event_listener(
+                    "mousedown",
+                    lambda event, prop=prop, input_id=input_id: self._on_value_drag_press(prop, input_id, event),
+                )
 
     def update(self, doc):
         dirty = False
-        prev_tool = self._active_tool
+        prev_tool = (self._active_tool, self._crop_active)
         prev_space = self._transform_space
         prev_selected = tuple(self._selected)
 
         active_tool = _native_store_value("active_tool", _MISSING)
         if active_tool is _MISSING:
             active_tool = lf.ui.get_active_tool() or ""
+        self._crop_active = active_tool == "builtin.cropbox"
+        if self._crop_active:
+            operation = lf.ui.get_crop_tool_operation()
+            active_tool = f"builtin.{operation}"
         self._active_tool = active_tool or ""
         active_transform_tool = self._active_tool in _NUMERIC_TRANSFORM_TOOL_IDS
         wrap = doc.get_element_by_id("transform-block")
         if not active_transform_tool and not self._visible:
+            self._finish_value_drag()
             if wrap:
                 wrap.set_class("hidden", True)
             self._selected = []
@@ -253,13 +357,41 @@ class TransformControlsController:
             return False
 
         self._selected = lf.get_selected_node_names() or []
+        self._crop_locked = False
+        if self._crop_active:
+            # Only the volume selected by the crop tool may receive numeric edits.
+            # A parent selection during tool activation must never move the model.
+            scene = lf.get_scene()
+            node = scene.get_node(self._selected[0]) if scene and len(self._selected) == 1 else None
+            shape = lf.ui.get_crop_tool_shape()
+            volume = (node.cropbox() if shape == "box" else node.ellipsoid()) if node else None
+            if volume is None:
+                self._selected = []
+            else:
+                self._crop_locked = bool(node.locked)
+        self._editable = bool(self._can_edit_selection())
         self._transform_space = self._current_transform_space()
         self._pivot_mode = self._current_pivot_mode()
-
-        if self._active_tool != prev_tool or self._transform_space != prev_space:
-            self._commit_active_edit()
-
         visible = active_transform_tool and len(self._selected) > 0
+
+        # Drags and held steps belong to the selection, tool and space they started
+        # on, and end with the button even when its release lands outside the overlay.
+        context_changed = (
+            (self._active_tool, self._crop_active) != prev_tool
+            or self._transform_space != prev_space
+            or tuple(self._selected) != prev_selected
+        )
+        if context_changed or not visible or not self._editable:
+            self._finish_value_drag()
+            self._step_repeat_prop = None
+            self._commit_active_edit()
+        elif not lf.ui.is_mouse_button_down(0):
+            if self._value_drag is not None and not self._value_drag.pointer_locked:
+                self._finish_value_drag()
+            if self._step_repeat_prop:
+                self._step_repeat_prop = None
+                self._commit_active_edit()
+
         if wrap:
             wrap.set_class("hidden", not visible)
         if visible != self._visible:
@@ -268,13 +400,13 @@ class TransformControlsController:
             dirty = True
 
         if not visible:
-            self._commit_active_edit()
             self._last_state_key = None
             self._force_dirty = False
             return dirty
 
-        if tuple(self._selected) != prev_selected:
-            self._commit_active_edit()
+        drag = self._value_drag
+        if drag is not None and drag.pointer_locked:
+            dirty |= self._settle_value_drag(drag)
 
         if len(self._selected) == 1:
             self._update_single_node()
@@ -284,6 +416,7 @@ class TransformControlsController:
         if self._process_step_repeat():
             dirty = True
             self._force_dirty = True
+        self._schedule_step_repeat()
         return self._dirty_if_display_state_changed(dirty)
 
     def scene_changed(self):
@@ -292,11 +425,16 @@ class TransformControlsController:
         self._dirty_all()
 
     def unmount(self):
+        self._commit_active_edit()
         self._handle = None
+        self._finish_value_drag()
         self._doc = None
         self._visible = False
         self._active_tool = ""
+        self._crop_active = False
+        self._crop_locked = False
         self._selected = []
+        self._focused_input_property = None
         self._escape_revert.clear()
         self._state.reset_single_edit()
         self._state.reset_multi_edit()
@@ -304,6 +442,11 @@ class TransformControlsController:
         self._focus_active = False
         self._last_state_key = None
         self._force_dirty = False
+
+    def _can_edit_selection(self):
+        return lf.can_transform_selection() and (
+            not self._crop_active or (bool(self._selected) and not self._crop_locked)
+        )
 
     def _current_transform_space(self) -> int:
         value = _native_store_value("transform_space", _MISSING)
@@ -345,9 +488,9 @@ class TransformControlsController:
 
     def _set_single_display_transform(self, node_name: str, transform):
         if self._single_uses_world_space():
-            lf.set_node_visualizer_world_transform(node_name, transform)
+            lf.set_node_visualizer_world_transform(node_name, transform, record_history=False)
         else:
-            lf.set_node_transform(node_name, _flip_yz_rows(transform))
+            lf.set_node_transform(node_name, _flip_yz_rows(transform), record_history=False)
 
     def _update_single_node(self):
         node_name = self._selected[0]
@@ -403,6 +546,8 @@ class TransformControlsController:
         return (
             RuntimeState.language_generation.value,
             self._active_tool,
+            self._crop_active,
+            self._editable,
             tuple(self._selected),
             self._transform_space,
             self._pivot_mode,
@@ -434,16 +579,30 @@ class TransformControlsController:
         if not self._handle:
             return
         for axis in ("x", "y", "z"):
-            self._handle.dirty(f"transform_pos_{axis}_str")
-            self._handle.dirty(f"transform_rot_{axis}_str")
-            self._handle.dirty(f"transform_scale_{axis}_str")
-        self._handle.dirty("transform_scale_u_str")
+            value_property = f"transform_pos_{axis}_str"
+            if value_property != self._focused_input_property:
+                self._handle.dirty(value_property)
+            value_property = f"transform_rot_{axis}_str"
+            if value_property != self._focused_input_property:
+                self._handle.dirty(value_property)
+            value_property = f"transform_scale_{axis}_str"
+            if value_property != self._focused_input_property:
+                self._handle.dirty(value_property)
+        if self._focused_input_property != "transform_scale_u_str":
+            self._handle.dirty("transform_scale_u_str")
         self._handle.dirty("transform_reset_label")
         self._handle.dirty("transform_bake_label")
+        self._handle.dirty("transform_editable")
         self._handle.dirty("transform_show_translate")
         self._handle.dirty("transform_show_rotate")
         self._handle.dirty("transform_show_scale")
         self._handle.dirty("transform_show_actions")
+        self._handle.dirty("transform_is_crop")
+
+    def _numeric_display_value(self, value_property, formatted_value):
+        if value_property == self._focused_input_property and self._focused_input_text is not None:
+            return self._focused_input_text
+        return formatted_value
 
     def _begin_edit(self):
         if len(self._selected) == 1:
@@ -472,9 +631,20 @@ class TransformControlsController:
                     self._state.multi_visualizer_world_transforms_before.append(world_transform)
 
     def _set_value(self, group, idx, value_str):
+        if not self._can_edit_selection():
+            return
+        value_property = {
+            "pos": f"transform_pos_{('x', 'y', 'z')[idx]}_str",
+            "rot": f"transform_rot_{('x', 'y', 'z')[idx]}_str",
+            "scale": f"transform_scale_{('x', 'y', 'z')[idx]}_str",
+        }.get(group)
+        if value_property == self._focused_input_property:
+            self._focused_input_text = str(value_str)
         try:
             val = float(value_str)
         except ValueError:
+            return
+        if not math.isfinite(val):
             return
 
         if not self._state.editing_active and not self._state.multi_editing_active:
@@ -500,10 +670,17 @@ class TransformControlsController:
         self._force_dirty = True
 
     def _set_uniform_scale(self, value_str):
+        if not self._can_edit_selection():
+            return
+        if self._focused_input_property == "transform_scale_u_str":
+            self._focused_input_text = str(value_str)
         try:
-            val = max(float(value_str), MIN_SCALE)
+            val = float(value_str)
         except ValueError:
             return
+        if not math.isfinite(val):
+            return
+        val = max(val, MIN_SCALE)
 
         if not self._state.editing_active and not self._state.multi_editing_active:
             self._begin_edit()
@@ -529,17 +706,33 @@ class TransformControlsController:
         decomp_current = lf.decompose_transform(current_transform) if current_transform else None
 
         if self._active_tool == "builtin.rotate":
-            euler_to_use = list(self._euler)  # COPY to avoid reference issues
             self._state.euler_display = list(self._euler)  # COPY
-            # Use current translation and scale from node to ensure we're not using stale values
-            trans_to_use = list(decomp_current["translation"]) if decomp_current else list(self._trans)
-            scale_to_use = list(decomp_current["scale"]) if decomp_current else list(self._scale)
+            if current_transform and decomp_current:
+                new_transform = _rotate_basis_to_euler(
+                    current_transform,
+                    decomp_current["rotation_euler_deg"],
+                    self._euler,
+                )
+            else:
+                new_transform = lf.compose_transform(self._trans, self._euler, self._scale)
+        elif self._active_tool == "builtin.translate":
+            if current_transform:
+                new_transform = list(current_transform)
+                new_transform[12:15] = self._trans
+            else:
+                new_transform = lf.compose_transform(self._trans, self._euler, self._scale)
+        elif self._active_tool == "builtin.scale":
+            if current_transform and decomp_current:
+                old_scale = decomp_current["scale"]
+                factors = [
+                    self._scale[axis] / old_scale[axis] if abs(old_scale[axis]) > 1e-12 else 1.0
+                    for axis in range(3)
+                ]
+                new_transform = _scale_basis_columns(current_transform, factors)
+            else:
+                new_transform = lf.compose_transform(self._trans, self._euler, self._scale)
         else:
-            euler_to_use = list(decomp_current["rotation_euler_deg"]) if decomp_current else list(self._euler)
-            trans_to_use = list(self._trans)  # COPY
-            scale_to_use = list(self._scale)  # COPY
-
-        new_transform = lf.compose_transform(trans_to_use, euler_to_use, scale_to_use)
+            new_transform = lf.compose_transform(self._trans, self._euler, self._scale)
         self._set_single_display_transform(node_name, new_transform)
 
         if self._active_tool == "builtin.rotate":
@@ -554,46 +747,55 @@ class TransformControlsController:
             return
 
         pivot = self._state.pivot_world
+        rotation = _rotation_matrix_xyz(self._state.display_euler) if tool == "builtin.rotate" else None
+        zero_rotation = tool == "builtin.rotate" and not any(self._state.display_euler)
+        identity_scale = tool == "builtin.scale" and self._state.display_scale == [1.0, 1.0, 1.0]
+        individual = (
+            lf.ui.get_multi_transform_mode() == lf.ui.MULTI_TRANSFORM_MODE_INDIVIDUAL
+        )
 
         for i, name in enumerate(self._state.multi_node_names):
             original = self._state.multi_visualizer_world_transforms_before[i]
-            decomp = lf.decompose_transform(original)
-            pos = list(decomp["translation"])
+            if zero_rotation or identity_scale:
+                lf.set_node_visualizer_world_transform(name, original, record_history=False)
+                continue
+
+            if tool == "builtin.rotate":
+                pos = [original[12], original[13], original[14]]
+                new_transform = list(original)
+                r00, r01, r02 = rotation[0]
+                r10, r11, r12 = rotation[1]
+                r20, r21, r22 = rotation[2]
+                for offset in (0, 4, 8):
+                    x, y, z = original[offset], original[offset + 1], original[offset + 2]
+                    new_transform[offset] = r00 * x + r01 * y + r02 * z
+                    new_transform[offset + 1] = r10 * x + r11 * y + r12 * z
+                    new_transform[offset + 2] = r20 * x + r21 * y + r22 * z
+                if not individual:
+                    x, y, z = pos[0] - pivot[0], pos[1] - pivot[1], pos[2] - pivot[2]
+                    new_transform[12] = pivot[0] + r00 * x + r01 * y + r02 * z
+                    new_transform[13] = pivot[1] + r10 * x + r11 * y + r12 * z
+                    new_transform[14] = pivot[2] + r20 * x + r21 * y + r22 * z
+                lf.set_node_visualizer_world_transform(name, new_transform, record_history=False)
+                continue
 
             if tool == "builtin.translate":
                 delta = [self._state.display_translation[j] - pivot[j] for j in range(3)]
-                new_pos = [pos[j] + delta[j] for j in range(3)]
-                new_transform = lf.compose_transform(new_pos, decomp["rotation_euler_deg"], decomp["scale"])
-                lf.set_node_visualizer_world_transform(name, new_transform)
+                new_transform = list(original)
+                for axis in range(3):
+                    new_transform[12 + axis] = original[12 + axis] + delta[axis]
+                lf.set_node_visualizer_world_transform(name, new_transform, record_history=False)
+                continue
 
-            elif tool == "builtin.rotate":
-                euler_rad = [math.radians(e) for e in self._state.display_euler]
-                cx, cy, cz = math.cos(euler_rad[0]), math.cos(euler_rad[1]), math.cos(euler_rad[2])
-                sx, sy, sz = math.sin(euler_rad[0]), math.sin(euler_rad[1]), math.sin(euler_rad[2])
-                r00, r01, r02 = cy * cz, -cy * sz, sy
-                r10, r11, r12 = sx * sy * cz + cx * sz, -sx * sy * sz + cx * cz, -sx * cy
-                r20, r21, r22 = -cx * sy * cz + sx * sz, cx * sy * sz + sx * cz, cx * cy
-
-                rel = [pos[j] - pivot[j] for j in range(3)]
-                new_rel = [
-                    r00 * rel[0] + r01 * rel[1] + r02 * rel[2],
-                    r10 * rel[0] + r11 * rel[1] + r12 * rel[2],
-                    r20 * rel[0] + r21 * rel[1] + r22 * rel[2],
-                ]
-                new_pos = [pivot[j] + new_rel[j] for j in range(3)]
-                orig_euler = list(decomp["rotation_euler_deg"])
-                new_euler = [orig_euler[j] + self._state.display_euler[j] for j in range(3)]
-                new_transform = lf.compose_transform(new_pos, new_euler, decomp["scale"])
-                lf.set_node_visualizer_world_transform(name, new_transform)
-
-            elif tool == "builtin.scale":
-                rel = [pos[j] - pivot[j] for j in range(3)]
-                new_rel = [rel[j] * self._state.display_scale[j] for j in range(3)]
-                new_pos = [pivot[j] + new_rel[j] for j in range(3)]
-                orig_scale = list(decomp["scale"])
-                new_scale = [orig_scale[j] * self._state.display_scale[j] for j in range(3)]
-                new_transform = lf.compose_transform(new_pos, decomp["rotation_euler_deg"], new_scale)
-                lf.set_node_visualizer_world_transform(name, new_transform)
+            if tool == "builtin.scale":
+                factors = self._state.display_scale
+                new_transform = _scale_basis_columns(original, factors)
+                if not individual:
+                    for axis in range(3):
+                        new_transform[12 + axis] = (
+                            pivot[axis] + (original[12 + axis] - pivot[axis]) * factors[axis]
+                        )
+                lf.set_node_visualizer_world_transform(name, new_transform, record_history=False)
 
     def _can_reset_transform(self) -> bool:
         if not self._selected:
@@ -654,11 +856,22 @@ class TransformControlsController:
         self._step_repeat_dir = direction
         self._step_repeat_start = now
         self._step_repeat_last = now
+        self._schedule_step_repeat()
+
+    def _schedule_step_repeat(self):
+        # A held button sends no UI events, so ask for the frame of the next step.
+        if not self._step_repeat_prop:
+            return
+        due = max(self._step_repeat_start + STEP_REPEAT_DELAY,
+                  self._step_repeat_last + STEP_REPEAT_INTERVAL)
+        lf.ui.request_viewport_overlay_sync()
+        lf.ui.request_redraw(max(due - time.monotonic(), 0.0))
 
     def _on_step_mouseup(self, event):
         del event
         if self._step_repeat_prop:
             self._step_repeat_prop = None
+            self._commit_active_edit()
 
     def _process_step_repeat(self):
         if not self._step_repeat_prop:
@@ -673,12 +886,14 @@ class TransformControlsController:
         return False
 
     def _apply_step(self, prop, direction):
+        if not self._can_edit_selection():
+            return
         cfg = _STEP_CONFIG.get(prop)
         if not cfg:
             return
 
         step, step_fast = cfg
-        step_val = step_fast if lf.ui.is_ctrl_down() else step
+        step_val = step_fast if _accelerated() else step
 
         if not self._state.editing_active and not self._state.multi_editing_active:
             self._begin_edit()
@@ -714,6 +929,8 @@ class TransformControlsController:
         self._force_dirty = True
 
     def _on_action(self, handle, event, args):
+        if not self._can_edit_selection():
+            return
         del handle, event
         if not args:
             return
@@ -741,17 +958,122 @@ class TransformControlsController:
                 except Exception as exc:
                     print(f"Transform bake failed: {exc}")
 
-    def _on_input_focus(self, event):
+    def _on_value_drag_press(self, prop, input_id, event):
+        if int(event.get_parameter("button", "0")) != 0 or not self._can_edit_selection():
+            return
+        self._finish_value_drag()
+        self._value_drag = _ValueDrag(prop=prop, input_id=input_id, last_x=_event_mouse_x(event))
+        event.stop_propagation()
+
+    def _on_value_drag_move(self, event):
+        drag = self._value_drag
+        if drag is None or drag.pointer_locked:
+            return
+        if not lf.ui.is_mouse_button_down(0):
+            self._finish_value_drag()
+            return
+        mouse_x = _event_mouse_x(event)
+        if not drag.active:
+            if abs(mouse_x - drag.last_x) < VALUE_DRAG_THRESHOLD_PX:
+                return
+            # The value follows the pointer from the threshold on.
+            drag.active = True
+            drag.pointer_locked = bool(lf.ui.begin_value_drag())
+            self._begin_edit()
+            drag.value = self._value_drag_start_value(drag.prop)
+            if drag.pointer_locked:
+                lf.ui.request_viewport_overlay_sync()
+        elif self._apply_value_drag_motion(drag, mouse_x - drag.last_x):
+            self._force_dirty = True
+        drag.last_x = mouse_x
+        event.stop_propagation()
+
+    def _on_value_drag_release(self, event):
+        drag = self._value_drag
+        # The input controller ends a locked drag; update() settles it.
+        if drag is None or drag.pointer_locked or int(event.get_parameter("button", "0")) != 0:
+            return
+        if drag.active:
+            self._finish_value_drag()
+            return
+        self._value_drag = None
+        field = self._doc.get_element_by_id(drag.input_id) if self._doc else None
+        if field:
+            field.focus()
+
+    def _settle_value_drag(self, drag):
+        state = lf.ui.value_drag_state()
+        if state == "cancelled":
+            self._cancel_value_drag()
+            return True
+        changed = self._apply_value_drag_motion(drag, lf.ui.take_value_drag_delta())
+        if state == "active":
+            # The locked pointer sends the overlay no UI events; its motion and
+            # release still wake frames, which run this sync.
+            lf.ui.request_viewport_overlay_sync()
+            return changed
+        self._finish_value_drag()
+        return True
+
+    def _value_drag_start_value(self, prop):
+        if prop == "scale_u":
+            return sum(self._scale) / 3.0
+        group, axis = prop.split("_", 1)
+        return {"pos": self._trans, "rot": self._euler, "scale": self._scale}[group][_AXIS_INDEX[axis]]
+
+    def _apply_value_drag_motion(self, drag, delta):
+        if not delta:
+            return False
+        step, step_fast = _STEP_CONFIG[drag.prop]
+        drag.value += delta / VALUE_DRAG_PIXELS_PER_STEP * (step_fast if _accelerated() else step)
+        group, axis = drag.prop.split("_", 1)
+        if group == "scale":
+            drag.value = max(drag.value, MIN_SCALE)
+        if drag.prop == "scale_u":
+            self._set_uniform_scale(repr(drag.value))
+        else:
+            self._set_value(group, _AXIS_INDEX[axis], repr(drag.value))
+        return True
+
+    def _release_value_drag(self):
+        drag, self._value_drag = self._value_drag, None
+        if drag is not None and drag.pointer_locked:
+            lf.ui.end_value_drag()
+        return drag is not None and drag.active
+
+    def _finish_value_drag(self):
+        if self._release_value_drag():
+            self._commit_active_edit()
+            self._force_dirty = True
+
+    def _cancel_value_drag(self):
+        if not self._release_value_drag():
+            return False
+        self._cancel_active_edit()
+        return True
+
+    def _on_input_focus(self, event, value_property=None):
         if self._focus_active:
             return
         self._focus_active = True
+        self._focused_input_property = value_property
+        self._focused_input_text = None
         target = event.current_target()
         if target is not None:
             target.select()
         self._begin_edit()
 
-    def _on_input_blur(self, event):
+    def _on_input_change(self, event):
+        if event.get_bool_parameter("linebreak", False):
+            self._commit_active_edit()
+            self._force_dirty = True
+
+    def _on_input_blur(self, event, value_property=None):
         del event
+        if value_property is not None and value_property != self._focused_input_property:
+            return
+        self._focused_input_property = None
+        self._focused_input_text = None
         if not self._focus_active:
             return
         self._focus_active = False
@@ -759,11 +1081,12 @@ class TransformControlsController:
             self._commit_single_edit()
         elif self._state.multi_editing_active:
             self._commit_multi_edit()
+        self._force_dirty = True
 
     def _cancel_active_edit(self):
         if self._state.editing_active and self._state.editing_node_names and self._state.transforms_before_edit:
             node_name = self._state.editing_node_names[0]
-            lf.set_node_transform(node_name, self._state.transforms_before_edit[0])
+            lf.set_node_transform(node_name, self._state.transforms_before_edit[0], record_history=False)
             self._state.reset_single_edit()
             self._update_single_node()
             self._force_dirty = True
@@ -771,7 +1094,7 @@ class TransformControlsController:
 
         if self._state.multi_editing_active and self._state.multi_node_names and self._state.multi_transforms_before:
             for name, transform in zip(self._state.multi_node_names, self._state.multi_transforms_before):
-                lf.set_node_transform(name, transform)
+                lf.set_node_transform(name, transform, record_history=False)
             self._state.reset_multi_edit()
             self._update_multi_selection()
             self._force_dirty = True
@@ -795,8 +1118,7 @@ class TransformControlsController:
 
         old = self._state.transforms_before_edit[0]
         if old != current:
-            lf.ops.invoke(
-                "transform.apply_batch",
+            lf.commit_node_transforms(
                 node_names=[node_name],
                 old_transforms=[old],
             )
@@ -818,8 +1140,7 @@ class TransformControlsController:
                 break
 
         if any_changed:
-            lf.ops.invoke(
-                "transform.apply_batch",
+            lf.commit_node_transforms(
                 node_names=self._state.multi_node_names,
                 old_transforms=self._state.multi_transforms_before,
             )
@@ -827,6 +1148,7 @@ class TransformControlsController:
         self._state.reset_multi_edit()
 
     def _reset_single_transform(self):
+        self._commit_active_edit()
         if not self._selected:
             return
 
@@ -836,9 +1158,8 @@ class TransformControlsController:
             return
 
         identity = lf.compose_transform([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
-        lf.set_node_transform(node_name, identity)
-        lf.ops.invoke(
-            "transform.apply_batch",
+        lf.set_node_transform(node_name, identity, record_history=False)
+        lf.commit_node_transforms(
             node_names=[node_name],
             old_transforms=[current],
         )
@@ -864,10 +1185,9 @@ class TransformControlsController:
 
         identity = lf.compose_transform([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
         for name in selected:
-            lf.set_node_transform(name, identity)
+            lf.set_node_transform(name, identity, record_history=False)
 
-        lf.ops.invoke(
-            "transform.apply_batch",
+        lf.commit_node_transforms(
             node_names=selected,
             old_transforms=old_transforms,
         )

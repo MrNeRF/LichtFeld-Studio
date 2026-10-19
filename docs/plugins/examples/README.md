@@ -1,5 +1,7 @@
 # Plugin Examples
 
+[Python docs](../README.md) · [Development guide](../getting-started.md) · [Application API](../api-reference.md) · [Plugin and UI API](../plugin-reference.md)
+
 Start with these in order:
 
 | Step | File | What it teaches |
@@ -10,7 +12,7 @@ Start with these in order:
 
 `lf.plugins.create("name")` now scaffolds the step-1 panel plus a ready-made `main_panel.rml` / `main_panel.rcss` shell. You can ignore those files until you move to step 3. The CLI command `LichtFeld-Studio plugin create <name>` follows the same UI progression and only adds development helpers such as `.venv` and `.vscode`.
 
-For data-driven retained panels, prefer `update_policy = "dirty"` with `lfs_plugins.ui.RuntimeState` and `PanelStateBinding` instead of interval polling. See [Reactive retained panels](../getting-started.md#reactive-retained-panels) and the [Plugin API Reference](../api-reference.md#reactive-retained-panels).
+For data-driven retained panels, prefer `update_policy = "dirty"` with `lfs_plugins.ui.RuntimeState` and `PanelStateBinding` instead of interval polling. See [Reactive retained panels](../getting-started.md#reactive-retained-panels) and the [Plugin API Reference](../plugin-reference.md#reactive-retained-panels).
 
 After that, use the focused examples by topic:
 

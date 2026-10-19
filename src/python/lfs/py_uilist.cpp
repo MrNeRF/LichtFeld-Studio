@@ -4,6 +4,8 @@
 
 #include "py_uilist.hpp"
 #include "core/logger.hpp"
+#include "python/python_runtime.hpp"
+#include "rml_im_mode_layout.hpp"
 
 namespace lfs::python {
 
@@ -38,25 +40,33 @@ namespace lfs::python {
         uilists_.clear();
     }
 
-    PyUIListInfo* PyUIListRegistry::ensure_instance(PyUIListInfo& uilist) {
-        if (!uilist.list_instance.is_valid() || uilist.list_instance.is_none()) {
-            nb::gil_scoped_acquire gil;
-            try {
-                uilist.list_instance = uilist.list_class();
-            } catch (const std::exception& e) {
-                LOG_ERROR("Failed to instantiate UIList {}: {}", uilist.id, e.what());
-                return nullptr;
-            }
+    nb::object PyUIListRegistry::get_uilist(const std::string& id) {
+        nb::object list_class;
+        {
+            std::lock_guard lock(mutex_);
+            auto it = uilists_.find(id);
+            if (it == uilists_.end())
+                return {};
+            if (it->second.list_instance.is_valid())
+                return it->second.list_instance;
+            list_class = it->second.list_class;
         }
-        return &uilist;
-    }
 
-    PyUIListInfo* PyUIListRegistry::get_uilist(const std::string& id) {
+        // A constructor can mutate the registry. Keep Python outside the lock
+        // and return an owned reference that survives unregistering during draw.
+        nb::object instance;
+        try {
+            instance = list_class();
+        } catch (const std::exception& e) {
+            LOG_ERROR("Failed to instantiate UIList {}: {}", id, e.what());
+            return {};
+        }
         std::lock_guard lock(mutex_);
         auto it = uilists_.find(id);
-        if (it == uilists_.end())
-            return nullptr;
-        return ensure_instance(it->second);
+        if (it == uilists_.end() || !it->second.list_class.is(list_class))
+            return {};
+        it->second.list_instance = instance;
+        return instance;
     }
 
     std::vector<std::string> PyUIListRegistry::get_uilist_ids() const {
@@ -115,6 +125,14 @@ namespace lfs::python {
     }
 
     void register_uilist(nb::module_& m) {
+        set_uilist_callbacks(
+            [](const char* id) -> void* {
+                return PyUIListRegistry::instance().get_uilist(id).release().ptr();
+            },
+            [](void* layout) -> void* {
+                return nb::cast(static_cast<RmlImModeLayout*>(layout), nb::rv_policy::reference).release().ptr();
+            });
+
         m.def(
             "register_uilist", [](nb::object list_class) {
                 PyUIListRegistry::instance().register_uilist(list_class);

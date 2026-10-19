@@ -3,14 +3,17 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/converter.hpp"
+#include "app/converter_output_paths.hpp"
+#include "app/converter_overwrite.hpp"
+#include "app/terminal_progress_bar.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/error.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
-#include "indicators.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/rad.hpp"
 #include "io/formats/ssog.hpp"
@@ -25,7 +28,6 @@
 #include <fstream>
 #include <iostream>
 #include <istream>
-#include <mutex>
 #include <optional>
 #include <print>
 
@@ -38,28 +40,10 @@ namespace lfs::app {
         constexpr const char* CONVERT_EXTENSIONS[] = {".ply", ".sog", ".ssog", ".spz", ".usd", ".usda", ".usdc", ".usdz", ".resume", ".rad", ".licht"};
         constexpr const char* MESH_EXTENSIONS[] = {".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".mesh", ".ply"};
 
-        enum class OverwriteChoice { YES,
-                                     NO,
-                                     ALL };
-
         struct OutputTarget {
             param::OutputFormat format;
             std::filesystem::path path;
         };
-
-        OverwriteChoice askOverwrite(const std::filesystem::path& path) {
-            std::print("File exists: {}\nOverwrite? [y]es / [n]o / [a]ll: ", path.filename().string());
-            std::string input;
-            if (!std::getline(std::cin, input) || input.empty()) {
-                return OverwriteChoice::NO;
-            }
-            const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(input[0])));
-            if (c == 'y')
-                return OverwriteChoice::YES;
-            if (c == 'a')
-                return OverwriteChoice::ALL;
-            return OverwriteChoice::NO;
-        }
 
         void truncateSHDegree(SplatData& splat, const int degree) {
             if (degree < 0)
@@ -72,21 +56,21 @@ namespace lfs::app {
             std::vector<std::filesystem::path> files;
             if (&valid_extensions[0] == &CONVERT_EXTENSIONS[0] && lfs::io::is_ssog_path(path))
                 return {path};
-            if (std::filesystem::is_directory(path)) {
-                for (const auto& entry : std::filesystem::directory_iterator(path)) {
+            if (lfs::core::native_fs::is_directory(path)) {
+                for (const auto& entry : lfs::core::native_fs::directory_iterator(path)) {
                     if (&valid_extensions[0] == &CONVERT_EXTENSIONS[0] && lfs::io::is_ssog_path(entry.path())) {
-                        files.push_back(entry.path());
+                        files.push_back(lfs::core::native_fs::entry_path(path, entry.path()));
                         continue;
                     }
-                    if (!entry.is_regular_file())
+                    if (!lfs::core::native_fs::entry_is_regular_file(path, entry))
                         continue;
-                    auto ext = entry.path().extension().string();
+                    auto ext = lfs::core::path_to_utf8(entry.path().extension());
                     std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                         return static_cast<char>(std::tolower(c));
                     });
                     for (const auto* valid : valid_extensions) {
                         if (ext == valid) {
-                            files.push_back(entry.path());
+                            files.push_back(lfs::core::native_fs::entry_path(path, entry.path()));
                             break;
                         }
                     }
@@ -97,59 +81,10 @@ namespace lfs::app {
             return files;
         }
 
-        const char* getFormatExtension(const param::OutputFormat format) {
-            switch (format) {
-            case param::OutputFormat::PLY: return ".ply";
-            case param::OutputFormat::SOG: return ".sog";
-            case param::OutputFormat::SSOG: return ".ssog";
-            case param::OutputFormat::SPZ: return ".spz";
-            case param::OutputFormat::HTML: return ".html";
-            case param::OutputFormat::USD: return ".usd";
-            case param::OutputFormat::USDA: return ".usda";
-            case param::OutputFormat::USDC: return ".usdc";
-            case param::OutputFormat::RAD: return ".rad";
-            }
-            return ".ply";
-        }
-
         std::uint32_t radChunkSizeForMode(const param::RadExportMode mode) {
             return mode == param::RadExportMode::Stream
                        ? lfs::io::kRadStreamableChunkSplats
                        : lfs::io::kRadNativeChunkSplats;
-        }
-
-        std::filesystem::path generateOutputPath(
-            const std::filesystem::path& input,
-            const std::filesystem::path& output_template,
-            const param::OutputFormat format,
-            const char* suffix,
-            const bool replace_output_extension = false) {
-
-            if (format == param::OutputFormat::SSOG) {
-                return std::filesystem::absolute(output_template.empty()
-                                                     ? input.parent_path() / (input.stem().string() + ".ssog")
-                                                     : output_template);
-            }
-            const auto ext = getFormatExtension(format);
-            const auto cwd = std::filesystem::current_path();
-            const auto converted_name = input.stem().string() + suffix + ext;
-
-            if (output_template.empty()) {
-                return cwd / converted_name;
-            }
-
-            if (std::filesystem::is_directory(output_template)) {
-                const auto dir = output_template.is_absolute() ? output_template : cwd / output_template;
-                return dir / converted_name;
-            }
-
-            auto out = output_template;
-            if (replace_output_extension) {
-                out.replace_extension(ext);
-            } else if (out.extension().empty()) {
-                out += ext;
-            }
-            return out.is_absolute() ? out : cwd / out;
         }
 
         std::vector<OutputTarget> generateMesh2SplatOutputs(
@@ -161,81 +96,13 @@ namespace lfs::app {
             for (const auto format : params.formats) {
                 targets.push_back({
                     .format = format,
-                    .path = generateOutputPath(input, params.output_path, format, "_splat", multi_format),
+                    .path = generate_converter_output_path(input, params.output_path, format, "_splat", multi_format),
                 });
             }
             return targets;
         }
 
-        // Terminal progress bar for conversions, styled like the training bar.
-        // report() is thread-safe: RAD chunk encoding fires the export progress
-        // callback from TBB worker threads.
-        class ConvertProgressBar {
-        public:
-            ConvertProgressBar() {
-                bar_.set_option(indicators::option::Start("["));
-#ifdef _WIN32
-                bar_.set_option(indicators::option::BarWidth(38));
-                bar_.set_option(indicators::option::Fill("="));
-                bar_.set_option(indicators::option::Lead(">"));
-                bar_.set_option(indicators::option::Remainder(" "));
-#else
-                bar_.set_option(indicators::option::BarWidth(40));
-                bar_.set_option(indicators::option::Fill("█"));
-                bar_.set_option(indicators::option::Lead("▌"));
-                bar_.set_option(indicators::option::Remainder("░"));
-#endif
-                bar_.set_option(indicators::option::End("]"));
-                bar_.set_option(indicators::option::PrefixText("Converting "));
-                bar_.set_option(indicators::option::ShowPercentage(true));
-                bar_.set_option(indicators::option::ShowElapsedTime(true));
-                bar_.set_option(indicators::option::ShowRemainingTime(true));
-                bar_.set_option(indicators::option::ForegroundColor(indicators::Color::cyan));
-                bar_.set_option(indicators::option::FontStyles(
-                    std::vector<indicators::FontStyle>{indicators::FontStyle::bold}));
-            }
-
-            bool report(const float progress, const std::string& stage) {
-                const int percent = static_cast<int>(std::clamp(progress, 0.0f, 1.0f) * 100.0f);
-                std::lock_guard lock(mutex_);
-                if (percent == last_percent_ && stage == last_stage_) {
-                    return true;
-                }
-                last_percent_ = percent;
-                last_stage_ = stage;
-                bar_.set_option(indicators::option::PostfixText(std::format("{:<40}", stage)));
-                bar_.set_progress(static_cast<size_t>(percent));
-                return true;
-            }
-
-            void complete() {
-                std::lock_guard lock(mutex_);
-                if (!bar_.is_completed()) {
-                    bar_.set_progress(100);
-                    bar_.mark_as_completed();
-                    std::cout << std::endl;
-                }
-            }
-
-            // Ends the bar line without forcing 100% so errors print cleanly below.
-            void abort() {
-                std::lock_guard lock(mutex_);
-                if (!bar_.is_completed()) {
-                    bar_.mark_as_completed();
-                    std::cout << std::endl;
-                }
-            }
-
-            ~ConvertProgressBar() {
-                abort();
-            }
-
-        private:
-            indicators::ProgressBar bar_;
-            std::mutex mutex_;
-            int last_percent_ = -1;
-            std::string last_stage_;
-        };
+        using ConvertProgressBar = TerminalProgressBar;
 
         template <typename Parameters>
         lfs::io::SsogSaveOptions ssogOptions(const Parameters& p) {
@@ -271,6 +138,8 @@ namespace lfs::app {
                 return lfs::io::save_sog(splat, {.output_path = output, .kmeans_iterations = sog_iterations, .progress_callback = progress, .provenance = provenance});
             case param::OutputFormat::SPZ:
                 return lfs::io::save_spz(splat, {.output_path = output, .version = spz_version, .progress_callback = progress, .provenance = provenance});
+            case param::OutputFormat::GLB:
+                return lfs::io::save_spz(splat, {.output_path = output, .progress_callback = progress, .provenance = provenance, .glb = true});
             case param::OutputFormat::HTML:
                 return lfs::io::export_html(splat, {.output_path = output, .kmeans_iterations = sog_iterations, .progress_callback = progress, .provenance = provenance});
             case param::OutputFormat::USD:
@@ -289,7 +158,7 @@ namespace lfs::app {
         }
 
         bool isPlyExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -297,7 +166,7 @@ namespace lfs::app {
         }
 
         bool isRadExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -305,7 +174,7 @@ namespace lfs::app {
         }
 
         bool isResumeExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -313,7 +182,7 @@ namespace lfs::app {
         }
 
         bool isLichtExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -510,7 +379,7 @@ namespace lfs::app {
             const std::uint64_t estimated = info->vertex_count * per_splat;
             std::uint64_t budget = 8ull << 30;
 #ifndef _WIN32
-            std::ifstream meminfo("/proc/meminfo");
+            std::ifstream meminfo(lfs::core::native_fs::native_path("/proc/meminfo"));
             std::string line;
             while (std::getline(meminfo, line)) {
                 if (line.starts_with("MemAvailable:")) {
@@ -717,12 +586,13 @@ namespace lfs::app {
 
         for (const auto& input : files) {
             auto output_template = params.output_path;
-            if (params.format == param::OutputFormat::SSOG && files.size() > 1 && !output_template.empty())
-                output_template /= input.stem().string() + ".ssog";
-            const auto output = generateOutputPath(input, output_template, params.format, "_converted");
+            if (params.format == param::OutputFormat::SSOG && files.size() > 1 && !output_template.empty()) {
+                output_template = generate_ssog_batch_output_path(output_template, input);
+            }
+            const auto output = generate_converter_output_path(input, output_template, params.format, "_converted");
 
-            if (std::filesystem::exists(output) && !overwrite_all && !params.overwrite) {
-                const auto choice = askOverwrite(output);
+            if (lfs::core::native_fs::exists(output) && !overwrite_all && !params.overwrite) {
+                const auto choice = ask_overwrite(output, std::cin, std::cout);
                 if (choice == OverwriteChoice::NO) {
                     std::println("  Skipped");
                     ++skipped;
@@ -762,8 +632,8 @@ namespace lfs::app {
 
             bool skip = false;
             for (const auto& output : outputs) {
-                if (std::filesystem::exists(output.path) && !overwrite_all && !params.overwrite) {
-                    const auto choice = askOverwrite(output.path);
+                if (lfs::core::native_fs::exists(output.path) && !overwrite_all && !params.overwrite) {
+                    const auto choice = ask_overwrite(output.path, std::cin, std::cout);
                     if (choice == OverwriteChoice::NO) {
                         skip = true;
                         break;

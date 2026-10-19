@@ -5,12 +5,17 @@
 #include <atomic>
 #include <chrono>
 #include <cuda_runtime.h>
+#include <functional>
 #include <gtest/gtest.h>
 #include <iostream>
 #include <numeric>
+#include <string>
+#include <string_view>
 #include <thread>
+#include <tuple>
 #include <vector>
 
+#include "core/logger.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
@@ -566,4 +571,121 @@ TEST_F(TensorStreamTest, BoolToUInt8OrderedAgainstGatedProducerStream) {
         << "Bool->UInt8 copy was not ordered after the gated producer fill";
 
     destroyStreamSafely(stream);
+}
+
+// A busy default stream must not initialize a tensor after its owning stream
+// has already overwritten it (the GT preview's UInt8 vertical flip did this).
+TEST_F(TensorStreamTest, ConstantInitializationStaysOnNonBlockingStream) {
+    cudaStream_t stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+    for (const auto dtype : {DataType::UInt8, DataType::Bool, DataType::Int32, DataType::Int64}) {
+        SCOPED_TRACE(static_cast<int>(dtype));
+        CUDAStreamGuard guard(stream);
+        {
+            auto warm = Tensor::zeros({4096}, Device::CUDA, dtype);
+            ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        }
+        std::atomic<bool> release{false};
+        ASSERT_EQ(cudaLaunchHostFunc(nullptr, [](void* data) {
+            auto& ready = *static_cast<std::atomic<bool>*>(data);
+            while (!ready.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            } }, &release), cudaSuccess);
+        std::jthread watchdog([&](std::stop_token stop) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!stop.stop_requested() && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            release.store(true, std::memory_order_release);
+        });
+        auto tensor = Tensor::zeros({4096}, Device::CUDA, dtype);
+        EXPECT_EQ(cudaMemsetAsync(tensor.data_ptr(), 0x7f, tensor.bytes(), stream), cudaSuccess);
+        EXPECT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+        const bool gate_timed_out = release.load(std::memory_order_acquire);
+        release.store(true, std::memory_order_release);
+        watchdog.request_stop();
+        watchdog.join();
+        ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
+        const auto cpu = tensor.cpu();
+        const auto* bytes = static_cast<const uint8_t*>(cpu.data_ptr());
+        EXPECT_FALSE(gate_timed_out) << "Factory waited on the unrelated default stream";
+        EXPECT_EQ(std::count(bytes, bytes + cpu.bytes(), uint8_t{0x7f}), cpu.bytes())
+            << "Late default-stream initialization overwrote the tensor";
+    }
+    destroyStreamSafely(stream);
+}
+
+TEST_F(TensorStreamTest, FusedSliceReductionOfStreamTensorWaitsForItsResult) {
+    constexpr size_t rows = 5'000'000;
+    cudaStream_t producer;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&producer, cudaStreamNonBlocking), cudaSuccess);
+    {
+        Tensor produced;
+        {
+            CUDAStreamGuard guard(producer);
+            produced = (Tensor::full({rows, 3}, 0.25f, Device::CUDA) +
+                        Tensor::from_vector({0.0f, -0.5f, 0.0f}, {1, 3}, Device::CUDA))
+                           .contiguous();
+        }
+        ASSERT_EQ(cudaStreamSynchronize(producer), cudaSuccess);
+        const auto column_gap = [](const Tensor& value) {
+            const auto scaled = value * 0.5f + 0.5f;
+            return (scaled.slice(1, 1, 2).squeeze(1) - scaled.slice(1, 0, 1).squeeze(1)).mean().item<float>();
+        };
+        EXPECT_FLOAT_EQ(column_gap(Tensor::full({rows, 3}, 1.0f, Device::CUDA)), 0.0f);
+
+        // Hold the producer back so an unordered consumer reads unwritten memory.
+        ASSERT_EQ(cudaLaunchHostFunc(producer, [](void*) { std::this_thread::sleep_for(std::chrono::milliseconds(100)); }, nullptr), cudaSuccess);
+        EXPECT_FLOAT_EQ(column_gap(produced), -0.25f);
+    }
+    destroyStreamSafely(producer);
+}
+
+TEST_F(TensorStreamTest, EagerOpsOnStreamTensorWaitForItsProducer) {
+    constexpr size_t rows = 1'000'000;
+    cudaStream_t producer;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&producer, cudaStreamNonBlocking), cudaSuccess);
+    {
+        Tensor produced;
+        {
+            CUDAStreamGuard guard(producer);
+            produced = (Tensor::full({rows, 3}, 0.25f, Device::CUDA) + Tensor::zeros({rows, 3}, Device::CUDA)).contiguous();
+        }
+        ASSERT_EQ(cudaStreamSynchronize(producer), cudaSuccess);
+        using Probe = std::function<float(const Tensor&)>;
+        const std::vector<std::tuple<const char*, Probe, float>> probes = {
+            {"to", [](const Tensor& v) { return (v * 4.0f).gt(1.5f).to(DataType::Float32).sum().item<float>(); }, 0.0f},
+            {"clamp", [](const Tensor& v) { return (v * 4.0f).clamp(0.0f, 0.5f).sum().item<float>(); }, 1.5e6f},
+            {"cat", [](const Tensor& v) { return Tensor::cat({v * 4.0f, v * 4.0f}, 0).sum().item<float>(); }, 6.0e6f},
+        };
+        for (const auto& [name, probe, expected] : probes) {
+            // Same expressions on other values first, so pooled buffers hold wrong results.
+            (void)probe(Tensor::full({rows, 3}, 0.6f, Device::CUDA));
+            // Hold the producer back so an unordered consumer reads unwritten memory.
+            ASSERT_EQ(cudaLaunchHostFunc(producer, [](void*) { std::this_thread::sleep_for(std::chrono::milliseconds(100)); }, nullptr), cudaSuccess);
+            EXPECT_FLOAT_EQ(probe(produced), expected) << name;
+        }
+    }
+    destroyStreamSafely(producer);
+}
+
+// Fails if moving an empty CUDA tensor to another stream asks the memory pool to rehome storage the pool never
+// allocated: the pool then logs a missed allocation.
+TEST_F(TensorStreamTest, EmptyTensorChangesStreamWithoutRehomingStorage) {
+    std::vector<std::string> warnings;
+    const auto token = Logger::get().add_log_handler(
+        [&warnings](const LogLevel level, const SourceSite&, const std::string_view message) {
+            if (level == LogLevel::Warn && message.find("rehome_stream missed") != std::string_view::npos)
+                warnings.emplace_back(message);
+        });
+    cudaStream_t stream;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+    {
+        auto empty = Tensor::empty({0}, Device::CUDA, DataType::Int64);
+        empty.set_stream(stream);
+        EXPECT_EQ(empty.stream(), stream);
+    }
+    Logger::get().remove_log_handler(token);
+    destroyStreamSafely(stream);
+    EXPECT_TRUE(warnings.empty()) << warnings.front();
 }

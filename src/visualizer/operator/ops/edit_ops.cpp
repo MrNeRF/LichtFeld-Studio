@@ -49,7 +49,7 @@ namespace lfs::vis::op {
         }
         const auto result = undoHistory().undo();
         if (auto* rm = services().renderingOrNull()) {
-            rm->markDirty(DirtyFlag::ALL);
+            rm->markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
         }
         return result.success ? OperatorResult::FINISHED : OperatorResult::CANCELLED;
     }
@@ -76,7 +76,7 @@ namespace lfs::vis::op {
         }
         const auto result = undoHistory().redo();
         if (auto* rm = services().renderingOrNull()) {
-            rm->markDirty(DirtyFlag::ALL);
+            rm->markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
         }
         return result.success ? OperatorResult::FINISHED : OperatorResult::CANCELLED;
     }

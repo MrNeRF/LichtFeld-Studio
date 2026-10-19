@@ -24,6 +24,10 @@ import utils;
 #define LFS_RASTER_OVERLAYS 1
 #endif
 
+#ifndef LFS_SPARK_RAD_RASTER
+#define LFS_SPARK_RAD_RASTER 0
+#endif
+
 #ifndef LFS_SKIP_DENSE_TILES
 #define LFS_SKIP_DENSE_TILES 0
 #endif
@@ -141,9 +145,9 @@ layout(binding=5) StructuredBuffer<float> depths;
 
 #if LFS_3DGUT_RASTERIZE
 layout(binding=6) StructuredBuffer<float> xyz_ws;
-layout(binding=7) StructuredBuffer<float4> rotations;
-layout(binding=8) StructuredBuffer<float> scaling_raw;
-layout(binding=9) StructuredBuffer<float> opacity_raw;
+layout(binding=7) ByteAddressBuffer rotations;
+layout(binding=8) ByteAddressBuffer scaling_raw;
+layout(binding=9) ByteAddressBuffer opacity_raw;
 
 layout(binding=10) RWStructuredBuffer<float4> final_pixel_state;
 layout(binding=11) RWStructuredBuffer<float> final_pixel_depth;
@@ -163,6 +167,9 @@ layout(binding=17) ByteAddressBuffer gaussian_overlay_flags;
 layout(binding=18) StructuredBuffer<float4> overlay_params;
 layout(binding=19) ByteAddressBuffer transform_indices;
 layout(binding=20) StructuredBuffer<float4> model_transforms;
+layout(binding=21) StructuredBuffer<uint> lod_indices;
+layout(binding=22) StructuredBuffer<uint> lod_logical_indices;
+layout(binding=23) StructuredBuffer<float> lod_weights;
 #else
 layout(binding=10) ByteAddressBuffer selection_mask;
 layout(binding=11) ByteAddressBuffer preview_mask;
@@ -201,15 +208,25 @@ Splat_3D_GUT_AlphaBlend load_transformed_splat_gut_alphablend(
     int32_t g_idx,
     Uniforms uniforms)
 {
+    // Sorted ids address projected slots, not the physical RAD page pool.
+    const uint slot = uint(g_idx);
+    const bool lod_active = (uniforms.lod_enabled & 1u) != 0u;
+    const uint physical_idx = lod_active ? lod_indices[slot] : slot;
+    const uint logical_idx = lod_active && (uniforms.lod_enabled & 8u) != 0u
+        ? lod_logical_indices[slot] : physical_idx;
     Splat_3D_GUT_AlphaBlend g =
-        load_splat_gut_alphablend(g_idx, xyz_ws, rotations, scaling_raw, opacity_raw, rgb);
+        load_splat_gut_alphablend(physical_idx, slot, xyz_ws, rotations, scaling_raw,
+                                  opacity_raw, rgb, uniforms.lod_enabled, uniforms.lod_page_splats > 0u,
+                                  (uniforms.lod_enabled & 4u) == 0u ? uniforms.splat_render_profile : 0u);
+    if (lod_active && (uniforms.lod_enabled & 16u) != 0u)
+        g.opacity *= clamp(lod_weights[slot], 0.0f, 1.0f);
 
     if (uniforms.step == 0u)
         return g;
 
     float4 emphasis_flags = overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS];
     bool transform_indices_enabled = overlay_enabled(emphasis_flags.y);
-    int transform_idx = transform_indices_enabled ? read_int32(transform_indices, uint(g_idx)) : 0;
+    int transform_idx = transform_indices_enabled ? read_int32(transform_indices, logical_idx) : 0;
     transform_idx = clamp(transform_idx, 0, int(uniforms.step) - 1);
     uint transform_base = uint(transform_idx) * 4u;
 
@@ -299,8 +316,19 @@ void main(
     }
     bool thread_active = is_inside && curr_pixel_state.a >= 0.0001f;
 
-    float2 center_pix_coord = pix_coord;
+    const uint2 projection_origin = full_frame_binning(uniforms)
+        ? uint2(uniforms.render_origin_x, uniforms.render_origin_y) : uint2(0u);
+    float2 center_pix_coord = pix_coord + projection_origin;
+  #if SUBTILE_SIZE > 0
+    pix_coord_base += projection_origin;
+  #endif
+#if LFS_3DGUT_RASTERIZE
+    // The host picks the *_rad variant for Spark RAD scenes; a compile-time flag keeps the
+    // LOD-parent kernel out of the ordinary 3DGUT loop.
+    const bool spark_rad_opacity_path = LFS_SPARK_RAD_RASTER != 0;
+#else
     const bool spark_rad_opacity_path = (uniforms.lod_enabled & 4u) != 0u;
+#endif
 #if LFS_3DGUT_RASTERIZE
     float3 ray_origin = float3(0.0);
     float3 ray_direction = float3(0.0, 0.0, 1.0);
@@ -417,7 +445,12 @@ void main(
               #endif
               #if LFS_3DGUT_RASTERIZE
                     Splat_3D_GUT_AlphaBlend g = collected_gut_splats[j];
-                    gauss_rgba = evaluate_gut_splat(g, ray_origin, ray_direction);
+                    if (uniforms.splat_render_profile == 1u && !spark_rad_opacity_path && !portal_gut_quad_contains(
+                            center_pix_coord, xy_vs[splat_id], inv_cov_vs_opacity[splat_id].xyz,
+                            g.opacity, cam))
+                        continue;
+                    gauss_rgba = evaluate_gut_splat_lod(g, ray_origin, ray_direction, spark_rad_opacity_path,
+                                                        uniforms.splat_render_profile);
                   #if LFS_RASTER_OVERLAYS
                     overlay_splat = load_splat_alphablend(splat_id, xy_vs, inv_cov_vs_opacity, rgb);
                   #endif
@@ -425,7 +458,7 @@ void main(
                     Splat_2D_AlphaBlend g = collected_splats[j];
                     gauss_rgba = spark_rad_opacity_path
                                       ? evaluate_splat_spark_rad(g, center_pix_coord)
-                                      : evaluate_splat(g, center_pix_coord);
+                                      : evaluate_splat_for_profile(g, center_pix_coord, uniforms.splat_render_profile);
                   #if LFS_RASTER_OVERLAYS
                     overlay_splat = g;
                   #endif
@@ -435,6 +468,8 @@ void main(
 
               #if LFS_3DGUT_RASTERIZE
                 splat_depth = gut_splat_view_depth(g, ray_origin, ray_direction, cam);
+                if (splat_depth < FAR_DEPTH)
+                    splat_depth -= uniforms.depth_offset;
               #endif
 
             #else
@@ -446,7 +481,7 @@ void main(
 
                 float alpha = spark_rad_opacity_path
                                   ? evaluate_splat_alpha_spark_rad(g_xy, g_opacity, g_inv_cov, center_pix_coord)
-                                  : evaluate_splat_alpha(g_xy, g_opacity, g_inv_cov, center_pix_coord);
+                                  : evaluate_splat_alpha_for_profile(g_xy, g_opacity, g_inv_cov, center_pix_coord, uniforms.splat_render_profile);
                 if (alpha < ALPHA_THRESHOLD)
                     continue;
 
@@ -509,7 +544,6 @@ void main(
                 }
 
                 gauss_rgba = apply_selection_overlay(gauss_rgba, sel_status, selection_colors);
-                gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_state.flash_intensity);
             #endif
 
                 float4 new_pixel_state = update_pixel_state(curr_pixel_state, gauss_rgba);

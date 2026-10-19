@@ -14,6 +14,13 @@
 
 #include "config.slang"
 #include "overlay_flags.inc"
+#include "equirect_projection.inc"
+
+#define LFS_PORTAL_INLINE
+#define LFS_PORTAL_VEC3 float3
+#define LFS_PORTAL_VEC4 float4
+#include "portal_compact.inc"
+
 
 static const float eps = 1e-7;
 
@@ -168,11 +175,12 @@ float3 project_point_equirect(float3 point, Camera cam) {
         return {0, 0, -1};
 
     float3 dir = view_point / len;
-    float azimuth = atan2(dir.x, dir.z);
-    float elevation = asin(clamp(dir.y, -1.0f, 1.0f));
+    // Rasterizer camera space is +Y down and +Z forward (see the pinhole projection);
+    // the shared panorama frame is +Y up and -Z forward.
+    float2 uv = lfs_equirect_uv(float3(dir.x, -dir.y, -dir.z));
     return {
-        (azimuth / (2.0f * M_PI) + 0.5f) * float(cam.W),
-        (elevation / M_PI + 0.5f) * float(cam.H),
+        uv.x * float(cam.W),
+        uv.y * float(cam.H),
         len
     };
 }
@@ -498,13 +506,11 @@ WorldRay pixel_to_world_ray(float2 pixel, Camera cam) {
     float3x3 view_to_world_rotation = float3x3(world_view_t);
     float3 camera_origin = -mul(view_to_world_rotation, world_view_t[3]);
     if (cam.model == int(CameraModel::EQUIRECTANGULAR)) {
-        float azimuth = 2.0f * M_PI * (pixel.x / float(cam.W) - 0.5f);
-        float elevation = M_PI * (pixel.y / float(cam.H) - 0.5f);
-        float cos_elevation = cos(elevation);
-        float3 ray_camera = safe_normalize(float3(
-            sin(azimuth) * cos_elevation,
-            sin(elevation),
-            cos(azimuth) * cos_elevation));
+        // Inverse of project_point_equirect. Shared equirect is +Y up at uv.y = 0
+        // and -Z forward; the rasterizer camera is +Y down and +Z forward.
+        float2 equirect_uv = float2(pixel.x / float(cam.W), pixel.y / float(cam.H));
+        float3 shared_dir = lfs_equirect_direction(equirect_uv);
+        float3 ray_camera = float3(shared_dir.x, -shared_dir.y, -shared_dir.z);
         float3 direction = safe_normalize(mul(view_to_world_rotation, ray_camera));
         return { camera_origin, direction, isfinite(dot(camera_origin, camera_origin)) && isfinite(dot(direction, direction)) };
     }
@@ -632,6 +638,82 @@ float4 covariance_3d_to_2d(
 }
 
 
+// Standard PlayCanvas projects with an unclamped pinhole Jacobian. Its
+// covariance is in 4x native pixel-squared units, so +0.3 becomes +0.075 here.
+// Keep this forward-only path separate from the native training derivatives.
+[ForceInline]
+float4 covariance_3d_to_2d_portal(Camera cam, float3 xyz_ws, float3x3 cov_ws, bool mip_filter) {
+    float3 t = geom_transform_points(xyz_ws, cam.world_view_transform);
+    float3x3 J = cam.model == int(CameraModel::ORTHO)
+        ? compute_jacobian_ortho(xyz_ws, cam)
+        : float3x3(cam.fx / t.z, 0.0f, -(cam.fx * t.x) / (t.z * t.z),
+                   0.0f, cam.fy / t.z, -(cam.fy * t.y) / (t.z * t.z),
+                   0.0f, 0.0f, 0.0f);
+    float3x3 R = (float3x3)cam.world_view_transform;
+    float3x3 cov = mul(J, mul(R, mul(cov_ws, mul(transpose(R), transpose(J)))));
+    float3 raw = float3(cov[0][0], cov[0][1], cov[1][1]);
+    float3 blurred = raw + float3(0.075f, 0.0f, 0.075f);
+    float compensation = mip_filter ? sqrt(max(0.0f, compute_det(raw) / compute_det(blurred))) : 1.0f;
+    return float4(blurred, compensation);
+}
+
+// The legacy billboard caps each eigen-axis to min(1024, width, height)
+// pixels at its full support. Preserve its minor-axis floor as well.
+[ForceInline]
+float3 clamp_covariance_2d_portal(float3 cov, uint width, uint height) {
+    // Match the WebGPU projector's uniform covariance cap before its
+    // billboard eigen-axis cap. WebGL uses this same standard profile rule.
+    float limit = min(1024.0f, min(float(width), float(height)));
+    float cap = max(1.0f, sqrt(8.0f * max(cov.x, cov.z)) / limit);
+    cov /= cap * cap;
+    float mid = 0.5f * (cov.x + cov.z);
+    float radius = length(float2(0.5f * (cov.x - cov.z), cov.y));
+    float first = mid + radius;
+    float second = max(mid - radius, 0.025f);
+    float max_variance = limit * limit / 8.0f;
+    float a = min(first, max_variance);
+    float b = min(second, max_variance);
+    float2 axis = abs(cov.y) > 1e-6f ? normalize(float2(cov.y, first - cov.x))
+        : (cov.x >= cov.z ? float2(1.0f, 0.0f) : float2(0.0f, 1.0f));
+    float2 other = float2(axis.y, -axis.x);
+    return float3(a * axis.x * axis.x + b * other.x * other.x,
+                  a * axis.x * axis.y + b * other.x * other.y,
+                  a * axis.y * axis.y + b * other.y * other.y);
+}
+
+[ForceInline]
+float3 clamp_covariance_2d_portal(float3 cov, Camera cam) {
+    return clamp_covariance_2d_portal(cov, cam.W, cam.H);
+}
+
+[ForceInline]
+float3 portal_gut_bin_inverse(float3 raw_inv_cov, uint width, uint height) {
+    // Count and emit tiles from the same stored representation, including its
+    // rounding, so both passes agree even close to tile boundaries.
+    return compute_inverse(2.0f * clamp_covariance_2d_portal(
+        compute_inverse(raw_inv_cov), width, height));
+}
+
+
+// The portal's GUT fragment shader evaluates a ray only inside its projected
+// billboard. Binning can be conservative, but shading must retain that bound.
+[ForceInline]
+bool portal_gut_quad_contains(float2 pixel, float2 xy, float3 inv_cov, float opacity, Camera cam) {
+    if (opacity <= (1.0f / 255.0f)) return false;
+    float3 cov = clamp_covariance_2d_portal(compute_inverse(inv_cov), cam);
+    float mid = 0.5f * (cov.x + cov.z);
+    float radius = length(float2(0.5f * (cov.x - cov.z), cov.y));
+    float first = mid + radius;
+    float second = max(mid - radius, 0.025f);
+    float2 axis = abs(cov.y) > 1e-6f ? normalize(float2(cov.y, first - cov.x))
+        : (cov.x >= cov.z ? float2(1.0f, 0.0f) : float2(0.0f, 1.0f));
+    float clip = min(1.0f, 0.5f * sqrt(max(0.0f, log(opacity * 255.0f))));
+    float2 extent = sqrt(8.0f * float2(first, second)) * clip;
+    float2 d = pixel - xy;
+    return abs(dot(d, axis)) <= extent.x && abs(dot(d, float2(axis.y, -axis.x))) <= extent.y;
+}
+
+
 struct Splat_2D_Vertex : IDifferentiable
 {
     float3 xyz_vs;
@@ -695,19 +777,48 @@ Splat_2D_AlphaBlend load_splat_alphablend(
 
 [ForceInline]
 Splat_3D_GUT_AlphaBlend load_splat_gut_alphablend(
-    int32_t g_idx,
+    uint g_idx,
+    uint rgb_idx,
     StructuredBuffer<float> xyz_ws,
-    StructuredBuffer<float4> rotations,
-    StructuredBuffer<float> scaling_raw,
-    StructuredBuffer<float> opacity_raw,
-    StructuredBuffer<float> rgb
+    ByteAddressBuffer rotations,
+    ByteAddressBuffer scaling_raw,
+    ByteAddressBuffer opacity_raw,
+    StructuredBuffer<float> rgb,
+    uint lod_flags,
+    bool quantized_pool,
+    uint splat_render_profile
 ) {
     float3 g_xyz_ws = read_t3_float3(g_idx, xyz_ws);
-    float4 g_rotation = rotations[g_idx];
-    float3 g_scale = exp(read_t3_float3(g_idx, scaling_raw));
-    float g_opacity = sigmoid_activation(opacity_raw[g_idx]);
-    float3 g_rgb = read_t3_float3(g_idx, rgb);
-    float3x3 rotation = quat_to_rotmat(normalize(g_rotation));
+    float4 g_rotation;
+    float3 raw_scale;
+    float raw_opacity;
+    // Match the canonical RAD pool layout used by load_gaussian_split_quant.
+    if (quantized_pool) {
+        uint2 rq = rotations.Load2(g_idx * 8u);
+        g_rotation = float4(f16tof32(rq.x & 0xffffu), f16tof32(rq.x >> 16),
+                            f16tof32(rq.y & 0xffffu), f16tof32(rq.y >> 16));
+        uint2 sq = scaling_raw.Load2(g_idx * 8u);
+        raw_scale = float3(f16tof32(sq.x & 0xffffu), f16tof32(sq.x >> 16),
+                           f16tof32(sq.y & 0xffffu));
+        uint word = opacity_raw.Load((g_idx >> 1u) * 4u);
+        raw_opacity = f16tof32((g_idx & 1u) != 0u ? word >> 16 : word & 0xffffu);
+    } else {
+        g_rotation = asfloat(rotations.Load4(g_idx * 16u));
+        raw_scale = asfloat(scaling_raw.Load3(g_idx * 12u));
+        raw_opacity = asfloat(opacity_raw.Load(g_idx * 4u));
+    }
+    float3 g_scale = exp(min(raw_scale, float3(MAX_RAW_SCALE)));
+    const bool spark_rad_opacity = (lod_flags & 4u) != 0u;
+    float g_opacity = spark_rad_opacity ? max(raw_opacity, 0.0f) : sigmoid_activation(raw_opacity);
+    if (spark_rad_opacity && g_opacity > 1.0f)
+        g_opacity = min(g_opacity * 4.0f - 3.0f, 5.0f);
+    float3 g_rgb = read_t3_float3(rgb_idx, rgb);
+    if (splat_render_profile == 1u) {
+        g_rotation = lfsPortalCompactRotation(g_rotation);
+        g_scale = lfsPortalCompactScales(g_scale);
+        g_opacity = lfsPortalCompactOpacity(g_opacity);
+    }
+    float3x3 rotation = quat_to_rotmat(safe_quat_normalize(g_rotation));
     float3 safe_scale = max(g_scale, float3(1e-8f));
     float3x3 inv_scale = float3x3(
         1.0f / safe_scale.x, 0.0f, 0.0f,
@@ -835,6 +946,28 @@ float evaluate_splat_alpha(
 }
 
 [ForceInline]
+float4 evaluate_gut_splat_lod(Splat_3D_GUT_AlphaBlend g, float3 ray_origin, float3 ray_direction,
+                              bool spark_rad, uint profile) {
+    float3 gro = mul(g.iscl_rot, ray_origin - g.xyz_ws);
+    float3 grd = safe_normalize(mul(g.iscl_rot, ray_direction));
+    float3 distance = cross(grd, gro);
+    float sigma_over_2 = 0.5f * dot(distance, distance);
+    float value = exp(-sigma_over_2);
+    float alpha;
+    // Spark RAD leaves (opacity <= 1) blend like ordinary splats; only high-density LOD parents
+    // need the Spark kernel, so the ordinary path keeps its cost.
+    if (spark_rad && g.opacity > 1.0f) {
+        alpha = spark_rad_alpha_from_value(
+            g.opacity, sigma_over_2 > power_threshold_for_spark_rad_opacity(g.opacity) ? 0.0f : value);
+    } else {
+        alpha = clipOpacity(g.opacity * value);
+        if (!spark_rad && profile == 1u && alpha < (1.0f / 255.0f))
+            alpha = 0.0f;
+    }
+    return float4(clamp(g.rgb, float3(0.0f), float3(MAX_BLEND_COLOR)) * alpha, alpha);
+}
+
+[ForceInline]
 float evaluate_splat_alpha_spark_rad(
     float2 g_xy,
     float g_opacity,
@@ -850,6 +983,42 @@ float evaluate_splat_alpha_spark_rad(
         : exp(-sigma_over_2);
 
     return float(spark_rad_alpha_from_value(g_opacity, val));
+}
+
+
+// Portal standard 3DGS uses a compact, normalized Gaussian. A pure exp()
+// leaves more opacity in its tails and visibly changes overlapping splats.
+[ForceInline]
+float portal_normalized_falloff(float value) {
+    const float edge = 0.01831563888873418f; // exp(-4)
+    return max(0.0f, (value - edge) / (1.0f - edge));
+}
+
+[ForceInline]
+float evaluate_splat_alpha_for_profile(float2 xy, float opacity, float3 inv_cov, float2 pixel, uint profile) {
+    if (profile != 1u)
+        return evaluate_splat_alpha(xy, opacity, inv_cov, pixel);
+    if (opacity <= (1.0f / 255.0f)) return 0.0f;
+    float2 d = pixel - xy;
+    float power = 0.5f * (inv_cov.x * d.x * d.x + inv_cov.z * d.y * d.y) + inv_cov.y * d.x * d.y;
+    float value = power < 0.0f || power > 4.0f ? 0.0f : exp(-power);
+    float alpha = clipOpacity(opacity * portal_normalized_falloff(value));
+    return alpha >= (1.0f / 255.0f) ? alpha : 0.0f;
+}
+
+[ForceInline]
+float4 evaluate_splat_for_profile(Splat_2D_AlphaBlend g, float2 pixel, uint profile) {
+    if (profile != 1u)
+        return evaluate_splat(g, pixel);
+    float alpha = evaluate_splat_alpha_for_profile(g.xy_vs, g.inv_cov_vs_opacity.w,
+                                                  g.inv_cov_vs_opacity.xyz, pixel, profile);
+    return float4(clamp(g.rgb, float3(0.0f), float3(MAX_BLEND_COLOR)) * alpha, alpha);
+}
+
+[ForceInline]
+float4 evaluate_gut_splat_for_profile(Splat_3D_GUT_AlphaBlend g, float3 origin, float3 direction, uint profile) {
+    float4 rgba = evaluate_gut_splat(g, origin, direction);
+    return profile == 1u && rgba.a < (1.0f / 255.0f) ? float4(0.0f) : rgba;
 }
 
 [Differentiable]
@@ -976,13 +1145,14 @@ float2 ellipse_range_bound(
 int count_ellipse_grid_overlaps(
     float2 pixelspace_xy,
     float3 inv_cov,
-    rectangle grid
+    rectangle grid,
+    bool scan_rows
 ) {
     // count the number grid cells that overlap with an ellipse
 
     int n_tiles = 0;
 
-    if (grid.max_y-grid.min_y <= grid.max_x-grid.min_x) {
+    if (scan_rows) {
         for (uint16_t y = grid.min_y; y < grid.max_y; y++) {
             float y0 = y * TILE_HEIGHT - pixelspace_xy.y;
             float y1 = y0 + TILE_HEIGHT;
@@ -1044,12 +1214,51 @@ struct Uniforms {
     // 0 = median depth; > 0 = alpha-weighted (expected) depth, far bound = value.
     float expected_far;
     // Explicit padding to keep dist_coeffs 16-byte aligned; mirrors the C++
-    // struct exactly (192 bytes total). shN_address occupies the former
+    // struct exactly (224 bytes total). shN_address occupies the former
     // uniforms_pad1/pad2 (offset 104, 8-byte aligned).
     uint depth_wave;
     uint64_t shN_address;
     float4 dist_coeffs;
     float4x4 world_view_transform;
+    float color_exposure;
+    uint color_tonemapping;
+    uint splat_render_profile;
+    float rasterization_scale;
+    // Distance the orthographic eye was moved back; subtracted from every depth output.
+    float depth_offset;
+    uint depth_offset_pad0;
+    uint depth_offset_pad1;
+    uint depth_offset_pad2;
+}
+
+// mip_filter packs MIP filtering (bit 0), exact depth replay (bit 1),
+// full-frame binning for banded exports (bit 2), and a depth sample mask (bit 3).
+#ifndef LFS_BANDED_EXPORT_RENDER
+#define LFS_BANDED_EXPORT_RENDER 0
+#endif
+
+bool full_frame_binning(Uniforms uniforms) {
+#if LFS_BANDED_EXPORT_RENDER
+    return (uniforms.mip_filter & 4u) != 0u;
+#else
+    return false;
+#endif
+}
+
+[ForceInline]
+rectangle clip_to_render_grid(rectangle rect, Uniforms uniforms) {
+    const uint2 lo = uint2(uniforms.render_origin_x / TILE_WIDTH,
+                          uniforms.render_origin_y / TILE_HEIGHT);
+    const uint2 hi = lo + uint2(uniforms.grid_width, uniforms.grid_height);
+    // Full-width panorama bands retain the wrapped interval across the seam.
+    // The tile pass reduces these x coordinates modulo the full-width grid.
+    if (base_camera_model(uniforms.camera_model) != uint(CameraModel::EQUIRECTANGULAR)) {
+        rect.min_x = uint16_t(clamp(uint(rect.min_x), lo.x, hi.x));
+        rect.max_x = uint16_t(clamp(uint(rect.max_x), lo.x, hi.x));
+    }
+    rect.min_y = uint16_t(clamp(uint(rect.min_y), lo.y, hi.y));
+    rect.max_y = uint16_t(clamp(uint(rect.max_y), lo.y, hi.y));
+    return rect;
 }
 
 // HiGS macro-tile grid (64x32 px macro tiles), derived from the legacy
@@ -1064,9 +1273,17 @@ uint higs_macro_grid_height(uint grid_height) {
     return (grid_height + HIGS_MACRO_T16_H - 1u) / HIGS_MACRO_T16_H;
 }
 
+// The active-mask buffer starts with one word per possible macro batch.
+// Exact-depth replay ballots follow that header and reuse the partials pool
+// across raster waves. Use the logical grid here, not its allocation bucket.
+[ForceInline]
+uint higs_replay_mask_base(Uniforms uniforms) {
+    return (uniforms.sort_capacity + RASTER_BATCH_SIZE - 1u) / RASTER_BATCH_SIZE +
+           higs_macro_grid_width(uniforms.grid_width) * higs_macro_grid_height(uniforms.grid_height);
+}
+
 static const uint OVERLAY_FLAG_DIM = 1;
 static const uint OVERLAY_FLAG_NONSELECTABLE = 2;
-static const uint OVERLAY_FLAG_FLASH = 4;
 
 static const uint SELECTION_PREVIEW_FLAG = 0x80;
 static const uint SELECTION_GROUP_MASK = 0x7F;
@@ -1156,7 +1373,6 @@ struct OverlayUniformState {
     bool preview_mask_enabled;
     bool add_mode;
     int focused_gaussian_id;
-    float flash_intensity;
 };
 
 [ForceInline]
@@ -1166,7 +1382,6 @@ OverlayUniformState load_overlay_uniform_state(StructuredBuffer<float4> overlay_
     float4 marker_flags = overlay_params[OVERLAY_PARAM_MARKER_FLAGS];
     float4 selection_cursor = overlay_params[OVERLAY_PARAM_SELECTION_CURSOR];
     float4 selection_flags = overlay_params[OVERLAY_PARAM_SELECTION_FLAGS];
-    float4 emphasis_flags = overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS];
 
     OverlayUniformState state;
     state.cursor_enabled = overlay_enabled(cursor_flags.x);
@@ -1182,12 +1397,11 @@ OverlayUniformState load_overlay_uniform_state(StructuredBuffer<float4> overlay_
     state.preview_mask_enabled = overlay_enabled(selection_flags.y);
     state.add_mode = overlay_enabled(selection_flags.z);
     state.focused_gaussian_id = overlay_int(selection_flags.w);
-    state.flash_intensity = emphasis_flags.w;
     return state;
 }
 
 // Pack per-splat overlay payload for groupshared staging: flags | sel | preview.
-// Flags currently use 3 bits; 16 bits leave headroom without a second shared slot.
+// Flags currently use 2 bits; 16 bits leave headroom without a second shared slot.
 [ForceInline]
 uint pack_overlay_per_splat(uint flags, uint selection_byte, uint preview_byte)
 {
@@ -1381,24 +1595,6 @@ float4 apply_selection_overlay(
     } else if (group_id > 0u) {
         color = lerp(color, selection_colors[group_id].xyz, SELECTION_COMMITTED_BLEND);
     }
-    return replace_unpremultiplied_color(gauss_rgba, color);
-}
-
-[ForceInline]
-float4 apply_flash_overlay(
-    float4 gauss_rgba,
-    uint flags,
-    float flash_intensity)
-{
-    if ((flags & OVERLAY_FLAG_FLASH) == 0u) {
-        return gauss_rgba;
-    }
-    if (flash_intensity <= 0.0f) {
-        return gauss_rgba;
-    }
-    float3 color = unpremultiplied_color(gauss_rgba);
-    const float3 flash_color = float3(1.0f, 0.95f, 0.6f);
-    color = lerp(color, flash_color, flash_intensity * 0.5f);
     return replace_unpremultiplied_color(gauss_rgba, color);
 }
 

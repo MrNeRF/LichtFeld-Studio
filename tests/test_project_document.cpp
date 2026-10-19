@@ -5,12 +5,16 @@
 
 #include "app/headless_recovery_document.hpp"
 #include "core/image_io.hpp"
+#include "core/path_utils.hpp"
 #include "io/embedded_dataset.hpp"
+#include "io/formats/transforms.hpp"
 #include "io/loaders/loader_utils.hpp"
 #include "io/project/project_container_internal.hpp"
 #include "io/project/span_streambuf.hpp"
 #include "io/project_document.hpp"
+#include "io/project_operations.hpp"
 #include "io/project_recovery.hpp"
+#include "io/sfm_observation_chapter.hpp"
 #include "licht_test_support.hpp"
 #include "project/session_state.hpp"
 #include "training/checkpoint.hpp"
@@ -37,6 +41,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -132,6 +137,34 @@ namespace {
             }
         }
         lfs::core::save_image_u8(path, image);
+    }
+
+    TEST(ProjectDocumentTest, SaveAsAcceptsLongDestinationFilename) {
+        TemporaryDirectory temporary;
+        const auto source = temporary.path / "source.licht";
+        auto document = make_empty_document(fixed_uuid(19'180), 100);
+        const ProjectLicense license{"CC BY", "Preserve this notice"};
+        ASSERT_TRUE(document->set_license(license));
+        ASSERT_TRUE(document->save(source, save_options(19'181, 200)));
+        for (const size_t length : {size_t{173}, size_t{174}, size_t{240}}) {
+            SCOPED_TRACE(length);
+            const auto destination = temporary.path / (std::string(length - 6, 'x') + ".licht");
+            const auto start = std::chrono::steady_clock::now();
+            auto saved = document->save_as(destination, save_options(19'182 + length, 300));
+            ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+            RecordProperty("save_as_" + std::to_string(length) + "_us",
+                           std::to_string(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count()));
+            auto original = ProjectDocument::open(source);
+            ASSERT_TRUE(original) << lfs::format_for_developer(original.error());
+            auto overwritten = original->save_as(destination, save_options(19'582 + length, 400));
+            ASSERT_TRUE(overwritten) << lfs::format_for_developer(overwritten.error());
+            auto reopened = ProjectDocument::open(destination);
+            ASSERT_TRUE(reopened) << lfs::format_for_developer(reopened.error());
+            const auto saved_license = require_result(reopened->project().license());
+            ASSERT_TRUE(saved_license);
+            EXPECT_EQ(*saved_license, license);
+            EXPECT_TRUE(fs::is_regular_file(source));
+        }
     }
 
     TEST(ProjectDocumentTest, LicensePersistsAcrossSaveAsAndCompaction) {
@@ -947,6 +980,31 @@ namespace {
                 static_cast<float>(expected)));
     }
 
+    TEST(SceneChapterAdapterTest, EncodedSplatBindingsCaptureAndRejectWrongOwners) {
+        Scene scene;
+        const auto id = scene.addSplat("Encoded", make_splat(2));
+        const auto uuid = scene.getNodeUuid(id);
+        for (const auto* format : {"ply", "sog", "ssog", "spz"}) {
+            ScenePayloadBindings bindings{{uuid, PayloadBinding{
+                                                     .fourcc = "DSRC",
+                                                     .instance_uuid = uuid,
+                                                     .reference_uuid = std::nullopt,
+                                                     .source_kind = format}}};
+            auto captured = capture_scene_graph(scene, bindings);
+            ASSERT_TRUE(captured) << lfs::format_for_developer(captured.error());
+            auto nodes = captured->nodes();
+            ASSERT_TRUE(nodes);
+            ASSERT_EQ(nodes->size(), 1u);
+            EXPECT_EQ(nodes->front().payload->fourcc, "DSRC");
+            EXPECT_EQ(nodes->front().payload->source_kind, format);
+            bindings.at(uuid).instance_uuid = fixed_uuid(9876);
+            EXPECT_FALSE(capture_scene_graph(scene, bindings));
+            bindings.at(uuid).instance_uuid = uuid;
+            bindings.at(uuid).reference_uuid = fixed_uuid(9876);
+            EXPECT_FALSE(capture_scene_graph(scene, bindings));
+        }
+    }
+
     TEST(SceneChapterAdapterTest,
          DuplicateNamesHydrateWithDistinctStableUuids) {
         SceneGraphChapter chapter;
@@ -1078,6 +1136,255 @@ namespace {
             lfs::core::CameraModelType::PINHOLE,
             image_name, std::filesystem::path{},
             std::filesystem::path{}, size, size, uid);
+    }
+
+    TEST(CameraCreationSchemaTest, MissingDistortionCapturesAndHydratesExactly) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        Scene scene;
+        const auto camera = std::make_shared<lfs::core::Camera>(
+            Tensor::eye(3, Device::CPU),
+            Tensor::from_vector({1.25f, -2.5f, 3.75f}, {3}, Device::CPU),
+            50.0f, 55.0f, 50.0f, 60.0f, Tensor{}, Tensor{},
+            lfs::core::CameraModelType::PINHOLE, "camera", std::filesystem::path{},
+            std::filesystem::path{}, 100, 120, 7);
+        for (const auto& distortion : {camera->radial_distortion(), camera->tangential_distortion()}) {
+            ASSERT_TRUE(distortion.is_valid());
+            EXPECT_EQ(distortion.dtype(), DataType::Float32);
+            EXPECT_EQ(distortion.ndim(), 1u);
+            EXPECT_EQ(distortion.numel(), 0u);
+        }
+        ASSERT_NE(scene.addCamera("camera", scene.addGroup("Cameras"), camera), lfs::core::NULL_NODE);
+        auto chapter = capture_scene_graph(scene, ScenePayloadBindings{});
+        ASSERT_TRUE(chapter) << lfs::format_for_developer(chapter.error());
+        Scene restored;
+        ASSERT_TRUE(hydrate_scene_graph(*chapter, restored, ScenePayloadResolver{}));
+        const auto* node = restored.getNode("camera");
+        ASSERT_NE(node, nullptr);
+        ASSERT_NE(node->camera, nullptr);
+        EXPECT_EQ(node->camera->R().to_vector(), camera->R().to_vector());
+        EXPECT_EQ(node->camera->T().to_vector(), camera->T().to_vector());
+        EXPECT_EQ(node->camera->focal_x(), camera->focal_x());
+        EXPECT_EQ(node->camera->focal_y(), camera->focal_y());
+        EXPECT_EQ(node->camera->camera_width(), camera->camera_width());
+        EXPECT_EQ(node->camera->camera_height(), camera->camera_height());
+        EXPECT_EQ(node->camera->uid(), camera->uid());
+        EXPECT_TRUE(capture_scene_graph(restored, ScenePayloadBindings{}));
+    }
+
+    TEST(CameraCreationSchemaTest, ExistingCalibrationAndCreationTiming) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto r = Tensor::eye(3, Device::CPU);
+        const auto t = Tensor::from_vector({1.25f, -2.5f, 3.75f}, {3}, Device::CPU);
+        const auto radial = Tensor::from_vector({0.125f, -0.25f}, {2}, Device::CPU);
+        const auto tangential = Tensor::from_vector({0.03125f, -0.0625f}, {2}, Device::CPU);
+        for (int sample = 0; sample < 6; ++sample) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int iteration = 0; iteration < 200; ++iteration) {
+                lfs::core::Camera camera(r, t, 50.0f, 55.0f, 49.0f, 59.0f, radial, tangential,
+                                         lfs::core::CameraModelType::PINHOLE, "camera",
+                                         std::filesystem::path{}, std::filesystem::path{}, 100, 120, 7);
+                EXPECT_EQ(camera.R().to_vector(), r.to_vector());
+                EXPECT_EQ(camera.T().to_vector(), t.to_vector());
+                EXPECT_EQ(camera.radial_distortion().to_vector(), radial.to_vector());
+                EXPECT_EQ(camera.tangential_distortion().to_vector(), tangential.to_vector());
+                EXPECT_EQ(camera.center_x(), 49.0f);
+                EXPECT_EQ(camera.center_y(), 59.0f);
+            }
+            const double micros = std::chrono::duration<double, std::micro>(
+                                      std::chrono::steady_clock::now() - start)
+                                      .count() /
+                                  200;
+            std::cout << "camera_creation_us sample=" << sample << " value=" << micros << '\n';
+        }
+    }
+
+    TEST(CameraCreationSchemaTest, ConstructorKeepsAcceptingLoaderInputs) {
+        // Dataset loaders build cameras through this constructor; normalizing missing
+        // distortion must never turn a previously loadable camera into an error.
+        const auto rotation = Tensor::eye(3, Device::CPU);
+        const auto create = [&](const Tensor& t, const Tensor& radial, float fx, float fy, int width, int height) {
+            return lfs::core::Camera(rotation, t, fx, fy, 0.0f, 0.0f, radial, Tensor{},
+                                     lfs::core::CameraModelType::PINHOLE, "camera",
+                                     std::filesystem::path{}, std::filesystem::path{}, width, height, 0);
+        };
+        const auto t3 = Tensor::zeros({3}, Device::CPU);
+        const auto twelve = Tensor::zeros({12}, Device::CPU);
+        EXPECT_NO_THROW(create(t3, Tensor{}, 0.0f, 0.0f, 0, 0));
+        EXPECT_NO_THROW(create(t3, twelve, 525.0f, 525.0f, 640, 480));
+        const auto with_coefficients = create(t3, twelve, 525.0f, 525.0f, 640, 480);
+        EXPECT_EQ(with_coefficients.radial_distortion().numel(), 12u);
+        EXPECT_EQ(with_coefficients.T().shape(), t3.shape());
+        const auto without = create(t3, Tensor{}, 525.0f, 525.0f, 640, 480);
+        ASSERT_TRUE(without.radial_distortion().is_valid());
+        EXPECT_EQ(without.radial_distortion().dtype(), DataType::Float32);
+        EXPECT_EQ(without.radial_distortion().numel(), 0u);
+        EXPECT_EQ(without.tangential_distortion().numel(), 0u);
+    }
+
+    using lfs::core::Camera;
+    using lfs::io::project::SfmObservationTable;
+
+    void expect_sfm_observations_exact(const std::span<const Camera::SfmObservation> expected,
+                                       const std::span<const Camera::SfmObservation> actual) {
+        ASSERT_EQ(actual.size(), expected.size());
+        EXPECT_EQ(std::memcmp(actual.data(), expected.data(), expected.size_bytes()), 0);
+    }
+
+    std::shared_ptr<Camera> add_observed_camera(Scene& scene, const lfs::core::NodeId group,
+                                                const std::string& name, const int uid,
+                                                std::vector<Camera::SfmObservation> observations) {
+        auto camera = make_adapter_test_camera(name, uid);
+        camera->set_sfm_observations(std::move(observations));
+        EXPECT_NE(scene.addCamera(name, group, camera), lfs::core::NULL_NODE);
+        return camera;
+    }
+
+    // Catches a layout that is not the documented little-endian header, sorted index and raw
+    // float32 data, and an index reader that accepts truncated, foreign or unsorted chapters.
+    TEST(SfmObservationChapterTest, EncodesTheDocumentedLayoutAndRejectsMalformedChapters) {
+        const std::vector<Camera::SfmObservation> first{{.u = 1.5f, .v = 2.0f, .x = -3.0f, .y = 4.0f, .z = 5.0f}};
+        const std::vector<Camera::SfmObservation> second{{.u = 6.0f, .v = 7.0f, .x = 8.0f, .y = 9.0f, .z = 10.0f},
+                                                         {.u = -0.0f, .v = 0.25f, .x = 0.5f, .y = 0.75f, .z = 1.0f}};
+        const auto low = fixed_uuid(19'300);
+        const auto high = fixed_uuid(19'301);
+        ASSERT_TRUE(lfs::io::project::UuidLess{}(low, high));
+        const auto bytes = lfs::io::project::encode_sfm_observations(SfmObservationTable{{high, &second}, {low, &first}});
+        ASSERT_EQ(bytes.size(), 32u + 2 * 24u + 3 * 20u);
+        const auto u32 = [&](const std::size_t offset) {
+            return std::to_integer<std::uint32_t>(bytes[offset]) |
+                   std::to_integer<std::uint32_t>(bytes[offset + 1]) << 8 |
+                   std::to_integer<std::uint32_t>(bytes[offset + 2]) << 16 |
+                   std::to_integer<std::uint32_t>(bytes[offset + 3]) << 24;
+        };
+        EXPECT_EQ(std::string(reinterpret_cast<const char*>(bytes.data()), 4), "SFMO");
+        EXPECT_EQ(u32(4), 1u);
+        EXPECT_EQ(u32(8), 2u);
+        EXPECT_EQ(u32(16), 3u);
+        EXPECT_EQ(std::memcmp(bytes.data() + 32, low.bytes.data(), 16), 0);
+        EXPECT_EQ(u32(32 + 16), 1u);
+        EXPECT_EQ(std::memcmp(bytes.data() + 56, high.bytes.data(), 16), 0);
+        EXPECT_EQ(u32(56 + 16), 2u);
+        EXPECT_EQ(u32(80), std::bit_cast<std::uint32_t>(1.5f));
+        EXPECT_EQ(u32(100), std::bit_cast<std::uint32_t>(6.0f));
+
+        const auto index_of = [](std::vector<std::byte> chapter) {
+            auto value = LazyChunkValue::from_owned(std::move(chapter), fixed_uuid(19'302));
+            EXPECT_TRUE(value);
+            return lfs::io::project::read_sfm_observation_index(*value);
+        };
+        const auto index = index_of(bytes);
+        ASSERT_TRUE(index) << lfs::format_for_developer(index.error());
+        EXPECT_EQ(index->observation_count, 3u);
+        EXPECT_EQ(index->cameras.at(low).first, 0u);
+        EXPECT_EQ(index->cameras.at(high).first, 1u);
+        EXPECT_EQ(index->cameras.at(high).count, 2u);
+
+        auto truncated = bytes;
+        truncated.resize(bytes.size() - 4);
+        EXPECT_FALSE(index_of(truncated));
+        auto foreign = bytes;
+        foreign[0] = std::byte{'X'};
+        EXPECT_FALSE(index_of(foreign));
+        auto unsorted = bytes;
+        std::swap_ranges(unsorted.begin() + 32, unsorted.begin() + 48, unsorted.begin() + 56);
+        EXPECT_FALSE(index_of(unsorted));
+    }
+
+    // Catches observations written into the size-limited JSON scene chapter, decoded when the
+    // project opens, rewritten on every save, or altered on the way back.
+    TEST(SceneChapterAdapterTest, SfmObservationsLiveInTheirOwnChapterAndLoadOnFirstUse) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        std::vector<Camera::SfmObservation> dense(200'000);
+        for (std::size_t i = 0; i < dense.size(); ++i) {
+            const auto value = static_cast<float>(i);
+            dense[i] = {.u = value, .v = -value, .x = 0.5f * value, .y = 1.0f, .z = -0.0f};
+        }
+        const std::vector<Camera::SfmObservation> sparse{{.u = 12.5f, .v = 2160.125f, .x = -0.03125f, .y = 64.5f, .z = 0.125f}};
+        Scene source;
+        const auto group = source.addCameraGroup("Training", source.addDataset("Dataset"), 2);
+        add_observed_camera(source, group, "dense.png", 7, dense);
+        add_observed_camera(source, group, "sparse.png", 8, sparse);
+        add_observed_camera(source, group, "none.png", 9, {});
+
+        auto chapter = capture_scene_graph(source, ScenePayloadBindings{});
+        ASSERT_TRUE(chapter) << lfs::format_for_developer(chapter.error());
+        EXPECT_LT(chapter->to_bytes().size(), 16u * 1024u);
+        auto document = make_empty_document(fixed_uuid(19'310), 100);
+        document->edit_scene_graph() = std::move(*chapter);
+        ASSERT_TRUE(lfs::io::project::sync_sfm_observations(
+            *document, lfs::io::project::capture_sfm_observation_cameras(source)));
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "observed.licht";
+        (void)require_result(document->save(path, save_options(19'311, 200)));
+
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
+        const auto root = json_root(reopened->scene_graph().dom());
+        std::map<std::string, std::uint64_t> counts;
+        for (const auto& node : root["nodes"]) {
+            if (node.value("type", "") == "camera")
+                counts[node["name"]] = node["camera"].value("sfm_observations", std::uint64_t{0});
+        }
+        EXPECT_EQ(counts, (std::map<std::string, std::uint64_t>{{"dense.png", dense.size()}, {"none.png", 0}, {"sparse.png", 1}}));
+        const auto* stored = reopened->find_sfm_observations();
+        ASSERT_NE(stored, nullptr);
+        const auto stored_uuid = stored->snapshot_uuid();
+
+        Scene restored;
+        ASSERT_TRUE(reopened->hydrate(restored));
+        const auto camera_of = [&](const std::string& name) { return restored.getNode(name)->camera; };
+        ASSERT_NE(camera_of("dense.png")->sfm_observation_source(), nullptr);
+        EXPECT_EQ(camera_of("dense.png")->sfm_observation_count(), dense.size());
+        EXPECT_EQ(camera_of("none.png")->sfm_observation_source(), nullptr);
+        expect_sfm_observations_exact(dense, camera_of("dense.png")->sfm_observations());
+        expect_sfm_observations_exact(sparse, camera_of("sparse.png")->sfm_observations());
+        EXPECT_TRUE(camera_of("none.png")->sfm_observations().empty());
+
+        ASSERT_TRUE(lfs::io::project::sync_sfm_observations(
+            *reopened, lfs::io::project::capture_sfm_observation_cameras(restored)));
+        reopened->edit_metrics();
+        (void)require_result(reopened->save(path, save_options(19'312, 300)));
+        auto resaved = require_result_ptr(ProjectDocument::open(path));
+        ASSERT_NE(resaved->find_sfm_observations(), nullptr);
+        EXPECT_EQ(resaved->find_sfm_observations()->snapshot_uuid(), stored_uuid);
+
+        const auto copy = temporary.path / "copy.licht";
+        (void)require_result(resaved->save_as(copy, save_options(19'313, 400)));
+        auto copied = require_result_ptr(ProjectDocument::open(copy));
+        Scene from_copy;
+        ASSERT_TRUE(copied->hydrate(from_copy));
+        expect_sfm_observations_exact(sparse, from_copy.getNode("sparse.png")->camera->sfm_observations());
+    }
+
+    // Catches a reader that requires the observation reference and so rejects projects written
+    // before it existed, or that invents observations for them.
+    TEST(SceneChapterAdapterTest, CamerasWithoutStoredObservationsStillHydrate) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        Scene source;
+        const auto group = source.addCameraGroup("Training", source.addDataset("Dataset"), 1);
+        add_observed_camera(source, group, "legacy.png", 8, {});
+        auto chapter = capture_scene_graph(source, ScenePayloadBindings{});
+        ASSERT_TRUE(chapter) << lfs::format_for_developer(chapter.error());
+        auto document = make_empty_document(fixed_uuid(19'320), 100);
+        document->edit_scene_graph() = std::move(*chapter);
+        ASSERT_TRUE(lfs::io::project::sync_sfm_observations(
+            *document, lfs::io::project::capture_sfm_observation_cameras(source)));
+        EXPECT_EQ(document->find_sfm_observations(), nullptr);
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "legacy.licht";
+        (void)require_result(document->save(path, save_options(19'321, 200)));
+
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
+        Scene restored;
+        ASSERT_TRUE(reopened->hydrate(restored));
+        EXPECT_TRUE(restored.getNode("legacy.png")->camera->sfm_observations().empty());
     }
 
     TEST(SceneChapterAdapterTest,
@@ -1809,6 +2116,49 @@ namespace {
         }
     }
 
+    TEST(ProjectDocumentTest, EmptySelectionChapterRestoresDefaultGroupWithoutDirty) {
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "empty-selection.licht";
+        auto created = make_empty_document(fixed_uuid(156001), 100);
+        const auto saved = created->save(path, save_options(156001, 200));
+        ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
+        EXPECT_FALSE(reopened->dirty());
+        auto reader = require_result(ProjectReader::open(path));
+        const auto* row = reader.find(FOURCC_SELM, reopened->project_uuid());
+        ASSERT_NE(row, nullptr);
+        auto decoded = require_result(decode_selection_chapter(
+            require_result(reader.read_chunk(*row))));
+        EXPECT_TRUE(decoded.groups().empty());
+        EXPECT_EQ(decoded.active_group_id(), 0);
+
+        Scene live;
+        auto shell = reopened->stage_shell(live);
+        ASSERT_TRUE(shell) << lfs::format_for_developer(shell.error());
+        live.commitRestoreStage(std::move(*shell));
+        const Scene fresh;
+        ASSERT_EQ(live.getSelectionGroups().size(), fresh.getSelectionGroups().size());
+        ASSERT_FALSE(live.getSelectionGroups().empty());
+        EXPECT_EQ(live.getActiveSelectionGroup(), fresh.getActiveSelectionGroup());
+        EXPECT_EQ(live.getSelectionGroups().front().id, fresh.getSelectionGroups().front().id);
+        EXPECT_EQ(live.getSelectionGroups().front().name, fresh.getSelectionGroups().front().name);
+        EXPECT_FLOAT_EQ(live.getSelectionGroups().front().color.x, fresh.getSelectionGroups().front().color.x);
+        EXPECT_FLOAT_EQ(live.getSelectionGroups().front().color.y, fresh.getSelectionGroups().front().color.y);
+        EXPECT_FLOAT_EQ(live.getSelectionGroups().front().color.z, fresh.getSelectionGroups().front().color.z);
+        EXPECT_FALSE(reopened->dirty());
+
+        auto captured = require_result(capture_selection_chapter(live, {}));
+        EXPECT_EQ(
+            require_result(encode_selection_chapter(captured)),
+            require_result(encode_selection_chapter(reopened->selection())));
+
+        auto again = reopened->save(path, save_options(156002, 300));
+        ASSERT_TRUE(again) << lfs::format_for_developer(again.error());
+        EXPECT_EQ(again->rewritten_chunks, 1u);
+        EXPECT_FALSE(reopened->dirty());
+    }
+
     TEST(ProjectDocumentTest,
          DeferredShellExposesUnloadedUnitsAndCommitsHydrationPerNodeUuid) {
         TemporaryDirectory temporary;
@@ -2149,7 +2499,7 @@ namespace {
         lfs::core::free_image(pixels);
     }
 
-    TEST(ProjectDocumentTest, DatasetImageWinsOverCallerPreview) {
+    TEST(ProjectDocumentTest, CallerPreviewWinsOverAutomaticDatasetPreview) {
         TemporaryDirectory temporary;
         const auto images = temporary.path / "images";
         fs::create_directories(images);
@@ -2161,10 +2511,12 @@ namespace {
         require_status(document->edit_parameters().set_snapshot(snapshot));
         bind_dataset(*document, temporary.path);
 
-        const auto preview = one_pixel_png();
+        const auto caller_preview_path = temporary.path / "caller-preview.png";
+        write_solid_png(caller_preview_path, 1, 1);
+        const auto preview = read_file_bytes(caller_preview_path);
         auto options = save_options(2111, 200);
         options.preview_png = std::span<const std::byte>(preview);
-        const auto path = temporary.path / "dataset-wins.licht";
+        const auto path = temporary.path / "caller-preview-wins.licht";
         auto saved = document->save(path, options);
         ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
 
@@ -2173,15 +2525,14 @@ namespace {
         auto png = reader->read_preview();
         ASSERT_TRUE(png);
         ASSERT_FALSE(png->empty());
-        EXPECT_NE(*png, preview);
+        EXPECT_EQ(*png, preview);
         const auto [pixels, width, height, channels] =
             lfs::core::load_image_from_memory(
                 reinterpret_cast<const std::uint8_t*>(png->data()),
                 png->size());
         ASSERT_NE(pixels, nullptr);
-        EXPECT_LE(std::max(width, height), 512);
-        EXPECT_GT(width, 1);
-        EXPECT_GT(height, 1);
+        EXPECT_EQ(width, 1);
+        EXPECT_EQ(height, 1);
         EXPECT_GE(channels, 1);
         lfs::core::free_image(pixels);
     }
@@ -2211,7 +2562,7 @@ namespace {
     }
 
     TEST(ProjectDocumentTest,
-         ExplicitSaveReplacesExistingThumbWithDatasetImage) {
+         ExplicitSavePreservesExistingCustomThumbnailWhenDatasetImageAppears) {
         TemporaryDirectory temporary;
         const auto images = temporary.path / "images";
         fs::create_directories(images);
@@ -2248,17 +2599,66 @@ namespace {
         auto png = second_reader->read_preview();
         ASSERT_TRUE(png);
         ASSERT_FALSE(png->empty());
-        EXPECT_NE(*png, preview);
-        const auto [pixels, width, height, channels] =
-            lfs::core::load_image_from_memory(
-                reinterpret_cast<const std::uint8_t*>(png->data()),
-                png->size());
-        ASSERT_NE(pixels, nullptr);
-        EXPECT_LE(std::max(width, height), 512);
-        EXPECT_GT(width, 1);
-        EXPECT_GT(height, 1);
-        EXPECT_GE(channels, 1);
-        lfs::core::free_image(pixels);
+        EXPECT_EQ(*png, preview);
+    }
+
+    TEST(ProjectDocumentTest,
+         ReopenedDocumentPreservesContentsThumbnailOnSaveAndSaveAs) {
+        TemporaryDirectory temporary;
+        const auto images = temporary.path / "images";
+        fs::create_directories(images);
+
+        auto document = make_empty_document(fixed_uuid(2170), 100);
+        auto snapshot = require_result(document->parameters().snapshot());
+        snapshot.dataset.images = "images";
+        require_status(document->edit_parameters().set_snapshot(snapshot));
+        bind_dataset(*document, temporary.path);
+
+        auto first_options = save_options(2171, 200);
+        const auto path = temporary.path / "contents-thumbnail.licht";
+        auto first_saved = document->save(path, first_options);
+        ASSERT_TRUE(first_saved)
+            << lfs::format_for_developer(first_saved.error());
+
+        const auto external_image_path = temporary.path / "external-preview.png";
+        write_solid_png(external_image_path, 2, 2);
+        const auto external_preview = read_file_bytes(external_image_path);
+        require_result(lfs::io::project::set_project_preview(path, external_preview));
+
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
+        const auto unsaved_node_uuid = fixed_uuid(2174);
+        require_status(reopened->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = unsaved_node_uuid,
+                .type = "group",
+                .name = "Unsaved scene edit",
+                .child_order = 0,
+            }));
+        write_solid_png(images / "scene.png", 800, 400);
+        auto saved = reopened->save(path, save_options(2172, 300));
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+        auto reader = ProjectReader::open(path);
+        ASSERT_TRUE(reader);
+        auto png = reader->read_preview();
+        ASSERT_TRUE(png);
+        EXPECT_EQ(*png, external_preview);
+        auto saved_document = require_result_ptr(ProjectDocument::open(path));
+        const auto saved_node = require_result(
+            saved_document->scene_graph().find(unsaved_node_uuid));
+        ASSERT_TRUE(saved_node);
+        EXPECT_EQ(saved_node->name, "Unsaved scene edit");
+
+        const auto destination = temporary.path / "contents-thumbnail-copy.licht";
+        auto save_as = saved_document->save_as(
+            destination, save_options(2173, 400));
+        ASSERT_TRUE(save_as)
+            << lfs::format_for_developer(save_as.error());
+        auto copied_reader = ProjectReader::open(destination);
+        ASSERT_TRUE(copied_reader);
+        auto copied_preview = copied_reader->read_preview();
+        ASSERT_TRUE(copied_preview);
+        EXPECT_EQ(*copied_preview, external_preview);
     }
 
     TEST(ProjectDocumentTest,
@@ -3625,6 +4025,52 @@ namespace {
         EXPECT_EQ(*after, *before);
     }
 
+    TEST(ProjectDocumentTest, AutosaveWriterUsesBoundedNativeSidecarNames) {
+        TemporaryDirectory temporary;
+        std::vector<std::string> names;
+        for (size_t length = 247; length <= 255; ++length)
+            names.push_back(std::string(length - 6, 'x') + ".licht");
+#ifndef _WIN32
+        names.emplace_back("caf\xe9.licht");
+        names.emplace_back("caf\xe8.licht");
+        names.push_back(std::string(248, 'x') + "\xe9.licht");
+        names.push_back(std::string(248, 'x') + "\xe8.licht");
+#endif
+        std::unordered_set<std::string> locks;
+        std::unordered_set<std::string> sidecars;
+        for (const auto& name : names) {
+            SCOPED_TRACE(name.size());
+            const auto master = temporary.path / fs::path(name);
+            const auto sidecar = autosave_sidecar_path(master);
+            EXPECT_TRUE(locks.insert(detail::project_lock_path(master).filename().string()).second);
+            EXPECT_TRUE(sidecars.insert(sidecar.filename().string()).second);
+            if (master.filename().native().size() + 9 <= 255) {
+                auto expected = master;
+                expected += ".autosave";
+                EXPECT_EQ(sidecar, expected);
+            }
+            write_phase_a_fixture(master);
+            auto base = require_result(ProjectReader::open(master));
+            auto document = require_result_ptr(ProjectDocument::open(master));
+            require_status(document->edit_view().dom().set("recovery_marker", std::string{"native-name"}));
+            auto saved = document->save_autosave(sidecar, ProjectDocumentAutosaveOptions{
+                                                              .file_uuid = fixed_uuid(981),
+                                                              .base_explicit_commit_uuid = base.commit().commit_uuid,
+                                                              .autosave_sequence = 1,
+                                                              .snapshot_uuid = fixed_uuid(980),
+                                                              .index_compression = IndexCompression::StoredForDeterministicTests,
+                                                              .disk_reserve_bytes = 0,
+                                                          });
+            ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+            auto overlay = require_result(ProjectReader::open(sidecar));
+            EXPECT_EQ(overlay.superblock().role, ContainerRole::AutosaveSidecar);
+            EXPECT_EQ(overlay.superblock().base_explicit_commit_uuid, base.commit().commit_uuid);
+            require_status(overlay.verify_all());
+            auto unchanged = require_result(ProjectReader::open(master));
+            EXPECT_EQ(unchanged.commit().commit_uuid, base.commit().commit_uuid);
+        }
+    }
+
     TEST(ProjectDocumentTest,
          AutosaveIsCompleteBoundOverlayAndDoesNotMutateMasterOrDirtyState) {
         TemporaryDirectory temporary;
@@ -4596,6 +5042,152 @@ namespace {
             << lfs::format_for_developer(appended.error());
     }
 
+    TEST(ProjectDocumentTest, SaveAfterSourceRemovalPreservesCompleteDocument) {
+        for (const bool remove_source : {false, true}) {
+            for (const int mode : {0, 1, 2}) {
+                SCOPED_TRACE(std::format("removed={} mode={}", remove_source, mode));
+                TemporaryDirectory temporary;
+                const auto source = temporary.path / "source.licht";
+                const auto destination = mode == 1 ? temporary.path / "copy.licht" : source;
+                const auto checkpoint_uuid = fixed_uuid(19'701);
+                write_phase_a_fixture(source);
+                {
+                    auto seeded = require_result_ptr(ProjectDocument::open(source));
+                    install_bound_autosave_checkpoint(*seeded, fixed_uuid(19'700), checkpoint_uuid);
+                    auto options = save_options(19'702, 300);
+                    options.commit.snapshot_uuid = checkpoint_uuid;
+                    const auto preview = one_pixel_png();
+                    options.preview_png = preview;
+                    static_cast<void>(require_result(seeded->save(source, options)));
+                }
+                auto document = require_result_ptr(ProjectDocument::open(source));
+                auto before = require_result(ProjectReader::open(source));
+                const auto original = read_file_bytes(source);
+                require_status(document->set_license(ProjectLicense{"CC BY", "Unsaved notice"}));
+                if (remove_source) {
+                    ASSERT_TRUE(fs::remove(source));
+                }
+                auto options = save_options(19'703, 400);
+                options.commit.snapshot_uuid = checkpoint_uuid;
+                const auto started = std::chrono::steady_clock::now();
+                auto saved = mode == 0 ? document->save(destination, options)
+                                       : document->save_as(destination, options);
+                RecordProperty(std::format("removed_{}_mode_{}_us", remove_source, mode),
+                               std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count());
+                ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+                EXPECT_FALSE(document->dirty());
+                EXPECT_EQ(*document->source_path(), fs::absolute(destination));
+                auto after = require_result(ProjectReader::open(destination));
+                require_status(after.verify_all());
+                EXPECT_EQ(require_result(after.read_preview()), require_result(before.read_preview()));
+                for (const auto& row : before.chunks()) {
+                    if (!row.is_live() || row.key.fourcc == FOURCC_PROJ) {
+                        continue;
+                    }
+                    const auto* copied = after.find(row.key);
+                    ASSERT_NE(copied, nullptr) << row.key.fourcc.to_string();
+                    EXPECT_EQ(require_result(after.read_chunk(*copied)), require_result(before.read_chunk(row)))
+                        << row.key.fourcc.to_string();
+                }
+                auto reopened = require_result_ptr(ProjectDocument::open(destination));
+                EXPECT_EQ(require_result(reopened->project().license()),
+                          (ProjectLicense{"CC BY", "Unsaved notice"}));
+                EXPECT_NE(reopened->find_checkpoint(checkpoint_uuid), nullptr);
+                if (mode == 1) {
+                    EXPECT_EQ(fs::exists(source), !remove_source);
+                    if (!remove_source) {
+                        EXPECT_EQ(read_file_bytes(source), original);
+                    }
+                }
+                auto append_options = save_options(19'704, 500);
+                append_options.commit.snapshot_uuid = checkpoint_uuid;
+                static_cast<void>(require_result(document->save(destination, append_options)));
+            }
+        }
+    }
+
+    TEST(ProjectDocumentTest, MissingSourceSaveAsFailurePreservesEditsAndDestination) {
+        for (const bool cancel : {false, true}) {
+            SCOPED_TRACE(cancel);
+            TemporaryDirectory temporary;
+            const auto source = temporary.path / "source.licht";
+            const auto destination = temporary.path / "destination.licht";
+            write_phase_a_fixture(source);
+            const auto destination_bytes = one_pixel_png();
+            write_file_bytes(destination, destination_bytes);
+            auto document = require_result_ptr(ProjectDocument::open(source));
+            const auto checkpoint_uuid = fixed_uuid(19'721);
+            install_bound_autosave_checkpoint(*document, fixed_uuid(19'720), checkpoint_uuid);
+            const auto* checkpoint = document->find_checkpoint(checkpoint_uuid);
+            ASSERT_NE(checkpoint, nullptr);
+            std::vector<std::byte> checkpoint_bytes(checkpoint->size());
+            require_status(checkpoint->read_at(0, checkpoint_bytes));
+            require_status(document->set_license(ProjectLicense{"CC BY", "Pending edit"}));
+            ASSERT_TRUE(fs::remove(source));
+            const std::vector<std::byte> invalid_preview(MAX_PREVIEW_BYTES + 1);
+            auto options = save_options(19'722, 400);
+            options.commit.snapshot_uuid = checkpoint_uuid;
+            if (cancel) {
+                options.save_as_cancel = [] { return true; };
+            } else {
+                options.preview_png = invalid_preview;
+            }
+            auto failed = document->save_as(destination, options);
+            ASSERT_FALSE(failed);
+            EXPECT_TRUE(document->dirty());
+            EXPECT_EQ(*document->source_path(), fs::absolute(source));
+            EXPECT_EQ(read_file_bytes(destination), destination_bytes);
+            EXPECT_FALSE(fs::exists(source));
+            options.save_as_cancel = {};
+            options.preview_png = {};
+            auto retried = document->save_as(destination, options);
+            ASSERT_TRUE(retried) << lfs::format_for_developer(retried.error());
+            auto reopened = require_result_ptr(ProjectDocument::open(destination));
+            EXPECT_EQ(require_result(reopened->project().license()),
+                      (ProjectLicense{"CC BY", "Pending edit"}));
+            checkpoint = reopened->find_checkpoint(checkpoint_uuid);
+            ASSERT_NE(checkpoint, nullptr);
+            std::vector<std::byte> saved_bytes(checkpoint->size());
+            require_status(checkpoint->read_at(0, saved_bytes));
+            EXPECT_EQ(saved_bytes, checkpoint_bytes);
+            for (const auto& entry : fs::directory_iterator(temporary.path)) {
+                EXPECT_EQ(entry.path().filename().string().find(".saveas-"), std::string::npos);
+            }
+        }
+    }
+
+    TEST(ProjectDocumentTest, SaveAsPreservesUnicodeSourceAndDestinationPaths) {
+        TemporaryDirectory temporary;
+        const fs::path source =
+            temporary.path / lfs::core::utf8_to_path("源_项目.licht");
+        const fs::path destination =
+            temporary.path / lfs::core::utf8_to_path("保存_копия.licht");
+
+        auto document = make_empty_document(fixed_uuid(19'160), 100);
+        ASSERT_TRUE(document->save(source, save_options(19'161, 200)));
+        auto reopened = require_result_ptr(ProjectDocument::open(source));
+
+        auto saved = reopened->save_as(
+            destination, save_options(19'162, 300));
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+        ASSERT_TRUE(reopened->source_path());
+        EXPECT_EQ(*reopened->source_path(),
+                  fs::absolute(destination).lexically_normal());
+        EXPECT_TRUE(fs::is_regular_file(destination));
+        auto published = require_result(ProjectReader::open(destination));
+        require_status(published.verify_all());
+        static_cast<void>(require_result_ptr(
+            ProjectDocument::open(destination)));
+
+        for (const auto& entry : fs::directory_iterator(temporary.path)) {
+            const auto name = lfs::core::path_to_utf8(
+                entry.path().filename());
+            EXPECT_EQ(name.find(".saveas-"), std::string::npos)
+                << name;
+        }
+    }
+
     TEST(ProjectDocumentTest,
          SaveAsFailureRemovesStagingTempAndLock) {
         TemporaryDirectory temporary;
@@ -4818,6 +5410,87 @@ namespace {
             elevated_master.commit().required_reader_capabilities));
         EXPECT_TRUE(overlay.commit().required_writer_capabilities.contains_all(
             elevated_master.commit().required_writer_capabilities));
+    }
+
+    TEST(ProjectDocumentTest, RecoveredAutosaveKeepsSplatAbsentFromMaster) {
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "recovered-new-splat.licht";
+        const fs::path sidecar = autosave_sidecar_path(master);
+        const Uuid project_uuid = fixed_uuid(9901);
+        const Uuid master_splat = fixed_uuid(9902);
+        const Uuid added_splat = fixed_uuid(9903);
+        write_one_splat_document(master, *make_splat(2), project_uuid, master_splat, 9904);
+        ProjectReader base = require_result(ProjectReader::open(master));
+        const auto master_bytes = read_file_bytes(master);
+        {
+            auto session = require_result_ptr(ProjectDocument::open(master));
+            require_status(session->edit_scene_graph().upsert_node(SceneNodeRecord{
+                .uuid = added_splat,
+                .type = "splat",
+                .name = "Added",
+                .child_order = 1,
+                .payload = PayloadBinding{
+                    .fourcc = "SPLT",
+                    .instance_uuid = added_splat,
+                    .source_kind = "ply"},
+            }));
+            require_status(session->set_splat(
+                added_splat, require_result(SplatChapterPayload::capture(
+                                 *make_splat(1), SplatSourceKind::ImportedPly, false))));
+            require_status(session->edit_project().upsert_embed_decision(EmbedDecision{
+                .uuid = added_splat,
+                .node_uuid = added_splat,
+                .payload_fourcc = "SPLT",
+                .decision = "embedded",
+                .reason = "added after the explicit save"}));
+            require_status(session->edit_project().upsert_embedded_payload_provenance(
+                provenance(added_splat, "SPLT", "assets/added.bin", 44)));
+            auto autosaved = session->save_autosave(sidecar, ProjectDocumentAutosaveOptions{
+                                                                 .file_uuid = fixed_uuid(9905),
+                                                                 .base_explicit_commit_uuid = base.commit().commit_uuid,
+                                                                 .autosave_sequence = 1,
+                                                                 .snapshot_uuid = fixed_uuid(9906),
+                                                                 .index_compression = IndexCompression::StoredForDeterministicTests,
+                                                                 .disk_reserve_bytes = 0});
+            ASSERT_TRUE(autosaved) << lfs::format_for_developer(autosaved.error());
+        }
+        RecoverySession recovery = require_result(begin_recovery_session(master, sidecar));
+        const fs::path staging = recovery_session_temp_path(master);
+        require_status(materialize_recovered_project(master, sidecar, staging, recovery));
+        auto recovered = require_result_ptr(ProjectDocument::open(
+            staging, ProjectDocumentOpenOptions{.defer_geometry_payloads = true}));
+        require_status(recovered->prepare_recovery_autosave(sidecar));
+        require_status(recovered->edit_view().dom().set("after_recover", std::string{"kept"}));
+        auto next = recovered->save_autosave(sidecar, ProjectDocumentAutosaveOptions{
+                                                          .file_uuid = fixed_uuid(9907),
+                                                          .base_explicit_commit_uuid = base.commit().commit_uuid,
+                                                          .autosave_sequence = 2,
+                                                          .snapshot_uuid = fixed_uuid(9908),
+                                                          .index_compression = IndexCompression::StoredForDeterministicTests,
+                                                          .disk_reserve_bytes = 0,
+                                                          .writer_lock_lease = recovery.writer_lock(),
+                                                          .recovery_base_path = master});
+        ASSERT_TRUE(next) << lfs::format_for_developer(next.error());
+        EXPECT_EQ(read_file_bytes(master), master_bytes);
+        ProjectReader overlay = require_result(ProjectReader::open(sidecar));
+        EXPECT_EQ(overlay.superblock().autosave_sequence, 2u);
+        const ChunkInfo* kept = overlay.find(FOURCC_SPLT, master_splat);
+        const ChunkInfo* added = overlay.find(FOURCC_SPLT, added_splat);
+        ASSERT_NE(kept, nullptr);
+        ASSERT_NE(added, nullptr);
+        EXPECT_EQ(kept->row_kind, RowKind::SidecarBaseReference);
+        EXPECT_EQ(added->row_kind, RowKind::Live);
+        EXPECT_GT(added->stored_bytes, 0u);
+        recovered.reset();
+        require_status(recovery.release());
+        const fs::path again = temporary.path / "recovered-again.licht";
+        require_status(materialize_recovered_project(master, sidecar, again));
+        auto reopened = require_result_ptr(ProjectDocument::open(again));
+        EXPECT_NE(reopened->find_splat(master_splat), nullptr);
+        EXPECT_NE(reopened->find_splat(added_splat), nullptr);
+        const auto marker = reopened->view().dom().get_json("after_recover");
+        ASSERT_TRUE(marker.has_value());
+        EXPECT_EQ(*marker, "kept");
     }
 
     TEST(ProjectDocumentTest,
@@ -5639,6 +6312,47 @@ namespace {
         EXPECT_GT(reports.back().first, 0u);
     }
 
+    TEST(ProjectDocumentTest, ScopedUndoHydrationLeavesSiblingPayloadsDeferred) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "scoped-undo-hydration.licht";
+        write_phase_a_fixture(path);
+        auto document = require_result_ptr(ProjectDocument::open(
+            path, ProjectDocumentOpenOptions{.defer_geometry_payloads = true}));
+        const std::array payload_uuids{
+            fixed_uuid(952), fixed_uuid(953), fixed_uuid(954)};
+
+        for (const auto target_uuid : payload_uuids) {
+            Scene live;
+            auto shell = document->stage_shell(live);
+            ASSERT_TRUE(shell) << lfs::format_for_developer(shell.error());
+            live.commitRestoreStage(std::move(*shell));
+            const std::array targets{target_uuid};
+            auto staged = document->stage_payload_hydration_for_nodes(
+                live, targets);
+            ASSERT_TRUE(staged) << lfs::format_for_developer(staged.error());
+            const auto report = ProjectDocument::commit_partial_hydration(
+                live, std::move(*staged), false);
+            EXPECT_EQ(report.hydrated_payload_units, 1u);
+            EXPECT_EQ(report.invalidated_payload_units, 0u);
+
+            for (const auto uuid : payload_uuids) {
+                const auto* node = live.getNodeByUuid(uuid);
+                ASSERT_NE(node, nullptr);
+                const bool selected = uuid == target_uuid;
+                EXPECT_EQ(node->payload_hydration,
+                          selected ? lfs::core::PayloadHydrationState::Loaded
+                                   : lfs::core::PayloadHydrationState::Unloaded);
+                if (node->type == lfs::core::NodeType::SPLAT) {
+                    EXPECT_EQ(static_cast<bool>(node->model), selected);
+                } else if (node->type == lfs::core::NodeType::POINTCLOUD) {
+                    EXPECT_EQ(static_cast<bool>(node->point_cloud), selected);
+                } else if (node->type == lfs::core::NodeType::MESH) {
+                    EXPECT_EQ(static_cast<bool>(node->mesh), selected);
+                }
+            }
+        }
+    }
+
     TEST(ProjectDocumentTest,
          OversizedSpltAutoDefersOnOpenAndStreamHydrates) {
         TemporaryDirectory temporary;
@@ -6317,6 +7031,140 @@ namespace {
             EXPECT_EQ(require_result(compacted_reader.read_chunk(*row)),
                       read_file_bytes(dataset / entry.rel_path));
         }
+    }
+
+    TEST(ProjectDocumentTest, TransformsDatasetEmbedsResolvedFramePaths) {
+        TemporaryDirectory temporary;
+        const auto dataset = temporary.path / "transforms-dataset";
+        for (const auto* directory : {"train", "test", "masks", "depths", "normals", "points"}) {
+            std::filesystem::create_directories(dataset / directory);
+        }
+        const auto png = lfs::test::licht::one_pixel_png();
+        write_file_bytes(dataset / "train" / "frame_a.png", png);
+        write_file_bytes(dataset / "test" / "frame_b.png", png);
+        write_file_bytes(dataset / "masks" / "frame_a.png", png);
+        write_file_bytes(dataset / "depths" / "frame_a.png", png);
+        write_file_bytes(dataset / "normals" / "frame_a.png", png);
+        const std::string point_cloud =
+            "ply\nformat ascii 1.0\nelement vertex 1\n"
+            "property float x\nproperty float y\nproperty float z\n"
+            "end_header\n0 0 0\n";
+        std::ofstream(dataset / "points" / "cloud.ply") << point_cloud;
+        const nlohmann::json identity = {
+            {1.0, 0.0, 0.0, 0.0},
+            {0.0, 1.0, 0.0, 0.0},
+            {0.0, 0.0, 1.0, 0.0},
+            {0.0, 0.0, 0.0, 1.0},
+        };
+        const nlohmann::json transforms = {
+            {"w", 1},
+            {"h", 1},
+            {"fl_x", 1.0},
+            {"fl_y", 1.0},
+            {"cx", 0.5},
+            {"cy", 0.5},
+            {"ply_file_path", "points/cloud.ply"},
+            {"frames", nlohmann::json::array({
+                           {{"file_path", "train/frame_a"}, {"mask_path", "masks/frame_a.png"}, {"transform_matrix", identity}},
+                           {{"file_path", "test/frame_b.png"},
+                            {"transform_matrix", identity}},
+                       })},
+        };
+        std::filesystem::create_directories(dataset);
+        std::ofstream(dataset / "transforms_train.json") << transforms.dump();
+
+        auto document = require_result_ptr(ProjectDocument::create(fixed_uuid(2991), 100));
+        bind_dataset(*document, dataset);
+        const auto project_path = temporary.path / "transforms.licht";
+        (void)require_result(document->save(project_path, save_options(2992, 200)));
+
+        const auto embedded = require_result(embed_dataset_file(project_path));
+        EXPECT_EQ(embedded.images_embedded, 2u);
+        EXPECT_EQ(embedded.masks_embedded, 1u);
+        EXPECT_EQ(embedded.depths_embedded, 1u);
+        EXPECT_EQ(embedded.normals_embedded, 1u);
+        EXPECT_EQ(embedded.sparse_embedded, 1u);
+        auto reopened = require_result_ptr(ProjectDocument::open(project_path));
+        const auto manifest = require_result(reopened->parameters().embedded_dataset());
+        ASSERT_TRUE(manifest);
+        const auto extraction = temporary.path / "extracted";
+        ASSERT_TRUE(require_result(extract_embedded_dataset(*reopened, extraction)));
+        for (const auto& entry : manifest->entries) {
+            EXPECT_EQ(read_file_bytes(dataset / lfs::core::utf8_to_path(entry.rel_path)),
+                      read_file_bytes(extraction / lfs::core::utf8_to_path(entry.rel_path)));
+        }
+        const auto [cameras, center, splits] =
+            lfs::io::read_transforms_cameras_and_images(extraction, {});
+        (void)center;
+        (void)splits;
+        EXPECT_EQ(cameras.size(), 2u);
+        auto loader = lfs::io::Loader::create();
+        ASSERT_NE(loader, nullptr);
+        auto loaded = loader->load(extraction);
+        ASSERT_TRUE(loaded) << loaded.error().format();
+        const auto& scene = std::get<lfs::io::LoadedScene>(loaded->data);
+        ASSERT_NE(scene.point_cloud, nullptr);
+        EXPECT_EQ(scene.point_cloud->size(), 1);
+    }
+
+    TEST(ProjectDocumentTest, ReembeddingReplacesOnlyThePriorDatasetPayload) {
+        TemporaryDirectory temporary;
+        const auto first = temporary.path / "first";
+        const auto second = temporary.path / "second";
+        for (const auto& root : {first, second}) {
+            std::filesystem::create_directories(root / "train");
+            std::ofstream(root / "transforms_train.json")
+                << R"({"frames":[{"file_path":"train/frame.png"}]})";
+        }
+        const std::array first_frame{std::byte{0x11}};
+        const std::array second_frame{std::byte{0x22}, std::byte{0x33}};
+        write_file_bytes(first / "train" / "frame.png", first_frame);
+        write_file_bytes(second / "train" / "frame.png", second_frame);
+
+        auto document = require_result_ptr(ProjectDocument::create(fixed_uuid(2993), 100));
+        bind_dataset(*document, first);
+        const auto project_path = temporary.path / "replacement.licht";
+        (void)require_result(document->save(project_path, save_options(2994, 200)));
+        (void)require_result(embed_dataset_file(project_path));
+
+        const auto changed = require_result(set_dataset_reference(project_path, second, true));
+        EXPECT_TRUE(changed.content_replaced);
+        (void)require_result(embed_dataset_file(project_path));
+        auto reopened = require_result_ptr(ProjectDocument::open(project_path));
+        const auto manifest = require_result(reopened->parameters().embedded_dataset());
+        ASSERT_TRUE(manifest);
+        const auto frame = std::ranges::find_if(
+            manifest->entries, [](const auto& entry) { return entry.rel_path == "train/frame.png"; });
+        ASSERT_NE(frame, manifest->entries.end());
+        EXPECT_EQ(frame->bytes, 2u);
+        ASSERT_NE(reopened->find_dataset_source(frame->chunk_uuid), nullptr);
+        EXPECT_EQ(reopened->dataset_source_uuids().size(), manifest->entries.size());
+        const auto extracted = temporary.path / "replacement-extracted";
+        ASSERT_TRUE(require_result(extract_embedded_dataset(*reopened, extracted)));
+        EXPECT_EQ(read_file_bytes(extracted / "train/frame.png"),
+                  read_file_bytes(second / "train/frame.png"));
+    }
+
+    TEST(ProjectDocumentTest, EmbeddingPreservesSceneSourcePayloads) {
+        TemporaryDirectory temporary;
+        const auto dataset = temporary.path / "dataset";
+        std::filesystem::create_directories(dataset / "train");
+        const auto image = lfs::test::licht::one_pixel_png();
+        write_file_bytes(dataset / "train" / "frame.png", image);
+        std::ofstream(dataset / "transforms_train.json")
+            << R"({"frames":[{"file_path":"train/frame.png"}]})";
+
+        const auto project_path = temporary.path / "scene.licht";
+        std::filesystem::copy_file(
+            fs::path(PROJECT_ROOT_PATH) / "tests/data/portable-sog.licht", project_path);
+        const auto reference = require_result(set_dataset_reference(
+            project_path, dataset, true));
+        static_cast<void>(reference);
+        static_cast<void>(require_result(embed_dataset_file(project_path)));
+        const auto reopened = require_result_ptr(ProjectDocument::open(project_path));
+        const auto nodes = reopened->scene_graph().nodes();
+        ASSERT_TRUE(nodes);
+        EXPECT_FALSE(nodes->empty());
     }
 
     // Covers lfs::io::project::extract_embedded_dataset, the headless side of

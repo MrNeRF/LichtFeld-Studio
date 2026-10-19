@@ -6,6 +6,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/property_registry.hpp"
@@ -272,8 +273,8 @@ namespace lfs::python {
 
                 const auto asset_path = core::utf8_to_path(path);
                 std::error_code file_size_error;
-                if (std::filesystem::is_regular_file(asset_path, file_size_error)) {
-                    const auto file_size = std::filesystem::file_size(asset_path, file_size_error);
+                if (lfs::core::native_fs::is_regular_file(asset_path, file_size_error)) {
+                    const auto file_size = lfs::core::native_fs::file_size(asset_path, file_size_error);
                     if (!file_size_error && file_size > MAX_RENDERED_ASSET_PREVIEW_BYTES) {
                         LOG_DEBUG("Skipping rendered asset preview for '{}' ({} MB exceeds {} MB budget)",
                                   path,
@@ -282,7 +283,7 @@ namespace lfs::python {
                         return std::nullopt;
                     }
                 }
-                auto ext = asset_path.extension().string();
+                auto ext = lfs::core::path_to_utf8(asset_path.extension());
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
                 if (ext == ".ckpt" || ext == ".resume") {
                     auto checkpoint_result = core::load_checkpoint_splat_data(
@@ -448,7 +449,8 @@ namespace lfs::python {
             const PreviewReadback readback,
             const std::optional<glm::vec3>& background_color_override,
             const std::optional<bool> orthographic_override = std::nullopt,
-            const std::optional<float> ortho_scale_override = std::nullopt) {
+            const std::optional<float> ortho_scale_override = std::nullopt,
+            const int reference_height = 0) {
             if (width <= 0 || height <= 0 || !std::isfinite(fov_degrees) || fov_degrees <= 0.0f) {
                 return std::nullopt;
             }
@@ -471,7 +473,8 @@ namespace lfs::python {
                     height,
                     background_color_override,
                     orthographic_override,
-                    ortho_scale_override);
+                    ortho_scale_override,
+                    reference_height);
             } else {
                 image = rendering_manager->renderPreviewImage(
                     scene_manager,
@@ -502,7 +505,8 @@ namespace lfs::python {
             const PreviewReadback readback,
             const std::optional<glm::vec3>& background_color_override,
             const std::optional<bool> orthographic_override = std::nullopt,
-            const std::optional<float> ortho_scale_override = std::nullopt) {
+            const std::optional<float> ortho_scale_override = std::nullopt,
+            const int reference_height = 0) {
             auto invoke_render = [&]() -> std::optional<core::Tensor> {
                 return renderViewOnViewerThread(
                     rotation,
@@ -513,7 +517,8 @@ namespace lfs::python {
                     readback,
                     background_color_override,
                     orthographic_override,
-                    ortho_scale_override);
+                    ortho_scale_override,
+                    reference_height);
             };
 
             auto* const viewer = get_visualizer();
@@ -617,7 +622,7 @@ namespace lfs::python {
         group.id = "render_settings";
         group.name = "Render Settings";
 
-        auto add_color3 = [&](std::array<float, 3> Proxy::*member, const std::string& id, const std::string& name,
+        auto add_color3 = [&](std::array<float, 3> Proxy::* member, const std::string& id, const std::string& name,
                               const std::string& desc, std::array<double, 3> default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -637,7 +642,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_bool = [&](bool Proxy::*member, const std::string& id, const std::string& name, const std::string& desc,
+        auto add_bool = [&](bool Proxy::* member, const std::string& id, const std::string& name, const std::string& desc,
                             bool default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -654,7 +659,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_float = [&](float Proxy::*member, const std::string& id, const std::string& name,
+        auto add_float = [&](float Proxy::* member, const std::string& id, const std::string& name,
                              const std::string& desc, double default_val, double min_val, double max_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -673,7 +678,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_int_enum = [&](int Proxy::*member, const std::string& id, const std::string& name,
+        auto add_int_enum = [&](int Proxy::* member, const std::string& id, const std::string& name,
                                 const std::string& desc, std::vector<EnumItem> items, int default_idx) {
             PropertyMeta meta;
             meta.id = id;
@@ -708,7 +713,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_string = [&](std::string Proxy::*member, const std::string& id, const std::string& name,
+        auto add_string = [&](std::string Proxy::* member, const std::string& id, const std::string& name,
                               const std::string& desc, const std::string& default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -724,6 +729,13 @@ namespace lfs::python {
             };
             group.properties.push_back(std::move(meta));
         };
+
+        add_float(&Proxy::color_exposure, "color_exposure", "Splat exposure", "Splat brightness multiplier", 1.0, 0.1, 8.0);
+        add_int_enum(&Proxy::color_tonemapping, "color_tonemapping", "Tone mapping", "Splat display tone mapping",
+                     {{"None", "none", 0}, {"Linear", "linear", 1}, {"Filmic", "filmic", 2}, {"Hejl", "hejl", 3}, {"ACES", "aces", 4}, {"ACES 2", "aces2", 5}, {"Neutral", "neutral", 6}}, 0);
+        add_int_enum(&Proxy::splat_render_profile, "splat_render_profile", "Splat rendering profile",
+                     "Preserve the source scene rendering when importing from the gallery",
+                     {{"Studio", "studio", 0}, {"Standard portal", "standard", 1}}, 0);
 
         // Background
         add_color3(&Proxy::background_color, "background_color", "Color", "Viewport background color", {0.0, 0.0, 0.0});
@@ -762,8 +774,6 @@ namespace lfs::python {
         add_float(&Proxy::voxel_size, "voxel_size", "Point Size", "Point size in point cloud mode", 0.01, 0.001, 0.1);
 
         // Selection Colors
-        add_color3(&Proxy::selection_color_committed, "selection_color_committed", "Committed",
-                   "Committed selection color", {0.859, 0.325, 0.325});
         add_color3(&Proxy::selection_color_preview, "selection_color_preview", "Preview", "Preview selection color",
                    {0.0, 0.871, 0.298});
         add_color3(&Proxy::selection_color_center_marker, "selection_color_center_marker", "Center Marker",
@@ -845,7 +855,7 @@ namespace lfs::python {
                      {{"Manual", "MANUAL", 0}, {"Auto", "AUTO", 1}}, 1);
 
         using PPISP = vis::PPISPOverrides;
-        const auto add_ppisp_float = [&](float PPISP::*member, const char* id, const char* name,
+        const auto add_ppisp_float = [&](float PPISP::* member, const char* id, const char* name,
                                          const char* desc, double def, double min_v, double max_v) {
             PropertyMeta meta;
             meta.id = id;
@@ -864,7 +874,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        const auto add_ppisp_bool = [&](bool PPISP::*member, const char* id, const char* name,
+        const auto add_ppisp_bool = [&](bool PPISP::* member, const char* id, const char* name,
                                         const char* desc, bool def) {
             PropertyMeta meta;
             meta.id = id;
@@ -927,6 +937,21 @@ namespace lfs::python {
           prop_(&settings_, "render_settings") {}
 
     void PyRenderSettings::set(const std::string& name, nb::object value) {
+        set_impl(name, std::move(value), true);
+    }
+
+    void PyRenderSettings::_set_without_session_dirty(
+        const std::string& name, nb::object value) {
+        set_impl(name, std::move(value), false);
+    }
+
+    void PyRenderSettings::set_impl(
+        const std::string& name, nb::object value,
+        const bool mark_session_dirty) {
+        std::optional<std::any> previous_value;
+        if (mark_session_dirty) {
+            previous_value = prop_.get_value(name);
+        }
         prop_.setattr(name, value);
         if (name == "raster_backend") {
             const auto backend = static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend);
@@ -935,7 +960,14 @@ namespace lfs::python {
             settings_.gut = rendering::isGutBackend(
                 static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend));
         }
-        vis::update_render_settings(settings_);
+        try {
+            vis::update_render_settings(settings_);
+        } catch (...) {
+            if (const auto applied = vis::get_render_settings()) {
+                settings_ = *applied;
+            }
+            throw;
+        }
         // update_render_settings may normalize dependent properties (for
         // example the preset when switching scene reconstruction backends).
         // Keep this Python proxy in lockstep with that applied state so the
@@ -943,6 +975,10 @@ namespace lfs::python {
         // preset.
         if (const auto applied = vis::get_render_settings()) {
             settings_ = *applied;
+        }
+        if (previous_value &&
+            !prop_.values_equal(name, *previous_value, prop_.get_value(name))) {
+            markProjectSessionChapterCommitted("VIEW");
         }
         request_redraw();
     }
@@ -1068,7 +1104,7 @@ namespace lfs::python {
         [[nodiscard]] std::string normalizeExportImageFormat(std::string format,
                                                              const std::filesystem::path& path) {
             if (format.empty()) {
-                format = path.extension().string();
+                format = lfs::core::path_to_utf8(path.extension());
             }
             if (!format.empty() && format.front() == '.') {
                 format.erase(format.begin());
@@ -1090,7 +1126,7 @@ namespace lfs::python {
                 throw std::invalid_argument("export path is empty");
             }
 
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -1118,23 +1154,15 @@ namespace lfs::python {
             return rotation;
         }
 
-        [[nodiscard]] std::optional<float> scaledViewInfoOrthoScale(const vis::ViewInfo& view_info,
-                                                                    const int target_height) {
+        [[nodiscard]] std::optional<float> viewInfoOrthoScale(const vis::ViewInfo& view_info) {
             if (!view_info.orthographic) {
                 return std::nullopt;
             }
-            if (view_info.height <= 0 || target_height <= 0 ||
-                !std::isfinite(view_info.ortho_scale) || view_info.ortho_scale <= 0.0f) {
+            if (!std::isfinite(view_info.ortho_scale) || view_info.ortho_scale <= 0.0f) {
                 return std::nullopt;
             }
 
-            const double scale = static_cast<double>(view_info.ortho_scale) *
-                                 static_cast<double>(target_height) /
-                                 static_cast<double>(view_info.height);
-            if (!std::isfinite(scale) || scale <= 0.0) {
-                return std::nullopt;
-            }
-            return static_cast<float>(scale);
+            return view_info.ortho_scale;
         }
 
         [[nodiscard]] core::Tensor toU8Hwc(core::Tensor image) {
@@ -1169,7 +1197,8 @@ namespace lfs::python {
                 PreviewReadback::UInt8Rgb,
                 background_color_override,
                 view_info.orthographic,
-                scaledViewInfoOrthoScale(view_info, height));
+                viewInfoOrthoScale(view_info),
+                view_info.height);
             if (!image || !image->is_valid()) {
                 throw std::runtime_error("viewport export render failed");
             }
@@ -1216,8 +1245,9 @@ namespace lfs::python {
                     .focal_length_mm = lfs::rendering::vFovToFocalLength(view_info.fov),
                     .width = width,
                     .height = height,
+                    .reference_height = view_info.height,
                     .orthographic_override = view_info.orthographic,
-                    .ortho_scale_override = scaledViewInfoOrthoScale(view_info, height),
+                    .ortho_scale_override = viewInfoOrthoScale(view_info),
                     .mode = mode,
                 };
                 return rendering_manager->renderExportImage(scene_manager, request);
@@ -1596,8 +1626,13 @@ namespace lfs::python {
         int target_width = width;
         int target_height = height;
 
+        const auto render_settings = vis::get_render_settings();
+        const bool split_view =
+            render_settings && render_settings->split_view_mode != static_cast<int>(vis::SplitViewMode::Disabled);
+
         core::Tensor image;
-        if (!transparent && target_width <= 0 && target_height <= 0) {
+        // Only the live viewport composes split-view panels; every other export renders the scene.
+        if (!transparent && target_width <= 0 && target_height <= 0 && split_view) {
             auto captured = viewportRenderImageHwc(captureViewportRenderThreadSafe(), true);
             if (!captured || !captured->is_valid()) {
                 throw std::runtime_error("viewport capture failed");
@@ -1644,7 +1679,6 @@ namespace lfs::python {
                         vis::ExportPostProcessMode::Transparent);
                 }
             } else {
-                const auto render_settings = vis::get_render_settings();
                 const bool export_hdr_environment =
                     render_settings &&
                     render_settings->environment_mode ==
@@ -1950,6 +1984,8 @@ Args:
             .def_prop_ro("__property_group__", &PyRenderSettings::property_group)
             .def("get", &PyRenderSettings::get, nb::arg("name"), "Get property value by name")
             .def("set", &PyRenderSettings::set, nb::arg("name"), nb::arg("value"), "Set property value by name")
+            .def("_set_without_session_dirty", &PyRenderSettings::_set_without_session_dirty,
+                 nb::arg("name"), nb::arg("value"))
             .def("prop_info", &PyRenderSettings::prop_info, nb::arg("name"))
             .def("get_all_properties", &PyRenderSettings::get_all_properties,
                  "Get all property descriptors as Python Property objects")

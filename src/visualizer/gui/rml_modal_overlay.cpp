@@ -12,13 +12,18 @@
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "internal/resource_paths.hpp"
+#include "python/python_runtime.hpp"
+#include "python/ui_hooks.hpp"
 #include "theme/theme.hpp"
 
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/Elements/ElementFormControl.h>
 #include <RmlUi/Core/Input.h>
+#include <SDL3/SDL_init.h>
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <format>
@@ -125,6 +130,7 @@ namespace lfs::vis::gui {
     }
 
     RmlModalOverlay::~RmlModalOverlay() {
+        lfs::python::unregister_rml_document("modal_overlay");
         if (Rml::GetSystemInterface())
             text_input_revert_.clear();
         if (rml_manager_ && rml_manager_->isInitialized())
@@ -134,8 +140,26 @@ namespace lfs::vis::gui {
     }
 
     void RmlModalOverlay::enqueue(lfs::core::ModalRequest request) {
-        std::lock_guard lock(queue_mutex_);
-        queue_.push_back(std::move(request));
+        {
+            std::lock_guard lock(queue_mutex_);
+            queue_.push_back(std::move(request));
+        }
+        if (SDL_IsMainThread())
+            activatePending();
+        lfs::python::request_redraw();
+    }
+
+    void RmlModalOverlay::activatePending() {
+        if (active_ || !rml_manager_->isInitialized())
+            return;
+        {
+            std::lock_guard lock(queue_mutex_);
+            if (queue_.empty())
+                return;
+        }
+        initContext();
+        if (elements_cached_)
+            showNext();
     }
 
     bool RmlModalOverlay::isOpen() const {
@@ -173,7 +197,16 @@ namespace lfs::vis::gui {
         // While a modal is already visible, the queue must not be treated as
         // an animation source: doing so spins the frame loop for a static
         // modal until the user makes that choice.
-        return !active_.has_value() && hasPendingRequest();
+        const auto delay = secondsUntilNextUpdate();
+        return (!active_.has_value() && hasPendingRequest()) || (delay && *delay <= 0.0);
+    }
+
+    std::optional<double> RmlModalOverlay::secondsUntilNextUpdate() const {
+        if (active_ && next_update_at_)
+            return std::max(0.0, std::chrono::duration<double>(
+                                     *next_update_at_ - std::chrono::steady_clock::now())
+                                     .count());
+        return std::nullopt;
     }
 
     std::string RmlModalOverlay::animationDemandDescription() const {
@@ -206,6 +239,7 @@ namespace lfs::vis::gui {
                 return;
             }
             document_->Show();
+            lfs::python::register_rml_document("modal_overlay", document_);
             cacheElements();
         } catch (const std::exception& e) {
             LOG_ERROR("RmlModalOverlay: resource not found: {}", e.what());
@@ -218,6 +252,7 @@ namespace lfs::vis::gui {
 
         text_input_revert_.clear();
         if (document_) {
+            lfs::python::unregister_rml_document("modal_overlay");
             rml_context_->UnloadDocument(document_);
             rml_context_->Update();
         }
@@ -250,6 +285,7 @@ namespace lfs::vis::gui {
                 return;
             }
             document_->Show();
+            lfs::python::register_rml_document("modal_overlay", document_);
             cacheElements();
         } catch (const std::exception& e) {
             LOG_ERROR("RmlModalOverlay: resource not found during reload: {}", e.what());
@@ -331,17 +367,9 @@ namespace lfs::vis::gui {
             el_input_row_->SetClass("visible", false);
         }
 
-        std::string btn_html;
-        btn_html.reserve(512);
-        for (size_t i = 0; i < req.buttons.size(); ++i) {
-            const auto& btn = req.buttons[i];
-            const std::string cls = "btn btn--" + btn.style;
-            btn_html += std::format(
-                R"(<button type="button" class="{}" id="modal-btn-{}"{}>{}</button>)",
-                cls, i, btn.disabled ? " disabled=\"disabled\"" : "", btn.label);
-        }
-        el_button_row_->SetInnerRML(btn_html);
+        updateButtons(req.buttons);
 
+        el_dialog_->SetClass("form-modal", !req.key.empty());
         el_dialog_->SetClass("style-info", req.style == lfs::core::ModalStyle::Info);
         el_dialog_->SetClass("style-warning", req.style == lfs::core::ModalStyle::Warning);
         el_dialog_->SetClass("style-error", req.style == lfs::core::ModalStyle::Error);
@@ -352,12 +380,59 @@ namespace lfs::vis::gui {
         el_dialog_->SetProperty("display", "block");
 
         active_ = std::move(req);
+        rml_context_->Update();
+        rml_manager_->activateInput(rml_context_, [this](const PanelInputState& event) { processInput(event); });
         bindTextInputRevert();
         if (active_->has_input)
             el_input_->Focus();
+        rml_manager_->syncTextInput();
         render_needed_ = true;
         dialog_position_valid_ = false;
         last_mouse_valid_ = false;
+    }
+
+    void RmlModalOverlay::updateButtons(const std::vector<lfs::core::ModalButtonSpec>& buttons) {
+        std::string btn_html;
+        btn_html.reserve(512);
+        for (size_t i = 0; i < buttons.size(); ++i) {
+            const auto& btn = buttons[i];
+            const std::string cls = "btn btn--" + btn.style;
+            btn_html += std::format(
+                R"(<button type="button" class="{}" id="modal-btn-{}"{}>{}</button>)",
+                cls, i, btn.disabled ? " disabled=\"disabled\"" : "", btn.label);
+        }
+        el_button_row_->SetInnerRML(btn_html);
+    }
+
+    bool RmlModalOverlay::updateForm(const std::string& key,
+                                     const std::optional<std::string>& body_rml,
+                                     const std::vector<lfs::core::ModalButtonSpec>& buttons) {
+        if (key.empty())
+            return false;
+        if (!active_ || active_->key != key) {
+            std::lock_guard lock(queue_mutex_);
+            for (auto& req : queue_) {
+                if (req.key != key)
+                    continue;
+                if (body_rml)
+                    req.body_rml = *body_rml;
+                req.buttons = buttons;
+                return true;
+            }
+            return false;
+        }
+        if (body_rml) {
+            text_input_revert_.clear();
+            active_->body_rml = *body_rml;
+            el_content_->SetInnerRML(*body_rml);
+            bindTextInputRevert();
+        }
+        active_->buttons = buttons;
+        updateButtons(buttons);
+        lfs::python::request_redraw();
+        render_needed_ = true;
+        dialog_position_valid_ = false;
+        return true;
     }
 
     lfs::core::ModalResult RmlModalOverlay::collectFormValues() const {
@@ -367,13 +442,23 @@ namespace lfs::vis::gui {
             result.input_value = el_input_->GetAttribute<Rml::String>("value", "");
         }
 
-        // Collect all named text-editable controls from the content area.
-        rml_input::forEachTextEditableElement(el_content_, [&result](Rml::Element& element) {
-            const auto id = element.GetId();
-            if (!id.empty()) {
-                result.form_values[id] = element.GetAttribute<Rml::String>("value", "");
-            }
-        });
+        // Use each native control's value: select boxes and checked radio
+        // groups do not store their current value like a text input does.
+        Rml::ElementList controls;
+        el_content_->QuerySelectorAll(controls, "input, select, textarea");
+        for (auto* element : controls) {
+            auto* control = dynamic_cast<Rml::ElementFormControl*>(element);
+            if (!control || control->IsDisabled())
+                continue;
+            const auto type = element->GetAttribute<Rml::String>("type", "");
+            const auto key = type == "radio" ? control->GetName()
+                                             : (!element->GetId().empty() ? element->GetId() : control->GetName());
+            if (key.empty())
+                continue;
+            if (type == "radio" && !control->IsSubmitted())
+                continue;
+            result.form_values[key] = type == "checkbox" && !control->IsSubmitted() ? "" : control->GetValue();
+        }
 
         return result;
     }
@@ -394,12 +479,15 @@ namespace lfs::vis::gui {
 
             auto on_result = std::move(active_->on_result);
             active_.reset();
+            lfs::python::request_redraw();
+            rml_manager_->deactivateInput(rml_context_);
             render_needed_ = true;
             dialog_position_valid_ = false;
             last_mouse_valid_ = false;
 
             if (on_result)
                 on_result(result);
+            activatePending();
             return true;
         }
 
@@ -444,12 +532,15 @@ namespace lfs::vis::gui {
 
         auto on_cancel = std::move(active_->on_cancel);
         active_.reset();
+        lfs::python::request_redraw();
+        rml_manager_->deactivateInput(rml_context_);
         render_needed_ = true;
         dialog_position_valid_ = false;
         last_mouse_valid_ = false;
 
         if (on_cancel)
             on_cancel();
+        activatePending();
     }
 
     void RmlModalOverlay::bindTextInputRevert() {
@@ -465,6 +556,8 @@ namespace lfs::vis::gui {
         if (rml_manager_)
             rml_manager_->trackContextFrame(rml_context_, 0, 0);
 
+        if (rml_manager_ && rml_context_ && rml_manager_->routeInput(rml_context_, input, [this](const PanelInputState& event) { processInput(event); }, true))
+            return;
         auto& focus = guiFocusState();
         focus.want_capture_mouse = true;
         focus.want_capture_keyboard = true;
@@ -498,93 +591,36 @@ namespace lfs::vis::gui {
 
         auto* const text_input_handler =
             rml_manager_ ? rml_manager_->getTextInputHandler() : nullptr;
-        const bool composing = text_input_handler && text_input_handler->isComposing();
-
-        bool escape_requested = false;
-        for (const int sc : input.keys_pressed) {
-            if (!composing && sc == SDL_SCANCODE_ESCAPE) {
-                if (auto* const focused = rml_context_->GetFocusElement();
-                    focused && (rml_input::isTextEditableElement(focused) ||
-                                rml_input::isSelectRelatedElement(focused))) {
-                    escape_requested = true;
-                    continue;
+        for (const auto& event : input.input_events) {
+            if (rml_input::isRepeatedDialogAction(event, rml_context_->GetFocusElement()))
+                continue;
+            const bool composing = text_input_handler && text_input_handler->isComposing();
+            const bool down = event.kind == FrameInputEventKind::KeyDown;
+            if (down && event.scancode == SDL_SCANCODE_ESCAPE &&
+                rml_input::shouldCancelOnEscape(rml_context_->GetFocusElement(), composing)) {
+                if (rml_input::cancelFocusedElement(*rml_context_)) {
+                    render_needed_ = true;
+                    return;
                 }
             }
-            if (composing &&
-                (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER ||
-                 sc == SDL_SCANCODE_ESCAPE)) {
-                continue;
+            render_needed_ |= rml_input::processKeyboardEvent(*rml_context_, event, text_input_handler);
+            // A key can dismiss the modal synchronously.
+            if (!active_)
+                return;
+            if (!composing && down && !active_->has_input && rml_context_->GetFocusElement() == nullptr &&
+                (event.scancode == SDL_SCANCODE_RETURN || event.scancode == SDL_SCANCODE_KP_ENTER)) {
+                if (dismissFirstEnabledButton())
+                    return;
             }
-            const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-            if (rml_key != Rml::Input::KI_UNKNOWN) {
+            if (!composing && down && event.scancode == SDL_SCANCODE_ESCAPE) {
                 render_needed_ = true;
-                if (text_input_handler && text_input_handler->handleKeyDown(rml_key, mods))
-                    continue;
-                rml_context_->ProcessKeyDown(rml_key, mods);
-            }
-        }
-        for (const int sc : input.keys_released) {
-            if (escape_requested && sc == SDL_SCANCODE_ESCAPE)
-                continue;
-            if (composing && (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER))
-                continue;
-            const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-            if (rml_key != Rml::Input::KI_UNKNOWN) {
-                render_needed_ = true;
-                rml_context_->ProcessKeyUp(rml_key, mods);
-            }
-        }
-
-        if (!composing && escape_requested) {
-            if (rml_input::cancelFocusedElement(*rml_context_)) {
-                has_text_focus = rml_input::isTextEditableElement(rml_context_->GetFocusElement());
-                render_needed_ = true;
+                cancel();
                 return;
             }
-        }
-
-        if (has_text_focus && text_input_handler && input.has_text_editing) {
-            render_needed_ = true;
-            text_input_handler->handleTextEditing(
-                input.text_editing, input.text_editing_start, input.text_editing_length);
-        }
-
-        bool forward_text_codepoints = input.text_inputs.empty();
-        if (has_text_focus) {
-            for (const auto& text_input : input.text_inputs) {
-                render_needed_ = true;
-                if (!text_input_handler || !text_input_handler->handleTextInput(text_input))
-                    forward_text_codepoints = true;
-            }
-        }
-
-        if (has_text_focus && forward_text_codepoints) {
-            for (uint32_t cp : input.text_codepoints) {
-                render_needed_ = true;
-                rml_context_->ProcessTextInput(static_cast<Rml::Character>(cp));
-            }
-        }
-
-        // Re-check active_ since RmlUI event processing above may have triggered
-        // dismiss() or cancel() callbacks that reset it
-        if (!active_)
-            return;
-
-        if (!composing && active_.has_value() && !active_->has_input && rml_context_->GetFocusElement() == nullptr &&
-            (hasKey(input.keys_pressed, SDL_SCANCODE_RETURN) ||
-             hasKey(input.keys_pressed, SDL_SCANCODE_KP_ENTER))) {
-            if (dismissFirstEnabledButton())
-                return;
-        }
-        if (!composing && hasKey(input.keys_pressed, SDL_SCANCODE_ESCAPE)) {
-            render_needed_ = true;
-            cancel();
         }
     }
 
-    void RmlModalOverlay::render(int screen_w, int screen_h,
-                                 float screen_x, float screen_y,
-                                 float vp_x, float vp_y, float vp_w, float vp_h) {
+    void RmlModalOverlay::render(int screen_w, int screen_h) {
         bool has_pending;
         {
             std::lock_guard lock(queue_mutex_);
@@ -624,7 +660,9 @@ namespace lfs::vis::gui {
         if (w <= 0 || h <= 0)
             return;
 
-        bool needs_update = render_needed_ || theme_changed;
+        const auto scheduled_delay = secondsUntilNextUpdate();
+        bool needs_update = render_needed_ || theme_changed ||
+                            (scheduled_delay && *scheduled_delay <= 0.0);
         if (w != width_ || h != height_) {
             width_ = w;
             height_ = h;
@@ -642,13 +680,10 @@ namespace lfs::vis::gui {
         bool position_changed = false;
         if (el_dialog_ && active_) {
             LOG_TIMER("gui_render.menu_context_modal_render.modal_overlay.position");
-            const float dp_ratio = rml_manager_->getDpRatio();
-            const float dialog_w = static_cast<float>(active_->width_dp) * dp_ratio;
-            const float dialog_h = el_dialog_->GetClientHeight();
-            const float vp_cx = (vp_x - screen_x) + vp_w * 0.5f;
-            const float vp_cy = (vp_y - screen_y) + vp_h * 0.5f;
-            const float dialog_left = vp_cx - dialog_w * 0.5f;
-            const float dialog_top = vp_cy - dialog_h * 0.5f;
+            const float dialog_w = el_dialog_->GetOffsetWidth();
+            const float dialog_h = el_dialog_->GetOffsetHeight();
+            const float dialog_left = std::max(0.0f, (static_cast<float>(w) - dialog_w) * 0.5f);
+            const float dialog_top = std::max(0.0f, (static_cast<float>(h) - dialog_h) * 0.5f);
             if (!dialog_position_valid_ || std::abs(dialog_left - last_dialog_left_) > 0.5f ||
                 std::abs(dialog_top - last_dialog_top_) > 0.5f) {
                 el_dialog_->SetProperty("left", std::format("{}px", dialog_left));
@@ -662,6 +697,14 @@ namespace lfs::vis::gui {
             }
         }
 
+        if (needs_update || position_changed) {
+            next_update_at_.reset();
+            const double delay = rml_context_->GetNextUpdateDelay();
+            if (std::isfinite(delay))
+                next_update_at_ = std::chrono::steady_clock::now() +
+                                  std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                      std::chrono::duration<double>(delay));
+        }
         const bool refresh_cache = needs_update || position_changed || direct_cache_.texture == 0;
         render_needed_ = false;
         LOG_TIMER("gui_render.menu_context_modal_render.modal_overlay.queue");
@@ -699,6 +742,10 @@ namespace lfs::vis::gui {
 
         if (event == Rml::EventId::Change && event.GetCurrentElement() == overlay->el_form_) {
             overlay->render_needed_ = true;
+            if (overlay->active_ && overlay->active_->on_change) {
+                auto callback = overlay->active_->on_change;
+                callback(overlay->collectFormValues());
+            }
             if (event.GetParameter<bool>("linebreak", false) &&
                 rml_input::isTextEditableElement(event.GetTargetElement())) {
                 overlay->dismissFirstEnabledButton();

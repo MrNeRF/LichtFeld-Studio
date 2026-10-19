@@ -3,6 +3,7 @@
 
 #include "timeline.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "interpolation.hpp"
 #include "io/atomic_output.hpp"
@@ -290,7 +291,9 @@ namespace lfs::sequencer {
     }
 
     void Timeline::sortKeyframes() {
-        std::sort(keyframes_.begin(), keyframes_.end());
+        // Equal-time keys keep their current order.
+        if (!std::is_sorted(keyframes_.begin(), keyframes_.end()))
+            std::stable_sort(keyframes_.begin(), keyframes_.end());
     }
 
     nlohmann::json Timeline::saveToJson() const {
@@ -316,6 +319,11 @@ namespace lfs::sequencer {
 
     bool Timeline::saveToJson(const std::string& path) const {
         try {
+            const auto json_bytes = saveToJson().dump(2);
+            if (json_bytes.size() > MAX_TIMELINE_JSON_BYTES) {
+                LOG_ERROR("Timeline output exceeds the 16 MiB file budget: {}", path);
+                return false;
+            }
             const std::filesystem::path path_fs = lfs::core::utf8_to_path(path);
             if (auto result = lfs::io::ensure_output_parent_directory(path_fs); !result) {
                 LOG_ERROR("Failed to prepare timeline output '{}': {}", path, result.error().format());
@@ -331,7 +339,7 @@ namespace lfs::sequencer {
                 LOG_ERROR("Failed to open timeline file: {}", path);
                 return false;
             }
-            file << saveToJson().dump(2);
+            file << json_bytes;
             file.close();
             if (!file) {
                 LOG_ERROR("Failed to write complete timeline file: {}", path);
@@ -400,7 +408,13 @@ namespace lfs::sequencer {
                         AnimationClip::fromJson(json["animation_clip"]));
             }
 
-            std::sort(loaded_keyframes.begin(), loaded_keyframes.end());
+            // IDs were assigned in file order, so use them to preserve ties
+            // without allocating a second keyframe buffer for a stable sort.
+            if (!std::is_sorted(loaded_keyframes.begin(), loaded_keyframes.end()))
+                std::sort(loaded_keyframes.begin(), loaded_keyframes.end(),
+                          [](const Keyframe& a, const Keyframe& b) {
+                              return a.time < b.time || (a.time == b.time && a.id < b.id);
+                          });
             float loaded_duration = DEFAULT_CLIP_DURATION_SECONDS;
             if (json.contains("clip_duration")) {
                 loaded_duration =
@@ -410,8 +424,8 @@ namespace lfs::sequencer {
                     throw std::runtime_error(
                         "Timeline clip_duration is outside the supported range");
                 }
-                if (loaded_duration == 0.0f)
-                    loaded_duration = DEFAULT_CLIP_DURATION_SECONDS;
+                // An explicit 0 is a duration. The clamp below matches setClipDuration.
+                // Only a missing key keeps DEFAULT_CLIP_DURATION_SECONDS.
             }
             float real_end_time = 0.0f;
             for (auto it = loaded_keyframes.rbegin();
@@ -448,7 +462,7 @@ namespace lfs::sequencer {
             }
 
             std::error_code size_error;
-            const uintmax_t file_size = std::filesystem::file_size(path_fs, size_error);
+            const uintmax_t file_size = lfs::core::native_fs::file_size(path_fs, size_error);
             if (size_error || file_size == 0 || file_size > MAX_TIMELINE_JSON_BYTES)
                 throw std::runtime_error("Timeline JSON is empty or exceeds the 16 MiB input budget");
             std::vector<char> json_bytes(static_cast<size_t>(file_size) + 1);

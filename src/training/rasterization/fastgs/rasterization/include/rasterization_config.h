@@ -12,6 +12,19 @@ enum class DensificationType : int { None = 0,
                                      MCMC = 1,
                                      MRNF = 2 };
 
+namespace fast_lfs::rasterization {
+    // dL/dalpha of the background blend (output = color + (1 - alpha) * bg).
+    // A precomputed map wins; otherwise the blend backward derives it per pixel
+    // from the image gradient and the background (CHW image, else solid color)
+    // and adds the optional extra alpha gradient.
+    struct BackgroundAlphaGradient {
+        const float* grad_alpha_map = nullptr;
+        const float* bg_color = nullptr;
+        const float* bg_image = nullptr;
+        const float* grad_alpha_extra = nullptr;
+    };
+} // namespace fast_lfs::rasterization
+
 namespace fast_lfs::rasterization::config {
     // rendering constants
     DEF float dilation = 0.3f;            // Standard dilation when mip_filter OFF

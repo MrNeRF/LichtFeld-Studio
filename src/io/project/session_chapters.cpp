@@ -141,7 +141,7 @@ namespace lfs::io::project {
                 {"centre_speed", 0.002},
                 {"roll_speed", 0.01},
                 {"translate_speed", 0.0005},
-                {"wasd_speed", 8.0},
+                {"wasd_speed", 10.0},
                 {"max_wasd_speed", 100.0},
                 {"ortho_scale", nullptr},
             };
@@ -931,12 +931,10 @@ namespace lfs::io::project {
                 panels.insert(
                     camera["panel"].get<std::string>());
             }
-            if (panels !=
-                std::set<std::string>{
-                    "primary", "secondary"}) {
+            if (panels.size() != 2) {
                 return fail<void>(
                     lfs::ErrorCode::DataLoss,
-                    "VIEW needs exactly primary and secondary camera state",
+                    "VIEW panel camera roles must be unique",
                     "VIEW.panel_cameras.panel");
             }
             return {};

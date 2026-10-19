@@ -13,6 +13,7 @@
 #include "io/scene_chapter_adapter.hpp"
 #include "io/selection_chapter.hpp"
 #include "io/session_chapters.hpp"
+#include "io/sfm_observation_chapter.hpp"
 #include "training_snapshot_service.hpp"
 
 #include <filesystem>
@@ -66,6 +67,7 @@ namespace lfs::training {
         lfs::io::project::SceneGraphChapter scene_graph;
         lfs::io::project::SelectionChapter selection;
         lfs::io::project::ParameterManagerSnapshot parameters;
+        lfs::io::project::SfmObservationCameras sfm_observation_cameras;
         std::optional<ProjectSnapshotDocumentContext>
             document_context;
     };
@@ -82,6 +84,8 @@ namespace lfs::training {
             selection;
         lfs::io::project::ParameterManagerSnapshot
             parameters;
+        lfs::io::project::SfmObservationCameras
+            sfm_observation_cameras;
     };
 
     [[nodiscard]] lfs::Result<TrainingSnapshotCpuStateMetrics>
@@ -93,7 +97,8 @@ namespace lfs::training {
         int iteration,
         ProjectSnapshotCpuState& output,
         std::span<const lfs::core::Uuid>
-            selected_node_uuids = {});
+            selected_node_uuids = {},
+        const lfs::io::project::ScenePayloadBindings& inherited_bindings = {});
 
     // Fallback for callers without a live ParameterManager (for example,
     // headless periodic checkpoint saves). GUI training saves must use the
@@ -107,7 +112,8 @@ namespace lfs::training {
         int iteration,
         ProjectSnapshotCpuState& output,
         std::span<const lfs::core::Uuid>
-            selected_node_uuids = {});
+            selected_node_uuids = {},
+        const lfs::io::project::ScenePayloadBindings& inherited_bindings = {});
 
     // Builds JSON/DOM-backed chapters exclusively from a detached safe-point
     // copy. This may run after the optimizer is allowed to mutate again.

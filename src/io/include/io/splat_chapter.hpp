@@ -47,9 +47,10 @@ namespace lfs::io::project {
         capture(const lfs::core::SplatData& model, SplatSourceKind source_kind,
                 bool is_training_model);
 
-        // Enqueue a device-only snapshot on a dedicated stream. A null pointer
-        // means the coordinator rejected the extra device allocation; callers
-        // should use capture() synchronously in that case.
+        // Enqueue a device-only snapshot on a dedicated stream. Before returning,
+        // order later source-stream writes after the snapshot without a host wait.
+        // A null pointer requests synchronous capture() when device capture is
+        // unavailable (including insufficient allocation headroom).
         [[nodiscard]] static lfs::Result<std::unique_ptr<AsyncSplatCapture>>
         start_async_capture(const lfs::core::SplatData& model,
                             SplatSourceKind source_kind,
@@ -104,6 +105,9 @@ namespace lfs::io::project {
             std::optional<std::size_t> window_bytes);
         LFS_IO_API void set_splat_capture_no_headroom_for_testing(
             std::optional<bool> forced);
+        // Runs on the calling thread before snapshot copies are enqueued.
+        LFS_IO_API void set_splat_capture_stream_hook_for_testing(
+            std::function<void(cudaStream_t)> hook);
         LFS_IO_API void set_splat_capture_stream_creation_failure_for_testing(
             std::optional<bool> forced);
     } // namespace detail

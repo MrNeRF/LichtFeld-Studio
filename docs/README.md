@@ -1,5 +1,12 @@
 # Documentation
 
+For the Python API, start with the [Python and plugin documentation index](plugins/README.md).
+It links the development guide, application API, plugin/UI reference, and examples.
+
+## Documentation website
+
+# Documentation
+
 The documentation is built using [Docusaurus](https://docusaurus.io/), a modern static website generator.
 
 ## Prerequisites

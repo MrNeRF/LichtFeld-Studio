@@ -2,12 +2,15 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/image_io.hpp"
+#include "core/native_fs.hpp"
 
 #include "image_codecs.hpp"
 
+#include "core/cuda/image_quantize.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <condition_variable>
@@ -23,6 +26,8 @@
 #include <queue>
 #include <stdexcept>
 #include <string>
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 #include <thread>
 #include <type_traits>
 #include <vector>
@@ -33,6 +38,7 @@ namespace {
 
     constexpr int DEFAULT_JPEG_QUALITY = 95;
     constexpr std::size_t kJpegExifReadLimit = 64u * 1024u;
+    std::atomic<std::uint64_t> image_info_full_decode_count{0};
 
     struct JpegExifData {
         std::vector<std::uint8_t> thumbnail;
@@ -42,7 +48,7 @@ namespace {
                          const std::uint64_t offset,
                          const std::size_t size,
                          std::vector<std::uint8_t>& data) {
-        std::ifstream file(path, std::ios::binary);
+        std::ifstream file(lfs::core::native_fs::native_path(path), std::ios::binary);
         if (!file)
             return false;
         file.seekg(static_cast<std::streamoff>(offset));
@@ -57,7 +63,7 @@ namespace {
     bool read_file_prefix(const std::filesystem::path& path,
                           const std::size_t max_size,
                           std::vector<std::uint8_t>& data) {
-        std::ifstream file(path, std::ios::binary);
+        std::ifstream file(lfs::core::native_fs::native_path(path), std::ios::binary);
         if (!file)
             return false;
         data.resize(max_size);
@@ -203,6 +209,13 @@ namespace {
         return std::nullopt;
     }
 
+    // Equals static_cast<T>(std::lround(value)) for value in [0, max of T], without a libm call per sample.
+    template <typename T>
+    T round_half_up(const double value) {
+        const auto whole = static_cast<std::uint32_t>(value);
+        return static_cast<T>(whole + (value - static_cast<double>(whole) >= 0.5 ? 1u : 0u));
+    }
+
     template <typename T>
     T* downscale_resample_nch(const T* src,
                               int w, int h, int nw, int nh,
@@ -211,29 +224,32 @@ namespace {
         auto* out = static_cast<T*>(std::malloc(outbytes));
         if (!out)
             throw std::bad_alloc();
-        for (int y = 0; y < nh; ++y) {
-            const float sy = (static_cast<float>(y) + 0.5f) * static_cast<float>(h) / nh - 0.5f;
-            const int y0 = std::clamp(static_cast<int>(std::floor(sy)), 0, h - 1);
-            const int y1 = std::min(y0 + 1, h - 1);
-            const float fy = sy - std::floor(sy);
-            for (int x = 0; x < nw; ++x) {
-                const float sx = (static_cast<float>(x) + 0.5f) * static_cast<float>(w) / nw - 0.5f;
-                const int x0 = std::clamp(static_cast<int>(std::floor(sx)), 0, w - 1);
-                const int x1 = std::min(x0 + 1, w - 1);
-                const float fx = sx - std::floor(sx);
-                for (int c = 0; c < channels; ++c) {
-                    const float top = static_cast<float>(src[(static_cast<size_t>(y0) * w + x0) * channels + c]) * (1.0f - fx) +
-                                      static_cast<float>(src[(static_cast<size_t>(y0) * w + x1) * channels + c]) * fx;
-                    const float bottom = static_cast<float>(src[(static_cast<size_t>(y1) * w + x0) * channels + c]) * (1.0f - fx) +
-                                         static_cast<float>(src[(static_cast<size_t>(y1) * w + x1) * channels + c]) * fx;
-                    const float value = top * (1.0f - fy) + bottom * fy;
-                    if constexpr (std::is_floating_point_v<T>)
-                        out[(static_cast<size_t>(y) * nw + x) * channels + c] = static_cast<T>(value);
-                    else
-                        out[(static_cast<size_t>(y) * nw + x) * channels + c] = static_cast<T>(std::clamp(std::lround(value), 0l, static_cast<long>(std::numeric_limits<T>::max())));
+        tbb::parallel_for(tbb::blocked_range<int>(0, nh), [&](const tbb::blocked_range<int>& rows) {
+            for (int y = rows.begin(); y < rows.end(); ++y) {
+                const float sy = (static_cast<float>(y) + 0.5f) * static_cast<float>(h) / nh - 0.5f;
+                const int y0 = std::clamp(static_cast<int>(std::floor(sy)), 0, h - 1);
+                const int y1 = std::min(y0 + 1, h - 1);
+                const float fy = sy - std::floor(sy);
+                for (int x = 0; x < nw; ++x) {
+                    const float sx = (static_cast<float>(x) + 0.5f) * static_cast<float>(w) / nw - 0.5f;
+                    const int x0 = std::clamp(static_cast<int>(std::floor(sx)), 0, w - 1);
+                    const int x1 = std::min(x0 + 1, w - 1);
+                    const float fx = sx - std::floor(sx);
+                    for (int c = 0; c < channels; ++c) {
+                        const float top = static_cast<float>(src[(static_cast<size_t>(y0) * w + x0) * channels + c]) * (1.0f - fx) +
+                                          static_cast<float>(src[(static_cast<size_t>(y0) * w + x1) * channels + c]) * fx;
+                        const float bottom = static_cast<float>(src[(static_cast<size_t>(y1) * w + x0) * channels + c]) * (1.0f - fx) +
+                                             static_cast<float>(src[(static_cast<size_t>(y1) * w + x1) * channels + c]) * fx;
+                        const float value = top * (1.0f - fy) + bottom * fy;
+                        if constexpr (std::is_floating_point_v<T>)
+                            out[(static_cast<size_t>(y) * nw + x) * channels + c] = static_cast<T>(value);
+                        else
+                            out[(static_cast<size_t>(y) * nw + x) * channels + c] = round_half_up<T>(
+                                std::clamp(value, 0.0f, static_cast<float>(std::numeric_limits<T>::max())));
+                    }
                 }
             }
-        }
+        });
         return out;
     }
 
@@ -264,6 +280,12 @@ namespace {
     }
 
     lfs::core::Tensor prepare_image_for_write(lfs::core::Tensor image) {
+        if (image.ndim() == 4)
+            image = image.squeeze(0); // [B,C,H,W] -> [C,H,W]
+        // A CUDA image is quantized where it lives and downloads as bytes.
+        if (image.device() == lfs::core::Device::CUDA && image.dtype() == lfs::core::DataType::Float32 &&
+            image.ndim() == 3 && image.shape()[0] <= 4)
+            return lfs::core::cuda::quantize_to_interleaved_bytes(image).to(lfs::core::Device::CPU);
         auto normalized = normalize_image_for_save(std::move(image));
         return (normalized.clamp(0, 1) * 255.0f + 0.5f)
             .to(lfs::core::DataType::UInt8)
@@ -322,7 +344,7 @@ namespace {
 
         const std::string path_utf8 = lfs::core::path_to_utf8(path);
         LOG_INFO("Saving image: {} shape: [{}, {}, {}]", path_utf8, height, width, channels);
-        auto ext = path.extension().string();
+        auto ext = lfs::core::path_to_utf8(path.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
         std::string error;
         bool success = false;
@@ -385,15 +407,17 @@ namespace {
             } else {
                 const auto* source = reinterpret_cast<const float*>(decoded.data.data());
                 const auto convert = [&](const size_t index) {
-                    return static_cast<uint8_t>(std::lround(std::clamp(static_cast<double>(source[index]), 0.0, 1.0) * 255.0));
+                    return round_half_up<uint8_t>(std::clamp(static_cast<double>(source[index]), 0.0, 1.0) * 255.0);
                 };
-                for (size_t pixel = 0; pixel < pixels; ++pixel) {
-                    const size_t index = pixel * decoded.channels;
-                    const T first = convert(index);
-                    expand_pixel_to_rgb(base + pixel * 3, decoded.channels, first,
-                                        decoded.channels > 1 ? convert(index + 1) : first,
-                                        decoded.channels > 2 ? convert(index + 2) : first);
-                }
+                tbb::parallel_for(tbb::blocked_range<size_t>(0, pixels), [&](const tbb::blocked_range<size_t>& range) {
+                    for (size_t pixel = range.begin(); pixel < range.end(); ++pixel) {
+                        const size_t index = pixel * decoded.channels;
+                        const T first = convert(index);
+                        expand_pixel_to_rgb(base + pixel * 3, decoded.channels, first,
+                                            decoded.channels > 1 ? convert(index + 1) : first,
+                                            decoded.channels > 2 ? convert(index + 2) : first);
+                    }
+                });
             }
         } else {
             if (decoded.sample_type == image_codecs::SampleType::UInt16) {
@@ -423,18 +447,69 @@ namespace {
             } else {
                 const auto* source = reinterpret_cast<const float*>(decoded.data.data());
                 const auto convert = [&](const size_t index) {
-                    return static_cast<uint16_t>(std::lround(std::clamp(static_cast<double>(source[index]), 0.0, 1.0) * 65535.0));
+                    return round_half_up<uint16_t>(std::clamp(static_cast<double>(source[index]), 0.0, 1.0) * 65535.0);
                 };
-                for (size_t pixel = 0; pixel < pixels; ++pixel) {
-                    const size_t index = pixel * decoded.channels;
-                    const T first = convert(index);
-                    expand_pixel_to_rgb(base + pixel * 3, decoded.channels, first,
-                                        decoded.channels > 1 ? convert(index + 1) : first,
-                                        decoded.channels > 2 ? convert(index + 2) : first);
-                }
+                tbb::parallel_for(tbb::blocked_range<size_t>(0, pixels), [&](const tbb::blocked_range<size_t>& range) {
+                    for (size_t pixel = range.begin(); pixel < range.end(); ++pixel) {
+                        const size_t index = pixel * decoded.channels;
+                        const T first = convert(index);
+                        expand_pixel_to_rgb(base + pixel * 3, decoded.channels, first,
+                                            decoded.channels > 1 ? convert(index + 1) : first,
+                                            decoded.channels > 2 ? convert(index + 2) : first);
+                    }
+                });
             }
         }
         return base;
+    }
+
+    template <typename T>
+    T rgba_sample_as(const image_codecs::Image& decoded, const size_t index) {
+        if (decoded.sample_type == image_codecs::SampleType::UInt8) {
+            const auto value = decoded.data[index];
+            return std::is_same_v<T, uint16_t> ? static_cast<T>(value * 257) : value;
+        }
+        if (decoded.sample_type == image_codecs::SampleType::UInt16) {
+            const auto value = reinterpret_cast<const uint16_t*>(decoded.data.data())[index];
+            return std::is_same_v<T, uint16_t> ? value : static_cast<T>(std::lround(value / 257.0));
+        }
+        const float value = std::clamp(reinterpret_cast<const float*>(decoded.data.data())[index], 0.0f, 1.0f);
+        return static_cast<T>(std::lround(value * static_cast<float>(std::numeric_limits<T>::max())));
+    }
+
+    template <typename T>
+    std::tuple<T*, int, int, int>
+    load_image_with_alpha_t(const std::filesystem::path& p, const int res_div, const int max_width) {
+        image_codecs::Image decoded;
+        std::string error;
+        if (!image_codecs::decode(p, decoded, error))
+            throw std::runtime_error("Load failed: " + lfs::core::path_to_utf8(p) + (error.empty() ? "" : " : " + error));
+        if (decoded.channels != 4) {
+            LOG_ERROR("load_image_with_alpha: expected 4 channels, got {}", decoded.channels);
+            return std::make_tuple(nullptr, 0, 0, 0);
+        }
+        const size_t pixel_count = static_cast<size_t>(decoded.width) * decoded.height;
+        auto* out = static_cast<T*>(std::malloc(pixel_count * 4 * sizeof(T)));
+        if (!out) {
+            throw std::bad_alloc();
+        }
+        for (size_t i = 0; i < pixel_count * 4; ++i)
+            out[i] = rgba_sample_as<T>(decoded, i);
+
+        const auto [nw, nh] = lfs::core::resized_image_dimensions(decoded.width, decoded.height, res_div, max_width);
+        if (nw != decoded.width || nh != decoded.height) {
+            T* resized = nullptr;
+            try {
+                resized = downscale_resample_nch<T>(out, decoded.width, decoded.height, nw, nh, 4);
+            } catch (...) {
+                std::free(out);
+                throw;
+            }
+            std::free(out);
+            return {resized, nw, nh, 4};
+        }
+
+        return {out, decoded.width, decoded.height, 4};
     }
 
     void* allocate_image_buffer(const std::size_t bytes, void*) {
@@ -461,7 +536,7 @@ namespace {
         T* base = nullptr;
         std::optional<JpegExifData> exif;
         if (prefer_embedded_thumbnail && max_width > 0) {
-            auto extension = p.extension().string();
+            auto extension = lfs::core::path_to_utf8(p.extension());
             std::transform(extension.begin(), extension.end(), extension.begin(),
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             if (extension == ".jpg" || extension == ".jpeg")
@@ -508,23 +583,8 @@ namespace {
         if (used_embedded_thumbnail)
             *used_embedded_thumbnail = decoded_embedded;
 
-        int target_width = source_width;
-        int target_height = source_height;
-        if (res_div == 2 || res_div == 4 || res_div == 8) {
-            target_width = std::max(1, target_width / res_div);
-            target_height = std::max(1, target_height / res_div);
-        } else if (res_div > 1) {
-            LOG_ERROR("load_image: unsupported resize factor {}", res_div);
-        }
-        if (max_width > 0 && (target_width > max_width || target_height > max_width)) {
-            if (target_width > target_height) {
-                target_height = std::max(1, max_width * target_height / target_width);
-                target_width = max_width;
-            } else {
-                target_width = std::max(1, max_width * target_width / target_height);
-                target_height = max_width;
-            }
-        }
+        const auto [target_width, target_height] =
+            lfs::core::resized_image_dimensions(source_width, source_height, res_div, max_width);
         if (target_width == source_width && target_height == source_height)
             return {base, source_width, source_height, 3};
         T* resized = nullptr;
@@ -543,11 +603,42 @@ namespace {
 
 namespace lfs::core {
 
+    std::pair<int, int> resized_image_dimensions(const int source_width, const int source_height,
+                                                 const int resize_factor, const int max_width) {
+        int target_width = source_width;
+        int target_height = source_height;
+        if (resize_factor == 2 || resize_factor == 4 || resize_factor == 8) {
+            target_width = std::max(1, target_width / resize_factor);
+            target_height = std::max(1, target_height / resize_factor);
+        } else if (resize_factor > 1) {
+            LOG_ERROR("load_image: unsupported resize factor {}", resize_factor);
+        }
+        if (max_width > 0 && (target_width > max_width || target_height > max_width)) {
+            if (target_width > target_height) {
+                target_height = std::max(1, max_width * target_height / target_width);
+                target_width = max_width;
+            } else {
+                target_width = std::max(1, max_width * target_width / target_height);
+                target_height = max_width;
+            }
+        }
+        return {target_width, target_height};
+    }
+
+    std::tuple<int, int, int> probe_image_info(const std::filesystem::path& p) {
+        image_codecs::Probe probe;
+        std::string error;
+        if (!image_codecs::probe(p, probe, error))
+            throw std::runtime_error("Image probe failed: " + lfs::core::path_to_utf8(p) + (error.empty() ? "" : " : " + error));
+        return {probe.width, probe.height, probe.channels};
+    }
+
     std::tuple<int, int, int> get_image_info(std::filesystem::path p) {
         image_codecs::Probe probe;
         std::string error;
         if (!image_codecs::probe(p, probe, error)) {
             image_codecs::Image decoded;
+            image_info_full_decode_count.fetch_add(1, std::memory_order_relaxed);
             if (!image_codecs::decode(p, decoded, error))
                 throw std::runtime_error("Image probe failed: " + lfs::core::path_to_utf8(p) + (error.empty() ? "" : " : " + error));
             return {decoded.width, decoded.height, decoded.channels};
@@ -555,58 +646,22 @@ namespace lfs::core {
         return {probe.width, probe.height, probe.channels};
     }
 
+    std::uint64_t image_info_full_decode_count_for_testing() noexcept {
+        return image_info_full_decode_count.load(std::memory_order_relaxed);
+    }
+
+    bool probe_image_header_bounded(const std::filesystem::path& p, std::string& error) {
+        return image_codecs::probe_bounded_header(p, error);
+    }
+
     std::tuple<unsigned char*, int, int, int>
     load_image_with_alpha(std::filesystem::path p, int res_div, int max_width) {
-        image_codecs::Image decoded;
-        std::string error;
-        if (!image_codecs::decode(p, decoded, error))
-            throw std::runtime_error("Load failed: " + lfs::core::path_to_utf8(p) + (error.empty() ? "" : " : " + error));
-        if (decoded.channels != 4) {
-            LOG_ERROR("load_image_with_alpha: expected 4 channels, got {}", decoded.channels);
-            return std::make_tuple(nullptr, 0, 0, 0);
-        }
-        const size_t pixel_count = static_cast<size_t>(decoded.width) * decoded.height;
-        auto* out = static_cast<unsigned char*>(std::malloc(pixel_count * 4));
-        if (!out) {
-            throw std::bad_alloc();
-        }
-        for (size_t i = 0; i < pixel_count * 4; ++i) {
-            if (decoded.sample_type == image_codecs::SampleType::UInt8)
-                out[i] = decoded.data[i];
-            else if (decoded.sample_type == image_codecs::SampleType::UInt16)
-                out[i] = static_cast<unsigned char>(std::lround(reinterpret_cast<const uint16_t*>(decoded.data.data())[i] / 257.0));
-            else
-                out[i] = static_cast<unsigned char>(std::lround(std::clamp(reinterpret_cast<const float*>(decoded.data.data())[i], 0.0f, 1.0f) * 255.0f));
-        }
+        return ::load_image_with_alpha_t<unsigned char>(p, res_div, max_width);
+    }
 
-        int nw = decoded.width, nh = decoded.height;
-        if (res_div == 2 || res_div == 4 || res_div == 8) {
-            nw = std::max(1, decoded.width / res_div);
-            nh = std::max(1, decoded.height / res_div);
-        }
-        if (max_width > 0 && (nw > max_width || nh > max_width)) {
-            if (nw > nh) {
-                nh = std::max(1, max_width * nh / nw);
-                nw = max_width;
-            } else {
-                nw = std::max(1, max_width * nw / nh);
-                nh = max_width;
-            }
-        }
-
-        if (nw != decoded.width || nh != decoded.height) {
-            unsigned char* resized = nullptr;
-            try {
-                resized = downscale_resample_nch<unsigned char>(out, decoded.width, decoded.height, nw, nh, 4);
-            } catch (...) {
-                std::free(out);
-                throw;
-            }
-            std::free(out);
-            return {resized, nw, nh, 4};
-        }
-
-        return {out, decoded.width, decoded.height, 4};
+    std::tuple<uint16_t*, int, int, int>
+    load_image_with_alpha_u16(std::filesystem::path p, int res_div, int max_width) {
+        return ::load_image_with_alpha_t<uint16_t>(p, res_div, max_width);
     }
 
     std::tuple<unsigned char*, int, int, int>
@@ -768,6 +823,33 @@ namespace lfs::core {
     void free_image_float(float* img) { std::free(img); }
 
     std::tuple<float*, int, int, int> load_image_float(const std::filesystem::path& p) {
+        if (p.extension() == ".lfsenv") {
+            // Canonical gallery background: magic, little-endian width/height,
+            // then top-to-bottom RGB float32. No filenames or image metadata.
+            static_assert(std::endian::native == std::endian::little);
+            std::ifstream input(lfs::core::native_fs::native_path(p), std::ios::binary | std::ios::ate);
+            const auto size = input.tellg();
+            input.seekg(0);
+            std::array<char, 8> magic{};
+            uint32_t width = 0, height = 0;
+            input.read(magic.data(), magic.size());
+            input.read(reinterpret_cast<char*>(&width), sizeof(width));
+            input.read(reinterpret_cast<char*>(&height), sizeof(height));
+            const uint64_t pixels = uint64_t(width) * height;
+            if (!input || std::memcmp(magic.data(), "LFSENV1\0", 8) != 0 ||
+                width == 0 || height == 0 || width > 8192 || height > 8192 ||
+                pixels > 8'388'608 || size != static_cast<std::streamoff>(16 + pixels * 12))
+                return {nullptr, 0, 0, 0};
+            auto* data = static_cast<float*>(std::malloc(pixels * 12));
+            if (!data)
+                throw std::bad_alloc();
+            input.read(reinterpret_cast<char*>(data), pixels * 12);
+            if (!input || !std::all_of(data, data + pixels * 3, [](float x) { return std::isfinite(x); })) {
+                std::free(data);
+                return {nullptr, 0, 0, 0};
+            }
+            return {data, static_cast<int>(width), static_cast<int>(height), 3};
+        }
         if (p.extension() == ".hdr") {
             image_codecs::DecodeTarget target{3, image_codecs::SampleType::Float32,
                                               nullptr, allocate_image_buffer, nullptr};
@@ -948,7 +1030,7 @@ namespace lfs::core {
         }
 
         // Get file extension to determine format
-        std::string ext = p.extension().string();
+        std::string ext = lfs::core::path_to_utf8(p.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
         // Check if format is supported

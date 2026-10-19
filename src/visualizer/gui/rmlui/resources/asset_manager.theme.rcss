@@ -12,6 +12,22 @@
     border-color: @{border};
 }
 
+/* ── Quick Look ──────────────────────────────────────────── */
+
+.asset-quick-look {
+    background-color: @{modal.backdrop};
+}
+
+.asset-quick-look-card {
+    background-color: @{surface};
+}
+
+.asset-size-menu {
+    background-color: @{surface};
+    color: @{text};
+    border-color: @{border};
+}
+
 /* ── Toolbar ─────────────────────────────────────────────── */
 
 .asset-button {
@@ -56,10 +72,6 @@
     border-color: @{border};
 }
 
-.asset-search-icon {
-    color: @{text_dim};
-}
-
 .asset-search-box input[type="text"] {
     color: @{text};
 }
@@ -70,19 +82,22 @@
 }
 
 .asset-refresh-button img,
-.asset-folder-menu img,
+.asset-toolbar-view img,
 .asset-card-menu img {
     image-color: @{alpha(text,0.90)};
 }
 
-.asset-refresh-button:hover img,
-.asset-folder-menu:hover img,
-.asset-card-menu:hover img {
-    image-color: @{text};
+.inspector-more img,
+.inspector-disclosure,
+.asset-list-header-gallery-icon {
+    image-color: @{alpha(text,0.90)};
 }
 
-.asset-add-folder-glyph {
-    color: @{text};
+.asset-refresh-button:hover img,
+.asset-toolbar-view:hover img,
+.asset-card-menu:hover img,
+.inspector-more:hover img {
+    image-color: @{text};
 }
 
 .asset-import-button {
@@ -119,92 +134,28 @@
     border-color: @{primary};
 }
 
-.asset-button-label {
-    color: @{text};
-}
-
-.asset-header-action {
-    color: @{text};
-    background-color: @{surface_bright};
-    border-color: @{border};
-}
-
-.asset-header-action:hover {
-    background-color: @{lighten(surface_bright,0.12)};
-    border-color: @{primary};
-}
-
-#asset-viewport-edge {
-    background-color: @{right_panel.border};
-}
-
-/* ── Sidebar ─────────────────────────────────────────────── */
-
-#asset-sidebar {
+#asset-scope-controls {
     background-color: @{alpha(background,0.32)};
     border-bottom-color: @{border};
 }
 
-#sidebar-resize-handle {
-    background-color: @{alpha(primary,0.12)};
-    border-top-color: @{alpha(primary,0.26)};
-    border-bottom-color: @{alpha(background,0.55)};
+.asset-resize-handle:hover,
+.asset-resize-handle:active,
+.asset-resize-handle:focus {
+    background-color: @{alpha(primary,0.45)};
 }
 
-#sidebar-resize-handle:hover {
-    background-color: @{alpha(primary,0.30)};
-}
-
-#sidebar-resize-handle.dragging {
-    background-color: @{alpha(primary,0.46)};
-}
-
-.asset-sidebar-global {
-    border-bottom-color: @{border};
-}
-
-.asset-sidebar-title,
-.asset-info-section-title {
-    color: @{text_dim};
-}
-
-.asset-sidebar-title .section-arrow {
-    color: @{alpha(text_dim,0.72)};
-}
-
-.asset-sidebar-title:hover .section-arrow,
-.asset-sidebar-title .section-arrow.is-expanded {
-    color: @{text};
-}
-
-.asset-filter-row:hover {
-    background-color: @{lighten(surface_bright,0.06)};
-}
-
-.asset-filter-row.is-active {
-    background-color: @{alpha(primary,0.20)};
-}
-
-.asset-filter-row.is-active .asset-row-label {
-    color: @{primary};
-}
-
-.asset-row-label {
-    color: @{text};
-}
-
-.asset-row-count {
-    color: @{text_dim};
-}
-
-.asset-folder-menu {
+.asset-resize-handle--horizontal,
+.asset-resize-handle--horizontal:hover,
+.asset-resize-handle--horizontal:active,
+.asset-resize-handle--horizontal:focus {
     background-color: transparent;
-    border-color: transparent;
 }
 
-.asset-folder-menu:hover {
-    background-color: @{alpha(surface_bright,0.94)};
-}
+.asset-resize-handle--horizontal .asset-resize-handle-line { background-color: @{border}; }
+.asset-resize-handle--horizontal:hover .asset-resize-handle-line,
+.asset-resize-handle--horizontal:active .asset-resize-handle-line,
+.asset-resize-handle--horizontal.dragging .asset-resize-handle-line { background-color: @{primary}; }
 
 /* ── Gallery ─────────────────────────────────────────────── */
 
@@ -214,10 +165,6 @@
 
 .asset-gallery-header {
     border-bottom-color: @{border};
-}
-
-.asset-gallery-title {
-    color: @{text};
 }
 
 .asset-gallery-subtitle {
@@ -230,6 +177,18 @@
 
 .asset-gallery-scan-status {
     color: @{text_dim};
+}
+
+.asset-loading-label {
+    color: @{text_dim};
+}
+
+.asset-loading-track {
+    background-color: @{statusbar.progress_bg};
+}
+
+.asset-loading-fill {
+    background-color: @{primary};
 }
 
 .asset-gallery-scroll::-webkit-scrollbar-track {
@@ -257,9 +216,7 @@
 }
 
 .asset-card.is-selected,
-.asset-card.is-multi-selected,
-.asset-list-row.is-selected,
-.asset-list-row.is-multi-selected {
+.asset-list-row.is-selected {
     border-color: @{primary};
     background-color: @{alpha(primary,0.12)};
 }
@@ -273,32 +230,20 @@
     border-bottom-color: @{border};
 }
 
-.asset-card-placeholder {
-    color: @{text_dim};
+.asset-thumbnail-placeholder {
+    background-color: @{darken(primary,0.40)};
 }
 
 .asset-thumb-project {
     background-color: @{alpha(info,0.14)};
 }
 
-.asset-card-title,
-.asset-info-name {
+.asset-card-title {
     color: @{text};
 }
 
 .asset-card-meta {
     color: @{text_dim};
-}
-
-.asset-card-button {
-    color: @{text};
-    background-color: @{lighten(surface_bright,0.06)};
-    border-color: @{border};
-}
-
-.asset-card-button:hover {
-    background-color: @{lighten(surface_bright,0.12)};
-    border-color: @{primary};
 }
 
 .asset-card-menu {
@@ -310,10 +255,38 @@
     background-color: @{surface_bright};
 }
 
+.asset-list-menu {
+    background-color: transparent;
+    border-color: transparent;
+}
+
+.asset-list-menu img {
+    image-color: @{alpha(text,0.90)};
+}
+
+.asset-list-menu:hover {
+    background-color: @{surface_bright};
+}
+
+.asset-list-menu:hover img {
+    image-color: @{text};
+}
+
 .asset-list-header {
     background-color: @{blend(surface_bright,background,0.18)};
     border-color: @{border};
     color: @{text_dim};
+}
+
+.asset-list-header .asset-list-sort {
+    background-color: transparent;
+    color: @{text_dim};
+    border-radius: 0;
+}
+
+.asset-list-header .asset-list-sort:hover {
+    background-color: @{surface_bright};
+    color: @{text};
 }
 
 .asset-list-row {
@@ -322,55 +295,25 @@
     color: @{text};
 }
 
+.asset-list-column-handle:hover {
+    border-right-color: @{primary};
+    background-color: @{alpha(primary,0.18)};
+}
+
 .asset-list-primary {
     color: @{text};
 }
 
-/* ── Info Panel ──────────────────────────────────────────── */
+/* ── Inspector ───────────────────────────────────────────── */
 
-#asset-info-panel {
-    background-color: @{alpha(background,0.32)};
-    border-top-color: @{border};
-}
-
-#bottom-panel-resize-handle {
-    background-color: @{alpha(primary,0.12)};
-    border-top-color: @{alpha(primary,0.26)};
-    border-bottom-color: @{alpha(background,0.55)};
-}
-
-#bottom-panel-resize-handle:hover {
-    background-color: @{alpha(primary,0.30)};
-}
-
-#bottom-panel-resize-handle.dragging {
-    background-color: @{alpha(primary,0.46)};
-}
-
-.asset-info-tabs {
-    border-bottom-color: @{border};
-}
-
-.asset-info-tab {
-    color: @{text_dim};
-    border-bottom-color: transparent;
-}
-
-.asset-info-tab:hover {
+.asset-inspector {
+    background-color: @{surface};
+    border-left-color: @{border};
     color: @{text};
 }
 
-.asset-info-tab.is-active {
-    color: @{primary};
-    border-bottom-color: @{primary};
-}
-
-.asset-info-name {
-    color: @{text};
-}
-
-.asset-info-section-title {
-    color: @{text_dim};
+.asset-inspector-content {
+    background-color: @{surface};
 }
 
 .parameter-row {
@@ -389,12 +332,26 @@
     border-bottom-color: @{border};
 }
 
-.asset-info-warning {
-    background-color: @{alpha(error,0.10)};
-    border-color: @{error};
-}
-
-.asset-artifact-type,
 .asset-info-empty-text {
     color: @{text_dim};
 }
+
+.gallery-progress { background-color: @{statusbar.progress_bg}; }
+.gallery-progress-fill { background-color: @{primary}; }
+
+.gallery-remote { border-color: @{text_dim}; }
+
+.asset-list-sort { color: @{text_dim}; }
+.asset-list-sort:hover, .asset-list-sort:focus { background-color: @{surface_bright}; color: @{text}; }
+
+.contents-tag { color: @{text_dim}; background-color: @{surface_bright}; }
+.contents-row--pending { color: @{text_dim}; }
+.contents-remove img { image-color: @{text}; }
+
+.gallery-activity > img { image-color: @{text_dim}; opacity: 0.35; }
+.gallery-activity > progress, .gallery-activity > progress fill { image-color: @{primary}; }
+
+.gallery-activity > progress, .gallery-activity > progress fill { background-color: transparent; border-width: 0; }
+
+.gallery-activity > progress, .gallery-activity > progress fill { decorator: none; }
+#asset-scope-select.is-drag-over { border-color: @{primary}; background-color: @{alpha(primary,0.20)}; }

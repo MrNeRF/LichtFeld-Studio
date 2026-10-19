@@ -23,7 +23,7 @@
 .meta-val-secondary,
 .hk-label,
 .status-item,
-.status-counter {
+.status-position {
     color: @{text_dim};
 }
 

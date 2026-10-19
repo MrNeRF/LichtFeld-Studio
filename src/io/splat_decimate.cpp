@@ -36,7 +36,7 @@ namespace lfs::io::decimate {
         std::vector<uint32_t> order(counts[buckets]);
         for (size_t e = 0; e < c.cost.size(); ++e)
             if (std::isfinite(c.cost[e]))
-                order[cursor[bucket(c.cost[e])]++] = e;
+                order[cursor[bucket(c.cost[e])]++] = static_cast<uint32_t>(e);
         Selection s;
         s.member_group.assign(n, -1);
         std::vector<std::array<uint32_t, 4>> groups;
@@ -75,7 +75,7 @@ namespace lfs::io::decimate {
         for (size_t g = 0; g < groups.size(); ++g) {
             s.minimum.push_back(*std::min_element(groups[g].begin(), groups[g].begin() + sizes[g]));
             s.members.insert(s.members.end(), groups[g].begin(), groups[g].begin() + sizes[g]);
-            s.offsets.push_back(s.members.size());
+            s.offsets.push_back(static_cast<uint32_t>(s.members.size()));
         }
         return s;
     }
@@ -86,7 +86,7 @@ namespace lfs::io::decimate {
         size_t n = data.n;
         std::vector<Cache> cache(n);
         for (size_t i = 0; i < n; ++i)
-            cache[i] = cache_one(v, i);
+            cache[i] = cache_one(v, static_cast<uint32_t>(i));
         std::vector<uint32_t> ids(n);
         std::iota(ids.begin(), ids.end(), 0);
         auto build = [&](auto&& self, size_t begin, size_t end, int axis) -> void {

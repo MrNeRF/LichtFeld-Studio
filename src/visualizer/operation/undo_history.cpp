@@ -192,7 +192,7 @@ namespace lfs::vis::op {
         void refreshAfterHistoryPlayback(const DirtyMask flags = DirtyFlag::ALL) {
             invalidateUndoRedoPollState();
             if (auto* rm = services().renderingOrNull()) {
-                rm->markDirty(flags == 0 ? DirtyFlag::ALL : flags);
+                rm->markDirty(flags == 0 ? DirtyFlag::ALL : flags, lfs::vis::FrameReason::SceneChange);
             }
         }
 
@@ -529,6 +529,11 @@ namespace lfs::vis::op {
             };
         }
 
+        // Discard the temporary alignment before replaying committed transforms.
+        if (operators().activeModalId() == to_string(BuiltinOp::AlignPickPoint)) {
+            operators().cancelModalOperator();
+        }
+
         if (auto* const scene_manager = services().sceneOrNull()) {
             try {
                 scene_manager->completePendingSelectionCounts();
@@ -628,6 +633,20 @@ namespace lfs::vis::op {
                 } else {
                     entry->redo();
                 }
+            } catch (const HistoryStaleEntryError& e) {
+                LOG_WARN("Discarding stale {} entry '{}': {}",
+                         undo_direction ? "undo" : "redo", entry->name(), e.what());
+                {
+                    std::lock_guard lock(mutex_);
+                    refreshResidencyLocked();
+                    updateAvailabilityLocked();
+                    bumpGenerationLocked();
+                }
+                result.success = false;
+                result.error = e.what();
+                refreshAfterHistoryPlayback(dirty_flags);
+                notifyObservers();
+                return result;
             } catch (const HistoryCorruptionError& e) {
                 LOG_ERROR("Fatal {} failure for '{}': {}",
                           undo_direction ? "undo" : "redo", entry->name(), e.what());
@@ -743,6 +762,18 @@ namespace lfs::vis::op {
         invalidateUndoRedoPollState();
         if (changed) {
             notifyObservers();
+        }
+    }
+
+    void UndoHistory::bindHydratedPayloadStorage(
+        const std::span<const lfs::core::Uuid> node_uuids) {
+        std::lock_guard lock(mutex_);
+        if (redo_stack_.empty()) {
+            return;
+        }
+        if (auto* const patch =
+                dynamic_cast<SceneGraphPatchEntry*>(redo_stack_.back().get())) {
+            patch->bindHydratedPayloadStorage(node_uuids);
         }
     }
 

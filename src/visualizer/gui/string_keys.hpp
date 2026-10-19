@@ -30,6 +30,8 @@ namespace lichtfeld::Strings {
             inline constexpr const char* MENU = "menu.tools";
             inline constexpr const char* PYTHON_CONSOLE = "menu.tools.python_console";
             inline constexpr const char* PLUGIN_MARKETPLACE = "menu.tools.plugin_marketplace";
+            inline constexpr const char* GALLERY = "menu.tools.gallery";
+            inline constexpr const char* GALLERY_TRANSFERS = "menu.tools.gallery_transfers";
         } // namespace Tools
 
         namespace View {
@@ -257,21 +259,8 @@ namespace lichtfeld::Strings {
         inline constexpr const char* PLY_SEQUENCE_LABEL = "scene.ply_sequence_label";
         inline constexpr const char* KEYFRAME_NODE_LABEL = "scene.keyframe_node_label";
         inline constexpr const char* SAVE_TO_DISK = "scene.save_to_disk";
-        inline constexpr const char* HISTORY = "scene.history";
         inline constexpr const char* LOGGING = "scene.logging";
-        inline constexpr const char* HISTORY_SHARED = "scene.history_shared";
-        inline constexpr const char* HISTORY_EMPTY = "scene.history_empty";
-        inline constexpr const char* HISTORY_NOTE = "scene.history_note";
-        inline constexpr const char* UNDO_STACK = "scene.undo_stack";
-        inline constexpr const char* REDO_STACK = "scene.redo_stack";
-        inline constexpr const char* NOTHING_RECORDED = "scene.nothing_recorded";
-        inline constexpr const char* NO_ENTRIES_IN_STACK = "scene.no_entries_in_stack";
-        inline constexpr const char* LOG_MIRROR = "scene.log_mirror";
         inline constexpr const char* LOG_LEVEL = "scene.log_level";
-        inline constexpr const char* LOG_EXPORT = "scene.log_export";
-        inline constexpr const char* LOG_COPY = "scene.log_copy";
-        inline constexpr const char* LOG_NOTE = "scene.log_note";
-        inline constexpr const char* NO_LOGS = "scene.no_logs";
         inline constexpr const char* LOG_TRACE = "scene.log_trace";
         inline constexpr const char* LOG_DEBUG = "scene.log_debug";
         inline constexpr const char* LOG_INFO = "scene.log_info";
@@ -286,6 +275,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* FORMAT_PLY_STANDARD = "export.format.ply_standard";
         inline constexpr const char* FORMAT_SOG_SUPERSPLAT = "export.format.sog_supersplat";
         inline constexpr const char* FORMAT_SPZ_NIANTIC = "export.format.spz_niantic";
+        inline constexpr const char* FORMAT_GLB_GLTF = "export.format.glb_gltf";
         inline constexpr const char* FORMAT_USD_OPENUSD = "export.format.usd_openusd";
         inline constexpr const char* FORMAT_HTML_VIEWER = "export.format.html_viewer";
         inline constexpr const char* ALL = "export.all";
@@ -363,7 +353,12 @@ namespace lichtfeld::Strings {
 
     namespace Preferences {
         inline constexpr const char* LANGUAGE = "preferences.language";
+        inline constexpr const char* TITLE = "preferences.title";
     } // namespace Preferences
+
+    namespace GettingStarted {
+        inline constexpr const char* TITLE = "getting_started.title";
+    } // namespace GettingStarted
 
     namespace MainPanel {
         inline constexpr const char* COLOR = "main_panel.color";
@@ -395,7 +390,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* PPISP_CRF_TOE = "main_panel.ppisp_crf_toe";
         inline constexpr const char* PPISP_CRF_SHOULDER = "main_panel.ppisp_crf_shoulder";
         inline constexpr const char* RENDER_SCALE = "main_panel.render_scale";
-        inline constexpr const char* COMMITTED = "main_panel.committed";
         inline constexpr const char* PREVIEW = "main_panel.preview";
         inline constexpr const char* CENTER_MARKER = "main_panel.center_marker";
         inline constexpr const char* SELECTION_GROUPS = "main_panel.selection_groups";
@@ -448,6 +442,20 @@ namespace lichtfeld::Strings {
         inline constexpr const char* RESET_TRANSFORM = "transform.reset_transform";
         inline constexpr const char* NODES_SELECTED = "transform.nodes_selected";
     } // namespace Transform
+
+    namespace Align {
+        inline constexpr const char* CLICK_1ST = "align.click_1st";
+        inline constexpr const char* CLICK_2ND = "align.click_2nd";
+        inline constexpr const char* CLICK_3RD = "align.click_3rd";
+        inline constexpr const char* POINTS_COUNT = "align.points_count";
+        inline constexpr const char* UP = "align.up";
+        inline constexpr const char* SNAPPED = "align.snapped";
+        inline constexpr const char* HINT_PICKING = "align.hint_picking";
+        inline constexpr const char* HINT_REVIEW = "align.hint_review";
+        inline constexpr const char* STATUS_COLINEAR = "align.status_colinear";
+        inline constexpr const char* STATUS_NO_SURFACE = "align.status_no_surface";
+        inline constexpr const char* STATUS_NO_TARGET = "align.status_no_target";
+    } // namespace Align
 
     namespace Ellipsoid {
         inline constexpr const char* TITLE = "ellipsoid.title";
@@ -582,7 +590,6 @@ namespace lichtfeld::Strings {
     } // namespace InputSettings
 
     namespace DebugInfo {
-        inline constexpr const char* CLEAR_HISTORY = "debug_info.clear_history";
     } // namespace DebugInfo
 
     namespace TrainingParams {
@@ -637,6 +644,9 @@ namespace lichtfeld::Strings {
         inline constexpr const char* SUPPORTED_BY = "startup.supported_by";
         inline constexpr const char* CLICK_TO_CONTINUE = "startup.click_to_continue";
         inline constexpr const char* LOADED_PLUGINS = "startup.loaded_plugins";
+        inline constexpr const char* PLUGIN_INVALID_MANIFEST = "startup.plugin_invalid_manifest";
+        inline constexpr const char* PLUGIN_INCOMPATIBLE_API = "startup.plugin_incompatible_api";
+        inline constexpr const char* PLUGIN_LOAD_FAILED = "startup.plugin_load_failed";
         inline constexpr const char* DROP_FILES_TITLE = "startup.drop_files_title";
         inline constexpr const char* DROP_FILES_SUBTITLE = "startup.drop_files_subtitle";
         inline constexpr const char* DROP_FILES_HINT = "startup.drop_files_hint";
@@ -659,6 +669,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* PYTHON = "python_console.python";
         inline constexpr const char* RUNNING = "python_console.running";
         inline constexpr const char* ALREADY_RUNNING = "python_console.already_running";
+        inline constexpr const char* SYSTEM_EXIT = "python_console.system_exit";
         inline constexpr const char* SYNTAX = "python_console.syntax";
         inline constexpr const char* OUTLINE = "python_console.outline";
         inline constexpr const char* SCOPE = "python_console.scope";
@@ -700,9 +711,14 @@ namespace lichtfeld::Strings {
         inline constexpr const char* ESTIMATED_FRAMES = "video_extractor.estimated_frames";
         inline constexpr const char* INPUT_VIDEO = "video_extractor.input_video";
         inline constexpr const char* VIDEO = "video_extractor.video";
+        inline constexpr const char* VIDEOS = "video_extractor.videos";
+        inline constexpr const char* ADD_VIDEOS = "video_extractor.add_videos";
+        inline constexpr const char* REMOVE_VIDEO = "video_extractor.remove_video";
+        inline constexpr const char* CLEAR_VIDEOS = "video_extractor.clear_videos";
         inline constexpr const char* NO_FILE = "video_extractor.no_file";
         inline constexpr const char* BROWSE = "video_extractor.browse";
         inline constexpr const char* OUTPUT = "video_extractor.output";
+        inline constexpr const char* OUTPUT_ROOT = "video_extractor.output_root";
         inline constexpr const char* NO_DIR = "video_extractor.no_dir";
         inline constexpr const char* SELECT_FOLDER = "video_extractor.select_folder";
         inline constexpr const char* SETTINGS = "video_extractor.settings";
@@ -746,6 +762,14 @@ namespace lichtfeld::Strings {
         inline constexpr const char* CANDIDATES_READOUT_FMT = "video_extractor.candidates_readout_fmt";
         inline constexpr const char* SHARPNESS_MODE_DESC_THRESHOLD = "video_extractor.sharpness_mode_desc_threshold";
         inline constexpr const char* SHARPNESS_MODE_DESC_WINDOW = "video_extractor.sharpness_mode_desc_window";
+        inline constexpr const char* OVERWRITE_PROMPT = "video_extractor.overwrite_prompt";
+        inline constexpr const char* OVERWRITE_PROMPT_METADATA = "video_extractor.overwrite_prompt_metadata";
+        inline constexpr const char* OVERWRITE_PROMPT_FRAMES_METADATA = "video_extractor.overwrite_prompt_frames_metadata";
+        inline constexpr const char* OVERWRITE_CANCEL = "video_extractor.overwrite_cancel";
+        inline constexpr const char* OVERWRITE_DELETE = "video_extractor.overwrite_delete";
+        inline constexpr const char* OVERWRITE_PROCEED = "video_extractor.overwrite_proceed";
+        inline constexpr const char* OVERWRITE_DELETE_ERROR = "video_extractor.overwrite_delete_error";
+        inline constexpr const char* CONTINUE_BATCH_ON_FAILURE = "video_extractor.continue_batch_on_failure";
     } // namespace VideoExtractor
 
     namespace Mesh2Splat {
@@ -832,7 +856,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* NOT_NOW = "file_association.not_now";
         inline constexpr const char* DONT_ASK = "file_association.dont_ask";
         inline constexpr const char* MENU_REGISTER = "file_association.menu_register";
-        inline constexpr const char* MENU_UNREGISTER = "file_association.menu_unregister";
     } // namespace FileAssociation
 
     namespace ErrorModal {
@@ -840,6 +863,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* OUT_OF_GPU_MEMORY = "error_modal.out_of_gpu_memory";
         inline constexpr const char* DATASET_LOAD_FAILED = "error_modal.dataset_load_failed";
         inline constexpr const char* EXPORT_FAILED = "error_modal.export_failed";
+        inline constexpr const char* EXPORT_WARNING = "error_modal.export_warning";
         inline constexpr const char* VIDEO_EXPORT_FAILED = "error_modal.video_export_failed";
         inline constexpr const char* MESH2SPLAT_FAILED = "error_modal.mesh2splat_failed";
         inline constexpr const char* CONFIG_INVALID = "error_modal.config_invalid";
@@ -884,9 +908,16 @@ namespace lichtfeld::Strings {
         inline constexpr const char* TASK_ENCODE_ERROR = "runtime.task_encode_error";
         inline constexpr const char* TASK_FINALIZING = "runtime.task_finalizing";
         inline constexpr const char* TASK_FAILED_DETAIL = "runtime.task_failed_detail";
+        inline constexpr const char* VIDEO_EXPORT_SEQUENCE_CHANGED = "runtime.video_export_sequence_changed";
+        inline constexpr const char* VIDEO_EXPORT_SEQUENCE_FRAME_TIMEOUT = "runtime.video_export_sequence_frame_timeout";
         inline constexpr const char* EXPORT_CANCELLED = "runtime.export_cancelled";
         inline constexpr const char* NO_SPLAT_DATA = "runtime.no_splat_data";
+        inline constexpr const char* EXPORT_STREAMED_LOD = "runtime.export_streamed_lod";
+        inline constexpr const char* EXPORT_EXTENSION_REQUIRED = "runtime.export_extension_required";
+        inline constexpr const char* EXPORT_EXTENSION_WARNING = "runtime.export_extension_warning";
+        inline constexpr const char* EXPORT_SH_DEGREE_CLAMPED = "runtime.export_sh_degree_clamped";
         inline constexpr const char* VIDEO_ENCODER_UNAVAILABLE = "runtime.video_encoder_unavailable";
+        inline constexpr const char* VIDEO_ENCODER_PROBE_FAILED = "runtime.video_encoder_probe_failed";
         inline constexpr const char* SCENE_MANAGER_UNAVAILABLE = "runtime.scene_manager_unavailable";
         inline constexpr const char* NO_MODEL_SELECTED = "runtime.no_model_selected";
         inline constexpr const char* NO_SCENE_MANAGER = "runtime.no_scene_manager";

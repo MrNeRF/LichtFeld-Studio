@@ -92,6 +92,12 @@ namespace lfs::core {
         const size_t k = shape_[2];
         const size_t n = other.shape_[2];
 
+        // Empty outputs need no kernel launch. In particular, CUDA rejects a
+        // batched grid with a zero-sized batch dimension.
+        if (batch_size == 0 || m == 0 || n == 0) {
+            return empty({batch_size, m, n}, device_, dtype_);
+        }
+
         const Tensor& a = is_contiguous() ? *this : contiguous();
         const Tensor& b = other.is_contiguous() ? other : other.contiguous();
 

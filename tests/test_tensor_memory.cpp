@@ -271,17 +271,21 @@ TEST_F(TensorMemoryTest, BoolViewTransferResultsAndAssignmentStorage) {
         }
         EXPECT_NE(cloned.ptr<bool>(), packed.ptr<bool>());
 
-        // View assignment writes through; none of these rebind the host view.
+        // Assigning a transfer or materialization result replaces the handle.
         view = view.cuda();
-        EXPECT_EQ(view.device(), Device::CPU);
-        EXPECT_EQ(view.ptr<bool>(), host_pointer);
+        EXPECT_EQ(view.device(), Device::CUDA);
+        EXPECT_NE(view.ptr<bool>(), host_pointer);
         view = view.contiguous();
-        EXPECT_FALSE(view.is_contiguous());
-        EXPECT_EQ(view.ptr<bool>(), host_pointer);
+        EXPECT_TRUE(view.is_contiguous());
+        EXPECT_NE(view.ptr<bool>(), host_pointer);
         view = view.clone();
-        EXPECT_EQ(view.device(), Device::CPU);
-        EXPECT_EQ(view.ptr<bool>(), host_pointer);
-        EXPECT_FALSE(view.owns_memory());
+        EXPECT_EQ(view.device(), Device::CUDA);
+        EXPECT_NE(view.ptr<bool>(), host_pointer);
+        EXPECT_TRUE(view.owns_memory());
+        EXPECT_TRUE(host.ptr<bool>()[0]);
+        EXPECT_FALSE(host.ptr<bool>()[1]);
+        EXPECT_FALSE(host.ptr<bool>()[2]);
+        EXPECT_TRUE(host.ptr<bool>()[3]);
     }
 }
 
@@ -294,8 +298,8 @@ TEST_F(TensorMemoryTest, BoolFromBlobCloneResultOwnsStorage) {
     EXPECT_TRUE(cloned.owns_memory());
     EXPECT_NE(cloned.ptr<bool>(), source.ptr<bool>());
     borrowed = borrowed.clone();
-    EXPECT_EQ(borrowed.ptr<bool>(), source.ptr<bool>());
-    EXPECT_FALSE(borrowed.owns_memory());
+    EXPECT_NE(borrowed.ptr<bool>(), source.ptr<bool>());
+    EXPECT_TRUE(borrowed.owns_memory());
     source.zero_();
     const auto values = cloned.cpu();
     EXPECT_TRUE(values.ptr<bool>()[0]);

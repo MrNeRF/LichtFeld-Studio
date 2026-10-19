@@ -5,8 +5,10 @@
 #include "core/error_bus.hpp"
 #include "core/error_codes.hpp"
 #include "core/error_reporter.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/frame_state_machine.hpp"
+#include "core/logger.hpp"
 #include "core/modal_request.hpp"
 #include "core/source_site.hpp"
 #include "gui/error_event_bridge.hpp"
@@ -21,6 +23,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -29,6 +32,11 @@
 #include <vector>
 
 namespace {
+
+    // Tests that load the locale files reset them so later tests see untranslated keys.
+    struct LocaleReset {
+        ~LocaleReset() { lfs::event::LocalizationManager::getInstance().reset(); }
+    };
 
     lfs::Error makeError(const lfs::ErrorCode code, const lfs::ErrorDomain domain,
                          const std::string& message, const char* operation = "unit_test") {
@@ -256,6 +264,45 @@ TEST(ErrorEventBridgeTest, TrainingOomMapsToResourceExhausted) {
     EXPECT_EQ(notification->error.code(), lfs::ErrorCode::ResourceExhausted);
 }
 
+// Fails if a training run whose project save ran out of disk space surfaces as GPU OOM instead of being
+// left to the disk-space dialog (also when only the error text survives), if another ResourceExhausted IO
+// error is mistaken for a full disk, or if a real GPU OOM stops reaching the error modal.
+TEST(ErrorEventBridgeTest, ProjectDiskSpaceFailureIsNotGpuOom) {
+    lfs::core::events::state::TrainingCompleted disk{};
+    disk.success = false;
+    disk.user_stopped = false;
+    disk.resource_exhausted = true;
+    disk.error = "There is not enough disk space to save the project.";
+    disk.error_info = lfs::core::WireError{.code = lfs::to_string(lfs::ErrorCode::ResourceExhausted),
+                                           .domain = lfs::to_string(lfs::ErrorDomain::IO),
+                                           .message = *disk.error};
+    const auto disk_space = lfs::vis::gui::projectDiskSpaceFailure(disk);
+    ASSERT_TRUE(disk_space.has_value());
+    EXPECT_TRUE(disk_space->is_project_save);
+    EXPECT_EQ(disk_space->error, *disk.error);
+    EXPECT_FALSE(lfs::vis::gui::translateTrainingCompleted(disk).has_value());
+
+    auto text_only = disk;
+    text_only.error_info.reset();
+    const auto text_only_disk_space = lfs::vis::gui::projectDiskSpaceFailure(text_only);
+    ASSERT_TRUE(text_only_disk_space.has_value());
+    EXPECT_EQ(text_only_disk_space->error, *disk.error);
+
+    auto host_memory = disk;
+    host_memory.error = "Not enough memory to load the geometry.";
+    host_memory.error_info->message = *host_memory.error;
+    EXPECT_FALSE(lfs::vis::gui::projectDiskSpaceFailure(host_memory).has_value());
+
+    auto gpu = disk;
+    gpu.error = "out of memory (12.0 GB)";
+    gpu.error_info->domain = lfs::to_string(lfs::ErrorDomain::Training);
+    gpu.error_info->message = *gpu.error;
+    EXPECT_FALSE(lfs::vis::gui::projectDiskSpaceFailure(gpu).has_value());
+    const auto notification = lfs::vis::gui::translateTrainingCompleted(gpu);
+    ASSERT_TRUE(notification.has_value());
+    EXPECT_EQ(notification->error.code(), lfs::ErrorCode::ResourceExhausted);
+}
+
 TEST(ErrorEventBridgeTest, TrainingSuccessDoesNotSurface) {
     lfs::core::events::state::TrainingCompleted success{};
     success.success = true;
@@ -317,6 +364,67 @@ TEST(ErrorEventBridgeTest, CudaVersionUnsupportedMapsToToast) {
     ASSERT_TRUE(notification.has_value());
     EXPECT_EQ(notification->surface, lfs::ErrorSurface::Toast);
     EXPECT_TRUE(notification->actions.empty());
+}
+
+TEST(ErrorEventBridgeTest, FileDropListsAllFivePathsAndLogsThem) {
+    const LocaleReset locale_reset;
+    ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
+        (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
+    const lfs::core::events::state::FileDropFailed event{
+        .files = {"/tmp/drop_one.xyz", "/tmp/drop_two.xyz", "/tmp/drop_three.xyz",
+                  "/tmp/drop_four.xyz", "/tmp/drop_five.xyz"},
+        .error = "Unsupported input"};
+    std::vector<std::string> warnings;
+    auto& logger = lfs::core::Logger::get();
+    const auto token = logger.add_log_handler([&](const lfs::core::LogLevel level,
+                                                  const lfs::core::SourceSite&, const std::string_view message) {
+        if (level == lfs::core::LogLevel::Warn)
+            warnings.emplace_back(message);
+    });
+    const auto notification = lfs::vis::gui::translateFileDropFailed(event);
+    logger.remove_log_handler(token);
+
+    ASSERT_TRUE(notification.has_value());
+    const std::string message(notification->error.user_message());
+    ASSERT_EQ(warnings.size(), 1u);
+    for (const auto& path : event.files) {
+        EXPECT_NE(message.find(std::filesystem::path(path).filename().string()), std::string::npos);
+        EXPECT_NE(warnings.front().find(path), std::string::npos);
+    }
+    EXPECT_EQ(message.find("full list in the log"), std::string::npos);
+}
+
+TEST(ErrorEventBridgeTest, FileDropLimitsDialogAndLogsAllPaths) {
+    const LocaleReset locale_reset;
+    ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
+        (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
+    const lfs::core::events::state::FileDropFailed event{
+        .files = {"/tmp/drop_one.xyz", "/tmp/drop_two.xyz", "/tmp/drop_three.xyz",
+                  "/tmp/drop_four.xyz", "/tmp/drop_five.xyz", "/tmp/drop_six.xyz",
+                  "/tmp/drop_seven.xyz"},
+        .error = "Unsupported input"};
+    auto& locale = lfs::event::LocalizationManager::getInstance();
+    locale.setOverride("notification.and_more_in_log", "plus {} others (full list in the log)");
+    std::vector<std::string> warnings;
+    auto& logger = lfs::core::Logger::get();
+    const auto token = logger.add_log_handler([&](const lfs::core::LogLevel level,
+                                                  const lfs::core::SourceSite&, const std::string_view message) {
+        if (level == lfs::core::LogLevel::Warn)
+            warnings.emplace_back(message);
+    });
+    const auto notification = lfs::vis::gui::translateFileDropFailed(event);
+    logger.remove_log_handler(token);
+    locale.clearOverride("notification.and_more_in_log");
+
+    ASSERT_TRUE(notification.has_value());
+    const std::string message(notification->error.user_message());
+    ASSERT_EQ(warnings.size(), 1u);
+    for (std::size_t i = 0; i < event.files.size(); ++i) {
+        EXPECT_NE(warnings.front().find(event.files[i]), std::string::npos);
+        const auto name = std::filesystem::path(event.files[i]).filename().string();
+        EXPECT_EQ(message.find(name) != std::string::npos, i < 5);
+    }
+    EXPECT_NE(message.find("plus 2 others (full list in the log)"), std::string::npos);
 }
 
 namespace {
@@ -933,4 +1041,88 @@ TEST(FrameStateMachineTest, CustomLimits) {
     const auto first_internal = n.on_fault(FrameFault::RendererInternal);
     EXPECT_TRUE(first_internal.publish_internal_modal);
     EXPECT_TRUE(n.scene_render_suspended());
+}
+
+TEST(GuiErrorConsumerTest, CameraGuidanceResolvesAtPresentationTime) {
+    auto& locale = lfs::event::LocalizationManager::getInstance();
+    for (const auto* key : {"messages.err_distorted_images", "messages.err_non_pinhole"}) {
+        const auto error = lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::InvalidArgument,
+            .domain = lfs::ErrorDomain::Training,
+            .user_message = "Readable English guidance",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+            .fields = lfs::SmallFields{}.add("message_key", std::string_view(key)),
+        });
+        std::optional<lfs::core::ModalRequest> modal;
+        std::optional<lfs::vis::gui::ToastRequest> toast;
+        std::string status;
+        lfs::vis::gui::GuiErrorConsumer consumer({
+            .modal = [&](lfs::core::ModalRequest request) { modal = std::move(request); },
+            .toast = [&](lfs::vis::gui::ToastRequest request) { toast = std::move(request); },
+            .status = [&](std::string text, lfs::vis::gui::ErrorNoticeLevel) { status = std::move(text); },
+        });
+        for (const auto* translated : {"Aktivieren Sie GUT im Trainingspanel.", "Activez GUT dans le panneau Entraînement."}) {
+            locale.setOverride(key, translated);
+            consumer.on_error(consumerNotification(error, lfs::ErrorSurface::Modal), {});
+            EXPECT_TRUE(modal.has_value());
+            if (modal) {
+                EXPECT_NE(modal->body_rml.find(translated), std::string::npos);
+                EXPECT_EQ(modal->body_rml.find(key), std::string::npos);
+            }
+            consumer.on_error(consumerNotification(error, lfs::ErrorSurface::Toast), {});
+            ASSERT_TRUE(toast.has_value());
+            EXPECT_EQ(toast->message, translated);
+            consumer.on_error(consumerNotification(error, lfs::ErrorSurface::StatusOnly), {});
+            EXPECT_EQ(status, translated);
+            EXPECT_EQ(error.user_message(), "Readable English guidance");
+        }
+        locale.clearOverride(key);
+    }
+}
+
+TEST(GuiErrorConsumerTest, MissingUnknownOrNonStringKeyKeepsEnglishMessage) {
+    for (const auto& fields : {lfs::SmallFields{},
+                               lfs::SmallFields{}.add("message_key", std::string_view("unknown.key")),
+                               lfs::SmallFields{}.add("message_key", true)}) {
+        const auto error = lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::InvalidArgument,
+            .domain = lfs::ErrorDomain::Training,
+            .user_message = "Readable English guidance",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+            .fields = fields,
+        });
+        std::string status;
+        lfs::vis::gui::GuiErrorConsumer consumer({
+            .modal = {},
+            .toast = {},
+            .status = [&](std::string text, lfs::vis::gui::ErrorNoticeLevel) { status = std::move(text); },
+        });
+        consumer.on_error(consumerNotification(error, lfs::ErrorSurface::StatusOnly), {});
+        EXPECT_EQ(status, error.user_message());
+    }
+}
+
+TEST(ErrorEventBridgeTest, CameraGuidanceKeepsEnglishAndLocalizesAtPresentationTime) {
+    auto& locale = lfs::event::LocalizationManager::getInstance();
+    for (const auto* key : {"messages.err_distorted_images", "messages.err_non_pinhole"}) {
+        lfs::core::events::state::TrainingCompleted event{};
+        event.error = "Readable English guidance";
+        event.error_message_key = key;
+        const auto notification = lfs::vis::gui::translateTrainingCompleted(event);
+        ASSERT_TRUE(notification.has_value());
+        EXPECT_EQ(notification->error.user_message(), *event.error);
+        EXPECT_EQ(lfs::format_for_developer(notification->error).find(key), std::string::npos);
+        std::optional<lfs::core::ModalRequest> modal;
+        lfs::vis::gui::GuiErrorConsumer consumer({
+            .modal = [&](lfs::core::ModalRequest request) { modal = std::move(request); },
+            .toast = {},
+            .status = {},
+        });
+        locale.setOverride(key, "Aktivieren Sie GUT im Trainingspanel.");
+        consumer.on_error(*notification, {});
+        locale.clearOverride(key);
+        ASSERT_TRUE(modal.has_value());
+        EXPECT_NE(modal->body_rml.find("Aktivieren Sie GUT im Trainingspanel."), std::string::npos);
+        EXPECT_EQ(modal->body_rml.find(key), std::string::npos);
+    }
 }

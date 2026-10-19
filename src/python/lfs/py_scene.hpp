@@ -5,22 +5,28 @@
 #pragma once
 
 #include "core/camera.hpp"
+#include "core/error.hpp"
 #include "core/events.hpp"
 #include "core/mesh_data.hpp"
 #include "core/scene.hpp"
 #include "py_prop.hpp"
 #include "py_splat_data.hpp"
 #include "py_tensor.hpp"
+#include <cstdint>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 #include <optional>
+#include <stdexcept>
 
 namespace nb = nanobind;
 
 namespace lfs::python {
+
+    // Shared viewer-thread dispatch for the two Python scene-clear entry points.
+    lfs::Result<void> clear_application_scene();
 
     struct PySelectionGroup {
         uint8_t id;
@@ -110,54 +116,29 @@ namespace lfs::python {
 
     class PyPointCloud {
     public:
-        explicit PyPointCloud(core::PointCloud* pc, bool owns = false,
-                              core::SceneNode* node = nullptr, core::Scene* scene = nullptr)
-            : pc_(pc),
-              owns_(owns),
-              node_(node),
-              scene_(scene) {
-            assert(pc_ != nullptr);
+        explicit PyPointCloud(std::shared_ptr<core::PointCloud> owner)
+            : owner_(std::move(owner)) {
+            assert(owner_ != nullptr);
         }
 
-        PyTensor means() const { return PyTensor(pc_->means, false); }
-        PyTensor colors() const { return PyTensor(pc_->colors, false); }
-
-        std::optional<PyTensor> normals() const {
-            if (!pc_->normals.is_valid())
-                return std::nullopt;
-            return PyTensor(pc_->normals, false);
-        }
-        std::optional<PyTensor> sh0() const {
-            if (!pc_->sh0.is_valid())
-                return std::nullopt;
-            return PyTensor(pc_->sh0, false);
-        }
-        std::optional<PyTensor> shN() const {
-            if (!pc_->shN.is_valid())
-                return std::nullopt;
-            return PyTensor(pc_->shN, false);
-        }
-        std::optional<PyTensor> opacity() const {
-            if (!pc_->opacity.is_valid())
-                return std::nullopt;
-            return PyTensor(pc_->opacity, false);
-        }
-        std::optional<PyTensor> scaling() const {
-            if (!pc_->scaling.is_valid())
-                return std::nullopt;
-            return PyTensor(pc_->scaling, false);
-        }
-        std::optional<PyTensor> rotation() const {
-            if (!pc_->rotation.is_valid())
-                return std::nullopt;
-            return PyTensor(pc_->rotation, false);
+        PyPointCloud(core::SceneNode* node, core::Scene* scene)
+            : node_uuid_(node->uuid), scene_(scene) {
+            assert(node->point_cloud != nullptr);
+            assert(scene_ != nullptr);
         }
 
-        int64_t size() const { return pc_->size(); }
-        bool is_gaussian() const { return pc_->is_gaussian(); }
-        std::vector<std::string> attribute_names() const { return pc_->attribute_names; }
-
-        void normalize_colors() { pc_->normalize_colors(); }
+        PyTensor means() const;
+        PyTensor colors() const;
+        std::optional<PyTensor> normals() const;
+        std::optional<PyTensor> sh0() const;
+        std::optional<PyTensor> shN() const;
+        std::optional<PyTensor> opacity() const;
+        std::optional<PyTensor> scaling() const;
+        std::optional<PyTensor> rotation() const;
+        int64_t size() const;
+        bool is_gaussian() const;
+        std::vector<std::string> attribute_names() const;
+        void normalize_colors();
 
         // Filter points by boolean mask - keeps points where mask is True
         int64_t filter(const PyTensor& keep_mask);
@@ -170,13 +151,13 @@ namespace lfs::python {
         void set_colors(const PyTensor& colors);
         void set_means(const PyTensor& points);
 
-        core::PointCloud* data() { return pc_; }
-        const core::PointCloud* data() const { return pc_; }
+        std::shared_ptr<core::PointCloud> retain_data() const;
 
     private:
-        core::PointCloud* pc_;
-        bool owns_;
-        core::SceneNode* node_ = nullptr;
+        core::SceneNode& resolve_node() const;
+
+        std::shared_ptr<core::PointCloud> owner_;
+        core::Uuid node_uuid_;
         core::Scene* scene_ = nullptr;
     };
 
@@ -207,28 +188,32 @@ namespace lfs::python {
     class PySceneNode {
     public:
         PySceneNode(core::SceneNode* node, core::Scene* scene)
-            : node_(node),
-              scene_(scene),
-              prop_(node, "scene_node") {
-            assert(node_ != nullptr);
+            : scene_(scene),
+              property_group_("scene_node") {
+            assert(node != nullptr);
             assert(scene_ != nullptr);
+            node_uuid_ = node->uuid;
         }
 
-        int32_t id() const { return node_->id; }
-        std::string uuid() const { return node_->uuid.to_string(); }
-        int32_t parent_id() const { return node_->parent_id; }
-        std::vector<int32_t> children() const { return node_->children; }
-        core::NodeType type() const { return node_->type; }
+        int32_t id() const { return node().id; }
+        std::string uuid() const {
+            (void)node();
+            return node_uuid_.to_string();
+        }
+        int32_t parent_id() const { return node().parent_id; }
+        std::vector<int32_t> children() const { return node().children; }
+        core::NodeType type() const { return node().type; }
 
         // Transform (special matrix conversion)
-        void set_local_transform(nb::ndarray<float, nb::shape<4, 4>> transform);
+        void set_local_transform(nb::ndarray<float, nb::device::cpu, nb::shape<4, 4>> transform);
         nb::tuple local_transform() const;
         nb::tuple world_transform() const;
 
         // Metadata (read-only)
-        size_t gaussian_count() const { return node_->gaussian_count.load(std::memory_order_acquire); }
+        size_t gaussian_count() const { return node().gaussian_count.load(std::memory_order_acquire); }
         std::tuple<float, float, float> centroid() const {
-            return {node_->centroid.x, node_->centroid.y, node_->centroid.z};
+            const auto& live = node();
+            return {live.centroid.x, live.centroid.y, live.centroid.z};
         }
 
         // Data accessors
@@ -240,82 +225,107 @@ namespace lfs::python {
         std::optional<PyKeyframeData> keyframe_data();
 
         // Camera node specific
-        int camera_uid() const { return node_->camera_uid; }
-        std::string image_path() const { return node_->image_path; }
-        std::string mask_path() const { return node_->mask_path; }
-        std::string depth_path() const { return node_->depth_path; }
-        bool has_camera() const { return node_->camera != nullptr; }
+        int camera_uid() const { return node().camera_uid; }
+        std::string image_path() const { return node().image_path; }
+        std::string mask_path() const { return node().mask_path; }
+        std::string depth_path() const { return node().depth_path; }
+        bool has_camera() const { return node().camera != nullptr; }
         bool has_mask() const {
-            if (!node_->camera)
+            const auto& live = node();
+            if (!live.camera)
                 return false;
-            return node_->camera->has_mask();
+            return live.camera->has_mask();
         }
         bool has_depth() const {
-            if (!node_->camera)
+            const auto& live = node();
+            if (!live.camera)
                 return false;
-            return node_->camera->has_depth();
+            return live.camera->has_depth();
         }
         std::optional<PyTensor> load_mask(int resize_factor = 1, int max_width = 0,
                                           bool invert = false, float threshold = 0.5f) {
-            if (!node_->camera || !node_->camera->has_mask())
+            const auto& live = node();
+            if (!live.camera || !live.camera->has_mask())
                 return std::nullopt;
-            return PyTensor(node_->camera->load_and_get_mask(resize_factor, max_width, invert, threshold), true);
+            return PyTensor(live.camera->load_and_get_mask(resize_factor, max_width, invert, threshold), true);
         }
         std::optional<PyTensor> load_depth(int resize_factor = 1, int max_width = 0) {
-            if (!node_->camera || !node_->camera->has_depth())
+            const auto& live = node();
+            if (!live.camera || !live.camera->has_depth())
                 return std::nullopt;
-            return PyTensor(node_->camera->load_and_get_depth(resize_factor, max_width), true);
+            return PyTensor(live.camera->load_and_get_depth(resize_factor, max_width), true);
         }
         std::optional<PyTensor> camera_R() const {
-            if (!node_->camera)
+            const auto& live = node();
+            if (!live.camera)
                 return std::nullopt;
-            return PyTensor(node_->camera->R(), false);
+            return PyTensor(live.camera->R(), false);
         }
         std::optional<PyTensor> camera_T() const {
-            if (!node_->camera)
+            const auto& live = node();
+            if (!live.camera)
                 return std::nullopt;
-            return PyTensor(node_->camera->T(), false);
+            return PyTensor(live.camera->T(), false);
         }
         std::optional<float> camera_focal_x() const {
-            if (!node_->camera)
+            const auto& live = node();
+            if (!live.camera)
                 return std::nullopt;
-            return node_->camera->focal_x();
+            return live.camera->focal_x();
         }
         std::optional<float> camera_focal_y() const {
-            if (!node_->camera)
+            const auto& live = node();
+            if (!live.camera)
                 return std::nullopt;
-            return node_->camera->focal_y();
+            return live.camera->focal_y();
         }
         std::optional<int> camera_width() const {
-            if (!node_->camera)
+            const auto& live = node();
+            if (!live.camera)
                 return std::nullopt;
-            return node_->camera->camera_width();
+            return live.camera->camera_width();
         }
         std::optional<int> camera_height() const {
-            if (!node_->camera)
+            const auto& live = node();
+            if (!live.camera)
                 return std::nullopt;
-            return node_->camera->camera_height();
+            return live.camera->camera_height();
         }
 
         // Property group interface for generic prop()
-        const std::string& property_group() const { return prop_.group_id(); }
-        nb::object get(const std::string& name) const { return prop_.getattr(name); }
-        void set(const std::string& name, nb::object value) { prop_.setattr(name, value); }
+        const std::string& property_group() const {
+            (void)node();
+            return property_group_;
+        }
+        nb::object get(const std::string& name) const {
+            return property().getattr(name);
+        }
+        void set(const std::string& name, nb::object value) {
+            if (name == "local_transform" && scene_->isNodeEffectivelyLocked(node().id))
+                return;
+            property().setattr(name, value);
+        }
 
         // Property introspection
-        nb::dict prop_info(const std::string& name) const { return prop_.prop_info(name); }
+        nb::dict prop_info(const std::string& name) const {
+            return property().prop_info(name);
+        }
 
         // Descriptor protocol support
-        nb::object prop_getattr(const std::string& name) const { return prop_.getattr(name); }
+        nb::object prop_getattr(const std::string& name) const {
+            return property().getattr(name);
+        }
         void prop_setattr(const std::string& name, nb::object value) { set(name, value); }
 
         bool has_prop(const std::string& name) const {
+            (void)node();
             return core::prop::PropertyRegistry::instance().get_property(
-                                                               prop_.group_id(), name)
+                                                               property_group_, name)
                 .has_value();
         }
 
         nb::list python_dir() const {
+            (void)node();
             nb::list result;
             for (const char* attr : {"id", "uuid", "parent_id", "children", "type",
                                      "local_transform", "world_transform", "set_local_transform",
@@ -328,7 +338,7 @@ namespace lfs::python {
                                      "prop_info"}) {
                 result.append(attr);
             }
-            nb::list props = prop_.dir();
+            nb::list props = property().dir();
             for (size_t i = 0; i < nb::len(props); ++i) {
                 result.append(props[i]);
             }
@@ -336,9 +346,23 @@ namespace lfs::python {
         }
 
     private:
-        core::SceneNode* node_;
+        core::SceneNode& node() const {
+            if (scene_ == nullptr) {
+                throw std::runtime_error("SceneNode has been deleted");
+            }
+            if (auto* const live = scene_->getNodeByUuid(node_uuid_)) {
+                return *live;
+            }
+            throw std::runtime_error("SceneNode has been deleted");
+        }
+
+        PyProp<core::SceneNode> property() const {
+            return PyProp<core::SceneNode>(&node(), property_group_);
+        }
+
+        core::Uuid node_uuid_;
         core::Scene* scene_;
-        PyProp<core::SceneNode> prop_;
+        std::string property_group_;
     };
 
     // Node collection for scene.nodes property
@@ -397,6 +421,15 @@ namespace lfs::python {
     };
 
     // Main scene wrapper
+    class PySceneSplatSnapshot {
+    public:
+        explicit PySceneSplatSnapshot(core::Scene::SplatSnapshot snapshot) : snapshot_(std::move(snapshot)) {}
+        [[nodiscard]] const core::Scene::SplatSnapshot& snapshot() const { return snapshot_; }
+
+    private:
+        core::Scene::SplatSnapshot snapshot_;
+    };
+
     class PyScene {
     public:
         explicit PyScene(core::Scene* scene);
@@ -404,6 +437,7 @@ namespace lfs::python {
         // Thread-safe validity checking
         bool is_valid() const;
         uint64_t generation() const;
+        uint64_t render_generation() const;
 
         // Node CRUD
         int32_t add_group(const std::string& name, int32_t parent = core::NULL_NODE);
@@ -453,17 +487,20 @@ namespace lfs::python {
         std::optional<PySceneNode> get_node(const std::string& name);
         std::vector<PySceneNode> get_nodes();
         std::vector<PySceneNode> get_visible_nodes();
+        std::vector<PySceneSplatSnapshot> snapshot_visible_splats();
         bool is_node_effectively_visible(int32_t id) const {
             return scene_->isNodeEffectivelyVisible(id);
         }
 
         // Transforms
         nb::tuple get_world_transform(int32_t node_id) const;
-        void set_node_transform(const std::string& name, nb::ndarray<float, nb::shape<4, 4>> transform);
+        void set_node_transform(const std::string& name,
+                                nb::ndarray<float, nb::device::cpu, nb::shape<4, 4>> transform);
         void set_node_transform_tensor(const std::string& name, const PyTensor& transform);
 
         // Combined model
         std::optional<PySplatData> combined_model();
+        void apply_crop_filter(PyTensor& mask);
         std::optional<PySplatData> training_model();
         void set_training_model_node(const std::string& name);
         std::string training_model_node_name() const {

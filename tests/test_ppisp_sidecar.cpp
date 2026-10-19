@@ -7,6 +7,7 @@
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
 #include "ppisp_fixture.hpp"
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -36,12 +37,12 @@ namespace {
         return Tensor::from_vector(values, {3, 4, 4}, Device::CUDA);
     }
 
-    Tensor make_controller_input(float base) {
-        std::vector<float> values(3 * 48 * 48);
+    Tensor make_controller_input(float base, size_t height = 48, size_t width = 48) {
+        std::vector<float> values(3 * height * width);
         for (size_t i = 0; i < values.size(); ++i) {
             values[i] = base + 0.001f * static_cast<float>(i);
         }
-        return Tensor::from_vector(values, {1, 3, 48, 48}, Device::CUDA);
+        return Tensor::from_vector(values, {1, 3, height, width}, Device::CUDA);
     }
 
     Tensor make_controller_grad(float value) {
@@ -75,12 +76,15 @@ namespace {
         }
     }
 
-    bool vectors_close(const std::vector<float>& expected, const std::vector<float>& actual, float tol = 1e-5f) {
+    bool vectors_close(const std::vector<float>& expected, const std::vector<float>& actual,
+                       float abs_tol = 1e-5f, float rel_tol = 0.0f) {
         if (expected.size() != actual.size()) {
             return false;
         }
         for (size_t i = 0; i < expected.size(); ++i) {
-            if (std::abs(expected[i] - actual[i]) > tol) {
+            if (!std::isfinite(expected[i]) || !std::isfinite(actual[i]) ||
+                std::abs(expected[i] - actual[i]) >
+                    abs_tol + rel_tol * std::max(std::abs(expected[i]), std::abs(actual[i]))) {
                 return false;
             }
         }
@@ -107,6 +111,25 @@ namespace {
     private:
         std::vector<std::filesystem::path> temp_paths_;
     };
+
+    TEST(PPISPControllerPoolTest, PredictPreservesOutputAcrossInputSizes) {
+        PPISPControllerPool controller(1, 64);
+        controller.allocate_buffers(48, 48);
+
+        const auto full_input = make_controller_input(0.2f);
+        const auto small_input = make_controller_input(0.35f, 24, 30);
+        const auto full_before = controller.predict(0, full_input).cpu().to_vector();
+        const auto small_before = controller.predict(0, small_input).cpu().to_vector();
+        const auto full_after = controller.predict(0, full_input).cpu().to_vector();
+        const auto small_after = controller.predict(0, small_input).cpu().to_vector();
+
+        ASSERT_EQ(full_before.size(), 9u);
+        ASSERT_EQ(small_before.size(), 9u);
+        constexpr float abs_tol = 1e-4f;
+        constexpr float rel_tol = 1e-4f;
+        EXPECT_TRUE(vectors_close(full_before, full_after, abs_tol, rel_tol));
+        EXPECT_TRUE(vectors_close(small_before, small_after, abs_tol, rel_tol));
+    }
 
     TEST_F(PPISPSidecarTest, SaveLoadWithMetadataSupportsRemappedImport) {
         PPISPConfig config;
@@ -270,6 +293,7 @@ namespace {
 
     TEST_F(PPISPSidecarTest, TrainingParamsValidationSkipsSidecarExistenceOnResume) {
         lfs::core::param::TrainingParameters params;
+        params.optimization.use_exposure_correction = false;
         params.optimization.use_ppisp = true;
         params.optimization.ppisp_freeze_from_sidecar = true;
         params.optimization.ppisp_sidecar_path = "/definitely/missing.ppisp";

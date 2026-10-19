@@ -16,3 +16,16 @@
 .rendering-simplify-error {
     color: @{error};
 }
+
+.selection-groups__title {
+    color: @{text_dim};
+    border-top-color: @{panel.primary_border_faint};
+}
+
+.group-row:hover {
+    background-color: @{alpha(border,0.30)};
+}
+
+.group-row.active {
+    background-color: @{alpha(border,0.50)};
+}

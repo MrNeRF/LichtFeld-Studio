@@ -92,6 +92,17 @@ namespace lfs::vis {
         return std::nullopt;
     }
 
+    // Select a validation pair containing the provisional node without changing
+    // the stored comparison offset. Keep the displayed left model when possible.
+    [[nodiscard]] inline size_t plyComparisonImportOffset(size_t count, size_t offset, size_t provisional) {
+        const auto displayed = plyComparisonPairForOffset(count, offset);
+        if (!displayed || provisional >= count || displayed->first == provisional || displayed->second == provisional)
+            return offset;
+        const size_t left = std::min(displayed->first, provisional);
+        const size_t right = std::max(displayed->first, provisional);
+        return left * (2 * count - left - 1) / 2 + right - left - 1;
+    }
+
     [[nodiscard]] inline bool splitViewUsesGTComparison(const SplitViewMode mode) {
         return mode == SplitViewMode::GTComparison;
     }
@@ -210,6 +221,15 @@ namespace lfs::vis {
                                            splitViewDividerPixel(total_width, current_split_position))) <= margin;
     }
 
+    // Normalized texture coordinates address pixel centers at (pixel + 0.5) / extent.
+    // Using extent - 1 here stretches clipped comparison panels by a different amount
+    // whenever their cached widths change, so a divider refresh appears to reframe them.
+    [[nodiscard]] inline float splitViewPixelCenterUv(
+        const int pixel, const int rect_origin, const int rect_extent) {
+        return (static_cast<float>(pixel - rect_origin) + 0.5f) /
+               static_cast<float>(std::max(rect_extent, 1));
+    }
+
     enum class SelectionPreviewMode {
         Centers,
         Rectangle,
@@ -295,6 +315,11 @@ namespace lfs::vis {
         PPISPMode ppisp_mode = PPISPMode::AUTO;
         PPISPOverrides ppisp_overrides;
 
+        // Display color: tone IDs match none, linear, filmic, hejl, aces, aces2, neutral.
+        float color_exposure = 1.0f;
+        int color_tonemapping = 0;
+        int splat_render_profile = 0; // 0: Studio, 1: standard portal
+
         // Background
         glm::vec3 background_color = glm::vec3(0.0f, 0.0f, 0.0f);
         EnvironmentBackgroundMode environment_mode = EnvironmentBackgroundMode::SolidColor;
@@ -339,6 +364,8 @@ namespace lfs::vis {
         lfs::rendering::GaussianRasterBackend raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgs;
         bool gut = false;
         bool equirectangular = false;
+        // Live projection override; persisted as optional VIEW state, excluded from render proxies.
+        std::optional<lfs::rendering::GaussianRasterBackend> raster_backend_before_equirectangular;
         bool orthographic = false;
         float ortho_scale = 100.0f; // Pixels per world unit (larger = more zoomed in)
         bool depth_view = false;
@@ -347,8 +374,7 @@ namespace lfs::vis {
         lfs::rendering::DepthVisualizationMode depth_visualization_mode =
             lfs::rendering::DepthVisualizationMode::Palette;
 
-        // Selection colors (RGB: committed=219,83,83 preview=0,222,76 center=0,154,187)
-        glm::vec3 selection_color_committed{0.859f, 0.325f, 0.325f};
+        // Selection colors (RGB: preview=0,222,76 center=0,154,187); committed splats use their group color
         glm::vec3 selection_color_preview{0.0f, 0.871f, 0.298f};
         glm::vec3 selection_color_center_marker{0.0f, 0.604f, 0.733f};
 
@@ -427,11 +453,27 @@ namespace lfs::vis {
         }
     }
 
-    inline void enforceProjectionBackend(RenderSettings& settings) {
+    inline void enforceProjectionBackend(RenderSettings& settings, const bool remember_backend = false) {
+        using Backend = lfs::rendering::GaussianRasterBackend;
+        auto& previous_backend = settings.raster_backend_before_equirectangular;
+        // Full settings restoration must use its saved backend, without a live override.
+        if (!remember_backend) {
+            previous_backend.reset();
+        }
         if (!settings.equirectangular) {
+            if (previous_backend) {
+                if (settings.raster_backend == Backend::ThreeDgut) {
+                    settings.raster_backend = *previous_backend;
+                }
+                settings.gut = lfs::rendering::isGutBackend(settings.raster_backend);
+                previous_backend.reset();
+            }
             return;
         }
-        settings.raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgut;
+        if (remember_backend && !previous_backend && settings.raster_backend != Backend::ThreeDgut) {
+            previous_backend = settings.raster_backend;
+        }
+        settings.raster_backend = Backend::ThreeDgut;
         settings.gut = true;
     }
 
@@ -443,7 +485,7 @@ namespace lfs::vis {
     [[nodiscard]] inline bool environmentBackgroundUsesTransparentViewerCompositing(
         const RenderSettings& settings) {
         return environmentBackgroundEnabled(settings) &&
-               !splitViewEnabled(settings.split_view_mode);
+               !splitViewUsesGTComparison(settings.split_view_mode);
     }
 
     struct SplitViewInfo {

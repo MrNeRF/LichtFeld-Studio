@@ -6,12 +6,12 @@
 #include "core/assert.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
-#include "core/training_churn_metrics.hpp"
 #include "kernels/pruning_kernels.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <vector>
@@ -151,7 +151,6 @@ namespace lfs::training {
         if (params.max_cap > 0) {
             config.initial_capacity = static_cast<size_t>(params.max_cap);
             config.growth_factor = 1.5f; // Still allow growth beyond max_cap if needed
-            LOG_INFO("AdamOptimizer: pre-allocating capacity for {} Gaussians (optimizer states)", config.initial_capacity);
         }
 
         LOG_DEBUG("Creating optimizer with per-parameter LRs:");
@@ -270,7 +269,7 @@ namespace lfs::training {
     lfs::core::Tensor apply_crop_damping_to_scores(
         const AdamOptimizer& optimizer,
         const lfs::core::Tensor& scores) {
-        const auto& crop_mask = optimizer.crop_damping_mask();
+        const auto& crop_mask = optimizer.crop_score_mask();
         const float scale = optimizer.cropbox_lr_scale();
         if (!crop_mask.is_valid() || crop_mask.numel() == 0 || scale == 1.0f) {
             return scores;
@@ -279,19 +278,74 @@ namespace lfs::training {
         LFS_ASSERT_MSG(scores.is_valid(), "crop-damped scores must be valid");
         LFS_ASSERT_MSG(scores.ndim() == 1, "crop-damped scores must be one-dimensional");
         LFS_ASSERT_MSG(
-            scores.numel() <= crop_mask.numel(),
-            "crop damping mask must cover every score row");
-        LFS_ASSERT_MSG(
             scores.device() == crop_mask.device(),
             "crop damping mask and scores must use the same device");
 
-        const auto active_mask = scores.numel() == crop_mask.numel()
-                                     ? crop_mask
-                                     : crop_mask.slice(0, 0, scores.numel());
+        // Rows appended by this refine after the mask was built are not damped.
+        lfs::core::Tensor active_mask;
+        if (scores.numel() == crop_mask.numel()) {
+            active_mask = crop_mask;
+        } else if (scores.numel() < crop_mask.numel()) {
+            active_mask = crop_mask.slice(0, 0, scores.numel());
+        } else {
+            active_mask = lfs::core::Tensor::cat(
+                {crop_mask, lfs::core::Tensor::zeros_bool({scores.numel() - crop_mask.numel()}, crop_mask.device())}, 0);
+        }
         if (scale == 0.0f) {
             return scores.masked_fill(active_mask, 0.0f);
         }
         return lfs::core::Tensor::where(active_mask, scores * scale, scores);
+    }
+
+    namespace {
+        // ROI rows sized to n: rows appended after the mask was built are outside the ROI.
+        lfs::core::Tensor roi_rows_for(const lfs::core::Tensor& rows, const size_t n) {
+            if (rows.numel() == n)
+                return rows;
+            if (rows.numel() > n)
+                return rows.slice(0, 0, n);
+            return lfs::core::Tensor::cat(
+                {rows, lfs::core::Tensor::zeros_bool({n - rows.numel()}, rows.device())}, 0);
+        }
+    } // namespace
+
+    std::optional<RoiGrowthSplit> split_growth_by_roi(
+        const AdamOptimizer& optimizer,
+        const lfs::core::Tensor& weights,
+        const int64_t k) {
+        const auto& rows = optimizer.crop_roi_rows();
+        if (!rows.is_valid() || k <= 0 || !weights.is_valid() || weights.numel() == 0)
+            return std::nullopt;
+        const float share = optimizer.cropbox_growth_inside();
+        const auto in_roi = roi_rows_for(rows, weights.numel());
+        RoiGrowthSplit split;
+        split.roi_weights = weights.masked_fill(in_roi.logical_not(), 0.0f);
+        split.rest_weights = weights.masked_fill(in_roi, 0.0f);
+        split.roi_nnz = static_cast<int64_t>(split.roi_weights.count_nonzero());
+        split.rest_nnz = static_cast<int64_t>(split.rest_weights.count_nonzero());
+        const int64_t roi_quota = std::llround(static_cast<double>(share) * static_cast<double>(k));
+        const int64_t rest_quota = k - roi_quota;
+        const int64_t roi_first = std::min(roi_quota, split.roi_nnz);
+        const int64_t rest_first = std::min(rest_quota, split.rest_nnz);
+        split.roi_count = share > 0.0f ? std::min(split.roi_nnz, roi_first + (rest_quota - rest_first)) : roi_first;
+        split.rest_count = share < 1.0f ? std::min(split.rest_nnz, rest_first + (roi_quota - roi_first)) : rest_first;
+        return split;
+    }
+
+    lfs::core::Tensor roi_share_sampling_weights(
+        const AdamOptimizer& optimizer,
+        const lfs::core::Tensor& weights) {
+        const auto& rows = optimizer.crop_roi_rows();
+        if (!rows.is_valid() || !weights.is_valid() || weights.numel() == 0)
+            return weights;
+        const float share = optimizer.cropbox_growth_inside();
+        const auto in_roi = roi_rows_for(rows, weights.numel());
+        const float roi_sum = weights.masked_fill(in_roi.logical_not(), 0.0f).sum().item();
+        const float rest_sum = weights.masked_fill(in_roi, 0.0f).sum().item();
+        // A strict share never draws from its excluded side, even when the other side is empty.
+        const float roi_scale = roi_sum > 0.0f ? (rest_sum > 0.0f ? share / roi_sum : (share > 0.0f ? 1.0f : 0.0f)) : 0.0f;
+        const float rest_scale = rest_sum > 0.0f ? (roi_sum > 0.0f ? (1.0f - share) / rest_sum : (share < 1.0f ? 1.0f : 0.0f)) : 0.0f;
+        return lfs::core::Tensor::where(in_roi, weights * roi_scale, weights * rest_scale);
     }
 
     size_t frozen_row_count(const lfs::core::SplatData& splat_data, const size_t n) {
@@ -416,8 +470,11 @@ namespace lfs::training {
                                    ? n
                                    : std::max(
                                          n, static_cast<size_t>(static_cast<double>(std::max(n_capacity, n)) * 1.2) + 1);
-        f32_a = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Float32);
-        bool_a = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Bool);
+        LFS_ASSERT_MSG(device == Device::CUDA, "DensifyNScratch requires CUDA storage");
+        f32_a = Tensor::empty_exact({new_cap}, DataType::Float32);
+        bool_a = Tensor::empty_exact({new_cap}, DataType::Bool);
+        f32_a.zero_();
+        bool_a.zero_();
         n_capacity = new_cap;
     }
 
@@ -449,10 +506,11 @@ namespace lfs::training {
             (use_shN && (!shN.is_valid() || shN.ndim() != 3));
 
         if (capacity < need || layout_changed) {
-            const auto alloc_start = std::chrono::steady_clock::now();
-            const size_t new_cap = std::max(
-                need,
-                static_cast<size_t>(static_cast<double>(std::max(capacity, need)) * 1.2) + 1);
+            const size_t new_cap = capacity == 0
+                                       ? need
+                                       : std::max(
+                                             need,
+                                             static_cast<size_t>(static_cast<double>(std::max(capacity, need)) * 1.2) + 1);
             means = Tensor::empty({new_cap, 3}, device);
             rotations = Tensor::empty({new_cap, 4}, device);
             scales = Tensor::empty({new_cap, 3}, device);
@@ -472,40 +530,11 @@ namespace lfs::training {
                 shN = Tensor();
             }
             capacity = new_cap;
-            lfs::core::TrainingChurnMetrics::instance().record_child_alloc(static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - alloc_start)
-                    .count()));
         } else if (use_shN && sh_rest_in > 0 &&
                    (!shN.is_valid() || shN.shape()[0] < capacity || shN.shape()[1] != sh_rest_in)) {
-            const auto alloc_start = std::chrono::steady_clock::now();
             sh_rest = sh_rest_in;
             shN = Tensor::empty({capacity, sh_rest_in, 3}, device);
-            lfs::core::TrainingChurnMetrics::instance().record_child_alloc(static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - alloc_start)
-                    .count()));
         }
-    }
-
-    DensifyChildWorkspace::~DensifyChildWorkspace() {
-        if (!means.is_valid() && !rotations.is_valid() && !scales.is_valid() &&
-            !sh0.is_valid() && !sh0_flat.is_valid() && !shN.is_valid() &&
-            !opacities.is_valid()) {
-            return;
-        }
-        const auto free_start = std::chrono::steady_clock::now();
-        means = {};
-        rotations = {};
-        scales = {};
-        sh0 = {};
-        sh0_flat = {};
-        shN = {};
-        opacities = {};
-        lfs::core::TrainingChurnMetrics::instance().record_child_free(static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - free_start)
-                .count()));
     }
 
     namespace {

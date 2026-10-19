@@ -1,6 +1,9 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/image_io.hpp"
+#include "core/path_utils.hpp"
+#include "core/point_cloud.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "io/formats/colmap.hpp"
@@ -9,6 +12,7 @@
 #include "io/loaders/colmap_loader.hpp"
 #include "training/dataset.hpp"
 
+#include <algorithm>
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <fstream>
@@ -73,6 +77,21 @@ namespace {
             out.write(reinterpret_cast<const char*>(png), sizeof(png));
             out.close();
             ASSERT_TRUE(out.good()) << "Failed to write " << path;
+        }
+
+        void write_valid_png(const fs::path& path) {
+            const unsigned char pixel[] = {64, 128, 192};
+            fs::create_directories(path.parent_path());
+            ASSERT_TRUE(lfs::core::save_png(path, pixel, 1, 1, 3, 8, 6));
+            const auto [decoded, width, height, channels] = lfs::core::load_image(path);
+            ASSERT_NE(decoded, nullptr);
+            EXPECT_EQ(width, 1);
+            EXPECT_EQ(height, 1);
+            EXPECT_EQ(channels, 3);
+            EXPECT_EQ(decoded[0], pixel[0]);
+            EXPECT_EQ(decoded[1], pixel[1]);
+            EXPECT_EQ(decoded[2], pixel[2]);
+            lfs::core::free_image(decoded);
         }
 
         void write_colmap_text(const fs::path& dataset_dir, const std::vector<std::string>& image_names) {
@@ -239,6 +258,34 @@ TEST_F(MissingDatasetImagesTest, ColmapTextLoadsWhenOneImageIsMissing) {
     ASSERT_NO_FATAL_FAILURE(expect_partial_missing(cameras, warnings, "missing.png", "present.png"));
 }
 
+TEST_F(MissingDatasetImagesTest, ColmapTextReportsUnreadableImageWithoutChangingCameras) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    const fs::path dataset_dir = temp_dir_ / "colmap_unreadable";
+    write_colmap_text(dataset_dir, {"present.png", "unreadable.png"});
+    write_png(dataset_dir / "images" / "present.png");
+    write_text_file(dataset_dir / "images" / "unreadable.png", "");
+
+    lfs::io::ColmapLoader loader;
+    auto result = loader.load(dataset_dir, {});
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    auto* scene = std::get_if<lfs::io::LoadedScene>(&result->data);
+    ASSERT_NE(scene, nullptr);
+    ASSERT_EQ(scene->cameras.size(), 2u);
+    EXPECT_TRUE(scene->cameras[0]->has_image());
+    EXPECT_TRUE(scene->cameras[1]->has_image());
+    EXPECT_TRUE(std::any_of(result->warnings.begin(), result->warnings.end(), [](const auto& warning) {
+        return warning.find("unreadable.png") != std::string::npos;
+    }));
+
+    lfs::training::DatasetConfig config;
+    lfs::training::CameraDataset training(scene->cameras, config,
+                                          lfs::training::CameraDataset::Split::ALL);
+    EXPECT_EQ(training.size(), 2u);
+}
+
 TEST_F(MissingDatasetImagesTest, ColmapTextAllMissingFails) {
     const fs::path dataset_dir = temp_dir_ / "colmap_text_all_missing";
     write_colmap_text(dataset_dir, {"missing_a.png", "missing_b.png"});
@@ -359,6 +406,96 @@ TEST_F(MissingDatasetImagesTest, TransformsLoadsWhenOneImageIsMissing) {
     auto* scene = std::get_if<lfs::io::LoadedScene>(&result->data);
     ASSERT_NE(scene, nullptr);
     ASSERT_NO_FATAL_FAILURE(expect_partial_missing(scene->cameras, result->warnings, "missing.png", "present.png"));
+}
+
+TEST_F(MissingDatasetImagesTest, TransformsImagePathResolvesUppercasePngWithoutExtension) {
+    const fs::path dataset_dir = temp_dir_ / "uppercase_png";
+    write_text_file(dataset_dir / "images_8/frame-one.PNG", "image");
+    write_text_file(dataset_dir / "images_8/frame-two.PNG", "image");
+
+    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "images_8/frame-one"),
+              dataset_dir / "images_8/frame-one.PNG");
+    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "images_8/frame-two"),
+              dataset_dir / "images_8/frame-two.PNG");
+    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "images_8\\frame-one"),
+              dataset_dir / "images_8/frame-one.PNG");
+}
+
+TEST_F(MissingDatasetImagesTest, TransformsImagePathKeepsExistingResolutionPrecedence) {
+    const fs::path dataset_dir = temp_dir_ / "path_precedence";
+    write_text_file(dataset_dir / "frame", "image");
+    write_text_file(dataset_dir / "frame.png", "image");
+    write_text_file(dataset_dir / "frame.PNG", "image");
+    write_text_file(dataset_dir / "images/frame", "image");
+    write_text_file(dataset_dir / "photo.JPG", "image");
+
+    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "frame"), dataset_dir / "images/frame");
+    fs::remove(dataset_dir / "images/frame");
+    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "frame"), dataset_dir / "frame.png");
+    fs::remove(dataset_dir / "frame.png");
+    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "frame"), dataset_dir / "frame");
+    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "frame.PNG"), dataset_dir / "frame.PNG");
+    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "photo"), dataset_dir / "photo");
+    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "missing"), dataset_dir / "missing");
+}
+
+TEST_F(MissingDatasetImagesTest, TransformsReportsUnreadableImageWithoutChangingCameras) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    const fs::path dataset_dir = temp_dir_ / "transforms_unreadable";
+    write_transforms(dataset_dir, {"present.png", "unreadable.png"});
+    write_png(dataset_dir / "present.png");
+    write_text_file(dataset_dir / "unreadable.png", "non-image bytes");
+
+    lfs::io::BlenderLoader loader;
+    auto result = loader.load(dataset_dir, {});
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    auto* scene = std::get_if<lfs::io::LoadedScene>(&result->data);
+    ASSERT_NE(scene, nullptr);
+    ASSERT_EQ(scene->cameras.size(), 2u);
+    EXPECT_TRUE(scene->cameras[0]->has_image());
+    EXPECT_TRUE(scene->cameras[1]->has_image());
+    EXPECT_TRUE(std::any_of(result->warnings.begin(), result->warnings.end(), [](const auto& warning) {
+        return warning.find("unreadable.png") != std::string::npos;
+    }));
+
+    lfs::training::DatasetConfig config;
+    lfs::training::CameraDataset training(scene->cameras, config,
+                                          lfs::training::CameraDataset::Split::ALL);
+    EXPECT_EQ(training.size(), 2u);
+}
+
+TEST_F(MissingDatasetImagesTest, TransformsMislabelledPngProbeAvoidsPixelDecode) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    const fs::path dataset_dir = temp_dir_ / "transforms_mislabelled_png";
+    write_transforms(dataset_dir, {"first.jpg", "second.jpg", "third.jpg", "broken.jpg"});
+    for (const auto* name : {"first.jpg", "second.jpg", "third.jpg"})
+        write_valid_png(dataset_dir / name);
+    write_text_file(dataset_dir / "broken.jpg", "not an image");
+
+    const auto decodes_before = lfs::core::image_info_full_decode_count_for_testing();
+    lfs::io::BlenderLoader loader;
+    auto result = loader.load(dataset_dir, {});
+    const auto decode_count = lfs::core::image_info_full_decode_count_for_testing() - decodes_before;
+
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    auto* scene = std::get_if<lfs::io::LoadedScene>(&result->data);
+    ASSERT_NE(scene, nullptr);
+    EXPECT_EQ(scene->cameras.size(), 4u);
+    for (const auto* name : {"first.jpg", "second.jpg", "third.jpg"}) {
+        EXPECT_FALSE(std::any_of(result->warnings.begin(), result->warnings.end(), [name](const auto& warning) {
+            return warning.find(name) != std::string::npos;
+        }));
+    }
+    EXPECT_TRUE(std::any_of(result->warnings.begin(), result->warnings.end(), [](const auto& warning) {
+        return warning.find("broken.jpg") != std::string::npos;
+    }));
+    EXPECT_EQ(decode_count, 0u);
 }
 
 TEST_F(MissingDatasetImagesTest, TransformsAllMissingFails) {
@@ -500,3 +637,161 @@ TEST_F(MissingDatasetImagesTest, RevalidateAllMissingExcludesEveryCamera) {
     EXPECT_EQ(dataset.get_cameras().size(), 2u);
     EXPECT_TRUE(scene.hasTrainingData());
 }
+
+namespace {
+    class BlenderSeedPathTest : public MissingDatasetImagesTest {
+    protected:
+        void SetUp() override {
+            MissingDatasetImagesTest::SetUp();
+            if (!has_cuda_device()) {
+                GTEST_SKIP() << "CUDA device required";
+            }
+            write_transforms(temp_dir_, {"present.png"});
+            write_png(temp_dir_ / "present.png");
+            std::ifstream input(temp_dir_ / "transforms.json");
+            transforms_ = nlohmann::json::parse(input);
+            write_seed(temp_dir_ / "seed" / "points.ply");
+        }
+
+        void write_seed(const fs::path& path, int count = 4) {
+            std::ostringstream ply;
+            ply << "ply\nformat ascii 1.0\nelement vertex " << count
+                << "\nproperty float x\nproperty float y\nproperty float z"
+                   "\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n";
+            for (int i = 0; i < count; ++i)
+                ply << i << " 2 3 10 20 30\n";
+            write_text_file(path, ply.str());
+        }
+
+        auto load_seed(const nlohmann::json& path) {
+            auto json = transforms_;
+            if (!path.is_null())
+                json["ply_file_path"] = path;
+            write_text_file(temp_dir_ / "transforms.json", json.dump());
+            lfs::io::BlenderLoader loader;
+            return loader.load(temp_dir_, {});
+        }
+
+        void expect_seed(const nlohmann::json& path, int count = 4) {
+            auto result = load_seed(path);
+            ASSERT_TRUE(result.has_value()) << result.error().format();
+            const auto& scene = std::get<lfs::io::LoadedScene>(result->data);
+            ASSERT_EQ(scene.cameras.size(), 1u);
+            ASSERT_NE(scene.point_cloud, nullptr);
+            ASSERT_EQ(scene.point_cloud->size(), count);
+            EXPECT_TRUE(result->warnings.empty());
+            // The seed remains in the existing transforms-to-COLMAP world frame.
+            const auto means = scene.point_cloud->means.cpu().to_vector();
+            const auto colors = scene.point_cloud->colors.to(lfs::core::DataType::Float32).cpu().to_vector();
+            for (int i = 0; i < count; ++i) {
+                EXPECT_FLOAT_EQ(means[3 * i], i);
+                EXPECT_FLOAT_EQ(means[3 * i + 1], -2);
+                EXPECT_FLOAT_EQ(means[3 * i + 2], -3);
+                EXPECT_EQ(colors[3 * i], 10);
+                EXPECT_EQ(colors[3 * i + 1], 20);
+                EXPECT_EQ(colors[3 * i + 2], 30);
+            }
+        }
+
+        void expect_unusable_normalized_seed_fallback() {
+            write_seed(temp_dir_ / "pointcloud.ply", 2);
+            expect_seed(R"(seed\points.ply)", 2);
+            fs::remove(temp_dir_ / "pointcloud.ply");
+
+            const auto reference = load_seed("missing.ply");
+            ASSERT_TRUE(reference.has_value()) << reference.error().format();
+            const auto result = load_seed(R"(seed\points.ply)");
+            ASSERT_TRUE(result.has_value()) << result.error().format();
+            const auto& expected = std::get<lfs::io::LoadedScene>(reference->data);
+            const auto& actual = std::get<lfs::io::LoadedScene>(result->data);
+            ASSERT_EQ(actual.cameras.size(), 1u);
+            ASSERT_NE(actual.point_cloud, nullptr);
+            EXPECT_EQ(actual.point_cloud->size(), 10000);
+            EXPECT_EQ(result->warnings, reference->warnings);
+            EXPECT_EQ(actual.point_cloud->means.cpu().to_vector(),
+                      expected.point_cloud->means.cpu().to_vector());
+            EXPECT_EQ(actual.point_cloud->colors.to(lfs::core::DataType::Float32).cpu().to_vector(),
+                      expected.point_cloud->colors.to(lfs::core::DataType::Float32).cpu().to_vector());
+        }
+
+        nlohmann::json transforms_;
+    };
+} // namespace
+
+TEST_F(BlenderSeedPathTest, WindowsAndMixedSeparators) {
+    for (const auto* path : {R"(seed\points.ply)", R"(seed\\points.ply)", R"(.\seed/points.ply)"}) {
+        SCOPED_TRACE(path);
+        expect_seed(path);
+    }
+}
+
+TEST_F(BlenderSeedPathTest, ForwardAbsoluteAndUnicodePaths) {
+    expect_seed("seed/points.ply");
+    expect_seed(lfs::core::path_to_utf8(temp_dir_ / "seed" / "points.ply"));
+    const auto unicode_path = lfs::core::utf8_to_path("seed/nuage é.ply");
+    fs::copy_file(temp_dir_ / "seed" / "points.ply", temp_dir_ / unicode_path);
+    expect_seed(lfs::core::path_to_utf8(unicode_path));
+}
+
+TEST_F(BlenderSeedPathTest, WindowsSeparatorsWithUnicode) {
+    fs::copy_file(temp_dir_ / "seed" / "points.ply",
+                  temp_dir_ / lfs::core::utf8_to_path("seed/nuage é.ply"));
+    expect_seed("seed\\nuage é.ply");
+}
+
+TEST_F(BlenderSeedPathTest, DefaultAndMissingReferenceFallback) {
+    write_seed(temp_dir_ / "pointcloud.ply", 2);
+    for (const auto& path : {nlohmann::json(), nlohmann::json("missing.ply"),
+                             nlohmann::json(42)}) {
+        SCOPED_TRACE(path.dump());
+        expect_seed(path, 2);
+    }
+    expect_seed("seed/points.ply");
+}
+
+TEST_F(BlenderSeedPathTest, WindowsReferencePrecedesDefault) {
+    write_seed(temp_dir_ / "pointcloud.ply", 2);
+    expect_seed(R"(seed\points.ply)");
+}
+
+TEST_F(BlenderSeedPathTest, InvalidNativeSeedRetainsExistingError) {
+    write_seed(temp_dir_ / "pointcloud.ply", 2);
+    write_text_file(temp_dir_ / "seed" / "points.ply", "not a PLY file\n");
+    const auto result = load_seed("seed/points.ply");
+    EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(BlenderSeedPathTest, MissingSeedStillUsesRandomInitialization) {
+    auto result = load_seed("missing.ply");
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    const auto& scene = std::get<lfs::io::LoadedScene>(result->data);
+    ASSERT_EQ(scene.point_cloud->size(), 10000);
+    EXPECT_EQ(result->warnings, std::vector<std::string>{"No point cloud file found, using random initialization"});
+}
+
+#ifndef _WIN32
+TEST_F(BlenderSeedPathTest, DirectoryNormalizedSeedKeepsFallback) {
+    fs::remove(temp_dir_ / "seed" / "points.ply");
+    fs::create_directory(temp_dir_ / "seed" / "points.ply");
+    expect_unusable_normalized_seed_fallback();
+}
+
+TEST_F(BlenderSeedPathTest, MalformedNormalizedSeedKeepsFallback) {
+    write_text_file(temp_dir_ / "seed" / "points.ply", "not a PLY file\n");
+    expect_unusable_normalized_seed_fallback();
+}
+
+TEST_F(BlenderSeedPathTest, UnreadableNormalizedSeedKeepsFallback) {
+    const auto path = temp_dir_ / "seed" / "points.ply";
+    fs::permissions(path, fs::perms::none);
+    if (std::ifstream input(path); input) {
+        GTEST_SKIP() << "File permissions do not prevent reading in this environment";
+    }
+    expect_unusable_normalized_seed_fallback();
+}
+
+TEST_F(BlenderSeedPathTest, ExistingLiteralBackslashFilenameKeepsPrecedence) {
+    write_seed(temp_dir_ / R"(seed\points.ply)", 2);
+    expect_seed(R"(seed\points.ply)", 2);
+}
+#endif

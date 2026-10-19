@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Sequence
 import enum
-from typing import TypeAlias, overload
+from typing import Annotated, TypeAlias, overload
 
 from numpy.typing import NDArray
 import typing_extensions
@@ -242,6 +242,9 @@ def finish_reason() -> str | None:
 def trainer_error() -> str | None:
     """Get trainer error message"""
 
+def trainer_error_key() -> str | None:
+    """Get the optional localization key for the trainer error message"""
+
 def prepare_training_from_scene() -> None:
     """Initialize trainer from existing scene cameras and point cloud"""
 
@@ -297,6 +300,9 @@ def project_save(wait: bool = False, regenerate_preview: bool = True) -> bool:
 def project_save_as(path: str = '', wait: bool = False) -> bool:
     """Save the active project to a new .licht path"""
 
+def project_save_as_for_training_start(path: str = '', wait: bool = False) -> bool:
+    """Save a clean project for a new training run"""
+
 def project_get_license() -> dict | None:
     """Return the license metadata for the active project, or None"""
 
@@ -305,6 +311,9 @@ def project_set_license(identifier: str, notice: str = '') -> None:
 
 def project_clear_license() -> None:
     """Clear the license metadata for the active project"""
+
+def project_set_preview(png_bytes: bytes, wait: bool = False, path: str = '', project_uuid: str = '') -> bool:
+    """Write a thumbnail onto the active project without saving unsaved edits"""
 
 def project_poll_write() -> dict:
     """Return the active .licht project write state"""
@@ -315,11 +324,24 @@ def project_open(path: str = '', discard_changes: bool = False, stop_training: b
 def project_compact() -> None:
     """Compact the active .licht project in the background"""
 
+def project_cancel_cleanup() -> None: ...
+
+def project_clean(destination: str = '', expected_commit: str = '') -> bool:
+    """
+    Clean the active saved project in the background, preserving its current resume point
+    """
+
 def project_is_dirty() -> bool:
     """Return whether the active project has unsaved chapters"""
 
 def project_has_path() -> bool:
     """Return whether the active project has a bound .licht path"""
+
+def project_path() -> str | None:
+    """Return the active project's bound .licht path, or None"""
+
+def project_uuid() -> str | None:
+    """Return the active project UUID (kept across saves), or None"""
 
 def project_can_embed_dataset() -> bool:
     """Return whether the active project can embed its external dataset"""
@@ -369,8 +391,11 @@ def clear_scene() -> None:
 def switch_to_edit_mode() -> None:
     """Switch from training to edit mode"""
 
-def load_file(path: str, is_dataset: bool = False, output_path: str = '', init_path: str = '', centralize_dataset: str = 'off', max_width: int | None = None, apply_auto_crop: bool = False, min_track_length: int | None = None, stop_training: bool = False, discard_changes: bool = False, replace: bool = False) -> None:
+def load_file(path: str, is_dataset: bool = False, output_path: str = '', init_path: str = '', centralize_dataset: str = 'off', max_width: int | None = None, apply_auto_crop: bool = False, min_track_length: int | None = None, stop_training: bool = False, discard_changes: bool = False, replace: bool = False, images_folder: str = '') -> None:
     """Load a file (PLY, checkpoint) or dataset into the scene."""
+
+def load_files(paths: Sequence[str], stop_training: bool = False, discard_changes: bool = False, replace: bool = False, _user_batch: bool = False) -> None:
+    """Import splat and mesh files as one ordered batch."""
 
 def load_config_file(path: str) -> None:
     """Load a JSON configuration file."""
@@ -400,9 +425,24 @@ def cancel_exit() -> None:
 def force_exit() -> None:
     """Explicitly discard unsaved changes and exit."""
 
+def load_gallery_scene(nodes: list, name: str, hidden: bool = False) -> None:
+    """
+    Load verified gallery nodes on the managed import worker, then attach a complete group. Nodes contain path, affine transform and shDegree. A failed or canceled batch adds no group.
+    """
+
+def prepare_gallery_scene(path: str, payload_format: str = 'ply') -> None:
+    """
+    Publish visible splats and appearance into a fresh native .licht file. The selected PLY, SOG, SSOG or SPZ v4 data and HDR assets are embedded; training and editor state are excluded.
+    """
+
+def prepare_gallery_project(source_path: str, destination: str, payload_format: str = 'sog', expected_commit_uuid: str = '') -> None:
+    """
+    Prepare a saved .licht project on the managed export worker without opening it in the editor. Destination must be a fresh staging directory. Poll ui.get_export_state() for progress, errors and commit_uuid.
+    """
+
 def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False, rad_streamable: bool = True, spz_version: int = 4, include_provenance: bool = True, *, lod_levels: int = 4, lod_ratio: float = 0.5, chunk_count_k: int = 512, chunk_extent: float = 16.0, chunk_min_k: int = 8, kmeans_iterations: int = 10) -> None:
     """
-    Export scene nodes to file or directory. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP, 8=SSOG. For SSOG, path names a .ssog bundle or directory; lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k and kmeans_iterations control its LODs and chunks. spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. Ignored for COLMAP and SPZ v3.
+    Export scene nodes to file or directory. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP, 8=SSOG, 13=GLB. For SSOG, path names a .ssog bundle or directory; lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k and kmeans_iterations control its LODs and chunks. spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. Ignored for COLMAP and SPZ v3.
     """
 
 def save_config_file(path: str) -> None:
@@ -455,6 +495,9 @@ def set_vram_profiler_enabled(enabled: bool) -> None:
 
 def get_vram_profiler_enabled() -> bool:
     """Return whether the live VRAM diagnostics profiler is enabled"""
+
+def vram_owner_breakdown() -> dict:
+    """Return a sampled process VRAM breakdown by owner category"""
 
 def set_node_visibility(name: str, visible: bool) -> None:
     """Set visibility of a scene node by name"""
@@ -533,11 +576,20 @@ def get_colmap_sparse_source_path() -> str | None:
 def get_node_visualizer_world_transform(name: str) -> list[float] | None:
     """Get node visualizer-world transform matrix (16 floats, column-major)"""
 
-def set_node_transform(name: str, matrix: Sequence[float]) -> None:
-    """Set node transform matrix (16 floats, column-major)"""
+def commit_node_transforms(node_names: Sequence[str], old_transforms: Sequence[Sequence[float]]) -> None:
+    """
+    Record a completed preview edit as one undo step using its original local transforms
+    """
 
-def set_node_visualizer_world_transform(name: str, matrix: Sequence[float]) -> None:
-    """Set node visualizer-world transform matrix (16 floats, column-major)"""
+def set_node_transform(name: str, matrix: Sequence[float], *, record_history: bool = True) -> None:
+    """
+    Set node transform matrix (16 floats, column-major). Disable record_history for previews committed with commit_node_transforms.
+    """
+
+def set_node_visualizer_world_transform(name: str, matrix: Sequence[float], *, record_history: bool = True) -> None:
+    """
+    Set node visualizer-world transform matrix (16 floats, column-major). Disable record_history for previews committed with commit_node_transforms.
+    """
 
 def bake_selected_node_transforms() -> int:
     """
@@ -571,6 +623,17 @@ def focus_selection() -> bool:
     Focus the active viewport on the selection, or the whole scene when nothing is selected
     """
 
+def go_home() -> None:
+    """Move the active viewport to its home view"""
+
+def set_home() -> None:
+    """Make the active viewport's current view its home view"""
+
+def reset_home() -> None:
+    """
+    Restore the default home view of the active viewport and move the camera there
+    """
+
 def get_camera_navigation_mode() -> str:
     """
     Get the active camera navigation mode ('orbit', 'trackball', 'fpv', or 'drone')
@@ -578,6 +641,25 @@ def get_camera_navigation_mode() -> str:
 
 def set_camera_navigation_mode(mode: str) -> None:
     """Set the active camera navigation mode"""
+
+def get_new_project_navigation_up_axis() -> str:
+    """Get the navigation vertical used only for new projects"""
+
+def get_new_project_align_grid() -> bool:
+    """
+    Get whether new projects start with a grid perpendicular to their navigation vertical
+    """
+
+def set_new_project_navigation_defaults(axis: str, align_grid: bool) -> None:
+    """Set new-project defaults without modifying the current project"""
+
+def get_navigation_up_axis() -> str:
+    """Get the project navigation vertical: legacy_y or data_z"""
+
+def set_navigation_up_axis(axis: str, align_grid: bool = False) -> None:
+    """
+    Set the project navigation vertical without transforming scene data or camera poses; optionally align both panel grids
+    """
 
 def get_camera_view_snap_enabled() -> bool:
     """Check whether camera axis-view snapping is enabled"""
@@ -612,6 +694,9 @@ def toggle_vram_hud() -> None:
     Toggle the VRAM diagnostics HUD overlay (requires vram profiler enabled)
     """
 
+def toggle_perf_hud_expanded() -> None:
+    """Toggle the performance HUD between its full and compact views"""
+
 def is_perf_hud_visible() -> bool:
     """True when the performance HUD is currently shown"""
 
@@ -645,8 +730,10 @@ def get_depth_view_mode() -> str:
 def set_depth_view_mode(mode: str) -> None:
     """Set depth-map visualization mode"""
 
-def set_orthographic(ortho: bool) -> None:
-    """Enable or disable orthographic projection"""
+def set_orthographic(ortho: bool, extent_world: float | None = None) -> None:
+    """
+    Enable or disable orthographic projection, optionally setting its vertical world extent
+    """
 
 def on_training_start(callback: Callable) -> Callable:
     """Decorator for training start handler"""
@@ -725,7 +812,7 @@ class Tensor:
         """Count non-zero elements"""
 
     @staticmethod
-    def from_numpy(arr: NDArray, copy: bool = True) -> Tensor:
+    def from_numpy(arr: Annotated[NDArray, dict(device='cpu')], copy: bool = True) -> Tensor:
         """Create tensor from NumPy array"""
 
     @staticmethod
@@ -774,10 +861,10 @@ class Tensor:
     def from_dlpack(obj: object) -> Tensor:
         """Create tensor from DLPack capsule or object"""
 
-    def __getitem__(self, arg: object, /) -> Tensor:
+    def __getitem__(self, key: object | None) -> Tensor:
         """Get item/slice"""
 
-    def __setitem__(self, arg0: object, arg1: object, /) -> None:
+    def __setitem__(self, key: object | None, value: object) -> None:
         """Set item/slice"""
 
     @overload
@@ -1922,6 +2009,11 @@ def has_draw_handlers() -> bool:
 def has_draw_handler(id: str) -> bool:
     """Check if a specific draw handler exists"""
 
+class SparsityMethod(enum.Enum):
+    OPACITY_ADMM = 0
+
+    POPSPA = 1
+
 class MaskMode(enum.Enum):
     NONE = 0
 
@@ -1933,9 +2025,19 @@ class MaskMode(enum.Enum):
 
     ALPHA_CONSISTENT = 4
 
-class SparsityMethod(enum.Enum):
-    OPACITY_ADMM = 0
-    POPSPA = 1
+class EvalSpace(enum.Enum):
+    DISTORTED = 0
+
+    UNDISTORTED = 1
+
+class EvalBitDepth(enum.Enum):
+    AUTO = 0
+
+    EIGHT = 1
+
+    SIXTEEN = 2
+
+    FLOAT = 3
 
 class DensifyErrorMap(enum.Enum):
     SSIM = 0
@@ -2067,6 +2169,13 @@ class OptimizationParams:
     def cropbox_loss_weight(self, arg: float, /) -> None: ...
 
     @property
+    def cropbox_growth_inside(self) -> float:
+        """Share of new splats placed inside the active crop box"""
+
+    @cropbox_growth_inside.setter
+    def cropbox_growth_inside(self, arg: float, /) -> None: ...
+
+    @property
     def lambda_dssim(self) -> float:
         """Weight for structural similarity loss"""
 
@@ -2106,54 +2215,47 @@ class OptimizationParams:
     def enable_eval(self, arg: bool, /) -> None: ...
 
     @property
-    def background_improvements(self) -> bool:
-        """
-        Improve distant background reconstruction (MRNF): far-field seeding and splits, decay relief, growth cap, per-splat position steps, visibility-ratio growth ranking, paced capacity fill
-        """
+    def eval_all(self) -> bool:
+        """Train on every image and evaluate all of them; no image is held out"""
 
-    @background_improvements.setter
-    def background_improvements(self, arg: bool, /) -> None: ...
+    @eval_all.setter
+    def eval_all(self, arg: bool, /) -> None: ...
 
     @property
-    def far_scene_min_fraction(self) -> float:
+    def eval_flip(self) -> bool:
         """
-        Minimum deep-far splat fraction that activates far-field features (0 = always on)
+        Also compute FLIP per evaluated image and save its error map next to the evaluation images
         """
 
-    @far_scene_min_fraction.setter
-    def far_scene_min_fraction(self, arg: float, /) -> None: ...
+    @eval_flip.setter
+    def eval_flip(self, arg: bool, /) -> None: ...
 
     @property
-    def growth_ratio_rank(self) -> bool:
+    def eval_mask(self) -> str:
         """
-        Rank MRNF growth by visibility-normalized error (err/vis^p) instead of raw window error
+        Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range, points or a splat); training is not affected
         """
 
-    @growth_ratio_rank.setter
-    def growth_ratio_rank(self, arg: bool, /) -> None: ...
+    @eval_mask.setter
+    def eval_mask(self, arg: str, /) -> None: ...
 
     @property
-    def growth_ratio_pow(self) -> float:
-        """Visibility exponent p for the err/vis^p growth rank"""
-
-    @growth_ratio_pow.setter
-    def growth_ratio_pow(self, arg: float, /) -> None: ...
-
-    @property
-    def fill_pacing_iter(self) -> int:
-        """Pace MRNF cap fill until this iteration (0 = fill as fast as possible)"""
-
-    @fill_pacing_iter.setter
-    def fill_pacing_iter(self, arg: int, /) -> None: ...
-
-    @property
-    def far_seed_dose(self) -> int:
+    def eval_mask_report(self) -> str:
         """
-        Far-field seeds injected per refine window (0 = starvation-scaled default)
+        Pixel sets scored with the evaluation mask, comma list of mask, unmasked and inverted; the first is the headline set, whose scores go to metrics.csv, the log and the training panel. Empty: the mask
         """
 
-    @far_seed_dose.setter
-    def far_seed_dose(self, arg: int, /) -> None: ...
+    @eval_mask_report.setter
+    def eval_mask_report(self, arg: str, /) -> None: ...
+
+    @property
+    def eval_mask_opacity(self) -> float:
+        """
+        Rendered opacity a pixel needs to count as covered by a splat mask; lower widens the mask past the outline, higher pulls it in
+        """
+
+    @eval_mask_opacity.setter
+    def eval_mask_opacity(self, arg: float, /) -> None: ...
 
     @property
     def densify_error_map(self) -> DensifyErrorMap:
@@ -2177,15 +2279,6 @@ class OptimizationParams:
 
     @screen_share_penalty.setter
     def screen_share_penalty(self, arg: float, /) -> None: ...
-
-    @property
-    def oversize_split_fraction(self) -> float:
-        """
-        Fraction of MRNF growth budget used to split Gaussians over the screen-share cap; 0 disables
-        """
-
-    @oversize_split_fraction.setter
-    def oversize_split_fraction(self, arg: float, /) -> None: ...
 
     @property
     def steps_scaler(self) -> float:
@@ -2237,91 +2330,109 @@ class OptimizationParams:
 
     @property
     def sparsity_method(self) -> SparsityMethod: ...
+
     @sparsity_method.setter
     def sparsity_method(self, arg: SparsityMethod, /) -> None: ...
 
     @property
     def popspa_target_count(self) -> int: ...
+
     @popspa_target_count.setter
     def popspa_target_count(self, arg: int, /) -> None: ...
 
     @property
     def popspa_first_prune_count(self) -> int: ...
+
     @popspa_first_prune_count.setter
     def popspa_first_prune_count(self, arg: int, /) -> None: ...
 
     @property
     def popspa_sparsify_steps(self) -> int: ...
+
     @popspa_sparsify_steps.setter
     def popspa_sparsify_steps(self, arg: int, /) -> None: ...
 
     @property
     def popspa_refine_steps(self) -> int: ...
+
     @popspa_refine_steps.setter
     def popspa_refine_steps(self, arg: int, /) -> None: ...
 
     @property
     def popspa_projection_interval(self) -> int: ...
+
     @popspa_projection_interval.setter
     def popspa_projection_interval(self, arg: int, /) -> None: ...
 
     @property
     def popspa_seed(self) -> int: ...
+
     @popspa_seed.setter
     def popspa_seed(self, arg: int, /) -> None: ...
 
     @property
     def popspa_rho(self) -> float: ...
+
     @popspa_rho.setter
     def popspa_rho(self, arg: float, /) -> None: ...
 
     @property
     def popspa_erank_weight(self) -> float: ...
+
     @popspa_erank_weight.setter
     def popspa_erank_weight(self, arg: float, /) -> None: ...
 
     @property
     def popspa_thin_scale_weight(self) -> float: ...
+
     @popspa_thin_scale_weight.setter
     def popspa_thin_scale_weight(self, arg: float, /) -> None: ...
 
     @property
     def popspa_erank_epsilon(self) -> float: ...
+
     @popspa_erank_epsilon.setter
     def popspa_erank_epsilon(self, arg: float, /) -> None: ...
 
     @property
     def popspa_means_lr(self) -> float: ...
+
     @popspa_means_lr.setter
     def popspa_means_lr(self, arg: float, /) -> None: ...
 
     @property
     def popspa_scales_lr(self) -> float: ...
+
     @popspa_scales_lr.setter
     def popspa_scales_lr(self, arg: float, /) -> None: ...
 
     @property
     def popspa_opacities_lr(self) -> float: ...
+
     @popspa_opacities_lr.setter
     def popspa_opacities_lr(self, arg: float, /) -> None: ...
 
     @property
     def popspa_quaternions_lr(self) -> float: ...
+
     @popspa_quaternions_lr.setter
     def popspa_quaternions_lr(self, arg: float, /) -> None: ...
 
     @property
     def popspa_sh0_lr(self) -> float: ...
+
     @popspa_sh0_lr.setter
     def popspa_sh0_lr(self, arg: float, /) -> None: ...
 
     @property
     def popspa_shn_lr(self) -> float: ...
+
     @popspa_shn_lr.setter
     def popspa_shn_lr(self, arg: float, /) -> None: ...
 
     @property
     def popspa_ssim_weight(self) -> float: ...
+
     @popspa_ssim_weight.setter
     def popspa_ssim_weight(self, arg: float, /) -> None: ...
 
@@ -2463,6 +2574,15 @@ class OptimizationParams:
     def depth_loss_mode(self, arg: str, /) -> None: ...
 
     @property
+    def depth_auto_generate(self) -> bool:
+        """
+        Generate missing or size-mismatched depth maps with MoGe-2 from the full-resolution images/ folder
+        """
+
+    @depth_auto_generate.setter
+    def depth_auto_generate(self, arg: bool, /) -> None: ...
+
+    @property
     def use_normal_loss(self) -> bool:
         """Load normal maps and use normal-map supervision during training"""
 
@@ -2526,10 +2646,30 @@ class OptimizationParams:
 
     @property
     def undistort(self) -> bool:
-        """Undistort images on-the-fly before training"""
+        """
+        Remove lens distortion before training: each image and its mask, depth and normal map are resampled once from full resolution into a distortion-free pinhole camera, which training then uses. Alternative to --gut for distorted or non-pinhole cameras
+        """
 
     @undistort.setter
     def undistort(self, arg: bool, /) -> None: ...
+
+    @property
+    def eval_space(self) -> EvalSpace:
+        """
+        Reference images for evaluation with --undistort: distorted = the original images, with the render warped into the original lens; undistorted = the undistorted training images
+        """
+
+    @eval_space.setter
+    def eval_space(self, arg: EvalSpace, /) -> None: ...
+
+    @property
+    def eval_bit_depth(self) -> EvalBitDepth:
+        """
+        Grid the render is quantized to before evaluation metrics: auto = each reference image's own encoding (8-bit, 16-bit or float)
+        """
+
+    @eval_bit_depth.setter
+    def eval_bit_depth(self, arg: EvalBitDepth, /) -> None: ...
 
     @property
     def save_steps(self) -> list[int]:
@@ -2599,6 +2739,12 @@ class DatasetParams:
     @property
     def images(self) -> str:
         """Subfolder name containing images"""
+
+    @property
+    def init_path(self) -> str:
+        """
+        Training initialization file; empty when training starts from the dataset's points
+        """
 
     @property
     def test_every(self) -> int:
@@ -2685,8 +2831,15 @@ def run(path: str) -> None:
 def list_scene() -> None:
     """Print the scene graph tree"""
 
-def on_frame(callback: Callable) -> None:
-    """Register a callback to be called each frame with delta time (seconds)"""
+def on_frame(callback: Callable, duration_s: object | None = None) -> None:
+    """
+    Register a frame callback with an optional positive lifetime in seconds (defaults to 10 seconds).
+    """
+
+def set_frame_callback(callback: Callable, duration_s: object | None = None) -> None:
+    """
+    Register a frame callback with an optional positive lifetime in seconds (defaults to 10 seconds).
+    """
 
 def stop_animation() -> None:
     """Stop any running animation (clears frame callback)"""

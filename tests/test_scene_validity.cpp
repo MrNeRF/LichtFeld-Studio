@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -22,15 +23,18 @@
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/events.hpp"
+#include "core/image_io.hpp"
 #include "core/parameters.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "io/exporter.hpp"
+#include "io/project_document.hpp"
+#include "licht_test_support.hpp"
 #include "ppisp_fixture.hpp"
 #include "python/python_runtime.hpp"
 #include "training/components/bilateral_grid.hpp"
@@ -243,8 +247,141 @@ namespace lfs::python {
         params.optimization.max_cap = 16;
         params.optimization.headless = true;
         params.optimization.enable_eval = false;
+        params.optimization.use_exposure_correction = false;
         params.optimization.use_ppisp = use_ppisp;
         return params;
+    }
+
+    class TrainerMaskValidationTest : public ::testing::Test {
+    protected:
+        ScopedTestDirectory directory_{"lfs_trainer_mask_validation"};
+        core::Scene scene_;
+        core::NodeId cameras_ = scene_.addGroup("Cameras");
+
+        void SetUp() override {
+            scene_.addSplat("Model", make_construction_splat());
+            scene_.setTrainingModelNode("Model");
+        }
+
+        std::shared_ptr<core::Camera> add_camera(int mask_width, int mask_height, int id = 0) {
+            const auto image = directory_.path() / ("image_" + std::to_string(id) + ".png");
+            const auto mask = directory_.path() / ("mask_" + std::to_string(id) + ".png");
+            const std::vector<uint8_t> pixels(64 * 48 * 3, 255);
+            EXPECT_TRUE(core::save_png(image, pixels.data(), 64, 48, 3, 8, 1));
+            if (mask_width > 0) {
+                const std::vector<uint8_t> mask_pixels(mask_width * mask_height, 255);
+                EXPECT_TRUE(core::save_png(mask, mask_pixels.data(), mask_width, mask_height, 1, 8, 1));
+            }
+            // Camera metadata can describe the original, larger source image.
+            auto camera = std::make_shared<core::Camera>(
+                core::Tensor::eye(3, core::Device::CPU),
+                core::Tensor::zeros({3}, core::Device::CPU),
+                100.0f, 100.0f, 64.0f, 48.0f,
+                core::Tensor(), core::Tensor(), core::CameraModelType::PINHOLE,
+                image.filename().string(), image, mask, 128, 96, id);
+            scene_.addCamera(camera->image_name(), cameras_, camera);
+            return camera;
+        }
+
+        core::param::TrainingParameters parameters(core::param::MaskMode mode) {
+            auto params = make_construction_params(false, directory_.path());
+            params.optimization.mask_mode = mode;
+            params.optimization.use_alpha_as_mask = false;
+            return params;
+        }
+    };
+
+    TEST_F(TrainerMaskValidationTest, RejectsWrongWidthAndHeightBeforeTraining) {
+        auto camera = add_camera(65, 48);
+        for (const auto mode : {core::param::MaskMode::Ignore, core::param::MaskMode::Segment,
+                                core::param::MaskMode::SegmentAndIgnore, core::param::MaskMode::AlphaConsistent}) {
+            for (const auto size : {std::pair{65, 48}, std::pair{64, 49}}) {
+                SCOPED_TRACE(static_cast<int>(mode));
+                SCOPED_TRACE(size.second);
+                const std::vector<uint8_t> pixels(size.first * size.second, 255);
+                ASSERT_TRUE(core::save_png(camera->mask_path(), pixels.data(), size.first, size.second, 1, 8, 1));
+                training::Trainer trainer(scene_);
+                const auto result = trainer.initialize(parameters(mode));
+                ASSERT_FALSE(result);
+                EXPECT_NE(result.error().find("Mask 'mask_0.png' is " + std::to_string(size.first) + "x" + std::to_string(size.second)), std::string::npos);
+                EXPECT_NE(result.error().find("image 'image_0.png' is 64x48"), std::string::npos);
+                EXPECT_FALSE(trainer.isInitialized());
+            }
+        }
+    }
+
+    TEST_F(TrainerMaskValidationTest, ChecksLaterCamerasBeforeTraining) {
+        add_camera(64, 48);
+        add_camera(65, 48, 1);
+        training::Trainer trainer(scene_);
+        const auto result = trainer.initialize(parameters(core::param::MaskMode::Ignore));
+        ASSERT_FALSE(result);
+        EXPECT_NE(result.error().find("mask_1.png"), std::string::npos);
+    }
+
+    TEST_F(TrainerMaskValidationTest, ChecksHeldOutCamerasBeforeTraining) {
+        add_camera(65, 48)->set_split(core::CameraSplit::Eval);
+        add_camera(64, 48, 1);
+        training::Trainer trainer(scene_);
+        auto params = parameters(core::param::MaskMode::Ignore);
+        params.optimization.enable_eval = true;
+        params.dataset.test_every = 2;
+        const auto result = trainer.initialize(params);
+        ASSERT_FALSE(result);
+        EXPECT_NE(result.error().find("mask_0.png"), std::string::npos) << result.error();
+    }
+
+    TEST_F(TrainerMaskValidationTest, PreservesUnmaskedAlphaConsistentEvaluation) {
+        add_camera(65, 48)->set_split(core::CameraSplit::Eval);
+        add_camera(64, 48, 1);
+        training::Trainer trainer(scene_);
+        auto params = parameters(core::param::MaskMode::AlphaConsistent);
+        params.optimization.enable_eval = true;
+        const auto result = trainer.initialize(params);
+        ASSERT_TRUE(result) << result.error();
+    }
+
+    TEST_F(TrainerMaskValidationTest, AcceptsMatchingFilesWithResizeAndPartialCoverage) {
+        add_camera(64, 48);
+        add_camera(0, 0, 1);
+        training::Trainer trainer(scene_);
+        auto params = parameters(core::param::MaskMode::Ignore);
+        params.dataset.resize_factor = 2;
+        const auto result = trainer.initialize(params);
+        ASSERT_TRUE(result) << result.error();
+    }
+
+    TEST_F(TrainerMaskValidationTest, IgnoresSidecarDimensionsWhenMasksDisabled) {
+        add_camera(65, 48);
+        training::Trainer trainer(scene_);
+        const auto result = trainer.initialize(parameters(core::param::MaskMode::None));
+        ASSERT_TRUE(result) << result.error();
+    }
+
+    TEST_F(TrainerMaskValidationTest, InMemoryMaskOverridesWrongSizedSidecar) {
+        auto camera = add_camera(65, 48);
+        camera->set_mask_tensor(core::Tensor::ones({48, 64}, core::Device::CUDA));
+        training::Trainer trainer(scene_);
+        const auto result = trainer.initialize(parameters(core::param::MaskMode::Ignore));
+        ASSERT_TRUE(result) << result.error();
+    }
+
+    TEST_F(TrainerMaskValidationTest, PreservesAlphaOnlyMasks) {
+        auto camera = add_camera(0, 0);
+        camera->set_has_alpha(true);
+        training::Trainer trainer(scene_);
+        auto params = parameters(core::param::MaskMode::Ignore);
+        params.optimization.use_alpha_as_mask = true;
+        const auto result = trainer.initialize(params);
+        ASSERT_TRUE(result) << result.error();
+    }
+
+    TEST_F(TrainerMaskValidationTest, PreservesMissingMaskError) {
+        add_camera(0, 0);
+        training::Trainer trainer(scene_);
+        const auto result = trainer.initialize(parameters(core::param::MaskMode::Ignore));
+        ASSERT_FALSE(result);
+        EXPECT_NE(result.error().find("no masks found"), std::string::npos);
     }
 
     TEST(TrainerConstructionTest, EvalAppearanceHookPresentIffUsePpisp) {
@@ -814,7 +951,6 @@ namespace lfs::python {
     protected:
         void SetUp() override {
             lfs::event::EventBridge::instance().clear_all();
-            core::event::bus().clear_all();
             lfs::vis::services().clear();
             lfs::vis::op::undoHistory().clear();
             set_application_scene(nullptr);
@@ -825,7 +961,6 @@ namespace lfs::python {
             set_application_scene(nullptr);
             lfs::vis::op::undoHistory().clear();
             lfs::vis::services().clear();
-            core::event::bus().clear_all();
             lfs::event::EventBridge::instance().clear_all();
         }
 
@@ -1237,6 +1372,40 @@ namespace lfs::python {
         EXPECT_EQ(dummy_scene_.getTrainingModelGaussianCount(), count);
     }
 
+    TEST_F(SceneValidityTest, TrainingModelCountsExcludePublishedSoftDeletions) {
+        constexpr size_t count = 10;
+        const auto id = dummy_scene_.addSplat("Model", make_test_splat(count));
+        dummy_scene_.setTrainingModelNode(id);
+        auto* model = dummy_scene_.getTrainingModel();
+        ASSERT_NE(model, nullptr);
+
+        auto mask = core::Tensor::zeros_bool({count}, core::Device::CPU);
+        std::fill_n(mask.ptr<uint8_t>(), 6, uint8_t{1});
+        model->soft_delete(mask);
+        model->refresh_deleted_count();
+
+        // Presentation excludes deleted rows, but topology still includes the
+        // reusable slots needed by selection, rendering and the optimizer.
+        EXPECT_EQ(model->size(), count);
+        EXPECT_EQ(dummy_scene_.getNodeById(id)->gaussian_count.load(), count);
+        EXPECT_EQ(dummy_scene_.getTrainingModelGaussianCount(), 4u);
+        EXPECT_EQ(dummy_scene_.getVisibleGaussianCount(), 4u);
+        EXPECT_EQ(dummy_scene_.getActiveGaussianCountsByNode().at(id), 4u);
+
+        model->undelete(mask);
+        model->refresh_deleted_count();
+        EXPECT_EQ(dummy_scene_.getTrainingModelGaussianCount(), count);
+        EXPECT_EQ(dummy_scene_.getActiveGaussianCountsByNode().at(id), count);
+
+        model->soft_delete(core::Tensor::ones_bool({count}, core::Device::CPU));
+        model->refresh_deleted_count();
+        EXPECT_EQ(dummy_scene_.getTrainingModelGaussianCount(), 0u);
+        EXPECT_EQ(dummy_scene_.getActiveGaussianCountsByNode().at(id), 0u);
+
+        model->clear_deleted();
+        EXPECT_EQ(dummy_scene_.getTrainingModelGaussianCount(), count);
+    }
+
     TEST_F(SceneValidityTest, SplatDataSetSHDegreeSupportsAllDegrees) {
         constexpr size_t count = 4;
 
@@ -1344,9 +1513,11 @@ namespace lfs::python {
                     const size_t requested_capacity,
                     const core::DataType dtype,
                     const std::string_view name) {
-                EXPECT_EQ(dtype, core::DataType::Float32);
+                EXPECT_EQ(dtype, name == "SplatData.shN" ? core::DataType::Float16 : core::DataType::Float32)
+                    << name;
                 calls->push_back({std::string{name}, requested_capacity});
-                auto tensor = core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::CUDA);
+                auto tensor =
+                    core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::CUDA, dtype);
                 tensor.set_name(std::string{name});
                 return tensor;
             };
@@ -1367,8 +1538,8 @@ namespace lfs::python {
         EXPECT_LE(model->scaling_raw().capacity(), capacity);
         EXPECT_LE(model->rotation_raw().capacity(), capacity);
         EXPECT_LE(model->opacity_raw().capacity(), capacity);
-        EXPECT_LE(model->shN_raw().capacity(),
-                  core::sh_swizzled_float_count(capacity, core::sh_rest_coefficients_for_degree(1)));
+        const auto rest = static_cast<std::uint32_t>(core::sh_rest_coefficients_for_degree(1));
+        EXPECT_LE(model->shN_raw().capacity(), core::sh_value_quant::sh_value_u16_count(capacity, rest));
 
         const auto max_capacity_for = [&](const std::string_view name) -> size_t {
             size_t max_capacity = 0;
@@ -1384,8 +1555,9 @@ namespace lfs::python {
         EXPECT_EQ(max_capacity_for("SplatData.scaling"), capacity);
         EXPECT_EQ(max_capacity_for("SplatData.rotation"), capacity);
         EXPECT_EQ(max_capacity_for("SplatData.opacity"), capacity);
-        EXPECT_EQ(max_capacity_for("SplatData.shN"),
-                  core::sh_swizzled_float_count(capacity, core::sh_rest_coefficients_for_degree(1)));
+        EXPECT_EQ(max_capacity_for("SplatData.shN"), core::sh_value_quant::sh_value_u16_count(capacity, rest));
+        EXPECT_EQ(max_capacity_for("SplatData.shN_value_bounds"),
+                  core::sh_value_quant::n_bounds_for_prims(capacity) * 2);
     }
 
     TEST_F(SceneValidityTest, MigrateTrainingModelAcceptsCudaOnlyExportableStorage) {
@@ -1543,6 +1715,38 @@ namespace lfs::python {
         EXPECT_EQ(get_application_scene(), &scene_manager.getScene());
         EXPECT_EQ(scene_manager.getContentType(), lfs::vis::SceneManager::ContentType::Empty);
         EXPECT_EQ(scene_manager.getScene().getNodeCount(), 0u);
+    }
+
+    TEST_F(SceneValidityTest, GalleryPreviewAttachmentLeavesProjectLicenseUntouched) {
+        auto document = lfs::io::project::ProjectDocument::create(lfs::core::generate_uuid_v4());
+        ASSERT_TRUE(document);
+        lfs::vis::SceneManager manager;
+        int license_callbacks = 0;
+        manager.setImportLicenseCallback([&](const auto& bytes) {
+            ++license_callbacks;
+            EXPECT_TRUE(document->adopt_import_license(bytes));
+        });
+
+        const std::string notice = "License: Preview terms";
+        const auto attach = [&](const bool defer) {
+            lfs::io::LoadResult loaded;
+            loaded.data = std::shared_ptr<lfs::core::SplatData>(lfs::test::licht::make_splat(1).release());
+            loaded.license_bytes = std::vector<uint8_t>(notice.begin(), notice.end());
+            const auto group = manager.getScene().addGroup(defer ? "preview" : "regular");
+            ASSERT_NE(group, lfs::core::NULL_NODE);
+            EXPECT_FALSE(manager.attachLoadedSplatNode("preview.sog", "splat", true,
+                                                       std::move(loaded), true, group, defer)
+                             .empty());
+        };
+
+        attach(true);
+        EXPECT_EQ(license_callbacks, 0);
+        EXPECT_FALSE(document->project().license().value().has_value());
+
+        attach(false);
+        EXPECT_EQ(license_callbacks, 1);
+        EXPECT_EQ(document->project().license().value(),
+                  (lfs::io::project::ProjectLicense{"LicenseRef-Previewterms", notice}));
     }
 
     TEST_F(SceneValidityTest, ColmapSparsePathTracksSuccessfulLoadAndClearsOnReset) {
@@ -1880,6 +2084,119 @@ namespace lfs::python {
                 EXPECT_NEAR(world_before[col][row], world_after[col][row], 1e-4f);
     }
 
+    TEST_F(SceneValidityTest, ReparentRejectsUnrepresentableParentInverseWithoutMutation) {
+        const auto group = dummy_scene_.addGroup("TinyGroup");
+        const auto splat = dummy_scene_.addSplat("Child", make_test_splat(1));
+        const glm::mat4 local_before = dummy_scene_.getNodeById(splat)->local_transform.get();
+        const glm::mat4 tiny_scale = glm::scale(glm::mat4(1.0f), glm::vec3(1e-18f));
+        dummy_scene_.setNodeTransform(group, tiny_scale);
+
+        EXPECT_FALSE(dummy_scene_.reparent(splat, group));
+        EXPECT_EQ(dummy_scene_.getNodeById(splat)->parent_id, core::NULL_NODE);
+        EXPECT_TRUE(dummy_scene_.getNodeById(group)->children.empty());
+        EXPECT_EQ(dummy_scene_.getNodeById(splat)->local_transform.get(), local_before);
+    }
+
+    TEST_F(SceneValidityTest, MoveRejectsUnrepresentableParentInverseWithoutMutation) {
+        const auto group = dummy_scene_.addGroup("TinyGroup");
+        const auto splat = dummy_scene_.addSplat("Child", make_test_splat(1));
+        const glm::mat4 local_before = dummy_scene_.getNodeById(splat)->local_transform.get();
+        const glm::mat4 tiny_scale = glm::scale(glm::mat4(1.0f), glm::vec3(1e-18f));
+        dummy_scene_.setNodeTransform(group, tiny_scale);
+
+        EXPECT_FALSE(dummy_scene_.moveNode(splat, group, -1));
+        EXPECT_EQ(dummy_scene_.getNodeById(splat)->parent_id, core::NULL_NODE);
+        EXPECT_TRUE(dummy_scene_.getNodeById(group)->children.empty());
+        EXPECT_EQ(dummy_scene_.getNodeById(splat)->local_transform.get(), local_before);
+    }
+
+    TEST_F(SceneValidityTest, ReparentAndMoveAcceptFiniteAnisotropicParentsAndPreserveWorldTransform) {
+        const std::array<glm::vec3, 2> scales = {
+            glm::vec3(1.0f, 1.0f, 1.0e-7f), glm::vec3(1.0e3f, 1.0e-3f, 1.0f)};
+        for (size_t index = 0; index < scales.size(); ++index) {
+            const auto group = dummy_scene_.addGroup("AnisotropicGroup" + std::to_string(index));
+            const auto splat = dummy_scene_.addSplat("AnisotropicChild" + std::to_string(index),
+                                                     make_test_splat(1));
+            const auto moved = dummy_scene_.addSplat("AnisotropicMoved" + std::to_string(index),
+                                                     make_test_splat(1));
+            ASSERT_NE(group, core::NULL_NODE);
+            ASSERT_NE(splat, core::NULL_NODE);
+            ASSERT_NE(moved, core::NULL_NODE);
+
+            dummy_scene_.setNodeTransform(group, glm::scale(glm::mat4(1.0f), scales[index]));
+            glm::mat4 child_transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.5f, -2.0f, 3.0f));
+            child_transform = glm::rotate(child_transform, 0.17f, glm::vec3(0.0f, 0.0f, 1.0f));
+            dummy_scene_.setNodeTransform(splat, child_transform);
+            child_transform[3][0] += 2.0f;
+            dummy_scene_.setNodeTransform(moved, child_transform);
+            const glm::mat4 world_before = dummy_scene_.getWorldTransform(splat);
+            const glm::mat4 moved_world_before = dummy_scene_.getWorldTransform(moved);
+
+            ASSERT_TRUE(dummy_scene_.reparent(splat, group));
+            ASSERT_TRUE(dummy_scene_.moveNode(moved, group, -1));
+            const glm::mat4 world_after = dummy_scene_.getWorldTransform(splat);
+            const glm::mat4 moved_world_after = dummy_scene_.getWorldTransform(moved);
+            for (int column = 0; column < 4; ++column) {
+                for (int row = 0; row < 3; ++row) {
+                    const float tolerance = 1.0e-4f * std::max(1.0f, std::abs(world_before[column][row]));
+                    EXPECT_NEAR(world_after[column][row], world_before[column][row], tolerance);
+                    const float moved_tolerance =
+                        1.0e-4f * std::max(1.0f, std::abs(moved_world_before[column][row]));
+                    EXPECT_NEAR(moved_world_after[column][row], moved_world_before[column][row], moved_tolerance);
+                }
+            }
+        }
+    }
+
+    TEST_F(SceneValidityTest, ReparentRejectsZeroAndTinyNestedParentsWithoutMutation) {
+        const auto outer = dummy_scene_.addGroup("OuterGroup");
+        const auto inner = dummy_scene_.addGroup("InnerGroup", outer);
+        const auto splat = dummy_scene_.addSplat("Child", make_test_splat(1));
+        ASSERT_NE(outer, core::NULL_NODE);
+        ASSERT_NE(inner, core::NULL_NODE);
+        ASSERT_NE(splat, core::NULL_NODE);
+        const glm::mat4 local_before = dummy_scene_.getNodeById(splat)->local_transform.get();
+
+        for (const float scale : {0.0f, 1.0e-30f}) {
+            dummy_scene_.setNodeTransform(outer, glm::scale(glm::mat4(1.0f), glm::vec3(scale)));
+            EXPECT_FALSE(dummy_scene_.reparent(splat, inner));
+            EXPECT_EQ(dummy_scene_.getNodeById(splat)->parent_id, core::NULL_NODE);
+            EXPECT_TRUE(dummy_scene_.getNodeById(inner)->children.empty());
+            EXPECT_EQ(dummy_scene_.getNodeById(splat)->local_transform.get(), local_before);
+        }
+    }
+
+    TEST_F(SceneValidityTest, ReparentAndMoveMatchLegacyInverseForFiniteParents) {
+        const auto group = dummy_scene_.addGroup("TransformedGroup");
+        const auto reparented = dummy_scene_.addSplat("Reparented", make_test_splat(1));
+        const auto moved = dummy_scene_.addSplat("Moved", make_test_splat(1));
+
+        glm::mat4 group_transform = glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, -3.0f, 4.0f));
+        group_transform = glm::rotate(group_transform, 0.37f, glm::vec3(0.0f, 1.0f, 0.0f));
+        group_transform = glm::scale(group_transform, glm::vec3(1.25f, 0.75f, 1.5f));
+        dummy_scene_.setNodeTransform(group, group_transform);
+
+        glm::mat4 reparented_transform = glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, 0.5f, 2.0f));
+        reparented_transform = glm::rotate(reparented_transform, -0.23f, glm::vec3(1.0f, 0.0f, 0.0f));
+        dummy_scene_.setNodeTransform(reparented, reparented_transform);
+        const glm::mat4 reparented_world = dummy_scene_.getWorldTransform(reparented);
+        const glm::mat4 expected_reparented_local =
+            glm::inverse(dummy_scene_.getWorldTransform(group)) * reparented_world;
+
+        ASSERT_TRUE(dummy_scene_.reparent(reparented, group));
+        EXPECT_EQ(dummy_scene_.getNodeById(reparented)->local_transform.get(), expected_reparented_local);
+
+        glm::mat4 moved_transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.25f, 1.5f, -2.0f));
+        moved_transform = glm::rotate(moved_transform, 0.19f, glm::vec3(0.0f, 0.0f, 1.0f));
+        dummy_scene_.setNodeTransform(moved, moved_transform);
+        const glm::mat4 moved_world = dummy_scene_.getWorldTransform(moved);
+        const glm::mat4 expected_moved_local =
+            glm::inverse(dummy_scene_.getWorldTransform(group)) * moved_world;
+
+        ASSERT_TRUE(dummy_scene_.moveNode(moved, group, -1));
+        EXPECT_EQ(dummy_scene_.getNodeById(moved)->local_transform.get(), expected_moved_local);
+    }
+
     TEST_F(SceneValidityTest, SceneManagerMoveNodeReparentsIntoGroup) {
         lfs::vis::SceneManager sm;
         auto& scene = sm.getScene();
@@ -1949,6 +2266,34 @@ namespace lfs::python {
         const auto non_camera_group_counts = scene.getCameraTrainingCounts(cameras);
         EXPECT_EQ(non_camera_group_counts.enabled, 0u);
         EXPECT_EQ(non_camera_group_counts.total, 0u);
+    }
+
+    TEST_F(SceneValidityTest, CameraTrainingToggleIdentifiesEffectiveChanges) {
+        lfs::vis::SceneManager sm;
+        auto& scene = sm.getScene();
+        const auto group = scene.addCameraGroup("Training", core::NULL_NODE, 1);
+        const auto camera = scene.addCamera("frame.png", group, make_test_camera());
+        ASSERT_NE(camera, core::NULL_NODE);
+
+        std::vector<std::uint32_t> changes;
+        auto handler = core::events::state::SceneChanged::when(
+            [&](const auto& event) { changes.push_back(event.mutation_flags); });
+        (void)handler;
+        constexpr std::uint32_t visibility_changed = 1u << 5;
+        constexpr std::uint32_t camera_training_changed = 1u << 9;
+
+        scene.setCameraTrainingEnabled(camera, false);
+        ASSERT_EQ(changes.size(), 1u);
+        EXPECT_EQ(changes.back(), visibility_changed | camera_training_changed);
+        EXPECT_EQ(scene.getActiveCameraCount(), 0u);
+
+        scene.setCameraTrainingEnabled(camera, false);
+        EXPECT_EQ(changes.size(), 1u);
+
+        scene.setCameraTrainingEnabled(camera, true);
+        ASSERT_EQ(changes.size(), 2u);
+        EXPECT_EQ(changes.back(), visibility_changed | camera_training_changed);
+        EXPECT_EQ(scene.getActiveCameraCount(), 1u);
     }
 
     TEST_F(SceneValidityTest, SceneManagerBlocksActiveCameraSubtreeAndAllowsInactiveCameraRemoval) {

@@ -35,6 +35,33 @@ def tr_fallback(key, fallback):
     return result if result and result != key else fallback
 
 
+def _eval_mask_display(params):
+    if not (params and params.has_params() and params.eval_mask):
+        return tr("training.value.none")
+    if params.eval_mask == "cropbox":
+        return tr("training.value.crop_box")
+    if params.eval_mask.startswith("bbox:"):
+        return params.eval_mask
+    if params.eval_mask.startswith("masks:"):
+        return tr("training.value.mask_folder").format(os.path.basename(params.eval_mask[len("masks:"):].rstrip("/\\")))
+    return os.path.basename(params.eval_mask)
+
+
+EVAL_PIXEL_SETS = ("mask", "unmasked", "inverted")
+
+
+def _eval_report_sets(params):
+    """The pixel sets eval_mask_report lists, headline first; the mask alone for an empty list."""
+    if not (params and params.has_params() and params.eval_mask_report):
+        return ["mask"]
+    return [entry.strip() for entry in params.eval_mask_report.split(",")]
+
+
+def _eval_report_value(headline, also_scored):
+    sets = [headline] + [s for s in EVAL_PIXEL_SETS if s != headline and s in also_scored]
+    return "" if sets == ["mask"] else ",".join(sets)
+
+
 class IterationRateTracker:
     WINDOW_SECONDS = 5.0
 
@@ -66,6 +93,10 @@ _rate_tracker = IterationRateTracker()
 
 def _is_mrnf_strategy(strategy):
     return property_view.canonical_strategy_name(strategy) == "mrnf"
+
+
+def _trainer_run_is_finished():
+    return RuntimeState.trainer_state.value in ("completed", "stopped", "error")
 
 
 def _training_session_state():
@@ -147,11 +178,12 @@ SECTIONS = [
     "basic_params",
     "advanced_params",
     "dataset",
-    "optimization",
-    "bilateral",
+    "appearance",
+    "refinement",
+    "learning_rates",
     "losses",
     "init",
-    "sparsity",
+    "evaluation",
     "save_steps",
     "advanced_registry",
 ]
@@ -160,11 +192,12 @@ INITIALLY_COLLAPSED = {
     "advanced_params",
     "advanced_registry",
     "dataset",
-    "optimization",
-    "bilateral",
+    "appearance",
+    "refinement",
+    "learning_rates",
     "losses",
     "init",
-    "sparsity",
+    "evaluation",
     "save_steps",
 }
 
@@ -179,11 +212,9 @@ BG_COLOR_HEX_KEY = "bg_color_hex"
 BG_COLOR_TEXT_KEYS = tuple(key for key, _index in BG_COLOR_CHANNELS) + (
     BG_COLOR_HEX_KEY,
 )
-
-
 class TrainingPanel(Panel):
     id = "lfs.training"
-    label = "Training"
+    label = "window.training"
     space = lf.ui.PanelSpace.MAIN_PANEL_TAB
     order = 20
     template = "rmlui/training.rml"
@@ -209,6 +240,8 @@ class TrainingPanel(Panel):
         self._last_save_steps = None
         self._color_edit_prop = None
         self._picker_click_handled = False
+        self._init_mesh_checked_path = ""
+        self._init_is_mesh = False
         self._collapsed = set(INITIALLY_COLLAPSED)
         self._last_iteration = -1
         self._last_num_gaussians = -1
@@ -235,9 +268,12 @@ class TrainingPanel(Panel):
         self._psnr_tick_max = ""
         self._psnr_tick_mid = ""
         self._psnr_tick_min = ""
-        self._last_panel_label = ""
         self._last_language_generation = -1
         self._reactive_binding = PanelStateBinding()
+        self._param_subscriptions = []
+        self._params_subscription_generation = 0
+        self._params_changed = set()
+        self._params_refresh_pending = False
         self._deferred_update_pending = False
         self._deferred_update_deadline = None
         self._deferred_update_generation = 0
@@ -250,7 +286,7 @@ class TrainingPanel(Panel):
 
     def capture_chrome(self):
         return {
-            "collapsed": sorted(self._collapsed),
+            "expanded": sorted(set(SECTIONS) - self._collapsed),
             "property_search": self._pv_search_query,
             "steps_scaling_lock": bool(self._auto_scale_steps_locked),
         }
@@ -263,9 +299,9 @@ class TrainingPanel(Panel):
             if self._handle:
                 self._handle.dirty_all()
             return
-        collapsed = payload.get("collapsed")
-        if isinstance(collapsed, (list, tuple)):
-            self._collapsed = {str(name) for name in collapsed}
+        expanded = payload.get("expanded")
+        if isinstance(expanded, (list, tuple)):
+            self._collapsed = set(INITIALLY_COLLAPSED) - {str(name) for name in expanded}
         search = payload.get("property_search")
         if isinstance(search, str):
             self._pv_search_query = search
@@ -312,18 +348,10 @@ class TrainingPanel(Panel):
         self._handle = model.get_handle()
         for binding in self._pv_bindings:
             binding.attach_handle(self._handle)
-        self._sync_panel_label()
 
         params = lf.optimization_params()
         if params and params.has_params() and params.enable_eval:
-            self._sync_eval_steps_with_save_steps(params)
-
-    def _sync_panel_label(self):
-        label = tr("window.training")
-        if not label or label == self._last_panel_label:
-            return
-        if lf.ui.set_panel_label(self.id, label):
-            self._last_panel_label = label
+            self._add_save_steps_to_eval_steps(params)
 
     def _bind_labels(self, model):
         model.bind_func(
@@ -333,6 +361,9 @@ class TrainingPanel(Panel):
             "label_no_params", lambda: tr("training_panel.parameters_unavailable")
         )
         model.bind_func("label_reset", lambda: tr("training_panel.reset"))
+        model.bind_func(
+            "label_start_training", lambda: tr("training_panel.start_training")
+        )
         model.bind_func("label_clear", lambda: tr("training_panel.clear"))
         model.bind_func("label_pause", lambda: tr("training_panel.pause"))
         model.bind_func("label_resume", lambda: tr("training_panel.resume"))
@@ -344,7 +375,10 @@ class TrainingPanel(Panel):
         model.bind_func("label_status_stopped", lambda: tr("status.stopped"))
         model.bind_func("label_status_error", lambda: tr("status.error"))
         model.bind_func("label_status_stopping", lambda: tr("status.stopping"))
-        model.bind_func("label_status_starting", lambda: tr("runtime.task_starting"))
+        model.bind_func(
+            "label_status_starting", lambda: tr("training_panel.preparing_training")
+        )
+        model.bind_func("label_cancel_preparation", lambda: tr("common.cancel"))
         model.bind_func(
             "label_save_project", lambda: tr("training_panel.save_project")
         )
@@ -388,6 +422,20 @@ class TrainingPanel(Panel):
         model.bind_func("label_ppisp_sidecar_clear", lambda: tr("training_panel.clear"))
         model.bind_func("label_bg_color", lambda: tr("training_params.bg_color"))
         model.bind_func("label_bg_image", lambda: tr("training_params.bg_image"))
+        model.bind_func("label_eval_mask", lambda: tr("training_params.eval_mask"))
+        model.bind_func("label_use_cropbox", lambda: tr("training_params.eval_mask_use_cropbox"))
+        model.bind_func("label_mask_folder", lambda: tr("training_params.eval_mask_folder"))
+        model.bind_func("label_eval_mask_spec", lambda: tr("training_params.eval_mask_spec"))
+        model.bind_func("label_eval_mask_headline", lambda: tr("training_params.eval_mask_report"))
+        for pixel_set in EVAL_PIXEL_SETS:
+            model.bind_func(
+                f"label_eval_set_{pixel_set}",
+                lambda pixel_set=pixel_set: tr(f"training.options.eval_mask_set.{pixel_set}"),
+            )
+            model.bind_func(
+                f"label_eval_also_{pixel_set}",
+                lambda pixel_set=pixel_set: tr(f"training_params.eval_mask_report_{pixel_set}"),
+            )
         model.bind_func(
             "label_bg_browse", lambda: tr("training_params.bg_image_browse")
         )
@@ -409,6 +457,7 @@ class TrainingPanel(Panel):
         model.bind_func(
             "label_dataset_output", lambda: tr("training.dataset.output")
         )
+        model.bind_func("label_browse", lambda: tr("common.browse"))
         model.bind_func("label_auto", lambda: tr("common.auto"))
         model.bind_func(
             "label_no_dataset", lambda: tr("training_panel.no_dataset_loaded")
@@ -473,10 +522,20 @@ class TrainingPanel(Panel):
         for binding in self._pv_bindings:
             self._queue_pv_publish(binding)
 
+    def _init_file_is_mesh(self):
+        dataset = lf.dataset_params()
+        path = dataset.init_path if dataset and dataset.has_params() else ""
+        if path != self._init_mesh_checked_path:
+            self._init_mesh_checked_path = path
+            self._init_is_mesh = bool(path) and lf.io.is_mesh_file(path)
+        return self._init_is_mesh
+
     def _property_view_condition_visible(self, condition_id):
         if str(condition_id) == "has_dataset":
             dataset = lf.dataset_params()
             return bool(dataset and dataset.has_params())
+        if str(condition_id) == "dep_init_mesh":
+            return self._init_file_is_mesh()
 
         params = lf.optimization_params()
         if not params or not params.has_params():
@@ -501,6 +560,10 @@ class TrainingPanel(Panel):
             "dep_popspa": params.enable_sparsity and params.sparsity_method.value == 1,
             "dep_opacity_admm": params.enable_sparsity and params.sparsity_method.value == 0,
             "dep_random": params.random,
+            "dep_eval": params.enable_eval,
+            "dep_undistort": params.undistort,
+            "dep_eval_mask": params.enable_eval and bool(params.eval_mask),
+            "dep_eval_mask_splat": params.enable_eval and params.eval_mask.startswith("splat:"),
         }
         return bool(conditions.get(str(condition_id), True))
 
@@ -508,14 +571,23 @@ class TrainingPanel(Panel):
         def _state():
             value = RuntimeState.trainer_state.value
             session = _training_session_state()
+            if session.get("available") and not session.get("hydrated"):
+                if session.get("restoring"):
+                    return "restoring"
+                if session.get("error"):
+                    return "error"
             if (
                 not RuntimeState.has_trainer.value
                 and session.get("available")
                 and not session.get("hydrated")
-                and not session.get("restoring")
-                and value in ("idle", "ready", "", None)
             ):
-                return "completed" if session.get("completed") else "paused"
+                if value in (
+                    "idle",
+                    "ready",
+                    "",
+                    None,
+                ):
+                    return "completed" if session.get("completed") else "paused"
             return value
 
         def _iteration():
@@ -556,6 +628,7 @@ class TrainingPanel(Panel):
 
         for state_name in [
             "ready",
+            "preparing",
             "starting",
             "running",
             "paused",
@@ -697,6 +770,35 @@ class TrainingPanel(Panel):
             "dep_eval", lambda: p() is not None and p().has_params() and p().enable_eval
         )
         model.bind_func(
+            "dep_undistort",
+            lambda: p() is not None and p().has_params() and p().undistort,
+        )
+        model.bind_func(
+            "dep_eval_mask",
+            lambda: p() is not None
+            and p().has_params()
+            and p().enable_eval
+            and bool(p().eval_mask),
+        )
+        model.bind_func(
+            "dep_eval_mask_splat",
+            lambda: p() is not None
+            and p().has_params()
+            and p().enable_eval
+            and p().eval_mask.startswith("splat:"),
+        )
+        model.bind_func(
+            "has_eval_mask_clear",
+            lambda: p() is not None and p().has_params() and bool(p().eval_mask),
+        )
+        model.bind_func(
+            "dep_eval_holdout",
+            lambda: p() is not None
+            and p().has_params()
+            and p().enable_eval
+            and not p().eval_all,
+        )
+        model.bind_func(
             "show_training_telemetry",
             lambda: (
                 _state() in ("running", "paused", "stopping", "completed", "stopped")
@@ -705,6 +807,7 @@ class TrainingPanel(Panel):
             ),
         )
         model.bind_func("has_dataset", lambda: d() is not None and d().has_params())
+        model.bind_func("dep_init_mesh", self._init_file_is_mesh)
         model.bind_func(
             "show_dataset_no_data", lambda: d() is None or not d().has_params()
         )
@@ -737,6 +840,8 @@ class TrainingPanel(Panel):
 
     def _bind_disabled(self, model, p):
         def _params_edit_locked():
+            if _trainer_run_is_finished():
+                return False
             return not (
                 RuntimeState.trainer_state.value == "ready"
                 and RuntimeState.iteration.value == 0
@@ -836,6 +941,39 @@ class TrainingPanel(Panel):
             ppisp_activation_step_setter,
         )
 
+        self._text_bufs["eval_mask_spec_str"] = None
+
+        def eval_mask_spec_getter():
+            if self._text_bufs["eval_mask_spec_str"] is None:
+                self._text_bufs["eval_mask_spec_str"] = (
+                    p().eval_mask if p() and p().has_params() else ""
+                )
+            return self._text_bufs["eval_mask_spec_str"]
+
+        def eval_mask_spec_setter(v):
+            self._text_bufs["eval_mask_spec_str"] = str(v)
+
+        model.bind("eval_mask_spec_str", eval_mask_spec_getter, eval_mask_spec_setter)
+        model.bind(
+            "eval_mask_headline_str",
+            lambda: _eval_report_sets(p())[0],
+            lambda v: self._set_eval_report(str(v), _eval_report_sets(p())[1:]),
+        )
+        for pixel_set in EVAL_PIXEL_SETS:
+            model.bind(
+                f"eval_also_{pixel_set}",
+                lambda pixel_set=pixel_set: pixel_set in _eval_report_sets(p())[1:],
+                lambda v, pixel_set=pixel_set: self._set_eval_also_scored(pixel_set, bool(v)),
+            )
+            model.bind_func(
+                f"show_eval_also_{pixel_set}",
+                lambda pixel_set=pixel_set: p() is not None
+                and p().has_params()
+                and p().enable_eval
+                and bool(p().eval_mask)
+                and _eval_report_sets(p())[0] != pixel_set,
+            )
+
         self._text_bufs["max_width_str"] = None
 
         def max_width_getter():
@@ -930,6 +1068,9 @@ class TrainingPanel(Panel):
         if key == "max_width_str":
             return f"{d.max_width:,}" if d and d.has_params() else ""
 
+        if key == "eval_mask_spec_str":
+            return p.eval_mask if p and p.has_params() else ""
+
         if key == "test_every_str":
             return f"{d.test_every:,}" if d and d.has_params() else "8"
 
@@ -958,6 +1099,8 @@ class TrainingPanel(Panel):
                 self._set_ppisp_activation_step(buf_val)
             elif prop == "max_width":
                 self._set_max_width(buf_val)
+            elif prop == "eval_mask_spec":
+                self._set_eval_mask_spec(buf_val)
             elif prop == "test_every":
                 self._set_test_every(buf_val)
             elif prop == "new_step":
@@ -989,27 +1132,34 @@ class TrainingPanel(Panel):
         else:
             self._mark_text_buf_dirty(key)
 
-    def _sync_text_bufs(self):
-        p = lf.optimization_params()
-        d = lf.dataset_params()
-        if p and p.has_params():
-            self._text_bufs["ppisp_activation_step_str"] = (
-                f"{_display_ppisp_activation_step(p):,}"
+    def _sync_text_bufs(self, changed=None):
+        preserve_active = changed is not None
+        strategy_changed = changed is not None and "optimization.strategy" in changed
+        manual_fields = {
+            "ppisp_activation_step_str": "optimization.ppisp_controller_activation_step",
+            "max_width_str": "dataset.max_width",
+            "test_every_str": "dataset.test_every",
+            "eval_mask_spec_str": "optimization.eval_mask",
+            "new_step_str": None,
+        }
+        for key, path in manual_fields.items():
+            affected = changed is None or path in changed or (
+                strategy_changed and path and path.startswith("optimization.")
             )
-        else:
-            self._text_bufs["ppisp_activation_step_str"] = ""
-        self._text_bufs["max_width_str"] = (
-            f"{d.max_width:,}" if d and d.has_params() else ""
-        )
-        self._text_bufs["test_every_str"] = (
-            f"{d.test_every:,}" if d and d.has_params() else "8"
-        )
-        self._text_bufs["new_step_str"] = f"{self._new_save_step:,}"
-        self._sync_bg_color_text_bufs(p)
+            if key == "ppisp_activation_step_str" and changed is not None:
+                affected |= bool(changed & {"optimization.iterations", "optimization.steps_scaler"})
+            if affected and not (preserve_active and self._escape_revert.is_editing(key)):
+                self._text_bufs[key] = self._canonical_text_buf_value(key)
+        if changed is None or strategy_changed or "optimization.bg_color" in changed:
+            self._sync_bg_color_text_bufs(preserve_active=preserve_active)
+        properties = None if changed is None or strategy_changed else {
+            path.removeprefix("optimization.") for path in changed
+            if path.startswith("optimization.")
+        }
         for binding in self._pv_bindings:
-            binding.sync_text_bufs()
+            binding.sync_text_bufs(properties=properties, preserve_active=preserve_active)
 
-    def _sync_bg_color_text_bufs(self, params=None):
+    def _sync_bg_color_text_bufs(self, params=None, *, preserve_active=False):
         if params is None:
             params = lf.optimization_params()
         color = (
@@ -1018,8 +1168,10 @@ class TrainingPanel(Panel):
             else (0.0, 0.0, 0.0)
         )
         for key, channel_index in BG_COLOR_CHANNELS:
-            self._text_bufs[key] = w.color_channel_text(color, channel_index)
-        self._text_bufs[BG_COLOR_HEX_KEY] = w.color_to_hex(color)
+            if not (preserve_active and self._escape_revert.is_editing(key)):
+                self._text_bufs[key] = w.color_channel_text(color, channel_index)
+        if not (preserve_active and self._escape_revert.is_editing(BG_COLOR_HEX_KEY)):
+            self._text_bufs[BG_COLOR_HEX_KEY] = w.color_to_hex(color)
 
     def _dirty_bg_color_bindings(self):
         if not self._handle:
@@ -1103,6 +1255,7 @@ class TrainingPanel(Panel):
                 not RuntimeState.has_trainer.value
                 and session.get("available")
                 and not session.get("hydrated")
+                and state in ("idle", "ready", "", None)
             ):
                 state = "completed" if session.get("completed") else "paused"
             it = RuntimeState.iteration.value
@@ -1110,6 +1263,8 @@ class TrainingPanel(Panel):
                 return f"{tr('status.mode')} Saving model..."
             labels = {
                 "idle": tr("training_panel.idle"),
+                "preparing": tr("training_panel.preparing_training"),
+                "starting": tr("training_panel.preparing_training"),
                 "ready": tr("status.ready") if it == 0 else tr("training_panel.resume"),
                 "running": tr("training_panel.running"),
                 "paused": tr("status.paused"),
@@ -1122,8 +1277,18 @@ class TrainingPanel(Panel):
 
         def _status_iteration():
             it = RuntimeState.iteration.value
+            has_trainer = RuntimeState.has_trainer.value
+            session = _training_session_state() if not has_trainer or it <= 0 else {}
             if it <= 0:
-                it = int(_training_session_state().get("iteration") or 0)
+                it = int(session.get("iteration") or 0)
+            if (
+                not has_trainer
+                and session.get("available")
+                and not session.get("hydrated")
+            ):
+                # Restored counters are not iterations performed in this sampling window.
+                _rate_tracker.clear()
+                return f"{tr('status.iteration')} {it:,}"
             _rate_tracker.add_sample(it)
             rate = _rate_tracker.get_rate()
             return f"{tr('status.iteration')} {it:,} ({rate:.1f} {tr('training_panel.iters_per_sec')})"
@@ -1142,7 +1307,15 @@ class TrainingPanel(Panel):
             return f"{it:,}/{mx:,}" if mx > 0 else ""
 
         def _error_message():
-            return lf.trainer_error() or ""
+            message = lf.trainer_error() or ""
+            if not message:
+                return ""
+            key = lf.trainer_error_key()
+            if key == "messages.err_distorted_images":
+                return lf.ui.tr("messages.err_distorted_images")
+            if key == "messages.err_non_pinhole":
+                return lf.ui.tr("messages.err_non_pinhole")
+            return message
 
         model.bind_func("status_mode", _status_mode)
         model.bind_func("status_iteration", _status_iteration)
@@ -1210,6 +1383,7 @@ class TrainingPanel(Panel):
                 else tr("training.value.none")
             ),
         )
+        model.bind_func("eval_mask_path_display", lambda: _eval_mask_display(p()))
 
     def _bind_events(self, model):
         model.bind_event("toggle_section", self._on_toggle_section)
@@ -1246,7 +1420,6 @@ class TrainingPanel(Panel):
 
     def on_mount(self, doc):
         self._doc = doc
-        self._sync_panel_label()
         self._popup_el = doc.get_element_by_id("color-picker-popup")
         if self._popup_el:
             self._popup_el.add_event_listener("click", self._on_popup_click)
@@ -1327,9 +1500,34 @@ class TrainingPanel(Panel):
             RuntimeState.eval_psnr,
             RuntimeState.num_gaussians,
             RuntimeState.scene_generation,
+            RuntimeState.stored_session_generation,
             RuntimeState.language_generation,
         )
         self._reactive_binding.set_handle(self._handle).watch(*native_signals)
+        generation = self._params_subscription_generation
+        for group in ("optimization", "dataset"):
+            for prop in lf.ui.property_group_info(group).get("properties", ()):
+                path = f"{group}.{prop['id']}"
+                self._param_subscriptions.append(lf.on_property_change(
+                    path, lambda old, new, key=path: self._on_params_changed(
+                        key, generation, old, new
+                    )
+                ))
+
+    def _on_params_changed(self, path, generation, _old, _new):
+        if generation != self._params_subscription_generation:
+            return
+        self._params_changed.add(path)
+        # API batches emit one notification per property. Refresh once, on the
+        # UI update, after all values have been applied.
+        if not self._params_refresh_pending:
+            self._params_refresh_pending = True
+
+            def request():
+                if generation == self._params_subscription_generation:
+                    self._request_reactive_update()
+
+            lf.ui.schedule_on_ui_thread(request)
 
     def _sync_auto_scale_markers(self):
         d = lf.dataset_params()
@@ -1340,7 +1538,13 @@ class TrainingPanel(Panel):
             self._auto_scale_user_override = False
 
     def _unsubscribe_reactive_state(self):
+        self._params_subscription_generation += 1
+        self._params_changed.clear()
         self._reactive_binding.close()
+        for token in self._param_subscriptions:
+            lf.unsubscribe_property_change(token)
+        self._param_subscriptions.clear()
+        self._params_refresh_pending = False
 
     def _request_reactive_update(self):
         if self._handle:
@@ -1400,10 +1604,15 @@ class TrainingPanel(Panel):
     def on_update(self, doc):
         if not self._handle:
             return False
-        self._sync_panel_label()
         self._sync_auto_scale_markers()
 
-        dirty = self._flush_pv_publish()
+        params_changed = self._params_refresh_pending
+        self._params_refresh_pending = False
+        if params_changed:
+            changed, self._params_changed = self._params_changed, set()
+            self._sync_text_bufs(changed)
+            self._handle.dirty_all()
+        dirty = self._flush_pv_publish() or params_changed
         language_generation = RuntimeState.language_generation.value
         if language_generation != self._last_language_generation:
             self._last_language_generation = language_generation
@@ -1425,16 +1634,7 @@ class TrainingPanel(Panel):
         )
         if session_key != self._last_session:
             self._last_session = session_key
-            self._handle.dirty("status_mode")
-            self._handle.dirty("status_iteration")
-            self._handle.dirty("progress_text")
-            self._handle.dirty("btn_start")
-            self._handle.dirty("show_no_trainer")
-            self._handle.dirty("show_main")
-            self._handle.dirty("show_ctrl_ready")
-            self._handle.dirty("show_ctrl_paused")
-            self._handle.dirty("show_ctrl_completed")
-            self._handle.dirty("show_training_telemetry")
+            self._handle.dirty_all()
             dirty = True
         state = RuntimeState.trainer_state.value
         if state != self._last_state:
@@ -1534,7 +1734,7 @@ class TrainingPanel(Panel):
             return False
         self._last_bg_color = c
         self._sync_render_background_to_training(params)
-        self._sync_bg_color_text_bufs(params)
+        self._sync_bg_color_text_bufs(params, preserve_active=True)
         swatch = doc.get_element_by_id("swatch-bg_color")
         if swatch:
             r = w.color_channel_byte(c, 0)
@@ -1720,7 +1920,7 @@ class TrainingPanel(Panel):
             return False
         setattr(params, prop, val)
         if prop == "enable_eval" and val:
-            self._sync_eval_steps_with_save_steps(params)
+            self._add_save_steps_to_eval_steps(params)
         if prop in RENDER_SYNC:
             self._sync_render_setting(RENDER_SYNC[prop], val)
         if self._handle:
@@ -1746,6 +1946,8 @@ class TrainingPanel(Panel):
     def _set_strategy(self, val):
         params = lf.optimization_params()
         if not params or not params.has_params():
+            return
+        if val == params.strategy:
             return
         if val == "igs+" and params.gut:
             btn_gut = tr("training.conflict.btn_disable_gut")
@@ -1773,7 +1975,9 @@ class TrainingPanel(Panel):
         if not params or not params.has_params():
             return
         try:
-            setattr(params, prop, int(val_str))
+            value = int(val_str)
+            if value != getattr(params, prop):
+                setattr(params, prop, value)
         except (ValueError, TypeError):
             pass
 
@@ -1790,11 +1994,32 @@ class TrainingPanel(Panel):
             self._handle.dirty_all()
         return True
 
+    def _set_eval_report(self, headline, also_scored):
+        params = lf.optimization_params()
+        if not params or not params.has_params() or headline not in EVAL_PIXEL_SETS:
+            return
+        value = _eval_report_value(headline, also_scored)
+        if value == params.eval_mask_report:
+            return
+        params.eval_mask_report = value
+        if self._handle:
+            self._handle.dirty_all()
+
+    def _set_eval_also_scored(self, pixel_set, scored):
+        sets = _eval_report_sets(lf.optimization_params())
+        also_scored = set(sets[1:]) - {pixel_set}
+        if scored:
+            also_scored.add(pixel_set)
+        self._set_eval_report(sets[0], also_scored)
+
     def _set_depth_loss_mode(self, val_str):
         params = lf.optimization_params()
         if not params or not params.has_params():
             return
-        params.depth_loss_mode = _depth_loss_mode_or_default(val_str)
+        value = _depth_loss_mode_or_default(val_str)
+        if value == params.depth_loss_mode:
+            return
+        params.depth_loss_mode = value
         if self._handle:
             self._handle.dirty_all()
 
@@ -1841,6 +2066,9 @@ class TrainingPanel(Panel):
     def _set_iterations(self, params, val):
         if val <= 0:
             return False
+        if (RuntimeState.training_state.value == "paused"
+                and val <= RuntimeState.iteration.value):
+            return False
         if not self._auto_scale_steps_locked:
             params.iterations = val
             return True
@@ -1871,6 +2099,19 @@ class TrainingPanel(Panel):
             )
         except (ValueError, TypeError):
             return False
+        return True
+
+    def _set_eval_mask_spec(self, val_str):
+        p = lf.optimization_params()
+        if not p or not p.has_params():
+            return False
+        previous = p.eval_mask
+        p.eval_mask = str(val_str).strip()
+        if "eval_mask" in (p.validate() or ""):
+            p.eval_mask = previous
+            return False
+        if self._handle:
+            self._handle.dirty_all()
         return True
 
     def _set_max_width(self, val_str):
@@ -1908,7 +2149,10 @@ class TrainingPanel(Panel):
     def _eval_requires_training_split(self):
         params = lf.optimization_params()
         return bool(
-            params and params.has_params() and getattr(params, "enable_eval", False)
+            params
+            and params.has_params()
+            and getattr(params, "enable_eval", False)
+            and not getattr(params, "eval_all", False)
         )
 
     def _coerce_test_every_for_current_eval_split(self, val):
@@ -1964,7 +2208,12 @@ class TrainingPanel(Panel):
         if not params or not params.has_params():
             return
         try:
-            params.set(prop, float(val))
+            value = float(val)
+            current = getattr(params, prop)
+            # Range controls can echo a rounded float when a saved value is bound.
+            if value == current or abs(value - current) <= 1e-6:
+                return
+            params.set(prop, value)
             if self._handle:
                 self._handle.dirty(prop)
         except (ValueError, TypeError):
@@ -2371,6 +2620,43 @@ class TrainingPanel(Panel):
                 if self._handle:
                     self._sync_text_bufs()
                     self._handle.dirty_all()
+        elif action == "browse_eval_mask":
+            self._text_bufs["eval_mask_spec_str"] = None
+            params = lf.optimization_params()
+            start_dir = ""
+            if params and params.has_params() and os.path.isabs(params.eval_mask):
+                start_dir = os.path.dirname(params.eval_mask)
+            selected = lf.ui.open_mesh_file_dialog(start_dir)
+            if selected and params and params.has_params():
+                params.eval_mask = selected
+                if self._handle:
+                    self._handle.dirty_all()
+        elif action == "browse_eval_mask_folder":
+            self._text_bufs["eval_mask_spec_str"] = None
+            params = lf.optimization_params()
+            start_dir = ""
+            if params and params.has_params() and params.eval_mask.startswith("masks:"):
+                start_dir = params.eval_mask[len("masks:"):]
+            selected = lf.ui.open_folder_dialog(tr("training_params.eval_mask_folder"), start_dir)
+            if selected and params and params.has_params():
+                params.eval_mask = "masks:" + selected
+                if self._handle:
+                    self._handle.dirty_all()
+        elif action == "use_cropbox_eval_mask":
+            self._text_bufs["eval_mask_spec_str"] = None
+            params = lf.optimization_params()
+            if params and params.has_params():
+                params.eval_mask = "cropbox"
+                if self._handle:
+                    self._handle.dirty_all()
+        elif action == "clear_eval_mask":
+            self._text_bufs["eval_mask_spec_str"] = None
+            params = lf.optimization_params()
+            if params and params.has_params():
+                params.eval_mask = ""
+                params.eval_mask_report = ""
+                if self._handle:
+                    self._handle.dirty_all()
         elif action == "clear_ppisp_sidecar":
             params = lf.optimization_params()
             if params and params.has_params():
@@ -2394,7 +2680,7 @@ class TrainingPanel(Panel):
             if params and params.has_params() and self._new_save_step > 0:
                 params.add_save_step(self._new_save_step)
                 if params.enable_eval:
-                    self._sync_eval_steps_with_save_steps(params)
+                    self._add_save_steps_to_eval_steps(params)
                 self._refresh_save_steps_model(params)
 
     def _action_reset(self):
@@ -2416,7 +2702,7 @@ class TrainingPanel(Panel):
         params = lf.optimization_params()
 
         if params and params.has_params() and params.enable_eval:
-            self._sync_eval_steps_with_save_steps(params)
+            self._add_save_steps_to_eval_steps(params)
 
         conflict = lf.training_start_overwrite_conflict()
         if conflict is not None:
@@ -2426,6 +2712,10 @@ class TrainingPanel(Panel):
         self._start_after_consent()
 
     def _start_after_consent(self):
+        # Consent starts a new run. A finished trainer cannot accept Start
+        # until Reset returns it to a fresh dataset.
+        if _trainer_run_is_finished():
+            lf.reset_training()
         params = lf.optimization_params()
         error = params.validate() if params and params.has_params() else ""
         if error:
@@ -2482,7 +2772,7 @@ class TrainingPanel(Panel):
         return _project_has_path()
 
     def _save_as_then_start(self):
-        accepted = _invoke_project_save_as()
+        accepted = _invoke_project_save_as(fresh_training_start=True)
         if accepted is False:
             return
         if self._project_is_bound():
@@ -2572,13 +2862,12 @@ class TrainingPanel(Panel):
                 self._remove_from_eval_steps(params, step_to_remove)
             self._refresh_save_steps_model(params)
 
-    def _sync_eval_steps_with_save_steps(self, params):
+    def _add_save_steps_to_eval_steps(self, params):
         if not params or not params.has_params():
             return
-        save_steps_list = list(params.save_steps)
-        params.clear_eval_steps()
-        for step in save_steps_list:
-            params.add_eval_step(step)
+        for step in list(params.save_steps):
+            if step not in params.eval_steps:
+                params.add_eval_step(step)
 
     def _remove_from_eval_steps(self, params, step):
         if not params or not params.has_params():

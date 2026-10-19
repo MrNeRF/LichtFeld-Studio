@@ -10,10 +10,26 @@
 
 using namespace lfs::core;
 
-TEST(TensorAdvancedTest, LinspaceIncludesEndpointsAndRejectsZeroSteps) {
+TEST(TensorAdvancedTest, LinspaceIncludesEndpointsAndZeroStepsAreEmpty) {
     const auto values = Tensor::linspace(-1.0f, 1.0f, 5, Device::CUDA).cpu().to_vector();
     EXPECT_EQ(values, (std::vector<float>{-1.0f, -0.5f, 0.0f, 0.5f, 1.0f}));
-    EXPECT_THROW(Tensor::linspace(0.0f, 1.0f, 0, Device::CUDA), std::runtime_error);
+    const auto empty = Tensor::linspace(0.0f, 1.0f, 0, Device::CUDA);
+    EXPECT_EQ(empty.shape(), TensorShape({0}));
+    EXPECT_TRUE(empty.is_empty());
+}
+
+TEST(TensorAdvancedTest, ArangeCreatesOnRequestedDevice) {
+    const auto host = Tensor::arange(0.0f, 2.0f, 0.5f, Device::CPU);
+    EXPECT_EQ(host.device(), Device::CPU);
+    EXPECT_EQ(host.to_vector(), (std::vector<float>{0.0f, 0.5f, 1.0f, 1.5f}));
+
+    const auto empty_host = Tensor::arange(3.0f, -2.0f, 1.0f, Device::CPU);
+    EXPECT_EQ(empty_host.device(), Device::CPU);
+    EXPECT_EQ(empty_host.shape(), TensorShape({0}));
+
+    const auto device = Tensor::arange(0.0f, 2.0f, 0.5f, Device::CUDA);
+    EXPECT_EQ(device.device(), Device::CUDA);
+    EXPECT_EQ(device.cpu().to_vector(), host.to_vector());
 }
 
 TEST(TensorAdvancedTest, StackPreservesValuesAndRejectsEmptyInput) {

@@ -49,7 +49,11 @@ namespace lfs::vis::op {
             const auto value = props.get_or<glm::vec3>("value", default_value);
             props.set("resolved_node_names", nodes->node_names);
             const auto result = apply(ctx.scene(), nodes->node_names, value, undo_label);
-            return result ? OperatorResult::FINISHED : OperatorResult::CANCELLED;
+            if (!result) {
+                props.set("error", result.error());
+                return OperatorResult::CANCELLED;
+            }
+            return OperatorResult::FINISHED;
         }
 
     } // namespace
@@ -89,7 +93,11 @@ namespace lfs::vis::op {
         props.set("resolved_node_names", nodes->node_names);
         const auto result = cap::setTransform(
             ctx.scene(), nodes->node_names, translation, rotation, scale, "transform.set");
-        return result ? OperatorResult::FINISHED : OperatorResult::CANCELLED;
+        if (!result) {
+            props.set("error", result.error());
+            return OperatorResult::CANCELLED;
+        }
+        return OperatorResult::FINISHED;
     }
 
     const OperatorDescriptor TransformTranslateOperator::DESCRIPTOR = {

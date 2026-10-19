@@ -4,6 +4,7 @@
 
 #include "gui/rmlui/rml_theme.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "gui/rmlui/rml_path_utils.hpp"
 #include "internal/resource_paths.hpp"
@@ -73,7 +74,7 @@ namespace lfs::vis::gui::rml_theme {
 
     std::string loadBaseRCSS(const std::string& asset_name) {
         try {
-            const auto requested_path = std::filesystem::path(asset_name);
+            const auto requested_path = lfs::core::utf8_to_path(asset_name);
             const auto rcss_path = requested_path.is_absolute()
                                        ? requested_path
                                        : lfs::vis::getAssetPath(asset_name);
@@ -85,7 +86,7 @@ namespace lfs::vis::gui::rml_theme {
                     return it->second;
             }
 
-            std::ifstream f(rcss_path);
+            std::ifstream f(lfs::core::native_fs::native_path(rcss_path));
             if (f) {
                 std::string contents{std::istreambuf_iterator<char>(f),
                                      std::istreambuf_iterator<char>()};
@@ -93,7 +94,7 @@ namespace lfs::vis::gui::rml_theme {
                 auto inserted = base_rcss_cache.emplace(cache_key, std::move(contents));
                 return inserted.first->second;
             }
-            LOG_ERROR("RmlTheme: failed to open RCSS at {}", rcss_path.string());
+            LOG_ERROR("RmlTheme: failed to open RCSS at {}", lfs::core::path_to_utf8(rcss_path));
         } catch (const std::exception& e) {
             LOG_ERROR("RmlTheme: RCSS not found: {}", e.what());
         }
@@ -296,7 +297,6 @@ namespace lfs::vis::gui::rml_theme {
             hashColor(seed, overlay.icon);
             hashColor(seed, overlay.highlight);
             hashColor(seed, overlay.selection);
-            hashColor(seed, overlay.selection_flash);
         }
 
         void hashGradient(std::size_t& seed, const std::optional<ThemeGradient>& gradient) {
@@ -450,6 +450,12 @@ namespace lfs::vis::gui::rml_theme {
                 return t.menu_border();
             if (name == "toolbar.background")
                 return t.toolbar_background();
+            if (name == "overlay.text")
+                return t.overlay.text;
+            if (name == "overlay.text_dim")
+                return t.overlay.text_dim;
+            if (name == "overlay.icon")
+                return t.overlay.icon;
             if (name == "toolbar.sub_background")
                 return t.subtoolbar_background();
             return std::nullopt;
@@ -841,12 +847,6 @@ namespace lfs::vis::gui::rml_theme {
 
             const ThemeColor startup_base_color = blend(p.surface, p.text, is_light ? 0.04f : 0.10f);
             const ThemeColor startup_border_color = blend(p.border, p.text, is_light ? 0.28f : 0.38f);
-            std::string startup_box_shadow;
-            if (t.shadows.enabled) {
-                startup_box_shadow = std::format("box-shadow: {}, {} 0dp 0dp 0dp 1dp inset;",
-                                                 layeredShadow(t, 4),
-                                                 colorToRmlAlpha(RmlColor{1, 1, 1, 1}, is_light ? 0.08f : 0.05f));
-            }
             const std::string no_shadow = "none";
             const std::string layered_shadow_3 =
                 t.shadows.enabled ? layeredShadow(t, 3) : no_shadow;
@@ -1017,9 +1017,8 @@ namespace lfs::vis::gui::rml_theme {
                 {"sequencer_overlay.surface", colorToRmlAlpha(p.surface, 0.95f)},
                 {"sequencer_overlay.border", colorToRmlAlpha(p.border, 0.4f)},
                 {"sequencer_overlay.primary_border", colorToRmlAlpha(p.primary, 0.6f)},
-                {"startup.overlay_bg", colorToRmlAlpha(startup_base_color, is_light ? 0.82f : 0.86f)},
+                {"startup.overlay_bg", colorToRmlAlpha(startup_base_color, 1.0f)},
                 {"startup.overlay_border", colorToRmlAlpha(startup_border_color, is_light ? 0.40f : 0.50f)},
-                {"startup.box_shadow", startup_box_shadow},
                 {"startup.primary", colorToRmlAlpha(p.primary, is_light ? 0.78f : 0.62f)},
                 {"startup.select_bg", colorToRmlAlpha(p.background, is_light ? 0.90f : 0.78f)},
                 {"startup.selectbox_bg", colorToRmlAlpha(p.surface, is_light ? 0.95f : 0.90f)},

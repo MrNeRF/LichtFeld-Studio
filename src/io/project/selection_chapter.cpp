@@ -1473,16 +1473,27 @@ namespace lfs::io::project {
         }
         staged.state.active_group_id = active;
         staged.state.next_group_id = next;
+        // Chapter bytes are filled on the host. Selection gathers and
+        // kernels run on CUDA, and Tensor::to clones when the device
+        // already matches, so upload only a host mask.
+        const auto on_selection_device =
+            [](lfs::core::Tensor mask) {
+                if (!mask.is_valid() ||
+                    mask.device() == lfs::core::Device::CUDA) {
+                    return mask;
+                }
+                return mask.to(lfs::core::Device::CUDA);
+            };
         if (selected_counts[0] != 0) {
             staged.state.splat_mask =
                 std::make_shared<lfs::core::Tensor>(
-                    std::move(splat_mask));
+                    on_selection_device(std::move(splat_mask)));
             staged.state.has_splat_selection = true;
         }
         if (selected_counts[1] != 0) {
             staged.state.point_cloud_mask =
                 std::make_shared<lfs::core::Tensor>(
-                    std::move(point_cloud_mask));
+                    on_selection_device(std::move(point_cloud_mask)));
             staged.state.has_point_cloud_selection = true;
         }
         return staged;

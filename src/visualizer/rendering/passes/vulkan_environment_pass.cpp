@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vulkan_environment_pass.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
@@ -685,7 +686,7 @@ namespace lfs::vis {
                 return false;
             }
             std::filesystem::path resolved = path;
-            if (!resolved.is_absolute() && !std::filesystem::exists(resolved)) {
+            if (!resolved.is_absolute() && !lfs::core::native_fs::exists(resolved)) {
                 try {
                     resolved = lfs::vis::getAssetPath(lfs::core::path_to_utf8(path));
                 } catch (const std::exception&) {
@@ -890,21 +891,21 @@ namespace lfs::vis {
                 load_failed_for_path = false;
                 return;
             }
-            if (params.map_path == loaded_path && image != VK_NULL_HANDLE) {
-                rebindDescriptor(descriptor);
-                return;
-            }
-            if (params.map_path.empty()) {
+            if (!params.map_path || params.map_path->empty()) {
                 retireAndDestroyImage("empty environment path");
                 return;
             }
-            // Skip retry of a path we've already failed once for, until it changes.
-            if (load_failed_for_path && params.map_path == loaded_path) {
+            if (*params.map_path == loaded_path && image != VK_NULL_HANDLE) {
+                rebindDescriptor(descriptor);
                 return;
             }
-            const bool ok = loadFromPath(params.map_path);
+            // Skip retry of a path we've already failed once for, until it changes.
+            if (load_failed_for_path && *params.map_path == loaded_path) {
+                return;
+            }
+            const bool ok = loadFromPath(*params.map_path);
             load_failed_for_path = !ok;
-            loaded_path = params.map_path;
+            loaded_path = *params.map_path;
             if (ok) {
                 rebindDescriptor(descriptor);
             }

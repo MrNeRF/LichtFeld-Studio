@@ -39,6 +39,9 @@ namespace lfs::vis {
         p.ppisp_mode = static_cast<int>(s.ppisp_mode);
         p.ppisp = s.ppisp_overrides;
         p.background_color = detail::to_array(s.background_color);
+        p.color_exposure = s.color_exposure;
+        p.color_tonemapping = s.color_tonemapping;
+        p.splat_render_profile = s.splat_render_profile;
         p.environment_mode = static_cast<int>(s.environment_mode);
         p.environment_map_path = s.environment_map_path;
         p.environment_exposure = s.environment_exposure;
@@ -72,7 +75,6 @@ namespace lfs::vis {
         p.depth_view_min = s.depth_view_min;
         p.depth_view_max = s.depth_view_max;
         p.depth_visualization_mode = static_cast<int>(s.depth_visualization_mode);
-        p.selection_color_committed = detail::to_array(s.selection_color_committed);
         p.selection_color_preview = detail::to_array(s.selection_color_preview);
         p.selection_color_center_marker = detail::to_array(s.selection_color_center_marker);
         p.depth_clip_enabled = s.depth_clip_enabled;
@@ -129,6 +131,9 @@ namespace lfs::vis {
         s.ppisp_mode = static_cast<RenderSettings::PPISPMode>(p.ppisp_mode);
         s.ppisp_overrides = p.ppisp;
         s.background_color = detail::to_vec3(p.background_color);
+        s.color_exposure = p.color_exposure;
+        s.color_tonemapping = p.color_tonemapping;
+        s.splat_render_profile = p.splat_render_profile;
         s.environment_mode = static_cast<EnvironmentBackgroundMode>(p.environment_mode);
         s.environment_map_path = p.environment_map_path;
         s.environment_exposure = p.environment_exposure;
@@ -163,7 +168,7 @@ namespace lfs::vis {
                                : lfs::rendering::normalizeViewerRasterBackend(requested_backend, p.gut);
         s.gut = lfs::rendering::isGutBackend(s.raster_backend);
         s.equirectangular = p.equirectangular;
-        enforceProjectionBackend(s);
+        enforceProjectionBackend(s, true);
         s.orthographic = p.orthographic;
         s.ortho_scale = p.ortho_scale;
         s.depth_view = p.depth_view;
@@ -172,7 +177,6 @@ namespace lfs::vis {
         s.depth_visualization_mode =
             static_cast<lfs::rendering::DepthVisualizationMode>(p.depth_visualization_mode);
         sanitizeDepthViewSettings(s);
-        s.selection_color_committed = detail::to_vec3(p.selection_color_committed);
         s.selection_color_preview = detail::to_vec3(p.selection_color_preview);
         s.selection_color_center_marker = detail::to_vec3(p.selection_color_center_marker);
         s.depth_clip_enabled = p.depth_clip_enabled;

@@ -274,7 +274,10 @@ namespace {
 
     TEST(GeometryPayloadTest,
          MeshPlaneRoundTripsMaterialsTexturesAndOpaqueProperty) {
-        MeshPayload source(sample_mesh());
+        auto source_mesh = sample_mesh();
+        source_mesh->materials[0].alpha_mode = lfs::core::AlphaMode::Mask;
+        source_mesh->materials[0].alpha_cutoff = 0.25f;
+        MeshPayload source(std::move(source_mesh));
         ASSERT_TRUE(source.add_opaque_property(GeometryPropertyPlane{
             .name = "vendor_ids",
             .components = 1,
@@ -295,6 +298,9 @@ namespace {
         EXPECT_EQ(decoded->mesh()->materials[0].name, "plane");
         EXPECT_EQ(decoded->mesh()->materials[0].albedo_tex, 1u);
         EXPECT_TRUE(decoded->mesh()->materials[0].double_sided);
+        EXPECT_EQ(decoded->mesh()->materials[0].alpha_mode,
+                  lfs::core::AlphaMode::Mask);
+        EXPECT_FLOAT_EQ(decoded->mesh()->materials[0].alpha_cutoff, 0.25f);
         ASSERT_EQ(decoded->mesh()->texture_images.size(), 1);
         EXPECT_EQ(decoded->mesh()->texture_images[0].pixels,
                   (std::vector<std::uint8_t>{1, 2, 3, 4, 5, 6}));
@@ -312,6 +318,101 @@ namespace {
         EXPECT_EQ(after.dtype, before.dtype);
         EXPECT_EQ(after.encoding, before.encoding);
         EXPECT_TRUE(std::ranges::equal(after.bytes, before.bytes));
+    }
+
+    TEST(GeometryPayloadTest,
+         LegacyMeshLayoutDefaultsAlphaAndReencodesByteIdentically) {
+        // Master MESH layout: vertices, indices, and the material record only.
+        struct Plane {
+            std::string_view name;
+            std::uint16_t components;
+            GeometryDtype dtype;
+            std::uint32_t encoding;
+            std::vector<std::byte> bytes;
+        };
+        std::vector<std::byte> vertices(36);
+        const std::array points{0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+                                0.0f, 1.0f, 0.0f};
+        for (std::size_t i = 0; i < points.size(); ++i) {
+            write_u32(vertices, i * 4, std::bit_cast<std::uint32_t>(points[i]));
+        }
+        std::vector<std::byte> indices(12);
+        write_u32(indices, 0, 0);
+        write_u32(indices, 4, 1);
+        write_u32(indices, 8, 2);
+        std::vector<std::byte> material(72);
+        write_u16(material, 0, 0);
+        for (std::size_t i = 0; i < 4; ++i) {
+            write_u32(material, 2 + i * 4, std::bit_cast<std::uint32_t>(1.0f));
+        }
+        write_u32(material, 18, std::bit_cast<std::uint32_t>(0.0f));
+        write_u32(material, 22, std::bit_cast<std::uint32_t>(0.0f));
+        write_u32(material, 26, std::bit_cast<std::uint32_t>(0.0f));
+        write_u32(material, 30, std::bit_cast<std::uint32_t>(0.0f));
+        write_u32(material, 34, std::bit_cast<std::uint32_t>(1.0f));
+        write_u32(material, 38, std::bit_cast<std::uint32_t>(1.0f));
+        for (std::size_t i = 0; i < 5; ++i) {
+            write_u32(material, 42 + i * 4, std::numeric_limits<std::uint32_t>::max());
+        }
+        const std::array planes{
+            Plane{"vertices", 3, GeometryDtype::Float32, 1, std::move(vertices)},
+            Plane{"indices", 1, GeometryDtype::UInt32, 1, std::move(indices)},
+            Plane{"materials", 1, GeometryDtype::UInt8, 3, std::move(material)},
+        };
+        std::vector<std::byte> legacy(192, std::byte{0});
+        std::memcpy(legacy.data(), "LMSH", 4);
+        write_u16(legacy, 4, lfs::io::project::MESH_PAYLOAD_VERSION);
+        write_u64(legacy, 8, 3);
+        write_u64(legacy, 16, 3);
+        write_u16(legacy, 24, static_cast<std::uint16_t>(planes.size()));
+        std::size_t cursor = 192;
+        for (std::size_t i = 0; i < planes.size(); ++i) {
+            const auto& plane = planes[i];
+            const auto descriptor = 32 + i * 48;
+            std::memcpy(legacy.data() + descriptor, plane.name.data(), plane.name.size());
+            write_u16(legacy, descriptor + 16, plane.components);
+            write_u16(legacy, descriptor + 18, std::to_underlying(plane.dtype));
+            write_u32(legacy, descriptor + 20, plane.encoding);
+            write_u64(legacy, descriptor + 24, cursor);
+            write_u64(legacy, descriptor + 32, plane.bytes.size());
+            legacy.resize(cursor + plane.bytes.size(), std::byte{0});
+            std::memcpy(legacy.data() + cursor, plane.bytes.data(), plane.bytes.size());
+            cursor = (legacy.size() + 63u) & ~std::size_t{63};
+            legacy.resize(cursor, std::byte{0});
+        }
+
+        EXPECT_EQ(descriptor_offset(legacy, "material_alpha"), legacy.size());
+        auto decoded = lfs::io::project::decode_mesh_payload(legacy);
+        ASSERT_TRUE(decoded) << lfs::format_for_developer(decoded.error());
+        ASSERT_EQ(decoded->mesh()->materials.size(), 1u);
+        EXPECT_EQ(decoded->mesh()->materials[0].alpha_mode,
+                  lfs::core::AlphaMode::Opaque);
+        EXPECT_FLOAT_EQ(decoded->mesh()->materials[0].alpha_cutoff, 0.5f);
+
+        auto reencoded = lfs::io::project::encode_mesh_payload(*decoded);
+        ASSERT_TRUE(reencoded) << lfs::format_for_developer(reencoded.error());
+        EXPECT_EQ(*reencoded, legacy);
+    }
+
+    TEST(GeometryPayloadTest, MeshAlphaModesAndCutoffsRoundTrip) {
+        const std::array modes{
+            lfs::core::AlphaMode::Opaque,
+            lfs::core::AlphaMode::Mask,
+            lfs::core::AlphaMode::Blend,
+        };
+        for (const auto mode : modes) {
+            auto mesh = sample_mesh();
+            mesh->materials[0].alpha_mode = mode;
+            mesh->materials[0].alpha_cutoff = 0.25f;
+            auto encoded = lfs::io::project::encode_mesh_payload(
+                MeshPayload(std::move(mesh)));
+            ASSERT_TRUE(encoded) << lfs::format_for_developer(encoded.error());
+            auto decoded = lfs::io::project::decode_mesh_payload(*encoded);
+            ASSERT_TRUE(decoded) << lfs::format_for_developer(decoded.error());
+            ASSERT_EQ(decoded->mesh()->materials.size(), 1u);
+            EXPECT_EQ(decoded->mesh()->materials[0].alpha_mode, mode);
+            EXPECT_FLOAT_EQ(decoded->mesh()->materials[0].alpha_cutoff, 0.25f);
+        }
     }
 
     TEST(GeometryPayloadTest,

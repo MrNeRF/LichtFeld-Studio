@@ -8,6 +8,8 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -24,7 +26,86 @@ namespace {
         return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
     }
 
+    std::vector<std::filesystem::path> find_dataset_jpegs(const size_t count) {
+        std::vector<std::filesystem::path> found;
+        const auto data_root = std::filesystem::path(PROJECT_ROOT_PATH) / "data";
+        std::error_code ec;
+        for (const auto& dataset : std::filesystem::directory_iterator(data_root, ec)) {
+            const auto images = dataset.path() / "images_4";
+            if (!std::filesystem::is_directory(images, ec)) {
+                continue;
+            }
+            for (const auto& entry : std::filesystem::directory_iterator(images, ec)) {
+                auto ext = entry.path().extension().string();
+                std::ranges::transform(ext, ext.begin(), [](unsigned char c) { return std::tolower(c); });
+                if (ext == ".jpg" || ext == ".jpeg") {
+                    found.push_back(entry.path());
+                }
+            }
+            if (found.size() >= count) {
+                std::ranges::sort(found);
+                found.resize(count);
+                return found;
+            }
+            found.clear();
+        }
+        return {};
+    }
+
 } // namespace
+
+TEST(NvCodecBatchDecodeTest, PlanarUint8MatchesInterleavedDecode) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+        GTEST_SKIP() << "CUDA device unavailable";
+    }
+    const auto paths = find_dataset_jpegs(3);
+    if (paths.size() != 3) {
+        GTEST_SKIP() << "no dataset with images_4 JPEGs under data/";
+    }
+    std::vector<std::vector<uint8_t>> jpegs;
+    std::vector<std::pair<const uint8_t*, size_t>> spans;
+    for (const auto& path : paths) {
+        jpegs.push_back(read_test_jpeg(path));
+        ASSERT_FALSE(jpegs.back().empty()) << path;
+    }
+    for (const auto& jpeg : jpegs) {
+        spans.emplace_back(jpeg.data(), jpeg.size());
+    }
+
+    std::unique_ptr<lfs::io::NvCodecImageLoader> loader;
+    try {
+        lfs::io::NvCodecImageLoader::Options options;
+        options.decoder_pool_size = 1;
+        loader = std::make_unique<lfs::io::NvCodecImageLoader>(options);
+    } catch (const std::exception& e) {
+        GTEST_SKIP() << "nvImageCodec unavailable: " << e.what();
+    }
+
+    // The uint8 request decodes planar RGB into the CHW destination; the float
+    // request decodes interleaved RGB and transposes. A wrong plane stride or
+    // channel order in the planar descriptor changes nearly every byte.
+    const auto planar = loader->decode_jpeg_batch_from_spans(spans, nullptr, true, true);
+    const auto interleaved = loader->decode_jpeg_batch_from_spans(spans, nullptr, false, true);
+    ASSERT_EQ(planar.size(), spans.size());
+    ASSERT_EQ(interleaved.size(), spans.size());
+    for (size_t i = 0; i < spans.size(); ++i) {
+        ASSERT_EQ(planar[i].dtype(), lfs::core::DataType::UInt8);
+        ASSERT_EQ(interleaved[i].dtype(), lfs::core::DataType::Float32);
+        ASSERT_EQ(planar[i].shape(), interleaved[i].shape());
+        ASSERT_EQ(planar[i].shape()[0], 3u);
+        const auto bytes = planar[i].cpu().to_vector();
+        const auto values = interleaved[i].cpu().to_vector();
+        ASSERT_EQ(bytes.size(), values.size());
+        size_t mismatches = 0;
+        for (size_t k = 0; k < bytes.size(); ++k) {
+            if (std::lround(values[k] * 255.0f) != std::lround(bytes[k])) {
+                ++mismatches;
+            }
+        }
+        EXPECT_EQ(mismatches, 0u) << paths[i];
+    }
+}
 
 TEST(NvCodecSentinelValidatorTest, SkippedMemberIsRetriedOrFailsHardBeforeReturn) {
     int device_count = 0;
@@ -95,4 +176,30 @@ TEST(NvCodecSentinelValidatorTest, SkippedMemberIsRetriedOrFailsHardBeforeReturn
             std::string::npos);
     }
     EXPECT_FALSE(returned_batch) << "a twice-unwritten destination must never be returned";
+}
+
+// A build without the codec extension modules used to report nvImageCodec available and then fail every JPEG,
+// falling back to the CPU image by image. Available must mean a JPEG decodes on the GPU.
+TEST(NvCodecAvailabilityTest, AvailableExactlyWhenADatasetJpegDecodesOnTheGpu) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+        GTEST_SKIP() << "CUDA device unavailable";
+    }
+    const auto paths = find_dataset_jpegs(1);
+    if (paths.size() != 1) {
+        GTEST_SKIP() << "no dataset with images_4 JPEGs under data/";
+    }
+
+    bool decoded = false;
+    try {
+        lfs::io::NvCodecImageLoader loader({.enable_fallback = false, .decoder_pool_size = 1});
+        const auto image = loader.load_image_from_memory_gpu(read_test_jpeg(paths.front()), 1, 0, nullptr,
+                                                             lfs::io::DecodeFormat::RGB, true);
+        decoded = image.is_valid() && image.ndim() == 3 && image.shape()[0] == 3;
+    } catch (const std::exception&) {
+        decoded = false;
+    }
+
+    EXPECT_EQ(lfs::io::NvCodecImageLoader::is_available(), decoded);
+    EXPECT_EQ(lfs::io::NvCodecImageLoader::jpeg_decoder(), decoded ? "nvImageCodec (GPU)" : "CPU");
 }

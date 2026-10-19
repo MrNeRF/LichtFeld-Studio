@@ -1,9 +1,12 @@
+#include "core/cuda/mask_normalization.cuh"
+#include <type_traits>
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-FileCopyrightText: 2025 Youyu Chen (original Lanczos implementation)
  * SPDX-License-Identifier: GPL-3.0-or-later
  * SPDX-License-Identifier: MIT (original Lanczos implementation)
  */
 
+#include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/cuda_memory_guard.hpp"
@@ -155,6 +158,17 @@ namespace lfs::core {
             return sinc(x) * sinc(x / a);
         }
 
+        // The coefficient table and every resample kernel must agree on each sample's support, or a kernel reads
+        // a weight the table never wrote. Explicit rounding stops the compiler from contracting the copies differently.
+        __device__ __forceinline__ int2 lanczos_support(const int output_idx, const int input_size,
+                                                        const int output_size, const int kernel_size) {
+            const float scale = __fdiv_rn(static_cast<float>(input_size), static_cast<float>(output_size));
+            const float center = __fmul_rn(__fadd_rn(static_cast<float>(output_idx), 0.5f), scale);
+            const float reach = __fmul_rn(static_cast<float>(kernel_size), scale);
+            return {max(static_cast<int>(__fadd_rn(__fsub_rn(center, reach), 0.5f)), 0),
+                    min(static_cast<int>(__fadd_rn(__fadd_rn(center, reach), 0.5f)), input_size)};
+        }
+
         __global__ void __launch_bounds__(BLOCK_X* BLOCK_Y)
             PreComputeCoef(
                 const int input_size,
@@ -173,9 +187,9 @@ namespace lfs::core {
                 return;
 
             const float center = (output_ax + 0.5f) * scale;
-            const int2 box = {
-                max((int)(center - kernel_size * scale + 0.5f), 0),
-                min((int)(center + kernel_size * scale + 0.5f), input_size)};
+            const int2 box = lanczos_support(output_idx, input_size, output_size, kernel_size);
+            LFS_DEBUG_ASSERT_MSG(box.y > box.x && static_cast<uint32_t>(box.y - box.x) <= coefficient_stride,
+                                 "Lanczos support must be non-empty and fit the coefficient stride");
 
             const uint32_t offset = output_idx * coefficient_stride;
             float norm = 0.0f;
@@ -187,9 +201,12 @@ namespace lfs::core {
             for (int i = box.x; i < box.y; i++) {
                 kernel_values[offset + i - box.x] /= norm;
             }
+            for (uint32_t i = static_cast<uint32_t>(box.y - box.x); i < coefficient_stride; i++) {
+                kernel_values[offset + i] = __int_as_float(0x7fffffff);
+            }
         }
 
-        template <uint32_t CHANNELS, typename T>
+        template <uint32_t CHANNELS, typename T, bool ExactAlpha = false>
         __global__ void __launch_bounds__(BLOCK_X* BLOCK_Y)
             LanczosResampleCUDA(
                 const int input_h, const int input_w,
@@ -208,22 +225,19 @@ namespace lfs::core {
             const uint2 pix = {
                 block.group_index().x * BLOCK_X + thread_idx_x,
                 block.group_index().y * BLOCK_Y + thread_idx_y};
-            const float2 pixf = {(float)pix.x, (float)pix.y};
-            float scale_h = 1.0f * input_h / output_h, scale_w = 1.0f * input_w / output_w;
-
             const bool inside = (pix.x < output_w && pix.y < output_h);
 
             if (!inside)
                 return;
 
-            const float2 center = {(pixf.x + 0.5f) * scale_w, (pixf.y + 0.5f) * scale_h};
-
-            const int2 LU = {
-                max((int)(center.x - kernel_size * scale_w + 0.5f), 0),
-                max((int)(center.y - kernel_size * scale_h + 0.5f), 0)};
-            const int2 RD = {
-                min((int)(center.x + kernel_size * scale_w + 0.5f), input_w),
-                min((int)(center.y + kernel_size * scale_h + 0.5f), input_h)};
+            const int2 support_x = lanczos_support(pix.x, input_w, output_w, kernel_size);
+            const int2 support_y = lanczos_support(pix.y, input_h, output_h, kernel_size);
+            const int2 LU = {support_x.x, support_y.x};
+            const int2 RD = {support_x.y, support_y.y};
+            LFS_DEBUG_ASSERT_MSG(RD.x > LU.x && RD.y > LU.y &&
+                                     static_cast<uint32_t>(RD.x - LU.x) <= coefficient_stride_x &&
+                                     static_cast<uint32_t>(RD.y - LU.y) <= coefficient_stride_y,
+                                 "Lanczos support must be non-empty and fit the coefficient stride");
 
             float accumulator[CHANNELS] = {0.0f};
 
@@ -232,10 +246,18 @@ namespace lfs::core {
                 for (int x = LU.x; x < RD.x; x++) {
                     const uint32_t input_pix_id = input_w * y + x;
                     const float kernel_value_x = pre_coef_x[pix.x * coefficient_stride_x + x - LU.x];
+                    LFS_DEBUG_ASSERT_MSG(isfinite(kernel_value_x) && isfinite(kernel_value_y),
+                                         "Lanczos read a coefficient the table did not write");
                     const float kernel_value = kernel_value_y * kernel_value_x;
 
                     for (int ch = 0; ch < CHANNELS; ch++) {
-                        accumulator[ch] += PixelTraits<T>::load_and_normalize(input, input_pix_id * 3 + ch) * kernel_value;
+                        if constexpr (ExactAlpha && CHANNELS == 4 && std::is_same_v<T, uint8_t>) {
+                            const float value = ch == 3 ? cuda::normalize_mask_byte(input[input_pix_id * CHANNELS + ch])
+                                                        : PixelTraits<T>::load_and_normalize(input, input_pix_id * CHANNELS + ch);
+                            accumulator[ch] += value * kernel_value;
+                        } else {
+                            accumulator[ch] += PixelTraits<T>::load_and_normalize(input, input_pix_id * CHANNELS + ch) * kernel_value;
+                        }
                     }
                 }
             }
@@ -247,7 +269,7 @@ namespace lfs::core {
             }
         }
 
-        template <typename TIn>
+        template <typename TIn, bool ExactMask = false>
         __global__ void __launch_bounds__(BLOCK_X* BLOCK_Y)
             LanczosResampleGrayscaleCUDA(
                 const int input_h, const int input_w,
@@ -267,22 +289,19 @@ namespace lfs::core {
             const uint2 pix = {
                 block.group_index().x * BLOCK_X + thread_idx_x,
                 block.group_index().y * BLOCK_Y + thread_idx_y};
-            const float2 pixf = {(float)pix.x, (float)pix.y};
-            float scale_h = 1.0f * input_h / output_h, scale_w = 1.0f * input_w / output_w;
-
             const bool inside = (pix.x < output_w && pix.y < output_h);
 
             if (!inside)
                 return;
 
-            const float2 center = {(pixf.x + 0.5f) * scale_w, (pixf.y + 0.5f) * scale_h};
-
-            const int2 LU = {
-                max((int)(center.x - kernel_size * scale_w + 0.5f), 0),
-                max((int)(center.y - kernel_size * scale_h + 0.5f), 0)};
-            const int2 RD = {
-                min((int)(center.x + kernel_size * scale_w + 0.5f), input_w),
-                min((int)(center.y + kernel_size * scale_h + 0.5f), input_h)};
+            const int2 support_x = lanczos_support(pix.x, input_w, output_w, kernel_size);
+            const int2 support_y = lanczos_support(pix.y, input_h, output_h, kernel_size);
+            const int2 LU = {support_x.x, support_y.x};
+            const int2 RD = {support_x.y, support_y.y};
+            LFS_DEBUG_ASSERT_MSG(RD.x > LU.x && RD.y > LU.y &&
+                                     static_cast<uint32_t>(RD.x - LU.x) <= coefficient_stride_x &&
+                                     static_cast<uint32_t>(RD.y - LU.y) <= coefficient_stride_y,
+                                 "Lanczos support must be non-empty and fit the coefficient stride");
 
             float accumulator = 0.0f;
 
@@ -291,8 +310,14 @@ namespace lfs::core {
                 for (int x = LU.x; x < RD.x; x++) {
                     const uint32_t input_pix_id = input_w * y + x;
                     const float kernel_value_x = pre_coef_x[pix.x * coefficient_stride_x + x - LU.x];
+                    LFS_DEBUG_ASSERT_MSG(isfinite(kernel_value_x) && isfinite(kernel_value_y),
+                                         "Lanczos read a coefficient the table did not write");
                     const float kernel_value = kernel_value_y * kernel_value_x;
-                    const float pixel_value = (float)input[input_pix_id] * input_scale;
+                    float pixel_value;
+                    if constexpr (ExactMask && std::is_same_v<TIn, uint8_t>)
+                        pixel_value = cuda::normalize_mask_byte(input[input_pix_id]);
+                    else
+                        pixel_value = (float)input[input_pix_id] * input_scale;
                     accumulator += pixel_value * kernel_value;
                 }
             }
@@ -319,22 +344,19 @@ namespace lfs::core {
             const uint2 pix = {
                 block.group_index().x * BLOCK_X + thread_idx_x,
                 block.group_index().y * BLOCK_Y + thread_idx_y};
-            const float2 pixf = {(float)pix.x, (float)pix.y};
-            float scale_h = 1.0f * input_h / output_h, scale_w = 1.0f * input_w / output_w;
-
             const bool inside = (pix.x < output_w && pix.y < output_h);
 
             if (!inside)
                 return;
 
-            const float2 center = {(pixf.x + 0.5f) * scale_w, (pixf.y + 0.5f) * scale_h};
-
-            const int2 LU = {
-                max((int)(center.x - kernel_size * scale_w + 0.5f), 0),
-                max((int)(center.y - kernel_size * scale_h + 0.5f), 0)};
-            const int2 RD = {
-                min((int)(center.x + kernel_size * scale_w + 0.5f), input_w),
-                min((int)(center.y + kernel_size * scale_h + 0.5f), input_h)};
+            const int2 support_x = lanczos_support(pix.x, input_w, output_w, kernel_size);
+            const int2 support_y = lanczos_support(pix.y, input_h, output_h, kernel_size);
+            const int2 LU = {support_x.x, support_y.x};
+            const int2 RD = {support_x.y, support_y.y};
+            LFS_DEBUG_ASSERT_MSG(RD.x > LU.x && RD.y > LU.y &&
+                                     static_cast<uint32_t>(RD.x - LU.x) <= coefficient_stride_x &&
+                                     static_cast<uint32_t>(RD.y - LU.y) <= coefficient_stride_y,
+                                 "Lanczos support must be non-empty and fit the coefficient stride");
 
             const int input_plane = input_h * input_w;
             const int output_plane = output_h * output_w;
@@ -346,6 +368,8 @@ namespace lfs::core {
                 for (int x = LU.x; x < RD.x; x++) {
                     const uint32_t input_pix_id = input_w * y + x;
                     const float kernel_value_x = pre_coef_x[pix.x * coefficient_stride_x + x - LU.x];
+                    LFS_DEBUG_ASSERT_MSG(isfinite(kernel_value_x) && isfinite(kernel_value_y),
+                                         "Lanczos read a coefficient the table did not write");
                     const float kernel_value = kernel_value_y * kernel_value_x;
 
                     for (int ch = 0; ch < CHANNELS; ch++) {
@@ -359,7 +383,7 @@ namespace lfs::core {
             }
         }
 
-        template <typename T>
+        template <typename T, bool ExactAlpha = false>
         static Tensor lanczos_resize_impl(
             const Tensor& input,
             int output_h,
@@ -370,8 +394,8 @@ namespace lfs::core {
             const int input_w = static_cast<int>(input.size(1));
             const int channels = static_cast<int>(input.size(2));
 
-            if (channels != 3) {
-                LOG_ERROR("lanczos_resize: Only 3-channel (RGB) images supported, got {}", channels);
+            if (channels < 1 || channels > 4) {
+                LOG_ERROR("lanczos_resize: Expected 1 to 4 channels, got %d", channels);
                 return Tensor();
             }
 
@@ -410,14 +434,22 @@ namespace lfs::core {
                                  (output_h + BLOCK_Y - 1) / BLOCK_Y);
             const dim3 block(BLOCK_X, BLOCK_Y, 1);
 
-            detail::LanczosResampleCUDA<NUM_CHANNELS, T>
-                <<<tile_grid, block, 0, cuda_stream>>>(
-                    input_h, input_w, output_h, output_w, kernel_size,
-                    layout_x->stride, layout_y->stride,
-                    coef_x.get(), coef_y.get(),
-                    input.ptr<T>(), output.ptr<float>());
-            LFS_CUDA_CHECK_MSG(cudaGetLastError(), "Lanczos RGB resample kernel launch");
-            LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(cuda_stream), "Lanczos RGB resample completion");
+            const auto launch = [&]<uint32_t CHANNELS>() {
+                detail::LanczosResampleCUDA<CHANNELS, T, ExactAlpha>
+                    <<<tile_grid, block, 0, cuda_stream>>>(
+                        input_h, input_w, output_h, output_w, kernel_size,
+                        layout_x->stride, layout_y->stride,
+                        coef_x.get(), coef_y.get(),
+                        input.ptr<T>(), output.ptr<float>());
+                LFS_CUDA_CHECK_MSG(cudaGetLastError(), "Lanczos interleaved resample kernel launch");
+            };
+            switch (channels) {
+            case 1: launch.template operator()<1>(); break;
+            case 2: launch.template operator()<2>(); break;
+            case 3: launch.template operator()<3>(); break;
+            default: launch.template operator()<4>(); break;
+            }
+            LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(cuda_stream), "Lanczos interleaved resample completion");
             return output;
         }
 
@@ -428,7 +460,7 @@ namespace lfs::core {
         int output_h,
         int output_w,
         int kernel_size,
-        cudaStream_t cuda_stream) {
+        cudaStream_t cuda_stream, bool normalize_mask_alpha) {
 
         if (!input.is_valid() || input.device() != Device::CUDA) {
             LOG_ERROR("lanczos_resize: Input must be a valid CUDA tensor");
@@ -449,14 +481,16 @@ namespace lfs::core {
             return {};
         }
 
-        if (input.dtype() == DataType::UInt8) {
+        if (input.dtype() == DataType::UInt8 && normalize_mask_alpha) {
+            return detail::lanczos_resize_impl<uint8_t, true>(input, output_h, output_w, kernel_size, cuda_stream);
+        } else if (input.dtype() == DataType::UInt8) {
             return detail::lanczos_resize_impl<uint8_t>(
                 input, output_h, output_w, kernel_size, cuda_stream);
         } else if (input.dtype() == DataType::Float32) {
             return detail::lanczos_resize_impl<float>(
                 input, output_h, output_w, kernel_size, cuda_stream);
         } else {
-            LOG_ERROR("lanczos_resize: Unsupported dtype: {}",
+            LOG_ERROR("lanczos_resize: Unsupported dtype: %s",
                       dtype_name(input.dtype()));
             return Tensor();
         }
@@ -467,7 +501,7 @@ namespace lfs::core {
         int output_h,
         int output_w,
         int kernel_size,
-        cudaStream_t cuda_stream) {
+        cudaStream_t cuda_stream, bool normalize_mask) {
 
         if (!input.is_valid() || input.device() != Device::CUDA) {
             LOG_ERROR("lanczos_resize_grayscale: Input must be a valid CUDA tensor");
@@ -531,12 +565,21 @@ namespace lfs::core {
         const dim3 block(BLOCK_X, BLOCK_Y, 1);
 
         if (input.dtype() == DataType::UInt8) {
-            detail::LanczosResampleGrayscaleCUDA<uint8_t><<<tile_grid, block, 0, cuda_stream>>>(
-                input_h, input_w, output_h, output_w, kernel_size,
-                layout_x->stride, layout_y->stride,
-                coef_x.get(), coef_y.get(),
-                input.ptr<uint8_t>(), 1.0f / 255.0f, output.ptr<float>());
-            LFS_CUDA_LAUNCH_CHECK(cuda_stream, "core.lanczos.grayscale_resample");
+            if (normalize_mask) {
+                detail::LanczosResampleGrayscaleCUDA<uint8_t, true><<<tile_grid, block, 0, cuda_stream>>>(
+                    input_h, input_w, output_h, output_w, kernel_size,
+                    layout_x->stride, layout_y->stride,
+                    coef_x.get(), coef_y.get(),
+                    input.ptr<uint8_t>(), 1.0f / 255.0f, output.ptr<float>());
+                LFS_CUDA_LAUNCH_CHECK(cuda_stream, "core.lanczos.grayscale_resample");
+            } else {
+                detail::LanczosResampleGrayscaleCUDA<uint8_t><<<tile_grid, block, 0, cuda_stream>>>(
+                    input_h, input_w, output_h, output_w, kernel_size,
+                    layout_x->stride, layout_y->stride,
+                    coef_x.get(), coef_y.get(),
+                    input.ptr<uint8_t>(), 1.0f / 255.0f, output.ptr<float>());
+                LFS_CUDA_LAUNCH_CHECK(cuda_stream, "core.lanczos.grayscale_resample");
+            }
         } else {
             detail::LanczosResampleGrayscaleCUDA<float><<<tile_grid, block, 0, cuda_stream>>>(
                 input_h, input_w, output_h, output_w, kernel_size,
@@ -584,7 +627,7 @@ namespace lfs::core {
         const int input_h = static_cast<int>(input.size(1));
         const int input_w = static_cast<int>(input.size(2));
         if (channels != NUM_CHANNELS) {
-            LOG_ERROR("lanczos_resize_float_chw: Only 3-channel images supported, got {}", channels);
+            LOG_ERROR("lanczos_resize_float_chw: Only 3-channel images supported, got %d", channels);
             return Tensor();
         }
 

@@ -16,11 +16,12 @@ namespace {
 
     using json = nlohmann::json;
 
-    constexpr std::array<const char*, 5> kSharedSceneToolNames = {
+    constexpr std::array<const char*, 6> kSharedSceneToolNames = {
         "scene.load_dataset",
         "scene.load_checkpoint",
         "scene.save_ply",
         "training.start",
+        "render.capture",
         "training.get_last_error",
     };
 
@@ -43,6 +44,7 @@ namespace {
         std::filesystem::path loaded_path;
         lfs::core::param::TrainingParameters loaded_params;
         bool load_dataset_called = false;
+        int capture_calls = 0;
 
         lfs::mcp::SharedSceneToolBackend backend() {
             return lfs::mcp::SharedSceneToolBackend{
@@ -66,7 +68,8 @@ namespace {
                     return {};
                 },
                 .start_training = []() -> std::expected<void, std::string> { return {}; },
-                .render_capture = [](std::optional<int>, int, int) -> std::expected<std::string, std::string> {
+                .render_capture = [this](std::optional<int>, int, int) -> std::expected<std::string, std::string> {
+                    ++capture_calls;
                     return std::string{};
                 },
                 .gaussian_count = []() -> std::expected<int64_t, std::string> { return 0; },
@@ -75,6 +78,21 @@ namespace {
     };
 
 } // namespace
+
+TEST(McpSharedSceneToolsTest, CaptureRejectsInvalidDimensionsBeforeCallingBackend) {
+    ScopedSharedSceneToolRegistration cleanup;
+    FakeSharedSceneBackend backend;
+    lfs::mcp::register_shared_scene_tools(backend.backend());
+    auto& registry = lfs::mcp::ToolRegistry::instance();
+    for (const auto& args : {json{{"width", 0}}, json{{"height", -1}}, json{{"width", 16385}},
+                             json{{"width", 65535}, {"height", 65535}}}) {
+        const auto result = registry.call_tool("render.capture", args);
+        EXPECT_EQ(result["error"]["code"], "InvalidArgument") << args.dump();
+    }
+    EXPECT_EQ(backend.capture_calls, 0);
+    EXPECT_EQ(registry.call_tool("render.capture", json{{"width", 16384}})["success"], true);
+    EXPECT_EQ(backend.capture_calls, 1);
+}
 
 TEST(McpSharedSceneToolsTest, LoadDatasetDefaultsOutputPathAndStrategyAlias) {
     ScopedSharedSceneToolRegistration cleanup;
@@ -92,6 +110,7 @@ TEST(McpSharedSceneToolsTest, LoadDatasetDefaultsOutputPathAndStrategyAlias) {
     EXPECT_EQ(backend.loaded_params.dataset.data_path, dataset_path);
     EXPECT_EQ(backend.loaded_params.dataset.output_path,
               lfs::core::param::default_dataset_output_path(dataset_path));
+    EXPECT_FALSE(backend.loaded_params.dataset.output_path_explicit);
     EXPECT_EQ(backend.loaded_params.optimization.strategy,
               std::string(lfs::core::param::kStrategyMRNF));
     EXPECT_EQ(result["output_path"].get<std::string>(),
@@ -119,12 +138,30 @@ TEST(McpSharedSceneToolsTest, LoadDatasetHonorsExplicitOutputPathAndCanonicalStr
     ASSERT_TRUE(result["success"].get<bool>());
     ASSERT_TRUE(backend.load_dataset_called);
     EXPECT_EQ(backend.loaded_params.dataset.output_path, output_path);
+    EXPECT_TRUE(backend.loaded_params.dataset.output_path_explicit);
     EXPECT_EQ(backend.loaded_params.dataset.images, "images_8");
     EXPECT_EQ(backend.loaded_params.optimization.iterations, 42u);
     EXPECT_EQ(backend.loaded_params.optimization.strategy,
               std::string(lfs::core::param::kStrategyIGSPlus));
     EXPECT_EQ(result["output_path"].get<std::string>(), output_path.string());
     EXPECT_EQ(result["strategy"].get<std::string>(), std::string(lfs::core::param::kStrategyIGSPlus));
+}
+
+TEST(McpSharedSceneToolsTest, LoadDatasetTreatsEmptyOutputPathAsDefault) {
+    ScopedSharedSceneToolRegistration cleanup;
+    FakeSharedSceneBackend backend;
+    lfs::mcp::register_shared_scene_tools(backend.backend());
+
+    const std::filesystem::path dataset_path = "/tmp/mcp_dataset";
+    const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+        "scene.load_dataset",
+        json{{"path", dataset_path.string()}, {"output_path", ""}});
+
+    ASSERT_TRUE(result["success"].get<bool>());
+    ASSERT_TRUE(backend.load_dataset_called);
+    EXPECT_EQ(backend.loaded_params.dataset.output_path,
+              lfs::core::param::default_dataset_output_path(dataset_path));
+    EXPECT_FALSE(backend.loaded_params.dataset.output_path_explicit);
 }
 
 TEST(McpSharedSceneToolsTest, LoadDatasetAppliesMrnfDefaultsWhenStrategyOmitted) {
@@ -220,4 +257,19 @@ TEST(McpSharedSceneToolsTest, GetLastErrorReturnsNullWhenNoFailureLatched) {
     ASSERT_TRUE(result["success"].get<bool>());
     EXPECT_TRUE(result["last_error"].is_null());
     EXPECT_TRUE(result["last_error_message"].is_null());
+}
+
+TEST(McpSharedSceneToolsTest, LoadDatasetRejectsInvalidParametersBeforeReachingTheBackend) {
+    ScopedSharedSceneToolRegistration cleanup;
+    FakeSharedSceneBackend backend;
+    lfs::mcp::register_shared_scene_tools(backend.backend());
+
+    const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+        "scene.load_dataset",
+        json{{"path", "/tmp/mcp_dataset"}, {"strategy", "igs+"}, {"max_iterations", 0}});
+
+    ASSERT_TRUE(result.contains("error_message")) << result.dump();
+    EXPECT_NE(result["error_message"].get<std::string>().find("iterations"), std::string::npos)
+        << result.dump();
+    EXPECT_FALSE(backend.load_dataset_called);
 }

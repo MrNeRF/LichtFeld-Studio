@@ -16,3 +16,19 @@ body {
     width: 100%;
     height: 100%;
 }
+
+.context-menu-item.has-icon {
+    display: flex;
+    align-items: center;
+    gap: 8dp;
+}
+
+.context-menu-icon {
+    width: 16dp;
+    height: 16dp;
+    flex: 0 0 16dp;
+}
+
+.context-menu-label {
+    white-space: normal;
+}

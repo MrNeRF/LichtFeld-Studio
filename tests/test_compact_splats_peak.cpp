@@ -9,6 +9,7 @@ class MRNFStrategyTest_CompactSplatsFusedPathLeavesGradsEmpty_Test;
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/internal/gpu_slab_allocator.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "training/strategies/mrnf.hpp"
 
@@ -21,13 +22,27 @@ using namespace lfs::training;
 
 namespace {
 
-    size_t cuda_used_bytes() {
-        size_t free_b = 0;
-        size_t total_b = 0;
-        if (cudaMemGetInfo(&free_b, &total_b) != cudaSuccess || total_b < free_b) {
-            return 0;
+    ::testing::AssertionResult tensor_cuda_used_bytes(size_t& bytes) {
+        int device = 0;
+        cudaMemPool_t pool = nullptr;
+        uint64_t pool_used = 0;
+        auto status = cudaGetDevice(&device);
+        if (status != cudaSuccess) {
+            return ::testing::AssertionFailure() << cudaGetErrorString(status);
         }
-        return total_b - free_b;
+        status = cudaDeviceGetDefaultMemPool(&pool, device);
+        if (status != cudaSuccess) {
+            return ::testing::AssertionFailure() << cudaGetErrorString(status);
+        }
+        status = cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &pool_used);
+        if (status != cudaSuccess) {
+            return ::testing::AssertionFailure() << cudaGetErrorString(status);
+        }
+        // Slabs and zeros_direct/reserve use cudaMalloc outside the async pool.
+        // Count allocator-owned storage, excluding other processes and Vulkan.
+        bytes = pool_used + GPUSlabAllocator::instance().stats().total_slab_memory +
+                Tensor::cuda_direct_storage_live_bytes();
+        return ::testing::AssertionSuccess();
     }
 
     SplatData create_compact_test_splat(const size_t n, const int sh_degree = 0) {
@@ -145,13 +160,18 @@ TEST(MRNFStrategyTest, CompactSplatsCorrectAndPeakBelowThreeX) {
     Tensor::trim_memory_pool();
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     const auto alloc_snap = alloc_counter::snapshot();
-    const size_t used_before = cuda_used_bytes();
+    size_t used_before = 0;
+    ASSERT_TRUE(tensor_cuda_used_bytes(used_before));
 
     strategy.compact_splats(keep_mask);
 
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     const auto alloc_delta = alloc_counter::delta_since(alloc_snap);
-    const size_t used_after = cuda_used_bytes();
+    size_t used_after = 0;
+    ASSERT_TRUE(tensor_cuda_used_bytes(used_after));
+    RecordProperty("allocator_bytes_before", std::to_string(used_before));
+    RecordProperty("allocator_bytes_after", std::to_string(used_after));
+    RecordProperty("compaction_allocations", std::to_string(alloc_delta));
 
     ASSERT_EQ(static_cast<size_t>(splat_data.size()), keep_n);
     auto got_means = splat_data.means().contiguous().cpu();
@@ -193,7 +213,7 @@ TEST(MRNFStrategyTest, CompactSplatsCorrectAndPeakBelowThreeX) {
     const size_t one_means_at_cap = max_cap * 3 * sizeof(float);
     if (used_after > used_before) {
         EXPECT_LT(used_after - used_before, 8 * one_means_at_cap)
-            << "post-compact VRAM growth too large for gather-into-reserved";
+            << "post-compact tensor allocator growth too large for gather-into-reserved";
     }
 }
 

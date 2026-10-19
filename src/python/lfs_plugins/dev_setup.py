@@ -6,7 +6,7 @@ import json
 import os
 import subprocess
 import sys
-from pathlib import Path
+from _lfs_path_io import Path, executable_kwargs
 
 from .templates import create_plugin
 
@@ -37,7 +37,7 @@ def create_plugin_with_venv(
         "--no-managed-python",
         "--no-python-downloads",
     ]
-    subprocess.run(venv_cmd, capture_output=True, text=True, check=True, env=_uv_env(set_pythonhome=True))
+    subprocess.run(venv_cmd, **executable_kwargs(venv_cmd), capture_output=True, text=True, check=True, env=_uv_env(set_pythonhome=True))
 
     sync_cmd = [
         uv_path,
@@ -49,7 +49,7 @@ def create_plugin_with_venv(
         "--no-managed-python",
         "--no-python-downloads",
     ]
-    subprocess.run(sync_cmd, capture_output=True, text=True, check=True, env=_uv_env(set_pythonhome=False))
+    subprocess.run(sync_cmd, **executable_kwargs(sync_cmd), capture_output=True, text=True, check=True, env=_uv_env(set_pythonhome=False))
 
     _generate_vscode_config(plugin_dir, venv_path, typings_dir, site_packages_dir)
     return str(plugin_dir)

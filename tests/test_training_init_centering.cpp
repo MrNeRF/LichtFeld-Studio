@@ -1,0 +1,524 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#include "core/camera.hpp"
+#include "core/parameters.hpp"
+#include "core/scene.hpp"
+#include "core/uuid.hpp"
+#include "io/loader.hpp"
+#include "training/training_setup.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <chrono>
+#include <cmath>
+#include <cuda_runtime.h>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <gtest/gtest.h>
+#include <tuple>
+#include <vector>
+
+namespace {
+    namespace fs = std::filesystem;
+    using namespace lfs::core;
+
+    // The init file deliberately has a different center from points3D. Both
+    // must receive the DATASET's shift, not be centered independently.
+    const std::array<glm::vec3, 4> dataset_points = {{{10, 20, 0}, {14, 20, 0}, {10, 24, 0}, {14, 24, 0}}};
+    const std::array<glm::vec3, 4> init_points = {{{11, 21, 3}, {13, 21, 3}, {11, 23, 5}, {13, 23, 5}}};
+
+    class TrainingInitCentering : public ::testing::TestWithParam<std::tuple<int, bool, int>> {
+    protected:
+        fs::path root;
+
+        void SetUp() override {
+            int devices = 0;
+            if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0)
+                GTEST_SKIP() << "CUDA device required for training initialization";
+            root = fs::temp_directory_path() / ("lfs_init_centering_" + generate_uuid_v4().to_string());
+            fs::create_directories(root / "images");
+            fs::create_directories(root / "sparse" / "0");
+            // A focal at which the cameras resolve the points' depth: the loader moves unresolved points.
+            std::ofstream(root / "sparse/0/cameras.txt") << "1 PINHOLE 1 1 1000 1000 0.5 0.5\n";
+            // Camera centers (10,20,-40), (14,24,-40); second camera has a
+            // 90-degree rotation, so checking only a common T offset is wrong.
+            std::ofstream(root / "sparse/0/images.txt")
+                << "1 1 0 0 0 -10 -20 40 1 a.png\n\n"
+                << "2 0.7071067811865476 0 0 0.7071067811865476 24 -14 40 1 b.png\n\n";
+            std::ofstream points(root / "sparse/0/points3D.txt");
+            for (size_t i = 0; i < dataset_points.size(); ++i) {
+                const auto p = dataset_points[i];
+                points << i + 1 << ' ' << p.x << ' ' << p.y << ' ' << p.z << " 128 128 128 0 1 0 2 0\n";
+            }
+            static constexpr unsigned char png[] = {
+                0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+                0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+                0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
+                0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+                0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49,
+                0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82};
+            for (const auto* name : {"a.png", "b.png"}) {
+                std::ofstream image(root / "images" / name, std::ios::binary);
+                image.write(reinterpret_cast<const char*>(png), sizeof(png));
+            }
+            for (const bool gaussian : {false, true}) {
+                std::ofstream ply(root / (gaussian ? "splat.ply" : "points.ply"), std::ios::binary);
+                ply << "ply\nformat binary_little_endian 1.0\nelement vertex 4\nproperty float x\nproperty float y\nproperty float z\n";
+                if (gaussian) {
+                    for (const auto* field : {"f_dc_0", "f_dc_1", "f_dc_2", "opacity", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"})
+                        ply << "property float " << field << '\n';
+                } else {
+                    ply << "property uchar red\nproperty uchar green\nproperty uchar blue\n";
+                }
+                ply << "end_header\n";
+                for (const auto p : init_points) {
+                    const std::array<float, 3> xyz{p.x, p.y, p.z};
+                    ply.write(reinterpret_cast<const char*>(xyz.data()), sizeof(xyz));
+                    if (gaussian) {
+                        const std::array<float, 11> attributes{0.1f, 0.2f, 0.3f, 0.7f, -2, -3, -4, 1, 0, 0, 0};
+                        ply.write(reinterpret_cast<const char*>(attributes.data()), sizeof(attributes));
+                    } else {
+                        const std::array<unsigned char, 3> rgb{128, 128, 128};
+                        ply.write(reinterpret_cast<const char*>(rgb.data()), sizeof(rgb));
+                    }
+                }
+            }
+        }
+
+        void TearDown() override {
+            if (!root.empty()) {
+                std::error_code ec;
+                fs::remove_all(root, ec);
+            }
+        }
+
+        void check_gaussian_attributes(const SplatData& model, const size_t offset) {
+            const auto check_rows = [offset](const Tensor& tensor, const std::vector<float>& expected) {
+                const auto cpu = tensor.cpu().contiguous();
+                const auto* values = cpu.ptr<float>();
+                for (size_t i = offset; i < offset + init_points.size(); ++i)
+                    for (size_t c = 0; c < expected.size(); ++c)
+                        EXPECT_NEAR(values[i * expected.size() + c], expected[c], 1e-6f);
+            };
+            check_rows(model.rotation_raw(), {1, 0, 0, 0});
+            check_rows(model.scaling_raw(), {-2, -3, -4});
+            check_rows(model.opacity_raw(), {0.7f});
+            check_rows(model.sh0(), {0.1f, 0.2f, 0.3f});
+        }
+
+        void check_positions(const Tensor& means, const std::array<glm::vec3, 4>& source,
+                             const glm::vec3 origin, const Scene& scene, const size_t offset = 0) {
+            auto cpu = means.cpu().contiguous();
+            ASSERT_GE(cpu.numel(), (offset + source.size()) * 3);
+            const auto* values = cpu.ptr<float>() + offset * 3;
+            for (size_t i = 0; i < source.size(); ++i) {
+                const glm::vec3 actual{values[i * 3], values[i * 3 + 1], values[i * 3 + 2]};
+                for (int axis = 0; axis < 3; ++axis)
+                    EXPECT_NEAR(actual[axis], (source[i] - origin)[axis], 1e-4f);
+                // Point-to-camera vectors must stay invariant. A rotated
+                // camera also catches mistakes in translating camera T.
+                for (const auto& camera : scene.getAllCameras()) {
+                    const auto position = camera->cam_position().cpu();
+                    const auto* c = position.ptr<float>();
+                    const glm::vec3 original_center = camera->image_name() == "a.png"
+                                                          ? glm::vec3{10, 20, -40}
+                                                          : glm::vec3{14, 24, -40};
+                    for (int axis = 0; axis < 3; ++axis)
+                        EXPECT_NEAR(actual[axis] - c[axis], (source[i] - original_center)[axis], 1e-4f);
+                }
+            }
+        }
+    };
+
+    TEST_P(TrainingInitCentering, PreviewAndTrainingKeepCameraAlignment) {
+        const auto [mode, async, init_kind] = GetParam();
+        param::TrainingParameters params;
+        params.dataset.data_path = root;
+        params.dataset.centralize_dataset = mode == 0 ? "off" : mode == 1 ? "by_cameras"
+                                                                          : "by_pointcloud";
+        params.optimization.sh_degree = 0;
+        params.optimization.max_cap = 100;
+        if (init_kind == 1 || init_kind == 2 || init_kind == 4)
+            params.init_path = (root / (init_kind == 1 ? "points.ply" : "splat.ply")).string();
+
+        const bool added = init_kind >= 3;
+        if (added) {
+            params.add_splat_paths.push_back(root / "splat.ply");
+            params.add_splat_freeze.push_back(true);
+        }
+        Scene scene;
+        if (async) {
+            auto loader = lfs::io::Loader::create();
+            lfs::io::LoadOptions options;
+            options.centralize = mode == 0 ? lfs::io::CentralizeDataset::Off : mode == 1 ? lfs::io::CentralizeDataset::ByCameras
+                                                                                         : lfs::io::CentralizeDataset::ByPointCloud;
+            auto loaded = loader->load(root, options);
+            ASSERT_TRUE(loaded) << loaded.error().format();
+            const auto applied = lfs::training::applyLoadResultToScene(params, scene, std::move(*loaded));
+            ASSERT_TRUE(applied) << applied.error();
+        } else {
+            const auto loaded = lfs::training::loadTrainingDataIntoScene(params, scene);
+            ASSERT_TRUE(loaded) << loaded.error();
+        }
+        const glm::vec3 origin = mode == 0 ? glm::vec3{0} : mode == 1 ? glm::vec3{12, 22, -40}
+                                                                      : glm::vec3{12, 22, 0};
+        const auto& source = (init_kind == 0 || init_kind == 3) ? dataset_points : init_points;
+        ASSERT_TRUE(scene.getInitialPointCloud());
+        ASSERT_EQ(scene.getAllCameras().size(), 2u);
+        check_positions(scene.getInitialPointCloud()->means, source, origin, scene);
+
+        // Exercise deferred initialization, before any optimizer can move a
+        // point; the viewer uses this owner-thread capture / worker split.
+        auto capture = lfs::training::captureTrainingModelGraph(scene);
+        auto prepared = lfs::training::prepareTrainingModel(params, scene, {}, async ? &capture : nullptr);
+        ASSERT_TRUE(prepared) << prepared.error();
+        ASSERT_TRUE(prepared->has_value());
+        ASSERT_EQ((**prepared).model->size(), added ? 8u : 4u);
+        if (init_kind == 2 || init_kind == 4)
+            check_gaussian_attributes(*(**prepared).model, 0);
+        if (added)
+            check_gaussian_attributes(*(**prepared).model, 4);
+        check_positions((**prepared).model->means(), source, origin, scene);
+        if (added)
+            check_positions((**prepared).model->means(), init_points, origin, scene, 4);
+        const auto installed = lfs::training::installTrainingModel(scene, std::move(**prepared));
+        ASSERT_TRUE(installed) << installed.error();
+        ASSERT_TRUE(scene.getTrainingModel());
+        check_positions(scene.getTrainingModel()->means(), source, origin, scene);
+        if (added)
+            check_positions(scene.getTrainingModel()->means(), init_points, origin, scene, 4);
+        // Reusing an already initialized model must never shift it again.
+        params.add_splat_paths.clear();
+        params.add_splat_freeze.clear();
+        auto reused = lfs::training::prepareTrainingModel(params, scene);
+        ASSERT_TRUE(reused) << reused.error();
+        EXPECT_FALSE(reused->has_value());
+        check_positions(scene.getTrainingModel()->means(), source, origin, scene);
+
+        // Loading another dataset with centering off must not reuse the old
+        // origin. Exercise the real clear/load path, not just the setter.
+        scene.clear();
+        params.dataset.centralize_dataset = "off";
+        const auto reloaded = lfs::training::loadTrainingDataIntoScene(params, scene);
+        ASSERT_TRUE(reloaded) << reloaded.error();
+        const auto initialized = lfs::training::initializeTrainingModel(params, scene);
+        ASSERT_TRUE(initialized) << initialized.error();
+        ASSERT_TRUE(scene.getTrainingModel());
+        check_positions(scene.getTrainingModel()->means(), source, glm::vec3{0}, scene);
+    }
+
+    TEST_F(TrainingInitCentering, DeferredInitializationUsesCapturedOrigin) {
+        param::TrainingParameters params;
+        params.dataset.data_path = root;
+        params.dataset.centralize_dataset = "by_cameras";
+        params.init_path = (root / "splat.ply").string();
+        params.optimization.sh_degree = 0;
+        params.optimization.max_cap = 100;
+        Scene scene;
+        const auto loaded = lfs::training::loadTrainingDataIntoScene(params, scene);
+        ASSERT_TRUE(loaded) << loaded.error();
+        const auto capture = lfs::training::captureTrainingModelGraph(scene);
+
+        // Worker preparation must use the owner-thread snapshot even when
+        // the live scene has moved on to another dataset origin.
+        scene.setTrainingDataOrigin(glm::vec3{100, 200, 300});
+        auto prepared = lfs::training::prepareTrainingModel(params, scene, {}, &capture);
+        ASSERT_TRUE(prepared) << prepared.error();
+        ASSERT_TRUE(prepared->has_value());
+        check_positions((**prepared).model->means(), init_points, glm::vec3{12, 22, -40}, scene);
+    }
+
+    void check_random_positions(const Tensor& positions, const int count, const float extent) {
+        ASSERT_EQ(positions.size(0), static_cast<size_t>(count));
+        const auto cpu = positions.cpu().contiguous();
+        const auto* values = cpu.ptr<float>();
+        const auto [minimum, maximum] = std::minmax_element(values, values + cpu.numel());
+        EXPECT_GE(*minimum, -extent);
+        EXPECT_LE(*maximum, extent);
+        EXPECT_LT(*minimum, -0.9f * extent);
+        EXPECT_GT(*maximum, 0.9f * extent);
+    }
+
+    TEST_F(TrainingInitCentering, EmptySparsePointsUseConfiguredRandomInitialization) {
+        for (const int kind : {0, 1, 2, 3}) {
+            SCOPED_TRACE(kind);
+            fs::remove(root / "sparse/0/points3D.bin");
+            fs::remove(root / "sparse/0/points3D.txt");
+            if (kind == 0) {
+                std::ofstream(root / "sparse/0/points3D.txt") << "# Empty sparse model\n";
+            } else if (kind == 1) {
+                const std::array<char, 8> zero_count{};
+                std::ofstream(root / "sparse/0/points3D.bin", std::ios::binary)
+                    .write(zero_count.data(), zero_count.size());
+            } else if (kind == 3) {
+                std::ofstream(root / "sparse/0/points3D.txt") << "1 10 20 0 128 128 128 0 1 0 2 0\n";
+            }
+            for (const bool defaults : {false, true}) {
+                for (const bool async : {false, true}) {
+                    SCOPED_TRACE(defaults);
+                    SCOPED_TRACE(async);
+                    param::TrainingParameters params;
+                    params.dataset.data_path = root;
+                    params.dataset.min_track_length = kind == 3 ? 3 : 0;
+                    if (!defaults) {
+                        params.optimization.init_num_pts = 512;
+                        params.optimization.init_extent = 8.0f;
+                    }
+                    Scene scene;
+                    if (async) {
+                        lfs::io::LoadOptions options;
+                        options.min_track_length = params.dataset.min_track_length;
+                        auto loaded = lfs::io::Loader::create()->load(root, options);
+                        ASSERT_TRUE(loaded) << loaded.error().format();
+                        EXPECT_TRUE(std::ranges::any_of(loaded->warnings, [](const auto& warning) {
+                            return warning.find("random initialization") != std::string::npos;
+                        }));
+                        const auto applied = lfs::training::applyLoadResultToScene(params, scene, std::move(*loaded));
+                        ASSERT_TRUE(applied) << applied.error();
+                    } else {
+                        const auto loaded = lfs::training::loadTrainingDataIntoScene(params, scene);
+                        ASSERT_TRUE(loaded) << loaded.error();
+                    }
+                    const auto cloud = scene.getInitialPointCloud();
+                    ASSERT_TRUE(cloud);
+                    check_random_positions(cloud->means, params.optimization.init_num_pts, params.optimization.init_extent);
+                    EXPECT_EQ(cloud->colors.shape(), cloud->means.shape());
+                    EXPECT_EQ(cloud->colors.dtype(), DataType::UInt8);
+                }
+            }
+        }
+    }
+
+    TEST_F(TrainingInitCentering, MissingPreviewUsesConfiguredRandomInitializationForTraining) {
+        for (const bool captured : {false, true}) {
+            Scene scene;
+            param::TrainingParameters params;
+            params.optimization.init_num_pts = 512;
+            params.optimization.init_extent = 8.0f;
+            params.optimization.max_cap = 512;
+            params.optimization.sh_degree = 0;
+            const auto capture = lfs::training::captureTrainingModelGraph(scene);
+            auto prepared = lfs::training::prepareTrainingModel(params, scene, {}, captured ? &capture : nullptr);
+            ASSERT_TRUE(prepared) << prepared.error();
+            ASSERT_TRUE(prepared->has_value());
+            check_random_positions((**prepared).model->means(), 512, 8.0f);
+        }
+    }
+
+    TEST_F(TrainingInitCentering, SparseAndExplicitInitPointsIgnoreRandomFallbackSettings) {
+        for (const int kind : {0, 1, 2}) {
+            for (const bool async : {false, true}) {
+                SCOPED_TRACE(kind);
+                SCOPED_TRACE(async);
+                param::TrainingParameters params;
+                params.dataset.data_path = root;
+                params.optimization.init_num_pts = 512;
+                params.optimization.init_extent = 8.0f;
+                params.optimization.max_cap = 100;
+                params.optimization.sh_degree = 0;
+                if (kind != 0)
+                    params.init_path = (root / (kind == 1 ? "points.ply" : "splat.ply")).string();
+                auto loaded = lfs::io::Loader::create()->load(root);
+                ASSERT_TRUE(loaded) << loaded.error().format();
+                EXPECT_FALSE(std::ranges::any_of(loaded->warnings, [](const auto& warning) {
+                    return warning.find("random initialization") != std::string::npos;
+                }));
+                Scene scene;
+                const auto applied = async
+                                         ? lfs::training::applyLoadResultToScene(params, scene, std::move(*loaded))
+                                         : lfs::training::loadTrainingDataIntoScene(params, scene);
+                ASSERT_TRUE(applied) << applied.error();
+                ASSERT_TRUE(scene.getInitialPointCloud());
+                ASSERT_EQ(scene.getInitialPointCloud()->size(), 4);
+                const auto& expected = kind == 0 ? dataset_points : init_points;
+                check_positions(scene.getInitialPointCloud()->means, expected, glm::vec3{0}, scene);
+                auto prepared = lfs::training::prepareTrainingModel(params, scene);
+                ASSERT_TRUE(prepared) << prepared.error();
+                ASSERT_TRUE(prepared->has_value());
+                ASSERT_EQ((**prepared).model->size(), 4);
+                check_positions((**prepared).model->means(), expected, glm::vec3{0}, scene);
+                if (kind == 2)
+                    check_gaussian_attributes(*(**prepared).model, 0);
+            }
+        }
+    }
+
+    // A 2 x 3 quad in the plane z = 4; it covers 2/3 of Mesh2Splat's square raster.
+    const std::array<glm::vec3, 4> quad_corners = {{{11, 21, 4}, {13, 21, 4}, {13, 24, 4}, {11, 24, 4}}};
+
+    void write_quad_mesh(const fs::path& path) {
+        std::ofstream file(path);
+        if (path.extension() == ".ply") {
+            file << "ply\nformat ascii 1.0\nelement vertex 4\nproperty float x\nproperty float y\nproperty float z\n"
+                 << "element face 2\nproperty list uchar int vertex_indices\nend_header\n";
+            for (const auto& c : quad_corners)
+                file << c.x << ' ' << c.y << ' ' << c.z << '\n';
+            file << "3 0 1 2\n3 0 2 3\n";
+        } else {
+            for (const auto& c : quad_corners)
+                file << "v " << c.x << ' ' << c.y << ' ' << c.z << '\n';
+            file << "f 1 2 3\nf 1 3 4\n";
+        }
+    }
+
+    // Catches a mesh PLY taken for a plain point cloud (trained from its 4 vertices), a missing
+    // dataset shift, and budget fitting by dropping random splats, which leaves most of the quad bare.
+    TEST_F(TrainingInitCentering, MeshInitConvertsTheSurfaceInTheDatasetFrame) {
+        constexpr int max_cap = 1000;
+        for (const auto* mesh_file : {"mesh.ply", "mesh.obj"}) {
+            write_quad_mesh(root / mesh_file);
+            for (const int mode : {0, 1, 2}) {
+                for (const bool async : {false, true}) {
+                    SCOPED_TRACE(mesh_file);
+                    SCOPED_TRACE(mode);
+                    SCOPED_TRACE(async);
+                    param::TrainingParameters params;
+                    params.dataset.data_path = root;
+                    params.dataset.centralize_dataset = mode == 0 ? "off" : mode == 1 ? "by_cameras"
+                                                                                      : "by_pointcloud";
+                    params.optimization.sh_degree = 0;
+                    params.optimization.max_cap = max_cap;
+                    params.optimization.init_mesh_resolution = 64;
+                    params.init_path = (root / mesh_file).string();
+                    Scene scene;
+                    if (async) {
+                        lfs::io::LoadOptions options;
+                        options.centralize = mode == 0 ? lfs::io::CentralizeDataset::Off : mode == 1 ? lfs::io::CentralizeDataset::ByCameras
+                                                                                                     : lfs::io::CentralizeDataset::ByPointCloud;
+                        auto loaded = lfs::io::Loader::create()->load(root, options);
+                        ASSERT_TRUE(loaded) << loaded.error().format();
+                        const auto applied = lfs::training::applyLoadResultToScene(params, scene, std::move(*loaded));
+                        ASSERT_TRUE(applied) << applied.error();
+                    } else {
+                        const auto loaded = lfs::training::loadTrainingDataIntoScene(params, scene);
+                        ASSERT_TRUE(loaded) << loaded.error();
+                    }
+                    const glm::vec3 origin = mode == 0 ? glm::vec3{0} : mode == 1 ? glm::vec3{12, 22, -40}
+                                                                                  : glm::vec3{12, 22, 0};
+                    ASSERT_TRUE(scene.getInitialPointCloud());
+                    check_positions(scene.getInitialPointCloud()->means, quad_corners, origin, scene);
+
+                    auto capture = lfs::training::captureTrainingModelGraph(scene);
+                    auto prepared = lfs::training::prepareTrainingModel(params, scene, {}, async ? &capture : nullptr);
+                    ASSERT_TRUE(prepared) << prepared.error();
+                    ASSERT_TRUE(prepared->has_value());
+                    const auto& model = *(**prepared).model;
+                    ASSERT_GT(model.size(), static_cast<size_t>(max_cap / 2));
+                    ASSERT_LE(model.size(), static_cast<size_t>(max_cap));
+
+                    const auto means = model.means().cpu().contiguous();
+                    const auto scaling = model.scaling_raw().cpu().contiguous();
+                    assert(means.ndim() == 2 && means.size(1) == 3);
+                    assert(scaling.ndim() == 2 && scaling.size(1) == 3);
+                    const auto* p = means.ptr<float>();
+                    const auto* s = scaling.ptr<float>();
+                    double footprint = 0.0;
+                    for (size_t i = 0; i < model.size(); ++i) {
+                        const glm::vec3 world = glm::vec3{p[i * 3], p[i * 3 + 1], p[i * 3 + 2]} + origin;
+                        ASSERT_NEAR(world.z, 4.0f, 1e-4f);
+                        ASSERT_GE(world.x, 11.0f - 1e-3f);
+                        ASSERT_LE(world.x, 13.0f + 1e-3f);
+                        ASSERT_GE(world.y, 21.0f - 1e-3f);
+                        ASSERT_LE(world.y, 24.0f + 1e-3f);
+                        footprint += 3.14159265 * std::exp(s[i * 3]) * std::exp(s[i * 3 + 1]);
+                    }
+                    EXPECT_GT(footprint / 6.0, 0.5);
+                }
+            }
+        }
+    }
+
+    // Catches the mesh being fitted to the whole --max-cap, so the merged --add-splat file overflows it.
+    TEST_F(TrainingInitCentering, MeshInitLeavesRoomForAddedSplats) {
+        write_quad_mesh(root / "mesh.obj");
+        constexpr int added = 400;
+        {
+            std::ofstream ply(root / "added.ply", std::ios::binary);
+            ply << "ply\nformat binary_little_endian 1.0\nelement vertex " << added << '\n';
+            for (const auto* field : {"x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity", "scale_0", "scale_1",
+                                      "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"})
+                ply << "property float " << field << '\n';
+            ply << "end_header\n";
+            const std::array<float, 14> splat{12, 22, 4, 0, 0, 0, 0, -3, -3, -3, 1, 0, 0, 0};
+            for (int i = 0; i < added; ++i)
+                ply.write(reinterpret_cast<const char*>(splat.data()), sizeof(splat));
+        }
+        param::TrainingParameters params;
+        params.dataset.data_path = root;
+        params.optimization.sh_degree = 0;
+        params.optimization.max_cap = 1000;
+        params.optimization.init_mesh_resolution = 64;
+        params.init_path = (root / "mesh.obj").string();
+        params.add_splat_paths.push_back(root / "added.ply");
+        params.add_splat_freeze.push_back(false);
+        Scene scene;
+        const auto loaded = lfs::training::loadTrainingDataIntoScene(params, scene);
+        ASSERT_TRUE(loaded) << loaded.error();
+        auto prepared = lfs::training::prepareTrainingModel(params, scene);
+        ASSERT_TRUE(prepared) << prepared.error();
+        ASSERT_TRUE(prepared->has_value());
+        EXPECT_LE((**prepared).model->size(), 1000u);
+        EXPECT_GT((**prepared).model->size(), 800u);
+    }
+
+    // Catches the converter ignoring init_mesh_resolution: the count follows 2/3 of the resolution squared.
+    TEST_F(TrainingInitCentering, MeshInitUsesTheConfiguredResolution) {
+        write_quad_mesh(root / "mesh.obj");
+        for (const int resolution : {32, 96}) {
+            SCOPED_TRACE(resolution);
+            param::TrainingParameters params;
+            params.dataset.data_path = root;
+            params.optimization.sh_degree = 0;
+            params.optimization.init_mesh_resolution = resolution;
+            params.init_path = (root / "mesh.obj").string();
+            Scene scene;
+            const auto loaded = lfs::training::loadTrainingDataIntoScene(params, scene);
+            ASSERT_TRUE(loaded) << loaded.error();
+            auto prepared = lfs::training::prepareTrainingModel(params, scene);
+            ASSERT_TRUE(prepared) << prepared.error();
+            ASSERT_TRUE(prepared->has_value());
+            EXPECT_NEAR(static_cast<double>((**prepared).model->size()), resolution * resolution * 2.0 / 3.0,
+                        2.0 * resolution);
+        }
+    }
+
+    // Catches the preview or training start parsing the init mesh again (they fail once the file is
+    // gone), and a mesh edited after the dataset load being trained from the stale copy.
+    TEST_F(TrainingInitCentering, MeshInitParsesTheMeshOnce) {
+        const auto mesh = root / "mesh.obj";
+        param::TrainingParameters params;
+        params.dataset.data_path = root;
+        params.optimization.sh_degree = 0;
+        params.init_path = mesh.string();
+        const auto prepare_after = [&](const std::function<void()>& between_load_and_training) {
+            Scene scene;
+            const auto loaded = lfs::training::loadTrainingDataIntoScene(params, scene);
+            EXPECT_TRUE(loaded) << loaded.error();
+            between_load_and_training();
+            auto prepared = lfs::training::prepareTrainingModel(params, scene);
+            EXPECT_TRUE(prepared && prepared->has_value());
+            return prepared && prepared->has_value() ? (**prepared).model->means().cpu().contiguous().ptr<float>()[2] : 0.0f;
+        };
+
+        write_quad_mesh(mesh);
+        EXPECT_NEAR(prepare_after([&] { fs::remove(mesh); }), 4.0f, 1e-4f);
+
+        write_quad_mesh(mesh);
+        lfs::training::preloadInitMesh(params);
+        fs::remove(mesh);
+        EXPECT_NEAR(prepare_after([] {}), 4.0f, 1e-4f);
+
+        write_quad_mesh(mesh);
+        const auto move_to_z9 = [&] {
+            std::ofstream(mesh) << "v 0 0 9\nv 1 0 9\nv 0 1 9\nf 1 2 3\n";
+            fs::last_write_time(mesh, fs::last_write_time(mesh) + std::chrono::seconds(1));
+        };
+        EXPECT_NEAR(prepare_after(move_to_z9), 9.0f, 1e-4f);
+    }
+
+    INSTANTIATE_TEST_SUITE_P(LoadPaths, TrainingInitCentering,
+                             ::testing::Combine(::testing::Values(0, 1, 2), ::testing::Bool(), ::testing::Values(0, 1, 2, 3, 4)));
+} // namespace

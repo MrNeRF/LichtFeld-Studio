@@ -38,6 +38,10 @@ namespace lfs::core {
         int width_dp = 440;
         std::function<void(const ModalResult&)> on_result;
         std::function<void()> on_cancel;
+        // Keyed forms can refresh after a worker completes without reopening
+        // a dismissed dialog or disturbing an unrelated modal.
+        std::string key;
+        std::function<void(const ModalResult&)> on_change;
     };
 
 } // namespace lfs::core

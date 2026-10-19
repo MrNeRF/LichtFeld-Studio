@@ -101,7 +101,8 @@ namespace fast_lfs::rasterization {
         const float* sh_value_bounds_ptr = nullptr, // float2 per 256; null = fp32/IEEE-f16 shN
         unsigned int sh_value_n_cells = 0,
         unsigned int sh_value_bits = 0, // 0=fp32, 16=q16(+bounds) or IEEE f16
-        float* max_screen_share_ptr = nullptr);
+        float* max_screen_share_ptr = nullptr,
+        float dilation_scale = 1.0f);
 
     void release_forward_context(const ForwardContext& forward_ctx);
 
@@ -114,18 +115,18 @@ namespace fast_lfs::rasterization {
         float* densification_info_ptr,            // Device pointer [2*N] or nullptr
         const float* densification_error_map_ptr, // Device pointer [H*W] or nullptr
         const float* grad_image_ptr,              // Device pointer [3*H*W]
-        const float* grad_alpha_ptr,              // Device pointer [H*W]
-        const float* grad_depth_ptr,              // Device pointer [H*W] or nullptr
-        const float* grad_normal_ptr,             // Device pointer [3*H*W] or nullptr
-        const float* image_ptr,                   // Device pointer [3*H*W]
-        const float* alpha_ptr,                   // Device pointer [H*W]
-        const float* means_ptr,                   // Device pointer [N*3]
-        const float* scales_raw_ptr,              // Device pointer [N*3]
-        const float* rotations_raw_ptr,           // Device pointer [N*4]
-        const float* raw_opacities_ptr,           // Device pointer [N]
-        const float* sh_coefficients_rest_ptr,    // Device pointer to swizzled shN float buffer
-        const float* w2c_ptr,                     // Device pointer [4*4]
-        const float* cam_position_ptr,            // Device pointer [3]
+        const BackgroundAlphaGradient& background_grad,
+        const float* grad_depth_ptr,           // Device pointer [H*W] or nullptr
+        const float* grad_normal_ptr,          // Device pointer [3*H*W] or nullptr
+        const float* image_ptr,                // Device pointer [3*H*W]
+        const float* alpha_ptr,                // Device pointer [H*W]
+        const float* means_ptr,                // Device pointer [N*3]
+        const float* scales_raw_ptr,           // Device pointer [N*3]
+        const float* rotations_raw_ptr,        // Device pointer [N*4]
+        const float* raw_opacities_ptr,        // Device pointer [N]
+        const float* sh_coefficients_rest_ptr, // Device pointer to swizzled shN float buffer
+        const float* w2c_ptr,                  // Device pointer [4*4]
+        const float* cam_position_ptr,         // Device pointer [3]
         const ForwardContext& forward_ctx,
         float* grad_w2c_ptr, // Device pointer [4*4] - output or nullptr
         int n_primitives,
@@ -149,10 +150,10 @@ namespace fast_lfs::rasterization {
         const float* shN_value_bounds_ptr = nullptr,
         unsigned shN_value_n_cells = 0u,
         unsigned shN_value_bits = 0u,
-        const bool* mean_step_far_mask = nullptr,
-        int mean_step_far_mask_n = 0,
         const float* edge_weight_map = nullptr,
-        float* edge_score_out = nullptr);
+        float* edge_score_out = nullptr,
+        float* impact_sum_out = nullptr,
+        float* impact_peak_out = nullptr);
 
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
     void warmup_kernels();

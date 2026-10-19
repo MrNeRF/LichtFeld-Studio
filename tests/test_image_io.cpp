@@ -1,7 +1,10 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/image_codecs.hpp"
 #include "core/image_io.hpp"
+#include "core/tensor.hpp"
+#include "environment_image.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -73,6 +76,54 @@ namespace {
         ASSERT_TRUE(file.good());
     }
 
+    // Minimal uncompressed RGB EXR, independent of the decoder library. Its
+    // negative and HDR samples detect accidental clipping or colour transforms.
+    void write_float_exr(const std::filesystem::path& path) {
+        std::vector<std::uint8_t> data;
+        append_u32(data, 20000630);
+        append_u32(data, 2);
+        const auto text = [](std::vector<std::uint8_t>& out, const char* value) {
+            out.insert(out.end(), value, value + std::strlen(value) + 1);
+        };
+        const auto attribute = [&](const char* name, const char* type, const std::vector<std::uint8_t>& value) {
+            text(data, name);
+            text(data, type);
+            append_u32(data, static_cast<std::uint32_t>(value.size()));
+            data.insert(data.end(), value.begin(), value.end());
+        };
+        std::vector<std::uint8_t> channels;
+        for (const char* name : {"B", "G", "R"}) {
+            text(channels, name);
+            append_u32(channels, 2); // FLOAT
+            append_u32(channels, 0); // pLinear and reserved bytes
+            append_u32(channels, 1);
+            append_u32(channels, 1);
+        }
+        channels.push_back(0);
+        attribute("channels", "chlist", channels);
+        attribute("compression", "compression", {0});
+        std::vector<std::uint8_t> window;
+        for (const auto value : {0u, 0u, 1u, 0u})
+            append_u32(window, value);
+        attribute("dataWindow", "box2i", window);
+        attribute("displayWindow", "box2i", window);
+        attribute("lineOrder", "lineOrder", {0});
+        attribute("pixelAspectRatio", "float", {0, 0, 128, 63});
+        attribute("screenWindowCenter", "v2f", std::vector<std::uint8_t>(8));
+        attribute("screenWindowWidth", "float", {0, 0, 128, 63});
+        data.push_back(0);
+        const auto chunk_offset = static_cast<std::uint32_t>(data.size() + 8);
+        append_u32(data, chunk_offset);
+        append_u32(data, 0);
+        append_u32(data, 0); // scanline y
+        append_u32(data, 24);
+        for (const auto value : {0x3f000000u, 0x40000000u, 0x3f800000u, 0x3e800000u, 0xbe800000u, 0x41200000u})
+            append_u32(data, value);
+        std::ofstream file(path, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+        ASSERT_TRUE(file.good());
+    }
+
     std::vector<std::uint8_t> read_file(const std::filesystem::path& path) {
         std::ifstream file(path, std::ios::binary | std::ios::ate);
         EXPECT_TRUE(file);
@@ -82,6 +133,34 @@ namespace {
         file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size));
         EXPECT_TRUE(file.good() || file.eof());
         return data;
+    }
+
+    void write_variant_tiff(const std::filesystem::path& path, const std::uint16_t photometric,
+                            const std::uint16_t samples, const bool extra_sample) {
+        std::vector<std::uint8_t> data = {'I', 'I', 42, 0, 8, 0, 0, 0};
+        const std::uint16_t entries = extra_sample ? 12 : 11;
+        const std::uint32_t strip_offset = 8 + 2 + 12 * entries + 4;
+        append_u16(data, entries);
+        append_tiff_tag(data, 256, 3, 1, 2);
+        append_tiff_tag(data, 257, 3, 1, 1);
+        append_tiff_tag(data, 258, 3, 1, 16);
+        append_tiff_tag(data, 259, 3, 1, 1);
+        append_tiff_tag(data, 262, 3, 1, photometric);
+        append_tiff_tag(data, 273, 4, 1, strip_offset);
+        append_tiff_tag(data, 277, 3, 1, samples);
+        append_tiff_tag(data, 278, 4, 1, 1);
+        append_tiff_tag(data, 279, 4, 1, 4 * samples);
+        append_tiff_tag(data, 284, 3, 1, 1);
+        if (extra_sample)
+            append_tiff_tag(data, 338, 3, 1, 0);
+        append_tiff_tag(data, 339, 3, 1, 1);
+        append_u32(data, 0);
+        const std::uint16_t pixels[] = {0x1234, 0xFEDC, 0x2345, 0xABCD, 0x3456, 0x9876, 0x4567, 0x7654};
+        for (std::size_t i = 0; i < 2 * samples; ++i)
+            append_u16(data, pixels[i]);
+        std::ofstream file(path, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+        ASSERT_TRUE(file.good());
     }
 
     std::vector<std::uint8_t> add_exif_thumbnail(std::vector<std::uint8_t> primary,
@@ -232,6 +311,16 @@ TEST(ImageIoTest, LoadsJpegThumbnailWithDctScaling) {
     EXPECT_EQ(decoded_height, 64);
     EXPECT_EQ(channels, 3);
     lfs::core::free_image(decoded);
+}
+
+// Fails if a thumbnail decode reduces below the requested size or skips a reduction that still covers it.
+TEST(ImageIoTest, JpegScaleDenominatorKeepsThumbnailResolution) {
+    using lfs::core::image_codecs::jpeg_scale_denominator;
+    EXPECT_EQ(jpeg_scale_denominator(5187, 512), 8u);
+    EXPECT_EQ(jpeg_scale_denominator(2000, 512), 2u);
+    EXPECT_EQ(jpeg_scale_denominator(1023, 512), 2u);
+    EXPECT_EQ(jpeg_scale_denominator(1022, 512), 1u);
+    EXPECT_EQ(jpeg_scale_denominator(300, 512), 1u);
 }
 
 TEST(ImageIoTest, LoadsEmbeddedExifThumbnailAndReportsFastPath) {
@@ -420,4 +509,292 @@ TEST(ImageIoTest, FloatTiffInferenceRangeNormalization) {
     EXPECT_FLOAT_EQ(decoded[0], 128.0f / 255.0f);
     EXPECT_FLOAT_EQ(decoded[1], 64.0f / 255.0f);
     lfs::core::free_image_float(decoded);
+}
+
+TEST(ImageIoTest, TiffPhotometricAndUnspecifiedExtraSamplesVariants) {
+    struct Case {
+        std::uint16_t photometric;
+        std::uint16_t samples;
+        bool extra_sample;
+        std::vector<std::uint16_t> expected;
+    };
+    const std::vector<Case> cases = {
+        {1, 1, false, {0x1234, 0xFEDC}},
+        {0, 1, false, {static_cast<std::uint16_t>(0xFFFF - 0x1234), static_cast<std::uint16_t>(0xFFFF - 0xFEDC)}},
+        {2, 3, false, {0x1234, 0xFEDC, 0x2345, 0xABCD, 0x3456, 0x9876}},
+        {2, 4, true, {0x1234, 0xFEDC, 0x2345, 0xABCD, 0x3456, 0x9876, 0x4567, 0x7654}},
+        {2, 4, false, {0x1234, 0xFEDC, 0x2345, 0xABCD, 0x3456, 0x9876, 0x4567, 0x7654}},
+        {0, 3, false, {0x1234, 0xFEDC, 0x2345, 0xABCD, 0x3456, 0x9876}},
+    };
+    for (std::size_t i = 0; i < cases.size(); ++i) {
+        const auto path = unique_temp_path("tiff_variant", ".tif");
+        write_variant_tiff(path, cases[i].photometric, cases[i].samples, cases[i].extra_sample);
+        auto [pixels, width, height, channels] = lfs::core::load_image_float(path);
+        ASSERT_NE(pixels, nullptr) << "case " << i;
+        ASSERT_EQ(width, 2);
+        ASSERT_EQ(height, 1);
+        ASSERT_EQ(channels, cases[i].samples);
+        for (std::size_t j = 0; j < cases[i].expected.size(); ++j)
+            EXPECT_FLOAT_EQ(pixels[j], cases[i].expected[j] / 65535.0f) << "case " << i;
+        lfs::core::free_image_float(pixels);
+        std::filesystem::remove(path);
+    }
+}
+
+TEST(ImageIoTest, ExrPreservesLinearHdrAndHighBitdepthPaths) {
+    const auto path = unique_temp_path("hdr", ".exr");
+    write_float_exr(path);
+    const auto [probe_width, probe_height, probe_channels] = lfs::core::get_image_info(path);
+    EXPECT_EQ(probe_width, 2);
+    EXPECT_EQ(probe_height, 1);
+    EXPECT_EQ(probe_channels, 3);
+    auto [rgba, width, height, channels] = lfs::core::load_image_float(path);
+    ASSERT_NE(rgba, nullptr);
+    EXPECT_EQ(width, 2);
+    EXPECT_EQ(height, 1);
+    EXPECT_EQ(channels, 4);
+    const float expected[] = {-0.25f, 1.0f, 0.5f, 1.0f, 10.0f, 0.25f, 2.0f, 1.0f};
+    for (size_t i = 0; i < std::size(expected); ++i)
+        EXPECT_FLOAT_EQ(rgba[i], expected[i]);
+    lfs::core::free_image_float(rgba);
+    auto [rgb, rgb_width, rgb_height] = lfs::core::load_image_rgb_high_bitdepth(path);
+    ASSERT_NE(rgb, nullptr);
+    EXPECT_EQ(rgb_width, 2);
+    EXPECT_EQ(rgb_height, 1);
+    for (size_t p = 0; p < 2; ++p)
+        for (size_t c = 0; c < 3; ++c)
+            EXPECT_FLOAT_EQ(rgb[p * 3 + c], expected[p * 4 + c]);
+    lfs::core::free_image_float(rgb);
+    auto [gray, gray_width, gray_height] = lfs::core::load_image_gray_high_bitdepth(path);
+    ASSERT_NE(gray, nullptr);
+    EXPECT_EQ(gray_width, 2);
+    EXPECT_EQ(gray_height, 1);
+    EXPECT_FLOAT_EQ(gray[0], -0.25f);
+    EXPECT_FLOAT_EQ(gray[1], 10.0f);
+    lfs::core::free_image_float(gray);
+    std::filesystem::remove(path);
+}
+
+std::vector<std::uint8_t> radiance_header(const std::string_view y_axis, const int height, const int width) {
+    const std::string text = std::string("#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n") + std::string(y_axis) +
+                             " " + std::to_string(height) + " +X " + std::to_string(width) + "\n";
+    return {text.begin(), text.end()};
+}
+
+void expect_radiance_loads(const std::filesystem::path& path, const int width, const int height,
+                           const std::vector<float>& expected) {
+    EXPECT_NO_THROW(lfs::rendering::probeEnvironmentImage(path));
+    auto [pixels, decoded_width, decoded_height, channels] = lfs::core::load_image_float(path);
+    ASSERT_NE(pixels, nullptr);
+    EXPECT_EQ(decoded_width, width);
+    EXPECT_EQ(decoded_height, height);
+    EXPECT_EQ(channels, 3);
+    ASSERT_EQ(expected.size(), static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 3u);
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_FLOAT_EQ(pixels[i], expected[i]) << i;
+        EXPECT_TRUE(std::isfinite(pixels[i]));
+    }
+    lfs::core::free_image_float(pixels);
+    lfs::rendering::releaseEnvironmentImageCache();
+}
+
+TEST(ImageIoTest, TruncatedRadianceHdrIsRejectedWithoutRejectingValidHdr) {
+    const auto truncated_path = unique_temp_path("truncated", ".hdr");
+    std::vector<std::uint8_t> truncated{
+        '#', '?', 'R', 'A', 'D', 'I', 'A', 'N', 'C', 'E', '\n',
+        'F', 'O', 'R', 'M', 'A', 'T', '=', '3', '2', '-', 'b', 'i', 't', '_', 'r', 'l', 'e', '_', 'r', 'g', 'b', 'e', '\n',
+        '\n', '-', 'Y', ' ', '8', ' ', '+', 'X', ' ', '1', '6', '\n'};
+    truncated.resize(308, 0);
+    {
+        std::ofstream file(truncated_path, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(truncated.data()), static_cast<std::streamsize>(truncated.size()));
+    }
+    EXPECT_THROW(lfs::rendering::probeEnvironmentImage(truncated_path), std::runtime_error);
+    auto [bad, bad_width, bad_height, bad_channels] = lfs::core::load_image_float(truncated_path);
+    EXPECT_EQ(bad, nullptr);
+    EXPECT_EQ(bad_width, 0);
+    EXPECT_EQ(bad_height, 0);
+    EXPECT_EQ(bad_channels, 0);
+    lfs::core::free_image_float(bad);
+    std::filesystem::remove(truncated_path);
+
+    const auto write_hdr = [](const std::filesystem::path& path, const std::vector<std::uint8_t>& bytes) {
+        std::ofstream file(path, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        ASSERT_TRUE(file.good());
+    };
+    const std::vector<float> flat_expected = [] {
+        std::vector<float> values;
+        const float row0[] = {1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1};
+        const float row1[] = {1, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0};
+        values.insert(values.end(), std::begin(row0), std::end(row0));
+        values.insert(values.end(), std::begin(row1), std::end(row1));
+        return values;
+    }();
+    const auto flat_bytes = [] {
+        auto bytes = radiance_header("-Y", 2, 4);
+        const std::uint8_t rgbe[] = {
+            128, 0, 0, 129, 0, 128, 0, 129, 0, 0, 128, 129, 128, 128, 128, 129,
+            128, 128, 128, 129, 0, 0, 128, 129, 0, 128, 0, 129, 128, 0, 0, 129};
+        bytes.insert(bytes.end(), std::begin(rgbe), std::end(rgbe));
+        return bytes;
+    }();
+    const auto flat_path = unique_temp_path("flat", ".hdr");
+    write_hdr(flat_path, flat_bytes);
+    expect_radiance_loads(flat_path, 4, 2, flat_expected);
+    std::filesystem::remove(flat_path);
+
+    auto positive_y = radiance_header("+Y", 2, 4);
+    positive_y.insert(positive_y.end(), flat_bytes.begin() + radiance_header("-Y", 2, 4).size(), flat_bytes.end());
+    const auto positive_y_path = unique_temp_path("positive-y", ".hdr");
+    write_hdr(positive_y_path, positive_y);
+    expect_radiance_loads(positive_y_path, 4, 2, flat_expected);
+    std::filesystem::remove(positive_y_path);
+
+    auto trailing = flat_bytes;
+    trailing.insert(trailing.end(), {'t', 'r', 'a', 'i', 'l', 'i', 'n', 'g'});
+    const auto trailing_path = unique_temp_path("trailing", ".hdr");
+    write_hdr(trailing_path, trailing);
+    expect_radiance_loads(trailing_path, 4, 2, flat_expected);
+    std::filesystem::remove(trailing_path);
+
+    auto rle = radiance_header("-Y", 2, 8);
+    const auto append_scanline = [](std::vector<std::uint8_t>& bytes, const std::uint8_t r,
+                                    const std::uint8_t g, const std::uint8_t b) {
+        bytes.insert(bytes.end(), {2, 2, 0, 8});
+        bytes.insert(bytes.end(), {3, r, r, r, 133, r});
+        bytes.insert(bytes.end(), {8, g, g, g, g, g, g, g, g});
+        bytes.insert(bytes.end(), {136, b});
+        bytes.insert(bytes.end(), {136, 129});
+    };
+    append_scanline(rle, 128, 0, 0);
+    append_scanline(rle, 0, 128, 0);
+    std::vector<float> rle_expected;
+    for (int i = 0; i < 8; ++i)
+        rle_expected.insert(rle_expected.end(), {1.0f, 0.0f, 0.0f});
+    for (int i = 0; i < 8; ++i)
+        rle_expected.insert(rle_expected.end(), {0.0f, 1.0f, 0.0f});
+    const auto rle_path = unique_temp_path("rle", ".hdr");
+    write_hdr(rle_path, rle);
+    expect_radiance_loads(rle_path, 8, 2, rle_expected);
+    auto rle_trailing = rle;
+    rle_trailing.insert(rle_trailing.end(), 32, std::uint8_t{0xab});
+    const auto rle_trailing_path = unique_temp_path("rle-trailing", ".hdr");
+    write_hdr(rle_trailing_path, rle_trailing);
+    expect_radiance_loads(rle_trailing_path, 8, 2, rle_expected);
+    auto rle_positive_y = radiance_header("+Y", 2, 8);
+    rle_positive_y.insert(rle_positive_y.end(), rle.begin() + radiance_header("-Y", 2, 8).size(), rle.end());
+    const auto rle_positive_y_path = unique_temp_path("rle-positive-y", ".hdr");
+    write_hdr(rle_positive_y_path, rle_positive_y);
+    expect_radiance_loads(rle_positive_y_path, 8, 2, rle_expected);
+    std::filesystem::remove(rle_path);
+    std::filesystem::remove(rle_trailing_path);
+    std::filesystem::remove(rle_positive_y_path);
+
+    const auto valid_path = unique_temp_path("valid", ".hdr");
+    const float pixels[] = {0.25f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f};
+    ASSERT_TRUE(stbi_write_hdr(valid_path.string().c_str(), 2, 1, 3, pixels));
+    auto [valid, width, height, channels] = lfs::core::load_image_float(valid_path);
+    ASSERT_NE(valid, nullptr);
+    EXPECT_EQ(width, 2);
+    EXPECT_EQ(height, 1);
+    EXPECT_EQ(channels, 3);
+    EXPECT_NEAR(valid[0], pixels[0], 0.02f);
+    EXPECT_NEAR(valid[1], pixels[1], 0.02f);
+    EXPECT_NEAR(valid[2], pixels[2], 0.02f);
+    EXPECT_NEAR(valid[3], pixels[3], 0.02f);
+    EXPECT_NEAR(valid[4], pixels[4], 0.02f);
+    EXPECT_NEAR(valid[5], pixels[5], 0.02f);
+    EXPECT_TRUE(std::isfinite(valid[0]) && std::isfinite(valid[5]));
+    lfs::core::free_image_float(valid);
+    std::filesystem::remove(valid_path);
+}
+
+TEST(ImageIoTest, GalleryEnvironmentValidatesBeforeAllocationAndPreservesFloats) {
+    const auto path = unique_temp_path("gallery", ".lfsenv");
+    std::vector<std::uint8_t> bytes{'L', 'F', 'S', 'E', 'N', 'V', '1', 0};
+    append_u32(bytes, 1);
+    append_u32(bytes, 1);
+    append_u32(bytes, 0xbe800000); // -0.25
+    append_u32(bytes, 0x3f800000); // 1
+    append_u32(bytes, 0x41200000); // 10
+    const auto write = [&](const std::vector<std::uint8_t>& value) {
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        file.write(reinterpret_cast<const char*>(value.data()), value.size());
+    };
+    write(bytes);
+    auto [pixels, width, height, channels] = lfs::core::load_image_float(path);
+    ASSERT_NE(pixels, nullptr);
+    EXPECT_EQ(width, 1);
+    EXPECT_EQ(height, 1);
+    EXPECT_EQ(channels, 3);
+    EXPECT_FLOAT_EQ(pixels[0], -0.25f);
+    EXPECT_FLOAT_EQ(pixels[1], 1.0f);
+    EXPECT_FLOAT_EQ(pixels[2], 10.0f);
+    lfs::core::free_image_float(pixels);
+    for (int fault = 0; fault < 5; ++fault) {
+        auto invalid = bytes;
+        if (fault == 0)
+            invalid.pop_back();
+        if (fault == 1)
+            invalid.push_back(0);
+        if (fault == 2)
+            invalid[0] = '?';
+        if (fault == 3) {
+            invalid[8] = 0xff;
+            invalid[9] = 0xff;
+        }
+        if (fault == 4) {
+            invalid[18] = 0xc0;
+            invalid[19] = 0x7f;
+        } // NaN
+        write(invalid);
+        auto [bad, w, h, c] = lfs::core::load_image_float(path);
+        EXPECT_EQ(bad, nullptr) << fault;
+        lfs::core::free_image_float(bad);
+    }
+    std::filesystem::remove(path);
+}
+
+// Catches the CUDA save path quantizing differently from the host path: a real image stretched past
+// [0, 1] must write the same bytes whether it is saved from the GPU or from the CPU.
+TEST(ImageIoTest, CudaImageSavesTheSameBytesAsTheHostImage) {
+    const auto source_path = std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/nn/lpips_crop_a.png";
+    auto [source, width, height, channels] = lfs::core::load_image(source_path);
+    ASSERT_NE(source, nullptr);
+    ASSERT_EQ(channels, 3);
+    const auto plane = static_cast<std::size_t>(width) * height;
+    std::vector<float> planes(plane * 3);
+    for (std::size_t pixel = 0; pixel < plane; ++pixel)
+        for (std::size_t c = 0; c < 3; ++c)
+            planes[c * plane + pixel] = static_cast<float>(source[pixel * 3 + c]) / 212.0f - 0.1f;
+    lfs::core::free_image(source);
+    const lfs::core::TensorShape shape{3, static_cast<std::size_t>(height), static_cast<std::size_t>(width)};
+    const auto host = lfs::core::Tensor::from_vector(planes, shape, lfs::core::Device::CPU);
+    const auto device = lfs::core::Tensor::from_vector(planes, shape, lfs::core::Device::CUDA);
+
+    const auto host_path = std::filesystem::temp_directory_path() / "lfs_image_io_host_save.png";
+    const auto device_path = std::filesystem::temp_directory_path() / "lfs_image_io_device_save.png";
+    lfs::core::save_image(host_path, host);
+    lfs::core::save_image(device_path, device);
+    auto host_loaded = lfs::core::load_image(host_path);
+    auto device_loaded = lfs::core::load_image(device_path);
+    std::error_code ec;
+    std::filesystem::remove(host_path, ec);
+    std::filesystem::remove(device_path, ec);
+
+    auto* const host_bytes = std::get<0>(host_loaded);
+    auto* const device_bytes = std::get<0>(device_loaded);
+    ASSERT_NE(host_bytes, nullptr);
+    ASSERT_NE(device_bytes, nullptr);
+    EXPECT_EQ(std::get<1>(device_loaded), width);
+    EXPECT_EQ(std::get<2>(device_loaded), height);
+    std::size_t clipped = 0;
+    for (std::size_t i = 0; i < plane * 3; ++i) {
+        clipped += host_bytes[i] == 0 || host_bytes[i] == 255;
+        ASSERT_EQ(device_bytes[i], host_bytes[i]) << "sample " << i;
+    }
+    EXPECT_GT(clipped, 0u);
+    lfs::core::free_image(host_bytes);
+    lfs::core::free_image(device_bytes);
 }

@@ -70,6 +70,8 @@ class AnimationClip:
 class Timeline:
     """Animation timeline with camera keyframes and multi-track clips"""
 
+    def __init__(self) -> None: ...
+
     @property
     def has_animation_clip(self) -> bool:
         """True if an animation clip exists"""

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -12,7 +14,7 @@
 
 namespace lfs::vis::editor {
 
-    class PythonLspClient {
+    class LFS_VIS_API PythonLspClient {
     public:
         struct TextEdit {
             int start_line = 0;

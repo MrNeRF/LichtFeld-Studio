@@ -527,7 +527,10 @@ namespace lfs::training::mcmc {
         curandStatePhilox4_32_10_t state;
         curand_init(seed, idx, 0, &state);
 
-        const float u = curand_uniform(&state) * prob_sum;
+        // Rescale small CDFs by an exact power of two so a positive draw
+        // stays normal under fast math and cannot select a leading zero weight.
+        const float probability_scale = prob_sum < 1.0f ? 0x1p64f : 1.0f;
+        const float u = curand_uniform(&state) * (prob_sum * probability_scale);
 
         int64_t left = 0;
         int64_t right = static_cast<int64_t>(n_alive) - 1;
@@ -535,7 +538,7 @@ namespace lfs::training::mcmc {
 
         while (left <= right) {
             const int64_t mid = (left + right) / 2;
-            if (cumsum[mid] >= u) {
+            if (cumsum[mid] * probability_scale >= u) {
                 selected_idx = mid;
                 right = mid - 1;
             } else {
@@ -646,7 +649,10 @@ namespace lfs::training::mcmc {
         curandStatePhilox4_32_10_t state;
         curand_init(seed, idx, 0, &state);
 
-        const float u = curand_uniform(&state) * prob_sum;
+        // Rescale small CDFs by an exact power of two so a positive draw
+        // stays normal under fast math and cannot select a leading zero weight.
+        const float probability_scale = prob_sum < 1.0f ? 0x1p64f : 1.0f;
+        const float u = curand_uniform(&state) * (prob_sum * probability_scale);
 
         int64_t left = 0;
         int64_t right = static_cast<int64_t>(N) - 1;
@@ -654,7 +660,7 @@ namespace lfs::training::mcmc {
 
         while (left <= right) {
             const int64_t mid = (left + right) / 2;
-            if (cumsum[mid] >= u) {
+            if (cumsum[mid] * probability_scale >= u) {
                 selected_idx = mid;
                 right = mid - 1;
             } else {

@@ -24,7 +24,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${LFS_VCPKG_OVERL
 # cache values are visible before project(), when the vcpkg toolchain resolves
 # manifest features.
 list(REMOVE_ITEM VCPKG_MANIFEST_FEATURES tests vulkan-validation)
-if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS)
+if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_PANEL_LAYOUT_TESTS OR BUILD_VISUALIZER_TESTS)
     list(APPEND VCPKG_MANIFEST_FEATURES tests)
 endif()
 
@@ -94,7 +94,14 @@ endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/VcpkgProfiles.cmake")
 lfs_validate_vcpkg_profile()
 
-project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CUDA CXX C)
+project(LichtFeld-Studio VERSION 0.5.5 LANGUAGES CUDA CXX C)
+
+if(WIN32)
+    # Public headers can include windows.h in consumers such as the test targets.
+    add_compile_definitions(NOMINMAX)
+    enable_language(RC)
+endif()
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/WindowsVersionResource.cmake")
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SelectFastLinker.cmake")
 
@@ -117,7 +124,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # (each comma becomes a separate ld argument). Use colons so the whole
     # list reaches ld as a single argument.
     set(_LFS_EXCLUDE_STATIC_ARCHIVES
-        "libpng16.a:libpng.a:libz.a:libjpeg.a:libturbojpeg.a:libtiff.a:libwebp.a:libwebpdecoder.a:libsharpyuv.a:liblzma.a:libdeflate.a:libzstd.a"
+        "libpng16.a:libpng.a:libz.a:libjpeg.a:libturbojpeg.a:libtiff.a:libwebp.a:libwebpdecoder.a:libsharpyuv.a:liblzma.a:libdeflate.a:libzstd.a:libOpenEXRCore-3_4.a:libOpenEXRCore.a:libImath-3_2.a:libImath-3_1.a:libopenjph.a"
     )
     string(APPEND CMAKE_EXE_LINKER_FLAGS    " -Wl,--exclude-libs,${_LFS_EXCLUDE_STATIC_ARCHIVES}")
     string(APPEND CMAKE_SHARED_LINKER_FLAGS " -Wl,--exclude-libs,${_LFS_EXCLUDE_STATIC_ARCHIVES}")
@@ -129,6 +136,10 @@ endif()
 # Keep CUDA language targets on the shared runtime as well; MSVC otherwise adds
 # cudart_static.lib implicitly, which collides with cudart.lib when linking DLLs.
 set(CMAKE_CUDA_RUNTIME_LIBRARY Shared CACHE STRING "CUDA runtime linkage" FORCE)
+
+# Whole-program CUDA embeds a separate device program per translation unit.
+# Shared weak template stubs can otherwise select a program with different math flags.
+add_compile_options($<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:--static-global-template-stub=true>)
 
 # On Windows with a multi-config generator (MSVC/Visual Studio, Ninja Multi-Config),
 # route all build outputs to build/<Config>/ so Debug and Release binaries are
@@ -160,16 +171,21 @@ add_custom_target(lfs_git_version ALL
     COMMAND ${CMAKE_COMMAND}
             "-DGIT_SRC_DIR=${CMAKE_SOURCE_DIR}"
             "-DGIT_VERSION_HEADER=${CMAKE_BINARY_DIR}/include/git_version.h"
+            "-DLFS_PROJECT_VERSION=${PROJECT_VERSION}"
             -P "${CMAKE_SOURCE_DIR}/cmake/GenerateGitVersion.cmake"
     COMMENT "Refreshing git_version.h"
     VERBATIM
 )
 
 option(BUILD_TESTS "Build tests" OFF)
+option(BUILD_PANEL_LAYOUT_TESTS "Build focused panel layout and registry tests" OFF)
+option(BUILD_VISUALIZER_TESTS "Build CPU-only visualizer tests without LibTorch" OFF)
 option(BUILD_FORMAT_TESTS "Build only the CPU-only .licht format tests (no CUDA)" OFF)
-option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path test (no CUDA)" OFF)
+option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path tests (no CUDA runtime linkage)" OFF)
 option(BUILD_LOCALIZATION_TESTS "Register headless localization contract tests without LibTorch" OFF)
 option(LFS_FAST_COMPILE "Optimize measured slow C++ components for build speed instead of runtime speed (WIN32 only)" OFF)
+# Cannot catch MSVC-specific dllimport template issues in third-party DLLs (e.g. Rml::ObserverPtr).
+option(LFS_HIDDEN_SYMBOLS "Check Windows DLL export boundaries with hidden visibility on non-Windows" OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DeveloperOptions.cmake")
@@ -328,6 +344,22 @@ else()
     message(STATUS "Compiler cache: disabled")
 endif()
 
+if(MSVC)
+    foreach(_lfs_language IN ITEMS C CXX CUDA)
+        set(CMAKE_${_lfs_language}_COMPILER_LAUNCHER
+            "${CMAKE_COMMAND}"
+            -P "${CMAKE_SOURCE_DIR}/cmake/NormalizeMsvcFlags.cmake"
+            --
+            ${CMAKE_${_lfs_language}_COMPILER_LAUNCHER})
+    endforeach()
+    unset(_lfs_language)
+endif()
+
+# native_fs relies on MSVC's lexically_relative fix for \\?\ paths (LWG 3699, VS 2022 17.4).
+if(MSVC AND MSVC_VERSION LESS 1934)
+    message(FATAL_ERROR "LichtFeld Studio needs Visual Studio 2022 17.4 or newer, found MSVC ${MSVC_VERSION}")
+endif()
+
 # Minimum SM for PTX-only (75=Turing, 80=Ampere, 86=GA102, 89=Ada, 90=Hopper)
 set(BUILD_CUDA_MIN_SM "75" CACHE STRING "Minimum SM for PTX-only builds")
 
@@ -377,7 +409,7 @@ if(NVIDIA_SMI)
         set(LichtFeld-Studio_CUDA_ARCH "native")
     endif()
 else()
-    message(WARNING "nvidia-smi not found! We are likely in CI, default to 8.6.")
+    message(STATUS "nvidia-smi not found; using CUDA architecture 8.6 for this build")
     set(DETECTED_COMPUTE_CAP 8.6)
     set(LichtFeld-Studio_CUDA_ARCH "86")
 endif()
@@ -472,7 +504,7 @@ find_package(TIFF REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(Freetype REQUIRED)
 find_package(WebP REQUIRED)
-find_package(tinyexr CONFIG REQUIRED)
+find_package(OpenEXR 3.4.15 CONFIG REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(libdeflate CONFIG REQUIRED)
@@ -555,6 +587,10 @@ endif()
 
 if(LFS_ENABLE_CUDA_DEVICE_DEBUG)
     add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-G>)
+else()
+    # Device debug already includes line information; passing both flags makes
+    # nvcc and ptxas warn about the redundant, overridden -lineinfo option.
+    add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-lineinfo>)
 endif()
 
 add_compile_definitions(
@@ -578,6 +614,25 @@ add_subdirectory(src/geometry)   # Geometry utilities
 add_subdirectory(src/mcp)        # MCP server (AI agent integration)
 add_subdirectory(src/python)
 
+if(LFS_HIDDEN_SYMBOLS AND NOT WIN32)
+    # Match the libraries using LFS_*_API DLL exports; leave static libraries alone.
+    set_target_properties(lfs_logger lfs_core lfs_visualizer lfs_mcp PROPERTIES
+        CXX_VISIBILITY_PRESET hidden
+        CUDA_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN ON
+    )
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # ELF shared links otherwise defer missing exports until Python imports the module.
+        foreach(_lfs_export_consumer IN ITEMS lfs_logger lfs_core lfs_visualizer lfs_mcp lfs_py)
+            target_link_options(${_lfs_export_consumer} PRIVATE "LINKER:--no-undefined")
+        endforeach()
+        # FFmpeg assembly uses direct references to archive-local data in the shared visualizer.
+        # SPZ globals must stay local too: the Python module links another copy of its archive.
+        target_link_options(lfs_visualizer PRIVATE
+            "LINKER:--exclude-libs,libavcodec.a:libavutil.a:libspz_lib.a")
+    endif()
+endif()
+
 # =============================================================================
 # MAIN EXECUTABLES
 # =============================================================================
@@ -595,7 +650,11 @@ add_executable(${PROJECT_NAME}
     src/app/mcp_runtime_tools.cpp
     src/app/mcp_sequencer_tools.cpp
     src/app/mcp_ui_registry_tools.cpp
+    src/app/compare.cpp
     src/app/converter.cpp
+    src/app/licht_command.cpp
+    src/app/converter_output_paths.cpp
+    src/app/converter_overwrite.cpp
     resources/lichtfeld-studio.rc
     resources/lichtfeld-studio.manifest
 )
@@ -604,6 +663,18 @@ add_dependencies(${PROJECT_NAME} lfs_core_abi_stamp)
 target_include_directories(${PROJECT_NAME} BEFORE PRIVATE
     "${LFS_CORE_ABI_INCLUDE_DIR}"
 )
+
+# Give every first-party Windows binary a consistent product identity. This
+# also covers lfs_core.dll, which Defender has flagged in local source builds.
+lfs_add_windows_version_resource(${PROJECT_NAME} "LichtFeld Studio")
+lfs_add_windows_version_resource(lfs_core "LichtFeld Studio core and tensor runtime")
+lfs_add_windows_version_resource(lfs_diagnostics "LichtFeld Studio diagnostics")
+lfs_add_windows_version_resource(lfs_logger "LichtFeld Studio logging")
+lfs_add_windows_version_resource(lfs_event_bridge "LichtFeld Studio event bridge")
+lfs_add_windows_version_resource(lfs_visualizer "LichtFeld Studio visualizer")
+lfs_add_windows_version_resource(lfs_mcp "LichtFeld Studio MCP server")
+lfs_add_windows_version_resource(lfs_python_runtime "LichtFeld Studio Python runtime")
+lfs_add_windows_version_resource(lfs_py "LichtFeld Studio Python module")
 
 # The binary only carries code for these architectures; the app refuses to start on anything
 # lower instead of dying inside the first kernel launch (#1540).
@@ -790,6 +861,15 @@ if(WIN32 AND DEFINED VCPKG_TARGET_TRIPLET)
     else()
         set(_vcpkg_debug_dlls)
     endif()
+
+    # Core-only builds install none of these DLLs. Test-enabled builds also
+    # install the C++ oracle; keep its DLLs out of the application directory.
+    set(_lfs_exr_cpp_dll_pattern "^$")
+    if(TARGET OpenEXR::OpenEXR)
+        set(_lfs_exr_cpp_dll_pattern "/(OpenEXR|OpenEXRUtil|Iex|IlmThread|Imath)-3_[0-9]+(_d)?[.]dll$")
+    endif()
+    list(FILTER _vcpkg_release_dlls EXCLUDE REGEX "${_lfs_exr_cpp_dll_pattern}")
+    list(FILTER _vcpkg_debug_dlls EXCLUDE REGEX "${_lfs_exr_cpp_dll_pattern}")
 
     # Always copy release DLLs - needed for both Release and Debug builds
     if(_vcpkg_release_dlls)
@@ -1179,13 +1259,17 @@ endif()
 # =============================================================================
 # TESTING (Optional)
 # =============================================================================
-if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_LOCALIZATION_TESTS)
+if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_LOCALIZATION_TESTS OR BUILD_PANEL_LAYOUT_TESTS OR BUILD_VISUALIZER_TESTS)
     enable_testing()
     add_subdirectory(tests)
     if(BUILD_UNICODE_TEST_ONLY)
         message(STATUS "Unicode path test enabled. Build with 'ninja unicode_path_test' and run with 'ctest -R UnicodePathTest'")
     elseif(BUILD_LOCALIZATION_TESTS AND NOT BUILD_TESTS)
         message(STATUS "Headless localization tests enabled. Build with 'ninja test_localization_contracts' and run with 'ctest -R LocalizationContracts'")
+    elseif(BUILD_PANEL_LAYOUT_TESTS AND NOT BUILD_TESTS)
+        message(STATUS "Panel layout tests enabled. Build target panel_layout_tests to run them")
+    elseif(BUILD_VISUALIZER_TESTS AND NOT BUILD_TESTS)
+        message(STATUS "CPU-only visualizer tests enabled. Build target lichtfeld_visualizer_tests and run with 'ctest -R lichtfeld_visualizer_tests'")
     elseif(NOT BUILD_TESTS)
         message(STATUS "Format tests enabled. Build with 'ninja lichtfeld_format_tests' and run with 'ctest -L format'")
     else()
@@ -1255,7 +1339,9 @@ install(TARGETS lfs_mcp
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
-install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" DESTINATION ".")
+install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" "${CMAKE_SOURCE_DIR}/LICENSE-EXCEPTION.txt" DESTINATION ".")
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/resources/licenses/"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/LichtFeld-Studio/licenses")
 
 set(INSTALL_RESOURCE_DIR "${CMAKE_INSTALL_DATADIR}/LichtFeld-Studio")
 if(_LFS_VULKAN_RASTERIZER_SPV_DIR)
@@ -1299,6 +1385,9 @@ if(TARGET nvimgcodec)
     install(TARGETS nvimgcodec
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        # Keep SDK headers out of the application's default runtime install.
+        PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+            COMPONENT Development EXCLUDE_FROM_ALL
     )
     if(TARGET nvjpeg_ext)
         install(TARGETS nvjpeg_ext
@@ -1426,6 +1515,7 @@ if(BUILD_PORTABLE)
             # Copy vcpkg DLLs
             if(EXISTS \"${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin\")
                 file(GLOB _vcpkg \"${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin/*.dll\")
+                list(FILTER _vcpkg EXCLUDE REGEX \"${_lfs_exr_cpp_dll_pattern}\")
                 foreach(_v IN LISTS _vcpkg)
                     file(INSTALL \"\${_v}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}\")
                 endforeach()
@@ -1466,4 +1556,86 @@ elseif(SCCACHE_PROGRAM)
         COMMAND ${SCCACHE_PROGRAM} --zero-stats
         COMMENT "Cleaning build and resetting sccache stats"
     )
+endif()
+
+# Generate release notices from the exact installed vcpkg triplet and payload.
+# This runs last so the shared-library inventory includes all runtime bundles.
+install(CODE "
+    set(_lfs_notice_output \"${CMAKE_BINARY_DIR}/generated/THIRD-PARTY-LICENSES.md\")
+    execute_process(
+        COMMAND \"${Python_EXECUTABLE}\" \"${CMAKE_SOURCE_DIR}/tools/generate_third_party_licenses.py\"
+            --source \"${CMAKE_SOURCE_DIR}\"
+            --triplet-dir \"${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}\"
+            --install-prefix \"\${CMAKE_INSTALL_PREFIX}\"
+            --output \"\${_lfs_notice_output}\"
+            --vcpkg-root \"${Z_VCPKG_ROOT_DIR}\"
+            --check
+        RESULT_VARIABLE _lfs_notice_result
+    )
+    if(NOT _lfs_notice_result EQUAL 0)
+        message(FATAL_ERROR \"Third-party notice generation or coverage check failed\")
+    endif()
+    file(INSTALL \"\${_lfs_notice_output}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}\")
+" COMPONENT runtime)
+
+option(BUILD_SPLAT_TRANSFER_TESTS "Build splat drag export contract tests" ${BUILD_FORMAT_TESTS})
+if(BUILD_SPLAT_TRANSFER_TESTS)
+    add_executable(lfs_splat_drag_axes_contract tools/splat_transfer_test/axes_contract.cpp)
+    target_include_directories(lfs_splat_drag_axes_contract PRIVATE src/visualizer)
+    target_link_libraries(lfs_splat_drag_axes_contract PRIVATE glm::glm)
+    target_compile_features(lfs_splat_drag_axes_contract PRIVATE cxx_std_23)
+    enable_testing()
+    add_test(NAME splat_drag_axes_contract COMMAND lfs_splat_drag_axes_contract)
+    add_executable(lfs_native_modal_frame_contract tools/splat_transfer_test/modal_frame_contract.cpp src/visualizer/core/main_loop.cpp)
+    target_include_directories(lfs_native_modal_frame_contract PRIVATE src/visualizer)
+    target_compile_definitions(lfs_native_modal_frame_contract PRIVATE LFS_VIS_EXPORTS)
+    target_compile_features(lfs_native_modal_frame_contract PRIVATE cxx_std_23)
+    target_link_libraries(lfs_native_modal_frame_contract PRIVATE lfs_core Threads::Threads)
+    add_executable(lfs_file_transfer_progress_contract tools/splat_transfer_test/progress_contract.cpp)
+    target_include_directories(lfs_file_transfer_progress_contract PRIVATE src/visualizer)
+    target_compile_features(lfs_file_transfer_progress_contract PRIVATE cxx_std_23)
+    target_link_libraries(lfs_file_transfer_progress_contract PRIVATE Threads::Threads)
+    enable_testing()
+    add_test(NAME file_transfer_progress_contract COMMAND lfs_file_transfer_progress_contract)
+    add_test(NAME native_modal_frame_contract COMMAND lfs_native_modal_frame_contract)
+    set_tests_properties(native_modal_frame_contract PROPERTIES TIMEOUT 30)
+    set_tests_properties(file_transfer_progress_contract PROPERTIES TIMEOUT 30)
+    add_executable(lfs_splat_transfer_test tools/splat_transfer_test/main.cpp src/visualizer/gui/utils/splat_transfer.cpp)
+    target_include_directories(lfs_splat_transfer_test PRIVATE src/visualizer src/io)
+    target_compile_definitions(lfs_splat_transfer_test PRIVATE LFS_VIS_EXPORTS)
+    target_link_libraries(lfs_splat_transfer_test PRIVATE lfs_core lfs_io CUDA::cudart)
+    target_compile_features(lfs_splat_transfer_test PRIVATE cxx_std_23)
+    enable_testing()
+    add_test(NAME splat_transfer_contract COMMAND lfs_splat_transfer_test)
+    # Snapshot hydration and SH storage require CUDA. Hosted CPU runners still
+    # run all native/progress contracts and report this integration test skipped.
+    set_tests_properties(splat_transfer_contract PROPERTIES SKIP_RETURN_CODE 77 LABELS "gpu")
+    if(WIN32)
+        add_executable(lfs_native_drag_contract resources/lichtfeld-studio.rc src/visualizer/gui/utils/drag_drop_native.cpp tools/splat_transfer_test/windows_contract.cpp src/visualizer/gui/utils/native_file_drag.cpp src/visualizer/gui/utils/native_file_drag_wayland.cpp)
+        target_include_directories(lfs_native_drag_contract PRIVATE src/visualizer src/core/include)
+        target_compile_definitions(lfs_native_drag_contract PRIVATE LFS_NATIVE_DRAG_TESTS=1)
+        target_link_libraries(lfs_native_drag_contract PRIVATE lfs_core SDL3::SDL3 ole32 shell32 uuid psapi)
+        target_compile_features(lfs_native_drag_contract PRIVATE cxx_std_23)
+        add_test(NAME native_drag_contract COMMAND lfs_native_drag_contract)
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        pkg_check_modules(LFS_DRAG_TEST_WAYLAND REQUIRED IMPORTED_TARGET wayland-client wayland-server)
+        add_executable(lfs_wayland_drag_contract tools/splat_transfer_test/wayland_contract.cpp src/visualizer/gui/utils/native_file_drag.cpp src/visualizer/gui/utils/native_file_drag_wayland.cpp)
+        target_include_directories(lfs_wayland_drag_contract PRIVATE src src/visualizer src/core/include)
+        target_compile_definitions(lfs_wayland_drag_contract PRIVATE LFS_HAS_WAYLAND_DRAG=1)
+        target_link_libraries(lfs_wayland_drag_contract PRIVATE SDL3::Headers PkgConfig::LFS_GTK3 PkgConfig::LFS_DRAG_TEST_WAYLAND Threads::Threads X11)
+        target_compile_features(lfs_wayland_drag_contract PRIVATE cxx_std_23)
+        add_test(NAME wayland_drag_contract COMMAND lfs_wayland_drag_contract)
+        add_executable(lfs_x11_drag_contract tools/splat_transfer_test/x11_contract.cpp src/visualizer/gui/utils/native_file_drag.cpp src/visualizer/gui/utils/native_file_drag_wayland.cpp)
+        target_include_directories(lfs_x11_drag_contract PRIVATE src src/visualizer src/core/include)
+        target_compile_definitions(lfs_x11_drag_contract PRIVATE LFS_HAS_WAYLAND_DRAG=1 LFS_NATIVE_DRAG_TESTS=1)
+        target_link_libraries(lfs_x11_drag_contract PRIVATE SDL3::Headers PkgConfig::LFS_GTK3 PkgConfig::LFS_DRAG_TEST_WAYLAND Threads::Threads X11)
+        target_compile_features(lfs_x11_drag_contract PRIVATE cxx_std_23)
+        find_program(LFS_XVFB_RUN xvfb-run)
+        if(LFS_XVFB_RUN)
+            add_test(NAME x11_drag_contract COMMAND "${LFS_XVFB_RUN}" -a $<TARGET_FILE:lfs_x11_drag_contract>)
+        else()
+            add_test(NAME x11_drag_contract COMMAND lfs_x11_drag_contract)
+        endif()
+        set_tests_properties(x11_drag_contract PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT "GDK_BACKEND=x11" TIMEOUT 30)
+    endif()
 endif()

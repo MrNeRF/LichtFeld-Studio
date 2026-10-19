@@ -68,8 +68,9 @@ if (BUILD_NVJPEG2K_EXT)
             nvjpeg2k_headers
             URL      ${_nvjpeg2k_redist_url}
             URL_HASH ${_nvjpeg2k_redist_hash}
+            DOWNLOAD_EXTRACT_TIMESTAMP FALSE
         )
-        FetchContent_Populate(nvjpeg2k_headers)
+        FetchContent_MakeAvailable(nvjpeg2k_headers)
         set(NVJPEG2K_SEARCH_PATHS "${nvjpeg2k_headers_SOURCE_DIR}/include")
         set(NVJPEG2K_REDIST_ROOT "${nvjpeg2k_headers_SOURCE_DIR}" CACHE INTERNAL "nvJPEG2000 redist root")
     else()
@@ -107,8 +108,9 @@ if (BUILD_NVTIFF_EXT)
            nvtiff_headers
            URL      https://developer.download.nvidia.com/compute/nvtiff/redist/libnvtiff/linux-x86_64/libnvtiff-linux-x86_64-0.8.0.82_cuda12-archive.tar.xz
            URL_HASH SHA512=6eea339a73a1ea306532a5f75b8a7b959ce7653c805cac855e050d5a00073a4bd46d3d69e8d84a367e42199495b634bb855fe99234cbe2d828b19df93a00ac25
+           DOWNLOAD_EXTRACT_TIMESTAMP FALSE
         )
-        FetchContent_Populate(nvtiff_headers)
+        FetchContent_MakeAvailable(nvtiff_headers)
         set(NVTIFF_SEARCH_PATHS "${nvtiff_headers_SOURCE_DIR}/include")
     else()
         set(NVTIFF_SEARCH_PATHS ${CTK_SEARCH_PATHS})

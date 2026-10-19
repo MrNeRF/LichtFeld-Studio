@@ -23,6 +23,11 @@
 #define HIGS_TILE_WIDTH              8
 #define HIGS_TILE_HEIGHT             8
 #define HIGS_TILE_SIZE               (HIGS_TILE_WIDTH * HIGS_TILE_HEIGHT)
+// One coverage bit per 4x4 output region.
+#define HIGS_DEPTH_SAMPLE_TILE_SIZE 4
+// One 32-splat membership ballot per render tile and mini-batch, retained
+// only when compose needs exact median depth.
+#define HIGS_REPLAY_MASK_WORDS_PER_BATCH ((RASTER_BATCH_SIZE / SUBGROUP_SIZE) * HIGS_MACRO_TILE_SIZE_TILES)
 // Macro-tile extent in legacy 16px-tile units (projection rects use that grid).
 #define HIGS_MACRO_T16_W ((HIGS_MACRO_TILE_WIDTH_TILES * HIGS_TILE_WIDTH) / TILE_WIDTH)
 #define HIGS_MACRO_T16_H ((HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT) / TILE_HEIGHT)
@@ -30,7 +35,8 @@
 // Raster/compose run in waves of this many 1024-splat batches so the half4
 // partials pool stays bounded (16384 batches x 32 tiles x 256 px x 8 B = 1 GiB).
 #define HIGS_RASTER_WAVE_BATCHES 16384
-#define HIGS_RASTER_MAX_WAVES    16
+// A full 32K square macro grid needs 33 waves; pixel storage may be banded.
+#define HIGS_RASTER_MAX_WAVES 64
 
 // Fixed per-depth-wave tile-instance budget. Interactive recording arms the
 // capability-selected number of slots; exports record an exact upper bound.

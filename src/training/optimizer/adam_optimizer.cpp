@@ -58,6 +58,26 @@ namespace lfs::training {
             return (tensor.capacity() > 0 ? tensor.capacity() : tensor.shape()[0]) * row_size;
         }
 
+        void grow_grad_rows(lfs::core::Tensor& grad, const std::string& name,
+                            const size_t old_rows, const size_t new_rows,
+                            const size_t capacity_rows) {
+            if (!grad.is_valid() || grad.numel() == 0) {
+                return;
+            }
+            const size_t rows = grad.shape()[0];
+            LFS_ASSERT_MSG(rows >= old_rows,
+                           std::format("AdamOptimizer: {} grad has {} rows but optimizer state "
+                                       "already had {} before growing to {}",
+                                       name, rows, old_rows, new_rows));
+            if (rows >= new_rows) {
+                return;
+            }
+            if (grad.capacity() < new_rows) {
+                grad.reserve(std::max(capacity_rows, new_rows));
+            }
+            grad.append_zeros(new_rows - rows);
+        }
+
     } // namespace
 
     void ensure_joint_bounds_capacity(lfs::core::Tensor& joint_bounds,
@@ -173,6 +193,39 @@ namespace lfs::training {
         crop_damping_mask_ = std::move(mask);
     }
 
+    void AdamOptimizer::set_crop_roi_rows(lfs::core::Tensor rows, const float growth_inside) {
+        LFS_ASSERT_MSG(
+            std::isfinite(growth_inside) && growth_inside >= 0.0f && growth_inside <= 1.0f,
+            "AdamOptimizer crop growth share must be finite and within [0, 1]");
+        if (rows.is_valid()) {
+            LFS_ASSERT_MSG(
+                rows.dtype() == lfs::core::DataType::Bool && rows.ndim() == 1,
+                "AdamOptimizer crop ROI rows must be a 1D bool tensor");
+            if (rows.device() != lfs::core::Device::CUDA)
+                rows = rows.cuda();
+            if (!rows.is_contiguous())
+                rows = rows.contiguous();
+        }
+        crop_roi_rows_ = std::move(rows);
+        cropbox_growth_inside_ = growth_inside;
+    }
+
+    void AdamOptimizer::set_crop_score_mask(lfs::core::Tensor mask) {
+        if (mask.is_valid()) {
+            LFS_ASSERT_MSG(
+                mask.dtype() == lfs::core::DataType::Bool && mask.ndim() == 1,
+                "AdamOptimizer crop score mask must be a 1D bool tensor");
+            LFS_ASSERT_MSG(
+                mask.numel() == static_cast<size_t>(splat_data_.size()),
+                "AdamOptimizer crop score mask must match the model row count");
+            if (mask.device() != lfs::core::Device::CUDA)
+                mask = mask.cuda();
+            if (!mask.is_contiguous())
+                mask = mask.contiguous();
+        }
+        crop_score_mask_ = std::move(mask);
+    }
+
     void AdamOptimizer::set_cropbox_lr_scale(const float scale) {
         LFS_ASSERT_MSG(
             std::isfinite(scale) && scale >= 0.0f && scale <= 1.0f,
@@ -180,14 +233,9 @@ namespace lfs::training {
         cropbox_lr_scale_ = scale;
     }
 
-    void AdamOptimizer::set_per_splat_mean_step(const bool enabled,
-                                                const float median_extent,
-                                                const float r_min,
-                                                const float r_max) {
+    void AdamOptimizer::set_per_splat_mean_step(const bool enabled, const float median_extent) {
         per_splat_mean_step_ = enabled;
         mean_step_median_extent_ = median_extent;
-        mean_step_r_min_ = r_min;
-        mean_step_r_max_ = r_max;
         if (!enabled) {
             set_mean_step_far_mask({});
         }
@@ -204,8 +252,7 @@ namespace lfs::training {
                        "AdamOptimizer mean-step far mask must be a 1D bool tensor");
         LFS_ASSERT_MSG(mask.numel() <= static_cast<size_t>(std::numeric_limits<int>::max()),
                        "AdamOptimizer mean-step far mask exceeds the supported row count");
-        // Construct fresh handles: assignment to a view copies into its existing
-        // storage, even for mask = mask.cuda() or mask = mask.clone().
+        // Retain owned, contiguous device storage for the raw mask pointer.
         auto uploaded = mask.device() == lfs::core::Device::CUDA ? mask : mask.cuda();
         auto storage = uploaded.is_contiguous() && uploaded.owns_memory()
                            ? uploaded
@@ -361,8 +408,7 @@ namespace lfs::training {
                 static_cast<float>(config_.eps),
                 batch_stream,
                 batch_mean_step_scale_raw, batch_mean_step_scale_n,
-                mean_step_median_extent_, mean_step_r_min_, mean_step_r_max_,
-                mean_step_far_mask_, mean_step_far_mask_n_,
+                mean_step_median_extent_, mean_step_far_mask_, mean_step_far_mask_n_,
                 screen_share_max_, screen_share_n_, screen_share_limit_, screen_share_penalty_);
         }
         step_param(ParamType::ShN, iteration, apply_sh_warmup);
@@ -445,8 +491,12 @@ namespace lfs::training {
             last_step_zeroed_gradients_ = false;
             return;
         }
-        for (auto& [_, state] : states_) {
+        for (auto& [name, state] : states_) {
             if (state.grad.is_valid() && state.grad.numel() > 0) {
+                LFS_ASSERT_MSG(state.size <= state.grad.shape()[0],
+                               std::format("AdamOptimizer::zero_grad: {} optimizer state has {} rows "
+                                           "but its grad buffer only {}",
+                                           name, state.size, state.grad.shape()[0]));
                 const size_t bytes = state.size * (state.grad.numel() / state.grad.shape()[0]) * sizeof(float);
                 LFS_CUDA_CHECK(cudaMemsetAsync(state.grad.ptr<float>(), 0, bytes, state.grad.stream()));
             }
@@ -803,19 +853,6 @@ namespace lfs::training {
                 throw std::runtime_error("Optimizer state desync: " + name);
             }
             const size_t feature_dim = param_live.numel() / param_size;
-            if (mean_step_far_mask_storage_.is_valid()) {
-                mean_step_far_mask_storage_.sync_to_stream(execution_stream);
-            }
-            const float* mean_step_scale_raw = nullptr;
-            int mean_step_scale_n = 0;
-            if (type == ParamType::Means && per_splat_mean_step_) {
-                auto& scaling = splat_data_.scaling_raw();
-                if (scaling.is_valid() && scaling.numel() > 0) {
-                    lfs::core::waitForCUDAStream(execution_stream, scaling.stream());
-                    mean_step_scale_raw = scaling.ptr<float>();
-                    mean_step_scale_n = static_cast<int>(scaling.numel());
-                }
-            }
             const float* share_max = nullptr;
             int share_n = 0;
             float share_limit = 0.0f;
@@ -847,13 +884,6 @@ namespace lfs::training {
                 static_cast<float>(bias_correction1_rcp),
                 static_cast<float>(bias_correction2_sqrt_rcp),
                 execution_stream,
-                mean_step_scale_raw,
-                mean_step_scale_n,
-                mean_step_median_extent_,
-                mean_step_r_min_,
-                mean_step_r_max_,
-                mean_step_far_mask_,
-                mean_step_far_mask_n_,
                 share_max,
                 share_n,
                 share_limit,
@@ -943,6 +973,7 @@ namespace lfs::training {
                     if (moment_cap_floats >= float_layout && state.size < float_layout) {
                         // Capacity reserved at max_cap: advance logical size (new slots
                         // already zero-initialized under joint bounds when pre-allocated).
+                        grow_grad_rows(state.grad, name, state.size, float_layout, moment_cap_floats);
                         state.size = float_layout;
                     } else if (state.size < float_layout) {
                         // Pad-aware: derive n_new from prim count, not float/N (pad jumps).
@@ -974,6 +1005,7 @@ namespace lfs::training {
                                                   : state.exp_avg.capacity())
                                            : 0);
                             if (cap2 >= float_layout && state.size < float_layout) {
+                                grow_grad_rows(state.grad, name, state.size, float_layout, cap2);
                                 state.size = float_layout;
                             }
                         }
@@ -1091,8 +1123,6 @@ namespace lfs::training {
         fused.opacity = prepare_param(ParamType::Opacity, 1, true);
         fused.per_splat_mean_step = per_splat_mean_step_;
         fused.mean_step_median_extent = mean_step_median_extent_;
-        fused.mean_step_r_min = mean_step_r_min_;
-        fused.mean_step_r_max = mean_step_r_max_;
         fused.mean_step_far_mask = mean_step_far_mask_;
         fused.mean_step_far_mask_n = mean_step_far_mask_n_;
 
@@ -1191,6 +1221,44 @@ namespace lfs::training {
         }
         state.exp_avg.set_stream(stream);
         LFS_CUDA_CHECK(cudaFreeAsync(d_indices, stream));
+    }
+
+    void AdamOptimizer::reset_state_at_indices(ParamType type, const lfs::core::Tensor& indices) {
+        if (!indices.is_valid() || indices.numel() == 0)
+            return;
+        if (indices.ndim() != 1)
+            throw std::runtime_error("reset_state_at_indices: indices must be one-dimensional");
+        if (indices.dtype() != lfs::core::DataType::Int32 &&
+            indices.dtype() != lfs::core::DataType::Int64) {
+            throw std::runtime_error("reset_state_at_indices: indices must be int32 or int64");
+        }
+
+        if (indices.device() == lfs::core::Device::CUDA) {
+            auto device_indices = indices.is_contiguous() ? indices : indices.contiguous();
+            if (device_indices.dtype() != lfs::core::DataType::Int64) {
+                device_indices = device_indices.to(lfs::core::DataType::Int64);
+            }
+            const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+            lfs::core::waitForCUDAStream(stream, device_indices.stream());
+            relocate_params_at_indices_gpu(
+                type, device_indices.ptr<int64_t>(), device_indices.numel());
+            device_indices.set_stream(stream);
+            return;
+        }
+
+        const auto cpu_indices = indices.is_contiguous() ? indices : indices.contiguous();
+        std::vector<int64_t> host_indices;
+        host_indices.reserve(cpu_indices.numel());
+        if (cpu_indices.dtype() == lfs::core::DataType::Int64) {
+            const auto* ptr = cpu_indices.ptr<int64_t>();
+            host_indices.assign(ptr, ptr + cpu_indices.numel());
+        } else {
+            const auto* ptr = cpu_indices.ptr<int32_t>();
+            for (size_t i = 0; i < cpu_indices.numel(); ++i) {
+                host_indices.push_back(static_cast<int64_t>(ptr[i]));
+            }
+        }
+        reset_state_at_indices(type, host_indices);
     }
 
     void AdamOptimizer::extend_state_by_gather(ParamType type, const lfs::core::Tensor& indices) {
@@ -1354,8 +1422,7 @@ namespace lfs::training {
                               packed_new_rows <= state.exp_avg.capacity() &&
                               (!state.grad.is_valid() || new_size <= state.grad.capacity());
             if (fits) {
-                if (state.grad.is_valid())
-                    state.grad.append_zeros(growth);
+                grow_grad_rows(state.grad, name, state.size, new_size, new_size);
                 if (type == ParamType::ShN) {
                     state.exp_avg.append_zeros(packed_growth);
                 } else {
@@ -1381,8 +1448,7 @@ namespace lfs::training {
                 if (state.exp_avg.is_valid() && state.exp_avg.capacity() < moment_cap) {
                     state.exp_avg.reserve(moment_cap);
                 }
-                if (state.grad.is_valid())
-                    state.grad.reserve(moment_cap);
+                grow_grad_rows(state.grad, name, state.size, new_size, moment_cap);
                 if (old_packed.is_valid() && old_packed.numel() > 0 &&
                     state.exp_avg.is_valid() && state.exp_avg.numel() > 0) {
                     const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
@@ -1684,6 +1750,9 @@ namespace lfs::training {
             const auto name = param_name(type);
             if (states_.contains(name)) {
                 auto& state = states_[name];
+
+                grow_grad_rows(state.grad, name, state.size, new_floats,
+                               std::max(state.capacity, new_floats));
 
                 // Joint states grow packed exp_avg directly.
                 if (state.is_joint() && state.exp_avg.is_valid()) {

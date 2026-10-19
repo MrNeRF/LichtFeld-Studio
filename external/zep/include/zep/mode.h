@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <stack>
 
 #include "zep/buffer.h"
@@ -164,6 +165,7 @@ namespace Zep {
         virtual CursorType GetCursorType() const;
 
         virtual void SwitchMode(EditorMode currentMode);
+        void SetSelection(const GlyphIterator& anchor, const GlyphIterator& cursor);
 
         virtual ZepWindow* GetCurrentWindow() const;
 

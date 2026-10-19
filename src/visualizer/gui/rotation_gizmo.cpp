@@ -602,12 +602,8 @@ namespace lfs::vis::gui {
             hovered_axis = nearestAxis(mouse, pivot_screen, ring_radius_px, rings);
         }
 
-        if (g_active.active && g_active.id == config.id) {
-            result.active = config.input.mouse_left_down;
-            if (!result.active) {
-                g_active = ActiveState{};
-            }
-        }
+        const bool release_active_drag =
+            g_active.active && g_active.id == config.id && !config.input.mouse_left_down;
 
         if (!g_active.active && config.input_enabled &&
             hovered_axis != RotationGizmoAxis::None &&
@@ -667,8 +663,6 @@ namespace lfs::vis::gui {
 
         result.hovered_axis = hovered_axis;
         result.hovered = hovered_axis != RotationGizmoAxis::None;
-        g_hovered = result.hovered || result.active;
-
         const RotationGizmoAxis emphasized_axis = result.active ? g_active.axis : hovered_axis;
         for (const auto& ring : rings) {
             const bool emphasized = emphasized_axis == ring.axis.axis;
@@ -685,6 +679,14 @@ namespace lfs::vis::gui {
         drag_config.draw_list->AddCircleFilled(glm::vec2(pivot_screen.x, pivot_screen.y), 3.5f,
                                                overlayColor(250, 250, 255, 230), 24);
 
+        result.released = release_active_drag;
+        result.returned_to_start = release_active_drag && mouse == g_active.start_mouse;
+        if (release_active_drag)
+            result.active = false;
+        g_hovered = result.hovered || result.active;
+        if (release_active_drag)
+            g_active = ActiveState{};
+
         return result;
     }
 
@@ -694,6 +696,11 @@ namespace lfs::vis::gui {
 
     bool isRotationGizmoActive() {
         return g_active.active;
+    }
+
+    void cancelRotationGizmoDrag() {
+        g_active = ActiveState{};
+        g_hovered = false;
     }
 
 } // namespace lfs::vis::gui

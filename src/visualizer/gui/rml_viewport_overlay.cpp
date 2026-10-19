@@ -11,8 +11,11 @@
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "gui/rmlui/rmlui_system_interface.hpp"
 #include "gui/rmlui/rmlui_vk_backend.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
+#include "gui/viewport_gizmo_geometry.hpp"
+#include "input/input_controller.hpp"
 #include "internal/resource_paths.hpp"
 #include "preferences.hpp"
 #include "python/python_runtime.hpp"
@@ -30,21 +33,27 @@
 #include <format>
 #include <limits>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace lfs::vis::gui {
     namespace {
+        // Below this the empty-scene hint no longer fits beside the tool rail.
+        constexpr float kCrampedViewportWidthDp = 360.0f;
+        constexpr float kCrampedViewportHeightDp = 240.0f;
+
         [[nodiscard]] bool isInteractiveViewportOverlayElement(const Rml::Element* const element) {
             if (!element)
                 return false;
             for (auto* node = element; node; node = node->GetParentNode()) {
-                if (node->GetId() == "project-drop-overlay")
+                if (node->GetId() == "project-drop-overlay" || node->GetId() == "empty-state-hint")
                     return false;
             }
             return element->GetTagName() != "body" &&
                    element->GetTagName() != "#root" &&
                    element->GetId() != "overlay-body" &&
                    element->GetId() != "dm-root" &&
+                   element->GetId() != "viewport-content" &&
                    !element->IsClassSet("viewport-split-divider") &&
                    !element->IsClassSet("left-dock-resize-indicator");
         }
@@ -60,6 +69,7 @@ namespace lfs::vis::gui {
                    element->IsClassSet("toolbar-drag-handle") ||
                    element->IsClassSet("viewport-transform-option") ||
                    element->IsClassSet("viewport-transform-action") ||
+                   element->IsClassSet("viewport-transfer-queue") ||
                    element->IsClassSet("vram-hud-tree-row") ||
                    element->IsClassSet("vram-hud-expand-toggle") ||
                    element->IsClassSet("vram-hud-tab") ||
@@ -189,7 +199,6 @@ namespace lfs::vis::gui {
         doc_registered_ = false;
         gt_metrics_config_subscription_.reset();
         camera_metrics_subscription_.reset();
-        vram_hud_subscription_.reset();
         document_sync_subscriptions_.clear();
         resetToolbarDragListeners();
 
@@ -220,14 +229,15 @@ namespace lfs::vis::gui {
         if (rml_manager_)
             rml_manager_->releaseCachedVulkanContext(direct_cache_);
 
+        if (vram_hud_)
+            vram_hud_->onDocumentDestroyed();
+
         if (document_) {
             resetToolbarDragListeners();
             rml_context_->UnloadDocument(document_);
             rml_context_->Update();
         }
 
-        if (vram_hud_)
-            vram_hud_->onDocumentDestroyed();
         document_ = nullptr;
         body_el_ = nullptr;
         base_rcss_.clear();
@@ -323,7 +333,8 @@ namespace lfs::vis::gui {
     }
 
     bool RmlViewportOverlay::syncBuiltinDocument(const bool force) {
-        if (!document_ || (!force && !document_sync_dirty_))
+        const bool requested = std::exchange(document_sync_requested_, false);
+        if (!document_ || (!force && !document_sync_dirty_ && !requested))
             return false;
 
         LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.builtin_document_sync", 0.25);
@@ -354,6 +365,10 @@ namespace lfs::vis::gui {
         vp_pos_ = pos;
         vp_size_ = size;
         screen_origin_ = screen_origin;
+        if (vram_hud_)
+            vram_hud_->setViewportGeometry(
+                viewport_content_offset_, 0.0f,
+                vp_size_.x - viewport_content_offset_, vp_size_.y);
         if (context_size_changed && project_drag_overlay_.visible)
             applyProjectDragOverlay();
     }
@@ -362,16 +377,23 @@ namespace lfs::vis::gui {
         if (std::abs(viewport_content_offset_ - x) > 0.5f) {
             viewport_content_offset_ = x;
             viewport_content_offset_dirty_ = true;
+            toolbar_roots_dirty_ = true;
             markRenderNeeded(RenderReason::ViewportResize);
         }
+        if (vram_hud_)
+            vram_hud_->setViewportGeometry(
+                viewport_content_offset_, 0.0f,
+                vp_size_.x - viewport_content_offset_, vp_size_.y);
     }
 
     void RmlViewportOverlay::setToolbarPanels(const float primary_x,
                                               const float primary_width,
+                                              const float inset,
                                               const bool show_secondary,
                                               const float secondary_x,
                                               const float secondary_width) {
         const bool changed =
+            std::abs(toolbar_inset_ - inset) > 0.5f ||
             std::abs(primary_toolbar_x_ - primary_x) > 0.5f ||
             std::abs(primary_toolbar_width_ - primary_width) > 0.5f ||
             show_secondary_toolbar_ != show_secondary ||
@@ -381,6 +403,7 @@ namespace lfs::vis::gui {
             return;
         }
 
+        toolbar_inset_ = inset;
         primary_toolbar_x_ = primary_x;
         primary_toolbar_width_ = primary_width;
         show_secondary_toolbar_ = show_secondary;
@@ -431,7 +454,8 @@ namespace lfs::vis::gui {
             std::abs(gt_metrics_overlay_.y - state.y) > 0.5f ||
             gt_metrics_overlay_.psnr_text != state.psnr_text ||
             gt_metrics_overlay_.show_ssim != state.show_ssim ||
-            gt_metrics_overlay_.ssim_text != state.ssim_text;
+            gt_metrics_overlay_.ssim_text != state.ssim_text ||
+            gt_metrics_overlay_.metrics_status != state.metrics_status;
         if (!changed) {
             return;
         }
@@ -473,8 +497,8 @@ namespace lfs::vis::gui {
         if (!vram_hud_)
             return;
         const bool was_visible = vram_hud_->isVisible();
-        vram_hud_->setState(std::move(state));
-        if (was_visible || vram_hud_->isVisible())
+        const bool changed = vram_hud_->setState(std::move(state));
+        if (changed && (was_visible || vram_hud_->isVisible()))
             markRenderNeeded(RenderReason::VramHud);
     }
 
@@ -482,20 +506,6 @@ namespace lfs::vis::gui {
         auto& store = lfs::vis::app_store();
         gt_metrics_config_ = store.gt_metrics_overlay_config.get();
         camera_metrics_ = store.camera_metrics.get();
-
-        const auto make_overlay_state = [&store]() {
-            RmlViewportOverlay::VramHudOverlayState overlay_state;
-            const auto vram_hud_state = store.vram_hud.get();
-            const auto perf_hud_state = store.perf_hud.get();
-            if (vram_hud_state.visible && vram_hud_state.snapshot) {
-                overlay_state.visible = true;
-                overlay_state.snapshot = *vram_hud_state.snapshot;
-            }
-            overlay_state.perf_hud = perf_hud_state;
-            return overlay_state;
-        };
-        const auto overlay_state = make_overlay_state();
-        setVramHudOverlay(std::move(overlay_state));
 
         gt_metrics_config_subscription_ = store.gt_metrics_overlay_config.subscribe(
             [this](const lfs::vis::AppStore::GTMetricsOverlayConfig& config) {
@@ -507,28 +517,6 @@ namespace lfs::vis::gui {
                 camera_metrics_ = metrics;
                 refreshGTMetricsOverlayFromStore();
             });
-        vram_hud_subscription_ = store.vram_hud.subscribe(
-            [this](const lfs::vis::AppStore::VramHud& state) {
-                RmlViewportOverlay::VramHudOverlayState overlay;
-                if (state.visible && state.snapshot) {
-                    overlay.visible = true;
-                    overlay.snapshot = *state.snapshot;
-                }
-                overlay.perf_hud = lfs::vis::app_store().perf_hud.get();
-                setVramHudOverlay(std::move(overlay));
-            });
-        perf_hud_subscription_ = store.perf_hud.subscribe(
-            [this](const lfs::vis::AppStore::PerfHud& state) {
-                auto overlay = lfs::vis::app_store().vram_hud.get();
-                VramHudOverlayState combined;
-                combined.perf_hud = state;
-                if (overlay.visible && overlay.snapshot) {
-                    combined.visible = true;
-                    combined.snapshot = *overlay.snapshot;
-                }
-                setVramHudOverlay(std::move(combined));
-            });
-
         auto mark_document_dirty = [this](const auto&) {
             markDocumentSyncDirty();
         };
@@ -536,6 +524,7 @@ namespace lfs::vis::gui {
         document_sync_subscriptions_.push_back(store.scene_generation.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.selection_generation.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.active_tool.subscribe(mark_document_dirty));
+        document_sync_subscriptions_.push_back(store.align_state_generation.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.active_submode.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.transform_space.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.pivot_mode.subscribe(mark_document_dirty));
@@ -554,6 +543,7 @@ namespace lfs::vis::gui {
         document_sync_subscriptions_.push_back(
             store.import_overlay_state.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.video_export_overlay_state.subscribe(mark_document_dirty));
+        document_sync_subscriptions_.push_back(store.gallery_state.subscribe(mark_document_dirty));
     }
 
     void RmlViewportOverlay::refreshGTMetricsOverlayFromStore() {
@@ -564,12 +554,16 @@ namespace lfs::vis::gui {
         state.show_ssim = gt_metrics_config_.show_ssim;
         state.psnr_text = "--";
         state.ssim_text = "--";
+        state.metrics_status = gt_metrics_config_.metrics_status;
 
         if (state.visible && camera_metrics_ &&
             camera_metrics_->camera_id == gt_metrics_config_.current_camera_id) {
-            state.psnr_text = std::format("{:.2f}", camera_metrics_->psnr);
-            if (state.show_ssim && camera_metrics_->ssim.has_value())
-                state.ssim_text = std::format("{:.4f}", *camera_metrics_->ssim);
+            state.metrics_status = camera_metrics_->status;
+            if (state.metrics_status == lfs::vis::AppStore::CameraMetricsStatus::Available) {
+                state.psnr_text = std::format("{:.2f}", camera_metrics_->psnr);
+                if (state.show_ssim && camera_metrics_->ssim.has_value())
+                    state.ssim_text = std::format("{:.4f}", *camera_metrics_->ssim);
+            }
         }
 
         setGTMetricsOverlay(std::move(state));
@@ -600,12 +594,15 @@ namespace lfs::vis::gui {
         if (!changed)
             return false;
 
+        if (auto* const content = document_->GetElementById("viewport-content"))
+            content->SetClass("split-view", show_secondary_toolbar_);
+
         const auto apply_root = [&](const char* element_id,
                                     const float x,
                                     const float width,
                                     const bool visible) {
             if (auto* const element = document_->GetElementById(element_id)) {
-                element->SetProperty("left", std::format("{:.1f}px", x));
+                element->SetProperty("left", std::format("{:.1f}px", x - viewport_content_offset_));
                 element->SetProperty("width", std::format("{:.1f}px", std::max(width, 0.0f)));
                 element->SetClass("hidden", !visible);
             }
@@ -621,7 +618,8 @@ namespace lfs::vis::gui {
                 element->SetProperty("left", std::format("{:.1f}px", x));
             }
         };
-        apply_left_toolbar_offset("primary-utility-toolbar", -primary_toolbar_x_);
+        apply_left_toolbar_offset("primary-utility-toolbar", toolbar_inset_);
+        apply_left_toolbar_offset("secondary-utility-toolbar", toolbar_inset_);
         attachToolbarDragListeners();
         applyToolbarPosition();
         applied_primary_toolbar_x_ = primary_toolbar_x_;
@@ -638,8 +636,7 @@ namespace lfs::vis::gui {
         if (!document_ || !rml_context_ || !toolbar_rail_layout_dirty_)
             return false;
 
-        const float dpi = std::max(rml_context_->GetDensityIndependentPixelRatio(), 0.01f);
-        const float available_height = std::max(0.0f, vp_size_.y - 24.0f * dpi);
+        const float available_height = std::max(0.0f, vp_size_.y - 2.0f * toolbar_inset_);
         auto* const primary_toolbar = document_->GetElementById("primary-utility-toolbar");
         auto* const secondary_toolbar = document_->GetElementById("secondary-utility-toolbar");
         auto* const primary_tools = document_->GetElementById("primary-rail-tools");
@@ -706,12 +703,60 @@ namespace lfs::vis::gui {
         return changed;
     }
 
+    bool RmlViewportOverlay::updateViewportOverlayPanelLayout() {
+        if (!document_ || !rml_context_)
+            return false;
+
+        auto* const content = document_->GetElementById("viewport-content");
+        if (!content)
+            return false;
+
+        const float content_left = content->GetAbsoluteOffset(Rml::BoxArea::Border).x;
+        float toolbar_right = -1.0f;
+        for (const char* const id : {"primary-utility-toolbar", "secondary-utility-toolbar"}) {
+            auto* const toolbar = document_->GetElementById(id);
+            if (!toolbar || !toolbar->GetParentNode() || toolbar->GetParentNode()->IsClassSet("hidden"))
+                continue;
+
+            const auto offset = toolbar->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto size = toolbar->GetBox().GetSize(Rml::BoxArea::Border);
+            toolbar_right = std::max(toolbar_right, offset.x + size.x);
+        }
+
+        const float panel_left = toolbar_right < 0.0f
+                                     ? -1.0f
+                                     : toolbar_right - content_left +
+                                           8.0f * std::max(rml_context_->GetDensityIndependentPixelRatio(), 0.01f);
+        bool changed = false;
+        for (const char* const id : {"transform-block",
+                                     "selection-block",
+                                     "depth-view-block",
+                                     "gt-compare-mode-block",
+                                     "viewport-export-block"}) {
+            auto* const overlay = document_->GetElementById(id);
+            if (!overlay)
+                continue;
+
+            if (panel_left < 0.0f) {
+                const auto* const current = overlay->GetProperty("left");
+                if (!current || current->ToString() != "12dp") {
+                    overlay->SetProperty("left", "12dp");
+                    changed = true;
+                }
+            } else {
+                const auto value = std::format("{:.1f}px", panel_left);
+                const auto* const current = overlay->GetProperty("left");
+                if (!current || current->ToString() != value) {
+                    overlay->SetProperty("left", value);
+                    changed = true;
+                }
+            }
+        }
+        return changed;
+    }
+
     float RmlViewportOverlay::toolbarFreeGap(const float toolbar_height) const {
-        const float dp_ratio = rml_context_
-                                   ? std::max(rml_context_->GetDensityIndependentPixelRatio(), 0.01f)
-                                   : 1.0f;
-        constexpr float kViewportGapDp = 12.0f;
-        return std::min(kViewportGapDp * dp_ratio,
+        return std::min(toolbar_inset_,
                         std::max(0.0f, (vp_size_.y - std::max(toolbar_height, 0.0f)) * 0.5f));
     }
 
@@ -758,7 +803,7 @@ namespace lfs::vis::gui {
             if (!toolbar)
                 return;
 
-            if (viewport_toolbar_position_ != "free") {
+            if (viewport_toolbar_position_ == "centered") {
                 if (mode_changed)
                     toolbar->RemoveProperty("margin-top");
                 applied_top = std::numeric_limits<float>::quiet_NaN();
@@ -768,7 +813,7 @@ namespace lfs::vis::gui {
             float height = toolbar->GetBox().GetSize(Rml::BoxArea::Border).y;
             if (height <= 0.0f)
                 height = fallback_height;
-            const float top = toolbarFreeTop(height);
+            const float top = viewport_toolbar_position_ == "free" ? toolbarFreeTop(height) : toolbar_inset_;
             if (!std::isfinite(applied_top) || std::abs(applied_top - top) > 0.25f) {
                 toolbar->SetProperty("margin-top", std::format("{:.1f}px", top));
                 applied_top = top;
@@ -878,8 +923,28 @@ namespace lfs::vis::gui {
         if (auto* const element = document_->GetElementById("viewport-content")) {
             element->SetProperty("left", std::format("{:.1f}px", viewport_content_offset_));
         }
+        if (auto* const border = document_->GetElementById("left-frame-border"))
+            border->SetProperty("left", std::format("{:.1f}px", viewport_content_offset_));
+        applyLeftDockResizeIndicator();
+        applySplitDividerOverlay();
         applyProjectDragOverlay();
         viewport_content_offset_dirty_ = false;
+    }
+
+    void RmlViewportOverlay::updateViewportContentClasses(const float dp_ratio) {
+        auto* const content = document_ ? document_->GetElementById("viewport-content") : nullptr;
+        if (!content)
+            return;
+        const float width_dp = (vp_size_.x - viewport_content_offset_) / dp_ratio;
+        const float height_dp = vp_size_.y / dp_ratio;
+        content->SetClass("viewport-cramped",
+                          width_dp < kCrampedViewportWidthDp || height_dp < kCrampedViewportHeightDp);
+        const auto update_gizmo = [&](const char* id, const float width) {
+            if (auto* root = document_->GetElementById(id))
+                root->SetClass("gizmo-cramped", !viewportGizmoFits(width, vp_size_.y, dp_ratio));
+        };
+        update_gizmo("primary-toolbar-root", primary_toolbar_width_);
+        update_gizmo("secondary-toolbar-root", secondary_toolbar_width_);
     }
 
     void RmlViewportOverlay::applySplitDividerOverlay() {
@@ -889,7 +954,7 @@ namespace lfs::vis::gui {
 
         if (auto* const overlay = document_->GetElementById("split-divider-overlay")) {
             overlay->SetClass("hidden", !split_divider_overlay_.visible);
-            overlay->SetProperty("left", std::format("{:.1f}px", split_divider_overlay_.x));
+            overlay->SetProperty("left", std::format("{:.1f}px", split_divider_overlay_.x - viewport_content_offset_));
             overlay->SetProperty("top", std::format("{:.1f}px", split_divider_overlay_.y));
             overlay->SetProperty("width", std::format("{:.1f}px", std::max(split_divider_overlay_.width, 0.0f)));
             overlay->SetProperty("height", std::format("{:.1f}px", std::max(split_divider_overlay_.height, 0.0f)));
@@ -905,6 +970,9 @@ namespace lfs::vis::gui {
                 document_->GetElementById("left-dock-resize-indicator")) {
             indicator->SetClass("hidden", !left_dock_resize_visible_);
             indicator->SetClass("active", left_dock_resize_active_);
+            indicator->SetProperty(
+                "left",
+                std::format("{:.1f}px", viewport_content_offset_ - left_dock_resize_thickness_));
             indicator->SetProperty(
                 "width",
                 std::format("{:.1f}px", left_dock_resize_thickness_));
@@ -936,6 +1004,16 @@ namespace lfs::vis::gui {
         }
         if (auto* const ssim = document_->GetElementById("gt-metrics-ssim")) {
             ssim->SetInnerRML(metric_text(gt_metrics_overlay_.ssim_text));
+            touched = true;
+        }
+        if (auto* const reason = document_->GetElementById("gt-metrics-training-required")) {
+            reason->SetClass("hidden", gt_metrics_overlay_.metrics_status !=
+                                           lfs::vis::AppStore::CameraMetricsStatus::NeedsInitializedTrainingSession);
+            touched = true;
+        }
+        if (auto* const reason = document_->GetElementById("gt-metrics-calculation-failed")) {
+            reason->SetClass("hidden", gt_metrics_overlay_.metrics_status !=
+                                           lfs::vis::AppStore::CameraMetricsStatus::CalculationFailed);
             touched = true;
         }
 
@@ -985,6 +1063,7 @@ namespace lfs::vis::gui {
 
     void RmlViewportOverlay::setProjectDragOverlay(ProjectDragOverlayState state) {
         if (project_drag_overlay_.visible == state.visible &&
+            project_drag_overlay_.gallery_scene == state.gallery_scene &&
             project_drag_overlay_.label == state.label) {
             return;
         }
@@ -999,21 +1078,27 @@ namespace lfs::vis::gui {
 
         if (auto* const overlay = document_->GetElementById("project-drop-overlay")) {
             overlay->SetClass("hidden", !project_drag_overlay_.visible);
-            overlay->SetProperty("left", std::format("{:.1f}px", viewport_content_offset_));
-            overlay->SetProperty(
-                "width",
-                std::format("{:.1f}px", std::max(vp_size_.x - viewport_content_offset_, 0.0f)));
         }
+        if (auto* const title = document_->GetElementById("project-drop-title"))
+            title->SetClass("hidden", project_drag_overlay_.gallery_scene);
+        if (auto* const title = document_->GetElementById("gallery-drop-title"))
+            title->SetClass("hidden", !project_drag_overlay_.gallery_scene);
         if (auto* const label = document_->GetElementById("project-drop-label")) {
             label->SetInnerRML(
                 Rml::StringUtilities::EncodeRml(project_drag_overlay_.label));
         }
     }
 
-    void RmlViewportOverlay::processInput(const PanelInputState& input) {
+    void RmlViewportOverlay::processInput(const PanelInputState& input, std::function<bool(float, float)> pointer_blocker) {
+        if (rml_manager_ && rml_context_ && rml_manager_->routeInput(rml_context_, input, [this](const PanelInputState& event) { processInput(event); }, false, std::move(pointer_blocker)))
+            return;
         wants_input_ = false;
+        cursor_request_ = {};
         if (!rml_context_ || !document_)
             return;
+        // The pointer rests on the dragged field; its tooltip would cover the panel.
+        const auto* const input_controller = InputController::instance();
+        const bool value_drag = input_controller && input_controller->isValueDragActive();
         if (vp_size_.x <= 0 || vp_size_.y <= 0)
             return;
         if (rml_manager_) {
@@ -1047,11 +1132,9 @@ namespace lfs::vis::gui {
         const bool pointer_drag =
             input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2];
         const bool keyboard_event =
-            !input.keys_pressed.empty() || !input.keys_released.empty() ||
-            !input.keys_repeated.empty() || !input.text_codepoints.empty() ||
-            !input.text_inputs.empty() || input.has_text_editing;
-        const bool vram_drag_capture = vram_hud_ && vram_hud_->isCapturingPointer();
-        const bool toolbar_drag_capture = toolbar_drag_active_;
+            !input.keys_pressed.empty() || !input.input_events.empty();
+        bool vram_drag_capture = vram_hud_ && vram_hud_->isCapturingPointer();
+        bool toolbar_drag_capture = toolbar_drag_active_;
         auto* const focused_before = rml_context_->GetFocusElement();
         const bool focused_text_target = rml_input::wantsTextInput(focused_before);
         if (mouse_pos_valid_ && !mouse_moved && !pointer_event && !pointer_drag &&
@@ -1061,8 +1144,13 @@ namespace lfs::vis::gui {
             const auto* const hover_root = viewportOverlayHoverRoot(hover);
             if (hovered_interactive_) {
                 guiFocusState().want_capture_mouse = true;
-                if (hover)
-                    tooltip_.setHover(resolveRmlTooltip(hover), hover_root ? hover_root : hover);
+                if (hover) {
+                    cursor_request_ = rmlCursorRequestForName(hover->GetProperty<Rml::String>("cursor"));
+                    if (value_drag)
+                        tooltip_.setHover({}, nullptr);
+                    else
+                        tooltip_.setHover(resolveRmlTooltip(hover), hover_root ? hover_root : hover);
+                }
             } else {
                 tooltip_.setHover({}, nullptr);
             }
@@ -1143,6 +1231,8 @@ namespace lfs::vis::gui {
         const auto* const hover_root = viewportOverlayHoverRoot(hover);
         const bool over_interactive = is_inside && hover_root != nullptr;
         hovered_interactive_ = over_interactive;
+        if (over_interactive && hover)
+            cursor_request_ = rmlCursorRequestForName(hover->GetProperty<Rml::String>("cursor"));
 
         bool replayed_button_events = false;
         for (const auto& event : input.mouse_button_events) {
@@ -1156,6 +1246,11 @@ namespace lfs::vis::gui {
                                                   ? rml_context_->GetElementAtPoint(
                                                         Rml::Vector2f(event_x, event_y))
                                                   : nullptr;
+            if (event.down && event.button == 0 && event_inside &&
+                !rml_input::isSelectRelatedElement(event_element)) {
+                if (rml_input::hideOpenSelectBoxes(*rml_context_))
+                    markRenderNeeded(RenderReason::PointerButton);
+            }
             if (!vram_drag_capture && !toolbar_drag_capture &&
                 viewportOverlayHoverRoot(event_element) == nullptr)
                 continue;
@@ -1167,6 +1262,12 @@ namespace lfs::vis::gui {
             else
                 rml_context_->ProcessMouseButtonUp(event.button, mods);
             replayed_button_events = true;
+        }
+
+        if (!replayed_button_events && input.mouse_clicked[0] && is_inside &&
+            !rml_input::isSelectRelatedElement(point_element)) {
+            if (rml_input::hideOpenSelectBoxes(*rml_context_))
+                markRenderNeeded(RenderReason::PointerButton);
         }
 
         if (over_interactive || vram_drag_capture || toolbar_drag_capture ||
@@ -1199,49 +1300,31 @@ namespace lfs::vis::gui {
                     Rml::Vector2f(-input.mouse_wheel_x, -input.mouse_wheel), mods);
             }
 
-            if (hover)
+            if (value_drag)
+                tooltip_.setHover({}, nullptr);
+            else if (hover)
                 tooltip_.setHover(resolveRmlTooltip(hover), hover_root ? hover_root : hover);
         } else {
             tooltip_.setHover({}, nullptr);
         }
 
-        // Forward keyboard + text input whenever an RmlUi element on this context owns focus
-        // (e.g. the Annotations / Drill-down filter <input>). This must run regardless of
-        // over_interactive, because a text input keeps focus even when the mouse roams away.
+        // Focused scrub fields and selects need keys too, including when the
+        // pointer leaves the overlay. Only text controls request text input.
         if (auto* focused = rml_context_->GetFocusElement()) {
-            if (publishOverlayTextFocus(focused)) {
+            if (publishOverlayTextFocus(focused) ||
+                (keyboard_event && rml_input::hasFocusedKeyboardTarget(focused))) {
                 wants_input_ = true;
-                // Numpad digit and period scancodes must be suppressed from
-                // ProcessKeyDown / ProcessKeyUp when a text input is focused,
-                // otherwise RmlUi treats them as navigation keys (Home, End,
-                // arrows, etc.). The actual digit text arrives via
-                // ProcessTextInput below. This mirrors the fix in
-                // rml_panel_host.cpp for the sidebar text inputs.
-                auto isNumpadTextKey = [](int sc) {
-                    return (sc >= SDL_SCANCODE_KP_1 && sc <= SDL_SCANCODE_KP_0) ||
-                           sc == SDL_SCANCODE_KP_PERIOD;
-                };
-                for (const int sc : input.keys_pressed) {
-                    if (isNumpadTextKey(sc))
-                        continue;
-                    const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-                    if (rml_key != Rml::Input::KI_UNKNOWN) {
+                auto* const handler = rml_manager_ ? rml_manager_->getTextInputHandler() : nullptr;
+                for (const auto& event : input.input_events) {
+                    const bool composing = handler && handler->isComposing();
+                    if (event.kind == FrameInputEventKind::KeyDown &&
+                        event.scancode == SDL_SCANCODE_ESCAPE &&
+                        rml_input::shouldCancelOnEscape(rml_context_->GetFocusElement(), composing)) {
+                        if (rml_input::cancelFocusedElement(*rml_context_))
+                            markRenderNeeded(RenderReason::Keyboard);
+                    } else if (rml_input::processKeyboardEvent(*rml_context_, event, handler)) {
                         markRenderNeeded(RenderReason::Keyboard);
-                        rml_context_->ProcessKeyDown(rml_key, mods);
                     }
-                }
-                for (const int sc : input.keys_released) {
-                    if (isNumpadTextKey(sc))
-                        continue;
-                    const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-                    if (rml_key != Rml::Input::KI_UNKNOWN) {
-                        markRenderNeeded(RenderReason::Keyboard);
-                        rml_context_->ProcessKeyUp(rml_key, mods);
-                    }
-                }
-                for (uint32_t cp : input.text_codepoints) {
-                    markRenderNeeded(RenderReason::Keyboard);
-                    rml_context_->ProcessTextInput(static_cast<Rml::Character>(cp));
                 }
             }
         }
@@ -1315,6 +1398,9 @@ namespace lfs::vis::gui {
         for (auto* child : children_to_move)
             wrapper->AppendChild(body->RemoveChild(child));
 
+        viewport_content_offset_dirty_ = true;
+        toolbar_roots_dirty_ = true;
+        updateViewportContentOffset();
         applyGTMetricsOverlay();
         applySplitDividerOverlay();
         applyLeftDockResizeIndicator();
@@ -1452,14 +1538,15 @@ namespace lfs::vis::gui {
         const bool theme_current =
             has_theme_signature_ && rml_theme::currentThemeSignature() == last_theme_signature_;
         const bool document_hooks_due = shouldRunAnyDocumentHooks(false);
-        const bool builtin_document_sync_due = document_sync_dirty_;
+        const bool builtin_document_sync_due = document_sync_dirty_ || document_sync_requested_ ||
+                                               lfs::python::has_pending_rml_document_updates(document_);
         bool tooltip_changed = false;
         if (tooltip_.hasActiveState()) {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.tooltip", 0.25);
             tooltip_changed = applyFrameTooltip();
         }
         if (rml_manager_) {
-            rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.needsFrame());
+            rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.hasActiveState());
             rml_manager_->setContextTooltipRevealDeadline(rml_context_, tooltip_.revealDeadline());
         }
         const bool can_update_tooltip_only =
@@ -1516,9 +1603,13 @@ namespace lfs::vis::gui {
         const int h = static_cast<int>(vp_size_.y);
         const bool size_changed = (w != last_render_w_ || h != last_render_h_);
         const bool toolbar_changed = updateToolbarRoots();
+        const bool content_offset_changed = viewport_content_offset_dirty_;
         updateViewportContentOffset();
+        updateViewportContentClasses(toolbar_dpi);
+        const bool python_document_dirty = lfs::python::consume_pending_rml_document_updates(document_);
         const bool document_force = theme_changed || size_changed || toolbar_changed;
         bool document_dirty = syncBuiltinDocument(document_force);
+        document_dirty |= python_document_dirty;
         const bool run_prepend_document_hooks = shouldRunDocumentHooks(document_force, true);
         const bool run_append_document_hooks = shouldRunDocumentHooks(document_force, false);
         if (run_prepend_document_hooks || run_append_document_hooks) {
@@ -1552,7 +1643,7 @@ namespace lfs::vis::gui {
             tooltip_changed = applyFrameTooltip();
         }
         if (rml_manager_) {
-            rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.needsFrame());
+            rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.hasActiveState());
             rml_manager_->setContextTooltipRevealDeadline(rml_context_, tooltip_.revealDeadline());
         }
 
@@ -1592,10 +1683,16 @@ namespace lfs::vis::gui {
                 LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.update.context_update", 0.25);
                 rml_context_->Update();
             }
-            updateToolbarRailLayout();
+            if (vram_hud_ && vram_hud_->initializeGeometryAfterLayout())
+                rml_context_->Update();
+            const bool rail_layout_changed = updateToolbarRailLayout();
             if (viewport_toolbar_position_ == "free" && applyToolbarPosition()) {
                 LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.update.toolbar_position", 0.25);
                 rml_context_->Update();
+            }
+            if (toolbar_changed || content_offset_changed || size_changed || dpi_changed || rail_layout_changed) {
+                if (updateViewportOverlayPanelLayout())
+                    rml_context_->Update();
             }
         }
 
@@ -1614,9 +1711,21 @@ namespace lfs::vis::gui {
     }
 
     std::optional<double> RmlViewportOverlay::nextScheduledUpdateDelay() const {
+        std::optional<double> delay;
         if (std::isfinite(next_update_delay_) && next_update_delay_ > 0.0)
-            return next_update_delay_;
-        return std::nullopt;
+            delay = next_update_delay_;
+
+        // Passive document hooks poll toolbar state even when Rml itself has
+        // no animation deadline. Keep that poll alive while the frame loop idles.
+        if (document_ && vp_size_.x > 0 && vp_size_.y > 0 &&
+            (lfs::python::has_python_hooks("viewport_overlay", "document", true) ||
+             lfs::python::has_python_hooks("viewport_overlay", "document", false))) {
+            const auto elapsed = std::chrono::steady_clock::now() - last_document_hook_run_;
+            const double hook_delay = std::max(
+                0.001, std::chrono::duration<double>(kDocumentHookPollInterval - elapsed).count());
+            delay = delay ? std::min(*delay, hook_delay) : hook_delay;
+        }
+        return delay;
     }
 
 } // namespace lfs::vis::gui

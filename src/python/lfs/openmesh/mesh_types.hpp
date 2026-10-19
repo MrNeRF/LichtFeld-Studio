@@ -96,7 +96,7 @@ namespace lfs::python::openmesh_bindings {
             const auto prop = py_prop_on_demand<Handle, PropHandle>(_name);
 
             const nb::object tmp_obj = Mesh::property(prop, Handle(0));
-            auto first_arr = nb::cast<nb::ndarray<double, nb::numpy, nb::c_contig>>(tmp_obj);
+            auto first_arr = nb::cast<nb::ndarray<double, nb::numpy, nb::device::cpu, nb::c_contig>>(tmp_obj);
             const size_t size = first_arr.size();
 
             if (size == 0) {
@@ -113,7 +113,7 @@ namespace lfs::python::openmesh_bindings {
 
             for (size_t i = 0; i < n; ++i) {
                 const nb::object obj = Mesh::property(prop, Handle(static_cast<int>(i)));
-                auto arr = nb::cast<nb::ndarray<double, nb::numpy, nb::c_contig>>(obj);
+                auto arr = nb::cast<nb::ndarray<double, nb::numpy, nb::device::cpu, nb::c_contig>>(obj);
                 if (arr.size() != size) {
                     delete[] data;
                     throw std::runtime_error("Array sizes do not match.");
@@ -129,7 +129,8 @@ namespace lfs::python::openmesh_bindings {
         }
 
         template <class Handle, class PropHandle>
-        void py_set_property_array(const std::string& _name, nb::ndarray<double, nb::numpy, nb::c_contig> _arr) {
+        void py_set_property_array(const std::string& _name,
+                                   nb::ndarray<double, nb::numpy, nb::device::cpu, nb::c_contig> _arr) {
             const size_t n = py_n_items(Handle());
             const auto prop = py_prop_on_demand<Handle, PropHandle>(_name);
 

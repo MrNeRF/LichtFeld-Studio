@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <filesystem>
 #include <future>
 #include <memory>
@@ -18,14 +19,27 @@
 #include <string>
 #include <thread>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 namespace lfs::core {
 
     LFS_CORE_API std::tuple<int, int, int>
     get_image_info(std::filesystem::path p);
+    // Diagnostic count of full pixel decodes triggered by get_image_info's fallback.
+    LFS_CORE_API std::uint64_t image_info_full_decode_count_for_testing() noexcept;
+    // Advisory content sniff; reads at most 4096 bytes and never decodes pixels.
+    LFS_CORE_API bool probe_image_header_bounded(const std::filesystem::path& p, std::string& error);
+    // Header-only validation; unlike get_image_info, never falls back to pixel decoding.
+    LFS_CORE_API std::tuple<int, int, int>
+    probe_image_info(const std::filesystem::path& p);
+    // Target size for the resize_factor/max_width rules shared by every image loader.
+    LFS_CORE_API std::pair<int, int>
+    resized_image_dimensions(int source_width, int source_height, int resize_factor, int max_width);
     LFS_CORE_API std::tuple<unsigned char*, int, int, int>
     load_image_with_alpha(std::filesystem::path p, int res_div = -1, int max_width = 0);
+    LFS_CORE_API std::tuple<uint16_t*, int, int, int>
+    load_image_with_alpha_u16(std::filesystem::path p, int res_div = -1, int max_width = 0);
     LFS_CORE_API std::tuple<unsigned char*, int, int, int>
     load_image_from_memory(const uint8_t* data, size_t size);
 

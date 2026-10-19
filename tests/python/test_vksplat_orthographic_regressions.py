@@ -18,7 +18,8 @@ def test_vksplat_viewer_does_not_reject_orthographic_requests():
     assert "not orthographic cameras" not in source
     assert "kVkSplatCameraModelOrthographic = 1u" in source
     assert "frame_view.orthographic ? kVkSplatCameraModelOrthographic" in source
-    assert "frame_view.ortho_scale" in source
+    assert "frame_view.getCameraIntrinsics()" in source
+    assert "ortho_scale" in _read("src/rendering/include/rendering/frame_contract.hpp")
 
 
 def test_vksplat_shaders_project_and_raytrace_orthographic_cameras():

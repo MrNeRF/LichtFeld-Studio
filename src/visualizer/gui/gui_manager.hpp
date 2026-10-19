@@ -54,8 +54,12 @@
 struct SDL_Cursor;
 
 namespace lfs::vis {
+    class OrthographicZoomTest;
+    class WindowInputDispatchTest;
     class VisualizerImpl;
+    class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
     class WindowManager;
+    class VulkanImportErrorScope;
     class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
     class VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
     class VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
@@ -65,11 +69,16 @@ namespace lfs::vis {
     class VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
     class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
     class VisualizerImplResetTest_UiVisibilityWaitsForMatchingFrame_Test;
+    class UiVisibilityTransitionTest_UiVisibilityWaitsForMatchingFrame_Test;
     class VisualizerImplResetTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
+    class UiVisibilityTransitionTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
+    class UiVisibilityTransitionTest_UiVisibilityFinishesWithoutWaitingForFullscreenGuard_Test;
+    class UiVisibilityTransitionTest_UiVisibilityRequestsFreshFrameWithoutCooldown_Test;
     class VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
     class VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
     class VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
     class VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
+    class VisualizerImplResetTest_RecoverThenAutosaveEditsForNextRecovery_Test;
     class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
     class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
     class VisualizerImplResetTest_StartupPrunesOlderUnlockedScratchFilesAfterOffer_Test;
@@ -97,6 +106,10 @@ namespace lfs::vis {
 
         class LFS_VIS_API GuiManager {
         public:
+            void beginImportRenderCheck();
+            void endImportRenderCheck();
+            std::optional<std::string> pollImportRenderCheck(const core::Uuid& provisional_node);
+            void discardImportMesh(uint64_t mesh_id);
             GuiManager(VisualizerImpl* viewer);
             ~GuiManager();
 
@@ -118,6 +131,13 @@ namespace lfs::vis {
             // is requested immediately while decoded thumbnails remain ready.
             void notifyCameraThumbnailBatchReady();
             void setRmlResizeDeferring(bool defer) { rmlui_manager_.setResizeDeferring(defer); }
+            void prepareInput();
+            void prepareLayout();
+            bool processNativeWindowEvent(const SDL_Event& event) { return rmlui_manager_.processNativeWindowEvent(event); }
+            bool requestNativeWindowCapture(const std::string& panel_id, std::function<void(lfs::Result<VulkanContext::WindowCapture>)> callback) {
+                return rmlui_manager_.requestNativeWindowCapture(panel_id, std::move(callback));
+            }
+            RmlUIManager::InputDispatchResult dispatchInputEvent(const SDL_Event& event);
             void ensureCjkFontsLoaded() { rmlui_manager_.ensureCjkFontsLoaded(); }
 
             // Sub-manager access
@@ -131,8 +151,12 @@ namespace lfs::vis {
             void enqueueToast(ToastRequest request);
             [[nodiscard]] GizmoManager& gizmo() { return gizmo_manager_; }
             [[nodiscard]] const GizmoManager& gizmo() const { return gizmo_manager_; }
+            // Runs the overlay's Python document sync on the next frame even when no
+            // store change or UI event would trigger it.
+            void requestViewportOverlaySync() { rml_viewport_overlay_.requestDocumentSync(); }
             [[nodiscard]] PanelLayoutManager& panelLayout() { return panel_layout_; }
             [[nodiscard]] const PanelLayoutManager& panelLayout() const { return panel_layout_; }
+            void focusMainPanelTab(std::string panel_id) { focus_panel_name_ = std::move(panel_id); }
             [[nodiscard]] GlobalContextMenu& globalContextMenu() { return *global_context_menu_; }
 
             // State queries
@@ -177,9 +201,7 @@ namespace lfs::vis {
             getWindowStates() const {
                 return window_states_;
             }
-            [[nodiscard]] std::string scenePanelActiveTab() const;
             [[nodiscard]] std::unordered_set<int> visibleCameraUids() const;
-            void setScenePanelActiveTab(std::string_view tab);
             [[nodiscard]] bool selectAllSceneNodesIfFocused();
             [[nodiscard]] bool toggleSceneSelectionVisibilityIfFocused();
             [[nodiscard]] bool toggleSceneSelectionTrainingIfFocused();
@@ -239,6 +261,10 @@ namespace lfs::vis {
             void renderViewportDecorations();
 
         private:
+            std::string import_render_error_;
+            std::unique_ptr<VulkanImportErrorScope> import_error_capture_;
+            friend class lfs::vis::WindowInputDispatchTest;
+            friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
             friend class lfs::vis::VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
@@ -248,11 +274,16 @@ namespace lfs::vis {
             friend class lfs::vis::VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
             friend class lfs::vis::VisualizerImplResetTest_UiVisibilityWaitsForMatchingFrame_Test;
+            friend class lfs::vis::UiVisibilityTransitionTest_UiVisibilityWaitsForMatchingFrame_Test;
             friend class lfs::vis::VisualizerImplResetTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
+            friend class lfs::vis::UiVisibilityTransitionTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
+            friend class lfs::vis::UiVisibilityTransitionTest_UiVisibilityFinishesWithoutWaitingForFullscreenGuard_Test;
+            friend class lfs::vis::UiVisibilityTransitionTest_UiVisibilityRequestsFreshFrameWithoutCooldown_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
+            friend class lfs::vis::VisualizerImplResetTest_RecoverThenAutosaveEditsForNextRecovery_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupPrunesOlderUnlockedScratchFilesAfterOffer_Test;
@@ -260,6 +291,7 @@ namespace lfs::vis {
             friend class lfs::vis::VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoverLegacyScratchThenSaveAsRemovesLegacyFile_Test;
             [[nodiscard]] bool isPositionOverRightPanelResizeEdge(double x, double y) const;
+            friend class lfs::vis::OrthographicZoomTest;
             [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(VkExtent2D extent,
                                                                              std::size_t frame_slot) const;
             void recordVulkanViewport(VkCommandBuffer command_buffer,
@@ -328,7 +360,6 @@ namespace lfs::vis {
             bool consumeCameraThumbnailRefresh();
 
             [[nodiscard]] bool isVramHudOverlayVisible() const;
-            [[nodiscard]] bool isVramHudPublishDue(std::chrono::steady_clock::time_point now) const;
             [[nodiscard]] PanelAnimationVisibility panelAnimationVisibility() const;
             [[nodiscard]] bool drainVulkanFramesForInteractiveTransition(
                 lfs::vis::WindowManager& window_manager,
@@ -381,11 +412,11 @@ namespace lfs::vis {
             bool show_main_panel_ = true;
             bool show_vram_hud_ = false;
             bool perf_hud_expanded_ = true;
-            bool vram_hud_visible_published_ = false;
             bool perf_hud_visible_published_ = false;
-            std::chrono::steady_clock::time_point next_vram_hud_publish_{};
             PerfSampler perf_sampler_;
-            std::chrono::steady_clock::time_point ui_toggle_next_allowed_at_{};
+            std::chrono::steady_clock::time_point last_hud_sample_{};
+            bool last_hud_expanded_ = false;
+            std::chrono::steady_clock::time_point ui_visibility_deadline_{};
             bool ui_toggle_pending_ = false;
             bool ui_visibility_resize_active_ = false;
             bool ui_visibility_layout_committed_ = false;
@@ -441,6 +472,7 @@ namespace lfs::vis {
             RmlViewportOverlay rml_viewport_overlay_;
             RmlMenuBar rml_menu_bar_;
             bool menu_pointer_capture_active_ = false;
+            bool startup_overlay_pointer_capture_active_ = false;
             RmlStatusBar rml_status_bar_;
             std::unique_ptr<GlobalContextMenu> global_context_menu_;
             bool deferred_startup_work_pending_ = false;
@@ -491,6 +523,7 @@ namespace lfs::vis {
             SceneTreeSessionChrome pending_scene_tree_chrome_;
             uint64_t panel_frame_serial_ = 0;
             uint8_t ui_layout_settle_frames_ = 0;
+            bool ui_layout_changed_during_resize_ = false;
             EditorContextUpdateStamp last_editor_context_update_stamp_;
             glm::vec2 last_ui_layout_work_pos_{-1.0f, -1.0f};
             glm::vec2 last_ui_layout_work_size_{-1.0f, -1.0f};
@@ -519,6 +552,8 @@ namespace lfs::vis {
             RightPanelPointerRegion right_panel_pointer_capture_region_ =
                 RightPanelPointerRegion::None;
             bool right_panel_resize_edge_was_hovered_ = false;
+            // Axis widget hover in the last drawn frame (see GizmoManager::viewportGizmoHover).
+            int drawn_viewport_gizmo_hover_ = -1;
             bool bottom_dock_pointer_live_capture_ = false;
             bool left_dock_pointer_live_capture_ = false;
             bool dock_resize_interaction_active_ = false;

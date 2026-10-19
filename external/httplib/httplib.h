@@ -9239,9 +9239,9 @@ namespace httplib {
                     }
                     // LFS patch: exchange the listener fd before close so a
                     // concurrent Server::stop() cannot double-close a reused fd.
-                    const socket_t sock = svr_sock_.exchange(INVALID_SOCKET);
-                    if (sock != INVALID_SOCKET) {
-                        detail::close_socket(sock);
+                    const socket_t listener = svr_sock_.exchange(INVALID_SOCKET);
+                    if (listener != INVALID_SOCKET) {
+                        detail::close_socket(listener);
                         ret = false;
                         output_error_log(Error::Connection, nullptr);
                     } else {

@@ -28,15 +28,21 @@ namespace lfs::diagnostics {
         }
 
         [[nodiscard]] bool is_vulkan_external_row(const VramMetricSnapshot& row) {
-            return starts_with(row.scope, "vulkan.external") ||
-                   starts_with(row.label, "vulkan.external");
+            // CUDA-backed aliases already belong to the exportable root. Standalone
+            // external tensors own distinct backing and still belong to root G.
+            return (starts_with(row.scope, "vulkan.external") ||
+                    starts_with(row.label, "vulkan.external")) &&
+                   !starts_with(row.scope, "vulkan.external_tensor.alias") &&
+                   !starts_with(row.scope, "vulkan.external.imported") &&
+                   row.scope != "vulkan.external.semaphore";
         }
 
         // nvImageCodec's viewer decoder probe reports driver/direct CUDA bytes as a
         // Static External row.  They are real per-process device allocations, but do
         // not flow through the CUDA pool/direct accounting counters.
         [[nodiscard]] bool is_viewer_cuda_external_row(const VramMetricSnapshot& row) {
-            return starts_with(row.scope, "io.nvimagecodec");
+            return starts_with(row.scope, "io.nvimagecodec") &&
+                   row.method == VramAllocationMethod::External;
         }
 
         // recordStaticBytes SPIR-V estimates — not VMA allocations. Group under root H.
@@ -273,10 +279,29 @@ namespace lfs::diagnostics {
         const std::size_t pool_reserved =
             proc.cuda_pool_valid ? proc.cuda_pool_reserved : 0;
         const std::size_t slab_reserved = proc.cuda_slab_reserved_bytes;
-        const std::size_t direct_live = snapshot.accounted_direct_live_bytes;
+        std::size_t tensor_direct = 0;
+        for (const auto& gauge : snapshot.gauges) {
+            if (gauge.key == "vram.audit.tensor.cuda_direct_live_bytes")
+                tensor_direct = gauge_bytes(gauge.value);
+        }
+        const std::size_t direct_live = snapshot.accounted_direct_live_bytes + tensor_direct;
+        const bool arena_external_backing = policy.arena_external_backing ||
+                                            (proc.shared_scratch_bytes > 0 &&
+                                             std::ranges::any_of(snapshot.rows, [](const auto& row) {
+                                                 return row.scope == "shared.scratch" &&
+                                                        row.label.starts_with("cuda_vulkan_arena") &&
+                                                        row.live_bytes > 0;
+                                             }));
         // C3: do not also sum cuda_phase_default_pool when pool reserved is a root.
         std::size_t arena_live = snapshot.accounted_arena_live_bytes;
-        if (policy.arena_external_backing) {
+        if (!arena_external_backing) {
+            for (const auto& row : snapshot.rows) {
+                if (row.scope == "rasterizer.fastgs" && row.label == "arena.capacity" &&
+                    row.kind == VramRowKind::Sampled)
+                    arena_live = std::max(arena_live, row.live_bytes);
+            }
+        }
+        if (arena_external_backing) {
             arena_live = 0; // bytes live under exportable VMM / shared scratch
         }
         const std::size_t exportable =
@@ -321,7 +346,7 @@ namespace lfs::diagnostics {
                     hooked_direct_bytes += row.live_bytes;
                     break;
                 case VramAllocationMethod::Arena:
-                    if (!policy.arena_external_backing) {
+                    if (!arena_external_backing) {
                         hooked_arena_bytes += row.live_bytes;
                     }
                     break;
@@ -348,7 +373,7 @@ namespace lfs::diagnostics {
         if (snapshot.accounted_direct_live_bytes > 0) {
             hooked_direct_bytes = snapshot.accounted_direct_live_bytes;
         }
-        if (snapshot.accounted_arena_live_bytes > 0 && !policy.arena_external_backing) {
+        if (snapshot.accounted_arena_live_bytes > 0 && !arena_external_backing) {
             hooked_arena_bytes = snapshot.accounted_arena_live_bytes;
         }
 
@@ -426,6 +451,8 @@ namespace lfs::diagnostics {
         auto root_c = make_root(VramLedgerRootId::CudaDirect, cuda_direct_measured, "cuda_direct");
         add_child(root_c, "hooked_direct_live", hooked_direct_bytes, AttributionState::Justified,
                   VramRowKind::Hooked);
+        add_child(root_c, "tensor_direct_storage", tensor_direct, AttributionState::Justified,
+                  VramRowKind::Sampled, "independent direct tensor allocations");
         if (viewer_cuda_external > 0) {
             for (const auto& row : snapshot.rows) {
                 if (row.live_bytes == 0 || !is_viewer_cuda_external_row(row)) {
@@ -439,7 +466,7 @@ namespace lfs::diagnostics {
                           "viewer decoder driver/direct allocation");
             }
         }
-        root_c.attributed_bytes = hooked_direct_bytes + viewer_cuda_external;
+        root_c.attributed_bytes = hooked_direct_bytes + tensor_direct + viewer_cuda_external;
         apply_closure(root_c, ledger_epsilon(root_c.measured_bytes, policy));
 
         auto root_d = make_root(VramLedgerRootId::RasterizerArena, arena_live, "rasterizer");
@@ -489,7 +516,8 @@ namespace lfs::diagnostics {
         std::size_t rmlui_texture_bytes = 0;
         std::size_t rmlui_texture_count = 0;
         for (const auto& row : snapshot.rows) {
-            if (row.live_bytes == 0 || !is_vulkan_named_row(row) || is_vulkan_external_row(row) ||
+            if (row.live_bytes == 0 || !is_vulkan_named_row(row) || starts_with(row.scope, "vulkan.external") ||
+                starts_with(row.label, "vulkan.external") ||
                 is_shader_bytecode_row(row)) {
                 continue;
             }

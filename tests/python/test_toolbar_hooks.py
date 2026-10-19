@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Regression tests for hook-driven viewport toolbar updates."""
 
+import inspect
 from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -267,10 +268,12 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "crop_object_buttons" in model.bound_record_lists
     assert "crop_transform_buttons" in model.bound_record_lists
     assert "crop_action_buttons" in model.bound_record_lists
+    assert "align_action_buttons" in model.bound_record_lists
     assert "utility_primary_buttons" in model.bound_record_lists
     assert "camera_mode_buttons" in model.bound_record_lists
     assert "show_transform_space_controls" in model.bound_funcs
     assert "show_transform_pivot_controls" in model.bound_funcs
+    assert "show_align_toolbar" in model.bound_funcs
     assert "show_crop_toolbar" in model.bound_funcs
     assert "show_crop_edit_controls" in model.bound_funcs
     assert "show_crop_enable_separator" in model.bound_funcs
@@ -281,6 +284,9 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "label_cropbox_loss_weight" in model.bound_funcs
     assert "cropbox_lr_scale" in model.bound_binds
     assert "cropbox_loss_weight" in model.bound_binds
+    assert "label_cropbox_growth_inside" in model.bound_funcs
+    assert "cropbox_growth_inside_percent" in model.bound_funcs
+    assert "cropbox_growth_inside" in model.bound_binds
     assert "show_selection_volume_gizmos" in model.bound_funcs
     assert "toolbar_action" in model.bound_events
     assert "selection_tool_label" not in model.bound_funcs
@@ -398,6 +404,31 @@ def test_button_record_resolves_toolbar_tooltip(toolbar_module, monkeypatch):
     assert fallback["tooltip_text"] == "Custom Tool"
 
 
+def test_shortcut_buttons_declare_actions_without_cached_text(toolbar_module):
+    module, _hook_calls, _remove_calls = toolbar_module
+    button = module._button_record(
+        "util-home", "home", "", "../icon/home.png", action_id="CAMERA_RESET_HOME"
+    )
+    assert button["action_id"] == "CAMERA_RESET_HOME"
+    assert "shortcut_text" not in button
+
+    resources = Path(__file__).resolve().parents[2] / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    overlay = (resources / "viewport_overlay.rml").read_text(encoding="utf-8")
+    assert "data-attr-data-shortcut" not in overlay
+    assert 'data-attr-data-action="button.action_id"' in overlay
+    assert 'data-action="delete_selected"' in overlay
+    assert 'data-keymap-mode="selection"' in overlay
+    projects = (resources / "asset_manager.rml").read_text(encoding="utf-8")
+    assert 'data-keymap-action="asset_refresh"' in projects
+    assert 'data-keymap-action="asset_gallery_primary"' in projects
+    assert 'data-keymap-action="asset_gallery_copy_link"' in projects
+    scene = (resources / "scene_tree.rml").read_text(encoding="utf-8")
+    assert 'data-keymap-action="toggle_scene_selection_training"' in scene
+    assert 'data-keymap-action="toggle_grid"' in (resources / "rendering.rml").read_text(encoding="utf-8")
+    assert 'data-keymap-action="toggle_camera_frustums"' in (resources / "rendering.rml").read_text(encoding="utf-8")
+    assert 'data-keymap-action="toggle_ui"' in (resources / "menubar.rml").read_text(encoding="utf-8")
+
+
 def test_selection_tool_uses_centered_modes(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
     lf_stub = sys.modules["lichtfeld"]
@@ -428,7 +459,7 @@ def test_selection_tool_uses_centered_modes(toolbar_module, monkeypatch):
 
     monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: state.active_tool, raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: state.active_submode, raising=False)
-    monkeypatch.setattr(lf_stub.ui, "set_selection_mode", lambda mode: setattr(state, "active_submode", mode), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "set_selection_mode", lambda mode, mark_session_dirty=True: setattr(state, "active_submode", mode), raising=False)
     monkeypatch.setattr(module.ToolRegistry, "get_all", staticmethod(lambda: [select_tool]), raising=False)
     monkeypatch.setattr(
         module.ToolRegistry,
@@ -461,9 +492,9 @@ def test_selection_tool_uses_centered_modes(toolbar_module, monkeypatch):
     assert snapshot["selection_group_buttons"][0]["value"] == "builtin.select"
     assert snapshot["selection_group_buttons"][0]["icon_src"] == "../icon/selection.png"
     assert snapshot["selection_group_buttons"][0]["tooltip_text"] == "Select"
-    assert snapshot["selection_group_buttons"][0]["shortcut_text"] == "Alt+8"
-    assert snapshot["selection_mode_buttons"][0]["shortcut_text"] == "Ctrl+9"
-    assert snapshot["selection_mode_buttons"][1]["shortcut_text"] == ""
+    assert snapshot["selection_group_buttons"][0]["action_id"] == "TOOL_SELECT"
+    assert snapshot["selection_mode_buttons"][0]["action_id"] == "SELECT_MODE_CENTERS"
+    assert all("shortcut_text" not in button for button in snapshot["selection_group_buttons"] + snapshot["selection_mode_buttons"])
     assert [button["action"] for button in snapshot["selection_mode_buttons"]] == [
         "selection_mode",
         "selection_mode",
@@ -485,6 +516,64 @@ def test_selection_tool_uses_centered_modes(toolbar_module, monkeypatch):
     assert state.active_tool == ""
     assert snapshot["selection_group_buttons"][0]["selected"] is False
 
+
+def test_histogram_toolbar_entry_is_a_selection_mode_not_a_utility(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    select_tool = SimpleNamespace(
+        id="builtin.select",
+        icon="selection",
+        label="Select",
+        submodes=(SimpleNamespace(id="centers", label="Centers", icon="circle-dot"),),
+        can_activate=lambda _context: True,
+    )
+    monkeypatch.setattr(module, "histogram_mode_available", lambda _context: True)
+    monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: "centers", raising=False)
+    monkeypatch.setattr(lf_stub.ui, "is_panel_enabled", lambda _panel_id: False, raising=False)
+
+    _groups, modes = module._GizmoToolbarController()._build_selection_records(
+        select_tool, "builtin.select", SimpleNamespace()
+    )
+    utility_source = inspect.getsource(module._UtilityToolbarController.snapshot)
+
+    histogram = next(button for button in modes if button["button_id"] == "selection-histogram")
+    assert histogram["action"] == "toggle_histogram"
+    assert histogram["tooltip_text"] == "Histogram"
+    assert "util-histogram" not in utility_source
+
+
+def test_toolbar_default_submodes_do_not_mark_session_dirty(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    calls = []
+    monkeypatch.setattr(
+        lf_stub.ui,
+        "set_selection_mode",
+        lambda mode, mark_session_dirty=True: calls.append((mode, mark_session_dirty)),
+        raising=False,
+    )
+    monkeypatch.setattr(lf_stub.ui, "get_transform_space", lambda: 0, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: "", raising=False)
+    select_tool = SimpleNamespace(
+        id="builtin.select",
+        icon="selection",
+        label="Select",
+        can_activate=lambda _context: True,
+        submodes=(SimpleNamespace(id="centers", label="Centers", icon="circle-dot"),),
+    )
+    crop_tool = SimpleNamespace(
+        id="builtin.cropbox",
+        submodes=(SimpleNamespace(id="translate", label="Translate", icon="move"),),
+    )
+
+    module._GizmoToolbarController()._build_selection_records(
+        select_tool, "builtin.select", SimpleNamespace()
+    )
+    module._GizmoToolbarController()._build_submode_records(
+        "builtin.cropbox", crop_tool
+    )
+
+    assert calls == [("centers", False), ("translate", False)]
 
 def test_transform_and_mirror_tools_use_centered_subtool_rows(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
@@ -853,19 +942,30 @@ def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
     controller = module._GizmoToolbarController()
     snapshot = controller.snapshot()
 
-    assert snapshot["show_crop_toolbar"] is True
-    assert snapshot["show_crop_edit_controls"] is True
-    assert snapshot["show_crop_enable_separator"] is True
+    assert snapshot["show_crop_toolbar"] is False
+    assert snapshot["show_crop_numeric_controls"] is True
+    assert snapshot["show_crop_edit_controls"] is False
+    assert snapshot["show_crop_enable_separator"] is False
+    fallback = controller.snapshot(numeric_overlay_available=False)
+    assert fallback["show_crop_toolbar"] is True
+    assert fallback["show_crop_edit_controls"] is True
+    assert fallback["show_crop_numeric_controls"] is False
+    # Parent selection still needs the ordinary crop toolbar; numeric inputs
+    # only take its place when a matching crop volume itself is selected.
+    crop_node.type = SimpleNamespace(name="POINTCLOUD")
+    parent_snapshot = controller.snapshot()
+    assert parent_snapshot["show_crop_edit_controls"] is True
+    crop_node.type = SimpleNamespace(name="CROPBOX")
     assert snapshot["crop_enable_buttons"] == [
         {
             "button_id": "crop-enabled",
             "action": "crop_toggle_enabled",
             "value": "",
             "icon_src": "../icon/scene/visible.png",
+            "label": "",
             "tooltip_key": "toolbar.enable_crop_box",
             "tooltip_text": "Enable Crop Box",
             "action_id": "",
-            "shortcut_text": "",
             "selected": True,
             "enabled": True,
             "opacity": "1",
@@ -877,10 +977,10 @@ def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
             "action": "toggle_crop_roi_settings",
             "value": "",
             "icon_src": "../icon/settings.png",
+            "label": "",
             "tooltip_key": "toolbar.crop_roi_settings",
             "tooltip_text": "Crop ROI Settings",
             "action_id": "",
-            "shortcut_text": "",
             "selected": False,
             "enabled": True,
             "opacity": "1",
@@ -897,6 +997,7 @@ def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
     ]
     assert controller.snapshot()["crop_enable_buttons"][0]["selected"] is False
 
+    assert "preparing" in module._TOOLBAR_HIDDEN_STATES
     for trainer_state in module._TOOLBAR_HIDDEN_STATES:
         module.RuntimeState.trainer_state.value = trainer_state
         snapshot = controller.snapshot()
@@ -929,6 +1030,7 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
     class Params:
         cropbox_lr_scale = 0.1
         cropbox_loss_weight = 0.1
+        cropbox_growth_inside = 0.8
 
         @staticmethod
         def has_params():
@@ -968,6 +1070,8 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
 
     lr_getter, lr_setter = model.bound_binds["cropbox_lr_scale"]
     loss_getter, loss_setter = model.bound_binds["cropbox_loss_weight"]
+    growth_getter, growth_setter = model.bound_binds["cropbox_growth_inside"]
+    growth_percent = model.bound_funcs["cropbox_growth_inside_percent"]
 
     assert controller._gizmo.cropbox_toolbar_signature() == (
         "bicycle_cropbox",
@@ -975,31 +1079,77 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
         True,
         0.1,
         0.1,
+        0.8,
     )
     assert controller._gizmo._build_crop_settings_records(True)[0]["selected"] is True
 
     lr_setter("0.35")
     loss_setter("0.65")
+    growth_setter("0.5")
 
     assert set_calls == [
         ("cropbox_lr_scale", 0.35),
         ("cropbox_loss_weight", 0.65),
+        ("cropbox_growth_inside", 0.5),
     ]
     assert lr_getter() == "0.350"
     assert loss_getter() == "0.650"
-    assert model.handle.request_update_calls == 2
+    assert growth_getter() == "0.50"
+    assert growth_percent() == "50%"
+    assert model.handle.request_update_calls == 3
 
     params.cropbox_lr_scale = 0.42
     params.cropbox_loss_weight = 0.73
+    params.cropbox_growth_inside = 1.0
     signature = controller._gizmo.cropbox_toolbar_signature()
-    assert signature[-2:] == (0.42, 0.73)
+    assert signature[-3:] == (0.42, 0.73, 1.0)
 
     controller._sync_crop_roi_params(signature)
 
     assert lr_getter() == "0.420"
     assert loss_getter() == "0.730"
+    assert growth_percent() == "100%"
     assert "cropbox_lr_scale" in model.handle.dirty_calls
     assert "cropbox_loss_weight" in model.handle.dirty_calls
+    assert "cropbox_growth_inside_percent" in model.handle.dirty_calls
+
+    # 0 is Auto: growth follows the error, no fixed share.
+    params.cropbox_growth_inside = 0.0
+    controller._sync_crop_roi_params(controller._gizmo.cropbox_toolbar_signature())
+    assert growth_percent() == "Auto"
+
+
+@pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1, 0.8)])
+def test_crop_roi_unavailable_state_preserves_last_display_values(toolbar_module, signature):
+    module, *_ = toolbar_module
+    controller = module._ViewportToolbarController()
+    controller._sync_crop_roi_params(("crop", True, True, 0.0, 0.37, 0.6))
+
+    controller._sync_crop_roi_params(signature)
+
+    assert not controller._crop_roi_params_available
+    assert controller._cropbox_lr_scale == 0.0
+    assert controller._cropbox_loss_weight == 0.37
+    assert controller._cropbox_growth_inside == 0.6
+
+
+@pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1, 0.8)])
+def test_crop_roi_stale_slider_events_do_not_write_live_params(
+    toolbar_module, monkeypatch, signature
+):
+    module, *_ = toolbar_module
+    writes = []
+    params = SimpleNamespace(has_params=lambda: True, set=lambda *args: writes.append(args))
+    monkeypatch.setattr(sys.modules["lichtfeld"], "optimization_params", lambda: params, raising=False)
+    controller = module._ViewportToolbarController()
+    # Selection can disappear before the next toolbar poll updates its cached flag.
+    controller._crop_roi_params_available = True
+    monkeypatch.setattr(controller._gizmo, "cropbox_toolbar_signature", lambda: signature)
+
+    controller._set_crop_roi_param("cropbox_lr_scale", "0.1")
+    controller._set_crop_roi_param("cropbox_loss_weight", "0.1")
+
+    assert writes == []
 
 
 def test_crop_tool_activation_creates_explicitly_but_snapshot_is_passive(toolbar_module, monkeypatch):
@@ -1217,7 +1367,7 @@ def test_selection_volume_modes_show_inline_gizmo_controls(toolbar_module, monke
 
     monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: state.active_tool, raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: state.active_submode, raising=False)
-    monkeypatch.setattr(lf_stub.ui, "set_selection_mode", lambda mode: setattr(state, "active_submode", mode), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "set_selection_mode", lambda mode, mark_session_dirty=True: setattr(state, "active_submode", mode), raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_crop_tool_operation", lambda: state.crop_operation, raising=False)
     monkeypatch.setattr(
         lf_stub.ui,
@@ -1338,11 +1488,12 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert rml.count('data-for="button : pivot_buttons"') == 1
     assert rml.count('data-for="button : mirror_group_buttons"') == 2
     assert rml.count('data-for="button : crop_group_buttons"') == 2
-    assert rml.count('data-for="button : crop_enable_buttons"') == 2
-    assert rml.count('data-for="button : crop_settings_buttons"') == 2
-    assert rml.count('data-for="button : crop_object_buttons"') == 2
-    assert rml.count('data-for="button : crop_transform_buttons"') == 2
-    assert rml.count('data-for="button : crop_action_buttons"') == 2
+    assert rml.count('data-for="button : crop_enable_buttons"') == 3
+    assert rml.count('data-for="button : crop_settings_buttons"') == 3
+    assert rml.count('data-for="button : crop_object_buttons"') == 3
+    assert rml.count('data-for="button : crop_transform_buttons"') == 3
+    assert rml.count('data-for="button : crop_action_buttons"') == 3
+    assert rml.count('data-for="button : align_action_buttons"') == 2
     assert rml.count('data-for="button : selection_volume_gizmo_buttons"') == 1
     assert 'class="toolbar-flyout-divider hidden"' not in rml
     assert "toolbar-flyout" not in rml
@@ -1364,7 +1515,8 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     for toolbar_markup in (primary_left, secondary_left):
         assert 'data-for="button : camera_mode_buttons"' not in toolbar_markup
         assert 'data-for="button : utility_primary_buttons"' not in toolbar_markup
-    assert rml.count('data-attr-data-shortcut="button.shortcut_text"') == 29
+    assert 'data-attr-data-shortcut="button.shortcut_text"' not in rml
+    assert rml.count('data-attr-data-action="button.action_id"') >= 31
     assert "data-attr-data-tooltip" not in rml
     assert 'data-attr-title="button.tooltip_text"' in rml
     assert rml.count('data-for="button : selection_mode_buttons"') == 1
@@ -1505,7 +1657,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
         for key in transform_toolbar_tooltip_keys:
             assert data.get("toolbar", {}).get(key), f"{locale_path.name} missing toolbar.{key}"
         for key in utility_toolbar_tooltip_keys:
-            assert data.get("toolbar", {}).get(key), f"{locale_path.name} missing toolbar.{key}"
+            assert data.get(f"toolbar.{key}"), f"{locale_path.name} missing toolbar.{key}"
     assert "Space: {{transform_space_label}}" not in rml
     assert "Pivot: {{transform_pivot_label}}" not in rml
     assert 'id="transform-block"' not in rendering_rml
@@ -1531,10 +1683,10 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert "width: 64dp;" in rcss
     assert "width: 24dp;" in rcss
     assert ".toolbar-vertical .icon-btn {\n    position: relative;\n    display: flex;" in rcss
-    assert ".viewport-gizmo-controls {\n    position: absolute;\n    top: 108dp;\n    right: 10dp;" in rcss
-    assert "flex-direction: column;\n    align-items: center;\n    width: 95dp;" in rcss
+    assert ".viewport-gizmo-controls {\n    position: absolute;\n    top: 117dp;\n    right: 3.5dp;" in rcss
+    assert "flex-direction: column;\n    align-items: center;\n    width: 117dp;" in rcss
     assert ".viewport-gizmo-control-row {\n    display: flex;\n    flex-direction: row;" in rcss
-    assert "justify-content: center;\n    width: 95dp;\n    gap: 3dp;" in rcss
+    assert "justify-content: center;\n    width: 117dp;\n    gap: 3dp;" in rcss
     assert ".viewport-gizmo-controls .icon-btn {\n    position: relative;\n    display: flex;" in rcss
     gizmo_button_start = rcss.index(".viewport-gizmo-controls .icon-btn {")
     gizmo_button_end = rcss.index(".viewport-gizmo-controls .icon-btn:hover")
@@ -1859,7 +2011,6 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     lf_stub = sys.modules["lichtfeld"]
     panel_enabled = {
         "lfs.asset_manager": True,
-        "lfs.preferences": True,
         "lfs.plugin_marketplace": True,
     }
 
@@ -1888,9 +2039,10 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
         "tr",
         lambda key: {
             "toolbar.focus_selection": "Focus Selection",
-            "toolbar.asset_manager": "Assets",
+            "toolbar.reset_home": "Reset Home",
+            "input_settings.action.camera_set_home": "Set Home",
+            "toolbar.asset_manager": "Projects",
             "menu.tools.plugin_marketplace": "Plugins",
-            "window.preferences": "Preferences",
             "toolbar.viewport_export": "Export",
         }.get(key, key),
         raising=False,
@@ -1930,23 +2082,36 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     assert [button["action"] for button in primary_buttons] == [
         "home",
         "focus_selection",
+        "set_home",
+        "reset_home",
     ]
     assert primary_buttons[1]["icon_src"] == "../icon/focus-selection.png"
     assert primary_buttons[1]["tooltip_text"] == "Focus Selection"
+    assert primary_buttons[2]["icon_src"] == "../icon/home-check.png"
+    assert primary_buttons[2]["action_id"] == "CAMERA_SET_HOME"
+    assert primary_buttons[3]["icon_src"] == "../icon/home-reset.png"
+    assert primary_buttons[3]["tooltip_text"] == "Reset Home"
+    reset_home_calls = []
+    monkeypatch.setattr(lf_stub, "reset_home", lambda: reset_home_calls.append(True), raising=False)
+    module._UtilityToolbarController().dispatch("reset_home", "")
+    assert reset_home_calls == [True]
+    assert primary_buttons[3]["action_id"] == "CAMERA_RESTORE_HOME"
+    # Shift-click on Home sets the home and Ctrl-click restores the default, as Shift+H and Ctrl+H.
+    home_calls = []
+    for name in ("go_home", "set_home", "reset_home"):
+        monkeypatch.setattr(lf_stub, name, lambda name=name: home_calls.append(name), raising=False)
+    controller = module._toolbar_controller
+    for modifiers in ({}, {"shift_key": True}, {"ctrl_key": True}):
+        event = SimpleNamespace(get_bool_parameter=lambda key, default=False, held=modifiers: held.get(key, default))
+        controller._on_toolbar_action(None, event, ["home", ""])
+    assert home_calls == ["go_home", "set_home", "reset_home"]
     assert [button["button_id"] for button in extra_buttons] == [
-        "util-preferences",
-        "util-viewport-export",
         "util-asset-manager",
-        "util-plugin-marketplace",
+        "util-viewport-export",
         "util-sequencer",
+        "util-plugin-marketplace",
     ]
     extra_by_id = {button["button_id"]: button for button in extra_buttons}
-    preferences = extra_by_id["util-preferences"]
-    assert preferences["action"] == "toggle_panel"
-    assert preferences["value"] == "lfs.preferences"
-    assert preferences["icon_src"] == "../icon/settings.png"
-    assert preferences["tooltip_text"] == "Preferences"
-    assert preferences["selected"] is True
     assert extra_by_id["util-viewport-export"]["action"] == "toggle_viewport_export"
     assert extra_by_id["util-viewport-export"]["icon_src"] == "../icon/viewport-export.png"
     assert extra_by_id["util-viewport-export"]["tooltip_text"] == "Export"
@@ -1954,7 +2119,7 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     assert extra_by_id["util-asset-manager"]["action"] == "toggle_panel"
     assert extra_by_id["util-asset-manager"]["value"] == "lfs.asset_manager"
     assert extra_by_id["util-asset-manager"]["icon_src"] == "../icon/archive.png"
-    assert extra_by_id["util-asset-manager"]["tooltip_text"] == "Assets"
+    assert extra_by_id["util-asset-manager"]["tooltip_text"] == "Projects"
     assert extra_by_id["util-asset-manager"]["selected"] is True
     assert extra_by_id["util-plugin-marketplace"]["action"] == "toggle_panel"
     assert extra_by_id["util-plugin-marketplace"]["value"] == "lfs.plugin_marketplace"
@@ -1984,6 +2149,14 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     extra_buttons = model.handle.record_updates["utility_extra_buttons"]
     extra_by_id = {button["button_id"]: button for button in extra_buttons}
     assert extra_by_id["util-viewport-export"]["selected"] is True
+
+    # Overlay availability changes must invalidate cached crop toolbar records.
+    normal_signature = controller._toolbar_signature(None)
+    monkeypatch.setattr(lf_stub, "get_depth_view", lambda: True)
+    assert controller._toolbar_signature(None) != normal_signature
+    monkeypatch.setattr(lf_stub, "get_depth_view", lambda: False)
+    monkeypatch.setattr(lf_stub.ui, "get_split_view_mode", lambda: "gt_comparison")
+    assert controller._toolbar_signature(None) != normal_signature
 
 
 def test_viewport_export_toolbar_action_shows_overlay_immediately(toolbar_module, monkeypatch):
@@ -2238,3 +2411,86 @@ def test_toolbar_tool_action_refreshes_button_records_immediately(toolbar_module
         if button["value"] == "builtin.rotate"
     )
     assert rotate_button["selected"] is True
+
+
+def test_align_toolbar_signature_tracks_can_apply(toolbar_module):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    controller = module._ViewportToolbarController()
+
+    lf_stub.ui.get_active_tool = lambda: "builtin.align"
+    can_apply = {"value": False}
+    lf_stub.ui.can_apply_align = lambda: can_apply["value"]
+    lf_stub.ui.get_align_axis_snap = lambda: True
+    lf_stub.ui.get_align_edge_to_axis = lambda: False
+    preview = {"value": False}
+    lf_stub.ui.get_align_preview = lambda: preview["value"]
+
+    signature_disabled = controller._toolbar_signature(None)
+    can_apply["value"] = True
+    signature_enabled = controller._toolbar_signature(None)
+    assert signature_disabled != signature_enabled
+    assert signature_disabled[-4:-1] == (False, True, False)
+    assert signature_enabled[-4:-1] == (True, True, False)
+
+    preview["value"] = True
+    assert controller._toolbar_signature(None) != signature_enabled
+
+    lf_stub.ui.get_active_tool = lambda: "builtin.select"
+    signature_other_tool = controller._toolbar_signature(None)
+    assert signature_other_tool[-4:-1] == (False, True, False)
+
+
+def test_align_toolbar_actions_route_to_gizmo_dispatch(toolbar_module):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    controller = module._ViewportToolbarController()
+
+    calls = []
+    lf_stub.ui.get_active_tool = lambda: "builtin.align"
+    lf_stub.ui.get_align_axis_snap = lambda: True
+    lf_stub.ui.set_align_axis_snap = lambda enabled: calls.append(("snap", enabled))
+    lf_stub.ui.get_align_edge_to_axis = lambda: False
+    lf_stub.ui.get_align_preview = lambda: False
+    lf_stub.ui.set_align_edge_to_axis = lambda enabled: calls.append(("edge", enabled))
+    lf_stub.ui.toggle_align_preview = lambda: calls.append(("preview", None))
+    lf_stub.ui.apply_align = lambda: calls.append(("apply", None))
+    lf_stub.ui.clear_align_points = lambda: calls.append(("clear", None))
+
+    for action in ("align_toggle_preview", "align_toggle_snap", "align_toggle_edge_to_axis", "align_apply", "align_clear"):
+        controller._on_toolbar_action(None, None, [action, ""])
+
+    assert calls == [("preview", None), ("snap", False), ("edge", True), ("apply", None), ("clear", None)]
+
+
+def test_align_toolbar_buttons_follow_native_state(toolbar_module):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    ready = {"value": False}
+    lf_stub.ui.can_apply_align = lambda: ready["value"]
+    lf_stub.ui.get_align_axis_snap = lambda: True
+    lf_stub.ui.get_align_edge_to_axis = lambda: False
+    lf_stub.ui.get_align_preview = lambda: False
+    controller = module._GizmoToolbarController()
+
+    buttons = controller._build_align_action_records("builtin.align")
+    assert [button["action"] for button in buttons] == [
+        "align_toggle_preview", "align_apply", "align_clear", "align_toggle_snap", "align_toggle_edge_to_axis"
+    ]
+    assert buttons[0]["enabled"] is False
+    assert buttons[0]["selected"] is False
+    assert buttons[1]["enabled"] is False
+    assert buttons[2]["enabled"] is True
+    assert buttons[3]["selected"] is True
+    assert buttons[4]["selected"] is False
+
+    ready["value"] = True
+    lf_stub.ui.get_align_axis_snap = lambda: False
+    lf_stub.ui.get_align_edge_to_axis = lambda: True
+    lf_stub.ui.get_align_preview = lambda: True
+    buttons = controller._build_align_action_records("builtin.align")
+    assert buttons[0]["enabled"] is True
+    assert buttons[0]["selected"] is True
+    assert buttons[1]["enabled"] is True
+    assert buttons[3]["selected"] is False
+    assert buttons[4]["selected"] is True

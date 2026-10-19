@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
+#include "splat_data_mirror_centroid.hpp"
 #include <mutex>
 
 namespace lfs::core {
@@ -102,19 +103,31 @@ namespace lfs::core {
         if (!means.is_valid() || means.size(0) == 0)
             return glm::vec3(0.0f);
 
-        const auto selected = selection_mask.ne(0);
-        const int count = selected.sum_scalar();
+        const auto selected = selection_mask.ne(0)
+                                  .reshape(TensorShape{means.size(0)})
+                                  .to(means.device())
+                                  .contiguous();
+        if (means.device() == Device::CUDA)
+            return detail::selected_centroid_cuda(means.contiguous(), selected);
+
+        // Keep the centroid accurate enough that rounding a reflection does not
+        // repeatedly move its pivot. Divide in double before rounding once.
+        const auto positions = means.contiguous();
+        const auto* p = positions.ptr<float>();
+        const auto* mask = selected.ptr<bool>();
+        double sum[3]{};
+        size_t count = 0;
+        for (size_t i = 0; i < means.size(0); ++i) {
+            if (!mask[i])
+                continue;
+            ++count;
+            for (int axis = 0; axis < 3; ++axis)
+                sum[axis] += p[i * 3 + axis];
+        }
         if (count == 0)
             return glm::vec3(0.0f);
-
-        // Masked sum on GPU, only transfer 3 floats
-        const auto mask_f = selected.to(DataType::Float32).unsqueeze(1);
-        const auto masked = means * mask_f;
-        const auto sum = masked.sum({0}, false).to(Device::CPU).contiguous();
-        const auto* s = static_cast<const float*>(sum.data_ptr());
-        const float inv = 1.0f / static_cast<float>(count);
-
-        return {s[0] * inv, s[1] * inv, s[2] * inv};
+        return {static_cast<float>(sum[0] / count), static_cast<float>(sum[1] / count),
+                static_cast<float>(sum[2] / count)};
     }
 
     void mirror_gaussians(SplatData& splat_data,

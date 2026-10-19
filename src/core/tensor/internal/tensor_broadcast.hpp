@@ -80,12 +80,13 @@ namespace lfs::core {
             size_t in_idx = 0;
             size_t stride = 1;
 
-            for (int i = out_shape.size() - 1; i >= 0; --i) {
+            for (size_t trailing = 0; trailing < out_shape.size(); ++trailing) {
+                const size_t i = out_shape.size() - 1 - trailing;
                 size_t coord = (out_idx / stride) % out_shape[i];
                 stride *= out_shape[i];
 
-                int in_dim = i - (out_shape.size() - in_shape.size());
-                if (in_dim >= 0) {
+                if (trailing < in_shape.size()) {
+                    const size_t in_dim = in_shape.size() - 1 - trailing;
                     size_t in_coord = (in_shape[in_dim] == 1) ? 0 : coord;
                     size_t in_stride = 1;
                     for (size_t j = in_dim + 1; j < in_shape.size(); ++j) {

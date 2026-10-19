@@ -23,6 +23,25 @@ namespace lfs::vis::gui {
     LFS_VIS_API void setVulkanUiTextureContext(VulkanContext* context);
     [[nodiscard]] LFS_VIS_API VulkanContext* getVulkanUiTextureContext();
 
+    class ScopedVulkanUiTextureContext {
+    public:
+        explicit ScopedVulkanUiTextureContext(VulkanContext* target)
+            : previous_(getVulkanUiTextureContext()), changed_(target && target != previous_) {
+            if (changed_)
+                setVulkanUiTextureContext(target);
+        }
+        ~ScopedVulkanUiTextureContext() {
+            if (changed_)
+                setVulkanUiTextureContext(previous_);
+        }
+        ScopedVulkanUiTextureContext(const ScopedVulkanUiTextureContext&) = delete;
+        ScopedVulkanUiTextureContext& operator=(const ScopedVulkanUiTextureContext&) = delete;
+
+    private:
+        VulkanContext* previous_;
+        bool changed_;
+    };
+
     class LFS_VIS_API VulkanUiTexture {
     public:
         VulkanUiTexture() = default;
@@ -63,10 +82,10 @@ namespace lfs::vis::gui {
                                   bool flip_y = false);
         [[nodiscard]] std::uintptr_t textureId() const;
         [[nodiscard]] bool valid() const;
-        // Build a Rml::Image src URL referencing this texture's image view and sampler.
-        // The returned URL is stable as long as the underlying VkImage is not torn down
-        // (a same-size re-upload preserves the view; a resize destroys and recreates it).
-        [[nodiscard]] std::string rmlSrcUrl(int width, int height) const;
+        // Cached Rml::Image source, unique to this image lifetime even if handles are recycled.
+        // Same-size uploads preserve it. The reference is borrowed until the image lifetime
+        // or requested display dimensions change; copy it if it must outlive those changes.
+        [[nodiscard]] const std::string& rmlSrcUrl(int width, int height) const;
         void reset();
 
     private:

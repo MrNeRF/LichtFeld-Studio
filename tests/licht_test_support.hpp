@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -23,6 +24,7 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -48,6 +50,39 @@ namespace lfs::io::project {
 namespace lfs::test::licht {
 
     namespace fs = std::filesystem;
+
+    class ScopedEnvironmentVariable {
+    public:
+        ScopedEnvironmentVariable(const char* name, const std::optional<std::string>& value)
+            : name_(name) {
+            if (const char* previous = std::getenv(name))
+                previous_ = previous;
+            set(value);
+        }
+        ~ScopedEnvironmentVariable() { set(previous_); }
+
+    private:
+        void set(const std::optional<std::string>& value) const {
+#ifdef _WIN32
+            (void)_putenv_s(name_.c_str(), value ? value->c_str() : "");
+#else
+            if (value)
+                (void)setenv(name_.c_str(), value->c_str(), 1);
+            else
+                (void)unsetenv(name_.c_str());
+#endif
+        }
+        std::string name_;
+        std::optional<std::string> previous_;
+    };
+
+    [[nodiscard]] inline fs::path find_backup(const fs::path& root,
+                                              const fs::path& original) {
+        for (const auto& entry : fs::recursive_directory_iterator(root))
+            if (entry.is_regular_file() && entry.path().filename() == original.filename())
+                return entry.path();
+        return {};
+    }
     using namespace lfs::io::project;
 
     class TemporaryDirectory {

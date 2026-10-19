@@ -116,8 +116,6 @@ namespace lfs::training {
         float sparsity_grad_loss = 0.0f;
         bool per_splat_mean_step = false;
         float mean_step_median_extent = 0.0f;
-        float mean_step_r_min = 1.0f;
-        float mean_step_r_max = 300.0f;
         FastGSFusedAdamParam means;
         FastGSFusedAdamParam sh0;
         FastGSFusedAdamParam shN;
@@ -140,15 +138,20 @@ namespace lfs::training {
         [[nodiscard]] const lfs::core::Tensor& frozen_mask() const { return frozen_mask_; }
         void set_frozen_lr_scale(float scale);
         void set_crop_damping_mask(lfs::core::Tensor mask);
+        // Rows whose refine, sampling and keep scores are scaled by cropbox_lr_scale.
+        void set_crop_score_mask(lfs::core::Tensor mask);
+        // Rows inside the crop box ROI and the share of new splats they receive.
+        void set_crop_roi_rows(lfs::core::Tensor rows, float growth_inside);
         void set_cropbox_lr_scale(float scale);
-        void set_per_splat_mean_step(bool enabled,
-                                     float median_extent,
-                                     float r_min,
-                                     float r_max);
+        void set_per_splat_mean_step(bool enabled, float median_extent);
         // Retain the allocation for both explicit and fused Adam; CPU inputs are uploaded.
         void set_mean_step_far_mask(lfs::core::Tensor mask);
         void set_screen_share_cap(const float* max_share, int n, float limit, float penalty);
         void refresh_screen_share_buffer();
+        // Collection is independent of the hinge: refinement can still consume
+        // projected sizes while the strategy defers scale shrinkage.
+        void set_collect_projected_screen_share(bool enabled) noexcept { collect_projected_screen_share_ = enabled; }
+        [[nodiscard]] bool collect_projected_screen_share() const noexcept { return collect_projected_screen_share_; }
         [[nodiscard]] bool per_splat_mean_step() const noexcept { return per_splat_mean_step_; }
         [[nodiscard]] const bool* mean_step_far_mask() const noexcept {
             return mean_step_far_mask_;
@@ -157,6 +160,13 @@ namespace lfs::training {
         [[nodiscard]] const lfs::core::Tensor& crop_damping_mask() const noexcept {
             return crop_damping_mask_;
         }
+        [[nodiscard]] const lfs::core::Tensor& crop_score_mask() const noexcept {
+            return crop_score_mask_;
+        }
+        [[nodiscard]] const lfs::core::Tensor& crop_roi_rows() const noexcept {
+            return crop_roi_rows_;
+        }
+        [[nodiscard]] float cropbox_growth_inside() const noexcept { return cropbox_growth_inside_; }
         [[nodiscard]] float cropbox_lr_scale() const noexcept { return cropbox_lr_scale_; }
 
         // Gradient management
@@ -194,6 +204,8 @@ namespace lfs::training {
 
         // Low-level state manipulation
         void reset_state_at_indices(ParamType type, const std::vector<int64_t>& indices);
+        // Keeps CUDA-resident indices on device; accepts int32 or int64 tensors.
+        void reset_state_at_indices(ParamType type, const lfs::core::Tensor& indices);
         void extend_state_for_new_params(ParamType type, size_t n_new);
         void extend_state_by_gather(ParamType type, const lfs::core::Tensor& indices);
 
@@ -225,11 +237,12 @@ namespace lfs::training {
         lfs::core::Tensor frozen_mask_;
         float frozen_lr_scale_ = 0.0f;
         lfs::core::Tensor crop_damping_mask_;
+        lfs::core::Tensor crop_score_mask_;
+        lfs::core::Tensor crop_roi_rows_;
+        float cropbox_growth_inside_ = 1.0f;
         float cropbox_lr_scale_ = 1.0f;
         bool per_splat_mean_step_ = false;
         float mean_step_median_extent_ = 0.0f;
-        float mean_step_r_min_ = 1.0f;
-        float mean_step_r_max_ = 300.0f;
         lfs::core::Tensor mean_step_far_mask_storage_;
         const bool* mean_step_far_mask_ = nullptr;
         int mean_step_far_mask_n_ = 0;
@@ -237,6 +250,7 @@ namespace lfs::training {
         int screen_share_n_ = 0;
         float screen_share_limit_ = 0.0f;
         float screen_share_penalty_ = 0.0f;
+        bool collect_projected_screen_share_ = false;
         int64_t fused_step_iteration_ = -1;
         bool last_step_zeroed_gradients_ = false;
 

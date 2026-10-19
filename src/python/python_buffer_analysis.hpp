@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "python_runtime_api.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -109,7 +111,7 @@ namespace lfs::python {
         std::size_t end_byte = 0;
     };
 
-    class PythonSyntaxDocument {
+    class LFS_PYTHON_RUNTIME_API PythonSyntaxDocument {
     public:
         PythonSyntaxDocument();
         ~PythonSyntaxDocument();
@@ -137,7 +139,7 @@ namespace lfs::python {
         std::unique_ptr<Impl> impl_;
     };
 
-    PythonBufferPoint python_buffer_point_at_byte(std::string_view code, std::size_t byte_offset);
-    PythonBufferAnalysis analyze_python_buffer(std::string_view code);
+    LFS_PYTHON_RUNTIME_API PythonBufferPoint python_buffer_point_at_byte(std::string_view code, std::size_t byte_offset);
+    LFS_PYTHON_RUNTIME_API PythonBufferAnalysis analyze_python_buffer(std::string_view code);
 
 } // namespace lfs::python

@@ -193,7 +193,11 @@ namespace lfs::training {
         const int64_t budget = _params->max_cap;
         this->_initial_points = _splat_data->size();
 
-        this->_total_steps = static_cast<int>((_params->stop_refine - _params->start_refine) / _params->refine_every) + 2;
+        // Sparsity clamps stop_refine to short runs, which can end the window before it starts.
+        const size_t refine_window = _params->stop_refine > _params->start_refine
+                                         ? _params->stop_refine - _params->start_refine
+                                         : 0;
+        this->_total_steps = static_cast<int>(refine_window / _params->refine_every) + 2;
 
         std::vector<int64_t> values;
         values.reserve(_total_steps);
@@ -344,23 +348,40 @@ namespace lfs::training {
             std::min<int64_t>(budget_for_alloc, selectable));
     }
 
-    void ImprovedGSPlus::LAS_densify(const lfs::core::Tensor& scores, const int64_t budget_for_alloc) {
+    void ImprovedGSPlus::LAS_densify(const lfs::core::Tensor& scores, const int64_t requested_budget) {
         const bool shN_expanded =
             !_splat_data->shN_value_quantized() &&
             lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
         lfs::training::sh_value::ShNCommitGuard shn_guard(
             *_splat_data, shN_expanded, "ImprovedGSPlus::LAS_densify");
 
-        // Sample without replacement through the same Gumbel-top-k path as MCMC.
+        // Sample without replacement through the same Gumbel-top-k path as MCMC, split between
+        // the crop box ROI and the rest by the growth share when a crop box is active.
         const size_t n_scores = scores.numel();
-        const size_t k_sample = static_cast<size_t>(budget_for_alloc);
-        auto sampled_idxs = lfs::core::Tensor::empty(
-            {k_sample}, scores.device(), lfs::core::DataType::Int64);
         const auto seed = static_cast<uint64_t>(
             std::chrono::high_resolution_clock::now().time_since_epoch().count());
-        lfs::training::mrnf_strategy::launch_gumbel_topk(
-            scores.ptr<float>(), n_scores, k_sample, seed,
-            sampled_idxs.ptr<int64_t>());
+        const auto sample = [&](const lfs::core::Tensor& weights, const int64_t count, const uint64_t salt) {
+            auto picks = lfs::core::Tensor::empty(
+                {static_cast<size_t>(count)}, scores.device(), lfs::core::DataType::Int64);
+            lfs::training::mrnf_strategy::launch_gumbel_topk(
+                weights.ptr<float>(), n_scores, static_cast<size_t>(count), seed ^ salt,
+                picks.ptr<int64_t>());
+            return picks;
+        };
+        lfs::core::Tensor sampled_idxs;
+        if (const auto split = split_growth_by_roi(*_optimizer, scores, requested_budget)) {
+            std::vector<lfs::core::Tensor> parts;
+            if (split->roi_count > 0)
+                parts.push_back(sample(split->roi_weights, split->roi_count, 0));
+            if (split->rest_count > 0)
+                parts.push_back(sample(split->rest_weights, split->rest_count, 0x9e3779b97f4a7c15ull));
+            if (parts.empty())
+                return;
+            sampled_idxs = parts.size() == 1 ? parts[0] : lfs::core::Tensor::cat(parts, 0);
+        } else {
+            sampled_idxs = sample(scores, requested_budget, 0);
+        }
+        const int64_t budget_for_alloc = static_cast<int64_t>(sampled_idxs.numel());
         const auto sampled_scale_summary = summarize_sampled_scales(_splat_data->scaling_raw(), sampled_idxs);
         if (_pending_failure_snapshot.valid) {
             _pending_failure_snapshot.sampled_scale_p95 = sampled_scale_summary.p95;
@@ -423,19 +444,7 @@ namespace lfs::training {
                         return;
 
                     if (state->is_joint()) {
-                        auto idx_cpu = sampled_idxs.cpu();
-                        std::vector<int64_t> host_idx;
-                        host_idx.reserve(sampled_idxs.numel());
-                        if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
-                            const auto* p = idx_cpu.ptr<int64_t>();
-                            host_idx.assign(p, p + sampled_idxs.numel());
-                        } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
-                            const auto* p = idx_cpu.ptr<int32_t>();
-                            for (size_t i = 0; i < sampled_idxs.numel(); ++i)
-                                host_idx.push_back(static_cast<int64_t>(p[i]));
-                        }
-                        if (!host_idx.empty())
-                            _optimizer->reset_state_at_indices(param_type, host_idx);
+                        _optimizer->reset_state_at_indices(param_type, sampled_idxs);
                         if (param_type == ParamType::ShN) {
                             if (layout_rest_u32 != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
                                 auto idx_i32 = sampled_idxs.dtype() == lfs::core::DataType::Int32
@@ -613,7 +622,7 @@ namespace lfs::training {
 
         kernels::launch_normalize_by_positive_median(
             _edge_view_scores.ptr<float>(), _edge_view_scores.numel(),
-            _edge_view_scores.stream(), &_edge_median_scratch);
+            _edge_view_scores.stream());
         zero_frozen_scores_inplace(*_splat_data, _edge_view_scores);
         _edge_score_sum.add_(_edge_view_scores);
         ++_edge_sample_count;
@@ -678,10 +687,10 @@ namespace lfs::training {
         }
 
         if (is_refining(iter)) {
-            assert(_precompute_valid);
-
             _pending_failure_snapshot = {};
-            densify_with_score(_precomputed_scores, _error_score_max, get_current_budget());
+            // No edge scores reach the strategy while PPISP distillation freezes the Gaussians.
+            if (_precompute_valid)
+                densify_with_score(_precomputed_scores, _error_score_max, get_current_budget());
 
             opacity_prune(iter);
 
@@ -727,7 +736,9 @@ namespace lfs::training {
             _precompute_valid = false;
         }
 
-        if (((iter % _params->reset_every) == 0) && (iter < _params->stop_refine) && (iter > 0)) {
+        // A final-step reset leaves no training iterations to recover opacity.
+        if (((iter % _params->reset_every) == 0) && (iter < _params->stop_refine) &&
+            (iter < _params->iterations) && (iter > 0)) {
             reset_opacity();
         }
 
@@ -737,7 +748,6 @@ namespace lfs::training {
             _edge_score_sum = lfs::core::Tensor();
             _edge_view_scores = lfs::core::Tensor();
             _edge_sample_count = 0;
-            _edge_median_scratch.release();
 
             lfs::core::CudaMemoryPool::instance().trim_cached_memory();
         }
@@ -895,19 +905,7 @@ namespace lfs::training {
                 return;
 
             if (state->is_joint()) {
-                auto idx_cpu = prune_indices.cpu();
-                std::vector<int64_t> host_idx;
-                host_idx.reserve(static_cast<size_t>(num_pruned));
-                if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
-                    const auto* p = idx_cpu.ptr<int64_t>();
-                    host_idx.assign(p, p + num_pruned);
-                } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
-                    const auto* p = idx_cpu.ptr<int32_t>();
-                    for (int64_t i = 0; i < num_pruned; ++i)
-                        host_idx.push_back(static_cast<int64_t>(p[i]));
-                }
-                if (!host_idx.empty())
-                    _optimizer->reset_state_at_indices(param_type, host_idx);
+                _optimizer->reset_state_at_indices(param_type, prune_indices);
                 if (param_type == ParamType::ShN) {
                     const auto layout_rest =
                         static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
@@ -1042,19 +1040,7 @@ namespace lfs::training {
                         return;
 
                     if (state->is_joint()) {
-                        auto idx_cpu = target_indices.cpu();
-                        std::vector<int64_t> host_idx;
-                        host_idx.reserve(target_indices.numel());
-                        if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
-                            const auto* p = idx_cpu.ptr<int64_t>();
-                            host_idx.assign(p, p + target_indices.numel());
-                        } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
-                            const auto* p = idx_cpu.ptr<int32_t>();
-                            for (size_t i = 0; i < target_indices.numel(); ++i)
-                                host_idx.push_back(static_cast<int64_t>(p[i]));
-                        }
-                        if (!host_idx.empty())
-                            _optimizer->reset_state_at_indices(param_type, host_idx);
+                        _optimizer->reset_state_at_indices(param_type, target_indices);
                         if (param_type == ParamType::ShN) {
                             if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
                                 auto idx_i32 = target_indices.dtype() == lfs::core::DataType::Int32
@@ -1171,7 +1157,6 @@ namespace lfs::training {
             _edge_score_sum = lfs::core::Tensor();
             _edge_view_scores = lfs::core::Tensor();
             _edge_sample_count = 0;
-            _edge_median_scratch.release();
             _error_score_max = lfs::core::Tensor::zeros({static_cast<size_t>(_splat_data->size())}, _splat_data->means().device());
             _precompute_valid = false;
             _current_step = 0;
@@ -1280,7 +1265,6 @@ namespace lfs::training {
         _edge_score_sum = lfs::core::Tensor();
         _edge_view_scores = lfs::core::Tensor();
         _edge_sample_count = 0;
-        _edge_median_scratch.release();
         _error_score_max = lfs::core::Tensor::zeros({static_cast<size_t>(_splat_data->size())}, _splat_data->means().device());
         _precompute_valid = false;
 
@@ -1308,7 +1292,6 @@ namespace lfs::training {
         std::swap(_edge_score_sum, source._edge_score_sum);
         std::swap(_edge_view_scores, source._edge_view_scores);
         std::swap(_edge_sample_count, source._edge_sample_count);
-        std::swap(_edge_median_scratch, source._edge_median_scratch);
         std::swap(_error_score_max, source._error_score_max);
         std::swap(_precompute_valid, source._precompute_valid);
         std::swap(_free_mask, source._free_mask);

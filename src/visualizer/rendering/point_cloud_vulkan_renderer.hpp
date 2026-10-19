@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 #include "rendering/rendering.hpp"
@@ -98,6 +99,7 @@ namespace lfs::vis {
             glm::vec3 background_color{0.0f};
             bool transparent_background = false;
             bool orthographic = false;
+            bool equirectangular = false;
             float ortho_scale = 1.0f;
             float focal_y = 1.0f;
             float voxel_size = 0.01f;
@@ -115,6 +117,15 @@ namespace lfs::vis {
             SplitRight = 2,
         };
 
+        // Nonblocking sampling returns this while the GPU snapshot is in flight.
+        static constexpr float kDepthSamplePending = -2.0f;
+        struct DepthSampleRequest {
+            glm::ivec2 pixel{0, 0};
+            glm::ivec2 source_size{0, 0};
+            OutputSlot output_slot = OutputSlot::Main;
+            bool nonblocking = false;
+        };
+
         PointCloudVulkanRenderer();
         ~PointCloudVulkanRenderer();
 
@@ -125,9 +136,15 @@ namespace lfs::vis {
             VulkanContext& context,
             const RenderRequest& request,
             OutputSlot output_slot = OutputSlot::Main);
+        // uint8_rgba copies the attachment. The default stays the float RGB readback.
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& context,
-            OutputSlot output_slot = OutputSlot::Main);
+            OutputSlot output_slot = OutputSlot::Main,
+            bool uint8_rgba = false);
+
+        [[nodiscard]] lfs::Result<float> sampleDepthAtPixel(
+            VulkanContext& context, const DepthSampleRequest& request);
+        [[nodiscard]] bool takeRefinementRequest();
 
         void reset();
 

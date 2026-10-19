@@ -103,6 +103,36 @@ namespace lfs::core::tensor_ops {
 
 #ifdef __CUDACC__ // Only compile CUDA kernels with nvcc
 
+    // Rows narrower than a vector block leave almost every thread of a block-per-row launch idle,
+    // so such shapes run one thread per element. Operand kinds: 0 full [M,N], 1 row [1,N],
+    // 2 column [M,1].
+    inline constexpr size_t kFlatBroadcastWidth = 256;
+
+    template <typename T, typename OutputT, typename BinaryOp>
+    __global__ void broadcast_2d_flat_kernel(const T* __restrict__ a, const T* __restrict__ b,
+                                             OutputT* __restrict__ c, const size_t M, const size_t N,
+                                             const int a_kind, const int b_kind, BinaryOp op) {
+        const size_t total = M * N;
+        for (size_t i = blockIdx.x * static_cast<size_t>(blockDim.x) + threadIdx.x; i < total;
+             i += static_cast<size_t>(gridDim.x) * blockDim.x) {
+            const size_t row = i / N;
+            const size_t col = i - row * N;
+            const T av = a[a_kind == 0 ? i : (a_kind == 1 ? col : row)];
+            const T bv = b[b_kind == 0 ? i : (b_kind == 1 ? col : row)];
+            c[i] = op(av, bv);
+        }
+    }
+
+    template <typename T, typename OutputT, typename BinaryOp>
+    void launch_broadcast_2d_flat(const T* a, const T* b, OutputT* c, const size_t M, const size_t N,
+                                  const int a_kind, const int b_kind, BinaryOp op, cudaStream_t stream) {
+        constexpr int block_size = 256;
+        const size_t blocks = (M * N + block_size - 1) / block_size;
+        const auto grid = static_cast<unsigned>(std::min<size_t>(blocks, size_t{1} << 20));
+        broadcast_2d_flat_kernel<<<grid, block_size, 0, stream>>>(a, b, c, M, N, a_kind, b_kind, op);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.flat_2d");
+    }
+
     // Scalar broadcast: (M×N) op scalar, vectorized with float4
     template <typename BinaryOp>
     __global__ void broadcast_scalar_kernel_float(
@@ -849,9 +879,39 @@ namespace lfs::core::tensor_ops {
         if (c_elements == 0)
             return;
 
-        // DEBUG: Disabled for production - enable only for debugging
-        // fprintf(stderr, "BROADCAST CALLED: c_elem=%zu, a_rank=%zu, b_rank=%zu\n", c_elements, a_rank, b_rank);
-        // fflush(stderr);
+        // Merge neighbouring dimensions that broadcast the same way, so [n,15,3] op [n,1,1] runs as
+        // the column pattern [n,45] op [n,1], and [n,15,3] op [1,1,3] as the row pattern [n*15,3] op [1,3].
+        size_t a_merged[MAX_TENSOR_RANK];
+        size_t b_merged[MAX_TENSOR_RANK];
+        size_t c_merged[MAX_TENSOR_RANK];
+        size_t merged_rank = 0;
+        int previous_kind = -1;
+        for (size_t d = 0; d < c_rank; ++d) {
+            const size_t a_dim = d + a_rank >= c_rank ? a_shape[d + a_rank - c_rank] : 1;
+            const size_t b_dim = d + b_rank >= c_rank ? b_shape[d + b_rank - c_rank] : 1;
+            if (c_shape[d] == 1)
+                continue;
+            const int kind = (a_dim == 1 ? 1 : 0) | (b_dim == 1 ? 2 : 0);
+            if (kind == previous_kind) {
+                a_merged[merged_rank - 1] *= a_dim;
+                b_merged[merged_rank - 1] *= b_dim;
+                c_merged[merged_rank - 1] *= c_shape[d];
+            } else {
+                a_merged[merged_rank] = a_dim;
+                b_merged[merged_rank] = b_dim;
+                c_merged[merged_rank] = c_shape[d];
+                ++merged_rank;
+                previous_kind = kind;
+            }
+        }
+        if (merged_rank == 0) {
+            a_merged[0] = b_merged[0] = c_merged[0] = 1;
+            merged_rank = 1;
+        }
+        a_shape = a_merged;
+        b_shape = b_merged;
+        c_shape = c_merged;
+        a_rank = b_rank = c_rank = merged_rank;
 
         // Use specialized kernels for float→float operations
         constexpr bool use_vectorized_float = std::is_same<T, float>::value && std::is_same<OutputT, float>::value;
@@ -871,6 +931,12 @@ namespace lfs::core::tensor_ops {
                 const size_t M = c_shape[0];
                 const size_t N = c_shape[1];
                 const bool a_is_row = (a_shape[0] == 1);
+#ifdef __CUDACC__
+                if (N < kFlatBroadcastWidth) {
+                    launch_broadcast_2d_flat(a, b, c, M, N, a_is_row ? 1 : 0, a_is_row ? 0 : 1, op, stream);
+                    return;
+                }
+#endif
 
                 // CRITICAL FIX: Handle M > 65535 by using 3D grid
                 const int max_grid_dim = 65535; // CUDA Y/Z dimension limit
@@ -939,6 +1005,12 @@ namespace lfs::core::tensor_ops {
                 const size_t M = c_shape[0];
                 const size_t N = c_shape[1];
                 const bool a_is_row = (a_shape[0] == 1);
+#ifdef __CUDACC__
+                if (N < kFlatBroadcastWidth) {
+                    launch_broadcast_2d_flat(a, b, c, M, N, a_is_row ? 1 : 0, a_is_row ? 0 : 1, op, stream);
+                    return;
+                }
+#endif
 
                 // CRITICAL FIX: Handle M > 65535 by using 3D grid
                 const int max_grid_dim = 65535; // CUDA Y/Z dimension limit
@@ -972,6 +1044,12 @@ namespace lfs::core::tensor_ops {
                 const size_t M = c_shape[0];
                 const size_t N = c_shape[1];
                 const bool a_is_col = (a_shape[1] == 1);
+#ifdef __CUDACC__
+                if (N < kFlatBroadcastWidth) {
+                    launch_broadcast_2d_flat(a, b, c, M, N, a_is_col ? 2 : 0, a_is_col ? 0 : 2, op, stream);
+                    return;
+                }
+#endif
 
                 // CRITICAL FIX: Handle M > 65535 by using 3D grid
                 // Each thread processes 4 columns, so divide by 4

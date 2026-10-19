@@ -4,7 +4,9 @@
  */
 
 #include "io/scene_chapter_adapter.hpp"
+#include "io/sfm_observation_chapter.hpp"
 
+#include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "io/capture_omit_filter.hpp"
 
@@ -219,6 +221,7 @@ namespace lfs::io::project {
             result.has_image = camera.has_image();
             result.split =
                 camera.split() == lfs::core::CameraSplit::Train ? "train" : "eval";
+            result.sfm_observation_count = camera.sfm_observation_count();
             return result;
         }
 
@@ -259,9 +262,15 @@ namespace lfs::io::project {
                 }
                 return {};
             }
+            if (node.type == lfs::core::NodeType::SPLAT && binding.fourcc == "DSRC" &&
+                (binding.source_kind == "ply" || binding.source_kind == "sog" ||
+                 binding.source_kind == "ssog" || binding.source_kind == "spz") &&
+                binding.instance_uuid == node.uuid && !binding.reference_uuid) {
+                return {};
+            }
             if (node.type == lfs::core::NodeType::SPLAT &&
                 (binding.source_kind == "ply" || binding.source_kind == "spz" ||
-                 binding.source_kind == "sog" ||
+                 binding.source_kind == "sog" || binding.source_kind == "ssog" ||
                  binding.source_kind == "generated" ||
                  binding.source_kind == "baked_rad") &&
                 (binding.fourcc != "SPLT" ||
@@ -409,7 +418,8 @@ namespace lfs::io::project {
         using UndistortCache = std::map<UndistortCacheKey, lfs::core::UndistortParams>;
 
         std::shared_ptr<lfs::core::Camera> hydrate_camera(
-            const CameraRecord& value, UndistortCache& undistort_cache) {
+            const CameraRecord& value, UndistortCache& undistort_cache, const lfs::core::Uuid& node_uuid,
+            const std::shared_ptr<const SfmObservationChapterSource>& sfm_observations) {
             auto camera = std::make_shared<lfs::core::Camera>(
                 float_tensor(value.rotation, {3, 3}),
                 float_tensor(value.translation, {3}),
@@ -444,6 +454,21 @@ namespace lfs::io::project {
             camera->set_has_image(value.has_image);
             camera->set_split(value.split == "train" ? lfs::core::CameraSplit::Train
                                                      : lfs::core::CameraSplit::Eval);
+            if (value.sfm_observation_count > 0) {
+                bool stored = false;
+                if (sfm_observations) {
+                    const auto& cameras = sfm_observations->index().cameras;
+                    const auto entry = cameras.find(node_uuid);
+                    stored = entry != cameras.end() && entry->second.count == value.sfm_observation_count;
+                }
+                if (stored) {
+                    camera->set_sfm_observation_source(sfm_observations, node_uuid, value.sfm_observation_count);
+                } else {
+                    LOG_WARN("Camera '{}' lists {} SfM observations that the project does not contain; "
+                             "depth AbsRel is unavailable for it",
+                             value.image_name, value.sfm_observation_count);
+                }
+            }
             return camera;
         }
 
@@ -561,7 +586,8 @@ namespace lfs::io::project {
             const SceneGraphChapter& chapter, lfs::core::Scene& scene,
             const ScenePayloadResolver& resolver,
             const bool defer_geometry_payloads,
-            const bool payload_units_only) {
+            const bool payload_units_only,
+            const std::unordered_set<lfs::core::Uuid>* selected_payload_nodes = nullptr) {
             UndistortCache undistort_cache;
             auto nodes = chapter.nodes();
             if (!nodes) {
@@ -601,7 +627,9 @@ namespace lfs::io::project {
                     if (type &&
                         (*type == lfs::core::NodeType::SPLAT ||
                          *type == lfs::core::NodeType::POINTCLOUD ||
-                         *type == lfs::core::NodeType::MESH)) {
+                         *type == lfs::core::NodeType::MESH) &&
+                        (!selected_payload_nodes ||
+                         selected_payload_nodes->contains(record.uuid))) {
                         geometry.push_back(record.uuid);
                     }
                 }
@@ -746,7 +774,8 @@ namespace lfs::io::project {
                 }
                 if (record.camera) {
                     try {
-                        desc.camera = hydrate_camera(*record.camera, undistort_cache);
+                        desc.camera = hydrate_camera(*record.camera, undistort_cache, record.uuid,
+                                                     resolver.sfm_observations);
                     } catch (const std::exception& error) {
                         // LFS-CENSUS-OK(empty-catch): reject malformed camera tensors before mutating the scene.
                         return fail<void>(
@@ -936,13 +965,14 @@ namespace lfs::io::project {
         const SceneGraphChapter& chapter,
         lfs::core::Scene& target,
         const ScenePayloadResolver& resolver,
-        const bool payload_units_only) {
+        const bool payload_units_only,
+        const std::unordered_set<lfs::core::Uuid>* selected_payload_nodes) {
         auto staged =
             lfs::core::Scene::createRestoreStage(target);
         if (auto populated =
                 populate_scene_stage(
                     chapter, *staged, resolver, false,
-                    payload_units_only);
+                    payload_units_only, selected_payload_nodes);
             !populated) {
             return std::move(populated).error();
         }
@@ -952,12 +982,14 @@ namespace lfs::io::project {
     lfs::Result<std::unique_ptr<lfs::core::Scene>>
     stage_scene_shell(
         const SceneGraphChapter& chapter,
-        lfs::core::Scene& target) {
+        lfs::core::Scene& target,
+        std::shared_ptr<const SfmObservationChapterSource> sfm_observations) {
         auto staged =
             lfs::core::Scene::createRestoreStage(target);
         if (auto populated =
                 populate_scene_stage(
-                    chapter, *staged, {}, true, false);
+                    chapter, *staged, ScenePayloadResolver{.sfm_observations = std::move(sfm_observations)},
+                    true, false);
             !populated) {
             return std::move(populated).error();
         }

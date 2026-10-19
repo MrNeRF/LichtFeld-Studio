@@ -5,6 +5,8 @@
 #include "visible_mask.h"
 
 #include <algorithm>
+#include <atomic>
+#include <bit>
 #include <cmath>
 #include <csignal>
 #include <cstring>
@@ -666,7 +668,7 @@ void VulkanGSRenderer::ensureLodSelectionReadback(const size_t chunk_capacity) {
         destroyLodSelectionReadback();
     }
 
-    const VkDeviceSize byte_size = (2 + chunk_capacity) * sizeof(uint32_t);
+    const VkDeviceSize byte_size = (3 + chunk_capacity) * sizeof(uint32_t);
     VkBufferCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     info.size = byte_size;
@@ -693,7 +695,7 @@ void VulkanGSRenderer::ensureLodSelectionReadback(const size_t chunk_capacity) {
             std::format(
                 "LOD-selection readback buffer allocation failed (requested_bytes={}, payload_words={}, allocator={:#x}, result={}({}))",
                 byte_size,
-                2 + chunk_capacity,
+                3 + chunk_capacity,
                 lfs::rendering::vkHandleValue(allocator),
                 lfs::rendering::vkResultToString(create_result),
                 static_cast<int>(create_result)),
@@ -780,22 +782,23 @@ VulkanGSRenderer::pollDeferredLodSelectionStats() {
         return std::nullopt;
     if (!invalidateReadbackBuffer(
             lod_selection_readback_buffer_,
-            (2 + 4 + kLodCompactProtectedCap + 2 * kLodCompactMissCap) * sizeof(uint32_t)))
+            (3 + 4 + kLodCompactProtectedCap + 2 * kLodCompactMissCap) * sizeof(uint32_t)))
         return std::nullopt;
 
     LodSelectionStats stats{};
     stats.candidate_count = lod_selection_readback_mapped_[0];
     stats.rendered_capacity = lod_selection_readback_capacity_;
     stats.overflow_count = lod_selection_readback_mapped_[1];
+    stats.threshold_scale = std::bit_cast<float>(lod_selection_readback_mapped_[2]);
     const uint32_t* const words = lod_selection_readback_mapped_;
     const size_t protected_count =
-        std::min<size_t>(words[2], kLodCompactProtectedCap);
-    const size_t miss_count = std::min<size_t>(words[3], kLodCompactMissCap);
-    stats.protected_overflow = words[4];
-    stats.miss_overflow = words[5];
-    stats.protected_chunks.assign(words + 6, words + 6 + protected_count);
+        std::min<size_t>(words[3], kLodCompactProtectedCap);
+    const size_t miss_count = std::min<size_t>(words[4], kLodCompactMissCap);
+    stats.protected_overflow = words[5];
+    stats.miss_overflow = words[6];
+    stats.protected_chunks.assign(words + 7, words + 7 + protected_count);
     stats.miss_candidates.reserve(miss_count);
-    const uint32_t* const misses = words + 6 + kLodCompactProtectedCap;
+    const uint32_t* const misses = words + 7 + kLodCompactProtectedCap;
     for (size_t i = 0; i < miss_count; ++i) {
         stats.miss_candidates.emplace_back(misses[i * 2], misses[i * 2 + 1]);
     }
@@ -910,10 +913,10 @@ void VulkanGSRenderer::recordLodSelectionReadback(VulkanGSPipelineBuffers& buffe
         vulkan_dispatch_.cmd_copy_buffer(command_buffer, src.buffer,
                                          lod_selection_readback_buffer_.buffer, 1, &copy);
     };
-    copy_region(buffers.lod_gpu_counts.deviceBuffer, 0, 2);
-    copy_region(buffers.lod_compact_counts.deviceBuffer, 2, 4);
-    copy_region(buffers.lod_compact_protected.deviceBuffer, 6, kLodCompactProtectedCap);
-    copy_region(buffers.lod_compact_misses.deviceBuffer, 6 + kLodCompactProtectedCap,
+    copy_region(buffers.lod_gpu_counts.deviceBuffer, 0, 3);
+    copy_region(buffers.lod_compact_counts.deviceBuffer, 3, 4);
+    copy_region(buffers.lod_compact_protected.deviceBuffer, 7, kLodCompactProtectedCap);
+    copy_region(buffers.lod_compact_misses.deviceBuffer, 7 + kLodCompactProtectedCap,
                 2 * kLodCompactMissCap);
 
     // Host coherence still requires fence/timeline wait at endCommandBatch (§3.2 G3).
@@ -993,11 +996,6 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
             "Conditional rendering was enabled without both command entry points",
             LFS_SOURCE_SITE_CURRENT());
     }
-    LOG_INFO("vksplat depth waves: {} slots ({})",
-             supports_conditional_rendering_ ? HIGS_DEPTH_MAX_WAVES
-                                             : HIGS_DEPTH_MAX_WAVES_FALLBACK,
-             supports_conditional_rendering_ ? "conditional rendering"
-                                             : "VK_EXT_conditional_rendering unavailable");
 
     createComputePipeline(pipeline_projection_forward, spirv_paths.at("projection_forward"));
     createComputePipeline(pipeline_projection_forward_3dgut, spirv_paths.at("projection_forward_3dgut"));
@@ -1012,6 +1010,9 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
         createComputePipeline(pipeline_rasterize_forward_3dgut[i], spirv_paths.at("rasterize_forward_3dgut"));
         createComputePipeline(pipeline_rasterize_forward_plain[i], spirv_paths.at("rasterize_forward_plain"));
         createComputePipeline(pipeline_rasterize_forward_3dgut_plain[i], spirv_paths.at("rasterize_forward_3dgut_plain"));
+        createComputePipeline(pipeline_rasterize_forward_3dgut_rad[i], spirv_paths.at("rasterize_forward_3dgut_rad"));
+        createComputePipeline(pipeline_rasterize_forward_3dgut_plain_rad[i],
+                              spirv_paths.at("rasterize_forward_3dgut_plain_rad"));
         createComputePipeline(pipeline_rasterize_forward_light[i],
                               spirv_paths.at("rasterize_forward_light"));
         createComputePipeline(pipeline_rasterize_forward_light_plain[i],
@@ -1079,6 +1080,7 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
     create_optional(pipeline_projection_forward_shn_q16_survivors, "projection_forward_shn_q16_survivors");
     create_optional(pipeline_prepare_visible_chain, "prepare_visible_chain");
     create_optional(pipeline_copy_visible_indices, "copy_visible_indices");
+    create_optional(pipeline_prepare_stable_depth_sort, "prepare_stable_depth_sort");
     create_optional(pipeline_cumsum_indirect.block_scan, "cumsum_block_scan_indirect");
     create_optional(pipeline_cumsum_indirect.scan_block_sums, "cumsum_scan_block_sums_indirect");
     create_optional(pipeline_cumsum_indirect.add_block_offsets, "cumsum_add_block_offsets_indirect");
@@ -1174,7 +1176,7 @@ void VulkanGSRenderer::executeSelectLodThreshold(const VulkanGSLodSelectUniforms
         return;
     }
 
-    auto& counts = clearDeviceBuffer(buffers.lod_gpu_counts, 2);
+    auto& counts = clearDeviceBuffer(buffers.lod_gpu_counts, 6);
     auto& out_indices = resizeDeviceBuffer(buffers.lod_gpu_indices, uniforms.output_capacity, true);
     auto& out_logical_indices = resizeDeviceBuffer(buffers.lod_gpu_logical_indices,
                                                    uniforms.output_capacity,
@@ -1189,24 +1191,33 @@ void VulkanGSRenderer::executeSelectLodThreshold(const VulkanGSLodSelectUniforms
     // are never read.
     // Tags from lod_select_threshold.slang bindings 0–11.
     using lfs::rendering::vulkan::BufferUse;
-    executeCompute(
-        {{uniforms.physical_node_count, 128}},
-        &uniforms, sizeof(uniforms),
-        pipeline_lod_select_threshold,
-        std::vector<TaggedBinding>{
-            {node_bounds, BufferUse::ComputeRead},
-            {node_links, BufferUse::ComputeRead},
-            {chunk_to_page, BufferUse::ComputeRead},
-            {counts, BufferUse::ComputeReadWrite},
-            {out_indices, BufferUse::ComputeWrite},
-            {out_logical_indices, BufferUse::ComputeWrite},
-            {out_weights, BufferUse::ComputeWrite},
-            {chunk_touch, BufferUse::ComputeReadWrite},
-            {out_levels, BufferUse::ComputeWrite},
-            {page_age, BufferUse::ComputeRead},
-            {page_frames, BufferUse::ComputeRead},
-            {page_to_chunk, BufferUse::ComputeRead},
-        });
+    const auto bindings = std::vector<TaggedBinding>{
+        {node_bounds, BufferUse::ComputeRead},
+        {node_links, BufferUse::ComputeRead},
+        {chunk_to_page, BufferUse::ComputeRead},
+        {counts, BufferUse::ComputeReadWrite},
+        {out_indices, BufferUse::ComputeWrite},
+        {out_logical_indices, BufferUse::ComputeWrite},
+        {out_weights, BufferUse::ComputeWrite},
+        {chunk_touch, BufferUse::ComputeReadWrite},
+        {out_levels, BufferUse::ComputeWrite},
+        {page_age, BufferUse::ComputeRead},
+        {page_frames, BufferUse::ComputeRead},
+        {page_to_chunk, BufferUse::ComputeRead},
+    };
+    executeCompute({{uniforms.physical_node_count, 128}},
+                   &uniforms, sizeof(uniforms), pipeline_lod_select_threshold, bindings);
+    // Keep repairs on the GPU. Once a complete cut fits, subsequent indirect
+    // dispatches have zero work; projection never sees a truncated prefix.
+    for (uint32_t pass = 1; pass <= 16; ++pass) {
+        auto gate = uniforms;
+        gate.budget_pass = pass;
+        executeCompute({{1, 128}}, &gate, sizeof(gate), pipeline_lod_select_threshold, bindings);
+        auto retry = uniforms;
+        retry.budget_pass = 17;
+        executeComputeIndirect(counts, 3 * sizeof(uint32_t),
+                               &retry, sizeof(retry), pipeline_lod_select_threshold, bindings);
+    }
 
     // Phase D: compact chunk_touch on the GPU so the readback and the CPU
     // request pass scale with the working set, not the logical chunk count.
@@ -1365,6 +1376,11 @@ void VulkanGSRenderer::executeProjectionForward(
     } else {
         projection_uniforms.lod_enabled &= ~kLodEnabledWriteOverlayFlags;
     }
+    if (buffers.deleted_mask.deviceBuffer.buffer != VK_NULL_HANDLE) {
+        projection_uniforms.lod_enabled |= kLodEnabledDeletedMask;
+    } else {
+        projection_uniforms.lod_enabled &= ~kLodEnabledDeletedMask;
+    }
     if (buffers.quant_pool) {
         projection_uniforms.lod_page_splats = buffers.pool_page_splats;
         tagged.push_back({buffers.page_frames.deviceBuffer, BufferUse::ComputeRead});
@@ -1373,6 +1389,10 @@ void VulkanGSRenderer::executeProjectionForward(
         projection_uniforms.shN_layout_slots = buffers.shN_n_cells;
         tagged.push_back({buffers.shN_bounds.deviceBuffer, BufferUse::ComputeRead});
     }
+    tagged.push_back({buffers.deleted_mask.deviceBuffer.buffer != VK_NULL_HANDLE
+                          ? buffers.deleted_mask.deviceBuffer
+                          : primitive_depth_keys,
+                      BufferUse::ComputeRead});
     applyShNUniforms(projection_uniforms, buffers, deviceInfo.maxStorageBufferRange);
 
     auto& pipeline = buffers.quant_pool
@@ -1386,7 +1406,7 @@ void VulkanGSRenderer::executeProjectionForward(
                                                : pipeline_projection_forward_shn_f16)
                          : (use_gut_projection ? pipeline_projection_forward_3dgut
                                                : pipeline_projection_forward);
-    // fp32: 24 layouts; quant/q16: 25 with the extra last binding; q16/f16 skip
+    // fp32: 25 layouts; quant/q16: 26 with the extra SH binding; q16/f16 skip
     // binding 2 (shN is BDA). tagged keeps placeholder slots so indices match
     // shader binding numbers.
     executeCompute(
@@ -1547,6 +1567,18 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
     using lfs::rendering::vulkan::DeclaredAccess;
     // Mega-hoist removed: each tagged/indirect dispatch plans its own hazards.
 
+    // Use precisely the index stream used by projection, including GPU LOD selection.
+    const bool gpu_lod = (uniforms.lod_enabled & 32u) != 0u;
+    const bool lod_active = (uniforms.lod_enabled & 1u) != 0u;
+    const auto& lod_indices = lod_active
+                                  ? (gpu_lod ? buffers.lod_gpu_indices.deviceBuffer : buffers.lod_indices.deviceBuffer)
+                                  : buffers.depths.deviceBuffer;
+    const auto& lod_logical_indices = lod_active && (uniforms.lod_enabled & 8u) != 0u
+                                          ? (gpu_lod ? buffers.lod_gpu_logical_indices.deviceBuffer : buffers.lod_logical_indices.deviceBuffer)
+                                          : lod_indices;
+    const auto& lod_weights = lod_active && (uniforms.lod_enabled & 16u) != 0u
+                                  ? (gpu_lod ? buffers.lod_gpu_weights.deviceBuffer : buffers.lod_weights.deviceBuffer)
+                                  : buffers.depths.deviceBuffer;
     const auto& wave_buffer = buffers.depth_wave_dispatch.deviceBuffer;
     const auto& predicate_buffer = buffers.wave_predicates.deviceBuffer;
     for (size_t wave = 0; wave < armed; ++wave) {
@@ -1570,6 +1602,7 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
         // Inter-wave CSRW mega-barrier removed; per-dispatch plans cover reuse.
 
         VulkanGSRendererUniforms wave_uniforms = uniforms;
+        wave_uniforms.lod_page_splats = buffers.quant_pool ? buffers.pool_page_splats : 0u;
         wave_uniforms.depth_wave = static_cast<uint32_t>(wave);
         const auto record = bufferView(
             wave_buffer,
@@ -1741,9 +1774,12 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
 
         if (!use_batched_raster) {
             if (use_gut_rasterization) {
-                auto& gut_pipeline = overlays_active
-                                         ? pipeline_rasterize_forward_3dgut
-                                         : pipeline_rasterize_forward_3dgut_plain;
+                const bool spark_rad = (uniforms.lod_enabled & 4u) != 0u;
+                auto& gut_pipeline = spark_rad
+                                         ? (overlays_active ? pipeline_rasterize_forward_3dgut_rad
+                                                            : pipeline_rasterize_forward_3dgut_plain_rad)
+                                         : (overlays_active ? pipeline_rasterize_forward_3dgut
+                                                            : pipeline_rasterize_forward_3dgut_plain);
                 executeComputeIndirect(
                     record,
                     indirect::byteOffset(indirect::DepthWave::kFullscreenWordOffset),
@@ -1772,6 +1808,9 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                         {overlay_params, BufferUse::ComputeRead},
                         {transform_indices, BufferUse::ComputeRead},
                         {model_transforms, BufferUse::ComputeRead},
+                        {lod_indices, BufferUse::ComputeRead},
+                        {lod_logical_indices, BufferUse::ComputeRead},
+                        {lod_weights, BufferUse::ComputeRead},
                     });
             } else {
                 auto& raster_pipeline = overlays_active
@@ -1832,11 +1871,13 @@ void VulkanGSRenderer::executeSelectionMask(
     using lfs::rendering::vulkan::BufferUse;
     using lfs::rendering::vulkan::DeclaredAccess;
 
-    // Tags from selection_mask.slang bindings 0–10.
+    // Tags from selection_mask.slang bindings 0-11.
     const size_t num_words = _CEIL_DIV(static_cast<size_t>(uniforms.num_splats), 4);
+    VulkanGSSelectionMaskUniforms selection_uniforms = uniforms;
+    selection_uniforms.deleted_mask_enabled = buffers.deleted_mask.deviceBuffer.buffer != VK_NULL_HANDLE;
     executeCompute(
         {{num_words, SUBGROUP_SIZE}},
-        &uniforms, sizeof(uniforms),
+        &selection_uniforms, sizeof(selection_uniforms),
         pipeline_selection_mask,
         std::vector<TaggedBinding>{
             {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},
@@ -1850,6 +1891,10 @@ void VulkanGSRenderer::executeSelectionMask(
             {polygon_mask, BufferUse::ComputeRead},
             {buffers.opacity_raw.deviceBuffer, BufferUse::ComputeRead},
             {ring_pick_out, BufferUse::ComputeWrite},
+            {buffers.deleted_mask.deviceBuffer.buffer != VK_NULL_HANDLE
+                 ? buffers.deleted_mask.deviceBuffer
+                 : buffers.xyz_ws.deviceBuffer,
+             BufferUse::ComputeRead},
         });
 
     // Handoff: host/CUDA download consumers lack their own barrier site (§3.4.5).
@@ -2658,6 +2703,11 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
     } else {
         survivor_uniforms.lod_enabled &= ~kLodEnabledWriteOverlayFlags;
     }
+    if (buffers.deleted_mask.deviceBuffer.buffer != VK_NULL_HANDLE) {
+        survivor_uniforms.lod_enabled |= kLodEnabledDeletedMask;
+    } else {
+        survivor_uniforms.lod_enabled &= ~kLodEnabledDeletedMask;
+    }
     if (buffers.quant_pool) {
         survivor_uniforms.lod_page_splats = buffers.pool_page_splats;
     }
@@ -2724,6 +2774,10 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
         survivor_uniforms.shN_layout_slots = buffers.shN_n_cells;
         tagged.push_back({buffers.shN_bounds.deviceBuffer, BufferUse::ComputeRead}); // 29
     }
+    tagged.push_back({buffers.deleted_mask.deviceBuffer.buffer != VK_NULL_HANDLE
+                          ? buffers.deleted_mask.deviceBuffer
+                          : unsorted_keys,
+                      BufferUse::ComputeRead});
     applyShNUniforms(survivor_uniforms, buffers, deviceInfo.maxStorageBufferRange);
 
     // Indirect: plan() adds implicit IndirectRead on survivor_state (replaces L2629 handoff).
@@ -2741,7 +2795,8 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
 void VulkanGSRenderer::executeSortPrimitivesByDepthVisible(
     const VulkanGSRendererUniforms& uniforms,
     VulkanGSPipelineBuffers& buffers,
-    size_t visible_capacity) {
+    size_t visible_capacity,
+    const bool deterministic_ties) {
     PerfTimer::Timer<PerfTimer::SortPrimitivesByDepth> timer(this);
     DEVICE_GUARD;
 
@@ -2796,6 +2851,50 @@ void VulkanGSRenderer::executeSortPrimitivesByDepthVisible(
         // count to the frame's *capacity* would mask exactly the clamping the
         // raw count exists to detect.
         recordVisibleCountReadback(buffers, static_cast<size_t>(uniforms.num_splats));
+    }
+
+    if (deterministic_ties) {
+        // Compact slots are assigned by atomics. Sort model ids first so the
+        // stable depth sort has a repeatable order for equal radial depths.
+        // The saved keys die before the final sorted-index snapshot, allowing
+        // reuse of its storage without another persistent allocation.
+        auto& saved_depth_keys = resizeDeviceBuffer(buffers.primitive_sort_indices, visible_capacity);
+        struct StableSortUniforms {
+            uint32_t capacity;
+            uint32_t restore_depth;
+            uint32_t pad0, pad1;
+        } stable_uniforms{prepare_uniforms.visible_capacity, 0, 0, 0};
+        executeComputeIndirect(
+            visible_dispatch,
+            indirect::byteOffset(indirect::VisibleChainDispatch::kPerElementWordOffset),
+            &stable_uniforms, sizeof(stable_uniforms),
+            pipeline_prepare_stable_depth_sort,
+            std::vector<TaggedBinding>{
+                {buffers.unsorted_keys().deviceBuffer, BufferUse::ComputeRead},
+                {buffers.orig_ids.deviceBuffer, BufferUse::ComputeRead},
+                {saved_depth_keys, BufferUse::ComputeWrite},
+                {buffers.unsorted_keys().deviceBuffer, BufferUse::ComputeWrite},
+                {buffers.unsorted_gauss_idx().deviceBuffer, BufferUse::ComputeWrite},
+                {buffers.visible_count.deviceBuffer, BufferUse::ComputeRead},
+            });
+        executeSortIndirectCount(uniforms, buffers, 32,
+                                 buffers.visible_count.deviceBuffer, visible_dispatch,
+                                 visible_capacity, indirect::VisibleChainDispatch::kLayout,
+                                 indirect::VisibleChainDispatch::kRadixWordOffset);
+        stable_uniforms.restore_depth = 1;
+        executeComputeIndirect(
+            visible_dispatch,
+            indirect::byteOffset(indirect::VisibleChainDispatch::kPerElementWordOffset),
+            &stable_uniforms, sizeof(stable_uniforms),
+            pipeline_prepare_stable_depth_sort,
+            std::vector<TaggedBinding>{
+                {saved_depth_keys, BufferUse::ComputeRead},
+                {buffers.sorted_gauss_idx().deviceBuffer, BufferUse::ComputeRead},
+                {saved_depth_keys, BufferUse::ComputeRead},
+                {buffers.unsorted_keys().deviceBuffer, BufferUse::ComputeWrite},
+                {buffers.unsorted_gauss_idx().deviceBuffer, BufferUse::ComputeWrite},
+                {buffers.visible_count.deviceBuffer, BufferUse::ComputeRead},
+            });
     }
 
     {
@@ -2879,7 +2978,8 @@ void VulkanGSRenderer::executeMacroDepthWaves(
     const _VulkanBuffer& selection_colors,
     const _VulkanBuffer& overlay_params,
     const bool overlays_active,
-    const bool predicate_waves) {
+    const bool predicate_waves,
+    const std::span<const uint32_t> exact_depth_sample_mask) {
     PerfTimer::Timer<PerfTimer::RasterizeForward> timer(this);
     DEVICE_GUARD;
 
@@ -2928,8 +3028,9 @@ void VulkanGSRenderer::executeMacroDepthWaves(
     const size_t alloc_grid_h =
         _CEIL_DIV(static_cast<size_t>(scratch_bucket.alloc_h), size_t{TILE_HEIGHT});
     const size_t alloc_macro_tiles =
-        _CEIL_DIV(alloc_grid_w, size_t{HIGS_MACRO_T16_W}) *
-        _CEIL_DIV(alloc_grid_h, size_t{HIGS_MACRO_T16_H});
+        std::max(num_macro,
+                 _CEIL_DIV(alloc_grid_w, size_t{HIGS_MACRO_T16_W}) *
+                     _CEIL_DIV(alloc_grid_h, size_t{HIGS_MACRO_T16_H}));
     if (scratch_bucket.alloc_w != scratch_bucket_alloc_w_ ||
         scratch_bucket.alloc_h != scratch_bucket_alloc_h_) {
         LOG_DEBUG(
@@ -2999,10 +3100,34 @@ void VulkanGSRenderer::executeMacroDepthWaves(
     auto& partials = resizeDeviceBuffer(
         buffers.macro_partials,
         alloc_pool_batches * HIGS_MACRO_TILE_SIZE_TILES * HIGS_TILE_SIZE * 4u);
-    auto& active_mask = resize_scratch(buffers.macro_active_mask, alloc_max_batches);
+    const size_t replay_mask_words = (uniforms.mip_filter & 2u) != 0u
+                                         ? alloc_pool_batches * HIGS_REPLAY_MASK_WORDS_PER_BATCH
+                                         : 0u;
+    auto& active_mask = resize_scratch(buffers.macro_active_mask, alloc_max_batches + replay_mask_words);
     auto& pixel_state = resize_scratch(buffers.pixel_state, 4u * alloc_pixels);
     auto& pixel_depth = resize_scratch(buffers.pixel_depth, alloc_pixels);
     auto& n_contributors = resize_scratch(buffers.n_contributors, alloc_pixels);
+
+    const _VulkanBuffer* depth_sample_mask = &pixel_depth;
+    if (!exact_depth_sample_mask.empty()) {
+        const size_t expected_words = (_CEIL_DIV(size_t(uniforms.image_width), size_t{HIGS_DEPTH_SAMPLE_TILE_SIZE}) *
+                                           _CEIL_DIV(size_t(uniforms.image_height), size_t{HIGS_DEPTH_SAMPLE_TILE_SIZE}) +
+                                       31u) /
+                                      32u;
+        if (exact_depth_sample_mask.size() != expected_words) {
+            lfs::rendering::throw_renderer_contract("Exact depth mask dimensions do not match the viewport",
+                                                    LFS_SOURCE_SITE_CURRENT());
+        }
+        auto& mask = resizeDeviceBuffer(buffers.exact_depth_sample_mask, expected_words);
+        const lfs::rendering::vulkan::DeclaredAccess write{.buffer = &mask, .use = lfs::rendering::vulkan::BufferUse::TransferWrite};
+        planTransfer(std::span{&write, 1});
+        const auto bytes = std::as_bytes(exact_depth_sample_mask);
+        for (size_t offset = 0; offset < bytes.size(); offset += 65536u) {
+            vkCmdUpdateBuffer(command_buffer, mask.buffer, mask.offset + offset,
+                              std::min(size_t{65536u}, bytes.size() - offset), bytes.data() + offset);
+        }
+        depth_sample_mask = &mask;
+    }
 
     constexpr size_t kRadix = 256u;
     constexpr size_t kPartitionSize = 512u * 8u;
@@ -3057,6 +3182,8 @@ void VulkanGSRenderer::executeMacroDepthWaves(
             wave * sizeof(uint32_t));
 
         VulkanGSRendererUniforms wave_uniforms = uniforms;
+        if (!exact_depth_sample_mask.empty())
+            wave_uniforms.mip_filter |= 8u;
         wave_uniforms.depth_wave = static_cast<uint32_t>(wave);
         const auto record = bufferView(
             wave_buffer,
@@ -3167,6 +3294,8 @@ void VulkanGSRenderer::executeMacroDepthWaves(
                                      {overlay_params, BufferUse::ComputeRead},
                                      {buffers.orig_ids.deviceBuffer, BufferUse::ComputeRead}});
         }
+
+        compose_bindings.push_back({*depth_sample_mask, BufferUse::ComputeRead});
 
         for (size_t batch_wave = 0; batch_wave < batch_waves; ++batch_wave) {
             wave_uniforms.wave_base =

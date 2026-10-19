@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/error.hpp"
+#include "core/export.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
@@ -79,7 +80,7 @@ namespace lfs::vis {
             lfs::core::SplatExportableStorage::Means;
     };
 
-    [[nodiscard]] std::expected<lfs::core::Tensor, std::string> makeVulkanExternalTensor(
+    [[nodiscard]] LFS_VIS_API std::expected<lfs::core::Tensor, std::string> makeVulkanExternalTensor(
         VulkanContext& context,
         lfs::core::TensorShape shape,
         lfs::core::DataType dtype,
@@ -111,6 +112,6 @@ namespace lfs::vis {
     // One-tensor-per-VkBuffer allocator bound to the active window's Vulkan context, matching
     // what the splat renderer binds. Empty when interop is unavailable (headless). Shared by the
     // file loader and in-memory inserts (Python API).
-    [[nodiscard]] LFS_VIS_API lfs::core::SplatTensorAllocator makeViewerSplatTensorAllocator();
+    [[nodiscard]] LFS_VIS_API lfs::core::SplatTensorAllocator makeViewerSplatTensorAllocator(bool preserve_float_shN = false);
 
 } // namespace lfs::vis

@@ -682,3 +682,53 @@ TEST_F(TensorClampTest, ClampZeroAtBoundary) {
 
     compare_tensors(result_custom, result_torch, 1e-5f, 1e-7f, "ClampZeroAtBoundary");
 }
+
+class TensorClampRegression : public ::testing::TestWithParam<Device> {};
+
+TEST_P(TensorClampRegression, HalfPreservesDtypeAndNonfiniteValues) {
+    const float inf = std::numeric_limits<float>::infinity();
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    auto input = Tensor::from_vector({-inf, -2.0f, 0.5f, 2.0f, inf, nan}, {6}, GetParam())
+                     .to(DataType::Float16);
+    const auto output = input.clamp(-1.0f, 1.0f);
+    EXPECT_EQ(output.dtype(), DataType::Float16);
+    const auto values = output.to(DataType::Float32).to_vector();
+    ASSERT_EQ(values.size(), 6);
+    for (size_t i = 0; i < 5; ++i)
+        EXPECT_FLOAT_EQ(values[i], (std::vector<float>{-1, -1, 0.5f, 1, 1})[i]);
+    EXPECT_TRUE(std::isnan(values[5]));
+    EXPECT_EQ(input.to(DataType::Float32).to_vector()[0], -inf);
+    input.clamp_(-1.0f, 1.0f);
+    EXPECT_EQ(input.dtype(), DataType::Float16);
+    const auto inplace = input.to(DataType::Float32).to_vector();
+    for (size_t i = 0; i < 5; ++i)
+        EXPECT_FLOAT_EQ(inplace[i], values[i]);
+    EXPECT_TRUE(std::isnan(inplace[5]));
+}
+
+TEST_P(TensorClampRegression, HalfStridedWritesAndEmptyInputs) {
+    auto input = Tensor::from_vector({-2.0f, 9.0f, 2.0f, 8.0f, 0.5f, 7.0f}, {3, 2}, GetParam())
+                     .to(DataType::Float16);
+    auto view = input.slice(1, 0, 1);
+    EXPECT_EQ(view.clamp(-1.0f, 1.0f).to(DataType::Float32).to_vector(),
+              (std::vector<float>{-1, 1, 0.5f}));
+    view.clamp_(-1.0f, 1.0f);
+    EXPECT_EQ(input.to(DataType::Float32).to_vector(),
+              (std::vector<float>{-1, 9, 1, 8, 0.5f, 7}));
+    auto empty = Tensor::empty({0, 2}, GetParam(), DataType::Float16);
+    EXPECT_EQ(empty.clamp(-1.0f, 1.0f).dtype(), DataType::Float16);
+    EXPECT_NO_THROW(empty.clamp_(-1.0f, 1.0f));
+}
+
+TEST_P(TensorClampRegression, OneSidedInplacePreservesUnboundedInfinity) {
+    const float inf = std::numeric_limits<float>::infinity();
+    auto lower = Tensor::from_vector({-inf, -2.0f, 2.0f, inf}, {4}, GetParam());
+    auto upper = lower.clone();
+    lower.clamp_min_(-1.0f);
+    upper.clamp_max_(1.0f);
+    EXPECT_EQ(lower.to_vector(), (std::vector<float>{-1, -1, 2, inf}));
+    EXPECT_EQ(upper.to_vector(), (std::vector<float>{-inf, -2, 1, 1}));
+}
+
+INSTANTIATE_TEST_SUITE_P(CpuAndCuda, TensorClampRegression,
+                         ::testing::Values(Device::CPU, Device::CUDA));

@@ -1,13 +1,19 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/path_utils.hpp"
+#include "core/resource_messages.hpp"
 #include "core/uuid.hpp"
 #include "io/project/crc32c.hpp"
 #include "io/project/project_container_internal.hpp"
+#include "io/project/project_filesystem.hpp"
+#include "io/project/project_framing.hpp"
+#include "io/project/project_path_utils.hpp"
 #include "io/project_container.hpp"
 #include "io/project_path.hpp"
 #include "io/project_recovery.hpp"
 #include "licht_test_support.hpp"
+#include "long_path_test_support.hpp"
 
 #include <zstd.h>
 
@@ -50,11 +56,17 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#else
+#include <winerror.h>
 #endif
 
 namespace lfs::io::project::detail {
     void reset_framed_record_decode_calls_for_testing();
     std::uint64_t framed_record_decode_calls_for_testing();
+    void reset_framed_record_stored_cache_view_bytes_for_testing();
+    std::uint64_t framed_record_stored_cache_view_bytes_for_testing();
+    void reset_framed_record_stored_cache_nonalias_bytes_for_testing();
+    std::uint64_t framed_record_stored_cache_nonalias_bytes_for_testing();
 } // namespace lfs::io::project::detail
 
 namespace {
@@ -62,6 +74,7 @@ namespace {
     namespace fs = std::filesystem;
     using namespace lfs::io::project;
     using namespace lfs::test::licht;
+    using namespace lfs::test::long_paths;
     using namespace std::string_view_literals;
 
     constexpr std::uint64_t FIXED_CREATION_TIME_NS =
@@ -180,7 +193,7 @@ namespace {
         require_status(writer.preflight(payload.size()));
         require_status(writer.write_chunk(key, payload));
         require_status(writer.commit());
-        return read_file_bytes(path);
+        return read_file_bytes(detail::project_fs::native_path(path));
     }
 
     std::string recoverable_scene_graph_payload() {
@@ -247,7 +260,7 @@ namespace {
                                    ? fs::path{"."}
                                    : original.parent_path();
         std::error_code error;
-        for (fs::directory_iterator iterator(directory, error), end;
+        for (std::filesystem::directory_iterator iterator(lfs::core::native_fs::traversal_path(directory), error), end;
              !error && iterator != end; iterator.increment(error)) {
             const auto name = iterator->path().filename().string();
             if (name.starts_with(prefix)) {
@@ -255,6 +268,28 @@ namespace {
             }
         }
         return found;
+    }
+
+    // Fails if a write that hits a full volume keeps the generic write message, which hides the disk-space
+    // recovery, or if a file-size limit is reported as a full disk.
+    TEST(ProjectContainerFormat, FullVolumeWriteCarriesDiskSpaceMessage) {
+#ifdef _WIN32
+        constexpr std::int64_t disk_full = ERROR_DISK_FULL;
+        constexpr std::int64_t file_too_large = ERROR_FILE_TOO_LARGE;
+#else
+        constexpr std::int64_t disk_full = ENOSPC;
+        constexpr std::int64_t file_too_large = EFBIG;
+#endif
+        const auto full = detail::project_error(lfs::ErrorCode::ResourceExhausted, "The project could not be written.",
+                                                "write failed", "project.licht", 0, "positional_write", disk_full);
+        EXPECT_TRUE(lfs::core::is_disk_space_save_error(full.user_message()));
+        const auto too_large = detail::project_error(lfs::ErrorCode::ResourceExhausted, "The project could not be written.",
+                                                     "write failed", "project.licht", 0, "positional_write", file_too_large);
+        EXPECT_FALSE(lfs::core::is_disk_space_save_error(too_large.user_message()));
+
+        EXPECT_TRUE(detail::disk_full(std::make_error_code(std::errc::no_space_on_device)));
+        EXPECT_TRUE(detail::disk_full(std::error_code(static_cast<int>(disk_full), std::system_category())));
+        EXPECT_FALSE(detail::disk_full(std::make_error_code(std::errc::file_too_large)));
     }
 
     TEST(ProjectContainerFormat, Crc32cKnownVector) {
@@ -490,6 +525,40 @@ namespace {
         ASSERT_NE(row, nullptr);
         EXPECT_EQ(require_result(reader.read_chunk(*row)),
                   byte_vector(R"({"generation":3})"));
+    }
+
+    TEST(ProjectContainerReader, HeadIdentityFollowsTheNewestValidHead) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "head-identity.licht";
+        const ChunkKey key = fixed_key("PROJ", 961);
+        for (std::uint64_t generation = 1; generation <= 3; ++generation) {
+            ProjectWriter writer = require_result(
+                generation == 1
+                    ? ProjectWriter::create(path, fixture_create_options(960))
+                    : ProjectWriter::append(path, fixture_append_options()));
+            const auto payload = byte_vector(
+                std::format(R"({{"generation":{}}})", generation));
+            require_status(writer.plan_commit(fixture_commit_options(
+                960 + generation * 3, 961 + generation * 3, generation)));
+            require_status(writer.preflight(payload.size()));
+            require_status(writer.write_chunk(key, payload));
+            require_status(writer.commit());
+
+            const ProjectHeadIdentity head =
+                require_result(ProjectReader::read_head_identity(path));
+            const ProjectReader reader = require_result(ProjectReader::open(path));
+            EXPECT_EQ(head.project_uuid, reader.superblock().project_uuid);
+            EXPECT_EQ(head.commit_uuid, reader.commit().commit_uuid);
+            EXPECT_EQ(head.generation, generation);
+        }
+
+        const std::uint32_t newest_slot =
+            require_result(ProjectReader::open(path)).selected_head().slot_id;
+        const std::array corruption = {std::byte{0xff}};
+        write_file_range(path, HEAD_SLOT_OFFSETS[newest_slot] + 40, corruption);
+        EXPECT_EQ(require_result(ProjectReader::read_head_identity(path)).generation, 2u);
+        write_file_range(path, HEAD_SLOT_OFFSETS[1 - newest_slot] + 40, corruption);
+        EXPECT_FALSE(ProjectReader::read_head_identity(path));
     }
 
     TEST(ProjectContainerReader,
@@ -982,6 +1051,109 @@ namespace {
         require_status(writer.commit());
     }
 
+    std::vector<std::byte> reference_framed_zstd(
+        const std::span<const std::byte> input) {
+        constexpr std::size_t kStreamThreshold = 8ull * 1024 * 1024;
+        constexpr std::size_t kOutputWindow = 8ull * 1024 * 1024;
+        constexpr int kCompressionLevel = 1;
+        const auto record_count = detail::framed_record_count(input.size());
+        std::vector<std::vector<std::byte>> records(record_count);
+        for (std::size_t index = 0; index < record_count; ++index) {
+            const auto offset = index * detail::FRAMED_RECORD_TARGET_BYTES;
+            const auto size = std::min(detail::FRAMED_RECORD_TARGET_BYTES,
+                                       input.size() - offset);
+            const auto record = input.subspan(offset, size);
+            if (record.size() < kStreamThreshold) {
+                auto& compressed = records[index];
+                compressed.resize(ZSTD_compressBound(record.size()));
+                const auto written = ZSTD_compress(
+                    compressed.data(), compressed.size(), record.data(),
+                    record.size(), kCompressionLevel);
+                EXPECT_FALSE(ZSTD_isError(written));
+                compressed.resize(written);
+                continue;
+            }
+
+            ZSTD_CCtx* context = ZSTD_createCCtx();
+            EXPECT_NE(context, nullptr);
+            if (context == nullptr) {
+                return {};
+            }
+            EXPECT_FALSE(ZSTD_isError(ZSTD_CCtx_setParameter(
+                context, ZSTD_c_compressionLevel, kCompressionLevel)));
+            EXPECT_FALSE(ZSTD_isError(ZSTD_CCtx_setParameter(
+                context, ZSTD_c_contentSizeFlag, 1)));
+            EXPECT_FALSE(ZSTD_isError(
+                ZSTD_CCtx_setPledgedSrcSize(context, record.size())));
+            auto& compressed = records[index];
+            compressed.reserve(record.size());
+            std::vector<std::byte> output_window(kOutputWindow);
+            std::size_t input_offset = 0;
+            while (input_offset < record.size()) {
+                const auto chunk = std::min(kOutputWindow,
+                                            record.size() - input_offset);
+                ZSTD_inBuffer source{record.data() + input_offset, chunk, 0};
+                const auto mode = input_offset + chunk == record.size()
+                                      ? ZSTD_e_end
+                                      : ZSTD_e_continue;
+                std::size_t remaining = 1;
+                while (source.pos < source.size ||
+                       (mode == ZSTD_e_end && remaining != 0)) {
+                    ZSTD_outBuffer destination{output_window.data(),
+                                               output_window.size(), 0};
+                    remaining = ZSTD_compressStream2(
+                        context, &destination, &source, mode);
+                    EXPECT_FALSE(ZSTD_isError(remaining));
+                    compressed.insert(
+                        compressed.end(), output_window.begin(),
+                        output_window.begin() +
+                            static_cast<std::ptrdiff_t>(destination.pos));
+                    if (mode != ZSTD_e_end && source.pos == source.size) {
+                        break;
+                    }
+                }
+                input_offset += chunk;
+            }
+            ZSTD_freeCCtx(context);
+        }
+
+        const auto table_size = detail::FRAMED_HEADER_BYTES +
+                                record_count * detail::FRAMED_RECORD_BYTES;
+        std::size_t total = table_size;
+        for (const auto& record : records) {
+            total += record.size();
+        }
+        std::vector<std::byte> framed(total);
+        std::copy(detail::FRAMED_MAGIC.begin(), detail::FRAMED_MAGIC.end(),
+                  framed.begin());
+        const auto put_le = [&](const std::size_t offset,
+                                const std::uint64_t value,
+                                const std::size_t bytes) {
+            for (std::size_t byte = 0; byte < bytes; ++byte) {
+                framed[offset + byte] =
+                    static_cast<std::byte>(value >> (8 * byte));
+            }
+        };
+        put_le(8, detail::FRAMED_VERSION, 2);
+        put_le(12, record_count, 4);
+        std::size_t cursor = table_size;
+        for (std::size_t index = 0; index < record_count; ++index) {
+            const auto input_offset =
+                index * detail::FRAMED_RECORD_TARGET_BYTES;
+            const auto uncompressed = std::min(
+                detail::FRAMED_RECORD_TARGET_BYTES,
+                input.size() - input_offset);
+            const auto table_offset = detail::FRAMED_HEADER_BYTES +
+                                      index * detail::FRAMED_RECORD_BYTES;
+            put_le(table_offset, records[index].size(), 8);
+            put_le(table_offset + 8, uncompressed, 8);
+            std::copy(records[index].begin(), records[index].end(),
+                      framed.begin() + static_cast<std::ptrdiff_t>(cursor));
+            cursor += records[index].size();
+        }
+        return framed;
+    }
+
     TEST(ProjectContainerReader, BoundedStreamMatchesReadChunkForFramedPayloads) {
         constexpr std::size_t kBytes =
             2ull * 64ull * 1024ull * 1024ull + 32ull * 1024ull * 1024ull;
@@ -1008,6 +1180,11 @@ namespace {
             ASSERT_GE(record_count, 3u) << name;
             const auto materialized = require_result(reader.read_chunk(chunk));
             ASSERT_EQ(materialized, payload) << name;
+            if (compression == Compression::ZstdFramed) {
+                std::vector<std::byte> stored(chunk.stored_bytes);
+                require_status(reader.read_stored_at(chunk, 0, stored));
+                EXPECT_EQ(stored, reference_framed_zstd(payload));
+            }
             auto bounded = reader.open_bounded_stream(chunk);
             ASSERT_TRUE(bounded) << lfs::format_for_developer(bounded.error());
             expect_bounded_stream_matches(*bounded, materialized);
@@ -1404,6 +1581,11 @@ namespace {
             const ChunkInfo& chunk = reader.chunks().front();
             const auto records = read_framed_table(path, chunk);
             ASSERT_GE(records.size(), 3u) << name;
+            if (compression == Compression::ZstdFramed) {
+                std::vector<std::byte> stored(chunk.stored_bytes);
+                require_status(reader.read_stored_at(chunk, 0, stored));
+                EXPECT_EQ(stored, reference_framed_zstd(payload));
+            }
             const auto& victim = records[2];
             ASSERT_GT(victim.stored_bytes, 8u) << name;
             const std::uint64_t corrupt_rel =
@@ -1455,7 +1637,7 @@ namespace {
         check(Compression::ByteShuffleZstdFramed, "byteshuffle-framed");
     }
 
-    TEST(ProjectContainerReader, BoundedStreamSmallReadsDoNotRedecodeFramedRecords) {
+    TEST(ProjectContainerReader, BoundedStreamSmallReadsUseAliasedCacheSpans) {
         constexpr std::size_t kBytes =
             2ull * 64ull * 1024ull * 1024ull + 32ull * 1024ull * 1024ull;
         const auto payload = patterned_payload(kBytes);
@@ -1471,6 +1653,10 @@ namespace {
             EXPECT_EQ(chunk.compression, compression) << name;
             const auto records = read_framed_table(path, chunk);
             ASSERT_GE(records.size(), 3u) << name;
+            std::uint64_t expected_cached_bytes = 0;
+            for (const auto& record : records) {
+                expected_cached_bytes += record.stored_bytes;
+            }
             const auto materialized = require_result(reader.read_chunk(chunk));
             ASSERT_EQ(materialized, payload) << name;
 
@@ -1481,6 +1667,8 @@ namespace {
             const auto step = std::max<std::uint64_t>(
                 records.front().decoded_bytes / 4, 1);
             detail::reset_framed_record_decode_calls_for_testing();
+            detail::reset_framed_record_stored_cache_view_bytes_for_testing();
+            detail::reset_framed_record_stored_cache_nonalias_bytes_for_testing();
             std::vector<std::byte> got(payload.size());
             std::size_t filled = 0;
             while (filled < got.size()) {
@@ -1496,6 +1684,13 @@ namespace {
             EXPECT_EQ(detail::framed_record_decode_calls_for_testing(),
                       records.size())
                 << name;
+            EXPECT_EQ(detail::framed_record_stored_cache_view_bytes_for_testing(),
+                      expected_cached_bytes)
+                << name << " cache-hit spans did not cover each stored record";
+            // Cache-hit bytes alone do not prove the span aliases the cache buffer.
+            EXPECT_EQ(detail::framed_record_stored_cache_nonalias_bytes_for_testing(),
+                      0u)
+                << name << " cache-hit spans must alias the stored cache buffers";
         };
         check(Compression::ZstdFramed, "zstd-framed");
         check(Compression::ByteShuffleZstdFramed, "byteshuffle-framed");
@@ -3423,6 +3618,63 @@ namespace {
         EXPECT_FALSE(fs::exists(backup_temp));
     }
 
+    TEST(ProjectContainerWriter, ActiveAutosaveWriteTempSurvivesRecoverySweep) {
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "active-autosave.licht";
+        create_single_chunk_fixture(
+            master, 1033, 1034, 1035, fixed_key("PROJ", 1036),
+            R"({"master":"active-autosave"})");
+        ProjectReader base = require_result(ProjectReader::open(master));
+        const fs::path sidecar = autosave_sidecar_path(master);
+        const auto snapshot_uuid = fixed_uuid(1037);
+        ProjectWriter writer = require_result(ProjectWriter::create(
+            sidecar,
+            CreateOptions{
+                .project_uuid = base.superblock().project_uuid,
+                .file_uuid = fixed_uuid(1038),
+                .role = ContainerRole::AutosaveSidecar,
+                .base_explicit_commit_uuid = base.commit().commit_uuid,
+                .autosave_sequence = 1,
+                .sidecar_snapshot_uuid = snapshot_uuid,
+                .creation_time_unix_ns = FIXED_CREATION_TIME_NS + 1,
+                .index_compression =
+                    IndexCompression::StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+                .writer_lock_anchor = master,
+            }));
+
+        fs::path active_temp;
+        for (const auto& entry : fs::directory_iterator(temporary.path)) {
+            const auto name = entry.path().filename().string();
+            if (name.find(".project-write.") != std::string::npos &&
+                name.ends_with(".tmp.autosave")) {
+                active_temp = entry.path();
+                break;
+            }
+        }
+        ASSERT_FALSE(active_temp.empty());
+        ASSERT_TRUE(fs::is_regular_file(active_temp));
+
+        RecoveryInspection sweep;
+        sweep_orphan_project_artifacts(sidecar, sweep);
+        EXPECT_TRUE(fs::is_regular_file(active_temp));
+        EXPECT_TRUE(sweep.deleted_paths.empty());
+
+        auto commit = fixture_commit_options(1039, 1037, 1);
+        commit.kind = CommitKind::Autosave;
+        commit.snapshot_uuid = snapshot_uuid;
+        require_status(writer.plan_commit(commit));
+        require_status(writer.preflight(0));
+        for (const ChunkInfo& row : base.chunks()) {
+            if (row.row_kind == RowKind::Live) {
+                require_status(writer.add_sidecar_base_reference(row));
+            }
+        }
+        require_status(writer.commit());
+        EXPECT_TRUE(fs::is_regular_file(sidecar));
+        EXPECT_FALSE(fs::exists(active_temp));
+    }
+
     TEST(ProjectContainerWriter, InspectPrunesCorruptAsidesToNewestThree) {
         // Would fail if .corrupt-* asides grew without a per-stem cap.
         TemporaryDirectory temporary;
@@ -3587,6 +3839,416 @@ namespace {
         EXPECT_TRUE(fs::is_directory(lock_path));
     }
 #endif
+
+    struct LongPathTemporaryDirectory : TemporaryDirectory {
+        ~LongPathTemporaryDirectory() {
+#ifdef _WIN32
+            std::error_code ignored;
+            fs::remove_all(fs::path(L"\\\\?\\" + fs::absolute(path).native()), ignored);
+#endif
+        }
+    };
+
+    TEST(ProjectContainerWriter, LegacyAutosaveAtComponentLimitIsStillRecoverable) {
+        LongPathTemporaryDirectory temporary;
+        const auto master = temporary.path / (std::string(240, 'x') + ".licht");
+        create_single_chunk_fixture(master, 8001, 8002, 8003, fixed_key("SCNG", 8004), recoverable_scene_graph_payload());
+        auto legacy = master;
+        legacy += ".autosave";
+        ASSERT_EQ(legacy.filename().native().size(), 255u);
+        publish_complete_sidecar(master, legacy, 1, 8005, 8006, 8007);
+        EXPECT_EQ(autosave_sidecar_path(master), legacy);
+        auto recovery = require_result(inspect_autosave_recovery(master));
+        EXPECT_EQ(recovery.disposition, RecoveryDisposition::Offer);
+        ASSERT_TRUE(recovery.selected_path);
+        EXPECT_EQ(*recovery.selected_path, legacy);
+        auto lease = require_result(WriterLockLease::acquire(legacy));
+        EXPECT_TRUE(lease.valid());
+        EXPECT_LE(detail::project_lock_path(legacy).filename().native().size(), 255u);
+    }
+
+    TEST(ProjectContainerWriter, QuarantineCollisionStaysWithinComponentLimit) {
+        LongPathTemporaryDirectory temporary;
+        const std::string suffix = ".corrupt-1700000000";
+        const auto source = temporary.path / std::string(255 - suffix.size(), 'q');
+        write_file_bytes(detail::project_fs::native_path(source), byte_vector("quarantine source"));
+        auto existing = source;
+        existing += suffix;
+        write_file_bytes(detail::project_fs::native_path(existing), byte_vector("existing aside"));
+        const auto aside = require_result(detail::quarantine_project_artifact_with_suffix(source, suffix));
+        EXPECT_LE(aside.filename().native().size(), 255u);
+        EXPECT_TRUE(lfs::core::path_to_utf8(aside.filename()).ends_with("-1"));
+        EXPECT_EQ(read_file_bytes(detail::project_fs::native_path(aside)), byte_vector("quarantine source"));
+    }
+
+#ifdef _WIN32
+    TEST(ProjectContainerWriter, CaseSensitiveDirectoryKeepsDistinctBoundedSiblingKeys) {
+        LongPathTemporaryDirectory temporary;
+        const auto directory = detail::project_fs::native_path(temporary.path);
+        const HANDLE handle = CreateFileW(directory.c_str(), FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+                                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                          nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+        FILE_CASE_SENSITIVE_INFO info{FILE_CS_FLAG_CASE_SENSITIVE_DIR};
+        const bool enabled = SetFileInformationByHandle(handle, FileCaseSensitiveInfo, &info, sizeof(info)) != FALSE;
+        const auto error = GetLastError();
+        CloseHandle(handle);
+        if (!enabled)
+            GTEST_SKIP() << "Directory case-sensitive mode unavailable: " << error;
+        const auto lower = temporary.path / (std::string(249, 'x') + ".licht");
+        const auto upper = temporary.path / (std::string(249, 'X') + ".LICHT");
+        EXPECT_NE(detail::project_lock_path(lower), detail::project_lock_path(upper));
+        EXPECT_NE(autosave_sidecar_path(lower), autosave_sidecar_path(upper));
+        create_single_chunk_fixture(lower, 7931, 7932, 7933, fixed_key("PROJ", 7934), R"({"master":"lower"})");
+        create_single_chunk_fixture(upper, 7941, 7942, 7943, fixed_key("PROJ", 7944), R"({"master":"upper"})");
+        EXPECT_FALSE(detail::project_fs::equivalent(lower, upper));
+        auto first = require_result(WriterLockLease::acquire(lower));
+        auto second = require_result(WriterLockLease::acquire(upper));
+        require_status(require_result(ProjectReader::open(lower)).verify_all());
+        require_status(require_result(ProjectReader::open(upper)).verify_all());
+    }
+    TEST(ProjectContainerWriter, ValidUnicodeArtifactNamesKeepTheirExistingSpelling) {
+        LongPathTemporaryDirectory temporary;
+        auto master = temporary.path / fs::path(std::wstring(100, L'\u6e2c') + L".licht");
+        auto expected_lock = master;
+        expected_lock += ".lock";
+        auto expected_sidecar = master;
+        expected_sidecar += ".autosave";
+        EXPECT_EQ(detail::project_lock_path(master), expected_lock);
+        EXPECT_EQ(autosave_sidecar_path(master), expected_sidecar);
+        create_single_chunk_fixture(master, 7921, 7922, 7923, fixed_key("PROJ", 7924), R"({"master":"unicode"})");
+        require_status(require_result(ProjectReader::open(master)).verify_all());
+        const auto lowercase = temporary.path / (std::string(249, 'x') + ".licht");
+        const auto uppercase = temporary.path / (std::string(249, 'X') + ".LICHT");
+        EXPECT_EQ(detail::project_lock_path(lowercase), detail::project_lock_path(uppercase));
+        EXPECT_EQ(autosave_sidecar_path(lowercase), autosave_sidecar_path(uppercase));
+    }
+#endif
+
+#ifndef _WIN32
+    TEST(ProjectContainerWriter, ArtifactPathsPreserveDistinctNonUtf8NativeNames) {
+        TemporaryDirectory temporary;
+        for (const size_t padding : {0u, 245u}) {
+            const auto first = temporary.path / fs::path(std::string(padding, 'x') + "caf\xe9.licht");
+            const auto second = temporary.path / fs::path(std::string(padding, 'x') + "caf\xe8.licht");
+            const auto first_lock = detail::project_lock_path(first);
+            const auto second_lock = detail::project_lock_path(second);
+            EXPECT_NE(first_lock, second_lock);
+            EXPECT_NE(autosave_sidecar_path(first), autosave_sidecar_path(second));
+            if (!padding) {
+                auto expected_lock = first;
+                expected_lock += ".lock";
+                auto expected_sidecar = first;
+                expected_sidecar += ".autosave";
+                EXPECT_EQ(first_lock, expected_lock);
+                EXPECT_EQ(autosave_sidecar_path(first), expected_sidecar);
+                auto first_lease = require_result(WriterLockLease::acquire(first));
+                auto second_lease = require_result(WriterLockLease::acquire(second));
+                EXPECT_FALSE(WriterLockLease::acquire(first));
+                EXPECT_FALSE(WriterLockLease::acquire(second));
+            }
+            EXPECT_LE(first_lock.filename().native().size(), 255u);
+            EXPECT_LE(autosave_sidecar_path(first).filename().native().size(), 255u);
+        }
+    }
+#endif
+
+    TEST(ProjectContainerWriter, MaximumLengthNameSupportsLocksAutosaveAndQuarantine) {
+        LongPathTemporaryDirectory temporary;
+        const auto master = temporary.path / (std::string(249, 'x') + ".licht");
+        const auto other = temporary.path / (std::string(249, 'y') + ".licht");
+        ASSERT_EQ(master.filename().native().size(), 255u);
+        create_single_chunk_fixture(master, 7901, 7902, 7903, fixed_key("PROJ", 7904), R"({"master":"bounded"})");
+        const auto lock_path = detail::project_lock_path(master);
+        EXPECT_LE(lfs::core::path_to_utf8(lock_path.filename()).size(), 255u);
+        EXPECT_NE(lock_path, detail::project_lock_path(other));
+        {
+            auto lease = require_result(WriterLockLease::acquire(master));
+            EXPECT_TRUE(detail::project_fs::exists(lock_path));
+            EXPECT_FALSE(WriterLockLease::acquire(master));
+            sweep_stale_licht_artifacts_for_known_masters({master});
+            EXPECT_TRUE(detail::project_fs::exists(lock_path));
+        }
+        const auto sidecar = autosave_sidecar_path(master);
+        EXPECT_LE(lfs::core::path_to_utf8(sidecar.filename()).size(), 250u);
+        EXPECT_NE(sidecar, autosave_sidecar_path(other));
+        create_single_chunk_fixture(sidecar, 7911, 7912, 7913, fixed_key("PROJ", 7914), R"({"autosave":"bounded"})");
+        require_status(require_result(ProjectReader::open(sidecar)).verify_all());
+        const auto aside = require_result(quarantine_project_artifact(master));
+        EXPECT_LE(lfs::core::path_to_utf8(aside.filename()).size(), 255u);
+        EXPECT_FALSE(detail::project_fs::exists(master));
+        EXPECT_TRUE(detail::project_fs::exists(aside));
+        require_status(require_result(ProjectReader::open(aside)).verify_all());
+        // Preserve the names used by existing projects and their locks.
+        const auto short_master = temporary.path / "ordinary.licht";
+        EXPECT_EQ(detail::project_lock_path(short_master).filename().string(), "ordinary.licht.lock");
+        EXPECT_EQ(autosave_sidecar_path(short_master).filename().string(), "ordinary.licht.autosave");
+        const auto formerly_supported = temporary.path / (std::string(244, 'z') + ".licht");
+        EXPECT_EQ(detail::project_lock_path(formerly_supported), fs::path(formerly_supported.string() + ".lock"));
+    }
+
+    TEST(ProjectContainerWriter, LongFilenameAtomicReplacementCanRollbackAndFinish) {
+        LongPathTemporaryDirectory temporary;
+        const auto destination = temporary.path / (std::string(234, 'x') + ".licht");
+        const auto replacement = temporary.path / "replacement.licht";
+        create_single_chunk_fixture(destination, 1211, 1212, 1213, fixed_key("PROJ", 1214), R"({"version":"original"})");
+        create_single_chunk_fixture(replacement, 1221, 1222, 1223, fixed_key("PROJ", 1224), R"({"version":"replacement"})");
+        auto replaced = detail::atomic_replace(replacement, destination);
+        ASSERT_TRUE(replaced) << lfs::format_for_developer(replaced.error());
+        ASSERT_TRUE(replaced->backup_path);
+        EXPECT_LE(lfs::core::path_to_utf8(replaced->backup_path->filename()).size(), 255u);
+        {
+            auto reader = require_result(ProjectReader::open(destination));
+            EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(1222));
+            require_status(reader.verify_all());
+        }
+        require_status(detail::rollback_atomic_replace(*replaced, destination));
+        {
+            auto reader = require_result(ProjectReader::open(destination));
+            EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(1212));
+            require_status(reader.verify_all());
+        }
+        create_single_chunk_fixture(replacement, 1231, 1232, 1233, fixed_key("PROJ", 1234), R"({"version":"final"})");
+        auto final = require_result(detail::atomic_replace(replacement, destination));
+        const auto backup = *final.backup_path;
+        require_status(detail::finish_atomic_replace(final, destination));
+        EXPECT_FALSE(detail::project_fs::exists(backup));
+        auto reader = require_result(ProjectReader::open(destination));
+        EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(1232));
+        require_status(reader.verify_all());
+    }
+
+#ifndef _WIN32
+    TEST(ProjectContainerWriter, RenameBackupReplacementCanRollbackAndFinish) {
+        TemporaryDirectory temporary;
+        const auto destination = temporary.path / "project.licht";
+        const auto replacement = temporary.path / "replacement.licht";
+        create_single_chunk_fixture(destination, 1251, 1252, 1253, fixed_key("PROJ", 1254), R"({"version":"original"})");
+        create_single_chunk_fixture(replacement, 1261, 1262, 1263, fixed_key("PROJ", 1264), R"({"version":"replacement"})");
+        auto replaced = require_result(detail::replace_with_rename_backup(
+            replacement, destination, detail::make_sibling_temp_path(destination, "replace-backup")));
+        ASSERT_TRUE(replaced.backup_path);
+        EXPECT_FALSE(detail::project_fs::exists(replacement));
+        {
+            auto reader = require_result(ProjectReader::open(destination));
+            EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(1262));
+        }
+        require_status(detail::rollback_atomic_replace(replaced, destination));
+        {
+            auto reader = require_result(ProjectReader::open(destination));
+            EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(1252));
+            require_status(reader.verify_all());
+        }
+        create_single_chunk_fixture(replacement, 1271, 1272, 1273, fixed_key("PROJ", 1274), R"({"version":"final"})");
+        auto final = require_result(detail::replace_with_rename_backup(
+            replacement, destination, detail::make_sibling_temp_path(destination, "replace-backup")));
+        const auto backup = *final.backup_path;
+        require_status(detail::finish_atomic_replace(final, destination));
+        EXPECT_FALSE(detail::project_fs::exists(backup));
+        auto reader = require_result(ProjectReader::open(destination));
+        EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(1272));
+        require_status(reader.verify_all());
+    }
+
+    // Fails if a rejected publish leaves the prior project only at the backup path.
+    TEST(ProjectContainerWriter, RenameBackupReplacementRestoresPriorProjectWhenPublishFails) {
+        TemporaryDirectory temporary;
+        const auto destination = temporary.path / "project.licht";
+        create_single_chunk_fixture(destination, 1281, 1282, 1283, fixed_key("PROJ", 1284), R"({"version":"original"})");
+        const auto backup = detail::make_sibling_temp_path(destination, "replace-backup");
+        auto replaced = detail::replace_with_rename_backup(temporary.path / "missing.licht", destination, backup);
+        ASSERT_FALSE(replaced);
+        EXPECT_FALSE(detail::project_fs::exists(backup));
+        auto reader = require_result(ProjectReader::open(destination));
+        EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(1282));
+        require_status(reader.verify_all());
+    }
+#endif
+
+    TEST(ProjectContainerWriter, ShortenedTempsAreSweptOnlyUnderTheirMastersLock) {
+        LongPathTemporaryDirectory temporary;
+        const auto master = temporary.path / (std::string(234, 'x') + ".licht");
+        const auto other = temporary.path / (std::string(234, 'y') + ".licht");
+        create_single_chunk_fixture(master, 1241, 1242, 1243, fixed_key("PROJ", 1244), R"({"master":"source"})");
+        const auto stale = detail::make_sibling_temp_path(master, "compact");
+        const auto unrelated = detail::make_sibling_temp_path(other, "replace-backup");
+        write_file_bytes(detail::project_fs::native_path(stale), byte_vector("stale"));
+        write_file_bytes(detail::project_fs::native_path(unrelated), byte_vector("other"));
+        {
+            auto lease = require_result(WriterLockLease::acquire(master));
+            sweep_stale_licht_artifacts_for_known_masters({master});
+            EXPECT_TRUE(detail::project_fs::exists(stale));
+            EXPECT_TRUE(detail::project_fs::exists(unrelated));
+        }
+        sweep_stale_licht_artifacts_for_known_masters({master});
+        EXPECT_FALSE(detail::project_fs::exists(stale));
+        EXPECT_TRUE(detail::project_fs::exists(unrelated));
+    }
+
+#ifdef _WIN32
+    TEST(ProjectContainerWriter, LongDirectoryWorksWithoutProcessLongPathOptIn) {
+        LongPathTemporaryDirectory temporary;
+        const auto directory = temporary.path / std::string(100, 'a') / std::string(100, 'b') / lfs::core::utf8_to_path("保存");
+        std::error_code error;
+        ASSERT_TRUE(detail::project_fs::create_directories(directory, error)) << error.message();
+        const auto master = directory / "source.licht";
+        const auto destination = directory / "copy.licht";
+        ASSERT_GT(master.native().size(), 260u);
+        using LongPathOptIn = BOOLEAN(WINAPI*)();
+        const auto opted_in = reinterpret_cast<LongPathOptIn>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlAreLongPathsEnabled"));
+        if (opted_in) {
+            RecordProperty("process_long_paths_enabled", opted_in() ? "true" : "false");
+        }
+        create_single_chunk_fixture(master, 1251, 1252, 1253, fixed_key("PROJ", 1254), R"({"master":"deep"})");
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            CompactionOptions options;
+            options.new_file_uuid = fixed_uuid(1261 + attempt);
+            options.snapshot_uuid = fixed_uuid(1281 + attempt);
+            options.commit_uuid = fixed_uuid(1271 + attempt);
+            options.wallclock_unix_ns = FIXED_COMMIT_TIME_NS;
+            options.disk_reserve_bytes = 0;
+            require_status(ProjectWriter::compact_to(master, destination, options));
+            auto reader = require_result(ProjectReader::open(destination));
+            EXPECT_EQ(reader.commit().commit_uuid, options.commit_uuid);
+            require_status(reader.verify_all());
+        }
+        const auto stale = detail::make_sibling_temp_path(destination, "compact");
+        require_result(detail::NativeFile::create_new(stale)).reset();
+        sweep_stale_licht_artifacts_for_known_masters({destination});
+        EXPECT_FALSE(detail::project_fs::exists(stale));
+        // Canonicalization expands an 8.3 temporary root (C:\Users\RUNNER~1 on CI), so the root is checked by file
+        // identity. Paths are compared as UTF-8: gtest prints fs::path through the ANSI code page, which throws on 保存.
+        const auto canonical = detail::project_fs::weakly_canonical(destination, error);
+        ASSERT_FALSE(error) << error.message();
+        const auto canonical_text = lfs::core::path_to_utf8(canonical);
+        EXPECT_FALSE(canonical.native().starts_with(L"\\\\?\\")) << canonical_text;
+        const auto tail = fs::path(std::string(100, 'a')) / std::string(100, 'b') / lfs::core::utf8_to_path("保存") / "copy.licht";
+        EXPECT_TRUE(canonical_text.ends_with(lfs::core::path_to_utf8(tail))) << canonical_text;
+        EXPECT_TRUE(fs::equivalent(detail::project_fs::native_path(canonical), detail::project_fs::native_path(destination), error))
+            << error.message();
+    }
+#endif
+
+    void save_and_verify(const fs::path& destination, const std::uint64_t tag) {
+        std::error_code error;
+        detail::project_fs::create_directories(destination.parent_path(), error);
+        ASSERT_FALSE(error) << error.message();
+        create_single_chunk_fixture(destination, tag, tag + 1, tag + 2, fixed_key("PROJ", tag + 3), R"({"saved":true})");
+        auto reader = require_result(ProjectReader::open(destination));
+        EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(tag + 1));
+        require_status(reader.verify_all());
+    }
+
+    TEST(ProjectPathResolution, MatchesStandardResolutionForShortPaths) {
+        TemporaryDirectory temporary;
+        const auto root = temporary.path / lfs::core::utf8_to_path("проект 保存 é 🙂");
+        fs::create_directories(root / "existing");
+        write_file_bytes(root / "existing" / "scene.licht", byte_vector("scene"));
+        std::vector<fs::path> paths{
+            fs::path{},
+            root,
+            root / "existing",
+            root / "existing" / "scene.licht",
+            root / "existing" / "missing.licht",
+            root / "missing" / "deeper" / "scene.licht",
+            root / "missing" / ".." / "existing" / "scene.licht",
+            root / "." / "existing" / "." / "missing.licht",
+            root / "existing" / ".." / "missing.licht",
+        };
+#ifndef _WIN32
+        fs::create_directory_symlink(root / "existing", root / "link");
+        paths.push_back(root / "link" / "missing.licht");
+        paths.push_back(root / "link" / ".." / "missing.licht");
+#endif
+        for (const auto& path : paths) {
+            const auto text = lfs::core::path_to_utf8(path);
+            std::error_code project_error;
+            std::error_code standard_error;
+            const auto resolved = detail::project_fs::weakly_canonical(path, project_error);
+            const auto expected = fs::weakly_canonical(path, standard_error);
+            ASSERT_FALSE(project_error) << text << ": " << project_error.message();
+            ASSERT_FALSE(standard_error) << text << ": " << standard_error.message();
+            EXPECT_EQ(lfs::core::path_to_utf8(resolved), lfs::core::path_to_utf8(expected.lexically_normal())) << text;
+        }
+    }
+
+    TEST(ProjectPathResolution, UnicodeProjectsSaveOnBothSidesOfTheExtendedPathSwitch) {
+        LongPathTemporaryDirectory temporary;
+        const auto leaf = lfs::core::utf8_to_path("scène 🙂.licht");
+        std::uint64_t tag = 7100;
+        for (const auto length : kLengthsAroundExtendedPathSwitch) {
+            const auto directory = temporary.path / lfs::core::utf8_to_path("проект 保存 🙂") / std::to_string(length);
+            const auto destination = with_native_length(directory, length, leaf);
+            ASSERT_EQ(destination.native().size(), length);
+            save_and_verify(destination, tag += 10);
+            std::error_code error;
+            const auto resolved = lfs::core::path_to_utf8(detail::project_fs::weakly_canonical(destination, error));
+            ASSERT_FALSE(error) << length << ": " << error.message();
+            EXPECT_FALSE(resolved.starts_with(R"(\\?\)")) << resolved;
+            EXPECT_TRUE(resolved.ends_with(lfs::core::path_to_utf8(destination.lexically_relative(temporary.path)))) << resolved;
+            auto lease = require_result(WriterLockLease::acquire(destination));
+            const auto parent = destination.parent_path();
+            auto second = detail::WriterLock::acquire(parent / ".." / parent.filename() / leaf);
+            ASSERT_FALSE(second) << length;
+            EXPECT_EQ(second.error().code(), lfs::ErrorCode::Unavailable) << length;
+        }
+    }
+
+#ifdef _WIN32
+    TEST(ProjectPathResolution, NetworkProjectsSaveOnBothSidesOfTheExtendedPathSwitch) {
+        const auto share = network_share();
+        if (!share) {
+            if (network_share_required()) {
+                FAIL() << "LFS_TEST_UNC_ROOT and LFS_TEST_UNC_LOCAL must name a reachable network share";
+            }
+            GTEST_SKIP() << "No network share provisioned (LFS_TEST_UNC_ROOT, LFS_TEST_UNC_LOCAL)";
+        }
+        LongPathDirectory run(share->local);
+        const fs::path local_root = run.path;
+        const fs::path network_root = share->network / run.path.filename();
+        std::error_code error;
+        const auto leaf = lfs::core::utf8_to_path("scène 🙂.licht");
+        std::uint64_t tag = 7300;
+        for (const auto length : kLengthsAroundExtendedPathSwitch) {
+            const auto directory = network_root / lfs::core::utf8_to_path("проект 保存 🙂") / std::to_string(length);
+            const auto network = with_native_length(directory, length, leaf);
+            ASSERT_EQ(network.native().size(), length);
+            const auto tail = network.lexically_relative(network_root);
+            const auto local = local_root / tail;
+            save_and_verify(network, tag += 10);
+            for (const auto& spelling : {network, detail::project_fs::native_path(network)}) {
+                const auto resolved = lfs::core::path_to_utf8(detail::project_fs::weakly_canonical(spelling, error));
+                ASSERT_FALSE(error) << length << ": " << error.message();
+                EXPECT_FALSE(resolved.starts_with(R"(\\?\)")) << resolved;
+                EXPECT_TRUE(resolved.ends_with(lfs::core::path_to_utf8(tail))) << resolved;
+            }
+            {
+                auto reader = require_result(ProjectReader::open(local));
+                EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(tag + 1));
+            }
+            auto lease = require_result(WriterLockLease::acquire(network));
+            auto local_writer = detail::WriterLock::acquire(local);
+            ASSERT_FALSE(local_writer) << length;
+            EXPECT_EQ(local_writer.error().code(), lfs::ErrorCode::Unavailable) << length;
+        }
+    }
+#endif
+
+    TEST(ProjectContainerWriter, RecoveryRemovesOnlyUnheldLongNameStagingFiles) {
+        TemporaryDirectory temporary;
+        const auto master = temporary.path / "source.licht";
+        create_single_chunk_fixture(master, 1201, 1202, 1203, fixed_key("PROJ", 1204), R"({"master":"source"})");
+        const auto destination = temporary.path / (std::string(167, 'x') + ".licht");
+        const auto stale = detail::save_as_staging_path(destination, "stale-token");
+        const auto held = detail::save_as_staging_path(destination, "held-token");
+        write_file_bytes(detail::project_fs::native_path(stale), byte_vector("stale"));
+        write_file_bytes(held, byte_vector("active"));
+        auto lease = WriterLockLease::acquire(held);
+        ASSERT_TRUE(lease);
+        sweep_stale_licht_artifacts_for_known_masters({master});
+        EXPECT_FALSE(fs::exists(stale));
+        EXPECT_TRUE(fs::exists(held));
+    }
 
     TEST(ProjectContainerWriter,
          StartupSweepRemovesStaleMasterLockAndSaveasTemp) {
@@ -3811,6 +4473,25 @@ namespace {
                 EXPECT_EQ(derived->filename(), fs::path(row.derived));
             }
         }
+    }
+
+    TEST(ProjectPathTest, UnicodeNamesPreservePublishedAndRecoveryPaths) {
+        const fs::path parent{"/tmp/licht-path-unicode"};
+        const auto published_name = lfs::core::utf8_to_path("\u9879\u76ee_\u00e8.licht");
+        const auto temporary_name = lfs::core::utf8_to_path(
+            "\u9879\u76ee_\u00e8.project-write.1.2.3.tmp.licht");
+        const auto published = parent / published_name;
+        const auto temporary = parent / temporary_name;
+
+        EXPECT_TRUE(isPublishedLichtPath(published));
+        EXPECT_FALSE(isPublishedLichtPath(temporary));
+
+        const auto derived = derivedPublishedMasterPath(temporary);
+        ASSERT_TRUE(derived.has_value());
+        EXPECT_EQ(*derived, published);
+
+        const auto message = unpublishedLichtUserMessage(temporary);
+        EXPECT_NE(message.find(lfs::core::path_to_generic_utf8(published)), std::string::npos);
     }
 
 } // namespace

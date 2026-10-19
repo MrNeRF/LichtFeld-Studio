@@ -10,6 +10,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -70,10 +71,13 @@ namespace lfs::io {
         bool load_masks = false;
         bool load_depths = false;
         bool load_normals = false;
+        bool mesh_geometry_only = false;
         // When true, a normal map that fails the size contract is ignored (one
         // warning naming the file) so auto-generate can overwrite it. When false,
         // the load fails with NORMAL_SIZE_MISMATCH as before.
         bool normal_auto_generate = false;
+        // Same contract for depth maps when depth auto-generate is on.
+        bool depth_auto_generate = false;
         CentralizeDataset centralize = CentralizeDataset::Off;
         ProgressCallback progress = nullptr;
         CancelCallback cancel_requested = nullptr;
@@ -136,6 +140,7 @@ namespace lfs::io {
         std::chrono::milliseconds load_time{0};
         std::vector<std::string> warnings;
         std::optional<ImportGeoreference> georeference;
+        std::optional<std::vector<std::uint8_t>> license_bytes;
     };
 
     /**
@@ -212,6 +217,10 @@ namespace lfs::io {
     /// Check if PLY contains Gaussian splat properties (opacity, scaling, rotation)
     /// Returns false for simple point clouds (xyz + colors only)
     LFS_IO_API bool is_gaussian_splat_ply(const std::filesystem::path& filepath);
+
+    /// Check if the loader reads this file as a triangle mesh: a mesh format, a PLY with faces,
+    /// or a GLB without splat data
+    LFS_IO_API bool is_mesh_file(const std::filesystem::path& filepath);
 
     /// Load PLY as simple point cloud (xyz + optional colors and normals)
     /// Use this for PLY files that are NOT Gaussian splats

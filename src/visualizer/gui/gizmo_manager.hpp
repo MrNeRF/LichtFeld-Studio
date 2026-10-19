@@ -47,10 +47,10 @@ namespace lfs::vis {
 
         class GizmoManager {
         public:
-            explicit GizmoManager(VisualizerImpl* viewer);
+            LFS_VIS_API explicit GizmoManager(VisualizerImpl* viewer);
 
             void setupEvents();
-            void updateToolState(const UIContext& ctx, bool ui_hidden);
+            LFS_VIS_API void updateToolState(const UIContext& ctx, bool ui_hidden);
 
             void renderNodeTransformGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             void renderCropBoxGizmo(const UIContext& ctx, const ViewportLayout& viewport);
@@ -58,6 +58,8 @@ namespace lfs::vis {
             void renderViewportGizmo(const ViewportLayout& viewport);
             void updateCropFlash();
             void deactivateAllTools();
+            bool cancelActiveNodeTransformDrag();
+            bool cancelActiveGizmoDrag();
             void setSelectionSubMode(SelectionSubMode mode);
             void setSelectionVolumeFromDrag(SelectionSubMode mode,
                                             SelectionMode apply_mode,
@@ -92,6 +94,15 @@ namespace lfs::vis {
             LFS_VIS_API void applyActiveCropTool();
             LFS_VIS_API void deleteActiveCropToolVolume();
             [[nodiscard]] bool isViewportGizmoDragging() const { return viewport_gizmo_dragging_; }
+            // The panel whose axis widget is pressed or dragged, and the pressed marker (-1 for the sphere).
+            struct ViewportGizmoPress {
+                SplitViewPanelId panel = SplitViewPanelId::Left;
+                int axis = -1;
+            };
+            [[nodiscard]] std::optional<ViewportGizmoPress> viewportGizmoPress() const;
+            // What the axis widget shows under the pointer: -1 off every sphere,
+            // otherwise the panel and hovered marker, so a change needs a redraw.
+            [[nodiscard]] int viewportGizmoHover(double x, double y) const;
             [[nodiscard]] bool isPositionInViewportGizmo(double x, double y) const;
             [[nodiscard]] ToolType getCurrentToolMode() const;
 
@@ -122,6 +133,9 @@ namespace lfs::vis {
             };
 
             VisualizerImpl* viewer_;
+            void beginViewportGizmoOrbit(::Viewport& viewport, const glm::vec2& mouse, float time);
+            void orbitViewportGizmo(::Viewport& viewport, float time);
+            void releaseViewportGizmoPointer();
             [[nodiscard]] std::optional<core::NodeId> selectedCropVolumeNodeId(core::NodeId target_id) const;
             [[nodiscard]] bool ensureCropVolumeForCurrentSelection();
 
@@ -166,10 +180,15 @@ namespace lfs::vis {
             core::NodeId crop_tool_volume_node_id_ = core::NULL_NODE;
             bool crop_tool_drag_active_ = false;
             bool crop_tool_drag_changed_ = false;
+            glm::vec3 crop_tool_box_min_before_drag_{-0.5f};
+            glm::vec3 crop_tool_box_max_before_drag_{0.5f};
+            glm::vec3 crop_tool_ellipsoid_radii_before_drag_{1.0f};
+            glm::mat4 crop_tool_visualizer_transform_before_drag_{1.0f};
             glm::vec3 crop_tool_box_min_{-0.5f};
             glm::vec3 crop_tool_box_max_{0.5f};
             glm::vec3 crop_tool_ellipsoid_radii_{1.0f};
             glm::mat4 crop_tool_visualizer_transform_{1.0f};
+            std::optional<glm::mat4> crop_tool_scale_start_;
             SelectionMode selection_volume_apply_mode_ = SelectionMode::Replace;
             uint64_t selection_volume_source_generation_ = 0;
             std::shared_ptr<core::Tensor> selection_volume_base_mask_;
@@ -182,12 +201,18 @@ namespace lfs::vis {
 
             // Viewport gizmo
             bool viewport_gizmo_dragging_ = false;
+            bool viewport_gizmo_pressed_ = false;
+            int viewport_gizmo_pressed_axis_ = -1;
+            glm::vec2 viewport_gizmo_press_pos_{0.0f};
+            // Orbit input accumulates relative motion, so the window edge never stops a drag.
+            glm::vec2 viewport_gizmo_drag_pos_{0.0f};
             SplitViewPanelId viewport_gizmo_active_panel_ = SplitViewPanelId::Left;
             glm::dvec2 gizmo_drag_start_cursor_{0.0, 0.0};
+            glm::vec3 viewport_gizmo_camera_position_before_drag_{0.0f};
+            glm::vec3 viewport_gizmo_camera_pivot_before_drag_{0.0f};
+            glm::mat3 viewport_gizmo_camera_rotation_before_drag_{1.0f};
+            bool viewport_gizmo_camera_snapshot_valid_ = false;
             bool show_viewport_gizmo_ = true;
-            static constexpr float VIEWPORT_GIZMO_SIZE = 95.0f;
-            static constexpr float VIEWPORT_GIZMO_MARGIN_X = 10.0f;
-            static constexpr float VIEWPORT_GIZMO_MARGIN_Y = 10.0f;
 
             void triggerCropFlash();
 
@@ -232,6 +257,7 @@ namespace lfs::vis {
             [[nodiscard]] bool ensureCropToolState();
             [[nodiscard]] bool syncCropToolStateFromNode(core::NodeId target_id, core::NodeId volume_node_id, bool* changed = nullptr);
             [[nodiscard]] bool persistActiveCropToolToNode(bool enable);
+            void scaleCropToolTransform(const glm::vec3& total_scale);
             void updateCropToolOverlayState();
             void clearCropToolOverlayState();
             void leaveCropTool(bool hide_volume, bool select_parent, bool clear_active_tool);

@@ -14,6 +14,50 @@ def _rule_body(rcss: str, selector: str) -> str:
     return rcss.split(f"{selector} {{", 1)[1].split("}", 1)[0]
 
 
+def _theme_size_values(node, key):
+    if isinstance(node, dict):
+        for name, value in node.items():
+            if name == key:
+                yield value
+            else:
+                yield from _theme_size_values(value, key)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _theme_size_values(value, key)
+
+
+def test_every_scrollbar_uses_the_theme_size():
+    # Keep intentional family metrics while preventing panels from overriding them.
+    themes_dir = PROJECT_ROOT / "src" / "visualizer" / "gui" / "assets" / "themes"
+    for theme_path in themes_dir.glob("*.json"):
+        theme = json.loads(theme_path.read_text(encoding="utf-8"))
+        expected_scrollbar_size = 6.0 if theme.get("id") == "graphite" else 4.0
+        assert set(_theme_size_values(theme, "scrollbar_size")) <= {expected_scrollbar_size}, theme_path.name
+        assert set(_theme_size_values(theme, "grab_min_size")) <= {12.0}, theme_path.name
+
+    resources_dir = PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    rule = re.compile(r"([^{}]*scrollbar(?:vertical|horizontal)[^{}]*)\{([^}]*)\}")
+    for rcss_path in resources_dir.glob("*.rcss"):
+        if rcss_path.name.startswith("components"):
+            continue
+        for selector, body in rule.findall(rcss_path.read_text(encoding="utf-8")):
+            assert not re.search(r"\b(?:width|height|min-width|min-height):", body), (
+                f"{rcss_path.name}: {selector.strip()}"
+            )
+
+
+def test_narrow_tab_and_tool_bars_wrap_instead_of_clipping():
+    # Catches the HUD tabs overlapping and the console toolbar cutting off actions at large UI scales.
+    resources_dir = PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    overlay_rcss = (resources_dir / "viewport_overlay.rcss").read_text(encoding="utf-8")
+    assert "flex-wrap: wrap;" in _rule_body(overlay_rcss, ".vram-hud-tabs")
+    assert "flex: 1 0 auto;" in _rule_body(overlay_rcss, ".vram-hud-tab")
+
+    console_rcss = (resources_dir / "python_console_panel.rcss").read_text(encoding="utf-8")
+    assert "flex-wrap: wrap;" in _rule_body(console_rcss, ".toolbar-actions")
+    assert not re.search(r"(?<![-\w])height:", _rule_body(console_rcss, "#python-console-toolbar"))
+
+
 def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
     rml = (
         PROJECT_ROOT
@@ -45,18 +89,21 @@ def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
 
     assert 'data-class-open="item.submenu_open"' in rml
     assert 'data-attr-data-root-index="item.index"' in rml
-    assert 'data-class-active="item.submenu_open"' in rml
+    assert 'data-class-active="item.keyboard_active"' in rml
     assert 'data-class-open="child.submenu_open"' in rml
     assert 'data-attr-data-child-index="child.index"' in rml
-    assert 'data-for="leaf : child.children"' in rml
+    assert 'data-for="grandchild : child.children"' in rml
+    assert 'data-class-open="grandchild.submenu_open"' in rml
+    assert 'data-attr-data-grandchild-index="grandchild.index"' in rml
+    assert 'data-for="leaf : grandchild.children"' in rml
     assert 'id="dropdown-popup"' in rml
     assert "#dropdown-overlay" in rcss
     assert "#dropdown-container" in rcss
     assert "#dropdown-popup" in rcss
     assert ".submenu-popup" in rcss
-    assert "z-index: 1;" in rcss
-    assert "z-index: 2;" in rcss
-    assert "z-index: 3;" in rcss
+    assert "z-index: 1;" in _rule_body(rcss, "#dropdown-overlay")
+    assert "z-index: 2;" in _rule_body(rcss, "#dropdown-container")
+    assert "z-index: 3;" in _rule_body(rcss, ".submenu-popup")
     assert "#dropdown-container {\n    display: none;\n    position: absolute;\n    top: 0;" in rcss
     assert "width: 100%;" in rcss and "height: 100%;" in rcss
     dropdown_rule = _rule_body(rcss, ".dropdown-popup")
@@ -236,8 +283,25 @@ def test_rml_tooltips_request_only_pending_animation_frames():
     assert "tooltip_.revealDue()" in viewport_header
     assert "tooltip_.hasActiveState()" in viewport_cpp
     assert "applyFrameTooltip()" in viewport_cpp
-    assert "setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.needsFrame())" in viewport_cpp
+    # A visible tooltip keeps asking for pointer-move frames so it can hide.
+    assert "setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.hasActiveState())" in viewport_cpp
     assert "rml_viewport_overlay_.needsAnimationFrame()" in gui_manager_cpp
+
+
+def test_shared_tooltips_wrap_words_and_preserve_line_breaks():
+    rcss = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "components.rcss"
+    ).read_text(encoding="utf-8")
+    tooltip_rule = _rule_body(rcss, ".frame-tooltip")
+
+    assert re.search(r"\bword-break:\s*break-word\s*;", tooltip_rule)
+    assert re.search(r"\bwhite-space:\s*pre-line\s*;", tooltip_rule)
 
 
 def test_menu_bar_uses_retained_bounds_for_submenu_hover():
@@ -278,6 +342,20 @@ def test_menu_bar_uses_retained_bounds_for_submenu_hover():
     assert "std::vector<MenuToolbarButtonView> camera_buttons_" in menu_bar_header
 
 
+def test_project_title_native_wiring_contract():
+    # CPU Rml tests in test_menu_bar_title.cpp cover geometry, hit testing, text,
+    # dirty bindings and tooltip escaping. These two wiring checks only ensure
+    # the GUI feeds that surface and SDL's drag exclusion list omits the title;
+    # they cannot prove OS window movement or rendered pixels.
+    gui = (PROJECT_ROOT / "src/visualizer/gui/gui_manager.cpp").read_text(encoding="utf-8")
+    menu = (PROJECT_ROOT / "src/visualizer/gui/rml_menu_bar.cpp").read_text(encoding="utf-8")
+    assert "rml_menu_bar_.updateProjectDisplay(project_display)" in gui
+    drag = menu.split("void RmlMenuBar::updateTitlebarDragRegion", 1)[1].split(
+        "void RmlMenuBar::", 1
+    )[0]
+    assert "append_element(excluded_rects, project_title_el_)" not in drag
+
+
 def test_theme_auto_visibility_and_variant_button_width_are_capability_driven():
     preferences_panel = (
         PROJECT_ROOT / "src" / "python" / "lfs_plugins" / "preferences_panel.py"
@@ -309,7 +387,7 @@ def test_theme_auto_visibility_and_variant_button_width_are_capability_driven():
     assert "SDL_SYSTEM_THEME_DARK" in theme_cpp
 
 
-def test_all_optional_theme_gradients_reach_rml_consumers():
+def test_optional_theme_gradients_remain_supported_and_active_consumers_resolve():
     theme_cpp = (
         PROJECT_ROOT / "src" / "visualizer" / "theme" / "theme.cpp"
     ).read_text(encoding="utf-8")
@@ -375,48 +453,21 @@ def test_all_optional_theme_gradients_reach_rml_consumers():
         assert f"hashGradient(seed, gradients.{gradient})" in rml_theme_cpp
         assert f"t.gradients.{gradient}" in rml_theme_cpp
         resource = (resources / resource_name).read_text(encoding="utf-8")
-        assert f"@{{{token}}}" in resource
+        # Legacy histogram gradients still parse and hash, but charts now use
+        # solid semantic colors rather than consuming these decorators.
+        if not gradient.startswith("histogram_"):
+            assert f"@{{{token}}}" in resource
 
 
-def test_histogram_history_icons_follow_theme_contrast():
-    resources = (
-        PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
-    )
-    histogram_theme = (resources / "histogram_panel.theme.rcss").read_text(
-        encoding="utf-8"
-    )
-    rml_theme_cpp = (
-        PROJECT_ROOT
-        / "src"
-        / "visualizer"
-        / "gui"
-        / "rmlui"
-        / "rml_theme.cpp"
-    ).read_text(encoding="utf-8")
-
-    assert (
-        ".histogram-history-icon {\n"
-        "    image-color: @{text};\n"
-        "}"
-        in histogram_theme
-    )
-    assert (
-        ".histogram-history-btn:hover .histogram-history-icon {\n"
-        "    image-color: @{primary};\n"
-        "}"
-        in histogram_theme
-    )
-    assert (
-        ".histogram-history-btn:disabled .histogram-history-icon {\n"
-        "    image-color: @{panel.histogram_history_icon_disabled};\n"
-        "}"
-        in histogram_theme
-    )
-    assert (
-        '{"panel.histogram_history_icon_disabled", '
-        "colorToRmlAlpha(p.text_dim, is_light ? 0.68f : 0.52f)}"
-        in rml_theme_cpp
-    )
+def test_histogram_controls_and_chart_follow_semantic_theme_colors():
+    resources = PROJECT_ROOT / "src/visualizer/gui/rmlui/resources"
+    theme = (resources / "histogram_panel.theme.rcss").read_text(encoding="utf-8")
+    rml = (resources / "histogram_panel.rml").read_text(encoding="utf-8")
+    assert "histogram-history-icon" not in rml
+    assert "vertical-gradient" not in theme
+    assert "@{panel.histogram_fill_decor}" not in theme
+    assert "background-color: @{primary};" in theme
+    assert "background-color: @{warning};" in theme
 
 
 def test_signal_family_keeps_a_distinct_visual_language():
@@ -524,21 +575,29 @@ def test_asset_manager_palette_is_fully_theme_driven():
         ".asset-button": ("@{surface_bright}", "@{border}", "@{text}"),
         ".asset-import-button": ("@{blend(surface,primary,button.tint_normal)}",),
         ".asset-icon-grid > span,\n.asset-icon-list > span": ("@{text}",),
-        ".asset-refresh-button img,\n.asset-folder-menu img,\n.asset-card-menu img": (
+        ".asset-refresh-button img,\n.asset-toolbar-view img,\n.asset-card-menu img": (
             "@{alpha(text,0.90)}",
         ),
-        "#asset-sidebar": ("@{alpha(background,0.32)}", "@{border}"),
+        ".asset-quick-look": ("@{modal.backdrop}",),
+        ".asset-quick-look-card": ("@{surface}",),
+        ".asset-resize-handle:hover,\n.asset-resize-handle:active,\n.asset-resize-handle:focus": (
+            "@{alpha(primary,0.45)}",
+        ),
+        ".asset-list-column-handle:hover": (
+            "@{primary}",
+            "@{alpha(primary,0.18)}",
+        ),
+        ".contents-remove img": ("@{text}",),
+        "#asset-scope-controls": ("@{alpha(background,0.32)}", "@{border}"),
         ".asset-card": ("@{surface_bright}", "@{border}"),
         ".asset-list-row": ("@{surface_bright}", "@{border}", "@{text}"),
-        "#asset-info-panel": ("@{alpha(background,0.32)}", "@{border}"),
-        ".asset-info-warning": ("@{alpha(error,0.10)}", "@{error}"),
     }
     for selector, expected_tokens in required_theme_rules.items():
-        body = theme_rcss.split(f"{selector} {{", 1)[1].split("\n}", 1)[0]
+        body = re.split(r";\s*}", theme_rcss.split(f"{selector} {{", 1)[1], 1)[0]
         for token in expected_tokens:
             assert token in body
 
-    assert 'class="asset-add-folder-glyph"' in rml
+    assert 'id="asset-scope-select"' in rml
     assert "stroke=" not in rml
 
 
@@ -585,7 +644,7 @@ def test_menu_pointer_input_is_not_replayed_into_underlay_panels():
     assert "menu_blocks_underlay_pointer = menu_owns_pointer ||" in gui_manager_cpp
     assert "menu_pointer_capture_active_;" in gui_manager_cpp
     assert (
-        "else if (menu_blocks_underlay_pointer)\n"
+        "else if (startup_overlay_blocks_pointer || menu_blocks_underlay_pointer)\n"
         "                frame_input = maskPointerInputForUnderlay(std::move(frame_input));"
         in gui_manager_cpp
     )
@@ -602,7 +661,7 @@ def test_menu_pointer_input_is_not_replayed_into_underlay_panels():
     )[1].split("PanelInputState maskInputForBlockedUi", 1)[0]
     assert "input.key_ctrl" not in pointer_mask
     assert "input.keys_pressed" not in pointer_mask
-    assert "input.text_inputs" not in pointer_mask
+    assert "input.input_events" not in pointer_mask
 
 
 def test_viewport_overlay_toolbar_origin_tracks_viewport_content_offset():
@@ -674,7 +733,7 @@ def test_scene_tree_aligns_hierarchy_and_keeps_row_actions_trailing():
     assert "margin-right: 6dp;" in scene_view_rule
 
     tree_rule = _rule_body(scene_rcss, "#tree-container")
-    assert "overflow-y: scroll;" in tree_rule
+    assert "overflow-y: auto;" in tree_rule
 
     node_name_rule = _rule_body(scene_rcss, ".node-name")
     assert "flex-grow: 1;" in node_name_rule
@@ -801,7 +860,6 @@ def test_scene_tree_delete_key_uses_selection_gated_confirmation_path():
     assert "requestDeleteSceneSelectionIfAvailable" in gui_manager
     assert "requestDeleteSelectionIfAvailable" in scene_panel
     assert "tree_el_->selectedCount() == 0" in scene_panel
-    assert "if (active_tab_ == Tab::Scene)" in scene_panel
     assert "tree_el_->requestDeleteSelection();" in scene_panel
     assert "return true;" in scene_panel.split(
         "bool NativeScenePanel::requestDeleteSelectionIfAvailable()", 1
@@ -946,10 +1004,7 @@ def test_scene_tree_multi_selection_actions_are_fixed_below_the_scroll_view():
     assert "justify-content: center;" in button_rule
     assert "box-sizing: border-box;" in button_rule
     assert "padding: 0;" in button_rule
-    tree_scrollbar_rule = _rule_body(scene_rcss, "scene-graph scrollbarvertical")
-    assert "width: 4dp;" in tree_scrollbar_rule
-    tree_slider_rule = _rule_body(scene_rcss, "scene-graph scrollbarvertical sliderbar")
-    assert "min-height: 12dp;" in tree_slider_rule
+    assert "scene-graph scrollbarvertical" not in scene_rcss
     assert "state.count > 0" in scene_panel
     assert "!state.all_training_compatible" in scene_panel
     assert "!state.all_delete_enabled" in scene_panel
@@ -996,7 +1051,7 @@ def test_scene_graph_selection_markers_are_optional_user_preferences():
 
     assert "setSceneGraphSelectionMarkers(bool enabled)" in preferences_hpp
     assert 'values["scene_graph_selection_markers"] = enabled' in preferences_cpp
-    assert 'value("scene_graph_selection_markers", false)' in preferences_cpp
+    assert 'field<bool>(impl_->values, "scene_graph_selection_markers", false)' in preferences_cpp
     assert 'data-checked="scene_graph_selection_markers"' in preferences_rml
     assert 'toggle_section(\'scene_graph\')' in preferences_rml
     assert '@tr:preferences.scene_graph' in preferences_rml

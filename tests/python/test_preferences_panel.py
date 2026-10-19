@@ -4,6 +4,7 @@
 
 from enum import IntEnum
 from importlib import import_module
+import json
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import sys
@@ -11,15 +12,36 @@ import sys
 import pytest
 
 
+def test_project_folder_remove_label_uses_sentence_case_in_all_locales():
+    expected = {
+        "de": "Ordner entfernen",
+        "en": "Remove folder",
+        "es": "Quitar carpeta",
+        "fr": "Retirer le dossier",
+        "it": "Rimuovi cartella",
+        "ja": "フォルダーを外す",
+        "ko": "폴더 제거",
+        "nl": "Map verwijderen",
+        "pl": "Usuń folder",
+        "zh": "移除文件夹",
+    }
+    locales = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
+    assert {path.stem: json.loads(path.read_text(encoding="utf-8"))["projects"]["action.remove_folder"]
+            for path in locales.glob("*.json")} == expected
+
+
 @pytest.fixture
 def preferences_panel_module(monkeypatch):
     project_root = Path(__file__).parent.parent.parent
     source_python = project_root / "src" / "python"
-    if str(source_python) not in sys.path:
-        sys.path.insert(0, str(source_python))
+    if str(source_python) in sys.path:
+        sys.path.remove(str(source_python))
+    sys.path.insert(0, str(source_python))
 
     state = SimpleNamespace(
         language="it",
+        splat_drag_preferences={"format": "ply", "sh_degree": 3, "up_axis": -2},
+        sidebar_clear_calls=[],
         set_language_calls=[],
         mcp_preferences={
             "enabled": True,
@@ -50,6 +72,7 @@ def preferences_panel_module(monkeypatch):
             "safe_mode": False,
         },
         set_mcp_calls=[],
+        clipboard_text="",
         file_associations=[],
         file_association_set_calls=[],
         panel_enabled_calls=[],
@@ -64,9 +87,14 @@ def preferences_panel_module(monkeypatch):
         viewport_toolbar_position="centered",
         set_viewport_toolbar_position_calls=[],
         zoom_speed=11.0,
-        navigation_speed=8.0,
+        navigation_speed=10.0,
         project_location="",
         embed_dataset_by_default=False,
+        project_manager_preferences={
+            "defaultView": "remember",
+            "openAtStartup": True,
+            "rememberState": True,
+        },
     )
 
     def set_project_location(path):
@@ -114,7 +142,18 @@ def preferences_panel_module(monkeypatch):
         setattr(state, name, max(1.0, min(100.0, float(value))))
 
     lf_stub = ModuleType("lichtfeld")
+    state.marketplace_preferences = {"view": "list", "git_checkout": False}
+    state.marketplace_notifications = []
     lf_stub.ui = SimpleNamespace(
+        get_splat_drag_preferences=lambda: dict(state.splat_drag_preferences),
+        set_splat_drag_preferences=lambda values: state.splat_drag_preferences.update(values),
+        get_marketplace_preferences=lambda: dict(state.marketplace_preferences),
+        set_marketplace_view=lambda value: state.marketplace_preferences.update(view=value),
+        set_marketplace_git_checkout=lambda value: state.marketplace_preferences.update(git_checkout=value),
+        reset_marketplace_preferences=lambda: state.marketplace_preferences.update(view="list", git_checkout=False),
+        get_panel_object=lambda _panel_id: SimpleNamespace(
+            reload_marketplace_preferences=lambda: state.marketplace_notifications.append(True)),
+        clear_startup_sidebar=lambda: state.sidebar_clear_calls.append(True),
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
         PanelHeightMode=SimpleNamespace(FILL="fill"),
         PanelOption=SimpleNamespace(DEFAULT_CLOSED="DEFAULT_CLOSED"),
@@ -124,8 +163,13 @@ def preferences_panel_module(monkeypatch):
         get_theme_family=lambda: "lichtfeld",
         get_theme_mode=lambda: "dark",
         get_ui_scale_preference=lambda: 0.0,
+        get_native_floating_windows=lambda: getattr(state, "native_floating_windows", True),
+        set_native_floating_windows=lambda enabled: setattr(state, "native_floating_windows", enabled),
         set_ui_scale=lambda *_a, **_k: None,
         get_mcp_preferences=lambda: dict(state.mcp_preferences),
+        get_mcp_port_override=lambda: None,
+        get_mcp_access_token=lambda: "test-token",
+        set_clipboard_text=lambda text: setattr(state, "clipboard_text", text),
         set_mcp_preferences=set_mcp_preferences,
         get_mcp_status=lambda: dict(state.mcp_status),
         get_project_location=lambda: state.project_location or "/home/tester/.lichtfeld/projects",
@@ -189,14 +233,20 @@ def preferences_panel_module(monkeypatch):
         get_viewport_toolbar_position=lambda: state.viewport_toolbar_position,
         set_viewport_toolbar_position=set_viewport_toolbar_position,
         get_zoom_speed_preference=lambda: state.zoom_speed,
-        set_zoom_speed_preference=lambda value: set_speed("zoom_speed", value),
+        set_zoom_speed_preference=lambda value, persist=True: set_speed("zoom_speed", value),
         get_navigation_speed_preference=lambda: state.navigation_speed,
-        set_navigation_speed_preference=lambda value: set_speed("navigation_speed", value),
+        set_navigation_speed_preference=lambda value, persist=True: set_speed("navigation_speed", value),
         remember_camera_navigation=lambda: False,
         set_remember_camera_navigation=lambda _enabled: None,
         remember_camera_view_snap=lambda: False,
         set_remember_camera_view_snap=lambda _enabled: None,
     )
+    state.rendering_defaults = {}
+    lf_stub.ui.get_rendering_defaults_json = lambda: json.dumps(state.rendering_defaults)
+    lf_stub.ui.set_rendering_defaults_json = lambda value: state.rendering_defaults.update(json.loads(value))
+    state.auto_save_on_close = False
+    lf_stub.project_auto_save_on_close_enabled = lambda: state.auto_save_on_close
+    lf_stub.project_set_auto_save_on_close = lambda enabled: setattr(state, "auto_save_on_close", bool(enabled))
     lf_stub.keymap = SimpleNamespace(
         ToolMode=IntEnum(
             "ToolMode",
@@ -225,11 +275,14 @@ def preferences_panel_module(monkeypatch):
             ZOOM_SPEED_DOWN=SimpleNamespace(name="ZOOM_SPEED_DOWN", value=15),
             CAMERA_RESET_HOME=SimpleNamespace(name="CAMERA_RESET_HOME", value=16),
             CAMERA_SET_HOME=SimpleNamespace(name="CAMERA_SET_HOME", value=17),
+            CAMERA_RESTORE_HOME=SimpleNamespace(name="CAMERA_RESTORE_HOME", value=91),
             CAMERA_NEXT_VIEW=SimpleNamespace(name="CAMERA_NEXT_VIEW", value=18),
             CAMERA_PREV_VIEW=SimpleNamespace(name="CAMERA_PREV_VIEW", value=19),
+            CAMERA_FOCUS_SELECTION=SimpleNamespace(name="CAMERA_FOCUS_SELECTION", value=76),
             SELECTION_REPLACE=SimpleNamespace(name="SELECTION_REPLACE", value=20),
             SELECTION_ADD=SimpleNamespace(name="SELECTION_ADD", value=21),
             SELECTION_REMOVE=SimpleNamespace(name="SELECTION_REMOVE", value=22),
+            SELECTION_INTERSECT=SimpleNamespace(name="SELECTION_INTERSECT", value=77),
             SELECT_MODE_CENTERS=SimpleNamespace(name="SELECT_MODE_CENTERS", value=23),
             SELECT_MODE_RECTANGLE=SimpleNamespace(name="SELECT_MODE_RECTANGLE", value=24),
             SELECT_MODE_POLYGON=SimpleNamespace(name="SELECT_MODE_POLYGON", value=25),
@@ -298,9 +351,24 @@ def preferences_panel_module(monkeypatch):
             TOGGLE_SCENE_SELECTION_TRAINING=SimpleNamespace(
                 name="TOGGLE_SCENE_SELECTION_TRAINING", value=84
             ),
+            GROUP_SELECTED_SCENE_NODES=SimpleNamespace(
+                name="GROUP_SELECTED_SCENE_NODES", value=78
+            ),
+            UNGROUP_SELECTED_SCENE_NODE=SimpleNamespace(
+                name="UNGROUP_SELECTED_SCENE_NODE", value=79
+            ),
+            ASSET_GALLERY_PRIMARY=SimpleNamespace(
+                name="ASSET_GALLERY_PRIMARY", value=80
+            ),
+            ASSET_GALLERY_COPY_LINK=SimpleNamespace(
+                name="ASSET_GALLERY_COPY_LINK", value=81
+            ),
+            ASSET_REFRESH=SimpleNamespace(name="ASSET_REFRESH", value=85),
+            TOGGLE_PYTHON_CONSOLE=SimpleNamespace(name="TOGGLE_PYTHON_CONSOLE", value=90),
         ),
         get_available_profiles=lambda: ["Default"],
         get_current_profile=lambda: "Default",
+        bindings_revision=lambda: 0,
         get_tool_mode_name=lambda mode: str(mode),
         get_action_name=lambda value: str(value),
         get_trigger=lambda *_a, **_k: None,
@@ -333,6 +401,23 @@ def preferences_panel_module(monkeypatch):
         return False
 
     lf_stub.get_render_settings = lambda: state.render_settings
+    state.navigation_up_axis = "legacy_y"
+    state.navigation_up_calls = []
+    state.new_project_axis = "legacy_y"
+    state.new_project_align_grid = True
+    state.new_project_navigation_calls = []
+    lf_stub.get_new_project_navigation_up_axis = lambda: state.new_project_axis
+    lf_stub.get_new_project_align_grid = lambda: state.new_project_align_grid
+    def set_new_project_navigation_defaults(axis, align_grid):
+        state.new_project_axis = axis
+        state.new_project_align_grid = align_grid
+        state.new_project_navigation_calls.append((axis, align_grid))
+    lf_stub.set_new_project_navigation_defaults = set_new_project_navigation_defaults
+    lf_stub.get_navigation_up_axis = lambda: state.navigation_up_axis
+    def set_navigation_up_axis(axis, align_grid=False):
+        state.navigation_up_axis = axis
+        state.navigation_up_calls.append((axis, align_grid))
+    lf_stub.set_navigation_up_axis = set_navigation_up_axis
     lf_stub.get_camera_navigation_mode = lambda: "orbit"
     lf_stub.set_camera_navigation_mode = lambda _mode: None
     lf_stub.get_camera_view_snap_enabled = lambda: False
@@ -341,10 +426,31 @@ def preferences_panel_module(monkeypatch):
     lf_stub.file_association_set = file_association_set
 
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
+    sys.modules.pop("lfs_plugins.marketplace_preferences", None)
     sys.modules.pop("lfs_plugins.preferences_panel", None)
+    sys.modules.pop("lfs_plugins.rendering_defaults", None)
     sys.modules.pop("lfs_plugins.keymap_bindings", None)
     sys.modules.pop("lfs_plugins", None)
     module = import_module("lfs_plugins.preferences_panel")
+    monkeypatch.setattr(
+        module,
+        "read_project_manager_preferences",
+        lambda: dict(state.project_manager_preferences),
+    )
+    monkeypatch.setattr(
+        module,
+        "set_project_manager_preference",
+        lambda key, value: state.project_manager_preferences.__setitem__(key, value),
+    )
+    monkeypatch.setattr(
+        module,
+        "reset_project_manager_preferences",
+        lambda: setattr(
+            state,
+            "project_manager_preferences",
+            {"defaultView": "remember", "openAtStartup": True, "rememberState": True},
+        ),
+    )
     return module, state
 
 
@@ -356,6 +462,101 @@ def test_language_selection_does_not_reload_active_language(preferences_panel_mo
     panel._set_language_index("1")
 
     assert state.set_language_calls == []
+
+
+def test_project_manager_preferences_round_trip_and_reset(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+
+    panel._set_project_manager_default_view("gallery")
+    panel._set_project_manager_open_at_startup(False)
+    panel._set_project_manager_remember_state(False)
+
+    assert state.project_manager_preferences == {
+        "defaultView": "gallery",
+        "openAtStartup": False,
+        "rememberState": False,
+    }
+
+    panel._reset_section("general")
+
+    assert state.project_manager_preferences == {
+        "defaultView": "remember",
+        "openAtStartup": True,
+        "rememberState": True,
+    }
+
+
+def test_project_folders_preferences_add_remove_and_protect_default(preferences_panel_module, monkeypatch):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    records = {}
+    panel._handle = SimpleNamespace(
+        update_record_list=lambda name, rows: records.__setitem__(name, rows),
+        dirty=lambda _name: None,
+    )
+    folders = {"default": {"name": "Projects", "path": "/tmp/projects"}}
+    calls = []
+    backend = SimpleNamespace(
+        _asset_index=object(),
+        _asset_index_folders=lambda: folders,
+        _add_folder_from_path=lambda path, recursive: calls.append((path, recursive)) or folders.__setitem__("extra", {"name": "Extra", "path": path}),
+        on_delete_folder=lambda _h, _e, args: calls.append(("remove", args[0])),
+        refresh_catalog=lambda **kwargs: calls.append(("rescan", kwargs)),
+    )
+    monkeypatch.setattr(module.lf.ui, "get_panel_object", lambda _id: backend, raising=False)
+    monkeypatch.setattr(module.lf.ui, "open_folder_dialog", lambda *_: "/tmp/extra")
+    monkeypatch.setattr(module.lf.ui, "confirm_dialog", lambda _title, _message, buttons, callback: callback(buttons[1]), raising=False)
+
+    panel._refresh_project_folders()
+    assert records["project_folders"][0]["id"] == "default"
+    assert records["project_folders"][0]["can_remove"] is False
+    panel._on_add_project_folder()
+    assert calls == [("/tmp/extra", True)]
+    panel._on_remove_project_folder(args=["default"])
+    assert len(calls) == 1
+    panel._on_remove_project_folder(args=["extra"])
+    panel._on_rescan_project_folders()
+    assert calls[-2:] == [("remove", "extra"), ("rescan", {"scan_folders": True})]
+
+
+def test_portal_section_does_not_offer_settings_reset(preferences_panel_module, monkeypatch):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._section = "portal"
+    dialogs = []
+    monkeypatch.setattr(module.lf.ui, "confirm_dialog", lambda *args: dialogs.append(args), raising=False)
+    panel._on_reset_current_section(None, None, None)
+
+    assert dialogs == []
+    assert panel._show_section_reset() is False
+
+
+def test_preferences_portal_status_uses_shared_connection_state(preferences_panel_module, monkeypatch):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    translations = {
+        "portal.status.connect": "Connect to Portal",
+        "portal.status.turn_on": "Turn on Portal",
+        "portal.status.busy": "Portal: Working…",
+        "portal.status.switched_off": "Portal connected, switched off",
+        "portal.status.disconnected": "Portal: Not connected",
+        "portal.status.connected_as": "Portal connected as {name}",
+    }
+    monkeypatch.setattr(module.lf.ui, "tr", lambda key: translations.get(key, key), raising=False)
+    snapshots = (
+        (SimpleNamespace(signed_in=False, authorized=False, linking=False, disconnecting=False,
+                         display_name=""), "Portal: Not connected"),
+        (SimpleNamespace(signed_in=False, authorized=True, linking=False, disconnecting=False,
+                         display_name=""), "Portal connected, switched off"),
+        (SimpleNamespace(signed_in=False, authorized=False, linking=True, disconnecting=False,
+                         display_name=""), "Portal: Working…"),
+        (SimpleNamespace(signed_in=True, authorized=True, linking=False, disconnecting=False,
+                         display_name="A Long Display Name"), "Portal connected as A Long Display Name"),
+    )
+    for snapshot, expected in snapshots:
+        monkeypatch.setattr(panel, "_portal_connection_snapshot", lambda snapshot=snapshot: snapshot)
+        assert panel._portal_connection_status() == expected
 
 
 def test_viewport_chrome_selection_uses_global_style_preference(preferences_panel_module):
@@ -399,6 +600,36 @@ def test_navigation_speed_preferences_round_trip_and_clamp(preferences_panel_mod
     assert state.navigation_speed == 100
 
 
+@pytest.mark.parametrize("field", ["zoom_speed", "navigation_speed"])
+def test_speed_scrub_moves_preview_and_write_once_on_commit(preferences_panel_module,
+                                                              monkeypatch, tmp_path, field):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    writes = []
+    reads = []
+    path = tmp_path / "preferences.json"
+    path.write_text(json.dumps({field: getattr(state, field)}))
+
+    def set_speed(value, persist=True):
+        setattr(state, field, float(value))
+        if persist:
+            reads.append(path.read_text())
+            path.write_text(json.dumps({field: float(value)}))
+            writes.append(float(value))
+
+    monkeypatch.setattr(module.lf.ui, f"set_{field}_preference", set_speed)
+    for move in range(20):
+        panel._set_scrub_value(field, 20 + move)
+        assert getattr(state, field) == 20 + move
+    assert writes == []
+    assert reads == []
+    panel._commit_scrub_value(field, getattr(state, field))
+    assert writes == [39.0]
+    assert len(reads) == 1
+    assert json.loads(path.read_text())[field] == 39.0
+
+
 def test_navigation_speed_preferences_reset_with_input_section(preferences_panel_module):
     module, state = preferences_panel_module
     panel = module.PreferencesPanel()
@@ -410,7 +641,7 @@ def test_navigation_speed_preferences_reset_with_input_section(preferences_panel
     panel._reset_section()
 
     assert state.zoom_speed == 11
-    assert state.navigation_speed == 8
+    assert state.navigation_speed == 10
 
 
 def test_project_location_is_saved_and_can_return_to_default(
@@ -448,6 +679,20 @@ def test_general_preferences_expose_project_location_controls():
     assert 'data-value="project_location"' in rml
     assert 'data-event-click="browse_project_location"' in rml
     assert 'data-event-click="use_default_project_location"' in rml
+
+
+def test_project_manager_uses_a_standard_section_and_uniform_control_width():
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    rml = (resources / "preferences.rml").read_text(encoding="utf-8")
+    rcss = (resources / "preferences.rcss").read_text(encoding="utf-8")
+
+    assert 'data-event-click="toggle_section(\'project_manager\')"' in rml
+    assert 'data-if="project_manager_expanded"' in rml
+    assert "preferences-subheading" not in rml
+    select_rule = rcss.split(".preferences-select {", 1)[1].split("}", 1)[0]
+    assert "box-sizing: border-box;" in select_rule
+    assert "width: 200dp;" in select_rule
 
 
 def test_scene_reconstruction_uses_backend_specific_presets(preferences_panel_module):
@@ -535,6 +780,27 @@ def test_mcp_port_is_drafted_until_explicit_confirmation(preferences_panel_modul
             "request_logging": False,
         }
     ]
+
+
+def test_mcp_port_note_names_the_command_line_port(preferences_panel_module, monkeypatch):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    assert panel._mcp_port_override_text() == ""
+
+    monkeypatch.setattr(module.lf.ui, "get_mcp_port_override", lambda: 45696)
+    monkeypatch.setattr(module.lf.ui, "tr", lambda key: "uses {port}" if key == "preferences.mcp_port_override" else key)
+
+    assert panel._mcp_port_override_text() == "uses 45696"
+
+
+def test_mcp_access_token_copy_uses_displayed_value(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+
+    assert panel._mcp_token_text() == "test-token"
+    panel._on_copy_mcp_token(None, None, None)
+
+    assert state.clipboard_text == "test-token"
 
 
 def test_invalid_mcp_port_blocks_application(preferences_panel_module):
@@ -657,7 +923,8 @@ def test_title_bar_close_listener_discards_unconfirmed_mcp_port(
     document = SimpleNamespace(
         get_element_by_id=lambda element_id: (
             close_button if element_id == "close-btn" else None
-        )
+        ),
+        query_selector_all=lambda _selector: [],
     )
     monkeypatch.setattr(panel, "_dirty_expanded_sections", lambda: None)
     monkeypatch.setattr(panel, "_rebuild_records", lambda: None)
@@ -755,7 +1022,10 @@ def test_safe_mode_reset_does_not_stage_mcp_changes(preferences_panel_module):
     module.lf.set_camera_navigation_mode = lambda *_a, **_k: None
     module.lf.set_camera_view_snap_enabled = lambda *_a, **_k: None
 
+    state.marketplace_preferences.update(view="card", git_checkout=True)
     panel._on_reset_all_settings(None, None, None)
+    assert state.marketplace_preferences == {"view": "list", "git_checkout": False}
+    assert state.sidebar_clear_calls == [True]
 
     assert state.set_mcp_calls == []
     assert state.render_settings.scene_upscaler == "native"
@@ -777,7 +1047,11 @@ def test_safe_mode_disables_preferences_and_status_bar_mcp_controls():
     preferences = (resources / "preferences.rml").read_text(encoding="utf-8")
     status_bar = (resources / "statusbar.rml").read_text(encoding="utf-8")
 
-    assert preferences.count('data-attrif-disabled="mcp_safe_mode"') == 8
+    import re
+    drag_controls = re.findall(r'<(?:input|select)\b[^>]*splat_drag_[^>]*>', preferences)
+    assert drag_controls
+    assert all('data-attrif-disabled="mcp_safe_mode"' in control for control in drag_controls)
+    assert preferences.count('data-attrif-disabled="mcp_safe_mode"') - len(drag_controls) == 8
     assert preferences.count('data-class-disabled="mcp_safe_mode"') == 2
     assert (
         '<button id="mcp-toggle" data-class-is-on="mcp_server_enabled" '
@@ -931,6 +1205,9 @@ def test_preferences_close_retains_the_mounted_document(preferences_panel_module
         def get_element_by_id(self, _element_id):
             return None
 
+        def query_selector_all(self, _selector):
+            return []
+
     document = Document()
     panel._rebuild_records = lambda: None
     panel._load_mcp_preferences = lambda: None
@@ -964,3 +1241,312 @@ def test_preferences_keymap_rows_are_created_when_expanded(preferences_panel_mod
 
     assert panel._keymap._rows_built is True
     assert records["binding_rows"]
+
+
+@pytest.mark.parametrize("reset_scope", ["section", "all", "bindings"])
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_input_reset_restores_bindings_and_refreshes_rows(
+    preferences_panel_module, reset_scope, confirmed,
+):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._section = "input"
+    panel._refresh_selection = lambda: None
+    panel._set_zoom_speed(42)
+    panel._set_navigation_speed(73)
+    panel._set_navigation_up_index("1")
+    panel._set_new_project_align_grid(False)
+    state.navigation_up_axis = "data_z"
+    defaults = {"forward": "W", "backward": "S", "left": "A"}
+    bindings = {"forward": "S", "backward": "Unbound", "left": "A"}
+    reset_calls = []
+
+    def reset_bindings():
+        reset_calls.append(True)
+        bindings.update(defaults)
+
+    module.lf.keymap.reset_to_default = reset_bindings
+    module.lf.ui.confirm_dialog = lambda _title, _body, buttons, callback: callback(
+        buttons[1 if confirmed else 0]
+    )
+    module.lf.ui.message_dialog = lambda *_args: None
+    module.lf.ui.set_theme = lambda _theme: None
+    module.lf.ui.reset_layout = lambda: None
+    module.lf.ui.reset_window_state = lambda: None
+    module.lf.ui.set_scene_graph_selection_markers = lambda _enabled: None
+    dirty = []
+    panel._keymap._handle = SimpleNamespace(dirty=dirty.append)
+    panel._keymap._last_state_key = ("old bindings",)
+    panel._keymap._pending_conflict = {"old": "conflict"}
+
+    if reset_scope == "section":
+        panel._on_reset_current_section(None, None, None)
+    elif reset_scope == "all":
+        panel._on_reset_all_settings(None, None, None)
+    elif confirmed:
+        panel._keymap._on_reset_default(None, None, None)
+
+    if confirmed:
+        assert bindings == defaults
+        assert reset_calls == [True]
+        assert panel._keymap._last_state_key is None
+        assert panel._keymap._pending_conflict is None
+        assert {"profile_idx", "mode_idx", "is_capturing", "bindings_hint"} <= set(dirty)
+    else:
+        assert bindings == {"forward": "S", "backward": "Unbound", "left": "A"}
+        assert reset_calls == []
+        assert panel._keymap._last_state_key == ("old bindings",)
+        assert dirty == []
+
+    reset_input = confirmed and reset_scope != "bindings"
+    assert state.zoom_speed == (11 if reset_input else 42)
+    assert state.navigation_speed == (10 if reset_input else 73)
+    assert panel._navigation_up_index() == ("0" if reset_input else "1")
+    assert state.new_project_align_grid is reset_input
+    assert state.navigation_up_axis == "data_z"
+    assert state.navigation_up_calls == []
+
+
+@pytest.mark.parametrize("section", ["general", "appearance", "interface", "mcp", "portal"])
+def test_other_section_resets_preserve_key_bindings(preferences_panel_module, section):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    reset_calls = []
+    module.lf.keymap.reset_to_default = lambda: reset_calls.append(True)
+    module.lf.ui.set_theme = lambda _theme: None
+    module.lf.ui.reset_layout = lambda: None
+    module.lf.ui.set_scene_graph_selection_markers = lambda _enabled: None
+    panel._keymap._last_state_key = ("custom bindings",)
+    panel._set_zoom_speed(42)
+    panel._set_navigation_speed(73)
+
+    panel._reset_section(section)
+
+    assert reset_calls == []
+    assert panel._keymap._last_state_key == ("custom bindings",)
+    assert state.zoom_speed == 42
+    assert state.navigation_speed == 73
+
+
+def test_navigation_defaults_do_not_modify_current_project(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    assert panel._navigation_up_index() == "0"
+    panel._set_navigation_up_index("1")
+    assert state.new_project_navigation_calls == [("data_z", True)]
+    assert panel._navigation_up_index() == "1"
+    panel._set_navigation_up_index("invalid")
+    panel._set_navigation_up_index("2")
+    assert len(state.new_project_navigation_calls) == 1
+    panel._set_new_project_align_grid(False)
+    assert state.new_project_navigation_calls[-1] == ("data_z", False)
+    assert state.navigation_up_calls == []
+    assert state.navigation_up_axis == "legacy_y"
+
+def test_interface_reset_disables_external_windows_without_resetting_input(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    state.native_floating_windows = True
+    calls = []
+    module.lf.ui.reset_layout = lambda: calls.append('layout')
+    module.lf.ui.clear_startup_sidebar = lambda: calls.append('clear_sidebar')
+    module.lf.ui.set_scene_graph_selection_markers = lambda _enabled: None
+    module.lf.keymap.reset_to_default = lambda: calls.append('input')
+    panel._reset_section('interface')
+    assert state.native_floating_windows is False
+    assert calls == ['clear_sidebar', 'layout']
+
+
+def test_appearance_reset_preserves_native_window_mode(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    state.native_floating_windows = False
+    module.lf.ui.set_theme = lambda _theme: None
+    panel._reset_section('appearance')
+    assert state.native_floating_windows is False
+
+
+def test_window_mode_change_refreshes_preferences_state(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    before = panel._state()
+    state.native_floating_windows = False
+    assert panel._state() != before
+    dirty = []
+    panel._handle = SimpleNamespace(dirty=dirty.append)
+    panel._dirty_selection()
+    assert 'native_floating_windows' in dirty
+
+
+def test_save_on_close_change_invalidates_preferences_state(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    before = panel._state()
+    module.lf.project_set_auto_save_on_close(True)
+    assert state.auto_save_on_close is True
+    assert panel._state() != before
+
+
+def test_default_app_settings_preserve_registration_step(preferences_panel_module):
+    module, _state = preferences_panel_module
+    calls = []
+    module.lf.ui.register_file_associations = lambda: calls.append("register")
+    module.lf.ui.open_file_association_settings = lambda: calls.append("open")
+    module.PreferencesPanel._open_default_app_settings()
+    assert calls == ["register", "open"]
+
+
+def test_marketplace_preferences_apply_and_reset_independently(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._set_marketplace_preference("view", "card")
+    panel._set_marketplace_preference("git_checkout", True)
+    assert state.marketplace_preferences == {"view": "card", "git_checkout": True}
+    assert len(state.marketplace_notifications) == 2
+    panel._reset_section("marketplace")
+    assert state.marketplace_preferences == {"view": "list", "git_checkout": False}
+    assert len(state.marketplace_notifications) == 3
+    assert state.set_language_calls == []
+
+
+@pytest.mark.parametrize("git_available", [False, True])
+def test_marketplace_git_checkout_requires_git_without_changing_saved_choice(preferences_panel_module, monkeypatch, git_available):
+    module, state = preferences_panel_module
+    monkeypatch.setattr(module.shutil, "which", lambda _: "/usr/bin/git" if git_available else None)
+    panel = module.PreferencesPanel()
+    assert panel._marketplace_git_available is git_available
+    panel._set_marketplace_preference("git_checkout", True)
+    assert state.marketplace_preferences["git_checkout"] is git_available
+    state.marketplace_preferences["git_checkout"] = True
+    reopened = module.PreferencesPanel()
+    assert reopened._marketplace_git_available is git_available
+    assert state.marketplace_preferences["git_checkout"] is True
+    reopened._set_marketplace_preference("git_checkout", False)
+    assert state.marketplace_preferences["git_checkout"] is False
+
+
+def test_splat_drag_preferences_convert_ui_values_and_respect_safe_mode(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._set_splat_drag_preference("sh_degree", "2")
+    assert state.splat_drag_preferences["sh_degree"] == 2
+    assert panel._get_splat_drag_preference("sh_degree") == "2"
+    panel._mcp_safe_mode = True
+    panel._set_splat_drag_preference("sh_degree", "1")
+    assert state.splat_drag_preferences["sh_degree"] == 2
+
+
+@pytest.mark.parametrize("axis", [-2, 2, -3, 3])
+def test_drag_up_axis_accepts_the_four_maintainer_options(preferences_panel_module, axis):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._set_splat_drag_preference("up_axis", str(axis))
+    assert state.splat_drag_preferences["up_axis"] == axis
+    assert panel._get_splat_drag_preference("up_axis") == str(axis)
+
+
+@pytest.mark.parametrize("axis", ["0", "1", "-1", "4", "not-an-axis", None])
+def test_drag_up_axis_rejects_unsupported_values(preferences_panel_module, axis):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._set_splat_drag_preference("up_axis", axis)
+    assert state.splat_drag_preferences["up_axis"] == -2
+
+
+def test_drag_up_axis_respects_safe_mode(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._mcp_safe_mode = True
+    panel._set_splat_drag_preference("up_axis", "3")
+    assert state.splat_drag_preferences["up_axis"] == -2
+
+
+@pytest.mark.parametrize("key,value", [("format", "spz"), ("sh_degree", 1), ("up_axis", 3)])
+def test_external_drag_preference_changes_refresh_open_panel(preferences_panel_module, key, value):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._last_state = panel._state()
+    state.splat_drag_preferences[key] = value
+    assert panel._state() != panel._last_state
+    dirty = []
+    panel._handle = SimpleNamespace(dirty=dirty.append)
+    panel._dirty_selection()
+    assert {"splat_drag_format", "splat_drag_sh_degree", "splat_drag_up_axis"} <= set(dirty)
+
+
+@pytest.mark.parametrize("safe_mode", [False, True])
+def test_interface_reset_refreshes_drag_controls_and_respects_safe_mode(preferences_panel_module, safe_mode):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._mcp_safe_mode = safe_mode
+    customized = {"format": "spz", "sh_degree": 1, "up_axis": 3}
+    state.splat_drag_preferences.update(customized)
+    module.lf.ui.set_scene_graph_selection_markers = lambda _enabled: None
+    events = []
+    panel._refresh_selection = lambda: events.append("refresh")
+    module.lf.ui.reset_layout = lambda: events.append("layout")
+    panel._reset_section("interface")
+    expected = customized if safe_mode else {"format": "ply", "sh_degree": 3, "up_axis": -2}
+    assert state.splat_drag_preferences == expected
+    assert events == ["refresh", "layout"]
+
+
+def test_quick_export_offers_only_ply_and_spz_with_plain_translated_labels():
+    from xml.etree import ElementTree
+    root = Path(__file__).resolve().parents[2]
+    document = ElementTree.parse(root / "src/visualizer/gui/rmlui/resources/preferences.rml")
+    select = next(element for element in document.iter("select")
+                  if element.get("data-value") == "splat_drag_format")
+    assert [option.get("value") for option in select] == ["ply", "spz"]
+    for path in (root / "src/visualizer/gui/resources/locales").glob("*.json"):
+        preferences = json.loads(path.read_text(encoding="utf-8"))
+        assert preferences["preferences.drag_ply"] == "PLY", path.name
+        assert preferences["preferences.drag_spz"] == "SPZ", path.name
+
+
+@pytest.mark.parametrize("value", ["-1", "4", "invalid", None])
+def test_drag_sh_limit_rejects_invalid_ui_values(preferences_panel_module, value):
+    module, state = preferences_panel_module
+    module.PreferencesPanel()._set_splat_drag_preference("sh_degree", value)
+    assert state.splat_drag_preferences["sh_degree"] == 3
+
+
+def test_drag_settings_use_one_sh_cap_and_localized_tooltips():
+    from xml.etree import ElementTree
+    root = Path(__file__).resolve().parents[2]
+    document = ElementTree.parse(root / "src/visualizer/gui/rmlui/resources/preferences.rml")
+    cap = next(element for element in document.iter("select")
+               if element.get("data-value") == "splat_drag_sh_degree")
+    assert [option.get("value") for option in cap] == ["0", "1", "2", "3"]
+    text = (root / "src/visualizer/gui/rmlui/resources/preferences.rml").read_text(encoding="utf-8")
+    assert "splat_drag_maximum_quality" not in text
+    assert "splat_drag_ply_sh" not in text and "splat_drag_spz_sh" not in text
+    tooltip_keys = {"preferences.drag_format_hint", "preferences.drag_sh_hint", "preferences.drag_axes_hint"}
+    assert tooltip_keys <= {element.get("data-tooltip") for element in document.iter()}
+    inline = " ".join("".join(element.itertext()) for element in document.iter("span")
+                      if "preferences-description" in element.get("class", ""))
+    assert not any(key in inline for key in tooltip_keys)
+    marker_hint = "preferences.scene_graph_selection_markers_description"
+    marker_row = next(element for element in document.iter("div")
+                      if element.get("data-tooltip") == marker_hint)
+    marker = next(element for element in marker_row.iter("input")
+                  if element.get("data-checked") == "scene_graph_selection_markers")
+    assert marker.get("data-attrif-disabled") == "mcp_safe_mode"
+    assert marker_hint not in inline
+    axes = next(element for element in document.iter()
+                if element.get("data-tooltip") == "preferences.drag_axes_hint")
+    assert axes.get("data-if") == "splat_drag_format == 'ply'"
+    selector = next(element for element in axes.iter("select"))
+    assert selector.get("data-value") == "splat_drag_up_axis"
+    assert [option.get("value") for option in selector] == ["-2", "2", "-3", "3"]
+    assert selector[0].text == "@tr:preferences.drag_axis_default"
+    assert selector.get("data-attrif-disabled") == "mcp_safe_mode"
+    for path in (root / "src/visualizer/gui/resources/locales").glob("*.json"):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert all(data.get(key) for key in tooltip_keys), path.name
+        assert not any("SOG" in data[key].upper() for key in tooltip_keys), path.name
+        assert "-Y" in data["preferences.drag_axis_default"], path.name
+        assert data["preferences"]["scene_graph_selection_markers_description"].strip(), path.name

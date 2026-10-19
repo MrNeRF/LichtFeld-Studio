@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "subprocess.hpp"
+#include "core/native_fs.hpp"
 #include "windows_process_utils.hpp"
 
 #include <core/logger.hpp>
@@ -199,7 +200,7 @@ namespace lfs::python {
 
         PROCESS_INFORMATION pi = {};
         // Keep lpApplicationName and argv[0] aligned to the same executable path.
-        const BOOL success = CreateProcessW(program_w.c_str(), cmdline.data(), nullptr, nullptr, FALSE,
+        const BOOL success = CreateProcessW(lfs::core::native_fs::native_path(program_w).c_str(), cmdline.data(), nullptr, nullptr, FALSE,
                                             EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr,
                                             &si.StartupInfo, &pi);
 

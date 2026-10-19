@@ -3,6 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#define LFS_EQUIRECT_GLSL
+#include "../../../../rendering/rasterizer/vulkan/shader/src/slang/equirect_projection.inc"
 
 layout(location = 0) in vec3 in_position;
 layout(location = 1) in vec3 in_color;
@@ -55,6 +58,7 @@ const int FLAG_HAS_PREVIEW     = 1 << 6;
 const int FLAG_PREVIEW_ADD     = 1 << 7;
 const int FLAG_HAS_DELETED     = 1 << 9;
 const int FLAG_CROP_ELLIPSOID  = 1 << 10;
+const int FLAG_EQUIRECTANGULAR = 1 << 11;
 const uint SELECTION_GROUP_MAX = 255u;
 const uint SELECTION_PREVIEW_COLOR_INDEX = 256u;
 const float SELECTION_COMMITTED_BLEND = 0.75;
@@ -135,23 +139,36 @@ void main() {
     }
 
     vec4 view_pos = pc.view * vec4(ws, 1.0);
-    vec4 clip = pc.view_proj * vec4(ws, 1.0);
+    bool equirectangular = (PC_FLAGS & FLAG_EQUIRECTANGULAR) != 0;
+    bool orthographic = (PC_FLAGS & FLAG_ORTHOGRAPHIC) != 0;
+    float view_z_positive = -view_pos.z;
+    vec4 clip;
+    if (equirectangular) {
+        float distance = length(view_pos.xyz);
+        if (distance <= 1e-6) {
+            reject();
+            return;
+        }
+        vec2 uv = lfs_equirect_uv(view_pos.xyz / distance);
+        clip = pc.view_proj * vec4(0.0, 0.0, -distance, 1.0);
+        clip.xy = (2.0 * uv - 1.0) * clip.w;
+        view_z_positive = distance;
+    } else {
+        clip = pc.view_proj * vec4(ws, 1.0);
+        if (!orthographic && view_z_positive < 1e-4) {
+            reject();
+            return;
+        }
+    }
 
     if (abs(clip.w) <= 1e-6) {
         reject();
         return;
     }
 
-    bool orthographic = (PC_FLAGS & FLAG_ORTHOGRAPHIC) != 0;
-    float view_z_positive = -view_pos.z;
-    if (!orthographic && view_z_positive < 1e-4) {
-        reject();
-        return;
-    }
-
     float voxel = max(pc.voxel_focal_ortho.x, 1e-5);
     float radius_px;
-    if (orthographic) {
+    if (orthographic && !equirectangular) {
         float pixels_per_world = max(pc.voxel_focal_ortho.z, 1e-5);
         radius_px = max(1.0, ceil(voxel * pixels_per_world * 0.5));
     } else {

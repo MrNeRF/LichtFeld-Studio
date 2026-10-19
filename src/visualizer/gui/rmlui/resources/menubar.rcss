@@ -28,8 +28,7 @@ body {
     display: flex;
     flex-direction: row;
     align-items: center;
-    flex: 1;
-    min-width: 0;
+    flex: 1 0 auto;
     height: 30dp;
     overflow: hidden;
 }
@@ -38,31 +37,153 @@ body {
     display: flex;
     flex-direction: row;
     align-items: center;
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 0;
     height: 30dp;
     margin-right: 0;
 }
 
-#brand-logo {
+#project-title {
+    position: absolute;
+    top: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 30dp;
+    overflow: hidden;
+}
+
+#project-title-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 30dp;
+    max-width: 100%;
+    min-width: 0;
+    padding: 0 8dp;
+    box-sizing: border-box;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#project-title-content span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#project-title.hidden,
+#project-title.no-room {
+    display: none;
+}
+
+.project-dirty {
     flex: none;
-    width: 20dp;
-    height: 20dp;
-    margin-left: 10dp;
-    margin-right: 8dp;
-    decorator: none;
 }
 
 #menu-window-controls {
     display: flex;
     flex-direction: row;
     align-items: center;
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 0;
     height: 30dp;
     margin-left: 2dp;
 }
 
-#menu-toolbar.hidden {
+#menu-row.two-rows {
+    padding-bottom: 30dp;
+}
+
+#menu-toolbar.second-row {
+    top: 30dp;
+}
+
+.menu-portal-connection {
+    display: flex;
+    align-items: center;
+    height: 26dp;
+    padding: 0 8dp;
+    gap: 6dp;
+    margin: 0 3dp;
+    border-radius: 5dp;
+    white-space: nowrap;
+    flex-shrink: 1;
+    min-width: 34dp;
+    overflow: hidden;
+    cursor: pointer;
+}
+
+/* The menus keep their space; the connection label gives way down to its icon. */
+.menu-portal-connection span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.menu-portal-connection img {
+    width: 18dp;
+    height: 18dp;
+}
+
+@keyframes portal-transfer-pulse {
+    from { opacity: 1; }
+    to { opacity: 0.35; }
+}
+
+.menu-portal-connection.transferring img {
+    animation: portal-transfer-pulse 0.8s quadratic-in-out infinite alternate;
+}
+
+.menu-gallery-progress {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    width: 200dp;
+    height: 28dp;
+    padding: 0 6dp;
+    gap: 1dp;
+    border-radius: 5dp;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+.menu-gallery-progress.hidden {
     display: none;
+}
+
+.menu-gallery-progress span {
+    font-size: 11dp;
+    line-height: 12dp;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.menu-gallery-progress .menu-gallery-progress-detail {
+    font-size: 10dp;
+    line-height: 11dp;
+}
+
+.menu-gallery-progress-detail.hidden {
+    display: none;
+}
+
+.menu-gallery-progress-track {
+    width: 100%;
+    height: 3dp;
+    border-radius: 2dp;
+    overflow: hidden;
+}
+
+.menu-gallery-progress-fill {
+    height: 100%;
+    border-radius: 2dp;
+}
+
+.menu-gallery-progress.indeterminate .menu-gallery-progress-fill {
+    opacity: 0.4;
 }
 
 #menu-toolbar {
@@ -103,6 +224,9 @@ body {
 }
 
 .menu-window-btn {
+    /* This bar is cached between input events: a transition cannot finish
+       painting after the pointer leaves. */
+    transition: none;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -116,12 +240,16 @@ body {
     box-sizing: border-box;
     flex-shrink: 0;
     cursor: pointer;
-    transition: background-color 0.12s quadratic-out;
 }
 
 .menu-window-btn img {
     width: 18dp;
     height: 18dp;
+}
+
+.menu-window-utility-btn {
+    /* State changes must reach their final color before the menu is cached. */
+    transition: none;
 }
 
 .menu-window-separator {
@@ -167,6 +295,9 @@ body {
 }
 
 .window-restore-back {
+    width: 11dp;
+    height: 11dp;
+    border-width: 1dp 1dp 0 0;
     left: 5dp;
     top: 3dp;
 }
@@ -219,6 +350,26 @@ body {
 .menu-label {
     padding: 8dp 12dp;
     cursor: pointer;
+}
+
+.menu-label.logo {
+    display: flex;
+    align-items: center;
+    padding: 5dp 8dp;
+}
+
+.menu-label.logo img {
+    width: 20dp;
+    height: 20dp;
+}
+
+.access-key {
+    display: inline;
+    text-decoration: none;
+}
+
+.access-keys-visible .access-key {
+    text-decoration: underline;
 }
 
 #bottom-border {
@@ -297,7 +448,7 @@ body {
 
 .menu-item .checkmark {
     width: 16dp;
-    margin-left: 4dp;
+    margin-left: 12dp;
     flex-shrink: 0;
     white-space: nowrap;
     text-align: center;
@@ -315,6 +466,7 @@ body {
     margin-left: 24dp;
     flex-shrink: 0;
     white-space: nowrap;
+    text-align: left;
 }
 
 .menu-item .submenu-arrow {
@@ -357,4 +509,32 @@ body {
 
 .submenu-container.open > .submenu-popup {
     display: flex;
+}
+
+/* A wide portal status yields its words before the viewport tools wrap. The icon stays. */
+body.toolbar-squeeze #menu-portal-connection span {
+    display: none;
+}
+body.toolbar-squeeze #menu-portal-connection {
+    padding: 0 4dp;
+    min-width: 26dp;
+}
+
+/* Keep menus and native window controls reachable in narrow windows. */
+body.compact .menu-window-utility-btn,
+body.compact .menu-window-separator,
+body.compact #menu-portal-connection span {
+    display: none;
+}
+body.compact .menu-label {
+    padding-left: 3dp;
+    padding-right: 3dp;
+}
+body.compact .menu-window-btn {
+    width: 24dp;
+    min-width: 24dp;
+}
+body.compact #menu-portal-connection {
+    padding: 0 2dp;
+    margin: 0;
 }

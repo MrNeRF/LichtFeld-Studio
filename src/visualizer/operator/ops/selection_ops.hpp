@@ -28,7 +28,7 @@ namespace lfs::vis::op {
         SelectionFilterState filters_{};
     };
 
-    void registerSelectionOperators();
+    LFS_VIS_API void registerSelectionOperators();
     void unregisterSelectionOperators();
 
 } // namespace lfs::vis::op

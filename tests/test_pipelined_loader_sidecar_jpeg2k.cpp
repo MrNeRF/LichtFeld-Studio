@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "core/path_utils.hpp"
@@ -13,10 +14,13 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -261,3 +265,176 @@ TEST(PipelinedImageLoaderSidecarJpeg2k, ParameterChangesCanonicalizeFreshPerRun)
     EXPECT_NE(run_b, run_c) << "resize change reused run B output";
     EXPECT_NE(run_a, run_c) << "all parameter variants must remain distinct";
 }
+
+namespace {
+    enum class DepthEncoding { Png8,
+                               Png16,
+                               Tiff8,
+                               Tiff16,
+                               TiffFloat };
+
+    class PipelinedDepthDecode : public ::testing::TestWithParam<std::tuple<DepthEncoding, bool, bool>> {
+    protected:
+        void SetUp() override {
+            directory_ = fs::temp_directory_path() /
+                         ("lfs_depth_decode_" + std::to_string(
+                                                    std::chrono::steady_clock::now().time_since_epoch().count()));
+            fs::create_directories(directory_);
+        }
+        void TearDown() override {
+            std::error_code ec;
+            fs::remove_all(directory_, ec);
+        }
+
+        // Independent little-endian, single-strip TIFF fixture; includes values
+        // that would be lost by an accidental conversion through eight bits.
+        void write_tiff(const fs::path& path, const int bits, const std::vector<uint32_t>& samples, int width = 8, int height = 4) {
+            std::ofstream file(path, std::ios::binary);
+            const auto put = [&](uint32_t value, const int bytes) {
+                for (int i = 0; i < bytes; ++i) {
+                    file.put(static_cast<char>(value & 255));
+                    value >>= 8;
+                }
+            };
+            file.write("II", 2);
+            put(42, 2);
+            put(8, 4);
+            put(10, 2);
+            const auto tag = [&](const uint16_t id, const uint16_t type, const uint32_t value) {
+                put(id, 2);
+                put(type, 2);
+                put(1, 4);
+                put(value, 4);
+            };
+            tag(256, 4, width);  // width
+            tag(257, 4, height); // height
+            tag(258, 3, bits);
+            tag(259, 3, 1);      // uncompressed
+            tag(262, 3, 1);      // grayscale
+            tag(273, 4, 134);    // strip offset
+            tag(277, 3, 1);      // channels
+            tag(278, 4, height); // rows per strip
+            tag(279, 4, samples.size() * (bits / 8));
+            tag(339, 3, bits == 32 ? 3 : 1); // IEEE float or unsigned integer
+            put(0, 4);
+            for (const auto value : samples)
+                put(value, bits / 8);
+            ASSERT_TRUE(file.good());
+        }
+
+        fs::path directory_;
+    };
+} // namespace
+
+TEST_P(PipelinedDepthDecode, PreservesSamplesOnColdAndCachedReads) {
+    const auto [encoding, resize, spill] = GetParam();
+    const bool png = encoding == DepthEncoding::Png8 || encoding == DepthEncoding::Png16;
+    const int bits = encoding == DepthEncoding::TiffFloat ? 32 : encoding == DepthEncoding::Tiff16 || encoding == DepthEncoding::Png16 ? 16
+                                                                                                                                       : 8;
+    const int width = bits == 32 ? 1024 : 8;
+    const int height = bits == 32 ? 768 : 4;
+    const auto rgb_path = directory_ / "image.png";
+    const auto depth_path = directory_ / (png ? "depth.PNG" : bits == 16 ? "depth.tif"
+                                                                         : "depth.TIFF");
+    const std::vector<uint8_t> rgb(width * height * 3, 128);
+    ASSERT_TRUE(lfs::core::save_png(rgb_path, rgb.data(), width, height, 3, 8, 1));
+    const std::array<uint16_t, 8> pattern{0, 1, 257, 12345, 32768, 48001, 65534, 65535};
+    const std::array<float, 8> float_pattern{0.0f, 0.000001f, 0.1234567f, 0.5f, 1.0001f, 2.0f, 3.75f, 1000.25f};
+    std::vector<uint8_t> u8;
+    std::vector<uint16_t> u16;
+    std::vector<uint32_t> samples;
+    std::vector<float> expected;
+    for (size_t i = 0; i < static_cast<size_t>(width * height); ++i) {
+        const uint16_t value = pattern[i % pattern.size()];
+        u8.push_back(static_cast<uint8_t>(value >> 8));
+        u16.push_back(value);
+        const float decoded = bits == 32 ? float_pattern[i % float_pattern.size()] : bits == 16 ? static_cast<float>(value) / 65535.0f
+                                                                                                : static_cast<float>(u8.back()) / 255.0f;
+        expected.push_back(decoded);
+        samples.push_back(bits == 32 ? std::bit_cast<uint32_t>(decoded) : bits == 16 ? value
+                                                                                     : u8.back());
+    }
+    if (png) {
+        ASSERT_TRUE(lfs::core::save_png(depth_path, bits == 16 ? static_cast<void*>(u16.data()) : static_cast<void*>(u8.data()),
+                                        width, height, 1, bits, 1));
+    } else {
+        write_tiff(depth_path, bits, samples, width, height);
+    }
+
+    lfs::io::PipelinedLoaderConfig config;
+    config.io_threads = 1;
+    config.cold_process_threads = 1;
+    config.decoder_pool_size = 1;
+    config.output_queue_size = 2;
+    config.prefetch_count = 2;
+    if (spill)
+        config.max_cache_bytes = 1;
+    lfs::io::PipelinedImageLoader loader(config);
+    lfs::io::ImageRequest request;
+    request.path = rgb_path;
+    request.depth_path = depth_path;
+    request.sequence_id = 1;
+    request.aux_target_width = resize ? width / 2 : width;
+    request.aux_target_height = resize ? height / 2 : height;
+    const auto reference = lfs::core::resize_depth_prior(
+                               lfs::core::Tensor::from_vector(expected, {size_t(height), size_t(width)}, lfs::core::Device::CUDA),
+                               request.aux_target_height, request.aux_target_width)
+                               .cpu()
+                               .to_vector();
+    for (int pass = 0; pass < 2; ++pass) {
+        SCOPED_TRACE(pass);
+        const auto start = std::chrono::steady_clock::now();
+        loader.prefetch({request});
+        const auto ready = wait_for_ready(loader);
+        ASSERT_TRUE(ready.depth.has_value());
+        const auto values = ready.depth->cpu().to_vector();
+        RecordProperty(pass == 0 ? "cold_ms" : "cached_ms",
+                       std::to_string(std::chrono::duration<double, std::milli>(
+                                          std::chrono::steady_clock::now() - start)
+                                          .count()));
+        const auto cache = loader.get_stats();
+        RecordProperty("total_cache_bytes", std::to_string(cache.jpeg_cache_bytes + cache.spill_cache_bytes));
+        RecordProperty("depth_bytes", std::to_string(values.size() * sizeof(float)));
+        ASSERT_EQ(values.size(), reference.size());
+        for (size_t i = 0; i < values.size(); ++i) {
+            if (bits == 32)
+                ASSERT_EQ(values[i], reference[i]) << "sample " << i;
+            else
+                ASSERT_NEAR(values[i], reference[i], pass == 0 ? 1e-6f : 1.0f / 65535.0f) << "sample " << i;
+        }
+        if (pass == 0) {
+            ASSERT_TRUE(fs::remove(depth_path));
+            ASSERT_FALSE(fs::exists(depth_path));
+        }
+        ++request.sequence_id;
+    }
+    if (bits == 32) {
+        const auto normal_path = directory_ / "normal.png";
+        ASSERT_TRUE(lfs::core::save_png(normal_path, rgb.data(), width, height, 3, 8, 1));
+        request.normal_path = normal_path;
+        for (int pass = 0; pass < 2; ++pass) {
+            loader.prefetch({request});
+            auto ready = wait_for_ready(loader);
+            ASSERT_TRUE(ready.depth.has_value());
+            ASSERT_TRUE(ready.normal.has_value());
+            EXPECT_EQ(ready.depth->cpu().to_vector(), reference);
+            if (ready.normal_ready_event) {
+                ASSERT_EQ(cudaEventSynchronize(ready.normal_ready_event), cudaSuccess);
+                ASSERT_EQ(cudaEventDestroy(ready.normal_ready_event), cudaSuccess);
+                ready.normal_ready_event = nullptr;
+            }
+            if (pass == 0)
+                ASSERT_TRUE(fs::remove(normal_path));
+            ++request.sequence_id;
+        }
+    }
+    const auto stats = loader.get_stats();
+    if (spill)
+        EXPECT_GT(stats.spill_cache_entries, 0u);
+}
+
+INSTANTIATE_TEST_SUITE_P(Formats, PipelinedDepthDecode,
+                         ::testing::Combine(::testing::Values(DepthEncoding::Png8, DepthEncoding::Png16,
+                                                              DepthEncoding::Tiff8, DepthEncoding::Tiff16,
+                                                              DepthEncoding::TiffFloat),
+                                            ::testing::Bool(), ::testing::Bool()));

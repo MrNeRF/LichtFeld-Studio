@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -146,7 +145,6 @@ class SelectionOperatorModalTest : public ::testing::Test {
 protected:
     void SetUp() override {
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
         lfs::vis::op::undoHistory().clear();
 
@@ -183,7 +181,6 @@ protected:
 
     void TearDown() override {
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
         context_.reset();
         scene_manager_.reset();
@@ -449,8 +446,7 @@ TEST_F(SelectionOperatorModalTest, PolygonIgnoresDockClicksAndContinuesInViewpor
     using namespace lfs::vis;
     auto& registry = op::operators();
     registry.setSceneManager(scene_manager_.get());
-    registry.registerOperator(op::BuiltinOp::SelectionStroke, SelectionStrokeOperator::DESCRIPTOR,
-                              [] { return std::make_unique<SelectionStrokeOperator>(); });
+    op::registerSelectionOperators();
     Viewport viewport(100, 100);
     input::InputBindings::setPersistenceEnabled(false);
     InputController controller(nullptr, viewport);
@@ -480,6 +476,23 @@ TEST_F(SelectionOperatorModalTest, PolygonIgnoresDockClicksAndContinuesInViewpor
     registry.unregisterOperator(op::BuiltinOp::SelectionStroke);
     registry.setSceneManager(nullptr);
     input::InputBindings::setPersistenceEnabled(true);
+}
+
+TEST_F(SelectionOperatorModalTest, DeleteSuppressesStationaryBrushHoverUntilMouseMoves) {
+    using namespace lfs::vis;
+    set_initial_selection({1, 0});
+    service().updatePassiveBrushHoverPreview({50, 50}, 20, SelectionMode::Replace);
+    ASSERT_TRUE(rendering_manager_->isCursorPreviewActive());
+
+    ASSERT_TRUE(scene_manager_->deleteSelectedGaussiansWithHistory().has_value());
+    EXPECT_FALSE(rendering_manager_->isCursorPreviewActive());
+    service().updatePassiveBrushHoverPreview({50, 50}, 20, SelectionMode::Replace);
+    EXPECT_FALSE(rendering_manager_->isCursorPreviewActive());
+    EXPECT_TRUE(selection_values(*scene_manager_).empty());
+
+    service().updatePassiveBrushHoverPreview({51, 50}, 20, SelectionMode::Replace);
+    EXPECT_TRUE(rendering_manager_->isCursorPreviewActive());
+    EXPECT_TRUE(selection_values(*scene_manager_).empty());
 }
 
 TEST_F(SelectionOperatorModalTest, CameraMotionClearsPassiveHoverWithoutChangingSelection) {

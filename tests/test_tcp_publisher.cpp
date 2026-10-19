@@ -98,7 +98,8 @@ TEST(TcpPublisherTest, TrainingCompletedGoldenWireMessage) {
             .domain = "CUDA",
             .message = "Out of GPU memory",
             .operation_id = 42,
-            .retryable = false}};
+            .retryable = false},
+        .error_message_key = "messages.err_distorted_images"};
 
     const nlohmann::json message = lfs::tcp::PublisherServer::wireMessageFor(event);
     EXPECT_EQ(message["command"], "event");
@@ -114,6 +115,8 @@ TEST(TcpPublisherTest, TrainingCompletedGoldenWireMessage) {
     EXPECT_EQ(data["error_info"]["code"], "ResourceExhausted");
     EXPECT_EQ(data["error_info"]["operation_id"].get<std::uint64_t>(), 42u);
     EXPECT_FALSE(data.contains("resource_exhausted"));
+    EXPECT_FALSE(data.contains("error_message_key"));
+    EXPECT_EQ(message.dump().find("messages.err_"), std::string::npos);
 
     const lfs::core::events::state::TrainingCompleted clean{
         .iteration = 7000,

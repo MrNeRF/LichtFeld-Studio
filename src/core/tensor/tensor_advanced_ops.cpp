@@ -174,16 +174,15 @@ namespace lfs::core {
                         const size_t base = outer * dim_size * inner_size + inner;
                         float selected = src[base];
                         int64_t selected_index = 0;
-                        for (size_t index = 1; index < dim_size; ++index) {
+                        for (size_t index = 1; index < dim_size && !std::isnan(selected); ++index) {
                             const float candidate = src[base + index * inner_size];
                             if (std::isnan(candidate)) {
                                 selected = candidate;
                                 selected_index = static_cast<int64_t>(index);
                                 break;
                             }
-                            if (!std::isnan(selected) &&
-                                (find_maximum ? candidate > selected
-                                              : candidate < selected)) {
+                            if (find_maximum ? candidate > selected
+                                             : candidate < selected) {
                                 selected = candidate;
                                 selected_index = static_cast<int64_t>(index);
                             }
@@ -238,9 +237,11 @@ namespace lfs::core {
         // 1D case - optimized path
         if (ndim() == 1 && dim == 0) {
             if (device_ == Device::CUDA) {
+                const cudaStream_t execution_stream =
+                    prepare_inputs_for_stream({&sorted}, sorted.stream());
                 tensor_ops::launch_sort_1d(sorted.ptr<float>(),
                                            reinterpret_cast<int64_t*>(indices.data_ptr()),
-                                           numel(), descending, 0);
+                                           numel(), descending, execution_stream);
                 // No sync - returns tensors
             } else {
                 // CPU fallback
@@ -285,10 +286,12 @@ namespace lfs::core {
         }
 
         if (device_ == Device::CUDA) {
+            const cudaStream_t execution_stream =
+                prepare_inputs_for_stream({&sorted}, sorted.stream());
             tensor_ops::launch_sort_2d(sorted.ptr<float>(),
                                        reinterpret_cast<int64_t*>(indices.data_ptr()),
                                        outer_size, dim_size, inner_size,
-                                       dim, descending, 0);
+                                       dim, descending, execution_stream);
             // No sync - returns tensors
         } else {
             // CPU implementation

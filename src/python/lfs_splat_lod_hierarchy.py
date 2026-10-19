@@ -3,12 +3,13 @@
 """Helpers for building multi-level splat simplify hierarchies in Python."""
 
 from __future__ import annotations
+from _lfs_path_io import open
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
 import json
 import math
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -192,10 +193,15 @@ class SplatLodHierarchy:
         return list(self.levels[-1].row_node_ids)
 
     def is_leaf(self, node_id: int) -> bool:
-        return int(node_id) < self.leaf_count
+        node_id = int(node_id)
+        if node_id < 0:
+            raise KeyError(f"Unknown node id: {node_id}")
+        return node_id < self.leaf_count
 
     def children(self, node_id: int) -> list[int] | None:
         node_id = int(node_id)
+        if node_id < 0:
+            raise KeyError(f"Unknown node id: {node_id}")
         if node_id < self.leaf_count:
             return None
         merge_offset = node_id - self.leaf_count
@@ -338,6 +344,8 @@ def build_splat_lod_hierarchy(
 
     import lichtfeld as lf
 
+    if not math.isfinite(ratio):
+        raise ValueError("ratio must be finite")
     if ratio <= 0.0 or ratio > 1.0:
         raise ValueError("ratio must be in the range (0, 1]")
     if lod_base <= 1.0:

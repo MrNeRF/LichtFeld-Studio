@@ -22,7 +22,9 @@
 
 namespace fast_lfs::rasterization {
 
-    using InstanceKey = std::uint32_t;
+    using InstanceKey = std::uint64_t;
+    // Tile index above the raw IEEE bits of the (positive) view depth.
+    inline constexpr int kInstanceDepthBits = 32;
 
     enum FastGSForwardStatusFlags : unsigned int {
         kFastGSForwardStatusTileIndexOutOfRange = 1u << 0,
@@ -224,15 +226,9 @@ namespace fast_lfs::rasterization {
         return 32 - leading_zeros;
     }
 
-    inline int packed_instance_depth_bits(uint n_tiles) {
-        const int tile_bits = n_tiles <= 1 ? 0 : extract_end_bit(n_tiles - 1);
-        const int depth_bits = 32 - tile_bits;
-        return depth_bits > 23 ? 23 : (depth_bits < 0 ? 0 : depth_bits);
-    }
-
     inline int packed_instance_key_end_bit(uint n_tiles) {
         const int tile_bits = n_tiles <= 1 ? 0 : extract_end_bit(n_tiles - 1);
-        return tile_bits + packed_instance_depth_bits(n_tiles);
+        return tile_bits + kInstanceDepthBits;
     }
 
     struct mat3x3 {
@@ -322,6 +318,11 @@ namespace fast_lfs::rasterization {
             const size_t aligned = align_allocation_size(size);
             LFS_ASSERT_MSG(aligned <= cursor_, "FastGS retained prefix exceeds the phase high-water");
             if (size > 0 && source != base_) {
+                const auto source_address = reinterpret_cast<std::uintptr_t>(source);
+                const auto destination_address = reinterpret_cast<std::uintptr_t>(base_);
+                LFS_ASSERT_MSG(source_address >= destination_address &&
+                                   source_address - destination_address >= size,
+                               "FastGS retained prefix overlaps its source");
                 LFS_CUDA_CHECK_MSG(
                     cudaMemcpyAsync(base_, source, size, cudaMemcpyDeviceToDevice, stream_),
                     "cudaMemcpyAsync(FastGS retained sorted indices)");

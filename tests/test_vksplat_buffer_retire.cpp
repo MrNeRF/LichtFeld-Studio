@@ -241,6 +241,8 @@ TEST(VkSplatBufferRetire, ScratchAliasAllocatesFreshStorageAfterOwnerRetires) {
     indices.deviceBuffer.extra_usage = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
     pipeline.resizeDeviceBuffer(keys, 64);
     aliasDeviceView(indices.deviceBuffer, keys.deviceBuffer);
+    // Aliasing adopts the owner's usage; release must keep whatever the view had.
+    const auto view_usage = indices.deviceBuffer.extra_usage;
     const auto old_handle = keys.deviceBuffer.buffer;
     const auto old_bytes = keys.deviceBuffer.allocSize;
     std::vector<_VulkanBuffer> retired;
@@ -253,7 +255,7 @@ TEST(VkSplatBufferRetire, ScratchAliasAllocatesFreshStorageAfterOwnerRetires) {
     EXPECT_EQ(indices.deviceBuffer.buffer, VK_NULL_HANDLE);
     EXPECT_EQ(indices.deviceBuffer.capacity, 0u);
     EXPECT_STREQ(indices.deviceBuffer.label, "scratch.indices");
-    EXPECT_EQ(indices.deviceBuffer.extra_usage, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
+    EXPECT_EQ(indices.deviceBuffer.extra_usage, view_usage);
     pipeline.destroyBufferRetired(retired.front());
 
     // Survivor projection resizes the indices directly, without rebinding the

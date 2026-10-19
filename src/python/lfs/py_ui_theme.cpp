@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "gui/utils/splat_export_request.hpp"
 #include "py_ui.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/app_store.hpp"
@@ -11,6 +12,8 @@
 #include "visualizer/visualizer.hpp"
 
 #include <functional>
+#include <nanobind/stl/vector.h>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -138,9 +141,9 @@ namespace lfs::python {
             .def_ro("vignette", &PyTheme::vignette);
 
         m.def("theme", &get_current_theme, "Get the current theme");
-        m.def("set_theme_vignette_enabled", &lfs::vis::setThemeVignetteEnabled, "Set theme vignette enabled");
-        m.def("set_theme_vignette_intensity", &lfs::vis::setThemeVignetteIntensity, "Set theme vignette intensity");
-        m.def("set_theme_vignette_style", &lfs::vis::setThemeVignetteStyle, "Set vignette intensity, radius, and softness");
+        m.def("set_theme_vignette_enabled", nb::overload_cast<bool, bool>(&lfs::vis::setThemeVignetteEnabled), nb::arg("enabled"), nb::arg("persist") = true, "Set theme vignette enabled");
+        m.def("set_theme_vignette_intensity", nb::overload_cast<float, bool>(&lfs::vis::setThemeVignetteIntensity), nb::arg("intensity"), nb::arg("persist") = true, "Set theme vignette intensity");
+        m.def("set_theme_vignette_style", nb::overload_cast<float, float, float, bool>(&lfs::vis::setThemeVignetteStyle), nb::arg("intensity"), nb::arg("radius"), nb::arg("softness"), nb::arg("persist") = true, "Set vignette intensity, radius, and softness");
         m.def("remember_camera_navigation", &lfs::vis::rememberCameraNavigationPreference,
               "Return whether camera navigation is persisted between launches");
         m.def("set_remember_camera_navigation", &lfs::vis::setRememberCameraNavigationPreference,
@@ -149,6 +152,32 @@ namespace lfs::python {
               "Return whether camera view snap is persisted between launches");
         m.def("set_remember_camera_view_snap", &lfs::vis::setRememberCameraViewSnapPreference,
               nb::arg("enabled"), "Enable or disable camera view snap persistence");
+        m.def("take_splat_export_request", &lfs::vis::gui::takeSplatExportRequest);
+        m.def("get_splat_drag_preferences", []() {
+            const auto s = lfs::vis::UserPreferences::instance().splatDrag();
+            nb::dict result;
+            result["format"] = s.format;
+            result["sh_degree"] = s.sh_degree;
+            result["up_axis"] = s.axes.up;
+            // Compatibility for scripts written against the original checkbox.
+            result["blender_axes"] = s.axes.up == 3;
+            return result;
+        });
+        m.def("set_splat_drag_preferences", [](nb::dict values) {
+            auto s = lfs::vis::UserPreferences::instance().splatDrag();
+            if (values.contains("format"))
+                s.format = nb::cast<std::string>(values["format"]);
+            if (values.contains("sh_degree"))
+                s.sh_degree = nb::cast<int>(values["sh_degree"]);
+            if (values.contains("up_axis")) {
+                s.axes.up = nb::cast<int>(values["up_axis"]);
+            } else if (values.contains("blender_axes")) {
+                s.axes = nb::cast<bool>(values["blender_axes"]) ? lfs::vis::SplatDragAxes::blender() : lfs::vis::SplatDragAxes{};
+            }
+            if (!s.axes.valid())
+                throw std::invalid_argument("Splat drag up axis must be -Y, +Y, -Z or +Z");
+            lfs::vis::UserPreferences::instance().setSplatDrag(s);
+        });
         m.def("scene_graph_selection_markers", &lfs::vis::loadSceneGraphSelectionMarkersPreference,
               "Return whether Scene Graph selection markers are visible");
         m.def("set_scene_graph_selection_markers", &lfs::vis::saveSceneGraphSelectionMarkersPreference,

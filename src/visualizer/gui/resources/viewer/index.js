@@ -99843,6 +99843,8 @@ const initUI = (global) => {
         'buttonContainer',
         'play', 'pause',
         'settings', 'settingsPanel',
+        'screenshot', 'screenshotPanel', 'screenshotToast',
+        'screenshot1080p', 'screenshot2k', 'screenshot4k', 'screenshot8k',
         'orbitCamera', 'flyCamera', 'orthoCamera',
         'hqCheck', 'hqOption', 'lqCheck', 'lqOption',
         'reset', 'frame',
@@ -99967,6 +99969,7 @@ const initUI = (global) => {
             // close info panel on cancel
             dom.infoPanel.classList.add('hidden');
             dom.settingsPanel.classList.add('hidden');
+            closeScreenshotPanel();
             // close fullscreen on cancel
             if (state.isFullscreen) {
                 exitFullscreen();
@@ -99974,6 +99977,7 @@ const initUI = (global) => {
         }
         else if (event === 'interrupt') {
             dom.settingsPanel.classList.add('hidden');
+            closeScreenshotPanel();
         }
     });
     // fade ui controls after 5 seconds of inactivity
@@ -100070,6 +100074,7 @@ const initUI = (global) => {
     });
     dom.settings.addEventListener('click', () => {
         dom.settingsPanel.classList.toggle('hidden');
+        closeScreenshotPanel();
     });
     dom.orbitCamera.addEventListener('click', () => {
         state.cameraMode = 'orbit';
@@ -100084,6 +100089,446 @@ const initUI = (global) => {
             : PROJECTION_ORTHOGRAPHIC;
         dom.orthoCamera.classList[cameraComponent.projection === PROJECTION_ORTHOGRAPHIC ? 'add' : 'remove']('active');
     });
+    // Export the current view as a JPG image at a user-chosen resolution.
+    // Renders frames at the target size (keeping the current aspect ratio and
+    // framing), grabs the canvas drawing buffer in 'frameend' before the
+    // browser composites it, then restores the regular canvas resolution.
+    // ---- overlay snapshot helpers ----------------------------------------
+    // The measurement/label overlays are SVG elements positioned in current CSS pixels by worldToScreen(). For a high-resolution capture we read their screen-space coordinates before the resolution changes and draw them onto the composite canvas with 2D commands. Drawing is fully synchronous, so it can run inside 'frameend' before the WebGL drawing buffer is cleared.
+    const numAttr = (element, name) => {
+        if (!element) return null;
+        const value = parseFloat(element.getAttribute(name));
+        return Number.isFinite(value) ? value : null;
+    };
+    // An overlay element counts as visible when it is neither display-hidden via the .hidden class nor marked visibility="hidden" (the tools use both mechanisms).
+    const elementVisible = (element) => !!element &&
+        element.getAttribute('visibility') !== 'hidden' &&
+        !element.classList.contains('hidden');
+
+    // Snapshot the measurement overlay's screen-space geometry. Returns null when nothing is visible to composite.
+    const readMeasureOverlay = () => {
+        const svg = document.getElementById('measureToolSvg');
+        if (!svg || svg.classList.contains('hidden')) return null;
+        // Panel rows are parallel to SVG groups (both in measurement order), so length values pair with lines by index.
+        const lengths = [];
+        const panel = document.getElementById('measurePanel');
+        if (panel && !panel.classList.contains('hidden')) {
+            for (const row of panel.querySelectorAll('.measureRow')) {
+                const input = row.querySelector('.measureLengthInput');
+                lengths.push(!row.classList.contains('hidden') && input ? input.value : '');
+            }
+        }
+        const measurements = [];
+        let visibleCount = 0;
+        for (let i = 0; i < svg.children.length; i++) {
+            const group = svg.children[i];
+            if (group.classList.contains('hidden')) continue;
+            const lineTop = group.querySelector('.measureLineTop');
+            let line = null;
+            if (elementVisible(lineTop)) {
+                const x1 = numAttr(lineTop, 'x1'), y1 = numAttr(lineTop, 'y1');
+                const x2 = numAttr(lineTop, 'x2'), y2 = numAttr(lineTop, 'y2');
+                if (x1 != null && y1 != null && x2 != null && y2 != null) {
+                    line = { x1, y1, x2, y2 };
+                }
+            }
+            const points = [];
+            for (const circle of group.querySelectorAll('.measurePoint')) {
+                if (!elementVisible(circle)) continue;
+                const cx = numAttr(circle, 'cx'), cy = numAttr(circle, 'cy');
+                if (cx != null && cy != null) points.push({ x: cx, y: cy });
+            }
+            measurements.push({ line, points, length: lengths[i] || '' });
+            if (line || points.length) visibleCount++;
+        }
+        return visibleCount ? { measurements } : null;
+    };
+
+    // Snapshot the label overlay's screen-space geometry (leader lines, point markers and text positions).
+    const readLabelOverlay = () => {
+        const svg = document.getElementById('labelToolSvg');
+        if (!svg || svg.classList.contains('hidden')) return null;
+        const labels = [];
+        for (const group of svg.children) {
+            if (group.classList.contains('hidden')) continue;
+            const point = group.childNodes[2];
+            const textEl = group.childNodes[3];
+            const x = numAttr(point, 'cx'), y = numAttr(point, 'cy');
+            if (x == null || y == null) continue;
+            labels.push({
+                x, y,
+                ax: numAttr(textEl, 'x') ?? x,
+                ay: numAttr(textEl, 'y') ?? y,
+                r: numAttr(point, 'r') ?? 4,
+                text: textEl ? textEl.textContent : ''
+            });
+        }
+        return labels.length ? { labels } : null;
+    };
+
+    // Draw the snapshotted measurement overlay into capture pixel space. (s) maps current CSS pixels to capture pixels; stroke widths, marker radii and font sizes scale with it so the export matches what is on screen at any resolution.
+    const drawMeasureOverlay = (ctx, data, s) => {
+        if (!data || !data.measurements.length) return;
+        ctx.save();
+        ctx.lineCap = 'round';
+        for (const m of data.measurements) {
+            if (m.line) {
+                const { x1, y1, x2, y2 } = m.line;
+                ctx.beginPath();
+                ctx.moveTo(x1 * s, y1 * s);
+                ctx.lineTo(x2 * s, y2 * s);
+                ctx.lineWidth = 6 * s;
+                ctx.strokeStyle = '#000';
+                ctx.stroke();
+                ctx.lineWidth = 2 * s;
+                ctx.strokeStyle = '#fff';
+                ctx.stroke();
+            }
+            for (const p of m.points) {
+                ctx.beginPath();
+                ctx.arc(p.x * s, p.y * s, 5 * s, 0, Math.PI * 2);
+                ctx.fillStyle = '#fff';
+                ctx.fill();
+                ctx.lineWidth = 2 * s;
+                ctx.strokeStyle = '#000';
+                ctx.stroke();
+            }
+            if (m.length && m.line) {
+                const mx = ((m.line.x1 + m.line.x2) / 2) * s;
+                const my = (((m.line.y1 + m.line.y2) / 2) - 14) * s;
+                ctx.font = `${14 * s}px Arial, sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.lineJoin = 'round';
+                ctx.lineWidth = 3 * s;
+                ctx.strokeStyle = '#000';
+                ctx.strokeText(`Length: ${m.length}`, mx, my);
+                ctx.fillStyle = '#fff';
+                ctx.fillText(`Length: ${m.length}`, mx, my);
+            }
+        }
+        ctx.restore();
+    };
+
+    // Draw the snapshotted label overlay into capture pixel space.
+    const drawLabelOverlay = (ctx, data, s) => {
+        if (!data || !data.labels.length) return;
+        ctx.save();
+        for (const l of data.labels) {
+            const x = l.x * s, y = l.y * s, ax = l.ax * s, ay = l.ay * s;
+            // leader line: black outline under a white core (matches the SVG overlay styles)
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(ax, ay);
+            ctx.lineCap = 'round';
+            ctx.lineWidth = 5 * s;
+            ctx.strokeStyle = '#000';
+            ctx.stroke();
+            ctx.lineWidth = 1.5 * s;
+            ctx.strokeStyle = '#fff';
+            ctx.stroke();
+            // point marker (orange with black outline)
+            ctx.beginPath();
+            ctx.arc(x, y, l.r * s, 0, Math.PI * 2);
+            ctx.fillStyle = '#F60';
+            ctx.fill();
+            ctx.lineWidth = 1.5 * s;
+            ctx.strokeStyle = '#000';
+            ctx.stroke();
+            // text with a black outline (matches paint-order: stroke)
+            if (l.text) {
+                ctx.font = `${14 * s}px Arial, sans-serif`;
+                ctx.textAlign = 'end';
+                ctx.textBaseline = 'alphabetic';
+                ctx.lineJoin = 'round';
+                ctx.lineWidth = 3 * s;
+                ctx.strokeStyle = '#000';
+                ctx.strokeText(l.text, ax, ay);
+                ctx.fillStyle = '#fff';
+                ctx.fillText(l.text, ax, ay);
+            }
+        }
+        ctx.restore();
+    };
+
+    const closeScreenshotPanel = () => {
+        dom.screenshotPanel.classList.add('hidden');
+        dom.screenshot.classList.remove('active');
+    };
+    let capturingScreenshot = false;
+    let screenshotToastTimeout = null;
+    // brief on-screen status message for screenshot capture progress
+    const showScreenshotToast = (text, duration) => {
+        dom.screenshotToast.textContent = text;
+        dom.screenshotToast.classList.remove('hidden');
+        if (screenshotToastTimeout) {
+            clearTimeout(screenshotToastTimeout);
+        }
+        screenshotToastTimeout = duration ? setTimeout(() => {
+            screenshotToastTimeout = null;
+            dom.screenshotToast.classList.add('hidden');
+        }, duration) : null;
+    };
+    // Resolve once the engine has rendered `count` frames; used to let the canvas settle after a fullscreen/resize change before snapshotting overlay coordinates.
+    const waitForRenderedFrames = (count) => new Promise((resolve) => {
+        let seen = 0;
+        const onFrameEnd = () => {
+            if (++seen >= count) {
+                global.app.off('frameend', onFrameEnd);
+                clearTimeout(settleTimer);
+                resolve();
+            }
+        };
+        const settleTimer = setTimeout(() => {
+            global.app.off('frameend', onFrameEnd);
+            resolve();
+        }, 3000);
+        global.app.on('frameend', onFrameEnd);
+        global.app.renderNextFrame = true;
+    });
+
+    const captureScreenshot = async (targetHeight) => {
+        if (capturingScreenshot) {
+            return;
+        }
+        if (!state.readyToRender) {
+            console.log('[screenshot] ignored: scene is still loading');
+            showScreenshotToast('Scene is still loading', 2000);
+            return;
+        }
+        capturingScreenshot = true;
+        const { app, camera } = global;
+        const { graphicsDevice } = app;
+        const canvas = graphicsDevice.canvas;
+
+        // Windowed-mode exports use the browser window's aspect ratio, which is not a standard display aspect and produces distorted-looking captures. Enter fullscreen first so the capture matches the display's native framing (the existing fullscreen button does exactly this), then return to the original window size afterwards. requestFullscreen must be called synchronously within the click's user activation, so it happens here before any await.
+        const wasFullscreen = !!document.fullscreenElement;
+        let restoreAfterCapture = false;
+        if (!wasFullscreen && hasFullscreenAPI) {
+            let entered = true;
+            try {
+                const req = docRoot.requestFullscreen();
+                if (req && typeof req.then === 'function') {
+                    entered = await Promise.race([
+                        req.then(() => true, () => false),
+                        new Promise((resolve) => setTimeout(() => resolve(false), 3000))
+                    ]);
+                }
+            } catch (e) {
+                console.warn('[screenshot] fullscreen request failed:', e);
+                entered = false;
+            }
+            if (!entered) {
+                showScreenshotToast('Could not enter fullscreen - capturing at current size', 3000);
+            } else {
+                restoreAfterCapture = true;
+                // Let the engine resize the canvas and render a couple of frames at the new size so overlay coordinates are valid.
+                await waitForRenderedFrames(2);
+            }
+        }
+
+        const prevWidth = graphicsDevice.width;
+        const prevHeight = graphicsDevice.height;
+
+        // Snapshot the measurement/label overlays now: their screen-space coordinates are in current CSS pixels and must be captured before the resolution change (the overlay DOM is not re-projected for us).
+        const measureData = readMeasureOverlay();
+        const labelData = readLabelOverlay();
+
+        // Keep the current framing: scale to the requested height at the camera's aspect ratio. The engine keeps camera.aspectRatio in sync with the canvas, so this matches what is on screen; fall back to the device size if it has not been set yet.
+        const aspect = Number.isFinite(camera.camera.aspectRatio) && camera.camera.aspectRatio > 0
+            ? camera.camera.aspectRatio
+            : prevWidth / prevHeight;
+        let width = Math.round(targetHeight * aspect);
+        let height = targetHeight;
+        // Clamp to what the GPU can render in a single pass. The composite canvas is sized from the ACTUAL backing store at capture time, so a clamped (or further-limited) render target still composites exactly.
+        const maxSize = graphicsDevice.maxTextureSize || 8192;
+        if (Math.max(width, height) > maxSize) {
+            const scale = maxSize / Math.max(width, height);
+            width = Math.round(width * scale);
+            height = Math.round(height * scale);
+            console.log(`[screenshot] clamped to GPU max render size (${maxSize}): ${width}x${height}`);
+        }
+        // True when a render target of size w x h would change the view's aspect ratio relative to the preview. Screen-space overlay coordinates are only valid while framing is preserved, so captures that break this must be aborted.
+        const framingBroken = (w, h) => Math.abs(w / h - aspect) > 0.01 * aspect;
+        console.log(`[screenshot] capture start: render target ${prevWidth}x${prevHeight} -> ${width}x${height}, maxTextureSize=${graphicsDevice.maxTextureSize}, backend=${graphicsDevice.constructor.name}`);
+        showScreenshotToast(`Capturing ${width} x ${height}...`);
+
+        // Hide the measurement/label gizmos for the capture frames so their 3D handles (axis arrows, planes, center sphere) don't appear in the export. The gizmo meshes live under root entities named 'gizmo:*' parented to app.root - the 'LfsMeasureGizmo'/'LfsLabelGizmo' names are render layers, not entities, so Entity.find() can never locate them. Disabling a gizmo root also stops its per-frame guide-line drawing.
+        const hiddenGizmos = [];
+        if (app.root) {
+            const collectGizmos = (node) => {
+                for (let i = 0; i < node.children.length; i++) {
+                    const child = node.children[i];
+                    if (child.name.indexOf('gizmo:') === 0) {
+                        hiddenGizmos.push({ entity: child, enabled: child.enabled });
+                        child.enabled = false;
+                    } else {
+                        collectGizmos(child);
+                    }
+                }
+            };
+            collectGizmos(app.root);
+        }
+
+        // Pause camera animation during the capture so an animating camera doesn't move between the two rendered frames.
+        const wasAnimPaused = state.animationPaused;
+        if (state.cameraMode === 'anim' && !wasAnimPaused) {
+            state.animationPaused = true;
+        }
+
+        // Freeze the engine's per-frame auto-resize: AppBase.render() calls updateCanvasSize() every frame, which in RESOLUTION_AUTO mode resets the canvas to the window size and would silently discard the capture resolution before the frame is rendered. Pin RESOLUTION_FIXED with pixel ratio 1 so the backing store stays at exactly width x height.
+        const prevMaxPixelRatio = graphicsDevice.maxPixelRatio;
+
+        // Restore the pre-capture state. Shared by the success, failure and timeout paths so the viewer is never left half-resized with gizmos hidden.
+        let restored = false;
+        const restoreState = () => {
+            if (restored) return;
+            restored = true;
+            graphicsDevice.maxPixelRatio = prevMaxPixelRatio;
+            app.setCanvasResolution(RESOLUTION_AUTO);
+            camera.camera.aspectRatio = graphicsDevice.width / graphicsDevice.height;
+            for (const { entity, enabled } of hiddenGizmos) {
+                entity.enabled = enabled;
+            }
+            if (!wasAnimPaused && state.cameraMode === 'anim') {
+                state.animationPaused = false;
+            }
+            app.renderNextFrame = true;
+            capturingScreenshot = false;
+            if (restoreAfterCapture && document.fullscreenElement) {
+                // Return to the windowed size the user had before the capture.
+                const exitReq = document.exitFullscreen();
+                if (exitReq && typeof exitReq.catch === 'function') {
+                    exitReq.catch(() => {});
+                }
+            }
+            console.log(`[screenshot] restored render target: ${graphicsDevice.width}x${graphicsDevice.height}`);
+        };
+
+        graphicsDevice.maxPixelRatio = 1;
+        app.setCanvasResolution(RESOLUTION_FIXED, width, height);
+        // setCanvasResolution resizes via device.resizeCanvas which scales by the pixel ratio; force the exact pixel dimensions
+        graphicsDevice.setResolution(width, height);
+        camera.camera.aspectRatio = width / height;
+        app.renderNextFrame = true;
+
+        if (graphicsDevice.contextLost) {
+            console.error(`[screenshot] WebGL context lost while resizing canvas to ${width}x${height}`);
+            showScreenshotToast('Capture failed: GPU could not allocate the framebuffer', 4000);
+            restoreState();
+            return;
+        }
+
+        // Some engines clamp the render target below what was requested (e.g. per-dimension limits). If that changes the view's aspect ratio, every screen-space overlay coordinate becomes invalid - abort early rather than render frames we will discard.
+        if ((canvas.width !== width || canvas.height !== height) && framingBroken(canvas.width, canvas.height)) {
+            console.error(`[screenshot] engine clamped render target to ${canvas.width}x${canvas.height} (requested ${width}x${height}); view framing would change`);
+            showScreenshotToast('GPU limits this resolution - framing would change. Try 8K', 5000);
+            restoreState();
+            return;
+        }
+
+        // Watchdog: if frameend never fires (e.g. an async context loss right after the resize), bail out and restore so the UI is never stuck on "Capturing...".
+        const watchdog = setTimeout(() => {
+            console.error('[screenshot] capture timed out waiting for rendered frames');
+            app.off('frameend', onFrameEnd);
+            showScreenshotToast('Capture failed: no frame was rendered (WebGL context may have been lost)', 4000);
+            restoreState();
+        }, 5000);
+
+        let renderedFrames = 0;
+        const onFrameEnd = () => {
+            renderedFrames++;
+            if (renderedFrames < 2) {
+                // render one extra frame so async gsplat updates settle at the new resolution
+                app.renderNextFrame = true;
+                return;
+            }
+            app.off('frameend', onFrameEnd);
+            clearTimeout(watchdog);
+
+            // Use the ACTUAL WebGL backing store size, not the requested target: the GPU may clamp the render target below what was asked (e.g. 12K), and compositing must match what was really rendered or labels/measurements end up misaligned with the image.
+            const outWidth = canvas.width;
+            const outHeight = canvas.height;
+            console.log(`[screenshot] capture frame: render target ${graphicsDevice.width}x${graphicsDevice.height}, ` +
+                `canvas backing store ${outWidth}x${outHeight}, max pixel ratio ${graphicsDevice.maxPixelRatio}`);
+
+            // Final framing verification against the ACTUAL rendered buffer. If the engine clamped asymmetrically, overlays would land on the wrong places - abort and restore instead of exporting a shifted/zoomed image.
+            if (framingBroken(outWidth, outHeight)) {
+                console.error(`[screenshot] rendered buffer ${outWidth}x${outHeight} changed view framing (aspect ${(outWidth / outHeight).toFixed(4)} vs preview ${aspect.toFixed(4)})`);
+                showScreenshotToast('GPU limits this resolution - framing would change. Try 8K', 5000);
+                restoreState();
+                return;
+            }
+
+            const saveBlob = (blob) => {
+                if (blob) {
+                    const sizeMb = (blob.size / (1024 * 1024)).toFixed(1);
+                    const url = URL.createObjectURL(blob);
+                    const anchor = document.createElement('a');
+                    anchor.href = url;
+                    anchor.download = `lichtfeld-view-${outWidth}x${outHeight}.jpg`;
+                    anchor.click();
+                    console.log(`[screenshot] saved ${anchor.download} (${sizeMb} MB, ${blob.type})`);
+                    showScreenshotToast(`Saved ${outWidth} x ${outHeight} JPG (${sizeMb} MB)`, 3000);
+                    setTimeout(() => URL.revokeObjectURL(url), 10000);
+                }
+                else {
+                    console.error('[screenshot] canvas.toBlob returned no data');
+                    showScreenshotToast('Capture failed', 3000);
+                }
+            };
+
+            if (measureData || labelData) {
+                // Composite the base frame with the measurement/label overlays. The composite canvas is exactly the backing store size, so drawImage copies it 1:1; overlay coordinates are scaled from current CSS pixels to capture pixels. All drawing happens synchronously here, before the WebGL buffer is cleared.
+                const out = document.createElement('canvas');
+                out.width = outWidth;
+                out.height = outHeight;
+                const ctx = out.getContext('2d');
+                const s = outWidth / (canvas.clientWidth || outWidth);
+                ctx.drawImage(canvas, 0, 0);
+                drawMeasureOverlay(ctx, measureData, s);
+                drawLabelOverlay(ctx, labelData, s);
+                out.toBlob(saveBlob, 'image/jpeg', 0.92);
+            }
+            else {
+                canvas.toBlob(saveBlob, 'image/jpeg', 0.92);
+            }
+
+            // restore the regular canvas resolution immediately
+            restoreState();
+        };
+        app.on('frameend', onFrameEnd);
+    };
+    dom.screenshot.addEventListener('click', () => {
+        const hidden = dom.screenshotPanel.classList.toggle('hidden');
+        dom.screenshot.classList[hidden ? 'remove' : 'add']('active');
+        if (!hidden) {
+            dom.settingsPanel.classList.add('hidden');
+        }
+    });
+    const screenshotResolutions = {
+        screenshot1080p: 1080,
+        screenshot2k: 1440,
+        screenshot4k: 2160,
+        screenshot8k: 4320
+    };
+    for (const [id, targetHeight] of Object.entries(screenshotResolutions)) {
+        dom[id].addEventListener('click', () => {
+            closeScreenshotPanel();
+            const wasFullscreen = !!document.fullscreenElement;
+            captureScreenshot(targetHeight).catch((e) => {
+                console.error('[screenshot] capture failed:', e);
+                capturingScreenshot = false;
+                // If the capture died after entering fullscreen for us, return to the user's original windowed view.
+                if (!wasFullscreen && document.fullscreenElement) {
+                    const exitReq = document.exitFullscreen();
+                    if (exitReq && typeof exitReq.catch === 'function') {
+                        exitReq.catch(() => {});
+                    }
+                }
+            });
+        });
+    }
     dom.reset.addEventListener('click', (event) => {
         events.fire('inputEvent', 'reset', event);
     });
@@ -100137,6 +100582,7 @@ const initUI = (global) => {
     tooltip.register(dom.fovSlider, 'Camera Field of View', 'top');
     tooltip.register(dom.fovReset, 'Reset FOV', 'bottom');
     tooltip.register(dom.settings, 'Settings', 'top');
+    tooltip.register(dom.screenshot, 'Export View as JPG', 'top');
     tooltip.register(dom.info, 'Help', 'top');
     tooltip.register(dom.arMode, 'Enter AR', 'top');
     tooltip.register(dom.vrMode, 'Enter VR', 'top');

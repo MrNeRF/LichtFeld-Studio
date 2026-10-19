@@ -2,6 +2,7 @@
 .claude
 CLAUDE.md
 build/
+build-ui-audit/
 cmake-build-debug/
 cmake-build-release/
 external/libtorch
@@ -18,6 +19,10 @@ results
 data
 !tests/data/
 tests/data/*
+!tests/data/keymap_contract/
+!tests/data/keymap_contract/*.digest
+!tests/data/keymap_layouts/
+!tests/data/keymap_layouts/*.json
 !tests/data/usd/
 !tests/data/usd/**
 !tests/data/param_json_golden/
@@ -27,12 +32,14 @@ tests/data/param_json_golden/*
 tests/data/nn/*
 !tests/data/nn/moge2_ref_fixture.json
 !tests/data/nn/lpips_ref_fixture.json
+!tests/data/clamped_colour_regression.ply.fixture
 *.pt
 *.py
 !scripts/lichtfeld_mcp_bridge.py
 !scripts/verify_video_orientation.py
 !tools/gdb/lfs_pretty_printers.py
 !src/python/_lfs_panel_contract.py
+!src/python/_lfs_path_io.py
 !src/python/lfs_splat_lod_hierarchy.py
 !src/python/lfs_plugins/**/*.py
 !src/python/scripts/manage_stubs.py

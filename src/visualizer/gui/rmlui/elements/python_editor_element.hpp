@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/EventListener.h>
 
@@ -13,7 +15,7 @@ namespace lfs::vis::editor {
 
 namespace lfs::vis::gui {
 
-    class PythonEditorElement final : public Rml::Element {
+    class LFS_VIS_API PythonEditorElement final : public Rml::Element {
     public:
         explicit PythonEditorElement(const Rml::String& tag);
 

@@ -4,11 +4,13 @@
 
 #include "spz_loader.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "formats/spz.hpp"
 #include "io/error.hpp"
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -30,7 +32,7 @@ namespace lfs::io {
             options.progress(0.0f, "Loading SPZ file...");
         }
 
-        if (!std::filesystem::exists(path)) {
+        if (!lfs::core::native_fs::exists(path)) {
             return make_error(ErrorCode::PATH_NOT_FOUND,
                               "SPZ file does not exist", path);
         }
@@ -54,7 +56,8 @@ namespace lfs::io {
             const bool is_ngsp = bytes_read >= 4 &&
                                  header[0] == 'N' && header[1] == 'G' &&
                                  header[2] == 'S' && header[3] == 'P';
-            if (!is_gzip && !is_ngsp) {
+            const bool is_glb = bytes_read >= 4 && std::memcmp(header, "glTF", 4) == 0;
+            if (!is_gzip && !is_ngsp && !is_glb) {
                 return make_error(
                     ErrorCode::INVALID_HEADER,
                     "Invalid SPZ format (expected gzip (v1-v3) or NGSP (v4) container)",
@@ -84,7 +87,7 @@ namespace lfs::io {
         auto splat_result = load_spz(path);
         if (!splat_result) {
             return make_error(ErrorCode::CORRUPTED_DATA,
-                              std::format("Failed to load SPZ: {}", splat_result.error()), path);
+                              splat_result.error(), path);
         }
 
         if (options.progress) {
@@ -109,17 +112,17 @@ namespace lfs::io {
     }
 
     bool SpzLoader::canLoad(const std::filesystem::path& path) const {
-        if (!std::filesystem::exists(path)) {
+        if (!lfs::core::native_fs::exists(path)) {
             return false;
         }
 
-        if (!std::filesystem::is_regular_file(path)) {
+        if (!lfs::core::native_fs::is_regular_file(path)) {
             return false;
         }
 
-        auto ext = path.extension().string();
+        auto ext = lfs::core::path_to_utf8(path.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-        return ext == ".spz";
+        return ext == ".spz" || (ext == ".glb" && is_spz_glb(path));
     }
 
     std::string SpzLoader::name() const {

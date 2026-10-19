@@ -142,8 +142,9 @@ class VkSplatOverlayStorageTests(unittest.TestCase):
 
     def test_retired_radii_output_is_absent_from_forward_shader(self):
         self.assertNotIn("out_radii", read(SHADERS / "vertex_shader.slang"))
-        self.assertIn("pipeline_projection_forward = _ComputePipeline(vksplatSkipBinding(24, 8))",
-                      read(VULKAN / "src/gs_renderer.h"))
+        # Binding 8 was the radii output; the pipeline skips it whatever the binding count.
+        self.assertRegex(read(VULKAN / "src/gs_renderer.h"),
+                         r"pipeline_projection_forward = _ComputePipeline\(vksplatSkipBinding\(\d+, 8\)\)")
 
 
 if __name__ == "__main__":

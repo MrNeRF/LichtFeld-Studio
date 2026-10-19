@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lfs::core {
@@ -18,6 +19,10 @@ namespace lfs::core {
     [[nodiscard]] LFS_CORE_API lfs::Status
     writeTextFileAtomically(const std::filesystem::path& destination,
                             const std::string& contents);
+    [[nodiscard]] LFS_CORE_API lfs::Result<std::optional<std::filesystem::path>>
+    backupFile(const std::filesystem::path& source,
+               const std::filesystem::path& backup_root,
+               std::string_view category);
 
     /**
      * Per-invocation overrides for the user-owned storage tree.
@@ -90,6 +95,8 @@ namespace lfs::core {
         [[nodiscard]] std::filesystem::path keymapDir() const;
         [[nodiscard]] std::filesystem::path presetDir() const;
         [[nodiscard]] std::filesystem::path assetLibraryDir() const;
+        /** Durable plugin-owned data: `<data>/plugin_data/<plugin name>/`. */
+        [[nodiscard]] std::filesystem::path pluginDataDir() const;
         [[nodiscard]] std::filesystem::path backupDir() const;
         /** Legacy untitled crash files: `<root>/recovery`. Kept for startup scan. */
         [[nodiscard]] std::filesystem::path recoveryDir() const;

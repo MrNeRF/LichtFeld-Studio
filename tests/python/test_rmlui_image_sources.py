@@ -20,7 +20,11 @@ def _install_lf_stub(monkeypatch):
         def on_mount(self, _doc):
             pass
 
+        def on_unmount(self, _doc):
+            pass
+
     lf_stub = ModuleType("lichtfeld")
+    lf_stub.get_scene = lambda: None
     lf_stub.ui = SimpleNamespace(
         Panel=_Panel,
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
@@ -38,8 +42,9 @@ def _install_lf_stub(monkeypatch):
 def panel_modules(monkeypatch):
     project_root = Path(__file__).parent.parent.parent
     source_python = project_root / "src" / "python"
-    if str(source_python) not in sys.path:
-        sys.path.insert(0, str(source_python))
+    if str(source_python) in sys.path:
+        sys.path.remove(str(source_python))
+    sys.path.insert(0, str(source_python))
 
     for module_name in [
         "lfs_plugins.image_preview_panel",
@@ -87,6 +92,53 @@ def test_first_preview_request_survives_lazy_panel_creation(panel_modules, tmp_p
     assert panel._camera_uids == [17]
 
 
+def test_first_preview_request_opens_once_during_lazy_reentry(
+        panel_modules, tmp_path, monkeypatch):
+    image_preview, _ = panel_modules
+    image_preview._instance = None
+    image_preview._pending_open = None
+    image_path = tmp_path / "first.jpg"
+    open_calls = []
+    original_open = image_preview.ImagePreviewPanel.open
+
+    def track_open(panel, image_paths, mask_paths, start_index, camera_uids=None, camera_nodes=None):
+        open_calls.append((image_paths, mask_paths, start_index, camera_uids))
+        return original_open(panel, image_paths, mask_paths, start_index, camera_uids, camera_nodes)
+
+    monkeypatch.setattr(image_preview.ImagePreviewPanel, "open", track_open)
+
+    class LazyPanel:
+        @property
+        def open(self):
+            return image_preview.ImagePreviewPanel().open
+
+    sys.modules["lichtfeld"].ui.get_panel_object = lambda _panel_id: LazyPanel()
+
+    image_preview.open_image_preview([image_path], [None], 0, [17])
+
+    assert image_preview._pending_open is None
+    assert open_calls == [([image_path], [None], 0, [17])]
+    assert image_preview._instance._image_paths == [image_path.resolve()]
+    assert image_preview._instance._camera_uids == [17]
+
+
+def test_image_preview_discards_info_for_previous_image_sets(panel_modules, tmp_path):
+    image_preview, _ = panel_modules
+    panel = image_preview.ImagePreviewPanel()
+    old_path = tmp_path / "old.jpg"
+    retained_path = tmp_path / "retained.jpg"
+    panel._image_info_cache = {
+        str(old_path): (640, 480, 3),
+        str(retained_path): (1920, 1080, 3),
+    }
+
+    panel.open([retained_path], [None], 0)
+
+    assert panel._image_info_cache == {
+        str(retained_path): (1920, 1080, 3),
+    }
+
+
 class _ElementStub:
     def __init__(self):
         self.properties = {}
@@ -117,9 +169,16 @@ class _ElementStub:
 class _DocumentStub:
     def __init__(self, elements):
         self._elements = elements
+        self.removed_models = []
 
     def get_element_by_id(self, element_id):
         return self._elements.get(element_id)
+
+    def query_selector_all(self, _selector):
+        return []
+
+    def remove_data_model(self, name):
+        self.removed_models.append(name)
 
 
 class _HandleStub:
@@ -189,7 +248,7 @@ def test_getting_started_panel_escapes_thumbnail_paths(panel_modules, tmp_path):
 def test_getting_started_panel_uses_dirty_update_policy(panel_modules):
     _, getting_started = panel_modules
     assert getting_started.GettingStartedPanel.update_policy == "dirty"
-    assert getting_started.GettingStartedPanel.update_interval_ms == 100
+    assert getting_started.GettingStartedPanel.update_interval_ms is None
 
 
 def test_image_preview_uses_dirty_update_policy(panel_modules):
@@ -236,9 +295,11 @@ def test_getting_started_panel_requests_update_when_thumbnail_ready(panel_module
     panel._ready_lock = Lock()
     panel._ready_queue = []
     panel._thumb_update_scheduled = False
+    panel._mounted = True
 
-    panel._on_thumb_ready("intro", "/tmp/intro.jpg")
-    panel._on_thumb_ready("next", "/tmp/next.jpg")
+    generation = panel._mount_generation
+    panel._on_thumb_ready("intro", "/tmp/intro.jpg", generation)
+    panel._on_thumb_ready("next", "/tmp/next.jpg", generation)
 
     assert panel._ready_queue == [
         ("intro", "/tmp/intro.jpg"),
@@ -251,3 +312,32 @@ def test_getting_started_panel_requests_update_when_thumbnail_ready(panel_module
 
     assert panel._handle.request_update_count == 1
     assert panel._thumb_update_scheduled is False
+
+
+def test_getting_started_ignores_thumbnail_completion_after_unmount(panel_modules):
+    _, getting_started = panel_modules
+    callbacks = []
+    sys.modules["lichtfeld"].ui.schedule_on_ui_thread = callbacks.append
+
+    panel = getting_started.GettingStartedPanel()
+    old_handle = _HandleStub()
+    panel._handle = old_handle
+    panel._mounted = True
+    generation = panel._mount_generation
+
+    panel._on_thumb_ready("intro", "/tmp/intro.jpg", generation)
+    assert len(callbacks) == 1
+
+    doc = _DocumentStub({})
+    panel.on_unmount(doc)
+    panel.on_mount(doc)
+    new_handle = _HandleStub()
+    panel._handle = new_handle
+    callbacks.pop()()
+    panel._on_thumb_ready("late", "/tmp/late.jpg", generation)
+
+    assert doc.removed_models == ["getting_started"]
+    assert panel._ready_queue == []
+    assert panel._thumb_card_map == {}
+    assert old_handle.request_update_count == 0
+    assert new_handle.request_update_count == 0

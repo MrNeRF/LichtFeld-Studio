@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "usda_write.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include <charconv>
 #include <cmath>
@@ -109,7 +110,7 @@ namespace {
 namespace lfs::io::usd_flat {
 
     lfs::Status write_usda(const FlatStage& stage, const std::filesystem::path& path) {
-        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        std::ofstream output(lfs::core::native_fs::native_path(path), std::ios::binary | std::ios::trunc);
         if (!output) {
             return lfs::Status::failure(make_flat_error("Failed to open USD file for writing: " + lfs::core::path_to_utf8(path)));
         }

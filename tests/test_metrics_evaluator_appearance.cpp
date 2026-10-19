@@ -8,6 +8,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "training/dataset.hpp"
+#include "training/metrics/eval_image_labels.hpp"
 #include "training/metrics/metrics.hpp"
 
 #include <atomic>
@@ -174,15 +175,16 @@ TEST_F(MetricsEvaluatorAppearanceTest, HookRunsOncePerFrameBeforeClampAndSavesCo
     // Without the post-hook clamp, PSNR against 1 would be 0 dB.
     EXPECT_NEAR(metrics.psnr, 100.0f, 0.5f);
 
-    const auto saved = root.path() / "eval_step_7" / "0.png";
+    const auto saved = root.path() / "eval_step_7" / "a.png";
     ASSERT_TRUE(std::filesystem::exists(saved));
     auto [data, width, height, channels] = lfs::core::load_image(saved);
     ASSERT_NE(data, nullptr);
-    ASSERT_EQ(height, kImageSize);
+    const int band = lfs::training::caption_band_height(kImageSize);
+    ASSERT_EQ(height, band + kImageSize);
     ASSERT_EQ(width, kImageSize + kSeparator + kImageSize);
     ASSERT_GE(channels, 3);
     const int render_x = kImageSize + kSeparator;
-    const int idx = (0 * width + render_x) * channels;
+    const int idx = (band * width + render_x) * channels;
     EXPECT_EQ(data[idx], 255);
     EXPECT_EQ(data[idx + 1], 255);
     EXPECT_EQ(data[idx + 2], 255);

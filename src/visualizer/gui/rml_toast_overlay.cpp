@@ -3,6 +3,7 @@
 
 #include "gui/rml_toast_overlay.hpp"
 #include "core/logger.hpp"
+#include "core/number_format.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -178,7 +179,7 @@ namespace lfs::vis::gui {
                                                                                    : "error";
             std::string count_span;
             if (entry.count > 1)
-                count_span = std::format("<span class=\"toast-count\"> x{}</span>", entry.count);
+                count_span = std::format("<span class=\"toast-count\"> x{}</span>", lfs::core::format_count(entry.count));
 
             html += std::format(
                 "<div id=\"toast-{}\" class=\"toast level-{}\">"

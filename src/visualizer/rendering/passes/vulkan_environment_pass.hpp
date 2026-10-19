@@ -18,7 +18,8 @@ namespace lfs::vis {
 
     struct VulkanEnvironmentParams {
         bool enabled = false;
-        std::filesystem::path map_path;
+        // Shared with settings snapshots and captures; copying pane metadata never copies the path.
+        std::shared_ptr<const std::filesystem::path> map_path;
         glm::mat3 camera_to_world{1.0f};
         glm::vec4 intrinsics{0.0f}; // focal_x, focal_y, cx, cy
         glm::vec2 viewport_size{0.0f};

@@ -84,8 +84,8 @@ namespace lfs::diagnostics {
         std::size_t epsilon_min_bytes = 2ull * 1024ull * 1024ull;
         double epsilon_frac = 0.0025;
         bool include_vulkan_in_sum = true; // L0 answer on this machine
-        /// When true, arena measured under root D is zeroed if process reports
-        /// external-backed arena (exportable path owns the bytes in root E).
+        /// Force external arena backing. The shared.scratch import marker also
+        /// selects this automatically; root E owns those committed bytes.
         bool arena_external_backing = false;
     };
 

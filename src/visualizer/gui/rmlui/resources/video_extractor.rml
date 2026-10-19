@@ -68,12 +68,16 @@
           </div>
           <div class="file-list">
             <div class="file-row">
-              <span class="field-label">@tr:video_extractor.video</span>
+              <span class="field-label">@tr:video_extractor.videos</span>
               <span id="video-value" class="path-value">@tr:video_extractor.no_file</span>
-              <button id="btn-browse-video" class="btn btn--secondary browse-btn" type="button">@tr:video_extractor.browse</button>
+              <button id="btn-browse-video" class="btn btn--secondary browse-btn" type="button">@tr:video_extractor.add_videos</button>
+              <button id="btn-remove-video" class="btn btn--secondary mini-btn" type="button">@tr:video_extractor.remove_video</button>
+              <button id="btn-clear-videos" class="btn btn--secondary mini-btn" type="button">@tr:video_extractor.clear_videos</button>
             </div>
+            <div id="batch-video-list" class="batch-video-list"></div>
+            <span id="batch-summary" class="inline-note"></span>
             <div class="file-row">
-              <span class="field-label">@tr:video_extractor.output</span>
+              <span class="field-label">@tr:video_extractor.output_root</span>
               <span id="output-value" class="path-value">@tr:video_extractor.no_dir</span>
               <button id="btn-browse-output" class="btn btn--secondary browse-btn" type="button">@tr:video_extractor.browse</button>
             </div>
@@ -94,13 +98,21 @@
             </select>
             <div id="fps-row" class="inline-control">
               <input id="fps-slider" class="value-slider" type="range" min="0.1" max="30.0" step="0.1" value="1.0" />
-              <span id="fps-value" class="value-readout">1.0 FPS</span>
+              <input id="fps-value" class="fps-input" type="text" value="1.0" />
+              <span class="interval-unit">@tr:video_extractor.fps_label</span>
             </div>
             <div id="interval-row" class="inline-control interval-control">
               <span class="interval-label">@tr:video_extractor.every_label</span>
               <input id="interval-input" class="interval-input" type="text" value="1" />
               <span id="interval-value" class="interval-unit">@tr:video_extractor.frames_unit</span>
             </div>
+          </div>
+          <div class="settings-row">
+            <span class="field-label"></span>
+            <label class="toggle-label">
+              <input id="continue-batch-on-failure" type="checkbox" checked="checked" />
+              <span>@tr:video_extractor.continue_batch_on_failure</span>
+            </label>
           </div>
         </div>
 
@@ -220,47 +232,69 @@
             <span class="section-rule__line"></span>
           </div>
           <div class="settings-row">
-            <span class="field-label">@tr:video_extractor.pattern</span>
-            <input id="pattern-input" class="pattern-input" type="text" value="frame_%d" />
-            <span id="pattern-example" class="inline-note">@tr:video_extractor.example</span>
+            <span class="field-label">@tr:video_extractor.naming_preset</span>
+            <select id="naming-select" class="wide-select">
+              <option value="0">@tr:video_extractor.naming_video_frame</option>
+              <option value="1">@tr:video_extractor.naming_video_number</option>
+              <option value="2" selected="selected">@tr:video_extractor.naming_frame_number</option>
+              <option value="3">@tr:video_extractor.naming_number</option>
+              <option value="4">@tr:video_extractor.naming_custom</option>
+            </select>
           </div>
+          <div id="custom-pattern-row" class="settings-row">
+            <span class="field-label">@tr:video_extractor.pattern</span>
+            <input id="pattern-input" class="pattern-input" type="text" value="frame_%05d" />
+          </div>
+          <div class="settings-row">
+            <span class="field-label">@tr:video_extractor.first_source_frame_number</span>
+            <input id="first-source-frame-number-input" class="interval-input" type="text" value="1" />
+            <span class="inline-note">@tr:video_extractor.first_source_frame_number_help</span>
+          </div>
+          <div id="naming-help" class="naming-note">@tr:video_extractor.naming_help</div>
+          <div class="naming-note">@tr:video_extractor.naming_number_help</div>
+          <div id="pattern-example" class="naming-note inline-note"></div>
+          <div id="naming-error" class="naming-note inline-warning"></div>
         </div>
 
-        <div class="action-row">
-          <button id="btn-start" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.start</button>
-          <button id="btn-stop" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.stop</button>
-          <button id="btn-cancel" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.cancel</button>
-          <span id="select-hint" class="inline-warning">@tr:video_extractor.select_both</span>
+      </div>
+    </div>
+
+    <div id="action-footer">
+      <div class="action-row">
+        <button id="btn-start" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.start</button>
+        <button id="btn-stop" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.stop</button>
+        <button id="btn-cancel" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.cancel</button>
+        <span id="select-hint" class="inline-warning">@tr:video_extractor.select_both</span>
+      </div>
+      <div class="status-row">
+        <div id="progress-section" class="status-section">
+          <span id="progress-text" class="status-text">@tr:video_extractor.starting</span>
+          <progress id="progress-bar" max="1" value="0"></progress>
         </div>
-        <div class="status-row">
-          <div id="progress-section" class="status-section">
-            <span id="progress-text" class="status-text">@tr:video_extractor.starting</span>
-            <progress id="progress-bar" max="1" value="0"></progress>
-          </div>
-          <div id="complete-section" class="status-section status-section--success">
-            <span id="complete-text" class="status-text">@tr:video_extractor.complete</span>
-            <button id="btn-complete-ok" class="btn btn--secondary mini-btn" type="button">@tr:video_extractor.ok</button>
-          </div>
-          <div id="stopped-section" class="status-section status-section--stopped">
-            <span id="stopped-text" class="status-text">@tr:video_extractor.stopped</span>
-            <button id="btn-stopped-ok" class="btn btn--secondary mini-btn" type="button">@tr:video_extractor.ok</button>
-          </div>
-          <div id="error-section" class="status-section status-section--error">
-            <span id="error-text" class="status-text">@tr:video_extractor.error</span>
-            <button id="btn-error-dismiss" class="btn btn--secondary mini-btn" type="button">@tr:video_extractor.dismiss</button>
-          </div>
+        <div id="complete-section" class="status-section status-section--success">
+          <span id="complete-text" class="status-text">@tr:video_extractor.complete</span>
+          <button id="btn-complete-ok" class="btn btn--secondary mini-btn" type="button">@tr:video_extractor.ok</button>
+        </div>
+        <div id="stopped-section" class="status-section status-section--stopped">
+          <span id="stopped-text" class="status-text">@tr:video_extractor.stopped</span>
+          <button id="btn-stopped-ok" class="btn btn--secondary mini-btn" type="button">@tr:video_extractor.ok</button>
+        </div>
+        <div id="error-section" class="status-section status-section--error">
+          <span id="error-text" class="status-text">@tr:video_extractor.error</span>
+          <button id="btn-error-dismiss" class="btn btn--secondary mini-btn" type="button">@tr:video_extractor.dismiss</button>
         </div>
       </div>
     </div>
 
-    <!-- Overwrite confirmation overlay -->
+    <!-- Existing output confirmation overlay -->
     <div id="overwrite-overlay" class="extractor-overlay hidden">
       <div class="confirm-dialog">
         <span id="overwrite-message" class="confirm-message">@tr:video_extractor.overwrite_prompt</span>
         <div class="separator"></div>
         <div class="confirm-buttons">
-          <button id="overwrite-no" class="btn btn--secondary" type="button">@tr:video_extractor.overwrite_cancel</button>
-          <button id="overwrite-yes" class="btn btn--error" type="button">@tr:video_extractor.overwrite_clear</button>
+          <button id="overwrite-cancel" class="btn btn--secondary" type="button">@tr:video_extractor.overwrite_cancel</button>
+          <button id="overwrite-delete" class="btn btn--error" type="button">@tr:video_extractor.overwrite_delete</button>
+          <button id="overwrite-proceed" class="btn btn--primary" type="button">@tr:video_extractor.overwrite_proceed</button>
         </div>
       </div>
     </div>

@@ -43,6 +43,20 @@ namespace lfs::training {
             .inverse = cropbox->inverse};
     }
 
+    std::array<std::array<float, 3>, 8> training_cropbox_model_corners(
+        const TrainingCropBoxGeometry& geometry) {
+        const glm::mat4 cropbox_to_model = glm::inverse(geometry.model_to_cropbox);
+        std::array<std::array<float, 3>, 8> corners{};
+        for (size_t corner = 0; corner < corners.size(); ++corner) {
+            const glm::vec3 local{corner & 1 ? geometry.max.x : geometry.min.x,
+                                  corner & 2 ? geometry.max.y : geometry.min.y,
+                                  corner & 4 ? geometry.max.z : geometry.min.z};
+            const glm::vec4 model = cropbox_to_model * glm::vec4(local, 1.0f);
+            corners[corner] = {model.x, model.y, model.z};
+        }
+        return corners;
+    }
+
     std::optional<TrainingCropBoxGeometry> resolve_training_cropbox_loss_geom(
         const core::Scene& scene,
         const float outside_weight) {

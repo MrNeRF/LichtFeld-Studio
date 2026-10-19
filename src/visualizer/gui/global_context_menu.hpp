@@ -36,6 +36,7 @@ namespace lfs::vis::gui {
         bool is_label = false;
         bool is_submenu_item = false;
         bool is_active = false;
+        std::string icon = {};
     };
 
     class LFS_VIS_API GlobalContextMenu {
@@ -101,6 +102,10 @@ namespace lfs::vis::gui {
         bool last_mouse_valid_ = false;
         int last_mouse_x_ = 0;
         int last_mouse_y_ = 0;
+        float last_menu_left_dp_ = -1.0f;
+        float last_menu_top_dp_ = -1.0f;
+        float last_menu_min_width_dp_ = -1.0f;
+        float last_menu_max_width_dp_ = -1.0f;
     };
 
 } // namespace lfs::vis::gui

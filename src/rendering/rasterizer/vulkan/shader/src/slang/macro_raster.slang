@@ -152,6 +152,17 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
 
     const uint macro_tile_x = macro_tile_idx % mgw;
     const uint macro_tile_y = macro_tile_idx / mgw;
+    const uint2 render_origin = full_frame_binning(uniforms)
+        ? uint2(uniforms.render_origin_x, uniforms.render_origin_y) : uint2(0u);
+    // Binning and depth-wave boundaries stay calibrated to the full image;
+    // only rasterize the macro tiles in this output band.
+    const uint macro_y = macro_tile_y * HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT;
+    if (full_frame_binning(uniforms) &&
+        (macro_y < render_origin.y || macro_y >= render_origin.y + uniforms.image_height)) {
+        if (thread_rank == 0u)
+            macro_batch_active_mask[macro_batch_idx] = 0u;
+        return;
+    }
     const float2 macro_origin = float2(float(macro_tile_x * HIGS_MACRO_TILE_WIDTH_TILES * HIGS_TILE_WIDTH),
                                        float(macro_tile_y * HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT));
 
@@ -164,6 +175,9 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
     const uint splats_to_process = range_end - range_start;
     const uint num_mini_batches = (splats_to_process + SUBGROUP_SIZE - 1u) / SUBGROUP_SIZE;
     const bool spark_rad_opacity_path = (uniforms.lod_enabled & 4u) != 0u;
+    // RAD has its own alpha representation. Keep its projection and replay
+    // consistent even when opened in a project imported from the gallery.
+    const bool standard_portal = uniforms.splat_render_profile == 1u && !spark_rad_opacity_path;
 
   #if LFS_RASTER_OVERLAYS
     // Hoist uniform overlay scalars once per thread before the batch blend.
@@ -228,6 +242,15 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                 tile_gauss_mask = ballot.x;
         }
         shared_tile_masks[mini_batch * HIGS_MACRO_TILE_SIZE_TILES + lane_id] = tile_gauss_mask;
+        if ((uniforms.mip_filter & 2u) != 0u) {
+            // Compose replays only the batch crossing the median. Retain the
+            // tile membership ballots we already computed so it can skip
+            // unrelated splats without repeating a 1024-splat tile test per pixel.
+            const uint replay_mask_index = higs_replay_mask_base(uniforms) +
+                pool_batch_idx * HIGS_REPLAY_MASK_WORDS_PER_BATCH +
+                mini_batch * HIGS_MACRO_TILE_SIZE_TILES + lane_id;
+            macro_batch_active_mask[replay_mask_index] = tile_gauss_mask;
+        }
     }
     GroupMemoryBarrierWithGroupSync();
 
@@ -238,8 +261,8 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             any |= shared_tile_masks[mini_batch * HIGS_MACRO_TILE_SIZE_TILES + thread_rank];
         const uint tile_x = macro_tile_x * HIGS_MACRO_TILE_WIDTH_TILES + (thread_rank % HIGS_MACRO_TILE_WIDTH_TILES);
         const uint tile_y = macro_tile_y * HIGS_MACRO_TILE_HEIGHT_TILES + (thread_rank / HIGS_MACRO_TILE_WIDTH_TILES);
-        const bool tile_in_image = tile_x * HIGS_TILE_WIDTH < uniforms.image_width &&
-                                   tile_y * HIGS_TILE_HEIGHT < uniforms.image_height;
+        const bool tile_in_image = tile_x * HIGS_TILE_WIDTH - render_origin.x < uniforms.image_width &&
+                                   tile_y * HIGS_TILE_HEIGHT - render_origin.y < uniforms.image_height;
         if (any != 0u && tile_in_image) {
             uint q;
             InterlockedAdd(shared_tile_queue_count, 1u, q);
@@ -279,7 +302,8 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             const uint pixel_linear = lane_id + p * SUBGROUP_SIZE;
             const uint2 pix = tile_origin + uint2(pixel_linear % HIGS_TILE_WIDTH, pixel_linear / HIGS_TILE_WIDTH);
             pixel_state[p] = float4(0.0f, 0.0f, 0.0f, 1.0f);
-            pixel_active[p] = pix.x < uniforms.image_width && pix.y < uniforms.image_height;
+            pixel_active[p] = pix.x - render_origin.x < uniforms.image_width &&
+                              pix.y - render_origin.y < uniforms.image_height;
             pixel_coord[p] = float2(pix);
         }
 
@@ -324,12 +348,14 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                                           : power_threshold_for_opacity(g_rgbo.w);
                     if (sigma_over_2 < 0.0f || sigma_over_2 > thr)
                         continue;
-                    const float val = exp(-sigma_over_2);
+                    const float raw_val = exp(-sigma_over_2);
+                    const float val = standard_portal
+                        ? portal_normalized_falloff(raw_val) : raw_val;
 
                     const float alpha = spark_rad_opacity_path
                                             ? spark_rad_alpha_from_value(g_rgbo.w, val)
                                             : float(clipOpacity(g_rgbo.w * val));
-                    if (alpha < ALPHA_THRESHOLD)
+                    if (alpha < (standard_portal ? (1.0f / 255.0f) : ALPHA_THRESHOLD))
                         continue;
                     float4 gauss_rgba = float4(g_rgbo.rgb * alpha, alpha);
 
@@ -368,7 +394,6 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                     }
 
                     gauss_rgba = apply_selection_overlay(gauss_rgba, sel_status, selection_colors);
-                    gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_state.flash_intensity);
                   #endif
 
                     const float3 color = pixel_state[p].rgb + gauss_rgba.rgb * pixel_state[p].a;
@@ -413,7 +438,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
         const float fx_t = (float(tile_origin.x + (lane_id % HIGS_TILE_WIDTH)) - macro_origin.x) * (1.0f / HIGS_TILE_WIDTH);
         const float fy0_t = (float(tile_origin.y + (lane_id / HIGS_TILE_WIDTH)) - macro_origin.y) * (1.0f / HIGS_TILE_HEIGHT);
         const half px_x = half(fx_t);
-        const bool col_inside = (tile_origin.x + (lane_id % HIGS_TILE_WIDTH)) < uniforms.image_width;
+        const bool col_inside = (tile_origin.x + (lane_id % HIGS_TILE_WIDTH) - render_origin.x) < uniforms.image_width;
 
         half2 pix_y2[PIXEL_PAIRS];
         half2 acc_r[PIXEL_PAIRS];
@@ -425,8 +450,8 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             pix_y2[k] = half2(half(fy0_t + float(2u * k) * PIX_STEP_T),
                               half(fy0_t + float(2u * k + 1u) * PIX_STEP_T));
             const uint y0 = tile_origin.y + (lane_id / HIGS_TILE_WIDTH) + 2u * ROWS_PER_P * k;
-            const bool in0 = col_inside && y0 < uniforms.image_height;
-            const bool in1 = col_inside && (y0 + ROWS_PER_P) < uniforms.image_height;
+            const bool in0 = col_inside && y0 - render_origin.y < uniforms.image_height;
+            const bool in1 = col_inside && (y0 + ROWS_PER_P) - render_origin.y < uniforms.image_height;
             acc_r[k] = half2(0.0h, 0.0h);
             acc_g[k] = half2(0.0h, 0.0h);
             acc_b[k] = half2(0.0h, 0.0h);
@@ -434,7 +459,8 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
         }
 
         const half2 eps2 = half2(half(0.0001f), half(0.0001f));
-        const half2 alpha_min2 = half2(half(ALPHA_THRESHOLD), half(ALPHA_THRESHOLD));
+        const half alpha_min = half(standard_portal ? (1.0f / 255.0f) : ALPHA_THRESHOLD);
+        const half2 alpha_min2 = half2(alpha_min, alpha_min);
         const half2 alpha_cap2 = half2(half(ALPHA_BLEND_MAX_OPACITY), half(ALPHA_BLEND_MAX_OPACITY));
         const half2 zero2 = half2(0.0h, 0.0h);
         const half2 one2 = half2(1.0h, 1.0h);
@@ -500,7 +526,12 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                         const half2 u2 = u_dx2 + g_chol.y * dy2;
                         const half2 v2 = g_chol.z * dy2;
                         const half2 q2 = u2 * u2 + v2 * v2;
-                        half2 alpha2 = min(g_rgbo.w * exp2(-q2), alpha_cap2);
+                        half2 val2 = exp2(-q2);
+                        if (standard_portal) {
+                            const half2 edge2 = half2(half(0.01831563888873418f));
+                            val2 = max(zero2, (val2 - edge2) / (half2(half(1.0f)) - edge2));
+                        }
+                        half2 alpha2 = min(g_rgbo.w * val2, alpha_cap2);
                         alpha2 = select(q2 <= thr2, alpha2, zero2);
                         alpha2 = select(alpha2 >= alpha_min2, alpha2, zero2);
 
@@ -559,7 +590,6 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                             }
 
                             gauss_rgba = apply_selection_overlay(gauss_rgba, sel_status, selection_colors);
-                            gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_state.flash_intensity);
 
                             acc_r[k][pj] = half(float(acc_r[k][pj]) + gauss_rgba.x * t);
                             acc_g[k][pj] = half(float(acc_g[k][pj]) + gauss_rgba.y * t);

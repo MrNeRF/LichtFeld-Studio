@@ -140,9 +140,9 @@ def test_ui_stub_surface_matches_panel_api_names():
     assert "    None: int = ..." not in stub_text
     assert "class ThemeVignette:" in stub_text
     assert "def vignette(self) -> ThemeVignette: ..." in stub_text
-    assert "def set_theme_vignette_enabled(arg: bool, /) -> None:" in stub_text
-    assert "def set_theme_vignette_intensity(arg: float, /) -> None:" in stub_text
-    assert "def set_theme_vignette_style(arg0: float, arg1: float, arg2: float, /) -> None:" in stub_text
+    assert "def set_theme_vignette_enabled(enabled: bool, persist: bool = True) -> None:" in stub_text
+    assert "def set_theme_vignette_intensity(intensity: float, persist: bool = True) -> None:" in stub_text
+    assert "def set_theme_vignette_style(intensity: float, radius: float, softness: float, persist: bool = True) -> None:" in stub_text
 
 
 def test_training_session_stub_surface():
@@ -214,7 +214,7 @@ def test_lichtfeld_version_matches_cmake_project_version(monkeypatch):
     from lfs_plugins.compat import LICHTFELD_VERSION
 
     cmake_text = (PROJECT_ROOT / "CMakeLists.txt").read_text()
-    cmake_match = re.search(r"project\([^)]*\bVERSION\s+(\d+\.\d+\.\d+)", cmake_text)
+    cmake_match = re.search(r"project\([^)]*\bVERSION\s+(\d+(?:\.\d+){2,3})", cmake_text)
     assert cmake_match, "CMakeLists.txt: could not find project() VERSION"
     assert cmake_match.group(1) == LICHTFELD_VERSION, (
         f"CMakeLists.txt project VERSION ({cmake_match.group(1)!r}) is out of sync with "
@@ -266,6 +266,7 @@ def test_python_undo_surface_has_single_entry_point(lf):
     assert not hasattr(lf.pipeline, "undo")
 
 
+@pytest.mark.integration
 def test_floating_panels_accept_typed_space_enums(lf):
     if not hasattr(lf, "ui") or not hasattr(lf.ui, "Panel"):
         pytest.skip("panel API not available")

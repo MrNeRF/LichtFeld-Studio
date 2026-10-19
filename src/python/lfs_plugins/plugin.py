@@ -3,7 +3,7 @@
 """Plugin data structures."""
 
 from dataclasses import dataclass, field
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Optional, List, Any
 from enum import Enum
 import re

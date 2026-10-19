@@ -3,19 +3,26 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "mesh_loader.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
+#include "formats/ply.hpp"
+#include "formats/spz.hpp"
 #include "io/error.hpp"
 #include "io/mesh/texture_loader.hpp"
+#include <algorithm>
 #include <array>
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <format>
 #include <limits>
+#include <string_view>
 
 namespace lfs::io {
 
@@ -36,6 +43,22 @@ namespace lfs::io {
             if (ai_mat->Get(AI_MATKEY_BASE_COLOR, color) == AI_SUCCESS ||
                 ai_mat->Get(AI_MATKEY_COLOR_DIFFUSE, color) == AI_SUCCESS) {
                 mat.base_color = {color.r, color.g, color.b, color.a};
+            }
+
+            ai_mat->Get("$mat.gltf.alphaCutoff", 0, 0, mat.alpha_cutoff);
+            if (!std::isfinite(mat.alpha_cutoff)) {
+                mat.alpha_cutoff = 0.5f;
+            }
+            mat.alpha_cutoff = std::clamp(mat.alpha_cutoff, 0.0f, 1.0f);
+
+            aiString alpha_mode;
+            if (ai_mat->Get("$mat.gltf.alphaMode", 0, 0, alpha_mode) == AI_SUCCESS) {
+                const std::string_view mode = alpha_mode.C_Str();
+                if (mode == "MASK") {
+                    mat.alpha_mode = lfs::core::AlphaMode::Mask;
+                } else if (mode == "BLEND") {
+                    mat.alpha_mode = lfs::core::AlphaMode::Blend;
+                }
             }
 
             aiColor3D emissive;
@@ -78,15 +101,45 @@ namespace lfs::io {
             return mat;
         }
 
-        MeshData convert_ai_mesh(const aiMesh* ai_mesh) {
+        // glTF defines COLOR_0 as linear; other formats store vertex colors as display values.
+        bool vertex_colors_are_srgb(const std::filesystem::path& path) {
+            auto ext = lfs::core::path_to_utf8(path.extension());
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            return ext != ".gltf" && ext != ".glb";
+        }
+
+        MeshData convert_ai_mesh(const aiMesh* ai_mesh, const bool geometry_only, const bool srgb_colors,
+                                 const aiMatrix4x4& transform) {
             assert(ai_mesh);
             const int nv = static_cast<int>(ai_mesh->mNumVertices);
             assert(nv > 0);
 
+            const bool transform_positions = transform != aiMatrix4x4();
+            const aiMatrix3x3 linear(transform);
+            const bool transform_directions = linear != aiMatrix3x3();
+            const float determinant = linear.Determinant();
+            const bool mirrored = determinant < 0.0f;
+            const bool singular = determinant == 0.0f;
+            aiMatrix3x3 normal_transform;
+            if (!singular) {
+                normal_transform = aiMatrix3x3(linear).Inverse().Transpose();
+            } else {
+                // Cofactor columns transform oriented areas even when no inverse exists.
+                const aiVector3D x(linear.a1, linear.b1, linear.c1);
+                const aiVector3D y(linear.a2, linear.b2, linear.c2);
+                const aiVector3D z(linear.a3, linear.b3, linear.c3);
+                const auto cx = y ^ z;
+                const auto cy = z ^ x;
+                const auto cz = x ^ y;
+                normal_transform = aiMatrix3x3(cx.x, cy.x, cz.x,
+                                               cx.y, cy.y, cz.y,
+                                               cx.z, cy.z, cz.z);
+            }
+
             auto vertices = Tensor::empty({static_cast<size_t>(nv), size_t{3}}, Device::CPU, DataType::Float32);
             auto vacc = vertices.accessor<float, 2>();
             for (int i = 0; i < nv; ++i) {
-                const auto& v = ai_mesh->mVertices[i];
+                const auto v = transform_positions ? transform * ai_mesh->mVertices[i] : ai_mesh->mVertices[i];
                 vacc(i, 0) = v.x;
                 vacc(i, 1) = v.y;
                 vacc(i, 2) = v.z;
@@ -111,37 +164,83 @@ namespace lfs::io {
                 if (face.mNumIndices != 3)
                     continue;
                 iacc(ti, 0) = static_cast<int32_t>(face.mIndices[0]);
-                iacc(ti, 1) = static_cast<int32_t>(face.mIndices[1]);
-                iacc(ti, 2) = static_cast<int32_t>(face.mIndices[2]);
+                iacc(ti, 1) = static_cast<int32_t>(face.mIndices[mirrored ? 2 : 1]);
+                iacc(ti, 2) = static_cast<int32_t>(face.mIndices[mirrored ? 1 : 2]);
                 ++ti;
             }
             assert(ti == tri_count);
 
             MeshData mesh(std::move(vertices), std::move(indices));
 
-            if (ai_mesh->HasNormals()) {
+            // Only build geometric fallbacks if a singular transform erases a normal.
+            std::vector<aiVector3D> geometric_normals;
+            const auto geometric_normal = [&](const int vertex) {
+                if (geometric_normals.empty()) {
+                    geometric_normals.resize(nv);
+                    for (int face = 0; face < tri_count; ++face) {
+                        const auto a = iacc(face, 0);
+                        const auto b = iacc(face, 1);
+                        const auto c = iacc(face, 2);
+                        const aiVector3D p(vacc(a, 0), vacc(a, 1), vacc(a, 2));
+                        const aiVector3D q(vacc(b, 0), vacc(b, 1), vacc(b, 2));
+                        const aiVector3D r(vacc(c, 0), vacc(c, 1), vacc(c, 2));
+                        const auto normal = (q - p) ^ (r - p);
+                        for (const auto index : {a, b, c}) {
+                            if (geometric_normals[index].SquareLength() == 0.0f)
+                                geometric_normals[index] = normal;
+                        }
+                    }
+                }
+                return geometric_normals[vertex];
+            };
+
+            if (!geometry_only && ai_mesh->HasNormals()) {
                 mesh.normals = Tensor::empty({static_cast<size_t>(nv), size_t{3}}, Device::CPU, DataType::Float32);
                 auto nacc = mesh.normals.accessor<float, 2>();
                 for (int i = 0; i < nv; ++i) {
-                    const auto& n = ai_mesh->mNormals[i];
+                    auto n = transform_directions ? normal_transform * ai_mesh->mNormals[i] : ai_mesh->mNormals[i];
+                    if (singular && n.SquareLength() == 0.0f) {
+                        n = geometric_normal(i);
+                        if (n.SquareLength() == 0.0f)
+                            n = ai_mesh->mNormals[i];
+                    }
+                    if (transform_directions)
+                        n.NormalizeSafe();
                     nacc(i, 0) = n.x;
                     nacc(i, 1) = n.y;
                     nacc(i, 2) = n.z;
                 }
             }
 
-            if (ai_mesh->HasTangentsAndBitangents()) {
+            if (!geometry_only && ai_mesh->HasTangentsAndBitangents()) {
                 mesh.tangents = Tensor::empty({static_cast<size_t>(nv), size_t{4}}, Device::CPU, DataType::Float32);
                 auto tacc = mesh.tangents.accessor<float, 2>();
+                const auto* normals = mesh.normals.ptr<float>();
                 for (int i = 0; i < nv; ++i) {
-                    const auto& t = ai_mesh->mTangents[i];
-                    const auto& b = ai_mesh->mBitangents[i];
-                    const auto& n = ai_mesh->mNormals[i];
-                    const float handedness = (n.x * (t.y * b.z - t.z * b.y) -
-                                              n.y * (t.x * b.z - t.z * b.x) +
-                                              n.z * (t.x * b.y - t.y * b.x)) < 0.0f
-                                                 ? -1.0f
-                                                 : 1.0f;
+                    auto t = transform_directions ? (linear * ai_mesh->mTangents[i]).NormalizeSafe() : ai_mesh->mTangents[i];
+                    auto b = transform_directions ? (linear * ai_mesh->mBitangents[i]).NormalizeSafe() : ai_mesh->mBitangents[i];
+                    const aiVector3D n(normals[3 * i], normals[3 * i + 1], normals[3 * i + 2]);
+                    if (singular) {
+                        const float orientation = (ai_mesh->mNormals[i] * (ai_mesh->mTangents[i] ^ ai_mesh->mBitangents[i])) < 0.0f ? -1.0f : 1.0f;
+                        if (t.SquareLength() == 0.0f) {
+                            t = geometric_normal(i).SquareLength() != 0.0f ? (b ^ n) * orientation : ai_mesh->mTangents[i];
+                            if (t.SquareLength() == 0.0f)
+                                t = ai_mesh->mTangents[i];
+                            t.NormalizeSafe();
+                        }
+                        if (b.SquareLength() == 0.0f) {
+                            b = geometric_normal(i).SquareLength() != 0.0f ? (n ^ t) * orientation : ai_mesh->mBitangents[i];
+                            if (b.SquareLength() == 0.0f)
+                                b = ai_mesh->mBitangents[i];
+                            b.NormalizeSafe();
+                        }
+                    }
+                    float orientation = n.x * (t.y * b.z - t.z * b.y) -
+                                        n.y * (t.x * b.z - t.z * b.x) +
+                                        n.z * (t.x * b.y - t.y * b.x);
+                    if (singular && orientation == 0.0f)
+                        orientation = ai_mesh->mNormals[i] * (ai_mesh->mTangents[i] ^ ai_mesh->mBitangents[i]);
+                    const float handedness = orientation < 0.0f ? -1.0f : 1.0f;
                     tacc(i, 0) = t.x;
                     tacc(i, 1) = t.y;
                     tacc(i, 2) = t.z;
@@ -149,7 +248,7 @@ namespace lfs::io {
                 }
             }
 
-            if (ai_mesh->HasTextureCoords(0)) {
+            if (!geometry_only && ai_mesh->HasTextureCoords(0)) {
                 mesh.texcoords = Tensor::empty({static_cast<size_t>(nv), size_t{2}}, Device::CPU, DataType::Float32);
                 auto tcacc = mesh.texcoords.accessor<float, 2>();
                 for (int i = 0; i < nv; ++i) {
@@ -159,14 +258,18 @@ namespace lfs::io {
                 }
             }
 
-            if (ai_mesh->HasVertexColors(0)) {
+            if (!geometry_only && ai_mesh->HasVertexColors(0)) {
                 mesh.colors = Tensor::empty({static_cast<size_t>(nv), size_t{4}}, Device::CPU, DataType::Float32);
                 auto cacc = mesh.colors.accessor<float, 2>();
+                // Renderers and Mesh2Splat encode with a 2.2 power, so decode with the same curve.
+                const auto linear = [srgb_colors](const float value) {
+                    return srgb_colors ? std::pow(std::clamp(value, 0.0f, 1.0f), 2.2f) : value;
+                };
                 for (int i = 0; i < nv; ++i) {
                     const auto& c = ai_mesh->mColors[0][i];
-                    cacc(i, 0) = c.r;
-                    cacc(i, 1) = c.g;
-                    cacc(i, 2) = c.b;
+                    cacc(i, 0) = linear(c.r);
+                    cacc(i, 1) = linear(c.g);
+                    cacc(i, 2) = linear(c.b);
                     cacc(i, 3) = c.a;
                 }
             }
@@ -324,7 +427,7 @@ namespace lfs::io {
             options.progress(0.0f, "Loading mesh file...");
         }
 
-        if (!std::filesystem::exists(path)) {
+        if (!lfs::core::native_fs::exists(path)) {
             return make_error(ErrorCode::PATH_NOT_FOUND, "Mesh file does not exist", path);
         }
 
@@ -335,9 +438,15 @@ namespace lfs::io {
             aiProcess_JoinIdenticalVertices |
             aiProcess_FlipUVs |
             aiProcess_SortByPType;
+        constexpr unsigned int GEOMETRY_IMPORT_FLAGS =
+            aiProcess_Triangulate |
+            aiProcess_JoinIdenticalVertices |
+            aiProcess_PreTransformVertices |
+            aiProcess_SortByPType;
 
         Assimp::Importer importer;
-        const aiScene* scene = importer.ReadFile(path_str, IMPORT_FLAGS);
+        const aiScene* scene = importer.ReadFile(
+            lfs::core::path_to_native_utf8(path), options.mesh_geometry_only ? GEOMETRY_IMPORT_FLAGS : IMPORT_FLAGS);
 
         if (!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {
             return make_error(ErrorCode::CORRUPTED_DATA,
@@ -364,12 +473,59 @@ namespace lfs::io {
         std::vector<unsigned int> mesh_material_indices;
         sub_meshes.reserve(scene->mNumMeshes);
         mesh_material_indices.reserve(scene->mNumMeshes);
-        for (unsigned int i = 0; i < scene->mNumMeshes; ++i) {
-            sub_meshes.push_back(convert_ai_mesh(scene->mMeshes[i]));
+        const bool srgb_colors = vertex_colors_are_srgb(path);
+        const auto append_mesh = [&](const unsigned int i, const aiMatrix4x4& transform) {
+            if (scene->mMeshes[i]->mNumVertices == 0)
+                return;
+            sub_meshes.push_back(convert_ai_mesh(scene->mMeshes[i], options.mesh_geometry_only, srgb_colors, transform));
             mesh_material_indices.push_back(scene->mMeshes[i]->mMaterialIndex);
             LOG_DEBUG("  mesh[{}]: {} verts, {} faces, material_index={}",
                       i, scene->mMeshes[i]->mNumVertices, scene->mMeshes[i]->mNumFaces,
                       scene->mMeshes[i]->mMaterialIndex);
+        };
+        if (options.mesh_geometry_only) {
+            // This path already uses Assimp's pre-transformed geometry.
+            for (unsigned int i = 0; i < scene->mNumMeshes; ++i) {
+                append_mesh(i, aiMatrix4x4());
+            }
+        } else {
+            // Mesh definitions may be referenced by several nodes. Bake every
+            // instance's accumulated placement into the merged mesh.
+            const auto visit = [&](auto&& self, const aiNode* node, const aiMatrix4x4& parent) -> void {
+                const aiMatrix4x4 world = parent * node->mTransformation;
+                for (unsigned int i = 0; i < node->mNumMeshes; ++i) {
+                    append_mesh(node->mMeshes[i], world);
+                }
+                for (unsigned int i = 0; i < node->mNumChildren; ++i) {
+                    self(self, node->mChildren[i], world);
+                }
+            };
+            visit(visit, scene->mRootNode, aiMatrix4x4());
+        }
+
+        if (std::none_of(sub_meshes.begin(), sub_meshes.end(),
+                         [](const MeshData& mesh) { return mesh.face_count() > 0; })) {
+            const auto& localization = lfs::event::LocalizationManager::getInstance();
+            return make_error(ErrorCode::CORRUPTED_DATA,
+                              localization.hasKey("io.mesh_no_triangle_faces")
+                                  ? LOC("io.mesh_no_triangle_faces")
+                                  : "The mesh file contains no triangle faces.",
+                              path);
+        }
+
+        for (auto& mesh : sub_meshes) {
+            auto vertices = mesh.vertices.accessor<float, 2>();
+            for (int64_t i = 0; i < mesh.vertex_count(); ++i) {
+                if (!std::isfinite(vertices(i, 0)) || !std::isfinite(vertices(i, 1)) ||
+                    !std::isfinite(vertices(i, 2))) {
+                    const auto& localization = lfs::event::LocalizationManager::getInstance();
+                    return make_error(ErrorCode::CORRUPTED_DATA,
+                                      localization.hasKey("io.mesh_nonfinite_vertices")
+                                          ? LOC("io.mesh_nonfinite_vertices")
+                                          : "Mesh contains non-finite vertex coordinates.",
+                                      path);
+                }
+            }
         }
 
         if (options.progress) {
@@ -417,7 +573,7 @@ namespace lfs::io {
             return 0;
         };
 
-        for (size_t mi = 0; mi < materials.size(); ++mi) {
+        for (size_t mi = 0; mi < materials.size() && !options.mesh_geometry_only; ++mi) {
             auto& mat = materials[mi];
             mat.albedo_tex = load_texture(mat.albedo_tex_path);
             mat.normal_tex = load_texture(mat.normal_tex_path);
@@ -434,7 +590,7 @@ namespace lfs::io {
         mesh_data->materials = std::move(materials);
         mesh_data->texture_images = std::move(texture_images);
 
-        if (!mesh_data->has_normals()) {
+        if (!options.mesh_geometry_only && !mesh_data->has_normals()) {
             mesh_data->compute_normals();
         }
 
@@ -460,11 +616,11 @@ namespace lfs::io {
     }
 
     bool MeshLoader::canLoad(const std::filesystem::path& path) const {
-        if (!std::filesystem::exists(path) || std::filesystem::is_directory(path)) {
+        if (!lfs::core::native_fs::exists(path) || lfs::core::native_fs::is_directory(path)) {
             return false;
         }
 
-        auto ext = path.extension().string();
+        auto ext = lfs::core::path_to_utf8(path.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
         for (const auto& e : MESH_EXTENSIONS) {
@@ -492,6 +648,16 @@ namespace lfs::io {
 
     int MeshLoader::priority() const {
         return 5;
+    }
+
+    bool is_mesh_file(const std::filesystem::path& filepath) {
+        auto ext = lfs::core::path_to_utf8(filepath.extension());
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (ext == ".ply")
+            return ply_has_faces(filepath);
+        if (ext == ".glb")
+            return lfs::core::native_fs::exists(filepath) && !is_spz_glb(filepath);
+        return lfs::core::native_fs::exists(filepath) && std::ranges::find(MESH_EXTENSIONS, ext) != MESH_EXTENSIONS.end();
     }
 
 } // namespace lfs::io

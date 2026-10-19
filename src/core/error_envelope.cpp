@@ -4,13 +4,13 @@
 #include "core/error_envelope.hpp"
 
 #include "core/error.hpp"
+#include "core/path_utils.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
 #include <string_view>
 
 namespace lfs::core {
@@ -125,7 +125,7 @@ namespace lfs::core {
                 if (!path) {
                     return false;
                 }
-                details[key] = sanitize_utf8(std::filesystem::path(*path).filename().string());
+                details[key] = sanitize_utf8(path_to_utf8(utf8_to_path(*path).filename()));
                 return true;
             }
             return std::visit(

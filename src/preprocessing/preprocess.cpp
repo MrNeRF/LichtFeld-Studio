@@ -3,7 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "preprocessing/preprocess.hpp"
+#include "core/native_fs.hpp"
+#include "preprocessing/lens_priors.hpp"
 
+#include "core/camera.hpp"
 #include "core/cuda_error.hpp"
 #include "core/environment.hpp"
 #include "core/image_io.hpp"
@@ -57,7 +60,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace fs = std::filesystem;
+namespace fs = lfs::core::native_fs;
 
 namespace {
 
@@ -142,7 +145,7 @@ namespace {
     }
 
     bool is_image_file(const fs::path& path) {
-        const auto ext = lower_copy(path.extension().string());
+        const auto ext = lower_copy(lfs::core::path_to_utf8(path.extension()));
         return ext == ".jpg" || ext == ".jpeg" || ext == ".png" ||
                ext == ".bmp" || ext == ".tif" || ext == ".tiff" ||
                ext == ".webp";
@@ -272,7 +275,7 @@ namespace {
     };
 
     std::string sha256_file(const fs::path& path) {
-        std::ifstream input(path, std::ios::binary);
+        std::ifstream input(lfs::core::native_fs::native_path(path), std::ios::binary);
         if (!input)
             throw std::runtime_error("Could not open " + path_to_string(path) + " for hashing");
 
@@ -630,15 +633,15 @@ namespace {
             throw std::runtime_error("Images directory does not exist: " + path_to_string(images_dir));
 
         std::vector<fs::path> images;
-        const auto add_if_image = [&images](const fs::directory_entry& entry) {
+        const auto add_if_image = [&images, &images_dir](const std::filesystem::directory_entry& entry) {
             if (entry.is_regular_file() && is_image_file(entry.path()))
-                images.push_back(entry.path());
+                images.push_back(lfs::core::native_fs::entry_path(images_dir, entry.path()));
         };
         if (recursive) {
-            for (fs::recursive_directory_iterator it(images_dir), end; it != end; ++it)
+            for (std::filesystem::recursive_directory_iterator it(lfs::core::native_fs::traversal_path(images_dir)), end; it != end; ++it)
                 add_if_image(*it);
         } else {
-            for (fs::directory_iterator it(images_dir), end; it != end; ++it)
+            for (std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(images_dir)), end; it != end; ++it)
                 add_if_image(*it);
         }
         std::sort(images.begin(), images.end());
@@ -922,7 +925,7 @@ namespace {
             }
             means = means.to(lfs::core::Device::CUDA);
 
-            const auto fingerprint = lfs::training::computeAnchorFingerprint(scene->cameras);
+            const auto fingerprint = lfs::training::computeAnchorFingerprint(means, scene->cameras);
 
             std::optional<indicators::ProgressBar> anchor_bar;
             lfs::training::DepthAnchorProgress progress;
@@ -982,6 +985,95 @@ namespace {
         Image original;
         Image inference;
     };
+
+    // A lens the rasterizer models natively, with intrinsics at width x height.
+    struct LensSource {
+        lfs::training::kernels::DepthCameraProjection projection;
+        float fx = 0.0f;
+        float fy = 0.0f;
+        float cx = 0.0f;
+        float cy = 0.0f;
+        int width = 0;
+        int height = 0;
+    };
+
+    // Side of the grid the face estimates are gathered onto before the maps are written.
+    constexpr int kLensGridSide = 1024;
+
+    std::string lens_key(const fs::path& path) {
+        std::error_code ec;
+        const auto canonical = fs::weakly_canonical(path, ec);
+        return path_to_string(ec ? path : canonical);
+    }
+
+    // Images whose camera is not a pinhole: a monocular estimator assumes one, so these are estimated on
+    // pinhole faces of the lens instead. A bare image folder has no cameras and maps to nothing.
+    std::unordered_map<std::string, LensSource> load_lens_sources(
+        const lfs::core::param::PreprocessParameters& params) {
+        std::unordered_map<std::string, LensSource> lenses;
+        try {
+            auto loader = lfs::io::Loader::create();
+            lfs::io::LoadOptions options;
+            options.images_folder = params.images_folder;
+            auto result = loader->load(params.dataset_path, options);
+            if (!result)
+                return lenses;
+            const auto* scene = std::get_if<lfs::io::LoadedScene>(&result->data);
+            if (!scene)
+                return lenses;
+            for (const auto& cam : scene->cameras) {
+                if (!cam)
+                    continue;
+                const auto model = cam->camera_model_type();
+                if (model == lfs::core::CameraModelType::PINHOLE || model == lfs::core::CameraModelType::ORTHO)
+                    continue;
+                lenses.emplace(lens_key(cam->image_path()),
+                               LensSource{
+                                   .projection = lfs::training::depth_camera_projection(*cam),
+                                   .fx = cam->focal_x(),
+                                   .fy = cam->focal_y(),
+                                   .cx = cam->center_x(),
+                                   .cy = cam->center_y(),
+                                   .width = cam->camera_width(),
+                                   .height = cam->camera_height(),
+                               });
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("Lens cameras unavailable ({}); estimating on the raw images", e.what());
+        }
+        return lenses;
+    }
+
+    lfs::preprocessing::LensCamera lens_at(const LensSource& lens, const int width, const int height) {
+        const float sx = static_cast<float>(width) / static_cast<float>(lens.width);
+        const float sy = static_cast<float>(height) / static_cast<float>(lens.height);
+        return {
+            .projection = lens.projection,
+            .fx = lens.fx * sx,
+            .fy = lens.fy * sy,
+            .cx = lens.cx * sx,
+            .cy = lens.cy * sy,
+            .width = width,
+            .height = height,
+        };
+    }
+
+    // Ray distances go into the z of the point map, which build_depth_png writes.
+    HeadMaps lens_head_maps(const lfs::preprocessing::LensPriors& priors) {
+        const std::size_t pixels = static_cast<std::size_t>(priors.width) * priors.height;
+        HeadMaps maps{
+            .mask = {.width = priors.width, .height = priors.height, .values = std::vector<float>(pixels, 0.0f)},
+            .points = {.width = priors.width, .height = priors.height, .xyz_hwc = std::vector<float>(pixels * 3, 0.0f)},
+            .normals = {.width = priors.width, .height = priors.height, .xyz_hwc = priors.normal},
+        };
+        for (std::size_t p = 0; p < pixels; ++p) {
+            if (priors.distance[p] > 0.0f) {
+                maps.mask.values[p] = 1.0f;
+                maps.points.xyz_hwc[p * 3 + 2] = priors.distance[p];
+            }
+        }
+        return maps;
+    }
 
     constexpr std::ptrdiff_t kMaxPendingWrites = 4;
     constexpr std::size_t kPrefetchDepth = 3;
@@ -1058,8 +1150,8 @@ namespace {
         for (const auto& image_path : plan.images) {
             PreprocessJob job{
                 .image_path = image_path,
-                .depth_path = output_path_for(plan.dataset_root, "depth", image_path, plan.images_dir),
-                .normals_path = output_path_for(plan.dataset_root, "normals", image_path, plan.images_dir),
+                .depth_path = output_path_for(plan.dataset_root, params.depth_folder, image_path, plan.images_dir),
+                .normals_path = output_path_for(plan.dataset_root, params.normals_folder, image_path, plan.images_dir),
             };
             job.write_depth = should_write_output(needs_depth(params.mode), params.overwrite, job.depth_path);
             job.write_normals = should_write_output(needs_normals(params.mode), params.overwrite, job.normals_path);
@@ -1103,6 +1195,34 @@ namespace {
             return native_session.run(image, num_tokens);
         };
 
+        const auto lenses = load_lens_sources(params);
+        if (!lenses.empty())
+            LOG_INFO("Depth/normal estimation: {} images with a non-pinhole lens are estimated on pinhole faces",
+                     lenses.size());
+        const auto estimate = [&](const PreprocessJob& job, const LoadedImage& loaded) -> HeadMaps {
+            const auto lens = lenses.find(lens_key(job.image_path));
+            if (lens == lenses.end())
+                return run_inference(loaded.inference, params.num_tokens);
+            const Image& original = loaded.original;
+            const double grid_scale =
+                std::min(1.0, static_cast<double>(kLensGridSide) / std::max(original.width, original.height));
+            const auto priors = lfs::preprocessing::estimate_lens_priors(
+                original.rgb_hwc, lens_at(lens->second, original.width, original.height),
+                lens_at(lens->second, std::max(1, static_cast<int>(std::lround(original.width * grid_scale))),
+                        std::max(1, static_cast<int>(std::lround(original.height * grid_scale)))),
+                round_to_patch_multiple(params.max_side),
+                [&](const std::vector<float>& face_rgb, const int size) {
+                    auto maps = run_inference(Image{.width = size, .height = size, .rgb_hwc = face_rgb},
+                                              params.num_tokens);
+                    return lfs::preprocessing::LensFaceOutputs{
+                        .points = std::move(maps.points.xyz_hwc),
+                        .normals = std::move(maps.normals.xyz_hwc),
+                        .mask = std::move(maps.mask.values),
+                    };
+                });
+            return lens_head_maps(priors);
+        };
+
         const auto load_job = [&params](const PreprocessJob& job) {
             LoadedImage loaded{.original = load_image_rgb(job.image_path)};
             loaded.inference = resize_for_inference(loaded.original, params.max_side);
@@ -1138,15 +1258,16 @@ namespace {
             top_up_loads();
 
             const auto inference_start = std::chrono::steady_clock::now();
-            auto outputs = std::make_shared<const HeadMaps>(run_inference(loaded.inference, params.num_tokens));
+            auto outputs = std::make_shared<const HeadMaps>(estimate(job, loaded));
             const double inference_ms =
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - inference_start).count();
+            const std::string image_filename = path_to_string(job.image_path.filename());
             if (bar)
-                bar->report(i + 1, job.image_path.filename().string(), inference_ms);
+                bar->report(i + 1, image_filename, inference_ms);
             else if (!progress)
                 std::cout << "  inference " << inference_ms << " ms\n";
             if (progress)
-                progress(i + 1, plan.jobs.size(), job.image_path.filename().string());
+                progress(i + 1, plan.jobs.size(), image_filename);
 
             while (!writes.empty() && writes.front().wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
                 writes.front().get();

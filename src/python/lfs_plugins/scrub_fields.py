@@ -5,10 +5,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Callable
 
 from . import rml_widgets as w
-from .rml_keys import KI_ESCAPE
+from .rml_keys import KI_ESCAPE, KI_RETURN, KI_SPACE, KI_TAB
 
 
 DRAG_THRESHOLD_PX = 4.0
@@ -35,9 +36,13 @@ class _ScrubFieldState:
     dragging: bool = False
     editing: bool = False
     drag_start_mouse_x: float = 0.0
+    drag_last_mouse_x: float = 0.0
+    drag_value: float = 0.0
     edit_value_before: float = 0.0
+    edit_snapshot: object = None
     commit_on_blur: bool = False
     cancel_on_blur: bool = False
+    focus_on_blur: bool = False
 
 
 class ScrubFieldController:
@@ -45,10 +50,16 @@ class ScrubFieldController:
 
     def __init__(self, specs: dict[str, ScrubFieldSpec],
                  get_value: Callable[[str], float],
-                 set_value: Callable[[str, float], None]):
+                 set_value: Callable[[str, float], None], *,
+                 commit_value: Callable[[str, float], None] | None = None,
+                 capture_edit: Callable[[str], object] | None = None,
+                 restore_edit: Callable[[str, object], None] | None = None):
         self._specs = dict(specs)
         self._get_value = get_value
         self._set_value = set_value
+        self._commit_value = commit_value
+        self._capture_edit = capture_edit
+        self._restore_edit = restore_edit
         self._doc = None
         self._fields: dict[str, _ScrubFieldState] = {}
         self._active_prop: str | None = None
@@ -162,12 +173,26 @@ class ScrubFieldController:
             input_el=input_el,
         )
 
+        field.add_event_listener("keydown", lambda ev, p=prop: self._on_field_keydown(p, ev))
         field.add_event_listener("mousedown", lambda ev, p=prop: self._on_field_mousedown(p, ev))
         input_el.add_event_listener("change", lambda ev, p=prop: self._on_input_change(p, ev))
         input_el.add_event_listener("blur", lambda ev, p=prop: self._on_input_blur(p, ev))
+        input_el.add_event_listener("escapecancel", lambda ev, p=prop: self._on_input_escape(p, ev))
 
         self._sync_field(state)
         return state
+
+    def _on_field_keydown(self, prop: str, event) -> None:
+        state = self._fields.get(prop)
+        if state is None or state.editing:
+            return
+        key = int(event.get_parameter("key_identifier", "0"))
+        if key not in (KI_RETURN, KI_SPACE):
+            return
+        self._cancel_other_edits(prop)
+        self._finish_active_drag(False)
+        self._enter_edit(state)
+        event.stop_propagation()
 
     def _on_field_mousedown(self, prop: str, event) -> None:
         state = self._fields.get(prop)
@@ -183,6 +208,9 @@ class ScrubFieldController:
         mx = self._event_mouse_x(event)
         state.dragging = False
         state.drag_start_mouse_x = mx
+        state.drag_last_mouse_x = mx
+        state.drag_value = self._safe_value(prop)
+        state.edit_snapshot = self._capture_edit(prop) if self._capture_edit else None
         state.edit_value_before = self._safe_value(prop)
         self._active_prop = prop
 
@@ -204,18 +232,33 @@ class ScrubFieldController:
             state.dragging = True
             state.field.set_class("is-dragging", True)
 
-        self._apply_drag_position(state, mx)
+        self._apply_drag_position(state, mx, event)
         event.stop_propagation()
 
     def _on_body_mouseup(self, event) -> None:
         if self._active_prop is None:
             return
-        open_editor = self._fields.get(self._active_prop) is not None and not self._fields[self._active_prop].dragging
+        state = self._fields.get(self._active_prop)
+        open_editor = state is not None and not state.dragging
         self._finish_active_drag(open_editor)
+        # The press focused the element under the cursor inside the field.
+        # Keyboard focus is for Tab navigation, so keys after a drag go back
+        # to the viewport.
+        if state is not None and not state.editing and self._doc is not None:
+            self._doc.focus()
         event.stop_propagation()
 
     def _on_keydown(self, event) -> None:
         key = int(event.get_parameter("key_identifier", "0"))
+        if key == KI_TAB:
+            for state in self._fields.values():
+                if state.editing:
+                    state.commit_on_blur = True
+                    self._commit_edit_value(state)
+                    self._commit_if_changed(state)
+                    return
+            return
+
         if key != KI_ESCAPE:
             return
 
@@ -234,9 +277,21 @@ class ScrubFieldController:
                 continue
             self._restore_edit_value(state)
             state.cancel_on_blur = True
+            state.focus_on_blur = True
             state.input_el.blur()
             event.stop_propagation()
             return
+
+    def _on_input_escape(self, prop: str, event) -> None:
+        # Escape in a focused text field reaches the field as escapecancel, followed
+        # by a blur; the document keydown handler never sees it.
+        state = self._fields.get(prop)
+        if state is None or not state.editing:
+            return
+        self._restore_edit_value(state)
+        state.cancel_on_blur = True
+        state.focus_on_blur = True
+        event.stop_propagation()
 
     def _on_input_change(self, prop: str, event) -> None:
         state = self._fields.get(prop)
@@ -246,7 +301,9 @@ class ScrubFieldController:
             return
 
         state.commit_on_blur = True
+        state.focus_on_blur = True
         self._commit_edit_value(state)
+        self._commit_if_changed(state)
         state.input_el.blur()
 
     def _on_input_blur(self, prop: str, _event) -> None:
@@ -262,6 +319,7 @@ class ScrubFieldController:
             self._exit_edit(state)
             return
 
+        self._commit_edit_value(state)
         self._exit_edit(state)
 
     def _cancel_other_edits(self, current_prop: str) -> None:
@@ -285,13 +343,29 @@ class ScrubFieldController:
         state.dragging = False
         state.field.set_class("is-dragging", False)
 
+        if was_dragging:
+            self._commit_if_changed(state)
+
         if open_editor and not was_dragging and not state.editing:
             self._enter_edit(state)
+
+    def _commit_if_changed(self, state: _ScrubFieldState) -> None:
+        if self._commit_value is None:
+            return
+        value = self._safe_value(state.prop)
+        if self._values_equal(state.spec, value, state.edit_value_before):
+            return
+        try:
+            self._commit_value(state.prop, value)
+        except (RuntimeError, TypeError, ValueError):
+            return
 
     def _enter_edit(self, state: _ScrubFieldState) -> None:
         state.editing = True
         state.commit_on_blur = False
         state.cancel_on_blur = False
+        state.focus_on_blur = False
+        state.edit_snapshot = self._capture_edit(state.prop) if self._capture_edit else None
         state.edit_value_before = self._safe_value(state.prop)
         state.field.set_class("is-editing", True)
         text = self._format_value(state.spec, state.edit_value_before)
@@ -305,9 +379,16 @@ class ScrubFieldController:
         state.cancel_on_blur = False
         state.field.set_class("is-editing", False)
         self._sync_field(state)
+        if state.focus_on_blur:
+            state.focus_on_blur = False
+            state.field.focus()
 
     def _restore_edit_value(self, state: _ScrubFieldState) -> None:
-        self._apply_value(state, state.edit_value_before)
+        if self._restore_edit:
+            self._restore_edit(state.prop, state.edit_snapshot)
+            self._sync_field(state)
+        else:
+            self._apply_value(state, state.edit_value_before)
         state.input_el.set_attribute("value", self._format_value(state.spec, state.edit_value_before))
 
     def _commit_edit_value(self, state: _ScrubFieldState) -> None:
@@ -315,23 +396,40 @@ class ScrubFieldController:
         if not text:
             return
 
+        if text.count(",") == 1 and "." not in text:
+            try:
+                import lichtfeld as lf
+                language = lf.ui.get_current_language()
+            except (ImportError, AttributeError):
+                language = "en"
+            if language in {"de", "es", "fr", "it", "nl", "pl"}:
+                text = text.replace(",", ".")
+
         try:
+            parsed = float(text)
             if state.spec.data_type is int:
-                value = int(float(text))
+                if math.isnan(parsed):
+                    return
+                bounded = max(state.spec.min_value, min(state.spec.max_value, parsed))
+                value = int(bounded)
+            elif not math.isfinite(parsed):
+                return
             else:
-                value = float(text)
-        except (TypeError, ValueError):
+                value = parsed
+        except (TypeError, ValueError, OverflowError):
             return
 
         self._apply_value(state, value)
 
-    def _apply_drag_position(self, state: _ScrubFieldState, mouse_x: float) -> None:
+    def _apply_drag_position(self, state: _ScrubFieldState, mouse_x: float, event) -> None:
         width = max(float(getattr(state.field, "absolute_width", 0.0)), 1.0)
-        left = float(getattr(state.field, "absolute_left", 0.0))
-        x = mouse_x - left
-        t = max(0.0, min(1.0, x / width))
-        value = state.spec.min_value + t * (state.spec.max_value - state.spec.min_value)
-        value = self._snap_value(state.spec, value)
+        delta_x = mouse_x - state.drag_last_mouse_x
+        state.drag_last_mouse_x = mouse_x
+        accelerated = event.get_bool_parameter("shift_key", False) or event.get_bool_parameter("ctrl_key", False)
+        factor = 10.0 if accelerated else 1.0
+        state.drag_value += delta_x * (state.spec.max_value - state.spec.min_value) / width * factor
+        state.drag_value = max(state.spec.min_value, min(state.spec.max_value, state.drag_value))
+        value = self._snap_value(state.spec, state.drag_value)
         self._apply_value(state, value)
 
     def _apply_value(self, state: _ScrubFieldState, value: float) -> None:

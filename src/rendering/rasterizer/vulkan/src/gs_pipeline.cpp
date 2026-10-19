@@ -1,4 +1,7 @@
 #include "gs_pipeline.h"
+#include "core/native_fs.hpp"
+#include "core/path_utils.hpp"
+#include "gs_renderer.h"
 #include "perf_timer.h"
 
 #include "core/error.hpp"
@@ -24,7 +27,7 @@
 #undef min
 #endif
 
-static const size_t MAX_UNIFORM_SIZE = 192;
+static constexpr size_t MAX_UNIFORM_SIZE = sizeof(VulkanGSRendererUniforms);
 
 // The pre-wave renderer fits in the legacy 96-query budget. Each armed depth
 // wave adds one independently accumulated cumsum interval (begin + end), and
@@ -49,7 +52,7 @@ namespace {
     }
 
     [[nodiscard]] std::string spirvDiagnosticName(const std::string& spirv_path) {
-        auto name = std::filesystem::path(spirv_path).stem().string();
+        auto name = lfs::core::path_to_utf8(lfs::core::utf8_to_path(spirv_path).stem());
         if (name.empty()) {
             return "unnamed";
         }
@@ -185,7 +188,7 @@ std::vector<uint32_t> loadSpirv(std::string spirv_path) {
             return *it->second;
     }
 
-    std::ifstream file(spirv_path, std::ios::binary | std::ios::ate);
+    std::ifstream file(lfs::core::native_fs::native_path(lfs::core::native_fs::from_utf8(spirv_path)), std::ios::binary | std::ios::ate);
     if (!file) {
         lfs::rendering::throw_vk_setup(
             lfs::ErrorCode::NotFound,
@@ -398,6 +401,7 @@ void VulkanGSPipeline::assignBufferLabels(VulkanGSPipelineBuffers& buffers) {
     _(visible_dispatch)
     _(macro_partials)
     _(macro_active_mask)
+    _(exact_depth_sample_mask)
     _(macro_wave_args)
     _(index_buffer_offset)
     _(sorting_keys_1)
@@ -530,6 +534,7 @@ void VulkanGSPipeline::cleanupBuffers(VulkanGSPipelineBuffers& buffers) {
     _(visible_dispatch)
     _(macro_partials)
     _(macro_active_mask)
+    _(exact_depth_sample_mask)
     _(macro_wave_args)
     _(index_buffer_offset)
     _(sorting_keys_1)
@@ -581,7 +586,7 @@ void VulkanGSPipeline::cleanup() {
     lfs::diagnostics::VramProfiler::instance().clearStaticScope(kSlangShaderRootScope);
 
     if (device != VK_NULL_HANDLE) {
-        const VkResult idle_result = vkDeviceWaitIdle(device);
+        const VkResult idle_result = lfs::rendering::vk_device_wait_idle_synced(device);
         if (idle_result != VK_SUCCESS) {
             LOG_ERROR("Vulkan: vkDeviceWaitIdle failed during VkSplat pipeline cleanup "
                       "(device={:#x}, result={}({})); continuing resource destruction",
@@ -598,6 +603,9 @@ void VulkanGSPipeline::cleanup() {
             destroyComputePipeline(*pipeline);
         all_compute_pipelines.clear();
         pending_compute_pipelines.clear();
+        banded_export_pipelines_.clear();
+        banded_export_initialized_ = false;
+        banded_export_active_ = false;
 
         if (fence != VK_NULL_HANDLE) {
             vkDestroyFence(device, fence, nullptr);
@@ -1935,6 +1943,7 @@ void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline,
                                              const uint32_t expected_workgroup_size_x) {
 
     pipeline.diagnostic_name = spirvDiagnosticName(spirv_path);
+    pipeline.spirv_path = spirv_path;
     all_compute_pipelines.push_back(&pipeline);
     const auto spirv_code = loadSpirv(spirv_path);
     if (expected_workgroup_size_x != 0 &&
@@ -1991,6 +2000,56 @@ void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline,
     pending_compute_pipelines.push_back(&pipeline);
 }
 
+void VulkanGSPipeline::setBandedExport(const bool enabled) {
+    if (enabled == banded_export_active_)
+        return;
+
+    if (enabled && !banded_export_initialized_) {
+        const size_t count = all_compute_pipelines.size();
+        const size_t pending_count = pending_compute_pipelines.size();
+        try {
+            for (size_t i = 0; i < count; ++i) {
+                auto* const pipeline = all_compute_pipelines[i];
+                const std::filesystem::path path(pipeline->spirv_path);
+                const std::string name = lfs::core::path_to_utf8(path.stem());
+                if (!name.starts_with("projection_forward") &&
+                    !name.starts_with("rasterize_forward") &&
+                    !name.starts_with("macro_raster") &&
+                    !name.starts_with("macro_compose") && name != "generate_keys_wave") {
+                    continue;
+                }
+                auto variant = std::make_unique<_ComputePipeline>(pipeline->buffer_layouts);
+                auto* const variant_ptr = variant.get();
+                banded_export_pipelines_.emplace_back(pipeline, std::move(variant));
+                createComputePipeline(*variant_ptr,
+                                      lfs::core::path_to_utf8((path.parent_path() / (name + "_banded.spv"))),
+                                      pipeline->compatible_subgroup_size,
+                                      pipeline->expected_workgroup_size_x);
+            }
+            createPendingComputePipelines();
+        } catch (...) {
+            // A failed first export must leave the viewer usable and retryable.
+            for (auto& entry : banded_export_pipelines_)
+                destroyComputePipeline(*entry.second);
+            all_compute_pipelines.resize(count);
+            pending_compute_pipelines.resize(pending_count);
+            banded_export_pipelines_.clear();
+            throw;
+        }
+        banded_export_initialized_ = true;
+    }
+
+    // Swap once at the boundary, keeping ordinary dispatch recording unchanged.
+    // Both sets stay alive until renderer teardown, including in-flight uses.
+    for (auto& [pipeline, variant] : banded_export_pipelines_) {
+        std::swap(pipeline->shader, variant->shader);
+        std::swap(pipeline->descriptor_set_layout, variant->descriptor_set_layout);
+        std::swap(pipeline->pipeline_layout, variant->pipeline_layout);
+        std::swap(pipeline->pipeline, variant->pipeline);
+    }
+    banded_export_active_ = enabled;
+}
+
 void VulkanGSPipeline::createPendingComputePipelines() {
     if (pending_compute_pipelines.empty())
         return;
@@ -2028,6 +2087,10 @@ void VulkanGSPipeline::createPendingComputePipelines() {
     const VkResult result = vkCreateComputePipelines(
         device, pipeline_cache, static_cast<uint32_t>(infos.size()), infos.data(), nullptr, pipelines.data());
     if (result != VK_SUCCESS) {
+        for (const auto pipeline : pipelines) {
+            if (pipeline != VK_NULL_HANDLE)
+                vkDestroyPipeline(device, pipeline, nullptr);
+        }
         lfs::rendering::throw_vk_result(
             result,
             "vkCreateComputePipelines",

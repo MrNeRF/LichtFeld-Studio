@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "python_runtime_api.hpp"
+
 #include <string>
 #include <vector>
 
@@ -17,7 +19,7 @@ using ssize_t = SSIZE_T;
 
 namespace lfs::python {
 
-    class SubProcess {
+    class LFS_PYTHON_RUNTIME_API SubProcess {
     public:
         SubProcess() = default;
         ~SubProcess();

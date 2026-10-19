@@ -6,6 +6,8 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
+#include "core/number_format.hpp"
 #include "core/services.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/gpu_memory_query.hpp"
@@ -16,10 +18,13 @@
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "gui/status_bar_mining.hpp"
+#include "gui/status_bar_training.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_context.hpp"
+#include "gui/utils/summary_labels.hpp"
 #include "internal/resource_paths.hpp"
 #include "preferences.hpp"
+#include "python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
@@ -29,6 +34,7 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/FontEngineInterface.h>
 #include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_video.h>
 #include <cassert>
@@ -68,13 +74,6 @@ namespace lfs::vis::gui {
         public:
             void ProcessEvent(Rml::Event& /*event*/) override {
                 lfs::core::events::ui::ToggleVramHud{}.emit();
-            }
-        };
-
-        class AccountPanelOpenListener final : public Rml::EventListener {
-        public:
-            void ProcessEvent(Rml::Event& /*event*/) override {
-                PanelRegistry::instance().set_panel_enabled("lfs.account", true);
             }
         };
 
@@ -122,15 +121,8 @@ namespace lfs::vis::gui {
             return std::format("{}:{:02d}", m, s);
         }
 
-        std::string stripColon(const std::string& s) {
-            auto end = s.find_last_not_of(": ");
-            if (end == std::string::npos)
-                return s;
-            return s.substr(0, end + 1);
-        }
-
         std::string formatStepLabel(const size_t step) {
-            return std::format("{} {}", stripColon(LOC(lichtfeld::Strings::Status::STEP)), step);
+            return std::format("{} {}", stripLabelColon(LOC(lichtfeld::Strings::Status::STEP)), lfs::core::format_count(step));
         }
 
         // Width the element's content box would need to show everything on one line.
@@ -373,7 +365,6 @@ namespace lfs::vis::gui {
         model_.wasd_sep_color = colorToRml(palette.text_dim);
         model_.zoom_color = colorToRml(palette.info);
         model_.zoom_sep_color = colorToRml(palette.text_dim);
-        model_.account_color = colorToRml(palette.text_dim);
         model_.mcp_color = colorToRml(palette.text_dim);
         model_.lfs_mem_color = colorToRml(palette.info);
         model_.gpu_mem_color = colorToRml(palette.text);
@@ -433,12 +424,6 @@ namespace lfs::vis::gui {
         ctor.Bind("zoom_text", &model_.zoom_text);
         ctor.Bind("zoom_color", &model_.zoom_color);
         ctor.Bind("zoom_sep_color", &model_.zoom_sep_color);
-        ctor.Bind("account_label", &model_.account_label);
-        ctor.Bind("account_tier", &model_.account_tier);
-        ctor.Bind("account_tooltip", &model_.account_tooltip);
-        ctor.Bind("account_color", &model_.account_color);
-        ctor.Bind("account_show_tier", &model_.account_show_tier);
-        ctor.Bind("account_membership_required", &model_.account_membership_required);
         ctor.Bind("lfs_mem_text", &model_.lfs_mem_text);
         ctor.Bind("lfs_mem_color", &model_.lfs_mem_color);
         ctor.Bind("show_gpu_model", &model_.show_gpu_model);
@@ -447,8 +432,13 @@ namespace lfs::vis::gui {
         ctor.Bind("gpu_mem_text", &model_.gpu_mem_text);
         ctor.Bind("gpu_mem_color", &model_.gpu_mem_color);
         ctor.Bind("fps_value", &model_.fps_value);
+        ctor.Bind("fps_view_value", &model_.fps_view_value);
+        ctor.Bind("fps_ui_label", &model_.fps_ui_label);
+        ctor.Bind("fps_view_label", &model_.fps_view_label);
         ctor.Bind("fps_color", &model_.fps_color);
         ctor.Bind("fps_label", &model_.fps_label);
+        ctor.Bind("preview_reduced", &model_.preview_reduced);
+        ctor.Bind("preview_reduced_text", &model_.preview_reduced_text);
         ctor.Bind("git_commit", &model_.git_commit);
         ctor.Bind("mcp_details_expanded", &model_.mcp_details_expanded);
         ctor.Bind("mcp_summary", &model_.mcp_summary);
@@ -504,6 +494,10 @@ namespace lfs::vis::gui {
     }
 
     void RmlStatusBar::shutdown() {
+        tooltip_ = {};
+        if (document_registered_)
+            lfs::python::unregister_rml_document("status_bar");
+        document_registered_ = false;
         if (pending_gpu_mem_.valid()) {
             pending_gpu_mem_.wait();
             try {
@@ -528,8 +522,6 @@ namespace lfs::vis::gui {
         git_commit_listener_ = nullptr;
         delete gpu_icon_listener_;
         gpu_icon_listener_ = nullptr;
-        delete account_listener_;
-        account_listener_ = nullptr;
         delete mcp_toggle_listener_;
         mcp_toggle_listener_ = nullptr;
         delete mcp_power_listener_;
@@ -539,6 +531,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlStatusBar::reloadResources() {
+        tooltip_ = {};
         if (!rml_context_)
             return;
 
@@ -546,6 +539,9 @@ namespace lfs::vis::gui {
             rml_manager_->releaseCachedVulkanContext(direct_cache_);
 
         if (document_) {
+            if (document_registered_)
+                lfs::python::unregister_rml_document("status_bar");
+            document_registered_ = false;
             rml_context_->UnloadDocument(document_);
             rml_context_->Update();
         }
@@ -598,10 +594,9 @@ namespace lfs::vis::gui {
             }));
         };
 
-        bind(store.iteration);
+        // Published training progress wakes the GUI; read its latest values on
+        // that frame. FPS is measurement only and never publishes store changes.
         bind(store.total_iterations);
-        bind(store.loss);
-        bind(store.num_gaussians);
         bind(store.max_gaussians);
         bind(store.training_running);
         bind(store.training_state);
@@ -611,13 +606,7 @@ namespace lfs::vis::gui {
         bind(store.eval_lpips);
         bind(store.scene_generation);
         bind(store.selection_generation);
-        subscriptions_.push_back(store.fps.subscribe([this](const float& fps) {
-            reactive_fps_available_ = true;
-            reactive_fps_value_ = fps;
-            markModelDirty();
-        }));
         bind(store.mode_text);
-        bind(store.account_state);
         subscriptions_.push_back(store.perf_hud.subscribe([this](const lfs::vis::AppStore::PerfHud& state) {
             setModelBool("gpu_panel_active", model_.gpu_panel_active, state.visible);
             markModelDirty();
@@ -789,11 +778,6 @@ namespace lfs::vis::gui {
             gpu_icon_listener_ = new VramHudToggleListener();
         if (auto* el = document_->GetElementById("gpu-icon"))
             el->AddEventListener(Rml::EventId::Click, gpu_icon_listener_);
-
-        if (!account_listener_)
-            account_listener_ = new AccountPanelOpenListener();
-        if (auto* el = document_->GetElementById("account-chip"))
-            el->AddEventListener(Rml::EventId::Click, account_listener_);
 
         if (!mcp_toggle_listener_) {
             mcp_toggle_listener_ = new CallbackListener([this] {
@@ -1141,16 +1125,11 @@ namespace lfs::vis::gui {
         }
     }
 
-    bool RmlStatusBar::updateContent(const PanelDrawContext& ctx, const bool force_refresh) {
+    bool RmlStatusBar::updateContent(const PanelDrawContext& ctx) {
         if (!document_)
             return false;
 
         const auto now = std::chrono::steady_clock::now();
-        if (!force_refresh && next_refresh_at_ != std::chrono::steady_clock::time_point{} &&
-            now < next_refresh_at_) {
-            return false;
-        }
-
         model_dirty_ = false;
 
         const auto& p = lfs::vis::theme().palette;
@@ -1223,13 +1202,13 @@ namespace lfs::vis::gui {
                                               : "status_bar.mcp_turn_on"));
             setModelBool("mcp_server_enabled", model_.mcp_server_enabled, status.enabled);
             setModelString("mcp_total_text", model_.mcp_total_text,
-                           std::format("{} {}", status.request_count,
+                           std::format("{} {}", lfs::core::format_count(status.request_count),
                                        LOC("status_bar.mcp_requests")));
             setModelString("mcp_success_text", model_.mcp_success_text,
-                           std::format("{} {}", status.success_count,
+                           std::format("{} {}", lfs::core::format_count(status.success_count),
                                        LOC("status_bar.mcp_successes")));
             setModelString("mcp_error_text", model_.mcp_error_text,
-                           std::format("{} {}", status.error_count,
+                           std::format("{} {}", lfs::core::format_count(status.error_count),
                                        LOC("status_bar.mcp_errors")));
         }
 
@@ -1255,7 +1234,10 @@ namespace lfs::vis::gui {
         std::string mode_rml;
         std::string mode_color;
 
-        if (content_type == SceneManager::ContentType::Empty) {
+        if (viewer && viewer->isTrainingStartPending()) {
+            mode_rml = LOC("training_panel.preparing_training");
+            mode_color = colorToRml(p.info);
+        } else if (content_type == SceneManager::ContentType::Empty) {
             mode_rml = LOC("mode.empty");
             mode_color = colorToRml(p.text_dim);
         } else if (content_type == SceneManager::ContentType::SplatFiles) {
@@ -1301,13 +1283,18 @@ namespace lfs::vis::gui {
                 break;
             }
             case TrainingState::Starting:
-                mode_rml = LOC("runtime.task_starting_ellipsis") + suffix;
+                mode_rml = LOC("training_panel.preparing_training");
                 mode_color = colorToRml(p.warning);
                 break;
-            case TrainingState::Finished:
-                mode_rml = LOC(lichtfeld::Strings::Status::COMPLETE) + suffix;
-                mode_color = colorToRml(p.success);
+            case TrainingState::Finished: {
+                const auto reason = tm
+                                        ? tm->getStateMachine().getFinishReason()
+                                        : FinishReason::None;
+                const auto status = finishedTrainingStatus(reason, p);
+                mode_rml = LOC(status.label_key) + suffix;
+                mode_color = colorToRml(status.color);
                 break;
+            }
             case TrainingState::Stopping:
                 mode_rml = LOC(lichtfeld::Strings::Status::STOPPING) + suffix;
                 mode_color = colorToRml(p.text_dim);
@@ -1349,7 +1336,7 @@ namespace lfs::vis::gui {
         setModelString("step_label", model_.step_label, LOC(lichtfeld::Strings::Status::STEP));
         setModelString("loss_label", model_.loss_label, LOC(lichtfeld::Strings::Status::LOSS));
         setModelString("gaussians_label", model_.gaussians_label,
-                       stripColon(LOC(lichtfeld::Strings::Status::GAUSSIANS)));
+                       stripLabelColon(LOC(lichtfeld::Strings::Status::GAUSSIANS)));
         setModelString("eta_label", model_.eta_label, LOC(lichtfeld::Strings::Status::ETA));
 
         if (show_training && tm) {
@@ -1409,7 +1396,7 @@ namespace lfs::vis::gui {
             };
             setProgressMarkersRml(buildProgressMarkersRml(tm->getSaveSteps(), total, cur, marker_state,
                                                           progress_miner_pref_));
-            setModelString("step_value", model_.step_value, std::format("{}/{}", cur, total));
+            setModelString("step_value", model_.step_value, std::format("{}/{}", lfs::core::format_count(cur), lfs::core::format_count(total)));
             setModelString("loss_value", model_.loss_value, std::format("{:.4f}", loss));
             setModelString("gaussians_value", model_.gaussians_value,
                            std::format("{}/{}", fmtCount(num_splats), fmtCount(max_g)));
@@ -1480,7 +1467,7 @@ namespace lfs::vis::gui {
         if (show_splats) {
             auto splat_rml = std::format("{} {}",
                                          fmtCount(static_cast<int64_t>(total_gaussians)),
-                                         stripColon(LOC(lichtfeld::Strings::Status::GAUSSIANS)));
+                                         stripLabelColon(LOC(lichtfeld::Strings::Status::GAUSSIANS)));
             setModelString("splat_text", model_.splat_text, std::move(splat_rml));
             setModelString("splat_color", model_.splat_color, colorToRml(p.text));
         } else {
@@ -1519,7 +1506,7 @@ namespace lfs::vis::gui {
 
         if (wasd_visible) {
             auto wasd_rml = std::format("{}: {:.0f}",
-                                        stripColon(LOC(lichtfeld::Strings::Controls::WASD)),
+                                        stripLabelColon(LOC(lichtfeld::Strings::Controls::WASD)),
                                         wasd_speed);
             setModelBool("show_wasd", model_.show_wasd, true);
             setModelString("wasd_text", model_.wasd_text, std::move(wasd_rml));
@@ -1535,7 +1522,7 @@ namespace lfs::vis::gui {
 
         if (zoom_visible) {
             auto zoom_rml = std::format("{}: {:.0f}",
-                                        stripColon(LOC(lichtfeld::Strings::Controls::ZOOM)),
+                                        stripLabelColon(LOC(lichtfeld::Strings::Controls::ZOOM)),
                                         zoom_speed);
             setModelBool("show_zoom", model_.show_zoom, true);
             setModelString("zoom_text", model_.zoom_text, std::move(zoom_rml));
@@ -1545,6 +1532,11 @@ namespace lfs::vis::gui {
         } else {
             setModelBool("show_zoom", model_.show_zoom, false);
         }
+
+        setModelBool("preview_reduced", model_.preview_reduced,
+                     lfs::core::MemoryPressureCoordinator::instance().pressure_active());
+        setModelString("preview_reduced_text", model_.preview_reduced_text,
+                       LOC("status_bar.preview_reduced"));
 
         // Transient StatusOnly message (ErrorBus)
         const auto status_msg = status_message_.snapshot(now);
@@ -1558,79 +1550,51 @@ namespace lfs::vis::gui {
                            colorToRmlAlpha(status_col, status_msg.alpha));
         }
 
-        const auto account = lfs::vis::app_store().account_state.get();
-        std::string account_label = account.label;
-        if (account.linking) {
-            account_label = LOC("account.status.linking");
-        } else if (!account.signed_in) {
-            account_label = LOC("account.status.sign_in");
-        } else if (account_label.empty()) {
-            account_label = "LF";
-        }
-        setModelString("account_label", model_.account_label, std::move(account_label));
-        setModelString("account_tier", model_.account_tier, account.tier);
-        std::string account_tooltip;
-        if (account.membership_required) {
-            account_tooltip = LOC("account.status.membership_required");
-        } else if (account.linking) {
-            account_tooltip = LOC("account.status.linking");
-        } else if (!account.signed_in) {
-            account_tooltip = LOC("account.status.tooltip");
-        }
-        if (!account.tooltip.empty()) {
-            if (!account_tooltip.empty())
-                account_tooltip += " — ";
-            account_tooltip += account.tooltip;
-        }
-        if (account_tooltip.empty())
-            account_tooltip = LOC("account.status.tooltip");
-        setModelString("account_tooltip", model_.account_tooltip, std::move(account_tooltip));
-        setModelBool("account_show_tier", model_.account_show_tier,
-                     account.signed_in && !account.tier.empty());
-        setModelBool("account_membership_required", model_.account_membership_required,
-                     account.membership_required);
-        const ThemeColor& account_color = account.membership_required ? p.warning
-                                          : account.linking           ? p.info
-                                          : account.signed_in         ? p.text
-                                                                      : p.text_dim;
-        setModelString("account_color", model_.account_color, colorToRml(account_color));
-
         // Right section: GPU memory
         pollGpuMemoryQuery(now);
         const auto mem = cached_gpu_mem_;
-        constexpr float gib = 1024.0f * 1024.0f * 1024.0f;
-        float app_gib = mem.process_used / gib;
-        float used_gib = mem.total_used / gib;
-        float total_gib = mem.total / gib;
-        float pct = total_gib > 0.0f ? (used_gib / total_gib) * 100.0f : 0.0f;
+        float pct = mem.total > 0 ? 100.0f * static_cast<float>(mem.total_used) /
+                                        static_cast<float>(mem.total)
+                                  : 0.0f;
 
         ThemeColor mem_color = pct < 50.0f ? p.success : (pct < 75.0f ? p.warning : p.error);
         setModelBool("gpu_panel_active", model_.gpu_panel_active,
                      lfs::vis::app_store().perf_hud.get().visible);
-        setModelString("lfs_mem_text", model_.lfs_mem_text, std::format("LFS {:.2f} GiB", app_gib));
-        setModelString("lfs_mem_color", model_.lfs_mem_color, colorToRml(p.info));
+        setModelString("lfs_mem_text", model_.lfs_mem_text,
+                       mem.process_valid
+                           ? std::format("LFS {} GiB{}", formatGpuGiB(mem.process_used),
+                                         mem.process_over_budget
+                                             ? std::format(" ({})", LOC("ui.vram_over_budget"))
+                                             : "")
+                           : "LFS —");
+        setModelString("lfs_mem_color", model_.lfs_mem_color, colorToRml(mem.process_over_budget ? p.error : p.info));
         setModelBool("show_gpu_model", model_.show_gpu_model, !mem.device_name.empty());
         setModelString("gpu_model_text", model_.gpu_model_text, mem.device_name);
         setModelString("gpu_mem_text", model_.gpu_mem_text,
-                       std::format("{} {:.2f}/{:.2f} GiB", LOC("status_bar.gpu"), used_gib, total_gib));
+                       std::format("{} {}{}/{} GiB", LOC("status_bar.gpu"),
+                                   mem.device_estimated ? "≈" : "",
+                                   formatGpuGiB(mem.total_used), formatGpuGiB(mem.total)));
         setModelString("gpu_mem_color", model_.gpu_mem_color, colorToRml(mem_color));
+        if (document_) {
+            if (auto* element = document_->GetElementById("lfs-mem"))
+                element->SetAttribute("title", LOC(mem.process_valid
+                                                       ? "ui.vram_process_nvml_tooltip"
+                                                       : "ui.vram_process_unavailable_tooltip"));
+            if (auto* element = document_->GetElementById("gpu-mem"))
+                element->SetAttribute("title", LOC(mem.device_estimated
+                                                       ? "ui.vram_device_cuda_tooltip"
+                                                       : "ui.vram_device_nvml_tooltip"));
+        }
 
-        // FPS: prefer scene-render rate when scene frames are in the measurement
-        // window; when only GUI frames are presented, show that rate as ui-fps
-        // so a GUI-only spin is not invisible. True idle (no samples) stays 0.
-        const float scene_fps = reactive_fps_available_ ? reactive_fps_value_
-                                                        : (rm ? rm->getAverageFPS() : 0.0f);
-        const float presented_fps = rm ? rm->getPresentedAverageFPS() : 0.0f;
-        const bool ui_only_fps = scene_fps <= 0.0f && presented_fps > 0.0f;
-        const float fps = ui_only_fps ? presented_fps : scene_fps;
-        ThemeColor fps_col = ui_only_fps
-                                 ? p.text_dim
-                                 : (fps >= 30.0f ? p.success : (fps >= 15.0f ? p.warning : p.error));
-        setModelString("fps_value", model_.fps_value, std::format("{:.0f}", fps));
-        setModelString("fps_color", model_.fps_color, colorToRml(fps_col));
-        setModelString("fps_label", model_.fps_label,
-                       ui_only_fps ? std::format(" {}", LOC("status_bar.ui_fps"))
-                                   : std::format(" {}", LOC(lichtfeld::Strings::Status::FPS)));
+        const auto rates = rm ? rm->guiFrameRates() : FrameRates{};
+        const float scene_fps = rates.view;
+        const float presented_fps = rates.ui;
+        setModelString("fps_value", model_.fps_value, std::format("{:.0f}", presented_fps));
+        setModelString("fps_view_value", model_.fps_view_value, std::format("{:.0f}", scene_fps));
+        setModelString("fps_ui_label", model_.fps_ui_label, LOC("status_bar.ui"));
+        setModelString("fps_view_label", model_.fps_view_label, "3D");
+        setModelString("fps_color", model_.fps_color, colorToRml(p.text));
+        setModelString("fps_label", model_.fps_label, LOC(lichtfeld::Strings::Status::FPS));
         setModelString("git_commit", model_.git_commit, GIT_COMMIT_HASH_SHORT);
 
         section_signature_ =
@@ -1640,9 +1604,9 @@ namespace lfs::vis::gui {
             (model_.show_split ? uint32_t{1} << 3 : 0) |
             (model_.show_wasd ? uint32_t{1} << 4 : 0) |
             (model_.show_zoom ? uint32_t{1} << 5 : 0) |
+            (model_.preview_reduced ? uint32_t{1} << 10 : 0) |
             (model_.show_status_message ? uint32_t{1} << 6 : 0) |
-            (model_.show_gpu_model ? uint32_t{1} << 7 : 0) |
-            (model_.account_show_tier ? uint32_t{1} << 8 : 0);
+            (model_.show_gpu_model ? uint32_t{1} << 7 : 0);
 
         // A paused trainer has a static progress display. Keep the miner's
         // periodic refresh armed only while its particles actually advance.
@@ -1670,11 +1634,14 @@ namespace lfs::vis::gui {
                           bar_y - overlay_height - input.screen_y);
         const float local_x = input.mouse_x - bar_x;
         const float local_y = input.mouse_y - (bar_y - overlay_height);
+        tooltip_mouse_x_ = static_cast<int>(local_x);
+        tooltip_mouse_y_ = static_cast<int>(input.mouse_y - bar_y);
         const bool is_inside = local_x >= 0.0f && local_x < bar_w &&
                                local_y >= 0.0f && local_y < bar_h + overlay_height;
         if (!is_inside && !input.mouse_released[0] && !input.mouse_released[1] &&
             !save_step_interaction_.dragging) {
             clearSaveStepHover();
+            clearTooltip();
             return;
         }
 
@@ -1683,6 +1650,9 @@ namespace lfs::vis::gui {
         const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
                                       input.key_alt, input.key_super);
         rml_context_->ProcessMouseMove(static_cast<int>(local_x), static_cast<int>(local_y), mods);
+        auto* hover = rml_context_->GetHoverElement();
+        tooltip_.setHover(is_inside ? resolveRmlTooltip(hover) : std::string{},
+                          is_inside ? hover : nullptr);
 
         if (is_inside && input.mouse_clicked[0])
             rml_context_->ProcessMouseButtonDown(0, mods);
@@ -1695,12 +1665,22 @@ namespace lfs::vis::gui {
     }
 
     float RmlStatusBar::overlayHeight() const {
+        float tooltip_height = 0.0f;
+        if (tooltip_.hasActiveState() && document_) {
+            if (auto* const element = document_->GetElementById("frame-tooltip");
+                element && element->IsVisible()) {
+                // Match the tooltip's 10px cursor gap and 4px edge margin.
+                // Pending tooltips need no surface until apply() lays them out.
+                tooltip_height = std::min(tooltip_max_overlay_height_,
+                                          std::ceil(element->GetOffsetHeight() + 14.0f));
+            }
+        }
         if (!model_.mcp_details_expanded)
-            return 0.0f;
+            return tooltip_height;
         const float dp_ratio = rml_context_
                                    ? rml_context_->GetDensityIndependentPixelRatio()
                                    : 1.0f;
-        const float fallback_height = 150.0f * dp_ratio;
+        const float fallback_height = std::max(150.0f * dp_ratio, tooltip_height);
         if (!document_)
             return fallback_height;
 
@@ -1784,43 +1764,39 @@ namespace lfs::vis::gui {
         });
     }
 
-    void RmlStatusBar::renderCached(const PanelDrawContext& ctx, const float x, const float y,
-                                    const float w_px, const float h_px,
-                                    const int screen_w, const int screen_h) {
-        if (!rml_context_ || !document_)
-            return;
-        if (w_px <= 0.0f || h_px <= 0.0f || screen_w <= 0 || screen_h <= 0)
-            return;
-
-        const float overlay_height = overlayHeight();
-        const int render_w = static_cast<int>(w_px);
-        const int render_h = static_cast<int>(h_px + overlay_height);
-        const float dp_ratio = rml_context_->GetDensityIndependentPixelRatio();
-        const bool dp_changed = dp_ratio != last_dp_ratio_;
-        const bool theme_current =
-            has_theme_signature_ && rml_theme::currentThemeSignature() == last_theme_signature_;
-        const auto now = std::chrono::steady_clock::now();
-        const auto runtime_revision = lfs::vis::runtimeServiceRevision();
-        if (runtime_revision != last_runtime_service_revision_) {
-            last_runtime_service_revision_ = runtime_revision;
-            model_dirty_ = true;
+    void RmlStatusBar::updateFpsReservedWidths() {
+        // Reserve three digits in the actual font, rather than a fixed dp width.
+        if (auto* engine = Rml::GetFontEngineInterface()) {
+            for (const char* id : {"fps-value", "fps-view-value"}) {
+                if (auto* value = document_->GetElementById(id)) {
+                    const auto face = value->GetFontFaceHandle();
+                    if (!face)
+                        continue;
+                    int width = 0;
+                    const Rml::TextShapingContext shaping{Rml::String{}};
+                    for (char digit = '0'; digit <= '9'; ++digit)
+                        width = std::max(width, engine->GetStringWidth(face, std::string(3, digit), shaping));
+                    value->SetProperty("min-width", std::format("{}px", width));
+                }
+            }
+            rml_context_->Update();
         }
-        const bool refresh_due =
-            next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
-            now >= next_refresh_at_;
-        const bool can_reuse = theme_current && !dp_changed && !model_dirty_ && !refresh_due &&
-                               render_w == last_render_w_ &&
-                               render_h == last_render_h_;
-        if (!can_reuse) {
-            render(ctx, x, y, w_px, h_px, screen_w, screen_h);
+    }
+
+    void RmlStatusBar::positionTooltip(const float previous_overlay, const float overlay_height,
+                                       const bool place_above) {
+        auto* const element = document_->GetElementById("frame-tooltip");
+        if (!element || !element->IsVisible())
             return;
-        }
-
-        trackRenderedContextFrame(x, y, overlay_height);
-
-        queueCachedVulkanContext(x, y - overlay_height, w_px, h_px + overlay_height,
-                                 screen_w, screen_h,
-                                 render_w, render_h, direct_cache_.texture == 0);
+        // apply() has written the final position, but layout may still expose
+        // the offscreen measurement position. Read the pending pixel property.
+        const auto* const pending_top = element->GetLocalProperty(Rml::PropertyId::Top);
+        const float current_top = pending_top ? pending_top->Get<float>() : element->GetOffsetTop();
+        const float top = place_above
+                              ? std::max(4.0f, overlay_height + tooltip_mouse_y_ -
+                                                   10.0f - element->GetOffsetHeight())
+                              : current_top + overlay_height - previous_overlay;
+        element->SetProperty(Rml::PropertyId::Top, Rml::Property(top, Rml::Unit::PX));
     }
 
     void RmlStatusBar::render(const PanelDrawContext& ctx, const float x, const float y,
@@ -1832,28 +1808,58 @@ namespace lfs::vis::gui {
             return;
         }
 
+        if (!document_registered_) {
+            lfs::python::register_rml_document("status_bar", document_);
+            document_registered_ = true;
+        }
+
         if (w_px <= 0.0f || h_px <= 0.0f || screen_w <= 0 || screen_h <= 0) {
             rml_animation_active_ = false;
             animation_active_ = model_animation_active_;
             return;
         }
 
-        const float overlay_height = overlayHeight();
+        tooltip_max_overlay_height_ = std::max(0.0f, static_cast<float>(screen_h) - h_px);
         const int render_w = static_cast<int>(w_px);
-        const int render_h = static_cast<int>(h_px + overlay_height);
-        const bool size_changed = (render_w != last_render_w_ || render_h != last_render_h_);
         const float dp_ratio = rml_context_->GetDensityIndependentPixelRatio();
         const bool dp_changed = dp_ratio != last_dp_ratio_;
         const bool had_pending_model_dirty = model_dirty_;
         const bool theme_changed = updateTheme();
         const auto now = std::chrono::steady_clock::now();
+        const auto refresh_at = next_refresh_at_;
+        const bool content_changed = updateContent(ctx);
+        const bool section_signature_changed = section_signature_ != last_section_signature_;
+
+        if (tooltip_.hasActiveState() &&
+            (render_w != last_render_w_ || dp_changed || theme_changed)) {
+            rml_context_->SetDimensions({render_w, std::max(last_render_h_, static_cast<int>(h_px))});
+            rml_context_->Update();
+        }
+
+        // Reveal and measure in the existing surface before sizing the cache.
+        // The tooltip controller lays out new text even when the strip is short.
+        const float previous_overlay = std::max(0.0f, last_render_h_ - h_px);
+        const bool tooltip_changed = tooltip_.apply(document_->GetElementById("body"),
+                                                    tooltip_mouse_x_,
+                                                    tooltip_mouse_y_ + static_cast<int>(previous_overlay),
+                                                    render_w, static_cast<int>(h_px + previous_overlay));
+        const float overlay_height = overlayHeight();
+        const int render_h = static_cast<int>(h_px + overlay_height);
+        const bool size_changed = (render_w != last_render_w_ || render_h != last_render_h_);
         const bool refresh_due =
             size_changed || dp_changed || theme_changed || had_pending_model_dirty ||
-            next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
-            now >= next_refresh_at_;
-        const bool content_changed = updateContent(ctx, refresh_due);
-        const bool section_signature_changed = section_signature_ != last_section_signature_;
-        const bool needs_render = size_changed || dp_changed || theme_changed || had_pending_model_dirty ||
+            refresh_at == std::chrono::steady_clock::time_point{} ||
+            now >= refresh_at;
+        if (tooltip_.hasActiveState() && (tooltip_changed || size_changed || dp_changed || theme_changed)) {
+            // Revealing from the strip needs a new position after measurement.
+            // Preserve below-cursor placement when the MCP popup already provided space.
+            const bool place_above = (tooltip_changed && previous_overlay <= 0.0f) ||
+                                     ((dp_changed || theme_changed) && tooltip_mouse_y_ >= 0);
+            positionTooltip(previous_overlay, overlay_height, place_above);
+        }
+        rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.hasActiveState());
+        rml_manager_->setContextTooltipRevealDeadline(rml_context_, tooltip_.revealDeadline());
+        const bool needs_render = tooltip_changed || size_changed || dp_changed || theme_changed || had_pending_model_dirty ||
                                   content_changed ||
                                   (animation_active_ && refresh_due);
         if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface()) {
@@ -1869,7 +1875,9 @@ namespace lfs::vis::gui {
                 last_document_h_ = render_h;
             }
             rml_context_->Update();
-            fitToAvailableWidth(size_changed || dp_changed || theme_changed || section_signature_changed);
+            if (dp_changed || theme_changed)
+                updateFpsReservedWidths();
+            fitToAvailableWidth(render_w != last_render_w_ || dp_changed || theme_changed || section_signature_changed);
 
             rml_animation_active_ = rml_context_->GetNextUpdateDelay() == 0;
             animation_active_ = model_animation_active_ || rml_animation_active_;
@@ -1885,7 +1893,7 @@ namespace lfs::vis::gui {
 
         queueCachedVulkanContext(x, y - overlay_height, w_px, h_px + overlay_height,
                                  screen_w, screen_h,
-                                 render_w, render_h, true);
+                                 render_w, render_h, needs_render || direct_cache_.texture == 0);
     }
 
 } // namespace lfs::vis::gui

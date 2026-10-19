@@ -5,6 +5,8 @@
 #pragma once
 
 #include "core/tensor_fwd.hpp"
+#include "vulkan_depth_blit_pass.hpp"
+#include "vulkan_environment_pass.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -27,6 +29,7 @@ namespace lfs::vis {
         // the viewport pass record/submit.
         VkImageView external_image_view = VK_NULL_HANDLE;
         std::uint64_t external_image_generation = 0;
+        VulkanDepthBlitParams depth_blit{};
         // Valid-region UV for padded panel textures (default identity).
         glm::vec2 uv_scale{1.0f, 1.0f};
         glm::vec2 uv_clamp_max{1.0f, 1.0f};
@@ -36,6 +39,8 @@ namespace lfs::vis {
         // Set only for a panel rendered at the reconstruction input resolution.
         // Reference and ground-truth panels must remain unfiltered.
         bool spatial_filter = false;
+        // Scene-panel sky camera, shared by presentation and lazy capture.
+        VulkanEnvironmentParams environment{};
     };
 
     struct VulkanSplitViewParams {

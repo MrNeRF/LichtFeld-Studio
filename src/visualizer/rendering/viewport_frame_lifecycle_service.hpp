@@ -42,7 +42,13 @@ namespace lfs::vis {
         [[nodiscard]] ResizeResult handleViewportResize(const glm::ivec2& current_size);
         [[nodiscard]] ModelChangeResult handleModelChange(size_t model_ptr, ViewportArtifactService& viewport_artifacts,
                                                           ModelSource source = ModelSource::Scene);
+        // Refreshes the preview on the interval while training runs, and once more
+        // when it stops running so the final state is shown.
         [[nodiscard]] DirtyMask handleTrainingRefresh(bool is_training, float refresh_interval_sec);
+        [[nodiscard]] double secondsUntilTrainingRefresh(float refresh_interval_sec) const;
+        // A camera/rest render also satisfies the preview refresh. Schedule the
+        // next one from this actual submit, not an earlier deferred request.
+        void restartTrainingRefresh() { last_training_render_ = std::chrono::steady_clock::now(); }
         [[nodiscard]] DirtyMask requiredDirtyMask(bool has_viewport_output,
                                                   bool has_renderable_content,
                                                   SplitViewMode split_view_mode) const;
@@ -68,6 +74,7 @@ namespace lfs::vis {
         size_t last_model_ptr_ = 0;
         ModelSource last_model_source_ = ModelSource::Scene;
         std::chrono::steady_clock::time_point last_training_render_{};
+        bool training_refreshing_ = false;
         std::chrono::steady_clock::time_point last_resize_change_{};
         std::atomic<bool> resize_active_{false};
         std::atomic<ViewportResizeRenderPolicy> resize_render_policy_{

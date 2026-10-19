@@ -23,8 +23,8 @@
 
 namespace {
     namespace raster = fast_lfs::rasterization;
-    static_assert(sizeof(raster::InstanceKey) == sizeof(uint));
-    static_assert(sizeof(raster::InstanceKey) == 4);
+    static_assert(sizeof(raster::InstanceKey) == sizeof(uint64_t));
+    static_assert(sizeof(raster::InstanceKey) == 8);
 
     constexpr size_t kCubWorkspaceAlignment = 256;
     static_assert((kCubWorkspaceAlignment & (kCubWorkspaceAlignment - 1)) == 0);
@@ -47,30 +47,32 @@ namespace {
         size_t cub_workspace_offset_bytes = 0;
         int n_instances = 0;
 
-        [[nodiscard]] size_t per_buffer_bytes() const noexcept {
+        [[nodiscard]] size_t per_key_buffer_bytes() const noexcept {
             return static_cast<size_t>(n_instances) *
                    sizeof(raster::InstanceKey);
         }
 
+        [[nodiscard]] size_t per_index_buffer_bytes() const noexcept {
+            return static_cast<size_t>(n_instances) * sizeof(uint);
+        }
+
         [[nodiscard]] raster::InstanceKey* keys_current() const noexcept {
-            return reinterpret_cast<raster::InstanceKey*>(base + per_buffer_bytes());
+            return reinterpret_cast<raster::InstanceKey*>(base);
         }
 
         [[nodiscard]] raster::InstanceKey* keys_alternate() const noexcept {
             return reinterpret_cast<raster::InstanceKey*>(
-                base + 2 * per_buffer_bytes());
+                base + per_key_buffer_bytes());
         }
 
         [[nodiscard]] uint* primitive_indices_current() const noexcept {
-            return reinterpret_cast<uint*>(base);
+            // Both possible sort outputs must be disjoint from the retained phase prefix.
+            return reinterpret_cast<uint*>(base + 2 * per_key_buffer_bytes());
         }
 
         [[nodiscard]] uint* primitive_indices_alternate() const noexcept {
-            return reinterpret_cast<uint*>(base + 3 * per_buffer_bytes());
-        }
-
-        [[nodiscard]] uint* retained_indices() const noexcept {
-            return reinterpret_cast<uint*>(base);
+            return reinterpret_cast<uint*>(
+                base + 2 * per_key_buffer_bytes() + per_index_buffer_bytes());
         }
 
         [[nodiscard]] void* cub_workspace() const noexcept {
@@ -197,13 +199,13 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     const float far_,
     bool mip_filter,
     cudaStream_t stream,
-    float* max_screen_share) {
+    float* max_screen_share,
+    float dilation_scale) {
 
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
     const int n_tiles = checked_to_int(n_tiles_u64, "n_tiles exceeds int range");
     const uint n_tiles_u32 = static_cast<uint>(n_tiles);
-    const uint depth_bits = static_cast<uint>(packed_instance_depth_bits(n_tiles_u32));
     const int key_end_bit = packed_instance_key_end_bit(n_tiles_u32);
     const uint sh_layout_slots = kernels::shSlotsForBases(static_cast<uint>(sh_layout_bases));
 
@@ -283,8 +285,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             clip_bottom,
             near_,
             far_,
-            depth_bits,
             mip_filter,
+            dilation_scale,
             screen_share);
         LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.preprocess");
     };
@@ -508,7 +510,6 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                 primitive_indices.Current(),
                 forward_status,
                 grid.x,
-                depth_bits,
                 static_cast<uint>(n_visible),
                 static_cast<uint>(n_instances));
             LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.create_instances");
@@ -546,7 +547,6 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                 keys.Current(),
                 per_tile_buffers.instance_ranges,
                 forward_status,
-                depth_bits,
                 n_tiles_u32,
                 static_cast<uint>(n_instances),
                 /*d_n_instances=*/nullptr);
@@ -566,8 +566,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     // Production: warp cull ON (mode 0), blend_batch_size from config (or test hook).
     const int warp_cull_mode = g_warp_cull_mode.load(std::memory_order_relaxed);
     const int blend_batch_override = g_blend_batch_size_override.load(std::memory_order_relaxed);
-    auto launch_blend = [&]<bool RENDER_NORMAL>() {
-        kernels::forward::blend_cu<RENDER_NORMAL><<<grid, dim3(config::block_size_blend_forward), 0, stream>>>(
+    auto launch_blend = [&]<bool RENDER_NORMAL, bool RENDER_DEPTH>() {
+        kernels::forward::blend_cu<RENDER_NORMAL, RENDER_DEPTH><<<grid, dim3(config::block_size_blend_forward), 0, stream>>>(
             per_tile_buffers.instance_ranges,
             sorted_primitive_indices,
             visibility_buffers.primitive_work_indices,
@@ -592,9 +592,15 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.blend");
     };
     if (normal != nullptr) {
-        launch_blend.template operator()<true>();
+        if (depth != nullptr)
+            launch_blend.template operator()<true, true>();
+        else
+            launch_blend.template operator()<true, false>();
     } else {
-        launch_blend.template operator()<false>();
+        if (depth != nullptr)
+            launch_blend.template operator()<false, true>();
+        else
+            launch_blend.template operator()<false, false>();
     }
     check_cuda_with_fastgs_status(cudaGetLastError(), "blend", forward_status, "blend", static_cast<uint64_t>(n_primitives), n_tiles_u64);
     sync_fastgs_phase_if_requested("blend", forward_status, "blend", static_cast<uint64_t>(n_primitives), n_tiles_u64);

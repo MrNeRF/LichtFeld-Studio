@@ -1,0 +1,68 @@
+<rml>
+<head>
+    <link type="text/template" href="floating_window.rml"/>
+    <link type="text/rcss" href="logging_panel.rcss"/>
+</head>
+<body template="floating-window" data-model="logging_panel">
+    <div class="log-filter-bar">
+        <div class="log-field log-query-field"><span class="log-field-label text-muted">@tr:scene.search</span>
+            <div class="log-search-box"><input id="log-query" type="text" data-value="query" title="@tr:logging.search" />
+                <span class="log-placeholder text-muted" data-if="query == ''">@tr:logging.search</span></div>
+        </div>
+        <div class="log-field log-source-field"><span class="log-field-label text-muted">@tr:logging.source_label</span>
+            <div class="log-search-box"><input id="log-source-filter" type="text" data-value="source" title="@tr:logging.source" />
+                <span class="log-placeholder text-muted" data-if="source == ''">@tr:logging.source</span></div>
+        </div>
+        <div class="log-field log-level-field"><span class="log-field-label text-muted">@tr:logging.show</span>
+            <select data-value="level">
+                <option value="-1">@tr:logging.all_levels</option><option value="-2">@tr:logging.warnings_errors</option>
+                <option value="0">@tr:scene.log_trace</option><option value="1">@tr:scene.log_debug</option>
+                <option value="2">@tr:scene.log_info</option><option value="3">@tr:scene.log_performance</option>
+                <option value="4">@tr:scene.log_warn</option><option value="5">@tr:scene.log_error</option><option value="6">@tr:scene.log_critical</option>
+            </select>
+        </div>
+        <button type="button" class="btn btn--ghost" data-event-click="reset_filters"><span>@tr:logging.reset_filters</span></button>
+    </div>
+    <div class="log-settings-bar">
+        <div class="log-field log-level-field"><span class="log-field-label text-muted">@tr:logging.capture</span>
+            <select data-value="capture" title="@tr:logging.capture_hint">
+                <option value="0">@tr:scene.log_trace</option><option value="1">@tr:scene.log_debug</option>
+                <option value="2">@tr:scene.log_info</option><option value="3">@tr:scene.log_performance</option>
+                <option value="4">@tr:scene.log_warn</option><option value="5">@tr:scene.log_error</option>
+                <option value="6">@tr:scene.log_critical</option><option value="7">@tr:scene.log_off</option>
+            </select>
+        </div>
+        <div class="log-field log-number-field"><span class="log-field-label text-muted">@tr:logging.retain</span>
+            <input id="log-limit" class="log-limit-input" type="text" data-value="limit" title="@tr:logging.limit_hint" />
+        </div>
+        <div class="log-field log-number-field"><span class="log-field-label text-muted">@tr:logging.page_size</span>
+            <select data-value="page_size"><option value="100">100</option><option value="250">250</option>
+                <option value="500">500</option><option value="1000">1,000</option></select>
+        </div>
+        <label class="checkbox-row log-wrap"><input type="checkbox" data-checked="wrap" /><span>@tr:logging.wrap</span></label>
+    </div>
+    <div class="log-actions">
+        <button type="button" class="btn btn--secondary" data-event-click="pause">
+            <span data-if="!paused">@tr:logging.pause</span><span data-if="paused">@tr:logging.resume</span>
+        </button>
+        <span class="log-action-spacer"></span>
+        <button id="log-copy" type="button" class="btn btn--secondary" data-event-click="copy"><span>@tr:logging.copy_filtered</span></button>
+        <button id="log-export" type="button" class="btn btn--secondary" data-event-click="export"><span>@tr:logging.export_filtered</span></button>
+        <button type="button" class="btn btn--ghost" data-event-click="clear" title="@tr:logging.clear_hint"><span>@tr:logging.clear_buffer</span></button>
+    </div>
+    <div class="log-column-header text-muted">
+        <span class="log-time">@tr:logging.time</span><span class="log-level">@tr:logging.level</span>
+        <span class="log-source">@tr:logging.source_label</span><span class="log-message">@tr:logging.message</span>
+    </div>
+    <div id="log-scroll" tabindex="0">
+        <div id="log-empty" class="log-empty text-muted">@tr:logging.no_matches</div>
+        <div id="log-rows"></div>
+    </div>
+    <div class="log-footer">
+        <span class="log-summary text-muted">{{summary}}</span>
+        <button id="log-newer" type="button" class="btn btn--ghost" data-event-click="newer"><span>@tr:logging.newer</span></button>
+        <button id="log-older" type="button" class="btn btn--ghost" data-event-click="older"><span>@tr:logging.older</span></button>
+    </div>
+    <div class="log-feedback status-info" data-if="feedback != ''">{{feedback}}</div>
+</body>
+</rml>

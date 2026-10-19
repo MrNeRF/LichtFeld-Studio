@@ -1,0 +1,112 @@
+--- a/src/lib/CMakeLists.txt
++++ b/src/lib/CMakeLists.txt
+@@ -3,9 +3,13 @@
+ 
+ message(STATUS "Building OpenEXR libraries")
+ 
+-add_subdirectory( Iex )
+-add_subdirectory( IlmThread )
++if(OPENEXR_BUILD_CPP_LIBS)
++  add_subdirectory( Iex )
++  add_subdirectory( IlmThread )
++endif()
+ 
+ add_subdirectory( OpenEXRCore )
+-add_subdirectory( OpenEXR )
+-add_subdirectory( OpenEXRUtil )
++if(OPENEXR_BUILD_CPP_LIBS)
++  add_subdirectory( OpenEXR )
++  add_subdirectory( OpenEXRUtil )
++endif()
+--- a/cmake/OpenEXRSetup.cmake
++++ b/cmake/OpenEXRSetup.cmake
+@@ -64,6 +64,7 @@
+ 
+ # Whether to build & install the main libraries
+ option(OPENEXR_BUILD_LIBS "Enables building of main libraries" ON)
++option(OPENEXR_BUILD_CPP_LIBS "Build the optional C++ API" ON)
+ 
+ # Whether to build the various command line utility programs
+ option(OPENEXR_BUILD_TOOLS "Enables building of utility programs" ON)
+@@ -318,6 +319,9 @@
+ # Find or install Imath
+ #######################################
+ 
++if(OPENEXR_BUILD_CPP_LIBS)
++set(OPENEXR_CPP_PKGCONFIG_REQUIRES Imath)
++set(OPENEXR_CPP_PKGCONFIG_LIBS "-lOpenEXR${OPENEXR_LIB_SUFFIX} -lOpenEXRUtil${OPENEXR_LIB_SUFFIX} -lIex${OPENEXR_LIB_SUFFIX} -lIlmThread${OPENEXR_LIB_SUFFIX}")
+ option(OPENEXR_FORCE_INTERNAL_IMATH "Force using an internal imath" OFF)
+ # Check to see if Imath is installed outside of the current build directory.
+ set(OPENEXR_IMATH_REPO "https://github.com/AcademySoftwareFoundation/Imath.git" CACHE STRING "Repo for auto-build of Imath")
+@@ -388,6 +392,13 @@
+   endif()
+ endif()
+ 
++else()
++  set(Imath_SOVERSION 0)
++  set(Imath_VERSION_MAJOR 0)
++  set(Imath_VERSION_MINOR 0)
++  set(Imath_VERSION_PATCH 0)
++endif()
++
+ ###########################################
+ # Check if we need to emulate vld1q_f32_x2
+ ###########################################
+--- a/src/lib/OpenEXRCore/CMakeLists.txt
++++ b/src/lib/OpenEXRCore/CMakeLists.txt
+@@ -112,8 +112,6 @@
+   PRIVATE_DEPS
+     ${OPENEXR_EXTRA_MATH_LIB}
+ 
+-  DEPENDENCIES
+-    Imath::Imath
+   )
+ 
+ if (DEFINED EXR_DEFLATE_LIB)
+--- a/src/lib/OpenEXRCore/openexr_config.h
++++ b/src/lib/OpenEXRCore/openexr_config.h
+@@ -9,7 +9,6 @@
+ 
+ #include "OpenEXRConfig.h"
+ #include <IlmThreadConfig.h>
+-#include <ImathConfig.h>
+ 
+ /// \addtogroup ExportMacros
+ /// @{
+--- a/cmake/OpenEXRConfig.cmake.in
++++ b/cmake/OpenEXRConfig.cmake.in
+@@ -12,7 +12,9 @@
+ endif()
+ unset(openexr_needthreads)
+ 
+-find_dependency(Imath)
++if (@OPENEXR_BUILD_CPP_LIBS@)
++  find_dependency(Imath)
++endif()
+ 
+ if (@libdeflate_FOUND@)
+   find_dependency(libdeflate)
+--- a/cmake/OpenEXR.pc.in
++++ b/cmake/OpenEXR.pc.in
+@@ -14,8 +14,8 @@
+ Description: OpenEXR image library
+ Version: @OPENEXR_VERSION@
+ 
+-Libs: @exr_pthread_libs@ -L${libdir} -lOpenEXR${libsuffix} -lOpenEXRUtil${libsuffix} -lOpenEXRCore${libsuffix} -lIex${libsuffix} -lIlmThread${libsuffix}
++Libs: @exr_pthread_libs@ -L${libdir} -lOpenEXRCore${libsuffix} @OPENEXR_CPP_PKGCONFIG_LIBS@
+ Cflags: -I${includedir} -I${OpenEXR_includedir} @exr_pthread_cflags@
+-Requires: Imath
++Requires: @OPENEXR_CPP_PKGCONFIG_REQUIRES@
+ Requires.private: @EXR_DEFLATE_PKGCONFIG_REQUIRES@ @EXR_OPENJPH_PKGCONFIG_REQUIRES@
+ 
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -142,7 +142,7 @@
+   add_subdirectory(website)
+ endif()
+ 
+-if (OPENEXR_BUILD_LIBS AND NOT OPENEXR_IS_SUBPROJECT)
++if (OPENEXR_BUILD_LIBS AND OPENEXR_BUILD_CPP_LIBS AND NOT OPENEXR_IS_SUBPROJECT)
+   # Even if not building the website, still make sure the website example code compiles.
+   add_subdirectory(website/src)
+ endif()

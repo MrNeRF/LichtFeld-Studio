@@ -18,6 +18,7 @@
 #include <vulkan/vulkan.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <format>
@@ -34,6 +35,7 @@ namespace lfs::vis::gui {
     namespace {
         VulkanContext* g_texture_context = nullptr;
         lfs::rendering::CudaVulkanUploadStream g_texture_upload_stream;
+        std::atomic<std::uint64_t> g_next_source_generation{1};
 
         [[nodiscard]] const char* waitOutcomeLabel(const lfs::rendering::WaitOutcome outcome) noexcept {
             using lfs::rendering::WaitOutcome;
@@ -175,6 +177,16 @@ namespace lfs::vis::gui {
         VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         VulkanImageBarrierTracker image_barriers;
         std::uint64_t image_generation_ = 0;
+        std::uint64_t source_generation = 0;
+        std::string rml_source;
+        int source_width = 0;
+        int source_height = 0;
+
+        void beginSourceLifetime() {
+            // Driver handles can be recycled while RmlUi still caches their old descriptor.
+            source_generation = g_next_source_generation.fetch_add(1, std::memory_order_relaxed);
+            rml_source.clear();
+        }
         struct PendingUpload {
             VkFence fence = VK_NULL_HANDLE;
             VkCommandBuffer command_buffer = VK_NULL_HANDLE;
@@ -419,8 +431,13 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] bool init(VulkanContext& ctx) {
-            if (device != VK_NULL_HANDLE) {
+            if (device != VK_NULL_HANDLE && context == &ctx) {
                 return true;
+            }
+            if (device != VK_NULL_HANDLE) {
+                if (context && !context->waitForSubmittedFrames())
+                    return false;
+                reset();
             }
             this->context = &ctx;
             device = ctx.device();
@@ -657,8 +674,10 @@ namespace lfs::vis::gui {
                 destroyImage();
                 return false;
             }
-            vmaSetAllocationName(allocator, image_allocation, "Vulkan UI texture");
-            image_vram_label = std::format("cpu_upload_rgba8:{}x{}", new_width, new_height);
+            image_vram_label = std::format("cpu_upload_rgba8:{}x{}:{:#x}",
+                                           new_width, new_height,
+                                           lfs::rendering::vkHandleValue(image));
+            vmaSetAllocationName(allocator, image_allocation, image_vram_label.c_str());
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.ui_texture.image",
                 image_vram_label,
@@ -690,6 +709,7 @@ namespace lfs::vis::gui {
                                          new_width,
                                          new_height);
             ++image_generation_;
+            beginSourceLifetime();
             image_barriers.registerImage(image, image_generation_, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
 
             if (descriptor_set == VK_NULL_HANDLE) {
@@ -800,6 +820,7 @@ namespace lfs::vis::gui {
             image_view = interop_image.view;
             image_layout = VK_IMAGE_LAYOUT_GENERAL;
             ++image_generation_;
+            beginSourceLifetime();
             image_barriers.registerImage(image, image_generation_, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
             mode = Mode::CudaInterop;
 
@@ -1156,6 +1177,7 @@ namespace lfs::vis::gui {
             image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             image_vram_label.clear();
             mode = Mode::Uninitialized;
+            rml_source.clear();
             width = 0;
             height = 0;
         }
@@ -1265,12 +1287,22 @@ namespace lfs::vis::gui {
         return reinterpret_cast<std::uintptr_t>(impl_->descriptor_set);
     }
 
-    std::string VulkanUiTexture::rmlSrcUrl(const int width, const int height) const {
+    const std::string& VulkanUiTexture::rmlSrcUrl(const int width, const int height) const {
+        static const std::string empty;
         if (!impl_) {
-            return {};
+            return empty;
         }
         impl_->tryReleasePendingUpload();
-        return RenderInterface_VK::MakeExternalTextureSource(impl_->image_view, impl_->sampler, width, height);
+        if (impl_->image_view == VK_NULL_HANDLE || impl_->sampler == VK_NULL_HANDLE || width <= 0 || height <= 0) {
+            return empty;
+        }
+        if (impl_->rml_source.empty() || impl_->source_width != width || impl_->source_height != height) {
+            impl_->rml_source = RenderInterface_VK::MakeExternalTextureSource(impl_->image_view, impl_->sampler, width, height) +
+                                "&g=" + std::to_string(impl_->source_generation);
+            impl_->source_width = width;
+            impl_->source_height = height;
+        }
+        return impl_->rml_source;
     }
 
     bool VulkanUiTexture::valid() const {

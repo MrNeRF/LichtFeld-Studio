@@ -434,9 +434,7 @@ namespace lfs::python {
         }
 
         if (!group.properties.empty() || operator_group) {
-            const size_t prop_count = group.properties.size();
             core::prop::PropertyRegistry::instance().register_group(std::move(group));
-            LOG_INFO("Registered Python property group '{}' with {} properties", group_id, prop_count);
         }
     }
 

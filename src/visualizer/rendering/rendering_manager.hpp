@@ -6,10 +6,12 @@
 
 #include "camera_interaction_service.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#include "core/error.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 #include "dirty_flags.hpp"
+#include "frame_demand.hpp"
 #include "framerate_controller.hpp"
 #include "internal/viewport.hpp"
 #include "io/loader.hpp"
@@ -31,6 +33,8 @@
 #include "viewport_interaction_context.hpp"
 #include "viewport_interop_service.hpp"
 #include "viewport_overlay_service.hpp"
+#include "visualizer/app_store.hpp"
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -54,6 +58,7 @@ namespace lfs::core {
     class Camera;
     class Scene;
     class SplatData;
+    struct SplatLodTree;
     class Tensor;
 } // namespace lfs::core
 
@@ -79,6 +84,7 @@ namespace lfs::vis {
 
     class SceneManager;
     struct SceneRenderState;
+    struct FrameContext;
     class TrainerManager;
 
     class LFS_VIS_API RenderingManager {
@@ -86,14 +92,16 @@ namespace lfs::vis {
         struct RenderContext {
             const Viewport& viewport;
             const RenderSettings& settings;
-            glm::ivec2 logical_screen_size{0, 0};
+            glm::ivec2 screen_size_px{0, 0};
             const ViewportRegion* viewport_region = nullptr;
             SceneManager* scene_manager = nullptr;
             VulkanContext* vulkan_context = nullptr;
+            bool preparing_import = false;
+            core::Uuid provisional_import_node;
         };
 
         struct VulkanFrameResult {
-            std::shared_ptr<const lfs::core::Tensor> image;
+            std::shared_ptr<const lfs::core::Tensor> image = {};
             VkImage external_image = VK_NULL_HANDLE;
             VkImageView external_image_view = VK_NULL_HANDLE;
             VkImageLayout external_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -112,6 +120,7 @@ namespace lfs::vis {
             // extent in the current request. Internal reconstruction resolution
             // may differ from that extent.
             bool matches_viewport_extent = false;
+            bool rendered = false; // Fresh output; cached and deferred results stay false.
 
             // Split-view right panel. The left panel reuses the `image` slot above
             // (rideshares the existing scene-image interop). When this is set, the
@@ -125,11 +134,17 @@ namespace lfs::vis {
         RenderingManager();
         ~RenderingManager();
         void setWakeCallback(std::function<void()> callback);
+        [[nodiscard]] FrameDemandLedger& frameDemandLedger() { return frame_demand_ledger_; }
+        [[nodiscard]] const FrameDemandLedger& frameDemandLedger() const { return frame_demand_ledger_; }
 
         // Initialize rendering resources
         void initialize();
         bool isInitialized() const { return initialized_; }
         void releaseSceneModelResources();
+        void beginImportRenderCheck(uint64_t scene_generation);
+        bool importUsesCombinedModel() const;
+        std::optional<std::string> pollImportRenderCheck(const RenderContext& context, const std::function<void()>& prepare_viewport = {});
+        void cancelImportRenderCheck();
 
         // Main render function
         VulkanFrameResult renderVulkanFrame(const RenderContext& context);
@@ -139,7 +154,7 @@ namespace lfs::vis {
             glm::ivec2 viewport_size);
         // Called by the viewer loop at idle cadence. Releases private viewer
         // scratch after a hysteresis window, or immediately under pressure.
-        void noteVksplatIdleFrame(bool training_active);
+        void releaseIdleVksplatScratch(bool training_active);
 
         enum class VksplatSelectionMaskShape : std::uint32_t {
             Brush = 0,
@@ -164,7 +179,8 @@ namespace lfs::vis {
                                                               int width, int height,
                                                               std::optional<glm::vec3> background_color_override = std::nullopt,
                                                               std::optional<bool> orthographic_override = std::nullopt,
-                                                              std::optional<float> ortho_scale_override = std::nullopt);
+                                                              std::optional<float> ortho_scale_override = std::nullopt,
+                                                              bool equirectangular = false);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgb8(SceneManager* scene_manager,
                                                                   const glm::mat3& camera_rotation,
                                                                   const glm::vec3& camera_position,
@@ -172,7 +188,9 @@ namespace lfs::vis {
                                                                   int width, int height,
                                                                   std::optional<glm::vec3> background_color_override = std::nullopt,
                                                                   std::optional<bool> orthographic_override = std::nullopt,
-                                                                  std::optional<float> ortho_scale_override = std::nullopt);
+                                                                  std::optional<float> ortho_scale_override = std::nullopt,
+                                                                  int reference_height = 0,
+                                                                  bool equirectangular = false);
 
         // Image + per-pixel linear depth from the same viewport render. When
         // expected_depth is true, depth is alpha-weighted expected depth instead
@@ -194,7 +212,9 @@ namespace lfs::vis {
                                                                    float focal_length_mm,
                                                                    int width, int height,
                                                                    std::optional<bool> orthographic_override = std::nullopt,
-                                                                   std::optional<float> ortho_scale_override = std::nullopt);
+                                                                   std::optional<float> ortho_scale_override = std::nullopt,
+                                                                   int reference_height = 0,
+                                                                   bool equirectangular = false);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImage(const lfs::core::SplatData& model,
                                                               SceneRenderState scene_state,
                                                               const glm::mat3& camera_rotation,
@@ -203,7 +223,8 @@ namespace lfs::vis {
                                                               int width, int height,
                                                               std::optional<glm::vec3> background_color_override = std::nullopt,
                                                               std::optional<bool> orthographic_override = std::nullopt,
-                                                              std::optional<float> ortho_scale_override = std::nullopt);
+                                                              std::optional<float> ortho_scale_override = std::nullopt,
+                                                              bool equirectangular = false);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgb8(const lfs::core::SplatData& model,
                                                                   SceneRenderState scene_state,
                                                                   const glm::mat3& camera_rotation,
@@ -212,7 +233,8 @@ namespace lfs::vis {
                                                                   int width, int height,
                                                                   std::optional<glm::vec3> background_color_override = std::nullopt,
                                                                   std::optional<bool> orthographic_override = std::nullopt,
-                                                                  std::optional<float> ortho_scale_override = std::nullopt);
+                                                                  std::optional<float> ortho_scale_override = std::nullopt,
+                                                                  bool equirectangular = false);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgba8(const lfs::core::SplatData& model,
                                                                    SceneRenderState scene_state,
                                                                    const glm::mat3& camera_rotation,
@@ -220,7 +242,8 @@ namespace lfs::vis {
                                                                    float focal_length_mm,
                                                                    int width, int height,
                                                                    std::optional<bool> orthographic_override = std::nullopt,
-                                                                   std::optional<float> ortho_scale_override = std::nullopt);
+                                                                   std::optional<float> ortho_scale_override = std::nullopt,
+                                                                   bool equirectangular = false);
         void releasePreviewImageResources();
 
         // One-shot export: (tiled) preview render followed by the streamed GPU
@@ -233,6 +256,9 @@ namespace lfs::vis {
             float focal_length_mm = 0.0f;
             int width = 0;
             int height = 0;
+            // Positive for viewport exports: ortho_scale_override is the source
+            // viewport scale. Zero keeps native-resolution rasterization and scale.
+            int reference_height = 0;
             std::optional<bool> orthographic_override;
             std::optional<float> ortho_scale_override;
             ExportPostProcessMode mode = ExportPostProcessMode::Opaque;
@@ -242,30 +268,45 @@ namespace lfs::vis {
 
         [[nodiscard]] lfs::io::SplatTensorAllocator makeSplatTensorAllocator() const;
 
-        void markDirty();
-        void markDirty(DirtyMask flags);
+        void markDirty(DirtyMask flags, FrameReason reason, std::string detail = {});
         void markCameraPoseChanged();
 
         [[nodiscard]] bool pollDirtyState();
+        [[nodiscard]] DirtyMask pendingDirtyMask() const { return dirty_mask_.load(std::memory_order_relaxed); }
+        // The training preview refreshes on its own cadence, not only when an
+        // unrelated redraw happens to notice it is due.
+        void pollTrainingRefresh(bool is_training, int current_iteration);
+        [[nodiscard]] double secondsUntilTrainingRefresh() const;
+        // Seconds until an over-budget navigation render may run (camera at
+        // rest); +inf when no settle is pending.
+        [[nodiscard]] double secondsUntilCameraSettle() const;
+        // Re-arms a parked passive training refresh once its render can claim the arena.
+        void pollParkedArenaRetry();
+        [[nodiscard]] bool hasParkedArenaRetry() const { return parked_arena_retry_ != 0; }
+        void retainVksplatScratch();
+        [[nodiscard]] double secondsUntilVksplatScratchRelease() const;
 
         void setPivotAnimationEndTime(const std::chrono::steady_clock::time_point end_time) {
             animation_state_.setPivotAnimationEndTime(end_time);
         }
 
-        void triggerSelectionFlash() {
-            markDirty(animation_state_.triggerSelectionFlash());
-        }
-
         void setOverlayAnimationActive(const bool active) { animation_state_.setOverlayAnimationActive(active); }
 
-        [[nodiscard]] float getSelectionFlashIntensity() const {
-            return animation_state_.selectionFlashIntensity();
-        }
+        // Interactive edits validate changed environment maps before committing settings.
+        [[nodiscard]] lfs::Result<void> updateSettingsFromUser(const RenderSettings& settings);
 
-        // Settings management
+        // Settings management (also used for restoring saved state).
+        void restoreSettingsFromProject(const RenderSettings& settings);
         void updateSettings(const RenderSettings& settings);
         void updateSettings(const RenderSettings& settings, DirtyMask dirty_flags);
         RenderSettings getSettings() const;
+        struct CameraProjectionSettings {
+            bool orthographic;
+            float focal_length_mm;
+            float ortho_scale;
+        };
+        CameraProjectionSettings getCameraProjectionSettings() const;
+        void setOrthographicScale(float scale);
         // The presentation pass reports its actual runtime choice after pipeline
         // preparation. Rendering uses this feedback on the next frame so a failed
         // reconstruction pipeline never receives a reduced-resolution image.
@@ -285,6 +326,7 @@ namespace lfs::vis {
         [[nodiscard]] std::optional<SplitViewInfo> getSplitViewInfoIfChanged(std::uint64_t& generation) const;
         [[nodiscard]] bool isSplitViewActive() const;
         [[nodiscard]] bool isGTComparisonActive() const;
+        [[nodiscard]] bool hasGTComparisonAvailable() const;
         [[nodiscard]] bool isPLYComparisonActive() const;
         [[nodiscard]] bool isIndependentSplitViewActive() const;
         [[nodiscard]] GTComparisonMode getGTComparisonMode() const;
@@ -377,7 +419,7 @@ namespace lfs::vis {
             if (changed) {
                 invalidateCameraMetricsRequests(true);
             }
-            markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::PPISP);
+            markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::PPISP, lfs::vis::FrameReason::SettingsChange);
         }
         int getCurrentCameraId() const { return camera_interaction_service_.currentCameraId(); }
         int getHoveredCameraId() const { return camera_interaction_service_.hoveredCameraId(); }
@@ -388,17 +430,40 @@ namespace lfs::vis {
             float psnr = 0.0f;
             std::optional<float> ssim;
             bool used_mask = false;
+            AppStore::CameraMetricsStatus status = AppStore::CameraMetricsStatus::Available;
         };
 
         void clearLatestCameraMetrics();
 
         // FPS monitoring (scene renders vs. swapchain-presented GUI frames)
-        float getAverageFPS() const { return framerate_controller_.getAverageFPS(); }
-        float getPresentedAverageFPS() const {
-            return presented_framerate_controller_.getAverageFPS();
+        FrameRates getFrameRates() const { return frame_rates_.sample(); }
+        float getAverageFPS() const { return getFrameRates().view; }
+        float getPresentedAverageFPS() const { return getFrameRates().ui; }
+        void sampleFrameRates(const FramePlan& plan) {
+            gui_frame_rates_ = getFrameRates();
+            auto activity = plan.reasons;
+            activity.reset(static_cast<std::size_t>(FrameReason::FpsIdle));
+            fps_idle_frame_ = activity.none();
         }
-        // Measurement only — does not affect scene render pacing/limiting.
-        void notePresentedFrame() { presented_framerate_controller_.beginFrame(); }
+        FrameRates guiFrameRates() const { return gui_frame_rates_; }
+        bool isFpsIdleFrame() const { return fps_idle_frame_; }
+        void countPresentedFrame(const FramePlan& plan) {
+            frame_rates_.countPresented(plan);
+            frame_demand_ledger_.countPresented(plan);
+        }
+        void countViewRendered(const FramePlan& plan) {
+            frame_rates_.countView();
+            frame_demand_ledger_.countViewRendered(plan.render_views, plan);
+        }
+        std::optional<FrameClock::time_point> fpsIdleDeadline() const { return frame_rates_.idleDeadline(); }
+        void refreshIdleFps(const FrameClock::time_point now) {
+            if (frame_rates_.idleDue(now)) {
+                frame_demand_ledger_.request({.reason = FrameReason::FpsIdle,
+                                              .scope = FrameScope::Gui,
+                                              .views = 0,
+                                              .detail = "fps_window_expired"});
+            }
+        }
 
         // Access to the auxiliary rendering engine used by point-cloud, mesh, and readback paths.
         lfs::rendering::RenderingEngine* getRenderingEngine();
@@ -410,7 +475,7 @@ namespace lfs::vis {
         int pickCameraFrustum(const glm::vec2& mouse_pos);
 
         // Depth access for tools (returns camera-space depth at pixel, or -1 if invalid).
-        float getDepthAtPixel(int x, int y, std::optional<SplitViewPanelId> panel = std::nullopt) const;
+        float getDepthAtPixel(int x, int y, std::optional<SplitViewPanelId> panel = std::nullopt, bool nonblocking = false) const;
         struct ExpectedDepthSampleRequest {
             SceneManager* scene_manager = nullptr;
             const Viewport* viewport = nullptr;
@@ -423,15 +488,11 @@ namespace lfs::vis {
         };
         // Renders a fresh expected-depth preview for precise picking on sparse or low-opacity splats.
         float renderExpectedDepthAtPixel(const ExpectedDepthSampleRequest& request);
-        float renderDepthAtPixelForNodeMask(const SceneManager* scene_manager,
-                                            const Viewport& viewport,
-                                            const glm::ivec2& render_size,
-                                            int x,
-                                            int y,
-                                            const std::vector<bool>& node_visibility_mask);
         glm::ivec2 getRenderedSize() const { return viewport_artifact_service_.renderedSize(); }
         std::shared_ptr<lfs::core::Tensor> getViewportImageIfAvailable() const;
         std::shared_ptr<lfs::core::Tensor> captureViewportImage();
+        [[nodiscard]] static std::shared_ptr<lfs::core::Tensor> composeSplitViewCpu(
+            const VulkanSplitViewParams& params, const glm::ivec2& output_size);
 
         // Where the 3D viewport sat inside the window framebuffer on the last frame,
         // top-left origin. Lets callers crop a full-window readback down to the viewport
@@ -453,11 +514,20 @@ namespace lfs::vis {
                                    lfs::core::Tensor* selection_tensor = nullptr,
                                    bool saturation_mode = false, float saturation_amount = 0.0f,
                                    std::optional<SplitViewPanelId> panel = std::nullopt,
-                                   int focused_gaussian_id = -1, bool request_render = true);
+                                   int focused_gaussian_id = -1, bool highlight_splats = true);
         void clearCursorPreviewState();
         [[nodiscard]] bool isCursorPreviewActive() const { return viewport_overlay_service_.isCursorPreviewActive(); }
         [[nodiscard]] std::optional<SplitViewPanelId> getCursorPreviewPanel() const {
             return viewport_overlay_service_.cursorPreview().panel;
+        }
+        // True when the active cursor preview already highlights this splat with this preview selection.
+        [[nodiscard]] bool cursorPreviewShows(const int focused_gaussian_id, const bool add_mode,
+                                              const std::optional<SplitViewPanelId> panel,
+                                              const lfs::core::Tensor* const preview_selection) const {
+            const auto& cursor = viewport_overlay_service_.cursorPreview();
+            return cursor.active && cursor.focused_gaussian_id == focused_gaussian_id &&
+                   cursor.add_mode == add_mode && cursor.panel == panel &&
+                   cursor.preview_selection == preview_selection;
         }
         void getCursorPreviewState(float& x, float& y, float& radius, bool& add_mode) const {
             const auto& cursor = viewport_overlay_service_.cursorPreview();
@@ -533,33 +603,36 @@ namespace lfs::vis {
         struct VulkanMeshFrame {
             glm::mat4 view_projection{1.0f};
             glm::vec3 camera_position{0.0f};
+            glm::vec3 camera_backward{0.0f, 0.0f, 1.0f};
+            bool depth_view = false;
+            float depth_view_min = 0.0f;
+            float depth_view_max = 1.0f;
+            bool depth_grayscale = false;
             std::vector<lfs::vis::VulkanMeshDrawItem> items;
             std::vector<lfs::vis::VulkanMeshViewportPanel> panels;
             lfs::vis::VulkanEnvironmentParams environment;
             lfs::vis::VulkanDepthBlitParams depth_blit;
             lfs::vis::VulkanSplitViewParams split_view;
         };
-        void setVulkanMeshFrame(VulkanMeshFrame frame) {
-            std::lock_guard lock(vulkan_mesh_frame_mutex_);
-            vulkan_mesh_frame_ = std::move(frame);
-        }
+        void setVulkanMeshFrame(VulkanMeshFrame frame);
         [[nodiscard]] VulkanMeshFrame getVulkanMeshFrame() const {
             std::lock_guard lock(vulkan_mesh_frame_mutex_);
             return vulkan_mesh_frame_;
         }
-        void clearVulkanMeshFrame() {
+        [[nodiscard]] bool hasVulkanMeshItems() const {
             std::lock_guard lock(vulkan_mesh_frame_mutex_);
-            vulkan_mesh_frame_ = {};
+            return !vulkan_mesh_frame_.items.empty();
         }
+        void clearVulkanMeshFrame();
 
         // Preview selection
         void setPreviewSelection(lfs::core::Tensor* preview, bool add_mode = true) {
             viewport_overlay_service_.setPreviewSelection(preview, add_mode);
-            markDirty(DirtyFlag::SELECTION);
+            markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
         }
         void clearPreviewSelection() {
             viewport_overlay_service_.clearPreviewSelection();
-            markDirty(DirtyFlag::SELECTION);
+            markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
         }
         void clearSelectionPreviews();
 
@@ -569,6 +642,20 @@ namespace lfs::vis {
         }
         [[nodiscard]] SelectionPreviewMode getSelectionPreviewMode() const {
             return viewport_overlay_service_.selectionPreviewMode();
+        }
+        void setExactSurfacePicking(const bool enabled) {
+            if (exact_surface_picking_ == enabled)
+                return;
+            exact_surface_picking_ = enabled;
+            markDirty(DirtyFlag::VIEWPORT, FrameReason::SettingsChange);
+        }
+        void configureSurfacePicking(FrameContext& frame) const;
+
+        void setGaussianSelectionVisible(const bool visible) {
+            if (gaussian_selection_visible_ == visible)
+                return;
+            gaussian_selection_visible_ = visible;
+            markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
         }
         [[nodiscard]] int getHoveredGaussianId() const { return viewport_overlay_service_.hoveredGaussianId(); }
 
@@ -634,6 +721,13 @@ namespace lfs::vis {
         void clearVulkanViewportImageState(glm::ivec2 size = {0, 0},
                                            bool flip_y = false,
                                            glm::ivec2 alloc_size = {0, 0});
+        [[nodiscard]] float exportRasterizationScale(int target_height, int reference_height) const;
+        [[nodiscard]] std::optional<float> exportOrthoScale(std::optional<float> scale, int target_height, int reference_height) const;
+        // Draws the visible meshes over a finished export image, depth-tested against the splats.
+        [[nodiscard]] lfs::Status compositeExportMeshes(
+            SceneManager* scene_manager,
+            const ExportImageRequest& request,
+            lfs::core::Tensor& image);
 
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageWithState(
             SceneManager* scene_manager,
@@ -649,7 +743,9 @@ namespace lfs::vis {
             std::optional<bool> orthographic_override,
             std::optional<float> ortho_scale_override,
             std::optional<glm::vec3> background_color_override,
-            PreviewImageReadback readback);
+            PreviewImageReadback readback,
+            float rasterization_scale = 1.0f,
+            bool equirectangular = false);
         [[nodiscard]] std::expected<void, std::string> renderPreviewImageToPreviewSlotWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
@@ -666,7 +762,10 @@ namespace lfs::vis {
             std::optional<bool> orthographic_override,
             std::optional<float> ortho_scale_override,
             std::optional<glm::vec3> background_color_override,
-            std::optional<bool> transparent_background_override);
+            std::optional<bool> transparent_background_override,
+            float rasterization_scale = 1.0f,
+            bool deterministic_export = false,
+            bool equirectangular = false);
         [[nodiscard]] std::expected<void, std::string> renderDepthCaptureToPreviewSlotWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
@@ -694,7 +793,9 @@ namespace lfs::vis {
             std::optional<glm::vec3> background_color_override,
             std::optional<bool> orthographic_override,
             std::optional<float> ortho_scale_override,
-            PreviewImageReadback readback);
+            PreviewImageReadback readback,
+            float rasterization_scale = 1.0f,
+            bool equirectangular = false);
 
         struct CameraMetricsJobRequest {
             uint64_t generation = 0;
@@ -743,6 +844,7 @@ namespace lfs::vis {
         void queueCameraMetricsRefreshIfStale(SceneManager* scene_manager);
         void invalidateCameraMetricsRequests(bool clear_latest = false);
         void requestRenderFollowUp();
+        void queueSharedScratchRetry(DirtyMask retry_dirty);
         void notifyAsyncLodResultsReady();
         void requestResizeTrainingPause(TrainerManager* trainer_manager);
         void releaseResizeTrainingPause();
@@ -784,20 +886,45 @@ namespace lfs::vis {
         // Core components
         std::unique_ptr<lfs::rendering::RenderingEngine> engine_;
         lfs::rendering::ScreenOverlayRenderer screen_overlay_renderer_;
-        mutable FramerateController framerate_controller_;
-        // Parallel presented-frame counter (GUI-only frames included). Does not
-        // drive pacing — scene path still uses framerate_controller_ alone.
-        mutable FramerateController presented_framerate_controller_;
+        FrameRateTracker frame_rates_;
+        FrameRates gui_frame_rates_;
+        bool fps_idle_frame_ = false;
 
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;
         std::string last_logged_vksplat_render_error_;
+        std::optional<std::string> prepareImportRenderCheck(const RenderContext& context, const std::function<void()>& prepare_viewport);
+        void noteImportRenderFrame(uint64_t scene_generation, std::string error = {});
+        glm::ivec2 last_nonzero_viewport_size_{0, 0};
+        bool import_render_check_ = false;
+        bool import_render_preparing_ = false;
+        uint64_t import_render_generation_ = 0;
+        unsigned import_render_frames_ = 0;
+        std::optional<std::string> import_render_result_;
         StaleFrameGuard vksplat_stale_frame_guard_;
+        DirtyMask parked_arena_retry_ = 0;
+        // Over-budget navigation: render when the camera has rested.
+        bool camera_settle_pending_ = false;
+        glm::mat3 last_navigation_rotation_{1.0f};
+        glm::vec3 last_navigation_translation_{0.0f};
+        bool navigation_pose_valid_ = false;
+        std::chrono::steady_clock::time_point camera_settle_deadline_{};
+        [[nodiscard]] float trainingRefreshIntervalSec() const;
         std::uint64_t viewport_projection_generation_ = 1;
         std::unique_ptr<VksplatViewportRenderer> vksplat_viewport_renderer_;
         std::unique_ptr<PointCloudVulkanRenderer> point_cloud_vulkan_renderer_;
         std::unique_ptr<SparkLodController> lod_controller_;
         const lfs::core::SplatData* lod_controller_model_ = nullptr;
+        // Offscreen renders have no LOD cut, so an LOD-tree model draws through its leaf view.
+        [[nodiscard]] std::shared_ptr<const lfs::core::SplatData> lodLeafRenderView(const lfs::core::SplatData& model);
+        // The view shares its source's tensors; keep it only while that model is still rendered.
+        void releaseLodLeafRenderViewUnlessFor(const lfs::core::SplatData* model);
+        std::mutex lod_leaf_view_mutex_;
+        const lfs::core::SplatData* lod_leaf_view_source_ = nullptr;
+        const lfs::core::SplatLodTree* lod_leaf_view_tree_ = nullptr;
+        std::size_t lod_leaf_view_rows_ = 0;
+        std::uint64_t lod_leaf_view_deleted_version_ = 0;
+        std::shared_ptr<const lfs::core::SplatData> lod_leaf_view_;
         bool lod_controller_needs_sync_traversal_ = false;
         std::uint64_t lod_controller_page_map_generation_ = 0;
         // Cached SH0→RGB derivation for the point-cloud Vulkan path. Refreshed
@@ -806,11 +933,18 @@ namespace lfs::vis {
         lfs::core::Tensor point_cloud_colors_cache_;
         const void* point_cloud_colors_cache_key_ = nullptr;
         std::size_t point_cloud_colors_cache_size_ = 0;
+        // Submit serial of the last frame that drew the point cloud; its buffers
+        // are released only after that frame has retired on the GPU.
+        std::uint64_t point_cloud_last_frame_serial_ = 0;
         std::uint64_t point_cloud_data_revision_ = 0;
         std::uint64_t point_cloud_preview_selection_revision_ = 0;
+        // One texel keeps mesh-only independent panels renderable without
+        // allocating or uploading a full-size background each frame.
+        std::shared_ptr<lfs::core::Tensor> mesh_only_split_background_;
+        glm::vec4 mesh_only_split_background_color_{-1.0f};
         VulkanContext* last_vulkan_context_ = nullptr;
         std::atomic<bool> vksplat_terminal_release_pending_{false};
-        std::uint32_t vksplat_idle_frame_count_ = 0;
+        std::chrono::steady_clock::time_point vksplat_idle_since_{};
         VkImage vulkan_external_viewport_image_ = VK_NULL_HANDLE;
         VkImageView vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
         VkImageLayout vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -841,6 +975,7 @@ namespace lfs::vis {
         glm::ivec2 gt_comparison_failed_placeholder_size_{0, 0};
         std::mutex wake_callback_mutex_;
         std::function<void()> wake_callback_;
+        FrameDemandLedger frame_demand_ledger_;
         glm::ivec2 vulkan_viewport_image_size_{0, 0};
         glm::ivec2 vulkan_viewport_image_alloc_size_{0, 0};
         glm::ivec2 vulkan_viewport_coordinate_size_{0, 0};
@@ -880,6 +1015,7 @@ namespace lfs::vis {
         // #1574 GT depth/normal async hold-then-swap: at most one outstanding ticket.
         // Panel keeps gt_async_held_display_ until the next ticket delivers (never blank).
         std::uint64_t gt_async_depth_ticket_ = 0;
+        bool gt_async_refresh_pending_ = false;
         lfs::core::Tensor gt_async_depth_dest_{};
         GTComparisonMode gt_async_ticket_mode_ = GTComparisonMode::RGB;
         std::optional<lfs::rendering::CameraIntrinsics> gt_async_ticket_intrinsics_;
@@ -893,6 +1029,8 @@ namespace lfs::vis {
 
         // Granular dirty tracking
         std::atomic<uint32_t> dirty_mask_{DirtyFlag::ALL};
+        int last_training_preview_iteration_ = -1;
+        bool has_training_preview_iteration_ = false;
 
         RenderAnimationState animation_state_;
         FramebufferViewportRect framebuffer_viewport_rect_;
@@ -905,6 +1043,8 @@ namespace lfs::vis {
 
         // Settings
         RenderSettings settings_;
+        std::shared_ptr<const std::filesystem::path> environment_map_path_ =
+            std::make_shared<const std::filesystem::path>(settings_.environment_map_path);
         SceneUpscalerSelection scene_upscaler_runtime_selection_{};
         std::array<int, 2> panel_grid_planes_{{1, 1}};
         mutable std::mutex settings_mutex_;
@@ -929,11 +1069,15 @@ namespace lfs::vis {
         ViewportInteractionContext viewport_interaction_context_;
 
         ViewportOverlayService viewport_overlay_service_;
+        bool gaussian_selection_visible_ = true;
+        bool exact_surface_picking_ = false;
 
         lfs::event::ScopedHandler event_handlers_;
 
         friend class RenderingManagerEventsTest_SceneClearedResetsFrustumLoaderSyncCache_Test;
         friend class SceneManager;
+        friend class AlignDepthIntegrationTest;
+        friend struct SplitOutputLifetimeTestAccess;
     };
 
 } // namespace lfs::vis

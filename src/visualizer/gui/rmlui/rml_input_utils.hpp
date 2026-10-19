@@ -1,9 +1,17 @@
 #pragma once
 
+#include "core/logger.hpp"
+#include "gui/rmlui/rml_text_input_handler.hpp"
+#include "gui/rmlui/sdl_rml_key_mapping.hpp"
+#include "input/frame_input_buffer.hpp"
+#include <cstdlib>
+
 #include <RmlUi/Core.h>
+#include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <RmlUi/Core/EventListener.h>
 
 #include <functional>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 
@@ -44,6 +52,71 @@ namespace lfs::vis::gui::rml_input {
         return element && element->GetTagName() != "body";
     }
 
+    inline bool isDisplayedElement(Rml::Element* element) {
+        return element && element->GetDisplay() != Rml::Style::Display::None && element->IsVisible();
+    }
+
+    inline bool isKeyboardPopupElement(Rml::Element* element) {
+        if (!element)
+            return false;
+
+        const auto& tag = element->GetTagName();
+        if (tag == "select")
+            if (auto* select = dynamic_cast<Rml::ElementFormControlSelect*>(element); select && select->IsSelectBoxVisible())
+                return true;
+
+        const auto string_attribute = [element](const char* name) -> std::string_view {
+            const auto* attribute = element->GetAttribute(name);
+            return attribute && attribute->GetType() == Rml::Variant::STRING
+                       ? std::string_view(attribute->GetReference<Rml::String>())
+                       : std::string_view{};
+        };
+        const auto role = string_attribute("role");
+        const auto aria_modal = string_attribute("aria-modal");
+        if (tag == "dialog" || role == "dialog" || aria_modal == "true")
+            return true;
+
+        const auto classes = string_attribute("class");
+        std::size_t start = 0;
+        while (start < classes.size()) {
+            const auto end = classes.find_first_of(" \t\r\n", start);
+            const auto token = classes.substr(start, end == std::string_view::npos ? end : end - start);
+            if (token.find("popup") != std::string_view::npos || token == "context-menu")
+                return true;
+            if (end == std::string_view::npos)
+                break;
+            start = end + 1;
+        }
+        return false;
+    }
+
+    inline bool hasOpenKeyboardPopup(Rml::Context* context) {
+        if (!context)
+            return false;
+
+        auto visit = [](auto&& self, Rml::Element* element) -> bool {
+            if (!isDisplayedElement(element))
+                return false;
+            if (isKeyboardPopupElement(element))
+                return true;
+            for (int i = 0; i < element->GetNumChildren(); ++i) {
+                if (self(self, element->GetChild(i)))
+                    return true;
+            }
+            return false;
+        };
+
+        for (int i = 0; i < context->GetNumDocuments(); ++i) {
+            if (visit(visit, context->GetDocument(i)))
+                return true;
+        }
+        return false;
+    }
+
+    inline bool wantsKeyboardCapture(Rml::Element* focused, Rml::Context* context) {
+        return hasFocusedKeyboardTarget(focused) || hasOpenKeyboardPopup(context);
+    }
+
     inline bool isCustomTextInputElement(Rml::Element* element) {
         return element && element->GetAttribute<Rml::String>("data-text-input", "") == "true";
     }
@@ -56,13 +129,39 @@ namespace lfs::vis::gui::rml_input {
         return element && element->GetTagName() == "input" && isTextEditableElement(element);
     }
 
-    inline bool isSelectRelatedElement(Rml::Element* element) {
-        for (auto* current = element; current; current = current->GetParentNode()) {
+    inline bool isSelectRelatedElement(const Rml::Element* element) {
+        for (const auto* current = element; current; current = current->GetParentNode()) {
             const auto tag = current->GetTagName();
             if (tag == "select" || tag == "selectbox")
                 return true;
         }
         return false;
+    }
+
+    // Blur closes a dropdown only when the select itself is focused. A viewport
+    // click often is not, so hide every open list in the context that was clicked.
+    inline bool hideOpenSelectBoxes(Rml::Context& context) {
+        bool hidden = false;
+        const auto visit = [&](auto&& self, Rml::Element* element) -> void {
+            if (!element)
+                return;
+            if (auto* const select = dynamic_cast<Rml::ElementFormControlSelect*>(element);
+                select && select->IsSelectBoxVisible()) {
+                select->HideSelectBox();
+                hidden = true;
+            }
+            const int child_count = element->GetNumChildren();
+            for (int i = 0; i < child_count; ++i)
+                self(self, element->GetChild(i));
+        };
+        const int document_count = context.GetNumDocuments();
+        for (int i = 0; i < document_count; ++i)
+            visit(visit, context.GetDocument(i));
+        return hidden;
+    }
+
+    inline bool shouldCancelOnEscape(Rml::Element* element, const bool composing) {
+        return !composing && element && (isTextEditableElement(element) || isSelectRelatedElement(element));
     }
 
     inline bool cancelFocusedElement(Rml::Context& context) {
@@ -84,6 +183,92 @@ namespace lfs::vis::gui::rml_input {
         if (auto* const still_focused = context.GetFocusElement();
             still_focused && isSelectRelatedElement(still_focused)) {
             still_focused->Blur();
+        }
+        return true;
+    }
+
+    inline bool isRepeatedDialogAction(const FrameInputEvent& event, Rml::Element* focused = nullptr) {
+        if (event.kind != FrameInputEventKind::KeyDown || !event.repeat)
+            return false;
+        if (event.scancode == SDL_SCANCODE_ESCAPE)
+            return true;
+        if (event.scancode == SDL_SCANCODE_SPACE)
+            return !wantsTextInput(focused);
+        return (event.scancode == SDL_SCANCODE_RETURN || event.scancode == SDL_SCANCODE_KP_ENTER) &&
+               (!focused || focused->GetTagName() != "textarea");
+    }
+
+    // Mouse transitions share the keyboard timeline; never flush future text on blur.
+    template <typename Pointer, typename Keyboard>
+    void replayInputEvents(const std::vector<FrameInputEvent>& events,
+                           const std::vector<FrameMouseButtonEvent>& buttons,
+                           Pointer&& pointer, Keyboard&& keyboard) {
+        for (const auto& event : events) {
+            if (event.kind == FrameInputEventKind::MouseButton) {
+                if (event.mouse_button_index < buttons.size())
+                    pointer(buttons[event.mouse_button_index]);
+            } else {
+                keyboard(event);
+            }
+        }
+    }
+
+    // Replay one SDL event. Callers retain their own submit/cancel policies, but
+    // must invoke them at the event's position in the stream, before later text.
+    inline bool processKeyboardEvent(Rml::Context& context, const FrameInputEvent& event,
+                                     RmlTextInputHandler* handler = nullptr) {
+        if (event.kind == FrameInputEventKind::MouseButton)
+            return false;
+        const auto consumed = [&](bool value) {
+            if (event.dispatch)
+                event.dispatch->consumed |= value;
+            return value;
+        };
+        auto* focused = context.GetFocusElement();
+        // A control can become locked after it acquired focus. RmlUi retains that
+        // focus, so release it before dispatching queued text or key events.
+        if (focused && focused->GetComputedValues().focus() == Rml::Style::Focus::None) {
+            if (auto* document = focused->GetOwnerDocument())
+                document->Focus();
+            return consumed(true);
+        }
+        const bool editable = isTextEditableElement(focused);
+        if (event.kind == FrameInputEventKind::TextEditing) {
+            return consumed(editable && handler && handler->handleTextEditing(event.text, event.editing_start, event.editing_length));
+        }
+        if (event.kind == FrameInputEventKind::Text) {
+            if (std::getenv("LFS_TRACE_INPUT"))
+                LOG_INFO("INPUT consumer context={} element={} text={}", context.GetName(), focused ? focused->GetTagName() : "none", event.text);
+            if (!wantsTextInput(focused))
+                return false;
+            if (!editable || !handler || !handler->handleTextInput(event.text))
+                context.ProcessTextInput(event.text);
+            consumed(true);
+            return true;
+        }
+        const auto sc = event.scancode;
+        if (handler && handler->isComposing() &&
+            (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER || sc == SDL_SCANCODE_ESCAPE))
+            return false;
+        if (wantsTextInput(focused) &&
+            ((sc >= SDL_SCANCODE_KP_1 && sc <= SDL_SCANCODE_KP_0) || sc == SDL_SCANCODE_KP_PERIOD))
+            return false;
+        const auto key = editable
+                             ? sdlTextShortcutToRml(sc, event.keycode, event.modifiers)
+                             : sdlScancodeToRml(sc);
+        if (key == Rml::Input::KI_UNKNOWN)
+            return false;
+        const int mods = sdlModsToRml(event.modifiers & SDL_KMOD_CTRL,
+                                      event.modifiers & SDL_KMOD_SHIFT,
+                                      event.modifiers & SDL_KMOD_ALT,
+                                      event.modifiers & SDL_KMOD_GUI);
+        if (event.kind == FrameInputEventKind::KeyDown) {
+            if (!editable || !handler || !handler->handleKeyDown(key, mods))
+                consumed(!context.ProcessKeyDown(key, mods));
+            else
+                consumed(true);
+        } else {
+            consumed(!context.ProcessKeyUp(key, mods));
         }
         return true;
     }

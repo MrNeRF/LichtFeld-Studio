@@ -1,13 +1,17 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/alloc_counter.hpp"
 #include "core/camera.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/logger.hpp"
 #include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/ply.hpp"
 #include "io/loader.hpp"
@@ -195,6 +199,52 @@ TEST(ShValueStorageTest, GpuEncodeDecodeRoundtripLowMse) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
+// Catches the q16 block-run workspace keeping buffers bound to the stream that first
+// grew it: growing it after that stream is destroyed freed on a dead handle, which
+// segfaults or reports cudaErrorContextIsDestroyed after switching projects.
+TEST(ShValueStorageTest, Q16WorkspaceGrowthAfterReleasedStreamDoesNotReportCudaFailure) {
+    // Grow across many quantization blocks, including a partial final block.
+    auto splat = make_random_sh3(512 * kN + 17);
+    const auto rows = static_cast<size_t>(splat.size());
+    const Tensor canonical = splat.shN_canonical();
+    ASSERT_EQ(canonical.ndim(), 3u);
+    ASSERT_EQ(canonical.shape()[0], rows);
+
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+
+    cudaStream_t stream_a = nullptr;
+    cudaStream_t stream_b = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream_a, cudaStreamNonBlocking), cudaSuccess);
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream_b, cudaStreamNonBlocking), cudaSuccess);
+
+    const auto scatter_rows = [&](const cudaStream_t stream, const size_t count) {
+        CUDAStreamGuard stream_guard(stream);
+        const Tensor indices = Tensor::arange(static_cast<float>(count)).to(DataType::Int64);
+        LiveModelMutationGuard mutation_guard("q16_workspace_stream_lifetime_test");
+        sh_value::scatter_canonical_into_shN(
+            splat, indices, canonical.slice(0, 0, count).contiguous());
+    };
+
+    scatter_rows(stream_a, rows / 2);
+    CudaMemoryPool::instance().release_stream(stream_a);
+    ASSERT_EQ(cudaStreamDestroy(stream_a), cudaSuccess);
+
+    const auto log_generation = Logger::get().buffered_log_generation();
+    scatter_rows(stream_b, rows);
+
+    const auto logs = Logger::get().buffered_logs_since(log_generation, 64);
+    const bool stale_stream_free = std::any_of(
+        logs.begin(), logs.end(), [](const LogEntrySnapshot& entry) {
+            return entry.message.find("stream-ordered CUDA allocation free") != std::string::npos;
+        });
+    EXPECT_FALSE(stale_stream_free);
+
+    CudaMemoryPool::instance().release_stream(stream_b);
+    EXPECT_EQ(cudaStreamDestroy(stream_b), cudaSuccess);
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
 TEST(ShValueStorageTest, CanonicalExportIsFp32BitCompat) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto splat = make_random_sh3(64);
@@ -245,6 +295,12 @@ TEST(ShValueStorageTest, IeeeF16CanonicalCpuMatchesDevicePath) {
     EXPECT_EQ(cpu.device(), Device::CPU);
     EXPECT_EQ(cpu.dtype(), DataType::Float32);
     expect_tensors_bitwise_equal(cpu, device_cpu, "ieee-f16 canonical cpu vs device");
+
+    const auto rows = Tensor::from_vector(
+        std::vector<int32_t>{0, 17, 63}, TensorShape({3}), Device::CPU);
+    const auto selected = splat.shN_canonical_cpu_rows(rows);
+    expect_tensors_bitwise_equal(
+        cpu.index_select(0, rows), selected, "ieee-f16 selected canonical rows");
 }
 
 TEST(ShValueStorageTest, Q16CloneCarriesBoundsAndDecodesIdentically) {
@@ -365,6 +421,96 @@ TEST(ShValueStorageTest, Q16DeletedMaskSceneMergeAndPlyExport) {
     std::filesystem::remove(output_path);
 
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(ShValueStorageTest, Q16DeletedMaskMergeBoundsDeviceAllocations) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    constexpr size_t count = 262144;
+    auto splat = make_random_sh3(count, 0xD004);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    ASSERT_TRUE(splat.shN_value_quantized());
+
+    std::vector<bool> deleted(count, false);
+    for (size_t i = 31; i < count; i += 32)
+        deleted[i] = true;
+    splat.deleted() = Tensor::from_vector(deleted, {count}, Device::CPU).to(Device::CUDA);
+    const Tensor keep_mask = splat.deleted().logical_not();
+    const Tensor expected = splat.shN_canonical_cpu()
+                                .index_select(0, keep_mask.to(Device::CPU))
+                                .contiguous();
+
+    const auto allocation_snapshot = alloc_counter::snapshot();
+    auto merged = Scene::mergeSplatsWithTransforms(
+        {{&splat, glm::mat4{1.0f}}}, Scene::MergeStorageMode::Clone);
+    const auto merge_allocations = alloc_counter::delta_since(allocation_snapshot);
+
+    ASSERT_NE(merged, nullptr);
+    ASSERT_EQ(merged->size(), count - count / 32);
+    EXPECT_LE(merge_allocations, 8u)
+        << "compact deleted-row merge should not allocate a full-source decode and a second gather";
+    expect_tensors_bitwise_equal(expected, merged->shN_canonical_cpu(),
+                                 "q16 deleted-row merge shN");
+
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(ShValueStorageTest, Q16DeletedRowsPreserveEveryDegreeAndTransform) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    for (int degree = 1; degree <= 3; ++degree) {
+        auto splat = make_random_sh3(257, static_cast<uint32_t>(0xD100 + degree));
+        splat.set_sh_degree(degree);
+        ASSERT_EQ(splat.get_max_sh_degree(), degree);
+        ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+
+        std::vector<bool> deleted(257, false);
+        deleted[1] = true;
+        deleted[17] = true;
+        deleted[256] = true;
+        splat.deleted() = Tensor::from_vector(deleted, {deleted.size()}, Device::CPU).to(Device::CUDA);
+        const Tensor keep_mask = splat.deleted().logical_not();
+        const Tensor expected_sh = splat.shN_canonical_cpu()
+                                       .index_select(0, keep_mask.to(Device::CPU))
+                                       .contiguous();
+        const auto expected_means = splat.means_raw().cpu().contiguous();
+        const glm::mat4 translation = glm::translate(glm::mat4{1.0f}, glm::vec3{0.25f, -0.5f, 1.0f});
+
+        auto merged = Scene::mergeSplatsWithTransforms(
+            {{&splat, translation}}, Scene::MergeStorageMode::Clone);
+        ASSERT_NE(merged, nullptr) << "degree=" << degree;
+        ASSERT_EQ(merged->size(), 254u) << "degree=" << degree;
+        expect_tensors_bitwise_equal(expected_sh, merged->shN_canonical_cpu(), "q16 filtered SH degree");
+
+        const auto actual_means = merged->means_raw().cpu().contiguous();
+        const auto* src = expected_means.ptr<float>();
+        const auto* dst = actual_means.ptr<float>();
+        for (size_t row = 0; row < merged->size(); ++row) {
+            const size_t source_row = row < 1 ? row : row < 16 ? row + 1
+                                                               : row + 2;
+            EXPECT_FLOAT_EQ(dst[row * 3], src[source_row * 3] + 0.25f) << "degree=" << degree << " row=" << row;
+            EXPECT_FLOAT_EQ(dst[row * 3 + 1], src[source_row * 3 + 1] - 0.5f) << "degree=" << degree << " row=" << row;
+            EXPECT_FLOAT_EQ(dst[row * 3 + 2], src[source_row * 3 + 2] + 1.0f) << "degree=" << degree << " row=" << row;
+        }
+    }
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(ShValueStorageTest, IeeeF16DeletedRowsMergePreservesCanonicalValues) {
+    auto splat = make_random_sh3(64, 0xD1F1);
+    splat.shN() = splat.shN().to(DataType::Float16);
+    ASSERT_TRUE(splat.shN_ieee_f16());
+    std::vector<bool> deleted(64, false);
+    deleted[3] = true;
+    deleted[31] = true;
+    splat.deleted() = Tensor::from_vector(deleted, {deleted.size()}, Device::CPU).to(Device::CUDA);
+
+    const Tensor keep_mask = splat.deleted().logical_not();
+    const Tensor expected = splat.shN_canonical_cpu()
+                                .index_select(0, keep_mask.to(Device::CPU))
+                                .contiguous();
+    auto merged = Scene::mergeSplatsWithTransforms({{&splat, glm::mat4{1.0f}}}, Scene::MergeStorageMode::Clone);
+    ASSERT_NE(merged, nullptr);
+    ASSERT_EQ(merged->size(), 62u);
+    expect_tensors_bitwise_equal(expected, merged->shN_canonical_cpu(), "ieee-f16 deleted-row merge shN");
 }
 
 TEST(ShValueStorageTest, Q16BorrowSingleIdentityMergePreservesQuantAndPly) {

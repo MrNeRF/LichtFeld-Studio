@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "rendering/export_post_process.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "environment_image.hpp"
@@ -98,7 +99,7 @@ namespace lfs::rendering {
             lfs::core::CudaMemoryPool::instance().release_stream(upload_stream);
             (void)cudaStreamDestroy(upload_stream);
             return std::unexpected(std::format("failed to allocate CUDA environment map {}",
-                                               (*image)->path.string()));
+                                               lfs::core::path_to_utf8((*image)->path)));
         }
 
         if (status == cudaSuccess) {
@@ -118,7 +119,7 @@ namespace lfs::rendering {
         const cudaError_t destroy_status = cudaStreamDestroy(upload_stream);
         if (status != cudaSuccess) {
             return std::unexpected(std::format("failed to upload environment map {} to CUDA: {} ({})",
-                                               (*image)->path.string(),
+                                               lfs::core::path_to_utf8((*image)->path),
                                                cudaGetErrorName(status),
                                                cudaGetErrorString(status)));
         }

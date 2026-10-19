@@ -11,6 +11,8 @@
 #include <functional>
 #include <memory>
 
+struct SDL_Window;
+
 namespace lfs::vis::gui {
     struct PanelDrawContext;
     struct PanelInputState;
@@ -21,6 +23,11 @@ namespace lfs::gui {
     class IVideoExtractorWidget {
     public:
         virtual ~IVideoExtractorWidget() = default;
+        [[nodiscard]] virtual SDL_Window* nativeWindow() const { return nullptr; }
+        virtual bool detachToDesktop(float, float, float, float) { return false; }
+        virtual bool restoreDesktopWindow() { return false; }
+        virtual void releaseDesktopWindow() {}
+        virtual void resetDesktopRestoreState() {}
         [[nodiscard]] virtual bool isVideoPlaying() const = 0;
         [[nodiscard]] virtual bool openVideoPath(const std::filesystem::path& path) {
             (void)path;

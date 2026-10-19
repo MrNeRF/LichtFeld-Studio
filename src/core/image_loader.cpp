@@ -14,6 +14,10 @@ namespace lfs::core {
         g_image_loader = std::move(fn);
     }
 
+    bool has_image_loader() noexcept {
+        return static_cast<bool>(g_image_loader);
+    }
+
     Tensor load_image_cached(const ImageLoadParams& params) {
         assert(g_image_loader);
         return g_image_loader(params);

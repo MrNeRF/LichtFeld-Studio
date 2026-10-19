@@ -18,11 +18,13 @@ namespace lfs::core {
         void* stream = nullptr;
         bool output_uint8 = false;
         bool skip_blob_cache = false;
+        bool mask_grayscale = false;
     };
 
     using ImageLoadFunc = std::function<Tensor(const ImageLoadParams&)>;
 
     LFS_CORE_API void set_image_loader(ImageLoadFunc fn);
+    [[nodiscard]] LFS_CORE_API bool has_image_loader() noexcept;
     LFS_CORE_API Tensor load_image_cached(const ImageLoadParams& params);
 
 } // namespace lfs::core

@@ -17,7 +17,7 @@
 #include <unistd.h>
 #endif
 
-namespace {
+namespace lfs_test_lsp {
 
     class ScopedEnvVar {
     public:
@@ -174,7 +174,9 @@ while True:
     }
 #endif
 
-} // namespace
+} // namespace lfs_test_lsp
+
+using namespace lfs_test_lsp;
 
 TEST(PythonLspClientTest, ReceivesCompletionItemsFromLanguageServer) {
 #ifdef _WIN32

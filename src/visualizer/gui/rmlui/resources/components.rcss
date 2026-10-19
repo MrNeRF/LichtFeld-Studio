@@ -85,7 +85,7 @@ body.docked-panel {
 /* ── Scrollbars ─────────────────────────────────────────── */
 
 scrollbarvertical {
-    width: 12dp;
+    width: 4dp;
 }
 
 scrollbarvertical slidertrack {
@@ -95,7 +95,7 @@ scrollbarvertical slidertrack {
 
 scrollbarvertical sliderbar {
     background-color: rgba(108, 112, 134, 160);
-    min-height: 16dp;
+    min-height: 12dp;
     border-radius: 6dp;
     transition: background-color 0.12s quadratic-out;
 }
@@ -105,7 +105,7 @@ scrollbarvertical sliderbar:hover {
 }
 
 scrollbarhorizontal {
-    height: 12dp;
+    height: 4dp;
 }
 
 scrollbarhorizontal slidertrack {
@@ -115,7 +115,7 @@ scrollbarhorizontal slidertrack {
 
 scrollbarhorizontal sliderbar {
     background-color: rgba(108, 112, 134, 160);
-    min-width: 16dp;
+    min-width: 12dp;
     border-radius: 6dp;
     transition: background-color 0.12s quadratic-out;
 }
@@ -133,6 +133,7 @@ select,
 textarea,
 .btn,
 .context-menu-item,
+.scrub-field,
 .section-header {
     tab-index: auto;
     nav: auto;
@@ -214,7 +215,10 @@ input[type="text"] {
     background-color: #313244;
     border-width: 1dp;
     border-color: #45475a;
-    padding: 2dp 4dp;
+    height: 18dp;
+    min-height: 18dp;
+    padding: 1dp 4dp;
+    box-sizing: border-box;
     transition: border-color 0.12s quadratic-out;
 }
 
@@ -251,7 +255,9 @@ select:focus-visible,
 button:focus-visible,
 .btn:focus-visible,
 .context-menu-item:focus-visible,
-.section-header:focus-visible {
+.section-header:focus-visible,
+.asset-filter-row:focus-visible,
+.asset-sidebar-title:focus-visible {
     border-color: #89b4fa;
     box-shadow: 0 0 0 1dp rgba(137, 180, 250, 160);
 }
@@ -282,12 +288,14 @@ selectbox {
     border-color: #45475a;
     position: absolute;
     z-index: 10000;
+    min-width: 100%;
 }
 
 selectbox option {
     display: block;
     padding: 2dp 6dp;
     font-size: 12dp;
+    white-space: nowrap;
     transition: background-color 0.1s quadratic-out;
 }
 
@@ -304,10 +312,11 @@ select selectvalue {
     height: 16dp;
     line-height: 16dp;
     margin-right: 18dp;
-    padding: 0 0 0 6dp;
+    padding: 0 0 0 4dp;
     box-sizing: border-box;
     position: relative;
-    top: -4dp;
+    top: 50%;
+    transform: translateY(-50%);
 }
 
 select selectarrow {
@@ -317,7 +326,8 @@ select selectarrow {
     text-align: center;
     box-sizing: border-box;
     position: relative;
-    top: -4dp;
+    top: 50%;
+    transform: translateY(-50%);
 }
 
 /* ── Progress ───────────────────────────────────────────── */
@@ -381,10 +391,12 @@ progress fill {
     margin: 0;
 }
 
+/* Compact property columns keep number fields aligned and leave room for digits. */
 .prop-label,
 .setting-row__label-col {
-    width: 120dp;
-    min-width: 120dp;
+    width: 40%;
+    max-width: 120dp;
+    min-width: 64dp;
     color: #cdd6f4;
     font-size: 12dp;
     white-space: nowrap;
@@ -431,15 +443,25 @@ progress fill {
     min-width: 0;
 }
 
+/* Aligned settings share the row with their controls. Checkbox labels can use
+   the spare width; other controls retain their proportional column. */
 .setting-row__label-col {
+    max-width: none;
+    flex-grow: 1;
+    white-space: normal;
+    word-break: break-word;
     margin-right: 10dp;
 }
 
 .setting-row__control-col {
     display: flex;
     align-items: center;
-    flex: 1;
+    flex: 1 1 60%;
     min-width: 0;
+}
+
+.setting-row__control-col--checkbox {
+    flex: 0 0 auto;
 }
 
 .setting-row__control-col--checkbox > input[type="checkbox"] {
@@ -547,12 +569,12 @@ progress fill {
     border-width: 1dp;
     border-color: #45475a;
     border-radius: 6dp;
-    font-family: "JetBrains Mono";
     font-size: 12dp;
     cursor: ew-resize;
     transition: border-color 0.12s quadratic-out, background-color 0.12s quadratic-out;
 }
 
+.scrub-field:focus-visible,
 .scrub-field:hover,
 .scrub-field.is-dragging,
 .scrub-field.is-editing {
@@ -577,10 +599,8 @@ progress fill {
 .scrub-field-display,
 .scrub-field-input {
     position: relative;
-    z-index: 1;
     width: 100%;
     text-align: right;
-    font-family: "JetBrains Mono";
     font-size: 12dp;
     color: #cdd6f4;
 }
@@ -764,6 +784,7 @@ progress fill {
     display: none;
     position: absolute;
     z-index: 100;
+    box-sizing: border-box;
     background-color: #313244;
     border-width: 1dp;
     border-color: #45475a;
@@ -785,6 +806,7 @@ progress fill {
     font-size: 12dp;
     width: 100%;
     text-align: left;
+    white-space: normal;
     background-color: transparent;
     border-width: 0;
     transition: background-color 0.1s quadratic-out;
@@ -865,7 +887,9 @@ progress fill {
     background-color: #313244;
 }
 
-.btn:disabled {
+/* <button> is no form control in RmlUi: its disabled attribute sets no :disabled. */
+.btn:disabled,
+.btn[disabled] {
     opacity: 0.5;
     cursor: default;
 }
@@ -1087,6 +1111,11 @@ color-picker {
     display: block;
 }
 
+/* An absolute popup shrinks to its content; the full-width RGB row would otherwise stretch it. */
+.color-picker-popup {
+    width: 200dp;
+}
+
 crf-curve {
     height: 120dp;
     display: block;
@@ -1098,13 +1127,14 @@ crf-curve {
     flex: 1;
     min-width: 0;
     box-sizing: border-box;
-    font-family: "JetBrains Mono";
 }
 
+/* Square and exactly as tall as the 18dp fields beside it. */
 .num-step-btn {
-    width: 20dp;
+    width: 18dp;
     height: 18dp;
-    padding: 0 0 1dp 0;
+    padding: 0;
+    box-sizing: border-box;
     text-align: center;
     line-height: 16dp;
     font-size: 12dp;
@@ -1113,6 +1143,11 @@ crf-curve {
     flex-shrink: 0;
     cursor: pointer;
     transition: background-color 0.12s quadratic-out, border-color 0.12s quadratic-out;
+}
+
+/* Steppers sit against their field: the row gap stays between columns. */
+.setting-row > .num-step-btn {
+    margin-left: -4dp;
 }
 
 /* ── Full-width button ─────────────────────────────────── */
@@ -1124,11 +1159,19 @@ crf-curve {
     box-sizing: border-box;
 }
 
+.asset-button--toolbar24 {
+    box-sizing: border-box;
+    height: 24dp;
+    min-height: 24dp;
+    max-height: 24dp;
+}
+
 /* ── Disabled overlay ──────────────────────────────────── */
 
 .disabled-overlay {
     opacity: 0.4;
     pointer-events: none;
+    focus: none;
 }
 
 /* ── Status text ───────────────────────────────────────── */
@@ -1199,6 +1242,8 @@ crf-curve {
     padding: 4dp 8dp;
     font-size: 12dp;
     max-width: 320dp;
+    white-space: pre-line;
+    word-break: break-word;
     pointer-events: none;
 }
 

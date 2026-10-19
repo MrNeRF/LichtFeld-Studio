@@ -34,8 +34,8 @@
       "item_spacing": [8.0, 5.0],
       "item_inner_spacing": [5.0, 4.0],
       "indent_spacing": 21.0,
-      "scrollbar_size": 13.0,
-      "grab_min_size": 16.0,
+      "scrollbar_size": 4.0,
+      "grab_min_size": 12.0,
       "toolbar_button_size": 24.0,
       "toolbar_padding": 6.0,
       "toolbar_spacing": 4.0
@@ -148,8 +148,7 @@
         "border": [0.250, 0.580, 0.960, 1.0],
         "icon": [0.390, 0.680, 1.000, 1.0],
         "highlight": [0.200, 0.410, 0.760, 1.0],
-        "selection": [0.160, 0.340, 0.690, 1.0],
-        "selection_flash": [0.600, 0.430, 0.920, 1.0]
+        "selection": [0.160, 0.340, 0.690, 1.0]
       }
     },
 
@@ -202,8 +201,7 @@
         "border": [0.050, 0.330, 0.790, 1.0],
         "icon": [0.190, 0.430, 0.810, 1.0],
         "highlight": [0.760, 0.850, 0.980, 1.0],
-        "selection": [0.630, 0.750, 0.950, 1.0],
-        "selection_flash": [0.460, 0.230, 0.780, 1.0]
+        "selection": [0.630, 0.750, 0.950, 1.0]
       }
     }
   }

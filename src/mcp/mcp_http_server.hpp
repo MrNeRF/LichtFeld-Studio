@@ -41,6 +41,7 @@ namespace lfs::mcp {
         InvalidPort,
         BindFailed,
         ListenerFailed,
+        CredentialFailed,
     };
 
     struct McpHttpStatus {
@@ -62,6 +63,7 @@ namespace lfs::mcp {
     };
 
     LFS_MCP_API bool applyActiveMcpHttpConfig(const McpHttpConfig& config);
+    [[nodiscard]] LFS_MCP_API std::string mcpBearerToken();
 
     class LFS_MCP_API McpHttpServer {
     public:
@@ -90,6 +92,8 @@ namespace lfs::mcp {
         mutable std::mutex status_mutex_;
         McpHttpStatus status_;
         McpHttpConfig applied_config_{};
+        McpHttpConfig request_config_{};
+        std::string auth_token_;
         bool has_applied_config_ = false;
         std::atomic<std::uint64_t> request_count_{0};
         std::atomic<std::uint64_t> success_count_{0};

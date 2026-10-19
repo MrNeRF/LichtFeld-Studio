@@ -7,10 +7,6 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 
-namespace lfs::training {
-    struct PositiveMedianScratch;
-}
-
 namespace lfs::training::kernels {
 
     /**
@@ -131,16 +127,26 @@ namespace lfs::training::kernels {
         cudaStream_t stream = nullptr);
 
     /**
-     * positive-median normalize without full-tensor sort.
-     * Compact positives → radix-sort the compact buffer → median at count/2 →
-     * divide data in-place by max(median, 1e-9). NaN/non-positive left as-is
-     * after a pre-pass that zeros NaNs (caller may pre-masked_fill).
+     * Zero NaNs, then divide data in-place by max(median, 1e-9) where the
+     * median is the (count/2)-th smallest positive value, found by an exact
+     * radix select (no sort, no per-element scratch). All-zero when no value
+     * is positive.
      */
     void launch_normalize_by_positive_median(
         float* data,
         size_t n,
-        cudaStream_t stream = nullptr,
-        lfs::training::PositiveMedianScratch* scratch = nullptr);
+        cudaStream_t stream = nullptr);
+
+    /// Exact (n/2)-th smallest of all n values in cub::DeviceRadixSort float
+    /// order. Synchronizes the stream to return the value.
+    [[nodiscard]] float launch_select_median(const float* values, size_t n, cudaStream_t stream);
+
+    /// Accumulate the image-clipped projected bounding rectangle area / image area.
+    /// radii and means2d are [N, 2]; zero radii exclude culled splats. Call once
+    /// per completed training frame, independently of tile batching.
+    void launch_accumulate_projected_screen_share(
+        const int32_t* radii, const float* means2d,
+        float* shares, size_t n, uint32_t width, uint32_t height, cudaStream_t stream);
 
     /// Subtract min(log(share/limit), log(1.5)) from the longest log-scale axis
     /// when share > limit. The other two axes are left unchanged.
@@ -149,17 +155,6 @@ namespace lfs::training::kernels {
         const float* max_share,
         const bool* frozen_mask,
         size_t frozen_n,
-        float limit,
-        size_t n,
-        cudaStream_t stream = nullptr);
-
-    /// out[i] = sqrt(error) * (share/limit) when share > limit and error > 0, else 0.
-    void launch_oversize_split_scores(
-        const float* error_score, // [N]
-        const float* max_share,   // [N]
-        const bool* frozen_mask,
-        size_t frozen_n,
-        float* out_scores, // [N]
         float limit,
         size_t n,
         cudaStream_t stream = nullptr);

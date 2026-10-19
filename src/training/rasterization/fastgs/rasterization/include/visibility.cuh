@@ -13,7 +13,7 @@ namespace lfs::rasterization::visibility {
     // bookkeeping block. EDGE uses the same stable ordering contract.
     constexpr unsigned int kBlockSize = 256u;
 
-    __global__ inline void count_blocks(
+    static __global__ void count_blocks(
         const unsigned int* __restrict__ visibility_mask,
         unsigned int* __restrict__ block_counts,
         const unsigned int n_primitives) {
@@ -34,7 +34,7 @@ namespace lfs::rasterization::visibility {
 
     // Stable compaction: block_offsets supplies the original-order base and
     // the mask popcount supplies the in-block rank.
-    __global__ inline void compact_indices(
+    static __global__ void compact_indices(
         const unsigned int* __restrict__ visibility_mask,
         const unsigned int* __restrict__ block_offsets,
         unsigned int* __restrict__ visible_indices,

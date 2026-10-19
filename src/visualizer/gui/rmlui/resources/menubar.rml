@@ -5,12 +5,12 @@
 <body id="body" data-model="menu_bar">
     <div id="menu-row">
         <div id="menu-left">
-            <img id="brand-logo" />
             <div id="menu-items">
                 <span class="menu-label"
                       data-for="menu : menu_labels"
                       data-class-active="menu.active"
-                      data-attr-data-index="menu.index">{{ menu.label }}</span>
+                      data-class-logo="menu.logo"
+                      data-attr-data-index="menu.index"><img data-if="menu.logo" data-attr-src="brand_logo_src" />{{ menu.access.label_before }}<span class="access-key" data-if="menu.access.access_mark != ''">{{ menu.access.access_mark }}</span>{{ menu.access.label_after }}</span>
             </div>
         </div>
         <div id="menu-toolbar">
@@ -49,6 +49,27 @@
         </div>
         <div id="menu-right">
             <div id="menu-window-controls">
+                <div id="menu-gallery-progress"
+                     class="menu-gallery-progress"
+                     data-class-hidden="!gallery_has_progress"
+                     data-class-indeterminate="gallery_progress_indeterminate"
+                     data-action="gallery_transfers"
+                     data-attr-title="gallery_progress_tooltip">
+                    <span>{{ gallery_progress_label }}</span>
+                    <span class="menu-gallery-progress-detail" data-class-hidden="gallery_progress_detail == ''">{{ gallery_progress_detail }}</span>
+                    <div class="menu-gallery-progress-track">
+                        <div class="menu-gallery-progress-fill" data-style-width="gallery_progress_width"></div>
+                    </div>
+                </div>
+                <div id="menu-portal-connection"
+                     class="menu-portal-connection"
+                     data-attr-class="'menu-portal-connection ' + portal_connection_tone"
+                     data-action="portal_connection"
+                     data-attr-title="portal_connection_tooltip">
+                    <img data-attr-src="portal_connection_icon" />
+                    <span>{{ portal_connection_label }}</span>
+                </div>
+                <div class="menu-window-separator"></div>
                 <div id="menu-window-split-view"
                      class="icon-btn menu-window-btn menu-window-utility-btn"
                      data-action="toggle_independent_split_view"
@@ -58,6 +79,7 @@
                 <div id="menu-window-toggle-ui"
                      class="icon-btn menu-window-btn menu-window-utility-btn"
                      data-action="window_toggle_ui"
+                     data-keymap-action="toggle_ui"
                      title="@tr:ui.hide_ui">
                     <img src="../icon/layout-off.png" />
                 </div>
@@ -94,6 +116,11 @@
             </div>
         </div>
     </div>
+    <div id="project-title" data-class-hidden="project_title == ''">
+        <div id="project-title-content" data-attr-title="project_tooltip">
+            <span>{{ project_title }}</span><span data-if="project_dirty" class="project-dirty"> *</span>
+        </div>
+    </div>
     <div id="bottom-border"></div>
     <div id="dropdown-overlay"></div>
     <div id="dropdown-container">
@@ -105,9 +132,12 @@
                      data-class-open="item.submenu_open"
                      data-attr-data-root-index="item.index">
                     <div class="menu-item"
-                         data-class-active="item.submenu_open"
+                         data-attr-data-nav-level="0"
+                         data-attr-data-nav-index="item.index"
+                         data-attr-data-root-index="item.index"
+                         data-class-active="item.keyboard_active"
                          data-attr-title="item.tooltip">
-                        <span class="label">{{ item.label }}</span>
+                        <span class="label">{{ item.access.label_before }}<span class="access-key" data-if="item.access.access_mark != ''">{{ item.access.access_mark }}</span>{{ item.access.label_after }}</span>
                         <span class="submenu-arrow">&gt;</span>
                     </div>
                     <div class="submenu-popup dropdown-popup">
@@ -119,61 +149,125 @@
                                  data-attr-data-root-index="item.index"
                                  data-attr-data-child-index="child.index">
                                 <div class="menu-item"
-                                     data-class-active="child.submenu_open"
+                                     data-attr-data-nav-level="1"
+                                     data-attr-data-nav-index="child.index"
+                                     data-attr-data-root-index="item.index"
+                                     data-attr-data-child-index="child.index"
+                                     data-class-active="child.keyboard_active"
                                      data-attr-title="child.tooltip">
-                                    <span class="label">{{ child.label }}</span>
+                                    <span class="label">{{ child.access.label_before }}<span class="access-key" data-if="child.access.access_mark != ''">{{ child.access.access_mark }}</span>{{ child.access.label_after }}</span>
                                     <span class="submenu-arrow">&gt;</span>
                                 </div>
                                 <div class="submenu-popup dropdown-popup">
-                                    <div data-for="leaf : child.children">
-                                        <div class="menu-separator" data-if="leaf.separator_before"></div>
-                                        <div class="menu-item menu-item-label"
-                                             data-if="leaf.is_label"
-                                             data-class-disabled="true"
-                                             data-attr-title="leaf.tooltip">
-                                            <span class="label">{{ leaf.label }}</span>
+                                    <div data-for="grandchild : child.children">
+                                        <div class="menu-separator" data-if="grandchild.separator_before"></div>
+                                        <div class="submenu-container" data-if="grandchild.has_children"
+                                             data-class-open="grandchild.submenu_open"
+                                             data-attr-data-root-index="item.index"
+                                             data-attr-data-child-index="child.index"
+                                             data-attr-data-grandchild-index="grandchild.index">
+                                            <div class="menu-item" data-class-active="grandchild.keyboard_active"
+                                                 data-attr-data-nav-level="2"
+                                                 data-attr-data-nav-index="grandchild.index"
+                                                 data-attr-data-root-index="item.index"
+                                                 data-attr-data-child-index="child.index"
+                                                 data-attr-data-grandchild-index="grandchild.index"
+                                                 data-attr-title="grandchild.tooltip">
+                                                <span class="label">{{ grandchild.access.label_before }}<span class="access-key" data-if="grandchild.access.access_mark != ''">{{ grandchild.access.access_mark }}</span>{{ grandchild.access.label_after }}</span>
+                                                <span class="submenu-arrow">&gt;</span>
+                                            </div>
+                                            <div class="submenu-popup dropdown-popup">
+                                                <div data-for="leaf : grandchild.children">
+                                                    <div class="menu-separator" data-if="leaf.separator_before"></div>
+                                                    <div class="menu-item menu-item-label"
+                                                         data-if="leaf.is_label"
+                                                         data-attr-data-nav-level="3"
+                                                         data-attr-data-nav-index="leaf.index"
+                                                         data-attr-data-root-index="item.index"
+                                                         data-attr-data-child-index="child.index"
+                                                         data-attr-data-grandchild-index="grandchild.index"
+                                                         data-class-disabled="true"
+                                                         data-class-active="leaf.keyboard_active"
+                                                         data-attr-title="leaf.tooltip">
+                                                        <span class="label">{{ leaf.access.label_before }}<span class="access-key" data-if="leaf.access.access_mark != ''">{{ leaf.access.access_mark }}</span>{{ leaf.access.label_after }}</span>
+                                                    </div>
+                                                    <div class="menu-item"
+                                                         data-if="!leaf.is_label"
+                                                         data-attr-data-nav-level="3"
+                                                         data-attr-data-nav-index="leaf.index"
+                                                         data-attr-data-root-index="item.index"
+                                                         data-attr-data-child-index="child.index"
+                                                         data-attr-data-grandchild-index="grandchild.index"
+                                                         data-class-active="leaf.keyboard_active"
+                                                         data-class-disabled="!leaf.enabled"
+                                                         data-attr-data-action="leaf.action"
+                                                         data-attr-data-operator-id="leaf.operator_id"
+                                                         data-attr-data-callback-index="leaf.callback_index"
+                                                         data-attr-title="leaf.tooltip"
+                                                         data-attrif-disabled="!leaf.enabled">
+                                                        <span class="label">{{ leaf.access.label_before }}<span class="access-key" data-if="leaf.access.access_mark != ''">{{ leaf.access.access_mark }}</span>{{ leaf.access.label_after }}</span>
+                                                        <span class="checkmark" data-if="leaf.show_checkmark">{{ leaf.checkmark }}</span>
+                                                        <span class="shortcut" data-if="leaf.has_shortcut">{{ leaf.shortcut }}</span>
+                                            </div>
+                                        </div>
+                                            </div>
                                         </div>
                                         <div class="menu-item"
-                                             data-if="!leaf.is_label"
-                                             data-class-disabled="!leaf.enabled"
-                                             data-attr-data-action="leaf.action"
-                                             data-attr-data-operator-id="leaf.operator_id"
-                                             data-attr-data-callback-index="leaf.callback_index"
-                                             data-attr-title="leaf.tooltip"
-                                             data-attrif-disabled="!leaf.enabled">
-                                            <span class="label">{{ leaf.label }}</span>
-                                            <span class="shortcut" data-if="leaf.has_shortcut">{{ leaf.shortcut }}</span>
-                                            <span class="checkmark" data-if="leaf.show_checkmark">{{ leaf.checkmark }}</span>
+                                             data-if="!grandchild.has_children"
+                                             data-attr-data-nav-level="2"
+                                             data-attr-data-nav-index="grandchild.index"
+                                             data-attr-data-root-index="item.index"
+                                             data-attr-data-child-index="child.index"
+                                             data-attr-data-grandchild-index="grandchild.index"
+                                             data-class-active="grandchild.keyboard_active"
+                                             data-class-disabled="!grandchild.enabled"
+                                             data-attr-data-action="grandchild.action"
+                                             data-attr-data-operator-id="grandchild.operator_id"
+                                             data-attr-data-callback-index="grandchild.callback_index"
+                                             data-attr-title="grandchild.tooltip"
+                                             data-attrif-disabled="!grandchild.enabled">
+                                            <span class="label">{{ grandchild.access.label_before }}<span class="access-key" data-if="grandchild.access.access_mark != ''">{{ grandchild.access.access_mark }}</span>{{ grandchild.access.label_after }}</span>
+                                            <span class="checkmark" data-if="grandchild.show_checkmark">{{ grandchild.checkmark }}</span>
+                                            <span class="shortcut" data-if="grandchild.has_shortcut">{{ grandchild.shortcut }}</span>
                                         </div>
                                     </div>
                                 </div>
                             </div>
                             <div class="menu-item"
                                  data-if="!child.has_children"
+                                 data-attr-data-nav-level="1"
+                                 data-attr-data-nav-index="child.index"
+                                 data-attr-data-root-index="item.index"
+                                 data-attr-data-child-index="child.index"
+                                 data-class-active="child.keyboard_active"
                                  data-class-disabled="!child.enabled"
                                  data-attr-data-action="child.action"
                                  data-attr-data-operator-id="child.operator_id"
                                  data-attr-data-callback-index="child.callback_index"
                                  data-attr-title="child.tooltip"
                                  data-attrif-disabled="!child.enabled">
-                                <span class="label">{{ child.label }}</span>
-                                <span class="shortcut" data-if="child.has_shortcut">{{ child.shortcut }}</span>
+                                <span class="label">{{ child.access.label_before }}<span class="access-key" data-if="child.access.access_mark != ''">{{ child.access.access_mark }}</span>{{ child.access.label_after }}</span>
                                 <span class="checkmark" data-if="child.show_checkmark">{{ child.checkmark }}</span>
+                                <span class="shortcut" data-if="child.has_shortcut">{{ child.shortcut }}</span>
                             </div>
                         </div>
                     </div>
                 </div>
                 <div class="menu-item"
                      data-if="!item.has_children"
+                     data-attr-data-nav-level="0"
+                     data-attr-data-nav-index="item.index"
+                     data-attr-data-root-index="item.index"
+                     data-class-active="item.keyboard_active"
                      data-class-disabled="!item.enabled"
                      data-attr-data-action="item.action"
                      data-attr-data-operator-id="item.operator_id"
                      data-attr-data-callback-index="item.callback_index"
                      data-attr-title="item.tooltip"
                      data-attrif-disabled="!item.enabled">
-                    <span class="label">{{ item.label }}</span>
-                    <span class="shortcut" data-if="item.has_shortcut">{{ item.shortcut }}</span>
+                    <span class="label">{{ item.access.label_before }}<span class="access-key" data-if="item.access.access_mark != ''">{{ item.access.access_mark }}</span>{{ item.access.label_after }}</span>
                     <span class="checkmark" data-if="item.show_checkmark">{{ item.checkmark }}</span>
+                    <span class="shortcut" data-if="item.has_shortcut">{{ item.shortcut }}</span>
                 </div>
             </div>
         </div>

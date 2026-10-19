@@ -36,6 +36,47 @@ namespace lfs::python {
     namespace {
         constexpr float DEPTH_FILTER_HALF_HEIGHT = 10000.0f;
 
+        bool has_non_identity_transform(const std::vector<glm::mat4>& transforms) {
+            for (const auto& transform : transforms) {
+                for (int column = 0; column < 4; ++column) {
+                    for (int row = 0; row < 4; ++row) {
+                        const float expected = column == row ? 1.0f : 0.0f;
+                        if (transform[column][row] != expected)
+                            return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        struct SelectionTransformContext {
+            std::shared_ptr<core::Tensor> indices;
+            std::vector<glm::mat4> transforms;
+
+            [[nodiscard]] const core::Tensor* indices_ptr() const {
+                return indices ? indices.get() : nullptr;
+            }
+
+            [[nodiscard]] const std::vector<glm::mat4>* transforms_ptr() const {
+                return indices ? &transforms : nullptr;
+            }
+        };
+
+        SelectionTransformContext selection_transform_context(core::Scene& scene, const size_t model_size) {
+            SelectionTransformContext context;
+            context.transforms = scene.getVisibleNodeTransforms();
+            if (!has_non_identity_transform(context.transforms))
+                return context;
+
+            // Keep the original local-space path available while scene caches
+            // are rebuilding or the combined model is changing size.
+            auto indices = scene.getTransformIndices();
+            if (indices && indices->is_valid() && indices->numel() == model_size) {
+                context.indices = std::move(indices);
+            }
+            return context;
+        }
+
         vis::RenderingManager* get_rm() { return get_rendering_manager(); }
 
         vis::SceneManager* get_sm() { return get_scene_manager(); }
@@ -292,6 +333,7 @@ namespace lfs::python {
             "set_depth_filter", [](bool enabled, float depth_far, float frustum_half_width, float depth_near) {
                 if (auto* const tool = get_selection_tool()) {
                     tool->setDepthFilterRange(enabled, depth_near, depth_far, frustum_half_width);
+                    lfs::python::markProjectSessionChapterCommitted("VIEW");
                     return;
                 }
                 auto* rm = get_rm();
@@ -300,6 +342,7 @@ namespace lfs::python {
                 auto settings = rm->getSettings();
                 configure_depth_filter(settings, enabled, depth_near, depth_far, frustum_half_width);
                 rm->updateSettings(settings);
+                lfs::python::markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("enabled"), nb::arg("depth_far") = 100.0f, nb::arg("frustum_half_width") = 50.0f, nb::arg("depth_near") = 0.0f, "Set selection depth filter in camera space.");
 
@@ -307,6 +350,7 @@ namespace lfs::python {
             "set_depth_filter_range", [](bool enabled, float depth_near, float depth_far, float frustum_half_width) {
                 if (auto* const tool = get_selection_tool()) {
                     tool->setDepthFilterRange(enabled, depth_near, depth_far, frustum_half_width);
+                    lfs::python::markProjectSessionChapterCommitted("VIEW");
                     return;
                 }
                 auto* rm = get_rm();
@@ -315,6 +359,7 @@ namespace lfs::python {
                 auto settings = rm->getSettings();
                 configure_depth_filter(settings, enabled, depth_near, depth_far, frustum_half_width);
                 rm->updateSettings(settings);
+                lfs::python::markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("enabled"), nb::arg("depth_near") = 0.0f, nb::arg("depth_far") = 100.0f, nb::arg("frustum_half_width") = 50.0f, "Set selection depth filter range in camera space as (near, far, width).");
 
@@ -365,6 +410,7 @@ namespace lfs::python {
                 auto settings = rm->getSettings();
                 settings.crop_filter_for_selection = enabled;
                 rm->updateSettings(settings);
+                lfs::python::markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("enabled"), "Enable/disable crop box filtering for selection");
 
@@ -527,17 +573,22 @@ namespace lfs::python {
                 auto* model = scene.getCombinedModel();
                 if (!model)
                     return;
+                const auto transform_context = selection_transform_context(scene, model->means().size(0));
                 const auto group_id = scene.getActiveSelectionGroup();
                 auto current = *mask;
                 for (int i = 0; i < iterations; ++i)
-                    current = core::cuda::selection_grow(current, model->means(), radius, group_id);
+                    current = core::cuda::selection_grow(
+                        current, model->means(), radius, group_id,
+                        transform_context.indices_ptr(), transform_context.transforms_ptr());
+                if (auto* selection_service = get_ss())
+                    selection_service->restrictToEffectiveNodeScope(current);
                 apply_selection_state_with_undo(
                     *sm, "selection.grow",
                     [updated = std::move(current)](core::Scene& target_scene) mutable {
                         target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
                     });
                 if (auto* rm = get_rm())
-                    rm->markDirty(vis::DirtyFlag::SELECTION);
+                    rm->markDirty(vis::DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
             },
             nb::arg("radius"), nb::arg("iterations") = 1, "Grow selection by radius (scene units). Uses spatial hashing, O(N).");
 
@@ -553,16 +604,19 @@ namespace lfs::python {
                 auto* model = scene.getCombinedModel();
                 if (!model)
                     return;
+                const auto transform_context = selection_transform_context(scene, model->means().size(0));
                 auto current = *mask;
                 for (int i = 0; i < iterations; ++i)
-                    current = core::cuda::selection_shrink(current, model->means(), radius);
+                    current = core::cuda::selection_shrink(
+                        current, model->means(), radius,
+                        transform_context.indices_ptr(), transform_context.transforms_ptr());
                 apply_selection_state_with_undo(
                     *sm, "selection.shrink",
                     [updated = std::move(current)](core::Scene& target_scene) mutable {
                         target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
                     });
                 if (auto* rm = get_rm())
-                    rm->markDirty(vis::DirtyFlag::SELECTION);
+                    rm->markDirty(vis::DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
             },
             nb::arg("radius"), nb::arg("iterations") = 1, "Shrink selection by radius (scene units). Uses spatial hashing, O(N).");
 
@@ -583,7 +637,7 @@ namespace lfs::python {
                         target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
                     });
                 if (auto* rm = get_rm())
-                    rm->markDirty(vis::DirtyFlag::SELECTION);
+                    rm->markDirty(vis::DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
             },
             nb::arg("min_opacity") = 0.0f, nb::arg("max_opacity") = 1.0f, "Select gaussians by activated opacity range [min, max].");
 
@@ -604,7 +658,7 @@ namespace lfs::python {
                         target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
                     });
                 if (auto* rm = get_rm())
-                    rm->markDirty(vis::DirtyFlag::SELECTION);
+                    rm->markDirty(vis::DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
             },
             nb::arg("max_scale"), "Select gaussians with max activated scale <= threshold.");
 
@@ -646,23 +700,11 @@ namespace lfs::python {
                         target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
                     });
                 if (auto* rm = get_rm())
-                    rm->markDirty(vis::DirtyFlag::SELECTION);
+                    rm->markDirty(vis::DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
             },
             nb::arg("gaussian_index"), nb::arg("threshold") = 0.2f, "Select gaussians by color similarity to a reference gaussian.\n"
                                                                     "Picks the SH DC color of the gaussian at the given index and selects all\n"
                                                                     "gaussians whose per-channel color difference is within the threshold (0-1).");
-
-        // ─────────────────────────────────────────────────────────────────────
-        // FLASH & FEEDBACK
-        // ─────────────────────────────────────────────────────────────────────
-
-        sel.def(
-            "trigger_flash", []() {
-                if (auto* rm = get_rm()) {
-                    rm->triggerSelectionFlash();
-                }
-            },
-            "Trigger selection flash animation feedback");
     }
 
 } // namespace lfs::python

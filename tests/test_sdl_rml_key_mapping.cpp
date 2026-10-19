@@ -6,12 +6,28 @@
 #include "input/frame_input_buffer.hpp"
 #include "input/key_codes.hpp"
 #include "input/sdl_key_mapping.hpp"
+#include <array>
 #include <gtest/gtest.h>
 
 namespace {
 
     TEST(SdlRmlKeyMappingTest, LetterScancodeMapsToAlphabetKey) {
         EXPECT_EQ(lfs::vis::gui::sdlScancodeToRml(SDL_SCANCODE_A), Rml::Input::KI_A);
+    }
+
+    TEST(SdlRmlKeyMappingTest, TextEditingShortcutsFollowLayoutKeycodes) {
+        using namespace lfs::vis::gui;
+        for (const SDL_Keycode keycode : {SDLK_A, SDLK_C, SDLK_X, SDLK_V, SDLK_Z, SDLK_Y}) {
+            EXPECT_EQ(sdlTextShortcutToRml(SDL_SCANCODE_Q, keycode, SDL_KMOD_CTRL),
+                      sdlKeycodeToRml(keycode));
+            EXPECT_EQ(sdlTextShortcutToRml(SDL_SCANCODE_Q, keycode, SDL_KMOD_GUI),
+                      sdlKeycodeToRml(keycode));
+        }
+        EXPECT_EQ(sdlTextShortcutToRml(SDL_SCANCODE_A, SDLK_Q, SDL_KMOD_CTRL), Rml::Input::KI_Q);
+        EXPECT_EQ(sdlTextShortcutToRml(SDL_SCANCODE_Y, SDLK_Z, SDL_KMOD_CTRL), Rml::Input::KI_Z);
+        EXPECT_EQ(sdlTextShortcutToRml(SDL_SCANCODE_Z, SDLK_Y, SDL_KMOD_CTRL), Rml::Input::KI_Y);
+        EXPECT_EQ(sdlTextShortcutToRml(SDL_SCANCODE_Q, SDLK_A, SDL_KMOD_NONE), Rml::Input::KI_Q);
+        EXPECT_EQ(sdlTextShortcutToRml(SDL_SCANCODE_Q, SDLK_A, static_cast<SDL_Keymod>(SDL_KMOD_CTRL | SDL_KMOD_ALT)), Rml::Input::KI_Q);
     }
 
     TEST(SdlRmlKeyMappingTest, EqualsKeyMapsToOemPlus) {
@@ -57,6 +73,57 @@ namespace {
         EXPECT_EQ(lfs::vis::input::sdlKeycodeToAppKey(SDLK_KP_PLUS), lfs::vis::input::KEY_KP_ADD);
     }
 
+    TEST(SdlKeyMappingTest, ShortcutTranslationKeepsNonNumberRowKeysLayoutAware) {
+        using namespace lfs::vis::input;
+        EXPECT_EQ(sdlShortcutKeyToAppKey(SDL_SCANCODE_APOSTROPHE, SDLK_APOSTROPHE), KEY_APOSTROPHE);
+        EXPECT_EQ(sdlShortcutKeyToAppKey(SDL_SCANCODE_MINUS, SDLK_MINUS), KEY_MINUS);
+        EXPECT_EQ(sdlShortcutKeyToAppKey(SDL_SCANCODE_KP_4, SDLK_KP_4), KEY_KP_4);
+        EXPECT_EQ(sdlShortcutKeyToAppKey(SDL_SCANCODE_A, SDLK_Q), KEY_Q);
+    }
+
+    TEST(SdlKeyMappingTest, EntireTopNumberRowFollowsPhysicalDigitsAcrossLayouts) {
+        using namespace lfs::vis::input;
+        struct Layout {
+            const char* name;
+            std::array<SDL_Keycode, 10> keycodes;
+        };
+        const std::array layouts = {
+            Layout{"us", {SDLK_1, SDLK_2, SDLK_3, SDLK_4, SDLK_5, SDLK_6, SDLK_7, SDLK_8, SDLK_9, SDLK_0}},
+            Layout{"be", {SDLK_AMPERSAND, static_cast<SDL_Keycode>(0xe9), SDLK_DBLAPOSTROPHE, SDLK_APOSTROPHE, SDLK_LEFTPAREN, static_cast<SDL_Keycode>(0xa7), static_cast<SDL_Keycode>(0xe8), SDLK_EXCLAIM, static_cast<SDL_Keycode>(0xe7), static_cast<SDL_Keycode>(0xe0)}},
+            Layout{"fr", {SDLK_AMPERSAND, static_cast<SDL_Keycode>(0xe9), SDLK_DBLAPOSTROPHE, SDLK_APOSTROPHE, SDLK_LEFTPAREN, SDLK_MINUS, static_cast<SDL_Keycode>(0xe8), SDLK_UNDERSCORE, static_cast<SDL_Keycode>(0xe7), static_cast<SDL_Keycode>(0xe0)}},
+        };
+        for (const auto& layout : layouts) {
+            for (size_t i = 0; i < layout.keycodes.size(); ++i) {
+                SCOPED_TRACE(std::string(layout.name) + " key " + std::to_string((i + 1) % 10));
+                const auto scancode = static_cast<SDL_Scancode>(SDL_SCANCODE_1 + i);
+                EXPECT_EQ(sdlShortcutKeyToAppKey(scancode, layout.keycodes[i]),
+                          KEY_0 + static_cast<int>((i + 1) % 10));
+            }
+        }
+    }
+
+    TEST(FrameInputBufferTest, NumberRowShortcutMappingLeavesTextInputUntouched) {
+        lfs::vis::FrameInputBuffer buffer;
+        buffer.beginFrame();
+        SDL_Event key_event{};
+        key_event.type = SDL_EVENT_KEY_DOWN;
+        key_event.key.windowID = 11;
+        key_event.key.scancode = SDL_SCANCODE_4;
+        key_event.key.key = SDLK_APOSTROPHE;
+        buffer.processEvent(key_event, 11);
+        SDL_Event text_event{};
+        text_event.type = SDL_EVENT_TEXT_INPUT;
+        text_event.text.windowID = 11;
+        text_event.text.text = "'";
+        buffer.processEvent(text_event, 11);
+
+        EXPECT_EQ(lfs::vis::input::sdlShortcutKeyToAppKey(key_event.key.scancode, key_event.key.key),
+                  lfs::vis::input::KEY_4);
+        ASSERT_EQ(buffer.input_events.size(), 2u);
+        EXPECT_EQ(buffer.input_events.back().kind, lfs::vis::FrameInputEventKind::Text);
+        EXPECT_EQ(buffer.input_events.back().text, "'");
+    }
+
     TEST(SdlRmlKeyMappingTest, ModifierTranslationPreservesMeta) {
         const int mods = lfs::vis::gui::sdlModsToRml(
             true, false, true, true);
@@ -91,7 +158,7 @@ namespace {
 
         EXPECT_TRUE(buffer.keys_pressed.empty());
         EXPECT_FALSE(buffer.mouse_clicked[0]);
-        EXPECT_TRUE(buffer.text_codepoints.empty());
+        EXPECT_TRUE(buffer.input_events.empty());
         EXPECT_FALSE(buffer.had_event);
         EXPECT_FALSE(buffer.mouse_moved);
     }
@@ -121,8 +188,10 @@ namespace {
         ASSERT_EQ(buffer.keys_pressed.size(), 1u);
         EXPECT_EQ(buffer.keys_pressed.front(), SDL_SCANCODE_A);
         EXPECT_TRUE(buffer.mouse_clicked[0]);
-        ASSERT_EQ(buffer.text_codepoints.size(), 1u);
-        EXPECT_EQ(buffer.text_codepoints.front(), 0xE9u);
+        ASSERT_EQ(buffer.input_events.size(), 3u);
+        EXPECT_EQ(buffer.input_events[1].kind, lfs::vis::FrameInputEventKind::MouseButton);
+        EXPECT_EQ(buffer.input_events.back().kind, lfs::vis::FrameInputEventKind::Text);
+        EXPECT_EQ(buffer.input_events.back().text, "\xc3\xa9");
         EXPECT_TRUE(buffer.had_event);
         EXPECT_FALSE(buffer.mouse_moved);
     }

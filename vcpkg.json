@@ -60,11 +60,12 @@
     "spdlog",
     "tbb",
     "tiff",
-    "tinyexr",
+    "openexr",
     "vulkan",
     {
       "name": "vulkan-loader",
       "features": [
+        "wayland",
         "xcb",
         "xlib"
       ],
@@ -86,7 +87,11 @@
     "tests": {
       "description": "Dependencies used only by the C++ test targets",
       "dependencies": [
-        "gtest"
+        "gtest",
+        {
+          "name": "openexr",
+          "features": ["cpp"]
+        }
       ]
     },
     "vulkan-validation": {
@@ -186,7 +191,7 @@
     },
     {
       "name": "rmlui",
-      "version": "6.2"
+      "version": "6.3"
     },
     {
       "name": "glslang",

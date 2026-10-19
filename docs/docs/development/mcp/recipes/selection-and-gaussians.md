@@ -29,6 +29,12 @@ Use this flow when the task is to select visible Gaussians, confirm the result, 
 }
 ```
 
+For the displayed viewer, use `camera_index: -1`. Rectangle, brush, polygon and lasso
+coordinates are logical pixels relative to the focused viewport panel, excluding the
+surrounding UI. The service applies render scale and pixel ratio using the displayed
+panel's actual render resolution. In split view, focus the intended panel first.
+For an existing dataset camera, coordinates remain pixels in that camera's image.
+
 Other supported selection entry points:
 
 - `selection_click`

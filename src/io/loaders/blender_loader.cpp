@@ -4,8 +4,10 @@
 
 #include "io/loaders/blender_loader.hpp"
 #include "core/camera.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "formats/transforms.hpp"
@@ -13,6 +15,7 @@
 #include "io/filesystem_utils.hpp"
 #include "io/loaders/loader_utils.hpp"
 #include "io/loaders/missing_dataset_images.hpp"
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -37,6 +40,29 @@ namespace lfs::io {
                 relative = relative.lexically_relative(*relative.begin());
             return lfs::core::path_to_utf8(relative);
         }
+
+        FileLookupResult lookup_sidecar(const SidecarDirCache& cache,
+                                        const std::filesystem::path& image_path,
+                                        const std::string& image_name,
+                                        const std::filesystem::path& absolute_dataset_path) {
+            auto original = cache.lookup(image_name);
+            if (!original.ambiguous())
+                return original;
+
+            auto relative = std::filesystem::absolute(image_path).lexically_normal().lexically_relative(absolute_dataset_path);
+            if (relative.empty() || *relative.begin() == "..")
+                return original;
+
+            // Preserve existing matches; use the frame's directories only to resolve ambiguity.
+            if (auto result = cache.lookup(lfs::core::path_to_utf8(relative)); result.found())
+                return result;
+
+            // Sidecars can mirror either the dataset root or the leading image folder.
+            relative = relative.lexically_relative(*relative.begin());
+            if (auto result = cache.lookup(lfs::core::path_to_utf8(relative)); result.found())
+                return result;
+            return original;
+        }
     } // namespace
 
     // Import types from lfs::core for convenience
@@ -53,7 +79,7 @@ namespace lfs::io {
         auto start_time = std::chrono::high_resolution_clock::now();
 
         // Validate path exists
-        if (!std::filesystem::exists(path)) {
+        if (!lfs::core::native_fs::exists(path)) {
             return make_error(ErrorCode::PATH_NOT_FOUND,
                               "Blender/NeRF dataset path does not exist", path);
         }
@@ -70,12 +96,12 @@ namespace lfs::io {
         // Determine transforms file path
         std::filesystem::path transforms_file;
 
-        if (std::filesystem::is_directory(path)) {
+        if (lfs::core::native_fs::is_directory(path)) {
             // Look for transforms files in directory
-            if (std::filesystem::exists(path / "transforms_train.json")) {
+            if (lfs::core::native_fs::exists(path / "transforms_train.json")) {
                 transforms_file = path / "transforms_train.json";
                 LOG_DEBUG("Found transforms_train.json");
-            } else if (std::filesystem::exists(path / "transforms.json")) {
+            } else if (lfs::core::native_fs::exists(path / "transforms.json")) {
                 transforms_file = path / "transforms.json";
                 LOG_DEBUG("Found transforms.json");
             } else {
@@ -165,15 +191,23 @@ namespace lfs::io {
             LOG_INFO("Loading Blender/NeRF dataset from: {}", lfs::core::path_to_utf8(transforms_file));
 
             // Read transforms and create cameras
+            std::vector<std::string> warnings;
             auto [camera_infos, scene_center, train_val_split] =
-                read_transforms_cameras_and_images(transforms_file, options);
+                read_transforms_cameras_and_images(transforms_file, options, &warnings);
 
             std::vector<std::string> missing_images;
+            std::vector<std::string> unreadable_images;
             for (const auto& info : camera_infos) {
                 if (!info._has_image) {
                     missing_images.push_back(info._image_name.empty()
                                                  ? lfs::core::path_to_utf8(info._image_path.filename())
                                                  : info._image_name);
+                } else {
+                    std::string probe_error;
+                    if (!lfs::core::probe_image_header_bounded(info._image_path, probe_error)) {
+                        unreadable_images.push_back(info._image_name);
+                        LOG_DEBUG("Could not read dataset image '{}': {}", info._image_name, probe_error);
+                    }
                 }
             }
             if (!camera_infos.empty() && missing_images.size() == camera_infos.size()) {
@@ -258,7 +292,7 @@ namespace lfs::io {
                     }
 
                     std::filesystem::path depth_path;
-                    if (auto depth_lookup = depth_cache.lookup(info._image_name); depth_lookup.found()) {
+                    if (auto depth_lookup = lookup_sidecar(depth_cache, info._image_path, info._image_name, absolute_base_path); depth_lookup.found()) {
                         depth_path = std::move(depth_lookup.path);
                     } else if (depth_lookup.ambiguous()) {
                         if (options.load_depths) {
@@ -274,7 +308,7 @@ namespace lfs::io {
                     }
 
                     std::filesystem::path normal_path;
-                    if (auto normal_lookup = normal_cache.lookup(info._image_name); normal_lookup.found()) {
+                    if (auto normal_lookup = lookup_sidecar(normal_cache, info._image_path, info._image_name, absolute_base_path); normal_lookup.found()) {
                         normal_path = std::move(normal_lookup.path);
                     } else if (normal_lookup.ambiguous()) {
                         if (options.load_normals) {
@@ -312,13 +346,21 @@ namespace lfs::io {
                         auto [img_w, img_h, img_c] = get_image_info_cached();
                         auto [depth_w, depth_h, depth_c] = lfs::core::get_image_info(depth_path);
                         if (depth_c != 1 || !sidecar_dimensions_match_contract(depth_w, depth_h, img_w, img_h)) {
-                            return make_error(ErrorCode::DEPTH_SIZE_MISMATCH,
-                                              std::format("Depth map '{}' is {}x{} but image '{}' is {}x{}; expected a 1-channel map with aspect ratio within 1%",
-                                                          lfs::core::path_to_utf8(depth_path.filename()), depth_w, depth_h,
-                                                          info._image_name, img_w, img_h),
-                                              depth_path);
+                            if (!options.depth_auto_generate) {
+                                return make_error(ErrorCode::DEPTH_SIZE_MISMATCH,
+                                                  std::format("Depth map '{}' is {}x{} but image '{}' is {}x{}; expected a 1-channel map with aspect ratio within 1%",
+                                                              lfs::core::path_to_utf8(depth_path.filename()), depth_w, depth_h,
+                                                              info._image_name, img_w, img_h),
+                                                  depth_path);
+                            }
+                            LOG_WARN("Depth map '{}' is {}x{} but image '{}' is {}x{}; "
+                                     "ignoring it so auto-generate can overwrite that file",
+                                     lfs::core::path_to_utf8(depth_path.filename()),
+                                     depth_w, depth_h, info._image_name, img_w, img_h);
+                            depth_path.clear();
+                        } else {
+                            prior_resolutions.add({depth_w, depth_h, img_w, img_h}, false);
                         }
-                        prior_resolutions.add({depth_w, depth_h, img_w, img_h}, false);
                     }
                     if (info._has_image && options.load_normals && !normal_path.empty()) {
                         auto [img_w, img_h, img_c] = get_image_info_cached();
@@ -373,6 +415,9 @@ namespace lfs::io {
             if (!missing_images.empty()) {
                 notify_missing_dataset_images(missing_images);
             }
+            if (!unreadable_images.empty()) {
+                notify_unreadable_dataset_images(unreadable_images);
+            }
 
             prior_resolutions.log();
 
@@ -386,35 +431,73 @@ namespace lfs::io {
 
             // Check ply_file_path in transforms.json (nerfstudio format), fallback to pointcloud.ply
             std::filesystem::path pointcloud_path;
+            std::filesystem::path normalized_candidate;
             if (std::ifstream file; lfs::core::open_file_for_read(transforms_file, std::ios::in | std::ios::binary, file)) {
                 try {
                     if (const auto json = nlohmann::json::parse(file, nullptr, true, true);
                         json.contains("ply_file_path")) {
-                        pointcloud_path = base_path / lfs::core::utf8_to_path(json["ply_file_path"].get<std::string>());
+                        auto ply_path = json["ply_file_path"].get<std::string>();
+                        pointcloud_path = base_path / lfs::core::utf8_to_path(ply_path);
+                        // Keep existing native filenames; retry Windows separators on other platforms.
+                        if (ply_path.find('\\') != std::string::npos && !lfs::core::native_fs::exists(pointcloud_path)) {
+                            std::replace(ply_path.begin(), ply_path.end(), '\\', '/');
+                            normalized_candidate = base_path / lfs::core::utf8_to_path(ply_path);
+                        }
                     }
                 } catch (...) {
                     // Ignore parse errors - will fallback to default pointcloud.ply
                 }
             }
-            if (pointcloud_path.empty() || !std::filesystem::exists(pointcloud_path)) {
+            if (pointcloud_path.empty() || !lfs::core::native_fs::exists(pointcloud_path)) {
                 pointcloud_path = base_path / "pointcloud.ply";
             }
 
             std::shared_ptr<PointCloud> point_cloud;
-            std::vector<std::string> warnings;
             if (!missing_images.empty()) {
                 warnings.push_back(format_missing_dataset_images_warning(missing_images));
             }
-            if (std::filesystem::exists(pointcloud_path)) {
-                auto loaded_point_cloud = load_simple_ply_point_cloud(pointcloud_path, options);
-                point_cloud = std::make_shared<PointCloud>(
-                    convert_transforms_point_cloud_to_colmap_world(std::move(loaded_point_cloud)));
-                LOG_INFO("Loaded {} points from {}", point_cloud->size(),
-                         lfs::core::path_to_utf8(pointcloud_path.filename()));
+            if (!unreadable_images.empty()) {
+                warnings.push_back(format_unreadable_dataset_images_warning(unreadable_images));
+            }
+            std::optional<PointCloud> loaded_point_cloud;
+            if (!normalized_candidate.empty()) {
+                std::error_code ec;
+                if (lfs::core::native_fs::is_regular_file(normalized_candidate, ec)) {
+                    try {
+                        loaded_point_cloud = load_simple_ply_point_cloud(normalized_candidate, options);
+                        pointcloud_path = normalized_candidate;
+                    } catch (const std::runtime_error& e) {
+                        throw_if_load_cancel_requested(options, "Blender/NeRF point cloud load cancelled");
+                        // This optional spelling must not displace a working default or random seed.
+                        LOG_DEBUG("Ignoring unusable normalized seed path: {}", e.what());
+                    }
+                }
+            }
+            if (loaded_point_cloud || lfs::core::native_fs::exists(pointcloud_path)) {
+                if (!loaded_point_cloud) {
+                    loaded_point_cloud = load_simple_ply_point_cloud(pointcloud_path, options);
+                }
+                if (loaded_point_cloud->size() > 0) {
+                    point_cloud = std::make_shared<PointCloud>(
+                        convert_transforms_point_cloud_to_colmap_world(std::move(*loaded_point_cloud)));
+                    LOG_INFO("Loaded {} points from {}", point_cloud->size(),
+                             lfs::core::path_to_utf8(pointcloud_path.filename()));
+                } else {
+                    const auto& localization = lfs::event::LocalizationManager::getInstance();
+                    // Standalone/headless loaders can run before locale resources are initialized.
+                    warnings.emplace_back(localization.hasKey("io.no_finite_seed_points")
+                                              ? LOC("io.no_finite_seed_points")
+                                              : "The point cloud contains no finite seed points. Using random initialization.");
+                    LOG_WARN("{}", warnings.back());
+                }
             } else {
                 point_cloud = std::make_shared<PointCloud>(generate_random_point_cloud());
                 LOG_WARN("No PLY found, using {} random points", point_cloud->size());
                 warnings.emplace_back("No point cloud file found, using random initialization");
+            }
+
+            if (!point_cloud) {
+                point_cloud = std::make_shared<PointCloud>(generate_random_point_cloud());
             }
 
             // Centralize scene
@@ -462,14 +545,14 @@ namespace lfs::io {
     }
 
     bool BlenderLoader::canLoad(const std::filesystem::path& path) const {
-        if (!std::filesystem::exists(path)) {
+        if (!lfs::core::native_fs::exists(path)) {
             return false;
         }
 
-        if (std::filesystem::is_directory(path)) {
+        if (lfs::core::native_fs::is_directory(path)) {
             // Check for transforms files in directory
-            return std::filesystem::exists(path / "transforms.json") ||
-                   std::filesystem::exists(path / "transforms_train.json");
+            return lfs::core::native_fs::exists(path / "transforms.json") ||
+                   lfs::core::native_fs::exists(path / "transforms_train.json");
         } else {
             // Check if it's a JSON file
             return path.extension() == ".json";

@@ -7,6 +7,8 @@
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "lfs/training/live_model_mutation_guard.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/trainer.hpp"
 
@@ -16,18 +18,6 @@
 namespace lfs::training {
 
     namespace {
-        core::Tensor expand_mask(const core::Tensor& row_mask, const core::TensorShape& target_shape) {
-            if (row_mask.shape().rank() == 0 || target_shape.rank() == 0) {
-                return row_mask;
-            }
-            if (row_mask.shape().rank() == 1 && target_shape.rank() > 1) {
-                auto expanded = row_mask.unsqueeze(-1);
-                std::vector<size_t> dims = target_shape.dims();
-                expanded = expanded.expand(core::TensorShape{dims});
-                return expanded;
-            }
-            return row_mask;
-        }
 
         core::Tensor make_full_like_mask(const core::Tensor& mask, double value) {
             return core::Tensor::full(mask.shape(), static_cast<float>(value), mask.device(), core::DataType::Float32);
@@ -211,7 +201,13 @@ namespace lfs::training {
         if (snapshot_.trainer != trainer) {
             return;
         }
+        const TrainingSnapshot finished = snapshot_;
         reset_snapshot_locked();
+        snapshot_.iteration = finished.iteration;
+        snapshot_.max_iterations = finished.max_iterations;
+        snapshot_.loss = finished.loss;
+        snapshot_.num_gaussians = finished.num_gaussians;
+        snapshot_.strategy = finished.strategy;
     }
 
     void CommandCenter::reset_snapshot() {
@@ -350,7 +346,7 @@ namespace lfs::training {
                 return mask;
             }
             auto slice = mask.slice(0, s.start, effective_end);
-            slice = core::Tensor::ones_bool({len}, device);
+            slice.copy_from(core::Tensor::ones_bool({len}, device));
             return mask;
         }
         case SelectionKind::Indices: {
@@ -368,7 +364,7 @@ namespace lfs::training {
     }
 
     std::expected<void, std::string> CommandCenter::apply_set(core::Tensor& tensor, const core::Tensor& mask_rows, const ArgValue& value) {
-        auto mask_full = expand_mask(mask_rows, tensor.shape());
+        auto mask_full = expand_row_mask(mask_rows, tensor.shape());
 
         if (std::holds_alternative<double>(value)) {
             const double v = std::get<double>(value);
@@ -402,7 +398,7 @@ namespace lfs::training {
     }
 
     std::expected<void, std::string> CommandCenter::apply_scale(core::Tensor& tensor, const core::Tensor& mask_rows, double factor) {
-        const auto mask_full = expand_mask(mask_rows, tensor.shape());
+        const auto mask_full = expand_row_mask(mask_rows, tensor.shape());
         const auto mask_float = mask_full.to(tensor.dtype());
         const auto one = make_full_like_mask(mask_full, 1.0).to(tensor.dtype());
         const auto scale = make_full_like_mask(mask_full, factor).to(tensor.dtype());
@@ -414,7 +410,7 @@ namespace lfs::training {
         if (!minv && !maxv) {
             return std::unexpected("clamp_attribute requires min or max");
         }
-        const auto mask_full = expand_mask(mask_rows, tensor.shape());
+        const auto mask_full = expand_row_mask(mask_rows, tensor.shape());
         const auto mask_float = mask_full.to(tensor.dtype());
         const auto keep = mask_full.logical_not().to(tensor.dtype());
         auto clamped = tensor;
@@ -452,7 +448,6 @@ namespace lfs::training {
                 return std::unexpected("shN storage is not allocated (max sh-degree 0)");
             }
             shN_canon = model.shN_canonical();
-            prev_capacity = std::max<size_t>(model.means().capacity(), model.size());
             tensor = &shN_canon;
         } else {
             size_t row_dim = 0;
@@ -505,9 +500,14 @@ namespace lfs::training {
             return result;
         }
 
-        // For shN, write the mutated canonical view back into swizzled storage.
+        // Write only selected shN rows through the training storage helper, preserving live q16 storage.
         if (is_shN) {
-            model.shN_set_from_canonical(shN_canon, prev_capacity);
+            const auto written_rows = mask->nonzero().squeeze(-1);
+            if (written_rows.numel() > 0) {
+                LiveModelMutationGuard mutation_guard("CommandCenter::exec_model shN");
+                sh_value::scatter_canonical_into_shN(
+                    model, written_rows, shN_canon.index_select(0, written_rows));
+            }
         }
 
         if (auto p = param_type_from_attribute(attr_name)) {
@@ -598,6 +598,14 @@ namespace lfs::training {
             }
             if (!argument_is_finite(value)) {
                 return std::unexpected("Non-finite argument '" + name + "' in op " + cmd.op);
+            }
+            if (const auto* number = std::get_if<double>(&value)) {
+                if (spec->exclusive_minimum && *number <= *spec->exclusive_minimum)
+                    return std::unexpected(std::format("Argument '{}' must be > {} (got {})", name,
+                                                       *spec->exclusive_minimum, *number));
+                if (spec->maximum && *number > *spec->maximum)
+                    return std::unexpected(std::format("Argument '{}' must be <= {} (got {})", name,
+                                                       *spec->maximum, *number));
             }
         }
         for (const auto& spec : it_op->args) {

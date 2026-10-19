@@ -63,10 +63,16 @@ namespace lfs::mcp {
 
             if (args.contains("images_folder"))
                 params.dataset.images = args["images_folder"].get<std::string>();
-            if (args.contains("max_iterations"))
-                params.optimization.iterations = args["max_iterations"].get<size_t>();
-            if (args.contains("output_path"))
+            if (args.contains("max_iterations")) {
+                const auto max_iterations = args["max_iterations"].get<int64_t>();
+                if (max_iterations < 1)
+                    return std::unexpected("max_iterations must be 1 or greater");
+                params.optimization.iterations = static_cast<size_t>(max_iterations);
+            }
+            if (args.contains("output_path")) {
                 params.dataset.output_path = args["output_path"].get<std::string>();
+                params.dataset.output_path_explicit = !params.dataset.output_path.empty();
+            }
             if (args.contains("min_track_length")) {
                 const int min_track = args["min_track_length"].get<int>();
                 if (min_track < 0)
@@ -75,6 +81,9 @@ namespace lfs::mcp {
             }
             if (params.dataset.output_path.empty())
                 params.dataset.output_path = core::param::default_dataset_output_path(params.dataset.data_path);
+
+            if (auto invalid = params.optimization.validate(); !invalid.empty())
+                return std::unexpected(std::move(invalid));
 
             return {};
         }
@@ -95,12 +104,12 @@ namespace lfs::mcp {
                         {"images_folder", json{{"type", "string"}, {"description", "Images subfolder (default: images)"}}},
                         {"output_path", json{{"type", "string"}, {"description", "Optional output directory for project saves and exports (default: <dataset>/output)"}}},
                         {"min_track_length", json{{"type", "integer"}, {"minimum", 0}, {"description", "Minimum COLMAP track length for sparse point import; 0 disables filtering"}}},
-                        {"max_iterations", json{{"type", "integer"}, {"description", "Maximum training iterations (default: 30000)"}}},
+                        {"max_iterations", json{{"type", "integer"}, {"minimum", 1}, {"description", "Maximum training iterations (default: 30000)"}}},
                         {"strategy", json{{"type", "string"}, {"enum", json::array({"default", "mcmc", "mrnf", "igs+"})}, {"description", "Training strategy or 'default' to keep the built-in default"}}}},
                     .required = {"path"}},
                 .metadata = command_metadata(backend, "scene", true)},
             [backend](const json& args) -> json {
-                std::filesystem::path path = args["path"].get<std::string>();
+                std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
 
                 core::param::TrainingParameters params;
                 params.dataset.data_path = path;
@@ -140,7 +149,7 @@ namespace lfs::mcp {
                     .required = {"path"}},
                 .metadata = command_metadata(backend, "scene", true)},
             [backend](const json& args) -> json {
-                std::filesystem::path path = args["path"].get<std::string>();
+                std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 auto result = backend.load_checkpoint(path);
                 if (!result)
                     return json{{"error", result.error()}};
@@ -159,7 +168,7 @@ namespace lfs::mcp {
                     .required = {"path"}},
                 .metadata = command_metadata(backend, "scene", false, true)},
             [backend](const json& args) -> json {
-                std::filesystem::path path = args["path"].get<std::string>();
+                std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const bool include_provenance = args.value("include_provenance", true);
                 auto result = backend.save_ply(path, include_provenance);
                 if (!result)
@@ -183,13 +192,13 @@ namespace lfs::mcp {
         registry.register_tool(
             McpTool{
                 .name = "render.capture",
-                .description = "Capture the current scene. Omit camera_index to grab the live viewport region only; pass camera_index to render from a dataset camera. Scenes with no Gaussian or point-cloud content (meshes and environment backgrounds alone) are composited straight into the window, so their capture is cropped from it and includes any viewport overlays such as the axis gizmo and floating toolbars.",
+                .description = "Capture the current scene. Omit camera_index to grab the live viewport region only; pass camera_index to render a dataset camera's view (its pose and vertical field of view; the viewport renders lens cameras as pinhole). Scenes with no Gaussian or point-cloud content (meshes and environment backgrounds alone) are composited straight into the window, so their capture is cropped from it and includes any viewport overlays such as the axis gizmo and floating toolbars.",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"camera_index", json{{"type", "integer"}, {"description", "Dataset camera index; omit to capture the live viewport region only"}}},
-                        {"width", json{{"type", "integer"}, {"description", "Optional output width; preserves aspect ratio when height is omitted"}}},
-                        {"height", json{{"type", "integer"}, {"description", "Optional output height; preserves aspect ratio when width is omitted"}}}},
+                        {"camera_index", json{{"type", "integer"}, {"description", "Dataset camera UID as camera_list reports it; omit to capture the live viewport region only"}}},
+                        {"width", json{{"type", "integer"}, {"minimum", 1}, {"maximum", 16384}, {"description", "Optional output width; preserves aspect ratio when height is omitted"}}},
+                        {"height", json{{"type", "integer"}, {"minimum", 1}, {"maximum", 16384}, {"description", "Optional output height; preserves aspect ratio when width is omitted"}}}},
                     .required = {}},
                 .metadata = query_metadata(backend, "render")},
             [backend](const json& args) -> json {

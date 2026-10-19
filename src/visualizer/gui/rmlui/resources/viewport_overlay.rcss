@@ -14,6 +14,15 @@ body {
     height: 100%;
 }
 
+#viewport-content {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    overflow: hidden;
+}
+
 .viewport-split-divider {
     position: absolute;
     pointer-events: none;
@@ -39,8 +48,54 @@ body {
     z-index: 12;
 }
 
+/* Centered in the viewport; the side padding keeps the wrapped lines clear of
+   the docked tool rail. */
+.empty-state-hint {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    padding: 0 72dp;
+    text-align: center;
+    pointer-events: none;
+}
+
+/* viewport-cramped is set from the viewport size: the hint shows whole or not at all. */
+#viewport-content.viewport-cramped .empty-state-hint {
+    display: none;
+}
+
+.empty-state-icon {
+    width: 48dp;
+    height: 48dp;
+    margin-bottom: 16dp;
+}
+
+.empty-state-title {
+    font-size: 15dp;
+}
+
+.empty-state-subtitle {
+    max-width: 480dp;
+    margin-top: 10dp;
+    font-size: 13dp;
+}
+
+.empty-state-import {
+    margin-top: 10dp;
+    font-size: 12dp;
+}
+
 .project-drop-overlay {
     position: absolute;
+    left: 0;
+    right: 0;
     top: 0;
     bottom: 0;
     display: flex;
@@ -108,10 +163,6 @@ body {
     align-items: center;
     pointer-events: auto;
     overflow: hidden;
-}
-
-.toolbar-position-top .toolbar-vertical {
-    margin-top: 12dp;
 }
 
 .toolbar-drag-handle {
@@ -217,17 +268,22 @@ body {
     margin-bottom: 3dp;
 }
 
+/* Four 27dp buttons with 3dp gaps (117dp), centered under the 104dp axis widget. */
 .viewport-gizmo-controls {
     position: absolute;
-    top: 108dp;
-    right: 10dp;
+    top: 117dp;
+    right: 3.5dp;
     display: flex;
     flex-direction: column;
     align-items: center;
-    width: 95dp;
+    width: 117dp;
     gap: 3dp;
     pointer-events: none;
     z-index: 8;
+}
+
+.gizmo-cramped .viewport-gizmo-controls {
+    display: none;
 }
 
 .viewport-gizmo-control-row {
@@ -235,7 +291,7 @@ body {
     flex-direction: row;
     align-items: center;
     justify-content: center;
-    width: 95dp;
+    width: 117dp;
     gap: 3dp;
     pointer-events: auto;
 }
@@ -347,6 +403,7 @@ body {
 .crop-roi-setting-row > .setting-row__label-col {
     width: 180dp;
     min-width: 180dp;
+    max-width: 180dp;
 }
 
 .crop-roi-setting-row .setting-slider {
@@ -362,7 +419,7 @@ body {
 .viewport-selection-overlay {
     position: absolute;
     top: 5dp;
-    left: 52dp;
+    left: 12dp;
     right: 12dp;
     display: flex;
     justify-content: center;
@@ -373,7 +430,7 @@ body {
 .viewport-depth-overlay {
     position: absolute;
     top: 5dp;
-    left: 52dp;
+    left: 12dp;
     right: 12dp;
     display: flex;
     justify-content: center;
@@ -384,12 +441,21 @@ body {
 .viewport-transform-overlay {
     position: absolute;
     top: 5dp;
-    left: 52dp;
+    left: 12dp;
     right: 12dp;
     display: flex;
     justify-content: center;
     pointer-events: none;
     z-index: 9;
+}
+
+/* Shared bars span both panels; keep them below the axes and centered tool rails. */
+#viewport-content.split-view #depth-view-block,
+#viewport-content.split-view .viewport-selection-overlay,
+#viewport-content.split-view .viewport-transform-overlay {
+    top: auto;
+    bottom: 5dp;
+    right: 12dp;
 }
 
 .viewport-depth-header {
@@ -447,9 +513,12 @@ body {
     padding: 0 0 0 8dp;
     position: relative;
     top: 0;
+    /* Viewport selects align from the top instead of using shared centering. */
+    transform: none;
 }
 
-#depth-view-block .viewport-depth-mode-select selectvalue {
+#depth-view-block .viewport-depth-mode-select selectvalue,
+#gt-compare-mode-block .viewport-depth-mode-select selectvalue {
     height: 20dp;
     line-height: 20dp;
 }
@@ -460,9 +529,11 @@ body {
     line-height: 22dp;
     position: relative;
     top: 0;
+    transform: none;
 }
 
-#depth-view-block .viewport-depth-mode-select selectarrow {
+#depth-view-block .viewport-depth-mode-select selectarrow,
+#gt-compare-mode-block .viewport-depth-mode-select selectarrow {
     height: 20dp;
     line-height: 20dp;
 }
@@ -652,30 +723,30 @@ body {
 }
 
 .viewport-transform-panel.viewport-export-panel {
-    width: 470dp;
-    min-width: 470dp;
-    max-width: 470dp;
-    padding: 6dp 8dp;
+    width: auto;
+    min-width: 0;
+    max-width: 100%;
+    padding: 5dp 6dp;
+    border-radius: 6dp;
     gap: 4dp;
     box-sizing: border-box;
+    flex-shrink: 0;
 }
 
-.viewport-transform-panel.viewport-export-panel.has-custom {
-    width: 624dp;
-    min-width: 624dp;
-    max-width: 624dp;
+.viewport-transform-overlay > .viewport-transform-panel,
+.viewport-selection-overlay > .viewport-transform-panel,
+.viewport-depth-overlay > .viewport-transform-panel {
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    flex-shrink: 1;
 }
 
-.viewport-transform-panel.viewport-export-panel.has-alpha {
-    width: 532dp;
-    min-width: 532dp;
-    max-width: 532dp;
-}
-
-.viewport-transform-panel.viewport-export-panel.has-custom.has-alpha {
-    width: 686dp;
-    min-width: 686dp;
-    max-width: 686dp;
+.viewport-depth-overlay > .viewport-transform-panel.viewport-export-panel {
+    width: auto;
+    min-width: 0;
+    max-width: 100%;
+    flex-shrink: 0;
 }
 
 #transform-block .viewport-transform-panel {
@@ -690,7 +761,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: 5dp;
     min-width: 0;
 }
@@ -710,6 +781,15 @@ body {
     flex-direction: column;
     align-items: center;
     gap: 5dp;
+    overflow: visible;
+}
+
+/* Reserve the full 114dp axis corner plus a 7dp gap at every width.
+   A centered single-row bar can reach this corner above the old breakpoint. */
+.viewport-transform-overlay,
+.viewport-selection-overlay,
+.viewport-depth-overlay {
+    right: 121dp;
 }
 
 .viewport-transform-header {
@@ -806,37 +886,49 @@ body {
 .viewport-export-fields {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 8dp;
-    height: 26dp;
+    row-gap: 4dp;
+    height: auto;
     min-height: 26dp;
-    flex-shrink: 0;
-    flex-wrap: nowrap;
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    min-width: 0;
 }
 
 .viewport-export-axis {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 6dp;
-    height: 26dp;
+    height: auto;
     min-height: 26dp;
-    flex-shrink: 0;
+    flex: 0 1 auto;
+    min-width: 0;
+    flex-wrap: wrap;
 }
 
 .viewport-export-header {
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
+    justify-content: center;
     align-items: center;
+    align-content: center;
+    row-gap: 4dp;
     min-height: 26dp;
+    width: auto;
+    min-width: 0;
+    flex: 0 0 auto;
 }
 
 .viewport-transform-meta.viewport-export-meta {
-    width: 171dp;
-    min-width: 171dp;
-    max-width: 171dp;
+    width: auto;
+    min-width: 0;
+    max-width: none;
     flex-direction: row;
     align-items: center;
     gap: 6dp;
     flex-grow: 0;
-    flex-shrink: 0;
+    flex-shrink: 1;
     min-height: 26dp;
 }
 
@@ -844,16 +936,22 @@ body {
     font-size: 12dp;
     line-height: 26dp;
     white-space: nowrap;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .viewport-export-axis > .viewport-transform-axis-label {
-    width: 64dp;
-    min-width: 64dp;
+    width: auto;
+    min-width: 0;
     font-size: 12dp;
     line-height: 26dp;
     text-align: left;
     white-space: nowrap;
-    flex-shrink: 0;
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .viewport-export-resolution-select,
@@ -861,39 +959,42 @@ body {
     height: 26dp;
     min-height: 26dp;
     font-size: 12dp;
-    line-height: 24dp;
+    line-height: 26dp;
     padding: 0;
     margin: 0;
-    flex-shrink: 0;
+    flex: 0 0 auto;
 }
 
 .viewport-export-resolution-select {
-    width: 102dp;
-    min-width: 102dp;
+    /* Closed value must fit the longest locale, "Benutzerdefiniert". */
+    width: 128dp;
+    min-width: 128dp;
 }
 
 .viewport-export-format-select {
-    width: 74dp;
-    min-width: 74dp;
+    width: 58dp;
+    min-width: 58dp;
 }
 
 .viewport-export-resolution-select selectvalue,
 .viewport-export-format-select selectvalue {
-    height: 24dp;
-    line-height: 24dp;
+    height: 26dp;
+    line-height: 26dp;
     margin-right: 20dp;
     padding: 0 0 0 8dp;
     position: relative;
     top: 0;
+    transform: none;
 }
 
 .viewport-export-resolution-select selectarrow,
 .viewport-export-format-select selectarrow {
     width: 20dp;
-    height: 24dp;
-    line-height: 24dp;
+    height: 26dp;
+    line-height: 26dp;
     position: relative;
     top: 0;
+    transform: none;
 }
 
 .viewport-export-custom-size {
@@ -902,7 +1003,7 @@ body {
     gap: 5dp;
     height: 26dp;
     min-height: 26dp;
-    flex-shrink: 0;
+    flex: 0 0 auto;
 }
 
 .viewport-export-custom-size.hidden {
@@ -917,7 +1018,7 @@ body {
     font-size: 12dp;
     line-height: 16dp;
     padding: 3dp 6dp;
-    flex-shrink: 0;
+    flex: 0 0 auto;
     text-align: right;
     box-sizing: border-box;
 }
@@ -929,7 +1030,7 @@ body {
     line-height: 26dp;
     height: 26dp;
     text-align: center;
-    flex-shrink: 0;
+    flex: 0 0 auto;
 }
 
 .viewport-export-transparency {
@@ -939,8 +1040,18 @@ body {
     height: 26dp;
     min-height: 26dp;
     font-size: 12dp;
+    line-height: 26dp;
     white-space: nowrap;
-    flex-shrink: 0;
+    flex: 0 0 auto;
+}
+
+.viewport-export-transparency input {
+    width: 14dp;
+    height: 14dp;
+    min-width: 14dp;
+    min-height: 14dp;
+    margin: 0;
+    flex: 0 0 auto;
 }
 
 .viewport-export-transparency.hidden {
@@ -948,26 +1059,40 @@ body {
 }
 
 .viewport-export-actions {
+    display: flex;
+    align-items: center;
+    gap: 4dp;
     height: 26dp;
     min-height: 26dp;
-    flex-shrink: 0;
+    flex: 0 0 auto;
+    min-width: 0;
+}
+
+.viewport-export-actions .viewport-transform-action {
+    width: 26dp;
+    height: 26dp;
+    min-width: 26dp;
+    min-height: 26dp;
+    flex: 0 0 auto;
 }
 
 .viewport-export-button {
-    width: 66dp;
     min-width: 66dp;
+    width: auto;
     height: 26dp;
     min-height: 26dp;
-    padding: 0;
+    padding: 0 8dp;
     font-size: 12dp;
-    line-height: 24dp;
+    line-height: 26dp;
     box-sizing: border-box;
-    flex-shrink: 0;
+    flex: 0 0 auto;
+    white-space: nowrap;
 }
 
 .viewport-export-status {
     pointer-events: none;
-    max-width: 360dp;
+    width: auto;
+    max-width: none;
     min-height: 22dp;
     padding: 4dp 10dp;
     border-width: 1dp;
@@ -975,6 +1100,8 @@ body {
     font-size: 11dp;
     line-height: 14dp;
     white-space: nowrap;
+    text-align: center;
+    box-sizing: border-box;
     opacity: 1;
 }
 
@@ -1010,13 +1137,13 @@ body {
 
 #transform-block .viewport-transform-fields,
 #transform-block .viewport-transform-group {
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: 4dp;
 }
 
 #transform-block .viewport-transform-fields {
     justify-content: flex-start;
-    flex-shrink: 0;
+    flex-shrink: 1;
 }
 
 .viewport-transform-axis-label {
@@ -1026,7 +1153,8 @@ body {
     text-align: center;
 }
 
-.viewport-transform-axis > .number-input {
+.viewport-transform-axis > .number-input,
+.transform-drag-field > .number-input {
     width: 64dp;
     min-width: 64dp;
     height: 22dp;
@@ -1053,7 +1181,8 @@ body {
     min-width: 8dp;
 }
 
-#transform-block .viewport-transform-axis > .number-input {
+#transform-block .viewport-transform-axis > .number-input,
+#transform-block .transform-drag-field > .number-input {
     width: 58dp;
     min-width: 58dp;
     height: 22dp;
@@ -1063,6 +1192,25 @@ body {
 #transform-block .viewport-transform-axis > .num-step-btn {
     width: 20dp;
     min-width: 20dp;
+}
+
+.transform-drag-field {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.transform-drag-handle {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    cursor: ew-resize;
+}
+
+.transform-drag-handle.hidden,
+.transform-drag-field.is-editing > .transform-drag-handle {
+    display: none;
 }
 
 .viewport-transform-axis--split {
@@ -1112,6 +1260,49 @@ body {
     height: 22dp;
     margin: 0 5dp;
 }
+
+.viewport-transfer-queue {
+    position: absolute;
+    right: 8dp;
+    bottom: 8dp;
+    width: 352dp;
+    max-width: 90%;
+    max-height: 65%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 8dp;
+    padding: 8dp;
+    border-width: 1dp;
+    border-radius: 8dp;
+    pointer-events: auto;
+    z-index: 22;
+}
+
+.viewport-transfer-header, .viewport-transfer-title, .viewport-transfer-status,
+.viewport-transfer-actions, .viewport-transfer-footer {
+    display: flex;
+    align-items: center;
+    gap: 8dp;
+    flex-shrink: 0;
+}
+.viewport-transfer-heading { flex: 1; font-size: 13dp; font-weight: bold; }
+.viewport-transfer-toggle { width: 24dp; min-width: 24dp; padding: 0; }
+.viewport-transfer-summary { font-size: 11dp; flex-shrink: 0; }
+.viewport-transfer-list { min-height: 0; max-height: 320dp; overflow-y: auto; }
+.viewport-transfer-row { display: flex; flex-direction: column; gap: 8dp; padding: 8dp 0; border-top-width: 1dp; }
+.viewport-transfer-title { font-size: 12dp; font-weight: bold; }
+.viewport-transfer-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewport-transfer-status { flex-wrap: wrap; justify-content: space-between; font-size: 11dp; }
+.viewport-transfer-detail { font-size: 11dp; }
+.viewport-transfer-progress { height: 8dp; flex-shrink: 0; width: 100%; border-radius: 2dp; overflow: hidden; }
+.viewport-transfer-fill { height: 100%; }
+.viewport-transfer-footer { padding-top: 8dp; border-top-width: 1dp; flex-wrap: wrap; }
+.viewport-transfer-queue .btn { box-sizing: border-box; height: 24dp; min-height: 24dp; max-height: 24dp; padding: 0 8dp; line-height: 22dp; font-size: 11dp; white-space: nowrap; }
+.viewport-transfer-queue .viewport-transfer-toggle { padding: 0; width: 24dp; text-align: center; }
+.viewport-transfer-queue.hidden, .viewport-transfer-queue .hidden { display: none; }
+@keyframes transfer-progress-pulse { from { opacity: 1; } to { opacity: 0.35; } }
+.viewport-transfer-fill.is-indeterminate { animation: transfer-progress-pulse 0.8s quadratic-in-out infinite alternate; }
 
 .viewport-status-overlay {
     position: absolute;
@@ -1173,7 +1364,6 @@ body {
 .viewport-lod-stats-value {
     flex-grow: 1;
     min-width: 0;
-    font-family: "JetBrains Mono";
     font-size: 9dp;
     line-height: 14dp;
     text-align: right;
@@ -1208,6 +1398,13 @@ body {
     font-weight: bold;
 }
 
+.viewport-metrics-reason {
+    max-width: 220dp;
+    font-size: 10dp;
+    line-height: 13dp;
+    white-space: normal;
+}
+
 .vram-hud-overlay {
     position: absolute;
     right: 16dp;
@@ -1240,12 +1437,16 @@ body {
 
 .vram-hud-tabs {
     display: flex;
+    flex-wrap: wrap;
     gap: 0dp;
     border-bottom-width: 1dp;
 }
 
+/* Content-sized tabs wrap onto a second row in a narrow HUD instead of overlapping. */
 .vram-hud-tab {
-    flex: 1;
+    flex: 1 0 auto;
+    padding: 0 6dp;
+    white-space: nowrap;
     height: 24dp;
     font-size: 11dp;
     text-align: center;
@@ -1861,9 +2062,9 @@ body {
 }
 
 .perf-hud-strip {
-    position: absolute;
-    right: 18dp;
-    top: 18dp;
+    position: relative;
+    left: 0;
+    top: 0;
     width: 300dp;
     min-height: 142dp;
     padding: 10dp 12dp;
@@ -1880,11 +2081,12 @@ body {
     align-items: center;
     gap: 6dp;
     height: 18dp;
-    cursor: pointer;
+    drag: drag;
+    cursor: move;
 }
 
 .perf-hud-strip-title { flex-grow: 1; }
-.perf-hud-strip-rate, .perf-hud-strip-value, .perf-hud-strip-badge { font-family: "JetBrains Mono"; font-weight: normal; }
+.perf-hud-strip-rate, .perf-hud-strip-value, .perf-hud-strip-badge { font-weight: normal; }
 .perf-hud-strip-meter { display: flex; align-items: center; gap: 5dp; height: 18dp; cursor: pointer; }
 .perf-hud-strip-label { width: 34dp; }
 .perf-hud-meter-track { flex-grow: 1; display: flex; height: 7dp; overflow: hidden; border-radius: 3dp; }
@@ -1935,6 +2137,52 @@ body {
     height: 0%;
 }
 
+.vram-hud-timeline-toolbar, .vram-hud-timeline-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4dp;
+    margin-bottom: 5dp;
+}
+
+.vram-hud-timeline-toolbar button, .vram-hud-timeline-legend button {
+    font-size: 10dp;
+    padding: 3dp 6dp;
+    cursor: pointer;
+}
+
+.vram-hud-timeline { display: block; width: 100%; height: 100%; }
+.vram-hud-timeline-frame { position: relative; width: 100%; height: 48%; min-height: 220dp; flex-shrink: 0; margin-bottom: 0dp; overflow: hidden; }
+.vram-hud-timeline-axis { position: absolute; top: 0; bottom: 0; left: 3dp; display: flex; flex-direction: column; justify-content: space-between; pointer-events: none; font-size: 9dp; }
+.vram-hud-timeline-capacity { position: absolute; top: 16dp; right: 5dp; pointer-events: none; font-size: 9dp; }
+.vram-hud-timeline-x-axis { width: 100%; display: flex; justify-content: space-between; height: 15dp; font-size: 9dp; }
+.vram-hud-timeline-markers { position: absolute; top: 0; left: 0; right: 0; height: 16dp; pointer-events: none; }
+.vram-hud-marker { position: absolute; top: 0; font-size: 8dp; opacity: .55; pointer-events: auto; }
+#vram-hud-panel-overview > * { flex-shrink: 0; }
+.vram-hud-crosshair { position: absolute; display: none; top: 0; bottom: 0; width: 1dp; pointer-events: none; }
+.vram-hud-crosshair.active { display: block; }
+.vram-hud-mini-timeline { display: block; width: 100%; height: 28dp; }
+.vram-hud-health { font-size: 10dp; margin-right: 7dp; }
+.vram-hud-timeline-tooltip { min-height: 16dp; font-size: 10dp; white-space: normal; }
+.vram-hud-timeline-legend button { display: flex; align-items: center; gap: 4dp; }
+.vram-hud-timeline-legend button.muted { opacity: .42; }
+.vram-hud-legend-swatch { display: inline-block; width: 8dp; height: 8dp; border-radius: 2dp; }
+.vram-hud-legend-chip b { font-weight: normal; margin-left: 3dp; }
+.vram-hud-section-title { font-size: 11dp; font-weight: bold; cursor: pointer; margin-top: 7dp; }
+.vram-hud-peak { display: flex; flex-direction: column; gap: 3dp; }
+.vram-hud-peak-bar { display: flex; width: 100%; height: 11dp; overflow: hidden; }
+.vram-hud-peak-segment { height: 100%; }
+.vram-hud-peak-row { display: flex; justify-content: space-between; align-items: center; gap: 6dp; font-size: 10dp; }
+.vram-hud-peak-value { min-width: 155dp; text-align: right; }
+.vram-hud-movers { max-height: 130dp; overflow-y: auto; font-size: 10dp; }
+.vram-hud-mover-row { display: flex; align-items: center; gap: 6dp; padding: 2dp; cursor: pointer; }
+.vram-hud-mover-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vram-hud-mover-number { width: 76dp; min-width: 76dp; text-align: right; }
+.vram-hud-mover-spark { display: flex; align-items: flex-end; width: 62dp; min-width: 62dp; height: 14dp; gap: 1dp; }
+.vram-hud-mover-spark span { flex: 1 1 0; min-width: 1dp; }
+.vram-hud-export-path { font-size: 10dp; margin-top: 4dp; }
+.vram-hud-overlay .vram-hud-mini-timeline { display: none; }
+.vram-hud-overlay.perf-hud-compact .vram-hud-mini-timeline { display: block; }
+
 .perf-hud-ledger-allocated,
 .perf-hud-ledger-disclosure,
 .perf-hud-ledger-badge,
@@ -1952,6 +2200,46 @@ body {
 .vram-hud-allocs-summary-value,
 .vram-hud-breakdown-bytes,
 .vram-hud-breakdown-pct {
-    font-family: "JetBrains Mono";
     font-weight: normal;
+}
+
+/* Leave room for the tool strip and corner axis control in each pane. */
+.toolbar-hcenter.align-active {
+    padding-left: 44dp;
+    padding-right: 121dp;
+    box-sizing: border-box;
+}
+
+/* Keep labeled alignment options inside narrow viewport panes. */
+.toolbar-hcenter .align-toolbar {
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+/* Alignment options need names as well as icons. */
+.toolbar-hcenter .align-toolbar .icon-btn.has-label {
+    width: auto;
+    padding-left: 7dp;
+    padding-right: 7dp;
+    gap: 5dp;
+}
+
+.align-button-label {
+    white-space: nowrap;
+    font-size: 13dp;
+}
+
+/* Depth keeps its controls inside the reserved span, including narrow views. */
+#depth-view-block .viewport-depth-header {
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 4dp;
+}
+
+#depth-view-block .viewport-depth-fields {
+    flex-wrap: wrap;
+    flex-shrink: 1;
+    justify-content: center;
+    row-gap: 4dp;
 }

@@ -47,3 +47,19 @@
     background-color: @{alpha(border,0.25)};
     color: @{text_dim};
 }
+
+.modal-note { color: @{text_dim}; }
+.modal-dialog.form-modal { background-color: @{alpha(surface,1)}; border-color: @{border}; }
+.form-modal .btn[disabled] { background-color: @{surface_bright}; color: @{text_dim}; border-color: @{border}; opacity: 0.5; cursor: default; }
+
+/* Forms share field surfaces and borders in every theme. */
+.form-modal input[type="text"], .form-modal textarea {
+    color: @{text};
+    background-color: @{surface};
+    border-color: @{border};
+}
+.form-modal input[type="text"]:focus, .form-modal select:focus,
+.form-modal select:hover, .form-modal textarea:focus {
+    border-color: @{primary};
+    box-shadow: none;
+}

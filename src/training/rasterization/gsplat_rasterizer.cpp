@@ -12,7 +12,9 @@
 #include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include "gsplat/GeometryFeatures.h"
 #include "gsplat/Ops.h"
+#include "training/kernels/densification_kernels.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include <algorithm>
 #include <array>
@@ -20,6 +22,7 @@
 #include <cstring>
 #include <cuda_runtime.h>
 #include <spdlog/spdlog.h>
+#include <stdexcept>
 
 namespace lfs::training {
 
@@ -93,6 +96,9 @@ namespace lfs::training {
             core::Tensor image_chw;
             core::Tensor alpha_chw;
             core::Tensor depth_chw;
+            core::Tensor camera_rays;
+            core::Tensor geometry_bg;
+            core::Tensor geometry_bg_image;
             core::Tensor shN_dequant;
         };
 
@@ -167,6 +173,8 @@ namespace lfs::training {
             auto sh0 = ensure_contiguous(gaussian_model.sh0());
             auto shN = ensure_contiguous(gaussian_model.shN());
             const uint32_t sh_degree = static_cast<uint32_t>(gaussian_model.get_active_sh_degree());
+            const uint32_t sh_layout_degree =
+                static_cast<uint32_t>(gaussian_model.get_max_sh_degree());
 
             // Squeeze opacities if needed
             if (opacities.ndim() == 2 && opacities.shape()[1] == 1) {
@@ -278,14 +286,19 @@ namespace lfs::training {
             const float* tangential_ptr = nullptr;
             const float* thin_prism_ptr = nullptr;
 
-            auto upload_dist = [&](const core::Tensor& src, size_t n, core::Tensor& dest) {
-                if (!src.is_valid() || src.numel() == 0 || n == 0) {
+            auto upload_fixed_dist = [&](const core::Tensor& src, const size_t fixed_size,
+                                         core::Tensor& dest) {
+                if (!src.is_valid() || src.numel() == 0) {
                     dest = {};
                     return;
                 }
-                const size_t copy_n = std::min(n, static_cast<size_t>(src.numel()));
+                if (src.ndim() != 1 || src.dtype() != core::DataType::Float32 ||
+                    src.numel() > fixed_size) {
+                    throw std::runtime_error("Invalid camera distortion coefficient tensor");
+                }
+                const size_t copy_n = src.numel();
                 if (src.device() == core::Device::CUDA && src.is_contiguous() &&
-                    src.numel() == copy_n) {
+                    copy_n == fixed_size) {
                     dest = src;
                     if (dest.stream() != fwd_stream) {
                         dest.set_stream(fwd_stream);
@@ -299,38 +312,54 @@ namespace lfs::training {
                 if (host.device() != core::Device::CPU) {
                     host = host.cpu();
                 }
-                gsplat_thread_caches.staging.copy_to(dest, host.ptr<float>(), copy_n, fwd_stream);
+                std::array<float, 6> padded{};
+                std::memcpy(padded.data(), host.ptr<float>(), copy_n * sizeof(float));
+                gsplat_thread_caches.staging.copy_to(
+                    dest, padded.data(), fixed_size, fwd_stream);
             };
 
             if (!undistorted) {
                 switch (camera_model) {
                 case CameraModelType::THIN_PRISM_FISHEYE:
-                    if (radial_dist.is_valid() && radial_dist.numel() == 4) {
-                        upload_dist(radial_dist, 4, gsplat_thread_caches.radial);
+                    if (radial_dist.is_valid() && radial_dist.numel() > 0) {
+                        if (radial_dist.numel() != 4) {
+                            throw std::runtime_error(
+                                "Thin-prism fisheye requires four radial coefficients");
+                        }
+                        upload_fixed_dist(radial_dist, 4, gsplat_thread_caches.radial);
                         radial_cuda = gsplat_thread_caches.radial;
                     }
-                    if (tangential_dist.is_valid() && tangential_dist.numel() == 4) {
-                        upload_dist(tangential_dist, 4, gsplat_thread_caches.thin_prism);
+                    if (tangential_dist.is_valid() && tangential_dist.numel() > 0) {
+                        if (tangential_dist.numel() != 4) {
+                            throw std::runtime_error(
+                                "Thin-prism fisheye requires four tangential and prism coefficients");
+                        }
+                        upload_fixed_dist(tangential_dist, 4, gsplat_thread_caches.thin_prism);
                         thin_prism_cuda = gsplat_thread_caches.thin_prism;
                     }
                     break;
                 case CameraModelType::FISHEYE:
-                    if (radial_dist.is_valid() && radial_dist.numel() >= 4) {
-                        upload_dist(radial_dist.numel() == 4 ? radial_dist : radial_dist.slice(0, 0, 4),
-                                    4, gsplat_thread_caches.radial);
+                    if (radial_dist.is_valid() && radial_dist.numel() > 0) {
+                        upload_fixed_dist(radial_dist, 4, gsplat_thread_caches.radial);
                         radial_cuda = gsplat_thread_caches.radial;
                     }
                     break;
                 case CameraModelType::PINHOLE: {
                     if (radial_dist.is_valid() && radial_dist.numel() > 0) {
-                        const size_t n_rad = std::min(radial_dist.numel(), size_t(6));
-                        upload_dist(radial_dist.numel() == n_rad ? radial_dist : radial_dist.slice(0, 0, n_rad),
-                                    n_rad, gsplat_thread_caches.radial);
+                        const size_t radial_count = radial_dist.numel();
+                        if (radial_count > 3 && radial_count != 6) {
+                            throw std::runtime_error(
+                                "Pinhole cameras require at most three polynomial radial coefficients or six rational radial coefficients");
+                        }
+                        upload_fixed_dist(radial_dist, 6, gsplat_thread_caches.radial);
                         radial_cuda = gsplat_thread_caches.radial;
                     }
-                    if (tangential_dist.is_valid() && tangential_dist.numel() >= 2) {
-                        upload_dist(tangential_dist.numel() == 2 ? tangential_dist : tangential_dist.slice(0, 0, 2),
-                                    2, gsplat_thread_caches.tangential);
+                    if (tangential_dist.is_valid() && tangential_dist.numel() > 0) {
+                        if (tangential_dist.numel() != 2) {
+                            throw std::runtime_error(
+                                "Pinhole cameras require two tangential coefficients");
+                        }
+                        upload_fixed_dist(tangential_dist, 2, gsplat_thread_caches.tangential);
                         tangential_cuda = gsplat_thread_caches.tangential;
                     }
                     break;
@@ -366,6 +395,36 @@ namespace lfs::training {
                 channels = 1;
             } else if (render_mode == GsplatRenderMode::RGB_D || render_mode == GsplatRenderMode::RGB_ED) {
                 channels = 4;
+            } else if (render_mode == GsplatRenderMode::RGB_D_N) {
+                channels = 8;
+            }
+
+            // Geometry has zero background; only RGB contributes background color.
+            core::Tensor feature_bg, feature_bg_image;
+            if (channels != 3) {
+                auto& cached_bg = gsplat_thread_caches.geometry_bg;
+                if (!cached_bg.is_valid() || cached_bg.numel() != channels)
+                    cached_bg = core::Tensor::empty({channels}, core::Device::CUDA);
+                feature_bg = cached_bg;
+                feature_bg.set_stream(fwd_stream);
+                feature_bg.zero_();
+                if (channels > 1 && bg_color_ptr) {
+                    LFS_CUDA_CHECK(cudaMemcpyAsync(feature_bg.ptr<float>(), bg_color_ptr, 3 * sizeof(float), cudaMemcpyDeviceToDevice, fwd_stream));
+                }
+                bg_color_ptr = feature_bg.ptr<float>();
+                if (use_bg_image) {
+                    auto& cached_bg_image = gsplat_thread_caches.geometry_bg_image;
+                    const core::TensorShape shape{channels, H, W};
+                    if (!cached_bg_image.is_valid() || cached_bg_image.shape() != shape)
+                        cached_bg_image = core::Tensor::empty(shape, core::Device::CUDA);
+                    feature_bg_image = cached_bg_image;
+                    feature_bg_image.set_stream(fwd_stream);
+                    feature_bg_image.zero_();
+                    if (channels > 1) {
+                        LFS_CUDA_CHECK(cudaMemcpyAsync(feature_bg_image.ptr<float>(), bg_image_ptr, 3ULL * H * W * sizeof(float), cudaMemcpyDeviceToDevice, fwd_stream));
+                    }
+                    bg_image_ptr = feature_bg_image.ptr<float>();
+                }
             }
 
             // Calculate total memory needed (with alignment)
@@ -475,6 +534,7 @@ namespace lfs::training {
                 sh0_ptr,
                 shN_ptr,
                 sh_degree,
+                sh_layout_degree,
                 bg_color_ptr,
                 bg_image_ptr, // per-pixel background image
                 nullptr,      // masks
@@ -526,6 +586,9 @@ namespace lfs::training {
                 render_output.depth = cached_image_chw.div(cached_alpha_chw.clamp_min(1e-10f));
                 break;
             }
+            case GsplatRenderMode::RGB_D_N:
+                render_output.normal = cached_image_chw.slice(0, 4, 7);
+                [[fallthrough]];
             case GsplatRenderMode::RGB_D:
                 render_output.image = cached_image_chw.slice(0, 0, 3);
                 render_output.depth = cached_image_chw.slice(0, 3, 4);
@@ -546,6 +609,16 @@ namespace lfs::training {
 
             // Build context for backward - store raw pointers
             GsplatRasterizeContext ctx;
+            if (channels == 8) {
+                auto& rays = gsplat_thread_caches.camera_rays;
+                const core::TensorShape shape{H, W, 3UL};
+                if (!rays.is_valid() || rays.shape() != shape)
+                    rays = core::Tensor::empty(shape, core::Device::CUDA);
+                ctx.camera_rays = rays;
+                ctx.camera_rays.set_stream(fwd_stream);
+                gsplat_lfs::geometry_camera_rays(ctx.camera_rays.ptr<float>(), W, H, K_ptr,
+                                                 camera_model, radial_ptr, tangential_ptr, thin_prism_ptr, fwd_stream);
+            }
 
             // Store raw pointers directly (arena memory stays valid until end_frame)
             ctx.render_colors_ptr = render_colors_ptr_out;
@@ -563,6 +636,8 @@ namespace lfs::training {
             ctx.isect_ids_ptr = result.isect_ids;
             ctx.flatten_ids_ptr = result.flatten_ids;
             ctx.n_isects = result.n_isects;
+            ctx.batches = std::move(result.batches);
+            ctx.tiles_per_gauss_ptr = tiles_per_gauss_ptr;
             ctx.n_sort = result.n_sort;
 
             // Save input tensors for backward (these are references, not copies)
@@ -580,8 +655,8 @@ namespace lfs::training {
             ctx.viewmat_ptr = viewmat_ptr;
             ctx.K_ptr = K_ptr;
             ctx.K_tensor = K_tensor;
-            ctx.bg_color = bg_color;
-            ctx.bg_image = bg_image; // Save bg_image for backward pass
+            ctx.bg_color = channels == 3 ? bg_color : feature_bg;
+            ctx.bg_image = channels == 3 ? bg_image : feature_bg_image; // Save bg_image for backward pass
 
             // Distortion coefficients
             ctx.radial_ptr = radial_ptr;
@@ -596,6 +671,7 @@ namespace lfs::training {
             ctx.K_sh = K;
             ctx.channels = channels;
             ctx.sh_degree = sh_degree;
+            ctx.sh_layout_degree = sh_layout_degree;
             ctx.image_width = image_width;
             ctx.image_height = image_height;
             ctx.tile_size = tile_size;
@@ -617,6 +693,13 @@ namespace lfs::training {
             ctx.render_tile_height = tile_height;
 
             return std::pair{render_output, ctx};
+        } catch (const lfs::Exception& exception) {
+            arena.end_frame(frame_id, core::getCurrentCUDAStream());
+            auto error = exception.error();
+            lfs::SmallFields fields;
+            fields.add("camera", viewpoint_camera.image_name());
+            throw lfs::Exception(std::move(error).with_context(
+                "gsplat_rasterize_forward", LFS_SOURCE_SITE_CURRENT(), std::move(fields)));
         } catch (...) {
             // Isect buffers belong to the TLS VMM cache; only unwind the arena.
             // End on the same stream begin_frame used (same guard → same value),
@@ -635,7 +718,10 @@ namespace lfs::training {
         AdamOptimizer& optimizer,
         const core::Tensor& pixel_error_map,
         const core::Tensor& edge_weight_map,
-        core::Tensor edge_score_out) {
+        core::Tensor edge_score_out,
+        const core::Tensor& grad_depth,
+        const core::Tensor& grad_normal,
+        float flatten_weight) {
 
         // Get arena for temporary allocations
         auto& arena = core::GlobalArenaManager::instance().get_arena();
@@ -650,6 +736,13 @@ namespace lfs::training {
                                                ? core::getCurrentCUDAStream()
                                                : ctx.means.stream());
         try {
+            // A caller may produce loss gradients on a different stream from
+            // the saved forward context. Order every raw-pointer read explicitly.
+            for (const auto* gradient : {&grad_image, &grad_alpha, &grad_depth, &grad_normal}) {
+                if (gradient->is_valid() && gradient->numel() > 0) {
+                    gradient->sync_to_stream(stream);
+                }
+            }
 
             const uint32_t N = ctx.N;
             const uint32_t K = ctx.K_sh;
@@ -662,8 +755,9 @@ namespace lfs::training {
                 return (size + alignment - 1) & ~(alignment - 1);
             };
 
-            const bool have_color_grad = grad_image.is_valid() && grad_image.numel() > 0;
-            const bool have_alpha_grad = grad_alpha.is_valid() && grad_alpha.numel() > 0;
+            const bool have_color_grad = channels == 3 && grad_image.is_valid() && grad_image.numel() > 0;
+            const bool expected_depth = ctx.render_mode == GsplatRenderMode::ED || ctx.render_mode == GsplatRenderMode::RGB_ED;
+            const bool have_alpha_grad = !expected_depth && grad_alpha.is_valid() && grad_alpha.numel() > 0;
             size_t v_render_colors_size = have_color_grad ? 0 : align(H * W * channels * sizeof(float));
             size_t v_render_alphas_size = have_alpha_grad ? 0 : align(H * W * sizeof(float));
             size_t v_means_size = align(N * 3 * sizeof(float));
@@ -717,6 +811,31 @@ namespace lfs::training {
                 cudaMemsetAsync(bwd_blob, 0, total_bwd_size, stream),
                 "gsplat backward gradient arena clear");
 
+            if (channels != 3) {
+                const size_t plane_bytes = static_cast<size_t>(H) * W * sizeof(float);
+                auto copy_grad = [&](const core::Tensor& grad, int offset, int count) {
+                    if (!grad.is_valid() || grad.numel() == 0)
+                        return;
+                    LFS_ASSERT_MSG(grad.numel() == static_cast<size_t>(count) * H * W && grad.is_contiguous(), "GUT geometry gradient shape mismatch");
+                    core::pin_operands({&grad});
+                    LFS_CUDA_CHECK(cudaMemcpyAsync(v_render_colors_ptr + static_cast<size_t>(offset) * H * W,
+                                                   grad.ptr<float>(), count * plane_bytes, cudaMemcpyDeviceToDevice, stream));
+                };
+                if (channels > 1)
+                    copy_grad(grad_image, 0, 3);
+                copy_grad(grad_depth, channels == 1 ? 0 : 3, 1);
+                if (channels == 8)
+                    copy_grad(grad_normal, 4, 3);
+                if (expected_depth) {
+                    if (grad_alpha.is_valid() && grad_alpha.numel()) {
+                        core::pin_operands({&grad_alpha});
+                        LFS_CUDA_CHECK(cudaMemcpyAsync(v_render_alphas_ptr, grad_alpha.ptr<float>(), plane_bytes, cudaMemcpyDeviceToDevice, stream));
+                    }
+                    const size_t depth_offset = channels == 1 ? 0 : 3ULL * H * W;
+                    gsplat_lfs::expected_depth_bwd(ctx.render_colors_ptr + depth_offset, ctx.render_alphas_ptr,
+                                                   v_render_colors_ptr + depth_offset, v_render_alphas_ptr, H * W, stream);
+                }
+            }
             UnscentedTransformParameters ut_params;
 
             // Get background color and image pointers (same as forward)
@@ -782,6 +901,7 @@ namespace lfs::training {
                 ctx.sh0.ptr<float>(),
                 (ctx.sh_degree > 0 && ctx.shN.is_valid() && ctx.shN.numel() > 0) ? ctx.shN.ptr<float>() : nullptr,
                 ctx.sh_degree,
+                ctx.sh_layout_degree,
                 bg_color_ptr,
                 bg_image_ptr, // per-pixel background image
                 nullptr,      // masks
@@ -811,8 +931,8 @@ namespace lfs::training {
                 ctx.last_ids_ptr,
                 ctx.tile_offsets_ptr,
                 ctx.flatten_ids_ptr,
-                ctx.n_sort > 0 ? static_cast<uint32_t>(ctx.n_sort)
-                               : static_cast<uint32_t>(ctx.n_isects),
+                // Batched contexts have no retained list; backward replays each leaf.
+                static_cast<uint32_t>(ctx.n_sort),
                 ctx.colors_ptr,
                 ctx.dirs_ptr,
                 ctx.radii_ptr,
@@ -830,7 +950,9 @@ namespace lfs::training {
                 pixel_error_map_ptr,
                 edge_weight_map_ptr,
                 edge_score_out_ptr,
-                stream);
+                stream, ctx.batches, ctx.tiles_per_gauss_ptr);
+
+            gsplat_lfs::flatten_scale_grad(ctx.scales.ptr<float>(), v_scales_ptr, N, flatten_weight, stream);
 
             // ============ Accumulate gradients into optimizer using CUDA kernels ============
             // This avoids any tensor operations that might allocate from memory pool
@@ -902,6 +1024,18 @@ namespace lfs::training {
                     stream);
             }
 
+            // Projection is shared by all tile batches. Publish only after the
+            // complete backward succeeds, while its full-frame radii are alive.
+            // Inference and strategies that do not request this metric do no work.
+            auto& shares = gaussian_model._max_screen_share;
+            if (optimizer.collect_projected_screen_share() &&
+                shares.is_valid() && shares.numel() == N && N > 0) {
+                shares.sync_to_stream(stream);
+                kernels::launch_accumulate_projected_screen_share(
+                    ctx.radii_ptr, ctx.means2d_ptr, shares.ptr<float>(), N, W, H, stream);
+                shares.set_stream(stream);
+            }
+
             // Isect/flatten ids stay in the TLS VMM cache for the next forward.
             // Arena still ends with the frame.
             arena.end_frame(ctx.frame_id, stream);
@@ -920,6 +1054,9 @@ namespace lfs::training {
         gsplat_thread_caches.image_chw = {};
         gsplat_thread_caches.alpha_chw = {};
         gsplat_thread_caches.depth_chw = {};
+        gsplat_thread_caches.camera_rays = {};
+        gsplat_thread_caches.geometry_bg = {};
+        gsplat_thread_caches.geometry_bg_image = {};
         gsplat_thread_caches.shN_dequant = {};
         return !gsplat_thread_caches.K.is_valid() &&
                !gsplat_thread_caches.image_chw.is_valid() &&

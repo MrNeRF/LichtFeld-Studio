@@ -10,7 +10,6 @@
 #include "gui/panel_registry.hpp"
 #include "gui/rml_status_bar.hpp"
 #include "gui/sequencer_ui_manager.hpp"
-#include "gui/startup_overlay.hpp"
 #include "internal/viewport.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -129,6 +128,28 @@ namespace lfs::vis::gui::native_panels {
             widget_->setFloating(space == PanelSpace::Floating);
     }
 
+    SDL_Window* VideoExtractorPanel::nativeWindow() const {
+        return widget_ ? widget_->nativeWindow() : nullptr;
+    }
+
+    bool VideoExtractorPanel::detachToDesktop(float x, float y, float w, float h) {
+        return widget_ && widget_->detachToDesktop(x, y, w, h);
+    }
+
+    bool VideoExtractorPanel::restoreDesktopWindow() {
+        return widget_ && widget_->restoreDesktopWindow();
+    }
+
+    void VideoExtractorPanel::resetDesktopRestoreState() {
+        if (widget_)
+            widget_->resetDesktopRestoreState();
+    }
+
+    void VideoExtractorPanel::releaseDesktopWindow() {
+        if (widget_)
+            widget_->releaseDesktopWindow();
+    }
+
     bool VideoExtractorPanel::needsAnimationFrame() const {
         return widget_ && widget_->needsAnimationFrame();
     }
@@ -136,20 +157,6 @@ namespace lfs::vis::gui::native_panels {
     void VideoExtractorPanel::reloadRmlResources() {
         if (widget_)
             widget_->reloadRmlResources();
-    }
-
-    StartupOverlayPanel::StartupOverlayPanel(StartupOverlay* overlay, const bool* drag_hovering)
-        : overlay_(overlay),
-          drag_hovering_(drag_hovering) {}
-
-    void StartupOverlayPanel::draw(const PanelDrawContext& ctx) {
-        if (ctx.viewport)
-            overlay_->render(*ctx.viewport, drag_hovering_ ? *drag_hovering_ : false);
-    }
-
-    bool StartupOverlayPanel::poll(const PanelDrawContext& ctx) {
-        (void)ctx;
-        return overlay_->isVisible();
     }
 
     SelectionOverlayPanel::SelectionOverlayPanel(GuiManager* gui)

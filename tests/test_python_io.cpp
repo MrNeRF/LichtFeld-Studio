@@ -24,7 +24,9 @@
 
 #include "core/camera_types.h"
 #include "core/error.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
+#include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
@@ -41,6 +43,7 @@
 #include "python/gil.hpp"
 #include "python/runner.hpp"
 #include "tinyply.hpp"
+#include "visualizer/gui/html_viewer_export.hpp"
 
 namespace fs = std::filesystem;
 using namespace lfs::core;
@@ -481,6 +484,210 @@ protected:
     }
 };
 
+class SimplePlyPointCloudTest : public ::testing::Test {
+protected:
+    const fs::path temp_dir = fs::temp_directory_path() / "lfs_simple_ply_test";
+
+    void SetUp() override { fs::create_directories(temp_dir); }
+    void TearDown() override { fs::remove_all(temp_dir); }
+
+    template <typename T>
+    fs::path write_points(const std::vector<T>& positions, tinyply::Type type,
+                          bool binary = true, bool with_colors = true) {
+        const size_t count = positions.size() / 3;
+        std::vector<uint8_t> colors(positions.size());
+        for (size_t i = 0; i < colors.size(); ++i)
+            colors[i] = static_cast<uint8_t>(i + 10);
+        tinyply::PlyFile file;
+        file.add_properties_to_element("vertex", {"x", "y", "z"}, type, count,
+                                       reinterpret_cast<const uint8_t*>(positions.data()), tinyply::Type::INVALID, 0);
+        if (with_colors)
+            file.add_properties_to_element("vertex", {"red", "green", "blue"}, tinyply::Type::UINT8,
+                                           count, colors.data(), tinyply::Type::INVALID, 0);
+        const auto path = temp_dir / "points.ply";
+        std::ofstream out(path, std::ios::binary);
+        file.write(out, binary);
+        return path;
+    }
+
+    void expect_points(const PointCloud& cloud, const std::vector<float>& positions,
+                       const std::vector<uint8_t>& colors) {
+        ASSERT_EQ(cloud.size(), positions.size() / 3);
+        const auto means_cpu = cloud.means.cpu().contiguous();
+        const auto colors_cpu = cloud.colors.cpu().contiguous();
+        EXPECT_EQ(std::memcmp(means_cpu.ptr<float>(), positions.data(), positions.size() * sizeof(float)), 0);
+        EXPECT_EQ(std::memcmp(colors_cpu.ptr<uint8_t>(), colors.data(), colors.size()), 0);
+    }
+};
+
+TEST_F(SimplePlyPointCloudTest, FiltersNonFiniteCoordinatesAndKeepsMatchingColors) {
+    for (const float invalid : {std::numeric_limits<float>::quiet_NaN(),
+                                std::numeric_limits<float>::infinity(),
+                                -std::numeric_limits<float>::infinity()}) {
+        for (size_t axis = 0; axis < 3; ++axis) {
+            SCOPED_TRACE(axis);
+            std::vector<float> positions{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+            positions[axis] = invalid;
+            positions[6 + axis] = invalid;
+            const auto cloud = load_simple_ply_point_cloud(write_points(positions, tinyply::Type::FLOAT32));
+            expect_points(cloud, {4, 5, 6, 10, 11, 12}, {13, 14, 15, 19, 20, 21});
+        }
+    }
+}
+
+TEST_F(SimplePlyPointCloudTest, FiltersDoubleOverflowAfterFloatConversion) {
+    const std::vector<double> positions{1, 2, 3, std::numeric_limits<double>::max(), 5, 6,
+                                        7, 8, 9, 10, -std::numeric_limits<double>::infinity(), 12};
+    expect_points(load_simple_ply_point_cloud(write_points(positions, tinyply::Type::FLOAT64)),
+                  {1, 2, 3, 7, 8, 9}, {10, 11, 12, 16, 17, 18});
+}
+
+TEST_F(SimplePlyPointCloudTest, AllNonFiniteSeedsUseFiniteDatasetInitialization) {
+    save_image_u8(temp_dir / "frame.png",
+                  Tensor::full({8, 8, 3}, 127, Device::CPU, DataType::UInt8));
+    {
+        std::ofstream out(temp_dir / "transforms.json");
+        out << R"json({"w":8,"h":8,"camera_angle_x":0.8,"ply_file_path":"points.ply",
+            "frames":[{"file_path":"frame.png","transform_matrix":
+            [[1,0,0,0],[0,1,0,0],[0,0,1,2],[0,0,0,1]]}]})json";
+    }
+    auto loader = Loader::create();
+    auto missing = loader->load(temp_dir);
+    ASSERT_TRUE(missing) << missing.error().format();
+    const auto& missing_scene = std::get<LoadedScene>(missing->data);
+    ASSERT_TRUE(missing_scene.point_cloud);
+    ASSERT_GT(missing_scene.point_cloud->size(), 0);
+
+    auto& localization = lfs::event::LocalizationManager::getInstance();
+    constexpr auto warning_key = "io.no_finite_seed_points";
+    localization.setOverride(warning_key, "Localized seed fallback warning");
+    struct RestoreWarning {
+        ~RestoreWarning() {
+            lfs::event::LocalizationManager::getInstance().clearOverride("io.no_finite_seed_points");
+        }
+    } restore_warning;
+
+    write_points(std::vector<double>{
+                     std::numeric_limits<double>::quiet_NaN(), 0, 0,
+                     0, std::numeric_limits<double>::infinity(), 0,
+                     0, 0, -std::numeric_limits<double>::infinity(),
+                     std::numeric_limits<double>::max(), 0, 0},
+                 tinyply::Type::FLOAT64);
+    auto loaded = loader->load(temp_dir);
+    ASSERT_TRUE(loaded) << loaded.error().format();
+    ASSERT_TRUE(std::holds_alternative<LoadedScene>(loaded->data));
+    const auto& scene = std::get<LoadedScene>(loaded->data);
+    ASSERT_EQ(scene.cameras.size(), 1u);
+    ASSERT_TRUE(scene.point_cloud);
+    const auto expected_colors = missing_scene.point_cloud->colors.cpu().contiguous();
+    expect_points(*scene.point_cloud,
+                  missing_scene.point_cloud->means.cpu().to_vector(),
+                  std::vector<uint8_t>(expected_colors.ptr<uint8_t>(),
+                                       expected_colors.ptr<uint8_t>() + expected_colors.numel()));
+    EXPECT_NE(std::find(loaded->warnings.begin(), loaded->warnings.end(),
+                        "Localized seed fallback warning"),
+              loaded->warnings.end());
+
+    lfs::core::param::TrainingParameters params;
+    params.optimization.sh_degree = 0;
+    params.optimization.random = false;
+    auto model = init_model_from_pointcloud(params, loaded->scene_center, *scene.point_cloud);
+    ASSERT_TRUE(model) << model.error();
+    ASSERT_EQ(model->size(), scene.point_cloud->size());
+    for (const auto* tensor : {&model->means_raw(), &model->scaling_raw(), &model->rotation_raw(),
+                               &model->opacity_raw(), &model->sh0_raw()}) {
+        const auto values = tensor->cpu().to_vector();
+        EXPECT_TRUE(std::all_of(values.begin(), values.end(), [](float value) { return std::isfinite(value); }));
+    }
+}
+
+TEST_F(SimplePlyPointCloudTest, NormalizedSeedUsesFiniteFilteringAndFallback) {
+    save_image_u8(temp_dir / "frame.png",
+                  Tensor::full({8, 8, 3}, 127, Device::CPU, DataType::UInt8));
+    fs::create_directories(temp_dir / "seed");
+    auto load = [&](const std::string& path) {
+        std::ofstream out(temp_dir / "transforms.json");
+        out << R"json({"w":8,"h":8,"camera_angle_x":0.8,"ply_file_path":")json"
+            << path << R"json(","frames":[{"file_path":"frame.png","transform_matrix":
+            [[1,0,0,0],[0,1,0,0],[0,0,1,2],[0,0,0,1]]}]})json";
+        out.close();
+        return Loader::create()->load(temp_dir);
+    };
+    const float invalid = std::numeric_limits<float>::quiet_NaN();
+    for (const auto& positions : {std::vector<float>{invalid, 0, 0, 1, 2, 3, 4, 5, 6},
+                                  std::vector<float>{invalid, 0, 0}}) {
+        fs::copy_file(write_points(positions, tinyply::Type::FLOAT32), temp_dir / "seed" / "points.ply",
+                      fs::copy_options::overwrite_existing);
+        // A different default must not replace a successfully parsed explicit seed.
+        fs::copy_file(write_points(std::vector<float>{7, 8, 9}, tinyply::Type::FLOAT32),
+                      temp_dir / "pointcloud.ply", fs::copy_options::overwrite_existing);
+        const auto native = load("seed/points.ply");
+        ASSERT_TRUE(native) << native.error().format();
+        for (const bool with_default : {true, false}) {
+            if (!with_default)
+                fs::remove(temp_dir / "pointcloud.ply");
+            const auto normalized = load(R"(seed\\points.ply)");
+            ASSERT_TRUE(normalized) << normalized.error().format();
+            const auto& expected = std::get<LoadedScene>(native->data);
+            const auto& actual = std::get<LoadedScene>(normalized->data);
+            ASSERT_TRUE(actual.point_cloud);
+            const auto colors = expected.point_cloud->colors.cpu().contiguous();
+            expect_points(*actual.point_cloud, expected.point_cloud->means.cpu().to_vector(),
+                          std::vector<uint8_t>(colors.ptr<uint8_t>(), colors.ptr<uint8_t>() + colors.numel()));
+            EXPECT_EQ(normalized->warnings, native->warnings);
+            EXPECT_EQ(actual.point_cloud->size(), positions.size() == 3 ? 10000 : 2);
+        }
+    }
+}
+
+TEST_F(SimplePlyPointCloudTest, FilteredPointsWithoutColorsStayWhite) {
+    const std::vector<float> positions{1, 2, 3, 4, std::numeric_limits<float>::quiet_NaN(), 6, 7, 8, 9};
+    expect_points(load_simple_ply_point_cloud(write_points(positions, tinyply::Type::FLOAT32, true, false)),
+                  {1, 2, 3, 7, 8, 9}, std::vector<uint8_t>(6, 255));
+}
+
+TEST_F(SimplePlyPointCloudTest, FloatColorsKeepExistingConversionAfterFiltering) {
+    const std::vector<float> positions{1, 2, 3, 4, 5, 6, 7, 8, std::numeric_limits<float>::infinity()};
+    const std::vector<float> colors{0, 0.5f, 1, 0.25f, 0.75f, 1, 1, 0, 0};
+    tinyply::PlyFile file;
+    file.add_properties_to_element("vertex", {"x", "y", "z"}, tinyply::Type::FLOAT32, 3,
+                                   reinterpret_cast<const uint8_t*>(positions.data()), tinyply::Type::INVALID, 0);
+    file.add_properties_to_element("vertex", {"red", "green", "blue"}, tinyply::Type::FLOAT32, 3,
+                                   reinterpret_cast<const uint8_t*>(colors.data()), tinyply::Type::INVALID, 0);
+    const auto path = temp_dir / "float_colors.ply";
+    {
+        std::ofstream out(path, std::ios::binary);
+        file.write(out, true);
+    }
+    expect_points(load_simple_ply_point_cloud(path), {1, 2, 3, 4, 5, 6}, {0, 127, 255, 63, 191, 255});
+}
+
+TEST_F(SimplePlyPointCloudTest, FiniteFloatBoundariesRemainBitIdentical) {
+    const std::vector<float> positions{-0.0f, std::numeric_limits<float>::denorm_min(),
+                                       std::numeric_limits<float>::max(),
+                                       -std::numeric_limits<float>::max(), 0.0f, -1.0f};
+    expect_points(load_simple_ply_point_cloud(write_points(positions, tinyply::Type::FLOAT32)),
+                  positions, {10, 11, 12, 13, 14, 15});
+}
+
+TEST_F(SimplePlyPointCloudTest, FiniteInputsPreservePositionsAndColorsExactly) {
+    const std::vector<float> expected{1, 2, 3, 4, 5, 6};
+    const std::vector<uint8_t> colors{10, 11, 12, 13, 14, 15};
+    for (const bool binary : {false, true}) {
+        for (const bool with_colors : {false, true}) {
+            const auto expected_colors = with_colors ? colors : std::vector<uint8_t>(6, 255);
+            expect_points(load_simple_ply_point_cloud(write_points(expected, tinyply::Type::FLOAT32, binary, with_colors)),
+                          expected, expected_colors);
+            expect_points(load_simple_ply_point_cloud(write_points(std::vector<double>{1, 2, 3, 4, 5, 6}, tinyply::Type::FLOAT64, binary, with_colors)),
+                          expected, expected_colors);
+            expect_points(load_simple_ply_point_cloud(write_points(std::vector<int32_t>{1, 2, 3, 4, 5, 6}, tinyply::Type::INT32, binary, with_colors)),
+                          expected, expected_colors);
+            expect_points(load_simple_ply_point_cloud(write_points(std::vector<uint8_t>{1, 2, 3, 4, 5, 6}, tinyply::Type::UINT8, binary, with_colors)),
+                          expected, expected_colors);
+        }
+    }
+}
+
 // Test Loader creation
 TEST_F(PythonIOTest, LoaderCreation) {
     auto loader = Loader::create();
@@ -642,10 +849,6 @@ TEST_F(PythonIOTest, RejectsMalformedTransformsCameraContractsBeforeCameraConstr
     expect_rejected(std::move(invalid));
 
     invalid = valid;
-    invalid["fl_x"] = 0.0;
-    expect_rejected(std::move(invalid));
-
-    invalid = valid;
     invalid["frames"][0]["transform_matrix"][2] = nlohmann::json::array({0.0, 0.0, 1.0});
     expect_rejected(std::move(invalid));
 
@@ -656,6 +859,74 @@ TEST_F(PythonIOTest, RejectsMalformedTransformsCameraContractsBeforeCameraConstr
     invalid = valid;
     invalid["frames"][0]["transform_matrix"][3] = nlohmann::json::array({0.0, 0.0, 1.0, 1.0});
     expect_rejected(std::move(invalid));
+}
+
+TEST_F(PythonIOTest, SkipsTransformsFramesWithInvalidFocalLengthsAndWarnsOnce) {
+    const fs::path dataset_dir = temp_dir / "invalid_focal_frames";
+    write_png(dataset_dir / "valid.png", 64, 64);
+    write_png(dataset_dir / "zero.png", 64, 64);
+    write_png(dataset_dir / "negative.png", 64, 64);
+    write_png(dataset_dir / "nonfinite.png", 64, 64);
+    const nlohmann::json identity_matrix = {
+        {1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0},
+    };
+    const auto frame = [&](const char* name, const double focal) {
+        return nlohmann::json{
+            {"file_path", name},
+            {"fl_x", focal},
+            {"fl_y", 50.0},
+            {"w", 64},
+            {"h", 64},
+            {"transform_matrix", identity_matrix}};
+    };
+    auto nonfinite_frame = frame("nonfinite.png", 50.0);
+    nonfinite_frame.erase("fl_x");
+    nonfinite_frame["camera_angle_x"] = 1e-40;
+    write_text_file(dataset_dir / "transforms.json", nlohmann::json{
+                                                         {"frames", nlohmann::json::array({frame("valid.png", 50.0), frame("zero.png", 0.0), frame("negative.png", -2.0),
+                                                                                           nonfinite_frame})}}
+                                                         .dump());
+
+    auto& localization = lfs::event::LocalizationManager::getInstance();
+    constexpr auto warning_key = "io.dataset_camera_invalid_focal";
+    localization.setOverride(warning_key, "Localized invalid focal warning: {} camera(s) ({})");
+    struct RestoreWarning {
+        ~RestoreWarning() {
+            lfs::event::LocalizationManager::getInstance().clearOverride("io.dataset_camera_invalid_focal");
+        }
+    } restore_warning;
+
+    auto result = Loader::create()->load(dataset_dir);
+    ASSERT_TRUE(result) << result.error().format();
+    const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+    ASSERT_EQ(cameras.size(), 1u);
+    EXPECT_EQ(cameras.front()->image_name(), "valid.png");
+    EXPECT_FLOAT_EQ(cameras.front()->focal_x(), 50.0f);
+    EXPECT_FLOAT_EQ(cameras.front()->focal_y(), 50.0f);
+    const std::string localized_warning =
+        "Localized invalid focal warning: 3 camera(s) (zero.png, negative.png, nonfinite.png)";
+    EXPECT_EQ(std::count(result->warnings.begin(), result->warnings.end(), localized_warning), 1);
+}
+
+TEST_F(PythonIOTest, TransformsDatasetWithOnlyInvalidFocalLengthsReturnsClearError) {
+    const fs::path dataset_dir = temp_dir / "all_invalid_focals";
+    write_png(dataset_dir / "zero.png", 64, 64);
+    const nlohmann::json identity_matrix = {
+        {1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0},
+    };
+    write_text_file(dataset_dir / "transforms.json", nlohmann::json{
+                                                         {"frames", nlohmann::json::array({{{"file_path", "zero.png"}, {"fl_x", 0.0}, {"fl_y", 50.0}, {"w", 64}, {"h", 64}, {"transform_matrix", identity_matrix}}})}}
+                                                         .dump());
+
+    const auto result = Loader::create()->load(dataset_dir);
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.error().message.find("focal"), std::string::npos);
 }
 
 class TransformsMaskTest : public PythonIOTest {
@@ -683,6 +954,70 @@ protected:
                         "end_header\n0 0 -2 255 0 0\n1 0 -2 0 255 0\n");
     }
 };
+
+class TransformsImagePathTest : public TransformsMaskTest {};
+
+TEST_F(TransformsImagePathTest, WindowsSeparatorsLoadBothFramesFromFolderAndJson) {
+    const auto root = temp_dir / "image_separators";
+    write_dataset(root, {{{"file_path", "images\\front\\first.png"}},
+                         {{"file_path", "images\\back\\second.png"}}});
+    write_png(root / "images/front/first.png", 2, 2);
+    write_png(root / "images/back/second.png", 2, 2);
+
+    for (const auto& source : {root, root / "transforms.json"}) {
+        SCOPED_TRACE(lfs::core::path_to_utf8(source));
+        auto result = Loader::create()->load(source);
+        ASSERT_TRUE(result) << result.error().format();
+        const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+        ASSERT_EQ(cameras.size(), 2u);
+        EXPECT_EQ(cameras[0]->image_path(), root / "images/front/first.png");
+        EXPECT_EQ(cameras[1]->image_path(), root / "images/back/second.png");
+    }
+}
+
+TEST_F(TransformsImagePathTest, ForwardSlashesAndExtensionlessPngStillLoad) {
+    const auto root = temp_dir / "image_controls";
+    write_dataset(root, {{{"file_path", "images/front/first.png"}},
+                         {{"file_path", "./train/second"}}});
+    write_png(root / "images/front/first.png", 2, 2);
+    write_png(root / "train/second.png", 2, 2);
+
+    auto result = Loader::create()->load(root);
+    ASSERT_TRUE(result) << result.error().format();
+    const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+    ASSERT_EQ(cameras.size(), 2u);
+    EXPECT_EQ(cameras[0]->image_path(), root / "images/front/first.png");
+    EXPECT_EQ(cameras[1]->image_path(), root / "./train/second.png");
+}
+
+TEST_F(TransformsImagePathTest, ImagesFolderFallbackAcceptsBothSeparatorStyles) {
+    const auto root = temp_dir / "images_fallback";
+    write_dataset(root, {{{"file_path", "first.png"}},
+                         {{"file_path", "nested\\second.png"}}});
+    write_png(root / "images/first.png", 2, 2);
+    write_png(root / "images/nested/second.png", 2, 2);
+
+    auto result = Loader::create()->load(root);
+    ASSERT_TRUE(result) << result.error().format();
+    const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+    ASSERT_EQ(cameras.size(), 2u);
+    EXPECT_EQ(cameras[0]->image_path(), root / "images/first.png");
+    EXPECT_EQ(cameras[1]->image_path(), root / "images/nested/second.png");
+}
+
+#ifndef _WIN32
+TEST_F(TransformsImagePathTest, ExistingLiteralBackslashFilenameTakesPrecedence) {
+    const auto root = temp_dir / "literal_image";
+    const auto literal_image = root / "images\\frame.png";
+    write_dataset(root, {{{"file_path", "images\\frame.png"}}});
+    write_png(literal_image, 2, 2);
+    write_png(root / "images/frame.png", 2, 2);
+
+    auto result = Loader::create()->load(root);
+    ASSERT_TRUE(result) << result.error().format();
+    EXPECT_EQ(std::get<LoadedScene>(result->data).cameras.front()->image_path(), literal_image);
+}
+#endif
 
 TEST_F(TransformsMaskTest, ExplicitPathsOverrideDiscoveryForFolderAndJson) {
     const auto root = temp_dir / "explicit_masks";
@@ -792,6 +1127,54 @@ TEST_F(TransformsMaskTest, UnicodePathsWorkForExplicitAndImplicitMasks) {
     }
 }
 
+TEST_F(TransformsMaskTest, ExplicitMasksAcceptWindowsSeparators) {
+    const auto root = temp_dir / "mask_separators";
+    const auto relative_mask = fs::path(u8"labels/cam \u00e8/mask \u6d4b\u8bd5.png");
+    const auto mask = root / relative_mask;
+    write_png(root / "images/frame.png", 2, 2);
+    write_png(mask, 2, 2);
+    const std::vector<std::string> paths = {
+        lfs::core::path_to_utf8(relative_mask),
+        "./" + lfs::core::path_to_utf8(relative_mask),
+        "../mask_separators/" + lfs::core::path_to_utf8(relative_mask),
+        lfs::core::path_to_utf8(mask)};
+    for (const auto& path : paths) {
+        for (const auto* separator : {"/", "\\", "\\\\", "/\\"}) {
+            std::string mask_text;
+            for (const char ch : path)
+                mask_text += ch == '/' ? std::string(separator) : std::string(1, ch);
+            SCOPED_TRACE(mask_text);
+            write_dataset(root, {{{"file_path", "images/frame.png"}, {"mask_path", mask_text}}});
+            for (const auto& input : {root, root / "transforms.json"}) {
+                for (const bool load_masks : {false, true}) {
+                    auto result = Loader::create()->load(input, {.load_masks = load_masks});
+                    ASSERT_TRUE(result) << result.error().format();
+                    const auto& camera = std::get<LoadedScene>(result->data).cameras.front();
+                    ASSERT_TRUE(fs::is_regular_file(camera->mask_path()));
+                    EXPECT_TRUE(fs::equivalent(camera->mask_path(), mask));
+                    EXPECT_TRUE(camera->has_mask());
+                }
+            }
+        }
+    }
+}
+
+#ifndef _WIN32
+TEST_F(TransformsMaskTest, ExistingLiteralBackslashMaskTakesPrecedence) {
+    const auto root = temp_dir / "literal_mask";
+    const auto literal_mask = root / "labels\\mask.png";
+    write_png(root / "images/frame.png", 2, 2);
+    write_png(literal_mask, 2, 2);
+    write_png(root / "labels/mask.png", 2, 2);
+    write_dataset(root, {{{"file_path", "images/frame.png"}, {"mask_path", "labels\\mask.png"}}});
+    auto result = Loader::create()->load(root, {.load_masks = true});
+    ASSERT_TRUE(result) << result.error().format();
+    const auto& camera = std::get<LoadedScene>(result->data).cameras.front();
+    EXPECT_EQ(camera->mask_path(), literal_mask);
+    EXPECT_TRUE(camera->has_mask());
+}
+#endif
+
 TEST_F(TransformsMaskTest, MissingExplicitMaskNeverFallsBackToGuessedMask) {
     const auto root = temp_dir / "missing_explicit_mask";
     write_dataset(root, {{{"file_path", "images/frame.png"}, {"mask_path", "labels/missing.png"}}});
@@ -898,13 +1281,15 @@ TEST_F(PythonIOTest, LoadTransformsPerFrameIntrinsics) {
                            {"fl_y", 45.0},
                            {"cx", 32.0},
                            {"cy", 24.0},
-                           {"camera_model", "OPENCV"},
+                           {"camera_model", "FULL_OPENCV"},
                            {"k1", 0.01},
                            {"k2", -0.02},
                            {"k3", 0.003},
                            {"p1", 0.0001},
                            {"p2", -0.0002},
                            {"k4", 0.001},
+                           {"k5", -0.0002},
+                           {"k6", 0.00003},
                            {"b1", 0.0003},
                            {"b2", -0.0004},
                            {"transform_matrix", identity_matrix},
@@ -917,13 +1302,15 @@ TEST_F(PythonIOTest, LoadTransformsPerFrameIntrinsics) {
                            {"fl_y", 88.0},
                            {"cx", 64.0},
                            {"cy", 48.0},
-                           {"camera_model", "OPENCV"},
+                           {"camera_model", "FULL_OPENCV"},
                            {"k1", 0.05},
                            {"k2", -0.04},
                            {"k3", 0.006},
                            {"p1", 0.0005},
                            {"p2", -0.0006},
                            {"k4", 0.002},
+                           {"k5", -0.0004},
+                           {"k6", 0.00005},
                            {"b1", 0.0007},
                            {"b2", -0.0008},
                            {"transform_matrix", identity_matrix},
@@ -944,7 +1331,7 @@ TEST_F(PythonIOTest, LoadTransformsPerFrameIntrinsics) {
     EXPECT_FLOAT_EQ(cameras[0]._center_x, 32.0f);
     EXPECT_FLOAT_EQ(cameras[0]._center_y, 24.0f);
     EXPECT_EQ(cameras[0]._camera_model_type, CameraModelType::PINHOLE);
-    ASSERT_EQ(cameras[0]._radial_distortion.numel(), 3u);
+    ASSERT_EQ(cameras[0]._radial_distortion.numel(), 6u);
     ASSERT_EQ(cameras[0]._tangential_distortion.numel(), 2u);
     {
         const auto* radial = cameras[0]._radial_distortion.ptr<float>();
@@ -952,6 +1339,9 @@ TEST_F(PythonIOTest, LoadTransformsPerFrameIntrinsics) {
         EXPECT_FLOAT_EQ(radial[0], 0.01f);
         EXPECT_FLOAT_EQ(radial[1], -0.02f);
         EXPECT_FLOAT_EQ(radial[2], 0.003f);
+        EXPECT_FLOAT_EQ(radial[3], 0.001f);
+        EXPECT_FLOAT_EQ(radial[4], -0.0002f);
+        EXPECT_FLOAT_EQ(radial[5], 0.00003f);
         EXPECT_FLOAT_EQ(tangential[0], 0.0001f);
         EXPECT_FLOAT_EQ(tangential[1], -0.0002f);
     }
@@ -963,7 +1353,7 @@ TEST_F(PythonIOTest, LoadTransformsPerFrameIntrinsics) {
     EXPECT_FLOAT_EQ(cameras[1]._center_x, 64.0f);
     EXPECT_FLOAT_EQ(cameras[1]._center_y, 48.0f);
     EXPECT_EQ(cameras[1]._camera_model_type, CameraModelType::PINHOLE);
-    ASSERT_EQ(cameras[1]._radial_distortion.numel(), 3u);
+    ASSERT_EQ(cameras[1]._radial_distortion.numel(), 6u);
     ASSERT_EQ(cameras[1]._tangential_distortion.numel(), 2u);
     {
         const auto* radial = cameras[1]._radial_distortion.ptr<float>();
@@ -971,6 +1361,9 @@ TEST_F(PythonIOTest, LoadTransformsPerFrameIntrinsics) {
         EXPECT_FLOAT_EQ(radial[0], 0.05f);
         EXPECT_FLOAT_EQ(radial[1], -0.04f);
         EXPECT_FLOAT_EQ(radial[2], 0.006f);
+        EXPECT_FLOAT_EQ(radial[3], 0.002f);
+        EXPECT_FLOAT_EQ(radial[4], -0.0004f);
+        EXPECT_FLOAT_EQ(radial[5], 0.00005f);
         EXPECT_FLOAT_EQ(tangential[0], 0.0005f);
         EXPECT_FLOAT_EQ(tangential[1], -0.0006f);
     }
@@ -978,6 +1371,42 @@ TEST_F(PythonIOTest, LoadTransformsPerFrameIntrinsics) {
     // Distinct per-frame values prove resolution is not root-only.
     EXPECT_NE(cameras[0]._focal_x, cameras[1]._focal_x);
     EXPECT_NE(cameras[0]._width, cameras[1]._width);
+}
+
+// Higher radial terms only have the rational meaning under FULL_OPENCV; other models keep loading
+// with the terms ignored (and reported), as before rational support existed.
+TEST_F(PythonIOTest, LoadTransformsIgnoresRationalTermsWithoutFullOpenCVModel) {
+    const fs::path dataset_dir = temp_dir / "invalid_rational_model";
+    write_png(dataset_dir / "frame.png", 64, 48);
+    const nlohmann::json transforms = {
+        {"w", 64},
+        {"h", 48},
+        {"fl_x", 50.0},
+        {"fl_y", 50.0},
+        {"cx", 32.0},
+        {"cy", 24.0},
+        {"camera_model", "OPENCV"},
+        {"k1", 0.01},
+        {"k4", 0.001},
+        {"frames", nlohmann::json::array({
+                       {
+                           {"file_path", "frame.png"},
+                           {"transform_matrix", {
+                                                    {1.0, 0.0, 0.0, 0.0},
+                                                    {0.0, 1.0, 0.0, 0.0},
+                                                    {0.0, 0.0, 1.0, 0.0},
+                                                    {0.0, 0.0, 0.0, 1.0},
+                                                }},
+                       },
+                   })},
+    };
+    write_text_file(dataset_dir / "transforms.json", transforms.dump());
+
+    const auto [cameras, center, splits] =
+        read_transforms_cameras_and_images(dataset_dir / "transforms.json", {});
+    ASSERT_EQ(cameras.size(), 1u);
+    ASSERT_EQ(cameras[0]._radial_distortion.numel(), 3u);
+    EXPECT_FLOAT_EQ(cameras[0]._radial_distortion.cpu().to_vector()[0], 0.01f);
 }
 
 TEST_F(PythonIOTest, LoadTransformsRootIntrinsicsFrameOverride) {
@@ -1652,10 +2081,14 @@ TEST_F(PythonIOTest, HtmlExport) {
         << "Should be valid HTML";
     EXPECT_TRUE(content.find("window.__lfsInitMeasureTool") != std::string::npos)
         << "Should embed the measure tool init hook";
+    EXPECT_TRUE(content.find("window.__lfsInitLabelTool") != std::string::npos)
+        << "Should embed the label tool init hook";
     EXPECT_TRUE(content.find("export { Gizmo, TranslateGizmo };") == std::string::npos)
         << "Gizmo export statement should be stripped";
     EXPECT_TRUE(content.find("export { initMeasureTool };") == std::string::npos)
         << "Measure-tool export statement should be stripped";
+    EXPECT_TRUE(content.find("export { initLabelTool };") == std::string::npos)
+        << "Label-tool export statement should be stripped";
 }
 
 TEST_F(PythonIOTest, HtmlExportCancellationKeepsExistingTarget) {
@@ -1675,6 +2108,105 @@ TEST_F(PythonIOTest, HtmlExportCancellationKeepsExistingTarget) {
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code, ErrorCode::CANCELLED);
     expect_existing_target_and_no_temp_files(output_path, existing_contents);
+}
+
+TEST_F(PythonIOTest, HtmlExportEmbedsBackgroundColor) {
+    auto splat = create_test_splat(200, 0);
+    const fs::path output_path = temp_dir / "custom_bg.html";
+
+    HtmlExportOptions options;
+    options.output_path = output_path;
+    options.kmeans_iterations = 1;
+    options.background_color = glm::vec3(0.2f, 0.4f, 0.6f);
+
+    auto result = export_html(splat, options);
+    ASSERT_TRUE(result.has_value()) << "Failed to export HTML: " << result.error().format();
+    EXPECT_TRUE(fs::exists(output_path));
+
+    std::ifstream file(output_path);
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    EXPECT_TRUE(content.find("\"background\":{\"color\":[0.200000,0.400000,0.600000]}") != std::string::npos)
+        << "Should embed the specified background color";
+}
+
+TEST_F(PythonIOTest, HtmlExportSanitizesNonFiniteColor) {
+    auto splat = create_test_splat(200, 0);
+    const fs::path output_path = temp_dir / "non_finite_bg.html";
+
+    HtmlExportOptions options;
+    options.output_path = output_path;
+    options.kmeans_iterations = 1;
+    options.background_color = glm::vec3(std::numeric_limits<float>::quiet_NaN(),
+                                         std::numeric_limits<float>::infinity(),
+                                         0.5f);
+
+    auto result = export_html(splat, options);
+    ASSERT_TRUE(result.has_value()) << "Failed to export HTML: " << result.error().format();
+    EXPECT_TRUE(fs::exists(output_path));
+
+    std::ifstream file(output_path);
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    EXPECT_TRUE(content.find("\"background\":{\"color\":[0.000000,0.000000,0.500000]}") != std::string::npos)
+        << "Should treat non-finite color channels as 0.0";
+}
+
+TEST(HtmlExportBackgroundColorTest, ViewportNonBlackTakesPrecedence) {
+    const glm::vec3 viewport_bg{0.2f, 0.4f, 0.6f};
+    lfs::core::param::OptimizationParameters opt_params;
+    opt_params.bg_mode = lfs::core::param::BackgroundMode::SolidColor;
+    opt_params.bg_color = {1.0f, 1.0f, 1.0f};
+
+    const auto resolved = lfs::vis::gui::resolve_html_export_background_color(viewport_bg, opt_params);
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(*resolved, viewport_bg);
+}
+
+TEST(HtmlExportBackgroundColorTest, ViewportBlackFallsBackToSolidColorTraining) {
+    const glm::vec3 viewport_bg{0.0f, 0.0f, 0.0f};
+    lfs::core::param::OptimizationParameters opt_params;
+    opt_params.bg_mode = lfs::core::param::BackgroundMode::SolidColor;
+    opt_params.bg_color = {1.0f, 1.0f, 1.0f};
+
+    const auto resolved = lfs::vis::gui::resolve_html_export_background_color(viewport_bg, opt_params);
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(*resolved, glm::vec3(1.0f, 1.0f, 1.0f));
+}
+
+TEST(HtmlExportBackgroundColorTest, ViewportBlackSkipsNonSolidColorTraining) {
+    const glm::vec3 viewport_bg{0.0f, 0.0f, 0.0f};
+
+    for (auto mode : {lfs::core::param::BackgroundMode::Random,
+                      lfs::core::param::BackgroundMode::Image,
+                      lfs::core::param::BackgroundMode::Modulation}) {
+        lfs::core::param::OptimizationParameters opt_params;
+        opt_params.bg_mode = mode;
+        opt_params.bg_color = {1.0f, 1.0f, 1.0f};
+
+        const auto resolved = lfs::vis::gui::resolve_html_export_background_color(viewport_bg, opt_params);
+        ASSERT_TRUE(resolved.has_value());
+        EXPECT_EQ(*resolved, glm::vec3(0.0f, 0.0f, 0.0f));
+    }
+}
+
+TEST(HtmlExportBackgroundColorTest, NoViewportUsesSolidColorTraining) {
+    lfs::core::param::OptimizationParameters opt_params;
+    opt_params.bg_mode = lfs::core::param::BackgroundMode::SolidColor;
+    opt_params.bg_color = {0.8f, 0.8f, 0.8f};
+
+    const auto resolved = lfs::vis::gui::resolve_html_export_background_color(std::nullopt, opt_params);
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(*resolved, glm::vec3(0.8f, 0.8f, 0.8f));
+}
+
+TEST(HtmlExportBackgroundColorTest, NoViewportSkipsNonSolidColorTraining) {
+    lfs::core::param::OptimizationParameters opt_params;
+    opt_params.bg_mode = lfs::core::param::BackgroundMode::Random;
+    opt_params.bg_color = {0.8f, 0.8f, 0.8f};
+
+    const auto resolved = lfs::vis::gui::resolve_html_export_background_color(std::nullopt, opt_params);
+    EXPECT_FALSE(resolved.has_value());
 }
 
 TEST_F(PythonIOTest, RadSaveCancellationKeepsExistingTarget) {
@@ -2218,7 +2750,7 @@ namespace {
         if (!fs::exists(dir, ec)) {
             return false;
         }
-        for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        for (std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(dir), ec), end; !ec && it != end; it.increment(ec)) {
             std::error_code file_ec;
             if (!it->is_regular_file(file_ec) || file_ec) {
                 continue;

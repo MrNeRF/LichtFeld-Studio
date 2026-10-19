@@ -3,20 +3,26 @@
 
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/image_io.hpp"
+#include "core/image_loader.hpp"
+#include "io/cache_image_loader.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/formats/colmap.hpp"
 #include "io/loaders/blender_loader.hpp"
 #include "io/loaders/colmap_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
+#include <algorithm>
 #include <cmath>
 
 #include <atomic>
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
@@ -166,12 +172,50 @@ namespace {
             ASSERT_TRUE(out.good()) << "Failed to write " << path;
         }
 
+        void write_nerf_sidecars(const fs::path& dataset, const std::string& image_folder,
+                                 const std::string& sidecar_prefix, bool unique_names = false) {
+            nlohmann::json frames = nlohmann::json::array();
+            for (const auto* group : {"setA", "setB"}) {
+                const std::string name = unique_names ? std::string(group) + ".png" : "shared.png";
+                const auto image = fs::path(image_folder) / group / name;
+                write_png(dataset / image);
+                frames.push_back({{"file_path", image.generic_string()},
+                                  {"transform_matrix", {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}}}});
+                for (const bool depth : {true, false}) {
+                    const auto path = dataset / (depth ? "depth" : "normal") / sidecar_prefix / group / name;
+                    fs::create_directories(path.parent_path());
+                    const uint8_t pixels[] = {128, 128, 255};
+                    ASSERT_TRUE(lfs::core::save_png(path, pixels, 1, 1, depth ? 1 : 3, 8, 6));
+                }
+            }
+            write_text_file(dataset / "transforms.json",
+                            nlohmann::json({{"w", 1}, {"h", 1}, {"fl_x", 1}, {"fl_y", 1}, {"cx", 0.5}, {"cy", 0.5}, {"frames", frames}}).dump());
+        }
+
         fs::path temp_dir_;
     };
 
     bool has_cuda_device() {
         int device_count = 0;
         return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
+    }
+
+    void install_camera_image_loader() {
+        static const bool installed = [] {
+            lfs::io::CacheLoader::getInstance(false);
+            lfs::core::set_image_loader([](const lfs::core::ImageLoadParams& p) {
+                return lfs::io::CacheLoader::getInstance().load_cached_image(
+                    p.path,
+                    {.resize_factor = p.resize_factor,
+                     .max_width = p.max_width,
+                     .cuda_stream = p.stream,
+                     .output_uint8 = p.output_uint8,
+                     .skip_blob_cache = p.skip_blob_cache,
+                     .mask_grayscale = p.mask_grayscale});
+            });
+            return true;
+        }();
+        (void)installed;
     }
 
     struct BicyclePixels {
@@ -362,6 +406,46 @@ TEST_F(ColmapImageLayoutTest, FiltersTextPointCloudByMinimumTrackLength) {
     EXPECT_EQ(result->value.point_cloud.size(), 1u);
 }
 
+// Catches a wrong parallax limit or ray centre, resolved points that move, a far point clamped off its ray, depths
+// along the baseline (no resolvable parallax) treated as resolvable, and viewer imports without camera views that
+// clamp. Two cameras 1 apart with a 100 px focal resolve 0.25 px of parallax straight ahead out to 400.
+TEST_F(ColmapImageLayoutTest, PullsUnresolvedPointDepthsToTheirTracksParallaxLimit) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required for COLMAP point cloud load";
+    }
+
+    const fs::path dataset_dir = temp_dir_ / "far_points";
+    write_text_file(dataset_dir / "cameras.txt", "1 PINHOLE 100 100 100 100 50 50\n");
+    write_text_file(dataset_dir / "images.txt",
+                    "1 1 0 0 0 0 0 0 1 a.png\n\n"
+                    "2 1 0 0 0 -1 0 0 1 b.png\n\n");
+    write_png(dataset_dir / "images" / "a.png");
+    write_png(dataset_dir / "images" / "b.png");
+    write_text_file(dataset_dir / "points3D.txt",
+                    "1 0.5 0 10 255 0 0 0.1 1 0 2 0\n"
+                    "2 0.5 0 4000 0 255 0 0.1 1 1 2 1\n"
+                    "3 1000 0 0 0 0 255 0.1 1 2 2 2\n");
+
+    lfs::io::ColmapPointCloudRecords records;
+    const auto cameras = lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {}, &records);
+    ASSERT_TRUE(cameras.has_value()) << cameras.error().format();
+    const auto clamped = lfs::io::read_colmap_point_cloud_text(dataset_dir, {}, &records);
+    ASSERT_TRUE(clamped.has_value()) << clamped.error().format();
+    const auto unclamped = lfs::io::read_colmap_point_cloud_text(dataset_dir);
+    ASSERT_TRUE(unclamped.has_value()) << unclamped.error().format();
+
+    const auto positions = clamped->value.means.cpu();
+    const auto original = unclamped->value.means.cpu();
+    ASSERT_EQ(positions.shape()[0], 3u);
+    const float* p = positions.ptr<float>();
+    const float* o = original.ptr<float>();
+    const float expected[9] = {0.5f, 0.0f, 10.0f, 0.5f, 0.0f, 400.0f, 1000.0f, 0.0f, 0.0f};
+    for (int i = 0; i < 9; ++i) {
+        EXPECT_NEAR(p[i], expected[i], 1e-3f) << "coordinate " << i;
+    }
+    EXPECT_FLOAT_EQ(o[5], 4000.0f);
+}
+
 TEST_F(ColmapImageLayoutTest, ResolvesDepthMapsByImageName) {
     const fs::path dataset_dir = temp_dir_ / "dataset";
     const fs::path image_path = dataset_dir / "images" / "frame_0000.png";
@@ -497,6 +581,30 @@ TEST_F(ColmapImageLayoutTest, RejectsAspectMismatchedDepthForScaledImages) {
     EXPECT_EQ(result.error().code, lfs::io::ErrorCode::DEPTH_SIZE_MISMATCH);
 }
 
+TEST_F(ColmapImageLayoutTest, SkipsAspectMismatchedDepthWhenAutoGenerate) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required for COLMAP camera load";
+    }
+
+    const fs::path dataset_dir = temp_dir_ / "regen_depth_dataset";
+    const fs::path image_path = dataset_dir / "images_2" / "frame.png";
+    const fs::path depth_path = dataset_dir / "depth" / "frame.png";
+    const BicyclePixels source = read_bicycle_pixels();
+
+    write_text_file(dataset_dir / "cameras.txt",
+                    "1 PINHOLE " + std::to_string(source.width) + " " + std::to_string(source.height) +
+                        " 1000 1000 618.5 411\n");
+    write_text_file(dataset_dir / "images.txt", "1 1 0 0 0 0 0 0 1 frame.png\n");
+    write_derived_image(image_path, source, source.width / 2, source.height / 2);
+    write_derived_depth(depth_path, source, source.width, source.height / 2);
+
+    const auto result = lfs::io::read_colmap_cameras_and_images_text(
+        dataset_dir, "images_2", {.load_depths = true, .depth_auto_generate = true});
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    ASSERT_EQ(std::get<0>(result->value).size(), 1u);
+    EXPECT_FALSE(std::get<0>(result->value)[0]->has_depth());
+}
+
 TEST(SidecarDimensionsContract, OriginalSizePassesForSmallerTrainingImage) {
     // Integer rounding in selected image folders stays inside the 1% tolerance.
     EXPECT_TRUE(lfs::io::sidecar_dimensions_match_contract(1237, 822, 154, 102));
@@ -513,6 +621,7 @@ TEST(SidecarDimensionsContract, OriginalSizePassesForSmallerTrainingImage) {
 TEST_F(ColmapImageLayoutTest, HalfResolutionDepthAndNormalReachTrainingSize) {
     if (!has_cuda_device())
         GTEST_SKIP() << "CUDA device required";
+    install_camera_image_loader();
     const auto source = read_bicycle_pixels();
     for (const bool blender : {false, true}) {
         for (const int bits : {8, 16}) {
@@ -808,6 +917,31 @@ TEST_F(ColmapImageLayoutTest, ValidationFailsWhenDuplicateBasenameWasCollapsedIn
     EXPECT_NE(result.error().message.find("flattened or dropped"), std::string::npos);
 }
 
+TEST_F(ColmapImageLayoutTest, RecursiveFileCacheObserverVisitsOnlyRegularFiles) {
+    const fs::path images_dir = temp_dir_ / "images";
+    const fs::path image = images_dir / "nested" / "frame_0001.png";
+    const fs::path duplicate_image = images_dir / "other" / "frame_0001.png";
+    const fs::path text_file = images_dir / "nested" / "notes.txt";
+    write_png(image);
+    write_png(duplicate_image);
+    write_text_file(text_file, "not an image");
+    fs::create_directories(images_dir / "other" / "directory.png");
+
+    std::vector<fs::path> visited;
+    lfs::io::RecursiveFileCache cache(images_dir, nullptr, [&](const fs::path& path) {
+        visited.push_back(path);
+    });
+
+    ASSERT_EQ(visited.size(), 3u);
+    EXPECT_NE(std::find(visited.begin(), visited.end(), image.lexically_relative(images_dir)),
+              visited.end());
+    EXPECT_NE(std::find(visited.begin(), visited.end(), duplicate_image.lexically_relative(images_dir)),
+              visited.end());
+    EXPECT_NE(std::find(visited.begin(), visited.end(), text_file.lexically_relative(images_dir)),
+              visited.end());
+    EXPECT_TRUE(cache.lookup("frame_0001.png").ambiguous());
+}
+
 TEST_F(ColmapImageLayoutTest, ValidationFailsWhenMasksDoNotMirrorRelativeImageLayout) {
     const fs::path dataset_dir = temp_dir_ / "dataset";
 
@@ -1047,6 +1181,43 @@ TEST_F(ColmapImageLayoutTest, WriteBackAppliesSceneTransformsToTextSparseModel) 
     EXPECT_EQ(track_point_idx, 0u);
 }
 
+TEST_F(ColmapImageLayoutTest, WriteBackAcceptsTrackObservingOneImageTwice) {
+    const fs::path dataset_dir = temp_dir_ / "dataset";
+    const fs::path output_dir = temp_dir_ / "out_sparse";
+
+    write_text_file(dataset_dir / "cameras.txt",
+                    "1 PINHOLE 640 480 500 500 320 240\n");
+    write_text_file(dataset_dir / "images.txt",
+                    "1 1 0 0 0 0 0 0 1 frame_0001.png\n"
+                    "12 34 7 56 78 7\n");
+    write_text_file(dataset_dir / "points3D.txt",
+                    "7 10 20 30 1 2 3 0.25 1 0 1 1\n");
+
+    auto cameras_result = lfs::io::read_colmap_cameras_only(dataset_dir);
+    ASSERT_TRUE(cameras_result.has_value()) << cameras_result.error().format();
+    auto [cameras, scene_center] = std::move(*cameras_result);
+    (void)scene_center;
+    ASSERT_EQ(cameras.size(), 1u);
+
+    lfs::io::PointCloud point_cloud(
+        lfs::io::Tensor::from_vector({10.0f, 20.0f, 30.0f}, {1, 3}, lfs::io::Device::CPU),
+        lfs::io::Tensor::from_vector({1.0f / 255.0f, 2.0f / 255.0f, 3.0f / 255.0f}, {1, 3}, lfs::io::Device::CPU));
+    const std::vector<lfs::io::ColmapCameraWriteData> camera_data{
+        lfs::io::ColmapCameraWriteData{.camera = cameras[0], .data_world_transform = glm::mat4(1.0f)},
+    };
+
+    for (const auto format : {lfs::io::ColmapWriteFormat::Text, lfs::io::ColmapWriteFormat::Binary}) {
+        const auto write_result = lfs::io::write_colmap_reconstruction(
+            dataset_dir, output_dir, camera_data, &point_cloud, glm::mat4(1.0f),
+            lfs::io::ColmapWriteOptions{.format = format});
+        ASSERT_TRUE(write_result.has_value()) << write_result.error().format();
+    }
+
+    const auto points = lfs::io::read_colmap_point_cloud(output_dir);
+    ASSERT_TRUE(points.has_value()) << points.error().format();
+    EXPECT_EQ(points->value.size(), 1);
+}
+
 TEST_F(ColmapImageLayoutTest, WriteBackRemovesStaleOppositeFormatSparseFiles) {
     if (!has_cuda_device()) {
         GTEST_SKIP() << "CUDA device required for Camera-backed COLMAP write-back";
@@ -1280,4 +1451,315 @@ TEST(SidecarResampling, InvalidDepthAndNormalVectorsStayZero) {
     EXPECT_FLOAT_EQ(resized[0], 1.0f);
     EXPECT_FLOAT_EQ(resized[1], 0.0f);
     EXPECT_FLOAT_EQ(resized[2], -1.0f);
+}
+
+namespace {
+    class ScopedCurrentPath {
+    public:
+        explicit ScopedCurrentPath(const fs::path& path) : previous_(fs::current_path()) { fs::current_path(path); }
+        ~ScopedCurrentPath() {
+            std::error_code ec;
+            fs::current_path(previous_, ec);
+        }
+        ScopedCurrentPath(const ScopedCurrentPath&) = delete;
+        ScopedCurrentPath& operator=(const ScopedCurrentPath&) = delete;
+
+    private:
+        fs::path previous_;
+    };
+} // namespace
+
+TEST_F(ColmapImageLayoutTest, ResolvesImagesFolderNextToDatasetFromWorkingDirectory) {
+    // The parent directory name carries an "_2" that must not be read as an images_N scale.
+    const fs::path shot_dir = temp_dir_ / "take_2";
+    write_text_file(shot_dir / "colmap" / "sparse" / "0" / "cameras.txt", "1 PINHOLE 2 2 2 2 1 1\n");
+    write_text_file(shot_dir / "colmap" / "sparse" / "0" / "images.txt", "1 1 0 0 0 0 0 0 1 sub/frame_0001.png\n");
+    const fs::path image_path = shot_dir / "im01" / "sub" / "frame_0001.png";
+    fs::create_directories(image_path.parent_path());
+    const std::vector<unsigned char> pixels(2 * 2 * 3, 128);
+    ASSERT_TRUE(lfs::core::save_png(image_path, pixels.data(), 2, 2, 3, 8, 6));
+
+    const ScopedCurrentPath cwd(shot_dir);
+    lfs::io::ColmapLoader loader;
+    auto result = loader.load("colmap", {.images_folder = "im01"});
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+
+    const auto& cameras = std::get<lfs::io::LoadedScene>(result->data).cameras;
+    ASSERT_EQ(cameras.size(), 1u);
+    EXPECT_TRUE(fs::equivalent(cameras[0]->image_path(), image_path));
+    EXPECT_FLOAT_EQ(cameras[0]->focal_x(), 2.0f);
+}
+
+TEST_F(ColmapImageLayoutTest, MissingImagesFolderNamesBothSearchedLocations) {
+    write_minimal_colmap_text_dataset(temp_dir_ / "colmap" / "sparse" / "0", "frame_0001.png");
+
+    const ScopedCurrentPath cwd(temp_dir_);
+    lfs::io::ColmapLoader loader;
+    auto result = loader.load("colmap", {.images_folder = "im01"});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, lfs::io::ErrorCode::MISSING_REQUIRED_FILES);
+    EXPECT_NE(result.error().message.find("dataset or the working directory"), std::string::npos);
+}
+
+// 5187 is not divisible by 4: scaling through the truncated 1296 px nominal width biases fx by 0.06 % and cx by 0.4 px.
+TEST_F(ColmapImageLayoutTest, DownscaledIntrinsicsUseExactImageRatios) {
+    const auto binary_dir = temp_dir_ / "binary";
+    const auto text_dir = temp_dir_ / "text";
+    const auto images_dir = temp_dir_ / "images_4";
+    fs::create_directories(binary_dir);
+    fs::create_directories(images_dir);
+    const int width = 1297, height = 840;
+    const std::vector<unsigned char> pixels(width * height * 3, 128);
+    ASSERT_TRUE(lfs::core::save_png(images_dir / "frame.png", pixels.data(), width, height, 3, 8, 6));
+
+    const auto write = [](std::ofstream& out, const auto&... values) {
+        (out.write(reinterpret_cast<const char*>(&values), sizeof(values)), ...);
+    };
+    std::ofstream cameras(binary_dir / "cameras.bin", std::ios::binary);
+    write(cameras, uint64_t{1}, uint32_t{1}, int32_t{1}, uint64_t{5187}, uint64_t{3361},
+          3800.0, 3900.0, 2593.5, 1680.5);
+    cameras.close();
+    ASSERT_TRUE(cameras.good());
+    std::ofstream images(binary_dir / "images.bin", std::ios::binary);
+    write(images, uint64_t{1}, uint32_t{1}, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+          uint32_t{1}, "frame.png", uint64_t{0});
+    images.close();
+    ASSERT_TRUE(images.good());
+    write_text_file(text_dir / "cameras.txt", "1 PINHOLE 5187 3361 3800 3900 2593.5 1680.5\n");
+    write_text_file(text_dir / "images.txt", "1 1 0 0 0 0 0 0 1 frame.png\n\n");
+
+    install_camera_image_loader();
+    const auto check = [&](const std::shared_ptr<lfs::core::Camera>& camera) {
+        if (camera->image_path().empty()) {
+            camera->set_image_dimensions(width, height);
+        } else {
+            ASSERT_TRUE(camera->load_and_get_image(1, 0).is_valid());
+            ASSERT_EQ(camera->image_width(), width);
+            ASSERT_EQ(camera->image_height(), height);
+        }
+        const auto [fx, fy, cx, cy] = camera->get_intrinsics();
+        EXPECT_NEAR(fx, 3800.0 * width / 5187, 2e-4);
+        EXPECT_NEAR(fy, 3900.0 * height / 3361, 2e-4);
+        EXPECT_NEAR(cx, 2593.5 * width / 5187, 2e-4);
+        EXPECT_NEAR(cy, 1680.5 * height / 3361, 2e-4);
+    };
+    for (const auto& dir : {binary_dir, text_dir}) {
+        SCOPED_TRACE(dir.filename().string());
+        const auto loaded = dir == binary_dir
+                                ? lfs::io::read_colmap_cameras_and_images(dir, images_dir.string())
+                                : lfs::io::read_colmap_cameras_and_images_text(dir, images_dir.string());
+        ASSERT_TRUE(loaded) << loaded.error().format();
+        ASSERT_EQ(std::get<0>(loaded->value).size(), 1u);
+        EXPECT_TRUE(loaded->warnings.empty());
+        check(std::get<0>(loaded->value).front());
+        const auto metadata = lfs::io::read_colmap_cameras_only(dir, 4.0f);
+        ASSERT_TRUE(metadata) << metadata.error().format();
+        ASSERT_EQ(std::get<0>(*metadata).size(), 1u);
+        check(std::get<0>(*metadata).front());
+    }
+}
+
+TEST_F(ColmapImageLayoutTest, ManyAspectMismatchesAreSummarized) {
+    const auto dataset = temp_dir_ / "many_cropped";
+    fs::create_directories(dataset / "images");
+    write_text_file(dataset / "cameras.txt", "1 PINHOLE 648 420 480 481 324 210\n");
+    std::ostringstream image_text;
+    const std::vector<unsigned char> pixels(324 * 420 * 3, 128);
+    for (int i = 0; i < 12; ++i) {
+        const auto name = std::format("cropped_{:02}.png", i);
+        ASSERT_TRUE(lfs::core::save_png(dataset / "images" / name, pixels.data(), 324, 420, 3, 8, 6));
+        image_text << i + 1 << " 1 0 0 0 0 0 0 1 " << name << "\n\n";
+    }
+    write_text_file(dataset / "images.txt", image_text.str());
+    const auto loaded = lfs::io::read_colmap_cameras_and_images_text(dataset, "images");
+    ASSERT_TRUE(loaded) << loaded.error().format();
+    EXPECT_EQ(std::get<0>(loaded->value).size(), 12u);
+    ASSERT_EQ(loaded->warnings.size(), 9u);
+    EXPECT_NE(loaded->warnings.back().message.find("4 more image(s)"), std::string::npos);
+}
+
+TEST_F(ColmapImageLayoutTest, WarnsOnImageAspectMismatchWithoutChangingCameraCalibration) {
+    const auto write = [](std::ofstream& out, const auto&... values) {
+        (out.write(reinterpret_cast<const char*>(&values), sizeof(values)), ...);
+    };
+    for (const bool binary : {false, true}) {
+        const auto dataset = temp_dir_ / (binary ? "binary" : "text");
+        fs::create_directories(dataset / "images");
+        struct ImageCase {
+            const char* name;
+            int width, height;
+            bool warn;
+        };
+        const std::vector<ImageCase> cases{
+            {"original.png", 648, 420, false},
+            {"cropped.png", 324, 420, true},
+            {"stretched.png", 1296, 420, true},
+            {"rescaled.png", 1296, 840, false},
+            {"rounded.png", 649, 420, false}};
+        std::ostringstream image_text;
+        std::ofstream image_bin;
+        if (binary) {
+            std::ofstream cameras(dataset / "cameras.bin", std::ios::binary);
+            write(cameras, uint64_t{1}, uint32_t{1}, int32_t{1}, uint64_t{648}, uint64_t{420},
+                  480.0, 481.0, 324.0, 210.0);
+            image_bin.open(dataset / "images.bin", std::ios::binary);
+            write(image_bin, static_cast<uint64_t>(cases.size()));
+        } else {
+            write_text_file(dataset / "cameras.txt", "1 PINHOLE 648 420 480 481 324 210\n");
+        }
+        for (size_t i = 0; i < cases.size(); ++i) {
+            const auto& entry = cases[i];
+            const std::vector<unsigned char> pixels(entry.width * entry.height * 3, 128);
+            ASSERT_TRUE(lfs::core::save_png(dataset / "images" / entry.name, pixels.data(),
+                                            entry.width, entry.height, 3, 8, 6));
+            if (binary) {
+                write(image_bin, static_cast<uint32_t>(i + 1), 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, uint32_t{1});
+                image_bin.write(entry.name, std::char_traits<char>::length(entry.name) + 1);
+                write(image_bin, uint64_t{0});
+            } else {
+                image_text << i + 1 << " 1 0 0 0 0 0 0 1 " << entry.name << "\n\n";
+            }
+        }
+        if (binary)
+            image_bin.close();
+        else
+            write_text_file(dataset / "images.txt", image_text.str());
+        const auto loaded = binary ? lfs::io::read_colmap_cameras_and_images(dataset, "images")
+                                   : lfs::io::read_colmap_cameras_and_images_text(dataset, "images");
+        ASSERT_TRUE(loaded) << loaded.error().format();
+        const auto& cameras = std::get<0>(loaded->value);
+        ASSERT_EQ(cameras.size(), cases.size());
+        EXPECT_EQ(loaded->warnings.size(), 2u);
+        for (const auto& entry : cases) {
+            SCOPED_TRACE(std::string(binary ? "binary: " : "text: ") + entry.name);
+            const auto camera = std::find_if(cameras.begin(), cameras.end(), [&](const auto& c) {
+                return c->image_name() == entry.name;
+            });
+            ASSERT_NE(camera, cameras.end());
+            (*camera)->set_image_dimensions(entry.width, entry.height);
+            const auto [fx, fy, cx, cy] = (*camera)->get_intrinsics();
+            EXPECT_NEAR(fx, 480.0 * entry.width / 648, 1e-4);
+            EXPECT_NEAR(fy, 481.0 * entry.height / 420, 1e-4);
+            EXPECT_NEAR(cx, 324.0 * entry.width / 648, 1e-4);
+            EXPECT_NEAR(cy, 210.0 * entry.height / 420, 1e-4);
+            const auto warning = std::find_if(loaded->warnings.begin(), loaded->warnings.end(), [&](const auto& d) {
+                return d.message.find(entry.name) != std::string::npos;
+            });
+            EXPECT_EQ(warning != loaded->warnings.end(), entry.warn);
+            if (warning != loaded->warnings.end()) {
+                EXPECT_NE(warning->message.find("648x420"), std::string::npos);
+                EXPECT_NE(warning->message.find(std::to_string(entry.width) + "x" + std::to_string(entry.height)), std::string::npos);
+                EXPECT_NE(warning->message.find("aspect ratio"), std::string::npos);
+            }
+        }
+        lfs::io::ColmapLoader loader;
+        const auto result = loader.load(dataset, {});
+        ASSERT_TRUE(result) << result.error().format();
+        EXPECT_EQ(std::count_if(result->warnings.begin(), result->warnings.end(), [](const auto& warning) {
+                      return warning.find("aspect ratio") != std::string::npos;
+                  }),
+                  2);
+    }
+}
+
+TEST_F(ColmapImageLayoutTest, SkipsInvalidFocalCameraBeforeAmbiguousImageLookup) {
+    fs::create_directories(temp_dir_ / "images");
+    write_text_file(temp_dir_ / "cameras.txt",
+                    "1 PINHOLE 1 1 1 1 0.5 0.5\n"
+                    "2 PINHOLE 1 1 0 1 0.5 0.5\n");
+    write_text_file(temp_dir_ / "images.txt",
+                    "1 1 0 0 0 0 0 0 1 valid.png\n\n"
+                    "2 1 0 0 0 0 0 0 2 zero.png\n\n");
+    write_png(temp_dir_ / "images" / "valid.png");
+    write_png(temp_dir_ / "images" / "first" / "zero.png");
+    write_png(temp_dir_ / "images" / "second" / "zero.png");
+
+    const auto loaded = lfs::io::read_colmap_cameras_and_images_text(temp_dir_, "images");
+    ASSERT_TRUE(loaded) << loaded.error().format();
+    const auto& cameras = std::get<0>(loaded->value);
+    ASSERT_EQ(cameras.size(), 1u);
+    EXPECT_EQ(cameras.front()->image_name(), "valid.png");
+    ASSERT_EQ(loaded->warnings.size(), 1u);
+    EXPECT_NE(loaded->warnings.front().message.find("zero.png"), std::string::npos);
+}
+
+TEST_F(ColmapImageLayoutTest, UnreadableImageHeaderDoesNotRejectCameraImport) {
+    write_minimal_colmap_text_dataset(temp_dir_, "frame.jpg");
+    write_text_file(temp_dir_ / "images/frame.jpg", "unreadable image header");
+    const auto loaded = lfs::io::read_colmap_cameras_and_images_text(temp_dir_, "images");
+    ASSERT_TRUE(loaded) << loaded.error().format();
+    ASSERT_EQ(std::get<0>(loaded->value).size(), 1u);
+    EXPECT_TRUE(std::get<0>(loaded->value).front()->has_image());
+    ASSERT_EQ(loaded->warnings.size(), 1u);
+    EXPECT_NE(loaded->warnings.front().message.find("frame.jpg"), std::string::npos);
+}
+
+TEST_F(ColmapImageLayoutTest, NerfNestedDuplicateSidecars) {
+    if (!has_cuda_device())
+        GTEST_SKIP() << "CUDA device required";
+    for (const std::string folder : {"images", "images_8", "train", ""}) {
+        for (const bool mirror_root : {false, true}) {
+            const std::string prefix = mirror_root ? folder : "";
+            const auto dataset = temp_dir_ / (folder + std::to_string(mirror_root));
+            write_nerf_sidecars(dataset, folder, prefix);
+            for (const bool depth : {true, false}) {
+                for (const bool enabled : {true, false}) {
+                    SCOPED_TRACE(folder + ":" + prefix + ":" + std::to_string(depth) + ":" + std::to_string(enabled));
+                    lfs::io::BlenderLoader loader;
+                    const auto result = loader.load(dataset, {.load_depths = depth && enabled, .load_normals = !depth && enabled});
+                    EXPECT_TRUE(result.has_value()) << result.error().format();
+                    if (!result)
+                        continue;
+                    const auto& cameras = std::get<lfs::io::LoadedScene>(result->data).cameras;
+                    ASSERT_EQ(cameras.size(), 2u);
+                    for (size_t i = 0; i < cameras.size(); ++i) {
+                        EXPECT_EQ(cameras[i]->image_name(), "shared.png");
+                        const auto relative = fs::path(prefix) / (i == 0 ? "setA" : "setB") / "shared.png";
+                        EXPECT_EQ(cameras[i]->depth_path(), dataset / "depth" / relative);
+                        EXPECT_EQ(cameras[i]->normal_path(), dataset / "normal" / relative);
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_F(ColmapImageLayoutTest, NerfSidecarLegacyMatchesAndTrueAmbiguity) {
+    if (!has_cuda_device())
+        GTEST_SKIP() << "CUDA device required";
+    for (const bool unique : {true, false}) {
+        const auto dataset = temp_dir_ / std::to_string(unique);
+        write_nerf_sidecars(dataset, "images_8", "unrelated", unique);
+        lfs::io::BlenderLoader loader;
+        for (const bool depth : {true, false}) {
+            const auto result = loader.load(dataset, {.load_depths = depth, .load_normals = !depth});
+            if (!unique) {
+                ASSERT_FALSE(result.has_value());
+                EXPECT_EQ(result.error().code, lfs::io::ErrorCode::INVALID_DATASET);
+            } else {
+                ASSERT_TRUE(result.has_value()) << result.error().format();
+                for (const auto& camera : std::get<lfs::io::LoadedScene>(result->data).cameras) {
+                    EXPECT_EQ(camera->depth_path(), lfs::io::DepthDirCache(dataset).find(camera->image_name()));
+                    EXPECT_EQ(camera->normal_path(), lfs::io::NormalDirCache(dataset).find(camera->image_name()));
+                }
+            }
+        }
+        if (!unique) {
+            const auto disabled = loader.load(dataset, {});
+            ASSERT_TRUE(disabled.has_value()) << disabled.error().format();
+            for (const auto& camera : std::get<lfs::io::LoadedScene>(disabled->data).cameras) {
+                EXPECT_TRUE(camera->depth_path().empty());
+                EXPECT_TRUE(camera->normal_path().empty());
+            }
+            // A root-level match already won over nested duplicates; retain that choice.
+            fs::copy_file(dataset / "depth/unrelated/setA/shared.png", dataset / "depth/shared.png");
+            fs::copy_file(dataset / "normal/unrelated/setA/shared.png", dataset / "normal/shared.png");
+            const auto flat = loader.load(dataset, {.load_depths = true, .load_normals = true});
+            ASSERT_TRUE(flat.has_value()) << flat.error().format();
+            for (const auto& camera : std::get<lfs::io::LoadedScene>(flat->data).cameras) {
+                EXPECT_EQ(camera->depth_path(), dataset / "depth/shared.png");
+                EXPECT_EQ(camera->normal_path(), dataset / "normal/shared.png");
+            }
+        }
+    }
 }

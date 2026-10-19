@@ -10,6 +10,7 @@
 #include "visualizer/visualizer.hpp"
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
@@ -23,6 +24,10 @@ namespace lfs::vis {
 
     class InputController;
     class VulkanContext;
+    namespace gui {
+        class NativeDragContext;
+        class NativeDragScheduler;
+    } // namespace gui
 
     class LFS_VIS_API WindowManager {
     public:
@@ -65,7 +70,7 @@ namespace lfs::vis {
         void updateWindowSize(const char* reason = "manual",
                               ResizeIntent intent = ResizeIntent::Exact);
         void pollEvents();
-        void waitEvents(double timeout_seconds);
+        void waitEvents(std::optional<double> timeout_seconds = std::nullopt);
         bool shouldClose() const;
         void requestClose() { should_close_ = true; }
         void cancelClose();
@@ -73,6 +78,10 @@ namespace lfs::vis {
         void refreshResizeCursor();
         [[nodiscard]] unsigned manualResizeEdgeMask() const;
 
+        gui::NativeDragContext& nativeFileDragContext();
+        gui::NativeDragScheduler& nativeDragScheduler();
+        void dispatchNativeDrags(std::function<bool()> frame);
+        bool advanceNativeTransferFrame();
         SDL_Window* getWindow() const { return window_; }
         VulkanContext* getVulkanContext() const { return vulkan_context_.get(); }
         glm::ivec2 getWindowSize() const { return window_size_; }
@@ -85,6 +94,7 @@ namespace lfs::vis {
         void setTitlebarDragRegion(int height_px, std::vector<HitTestRect> excluded_rects);
         void clearTitlebarDragRegion();
         [[nodiscard]] bool isTitlebarDragPoint(int x, int y) const;
+        [[nodiscard]] bool usesWayland() const { return is_wayland_; }
         [[nodiscard]] bool usesEventDrivenTitlebarDrag() const { return native_titlebar_move_available_; }
         void setFullscreen(bool fullscreen);
         GraphicsBackend graphicsBackend() const { return graphics_backend_; }
@@ -96,7 +106,15 @@ namespace lfs::vis {
         [[nodiscard]] const input::InputRouter& inputRouter() const { return input_router_; }
 
     private:
+        friend class WindowInputDispatchTest;
         void processEvent(const ::SDL_Event& event);
+        void dispatchQueuedEvent(const ::SDL_Event& event);
+        void dispatchPolledEvent(const ::SDL_Event& event);
+        bool drainQueuedEvents();
+        static bool watchEvent(void* userdata, ::SDL_Event* event);
+        bool pumping_events_ = false;
+        bool watching_event_ = false;
+        std::vector<std::pair<Uint32, Uint64>> dispatched_events_;
         [[nodiscard]] bool shouldSuppressGuiRoutingForResize(const ::SDL_Event& event,
                                                              unsigned int main_window_id) const;
 
@@ -110,6 +128,9 @@ namespace lfs::vis {
 
         SDL_Window* window_ = nullptr;
         std::unique_ptr<VulkanContext> vulkan_context_;
+        std::unique_ptr<gui::NativeDragContext> native_file_drag_;
+        std::unique_ptr<gui::NativeDragScheduler> native_drag_scheduler_;
+        std::function<bool()> native_transfer_frame_;
         GraphicsBackend graphics_backend_ = GraphicsBackend::Vulkan;
         std::string title_;
         glm::ivec2 window_size_;
@@ -125,6 +146,7 @@ namespace lfs::vis {
         int titlebar_drag_height_px_ = 0;
         std::vector<HitTestRect> titlebar_drag_excluded_rects_;
         bool native_titlebar_move_available_ = false;
+        bool is_wayland_ = false;
         bool pending_titlebar_double_click_ = false;
         bool titlebar_drag_active_ = false;
         bool titlebar_drag_started_maximized_ = false;
@@ -156,6 +178,7 @@ namespace lfs::vis {
         void updateManualResize();
         void finishManualResize();
         void suppressFrameInputForManualResize();
+        void pinFrameInputForValueDrag();
         [[nodiscard]] bool isManualResizeActive() const { return manual_resize_edge_ != ResizeEdge::NoEdge; }
         void beginTitlebarDrag(int local_x, int local_y);
         void updateTitlebarDrag();

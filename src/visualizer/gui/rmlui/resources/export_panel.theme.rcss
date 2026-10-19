@@ -32,6 +32,12 @@
     color: @{text_dim};
 }
 
+.ep-model-list input[type="checkbox"].is-partial {
+    background-color: @{primary};
+    border-color: @{primary};
+    decorator: none;
+}
+
 .ep-error {
     color: @{error};
 }

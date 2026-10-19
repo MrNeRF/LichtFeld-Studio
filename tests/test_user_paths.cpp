@@ -6,6 +6,7 @@
 
 #include "core/legacy_settings_migration.hpp"
 #include "core/user_paths.hpp"
+#include "licht_test_support.hpp"
 
 #include <array>
 #include <chrono>
@@ -28,33 +29,7 @@ namespace lfs {
 namespace {
 
     namespace fs = std::filesystem;
-
-    class ScopedEnvironmentVariable {
-    public:
-        ScopedEnvironmentVariable(const char* name, const std::optional<std::string>& value)
-            : name_(name) {
-            if (const char* previous = std::getenv(name))
-                previous_ = previous;
-            set(value);
-        }
-
-        ~ScopedEnvironmentVariable() { set(previous_); }
-
-    private:
-        void set(const std::optional<std::string>& value) const {
-#ifdef _WIN32
-            (void)_putenv_s(name_.c_str(), value ? value->c_str() : "");
-#else
-            if (value)
-                (void)setenv(name_.c_str(), value->c_str(), 1);
-            else
-                (void)unsetenv(name_.c_str());
-#endif
-        }
-
-        std::string name_;
-        std::optional<std::string> previous_;
-    };
+    using lfs::test::licht::ScopedEnvironmentVariable;
 
     class UserPathsContractTest : public ::testing::Test {
     protected:
@@ -179,11 +154,10 @@ namespace {
             (root_ / "home").string());
 #ifdef _WIN32
         const ScopedEnvironmentVariable legacy_base("APPDATA", (root_ / "legacy-base").string());
-        const fs::path legacy = root_ / "legacy-base" / "LichtFeldStudio";
 #else
         const ScopedEnvironmentVariable legacy_base("XDG_CONFIG_HOME", (root_ / "legacy-base").string());
-        const fs::path legacy = root_ / "legacy-base" / "LichtFeldStudio";
 #endif
+        const fs::path legacy = root_ / "legacy-base" / "LichtFeldStudio";
         ASSERT_TRUE(fs::create_directories(legacy / "input_profiles"));
         std::ofstream(legacy / "theme_preference") << "gruvbox";
         std::ofstream(legacy / "language_preference") << "it";
@@ -208,6 +182,56 @@ namespace {
         std::ifstream layout(paths->layoutFile());
         const std::string layout_contents((std::istreambuf_iterator<char>(layout)), {});
         EXPECT_EQ(layout_contents, R"({"current":true})");
+    }
+
+    TEST_F(UserPathsContractTest, LateLegacyPreferencesImportMissingFieldsWithoutReplacingCurrentValues) {
+        const ScopedEnvironmentVariable lfs_home("LFS_HOME", std::nullopt);
+        const ScopedEnvironmentVariable home(
+#ifdef _WIN32
+            "USERPROFILE",
+#else
+            "HOME",
+#endif
+            (root_ / "home").string());
+#ifdef _WIN32
+        const ScopedEnvironmentVariable legacy_base("APPDATA", (root_ / "legacy-base").string());
+#else
+        const ScopedEnvironmentVariable legacy_base("XDG_CONFIG_HOME", (root_ / "legacy-base").string());
+#endif
+        const auto paths = lfs::core::UserPaths::resolve();
+        ASSERT_TRUE(paths);
+        ASSERT_TRUE(lfs::core::migrateLegacySettings(*paths));
+        const auto marker = paths->dataDir() / "migrations" / "legacy-user-settings-v1.done";
+        ASSERT_TRUE(paths->writePreferencesAtomically(
+            R"({"schema_version":999,"ui_scale":"auto","future_setting":{"kept":true}})"));
+
+        const auto legacy = root_ / "legacy-base" / "LichtFeldStudio";
+        ASSERT_TRUE(fs::create_directories(legacy / "input_profiles"));
+        std::ofstream(legacy / "layout.json") << R"({"right_panel_width":540})";
+        std::ofstream(legacy / "input_profiles" / "Default.json") << R"({"name":"Default"})";
+        std::ofstream(legacy / "theme_preference") << "light";
+        std::ofstream(legacy / "language_preference") << "fr";
+        std::ofstream(legacy / "ui_scale") << "1.25";
+        ASSERT_TRUE(lfs::core::migrateLegacySettings(*paths));
+
+        std::ifstream input(paths->preferencesFile());
+        const auto values = nlohmann::json::parse(input);
+        EXPECT_EQ(values.at("schema_version"), 999);
+        EXPECT_EQ(values.at("theme"), "light");
+        EXPECT_EQ(values.at("language"), "fr");
+        EXPECT_EQ(values.at("ui_scale"), "auto");
+        EXPECT_TRUE(values.at("future_setting").at("kept"));
+        EXPECT_TRUE(fs::exists(paths->layoutFile()));
+        EXPECT_TRUE(fs::exists(paths->keymapDir() / "Default.json"));
+        EXPECT_TRUE(lfs::core::takeLegacySettingsMigrationNotice());
+        EXPECT_FALSE(lfs::core::takeLegacySettingsMigrationNotice());
+
+        std::ofstream(legacy / "layout.json", std::ios::trunc) << R"({"right_panel_width":600})";
+        fs::last_write_time(legacy / "layout.json", fs::last_write_time(marker) + std::chrono::seconds(2));
+        ASSERT_TRUE(lfs::core::migrateLegacySettings(*paths));
+        EXPECT_FALSE(lfs::core::takeLegacySettingsMigrationNotice());
+        std::ifstream layout(paths->layoutFile());
+        EXPECT_EQ(nlohmann::json::parse(layout).at("right_panel_width"), 540);
     }
 
     TEST_F(UserPathsContractTest, PortableRootUsesExecutableDirectory) {

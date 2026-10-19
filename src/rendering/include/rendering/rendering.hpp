@@ -81,6 +81,7 @@ namespace lfs::rendering {
         const std::vector<glm::mat4>* model_transforms = nullptr;
         std::shared_ptr<lfs::core::Tensor> transform_indices;
         std::vector<bool> node_visibility_mask;
+        std::vector<int> node_active_sh_degrees = {}; // Empty uses the model-wide limit (e.g. live training).
     };
 
     struct GaussianScopedBoxFilter {
@@ -131,7 +132,6 @@ namespace lfs::rendering {
         GaussianTransientMaskOverlayState transient_mask;
         std::vector<bool> emphasized_node_mask;
         bool dim_non_emphasized = false;
-        float flash_intensity = 0.0f;
         int focused_gaussian_id = -1;
     };
 
@@ -196,6 +196,11 @@ namespace lfs::rendering {
 
     struct ViewportRenderRequest {
         FrameView frame_view;
+        // Display color: tone IDs match none, linear, filmic, hejl, aces, aces2, neutral.
+        float color_exposure = 1.0f;
+        int color_tonemapping = 0;
+        int splat_render_profile = 0; // 0: Studio, 1: standard portal
+
         float scaling_modifier = 1.0f;
         bool antialiasing = false;
         bool mip_filter = false;
@@ -208,6 +213,11 @@ namespace lfs::rendering {
         GaussianOverlayState overlay;
         bool transparent_background = false;
         bool depth_view = false;
+        // Occlusion consumers need per-pixel depth, not HiGS batch-leading depth.
+        bool require_exact_depth = false;
+        // Optional row-major bitset of 4x4 pixel regions (rounded up at edges).
+        // Empty requests exact depth everywhere.
+        std::vector<uint32_t> exact_depth_sample_mask{};
         float depth_view_min = DEFAULT_DEPTH_VIEW_MIN;
         float depth_view_max = DEFAULT_DEPTH_VIEW_MAX;
         DepthVisualizationMode depth_visualization_mode = DepthVisualizationMode::Palette;
@@ -375,7 +385,6 @@ namespace lfs::rendering {
         int shadow_map_resolution = 2048;
         bool is_emphasized = false;
         bool dim_non_emphasized = false;
-        float flash_intensity = 0.0f;
         glm::vec3 background_color{0.0f};
         bool transparent_background = false;
     };

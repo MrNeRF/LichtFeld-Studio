@@ -83,7 +83,8 @@ namespace lfs::io::project {
         bool is_payload_class_chunk(const ChunkInfo& row) noexcept {
             return (row.flags & TENSOR_PAYLOAD) != 0 ||
                    row.key.fourcc == FOURCC_CKPT ||
-                   row.key.fourcc == FOURCC_PPIS;
+                   row.key.fourcc == FOURCC_PPIS ||
+                   row.key.fourcc == FOURCC_SFMO;
         }
 
         std::optional<std::uint64_t> payload_materialized_bytes_override;
@@ -375,6 +376,7 @@ namespace lfs::io::project {
             std::uint64_t physical_size = 0;
             SuperblockInfo superblock;
             ParsedHead selected;
+            std::vector<HeadInfo> published_heads;
             std::vector<std::string> warnings;
             OpenState open_state = OpenState::Open;
             ReaderOptions options;
@@ -2624,6 +2626,11 @@ namespace lfs::io::project {
             state->physical_size = physical_size;
             state->superblock = *superblock;
             state->selected = selected;
+            for (const auto& attempt : attempts) {
+                if (attempt.head.has_value()) {
+                    state->published_heads.push_back(attempt.head->info);
+                }
+            }
             state->warnings = std::move(warnings);
             state->options = options;
             state->open_state = selected.compatibility_error.has_value()
@@ -2734,7 +2741,7 @@ namespace lfs::io::project {
     CapabilitySet supported_reader_capabilities() {
         CapabilitySet result;
         for (std::uint8_t bit = INDEX_ZSTD_V1;
-             bit <= CHUNK_BYTESHUFFLE_ZSTD_V1; ++bit) {
+             bit <= ENCODED_SCENE_ASSETS; ++bit) {
             result.set(bit);
         }
         return result;
@@ -2771,6 +2778,113 @@ namespace lfs::io::project {
         }
         assert(parsed->error.has_value());
         return std::move(*parsed->error);
+    }
+
+    lfs::Result<ProjectReader>
+    ProjectReader::open_generation(const std::filesystem::path& path,
+                                   const std::uint64_t generation,
+                                   const ReaderOptions& options) {
+        auto parsed = parse_path(path, options);
+        if (!parsed) {
+            return std::move(parsed).error();
+        }
+        if (!parsed->reader || parsed->state != OpenState::Open) {
+            return parsed->error.has_value()
+                       ? std::move(*parsed->error)
+                       : detail::project_error(
+                             lfs::ErrorCode::Unsupported,
+                             "This project generation cannot be opened.",
+                             "open_generation requires a supported project",
+                             path);
+        }
+        auto state = parsed->reader;
+        const auto found = std::ranges::find_if(
+            state->selected.lineage,
+            [generation](const ParsedCommit& commit) {
+                return commit.info.generation == generation;
+            });
+        if (found == state->selected.lineage.end()) {
+            return detail::project_error(
+                lfs::ErrorCode::InvalidArgument,
+                "The requested save generation does not exist.",
+                std::format("generation {} is outside the native lineage", generation),
+                path, std::nullopt, "generation");
+        }
+        auto index = parse_index(*state->file, state->physical_size,
+                                 state->superblock, *found,
+                                 state->selected.lineage);
+        if (!index) {
+            return std::move(index).error();
+        }
+        state->selected.commit = *found;
+        state->selected.chunks = std::move(index->chunks);
+        const auto published = std::ranges::find_if(
+            state->published_heads,
+            [&](const HeadInfo& head) {
+                return head.generation == found->info.generation &&
+                       head.commit_uuid == found->info.commit_uuid;
+            });
+        state->selected.info =
+            published != state->published_heads.end()
+                ? *published
+                : HeadInfo{
+                      .generation = found->info.generation,
+                      .commit_uuid = found->info.commit_uuid,
+                      .commit_offset = found->info.offset,
+                      .committed_file_end = found->info.committed_file_end,
+                      .commit_crc32c_echo = found->info.crc32c,
+                  };
+        return ProjectReader(std::make_shared<Impl>(std::move(state)));
+    }
+
+    lfs::Result<ProjectHeadIdentity>
+    ProjectReader::read_head_identity(const std::filesystem::path& path) {
+        auto file_result = detail::NativeFile::open_read(path);
+        if (!file_result) {
+            return std::move(file_result).error();
+        }
+        const auto file = *file_result;
+        auto size_result = file->size();
+        if (!size_result) {
+            return std::move(size_result).error();
+        }
+        const std::uint64_t physical_size = *size_result;
+        auto superblock = parse_superblock(*file, physical_size);
+        if (!superblock) {
+            return std::move(superblock).error();
+        }
+        std::optional<ProjectHeadIdentity> newest;
+        std::uint64_t newest_sequence = 0;
+        for (std::uint32_t slot_id = 0; slot_id < HEAD_SLOT_OFFSETS.size(); ++slot_id) {
+            auto raw = read_fixed<HEAD_SLOT_BYTES>(
+                *file, HEAD_SLOT_OFFSETS[slot_id], physical_size, physical_size,
+                std::format("head[{}]", slot_id));
+            if (!raw) {
+                continue;
+            }
+            const auto bytes = byte_span(*raw);
+            if (!bytes_equal(bytes, 0, HEAD_MAGIC) ||
+                read_u32(bytes, 4092) != crc32c(0, raw->data(), 4092) ||
+                read_uuid(bytes, 32) != superblock->project_uuid) {
+                continue;
+            }
+            const std::uint64_t sequence = read_u64(bytes, 16);
+            if (newest && sequence <= newest_sequence) {
+                continue;
+            }
+            newest_sequence = sequence;
+            newest = ProjectHeadIdentity{
+                .project_uuid = superblock->project_uuid,
+                .commit_uuid = read_uuid(bytes, 64),
+                .generation = read_u64(bytes, 24),
+            };
+        }
+        if (!newest) {
+            return detail::project_error(lfs::ErrorCode::DataLoss,
+                                         "The project container is corrupt.",
+                                         "no head slot has a valid checksum", path);
+        }
+        return *newest;
     }
 
     OpenClassification
@@ -2829,8 +2943,50 @@ namespace lfs::io::project {
         return impl_->state->selected.commit.info;
     }
 
+    std::vector<CommitInfo> ProjectReader::lineage() const {
+        std::vector<CommitInfo> result;
+        if (!impl_) {
+            return result;
+        }
+        result.reserve(impl_->state->selected.lineage.size());
+        for (const auto& commit : impl_->state->selected.lineage) {
+            result.push_back(commit.info);
+        }
+        return result;
+    }
+
     const std::vector<ChunkInfo>& ProjectReader::chunks() const noexcept {
         return impl_->state->selected.chunks;
+    }
+
+    lfs::Result<std::vector<std::vector<ChunkInfo>>>
+    ProjectReader::lineage_chunks() const {
+        if (!impl_) {
+            return detail::project_error(
+                lfs::ErrorCode::FailedPrecondition,
+                "The project reader is not initialized.",
+                "lineage_chunks requires an initialized ProjectReader");
+        }
+        if (impl_->state->open_state != OpenState::Open) {
+            return detail::project_error(
+                lfs::ErrorCode::Unsupported,
+                "Structural project details are unavailable for this project.",
+                "lineage index access requires a fully supported project",
+                impl_->state->path);
+        }
+        std::vector<std::vector<ChunkInfo>> result;
+        result.reserve(impl_->state->selected.lineage.size());
+        for (const auto& commit : impl_->state->selected.lineage) {
+            auto parsed = parse_index(
+                *impl_->state->file, impl_->state->physical_size,
+                impl_->state->superblock, commit,
+                impl_->state->selected.lineage);
+            if (!parsed) {
+                return std::move(parsed).error();
+            }
+            result.push_back(std::move(parsed->chunks));
+        }
+        return result;
     }
 
     const std::vector<std::string>& ProjectReader::warnings() const noexcept {
@@ -4894,6 +5050,8 @@ namespace lfs::io::project {
         }
 
         std::atomic<std::uint64_t> g_framed_record_decode_calls{0};
+        std::atomic<std::uint64_t> g_framed_record_stored_cache_view_bytes{0};
+        std::atomic<std::uint64_t> g_framed_record_stored_cache_nonalias_bytes{0};
 
         // Logical (decoded / unshuffled) view of a framed payload. Resident
         // decoded records are capped: ZstdFramed keeps current + one
@@ -5302,7 +5460,8 @@ namespace lfs::io::project {
                     if (!stored_cache_[index].empty()) {
                         continue;
                     }
-                    if (!read_record_stored(index, stored_cache_[index])) {
+                    std::span<const std::byte> stored;
+                    if (!read_record_stored(index, stored_cache_[index], stored)) {
                         stored_cache_[index].clear();
                         break;
                     }
@@ -5311,18 +5470,25 @@ namespace lfs::io::project {
             }
 
             bool read_record_stored(const std::size_t index,
-                                    std::vector<std::byte>& stored) {
+                                    std::vector<std::byte>& scratch,
+                                    std::span<const std::byte>& stored) {
                 if (index >= records_.size()) {
                     return false;
                 }
                 if (index < stored_cache_.size() &&
                     !stored_cache_[index].empty()) {
                     stored = stored_cache_[index];
+                    g_framed_record_stored_cache_view_bytes.fetch_add(
+                        stored.size(), std::memory_order_relaxed);
+                    if (stored.data() != stored_cache_[index].data()) {
+                        g_framed_record_stored_cache_nonalias_bytes.fetch_add(
+                            stored.size(), std::memory_order_relaxed);
+                    }
                     return true;
                 }
                 const FramedRecord& record = records_[index];
                 try {
-                    stored.resize(static_cast<std::size_t>(record.sb));
+                    scratch.resize(static_cast<std::size_t>(record.sb));
                 } catch (const std::bad_alloc&) {
                     return false;
                 } catch (const std::length_error&) {
@@ -5332,12 +5498,16 @@ namespace lfs::io::project {
                 if (!ensure_blocks_locked(record.so, record.sb)) {
                     return false;
                 }
-                return read_stored_locked(
-                    record.so, std::span<std::byte>(stored.data(), stored.size()));
+                if (!read_stored_locked(
+                        record.so, std::span<std::byte>(scratch.data(), scratch.size()))) {
+                    return false;
+                }
+                stored = scratch;
+                return true;
             }
 
             bool decompress_record(const FramedRecord& record,
-                                   const std::vector<std::byte>& stored, void* dest,
+                                   const std::span<const std::byte> stored, void* dest,
                                    const std::size_t dest_bytes) const {
                 if (dest == nullptr || dest_bytes != record.ub) {
                     return false;
@@ -5357,8 +5527,9 @@ namespace lfs::io::project {
                 if (index >= records_.size()) {
                     return false;
                 }
-                std::vector<std::byte> stored;
-                if (!read_record_stored(index, stored)) {
+                std::vector<std::byte> scratch;
+                std::span<const std::byte> stored;
+                if (!read_record_stored(index, scratch, stored)) {
                     return false;
                 }
                 try {
@@ -5377,8 +5548,9 @@ namespace lfs::io::project {
                 if (index >= records_.size()) {
                     return false;
                 }
-                std::vector<std::byte> stored;
-                if (!read_record_stored(index, stored)) {
+                std::vector<std::byte> scratch;
+                std::span<const std::byte> stored;
+                if (!read_record_stored(index, scratch, stored)) {
                     return false;
                 }
                 return decompress_record(records_[index], stored, dest, dest_bytes);
@@ -6063,6 +6235,26 @@ namespace lfs::io::project {
 
         std::uint64_t framed_record_decode_calls_for_testing() {
             return g_framed_record_decode_calls.load(std::memory_order_relaxed);
+        }
+
+        void reset_framed_record_stored_cache_view_bytes_for_testing() {
+            g_framed_record_stored_cache_view_bytes.store(
+                0, std::memory_order_relaxed);
+        }
+
+        std::uint64_t framed_record_stored_cache_view_bytes_for_testing() {
+            return g_framed_record_stored_cache_view_bytes.load(
+                std::memory_order_relaxed);
+        }
+
+        void reset_framed_record_stored_cache_nonalias_bytes_for_testing() {
+            g_framed_record_stored_cache_nonalias_bytes.store(
+                0, std::memory_order_relaxed);
+        }
+
+        std::uint64_t framed_record_stored_cache_nonalias_bytes_for_testing() {
+            return g_framed_record_stored_cache_nonalias_bytes.load(
+                std::memory_order_relaxed);
         }
     } // namespace detail
 

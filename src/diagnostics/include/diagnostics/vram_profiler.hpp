@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -105,6 +106,16 @@ namespace lfs::diagnostics {
         std::string scope;
         std::string label;
         std::size_t live_bytes = 0;
+    };
+
+    struct VramMarker {
+        std::uint64_t id = 0;
+        std::int64_t epoch_ms = 0;
+        int iteration = 0;
+        std::string kind;
+        std::string text;
+        std::size_t bytes = 0;
+        double pause_ms = 0.0;
     };
 
     // Persistent training-state ledger.
@@ -276,8 +287,12 @@ namespace lfs::diagnostics {
         std::vector<NamedCounter> total_counters;
         std::vector<NamedHistogram> histograms;
         std::vector<TopAlloc> top_live;
+        std::vector<VramMarker> markers;
         TrainingStateLedger training_state;
     };
+
+    // Device memory the driver attributes to this process; nullopt where NVML cannot report it.
+    [[nodiscard]] LFS_DIAGNOSTICS_API std::optional<std::size_t> process_device_memory_bytes();
 
     class LFS_DIAGNOSTICS_API VramScope {
     public:
@@ -388,6 +403,8 @@ namespace lfs::diagnostics {
         void setGauge(std::string_view key, double value);
         void addCounter(std::string_view key, std::uint64_t delta, bool per_iteration);
         void recordHistogram(std::string_view key, double value);
+        void mark(std::string_view kind, std::string_view text = {},
+                  std::size_t bytes = 0, double pause_ms = 0.0);
 
         void setPinnedHostMemory(std::size_t active_bytes,
                                  std::size_t cached_bytes,

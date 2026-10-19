@@ -11,6 +11,8 @@ namespace gsplat_lfs {
 
     void launch_spherical_harmonics_swizzled_fwd_kernel(
         uint32_t degrees_to_use,
+        uint32_t layout_degree,
+        uint32_t color_stride,
         const float* dirs,             // [..., 3]
         const float* sh0,              // [N, 1, 3] / [N, 3]
         const float* sh_rest_swizzled, // vksplat swizzled SH-rest storage
@@ -21,6 +23,8 @@ namespace gsplat_lfs {
 
     void launch_spherical_harmonics_swizzled_bwd_kernel(
         uint32_t degrees_to_use,
+        uint32_t layout_degree,
+        uint32_t color_stride,
         const float* dirs,             // [..., 3]
         const float* sh0,              // [N, 1, 3] / [N, 3]
         const float* sh_rest_swizzled, // vksplat swizzled SH-rest storage

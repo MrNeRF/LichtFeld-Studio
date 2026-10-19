@@ -12,6 +12,9 @@ add_subdirectory(rasterization/gsplat)
 set(LFS_TRAINING_KERNEL_SOURCES
     kernels/loss_tensor_contract.cpp
     kernels/camera_loss_heatmap.cu
+    kernels/thin_structure.cu
+    kernels/blob_seeding.cu
+    kernels/gradient_residual.cu
     kernels/ssim.cu
     kernels/l1_loss.cu
     kernels/ssim_reduction.cu
@@ -63,11 +66,11 @@ set_target_properties(lfs_training_kernels PROPERTIES
 # CUDA compiler options for lfs_training_kernels
 target_compile_options(lfs_training_kernels PRIVATE
     # CUDA device code + MSVC host compiler flags (Windows only)
-    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:-O0 -g -lineinfo --extended-lambda --expt-relaxed-constexpr -Xcompiler=/Od -Xcompiler=/Z7 -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS --diag-suppress=27>
-    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr -Xcompiler=/O2 -Xcompiler=/DNDEBUG -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS --diag-suppress=27>
+    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:-O0 -g --extended-lambda --expt-relaxed-constexpr -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS --diag-suppress=27>
+    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr -Xcompiler=/DNDEBUG -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS --diag-suppress=27>
 
     # CUDA device code for non-Windows
-    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Debug>>:-O0 -g -lineinfo --extended-lambda --expt-relaxed-constexpr>
+    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Debug>>:-O0 -g --extended-lambda --expt-relaxed-constexpr>
     $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr>
 )
 
@@ -96,6 +99,7 @@ set(TRAINING_NEW_SOURCES
     strategies/postprocess_compaction.cpp
     strategies/mcmc.cpp
     strategies/mrnf.cpp
+    strategies/blob_seeding.cpp
     strategies/strategy_factory.cpp
     strategies/improved_gs_plus.cpp
     rasterization/fast_rasterizer.cpp
@@ -110,7 +114,12 @@ set(TRAINING_NEW_SOURCES
     components/sparsity_optimizer.cpp
     components/popspa_controller.cpp
     control/command_api.cpp
+    metrics/compare_images.cpp
+    metrics/eval_image_labels.cpp
     metrics/eval_mask.cpp
+    metrics/eval_mask_kernels.cu
+    metrics/flip.cu
+    metrics/mesh_mask_kernels.cu
     metrics/metrics.cpp
         checkpoint.cpp
         project_snapshot_chapters.cpp
@@ -161,6 +170,7 @@ target_link_libraries(lfs_training
         lfs_depth_anchor        # Shared depth-anchor fit + sidecar cache
         lfs_preprocessing       # MoGe-2 normal auto-generate
         lfs_python_utils
+        lfs_rendering           # Mesh2Splat for mesh initialization
 )
 
 # Set C++ standard

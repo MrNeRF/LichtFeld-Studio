@@ -16,14 +16,12 @@ namespace lfs::training {
         const float s0,
         const float s1,
         const float s2,
-        const float median_splat_extent,
-        const float r_min,
-        const float r_max) {
+        const float median_splat_extent) {
         if (!(median_splat_extent > 0.0f)) {
             return 1.0f;
         }
         const float s_i = expf((s0 + s1 + s2) * (1.0f / 3.0f));
-        return fminf(fmaxf(s_i / median_splat_extent, r_min), r_max);
+        return fminf(fmaxf(s_i / median_splat_extent, kPerSplatMeanStepRatioMin), kPerSplatMeanStepRatioMax);
     }
 #endif
 

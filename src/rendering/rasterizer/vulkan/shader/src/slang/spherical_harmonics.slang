@@ -220,7 +220,7 @@ SpherHarmCoeffs read_spherical_harmonics_coeffs_split_q16(
                     decode_shn_q16_cell(load_shn_q16_u16(shN_address, shAtU16(g_idx, base + 1u, n_cells)), lo, hi), \
                     decode_shn_q16_cell(load_shn_q16_u16(shN_address, shAtU16(g_idx, base + 2u, n_cells)), lo, hi)); \
             } \
-        } while (0)
+        } while (false)
 
     // Band 1 (rest 0..2) → coeff1..3
     _SHN_Q16_REST(0, coeff1);

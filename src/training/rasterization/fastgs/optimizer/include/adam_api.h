@@ -52,19 +52,13 @@ namespace fast_lfs::optimizer {
         float bias_correction1_rcp,
         float bias_correction2_sqrt_rcp,
         cudaStream_t stream = nullptr,
-        const float* mean_step_scale_raw = nullptr,
-        int mean_step_scale_n = 0,
-        float mean_step_median_extent = 0.0f,
-        float mean_step_r_min = 1.0f,
-        float mean_step_r_max = 300.0f,
-        const bool* mean_step_far_mask = nullptr,
-        int mean_step_far_mask_n = 0,
         const float* screen_share_max = nullptr,
         int screen_share_n = 0,
         float screen_share_limit = 0.0f,
         float screen_share_penalty = 0.0f);
 
-    // One launch over a device table of contiguous joint params (means/sh0/scale/rot/opa).
+    // One launch over a fixed-size value batch of contiguous joint params
+    // (means/sh0/scale/rot/opa).
     void adam_step_joint_contiguous_batched(
         const JointContiguousBatchEntry* host_entries,
         int n_entries,
@@ -81,8 +75,6 @@ namespace fast_lfs::optimizer {
         const float* mean_step_scale_raw = nullptr,
         int mean_step_scale_n = 0,
         float mean_step_median_extent = 0.0f,
-        float mean_step_r_min = 1.0f,
-        float mean_step_r_max = 300.0f,
         const bool* mean_step_far_mask = nullptr,
         int mean_step_far_mask_n = 0,
         const float* screen_share_max = nullptr,

@@ -47,7 +47,7 @@ namespace {
     size_t decoupled_bytes(const DecoupledFusedL1SSIMWorkspace& w) {
         return tensor_bytes(w.ssim_map) + tensor_bytes(w.app_dm_dmu1) + tensor_bytes(w.raw_dm_dmu1) +
                tensor_bytes(w.raw_dm_dsigma1_sq) + tensor_bytes(w.raw_dm_dsigma12) +
-               tensor_bytes(w.grad_corrected) + tensor_bytes(w.grad_raw) +
+               tensor_bytes(w.grad_corrected) +
                tensor_bytes(w.reduction_temp) + tensor_bytes(w.reduction_result);
     }
 
@@ -60,7 +60,7 @@ namespace {
     size_t masked_decoupled_bytes(const MaskedDecoupledFusedL1SSIMWorkspace& w) {
         return tensor_bytes(w.ssim_map) + tensor_bytes(w.app_dm_dmu1) + tensor_bytes(w.raw_dm_dmu1) +
                tensor_bytes(w.raw_dm_dsigma1_sq) + tensor_bytes(w.raw_dm_dsigma12) +
-               tensor_bytes(w.grad_corrected) + tensor_bytes(w.grad_raw) +
+               tensor_bytes(w.grad_corrected) +
                tensor_bytes(w.reduction_temp) + tensor_bytes(w.masked_loss) + tensor_bytes(w.mask_sum);
     }
 
@@ -73,6 +73,21 @@ namespace {
                                         const size_t required) {
         EXPECT_EQ(arena.required_bytes(), required);
         EXPECT_EQ(arena.allocated_bytes(), align_arena_bytes(required));
+    }
+
+    // Corrected-image gradient plus the raw-render gradient, as the trainer adds them into the render gradient.
+    template <typename Context>
+    Tensor combined_gradient(const DecoupledGradients& grads, const Context& ctx) {
+        auto combined = grads.grad_corrected.clone();
+        accumulate_decoupled_raw_gradient(decoupled_raw_gradient(ctx), combined);
+        return combined;
+    }
+
+    template <typename Context>
+    Tensor raw_gradient(const DecoupledGradients& grads, const Context& ctx) {
+        auto raw = Tensor::zeros(grads.grad_corrected.shape(), Device::CUDA);
+        accumulate_decoupled_raw_gradient(decoupled_raw_gradient(ctx), raw);
+        return raw;
     }
 
 } // namespace
@@ -289,12 +304,12 @@ TEST_F(LossWorkspaceUnionTest, ZeroTermsDeletedAndDecoupledGradsStable) {
     ws.ensure_size(shape);
     const size_t live = decoupled_bytes(ws);
     const size_t image_f32 = static_cast<size_t>(N * C * H * W) * sizeof(float);
-    // Reference fields: ssim_map(C1) + 4 dm + zero_terms + 2 grad + reduce
-    // Current: map + four partials + two gradients + reduction.
+    // Reference fields: ssim_map(C1) + 4 dm + zero_terms + 1 grad + reduce
+    // Current: map + four partials + one gradient + reduction.
     const size_t map_bytes = static_cast<size_t>(N * 1 * H * W) * sizeof(float);
     const size_t reduce = 1024 * sizeof(float) + sizeof(float);
-    const size_t pre_6d2 = map_bytes + 7 * image_f32 + reduce;
-    const size_t post_6d2 = map_bytes + 6 * image_f32 + reduce;
+    const size_t pre_6d2 = map_bytes + 6 * image_f32 + reduce;
+    const size_t post_6d2 = map_bytes + 5 * image_f32 + reduce;
     EXPECT_LE(live, post_6d2 + 4096);
     EXPECT_LT(live, pre_6d2);
     EXPECT_GE(pre_6d2 - live, image_f32 - 4096)
@@ -319,8 +334,8 @@ TEST_F(LossWorkspaceUnionTest, ZeroTermsDeletedAndDecoupledGradsStable) {
 
     auto ga = grads_a.grad_corrected.cpu().contiguous();
     auto gb = grads_b.grad_corrected.cpu().contiguous();
-    auto ra = grads_a.grad_raw.cpu().contiguous();
-    auto rb = grads_b.grad_raw.cpu().contiguous();
+    auto ra = raw_gradient(grads_a, ctx_a).cpu().contiguous();
+    auto rb = raw_gradient(grads_b, ctx_b).cpu().contiguous();
     double max_c = 0, max_r = 0;
     for (size_t i = 0; i < ga.numel(); ++i) {
         max_c = std::max(max_c, static_cast<double>(std::abs(ga.ptr<float>()[i] - gb.ptr<float>()[i])));
@@ -339,8 +354,8 @@ TEST_F(LossWorkspaceUnionTest, ZeroTermsDeletedAndDecoupledGradsStable) {
     auto dgrads = decoupled_fused_l1_ssim_backward(dctx, dec);
 
     EXPECT_NEAR(floss.item<float>(), dloss.item<float>(), 1e-4f);
-    // Combined appearance path: grad_corrected + grad_raw ≈ fused grad when raw==corrected.
-    auto combined = (dgrads.grad_corrected + dgrads.grad_raw).cpu().contiguous();
+    // Combined appearance path: corrected plus raw gradient ≈ fused grad when raw==corrected.
+    auto combined = combined_gradient(dgrads, dctx).cpu().contiguous();
     auto fcpu = fgrad.cpu().contiguous();
     double max_combo = 0;
     for (size_t i = 0; i < fcpu.numel(); ++i) {
@@ -380,11 +395,11 @@ TEST_F(LossWorkspaceUnionTest, Fp16PartialsWorkspaceBytesAndGradEquiv) {
     EXPECT_EQ(dec_ws.raw_dm_dmu1.dtype(), DataType::Float16);
     EXPECT_EQ(dec_ws.raw_dm_dsigma1_sq.dtype(), DataType::Float16);
     EXPECT_EQ(dec_ws.raw_dm_dsigma12.dtype(), DataType::Float16);
-    // Reference: map, four fp32 partials, two fp32 gradients, and reduction.
-    // Current: map + four fp16 partials + two fp32 gradients + reduction.
+    // Reference: map, four fp32 partials, one fp32 gradient, and reduction.
+    // Current: map + four fp16 partials + one fp32 gradient + reduction.
     const size_t reduce = 1024 * sizeof(float) + sizeof(float);
-    const size_t dec_pre = map_bytes + 4 * image_f32 + 2 * image_f32 + reduce;
-    const size_t dec_post = map_bytes + 4 * image_f16 + 2 * image_f32 + reduce;
+    const size_t dec_pre = map_bytes + 4 * image_f32 + image_f32 + reduce;
+    const size_t dec_post = map_bytes + 4 * image_f16 + image_f32 + reduce;
     EXPECT_LE(decoupled_bytes(dec_ws), dec_post + 4096);
     EXPECT_LT(decoupled_bytes(dec_ws), dec_pre);
     EXPECT_GE(dec_pre - decoupled_bytes(dec_ws), 4 * image_f16 - 4096);
@@ -406,10 +421,15 @@ TEST_F(LossWorkspaceUnionTest, Fp16PartialsWorkspaceBytesAndGradEquiv) {
     EXPECT_EQ(mdec_ws.raw_dm_dmu1.dtype(), DataType::Float16);
     EXPECT_EQ(mdec_ws.raw_dm_dsigma1_sq.dtype(), DataType::Float16);
     EXPECT_EQ(mdec_ws.raw_dm_dsigma12.dtype(), DataType::Float16);
-    const size_t mdec_pre = map_bytes + 4 * image_f32 + 2 * image_f32 + mask_reduce;
-    const size_t mdec_post = map_bytes + 4 * image_f16 + 2 * image_f32 + mask_reduce;
+    const size_t mdec_pre = map_bytes + 4 * image_f32 + image_f32 + mask_reduce;
+    const size_t mdec_post = map_bytes + 4 * image_f16 + image_f32 + mask_reduce;
     EXPECT_LE(masked_decoupled_bytes(mdec_ws), mdec_post + 4096);
     EXPECT_LT(masked_decoupled_bytes(mdec_ws), mdec_pre);
+
+    // The arena layouts hold the same fields, each padded to the 256-byte arena alignment.
+    constexpr size_t field_padding = 10 * 256;
+    EXPECT_LE(LossWorkspaceArena::decoupled_layout_bytes(shape), dec_post + field_padding);
+    EXPECT_LE(LossWorkspaceArena::masked_decoupled_layout_bytes(shape), mdec_post + field_padding);
 
     // The arena maximum must reflect the compact layouts.
     const size_t arena_max = LossWorkspaceArena::max_variant_bytes(shape);
@@ -429,7 +449,7 @@ TEST_F(LossWorkspaceUnionTest, Fp16PartialsWorkspaceBytesAndGradEquiv) {
     auto [dloss, dctx] = decoupled_fused_l1_ssim_forward(img1, img1, img2, ssim_weight, dec, true);
     auto dgrads = decoupled_fused_l1_ssim_backward(dctx, dec);
     EXPECT_NEAR(floss.item<float>(), dloss.item<float>(), 1e-4f);
-    auto dcombo = (dgrads.grad_corrected + dgrads.grad_raw).cpu().contiguous();
+    auto dcombo = combined_gradient(dgrads, dctx).cpu().contiguous();
     double max_dec = 0;
     for (size_t i = 0; i < fgrad.numel(); ++i) {
         max_dec = std::max(max_dec,

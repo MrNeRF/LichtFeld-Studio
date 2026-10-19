@@ -31,6 +31,8 @@ class Action(enum.Enum):
 
     CAMERA_SET_HOME = 11
 
+    CAMERA_RESTORE_HOME = 91
+
     CAMERA_FOCUS_SELECTION = 12
 
     CAMERA_SET_PIVOT = 13
@@ -172,6 +174,14 @@ class Action(enum.Enum):
     TOGGLE_SCENE_SELECTION_TRAINING = 84
 
     GROUP_SELECTED_SCENE_NODES = 85
+
+    ASSET_GALLERY_PRIMARY = 87
+
+    ASSET_GALLERY_COPY_LINK = 88
+
+    ASSET_REFRESH = 89
+
+    TOGGLE_PYTHON_CONSOLE = 90
 
     UNGROUP_SELECTED_SCENE_NODE = 86
 
@@ -335,6 +345,9 @@ def is_capturing() -> bool:
 
 def is_waiting_for_double_click() -> bool:
     """Check if waiting for potential double-click"""
+
+def take_altgr_capture_rejection() -> bool:
+    """Return and clear an unsupported AltGr capture notice"""
 
 def get_captured_trigger() -> object:
     """Get captured trigger (clears it), returns None if nothing captured"""

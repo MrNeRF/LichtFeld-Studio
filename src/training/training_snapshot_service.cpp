@@ -4,6 +4,7 @@
  */
 
 #include "training_snapshot_service.hpp"
+#include "core/native_fs.hpp"
 
 #include "checkpoint.hpp"
 #include "core/cuda/sh_layout.cuh"
@@ -15,6 +16,7 @@
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_serialization_sink.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "lfs/cuda_scratch.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "strategies/istrategy.hpp"
@@ -45,7 +47,9 @@
 #include <utility>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #endif
 
@@ -139,7 +143,7 @@ namespace lfs::training {
 
         std::uint64_t read_rss_bytes() {
 #if defined(__linux__)
-            std::ifstream input("/proc/self/status");
+            std::ifstream input(lfs::core::native_fs::native_path("/proc/self/status"));
             std::string line;
             while (std::getline(input, line)) {
                 if (!line.starts_with("VmRSS:")) {
@@ -176,7 +180,7 @@ namespace lfs::training {
                 };
             }
 #elif defined(__linux__)
-            std::ifstream input("/proc/meminfo");
+            std::ifstream input(lfs::core::native_fs::native_path("/proc/meminfo"));
             std::string line;
             while (std::getline(input, line)) {
                 unsigned long long kib = 0;
@@ -778,6 +782,7 @@ namespace lfs::training {
             }
             ensure_device_scratch();
             calibrate_once(layout, mutating_streams);
+            device_scratch.reset();
             if (slots.empty()) {
                 slots.resize(config.ring_slots);
                 for (auto& slot : slots) {
@@ -1345,37 +1350,29 @@ namespace lfs::training {
                 record = capture->error.empty();
             }
             capture->drained_condition.notify_all();
-            double pause_p95_ms = 0.0;
-            std::size_t p95_n = 0;
-            {
-                std::scoped_lock lock(metrics_mutex);
-                active_capture = false;
-                if (record) {
-                    ++aggregate.completed_snapshots;
-                    aggregate.last = completed;
-                    pause_samples.push_back(
-                        completed.pause_ms);
-                    aggregate.pause_p95_ms =
-                        percentile_95(
-                            pause_samples);
-                    aggregate.p95_n =
-                        pause_samples.size();
-                    pause_p95_ms =
-                        aggregate.pause_p95_ms;
-                    p95_n = aggregate.p95_n;
-                }
-            }
+            std::scoped_lock lock(metrics_mutex);
+            active_capture = false;
             if (record) {
-                LOG_INFO(
-                    "Training snapshot pause metric: "
-                    "p95={:.3f}ms p95_n={}",
-                    pause_p95_ms, p95_n);
+                ++aggregate.completed_snapshots;
+                aggregate.last = completed;
+                pause_samples.push_back(
+                    completed.pause_ms);
+                aggregate.pause_p95_ms =
+                    percentile_95(
+                        pause_samples);
+                aggregate.p95_n =
+                    pause_samples.size();
             }
         }
 
         void shutdown() {
             if (drain_thread.joinable()) {
-                drain_thread.request_stop();
+                {
+                    // Under the mutex, so the drain thread between its predicate check and
+                    // its wait cannot miss the stop and sleep through the notify.
+                    std::scoped_lock lock(ring_mutex);
+                    drain_thread.request_stop();
+                }
                 ring_condition.notify_all();
                 drain_thread.join();
             }
@@ -1955,17 +1952,6 @@ namespace lfs::training {
                     impl_->config.ring_slots *
                     impl_->config.band_bytes;
             }
-            LOG_INFO(
-                "Training snapshot service initialized off the save path: "
-                "init={:.3f}ms pinned={} bytes raw_pinned_D2H={:.3f}GiB/s "
-                "mutating_streams={}",
-                impl_->initialization_ms,
-                impl_->config.ring_slots *
-                    impl_->config.band_bytes,
-                impl_->measured_bandwidth /
-                    static_cast<double>(
-                        1024ull * 1024 * 1024),
-                request.mutating_streams.size());
             return {};
         } catch (const std::exception& error) {
             // LFS-CENSUS-OK(empty-catch): normalize the exception into a typed snapshot error.
@@ -2036,8 +2022,6 @@ namespace lfs::training {
 
             prepared->baseline_rss_bytes =
                 read_rss_bytes();
-            impl_->ensure_device_scratch();
-
             if (prepared->checkpoint_bytes >
                 std::numeric_limits<std::size_t>::max()) {
                 return snapshot_error(
@@ -2045,7 +2029,7 @@ namespace lfs::training {
                     "Checkpoint staging exceeds address space",
                     LFS_SOURCE_SITE_CURRENT());
             }
-            const auto host_memory =
+            auto host_memory =
                 read_host_memory_info();
             const auto reserve_bytes =
                 request.relaxed_host_memory_gate
@@ -2063,6 +2047,15 @@ namespace lfs::training {
             }
             const auto required_host_memory =
                 prepared->checkpoint_bytes + reserve_bytes;
+            if (request.release_host_memory &&
+                host_memory.available_bytes > 0 &&
+                host_memory.available_bytes <
+                    required_host_memory &&
+                request.release_host_memory(
+                    required_host_memory -
+                    host_memory.available_bytes) > 0) {
+                host_memory = read_host_memory_info();
+            }
             if (host_memory.available_bytes == 0 ||
                 host_memory.available_bytes <
                     required_host_memory) {
@@ -2238,6 +2231,7 @@ namespace lfs::training {
                     "synchronize snapshot mutating stream");
             }
             const auto sync_end = Clock::now();
+            impl_->ensure_device_scratch();
 
             if (request.capture_additional_cpu_state) {
                 auto captured =
@@ -2325,6 +2319,7 @@ namespace lfs::training {
                     cudaEventSynchronize(last_event),
                     "wait for last snapshot D2H");
             }
+            impl_->device_scratch.reset();
             const auto pause_end = Clock::now();
             const auto capture_rss = read_rss_bytes();
             if (capture_rss >=
@@ -2368,6 +2363,7 @@ namespace lfs::training {
                 Milliseconds(
                     pause_end - pause_begin)
                     .count();
+            lfs::diagnostics::VramProfiler::instance().mark("training_snapshot", {}, pending->metrics.device_snapshot_bytes, pending->metrics.pause_ms);
             pending->metrics.cold_path_ms =
                 pending->metrics.pause_ms +
                 (pending->metrics.cold_first_snapshot
@@ -2385,63 +2381,6 @@ namespace lfs::training {
             pending->pause_end = pause_end;
             lfs::core::Tensor::trim_memory_pool();
 
-            LOG_INFO(
-                "Training snapshot {} iter {}: "
-                "bytes={} device_bytes={} pause={:.3f}ms "
-                "prepare_stall={:.3f}ms cold_path={:.3f}ms "
-                "cold_first={} "
-                "(safe_entry={:.3f} sync={:.3f} cpu_state={:.3f} "
-                "serialize+issue={:.3f} "
-                "last_d2h_wait={:.3f}) gate={:.3f}ms "
-                "raw_pinned_D2H={:.3f}GiB/s pause={} cold_path={} "
-                "host_delta={} host_gate={}",
-                pending->metrics.snapshot_uuid
-                    .to_string(),
-                request.iteration,
-                pending->metrics.checkpoint_bytes,
-                pending->metrics
-                    .device_snapshot_bytes,
-                pending->metrics.pause_ms,
-                pending->metrics.prepare_stall_ms,
-                pending->metrics.cold_path_ms,
-                pending->metrics.cold_first_snapshot,
-                pending->metrics
-                    .safe_point_entry_ms,
-                pending->metrics.stream_sync_ms,
-                pending->metrics
-                    .additional_cpu_state_ms,
-                pending->metrics
-                    .serialize_and_issue_ms,
-                pending->metrics
-                    .last_d2h_wait_ms,
-                pending->metrics.rig_gate_ms,
-                pending->metrics
-                        .measured_pinned_d2h_bytes_per_second /
-                    static_cast<double>(
-                        1024ull * 1024 * 1024),
-                pending->metrics
-                        .pause_within_rig_gate
-                    ? "PASS"
-                    : "FAIL",
-                pending->metrics
-                        .cold_path_within_rig_gate
-                    ? "PASS"
-                    : "FAIL",
-                pending->metrics.host_rss_delta_bytes,
-                pending->metrics.host_ram_within_gate
-                    ? "PASS"
-                    : "FAIL");
-            LOG_INFO(
-                "Training snapshot {} CPU value capture in safe point: "
-                "SCNG={:.3f}ms SELM={:.3f}ms PRMS={:.3f}ms total={:.3f}ms",
-                pending->metrics.snapshot_uuid
-                    .to_string(),
-                pending->metrics.scng_ms,
-                pending->metrics.selm_ms,
-                pending->metrics.prms_ms,
-                pending->metrics
-                    .additional_cpu_state_ms);
-
             impl_->mark_issuing_complete(pending);
             prepared.impl_.reset();
             return PendingTrainingSnapshot(
@@ -2452,6 +2391,7 @@ namespace lfs::training {
                     impl_->d2h_stream),
                 impl_->d2h_stream,
                 "failed training snapshot capture drain");
+            impl_->device_scratch.reset();
             pending->pause_end = Clock::now();
             {
                 std::scoped_lock lock(pending->mutex);

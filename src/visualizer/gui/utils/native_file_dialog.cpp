@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/utils/native_file_dialog.hpp"
+#include "core/native_fs.hpp"
+#include "gui/utils/file_dialog_path.hpp"
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -13,6 +15,7 @@
 #include <SDL3/SDL_video.h>
 #include <nfd.h>
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -29,6 +32,9 @@
 namespace lfs::vis::gui {
 
     namespace {
+
+        std::atomic_uint native_dialog_block_count{0};
+        thread_local bool native_dialog_block_attempted = false;
 
         enum class DialogKind : uint8_t {
             OpenFile,
@@ -159,34 +165,10 @@ namespace lfs::vis::gui {
             return extension;
         }
 
-        [[nodiscard]] std::string ensureDefaultExtension(std::string defaultName,
-                                                         const std::string_view extension) {
-            const std::filesystem::path normalizedPath =
-                defaultName.empty() ? std::filesystem::path{}
-                                    : lfs::core::utf8_to_path(defaultName).filename();
-            const std::string normalizedName =
-                normalizedPath.empty() ? std::string{} : lfs::core::path_to_utf8(normalizedPath);
-            if (normalizedName.empty() || extension.empty() ||
-                normalizedPath.extension() == extension) {
-                return normalizedName;
-            }
-            return normalizedName + std::string(extension);
-        }
-
-        [[nodiscard]] std::filesystem::path appendRequiredExtension(
-            std::filesystem::path path,
-            const std::string_view extension) {
-            if (path.empty() || extension.empty() || path.extension() == extension) {
-                return path;
-            }
-            path += std::string(extension);
-            return path;
-        }
-
         [[nodiscard]] std::filesystem::path absoluteDialogDirectory(
             const std::filesystem::path& directory) {
             std::error_code ec;
-            auto canonical = std::filesystem::weakly_canonical(directory, ec);
+            auto canonical = lfs::core::native_fs::weakly_canonical(directory, ec);
             if (!ec && !canonical.empty()) {
                 return canonical;
             }
@@ -207,16 +189,16 @@ namespace lfs::vis::gui {
             }
 
             std::error_code ec;
-            if (std::filesystem::exists(inputPath, ec)) {
-                if (std::filesystem::is_directory(inputPath, ec)) {
+            if (lfs::core::native_fs::exists(inputPath, ec)) {
+                if (lfs::core::native_fs::is_directory(inputPath, ec)) {
                     return absoluteDialogDirectory(inputPath);
                 }
                 return absoluteDialogDirectory(inputPath.parent_path());
             }
 
             const std::filesystem::path parent = inputPath.parent_path();
-            if (!parent.empty() && std::filesystem::exists(parent, ec) &&
-                std::filesystem::is_directory(parent, ec)) {
+            if (!parent.empty() && lfs::core::native_fs::exists(parent, ec) &&
+                lfs::core::native_fs::is_directory(parent, ec)) {
                 return absoluteDialogDirectory(parent);
             }
             return {};
@@ -357,6 +339,11 @@ namespace lfs::vis::gui {
 
         bool runDialog(const DialogRequest& request, std::filesystem::path& resultPath) {
             resultPath.clear();
+            if (nativeFileDialogsBlocked()) {
+                native_dialog_block_attempted = true;
+                LOG_WARN("Native file dialog request blocked during an MCP GUI operation");
+                return false;
+            }
             if (!ensureDialogBackendInitialized()) {
                 return false;
             }
@@ -384,7 +371,7 @@ namespace lfs::vis::gui {
                 dialogResult = NFD_OpenDialogU8_With(&selectedPath, &args);
             } else if (request.kind == DialogKind::SaveFile) {
                 const std::string defaultName =
-                    ensureDefaultExtension(request.default_name, request.required_extension);
+                    detail::saveDialogDefaultName(request.default_name, request.required_extension);
                 const char* const defaultNameArg =
                     defaultName.empty() ? nullptr : defaultName.c_str();
                 const nfdsavedialogu8args_t args{
@@ -424,8 +411,61 @@ namespace lfs::vis::gui {
 
             resultPath = lfs::core::utf8_to_path(selectedPath);
             NFD_FreePathU8(selectedPath);
-            resultPath = appendRequiredExtension(resultPath, request.required_extension);
+            resultPath = detail::appendRequiredExtension(resultPath, request.required_extension);
             return !resultPath.empty();
+        }
+
+        bool runMultiOpenDialog(const DialogRequest& request,
+                                std::vector<std::filesystem::path>& result_paths) {
+            result_paths.clear();
+            if (nativeFileDialogsBlocked()) {
+                native_dialog_block_attempted = true;
+                LOG_WARN("Native file dialog request blocked during an MCP GUI operation");
+                return false;
+            }
+            if (!ensureDialogBackendInitialized())
+                return false;
+
+            const FilterListStorage filters(request.filters);
+            const std::filesystem::path default_directory = normalizeDefaultDirectory(request.default_path);
+            const std::string default_directory_utf8 =
+                default_directory.empty() ? std::string{} : lfs::core::path_to_utf8(default_directory);
+            const nfdopendialogu8args_t args{
+                filters.data(),
+                filters.size(),
+                default_directory_utf8.empty() ? nullptr : default_directory_utf8.c_str(),
+                currentParentWindowHandle(),
+            };
+            const nfdpathset_t* selected_paths = nullptr;
+            NFD_ClearError();
+            const nfdresult_t result = NFD_OpenDialogMultipleU8_With(&selected_paths, &args);
+            if (result == NFD_CANCEL) {
+                NFD_ClearError();
+                return false;
+            }
+            if (result != NFD_OKAY) {
+                const char* const error = NFD_GetError();
+                LOG_ERROR("Native multi-file dialog failed: {}", error ? error : "unknown error");
+                NFD_ClearError();
+                return false;
+            }
+
+            nfdpathsetsize_t count = 0;
+            if (NFD_PathSet_GetCount(selected_paths, &count) != NFD_OKAY) {
+                NFD_PathSet_Free(selected_paths);
+                LOG_ERROR("Native multi-file dialog returned an unreadable path set");
+                return false;
+            }
+            result_paths.reserve(static_cast<size_t>(count));
+            for (nfdpathsetsize_t i = 0; i < count; ++i) {
+                nfdu8char_t* path = nullptr;
+                if (NFD_PathSet_GetPathU8(selected_paths, i, &path) == NFD_OKAY && path != nullptr) {
+                    result_paths.push_back(lfs::core::utf8_to_path(path));
+                    NFD_PathSet_FreePathU8(path);
+                }
+            }
+            NFD_PathSet_Free(selected_paths);
+            return !result_paths.empty();
         }
 
         [[nodiscard]] std::vector<DialogFilter> imageFilters() {
@@ -438,12 +478,18 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] std::vector<DialogFilter> pointCloudFilters() {
-            return {makeFilter("Point Cloud Files", {".ply", ".sog", ".ssog", ".spz", ".rad", ".usd", ".usda", ".usdc", ".usdz"})};
+            return {makeFilter("Point Cloud Files", {".ply", ".sog", ".ssog", ".spz", ".glb", ".rad", ".usd", ".usda", ".usdc", ".usdz"})};
         }
 
         [[nodiscard]] std::vector<DialogFilter> meshFilters() {
             return {makeFilter("3D Mesh Files",
                                {".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".ply"})};
+        }
+
+        [[nodiscard]] std::vector<DialogFilter> initFilters() {
+            return {makeFilter("Splat, Point Cloud and Mesh Files",
+                               {".ply", ".sog", ".ssog", ".spz", ".glb", ".rad", ".usd", ".usda", ".usdc", ".usdz",
+                                ".obj", ".fbx", ".gltf", ".stl", ".dae", ".3ds"})};
         }
 
         [[nodiscard]] std::vector<DialogFilter> checkpointFilters() {
@@ -509,6 +555,11 @@ namespace lfs::vis::gui {
             const char* title,
             const GtkFileChooserAction action,
             const bool returnCurrentFolder) {
+            if (nativeFileDialogsBlocked()) {
+                native_dialog_block_attempted = true;
+                LOG_WARN("Native file dialog request blocked during an MCP GUI operation");
+                return {};
+            }
             if (!ensureDialogBackendInitialized()) {
                 return {};
             }
@@ -569,6 +620,20 @@ namespace lfs::vis::gui {
         (void)ensureDialogBackendInitialized();
     }
 
+    ScopedNativeFileDialogBlock::ScopedNativeFileDialogBlock() noexcept {
+        if (native_dialog_block_count.fetch_add(1, std::memory_order_acq_rel) == 0)
+            native_dialog_block_attempted = false;
+    }
+    ScopedNativeFileDialogBlock::~ScopedNativeFileDialogBlock() {
+        native_dialog_block_count.fetch_sub(1, std::memory_order_acq_rel);
+    }
+    bool nativeFileDialogsBlocked() noexcept {
+        return native_dialog_block_count.load(std::memory_order_acquire) != 0;
+    }
+    bool nativeFileDialogAttempted() noexcept {
+        return native_dialog_block_attempted;
+    }
+
     std::filesystem::path OpenImageFileDialog(const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
         runDialog(makeOpenFileRequest(imageFilters(), defaultPath), result);
@@ -624,6 +689,12 @@ namespace lfs::vis::gui {
     std::filesystem::path OpenMeshFileDialog(const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
         runDialog(makeOpenFileRequest(meshFilters(), defaultPath), result);
+        return result;
+    }
+
+    std::filesystem::path OpenInitFileDialog(const std::filesystem::path& defaultPath) {
+        std::filesystem::path result;
+        runDialog(makeOpenFileRequest(initFilters(), defaultPath), result);
         return result;
     }
 
@@ -708,6 +779,12 @@ namespace lfs::vis::gui {
     std::filesystem::path OpenVideoFileDialog(const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
         runDialog(makeOpenFileRequest(videoFilters(), defaultPath), result);
+        return result;
+    }
+
+    std::vector<std::filesystem::path> OpenVideoFilesDialog(const std::filesystem::path& defaultPath) {
+        std::vector<std::filesystem::path> result;
+        runMultiOpenDialog(makeOpenFileRequest(videoFilters(), defaultPath), result);
         return result;
     }
 
@@ -796,6 +873,17 @@ namespace lfs::vis::gui {
                                       defaultPath,
                                       defaultName,
                                       ".spz"),
+                  result);
+        return result;
+    }
+
+    std::filesystem::path SaveGlbFileDialog(const std::string& defaultName,
+                                            const std::filesystem::path& defaultPath) {
+        std::filesystem::path result;
+        runDialog(makeSaveFileRequest(singleExtensionFilter("GLB Files", ".glb"),
+                                      defaultPath,
+                                      defaultName,
+                                      ".glb"),
                   result);
         return result;
     }

@@ -16,6 +16,7 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -51,6 +52,11 @@ namespace lfs::vis::op {
     class LFS_VIS_API HistoryCorruptionError : public std::runtime_error {
     public:
         using std::runtime_error::runtime_error;
+    };
+
+    class LFS_VIS_API HistoryStaleEntryError : public HistoryCorruptionError {
+    public:
+        using HistoryCorruptionError::HistoryCorruptionError;
     };
 
     struct SceneTopologyNodeProof {
@@ -436,7 +442,7 @@ namespace lfs::vis::op {
         bool scoped_topology = false;
         // A missing allowlist preserves the legacy FULL capture behavior. An
         // engaged allowlist captures payloads only for these node UUIDs.
-        std::optional<std::vector<lfs::core::Uuid>> payload_uuids;
+        std::optional<std::vector<lfs::core::Uuid>> payload_uuids = std::nullopt;
     };
 
     struct SceneGraphCameraSnapshot {
@@ -482,6 +488,8 @@ namespace lfs::vis::op {
         bool locked = false;
         bool training_enabled = true;
         bool payload_diverged = false;
+        lfs::core::PayloadHydrationState payload_hydration =
+            lfs::core::PayloadHydrationState::NotApplicable;
         size_t gaussian_count = 0;
         glm::vec3 centroid{0.0f};
         int order_index = -1;
@@ -536,6 +544,11 @@ namespace lfs::vis::op {
         SceneGraphNodeMetadataSnapshot after;
     };
 
+    struct PendingHydratedPayload {
+        bool payload_diverged = false;
+        const void* storage_identity = nullptr;
+    };
+
     class LFS_VIS_API SceneGraphMetadataEntry : public UndoEntry {
     public:
         static std::vector<SceneGraphNodeMetadataSnapshot> captureNodes(const SceneManager& scene,
@@ -586,6 +599,7 @@ namespace lfs::vis::op {
         void offloadToCPU() override;
         void restoreToPreferredDevice() override;
         [[nodiscard]] DirtyMask dirtyFlags() const override;
+        void bindHydratedPayloadStorage(std::span<const lfs::core::Uuid> node_uuids);
 
     private:
         void applyState(const SceneGraphStateSnapshot& desired,
@@ -596,6 +610,7 @@ namespace lfs::vis::op {
         SceneGraphStateSnapshot before_;
         SceneGraphStateSnapshot after_;
         SceneTopologyProof expected_topology_;
+        std::unordered_map<lfs::core::Uuid, PendingHydratedPayload> pending_hydration_nodes_;
     };
 
 } // namespace lfs::vis::op

@@ -8,13 +8,16 @@
 #include "core/export.hpp"
 #include "io/project_chapters.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lfs::core {
@@ -79,11 +82,14 @@ namespace lfs::vis {
     struct RuntimeServiceControls {
         std::function<bool()> toggle_mcp_enabled;
         std::function<bool()> toggle_mcp_binding;
+        std::optional<int> mcp_port_override;
     };
 
     LFS_VIS_API void setRuntimeServiceControls(RuntimeServiceControls controls);
     LFS_VIS_API bool toggleMcpRuntimeEnabled();
     LFS_VIS_API bool toggleMcpRuntimeBinding();
+    // Port from the command line; it wins over the saved preference for this session.
+    [[nodiscard]] LFS_VIS_API std::optional<int> mcpPortOverride();
     [[nodiscard]] LFS_VIS_API std::uint64_t runtimeServiceRevision();
 
     struct LFS_VIS_API ProjectPayloadInfo {
@@ -111,6 +117,17 @@ namespace lfs::vis {
         std::optional<std::filesystem::path> path;
         std::string error;
         std::optional<lfs::ErrorCode> error_code;
+    };
+
+    // Lightweight snapshot for persistent application chrome. Unlike
+    // ProjectInfo, this deliberately avoids payload and storage inspection so
+    // it is safe to refresh while the window is interactive.
+    struct LFS_VIS_API ProjectDisplayInfo {
+        std::optional<std::filesystem::path> path;
+        std::optional<std::string> title;
+        bool dirty = false;
+
+        friend bool operator==(const ProjectDisplayInfo&, const ProjectDisplayInfo&) = default;
     };
 
     struct LFS_VIS_API ProjectInfo {
@@ -236,12 +253,29 @@ namespace lfs::vis {
         projectHasPath() = 0;
         virtual lfs::Result<ProjectInfo>
         projectGetInfo() = 0;
+        virtual void projectMarkSessionChapterCommitted(std::string_view chapter) {
+            static_cast<void>(chapter);
+        }
+        [[nodiscard]] virtual bool projectSessionRestoreInProgress() const {
+            return false;
+        }
+        virtual ProjectDisplayInfo projectGetDisplayInfo() { return {}; }
         virtual lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
         projectGetLicense() = 0;
         virtual lfs::Result<void>
         projectSetLicense(const lfs::io::project::ProjectLicense& license) = 0;
         virtual lfs::Result<void>
         projectClearLicense() = 0;
+        virtual lfs::Result<void>
+        projectSetPreview(
+            std::span<const std::byte> png_bytes,
+            const std::filesystem::path& expected_path = {},
+            std::string expected_project_uuid = {}) {
+            static_cast<void>(png_bytes);
+            static_cast<void>(expected_path);
+            static_cast<void>(expected_project_uuid);
+            return {};
+        }
         virtual lfs::Result<ProjectWritePoll>
         projectPollWrite() {
             return ProjectWritePoll{};

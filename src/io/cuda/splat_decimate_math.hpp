@@ -32,21 +32,21 @@ namespace lfs::io::decimate {
         x *= inv;
         y *= inv;
         z *= inv;
-        r[0] = 1 - 2 * (y * y + z * z);
-        r[1] = 2 * (x * y - w * z);
-        r[2] = 2 * (x * z + w * y);
-        r[3] = 2 * (x * y + w * z);
-        r[4] = 1 - 2 * (x * x + z * z);
-        r[5] = 2 * (y * z - w * x);
-        r[6] = 2 * (x * z - w * y);
-        r[7] = 2 * (y * z + w * x);
-        r[8] = 1 - 2 * (x * x + y * y);
+        r[0] = static_cast<T>(1 - 2 * (y * y + z * z));
+        r[1] = static_cast<T>(2 * (x * y - w * z));
+        r[2] = static_cast<T>(2 * (x * z + w * y));
+        r[3] = static_cast<T>(2 * (x * y + w * z));
+        r[4] = static_cast<T>(1 - 2 * (x * x + z * z));
+        r[5] = static_cast<T>(2 * (y * z - w * x));
+        r[6] = static_cast<T>(2 * (x * z - w * y));
+        r[7] = static_cast<T>(2 * (y * z + w * x));
+        r[8] = static_cast<T>(1 - 2 * (x * x + y * y));
     }
     template <class R, class S>
     DEC_HD inline void covariance(const R* r, const double* v, S* s) {
         for (int a = 0; a < 3; ++a)
             for (int b = a; b < 3; ++b) {
-                s[a * 3 + b] = double(r[a * 3]) * r[b * 3] * v[0] + double(r[a * 3 + 1]) * r[b * 3 + 1] * v[1] + double(r[a * 3 + 2]) * r[b * 3 + 2] * v[2];
+                s[a * 3 + b] = static_cast<S>(double(r[a * 3]) * r[b * 3] * v[0] + double(r[a * 3 + 1]) * r[b * 3 + 1] * v[1] + double(r[a * 3 + 2]) * r[b * 3 + 2] * v[2]);
                 s[b * 3 + a] = s[a * 3 + b];
             }
     }
@@ -61,12 +61,12 @@ namespace lfs::io::decimate {
         for (int a = 0; a < 3; ++a) {
             double s = hi(exp(double(v.scale[size_t(i) * 3 + a])), 1e-12);
             variance[a] = s * s + 1e-8;
-            c.v[a] = variance[a];
-            c.inv[a] = 1 / hi(variance[a], 1e-30);
+            c.v[a] = static_cast<float>(variance[a]);
+            c.inv[a] = static_cast<float>(1 / hi(variance[a], 1e-30));
             ld += log(hi(variance[a], 1e-30));
         }
-        c.logdet = ld;
-        c.mass = mass(v, i, 1e-12);
+        c.logdet = static_cast<float>(ld);
+        c.mass = static_cast<float>(mass(v, i, 1e-12));
         rotation(v.rot + size_t(i) * 4, c.r);
         covariance(c.r, variance, c.sigma);
         // Each edge uses the same fixed sample and its density under this
@@ -156,21 +156,21 @@ namespace lfs::io::decimate {
         double scales[3], quat[4];
         decompose(sig, scales, quat);
         for (int a = 0; a < 3; ++a) {
-            out.pos[size_t(row) * 3 + a] = mean[a];
-            out.scale[size_t(row) * 3 + a] = log(scales[a]);
+            out.pos[size_t(row) * 3 + a] = static_cast<float>(mean[a]);
+            out.scale[size_t(row) * 3 + a] = static_cast<float>(log(scales[a]));
         }
         for (int a = 0; a < 4; ++a)
-            out.rot[size_t(row) * 4 + a] = quat[a];
+            out.rot[size_t(row) * 4 + a] = static_cast<float>(quat[a]);
         double alpha = hi(1e-7, lo(1 - 1e-7, w / hi(area(scales[0], scales[1], scales[2]), 1e-30)));
-        out.opacity[row] = log(alpha / (1 - alpha));
+        out.opacity[row] = static_cast<float>(log(alpha / (1 - alpha)));
         for (int c = 0; c < 3 + v.rest * 3; ++c) {
             double acc = 0;
             for (int m = 0; m < count; ++m)
                 acc += weights[m] * color(v, ids[m], c);
             if (c < 3)
-                out.dc[size_t(row) * 3 + c] = acc;
+                out.dc[size_t(row) * 3 + c] = static_cast<float>(acc);
             else
-                out.sh[size_t(row) * v.rest * 3 + c - 3] = acc;
+                out.sh[size_t(row) * v.rest * 3 + c - 3] = static_cast<float>(acc);
         }
     }
     DEC_HD inline void copy_one(View v, uint32_t i, View out, uint32_t row) {

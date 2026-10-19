@@ -15,6 +15,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 #ifdef _WIN32
@@ -44,6 +45,11 @@ namespace lfs::io::project::detail {
     // Same cap read_chunk uses for a materialized decode of `row`.
     [[nodiscard]] std::uint64_t
     max_materialized_bytes_for(const ChunkInfo& row) noexcept;
+
+    // errno, or the Win32 error code on Windows.
+    [[nodiscard]] bool native_disk_full(std::int64_t error) noexcept;
+    // std::filesystem reports errno in the system or the generic category, depending on the library.
+    [[nodiscard]] bool disk_full(const std::error_code& error) noexcept;
 
     [[nodiscard]] lfs::Error project_error(
         lfs::ErrorCode code, std::string user_message, std::string detail,
@@ -107,6 +113,19 @@ namespace lfs::io::project::detail {
         std::filesystem::path path_;
     };
 
+    struct ProjectPathIdentity {
+        std::filesystem::path path;
+        std::filesystem::path canonical_path;
+        std::optional<std::vector<std::byte>> superblock;
+
+        [[nodiscard]] static lfs::Result<ProjectPathIdentity> capture(const std::filesystem::path& path);
+        [[nodiscard]] lfs::Result<void> validate() const;
+    };
+
+    [[nodiscard]] lfs::Result<void> validate_project_operation_identity();
+    [[nodiscard]] const ProjectPathIdentity* active_operation_identity() noexcept;
+    const ProjectPathIdentity* set_active_operation_identity(const ProjectPathIdentity* identity) noexcept;
+
     class WriterLock {
     public:
         WriterLock(const WriterLock&) = delete;
@@ -147,6 +166,19 @@ namespace lfs::io::project::detail {
         std::optional<std::filesystem::path> backup_path;
     };
 
+    // Preserve existing artifact names when valid; hash only filenames whose
+    // suffix would exceed a 255-unit native filesystem component. Never truncate UTF-8.
+    [[nodiscard]] std::filesystem::path project_artifact_path(
+        const std::filesystem::path& source, std::string_view suffix);
+    [[nodiscard]] std::filesystem::path project_lock_path(const std::filesystem::path& source);
+    // Shared collision-safe rename logic; the public entry supplies the timestamp suffix.
+    [[nodiscard]] lfs::Result<std::filesystem::path> quarantine_project_artifact_with_suffix(
+        const std::filesystem::path& source, const std::string& suffix);
+
+    // Stable short stem for long names; recovery uses the same key to associate
+    // artifacts without treating a truncated filename as a different master.
+    [[nodiscard]] std::filesystem::path temporary_project_stem(const std::filesystem::path& destination);
+
     [[nodiscard]] std::filesystem::path
     make_sibling_temp_path(const std::filesystem::path& destination, std::string_view tag);
     [[nodiscard]] lfs::Result<void>
@@ -155,6 +187,15 @@ namespace lfs::io::project::detail {
     preflight_disk_space(const std::filesystem::path& path, std::uint64_t required_bytes);
     [[nodiscard]] lfs::Result<void>
     sync_parent_directory(const std::filesystem::path& path);
+#ifndef _WIN32
+    // For filesystems without hard links (exFAT, FAT): moves the prior project to `backup` before
+    // publishing, as ReplaceFileW does. A crash between the two renames leaves the prior project at
+    // `backup`, which recovery quarantines instead of deleting.
+    [[nodiscard]] lfs::Result<AtomicReplaceState>
+    replace_with_rename_backup(const std::filesystem::path& replacement,
+                               const std::filesystem::path& destination,
+                               const std::filesystem::path& backup);
+#endif
     [[nodiscard]] lfs::Result<AtomicReplaceState>
     atomic_replace(const std::filesystem::path& replacement,
                    const std::filesystem::path& destination);

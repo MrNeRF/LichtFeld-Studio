@@ -105,6 +105,17 @@ def menu_action(
     return entry
 
 
+def keymap_shortcut(action: Any) -> str:
+    """Return the current global shortcut, or an empty string when unavailable."""
+    try:
+        mode = lf.keymap.ToolMode.GLOBAL
+        if not lf.keymap.is_bound(action, mode):
+            return ""
+        return lf.keymap.get_trigger_description(action, mode) or ""
+    except (AttributeError, RuntimeError, TypeError):
+        return ""
+
+
 def menu_toggle(label: str, callback: Any, selected: bool,
                 shortcut: str = "", enabled: bool = True) -> dict[str, Any]:
     """Create a toggle menu entry with a checkmark state."""
