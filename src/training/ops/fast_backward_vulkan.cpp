@@ -5,6 +5,7 @@
 #include "lfs/training/vram_ledger.hpp"
 #include "vulkan/fast_state.hpp"
 #include <array>
+#include <format>
 
 namespace lfs::training::vulkan {
     namespace {
@@ -22,8 +23,10 @@ namespace lfs::training::vulkan {
             uint64_t rendered_count, erank_loss, dc_loss, sh_loss, scale_loss;
             uint32_t log_scale;
             float scale_normalizer, erank_weight, dc_weight, sh_weight;
+            uint64_t impact_sum, impact_peak;
         };
-        static_assert(sizeof(BackPush) == 576);
+        static_assert(sizeof(BackPush) == 592);
+        static_assert(offsetof(BackPush, impact_sum) == 576);
         static_assert(offsetof(BackPush, image_gradient) == 320);
         static_assert(offsetof(BackPush, densify) == 464);
         static_assert(offsetof(BackPush, scale_weight) == 480);
@@ -53,6 +56,12 @@ namespace lfs::training::vulkan {
             densification.is_valid() && densification.ndim() == 2 && densification.shape()[1] >= size_t(p.count);
         const Tensor& stats = update_densification ? densification : no_densification;
         LFS_ASSERT_MSG(!scores.is_valid() || scores.numel() >= p.count, "Fast edge scores need one row");
+        const bool impact = adam.impact_sum.is_valid() && adam.impact_peak.is_valid();
+        LFS_ASSERT_MSG(!impact || (adam.impact_sum.dtype() == core::DataType::Float32 && adam.impact_peak.dtype() == core::DataType::Float32 &&
+                                   adam.impact_sum.is_contiguous() && adam.impact_peak.is_contiguous() &&
+                                   adam.impact_sum.numel() >= p.count && adam.impact_peak.numel() >= p.count),
+                       std::format("Fast impact outputs need {} contiguous float values, got {} and {}", p.count,
+                                   adam.impact_sum.numel(), adam.impact_peak.numel()));
         s.mark(14);
         std::array<Tensor, 6> gradients;
         constexpr std::array<size_t, 5> widths{3, 3, 4, 1, 3};
@@ -74,6 +83,10 @@ namespace lfs::training::vulkan {
         b.error = address(error);
         b.edge = address(edge);
         b.scores = address(scores);
+        if (impact) {
+            b.impact_sum = address(adam.impact_sum);
+            b.impact_peak = address(adam.impact_peak);
+        }
         // Match the blend dispatch contract: pixel errors request weighted
         // statistics even when the strategy supplies None (as IGS+ does).
         const auto blend_type = type == DensificationType::MRNF && b.densification != 0
@@ -126,7 +139,9 @@ namespace lfs::training::vulkan {
         for (auto& t : gradients)
             if (t.numel())
                 writes.push_back(ref(t));
-        for (const Tensor* t : std::initializer_list<const Tensor*>{&screen_gradient, &stats, &scores})
+        for (const Tensor* t : std::initializer_list<const Tensor*>{&screen_gradient, &stats, &scores,
+                                                                    impact ? &adam.impact_sum : &no_densification,
+                                                                    impact ? &adam.impact_peak : &no_densification})
             if (t->is_valid() && t->numel()) {
                 reads.push_back(ref(*t));
                 writes.push_back(ref(*t));
@@ -143,7 +158,7 @@ namespace lfs::training::vulkan {
         const uint32_t variant = specialization(p, 0) |
                                  (uint32_t(b.depth_gradient != 0) << 18) | (uint32_t(b.normal_gradient != 0) << 19) |
                                  (uint32_t(b.densify != 0 && b.densification != 0) << 20) | (uint32_t(b.scores != 0) << 21) |
-                                 (uint32_t(count_visible) << 22);
+                                 (uint32_t(count_visible) << 22) | (uint32_t(impact) << 23);
         if (p.visible) {
             b.stage = 2;
             dispatch(shader, b, reads, writes,

@@ -4,6 +4,7 @@
 #include "metal_families.hpp"
 #include "metal_kernels.hpp"
 
+#include <algorithm>
 #include <format>
 #include <stdexcept>
 
@@ -12,6 +13,7 @@ namespace lfs::training {
     core::Tensor metal_flip_error_image(const core::Tensor&);
 
     namespace {
+        using lfs::core::DataType;
         using lfs::gpu_ops::RoiParams;
         using lfs::gpu_ops::Tensor;
         namespace mk = metal;
@@ -30,7 +32,7 @@ namespace lfs::training {
         }
 
         struct RoiKernelParams {
-            uint64_t world_to_camera, camera_position, output;
+            uint64_t world_to_camera, camera_position, output, camera_rays, surface_depth, surface_alpha;
             mk::Float4 world_to_cropbox[3];
             mk::Float3 crop_min, crop_max;
             float fx, fy, cx, cy;
@@ -39,8 +41,24 @@ namespace lfs::training {
             uint32_t inverse;
         };
 
-        void roi(const Tensor& view, const Tensor& camera_position, Tensor& weights, const RoiParams& p) {
-            if (p.image.w <= 0 || p.image.h <= 0 || !(p.intrinsics.fx > 0.f) || !(p.intrinsics.fy > 0.f))
+        void roi(const Tensor& view, const Tensor& camera_position, const Tensor& camera_rays,
+                 const Tensor& surface_depth, const Tensor& surface_alpha, Tensor& weights, const RoiParams& p) {
+            const size_t pixels = static_cast<size_t>(std::max(p.image.w, 0)) * static_cast<size_t>(std::max(p.image.h, 0));
+            const auto optional = [pixels](const Tensor& t, const size_t channels, const char* const name) {
+                if (!t.is_valid() || t.numel() == 0)
+                    return Tensor{};
+                if (t.numel() != pixels * channels || t.dtype() != DataType::Float32)
+                    throw std::invalid_argument(std::format("ROI {} needs {} float values, got {}", name, pixels * channels,
+                                                            t.numel()));
+                return t.contiguous();
+            };
+            const Tensor rays = optional(camera_rays, 3, "camera rays");
+            Tensor depth = optional(surface_depth, 1, "surface depth");
+            Tensor alpha = optional(surface_alpha, 1, "surface alpha");
+            if (!depth.is_valid() || !alpha.is_valid())
+                depth = alpha = Tensor{};
+            const bool pinhole = !rays.is_valid();
+            if (p.image.w <= 0 || p.image.h <= 0 || (pinhole && (!(p.intrinsics.fx > 0.f) || !(p.intrinsics.fy > 0.f))))
                 throw std::invalid_argument(std::format("ROI needs a positive image and focal length, got {}x{} f=({}, {})",
                                                         p.image.w, p.image.h, p.intrinsics.fx, p.intrinsics.fy));
             // world_to_cropbox is column-major; rows of its upper 3x4 block.
@@ -49,6 +67,9 @@ namespace lfs::training {
                 .world_to_camera = mk::address(view),
                 .camera_position = mk::address(camera_position),
                 .output = mk::address(weights),
+                .camera_rays = rays.is_valid() ? mk::address(rays) : 0,
+                .surface_depth = depth.is_valid() ? mk::address(depth) : 0,
+                .surface_alpha = alpha.is_valid() ? mk::address(alpha) : 0,
                 .world_to_cropbox = {{m[0], m[4], m[8], m[12]}, {m[1], m[5], m[9], m[13]}, {m[2], m[6], m[10], m[14]}},
                 .crop_min = {p.minimum[0], p.minimum[1], p.minimum[2]},
                 .crop_max = {p.maximum[0], p.maximum[1], p.maximum[2]},
@@ -61,7 +82,7 @@ namespace lfs::training {
                 .outside_weight = p.outside_weight,
                 .inverse = p.inverse ? 1u : 0u,
             };
-            mk::launch_items("training_image_roi", params, {&view, &camera_position, &weights},
+            mk::launch_items("training_image_roi", params, {&view, &camera_position, &weights, &rays, &depth, &alpha},
                              static_cast<size_t>(p.image.w) * static_cast<size_t>(p.image.h));
         }
 

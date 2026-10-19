@@ -935,6 +935,7 @@ if(NOT LFS_HAS_CUDA)
             test_training_ops_metal_losses.cpp
             test_training_ops_metal_adam_sh.cpp
             test_training_ops_metal_fast.cpp
+            test_roi_masks.cpp
             test_training_snapshot_service.cpp
             test_ppisp_regularizer_portable.cpp)
         if(LFS_TENSOR_VULKAN)
@@ -991,7 +992,7 @@ if(NOT LFS_HAS_CUDA)
         target_link_libraries(lichtfeld_tests PRIVATE Vulkan::Vulkan)
     endif()
     if(LFS_BUILD_TRAINER)
-        target_link_libraries(lichtfeld_tests PRIVATE lfs_training)
+        target_link_libraries(lichtfeld_tests PRIVATE lfs_training lfs_roi_masks)
         if(APPLE)
             # lfs_training resolves CPython from the host process, which the app
             # embeds; the test binary must load it whole.
@@ -1551,6 +1552,7 @@ list(APPEND TEST_FILES test_png_parallel_writer.cpp)
 list(APPEND TEST_FILES test_rad_gpu_encode.cpp)
 list(APPEND TEST_FILES test_rad_meta_sidecar.cpp)
 list(APPEND TEST_FILES test_rad_spark_paging.cpp)
+list(APPEND TEST_FILES test_roi_masks.cpp)
 
 # Keep the source manifest strict: a stale entry should fail configuration
 # instead of silently dropping coverage from the executable.
@@ -1702,6 +1704,7 @@ endif()
 # Link libraries
 target_link_libraries(lichtfeld_tests PRIVATE
     lfs_shared_image_cuda
+    lfs_roi_masks
     ${LFS_TEST_INTERNAL_LINK_LIBS}
 
     # External libraries

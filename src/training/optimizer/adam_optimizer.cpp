@@ -218,8 +218,8 @@ namespace lfs::training {
             LFS_ASSERT_MSG(
                 rows.dtype() == lfs::core::DataType::Bool && rows.ndim() == 1,
                 "AdamOptimizer crop ROI rows must be a 1D bool tensor");
-            if (rows.device() != lfs::core::Device::CUDA)
-                rows = rows.cuda();
+            if (rows.device() != lfs::core::Device::GPU)
+                rows = rows.to(lfs::core::Device::GPU);
             if (!rows.is_contiguous())
                 rows = rows.contiguous();
         }
@@ -235,8 +235,8 @@ namespace lfs::training {
             LFS_ASSERT_MSG(
                 mask.numel() == static_cast<size_t>(splat_data_.size()),
                 "AdamOptimizer crop score mask must match the model row count");
-            if (mask.device() != lfs::core::Device::CUDA)
-                mask = mask.cuda();
+            if (mask.device() != lfs::core::Device::GPU)
+                mask = mask.to(lfs::core::Device::GPU);
             if (!mask.is_contiguous())
                 mask = mask.contiguous();
         }

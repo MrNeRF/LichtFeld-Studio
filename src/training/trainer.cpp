@@ -52,6 +52,7 @@
 #include "losses/losses.hpp"
 #include "metrics/eval_mask.hpp"
 #include "normal_auto_generate.hpp"
+#include "ops/roi_masks.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "python/runner.hpp"
 #include "rasterization/fast_rasterizer.hpp"
@@ -1824,16 +1825,31 @@ namespace lfs::training {
             if (!buffer.is_valid() || buffer.numel() < n) {
                 buffer = lfs::core::Tensor::empty(
                     {std::max<size_t>(n, buffer.is_valid() ? buffer.numel() * 5 / 4 : 0)},
-                    lfs::core::Device::CUDA, lfs::core::DataType::Bool);
+                    lfs::core::Device::GPU, lfs::core::DataType::Bool);
             }
             return buffer.slice(0, 0, n);
         }
 
-        const bool* deleted_rows(const lfs::core::SplatData& model) {
+        lfs::core::Tensor deleted_rows(const lfs::core::SplatData& model) {
             const auto& deleted = model.deleted();
             return deleted.is_valid() && deleted.numel() == static_cast<size_t>(model.size())
-                       ? deleted.ptr<bool>()
-                       : nullptr;
+                       ? deleted.contiguous()
+                       : lfs::core::Tensor{};
+        }
+
+        lfs::training::RoiBox roi_box(const TrainingCropBoxGeometry& geometry) {
+            return {geometry.model_to_cropbox, geometry.min, geometry.max, geometry.inverse};
+        }
+
+        // Camera centres [M,3] in crop-box space.
+        lfs::core::Tensor centres_in_box(const lfs::core::Tensor& centres, const glm::mat4& world_to_cropbox) {
+            const glm::mat4& w2b = world_to_cropbox;
+            const auto rotation_t = lfs::core::Tensor::from_vector(
+                {w2b[0][0], w2b[0][1], w2b[0][2], w2b[1][0], w2b[1][1], w2b[1][2], w2b[2][0], w2b[2][1], w2b[2][2]},
+                {3, 3}, lfs::core::Device::GPU);
+            const auto translation = lfs::core::Tensor::from_vector(
+                {w2b[3][0], w2b[3][1], w2b[3][2]}, {1, 3}, lfs::core::Device::GPU);
+            return (centres.matmul(rotation_t) + translation).contiguous();
         }
     } // namespace
 
@@ -1852,10 +1868,11 @@ namespace lfs::training {
         const auto means = model.get_means().contiguous();
         const auto scales = model.scaling_raw().contiguous();
         auto rejected = bool_rows(cropbox_view_reject_, n);
-        lfs::training::kernels::launch_roi_view_reject_mask(
-            means.ptr<float>(), scales.ptr<float>(), n, cropbox_->model_to_cropbox, cropbox_->world_to_cropbox,
-            camera.cam_position_ptr(), cropbox_->min, cropbox_->max, cropbox_->inverse,
-            deleted_rows(model), rejected.ptr<bool>(), lfs::core::getCurrentCUDAStream());
+        lfs::core::Tensor no_roi_rows;
+        lfs::training::roi_reject_mask(
+            means, scales, deleted_rows(model),
+            centres_in_box(camera.cam_position().to(lfs::core::Device::GPU).reshape({1, 3}), cropbox_->world_to_cropbox),
+            roi_box(*cropbox_), rejected, no_roi_rows);
         optimizer.set_crop_damping_mask(rejected);
     }
 
@@ -1896,29 +1913,19 @@ namespace lfs::training {
         std::vector<lfs::core::Tensor> centres;
         centres.reserve(std::min(cameras.size(), kMaxCameras));
         for (size_t i = 0; i < cameras.size(); i += stride)
-            centres.push_back(cameras[i]->cam_position().reshape({1, 3}));
+            centres.push_back(cameras[i]->cam_position().to(lfs::core::Device::GPU).reshape({1, 3}));
         if (centres.empty()) {
             optimizer.set_crop_score_mask({});
             optimizer.set_crop_roi_rows({}, growth_inside);
             return;
         }
-        const glm::mat4& w2b = cropbox_->world_to_cropbox;
-        const auto rotation_t = lfs::core::Tensor::from_vector(
-            {w2b[0][0], w2b[0][1], w2b[0][2], w2b[1][0], w2b[1][1], w2b[1][2], w2b[2][0], w2b[2][1], w2b[2][2]},
-            {3, 3}, lfs::core::Device::CUDA);
-        const auto translation = lfs::core::Tensor::from_vector(
-            {w2b[3][0], w2b[3][1], w2b[3][2]}, {1, 3}, lfs::core::Device::CUDA);
-        cropbox_camera_centres_ =
-            (lfs::core::Tensor::cat(centres, 0).matmul(rotation_t) + translation).contiguous();
+        cropbox_camera_centres_ = centres_in_box(lfs::core::Tensor::cat(centres, 0), cropbox_->world_to_cropbox);
         const auto means = model.get_means().contiguous();
         const auto scales = model.scaling_raw().contiguous();
         auto rejected = bool_rows(cropbox_score_reject_, n);
         auto in_roi = bool_rows(cropbox_roi_rows_, n);
-        lfs::training::kernels::launch_roi_relevance_reject_mask(
-            means.ptr<float>(), scales.ptr<float>(), n, cropbox_->model_to_cropbox, cropbox_camera_centres_.ptr<float>(),
-            static_cast<int>(cropbox_camera_centres_.size(0)), cropbox_->min, cropbox_->max,
-            cropbox_->inverse, deleted_rows(model), rejected.ptr<bool>(), in_roi.ptr<bool>(),
-            lfs::core::getCurrentCUDAStream());
+        lfs::training::roi_reject_mask(means, scales, deleted_rows(model), cropbox_camera_centres_,
+                                       roi_box(*cropbox_), rejected, in_roi);
         optimizer.set_crop_score_mask(scale == 1.0f ? lfs::core::Tensor{} : rejected);
         optimizer.set_crop_roi_rows(growth_inside > 0.0f ? in_roi : lfs::core::Tensor{}, growth_inside);
     }

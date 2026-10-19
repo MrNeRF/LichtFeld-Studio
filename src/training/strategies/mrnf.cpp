@@ -1213,7 +1213,7 @@ namespace lfs::training {
         if (!_exchange_importance_sum.is_valid()) {
             _exchange_importance_sum = primary.clone();
             _exchange_importance_peak = secondary;
-            _exchange_birth = Tensor::zeros({n}, Device::CUDA);
+            _exchange_birth = Tensor::zeros({n}, Device::GPU);
             _exchange_windows = 1;
             return;
         }
@@ -1244,7 +1244,7 @@ namespace lfs::training {
             return {};
         }
         Tensor eligible = _free_mask.is_valid() ? _free_mask.slice(0, 0, n).logical_not()
-                                                : Tensor::ones_bool({n}, Device::CUDA);
+                                                : Tensor::ones_bool({n}, Device::GPU);
         if (auto trainable = make_trainable_mask(*_splat_data, n, _splat_data->means().device());
             trainable.is_valid()) {
             eligible = eligible.logical_and(trainable);
@@ -1275,13 +1275,20 @@ namespace lfs::training {
                                   .sort(0, /*descending=*/false)
                                   .second;
         }
-        Tensor ranks = Tensor::empty({n}, Device::CUDA, DataType::Int32);
-        Tensor ranked_rows = Tensor::empty({n}, Device::CUDA, DataType::Int64);
-        mrnf_strategy::launch_fused_exchange_ranks(
-            primary_order.ptr<int64_t>(),
-            secondary_order.is_valid() ? secondary_order.ptr<int64_t>() : nullptr,
-            eligible.ptr<bool>(), ranks.ptr<int32_t>(), ranked_rows.ptr<int64_t>(), n);
-        mrnf_strategy::launch_sort_exchange_ranks(ranks.ptr<int32_t>(), ranked_rows.ptr<int64_t>(), n);
+        // A row's rank is its later position in the two orders; ineligible rows sort last.
+        // Float ranks are exact up to 2^24 rows; beyond that only near-ties reorder.
+        const auto positions = Tensor::arange(0.0f, static_cast<float>(n), 1.0f, Device::GPU);
+        const auto inverse_order = [&](const Tensor& order) {
+            auto ranks = Tensor::zeros({n}, Device::GPU, DataType::Float32);
+            ranks.index_put_(order, positions);
+            return ranks;
+        };
+        Tensor ranks = inverse_order(primary_order);
+        if (secondary_order.is_valid())
+            ranks = ranks.maximum(inverse_order(secondary_order));
+        const auto ranked_rows = ranks.masked_fill(ineligible, std::numeric_limits<float>::infinity())
+                                     .sort(0, /*descending=*/false)
+                                     .second;
         return ranked_rows.slice(0, 0, count).contiguous();
     }
 
@@ -1297,19 +1304,17 @@ namespace lfs::training {
         // importance and are ranked once a full pass has scored them.
         Tensor born = _free_mask.is_valid()
                           ? _exchange_free_before_growth.logical_and(_free_mask.slice(0, 0, before).logical_not())
-                          : Tensor::zeros_bool({before}, Device::CUDA);
+                          : Tensor::zeros_bool({before}, Device::GPU);
         const auto extend = [&](Tensor& t) {
             if (t.is_valid() && n > before) {
-                t = Tensor::cat(std::vector<Tensor>{t, Tensor::zeros({n - before}, Device::CUDA)}, 0);
+                t = Tensor::cat(std::vector<Tensor>{t, Tensor::zeros({n - before}, Device::GPU)}, 0);
             }
         };
         if (n > before) {
-            born = Tensor::cat(std::vector<Tensor>{born, Tensor::ones_bool({n - before}, Device::CUDA)}, 0);
+            born = Tensor::cat(std::vector<Tensor>{born, Tensor::ones_bool({n - before}, Device::GPU)}, 0);
         }
-        if (split_parents.is_valid() && split_parents.numel() > 0) {
-            mrnf_strategy::launch_fill_index_mask(
-                split_parents.ptr<int64_t>(), split_parents.numel(), born.ptr<bool>());
-        }
+        if (split_parents.is_valid() && split_parents.numel() > 0)
+            born.index_put_(split_parents, Tensor::ones_bool({split_parents.numel()}, Device::GPU));
         extend(_exchange_importance_sum);
         extend(_exchange_importance_peak);
         extend(_exchange_birth);
@@ -1618,9 +1623,8 @@ namespace lfs::training {
                                         : 0;
             const size_t wanted_victims = std::min(over_cap, exchange_quota);
             if (wanted_victims > 0) {
-                Tensor excluded = Tensor::zeros_bool({n}, Device::CUDA);
-                mrnf_strategy::launch_fill_index_mask(
-                    split_indices.ptr<int64_t>(), split_indices.numel(), excluded.ptr<bool>());
+                Tensor excluded = Tensor::zeros_bool({n}, Device::GPU);
+                excluded.index_put_(split_indices, Tensor::ones_bool({split_indices.numel()}, Device::GPU));
                 const auto victims = select_exchange_victims(wanted_victims, excluded);
                 if (victims.is_valid() && victims.numel() > 0) {
                     soft_delete_rows(victims);
@@ -1646,7 +1650,7 @@ namespace lfs::training {
         if (_exchange_importance_sum.is_valid() && _exchange_importance_sum.numel() == n) {
             _exchange_free_before_growth = _free_mask.is_valid()
                                                ? _free_mask.slice(0, 0, n).clone()
-                                               : Tensor::zeros_bool({n}, Device::CUDA);
+                                               : Tensor::zeros_bool({n}, Device::GPU);
         }
 
         if (!split_indices.is_valid() || split_indices.numel() == 0) {

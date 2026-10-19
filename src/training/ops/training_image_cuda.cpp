@@ -25,13 +25,18 @@ namespace lfs::training {
                 latest.numel(), core::getCurrentCUDAStream());
         }
 
-        void roi(const Tensor& view, const Tensor& camera_position, Tensor& weights, const RoiParams& p) {
+        void roi(const Tensor& view, const Tensor& camera_position, const Tensor& camera_rays,
+                 const Tensor& surface_depth, const Tensor& surface_alpha, Tensor& weights, const RoiParams& p) {
+            const auto optional = [](const Tensor& t) { return t.is_valid() && t.numel() > 0 ? t.ptr<float>() : nullptr; };
+            const bool surface = optional(surface_depth) && optional(surface_alpha);
             kernels::launch_roi_weight_map(
                 view.ptr<float>(), camera_position.ptr<float>(),
                 p.intrinsics.fx, p.intrinsics.fy, p.intrinsics.cx, p.intrinsics.cy,
                 p.image.w, p.image.h, glm::make_mat4(p.world_to_cropbox.data()),
                 glm::make_vec3(p.minimum.data()), glm::make_vec3(p.maximum.data()),
-                p.inverse, p.outside_weight, weights.ptr<float>(), core::getCurrentCUDAStream());
+                p.inverse, p.outside_weight, optional(camera_rays),
+                surface ? surface_depth.ptr<float>() : nullptr, surface ? surface_alpha.ptr<float>() : nullptr,
+                weights.ptr<float>(), core::getCurrentCUDAStream());
         }
 
         void resize_background(const Tensor& source, Tensor& destination) {

@@ -59,6 +59,8 @@ struct FastBlendBackwardParams {
     device const float* error_map;
     device const float* edge_weight;
     device atomic_float* edge_score;
+    device atomic_float* impact_sum;
+    device atomic_uint* impact_peak; // non-negative float bits, so uint max is float max
     uint n_instances, n_primitives, width, height;
     uint grid_w, capacity, unused1, unused2;
 };
@@ -73,6 +75,8 @@ struct FastBackwardPixel {
     float grad_depth;
     float error;
     float edge_weight;
+    // Composite of everything behind the walk so far, starting at the background.
+    float3 behind;
     uint last;
     bool inside;
 };
@@ -89,6 +93,7 @@ static FastBackwardPixel fast_backward_pixel(constant FastBlendBackwardParams& p
     s.grad_depth = 0.0f;
     s.error = 1.0f;
     s.edge_weight = 0.0f;
+    s.behind = float3(0.0f);
     s.last = 0u;
     if (!inside)
         return s;
@@ -99,6 +104,8 @@ static FastBackwardPixel fast_backward_pixel(constant FastBlendBackwardParams& p
     s.grad_color = float3(p.grad_image[pixel], p.grad_image[n_pixels + pixel], p.grad_image[2u * n_pixels + pixel]);
     // dL/dT of output = color + T * background; alpha = 1 - T.
     const float3 bg = fast_background(p.bg_color, p.bg_image, pixel, n_pixels);
+    if (kFastImpactScore != 0u)
+        s.behind = bg;
     float grad_alpha = -dot(s.grad_color, bg);
     if (p.grad_alpha != nullptr)
         grad_alpha += p.grad_alpha[pixel];
@@ -125,6 +132,8 @@ struct FastBlendAccum {
     float densification_weight;
     float densification_error;
     float edge;
+    float impact_sum;
+    float impact_peak;
 };
 
 // One pixel's contribution of one splat, walking back to front.
@@ -148,6 +157,14 @@ static bool fast_accumulate_pixel(thread FastBackwardPixel& s, thread FastBlendA
     const float transmittance_before = s.transmittance / fmax(one_minus_alpha, 1e-4f);
     const float weight = transmittance_before * alpha;
     a.edge += weight * s.edge_weight;
+    if (kFastImpactScore != 0u) {
+        // How much the pixel changes when this splat is removed.
+        const float3 difference = abs(color - s.behind);
+        const float removal_impact = weight * (difference.x + difference.y + difference.z);
+        a.impact_sum += removal_impact;
+        a.impact_peak = fmax(a.impact_peak, removal_impact);
+        s.behind = alpha * color + one_minus_alpha * s.behind;
+    }
     const float normal_dot = kFastNormalChannel != 0u ? dot(normal, s.grad_normal) : 0.0f;
     a.densification_weight += weight;
     a.densification_error += weight * s.error;
@@ -311,7 +328,8 @@ kernel void fast_blend_backward(constant FastBlendBackwardParams& p [[buffer(0)]
                 const float depth = s_depth[j];
                 const float3 normal = kFastNormalChannel != 0u ? s_normal[j] : float3(0.0f);
 
-                FastBlendAccum a = {float2(0.0f), float3(0.0f), 0.0f, float3(0.0f), 0.0f, float3(0.0f), 0.0f, 0.0f, 0.0f};
+                FastBlendAccum a = {float2(0.0f), float3(0.0f), 0.0f, float3(0.0f), 0.0f, float3(0.0f), 0.0f, 0.0f, 0.0f,
+                                    0.0f, 0.0f};
                 bool contributed = false;
 #pragma unroll
                 for (uint k = 0u; k < kFastBwdSubtiles; ++k) {
@@ -320,6 +338,17 @@ kernel void fast_blend_backward(constant FastBlendBackwardParams& p [[buffer(0)]
                 }
                 if (!simd_any(contributed))
                     continue;
+                if (kFastImpactScore != 0u) {
+                    const float impact_sum = simd_sum(a.impact_sum);
+                    const float impact_peak = simd_max(a.impact_peak);
+                    if (lane == 0u) {
+                        if (impact_sum != 0.0f)
+                            fast_atomic_add(p.impact_sum + prim, impact_sum);
+                        if (impact_peak > 0.0f)
+                            atomic_fetch_max_explicit(p.impact_peak + prim, as_type<uint>(impact_peak),
+                                                      memory_order_relaxed);
+                    }
+                }
                 float v[16] = {a.mean.x, a.mean.y, a.conic.x, a.conic.y, a.conic.z, a.opacity,
                                a.color.x, a.color.y, a.color.z, a.depth, a.normal.x, a.normal.y,
                                a.normal.z, a.densification_weight, a.densification_error, a.edge};

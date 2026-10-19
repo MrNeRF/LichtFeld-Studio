@@ -26,6 +26,9 @@ struct RoiParams {
     device const float* world_to_camera;
     device const float* camera_position;
     device float* output;
+    device const float* camera_rays;   // [H,W,3] or null: pinhole rays from the intrinsics
+    device const float* surface_depth; // [H,W] or null
+    device const float* surface_alpha; // [H,W] or null
     float4 world_to_cropbox[3];
     float3 crop_min;
     float3 crop_max;
@@ -74,14 +77,31 @@ kernel void training_image_roi(constant RoiParams& p [[buffer(0)]], uint index [
         return;
     const int x = int(index % uint(p.width));
     const int y = int(index / uint(p.width));
-    const float3 camera = float3((float(x) + 0.5f - p.cx) / p.fx, (float(y) + 0.5f - p.cy) / p.fy, 1.0f);
+    float3 camera = float3((float(x) + 0.5f - p.cx) / p.fx, (float(y) + 0.5f - p.cy) / p.fy, 1.0f);
+    if (p.camera_rays != nullptr) {
+        camera = float3(p.camera_rays[3u * index], p.camera_rays[3u * index + 1u], p.camera_rays[3u * index + 2u]);
+        // The lens has no ray for this pixel.
+        if (!all(isfinite(camera))) {
+            p.output[index] = p.inverse != 0 ? 1.0f : p.outside_weight;
+            return;
+        }
+    }
     device const float* m = p.world_to_camera;
     const float3 world = float3(m[0] * camera.x + m[4] * camera.y + m[8] * camera.z,
                                 m[1] * camera.x + m[5] * camera.y + m[9] * camera.z,
                                 m[2] * camera.x + m[6] * camera.y + m[10] * camera.z);
     const float3 origin = float3(p.camera_position[0], p.camera_position[1], p.camera_position[2]);
-    const bool hit = ray_hits_box(affine_point(p.world_to_cropbox, origin),
-                                  affine_direction(p.world_to_cropbox, world), p.crop_min, p.crop_max);
+    const float3 origin_in_box = affine_point(p.world_to_cropbox, origin);
+    const float3 direction_in_box = affine_direction(p.world_to_cropbox, world);
+    bool hit;
+    if (p.surface_depth != nullptr && p.surface_alpha != nullptr) {
+        // Below half coverage a pixel shows mostly background, so no surface in the box.
+        const float alpha = p.surface_alpha[index];
+        const float3 point = origin_in_box + (p.surface_depth[index] / alpha) * direction_in_box;
+        hit = alpha >= 0.5f && all(point >= p.crop_min) && all(point <= p.crop_max);
+    } else {
+        hit = ray_hits_box(origin_in_box, direction_in_box, p.crop_min, p.crop_max);
+    }
     p.output[index] = (p.inverse != 0 ? !hit : hit) ? 1.0f : p.outside_weight;
 }
 

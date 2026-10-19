@@ -31,42 +31,4 @@ namespace lfs::training::kernels {
         float* output,              // [H,W] CUDA
         cudaStream_t stream = nullptr);
 
-    // Largest stretch of the model-to-box transform: box units per model unit.
-    [[nodiscard]] float box_units_per_model_unit(const glm::mat4& model_to_cropbox);
-
-    // Marks splats whose centre ray from this camera misses the box (meets it when inverse): they
-    // are neither inside the box nor in front of or behind it in this view. With scaling_raw
-    // ([N,3] log scales) the box grows by each splat's 3-sigma footprint. Deleted rows stay false.
-    void launch_roi_view_reject_mask(
-        const float* means,       // [N,3] CUDA, model frame
-        const float* scaling_raw, // [N,3] CUDA or null
-        size_t n,
-        const glm::mat4& model_to_cropbox,
-        const glm::mat4& world_to_cropbox,
-        const float* camera_position, // [3] CUDA, world
-        const glm::vec3& crop_min,
-        const glm::vec3& crop_max,
-        bool inverse,
-        const bool* deleted, // [N] CUDA or null
-        bool* rejected,      // [N] CUDA
-        cudaStream_t stream = nullptr);
-
-    // Marks splats that no listed camera sees inside, in front of or behind the box (outside it
-    // when inverse). in_roi, when given, marks centres inside the ROI (outside the box when
-    // inverse). Deleted rows stay false in both.
-    void launch_roi_relevance_reject_mask(
-        const float* means,       // [N,3] CUDA, model frame
-        const float* scaling_raw, // [N,3] CUDA or null
-        size_t n,
-        const glm::mat4& model_to_cropbox,
-        const float* cameras_in_box, // [M,3] CUDA camera centres in box space
-        int num_cameras,
-        const glm::vec3& crop_min,
-        const glm::vec3& crop_max,
-        bool inverse,
-        const bool* deleted, // [N] CUDA or null
-        bool* rejected,      // [N] CUDA
-        bool* in_roi,        // [N] CUDA or null
-        cudaStream_t stream = nullptr);
-
 } // namespace lfs::training::kernels

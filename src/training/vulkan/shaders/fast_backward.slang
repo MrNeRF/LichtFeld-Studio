@@ -14,6 +14,7 @@ struct BackPush {
     uint64_t renderedCount, erankLoss, dcLoss, shLoss, scaleLoss;
     uint logScale;
     float scaleNormalizer, erankWeight, dcWeight, shWeight;
+    uint64_t impactSum, impactPeak;
 };
 struct Push {
     uint64_t parameters;
@@ -54,6 +55,8 @@ groupshared uint maxLast[128];
         b.densification = 0;
     if ((fastStage & (1u << 21)) == 0)
         b.scores = 0;
+    // Per-splat removal impact: how much each pixel changes without the splat.
+    const bool impact = (fastStage & (1u << 23)) != 0;
     FastPush p = b.forward;
     uint3 groups = spirv_asm {
 result:
@@ -77,7 +80,7 @@ result:
         uint pixel[2], last[2];
         float2 center[2];
         float T[2], gT[2], gd[2];
-        float3 gc[2], gn[2];
+        float3 gc[2], gn[2], behind[2];
         [unroll] for (uint k = 0; k < 2; ++k) {
             uint rank = lane + k * 128;
             pixel[k] = pixelIndex(p, tile, rank);
@@ -89,6 +92,7 @@ result:
             gn[k] = valid && p.renderNormal != 0 ? image3(b.normalGradient, pixel[k], pixels) : float3(0);
             gd[k] = valid && b.depthGradient != 0 ? loadFloat(b.depthGradient, pixel[k]) : 0;
             gT[k] = valid ? dot(gc[k], background(p, pixel[k])) - (b.alphaGradient != 0 ? loadFloat(b.alphaGradient, pixel[k]) : 0) : 0;
+            behind[k] = valid && impact ? background(p, pixel[k]) : float3(0);
         }
         bool nativeWarp = WaveGetLaneCount() == 32;
         uint length;
@@ -134,6 +138,7 @@ result:
                 float accum[16];
                 [unroll] for (uint f = 0; f < 16; ++f)
                     accum[f] = 0;
+                float impactSum = 0, impactPeak = 0;
                 [unroll] for (uint k = 0; k < 2; ++k) {
                     if (((k == 0 ? mask0 : mask1) & (1u << selected)) == 0 || pixel[k] == 0xffffffffu || ordinal >= last[k])
                         continue;
@@ -165,11 +170,32 @@ result:
                     accum[13] += weight;
                     accum[14] += weight * (b.error != 0 ? loadFloat(b.error, pixel[k]) : 1);
                     accum[15] += weight * (b.edge != 0 ? loadFloat(b.edge, pixel[k]) : 0);
+                    if (impact) {
+                        float3 difference = abs(color - behind[k]);
+                        float removal = weight * (difference.x + difference.y + difference.z);
+                        impactSum += removal;
+                        impactPeak = max(impactPeak, removal);
+                        behind[k] = alpha * color + oneMinus * behind[k];
+                    }
                     T[k] = Tbefore;
                     gT[k] = dot(gc[k], alpha * color) + alpha * o.depth * gd[k] + alpha * normalDot + gT[k] * oneMinus;
                 }
                 if (nativeWarp && !WaveActiveAnyTrue(accum[13] != 0))
                     continue;
+                if (impact) {
+                    if (nativeWarp) {
+                        impactSum = WaveActiveSum(impactSum);
+                        impactPeak = WaveActiveMax(impactPeak);
+                    }
+                    if (!nativeWarp || WaveGetLaneIndex() == 0) {
+                        if (impactSum != 0)
+                            atomicFloat(b.impactSum, original, impactSum);
+                        if (impactPeak > 0) {
+                            uint previous;
+                            InterlockedMax(((Ptr<uint, Access.ReadWrite>)b.impactPeak)[original], asuint(impactPeak), previous);
+                        }
+                    }
+                }
                 if (b.densify == 0 || b.densification == 0) {
                     accum[13] = 0;
                     accum[14] = 0;
