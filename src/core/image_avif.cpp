@@ -43,7 +43,7 @@ namespace lfs::core::image_codecs {
                 if (!context)
                     return failure(ErrorCode::ResourceExhausted, "cannot allocate context");
                 const auto check = [](heif_error error) {
-                    return error.code == heif_error_Ok ? Status{} : failure(ErrorCode::Internal, "provider error " + std::to_string(error.code) + "/" + std::to_string(error.subcode));
+                    return error.code == heif_error_Ok ? Status{} : failure(error.code == heif_error_Memory_allocation_error ? ErrorCode::ResourceExhausted : ErrorCode::Internal, "provider error " + std::to_string(error.code) + "/" + std::to_string(error.subcode));
                 };
                 heif_encoder* raw_encoder = nullptr;
                 if (auto status = check(heif_context_get_encoder(context.get(), provider, &raw_encoder)); !status)
@@ -155,9 +155,12 @@ namespace lfs::core::image_codecs {
                 return cancelled() ? failure(ErrorCode::Cancelled, "cancelled before completion") : Status{};
             } catch (const std::bad_alloc&) {
                 return failure(ErrorCode::ResourceExhausted, "allocation failed");
+            } catch (const std::exception& exception) {
+                // LFS-CENSUS-OK(empty-catch): retain callback/provider diagnostics at the synchronous Status boundary.
+                return failure(ErrorCode::Internal, exception.what());
             } catch (...) {
                 // LFS-CENSUS-OK(empty-catch): convert synchronous provider/callback exceptions to the typed API.
-                return failure(ErrorCode::Internal, "encoding callback or provider exception");
+                return failure(ErrorCode::Internal, "nonstandard encoding callback or provider exception");
             }
         }
     } // namespace
@@ -189,13 +192,20 @@ namespace lfs::core::image_codecs {
             auto encoding = options;
             encoding.cancelled = [a = options.cancelled, b = publication.cancelled] { return (a && a()) || (b && b()); };
             return writeFileAtomically(path, [&](FILE* stream) { return encode(data, width, height, channels, stride, encoding, [&](std::span<const uint8_t> bytes) -> Status {
-                                                                     if (std::fwrite(bytes.data(), 1, bytes.size(), stream) != bytes.size())
-                                                                         return failure(ErrorCode::Unavailable, "file write failed (errno=" + std::to_string(errno) + ")");
+                                                                     if (std::fwrite(bytes.data(), 1, bytes.size(), stream) != bytes.size()) {
+                                                                         const int native = errno;
+                                                                         return Status::failure(make_error({.code = ErrorCode::Unavailable, .domain = ErrorDomain::IO, .detail = "Cannot write AVIF output (errno=" + std::to_string(native) + ")", .detection = LFS_SOURCE_SITE_CURRENT(), .native = NativeError{ErrorDomain::IO, native, "stdio"}}));
+                                                                     }
                                                                      return {};
                                                                  }); }, publication);
+        } catch (const std::bad_alloc&) {
+            return failure(ErrorCode::ResourceExhausted, "allocation failed while preparing publication");
+        } catch (const std::exception& exception) {
+            // LFS-CENSUS-OK(empty-catch): preserve publication setup diagnostics at the Status boundary.
+            return failure(ErrorCode::Internal, exception.what());
         } catch (...) {
             // LFS-CENSUS-OK(empty-catch): publication setup must not leak callback exceptions from the Status API.
-            return failure(ErrorCode::Internal, "publication setup exception");
+            return failure(ErrorCode::Internal, "nonstandard publication setup exception");
         }
     }
 } // namespace lfs::core::image_codecs

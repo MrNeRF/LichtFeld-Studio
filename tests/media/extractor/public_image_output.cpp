@@ -57,5 +57,16 @@ int main() {
         return 6;
     }
     auto jxl_collision = ImageOutput::writeJxl(jxl_path, surface->view());
-    return !jxl_collision && jxl_collision.error().code() == lfs::ErrorCode::AlreadyExists && std::filesystem::file_size(jxl_path) > 10 ? 0 : 7;
+    if (jxl_collision || jxl_collision.error().code() != lfs::ErrorCode::AlreadyExists || std::filesystem::file_size(jxl_path) <= 10)
+        return 7;
+    auto avif_path = path;
+    avif_path.replace_extension(".avif");
+    Cleanup avif_cleanup{avif_path};
+    auto avif_result = ImageOutput::writeAvif(avif_path, surface->view());
+    if (!avif_result) {
+        std::cerr << avif_result.error().detail();
+        return 8;
+    }
+    auto avif_collision = ImageOutput::writeAvif(avif_path, view);
+    return !avif_collision && avif_collision.error().code() == lfs::ErrorCode::AlreadyExists && std::filesystem::file_size(avif_path) > 10 ? 0 : 9;
 }

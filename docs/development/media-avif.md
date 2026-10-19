@@ -82,3 +82,26 @@ ISC-style permissions; it does not introduce an x264 encoder.
 
 Provider sources: https://github.com/strukturag/libheif/tree/v1.21.2 and
 https://aomedia.googlesource.com/aom/+/44d0a57786f432d933ff64b653347c66f4d0fa1d/ .
+
+## Validation boundaries
+
+Export tests cover all four channel layouts and integer precisions, independent
+sample/alpha decode, output budgets, concurrent calls, publication failures,
+cancellation and recovery. Public API tests additionally cover BT.2020 NCLX,
+premultiplied/straight equivalence, zero alpha, invalid declarations and
+non-finite values. AVIF-specific resume tests reject truncated or modified files,
+wrong checksums and malformed records while preserving existing files; restoring
+the original bytes/record allows the extraction to finish.
+
+Focused production bindings and a C++ consumer using only public media headers
+are tested on Windows, Linux and macOS. Linux ASan/UBSan/LeakSanitizer exercises
+the encoder; provider release libraries are not fully instrumented. Photographic
+4K/8K workload measurements are separate from unit tests and from the uniform
+color smoke test. Encoding large images and concurrent calls can require
+substantial RAM even with one provider thread per call. No aggregate concurrency
+or provider working-memory bound is implied by pixel/output-byte limits.
+
+Allocation failures use ResourceExhausted, including provider allocation errors
+and callback-copy failures during publication setup. Standard exception details
+and native stdio errors are retained. No callback exception crosses the C writer
+ABI; it is captured and handled after returning from the provider.

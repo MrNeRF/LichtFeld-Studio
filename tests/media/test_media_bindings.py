@@ -228,6 +228,118 @@ class MediaBindings(unittest.TestCase):
         options.effort = 1
         media.ImageOutput.write_jxl(self.root / "jxl-lossy-effort1.jxl", frame, options)
 
+    def test_avif_public_writer_rejects_incompatible_color_without_publication(self):
+        path = self.root / "avif-color-policy.avif"
+        color = media.FrameColor()
+        color.transfer = media.ColorTransfer.Srgb
+        color.primaries = media.ColorPrimaries.Bt709
+        frame = media.FrameSurface.from_bytes(1, 1, media.FramePixelFormat.RGB8,
+                                              bytes((10, 20, 30)), color=color)
+        options = media.AvifOutputOptions()
+        media.ImageOutput.write_avif(path, frame, options)
+        original = path.read_bytes()
+        options.overwrite = True
+        cases = (
+            (media.FramePixelFormat.RGB8, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGB8, media.ColorTransfer.Srgb, media.ColorPrimaries.Bt2020, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Unspecified, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Unspecified, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.Nits),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.SceneRelative),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.Straight, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGBAFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+        )
+        for fmt, transfer, primaries, alpha, units in cases:
+            with self.subTest(format=fmt, transfer=transfer, primaries=primaries, alpha=alpha, units=units):
+                color.transfer, color.primaries, color.alpha, color.units = transfer, primaries, alpha, units
+                pixels = bytes((10, 20, 30)) if fmt == media.FramePixelFormat.RGB8 else struct.pack("=4f", .1, .2, .3, 1.) if fmt == media.FramePixelFormat.RGBAFloat32 else struct.pack("=3f", .1, .2, .3)
+                invalid = media.FrameSurface.from_bytes(1, 1, fmt, pixels, color=color)
+                for target in (path, self.root / "avif-invalid-new.avif"):
+                    with self.assertRaises(MEDIA_ERROR):
+                        media.ImageOutput.write_avif(target, invalid, options)
+                self.assertEqual(path.read_bytes(), original)
+                self.assertFalse((self.root / "avif-invalid-new.avif").exists())
+        media.ImageOutput.write_avif(path, frame, options)
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_avif_bt2020_premultiplied_alpha_and_nonfinite_rejection(self):
+        color = media.FrameColor()
+        color.transfer = media.ColorTransfer.Linear
+        color.primaries = media.ColorPrimaries.Bt2020
+        color.alpha = media.AlphaMode.Straight
+        options = media.AvifOutputOptions()
+        options.bit_depth = 12
+        straight = media.FrameSurface.from_bytes(2, 1, media.FramePixelFormat.RGBAFloat32,
+                    struct.pack("=8f", .25, .5, .75, .5, 0., 0., 0., 0.), color=color)
+        path = self.root / "avif-bt2020-straight.avif"
+        media.ImageOutput.write_avif(path, straight, options)
+        original = path.read_bytes()
+        color.alpha = media.AlphaMode.Premultiplied
+        premult = media.FrameSurface.from_bytes(2, 1, media.FramePixelFormat.RGBAFloat32,
+                    struct.pack("=8f", .125, .25, .375, .5, 9., 3., 1., 0.), color=color)
+        other = self.root / "avif-bt2020-premult.avif"
+        media.ImageOutput.write_avif(other, premult, options)
+        self.assertEqual(other.read_bytes(), original)
+        info = json.loads(subprocess.check_output([
+            os.environ.get("LFS_MEDIA_TEST_FFPROBE", "ffprobe"), "-v", "error",
+            "-show_streams", "-of", "json", str(path)], timeout=30))
+        primary = info["streams"][0]
+        self.assertEqual(primary["color_primaries"], "bt2020")
+        self.assertEqual(primary["color_transfer"], "iec61966-2-1")
+        options.overwrite = True
+        color.alpha = media.AlphaMode.Straight
+        for values in ((float("nan"), .2, .3, 1.), (.1, float("inf"), .3, 1.),
+                       (.1, .2, float("-inf"), 1.), (.1, .2, .3, float("nan")),
+                       (.1, .2, .3, -.1), (.1, .2, .3, 1.1)):
+            invalid = media.FrameSurface.from_bytes(1, 1, media.FramePixelFormat.RGBAFloat32,
+                                                   struct.pack("=4f", *values), color=color)
+            for target in (path, self.root / "avif-invalid-samples.avif"):
+                with self.assertRaises(MEDIA_ERROR):
+                    media.ImageOutput.write_avif(target, invalid, options)
+            self.assertEqual(path.read_bytes(), original)
+            self.assertFalse((self.root / "avif-invalid-samples.avif").exists())
+        media.ImageOutput.write_avif(path, straight, options)
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_avif_resume_rejects_corruption_and_inconsistent_checkpoint(self):
+        for damage in ("truncate", "mutate", "checksum", "record"):
+            with self.subTest(damage=damage):
+                request = self.request()
+                request.output_format = media.FramePixelFormat.RGBFloat32
+                request.input_color.transfer = media.ColorTransfer.Linear
+                request.input_color.primaries = media.ColorPrimaries.Bt709
+                files = self.resume_files(self.root / ("avif-corrupt-" + damage), media.FrameFileFormat.AVIF)
+                self.interrupt_resume(request, files)
+                checkpoint = files.files.output_directory / ".media-ingest-checkpoint"
+                images = sorted(files.files.output_directory.glob("*.avif"))
+                self.assertTrue(images)
+                original = images[0].read_bytes()
+                record = checkpoint / "frame-0.json"
+                record_before = record.read_bytes()
+                if damage == "truncate":
+                    images[0].write_bytes(original[:16])
+                elif damage == "mutate":
+                    changed = bytearray(original)
+                    changed[-1] ^= 1
+                    images[0].write_bytes(changed)
+                elif damage == "checksum":
+                    value = json.loads(record_before)
+                    value["file_sha256"] = "0" * 64
+                    record.write_text(json.dumps(value))
+                else:
+                    record.write_bytes(b'{"partial":')
+                before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in images}
+                damaged_record = record.read_bytes()
+                with self.assertRaises(MEDIA_ERROR):
+                    media.MediaIngest.extract_files(request, files)
+                self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in images}, before)
+                self.assertEqual(record.read_bytes(), damaged_record)
+                self.assertFalse((files.files.output_directory / "extraction_metadata.json").exists())
+                images[0].write_bytes(original)
+                record.write_bytes(record_before)
+                self.assertEqual(media.MediaIngest.extract_files(request, files).frames_accepted, 4)
+                self.assertEqual(images[0].read_bytes(), original)
+
     def test_avif_float_quantization_matches_independent_decoder(self):
         color = media.FrameColor()
         color.transfer = media.ColorTransfer.Linear

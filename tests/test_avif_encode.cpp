@@ -169,6 +169,42 @@ namespace {
         EXPECT_EQ(bytes(path), before);
         EXPECT_EQ(std::distance(fs::directory_iterator(directory), fs::directory_iterator{}), 1);
     }
+    TEST_F(AvifEncode, AllocationAndCallbackErrorsKeepTypedDiagnosticsAndDestination) {
+        const std::array<uint8_t, 3> input{1, 2, 3};
+        std::vector<uint8_t> output{123};
+        auto allocation = c::encode_avif_memory(input, 1, 1, 3, 3, output, {.cancelled = []() -> bool { throw std::bad_alloc(); }});
+        ASSERT_FALSE(allocation);
+        EXPECT_EQ(allocation.error().code(), lfs::ErrorCode::ResourceExhausted);
+        auto exception = c::encode_avif_memory(input, 1, 1, 3, 3, output, {.cancelled = []() -> bool { throw std::runtime_error("AVIF detailed sentinel"); }});
+        ASSERT_FALSE(exception);
+        EXPECT_EQ(exception.error().code(), lfs::ErrorCode::Internal);
+        EXPECT_NE(exception.error().detail().find("AVIF detailed sentinel"), std::string_view::npos);
+        EXPECT_EQ(output, (std::vector<uint8_t>{123}));
+        struct CopyFailure {
+            std::shared_ptr<bool> fail;
+            explicit CopyFailure(std::shared_ptr<bool> value) : fail(std::move(value)) {}
+            CopyFailure(const CopyFailure& other) : fail(other.fail) {
+                if (*fail)
+                    throw std::bad_alloc();
+            }
+            bool operator()() const { return false; }
+        };
+        const auto path = directory / "allocation.avif";
+        ASSERT_TRUE(c::write_avif(path, input, 1, 1, 3, 3));
+        const auto before = bytes(path);
+        auto fail = std::make_shared<bool>(false);
+        c::AvifEncodeOptions options;
+        options.cancelled = CopyFailure(fail);
+        *fail = true;
+        auto publication = c::write_avif(path, input, 1, 1, 3, 3, options);
+        ASSERT_FALSE(publication);
+        EXPECT_EQ(publication.error().code(), lfs::ErrorCode::ResourceExhausted);
+        EXPECT_EQ(bytes(path), before);
+        EXPECT_EQ(std::distance(fs::directory_iterator(directory), fs::directory_iterator{}), 1);
+        *fail = false;
+        ASSERT_TRUE(c::write_avif(path, input, 1, 1, 3, 3, options));
+        EXPECT_EQ(bytes(path), before);
+    }
     TEST_F(AvifEncode, LosslessPreservesEvery12BitCodeAndHiddenColor) {
         std::vector<uint16_t> input(4096 * 4);
         for (size_t i = 0; i < 4096; ++i) {
