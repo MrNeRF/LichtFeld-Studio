@@ -15,6 +15,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <thread>
+#include <sys/mman.h>
 #include <unistd.h>
 using namespace lfs;
 static void require(bool value, const char* message) {
@@ -129,6 +130,29 @@ static void run() {
     request.lod_gpu_traversal.pixel_scale_limit = .01f;
     request.lod_gpu_traversal.object_to_view = glm::mat4(1);
     require(vis::MetalViewportRenderer::supports(model, request), "Native RAD adapter rejected a streamable CPU preview");
+    {
+        // A host cut drawn from the paged preview reads exactly its own
+        // entries: end it at a PROT_NONE page so any over-read faults.
+        const size_t page = size_t(getpagesize()), cut_count = 16;
+        require(cut_count < size_t(model.size()), "RAD preview must exceed the host cut");
+        auto* block = static_cast<std::byte*>(mmap(nullptr, 2 * page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0));
+        require(block != MAP_FAILED && mprotect(block + page, page, PROT_NONE) == 0, "Cannot guard the host cut");
+        auto* cut = reinterpret_cast<uint32_t*>(block + page) - cut_count;
+        for (uint32_t n = 0; n < cut_count; ++n)
+            cut[n] = n;
+        auto host_request = request;
+        host_request.lod_gpu_traversal.enabled = false;
+        host_request.lod_indices = cut;
+        host_request.lod_count = cut_count;
+        require(vis::MetalViewportRenderer::supports(model, host_request), "Native RAD adapter rejected a host cut of the paged preview");
+        const auto output = renderer.render(context, model, host_request, vis::RenderTargetId{5});
+        if (!output)
+            throw std::runtime_error(format_for_developer(output.error()));
+        auto pixels = core::Tensor::empty({64, 96, 4}, core::Device::CPU);
+        require(bool(renderer.readColor(vis::RenderTargetId{5}, pixels, 0, 0)), "Host-cut RAD readback failed");
+        require(bool(renderer.release(vis::RenderTargetId{5})), "Host-cut RAD release failed");
+        munmap(block, 2 * page);
+    }
     bool native_cut = false;
     bool settled = false;
     for (int frame = 0; frame < 80; ++frame) {
@@ -182,7 +206,7 @@ static void run() {
     interest.back() = std::bit_cast<uint32_t>(4.f);
     await(uint32_t(interest.size() - 1), interest);
     require(pager.pool().page_splats == 2048, "Legacy RAD file block leaked into the GPU page stride");
-    std::printf("RAD paging, generation replacement, and native desktop cut passed; fixture=%s\n", directory.c_str());
+    std::printf("RAD paging, generation replacement, preview host cut and native desktop cut passed; fixture=%s\n", directory.c_str());
 }
 int main() {
     @autoreleasepool {

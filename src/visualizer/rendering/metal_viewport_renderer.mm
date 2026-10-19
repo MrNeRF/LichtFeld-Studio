@@ -1149,8 +1149,7 @@ namespace lfs::vis {
             const uint32_t source_count = pager && gpu_lod ? pager->physicalNodes() : uint32_t(model.size());
             const uint32_t logical_count = pager ? pager->nodes() : source_count;
             const uint32_t draw_count = gpu_lod ? uint32_t(std::clamp<size_t>(request.lod_gpu_traversal.output_capacity, gpu_tree->roots, std::min(gpu_tree->nodes, source_count)))
-                                                : uint32_t(pager ? model.size() : request.lod_indices ? request.lod_count
-                                                                                                      : model.size());
+                                                : uint32_t(request.lod_indices ? request.lod_count : model.size());
             const int node_degree = request.scene.node_active_sh_degrees.empty() ? model.get_active_sh_degree() : *std::max_element(request.scene.node_active_sh_degrees.begin(), request.scene.node_active_sh_degrees.end());
             const int max_degree = std::clamp(node_degree, 0, std::min(3, model.get_max_sh_degree()));
             const uint32_t degree = static_cast<uint32_t>(std::clamp(request.sh_degree, 0, max_degree));
