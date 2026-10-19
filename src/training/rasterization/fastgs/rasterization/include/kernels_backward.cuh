@@ -654,8 +654,10 @@ namespace fast_lfs::rasterization::kernels::backward {
     // WARP_BWD_WALK_BEGIN / WARP_BWD_WALK_END mark the reverse-walk body: zero
     // The sync-count assertion depends on the block.sync and __syncthreads calls below.
     // ---------------------------------------------------------------------------
+    // The removal-impact walk keeps a colour composite per pixel live; at 8 blocks per SM it spills
+    // on every fragment, at 6 it fits in registers and runs faster.
     template <DensificationType DENSIFICATION_TYPE, bool NORMAL_CHANNEL, bool IMPACT_SCORE, int WARP_CULL_MODE = 0>
-    __global__ void __launch_bounds__(config::block_size_blend_backward, 8) blend_backward_cu(
+    __global__ void __launch_bounds__(config::block_size_blend_backward, IMPACT_SCORE ? 6 : 8) blend_backward_cu(
         const uint2* __restrict__ tile_instance_ranges,
         const uint* __restrict__ instance_primitive_indices,
         const uint* __restrict__ primitive_work_indices,
