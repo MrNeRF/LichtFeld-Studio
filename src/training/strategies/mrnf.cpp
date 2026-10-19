@@ -48,7 +48,10 @@ namespace lfs::training {
         // The growth exchange frees splats only while the model is at least this full;
         // below it, it waits until growth has refilled the slots freed earlier.
         constexpr double MRNF_EXCHANGE_MIN_CAP_FILL = 0.98;
-        constexpr double MRNF_EXCHANGE_END_SHARE = 1.0 / 8.0;
+        // Share of the active splats exchanged at the first exchanging refine; it tapers on a
+        // cosine to an eighth of that by grow_until_iter.
+        constexpr double MRNF_EXCHANGE_START_SHARE = 0.04;
+        constexpr double MRNF_EXCHANGE_END_SHARE = MRNF_EXCHANGE_START_SHARE / 8.0;
 
         [[nodiscard]] lfs::core::Tensor compact_bool_indices(
             const lfs::core::Tensor& mask, size_t count) {
@@ -629,9 +632,9 @@ namespace lfs::training {
         // A point cloud that already fills the capacity leaves no room for seeds, so skip capturing views for them.
         if (n > 0 && (_params->max_cap <= 0 || static_cast<int64_t>(n) < int64_t{_params->max_cap}))
             _blob_seeder = std::make_unique<BlobSeeder>(_splat_data->means());
-        if (_params->growth_exchange > 0.0f) {
+        if (_params->growth_exchange) {
             LOG_DEBUG("MRNF: growth exchange starts at {:.1f}% per refine and tapers until iter {}",
-                      100.0f * _params->growth_exchange, _params->grow_until_iter);
+                      100.0 * MRNF_EXCHANGE_START_SHARE, _params->grow_until_iter);
         }
     }
 
@@ -1116,7 +1119,7 @@ namespace lfs::training {
 
     bool MRNF::growth_exchange_active(const int iter) const {
         // Without a finite cap growth always has budget, so there is nothing to exchange.
-        return _params && _params->growth_exchange > 0.0f && _params->max_cap > 0 && !_topology_frozen &&
+        return _params && _params->growth_exchange && _params->max_cap > 0 && !_topology_frozen &&
                iter < static_cast<int>(_params->grow_until_iter) &&
                iter < static_cast<int>(_params->stop_refine);
     }
@@ -1139,7 +1142,7 @@ namespace lfs::training {
     }
 
     size_t MRNF::exchange_quota(const int iter, const size_t active) const {
-        double fraction = static_cast<double>(_params->growth_exchange);
+        double fraction = MRNF_EXCHANGE_START_SHARE;
         if (_exchange_first_iter >= 0) {
             const int duration = static_cast<int>(_params->grow_until_iter) - _exchange_first_iter;
             const double u = duration > 0
@@ -1148,8 +1151,8 @@ namespace lfs::training {
                                               0.0, 1.0)
                                  : 1.0;
             constexpr double pi = 3.14159265358979323846;
-            fraction *= MRNF_EXCHANGE_END_SHARE +
-                        (1.0 - MRNF_EXCHANGE_END_SHARE) * 0.5 * (1.0 + std::cos(pi * u));
+            fraction = MRNF_EXCHANGE_END_SHARE +
+                       (MRNF_EXCHANGE_START_SHARE - MRNF_EXCHANGE_END_SHARE) * 0.5 * (1.0 + std::cos(pi * u));
         }
         return static_cast<size_t>(std::floor(fraction * static_cast<double>(active)));
     }

@@ -455,7 +455,7 @@
     "tooltip.eval_bit_depth": "Grid the render is rounded to before evaluation metrics. Auto follows each reference image: 8-bit, 16-bit or float.",
     "tooltip.growth_grad_threshold": "Sets how strong a refinement signal must be before a splat can grow. Lower values allow more areas to grow; higher values focus growth only on stronger visible errors.",
     "tooltip.grow_fraction": "Controls how many eligible candidates grow each refine step. Increase it when the model needs capacity faster; decrease it when growth is too aggressive or noisy.",
-    "tooltip.growth_exchange": "Share of splats freed per refine step once growth reaches the splat cap, tapering to an eighth of it by the end of growth. The splats whose removal changes the image least are freed and growth places them where the error is. 0 disables; 0.04 works well.",
+    "tooltip.growth_exchange": "Once growth reaches the splat cap, keeps it working: each refine step frees the splats whose removal changes the image least, and growth places them where the error is. The share starts at 4% and tapers to an eighth of that by the end of growth. Training is a few percent slower until growth ends.",
     "tooltip.opacity_decay": "Gradually reduces opacity during refinement, strongest earlier in training. Increase it to help clear weak splats; lower it if useful surfaces fade.",
     "tooltip.scale_decay": "Gradually shrinks Gaussian scale during refinement, strongest earlier in training. Increase it to fight bloated splats; lower it if coverage becomes holey.",
     "tooltip.means_noise_weight": "Adds position exploration noise. Increase it when growth seems stuck or areas remain undercovered; lower it if geometry becomes noisy or unstable.",

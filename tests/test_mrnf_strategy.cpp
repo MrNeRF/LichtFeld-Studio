@@ -1539,7 +1539,7 @@ namespace {
         opt.max_cap = 32;
         opt.grow_fraction = 1.0f;
         opt.grow_until_iter = 10'000;
-        opt.growth_exchange = 0.02f;
+        opt.growth_exchange = true;
         return opt;
     }
 
@@ -1731,14 +1731,14 @@ TEST(MRNFStrategyTest, GrowthExchangeCosineQuotaAtStartMiddleAndEnd) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
     auto params = growth_exchange_test_params();
-    params.growth_exchange = 0.0625f;
     params.grow_until_iter = 1000;
     strategy.initialize(params);
     strategy._exchange_first_iter = 200;
 
-    EXPECT_EQ(strategy.exchange_quota(200, 1024), 64u);
-    EXPECT_EQ(strategy.exchange_quota(600, 1024), 36u);
-    EXPECT_EQ(strategy.exchange_quota(1000, 1024), 8u);
+    // 4% of 1010 active splats at the first exchange, 2.25% halfway, 0.5% at grow_until_iter.
+    EXPECT_EQ(strategy.exchange_quota(200, 1010), 40u);
+    EXPECT_EQ(strategy.exchange_quota(600, 1010), 22u);
+    EXPECT_EQ(strategy.exchange_quota(1000, 1010), 5u);
 }
 
 namespace {
