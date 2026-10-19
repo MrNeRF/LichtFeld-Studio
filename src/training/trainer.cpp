@@ -9310,11 +9310,8 @@ namespace lfs::training {
                     popspa_sampler_phase = popspa_controller_.phase();
                     const uint64_t seed = static_cast<uint64_t>(params_.optimization.popspa_seed) +
                                           (*popspa_sampler_phase == POPSpaPhase::Recover ? 1 : 0);
-                    train_dataloader = create_infinite_pipelined_dataloader(
-                        train_dataset_, pipelined_config, aux_pipeline_config, seed,
-                        popspa_controller_.phase_step());
-                    setActiveImageLoader(train_dataloader->get_loader_shared());
-                    strategy_->set_image_loader(train_dataloader->get_loader());
+                    train_dataloader->restart(InfiniteRandomSampler(
+                        train_dataset_->size(), seed, popspa_controller_.phase_step()));
                 }
                 if (callback_busy_.load(std::memory_order_acquire)) {
                     const cudaError_t callback_status = cudaStreamQuery(callback_stream_);
