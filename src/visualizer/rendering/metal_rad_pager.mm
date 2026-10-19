@@ -67,12 +67,13 @@ namespace lfs::vis {
         const uint64_t allocated = i.device.currentAllocatedSize;
         const uint64_t free = budget > allocated ? budget - allocated : 0;
         // The shared pool policy sizes the pool and the VRAM fraction caps it.
-        // The pool is always a copy here, so resident tensors never make it
-        // free. The current pool and staging count toward their replacement.
+        // A fully loaded RAD pages every node, as its resident tensors do on
+        // Vulkan; the pool is a copy here, so the cap bounds it. The current
+        // pool and staging count toward their replacement.
         const size_t current_pages = same_model ? i.cache.snapshot().physical_pages : 0;
         const uint64_t available = free + (same_model ? current_pages * page_bytes + staging : 0);
         const size_t requested = detail::lodPoolPages({.logical_chunks = chunks,
-                                                       .full_pool = model.has_deleted_mask(),
+                                                       .full_pool = model.has_deleted_mask() || nodes <= size_t(model.size()),
                                                        .out_of_core = nodes > size_t(model.size()),
                                                        .budget_splats = settings.pool_splats,
                                                        .vram_fraction = settings.vram_fraction,

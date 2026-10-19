@@ -17,7 +17,9 @@ namespace lfs::vis {
         constexpr size_t kPageSplats = LodPageCache::kChunkSplats;
         constexpr size_t kDescriptorBytes = sizeof(RadPagePackedDesc);
         constexpr size_t kStagingBytes = rad_page_staging_bytes(kPageSplats);
-        constexpr size_t kRingDepth = 16;
+        // Slots recycle once per rendered frame (uploads wait for the renderer
+        // before reusing pool pages), so the depth bounds pages per frame.
+        constexpr size_t kRingDepth = 64;
     } // namespace
     struct LodUploadEngine::Impl {
         struct Slot : StagingSlot {
