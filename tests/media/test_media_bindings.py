@@ -161,6 +161,40 @@ class MediaBindings(unittest.TestCase):
         source_exif_fixture.check(self, json.loads(value), payload)
         self.assertEqual(json.loads(media.MediaIngest.source_exif_json(path))["status"], "io_error")
 
+    def test_jxl_public_writer_rejects_incompatible_color_without_publication(self):
+        path = self.root / "jxl-color-policy.jxl"
+        color = media.FrameColor()
+        color.transfer = media.ColorTransfer.Srgb
+        color.primaries = media.ColorPrimaries.Bt709
+        frame = media.FrameSurface.from_bytes(1, 1, media.FramePixelFormat.RGB8,
+                                              bytes((10, 20, 30)), color=color)
+        options = media.JxlOutputOptions()
+        media.ImageOutput.write_jxl(path, frame, options)
+        original = path.read_bytes()
+        options.overwrite = True
+        cases = (
+            (media.FramePixelFormat.RGB8, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGB8, media.ColorTransfer.Srgb, media.ColorPrimaries.Bt2020, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Unspecified, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Unspecified, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.Nits),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.SceneRelative),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.Straight, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGBAFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+        )
+        for fmt, transfer, primaries, alpha, units in cases:
+            with self.subTest(format=fmt, transfer=transfer, primaries=primaries, alpha=alpha, units=units):
+                color.transfer, color.primaries, color.alpha, color.units = transfer, primaries, alpha, units
+                pixels = bytes((10, 20, 30)) if fmt == media.FramePixelFormat.RGB8 else struct.pack("=4f", .1, .2, .3, 1.) if fmt == media.FramePixelFormat.RGBAFloat32 else struct.pack("=3f", .1, .2, .3)
+                invalid = media.FrameSurface.from_bytes(1, 1, fmt, pixels, color=color)
+                for target in (path, self.root / "jxl-invalid-new.jxl"):
+                    with self.assertRaises(MEDIA_ERROR):
+                        media.ImageOutput.write_jxl(target, invalid, options)
+                self.assertEqual(path.read_bytes(), original)
+                self.assertFalse((self.root / "jxl-invalid-new.jxl").exists())
+        media.ImageOutput.write_jxl(path, frame, options)
+        self.assertEqual(path.read_bytes(), original)
+
     def test_jxl_public_writer_and_lossless_lossy_sequences(self):
         color = media.FrameColor()
         color.transfer = media.ColorTransfer.Linear
