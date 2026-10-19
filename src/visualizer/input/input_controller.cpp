@@ -49,6 +49,7 @@
 #include <cmath>
 #include <format>
 #include <limits>
+#include <utility>
 
 namespace lfs::vis {
 
@@ -495,6 +496,7 @@ namespace lfs::vis {
         });
 
         window_focus_lost_handler_id_ = internal::WindowFocusLost::when([this](const auto&) {
+            cancelValueDrag(false);
             drag_mode_ = DragMode::None;
             syncLookPointerLock(false);
             clearSelectedCameraContextMenuGesture();
@@ -801,6 +803,14 @@ namespace lfs::vis {
                  button, action, x, y, static_cast<int>(drag_mode_));
         auto* gui = services().guiOrNull();
         const bool is_left_button = button == static_cast<int>(input::AppMouseButton::LEFT);
+        // A left release ends a value drag wherever the hidden pointer is.
+        if (action == input::ACTION_RELEASE && is_left_button)
+            endValueDrag();
+        if (action == input::ACTION_PRESS && button == static_cast<int>(input::AppMouseButton::RIGHT) &&
+            isValueDragActive()) {
+            cancelValueDrag(true);
+            return;
+        }
         const bool press_consumed_camera_frustum =
             action == input::ACTION_RELEASE &&
             is_left_button &&
@@ -1448,6 +1458,16 @@ namespace lfs::vis {
         const bool relative_look = drag_mode_ == DragMode::Rotate && motion.has_value();
         if (relative_look)
             look_pos_ += *motion;
+        // The hidden pointer still moves inside the window; it must not hover or
+        // drag anything while a value drag owns it.
+        if (value_drag_restore_) {
+            if (motion) {
+                value_drag_dx_ += static_cast<float>(motion->x) / input::windowPixelScale(window_).x;
+                if (auto* rendering = services().renderingOrNull())
+                    rendering->markDirty(DirtyFlag::OVERLAY, FrameReason::Input, "value_drag");
+            }
+            return;
+        }
         const glm::vec2 camera_drag_pos = relative_look ? glm::vec2(look_pos_) : glm::vec2(x, y);
         const auto park_camera_drag_anchor = [&]() {
             if (drag_mode_ != DragMode::Pan && drag_mode_ != DragMode::Orbit &&
@@ -1808,6 +1828,10 @@ namespace lfs::vis {
         }
         if (physical_key == input::KEY_LEFT_ALT || physical_key == input::KEY_RIGHT_ALT) {
             key_alt_pressed_ = (action != input::ACTION_RELEASE);
+        }
+        if (action == input::ACTION_PRESS && logical_key == input::KEY_ESCAPE && isValueDragActive()) {
+            cancelValueDrag(true);
+            return;
         }
         const bool wants_text_input = input_router_
                                           ? input_router_->isTextInputActive()
@@ -3356,6 +3380,58 @@ namespace lfs::vis {
             return;
         look_pointer_restore_ =
             glm::vec2(static_cast<float>(x), static_cast<float>(y)) / input::windowPixelScale(window_);
+    }
+
+    bool InputController::isValueDragActive() const {
+        return value_drag_restore_.has_value();
+    }
+
+    bool InputController::beginValueDrag() {
+        if (value_drag_restore_)
+            return true;
+        if (!window_ || look_pointer_restore_)
+            return false;
+        glm::vec2 pointer;
+        SDL_GetMouseState(&pointer.x, &pointer.y);
+        if (!SDL_SetWindowRelativeMouseMode(window_, true))
+            return false;
+        value_drag_restore_ = pointer;
+        value_drag_pin_ = pointer;
+        value_drag_dx_ = 0.0f;
+        value_drag_cancelled_ = false;
+        return true;
+    }
+
+    float InputController::takeValueDragDelta() {
+        return std::exchange(value_drag_dx_, 0.0f);
+    }
+
+    std::optional<glm::vec2> InputController::takeValueDragPin() {
+        if (value_drag_restore_)
+            return value_drag_pin_;
+        return std::exchange(value_drag_pin_, std::nullopt);
+    }
+
+    void InputController::endValueDrag() {
+        releaseValueDrag(true);
+    }
+
+    void InputController::cancelValueDrag(const bool restore_pointer) {
+        if (!value_drag_restore_)
+            return;
+        value_drag_cancelled_ = true;
+        releaseValueDrag(restore_pointer);
+    }
+
+    void InputController::releaseValueDrag(const bool restore_pointer) {
+        if (!value_drag_restore_)
+            return;
+        SDL_SetWindowRelativeMouseMode(window_, false);
+        if (restore_pointer)
+            SDL_WarpMouseInWindow(window_, value_drag_restore_->x, value_drag_restore_->y);
+        value_drag_restore_.reset();
+        if (auto* rendering = services().renderingOrNull())
+            rendering->markDirty(DirtyFlag::OVERLAY, FrameReason::Input, "value_drag");
     }
 
     void InputController::syncLookPointerLock(const bool restore_position) {

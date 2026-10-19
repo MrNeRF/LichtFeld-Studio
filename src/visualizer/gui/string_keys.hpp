@@ -856,7 +856,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* NOT_NOW = "file_association.not_now";
         inline constexpr const char* DONT_ASK = "file_association.dont_ask";
         inline constexpr const char* MENU_REGISTER = "file_association.menu_register";
-        inline constexpr const char* MENU_UNREGISTER = "file_association.menu_unregister";
     } // namespace FileAssociation
 
     namespace ErrorModal {

@@ -188,6 +188,7 @@ namespace lfs::vis {
             glm::vec3 crop_tool_box_max_{0.5f};
             glm::vec3 crop_tool_ellipsoid_radii_{1.0f};
             glm::mat4 crop_tool_visualizer_transform_{1.0f};
+            std::optional<glm::mat4> crop_tool_scale_start_;
             SelectionMode selection_volume_apply_mode_ = SelectionMode::Replace;
             uint64_t selection_volume_source_generation_ = 0;
             std::shared_ptr<core::Tensor> selection_volume_base_mask_;
@@ -256,6 +257,7 @@ namespace lfs::vis {
             [[nodiscard]] bool ensureCropToolState();
             [[nodiscard]] bool syncCropToolStateFromNode(core::NodeId target_id, core::NodeId volume_node_id, bool* changed = nullptr);
             [[nodiscard]] bool persistActiveCropToolToNode(bool enable);
+            void scaleCropToolTransform(const glm::vec3& total_scale);
             void updateCropToolOverlayState();
             void clearCropToolOverlayState();
             void leaveCropTool(bool hide_volume, bool select_parent, bool clear_active_tool);

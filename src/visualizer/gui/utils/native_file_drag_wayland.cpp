@@ -363,7 +363,7 @@ namespace lfs::vis::gui {
                     }
 
                     constexpr char hex[] = "0123456789ABCDEF";
-                    for (const auto& path : provider()) {
+                    for (const auto& path : provider(FileDragTarget::Unknown)) {
                         self.payload += "file://";
                         for (const unsigned char c : path.native()) {
                             if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '/' || c == '-' || c == '_' || c == '.' || c == '~')

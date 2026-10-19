@@ -1754,19 +1754,84 @@ namespace lfs::vis {
                 EXPECT_EQ(sm.getNodeTransform(scene.getNodeById(volume)->name), scaled_transform);
                 ASSERT_TRUE(op::undoHistory().undo().success);
             }
-            drag_to(start - glm::normalize(start - glm::vec2(200.0f, 150.0f)) * 200.0f);
+            const auto world_scale = [&] {
+                const glm::mat4 world = scene.getWorldTransform(volume);
+                return glm::vec3(glm::length(glm::vec3(world[0])), glm::length(glm::vec3(world[1])),
+                                 glm::length(glm::vec3(world[2])));
+            };
+            const glm::vec3 scale_before = world_scale();
+            // Each drag can shrink to 1 %, so three drags fall far below the floor without the clamp.
+            for (int drag = 0; drag < 3; ++drag)
+                drag_to(start - glm::normalize(start - glm::vec2(200.0f, 150.0f)) * 200.0f);
             const auto* node = scene.getNodeById(volume);
             ASSERT_NE(node, nullptr);
             EXPECT_EQ(node->cropbox->min, data.min);
             EXPECT_EQ(node->cropbox->max, data.max);
-            const auto transform = sm.getNodeTransform(node->name);
-            const glm::vec3 scale(glm::length(glm::vec3(transform[0])), glm::length(glm::vec3(transform[1])), glm::length(glm::vec3(transform[2])));
-            EXPECT_GT(scale.x, 0.0f);
-            EXPECT_LT(scale.x, 1.0f);
-            EXPECT_NEAR(scale.z, 1.0f, 1e-5f);
+            const glm::vec3 scale = world_scale();
+            EXPECT_NEAR(scale.x, gui::gizmo_ops::MIN_VOLUME_AXIS_SCALE, 1e-6f);
+            EXPECT_NEAR(scale.y, nested ? gui::gizmo_ops::MIN_VOLUME_AXIS_SCALE : scale_before.y, 1e-5f);
+            EXPECT_NEAR(scale.z, scale_before.z, 1e-5f);
             gizmo.deactivateAllTools();
             op::undoHistory().clear();
         }
+    }
+
+    TEST_F(WindowInputDispatchTest, CropScaleHandleFloorIsReversibleWithinOneDrag) {
+        auto& sm = *viewer_->getSceneManager();
+        auto& scene = sm.getScene();
+        auto& gizmo = gui_->gizmo();
+        auto& camera = viewer_->getViewport().camera;
+        camera.t = {0.0f, 0.0f, 12.0f};
+        camera.pivot = {0.0f, 0.0f, 0.0f};
+        camera.R = rendering::makeVisualizerLookAtRotation(camera.t, camera.pivot);
+        const auto model = scene.addSplat("Floor model", lfs::test::licht::make_splat(3));
+        const auto volume = scene.addCropBox("Floor box", model);
+        core::CropBoxData data;
+        data.min = glm::vec3(-0.5f);
+        data.max = glm::vec3(0.5f);
+        scene.setCropBoxData(volume, data);
+        scene.setNodeTransform(volume, glm::scale(glm::mat4(1.0f), glm::vec3(0.05f, 1.0f, 1.0f)));
+        sm.changeContentType(SceneManager::ContentType::SplatFiles);
+        sm.selectNode(volume);
+        viewer_->getEditorContext().update(&sm, viewer_->getTrainerManager());
+        UnifiedToolRegistry::instance().setActiveTool("builtin.cropbox");
+        gizmo.setCropToolShape("box");
+        gizmo.setOperation(gui::GizmoOperation::Scale);
+        gizmo.setTransformSpace(TransformSpace::World);
+        gui::UIContext ui{.viewer = viewer_.get(), .editor = &viewer_->getEditorContext()};
+        const gui::ViewportLayout layout{.pos = {0.0f, 0.0f}, .size = {400.0f, 300.0f}};
+        gizmo.updateToolState(ui, false);
+        auto& frame = frameInput();
+        bool found = false;
+        for (int y = 105; y <= 195 && !found; ++y) {
+            frame.mouse_x = 290.0f;
+            frame.mouse_y = static_cast<float>(y);
+            gizmo.renderCropBoxGizmo(ui, layout);
+            found = gui::isScaleGizmoHovered();
+        }
+        ASSERT_TRUE(found);
+        const glm::vec2 start(frame.mouse_x, frame.mouse_y);
+        const auto x_scale = [&] { return glm::length(glm::vec3(scene.getWorldTransform(volume)[0])); };
+        frame.mouse_down[0] = frame.mouse_clicked[0] = true;
+        gizmo.renderCropBoxGizmo(ui, layout);
+        ASSERT_TRUE(gui::isScaleGizmoActive());
+        frame.mouse_clicked[0] = false;
+        // Past the centre the gizmo factor bottoms out at 1 %, far below the 0.001 floor here.
+        const glm::vec2 past_center = start - glm::normalize(start - glm::vec2(200.0f, 150.0f)) * 200.0f;
+        frame.mouse_x = past_center.x;
+        frame.mouse_y = past_center.y;
+        gizmo.renderCropBoxGizmo(ui, layout);
+        frame.mouse_x = start.x;
+        frame.mouse_y = start.y;
+        gizmo.renderCropBoxGizmo(ui, layout);
+        frame.mouse_down[0] = false;
+        frame.mouse_released[0] = true;
+        gizmo.renderCropBoxGizmo(ui, layout);
+        frame.mouse_released[0] = false;
+        // Chaining per-frame deltas onto the clamped transform would end at 0.1 instead.
+        EXPECT_NEAR(x_scale(), 0.05f, 1e-5f);
+        gizmo.deactivateAllTools();
+        op::undoHistory().clear();
     }
 
     TEST_F(WindowInputDispatchTest, EllipsoidScaleHandleMatchesNumericTransformScale) {
@@ -1818,6 +1883,27 @@ namespace lfs::vis {
         for (int column = 0; column < 4; ++column)
             for (int row = 0; row < 4; ++row)
                 EXPECT_NEAR(actual[column][row], expected[column][row], 1e-5f);
+
+        const glm::vec2 start(290.0f, frame.mouse_y);
+        const glm::vec2 end = start - glm::normalize(start - glm::vec2(200.0f, 150.0f)) * 200.0f;
+        for (int drag = 0; drag < 3; ++drag) {
+            frame.mouse_x = start.x;
+            frame.mouse_y = start.y;
+            frame.mouse_down[0] = frame.mouse_clicked[0] = true;
+            gizmo.renderEllipsoidGizmo(ui, layout);
+            ASSERT_TRUE(gui::isScaleGizmoActive());
+            frame.mouse_clicked[0] = false;
+            frame.mouse_x = end.x;
+            frame.mouse_y = end.y;
+            gizmo.renderEllipsoidGizmo(ui, layout);
+            frame.mouse_down[0] = false;
+            frame.mouse_released[0] = true;
+            gizmo.renderEllipsoidGizmo(ui, layout);
+            frame.mouse_released[0] = false;
+        }
+        const glm::mat4 world = scene.getWorldTransform(volume);
+        EXPECT_NEAR(glm::length(glm::vec3(world[0])), gui::gizmo_ops::MIN_VOLUME_AXIS_SCALE, 1e-6f);
+        EXPECT_EQ(scene.getNodeById(volume)->ellipsoid->radii, data.radii);
         gizmo.deactivateAllTools();
         op::undoHistory().clear();
     }

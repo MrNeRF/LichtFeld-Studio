@@ -313,6 +313,54 @@ def test_worker_histogram_matches_numpy_for_random_tensor(histogram_panel_module
     expected, _ = numpy.histogram(values, bins=numpy.asarray(result["primary"]["edges"]))
     assert result["primary"]["counts"] == expected.tolist()
 
+def test_worker_job_never_touches_the_live_scene(histogram_panel_module, lf, numpy, monkeypatch):
+    """The scene and combined-model bindings wrap live C++ objects that the UI and render threads keep
+    using, so the worker must not call into them once _refresh has queued the job. Fails if _refresh
+    hands the live objects to the worker instead of a snapshot."""
+    module = histogram_panel_module
+    panel = module.HistogramPanel()
+    panel._handle = _UpdateHandleStub()
+    panel._metric_id = "opacity"
+    panel._compare_metric_id = "scale_x"
+    values = numpy.array([0.1, 0.4, 0.6, 0.9], dtype=numpy.float32)
+    opacity = lf.Tensor.from_numpy(values)
+    scaling = lf.Tensor.from_numpy(numpy.repeat(values[:, None], 3, axis=1))
+    deleted = lf.Tensor.from_numpy(numpy.array([False, True, False, False]))
+    released = {"value": False}
+
+    def live(fn):
+        def call(*args, **kwargs):
+            assert not released["value"], "worker used the live scene after the job was queued"
+            return fn(*args, **kwargs)
+
+        return call
+
+    def crop(mask):
+        mask[3] = False
+
+    model = SimpleNamespace(num_points=len(values), get_opacity=live(lambda: opacity),
+                            get_scaling=live(lambda: scaling), has_deleted_mask=live(lambda: True),
+                            deleted=deleted)
+    scene = SimpleNamespace(is_valid=lambda: True, combined_model=lambda: model,
+                            get_nodes=live(lambda: []), apply_crop_filter=live(crop))
+    monkeypatch.setattr(module.lf, "get_scene", lambda: scene)
+    monkeypatch.setattr(panel, "_scene_data_generation_value", lambda: 1)
+    monkeypatch.setattr(panel, "_scene_node_selection_signature", lambda: ())
+    queued = []
+    monkeypatch.setattr(panel, "_queue_histogram_compute", lambda *args, **_kwargs: queued.append(args))
+
+    panel._refresh()
+    released["value"] = True
+    job_scene, job_model, _cache_key, scope_ids = queued[0]
+    result = panel._compute_histogram_result(
+        job_scene, job_model, "opacity", 16, "scale_x", 8, 8, (None, None), (None, None), scope_ids,
+    )
+
+    assert result["kind"] == "ok"
+    numpy.testing.assert_array_equal(result["primary"]["finite_mask"].numpy(), [True, False, True, False])
+    assert sum(result["compare"]["counts"]) == 2
+
+
 @pytest.mark.parametrize("crop_enabled", [False, True])
 def test_histogram_applies_render_crop_to_both_axes(histogram_panel_module, lf, numpy, crop_enabled):
     values = lf.Tensor.from_numpy(numpy.array([0.1, 0.3, 0.6, 0.9], dtype=numpy.float32))

@@ -6539,6 +6539,8 @@ namespace lfs::training {
                 }
                 lfs::core::Tensor edge_score_scratch;
                 lfs::core::Tensor edge_weight_map;
+                lfs::core::Tensor impact_sum_scratch;
+                lfs::core::Tensor impact_peak_scratch;
                 lfs::core::Tensor fused_scale_reg_loss_gpu;
                 lfs::core::Tensor fused_opacity_reg_loss_gpu;
                 lfs::core::Tensor fused_erank_reg_loss_gpu;
@@ -6587,6 +6589,19 @@ namespace lfs::training {
                         if (edge_weight_scoring_active_) {
                             fused_extra_gradients.edge_weight_map = edge_weight_map.ptr<float>();
                             fused_extra_gradients.edge_score_out = edge_score_scratch.ptr<float>();
+                        }
+                        {
+                            auto impact = strategy_->impact_scratch(iter);
+                            impact_sum_scratch = std::move(impact.first);
+                            impact_peak_scratch = std::move(impact.second);
+                            if (impact_sum_scratch.is_valid() && impact_peak_scratch.is_valid() &&
+                                impact_sum_scratch.dtype() == lfs::core::DataType::Float32 &&
+                                impact_peak_scratch.dtype() == lfs::core::DataType::Float32 &&
+                                impact_sum_scratch.numel() == static_cast<size_t>(model.size()) &&
+                                impact_peak_scratch.numel() == static_cast<size_t>(model.size())) {
+                                fused_extra_gradients.impact_sum_out = impact_sum_scratch.ptr<float>();
+                                fused_extra_gradients.impact_peak_out = impact_peak_scratch.ptr<float>();
+                            }
                         }
                         const float scale_weight = params_.optimization.scale_reg_at(iter);
                         const bool log_scale_reg = core::param::is_mrnf_strategy(params_.optimization.strategy);
@@ -8042,6 +8057,9 @@ namespace lfs::training {
                                                             tile_grad_normal);
                                     if (fused_extra_gradients.edge_score_out != nullptr) {
                                         strategy_->on_edge_score_accumulated(iter);
+                                    }
+                                    if (fused_extra_gradients.impact_sum_out != nullptr) {
+                                        strategy_->on_impact_accumulated(iter);
                                     }
                                     if (model_write_lock.owns_lock()) {
                                         recordParamsReady();

@@ -379,6 +379,9 @@ namespace lfs::core {
             float growth_grad_threshold = 0.003f;
             float grow_fraction = 0.07f;
             size_t grow_until_iter = 15000;
+            // At the cap, frees the splats whose removal changes the image least so error-guided
+            // growth keeps working until grow_until_iter.
+            bool growth_exchange = false;
             float opacity_decay = 0.004f;
             float scale_decay = 0.002f;
             float means_noise_weight = 50.0f;

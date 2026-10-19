@@ -514,9 +514,11 @@ protected:
         _ComputePipeline(4),
         _ComputePipeline(4)};
     _ComputePipelinePair pipeline_rasterize_forward = _ComputePipelinePair(15);
-    _ComputePipelinePair pipeline_rasterize_forward_3dgut = _ComputePipelinePair(21);
+    _ComputePipelinePair pipeline_rasterize_forward_3dgut = _ComputePipelinePair(24);
     _ComputePipelinePair pipeline_rasterize_forward_plain = _ComputePipelinePair(15);
-    _ComputePipelinePair pipeline_rasterize_forward_3dgut_plain = _ComputePipelinePair(21);
+    _ComputePipelinePair pipeline_rasterize_forward_3dgut_plain = _ComputePipelinePair(24);
+    _ComputePipelinePair pipeline_rasterize_forward_3dgut_rad = _ComputePipelinePair(24);
+    _ComputePipelinePair pipeline_rasterize_forward_3dgut_plain_rad = _ComputePipelinePair(24);
     _ComputePipelinePair pipeline_rasterize_forward_light = _ComputePipelinePair(15);
     _ComputePipelinePair pipeline_rasterize_forward_light_plain = _ComputePipelinePair(15);
     _ComputePipeline pipeline_tile_batch_descriptors = _ComputePipeline(4);

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "splat_drag_axes.hpp"
 #include <atomic>
 #include <chrono>
 #include <core/export.hpp>
@@ -10,6 +11,7 @@
 #include <future>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -24,7 +26,8 @@ namespace lfs::vis::gui {
         std::string format = "ply";
         std::string name = "splat";
         int sh_degree = -1;
-        bool z_up = true;
+        SplatDragAxes axes;
+        std::optional<int> training_step;
         std::function<bool(float)> progress;
         // Staging root; empty is the transfers folder in the LichtFeld cache directory.
         std::filesystem::path staging_root;

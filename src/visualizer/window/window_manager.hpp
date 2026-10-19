@@ -178,6 +178,7 @@ namespace lfs::vis {
         void updateManualResize();
         void finishManualResize();
         void suppressFrameInputForManualResize();
+        void pinFrameInputForValueDrag();
         [[nodiscard]] bool isManualResizeActive() const { return manual_resize_edge_ != ResizeEdge::NoEdge; }
         void beginTitlebarDrag(int local_x, int local_y);
         void updateTitlebarDrag();

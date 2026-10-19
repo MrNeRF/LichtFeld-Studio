@@ -148,7 +148,7 @@ def _install_lf_stub(monkeypatch):
         started=[],
         cancelled=0,
         section_request="",
-        splat_drag_preferences={"format": "ply", "sh_degree": 3, "blender_axes": True},
+        splat_drag_preferences={"format": "ply", "sh_degree": 3, "up_axis": -2},
         mcp_preferences={
             "enabled": True,
             "expose_network": False,
