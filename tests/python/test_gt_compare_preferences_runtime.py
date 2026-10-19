@@ -126,6 +126,7 @@ print(os.getpid())
         ('Left', 1100, ''),
         ('Right', 80, ''),
         ('Right', 1100, 'lf.ui.toggle_gt_comparison()\nassert not lf.ui.is_gt_comparison_active()'),
+        ('Right', 1100, 'lf.ui.toggle_gt_comparison()\nassert lf.ui.is_gt_comparison_active()'),
     ]
     args = ['wtype']
     for key, duration, _ in cases:
@@ -142,6 +143,10 @@ print(os.getpid())
             if index and configure:
                 _editor(camera_runtime, configure)
             before = current()
+            if index == 6:
+                # Switching comparison off during a hold must not stop browsing.
+                time.sleep(max(0, started + elapsed + 1.3 - time.monotonic()))
+                _editor(camera_runtime, 'lf.ui.toggle_gt_comparison()\nassert not lf.ui.is_gt_comparison_active()')
             elapsed += .7 + duration / 1000
             time.sleep(max(0, started + elapsed + .15 - time.monotonic()))
             after = current()
@@ -160,4 +165,6 @@ print(os.getpid())
     assert advances[2] > advances[1]
     assert 5 <= advances[2] <= 9
     assert 5 <= advances[3] <= 9
-    assert advances[4:] == [1, 1]
+    assert advances[4] == 1
+    assert 5 <= advances[5] <= 9
+    assert 5 <= advances[6] <= 9

@@ -1558,7 +1558,7 @@ def test_drag_settings_use_one_sh_cap_and_localized_tooltips():
         assert data["preferences"]["scene_graph_selection_markers_description"].strip(), path.name
 
 
-def test_gt_comparison_repeat_preferences_reset_and_preview(preferences_panel_module, monkeypatch):
+def test_camera_repeat_numeric_preference_and_step_buttons(preferences_panel_module, monkeypatch):
     module, state = preferences_panel_module
     panel = module.PreferencesPanel()
     panel._refresh_selection = lambda: None
@@ -1571,11 +1571,22 @@ def test_gt_comparison_repeat_preferences_reset_and_preview(preferences_panel_mo
     monkeypatch.setattr(module.lf.ui, "set_gt_comparison_repeat_rate", set_rate)
     panel._set_gt_comparison_key_repeat(False)
     assert not state.gt_comparison_key_repeat
-    panel._set_scrub_value("gt_comparison_repeat_rate", 12)
-    assert panel._get_scrub_value("gt_comparison_repeat_rate") == 12
-    assert writes == [(12.0, False)]
-    panel._commit_scrub_value("gt_comparison_repeat_rate", 12)
-    assert writes[-1] == (12.0, True)
+    panel._set_gt_comparison_repeat_rate("12")
+    assert state.gt_comparison_repeat_rate == 12
+    assert writes == [(12, True)]
+    for invalid in ("", "abc", "nan", "inf", "0", "21"):
+        panel._set_gt_comparison_repeat_rate(invalid)
+    assert writes == [(12, True)]
+    panel._step_camera_repeat_rate(None, None, [-1])
+    assert state.gt_comparison_repeat_rate == 11
+    panel._step_camera_repeat_rate(None, None, [1])
+    assert state.gt_comparison_repeat_rate == 12
+    panel._set_gt_comparison_repeat_rate("20")
+    panel._step_camera_repeat_rate(None, None, [1])
+    assert state.gt_comparison_repeat_rate == 20
+    panel._set_gt_comparison_repeat_rate("1")
+    panel._step_camera_repeat_rate(None, None, [-1])
+    assert state.gt_comparison_repeat_rate == 1
     panel._reset_section("input")
     assert state.gt_comparison_key_repeat
     assert state.gt_comparison_repeat_rate == 5.0

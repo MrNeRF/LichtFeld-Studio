@@ -385,9 +385,10 @@
           </div>
           <div class="setting-row setting-row--aligned" data-if="gt_comparison_key_repeat">
             <span class="setting-row__label-col">@tr:preferences.gt_comparison_repeat_rate</span>
-            <div class="setting-row__control-col setting-row__control-col--slider">
-              <input type="range" class="setting-slider" data-value="gt_comparison_repeat_rate" min="1" max="20" step="1" />
-              <span class="slider-value">{{ gt_comparison_repeat_rate | format_int }}</span>
+            <div class="setting-row__control-col preferences-repeat-rate">
+              <input type="text" class="number-input" data-value="gt_comparison_repeat_rate" maxlength="2" />
+              <button class="num-step-btn" data-event-click="step_camera_repeat_rate(-1)">-</button>
+              <button class="num-step-btn" data-event-click="step_camera_repeat_rate(1)">+</button>
             </div>
           </div>
           <div class="preferences-row preferences-checkbox-row">

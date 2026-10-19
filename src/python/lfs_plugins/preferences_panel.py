@@ -69,7 +69,6 @@ class PreferencesPanel(Panel):
     )
 
     SPEED_SCRUB_FIELD_DEFS = {
-        "gt_comparison_repeat_rate": ScrubFieldSpec(1.0, 20.0, 1.0, "%d", data_type=int),
         "zoom_speed": ScrubFieldSpec(1.0, 100.0, 1.0, "%d", data_type=int),
         "navigation_speed": ScrubFieldSpec(1.0, 100.0, 1.0, "%d", data_type=int),
         **{f"theme_vignette_{name}": ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f")
@@ -226,8 +225,9 @@ class PreferencesPanel(Panel):
         )
         model.bind("gt_comparison_key_repeat", lf.ui.get_gt_comparison_key_repeat,
                    self._set_gt_comparison_key_repeat)
-        model.bind("gt_comparison_repeat_rate", lf.ui.get_gt_comparison_repeat_rate,
+        model.bind("gt_comparison_repeat_rate", lambda: str(int(lf.ui.get_gt_comparison_repeat_rate())),
                    self._set_gt_comparison_repeat_rate)
+        model.bind_event("step_camera_repeat_rate", self._step_camera_repeat_rate)
         model.bind("view_snap", lf.get_camera_view_snap_enabled, self._set_view_snap)
         model.bind("remember_navigation", lf.ui.remember_camera_navigation, self._set_remember_navigation)
         model.bind("remember_view_snap", lf.ui.remember_camera_view_snap, self._set_remember_view_snap)
@@ -862,14 +862,24 @@ class PreferencesPanel(Panel):
         self._refresh_selection()
 
     def _set_gt_comparison_repeat_rate(self, value):
-        lf.ui.set_gt_comparison_repeat_rate(float(value))
+        try:
+            rate = float(value)
+        except (TypeError, ValueError):
+            return
+        if not 1 <= rate <= 20:
+            return
+        lf.ui.set_gt_comparison_repeat_rate(round(rate))
         self._refresh_selection()
+
+    def _step_camera_repeat_rate(self, _handle, _event, args):
+        if not args:
+            return
+        rate = lf.ui.get_gt_comparison_repeat_rate() + int(args[0])
+        self._set_gt_comparison_repeat_rate(max(1, min(20, rate)))
 
     def _get_scrub_value(self, prop):
         if prop.startswith("theme_vignette_"):
             return float(vignette_value(prop.removeprefix("theme_vignette_")))
-        if prop == "gt_comparison_repeat_rate":
-            return float(lf.ui.get_gt_comparison_repeat_rate())
         if prop == "zoom_speed":
             return float(lf.ui.get_zoom_speed_preference())
         if prop == "navigation_speed":
@@ -886,8 +896,6 @@ class PreferencesPanel(Panel):
             lf.ui.set_zoom_speed_preference(float(value), persist=False)
         elif prop == "navigation_speed":
             lf.ui.set_navigation_speed_preference(float(value), persist=False)
-        elif prop == "gt_comparison_repeat_rate":
-            lf.ui.set_gt_comparison_repeat_rate(float(value), persist=False)
         self._refresh_selection()
 
     def _commit_scrub_value(self, prop, value):
@@ -898,8 +906,6 @@ class PreferencesPanel(Panel):
             self._set_zoom_speed(value)
         elif prop == "navigation_speed":
             self._set_navigation_speed(value)
-        elif prop == "gt_comparison_repeat_rate":
-            self._set_gt_comparison_repeat_rate(value)
 
     def _set_view_snap(self, enabled):
         lf.set_camera_view_snap_enabled(bool(enabled))

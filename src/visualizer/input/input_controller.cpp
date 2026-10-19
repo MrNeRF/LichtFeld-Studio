@@ -2117,9 +2117,7 @@ namespace lfs::vis {
             case input::Action::CAMERA_PREV_VIEW: {
                 const int delta = bound_action == input::Action::CAMERA_NEXT_VIEW ? 1 : -1;
                 if (advanceCameraView(delta)) {
-                    const auto* rendering = services().renderingOrNull();
-                    if (rendering && rendering->isGTComparisonActive() &&
-                        UserPreferences::instance().gtComparisonKeyRepeat()) {
+                    if (UserPreferences::instance().gtComparisonKeyRepeat()) {
                         gt_navigation_repeat_modifiers_ = mods;
                         gt_navigation_repeat_.start(physical_key, delta, input::GTNavigationRepeat::Clock::now());
                     }
@@ -2459,12 +2457,12 @@ namespace lfs::vis {
     void InputController::updateGTNavigationRepeat() {
         if (!gt_navigation_repeat_.active())
             return;
-        const auto* rendering = services().renderingOrNull();
         auto& preferences = UserPreferences::instance();
-        if (!hasViewportKeyboardFocus() || !input_router_ ||
+        // The viewport owned the press. A transient unassigned focus does not
+        // revoke that hold; explicit GUI focus, text editing and modals do.
+        if (!input_router_ || input_router_->keyboardFocus() == input::InputTarget::Gui ||
             input_router_->isTextInputActive() || input_router_->isModalOpen() ||
             bindings_.isCapturing() || lfs::python::has_keyboard_capture_request() ||
-            !rendering || !rendering->isGTComparisonActive() ||
             !preferences.gtComparisonKeyRepeat() ||
             !isKeyPressed(gt_navigation_repeat_.key()) || getModifierKeys() != gt_navigation_repeat_modifiers_) {
             gt_navigation_repeat_.stop();
