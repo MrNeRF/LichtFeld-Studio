@@ -136,10 +136,12 @@ namespace lfs::training::mrnf_strategy {
         const int blocks = static_cast<int>((N + threads - 1) / threads);
         cudaStream_t s = resolve_stream(stream);
         initialize_exchange_ranks_kernel<<<blocks, threads, 0, s>>>(ranks, row_indices, N);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.initialize_exchange_ranks");
         fused_inverse_exchange_ranks_kernel<<<blocks, threads, 0, s>>>(
             primary_order, secondary_order, ranks, N);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.fused_inverse_exchange_ranks");
         mask_ineligible_exchange_ranks_kernel<<<blocks, threads, 0, s>>>(eligible, ranks, N);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.exchange_ranks");
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.mask_ineligible_exchange_ranks");
     }
 
     void launch_sort_exchange_ranks(
