@@ -366,20 +366,37 @@ namespace lfs::training {
             std::min<int64_t>(budget_for_alloc, selectable));
     }
 
-    void ImprovedGSPlus::LAS_densify(const lfs::core::Tensor& scores, const int64_t budget_for_alloc) {
+    void ImprovedGSPlus::LAS_densify(const lfs::core::Tensor& scores, const int64_t requested_budget) {
         const bool shN_expanded =
             !_splat_data->shN_value_quantized() &&
             lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
         lfs::training::sh_value::ShNCommitGuard shn_guard(
             *_splat_data, shN_expanded, "ImprovedGSPlus::LAS_densify");
 
-        // Sample without replacement through the same Gumbel-top-k path as MCMC.
-        const size_t k_sample = static_cast<size_t>(budget_for_alloc);
-        auto sampled_idxs = lfs::core::Tensor::empty(
-            {k_sample}, scores.device(), lfs::core::DataType::Int64);
+        // Sample without replacement through the same Gumbel-top-k path as MCMC, split between
+        // the crop box ROI and the rest by the growth share when a crop box is active.
         const auto seed = static_cast<uint64_t>(
             std::chrono::high_resolution_clock::now().time_since_epoch().count());
-        mrnf_ops().gumbel(nullptr, scores, sampled_idxs, {.seed = seed});
+        const auto sample = [&](const lfs::core::Tensor& weights, const int64_t count, const uint64_t salt) {
+            auto picks = lfs::core::Tensor::empty(
+                {static_cast<size_t>(count)}, scores.device(), lfs::core::DataType::Int64);
+            mrnf_ops().gumbel(nullptr, weights, picks, {.seed = seed ^ salt});
+            return picks;
+        };
+        lfs::core::Tensor sampled_idxs;
+        if (const auto split = split_growth_by_roi(*_optimizer, scores, requested_budget)) {
+            std::vector<lfs::core::Tensor> parts;
+            if (split->roi_count > 0)
+                parts.push_back(sample(split->roi_weights, split->roi_count, 0));
+            if (split->rest_count > 0)
+                parts.push_back(sample(split->rest_weights, split->rest_count, 0x9e3779b97f4a7c15ull));
+            if (parts.empty())
+                return;
+            sampled_idxs = parts.size() == 1 ? parts[0] : lfs::core::Tensor::cat(parts, 0);
+        } else {
+            sampled_idxs = sample(scores, requested_budget, 0);
+        }
+        const int64_t budget_for_alloc = static_cast<int64_t>(sampled_idxs.numel());
         const auto sampled_scale_summary = summarize_sampled_scales(_splat_data->scaling_raw(), sampled_idxs);
         if (_pending_failure_snapshot.valid) {
             _pending_failure_snapshot.sampled_scale_p95 = sampled_scale_summary.p95;

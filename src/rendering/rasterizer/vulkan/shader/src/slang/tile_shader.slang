@@ -110,7 +110,10 @@ void main(
         inv_cov_opac.xyz = portal_gut_bin_inverse(inv_cov_opac.xyz, camera_width, camera_height);
     }
 
-    float extend = extend_from_opacity(inv_cov_opac.w);
+    // Match GUT projection's expanded support for high-density RAD parents.
+    float extend = is_gut_projection_mode(uniforms.camera_model) && (uniforms.lod_enabled & 4u) != 0u
+        ? sqrt(2.0f * power_threshold_for_spark_rad_opacity(inv_cov_opac.w))
+        : extend_from_opacity(inv_cov_opac.w);
     float3 inv_cov = inv_cov_opac.xyz / (extend*extend);
 #endif  // TILE_CULLING_MODE > 0
 

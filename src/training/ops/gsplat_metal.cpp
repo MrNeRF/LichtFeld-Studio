@@ -339,8 +339,9 @@ namespace lfs::training {
             const Tensor image = rgb ? reuse(state.image, plane(3), DataType::Float32) : Tensor{};
             const Tensor depth = params.render_mode != ops::GsplatRenderMode::RGB ? reuse(state.depth, plane(1), DataType::Float32) : Tensor{};
             const Tensor normal = geometry ? reuse(state.normal, plane(3), DataType::Float32) : Tensor{};
-            saved.camera_rays = geometry ? reuse(state.camera_rays, {size_t(f.height), size_t(f.width), size_t(3)}, DataType::Float32) : Tensor{};
-            if (geometry) {
+            const bool rays_out = geometry || params.camera_rays;
+            saved.camera_rays = rays_out ? reuse(state.camera_rays, {size_t(f.height), size_t(f.width), size_t(3)}, DataType::Float32) : Tensor{};
+            if (rays_out) {
                 RasterParams rays{};
                 rays.camera = mk::address(f.camera);
                 rays.width = f.width;

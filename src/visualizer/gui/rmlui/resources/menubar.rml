@@ -5,12 +5,12 @@
 <body id="body" data-model="menu_bar">
     <div id="menu-row">
         <div id="menu-left">
-            <img id="brand-logo" />
             <div id="menu-items">
                 <span class="menu-label"
                       data-for="menu : menu_labels"
                       data-class-active="menu.active"
-                      data-attr-data-index="menu.index">{{ menu.access.label_before }}<span class="access-key" data-if="menu.access.access_mark != ''">{{ menu.access.access_mark }}</span>{{ menu.access.label_after }}</span>
+                      data-class-logo="menu.logo"
+                      data-attr-data-index="menu.index"><img data-if="menu.logo" data-attr-src="brand_logo_src" />{{ menu.access.label_before }}<span class="access-key" data-if="menu.access.access_mark != ''">{{ menu.access.access_mark }}</span>{{ menu.access.label_after }}</span>
             </div>
         </div>
         <div id="menu-toolbar">

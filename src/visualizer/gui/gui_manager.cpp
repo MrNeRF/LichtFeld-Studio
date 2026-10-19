@@ -21,6 +21,7 @@
 #include "gui/guide_segment_clipping.hpp"
 #include "gui/import_error.hpp"
 #include "gui/rmlui/elements/node_canvas_element.hpp"
+#include "gui/utils/native_drag_scheduler.hpp"
 #include "gui/viewport_gizmo_geometry.hpp"
 #include "gui/volume_guide_visibility.hpp"
 #include "ipc/view_context.hpp"
@@ -185,6 +186,8 @@ namespace lfs::vis::gui {
         constexpr auto kInteractiveTrainingToggleMinInterval = std::chrono::milliseconds(3000);
 
         void setCursorIfChanged(SDL_Cursor* const cursor) {
+            if (NativeDragScheduler::ownsNativeCursor())
+                return;
             if (SDL_GetCursor() != cursor)
                 SDL_SetCursor(cursor);
         }
@@ -6886,7 +6889,10 @@ namespace lfs::vis::gui {
             viewer_->getWindowManager() &&
             viewer_->getWindowManager()->manualResizeEdgeMask() != 0;
         if (!window_resize_active) {
-            const auto rml_cursor = rmlui_manager_.consumeCursorRequest();
+            auto rml_cursor = rmlui_manager_.consumeCursorRequest();
+            if (const auto overlay_cursor = rml_viewport_overlay_.cursorRequest();
+                !block_underlay_input && overlay_cursor != RmlCursorRequest::None)
+                rml_cursor = overlay_cursor;
             const bool floating_resize_applied =
                 !floating_panel_cursor_hidden_ && has_floating_panels &&
                 reg.apply_floating_resize_cursor();
@@ -8549,7 +8555,7 @@ namespace lfs::vis::gui {
     }
 
     bool GuiManager::isViewportExportLocked() const {
-        return async_tasks_.isExporting() || async_tasks_.isExportingVideo();
+        return (async_tasks_.isExporting() && !async_tasks_.isDragExport()) || async_tasks_.isExportingVideo();
     }
 
     void GuiManager::setStartupPluginLoadState(const bool started,

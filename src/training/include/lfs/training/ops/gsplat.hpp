@@ -23,6 +23,8 @@ namespace lfs::gpu_ops {
         GsplatRenderMode render_mode = GsplatRenderMode::RGB;
         float scaling_modifier = 1.f;
         bool antialiased = false;
+        // Also fill GsplatSaved::camera_rays ([H,W,3] camera-space rays) without geometry outputs.
+        bool camera_rays = false;
     };
 
     // Resolve each gradient at its existing accumulation point. In particular,

@@ -1256,7 +1256,11 @@ namespace lfs::vis {
         main_loop_->setFrameErrorCallback([this](std::exception_ptr eptr) {
             handleFrameException(std::move(eptr));
         });
-        main_loop_->setFrameCompletedCallback([this]() { onFrameCompleted(); });
+        main_loop_->setFrameCompletedCallback([this]() {
+            onFrameCompleted();
+            if (window_manager_)
+                window_manager_->dispatchNativeDrags([this] { return main_loop_->runModalFrame(); });
+        });
     }
 
     void VisualizerImpl::handleFrameException(std::exception_ptr eptr) noexcept {
@@ -2412,6 +2416,8 @@ namespace lfs::vis {
 
         // Update editor context state from scene/trainer
         editor_context_.update(scene_manager_.get(), trainer_manager_.get());
+        if (trainer_manager_)
+            trainer_manager_->syncCropBox();
 
         if (const auto& viewport = getViewport();
             scene_manager_ && rendering_manager_ && viewport.windowSize.y > 0) {

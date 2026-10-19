@@ -21,6 +21,7 @@
 #include <chrono>
 #include <ctime>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <limits>
 #include <stdexcept>
@@ -664,6 +665,14 @@ namespace lfs::training {
         const auto fused_adam = fast_adam_settings(adam);
         const float* edge_weight = edge_map.is_valid() && edge_map.numel() > 0 ? edge_map.ptr<float>() : nullptr;
         float* edge_score = edge_scores.is_valid() && edge_scores.numel() > 0 ? edge_scores.ptr<float>() : nullptr;
+        const bool impact_requested = adam.impact_sum.is_valid() && adam.impact_peak.is_valid();
+        if (impact_requested &&
+            (adam.impact_sum.dtype() != core::DataType::Float32 || adam.impact_peak.dtype() != core::DataType::Float32 ||
+             adam.impact_sum.numel() != adam.impact_peak.numel() || !adam.impact_sum.is_contiguous() || !adam.impact_peak.is_contiguous()))
+            throw std::invalid_argument(std::format("FastGS impact outputs need matching contiguous float32 vectors, got {} and {} elements",
+                                                    adam.impact_sum.numel(), adam.impact_peak.numel()));
+        float* impact_sum = impact_requested ? adam.impact_sum.ptr<float>() : nullptr;
+        float* impact_peak = impact_requested ? adam.impact_peak.ptr<float>() : nullptr;
         auto& caches = state.caches;
         auto& ctx = state.frame;
         const auto& grad_image = gradients.image;
@@ -853,9 +862,12 @@ namespace lfs::training {
             bwd_shN_n_cells,
             bwd_shN_bits,
             edge_weight,
-            edge_score);
+            edge_score,
+            impact_sum,
+            impact_peak);
         for (const core::Tensor* output : std::initializer_list<const core::Tensor*>{
-                 &adam.rendered_count, &adam.erank_reg_loss, &adam.dc_reg_loss, &adam.sh_rest_reg_loss}) {
+                 &adam.rendered_count, &adam.erank_reg_loss, &adam.dc_reg_loss, &adam.sh_rest_reg_loss,
+                 &adam.impact_sum, &adam.impact_peak}) {
             if (output->is_valid()) {
                 output->record_stream(stream);
                 core::bridgeStreams(stream, output->stream());

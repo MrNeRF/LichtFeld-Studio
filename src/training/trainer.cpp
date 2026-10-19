@@ -850,11 +850,10 @@ namespace lfs::training {
         fused_erank_reg_loss_ = {};
         fused_dc_reg_loss_ = {};
         fused_sh_rest_reg_loss_ = {};
-        cropbox_damping_cached_mask_ = {};
-        cropbox_damping_cached_n_ = 0;
-        cropbox_damping_geom_fp_ = 0;
-        cropbox_damping_cached_scale_ = 1.0f;
-        cropbox_damping_cache_valid_ = false;
+        cropbox_view_reject_ = {};
+        cropbox_score_reject_ = {};
+        cropbox_roi_rows_ = {};
+        cropbox_camera_centres_ = {};
         depth_loss_scalar_ = {};
         depth_loss_grad_ = {};
         depth_loss_grad_alpha_ = {};
@@ -1801,72 +1800,127 @@ namespace lfs::training {
         if (!result.applied) {
             return;
         }
-        cropbox_damping_cache_valid_ = false;
         strategy_->permute_gaussian_rows(result.permutation);
-        install_cropbox_step_damping(model, strategy_->get_optimizer());
     }
 
-    void Trainer::install_cropbox_step_damping(
+    void Trainer::setCropBoxSnapshot(std::optional<TrainingCropBoxGeometry> geometry) {
+        std::lock_guard lock(cropbox_publish_mutex_);
+        cropbox_published_ = std::move(geometry);
+        cropbox_published_mode_.store(true, std::memory_order_release);
+    }
+
+    void Trainer::refresh_cropbox_snapshot() {
+        if (cropbox_published_mode_.load(std::memory_order_acquire)) {
+            std::lock_guard lock(cropbox_publish_mutex_);
+            cropbox_ = cropbox_published_;
+            return;
+        }
+        cropbox_ = scene_ ? resolve_training_cropbox_geom(*scene_) : std::nullopt;
+    }
+
+    namespace {
+        // Reuses a row buffer across steps; it only grows.
+        lfs::core::Tensor bool_rows(lfs::core::Tensor& buffer, const size_t n) {
+            if (!buffer.is_valid() || buffer.numel() < n) {
+                buffer = lfs::core::Tensor::empty(
+                    {std::max<size_t>(n, buffer.is_valid() ? buffer.numel() * 5 / 4 : 0)},
+                    lfs::core::Device::CUDA, lfs::core::DataType::Bool);
+            }
+            return buffer.slice(0, 0, n);
+        }
+
+        const bool* deleted_rows(const lfs::core::SplatData& model) {
+            const auto& deleted = model.deleted();
+            return deleted.is_valid() && deleted.numel() == static_cast<size_t>(model.size())
+                       ? deleted.ptr<bool>()
+                       : nullptr;
+        }
+    } // namespace
+
+    void Trainer::install_cropbox_view_damping(
+        lfs::core::SplatData& model,
+        AdamOptimizer& optimizer,
+        const lfs::core::Camera& camera) {
+        const float scale = params_.optimization.cropbox_lr_scale;
+        optimizer.set_cropbox_lr_scale(scale);
+        const size_t n = static_cast<size_t>(model.size());
+        if (!cropbox_ || scale == 1.0f || n == 0) {
+            if (optimizer.crop_damping_mask().is_valid())
+                optimizer.set_crop_damping_mask({});
+            return;
+        }
+        const auto means = model.get_means().contiguous();
+        const auto scales = model.scaling_raw().contiguous();
+        auto rejected = bool_rows(cropbox_view_reject_, n);
+        lfs::training::kernels::launch_roi_view_reject_mask(
+            means.ptr<float>(), scales.ptr<float>(), n, cropbox_->model_to_cropbox, cropbox_->world_to_cropbox,
+            camera.cam_position_ptr(), cropbox_->min, cropbox_->max, cropbox_->inverse,
+            deleted_rows(model), rejected.ptr<bool>(), lfs::core::getCurrentCUDAStream());
+        optimizer.set_crop_damping_mask(rejected);
+    }
+
+    bool Trainer::cropbox_contains_camera(const lfs::core::Camera& camera) const {
+        if (!cropbox_)
+            return false;
+        const auto& R = camera.R();
+        const auto& T = camera.T();
+        if (!R.is_valid() || !T.is_valid() || R.device() != lfs::core::Device::CPU ||
+            T.device() != lfs::core::Device::CPU || R.numel() < 9 || T.numel() < 3)
+            return false;
+        const auto r = R.contiguous().to_vector();
+        const auto t = T.contiguous().to_vector();
+        // World-to-camera [R | t]: the camera sits at -R^T t.
+        const glm::vec3 centre(-(r[0] * t[0] + r[3] * t[1] + r[6] * t[2]),
+                               -(r[1] * t[0] + r[4] * t[1] + r[7] * t[2]),
+                               -(r[2] * t[0] + r[5] * t[1] + r[8] * t[2]));
+        const glm::vec3 p = glm::vec3(cropbox_->world_to_cropbox * glm::vec4(centre, 1.0f));
+        return glm::all(glm::greaterThanEqual(p, cropbox_->min)) && glm::all(glm::lessThanEqual(p, cropbox_->max));
+    }
+
+    void Trainer::install_cropbox_score_damping(
         lfs::core::SplatData& model,
         AdamOptimizer& optimizer) {
         const float scale = params_.optimization.cropbox_lr_scale;
+        const float growth_inside = params_.optimization.cropbox_growth_inside;
         optimizer.set_cropbox_lr_scale(scale);
-
-        if (scale == 1.0f || !scene_) {
-            optimizer.set_crop_damping_mask({});
-            cropbox_damping_cache_valid_ = false;
-            return;
-        }
-
-        // rebuild only on cropbox geometry / topology (N) / scale change.
-        // Means drift between densify events is intentionally not a rebuild trigger
-        // (damping is a soft LR scale, not a hard cull).
         const size_t n = static_cast<size_t>(model.size());
-        size_t geom_fp = 0;
-        if (const auto geometry = resolve_training_cropbox_geom(*scene_)) {
-            // FNV-ish fingerprint of crop bounds + inverse flag + a few matrix entries.
-            auto mix = [&](size_t v) {
-                geom_fp ^= v + 0x9e3779b97f4a7c15ull + (geom_fp << 6) + (geom_fp >> 2);
-            };
-            mix(static_cast<size_t>(geometry->inverse));
-            const float* floats = &geometry->min.x;
-            for (int i = 0; i < 6; ++i) {
-                mix(static_cast<size_t>(std::bit_cast<uint32_t>(floats[i])));
-            }
-            const float* m = &geometry->model_to_cropbox[0][0];
-            for (int i = 0; i < 16; ++i) {
-                mix(static_cast<size_t>(std::bit_cast<uint32_t>(m[i])));
-            }
-        } else {
-            optimizer.set_crop_damping_mask({});
-            cropbox_damping_cache_valid_ = false;
+        if (!cropbox_ || n == 0 || !train_dataset_) {
+            optimizer.set_crop_score_mask({});
+            optimizer.set_crop_roi_rows({}, growth_inside);
             return;
         }
-
-        if (cropbox_damping_cache_valid_ &&
-            cropbox_damping_cached_n_ == n &&
-            cropbox_damping_geom_fp_ == geom_fp &&
-            cropbox_damping_cached_scale_ == scale &&
-            cropbox_damping_cached_mask_.is_valid() &&
-            cropbox_damping_cached_mask_.numel() == n) {
-            optimizer.set_crop_damping_mask(cropbox_damping_cached_mask_);
+        // Up to 256 evenly spaced training cameras bound the per-splat test.
+        constexpr size_t kMaxCameras = 256;
+        const auto& cameras = train_dataset_->get_cameras();
+        const size_t stride = std::max<size_t>(1, (cameras.size() + kMaxCameras - 1) / kMaxCameras);
+        std::vector<lfs::core::Tensor> centres;
+        centres.reserve(std::min(cameras.size(), kMaxCameras));
+        for (size_t i = 0; i < cameras.size(); i += stride)
+            centres.push_back(cameras[i]->cam_position().reshape({1, 3}));
+        if (centres.empty()) {
+            optimizer.set_crop_score_mask({});
+            optimizer.set_crop_roi_rows({}, growth_inside);
             return;
         }
-
-        auto crop_mask = compute_training_cropbox_remove_mask(*scene_, model);
-        if (!crop_mask || !crop_mask->is_valid() || crop_mask->numel() == 0) {
-            optimizer.set_crop_damping_mask({});
-            cropbox_damping_cache_valid_ = false;
-            return;
-        }
-
-        cropbox_damping_cached_mask_ = *crop_mask;
-        cropbox_damping_cached_n_ = n;
-        cropbox_damping_geom_fp_ = geom_fp;
-        cropbox_damping_cached_scale_ = scale;
-        cropbox_damping_cache_valid_ = true;
-        ++cropbox_damping_rebuild_count_;
-        optimizer.set_crop_damping_mask(cropbox_damping_cached_mask_);
+        const glm::mat4& w2b = cropbox_->world_to_cropbox;
+        const auto rotation_t = lfs::core::Tensor::from_vector(
+            {w2b[0][0], w2b[0][1], w2b[0][2], w2b[1][0], w2b[1][1], w2b[1][2], w2b[2][0], w2b[2][1], w2b[2][2]},
+            {3, 3}, lfs::core::Device::CUDA);
+        const auto translation = lfs::core::Tensor::from_vector(
+            {w2b[3][0], w2b[3][1], w2b[3][2]}, {1, 3}, lfs::core::Device::CUDA);
+        cropbox_camera_centres_ =
+            (lfs::core::Tensor::cat(centres, 0).matmul(rotation_t) + translation).contiguous();
+        const auto means = model.get_means().contiguous();
+        const auto scales = model.scaling_raw().contiguous();
+        auto rejected = bool_rows(cropbox_score_reject_, n);
+        auto in_roi = bool_rows(cropbox_roi_rows_, n);
+        lfs::training::kernels::launch_roi_relevance_reject_mask(
+            means.ptr<float>(), scales.ptr<float>(), n, cropbox_->model_to_cropbox, cropbox_camera_centres_.ptr<float>(),
+            static_cast<int>(cropbox_camera_centres_.size(0)), cropbox_->min, cropbox_->max,
+            cropbox_->inverse, deleted_rows(model), rejected.ptr<bool>(), in_roi.ptr<bool>(),
+            lfs::core::getCurrentCUDAStream());
+        optimizer.set_crop_score_mask(scale == 1.0f ? lfs::core::Tensor{} : rejected);
+        optimizer.set_crop_roi_rows(growth_inside > 0.0f ? in_roi : lfs::core::Tensor{}, growth_inside);
     }
 
     Trainer::Trainer(lfs::core::Scene& scene)
@@ -5950,6 +6004,20 @@ namespace lfs::training {
                     lfs::training::CommandCenter::instance().drain_enqueued(view);
                 }
 
+                // The crop box for this whole step; refine steps also get fresh score masks.
+                refresh_cropbox_snapshot();
+                if (strategy_) {
+                    auto& optimizer = strategy_->get_optimizer();
+                    if (strategy_->is_refining(iter)) {
+                        install_cropbox_score_damping(strategy_->get_model(), optimizer);
+                    } else {
+                        if (optimizer.crop_score_mask().is_valid())
+                            optimizer.set_crop_score_mask({});
+                        if (optimizer.crop_roi_rows().is_valid())
+                            optimizer.set_crop_roi_rows({}, params_.optimization.cropbox_growth_inside);
+                    }
+                }
+
                 // Training step entering forward/backward/optimizer region (commands blocked)
                 lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::Forward);
 
@@ -6150,7 +6218,6 @@ namespace lfs::training {
                     const size_t model_size_before = static_cast<size_t>(model.size());
                     strategy_->post_backward(iter, r_output);
                     maybe_morton_reorder(iter);
-                    install_cropbox_step_damping(model, strategy_->get_optimizer());
                     fastgs_strategy_hooks_at_start = true;
 
                     if (sparsity_optimizer_ &&
@@ -6198,9 +6265,6 @@ namespace lfs::training {
                     auto& model_after = strategy_->get_model();
                     syncTrainingSceneTopology(scene_, model_after);
                 }
-                if (three_dgs_path && in_sparsification) {
-                    install_cropbox_step_damping(strategy_->get_model(), strategy_->get_optimizer());
-                }
 
                 const bool normal_supervision_started = normal_supervision_active(iter);
 
@@ -6213,6 +6277,8 @@ namespace lfs::training {
                 }
                 lfs::core::Tensor edge_score_scratch;
                 lfs::core::Tensor edge_weight_map;
+                lfs::core::Tensor impact_sum_scratch;
+                lfs::core::Tensor impact_peak_scratch;
                 lfs::core::Tensor fused_scale_reg_loss_gpu;
                 lfs::core::Tensor fused_opacity_reg_loss_gpu;
                 lfs::core::Tensor fused_erank_reg_loss_gpu;
@@ -6261,6 +6327,19 @@ namespace lfs::training {
                         if (edge_weight_scoring_active_) {
                             fused_extra_gradients.edge_weight_map = edge_weight_map.ptr<float>();
                             fused_extra_gradients.edge_score_out = edge_score_scratch.ptr<float>();
+                        }
+                        {
+                            auto impact = strategy_->impact_scratch(iter);
+                            impact_sum_scratch = std::move(impact.first);
+                            impact_peak_scratch = std::move(impact.second);
+                            if (impact_sum_scratch.is_valid() && impact_peak_scratch.is_valid() &&
+                                impact_sum_scratch.dtype() == lfs::core::DataType::Float32 &&
+                                impact_peak_scratch.dtype() == lfs::core::DataType::Float32 &&
+                                impact_sum_scratch.numel() == static_cast<size_t>(model.size()) &&
+                                impact_peak_scratch.numel() == static_cast<size_t>(model.size())) {
+                                fused_extra_gradients.impact_sum_out = impact_sum_scratch.ptr<float>();
+                                fused_extra_gradients.impact_peak_out = impact_peak_scratch.ptr<float>();
+                            }
                         }
                         const float scale_weight = params_.optimization.scale_reg_at(iter);
                         const bool log_scale_reg = core::param::is_mrnf_strategy(params_.optimization.strategy);
@@ -6402,6 +6481,11 @@ namespace lfs::training {
                     RenderOutput output;
                     bool gsplat_frame = false;
 
+                    // A camera inside the crop box weights its pixels by the surface they show, which
+                    // needs the rendered depth.
+                    const bool roi_surface_weights = cropbox_ &&
+                                                     params_.optimization.cropbox_loss_weight < 1.0f &&
+                                                     cropbox_contains_camera(*cam);
                     {
                         LFS_VRAM_SCOPE("train.rasterize_forward");
                         LOG_VRAM_DIFF("train.rasterize_forward");
@@ -6417,9 +6501,10 @@ namespace lfs::training {
                                     const auto result = gsplat_render(
                                         *training_ops_->gsplat, gsplat_saved_,
                                         *cam, strategy_->get_model(), bg,
-                                        0, 0, 0, 0, 1.0f, false, (normal_supervision_started && (params_.optimization.normal_loss_weight > 0.f || params_.optimization.normal_consistency_weight > 0.f)) ? GsplatRenderMode::RGB_D_N : (params_.optimization.use_depth_loss && params_.optimization.depth_loss_weight > 0.f) ? GsplatRenderMode::RGB_D
+                                        0, 0, 0, 0, 1.0f, false, (normal_supervision_started && (params_.optimization.normal_loss_weight > 0.f || params_.optimization.normal_consistency_weight > 0.f)) ? GsplatRenderMode::RGB_D_N : ((params_.optimization.use_depth_loss && params_.optimization.depth_loss_weight > 0.f) || roi_surface_weights) ? GsplatRenderMode::RGB_D
                                                                                                                                                                                                                                                                                                                              : GsplatRenderMode::RGB,
-                                        bg_tile, output);
+                                        bg_tile, output,
+                                        cropbox_.has_value() && params_.optimization.cropbox_loss_weight < 1.0f);
                                     if (result.code != lfs::gpu_ops::RasterResult::Code::Success) {
                                         lfs::core::pop_gpu_range();
                                         lfs::core::pop_gpu_range();
@@ -6455,7 +6540,7 @@ namespace lfs::training {
                                   cam->has_normal()) ||
                                  params_.optimization.normal_consistency_weight > 0.0f);
                             const bool render_depth =
-                                render_normal ||
+                                render_normal || roi_surface_weights ||
                                 (params_.optimization.use_depth_loss &&
                                  params_.optimization.depth_loss_weight > 0.0f);
                             const MutationStamp forward_stamp{
@@ -6570,10 +6655,10 @@ namespace lfs::training {
                     };
 
                     lfs::core::Tensor roi_weight;
-                    const auto cropbox_loss_geometry =
-                        scene_ ? resolve_training_cropbox_loss_geom(
-                                     *scene_, params_.optimization.cropbox_loss_weight)
-                               : std::nullopt;
+                    if (strategy_)
+                        install_cropbox_view_damping(strategy_->get_model(), strategy_->get_optimizer(), *cam);
+                    const auto& cropbox_loss_geometry =
+                        params_.optimization.cropbox_loss_weight < 1.0f ? cropbox_ : std::nullopt_t{std::nullopt};
                     if (cropbox_loss_geometry) {
                         LFS_ASSERT_MSG(
                             output.width > 0 && output.height > 0,
@@ -6597,6 +6682,22 @@ namespace lfs::training {
                         cam->world_view_transform().sync_to_stream(roi_stream);
                         cam->cam_position().sync_to_stream(roi_stream);
                         const auto [fx, fy, cx, cy] = cam->get_intrinsics();
+                        // Lens-distorted, fisheye and panoramic GUT cameras weight the pixels
+                        // through their real rays; plain pinholes use the closed form.
+                        const lfs::core::Tensor roi_rays =
+                            gsplat_frame && gsplat_saved_.camera_rays.is_valid() &&
+                                    gsplat_saved_.camera_rays.numel() == roi_shape.elements() * 3
+                                ? gsplat_saved_.camera_rays
+                                : lfs::core::Tensor{};
+                        const bool roi_surface = roi_surface_weights && output.depth.is_valid() &&
+                                                 output.alpha.is_valid() &&
+                                                 output.depth.numel() == roi_shape.elements() &&
+                                                 output.alpha.numel() == roi_shape.elements();
+                        lfs::core::Tensor roi_surface_depth, roi_surface_alpha;
+                        if (roi_surface) {
+                            roi_surface_depth = output.depth.contiguous();
+                            roi_surface_alpha = output.alpha.contiguous();
+                        }
                         ops::RoiParams roi_params{
                             .image = {output.height, output.width},
                             .intrinsics = {fx, fy, cx, cy},
@@ -6607,7 +6708,8 @@ namespace lfs::training {
                         };
                         std::copy_n(&cropbox_loss_geometry->world_to_cropbox[0][0], 16, roi_params.world_to_cropbox.begin());
                         training_ops_->training_image->roi(
-                            cam->world_view_transform(), cam->cam_position(), roi_weight_map_, roi_params);
+                            cam->world_view_transform(), cam->cam_position(), roi_rays,
+                            roi_surface_depth, roi_surface_alpha, roi_weight_map_, roi_params);
                         roi_weight = roi_weight_map_;
                         roi_weight.sync_to_stream(lfs::core::TensorExecutionTarget::current());
                     }
@@ -7432,6 +7534,13 @@ namespace lfs::training {
                             }
                         }
 
+                        // Growth credit follows the ROI pixel weights, so splats grow where the crop
+                        // box is seen, including the background behind it, not where pixels are ignored.
+                        if (tile_error_map.is_valid() && roi_weight.is_valid() &&
+                            tile_error_map.numel() == roi_weight.numel()) {
+                            tile_error_map.mul_(roi_weight.reshape(tile_error_map.shape()));
+                        }
+
                         if (tile_error_map.is_valid() && params_.optimization.densify_structure_weight > 0.0f) {
                             const auto structure_map = get_thin_structure_map(
                                 cam->uid(), stable_gt, params_.optimization.densify_structure_weight,
@@ -7655,6 +7764,8 @@ namespace lfs::training {
                                             .erank_reg_loss = fused_erank_reg_loss_gpu,
                                             .dc_reg_loss = fused_dc_reg_loss_gpu,
                                             .sh_rest_reg_loss = fused_sh_rest_reg_loss_gpu,
+                                            .impact_sum = fused_extra_gradients.impact_sum_out != nullptr ? impact_sum_scratch : none,
+                                            .impact_peak = fused_extra_gradients.impact_peak_out != nullptr ? impact_peak_scratch : none,
                                         },
                                         densification_type);
                                     if (deferred_fast_count) {
@@ -7679,6 +7790,9 @@ namespace lfs::training {
                                     }
                                     if (!retry_fast_capacity && resolved_fast_has_work && edge_weight_scoring_active_) {
                                         strategy_->on_edge_score_accumulated(iter);
+                                    }
+                                    if (!retry_fast_capacity && resolved_fast_has_work && fused_extra_gradients.impact_sum_out != nullptr) {
+                                        strategy_->on_impact_accumulated(iter);
                                     }
                                     if (!retry_fast_capacity && resolved_fast_has_work && model_write_lock.owns_lock()) {
                                         recordParamsReady();
@@ -8018,7 +8132,8 @@ namespace lfs::training {
                             maybe_morton_reorder(iter);
                         }
                         if (!three_dgs_path) {
-                            install_cropbox_step_damping(model, strategy_->get_optimizer());
+                            // Refine may have changed the rows since the forward pass.
+                            install_cropbox_view_damping(model, strategy_->get_optimizer(), *cam);
                         }
 
                         if (update_gaussians_this_iter) {

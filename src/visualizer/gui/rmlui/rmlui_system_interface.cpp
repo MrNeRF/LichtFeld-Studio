@@ -116,7 +116,7 @@ namespace lfs::vis::gui {
         if (!current_context_)
             return;
 
-        const auto request = mapCursorRequest(cursor_name);
+        const auto request = rmlCursorRequestForName(cursor_name);
         if (request == RmlCursorRequest::None)
             return;
 
@@ -196,7 +196,7 @@ namespace lfs::vis::gui {
         SDL_SetTextInputArea(window_, nullptr, 0);
     }
 
-    RmlCursorRequest RmlSystemInterface::mapCursorRequest(const Rml::String& cursor_name) const {
+    RmlCursorRequest rmlCursorRequestForName(const Rml::String& cursor_name) {
         if (cursor_name == "text")
             return RmlCursorRequest::TextInput;
         if (cursor_name == "pointer")

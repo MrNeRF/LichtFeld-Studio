@@ -2531,9 +2531,52 @@ namespace lfs::vis::gui {
         jobs_.requestCancel(
             export_state_.job, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLING));
         publishExportState();
+        if (drag_export_cancel_)
+            drag_export_cancel_();
         if (export_state_.thread && export_state_.thread->joinable()) {
             export_state_.thread->request_stop();
         }
+    }
+
+    bool AsyncTaskManager::beginDragExport(ExportFormat format, std::function<void()> cancel) {
+        if (isExporting() || !beginJob(export_state_.job, JobType::Export, LOC("export.exporting")))
+            return false;
+        {
+            const std::lock_guard lock(export_state_.mutex);
+            export_state_.format = format;
+            export_state_.path.clear();
+            export_state_.commit_uuid.clear();
+        }
+        drag_export_cancel_ = std::move(cancel);
+        publishExportState();
+        return true;
+    }
+
+    std::function<void()> AsyncTaskManager::dragExportWorkerStart() const {
+        return [registry = &jobs_, job = export_state_.job, started = std::make_shared<std::atomic<bool>>(false)] {
+            if (!started->exchange(true))
+                registry->work(job);
+        };
+    }
+
+    void AsyncTaskManager::reportDragExport(float progress, std::string stage) {
+        if (!drag_export_cancel_)
+            return;
+        jobs_.report(export_state_.job, progress, std::move(stage));
+        publishExportState();
+    }
+
+    void AsyncTaskManager::finishDragExport(bool cancelled, std::string error) {
+        if (!drag_export_cancel_)
+            return;
+        drag_export_cancel_ = {};
+        if (cancelled)
+            jobs_.canceled(export_state_.job);
+        else if (!error.empty())
+            jobs_.failed(export_state_.job, std::move(error));
+        else
+            jobs_.completed(export_state_.job);
+        publishExportState();
     }
 
     void AsyncTaskManager::publishExportFailureState(const ExportFormat format,
@@ -2573,7 +2616,7 @@ namespace lfs::vis::gui {
             const std::lock_guard lock(export_state_.mutex);
             state.format = exportProgressFormatName(export_state_.format);
             state.path = lfs::core::path_to_utf8(export_state_.path);
-            if (state.outcome == "completed" && state.error.empty()) {
+            if (state.outcome == "completed" && state.error.empty() && !export_state_.path.empty()) {
                 warn_for_extension = core::scene_export_path_status(export_state_.format, export_state_.path) == core::SceneExportPathStatus::Warn;
                 format_name = core::scene_export_format_name(export_state_.format);
             }

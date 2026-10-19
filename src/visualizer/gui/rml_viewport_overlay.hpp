@@ -113,6 +113,8 @@ namespace lfs::vis::gui {
         void setViewportBounds(glm::vec2 pos, glm::vec2 size, glm::vec2 screen_origin);
         void setToolbarBounds(float x, float width, float inset);
         void setSplitViewLayout(bool split);
+        // Python may request the next sync from inside a sync; that request survives it.
+        void requestDocumentSync() { document_sync_requested_ = true; }
         void setSplitDividerOverlay(SplitDividerOverlayState state);
         void setGTMetricsOverlay(GTMetricsOverlayState state);
         void setLodStatsOverlay(LodStatsOverlayState state);
@@ -132,6 +134,9 @@ namespace lfs::vis::gui {
         }
 
         bool wantsInput() const { return wants_input_; }
+        // Cursor of the hovered overlay element. RmlUi's own cursor request is set
+        // while SDL events are dispatched, before the frame resets it.
+        [[nodiscard]] RmlCursorRequest cursorRequest() const { return cursor_request_; }
         [[nodiscard]] bool needsAnimationFrame() const {
             return render_needed_ || document_sync_dirty_ || animation_active_ || tooltip_.revealDue() ||
                    toolbar_drag_active_ ||
@@ -252,10 +257,12 @@ namespace lfs::vis::gui {
         bool render_needed_ = true;
         std::uint32_t render_reason_bits_ = static_cast<std::uint32_t>(RenderReason::Initial);
         bool document_sync_dirty_ = true;
+        bool document_sync_requested_ = false;
         bool data_model_binding_dirty_ = true;
         bool animation_active_ = false;
         double next_update_delay_ = std::numeric_limits<double>::infinity();
         bool hovered_interactive_ = false;
+        RmlCursorRequest cursor_request_{};
         Rml::Element* last_hover_element_ = nullptr;
         bool mouse_pos_valid_ = false;
         int last_mouse_x_ = 0;
