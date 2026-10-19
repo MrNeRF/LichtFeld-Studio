@@ -31,9 +31,11 @@ namespace lfs::vis::input {
             const double delay = first_ ? std::max(0.35, interval) : interval;
             if (std::chrono::duration<double>(now - last_).count() < delay)
                 return 0;
-            last_ = now;
+            last_ += std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(delay));
+            if (std::chrono::duration<double>(now - last_).count() >= interval)
+                last_ = now;
             first_ = false;
-            // Never replay a backlog after a slow render or a blocked frame.
+            // Keep fractional frame time, but never replay a stalled backlog.
             return direction_;
         }
 

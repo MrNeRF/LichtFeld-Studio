@@ -277,6 +277,10 @@ def _install_lf_stub(monkeypatch):
     lf_stub.get_new_project_align_grid = lambda: True
     lf_stub.get_camera_view_snap_enabled = lambda: False
     lf_stub.ui = SimpleNamespace(
+        get_gt_comparison_key_repeat=lambda: True,
+        set_gt_comparison_key_repeat=lambda _enabled: None,
+        get_gt_comparison_repeat_rate=lambda: 5.0,
+        set_gt_comparison_repeat_rate=lambda _rate, persist=True: None,
         PanelSpace=panel_space,
         PanelHeightMode=panel_height_mode,
         PanelOption=panel_option,

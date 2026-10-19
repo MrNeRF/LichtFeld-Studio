@@ -55,3 +55,19 @@ TEST(GTNavigationRepeat, DirectionChangeAndCancellation) {
     repeat.stop();
     EXPECT_EQ(repeat.poll(now + 1s, 5), 0);
 }
+
+TEST(GTNavigationRepeat, FrameQuantizationDoesNotAccumulateDrift) {
+    using namespace std::chrono;
+    for (const float rate : {5.0f, 20.0f}) {
+        Repeat repeat;
+        const Repeat::Clock::time_point start{};
+        repeat.start(10, 1, start);
+        int count = 0;
+        for (int frame = 1; frame <= 600; ++frame) {
+            const auto now = start + duration_cast<Repeat::Clock::duration>(duration<double>(frame / 60.0));
+            count += repeat.poll(now, rate);
+        }
+        const int expected = 1 + static_cast<int>((10.0 - 0.35) * rate);
+        EXPECT_NEAR(count, expected, 1) << "rate=" << rate;
+    }
+}

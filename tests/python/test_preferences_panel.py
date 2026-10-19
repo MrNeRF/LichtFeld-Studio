@@ -1572,10 +1572,17 @@ def test_camera_repeat_numeric_preference_and_step_buttons(preferences_panel_mod
     panel._set_gt_comparison_key_repeat(False)
     assert not state.gt_comparison_key_repeat
     panel._set_gt_comparison_repeat_rate("12")
+    assert state.gt_comparison_repeat_rate == 5
+    assert writes == []
+    assert panel._get_camera_repeat_rate_draft() == "12"
+    assert panel._commit_camera_repeat_rate()
     assert state.gt_comparison_repeat_rate == 12
     assert writes == [(12, True)]
     for invalid in ("", "abc", "nan", "inf", "0", "21"):
         panel._set_gt_comparison_repeat_rate(invalid)
+        assert panel._get_camera_repeat_rate_draft() == invalid
+        assert not panel._commit_camera_repeat_rate()
+        assert panel._get_camera_repeat_rate_draft() == "12"
     assert writes == [(12, True)]
     panel._step_camera_repeat_rate(None, None, [-1])
     assert state.gt_comparison_repeat_rate == 11
@@ -1590,3 +1597,23 @@ def test_camera_repeat_numeric_preference_and_step_buttons(preferences_panel_mod
     panel._reset_section("input")
     assert state.gt_comparison_key_repeat
     assert state.gt_comparison_repeat_rate == 5.0
+
+
+def test_camera_repeat_draft_survives_refresh_and_commits_on_enter(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    panel._set_gt_comparison_repeat_rate("")
+    assert panel._get_camera_repeat_rate_draft() == ""
+    assert state.gt_comparison_repeat_rate == 5
+    event = SimpleNamespace(get_bool_parameter=lambda key, default: False)
+    panel._on_camera_repeat_rate_change(None, event, ["1"])
+    assert panel._get_camera_repeat_rate_draft() == "1"
+    assert state.gt_comparison_repeat_rate == 5
+    event.get_bool_parameter = lambda key, default: True
+    panel._on_camera_repeat_rate_change(None, event, ["1"])
+    assert state.gt_comparison_repeat_rate == 1
+    panel._set_gt_comparison_repeat_rate("12")
+    panel._cancel_camera_repeat_rate()
+    assert panel._get_camera_repeat_rate_draft() == "1"
+    assert state.gt_comparison_repeat_rate == 1

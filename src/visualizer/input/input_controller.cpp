@@ -742,6 +742,8 @@ namespace lfs::vis {
             mods |= input::KEYMOD_ALT;
         if (m & SDL_KMOD_MODE)
             mods |= input::KEYMOD_ALTGR;
+        if (m & SDL_KMOD_GUI)
+            mods |= input::KEYMOD_SUPER;
         return mods;
     }
 

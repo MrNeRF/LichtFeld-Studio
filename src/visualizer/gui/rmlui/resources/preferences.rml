@@ -386,7 +386,9 @@
           <div class="setting-row setting-row--aligned" data-if="gt_comparison_key_repeat">
             <span class="setting-row__label-col">@tr:preferences.gt_comparison_repeat_rate</span>
             <div class="setting-row__control-col preferences-repeat-rate">
-              <input type="text" class="number-input" data-value="gt_comparison_repeat_rate" maxlength="2" />
+              <input type="text" class="number-input" data-value="gt_comparison_repeat_rate" maxlength="2"
+                     data-event-change="camera_repeat_rate_change(ev.value)"
+                     data-event-blur="commit_camera_repeat_rate" data-event-escapecancel="cancel_camera_repeat_rate" />
               <button class="num-step-btn" data-event-click="step_camera_repeat_rate(-1)">-</button>
               <button class="num-step-btn" data-event-click="step_camera_repeat_rate(1)">+</button>
             </div>
