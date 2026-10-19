@@ -428,8 +428,6 @@
     "tooltip.popspa_sh0_lr": "Degree-zero spherical-harmonic learning rate.",
     "tooltip.popspa_shn_lr": "Higher-degree spherical-harmonic learning rate.",
     "tooltip.popspa_ssim_weight": "SSIM fraction in the POPSpa photometric loss; the remainder uses L1.",
-    "options.sparsity.opacity_admm": "Opacity ADMM",
-    "options.sparsity.popspa": "POPSpa",
     "section.dataset": "Dataset",
     "section.optimization": "Optimization",
     "section.refinement": "Refinement",
@@ -677,9 +675,6 @@
       "bilateral_grid_lr": "Controls how quickly the grid learns color/appearance correction. Increase it if correction is too slow or too weak; decrease it if colors shift too aggressively, flicker, or become unstable. Only applies when Bilateral Grid or Exposure Correction is enabled.",
       "prune_opacity": "IGS+ pruning threshold. Raise to remove weak splats more aggressively; lower to keep faint/detail splats.",
       "min_opacity": "Controls when faint Gaussians are considered too transparent to keep. Raise it to clean up weak floating splats more aggressively; lower it to preserve faint detail.",
-      "sparsify_steps": "Adds this many extra sparsity-optimization steps after normal training. More steps give the model more time to adapt before pruning; fewer steps finish faster but may hurt quality more. Only applies when Sparsity is enabled.",
-      "init_rho": "Controls how strongly the sparsity phase pushes weak/low-opacity Gaussians toward removal. Increase it for stronger compression pressure; lower it if the model loses detail or quality too quickly. Only applies when Sparsity is enabled.",
-      "prune_ratio": "Sets the final fraction of Gaussians removed after the sparsity phase. Higher values make the result smaller and faster but can remove detail; lower values preserve more quality but compress less. Pruning is based on the lowest-opacity Gaussians. Only applies when Sparsity is enabled.",
       "opt": {
         "strategy": {
           "mrnf": "Default 3DGS strategy with MRNF refinement",
@@ -1799,7 +1794,6 @@
     "print_to_log": "Print to Log"
   },
   "training_params": {
-    "sparsity_method": "Sparsity Method",
     "popspa_target_count": "Target Gaussians",
     "popspa_first_prune_count": "First Prune Count",
     "popspa_sparsify_steps": "Sparsify Steps",
@@ -1848,9 +1842,6 @@
     "bg_image": "Image:",
     "bg_image_browse": "Browse...",
     "bg_image_clear": "Clear",
-    "sparsify_steps": "Sparsify Steps:",
-    "init_rho": "Init Rho:",
-    "prune_ratio": "Prune Ratio:",
     "ppisp": "PPISP:",
     "ppisp_exposure_from_exif": "EXIF Exposure:",
     "ppisp_controller": "  Controller:",

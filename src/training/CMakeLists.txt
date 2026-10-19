@@ -37,7 +37,6 @@ set(LFS_TRAINING_KERNEL_SOURCES
     kernels/roi_weight_map.cu
     kernels/image_kernels.cu
     kernels/mask_preprocess.cu
-    components/sparsity_optimizer_kernels.cu
 )
 
 # Create CUDA kernels library
@@ -111,7 +110,6 @@ set(TRAINING_NEW_SOURCES
     components/ppisp_controller.cu
     components/ppisp_controller_pool.cu
     components/ppisp_file.cpp
-    components/sparsity_optimizer.cpp
     components/popspa_controller.cpp
     control/command_api.cpp
     metrics/compare_images.cpp

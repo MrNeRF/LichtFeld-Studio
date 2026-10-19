@@ -160,12 +160,11 @@ def _display_ppisp_activation_step(params):
     return step if step >= 0 else _resolved_ppisp_activation_step(params)
 
 
-SLIDER_PROPS = ["lambda_dssim", "init_opacity", "prune_ratio"]
+SLIDER_PROPS = ["lambda_dssim", "init_opacity"]
 
 SCRUB_FIELD_DEFS = {
     "lambda_dssim": ScrubFieldSpec(0.0, 1.0, 0.01, "%.3f"),
     "init_opacity": ScrubFieldSpec(0.01, 1.0, 0.01, "%.3f"),
-    "prune_ratio": ScrubFieldSpec(0.0, 1.0, 0.01, "%.3f"),
 }
 
 RENDER_SYNC = {
@@ -473,9 +472,6 @@ class TrainingPanel(Panel):
             "label_init_opacity", lambda: tr("training.init.init_opacity")
         )
         model.bind_func(
-            "label_prune_ratio", lambda: tr("training_params.prune_ratio")
-        )
-        model.bind_func(
             "label_no_save_steps", lambda: tr("training_panel.no_save_steps")
         )
         model.bind_func("label_add", lambda: tr("common.add"))
@@ -557,8 +553,6 @@ class TrainingPanel(Panel):
             "dep_mrnf": _is_mrnf_strategy(params.strategy),
             "dep_igs": params.strategy == "igs+",
             "dep_sparsity": params.enable_sparsity,
-            "dep_popspa": params.enable_sparsity and params.sparsity_method.value == 1,
-            "dep_opacity_admm": params.enable_sparsity and params.sparsity_method.value == 0,
             "dep_random": params.random,
             "dep_eval": params.enable_eval,
             "dep_undistort": params.undistort,
@@ -754,14 +748,6 @@ class TrainingPanel(Panel):
         model.bind_func(
             "dep_sparsity",
             lambda: p() is not None and p().has_params() and p().enable_sparsity,
-        )
-        model.bind_func(
-            "dep_popspa",
-            lambda: p() is not None and p().has_params() and p().enable_sparsity and p().sparsity_method.value == 1,
-        )
-        model.bind_func(
-            "dep_opacity_admm",
-            lambda: p() is not None and p().has_params() and p().enable_sparsity and p().sparsity_method.value == 0,
         )
         model.bind_func(
             "dep_random", lambda: p() is not None and p().has_params() and p().random

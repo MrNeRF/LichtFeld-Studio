@@ -83,12 +83,11 @@ LichtFeld Studio is built for users who need more than a training script or a st
 
 ### Optional POPSpa sparsification
 
-In the Training panel, enable **Sparsity**, then choose **POPSpa** under
-**Sparsity Settings → Sparsity Method** and set **Target Gaussians**. Opacity ADMM
-remains the default. The CLI equivalent is:
+In the Training panel, enable **Sparsity** and set **Target Gaussians** under
+**Sparsity Settings**. The CLI equivalent is:
 
 ```text
---enable-sparsity --sparsity-method popspa --popspa-target-count 256000
+--enable-sparsity --popspa-target-count 256000
 ```
 
 POPSpa runs after regular training: contribution scoring, an intermediate prune,

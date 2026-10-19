@@ -244,7 +244,7 @@ namespace {
 
         std::ostringstream reference_stream(std::ios::binary | std::ios::out);
         const auto reference = lfs::training::serialize_checkpoint(
-            reference_stream, 500, strategy, params, nullptr, nullptr, nullptr, nullptr);
+            reference_stream, 500, strategy, params, nullptr, nullptr, nullptr);
         ASSERT_TRUE(reference.has_value())
             << lfs::format_for_developer(reference.error());
 
@@ -303,7 +303,7 @@ namespace {
 
         std::ostringstream reference_stream(std::ios::binary | std::ios::out);
         const auto reference = lfs::training::serialize_checkpoint(
-            reference_stream, 500, strategy, params, nullptr, nullptr, nullptr, nullptr);
+            reference_stream, 500, strategy, params, nullptr, nullptr, nullptr);
         ASSERT_TRUE(reference.has_value())
             << lfs::format_for_developer(reference.error());
 
@@ -402,7 +402,7 @@ namespace {
             lfs::training::serialize_checkpoint(
                 reference_stream, SAVED_ITERATION,
                 strategy, params, nullptr, nullptr,
-                nullptr, nullptr);
+                nullptr);
         ASSERT_TRUE(reference_result.has_value())
             << lfs::format_for_developer(
                    reference_result.error());
@@ -564,7 +564,7 @@ namespace {
                 captured_stream,
                 captured->checkpoint_bytes->size(),
                 target_strategy, loaded_params,
-                nullptr, nullptr, nullptr, nullptr,
+                nullptr, nullptr, nullptr,
                 {}, "snapshot-service test CKPT");
         ASSERT_TRUE(loaded.has_value())
             << loaded.error();
@@ -649,7 +649,7 @@ namespace {
             lfs::training::serialize_checkpoint(
                 reference_stream, SAVED_ITERATION,
                 strategy, params, nullptr, nullptr,
-                nullptr, nullptr);
+                nullptr);
         ASSERT_TRUE(reference_result.has_value())
             << lfs::format_for_developer(
                    reference_result.error());
@@ -1102,7 +1102,6 @@ namespace {
         auto params = make_snapshot_test_params(4);
         auto& p = params.optimization;
         p.enable_sparsity = true;
-        p.sparsity_method = lfs::core::param::SparsityMethod::POPSpa;
         p.popspa_target_count = 4;
         p.popspa_first_prune_count = 4;
         lfs::training::MCMC strategy(*model);
@@ -1118,7 +1117,7 @@ namespace {
         const int iteration = static_cast<int>(p.iterations);
         std::ostringstream reference(std::ios::binary);
         ASSERT_TRUE(lfs::training::serialize_checkpoint(reference, iteration, strategy, params,
-                                                        nullptr, nullptr, nullptr, nullptr, &controller, &optimizer)
+                                                        nullptr, nullptr, nullptr, &controller, &optimizer)
                         .has_value());
         const auto bytes = reference.str();
         lfs::training::TrainingSnapshotService service({.ring_slots = 2, .band_bytes = 64 * 1024, .calibration_bytes = 64, .calibration_iterations = 1});

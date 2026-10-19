@@ -419,8 +419,6 @@
     "tooltip.popspa_sh0_lr": "Degree-zero spherical-harmonic learning rate.",
     "tooltip.popspa_shn_lr": "Higher-degree spherical-harmonic learning rate.",
     "tooltip.popspa_ssim_weight": "SSIM fraction in the POPSpa photometric loss; the remainder uses L1.",
-    "options.sparsity.opacity_admm": "Opacity ADMM",
-    "options.sparsity.popspa": "POPSpa",
     "section.dataset": "Datensatz",
     "section.optimization": "Optimierung",
     "section.refinement": "Verfeinerung",
@@ -668,9 +666,6 @@
       "bilateral_grid_lr": "Steuert, wie schnell das Grid Farb-/Appearance-Korrektur lernt. Erhöhe den Wert, wenn die Korrektur zu langsam oder zu schwach ist; senke ihn, wenn Farben zu aggressiv kippen, flackern oder instabil werden. Gilt nur, wenn Bilateral Grid oder Exposure Correction aktiviert ist.",
       "prune_opacity": "IGS+-Pruning-Schwelle. Erhöhe sie, um schwache Splats aggressiver zu entfernen; senke sie, um schwache/detailreiche Splats zu behalten.",
       "min_opacity": "Steuert, wann schwache Gaussians als zu transparent zum Behalten gelten. Erhöhe den Wert, um schwache schwebende Splats aggressiver aufzuräumen; senke ihn, um feine Details zu erhalten.",
-      "sparsify_steps": "Fügt nach dem normalen Training so viele zusätzliche Sparsity-Optimierungsschritte hinzu. Mehr Schritte geben dem Modell vor dem Pruning mehr Zeit zur Anpassung; weniger Schritte sind schneller, können aber die Qualität stärker beeinträchtigen. Gilt nur, wenn Sparsity aktiviert ist.",
-      "init_rho": "Steuert, wie stark die Sparsity-Phase schwache/niedrig-opake Gaussians in Richtung Entfernung drückt. Erhöhe den Wert für stärkeren Kompressionsdruck; senke ihn, wenn das Modell zu schnell Details oder Qualität verliert. Gilt nur, wenn Sparsity aktiviert ist.",
-      "prune_ratio": "Setzt den finalen Anteil der Gaussians, die nach der Sparsity-Phase entfernt werden. Höhere Werte machen das Ergebnis kleiner und schneller, können aber Details entfernen; niedrigere erhalten mehr Qualität, komprimieren aber weniger. Pruning basiert auf den Gaussians mit der niedrigsten Opazität. Gilt nur, wenn Sparsity aktiviert ist.",
       "opt": {
         "strategy": {
           "mrnf": "Standard-3DGS-Strategie mit MRNF-Verfeinerung",
@@ -1788,7 +1783,6 @@
     "print_to_log": "In Log ausgeben"
   },
   "training_params": {
-    "sparsity_method": "Sparsity Method",
     "popspa_target_count": "Target Gaussians",
     "popspa_first_prune_count": "First Prune Count",
     "popspa_sparsify_steps": "Sparsify Steps",
@@ -1837,9 +1831,6 @@
     "bg_image": "Bild:",
     "bg_image_browse": "Durchsuchen...",
     "bg_image_clear": "Löschen",
-    "sparsify_steps": "Sparsamkeitsschritte:",
-    "init_rho": "Init Rho:",
-    "prune_ratio": "Prune Verhältnis:",
     "ppisp": "PPISP:",
     "ppisp_exposure_from_exif": "EXIF-Belichtung:",
     "ppisp_controller": "  Controller:",

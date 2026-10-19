@@ -419,8 +419,6 @@
     "tooltip.popspa_sh0_lr": "Degree-zero spherical-harmonic learning rate.",
     "tooltip.popspa_shn_lr": "Higher-degree spherical-harmonic learning rate.",
     "tooltip.popspa_ssim_weight": "SSIM fraction in the POPSpa photometric loss; the remainder uses L1.",
-    "options.sparsity.opacity_admm": "Opacity ADMM",
-    "options.sparsity.popspa": "POPSpa",
     "section.dataset": "Jeu de données",
     "section.optimization": "Optimisation",
     "section.refinement": "Raffinement",
@@ -668,9 +666,6 @@
       "bilateral_grid_lr": "Contrôle la vitesse à laquelle le grid apprend la correction couleur/apparence. Augmentez si la correction est trop lente ou faible ; baissez si les couleurs changent trop agressivement, scintillent ou deviennent instables. S'applique seulement lorsque Bilateral Grid ou Exposure Correction est activé.",
       "prune_opacity": "Seuil d'élagage IGS+. Augmentez-le pour retirer plus agressivement les splats faibles ; baissez-le pour garder les splats faibles/de détail.",
       "min_opacity": "Contrôle quand des Gaussians faibles sont considérés trop transparents pour être conservés. Augmentez-le pour nettoyer plus agressivement les splats flottants faibles ; baissez-le pour préserver les détails subtils.",
-      "sparsify_steps": "Ajoute autant d'étapes supplémentaires d'optimisation de sparsity après l'entraînement normal. Plus d'étapes donnent au modèle plus de temps pour s'adapter avant l'élagage ; moins d'étapes finissent plus vite mais peuvent réduire davantage la qualité. S'applique seulement lorsque Sparsity est activé.",
-      "init_rho": "Contrôle avec quelle force la phase de sparsity pousse les Gaussians faibles/faiblement opaques vers la suppression. Augmentez pour plus de pression de compression ; baissez si le modèle perd trop vite détail ou qualité. S'applique seulement lorsque Sparsity est activé.",
-      "prune_ratio": "Définit la fraction finale de Gaussians supprimés après la phase de sparsity. Des valeurs plus hautes rendent le résultat plus petit et rapide mais peuvent supprimer du détail ; plus basses préservent plus de qualité mais compressent moins. L'élagage se base sur les Gaussians de plus faible opacité. S'applique seulement lorsque Sparsity est activé.",
       "opt": {
         "strategy": {
           "mrnf": "Stratégie 3DGS par défaut avec raffinement MRNF",
@@ -1788,7 +1783,6 @@
     "print_to_log": "Imprimer dans le Log"
   },
   "training_params": {
-    "sparsity_method": "Sparsity Method",
     "popspa_target_count": "Target Gaussians",
     "popspa_first_prune_count": "First Prune Count",
     "popspa_sparsify_steps": "Sparsify Steps",
@@ -1837,9 +1831,6 @@
     "bg_image": "Image:",
     "bg_image_browse": "Parcourir...",
     "bg_image_clear": "Effacer",
-    "sparsify_steps": "Étapes de parcimonie :",
-    "init_rho": "Rho initial :",
-    "prune_ratio": "Ratio d'élagage :",
     "ppisp": "PPISP:",
     "ppisp_exposure_from_exif": "Exposition EXIF :",
     "ppisp_controller": "  Contrôleur:",

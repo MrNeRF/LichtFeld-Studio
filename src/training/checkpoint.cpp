@@ -6,7 +6,6 @@
 #include "components/popspa_controller.hpp"
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
-#include "components/sparsity_optimizer.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/native_fs.hpp"
@@ -33,6 +32,34 @@
 namespace lfs::training {
 
     namespace {
+        // Opacity ADMM sparsity was removed, but checkpoints that carry its state
+        // (HAS_SPARSITY) still load. The payload is a magic, a version and the z,
+        // u and sigmoid(opacity) tensors, each float32 [N, 1]; it is discarded.
+        constexpr uint32_t LEGACY_ADMM_MAGIC = 0x4C464153; // "LFAS"
+        constexpr uint32_t LEGACY_ADMM_VERSION = 1;
+
+        size_t consume_legacy_admm_state(std::istream& is) {
+            uint32_t magic = 0;
+            uint32_t version = 0;
+            lfs::core::serialization_detail::read_exact(is, &magic, sizeof(magic), "sparsity-ADMM magic");
+            lfs::core::serialization_detail::read_exact(is, &version, sizeof(version), "sparsity-ADMM version");
+            if (magic != LEGACY_ADMM_MAGIC)
+                throw std::runtime_error("Invalid sparsity ADMM checkpoint");
+            if (version != LEGACY_ADMM_VERSION)
+                throw std::runtime_error("Unsupported sparsity ADMM checkpoint version");
+            lfs::core::Tensor z;
+            lfs::core::Tensor u;
+            lfs::core::Tensor opa_sigmoid;
+            is >> z >> u >> opa_sigmoid;
+            const auto valid = [&z](const lfs::core::Tensor& tensor) {
+                return tensor.is_valid() && tensor.dtype() == lfs::core::DataType::Float32 && tensor.ndim() == 2 &&
+                       tensor.size(0) > 0 && tensor.size(1) == 1 && tensor.shape() == z.shape();
+            };
+            if (!valid(z) || !valid(u) || !valid(opa_sigmoid))
+                throw std::runtime_error("Invalid sparsity ADMM checkpoint tensor schema");
+            return z.size(0);
+        }
+
         void validate_popspa_checkpoint(
             const POPSpaController& controller,
             const AdamOptimizer& optimizer,
@@ -42,8 +69,7 @@ namespace lfs::training {
             const size_t rows = model.size();
             if (const auto error = params.validate(); !error.empty())
                 throw std::runtime_error("Invalid POPSpa checkpoint parameters: " + error);
-            if (!params.enable_sparsity || params.sparsity_method != lfs::core::param::SparsityMethod::POPSpa ||
-                !controller.is_initialized() || controller.state_size() != rows)
+            if (!params.enable_sparsity || !controller.is_initialized() || controller.state_size() != rows)
                 throw std::runtime_error("Invalid POPSpa checkpoint: method or model row count disagrees");
             const auto& config = controller.config();
             const size_t expected_first_count = params.popspa_first_prune_count == 0
@@ -127,18 +153,6 @@ namespace lfs::training {
                     capacity = target_row_capacity;
                 }
                 return allocator(std::move(shape), capacity, dtype, name);
-            };
-        }
-
-        [[nodiscard]] ADMMSparsityOptimizer::Config sparsity_config_from_params(
-            const lfs::core::param::OptimizationParameters& params) {
-            const int start_iteration = static_cast<int>(params.iterations);
-            return {
-                .sparsify_steps = params.enable_sparsity ? std::max(0, params.sparsify_steps) : 0,
-                .init_rho = params.init_rho,
-                .prune_ratio = params.prune_ratio,
-                .update_every = 50,
-                .start_iteration = start_iteration,
             };
         }
 
@@ -338,7 +352,6 @@ namespace lfs::training {
         const BilateralGrid* bilateral_grid,
         const PPISP* ppisp,
         const PPISPControllerPool* ppisp_controller_pool,
-        const ADMMSparsityOptimizer* sparsity_optimizer,
         const POPSpaController* popspa_controller,
         const AdamOptimizer* popspa_optimizer) {
         try {
@@ -368,26 +381,14 @@ namespace lfs::training {
                     "Cannot serialize checkpoint: Gaussian count is out of bounds",
                     LFS_SOURCE_SITE_CURRENT());
             }
-            const bool save_sparsity =
-                sparsity_optimizer &&
-                sparsity_optimizer->is_initialized();
             const bool save_popspa = popspa_controller && popspa_controller->is_initialized();
             if (save_popspa) {
-                if (save_sparsity || !popspa_optimizer)
-                    throw std::runtime_error("POPSpa checkpoint requires dedicated Adam and excludes legacy sparsity");
+                if (!popspa_optimizer)
+                    throw std::runtime_error("POPSpa checkpoint requires its dedicated Adam");
                 validate_popspa_checkpoint(*popspa_controller, *popspa_optimizer, params.optimization, model, iteration);
             } else if (params.optimization.enable_sparsity &&
-                       params.optimization.sparsity_method == lfs::core::param::SparsityMethod::POPSpa &&
-                       (save_sparsity || uint64_t(iteration) > params.optimization.iterations)) {
+                       uint64_t(iteration) > params.optimization.iterations) {
                 throw std::runtime_error("POPSpa checkpoint is missing initialized controller state");
-            }
-            if (save_sparsity) {
-                // The legacy standalone writer used its byte estimate to
-                // validate this invariant before serialization. CKPT is now
-                // embedded directly, so the stream serializer must own the
-                // validation itself.
-                (void)sparsity_optimizer->checkpoint_size_bytes(
-                    model.size());
             }
 
             CheckpointHeader header{};
@@ -407,9 +408,6 @@ namespace lfs::training {
                 header.flags =
                     header.flags |
                     CheckpointFlags::HAS_PPISP_CONTROLLER;
-            if (save_sparsity)
-                header.flags =
-                    header.flags | CheckpointFlags::HAS_SPARSITY;
 
             const auto header_pos = destination.tellp();
             if (save_popspa)
@@ -468,13 +466,6 @@ namespace lfs::training {
                     "PPISP controller pool staged: {} cameras",
                     ppisp_controller_pool->num_cameras());
             }
-            if (save_sparsity) {
-                sparsity_optimizer->serialize(destination);
-                LOG_DEBUG(
-                    "Sparsity ADMM state staged: {} rows",
-                    sparsity_optimizer->state_size());
-            }
-
             if (save_popspa) {
                 auto serialized = popspa_controller->serialize(destination);
                 if (!serialized)
@@ -593,7 +584,6 @@ namespace lfs::training {
         BilateralGrid* bilateral_grid,
         PPISP* ppisp,
         PPISPControllerPool* ppisp_controller_pool,
-        ADMMSparsityOptimizer* sparsity_optimizer,
         lfs::core::SplatTensorAllocator tensor_allocator,
         POPSpaController* popspa_controller,
         AdamOptimizer* popspa_optimizer) {
@@ -615,7 +605,7 @@ namespace lfs::training {
         }
         return load_checkpoint(
             file, file_size, strategy, params, bilateral_grid,
-            ppisp, ppisp_controller_pool, sparsity_optimizer,
+            ppisp, ppisp_controller_pool,
             std::move(tensor_allocator),
             lfs::core::path_to_utf8(path), nullptr,
             popspa_controller, popspa_optimizer);
@@ -629,7 +619,6 @@ namespace lfs::training {
         BilateralGrid* bilateral_grid,
         PPISP* ppisp,
         PPISPControllerPool* ppisp_controller_pool,
-        ADMMSparsityOptimizer* sparsity_optimizer,
         lfs::core::SplatTensorAllocator tensor_allocator,
         const std::string_view source_name,
         lfs::core::SplatData* preloaded_model,
@@ -678,12 +667,23 @@ namespace lfs::training {
             const auto strategy_state_pos = file.tellg();
             auto loaded_params = params;
             auto saved_optimization = loaded_params.optimization;
+            // Builds with both methods saved "opacity_admm" or "popspa". Builds
+            // before POPSpa saved neither that key nor popspa_* settings; current
+            // builds save only the popspa_* settings.
+            bool saved_admm_sparsity = false;
             if (header.params_json_size > 0) {
                 file.seekg(static_cast<std::streamoff>(header.params_json_offset));
                 std::string params_str(header.params_json_size, '\0');
                 file.read(params_str.data(), static_cast<std::streamsize>(header.params_json_size));
                 if (!file)
                     return std::unexpected("Invalid checkpoint: truncated parameter JSON");
+                if (const auto saved = nlohmann::json::parse(params_str, nullptr, false);
+                    saved.is_object() && saved.contains("optimization") && saved.at("optimization").is_object()) {
+                    const auto& optimization = saved.at("optimization");
+                    const auto method = optimization.find("sparsity_method");
+                    saved_admm_sparsity = method != optimization.end() ? *method != "popspa"
+                                                                       : !optimization.contains("popspa_target_count");
+                }
 
                 const auto cli_data_path =
                     loaded_params.dataset.data_path;
@@ -864,26 +864,14 @@ namespace lfs::training {
                 LOG_WARN("PPISP controller pool requested but not in checkpoint - using fresh state");
             }
 
-            // Sparsity ADMM state (if present in checkpoint)
-            std::unique_ptr<ADMMSparsityOptimizer> loaded_sparsity;
+            // Opacity ADMM state written by older builds is consumed and dropped.
             const bool has_sparsity =
                 header.version >= lfs::core::CHECKPOINT_VERSION_HAS_SPARSITY &&
                 has_flag(header.flags, CheckpointFlags::HAS_SPARSITY);
             if (has_sparsity) {
-                if (sparsity_optimizer) {
-                    auto parsed = std::make_unique<ADMMSparsityOptimizer>(
-                        sparsity_config_from_params(loaded_params.optimization));
-                    parsed->deserialize(file);
-                    if (parsed->state_size() != static_cast<size_t>(loaded_model.size()))
-                        throw std::runtime_error("Invalid checkpoint: sparsity ADMM state does not match model count");
-                    loaded_sparsity = std::move(parsed);
-                } else {
-                    if (ADMMSparsityOptimizer::consume_checkpoint(file) !=
-                        static_cast<size_t>(loaded_model.size())) {
-                        throw std::runtime_error("Invalid checkpoint: sparsity ADMM state does not match model count");
-                    }
-                    LOG_WARN("Checkpoint has sparsity ADMM state but none provided - skipping data");
-                }
+                if (consume_legacy_admm_state(file) != static_cast<size_t>(loaded_model.size()))
+                    throw std::runtime_error("Invalid checkpoint: sparsity ADMM state does not match model count");
+                LOG_WARN("Checkpoint carries opacity ADMM state from an older version; it is no longer used");
             }
 
             const bool has_popspa = has_flag(header.flags, CheckpointFlags::HAS_POPSPA);
@@ -914,9 +902,14 @@ namespace lfs::training {
                 validate_popspa_checkpoint(*loaded_popspa, *loaded_popspa_optimizer,
                                            loaded_params.optimization, loaded_model, header.iteration);
             } else if (loaded_params.optimization.enable_sparsity &&
-                       loaded_params.optimization.sparsity_method == lfs::core::param::SparsityMethod::POPSpa &&
                        (has_sparsity || uint64_t(header.iteration) > loaded_params.optimization.iterations)) {
-                throw std::runtime_error("Invalid POPSpa checkpoint: missing controller state");
+                if (!saved_admm_sparsity)
+                    throw std::runtime_error("Invalid POPSpa checkpoint: missing controller state");
+                // Saved during or after opacity ADMM sparsification. That phase no
+                // longer exists, so resume the model without sparsification.
+                LOG_WARN("Checkpoint was saved during opacity ADMM sparsification, which is no longer supported; "
+                         "resuming without sparsification");
+                loaded_params.optimization.enable_sparsity = false;
             }
 
             // Reserve capacity for densification after the checkpoint params are resolved.
@@ -970,13 +963,6 @@ namespace lfs::training {
                          ppisp_controller_pool->num_cameras(),
                          ppisp_controller_pool->get_learning_rate());
             }
-            if (loaded_sparsity) {
-                sparsity_optimizer->adopt_checkpoint_state(*loaded_sparsity);
-                LOG_INFO("Sparsity ADMM state restored: {} rows", sparsity_optimizer->state_size());
-            } else if (sparsity_optimizer && !has_sparsity) {
-                sparsity_optimizer->reset();
-            }
-
             if (popspa_controller && loaded_popspa) {
                 popspa_controller->adopt_checkpoint_state(*loaded_popspa);
                 popspa_optimizer->adopt_checkpoint_state(*loaded_popspa_optimizer);

@@ -525,16 +525,6 @@ namespace fast_lfs::rasterization::kernels {
             grad += fused_adam.opacity_reg_weight * opa * (1.0f - opa) /
                     static_cast<float>(param.n_elements);
         }
-        if (fused_adam.sparsity_opa_sigmoid != nullptr &&
-            fused_adam.sparsity_z != nullptr &&
-            fused_adam.sparsity_u != nullptr &&
-            element_idx < static_cast<uint>(fused_adam.sparsity_n)) {
-            const float opa = fused_adam.sparsity_opa_sigmoid[element_idx];
-            grad += fused_adam.sparsity_rho *
-                    (opa - fused_adam.sparsity_z[element_idx] + fused_adam.sparsity_u[element_idx]) *
-                    opa * (1.0f - opa) *
-                    fused_adam.sparsity_grad_loss;
-        }
         return grad;
     }
 

@@ -419,8 +419,6 @@
     "tooltip.popspa_sh0_lr": "Degree-zero spherical-harmonic learning rate.",
     "tooltip.popspa_shn_lr": "Higher-degree spherical-harmonic learning rate.",
     "tooltip.popspa_ssim_weight": "SSIM fraction in the POPSpa photometric loss; the remainder uses L1.",
-    "options.sparsity.opacity_admm": "Opacity ADMM",
-    "options.sparsity.popspa": "POPSpa",
     "section.dataset": "Zbiór Danych",
     "section.optimization": "Optymalizacja",
     "section.refinement": "Udoskonalenie",
@@ -668,9 +666,6 @@
       "bilateral_grid_lr": "Kontroluje, jak szybko grid uczy się korekcji koloru/appearance. Zwiększ, jeśli korekcja jest zbyt wolna lub słaba; zmniejsz, jeśli kolory przesuwają się zbyt agresywnie, migoczą lub stają się niestabilne. Działa tylko, gdy Bilateral Grid lub Exposure Correction jest włączone.",
       "prune_opacity": "Próg pruningu IGS+. Zwiększ, aby agresywniej usuwać słabe splaty; zmniejsz, aby zachować subtelne/detaliczne splaty.",
       "min_opacity": "Kontroluje, kiedy słabe Gaussians są uznawane za zbyt przezroczyste, aby je zachować. Zwiększ, aby agresywniej czyścić słabe pływające splaty; zmniejsz, aby zachować subtelne detale.",
-      "sparsify_steps": "Dodaje tyle dodatkowych kroków optymalizacji sparsity po normalnym treningu. Więcej kroków daje modelowi więcej czasu na adaptację przed pruningiem; mniej kończy szybciej, ale może bardziej pogorszyć jakość. Działa tylko, gdy Sparsity jest włączone.",
-      "init_rho": "Kontroluje, jak mocno faza sparsity popycha słabe/nisko-opacity Gaussians ku usunięciu. Zwiększ dla silniejszej presji kompresji; zmniejsz, jeśli model zbyt szybko traci detal lub jakość. Działa tylko, gdy Sparsity jest włączone.",
-      "prune_ratio": "Ustawia końcową frakcję Gaussians usuniętych po fazie sparsity. Wyższe wartości dają mniejszy i szybszy wynik, ale mogą usuwać detal; niższe zachowują więcej jakości, ale kompresują mniej. Pruning opiera się na Gaussians o najniższej opacity. Działa tylko, gdy Sparsity jest włączone.",
       "opt": {
         "strategy": {
           "mrnf": "Domyślna strategia 3DGS z udoskonalaniem MRNF",
@@ -1788,7 +1783,6 @@
     "print_to_log": "Wydrukuj do Logu"
   },
   "training_params": {
-    "sparsity_method": "Sparsity Method",
     "popspa_target_count": "Target Gaussians",
     "popspa_first_prune_count": "First Prune Count",
     "popspa_sparsify_steps": "Sparsify Steps",
@@ -1837,9 +1831,6 @@
     "bg_image": "Obraz:",
     "bg_image_browse": "Przeglądaj...",
     "bg_image_clear": "Wyczyść",
-    "sparsify_steps": "Kroki redukcji:",
-    "init_rho": "Początkowe rho:",
-    "prune_ratio": "Współczynnik przycinania:",
     "ppisp": "PPISP:",
     "ppisp_exposure_from_exif": "Ekspozycja EXIF:",
     "ppisp_controller": "  Kontroler:",

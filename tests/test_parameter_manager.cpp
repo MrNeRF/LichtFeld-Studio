@@ -557,7 +557,8 @@ namespace {
         params.ppisp_use_controller = true;
         params.iterations = 10'000;
         params.enable_sparsity = true;
-        params.sparsify_steps = 15'000;
+        params.popspa_sparsify_steps = 10'000;
+        params.popspa_refine_steps = 5'000;
 
         EXPECT_EQ(params.resolved_total_iterations(), 25'000);
         EXPECT_EQ(params.resolved_ppisp_controller_activation_step(params.resolved_total_iterations()), 20'000);

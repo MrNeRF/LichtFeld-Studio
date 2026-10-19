@@ -63,12 +63,6 @@ namespace fast_lfs::rasterization {
         float* erank_reg_loss_out = nullptr;
         float* sh_rest_reg_loss_out = nullptr;
         float* dc_reg_loss_out = nullptr;
-        const float* sparsity_opa_sigmoid = nullptr;
-        const float* sparsity_z = nullptr;
-        const float* sparsity_u = nullptr;
-        int sparsity_n = 0;
-        float sparsity_rho = 0.0f;
-        float sparsity_grad_loss = 0.0f;
         bool per_splat_mean_step = false;
         float mean_step_median_extent = 0.0f;
         const bool* mean_step_far_mask = nullptr;

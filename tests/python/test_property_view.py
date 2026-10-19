@@ -360,24 +360,6 @@ EXPECTED_NUMBER_ROWS = {
         math.inf,
         False,
     ),
-    "sparsify_steps": (
-        "training_params.sparsify_steps",
-        "training.tooltip.sparsify_steps",
-        0,
-        1_000,
-        1_000,
-        50_000,
-        True,
-    ),
-    "init_rho": (
-        "training_params.init_rho",
-        "training.tooltip.init_rho",
-        4,
-        0.001,
-        0.0,
-        0.01,
-        False,
-    ),
     "popspa_target_count": (
         "training_params.popspa_target_count",
         "training.tooltip.popspa_target_count",
@@ -675,14 +657,6 @@ EXPECTED_SELECT_ROWS = {
             (3, "training.options.eval_bit_depth.float"),
         ),
     ),
-    "sparsity_method": (
-        "training_params.sparsity_method",
-        "",
-        (
-            (0, "training.options.sparsity.opacity_admm"),
-            (1, "training.options.sparsity.popspa"),
-        ),
-    ),
 }
 
 EXPECTED_ADVANCED_IDS = (
@@ -740,7 +714,6 @@ def _all_rows(lf):
 
 EXPECTED_RENDERED_PROP_IDS = (
     set(property_view.MIGRATED_PROP_IDS) | set(EXPECTED_ADVANCED_IDS)
-    | set(property_view.POPSPA_PROPS) | {"sparsity_method"}
 ) - set(property_view.BESPOKE_OR_HIDDEN)
 
 
@@ -748,13 +721,13 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
     assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
     assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
-    assert len(property_view.MIGRATED_PROP_IDS) == 85
-    assert len(set(property_view.MIGRATED_PROP_IDS)) == 85
+    assert len(property_view.MIGRATED_PROP_IDS) == 82
+    assert len(set(property_view.MIGRATED_PROP_IDS)) == 82
 
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 115
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 112
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 
@@ -775,7 +748,6 @@ def test_auto_advanced_roster_and_exclusions_follow_declaration_order(lf):
         "ppisp_controller_activation_step",
         "bg_modulation",
         "headless",
-        "prune_ratio",
         "steps_scaler",
         "eval_mask",
         "eval_mask_report",

@@ -419,8 +419,6 @@
     "tooltip.popspa_sh0_lr": "Degree-zero spherical-harmonic learning rate.",
     "tooltip.popspa_shn_lr": "Higher-degree spherical-harmonic learning rate.",
     "tooltip.popspa_ssim_weight": "SSIM fraction in the POPSpa photometric loss; the remainder uses L1.",
-    "options.sparsity.opacity_admm": "Opacity ADMM",
-    "options.sparsity.popspa": "POPSpa",
     "section.dataset": "데이터셋",
     "section.optimization": "최적화",
     "section.refinement": "정제",
@@ -668,9 +666,6 @@
       "bilateral_grid_lr": "grid가 색상/appearance 보정을 얼마나 빠르게 학습하는지 제어합니다. 보정이 너무 느리거나 약하면 올리고, 색상이 너무 공격적으로 변하거나 깜박이거나 불안정하면 낮춥니다. Bilateral Grid 또는 Exposure Correction이 활성화된 경우에만 적용됩니다.",
       "prune_opacity": "IGS+ pruning 임계값입니다. 약한 splat을 더 적극적으로 제거하려면 올리고, 희미한/디테일 splat을 유지하려면 낮춥니다.",
       "min_opacity": "희미한 Gaussians를 유지하기에 너무 투명하다고 볼 시점을 제어합니다. 약한 떠다니는 splat을 더 적극적으로 정리하려면 올리고, 희미한 디테일을 보존하려면 낮춥니다.",
-      "sparsify_steps": "일반 학습 후 추가 sparsity 최적화 단계를 이만큼 더합니다. 단계가 많을수록 pruning 전에 모델이 적응할 시간이 늘고, 적을수록 빨리 끝나지만 품질이 더 떨어질 수 있습니다. Sparsity가 활성화된 경우에만 적용됩니다.",
-      "init_rho": "sparsity phase가 약한/낮은 opacity의 Gaussians를 제거 쪽으로 얼마나 강하게 미는지 제어합니다. 압축 압력을 강하게 하려면 올리고, 모델이 디테일이나 품질을 너무 빨리 잃으면 낮춥니다. Sparsity가 활성화된 경우에만 적용됩니다.",
-      "prune_ratio": "sparsity phase 후 제거되는 Gaussians의 최종 비율을 설정합니다. 높은 값은 결과를 더 작고 빠르게 만들지만 디테일을 제거할 수 있고, 낮은 값은 품질을 더 보존하지만 압축은 적습니다. pruning은 가장 낮은 opacity의 Gaussians를 기준으로 합니다. Sparsity가 활성화된 경우에만 적용됩니다.",
       "opt": {
         "strategy": {
           "mrnf": "MRNF 정제를 사용하는 기본 3DGS 전략",
@@ -1788,7 +1783,6 @@
     "print_to_log": "로그에 출력"
   },
   "training_params": {
-    "sparsity_method": "Sparsity Method",
     "popspa_target_count": "Target Gaussians",
     "popspa_first_prune_count": "First Prune Count",
     "popspa_sparsify_steps": "Sparsify Steps",
@@ -1837,9 +1831,6 @@
     "bg_image": "이미지:",
     "bg_image_browse": "찾아보기...",
     "bg_image_clear": "지우기",
-    "sparsify_steps": "희소화 단계:",
-    "init_rho": "초기 rho:",
-    "prune_ratio": "가지치기 비율:",
     "ppisp": "PPISP:",
     "ppisp_exposure_from_exif": "EXIF 노출:",
     "ppisp_controller": "  컨트롤러:",

@@ -419,8 +419,6 @@
     "tooltip.popspa_sh0_lr": "Degree-zero spherical-harmonic learning rate.",
     "tooltip.popspa_shn_lr": "Higher-degree spherical-harmonic learning rate.",
     "tooltip.popspa_ssim_weight": "SSIM fraction in the POPSpa photometric loss; the remainder uses L1.",
-    "options.sparsity.opacity_admm": "Opacity ADMM",
-    "options.sparsity.popspa": "POPSpa",
     "section.dataset": "Dataset",
     "section.optimization": "Optimalisatie",
     "section.refinement": "Verfijning",
@@ -668,9 +666,6 @@
       "bilateral_grid_lr": "Bepaalt hoe snel het grid kleur-/appearance-correctie leert. Verhoog als correctie te langzaam of zwak is; verlaag als kleuren te agressief verschuiven, flikkeren of instabiel worden. Geldt alleen wanneer Bilateral Grid of Exposure Correction actief is.",
       "prune_opacity": "IGS+-pruningdrempel. Verhoog om zwakke splats agressiever te verwijderen; verlaag om zwakke/detail-splats te behouden.",
       "min_opacity": "Bepaalt wanneer zwakke Gaussians te transparant worden geacht om te behouden. Verhoog om zwakke zwevende splats agressiever op te ruimen; verlaag om subtiel detail te behouden.",
-      "sparsify_steps": "Voegt zoveel extra sparsity-optimalisatiestappen toe na normale training. Meer stappen geven het model meer tijd om zich aan te passen vóór pruning; minder stappen eindigen sneller maar kunnen kwaliteit meer schaden. Geldt alleen wanneer Sparsity actief is.",
-      "init_rho": "Bepaalt hoe sterk de sparsity-fase zwakke/laag-opacity Gaussians richting verwijdering duwt. Verhoog voor sterkere compressiedruk; verlaag als het model te snel detail of kwaliteit verliest. Geldt alleen wanneer Sparsity actief is.",
-      "prune_ratio": "Stelt de uiteindelijke fractie Gaussians in die na de sparsity-fase wordt verwijderd. Hogere waarden maken het resultaat kleiner en sneller maar kunnen detail verwijderen; lagere waarden behouden meer kwaliteit maar comprimeren minder. Pruning is gebaseerd op de laagste-opacity Gaussians. Geldt alleen wanneer Sparsity actief is.",
       "opt": {
         "strategy": {
           "mrnf": "Standaard 3DGS-strategie met MRNF-verfijning",
@@ -1788,7 +1783,6 @@
     "print_to_log": "Afdrukken naar Log"
   },
   "training_params": {
-    "sparsity_method": "Sparsity Method",
     "popspa_target_count": "Target Gaussians",
     "popspa_first_prune_count": "First Prune Count",
     "popspa_sparsify_steps": "Sparsify Steps",
@@ -1837,9 +1831,6 @@
     "bg_image": "Afbeelding:",
     "bg_image_browse": "Bladeren...",
     "bg_image_clear": "Wissen",
-    "sparsify_steps": "Schaarsheidsstappen:",
-    "init_rho": "Initiële rho:",
-    "prune_ratio": "Snoeiverhouding:",
     "ppisp": "PPISP:",
     "ppisp_exposure_from_exif": "EXIF-belichting:",
     "ppisp_controller": "  Controller:",

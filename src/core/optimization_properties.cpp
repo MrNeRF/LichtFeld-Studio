@@ -866,13 +866,6 @@ namespace lfs::core::param {
 
             // Sparsity
             .all_strategies()
-            .enum_prop(&OptimizationParameters::sparsity_method,
-                       "sparsity_method", "Sparsity Method", d.sparsity_method,
-                       {{"OpacityADMM", SparsityMethod::OpacityADMM, "training.options.sparsity.opacity_admm", "opacity_admm"},
-                        {"POPSpa", SparsityMethod::POPSpa, "training.options.sparsity.popspa", "popspa"}},
-                       "Post-training sparsity method")
-            .locale("training_params.sparsity_method")
-            .all_strategies()
             .int_prop(&OptimizationParameters::popspa_target_count,
                       "popspa_target_count", "Target Gaussians", d.popspa_target_count, 1, 2147483647,
                       "Exact final Gaussian count.")
@@ -1017,29 +1010,9 @@ namespace lfs::core::param {
             .all_strategies()
             .bool_prop(&OptimizationParameters::enable_sparsity,
                        "enable_sparsity", "Enable Sparsity", d.enable_sparsity,
-                       "Enable sparsity optimization")
+                       "Run POPSpa sparsification after training")
             .locale("training_params.sparsity")
             .tooltip("training.tooltip.sparsity")
-            .all_strategies()
-            .int_prop(&OptimizationParameters::sparsify_steps,
-                      "sparsify_steps", "Sparsify Steps", d.sparsify_steps, 1000, 50000,
-                      "Number of sparsification steps to run after regular training")
-            .locale("training_params.sparsify_steps")
-            .tooltip("training.tooltip.sparsify_steps")
-            .precision(0)
-            .ui_step(1000)
-            .all_strategies()
-            .float_prop(&OptimizationParameters::prune_ratio,
-                        "prune_ratio", "Prune Ratio", d.prune_ratio, 0.0f, 1.0f,
-                        "Target pruning ratio for sparsification")
-            .all_strategies()
-            .float_prop(&OptimizationParameters::init_rho,
-                        "init_rho", "Init Rho", d.init_rho, 0.0f, 0.01f,
-                        "Initial ADMM penalty rho for sparsity optimization")
-            .locale("training_params.init_rho")
-            .tooltip("training.tooltip.init_rho")
-            .precision(4)
-            .ui_step(0.001)
             .all_strategies()
             .float_prop(&OptimizationParameters::steps_scaler,
                         "steps_scaler", "Steps Scaler", d.steps_scaler, 0.0f, 10.0f,

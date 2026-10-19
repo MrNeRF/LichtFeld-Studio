@@ -81,8 +81,7 @@ namespace lfs::training {
 
     bool Trainer::popspa_enabled() const {
         const auto params = getParams();
-        return params.optimization.enable_sparsity &&
-               params.optimization.sparsity_method == core::param::SparsityMethod::POPSpa;
+        return params.optimization.enable_sparsity;
     }
 
     bool Trainer::popspa_optimizing() const noexcept {
@@ -141,7 +140,6 @@ namespace lfs::training {
         using Opt = core::param::OptimizationParameters;
         preserve(&Opt::iterations);
         preserve(&Opt::enable_sparsity);
-        preserve(&Opt::sparsity_method);
         preserve(&Opt::popspa_target_count);
         preserve(&Opt::popspa_first_prune_count);
         preserve(&Opt::popspa_sparsify_steps);
@@ -206,7 +204,6 @@ namespace lfs::training {
             const uint64_t fingerprint = sort_and_fingerprint_popspa_cameras(cameras);
             auto& model = strategy_->get_model();
             if (!popspa_controller_.is_initialized()) {
-                sparsity_optimizer_.reset();
                 const auto& opt = params_.optimization;
                 auto active = compute_near_zero_rotation_mask(model.rotation_raw()).logical_not();
                 if (model.has_deleted_mask())

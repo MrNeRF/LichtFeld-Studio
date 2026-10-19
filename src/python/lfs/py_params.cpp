@@ -845,10 +845,6 @@ namespace lfs::python {
         core::param::ensure_optimization_properties_registered();
         register_dataset_properties();
 
-        nb::enum_<SparsityMethod>(m, "SparsityMethod")
-            .value("OPACITY_ADMM", SparsityMethod::OpacityADMM)
-            .value("POPSPA", SparsityMethod::POPSpa);
-
         nb::enum_<MaskMode>(m, "MaskMode")
             .value("NONE", MaskMode::None)
             .value("SEGMENT", MaskMode::Segment)
@@ -1090,11 +1086,7 @@ namespace lfs::python {
                 "enable_sparsity",
                 [](PyOptimizationParams& self) { return self.params().enable_sparsity; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.enable_sparsity = v; }); },
-                "Enable sparsity optimization")
-            .def_prop_rw(
-                "sparsity_method",
-                [](PyOptimizationParams& self) { return self.params().sparsity_method; },
-                [](PyOptimizationParams&, SparsityMethod v) { modify_params([v](auto& p) { p.sparsity_method = v; }); })
+                "Run POPSpa sparsification after training")
             .def_prop_rw(
                 "popspa_target_count",
                 [](PyOptimizationParams& self) { return self.params().popspa_target_count; },

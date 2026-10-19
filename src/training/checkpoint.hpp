@@ -30,7 +30,6 @@ namespace lfs::training {
     class BilateralGrid;
     class PPISP;
     class PPISPControllerPool;
-    class ADMMSparsityOptimizer;
     class POPSpaController;
     class AdamOptimizer;
 
@@ -52,7 +51,7 @@ namespace lfs::training {
     // Serialize the exact LFKP stream to a seekable destination for embedding
     // in a .licht CKPT chapter.
     // An initialized POPSpa controller requires its dedicated Adam optimizer;
-    // these form one v4 payload and cannot accompany legacy sparsity state.
+    // the two form one v4 payload.
     [[nodiscard]] lfs::Result<CheckpointStreamResult>
     serialize_checkpoint(
         std::ostream& destination,
@@ -62,7 +61,6 @@ namespace lfs::training {
         const BilateralGrid* bilateral_grid,
         const PPISP* ppisp,
         const PPISPControllerPool* ppisp_controller_pool,
-        const ADMMSparsityOptimizer* sparsity_optimizer,
         const POPSpaController* popspa_controller = nullptr,
         const AdamOptimizer* popspa_optimizer = nullptr);
 
@@ -74,7 +72,6 @@ namespace lfs::training {
         BilateralGrid* bilateral_grid,
         PPISP* ppisp,
         PPISPControllerPool* ppisp_controller_pool,
-        ADMMSparsityOptimizer* sparsity_optimizer,
         lfs::core::SplatTensorAllocator tensor_allocator = {},
         POPSpaController* popspa_controller = nullptr,
         AdamOptimizer* popspa_optimizer = nullptr);
@@ -83,7 +80,7 @@ namespace lfs::training {
         std::declval<IStrategy&>(),
         std::declval<
             lfs::core::param::TrainingParameters&>(),
-        nullptr, nullptr, nullptr, nullptr));
+        nullptr, nullptr, nullptr));
 
     /// Load a complete checkpoint from a bounded, seekable CKPT stream.
     /// When `preloaded_model` is non-null it must already match the CKPT splat
@@ -101,7 +98,6 @@ namespace lfs::training {
         BilateralGrid* bilateral_grid,
         PPISP* ppisp,
         PPISPControllerPool* ppisp_controller_pool,
-        ADMMSparsityOptimizer* sparsity_optimizer,
         lfs::core::SplatTensorAllocator tensor_allocator = {},
         std::string_view source_name = "embedded CKPT",
         lfs::core::SplatData* preloaded_model = nullptr,

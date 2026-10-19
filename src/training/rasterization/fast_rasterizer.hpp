@@ -150,12 +150,6 @@ namespace lfs::training {
         float* erank_reg_loss_out = nullptr;
         float* sh_rest_reg_loss_out = nullptr;
         float* dc_reg_loss_out = nullptr;
-        const float* sparsity_opa_sigmoid = nullptr;
-        const float* sparsity_z = nullptr;
-        const float* sparsity_u = nullptr;
-        int sparsity_n = 0;
-        float sparsity_rho = 0.0f;
-        float sparsity_grad_loss = 0.0f;
         // Optional edge guidance folded into the main blend backward. The map
         // is a median-normalized row-major float32 [H,W], and the destination
         // is a zeroed float32 [N] per-view scratch vector.

@@ -2009,11 +2009,6 @@ def has_draw_handlers() -> bool:
 def has_draw_handler(id: str) -> bool:
     """Check if a specific draw handler exists"""
 
-class SparsityMethod(enum.Enum):
-    OPACITY_ADMM = 0
-
-    POPSPA = 1
-
 class MaskMode(enum.Enum):
     NONE = 0
 
@@ -2323,16 +2318,10 @@ class OptimizationParams:
 
     @property
     def enable_sparsity(self) -> bool:
-        """Enable sparsity optimization"""
+        """Run POPSpa sparsification after training"""
 
     @enable_sparsity.setter
     def enable_sparsity(self, arg: bool, /) -> None: ...
-
-    @property
-    def sparsity_method(self) -> SparsityMethod: ...
-
-    @sparsity_method.setter
-    def sparsity_method(self, arg: SparsityMethod, /) -> None: ...
 
     @property
     def popspa_target_count(self) -> int: ...

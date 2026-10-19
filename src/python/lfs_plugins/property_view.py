@@ -86,8 +86,6 @@ NUMBER_PROPS = (
     "init_mesh_resolution",
     "min_opacity",
     "prune_opacity",
-    "sparsify_steps",
-    "init_rho",
     *POPSPA_PROPS,
     "ppisp_controller_lr",
     "eval_mask_opacity",
@@ -117,7 +115,7 @@ BOOL_PROPS = (
     "eval_flip",
 )
 
-SELECT_PROPS = ("mask_mode", "bg_mode", "normal_loss_space", "eval_space", "eval_bit_depth", "sparsity_method")
+SELECT_PROPS = ("mask_mode", "bg_mode", "normal_loss_space", "eval_space", "eval_bit_depth")
 MIGRATED_PROP_IDS = NUMBER_PROPS + BOOL_PROPS + SELECT_PROPS
 
 # These registered properties are intentionally represented by bespoke widgets or
@@ -131,7 +129,6 @@ BESPOKE_OR_HIDDEN = {
     "ppisp_controller_activation_step": "derived -1 schedule semantics",
     "bg_modulation": "legacy mirror controlled by bg_mode",
     "headless": "runtime-only read-only flag",
-    "prune_ratio": "scrub slider",
     "steps_scaler": "driven by apply_step_scaling via the iterations lock; raw edits desync step counts",
     "eval_mask": "mesh file browser and path display",
     "eval_mask_report": "headline set select and also-score checkboxes",
@@ -140,11 +137,7 @@ BESPOKE_OR_HIDDEN = {
 AUTO_ADVANCED_RUN_ID = "advanced_registry"
 
 # Per-row visibility inside a run (auto-advanced rows have no run-level condition).
-
 PROP_VISIBILITY_CONDITION_IDS = {
-    "sparsify_steps": "dep_opacity_admm",
-    "init_rho": "dep_opacity_admm",
-    **{prop_id: "dep_popspa" for prop_id in POPSPA_PROPS},
     "ppisp_reg_weight": "dep_show_ppisp_reg_weight",
 }
 
@@ -215,9 +208,6 @@ BASIC_RUNS = (
     _run("basic_sparsity_toggle", "enable_sparsity"),
     _run(
         "sparsity",
-        "sparsity_method",
-        "sparsify_steps",
-        "init_rho",
         *POPSPA_PROPS,
         visibility_condition_id="dep_sparsity",
     ),

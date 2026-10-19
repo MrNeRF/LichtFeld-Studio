@@ -24,9 +24,6 @@
 
 namespace lfs::core {
     namespace param {
-        enum class SparsityMethod { OpacityADMM,
-                                    POPSpa };
-
         // Mask mode for attention mask behavior during training
         enum class MaskMode {
             None,             // No masking applied
@@ -404,9 +401,8 @@ namespace lfs::core {
             // Mesh2Splat raster resolution when the init file is a mesh
             int init_mesh_resolution = Mesh2SplatOptions{}.resolution_target;
 
-            // Sparsity optimization parameters
+            // POPSpa post-training sparsification
             bool enable_sparsity = false;
-            SparsityMethod sparsity_method = SparsityMethod::OpacityADMM;
             int popspa_target_count = 256000;
             int popspa_first_prune_count = 0;
             int popspa_sparsify_steps = 5000;
@@ -424,9 +420,6 @@ namespace lfs::core {
             float popspa_sh0_lr = 0.0025f;
             float popspa_shn_lr = 0.000125f;
             float popspa_ssim_weight = 0.2f;
-            int sparsify_steps = 15000;
-            float init_rho = 0.0005f;
-            float prune_ratio = 0.6f;
 
             // Perf / profiling instruments (CLI-only; no env toggles)
             bool perf_bench = false;     // --perf-bench → write perf_bench.json

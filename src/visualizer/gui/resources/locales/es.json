@@ -419,8 +419,6 @@
     "tooltip.popspa_sh0_lr": "Degree-zero spherical-harmonic learning rate.",
     "tooltip.popspa_shn_lr": "Higher-degree spherical-harmonic learning rate.",
     "tooltip.popspa_ssim_weight": "SSIM fraction in the POPSpa photometric loss; the remainder uses L1.",
-    "options.sparsity.opacity_admm": "Opacity ADMM",
-    "options.sparsity.popspa": "POPSpa",
     "section.dataset": "Dataset",
     "section.optimization": "Optimización",
     "section.refinement": "Refinamiento",
@@ -668,9 +666,6 @@
       "bilateral_grid_lr": "Controla qué tan rápido el grid aprende la corrección de color/apariencia. Auméntalo si la corrección es demasiado lenta o débil; bájalo si los colores cambian demasiado agresivamente, parpadean o se vuelven inestables. Solo aplica cuando Bilateral Grid o Exposure Correction está activado.",
       "prune_opacity": "Umbral de poda de IGS+. Súbelo para eliminar splats débiles con más agresividad; bájalo para conservar splats tenues o de detalle.",
       "min_opacity": "Controla cuándo los Gaussians tenues se consideran demasiado transparentes para conservarse. Súbelo para limpiar splats flotantes débiles más agresivamente; bájalo para preservar detalle tenue.",
-      "sparsify_steps": "Añade esta cantidad de pasos extra de optimización de sparsity después del entrenamiento normal. Más pasos dan al modelo más tiempo para adaptarse antes de podar; menos pasos terminan antes pero pueden dañar más la calidad. Solo aplica cuando Sparsity está activado.",
-      "init_rho": "Controla con qué fuerza la fase de sparsity empuja Gaussians débiles/de baja opacidad hacia la eliminación. Auméntalo para más presión de compresión; bájalo si el modelo pierde detalle o calidad demasiado rápido. Solo aplica cuando Sparsity está activado.",
-      "prune_ratio": "Define la fracción final de Gaussians eliminados tras la fase de sparsity. Valores altos hacen el resultado más pequeño y rápido pero pueden quitar detalle; valores bajos conservan más calidad pero comprimen menos. La poda se basa en los Gaussians de menor opacidad. Solo aplica cuando Sparsity está activado.",
       "opt": {
         "strategy": {
           "mrnf": "Estrategia 3DGS por defecto con refinamiento MRNF",
@@ -1788,7 +1783,6 @@
     "print_to_log": "Imprimir en el Registro"
   },
   "training_params": {
-    "sparsity_method": "Sparsity Method",
     "popspa_target_count": "Target Gaussians",
     "popspa_first_prune_count": "First Prune Count",
     "popspa_sparsify_steps": "Sparsify Steps",
@@ -1837,9 +1831,6 @@
     "bg_image": "Imagen:",
     "bg_image_browse": "Examinar...",
     "bg_image_clear": "Limpiar",
-    "sparsify_steps": "Pasos de dispersión:",
-    "init_rho": "Rho inicial:",
-    "prune_ratio": "Proporción de poda:",
     "ppisp": "PPISP:",
     "ppisp_exposure_from_exif": "Exposición EXIF:",
     "ppisp_controller": "  Controlador:",

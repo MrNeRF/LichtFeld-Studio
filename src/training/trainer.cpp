@@ -9,7 +9,6 @@
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
 #include "components/ppisp_file.hpp"
-#include "components/sparsity_optimizer.hpp"
 #include "control/command_api.hpp"
 #include "control/control_boundary.hpp"
 #include "core/assert.hpp"
@@ -1130,7 +1129,6 @@ namespace lfs::training {
         eval_ppisp_applied_.store(0);
         eval_ppisp_exif_.store(0);
         eval_ppisp_nearest_.store(0);
-        sparsity_optimizer_.reset();
         popspa_controller_.reset();
         popspa_optimizer_.reset();
         popspa_dataset_validated_ = false;
@@ -1178,14 +1176,9 @@ namespace lfs::training {
     }
 
     lfs::core::param::OptimizationParameters Trainer::get_runtime_optimization_params() const {
-        const auto params = getParams();
-        auto runtime_params = params.optimization;
-        // POPSpa is an independent postprocess with its own Adam. Extending
-        // the strategy horizon would change regular training's LR decay.
-        // Preserve the legacy extended horizon for Opacity ADMM only.
-        if (runtime_params.sparsity_method != core::param::SparsityMethod::POPSpa)
-            runtime_params.iterations = static_cast<size_t>(runtime_params.resolved_total_iterations());
-        return runtime_params;
+        // POPSpa runs after regular training with its own Adam, so the strategy
+        // keeps the regular horizon and its LR decay.
+        return getParams().optimization;
     }
 
     void Trainer::sync_strategy_optimization_params() {
@@ -1961,55 +1954,6 @@ namespace lfs::training {
         const lfs::core::param::OptimizationParameters& opt_params) {
         lfs::training::losses::OpacityRegularization::Params params{.weight = opt_params.opacity_reg};
         return lfs::training::losses::OpacityRegularization::forward(splatData.opacity_raw(), optimizer.get_grad(ParamType::Opacity), params);
-    }
-
-    std::expected<std::pair<lfs::core::Tensor, SparsityLossContext>, std::string>
-    Trainer::compute_sparsity_loss_forward(const int iter, const lfs::core::SplatData& splat_data) {
-        if (!sparsity_optimizer_ || !sparsity_optimizer_->should_apply_loss(iter)) {
-            auto zero = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-            return std::make_pair(std::move(zero), SparsityLossContext{});
-        }
-
-        if (!sparsity_optimizer_->is_initialized()) {
-            if (auto result = sparsity_optimizer_->initialize(splat_data.opacity_raw()); !result) {
-                return std::unexpected(result.error());
-            }
-            LOG_DEBUG("Sparsity optimizer initialized at iteration {}", iter);
-        }
-
-        return sparsity_optimizer_->compute_loss_forward(splat_data.opacity_raw());
-    }
-
-    std::expected<void, std::string> Trainer::handle_sparsity_update(const int iter, lfs::core::SplatData& splat_data) {
-        if (!sparsity_optimizer_ || !sparsity_optimizer_->should_update(iter)) {
-            return {};
-        }
-        return sparsity_optimizer_->update_state(splat_data.opacity_raw());
-    }
-
-    std::expected<void, std::string> Trainer::apply_sparsity_pruning(const int iter, lfs::core::SplatData& splat_data) {
-        if (!sparsity_optimizer_ || !sparsity_optimizer_->should_prune(iter)) {
-            return {};
-        }
-
-        auto mask_result = sparsity_optimizer_->get_prune_mask(splat_data.opacity_raw());
-        if (!mask_result) {
-            return std::unexpected(mask_result.error());
-        }
-
-        // Strategies may keep pruned rows as reusable slots. Publish the active
-        // count here, once, so progress and UI polling need no GPU reduction.
-        splat_data.refresh_deleted_count();
-        const size_t n_before = reported_gaussian_count(splat_data);
-        strategy_->remove_gaussians(*mask_result);
-        splat_data.refresh_deleted_count();
-        const size_t n_after = reported_gaussian_count(splat_data);
-
-        LOG_INFO("Sparsity pruning: {} -> {} Gaussians ({}% reduction)",
-                 n_before, n_after, n_before > 0 ? static_cast<int>(100.0f * (n_before - n_after) / n_before) : 0);
-
-        sparsity_optimizer_.reset();
-        return {};
     }
 
     bool Trainer::morton_reorder_due(const int iter) const {
@@ -3118,29 +3062,6 @@ namespace lfs::training {
                 }
             }
 
-            // Initialize sparsity optimizer
-            if (params.optimization.enable_sparsity &&
-                params.optimization.sparsity_method == core::param::SparsityMethod::OpacityADMM) {
-                constexpr int UPDATE_INTERVAL = 50;
-                const int regular_iters = get_regular_iterations();
-                const int sparsify_steps = get_active_sparsify_steps();
-                const int first_sparsify_iter = sparsify_steps > 0 ? regular_iters + 1 : regular_iters;
-
-                const ADMMSparsityOptimizer::Config config{
-                    .sparsify_steps = sparsify_steps,
-                    .init_rho = params.optimization.init_rho,
-                    .prune_ratio = params.optimization.prune_ratio,
-                    .update_every = UPDATE_INTERVAL,
-                    .start_iteration = get_sparsity_boundary_iteration()};
-
-                sparsity_optimizer_ = SparsityOptimizerFactory::create("admm", config);
-                if (sparsity_optimizer_) {
-                    LOG_INFO("Sparsity: regular={}, start={}, steps={}, total={}, prune={:.0f}%",
-                             regular_iters, first_sparsify_iter, sparsify_steps, get_total_iterations(),
-                             params.optimization.prune_ratio * 100);
-                }
-            }
-
             // Initialize background color tensor from params
             {
                 const auto& bg_color = params.optimization.bg_color;
@@ -3724,7 +3645,6 @@ namespace lfs::training {
         eval_ppisp_applied_.store(0);
         eval_ppisp_exif_.store(0);
         eval_ppisp_nearest_.store(0);
-        sparsity_optimizer_.reset();
         popspa_controller_.reset();
         popspa_optimizer_.reset();
         popspa_dataset_validated_ = false;
@@ -4149,10 +4069,6 @@ namespace lfs::training {
             .ppisp_controller_pool =
                 controller_pool_for_save(
                     current_iteration_.load()),
-            .sparsity_optimizer =
-                dynamic_cast<
-                    const ADMMSparsityOptimizer*>(
-                    sparsity_optimizer_.get()),
             .popspa_controller = popspa_controller_.is_initialized() ? &popspa_controller_ : nullptr,
             .popspa_optimizer = popspa_controller_.is_initialized() ? popspa_optimizer_.get() : nullptr,
             .mutating_streams = mutating_streams,
@@ -4471,10 +4387,6 @@ namespace lfs::training {
             .ppisp_controller_pool =
                 controller_pool_for_save(
                     capture_iteration),
-            .sparsity_optimizer =
-                dynamic_cast<
-                    const ADMMSparsityOptimizer*>(
-                    sparsity_optimizer_.get()),
             .popspa_controller = popspa_controller_.is_initialized() ? &popspa_controller_ : nullptr,
             .popspa_optimizer = popspa_controller_.is_initialized() ? popspa_optimizer_.get() : nullptr,
             .mutating_streams = mutating_streams,
@@ -4717,10 +4629,6 @@ namespace lfs::training {
             .ppisp = ppisp_.get(),
             .ppisp_controller_pool =
                 controller_pool_for_save(iteration),
-            .sparsity_optimizer =
-                dynamic_cast<
-                    const ADMMSparsityOptimizer*>(
-                    sparsity_optimizer_.get()),
             .popspa_controller = popspa_controller_.is_initialized() ? &popspa_controller_ : nullptr,
             .popspa_optimizer = popspa_controller_.is_initialized() ? popspa_optimizer_.get() : nullptr,
             .mutating_streams = mutating_streams,
@@ -6523,13 +6431,6 @@ namespace lfs::training {
                     maybe_morton_reorder(iter);
                     fastgs_strategy_hooks_at_start = true;
 
-                    if (sparsity_optimizer_ &&
-                        sparsity_optimizer_->is_initialized() &&
-                        static_cast<size_t>(model.size()) != model_size_before) {
-                        LOG_WARN("Sparsity: resetting ADMM state after topology change at iter {} ({} -> {})",
-                                 iter, model_size_before, model.size());
-                        sparsity_optimizer_->reset();
-                    }
                     if (static_cast<size_t>(model.size()) != model_size_before) {
                         // Defer topology fan-out until the densify barrier stabilizes
                         // exportable q16 so cache rebuilds cannot race the next forward.
@@ -6741,29 +6642,6 @@ namespace lfs::training {
                             }
                             fused_opacity_reg_loss_gpu = *opacity_loss_result;
                         }
-                    }
-                    if (run_fastgs_gaussian_backward &&
-                        sparsity_optimizer_ && sparsity_optimizer_->should_apply_loss(iter)) {
-                        auto sparsity_result = compute_sparsity_loss_forward(iter, model);
-                        if (!sparsity_result) {
-                            return lfs::from_legacy_expected<StepDisposition>(
-                                       std::unexpected(sparsity_result.error()),
-                                       lfs::LegacyErrorContext{
-                                           .code = lfs::ErrorCode::Internal,
-                                           .domain = lfs::ErrorDomain::Training,
-                                           .operation = "sparsity loss forward (fastgs)",
-                                           .source = LFS_SOURCE_SITE_CURRENT(),
-                                       })
-                                .error();
-                        }
-                        auto& [loss_tensor, ctx] = *sparsity_result;
-                        sparsity_loss_gpu = std::move(loss_tensor);
-                        fused_extra_gradients.sparsity_opa_sigmoid = ctx.opa_sigmoid_ptr;
-                        fused_extra_gradients.sparsity_z = ctx.z_ptr;
-                        fused_extra_gradients.sparsity_u = ctx.u_ptr;
-                        fused_extra_gradients.sparsity_n = static_cast<int>(ctx.n);
-                        fused_extra_gradients.sparsity_rho = ctx.rho;
-                        fused_extra_gradients.sparsity_grad_loss = 1.0f;
                     }
                 }
 
@@ -8256,50 +8134,6 @@ namespace lfs::training {
                     }
                 }
 
-                // Sparsity loss - ALL ON GPU, no CPU sync here
-                if (sparsity_optimizer_ &&
-                    sparsity_optimizer_->should_apply_loss(iter) &&
-                    (!fastgs_path || update_gaussians_this_iter)) {
-                    nvtxRangePush("sparsity_loss");
-                    LFS_VRAM_SCOPE("train.regularizers.sparsity_loss");
-                    LOG_VRAM_DIFF("train.regularizers.sparsity_loss");
-                    if (!run_fastgs_gaussian_backward) {
-                        auto sparsity_result = compute_sparsity_loss_forward(iter, strategy_->get_model());
-                        if (!sparsity_result) {
-                            nvtxRangePop();
-                            return lfs::from_legacy_expected<StepDisposition>(
-                                       std::unexpected(sparsity_result.error()),
-                                       lfs::LegacyErrorContext{
-                                           .code = lfs::ErrorCode::Internal,
-                                           .domain = lfs::ErrorDomain::Training,
-                                           .operation = "sparsity loss forward",
-                                           .source = LFS_SOURCE_SITE_CURRENT(),
-                                       })
-                                .error();
-                        }
-                        auto& [loss_tensor, ctx] = *sparsity_result;
-                        sparsity_loss_gpu = std::move(loss_tensor);
-
-                        if (ctx.n > 0) {
-                            if (auto result = sparsity_optimizer_->compute_loss_backward(
-                                    ctx, 1.0f, gaussian_optimizer.get_grad(ParamType::Opacity));
-                                !result) {
-                                nvtxRangePop();
-                                return lfs::from_legacy_expected<StepDisposition>(
-                                           std::unexpected(result.error()),
-                                           lfs::LegacyErrorContext{
-                                               .code = lfs::ErrorCode::Internal,
-                                               .domain = lfs::ErrorDomain::Training,
-                                               .operation = "sparsity loss backward",
-                                               .source = LFS_SOURCE_SITE_CURRENT(),
-                                           })
-                                    .error();
-                            }
-                        }
-                    }
-                    nvtxRangePop();
-                }
-
                 if (in_popspa) {
                     auto& model = strategy_->get_model();
                     auto regularization = popspa_controller_.regularization(
@@ -8313,15 +8147,6 @@ namespace lfs::training {
                         ppisp_->zero_grad();
                     if (bilateral_grid_)
                         bilateral_grid_->zero_grad();
-                }
-
-                // Sparsification phase logging (once per phase transition)
-                if (step_params.enable_sparsity && !in_popspa) {
-                    const int first_sparsify_iter = get_sparsity_boundary_iteration() + 1;
-                    if (get_active_sparsify_steps() > 0 && iter == first_sparsify_iter) {
-                        LOG_INFO("Entering sparsification: {} Gaussians, target prune={}%",
-                                 strategy_->get_model().size(), step_params.prune_ratio * 100);
-                    }
                 }
 
                 // Loss readback at intervals, async: enqueue the D2H into the
@@ -8512,26 +8337,6 @@ namespace lfs::training {
                             LOG_DEBUG(
                                 "Skipping regular-phase project capture at iteration {}: trainer-initiated saves are not authorized",
                                 iter);
-                        }
-
-                        if (sparsity_optimizer_ &&
-                            sparsity_optimizer_->is_initialized() &&
-                            static_cast<size_t>(model.size()) != model_size_before) {
-                            LOG_WARN("Sparsity: resetting ADMM state after topology change at iter {} ({} -> {})",
-                                     iter, model_size_before, model.size());
-                            sparsity_optimizer_->reset();
-                        }
-
-                        current_phase = StepPhase::RefinementCommit;
-                        ++mutation_epoch_;
-                        persistent_commit = true;
-                        if (auto result = handle_sparsity_update(iter, model); !result) {
-                            LOG_ERROR("Sparsity update: {}", result.error());
-                        }
-                        ++mutation_epoch_;
-                        persistent_commit = true;
-                        if (auto result = apply_sparsity_pruning(iter, model); !result) {
-                            LOG_ERROR("Sparsity pruning: {}", result.error());
                         }
 
                         const bool topology_changed =
@@ -10183,15 +9988,12 @@ namespace lfs::training {
             source, source_bytes, *strategy_, params_,
             bilateral_grid_.get(), ppisp_.get(),
             ppisp_controller_pool_.get(),
-            dynamic_cast<ADMMSparsityOptimizer*>(sparsity_optimizer_.get()),
             splat_tensor_allocator_, source_name, preloaded_model,
             restore_popspa ? &popspa_controller_ : nullptr,
             restore_popspa ? popspa_optimizer_.get() : nullptr);
         if (!result) {
             return result;
         }
-        if (popspa_controller_.is_initialized())
-            sparsity_optimizer_.reset();
         if (ppisp_) {
             if (params_.optimization.use_exposure_correction) {
                 ppisp_->set_train_crf(false);

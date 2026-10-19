@@ -76,12 +76,6 @@ namespace lfs::training {
         fused_adam.erank_reg_loss_out = fused_extra_gradients.erank_reg_loss_out;
         fused_adam.sh_rest_reg_loss_out = fused_extra_gradients.sh_rest_reg_loss_out;
         fused_adam.dc_reg_loss_out = fused_extra_gradients.dc_reg_loss_out;
-        fused_adam.sparsity_opa_sigmoid = fused_extra_gradients.sparsity_opa_sigmoid;
-        fused_adam.sparsity_z = fused_extra_gradients.sparsity_z;
-        fused_adam.sparsity_u = fused_extra_gradients.sparsity_u;
-        fused_adam.sparsity_n = fused_extra_gradients.sparsity_n;
-        fused_adam.sparsity_rho = fused_extra_gradients.sparsity_rho;
-        fused_adam.sparsity_grad_loss = fused_extra_gradients.sparsity_grad_loss;
         fused_adam.means = convert_param(optimizer_fused.means);
         fused_adam.scaling = convert_param(optimizer_fused.scaling);
         fused_adam.rotation = convert_param(optimizer_fused.rotation);

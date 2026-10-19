@@ -108,12 +108,6 @@ namespace lfs::training {
         float eps = 1e-15f;
         float scale_reg_weight = 0.0f;
         float opacity_reg_weight = 0.0f;
-        const float* sparsity_opa_sigmoid = nullptr;
-        const float* sparsity_z = nullptr;
-        const float* sparsity_u = nullptr;
-        int sparsity_n = 0;
-        float sparsity_rho = 0.0f;
-        float sparsity_grad_loss = 0.0f;
         bool per_splat_mean_step = false;
         float mean_step_median_extent = 0.0f;
         FastGSFusedAdamParam means;

@@ -9,7 +9,6 @@
 #include "components/popspa_controller.hpp"
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
-#include "components/sparsity_optimizer.hpp"
 #include "core/camera.hpp"
 #include "core/error.hpp"
 #include "core/parameters.hpp"
@@ -665,12 +664,6 @@ namespace lfs::training {
             AdamOptimizer& optimizer,
             const lfs::core::param::OptimizationParameters& opt_params);
 
-        // Sparsity optimization - returns GPU tensor (no CPU sync)
-        std::expected<std::pair<lfs::core::Tensor, SparsityLossContext>, std::string> compute_sparsity_loss_forward(
-            const int iter, const lfs::core::SplatData& splat_data);
-
-        std::expected<void, std::string> handle_sparsity_update(const int iter, lfs::core::SplatData& splat_data);
-        std::expected<void, std::string> apply_sparsity_pruning(const int iter, lfs::core::SplatData& splat_data);
         // Crop box for this step, from the published snapshot or the scene.
         void refresh_cropbox_snapshot();
         // Adam steps of splats that this view does not see inside, in front of or behind the
@@ -858,7 +851,6 @@ namespace lfs::training {
         // Shared CNN and per-camera FC weights for memory efficiency
         std::unique_ptr<PPISPControllerPool> ppisp_controller_pool_;
 
-        std::unique_ptr<ISparsityOptimizer> sparsity_optimizer_;
         POPSpaController popspa_controller_;
         std::unique_ptr<AdamOptimizer> popspa_optimizer_;
         bool popspa_dataset_validated_ = false;
