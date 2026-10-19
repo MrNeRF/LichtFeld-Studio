@@ -489,6 +489,7 @@ namespace lfs::vis::op {
         bool training_enabled = true;
         bool payload_diverged = false;
         bool point_cloud_source = false;
+        bool transient = false;
         lfs::core::PayloadHydrationState payload_hydration =
             lfs::core::PayloadHydrationState::NotApplicable;
         size_t gaussian_count = 0;

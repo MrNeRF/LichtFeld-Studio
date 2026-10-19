@@ -305,6 +305,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_DirectSplatLoadRejectsActiveTrainingWithoutConsent_Test;
         friend class VisualizerImplResetTest_DirectSplatLoadWithoutActiveTrainingStillReplacesScene_Test;
         friend class VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
+        friend class VisualizerImplResetTest_ProjectSaveLeavesTransientNodesOut_Test;
         friend class VisualizerImplResetTest_AsyncTrainingBindReturnsBeforeSlowWriteAndCoalescesStarts_Test;
         friend class VisualizerImplResetTest_AsyncTrainingBindFailureDoesNotStart_Test;
         friend class VisualizerImplResetTest_AsyncTrainingBindCloseDoesNotStart_Test;

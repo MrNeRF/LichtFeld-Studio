@@ -567,7 +567,8 @@ namespace lfs::python {
                                const PyTensor& opacity,
                                const int sh_degree,
                                const float scene_scale,
-                               const int32_t parent) {
+                               const int32_t parent,
+                               const bool transient) {
         const auto require_float32 = [](const char* field, const PyTensor& tensor) {
             const auto dtype = tensor.tensor().dtype();
             if (dtype != core::DataType::Float32) {
@@ -582,8 +583,10 @@ namespace lfs::python {
         require_float32("rotation", rotation);
         require_float32("opacity", opacity);
 
+        // A transient node is not part of the document: it is never saved, and
+        // adding it leaves nothing to undo.
         std::optional<vis::op::SceneGraphStateSnapshot> history_before;
-        if (auto* const scene_manager = get_scene_manager()) {
+        if (auto* const scene_manager = get_scene_manager(); scene_manager && !transient) {
             history_before = vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name});
         }
 
@@ -610,9 +613,12 @@ namespace lfs::python {
         if (node_id == core::NULL_NODE) {
             return core::NULL_NODE;
         }
-        const auto* const added = scene_->getNodeById(node_id);
+        auto* const added = scene_->getNodeById(node_id);
         assert(added);
         const std::string added_name = added ? added->name : name;
+        if (added) {
+            added->transient = transient;
+        }
 
         lfs::core::events::state::PLYAdded{
             .name = added_name,
@@ -627,11 +633,13 @@ namespace lfs::python {
 
         if (auto* const scene_manager = get_scene_manager()) {
             ensure_scene_manager_content_type(*scene_manager, vis::SceneManager::ContentType::SplatFiles);
-            vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
-                *scene_manager,
-                "Add Splat",
-                std::move(*history_before),
-                vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {added_name})));
+            if (history_before) {
+                vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+                    *scene_manager,
+                    "Add Splat",
+                    std::move(*history_before),
+                    vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {added_name})));
+            }
         }
 
         return node_id;
@@ -1077,6 +1085,18 @@ namespace lfs::python {
     }
 
     void PyScene::set_training_model_node(const std::string& name) {
+        // Binding a transient preview leaves nothing to undo, like adding it.
+        // A preview is for display only: it must not take the place of a
+        // saved training model, which training continues from and saves.
+        if (const auto* const target = scene_->getNode(name); target && target->transient) {
+            if (const auto* const bound = scene_->getNodeByUuid(scene_->getTrainingModelNodeUuid());
+                bound && !bound->transient) {
+                throw std::runtime_error("set_training_model_node: transient node '" + name +
+                                         "' cannot replace the training model '" + bound->name + "'");
+            }
+            scene_->setTrainingModelNode(name);
+            return;
+        }
         if (auto* const scene_manager = get_scene_manager()) {
             const auto options = scene_graph_history_options(false, true);
             auto before = vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {}, options);
@@ -1089,6 +1109,30 @@ namespace lfs::python {
             return;
         }
         scene_->setTrainingModelNode(name);
+    }
+
+    bool PyScene::set_node_transient(const std::string& name, const bool transient) {
+        auto* const node = scene_->getMutableNode(name);
+        if (!node) {
+            return false;
+        }
+        if (node->transient == transient) {
+            return true;
+        }
+        // A bound transient model is only a preview and a bound saved one is
+        // what training continues from, so neither may cross over while bound.
+        const auto* const bound = scene_->getNodeByUuid(scene_->getTrainingModelNodeUuid());
+        for (const auto* holder = bound; holder; holder = scene_->getNodeById(holder->parent_id)) {
+            if (holder == node && (holder == bound || (transient && !bound->transient))) {
+                throw std::runtime_error("set_node_transient: '" + name + "' holds the training model '" +
+                                         bound->name + "'");
+            }
+        }
+        node->transient = transient;
+        // The node leaves or joins the document, so the project has changes to save.
+        scene_->notifyMutation(transient ? core::Scene::MutationType::NODE_REMOVED
+                                         : core::Scene::MutationType::NODE_ADDED);
+        return true;
     }
 
     std::optional<std::tuple<std::tuple<float, float, float>, std::tuple<float, float, float>>>
@@ -1569,6 +1613,7 @@ namespace lfs::python {
                  nb::arg("sh_degree") = 0,
                  nb::arg("scene_scale") = 1.0f,
                  nb::arg("parent") = core::NULL_NODE,
+                 nb::arg("transient") = false,
                  R"doc(Add a new splat node from tensor data.
 
 Args:
@@ -1582,6 +1627,7 @@ Args:
     sh_degree: SH degree (0 for RGB only)
     scene_scale: Scene scale factor
     parent: Parent node ID (-1 for root)
+    transient: Show the node but leave it out of project saves and undo history
 
 Returns:
     Node ID of created splat
@@ -1684,8 +1730,9 @@ Returns:
             .def("combined_model", &PyScene::combined_model, "Get the merged SplatData for all visible splats (None if empty)")
             .def("apply_crop_filter", &PyScene::apply_crop_filter, nb::arg("mask"), "Filter a combined-model CUDA bool mask in place by enabled render crop boxes and ellipsoids. Scene selection is unchanged.")
             .def("training_model", &PyScene::training_model, "Get the SplatData used for training (None if unavailable)")
-            .def("set_training_model_node", &PyScene::set_training_model_node, nb::arg("name"), "Set which node provides the training model")
+            .def("set_training_model_node", &PyScene::set_training_model_node, nb::arg("name"), "Set which node provides the training model. A transient node may not replace a saved training model (RuntimeError)")
             .def_prop_ro("training_model_node_name", &PyScene::training_model_node_name, "Name of the node providing the training model")
+            .def("set_node_transient", &PyScene::set_node_transient, nb::arg("name"), nb::arg("transient"), "Show a node in the viewer but leave it and everything under it out of project saves; False if there is no such node. Raises RuntimeError if the node holds the training model")
             // Bounds (by id)
             .def("get_node_bounds", &PyScene::get_node_bounds, nb::arg("id"), "Get axis-aligned bounding box as ((min_x, min_y, min_z), (max_x, max_y, max_z))")
             .def("get_node_bounds_center", &PyScene::get_node_bounds_center, nb::arg("id"), "Get center of the node bounding box as (x, y, z)")

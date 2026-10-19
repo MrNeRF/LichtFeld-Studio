@@ -45,6 +45,14 @@
 namespace lfs::training {
 
     namespace {
+        // The model local training continues from. A transient training model
+        // is only a preview (e.g. a model trained elsewhere) that is never
+        // saved, so training starts from the dataset instead.
+        lfs::core::SplatData* localTrainingModel(lfs::core::Scene& scene) {
+            const auto* node = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
+            return node && node->transient ? nullptr : scene.getTrainingModel();
+        }
+
         std::shared_ptr<lfs::core::PointCloud> createRandomPointCloud(const lfs::core::param::TrainingParameters& params) {
             const auto N = static_cast<size_t>(params.optimization.init_num_pts);
             const float extent = params.optimization.init_extent;
@@ -1097,7 +1105,7 @@ namespace lfs::training {
 
     TrainingModelGraphCapture captureTrainingModelGraph(lfs::core::Scene& scene) {
         TrainingModelGraphCapture context;
-        context.training_model = scene.getTrainingModel();
+        context.training_model = localTrainingModel(scene);
         context.scene_center = scene.getSceneCenter();
         context.training_data_origin = scene.getTrainingDataOrigin();
         if (const auto* node = scene.getDatasetPointCloudNode()) {
@@ -1150,7 +1158,7 @@ namespace lfs::training {
         };
 
         const bool has_training_model =
-            graph_capture ? graph_capture->training_model != nullptr : scene.getTrainingModel() != nullptr;
+            graph_capture ? graph_capture->training_model != nullptr : localTrainingModel(scene) != nullptr;
         if (!has_training_model) {
             if (const auto init_file = gaussianSplatInitPath(params)) {
                 auto added = loadAddedSplats(params);
@@ -1183,7 +1191,7 @@ namespace lfs::training {
             }
         }
 
-        if (auto* model = graph_capture ? graph_capture->training_model : scene.getTrainingModel()) {
+        if (auto* model = graph_capture ? graph_capture->training_model : localTrainingModel(scene)) {
             applyTrainingSHDegree(*model, params.optimization.sh_degree);
             if (auto result = appendAddedSplats(params, *model, dataset_origin); !result) {
                 return std::unexpected(std::move(result.error()));

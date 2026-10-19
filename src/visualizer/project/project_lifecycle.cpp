@@ -6477,9 +6477,14 @@ namespace lfs::vis::project {
         const auto training_uuid =
             scene.getTrainingModelNodeUuid();
         std::vector<lfs::core::Uuid>
-            omit_unbound_training;
+            omitted_nodes;
         for (const auto* node : scene.getNodes()) {
             if (!node) {
+                continue;
+            }
+            if (node->transient) {
+                omitted_nodes.push_back(
+                    node->uuid);
                 continue;
             }
             const bool geometry =
@@ -6514,7 +6519,7 @@ namespace lfs::vis::project {
                         DocumentSyncMode::
                             LightTrainingAutosave &&
                     !keepStoredCheckpointChapters()) {
-                    omit_unbound_training.push_back(
+                    omitted_nodes.push_back(
                         node->uuid);
                     continue;
                 }
@@ -6554,7 +6559,7 @@ namespace lfs::vis::project {
         auto captured_scene =
             lfs::io::project::capture_scene_graph(
                 scene, bindings,
-                omit_unbound_training);
+                omitted_nodes);
         if (!captured_scene) {
             return lfs::Status::failure(
                 std::move(captured_scene).error());
@@ -6940,7 +6945,7 @@ namespace lfs::vis::project {
                 lfs::io::project::
                     capture_selection_chapter(
                         scene, live_selected_nodes,
-                        omit_unbound_training);
+                        omitted_nodes);
             if (!captured_selection) {
                 return lfs::Status::failure(
                     std::move(captured_selection)
@@ -7158,7 +7163,7 @@ namespace lfs::vis::project {
             auto session =
                 viewer_.captureProjectSession(
                     &staged_references, project_root,
-                    omit_unbound_training);
+                    omitted_nodes);
             if (!session) {
                 return lfs::Status::failure(
                     std::move(session).error());

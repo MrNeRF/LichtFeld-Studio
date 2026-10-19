@@ -450,7 +450,8 @@ namespace lfs::python {
                           const PyTensor& opacity,
                           int sh_degree,
                           float scene_scale,
-                          int32_t parent = core::NULL_NODE);
+                          int32_t parent = core::NULL_NODE,
+                          bool transient = false);
         int32_t add_point_cloud(const std::string& name,
                                 const PyTensor& points,
                                 const PyTensor& colors,
@@ -506,6 +507,7 @@ namespace lfs::python {
         std::string training_model_node_name() const {
             return scene_->getTrainingModelNodeName();
         }
+        bool set_node_transient(const std::string& name, bool transient);
 
         // Bounds
         std::optional<std::tuple<std::tuple<float, float, float>, std::tuple<float, float, float>>>

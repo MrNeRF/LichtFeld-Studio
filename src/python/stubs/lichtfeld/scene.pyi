@@ -488,7 +488,7 @@ class Scene:
     def add_group(self, name: str, parent: int = -1) -> int:
         """Add an empty group node, returns node ID"""
 
-    def add_splat(self, name: str, means: lichtfeld.Tensor, sh0: lichtfeld.Tensor, shN: lichtfeld.Tensor, scaling: lichtfeld.Tensor, rotation: lichtfeld.Tensor, opacity: lichtfeld.Tensor, sh_degree: int = 0, scene_scale: float = 1.0, parent: int = -1) -> int:
+    def add_splat(self, name: str, means: lichtfeld.Tensor, sh0: lichtfeld.Tensor, shN: lichtfeld.Tensor, scaling: lichtfeld.Tensor, rotation: lichtfeld.Tensor, opacity: lichtfeld.Tensor, sh_degree: int = 0, scene_scale: float = 1.0, parent: int = -1, transient: bool = False) -> int:
         """
         Add a new splat node from tensor data.
 
@@ -503,6 +503,7 @@ class Scene:
             sh_degree: SH degree (0 for RGB only)
             scene_scale: Scene scale factor
             parent: Parent node ID (-1 for root)
+            transient: Show the node but leave it out of project saves and undo history
 
         Returns:
             Node ID of created splat
@@ -609,11 +610,18 @@ class Scene:
         """Get the SplatData used for training (None if unavailable)"""
 
     def set_training_model_node(self, name: str) -> None:
-        """Set which node provides the training model"""
+        """
+        Set which node provides the training model. A transient node may not replace a saved training model (RuntimeError)
+        """
 
     @property
     def training_model_node_name(self) -> str:
         """Name of the node providing the training model"""
+
+    def set_node_transient(self, name: str, transient: bool) -> bool:
+        """
+        Show a node in the viewer but leave it and everything under it out of project saves; False if there is no such node. Raises RuntimeError if the node holds the training model
+        """
 
     @overload
     def get_node_bounds(self, id: int) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:

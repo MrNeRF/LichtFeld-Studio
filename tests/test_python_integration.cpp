@@ -660,6 +660,72 @@ TEST_F(PythonIntegrationTest, PythonCameraTrainingSettersPostNotices) {
     EXPECT_EQ(posted, 2u);
 }
 
+TEST_F(PythonIntegrationTest, PythonTransientSplatsLeaveNoUndoHistory) {
+    struct PythonSceneContextReset {
+        ~PythonSceneContextReset() {
+            lfs::vis::op::undoHistory().clear();
+            lfs::python::set_scene_manager(nullptr);
+            lfs::python::set_application_scene(nullptr);
+        }
+    } reset;
+    lfs::vis::op::undoHistory().clear();
+
+    lfs::vis::SceneManager scene_manager;
+    auto& scene = scene_manager.getScene();
+    lfs::python::set_application_scene(&scene);
+    lfs::python::set_scene_manager(&scene_manager);
+
+    {
+        const lfs::python::GilAcquire gil;
+        ASSERT_EQ(PyRun_SimpleString(
+                      "import lichtfeld as lf\n"
+                      "def _add_test_splat(name, **kwargs):\n"
+                      "    zeros = lambda *shape: lf.Tensor.zeros(shape, device='cuda')\n"
+                      "    return lf.get_scene().add_splat(name, zeros(1, 3), zeros(1, 1, 3), zeros(1, 0, 3),\n"
+                      "                                    zeros(1, 3), zeros(1, 4), zeros(1, 1), **kwargs)\n"
+                      "assert _add_test_splat('preview', transient=True) >= 0\n"
+                      "lf.get_scene().set_training_model_node('preview')\n"),
+                  0);
+    }
+    const auto* preview = scene.getNode("preview");
+    ASSERT_NE(preview, nullptr);
+    EXPECT_TRUE(preview->transient);
+    EXPECT_EQ(scene.getTrainingModelNodeName(), "preview");
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+
+    // A bound preview stays out of the document, and it cannot take the
+    // place of a saved training model.
+    {
+        const lfs::python::GilAcquire gil;
+        ASSERT_EQ(PyRun_SimpleString(
+                      "assert _add_test_splat('kept') >= 0\n"
+                      "assert not lf.get_scene().set_node_transient('missing', True)\n"
+                      "def _raises(call):\n"
+                      "    try:\n"
+                      "        call()\n"
+                      "    except RuntimeError:\n"
+                      "        return True\n"
+                      "    return False\n"
+                      "assert _raises(lambda: lf.get_scene().set_node_transient('preview', False))\n"
+                      "lf.get_scene().set_training_model_node('kept')\n"
+                      "assert _raises(lambda: lf.get_scene().set_training_model_node('preview'))\n"
+                      "assert _raises(lambda: lf.get_scene().set_node_transient('kept', True))\n"
+                      "lf.get_scene().remove_node('preview')\n"),
+                  0);
+    }
+    const auto* kept = scene.getNode("kept");
+    ASSERT_NE(kept, nullptr);
+    EXPECT_FALSE(kept->transient);
+    EXPECT_EQ(scene.getNode("preview"), nullptr);
+    EXPECT_EQ(scene.getTrainingModelNodeName(), "kept");
+    ASSERT_EQ(lfs::vis::op::undoHistory().undoCount(), 2u);
+
+    // Undoing the binding does not need the preview it replaced.
+    EXPECT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_TRUE(scene.getTrainingModelNodeUuid().is_nil());
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
+}
+
 TEST_F(PythonIntegrationTest, SceneTimeCallbackSupportsSetTickClearAndUnsetTick) {
     struct SceneTimeCallbackReset {
         ~SceneTimeCallbackReset() { lfs::python::clear_scene_time_callback(); }

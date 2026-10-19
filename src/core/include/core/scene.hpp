@@ -179,6 +179,9 @@ namespace lfs::core {
         // pasted, ...); drives the embed-vs-reference decision on project save.
         bool payload_diverged = false;
         bool point_cloud_source = false;
+        // Shown in the viewer but never saved to the project, e.g. a preview
+        // that its owner fetches again when the project is opened.
+        bool transient = false;
         PayloadHydrationState payload_hydration =
             PayloadHydrationState::NotApplicable;
         std::optional<GeoreferencePose> georef_pose;
