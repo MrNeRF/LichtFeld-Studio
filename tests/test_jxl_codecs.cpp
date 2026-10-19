@@ -5,14 +5,17 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <climits>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <gtest/gtest.h>
+#include <jxl/decode.h>
 #include <jxl/encode.h>
 #include <lcms2.h>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 
@@ -445,6 +448,388 @@ namespace {
         EXPECT_FALSE(native_target(valid, target, probe, error));
         EXPECT_EQ(calls, 1u);
         EXPECT_EQ(target.data, nullptr);
+    }
+
+    // Independent provider reader: do not validate the writer solely through
+    // the application decoder, which could hide matching policy mistakes.
+    std::vector<uint8_t> direct_decode(std::span<const uint8_t> bytes, int channels, codec::SampleType type) {
+        std::unique_ptr<JxlDecoder, decltype(&JxlDecoderDestroy)> decoder(JxlDecoderCreate(nullptr), JxlDecoderDestroy);
+        if (!decoder || JxlDecoderSubscribeEvents(decoder.get(), JXL_DEC_FULL_IMAGE) != JXL_DEC_SUCCESS ||
+            JxlDecoderSetInput(decoder.get(), bytes.data(), bytes.size()) != JXL_DEC_SUCCESS)
+            throw std::runtime_error("Independent JXL decoder initialization failed");
+        JxlDecoderCloseInput(decoder.get());
+        const JxlPixelFormat format{uint32_t(channels), type == codec::SampleType::Float32 ? JXL_TYPE_FLOAT : type == codec::SampleType::UInt16 ? JXL_TYPE_UINT16
+                                                                                                                                                : JXL_TYPE_UINT8,
+                                    JXL_NATIVE_ENDIAN, 0};
+        std::vector<uint8_t> result;
+        for (;;) {
+            const auto status = JxlDecoderProcessInput(decoder.get());
+            if (status == JXL_DEC_NEED_IMAGE_OUT_BUFFER) {
+                size_t size = 0;
+                if (JxlDecoderImageOutBufferSize(decoder.get(), &format, &size) != JXL_DEC_SUCCESS)
+                    throw std::runtime_error("Independent JXL size failed");
+                result.resize(size);
+                if (JxlDecoderSetImageOutBuffer(decoder.get(), &format, result.data(), size) != JXL_DEC_SUCCESS)
+                    throw std::runtime_error("Independent JXL output failed");
+            } else if (status == JXL_DEC_SUCCESS) {
+                return result;
+            } else if (status != JXL_DEC_FULL_IMAGE) {
+                throw std::runtime_error("Independent JXL decode failed");
+            }
+        }
+    }
+
+    TEST_F(JxlCodec, EncoderLosslessFileMemoryAndIndependentReaderAgreeForEveryLayout) {
+        for (const auto type : {codec::SampleType::UInt8, codec::SampleType::UInt16, codec::SampleType::Float32})
+            for (bool padded : {false, true})
+                for (int channels = 1; channels <= 4; ++channels) {
+                    SCOPED_TRACE(::testing::Message() << "type=" << int(type) << ", channels=" << channels << ", padded=" << padded);
+                    const size_t sample = type == codec::SampleType::Float32 ? 4 : type == codec::SampleType::UInt16 ? 2
+                                                                                                                     : 1;
+                    const size_t row = 3 * channels * sample, stride = row + (padded ? 3 : 0);
+                    std::vector<uint8_t> pixels(stride + row + 1, 0xa5), expected(2 * row);
+                    for (int y = 0; y < 2; ++y)
+                        for (int x = 0; x < 3 * channels; ++x) {
+                            const size_t offset = y * row + x * sample;
+                            if (sample == 4) {
+                                const float value = (channels % 2 == 0 && x % channels == channels - 1) ? .5f : float(x - 2) / 4;
+                                std::memcpy(expected.data() + offset, &value, sample);
+                            } else if (sample == 2) {
+                                const uint16_t value = uint16_t(x * 5003 + y * 97);
+                                std::memcpy(expected.data() + offset, &value, sample);
+                            } else {
+                                expected[offset] = uint8_t(x * 17 + y * 3);
+                            }
+                        }
+                    if (channels % 2 == 0)
+                        std::fill_n(expected.data() + (channels - 1) * sample, sample, uint8_t{0});
+                    for (int y = 0; y < 2; ++y)
+                        std::memcpy(pixels.data() + 1 + y * stride, expected.data() + y * row, row);
+                    const auto original = pixels;
+                    codec::JxlEncodeOptions options;
+                    options.color = sample == 4 ? codec::JxlEncodingColor::LinearSRGB : codec::JxlEncodingColor::SRGB;
+                    std::vector<uint8_t> encoded;
+                    const auto status = codec::encode_jxl_memory(std::span(pixels).subspan(1), 3, 2, channels, type, stride, encoded, options);
+                    ASSERT_TRUE(status) << (status ? "" : status.error().detail());
+                    EXPECT_EQ(direct_decode(encoded, channels, type), expected);
+                    codec::Image decoded;
+                    std::string error;
+                    ASSERT_TRUE(native_decode(encoded, decoded, error)) << error;
+                    EXPECT_EQ(decoded.data, expected);
+                    const auto path = write({});
+                    ASSERT_TRUE(codec::write_jxl(path, std::span(pixels).subspan(1), 3, 2, channels, type, stride, options));
+                    std::ifstream file(path, std::ios::binary);
+                    const std::vector<uint8_t> stored((std::istreambuf_iterator<char>(file)), {});
+                    EXPECT_EQ(stored, encoded);
+                    EXPECT_EQ(pixels, original);
+                }
+    }
+
+    TEST_F(JxlCodec, EncoderColorDeclarationsMatchTheSamplesWithoutImplicitConversion) {
+        for (auto color : {codec::JxlEncodingColor::SRGB, codec::JxlEncodingColor::LinearSRGB, codec::JxlEncodingColor::LinearBT2020}) {
+            const std::array<float, 3> input{.125f, .5f, 2.f};
+            codec::JxlEncodeOptions options;
+            options.color = color;
+            std::vector<uint8_t> encoded;
+            ASSERT_TRUE(codec::encode_jxl_memory({reinterpret_cast<const uint8_t*>(input.data()), sizeof(input)}, 1, 1, 3, codec::SampleType::Float32, sizeof(input), encoded, options));
+            const auto samples = direct_decode(encoded, 3, codec::SampleType::Float32);
+            ASSERT_EQ(samples.size(), sizeof(input));
+            EXPECT_EQ(std::memcmp(samples.data(), input.data(), samples.size()), 0);
+            std::unique_ptr<JxlDecoder, decltype(&JxlDecoderDestroy)> decoder(JxlDecoderCreate(nullptr), JxlDecoderDestroy);
+            ASSERT_EQ(JxlDecoderSubscribeEvents(decoder.get(), JXL_DEC_COLOR_ENCODING), JXL_DEC_SUCCESS);
+            ASSERT_EQ(JxlDecoderSetInput(decoder.get(), encoded.data(), encoded.size()), JXL_DEC_SUCCESS);
+            JxlDecoderCloseInput(decoder.get());
+            ASSERT_EQ(JxlDecoderProcessInput(decoder.get()), JXL_DEC_COLOR_ENCODING);
+            JxlColorEncoding profile{};
+            ASSERT_EQ(JxlDecoderGetColorAsEncodedProfile(decoder.get(), JXL_COLOR_PROFILE_TARGET_ORIGINAL, &profile), JXL_DEC_SUCCESS);
+            EXPECT_EQ(profile.transfer_function, color == codec::JxlEncodingColor::SRGB ? JXL_TRANSFER_FUNCTION_SRGB : JXL_TRANSFER_FUNCTION_LINEAR);
+            EXPECT_EQ(profile.primaries, color == codec::JxlEncodingColor::LinearBT2020 ? JXL_PRIMARIES_2100 : JXL_PRIMARIES_SRGB);
+        }
+    }
+
+    TEST_F(JxlCodec, EncoderLinearBt2020DisplayMatchesIndependentColorTransform) {
+        constexpr int width = 16, height = 16;
+        std::vector<float> input(width * height * 3), expected(input.size());
+        for (int y = 0; y < height; ++y)
+            for (int x = 0; x < width; ++x) {
+                const auto offset = (y * width + x) * 3;
+                input[offset] = .25f + x * .005f;
+                input[offset + 1] = .3f + y * .005f;
+                input[offset + 2] = .35f + (x + y) * .002f;
+            }
+        const cmsCIExyY white{.3127, .329, 1.};
+        const cmsCIExyYTRIPLE primaries{{.708, .292, 1.}, {.17, .797, 1.}, {.131, .046, 1.}};
+        std::unique_ptr<cmsToneCurve, decltype(&cmsFreeToneCurve)> curve(cmsBuildGamma(nullptr, 1.), cmsFreeToneCurve);
+        ASSERT_TRUE(curve);
+        cmsToneCurve* curves[]{curve.get(), curve.get(), curve.get()};
+        std::unique_ptr<void, decltype(&cmsCloseProfile)> original(cmsCreateRGBProfile(&white, &primaries, curves), cmsCloseProfile), srgb(cmsCreate_sRGBProfile(), cmsCloseProfile);
+        ASSERT_TRUE(original);
+        ASSERT_TRUE(srgb);
+        std::unique_ptr<void, decltype(&cmsDeleteTransform)> transform(cmsCreateTransform(original.get(), TYPE_RGB_FLT, srgb.get(), TYPE_RGB_FLT, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_NOOPTIMIZE), cmsDeleteTransform);
+        ASSERT_TRUE(transform);
+        cmsDoTransform(transform.get(), input.data(), expected.data(), width * height);
+        for (bool lossless : {false, true}) {
+            codec::JxlEncodeOptions options;
+            options.color = codec::JxlEncodingColor::LinearBT2020;
+            options.lossless = lossless;
+            options.distance = .25f;
+            std::vector<uint8_t> encoded;
+            ASSERT_TRUE(codec::encode_jxl_memory({reinterpret_cast<const uint8_t*>(input.data()), input.size() * sizeof(float)}, width, height, 3, codec::SampleType::Float32, width * 3 * sizeof(float), encoded, options));
+            std::vector<float> actual(input.size());
+            codec::DecodeTarget target{3, codec::SampleType::Float32, actual.data()};
+            codec::Probe info;
+            std::string error;
+            ASSERT_TRUE(codec::decode_jxl_to_buffer(encoded, target, info, error)) << error;
+            for (size_t i = 0; i < actual.size(); ++i)
+                EXPECT_NEAR(actual[i], expected[i], lossless ? .0005f : .01f);
+        }
+    }
+
+    TEST_F(JxlCodec, EncoderLimitsCancellationAndAliasingPreserveOutputAndRecover) {
+        const std::vector<uint8_t> input(3 * 64 * 32, 123);
+        for (int mode = 0; mode < 7; ++mode) {
+            codec::JxlEncodeOptions options;
+            if (mode == 0)
+                options.pixels = 1;
+            if (mode == 1)
+                options.encoder_bytes = 32;
+            if (mode == 2)
+                options.max_output_bytes = 1;
+            if (mode == 3)
+                options.effort = 0;
+            if (mode == 4)
+                options.distance = std::numeric_limits<float>::quiet_NaN();
+            if (mode == 5)
+                options.cancelled = [] { return true; };
+            unsigned calls = 0;
+            if (mode == 6)
+                options.cancelled = [&] { return ++calls > 1; };
+            std::vector<uint8_t> result{9, 8, 7};
+            EXPECT_FALSE(codec::encode_jxl_memory(input, 64, 32, 3, codec::SampleType::UInt8, 192, result, options));
+            EXPECT_EQ(result, (std::vector<uint8_t>{9, 8, 7}));
+            ASSERT_TRUE(codec::encode_jxl_memory(input, 64, 32, 3, codec::SampleType::UInt8, 192, result));
+            EXPECT_EQ(direct_decode(result, 3, codec::SampleType::UInt8), input);
+        }
+        auto alias = input;
+        ASSERT_TRUE(codec::encode_jxl_memory(alias, 64, 32, 3, codec::SampleType::UInt8, 192, alias));
+        EXPECT_EQ(direct_decode(alias, 3, codec::SampleType::UInt8), input);
+    }
+
+    TEST_F(JxlCodec, EncoderLossyPreservesAlphaAndConcurrentCallsAreIndependent) {
+        constexpr int width = 128, height = 64;
+        std::vector<uint8_t> input(width * height * 4);
+        for (int y = 0; y < height; ++y)
+            for (int x = 0; x < width; ++x) {
+                const auto i = (y * width + x) * 4;
+                input[i] = uint8_t(x * 2);
+                input[i + 1] = uint8_t(y * 4);
+                input[i + 2] = 90;
+                input[i + 3] = uint8_t(x + y);
+            }
+        codec::JxlEncodeOptions options;
+        options.lossless = false;
+        options.distance = .5f;
+        std::vector<uint8_t> encoded;
+        const auto status = codec::encode_jxl_memory(input, width, height, 4, codec::SampleType::UInt8, width * 4, encoded, options);
+        ASSERT_TRUE(status) << (status ? "" : status.error().detail());
+        codec::Image decoded;
+        std::string error;
+        ASSERT_TRUE(codec::decode_jxl(encoded, decoded, error)) << error;
+        ASSERT_EQ(decoded.data.size(), input.size());
+        double weighted_error = 0, weight = 0;
+        for (size_t i = 0; i < input.size(); ++i)
+            if (i % 4 == 3)
+                EXPECT_EQ(decoded.data[i], input[i]);
+            else {
+                const double alpha = input[(i / 4) * 4 + 3] / 255.;
+                const double delta = int(decoded.data[i]) - int(input[i]);
+                weighted_error += alpha * alpha * delta * delta;
+                weight += alpha * alpha;
+            }
+        // Perceptual distance is not a per-channel maximum error promise;
+        // invisible RGB has no visual weight. Check this fixture's weighted MSE.
+        EXPECT_LT(weighted_error / weight, 16.);
+        std::vector<std::future<std::vector<uint8_t>>> calls;
+        for (int i = 0; i < 4; ++i)
+            calls.push_back(std::async(std::launch::async, [&] {
+                std::vector<uint8_t> result;
+                if (!codec::encode_jxl_memory(input, width, height, 4, codec::SampleType::UInt8, width * 4, result, options))
+                    throw std::runtime_error("Concurrent JXL encode failed");
+                return result;
+            }));
+        for (auto& call : calls)
+            EXPECT_EQ(call.get(), encoded);
+    }
+
+    TEST_F(JxlCodec, EncoderFloatAlphaAndNonfiniteInputHaveExplicitPolicies) {
+        const std::array<float, 8> input{.25f, -.125f, 1.f, .5f, 0.f, 0.f, 0.f, 0.f};
+        const auto bytes = std::span(reinterpret_cast<const uint8_t*>(input.data()), sizeof(input));
+        codec::JxlEncodeOptions options;
+        options.color = codec::JxlEncodingColor::LinearSRGB;
+        options.premultiplied_alpha = true;
+        std::vector<uint8_t> encoded;
+        ASSERT_TRUE(codec::encode_jxl_memory(bytes, 2, 1, 4, codec::SampleType::Float32, sizeof(input), encoded, options));
+        const auto output = direct_decode(encoded, 4, codec::SampleType::Float32);
+        const std::array<float, 8> expected{.5f, -.25f, 2.f, .5f, 0.f, 0.f, 0.f, 0.f};
+        ASSERT_EQ(output.size(), sizeof(expected));
+        EXPECT_EQ(std::memcmp(output.data(), expected.data(), output.size()), 0);
+        for (const auto value : {std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()}) {
+            auto bad = input;
+            bad[0] = value;
+            const auto previous = encoded;
+            EXPECT_FALSE(codec::encode_jxl_memory({reinterpret_cast<const uint8_t*>(bad.data()), sizeof(bad)}, 2, 1, 4, codec::SampleType::Float32, sizeof(bad), encoded, options));
+            EXPECT_EQ(encoded, previous);
+        }
+    }
+
+    TEST_F(JxlCodec, EncoderParallelLosslessCallsShareWorkerBudgetWithoutChangingBytes) {
+        constexpr int width = 2048, height = 1024;
+        std::vector<uint8_t> input(width * height * 3);
+        for (size_t i = 0; i < input.size(); ++i)
+            input[i] = uint8_t((i / 127) ^ (i / (width * 3)));
+        codec::JxlEncodeOptions options;
+        options.effort = 1;
+        std::vector<uint8_t> baseline;
+        ASSERT_TRUE(codec::encode_jxl_memory(input, width, height, 3, codec::SampleType::UInt8, width * 3, baseline, options));
+        std::vector<std::future<std::vector<uint8_t>>> calls;
+        for (int i = 0; i < 4; ++i)
+            calls.push_back(std::async(std::launch::async, [&] {
+                std::vector<uint8_t> output;
+                if (!codec::encode_jxl_memory(input, width, height, 3, codec::SampleType::UInt8, width * 3, output, options))
+                    throw std::runtime_error("Parallel JXL encoding failed");
+                return output;
+            }));
+        for (auto& call : calls)
+            EXPECT_EQ(call.get(), baseline);
+        EXPECT_EQ(direct_decode(baseline, 3, codec::SampleType::UInt8), input);
+    }
+
+    TEST_F(JxlCodec, EncoderFloat32ExtremesAndSignedZeroSurviveLossless) {
+        const std::array<float, 12> input{0.f, -0.f, std::numeric_limits<float>::denorm_min(),
+                                          -std::numeric_limits<float>::denorm_min(), std::numeric_limits<float>::min(), -std::numeric_limits<float>::min(),
+                                          std::numeric_limits<float>::max(), std::numeric_limits<float>::lowest(), .125f, -.5f, 1.f, 2.f};
+        codec::JxlEncodeOptions options;
+        options.color = codec::JxlEncodingColor::LinearSRGB;
+        std::vector<uint8_t> output;
+        const auto status = codec::encode_jxl_memory({reinterpret_cast<const uint8_t*>(input.data()), sizeof(input)}, 4, 1, 3, codec::SampleType::Float32, sizeof(input), output, options);
+        ASSERT_TRUE(status) << (status ? "" : status.error().detail());
+        const auto decoded = direct_decode(output, 3, codec::SampleType::Float32);
+        ASSERT_EQ(decoded.size(), sizeof(input));
+        EXPECT_EQ(std::memcmp(decoded.data(), input.data(), decoded.size()), 0);
+    }
+
+    TEST_F(JxlCodec, EncoderRejectsInvalidViewsAndEnforcesExactOutputBudget) {
+        const std::array<uint8_t, 18> input{};
+        std::vector<uint8_t> encoded;
+        ASSERT_TRUE(codec::encode_jxl_memory(input, 3, 2, 3, codec::SampleType::UInt8, 9, encoded));
+        const auto valid = encoded;
+        codec::JxlEncodeOptions options;
+        options.max_output_bytes = valid.size();
+        ASSERT_TRUE(codec::encode_jxl_memory(input, 3, 2, 3, codec::SampleType::UInt8, 9, encoded, options));
+        EXPECT_EQ(encoded, valid);
+        options.max_output_bytes--;
+        EXPECT_FALSE(codec::encode_jxl_memory(input, 3, 2, 3, codec::SampleType::UInt8, 9, encoded, options));
+        EXPECT_EQ(encoded, valid);
+        for (int mode = 0; mode < 7; ++mode) {
+            int width = 3, height = 2, channels = 3;
+            size_t stride = 9;
+            options = {};
+            if (mode == 0)
+                width = 0;
+            if (mode == 1)
+                channels = 5;
+            if (mode == 2)
+                stride = 8;
+            if (mode == 3)
+                stride = SIZE_MAX;
+            if (mode == 4) {
+                width = INT_MAX;
+                height = INT_MAX;
+            }
+            if (mode == 5)
+                options.color = static_cast<codec::JxlEncodingColor>(99);
+            if (mode == 6)
+                options.premultiplied_alpha = true;
+            EXPECT_FALSE(codec::encode_jxl_memory(input, width, height, channels, codec::SampleType::UInt8, stride, encoded, options));
+            EXPECT_EQ(encoded, valid);
+        }
+        for (bool standard : {false, true}) {
+            options = {};
+            options.cancelled = [standard]() -> bool { if(standard) throw std::runtime_error("callback sentinel"); throw 7; };
+            EXPECT_FALSE(codec::encode_jxl_memory(input, 3, 2, 3, codec::SampleType::UInt8, 9, encoded, options));
+            EXPECT_EQ(encoded, valid);
+        }
+    }
+
+    TEST_F(JxlCodec, EncoderPartialOutputFailurePreservesExistingFile) {
+        const std::array<uint8_t, 3> old{9, 8, 7};
+        const auto path = write(old);
+        std::vector<uint8_t> pixels(1024 * 1024 * 3);
+        uint32_t random = 0x127645;
+        for (auto& value : pixels) {
+            random ^= random << 13;
+            random ^= random >> 17;
+            random ^= random << 5;
+            value = uint8_t(random);
+        }
+        codec::JxlEncodeOptions options;
+        options.effort = 1;
+        options.max_output_bytes = 65537;
+        EXPECT_FALSE(codec::write_jxl(path, pixels, 1024, 1024, 3, codec::SampleType::UInt8, 3072, options));
+        std::ifstream file(path, std::ios::binary);
+        EXPECT_EQ((std::vector<uint8_t>((std::istreambuf_iterator<char>(file)), {})), (std::vector<uint8_t>(old.begin(), old.end())));
+    }
+
+    TEST_F(JxlCodec, EncoderLargeImagesPreserveSamplesAndRejectPixelBudget) {
+        for (const auto dimensions : {std::pair{3840, 2160}, std::pair{7680, 4320}}) {
+            const auto [width, height] = dimensions;
+            std::vector<uint8_t> pixels(size_t(width) * height);
+            for (size_t i = 0; i < pixels.size(); ++i)
+                pixels[i] = uint8_t((i / 31) ^ (i / width));
+            codec::JxlEncodeOptions options;
+            options.effort = 1;
+            options.max_threads = 4;
+            std::vector<uint8_t> encoded;
+            const auto status = codec::encode_jxl_memory(pixels, width, height, 1, codec::SampleType::UInt8, width, encoded, options);
+            ASSERT_TRUE(status) << (status ? "" : status.error().detail());
+            EXPECT_EQ(direct_decode(encoded, 1, codec::SampleType::UInt8), pixels);
+            const auto previous = encoded;
+            options.pixels = pixels.size() - 1;
+            EXPECT_FALSE(codec::encode_jxl_memory(pixels, width, height, 1, codec::SampleType::UInt8, width, encoded, options));
+            EXPECT_EQ(encoded, previous);
+        }
+    }
+
+    TEST_F(JxlCodec, GenericDisplayByteWriterUsesTheSameAtomicJxlEncoder) {
+        const std::array<uint8_t, 24> pixels{1, 2, 3, 0, 4, 5, 6, 255, 7, 8, 9, 128, 11, 12, 13, 64, 14, 15, 16, 255, 17, 18, 19, 0};
+        const auto path = directory / std::filesystem::path(u8"generic_画像.JXL");
+        const lfs::core::AtomicFileOptions publication{.overwrite = false, .durable = false, .create_directories = false};
+        const auto written = codec::write_image_u8(path, pixels.data(), 3, 2, 4, 1, std::nullopt, publication);
+        ASSERT_TRUE(written) << (written ? "" : written.error().detail());
+        codec::Image decoded;
+        std::string error;
+        ASSERT_TRUE(codec::decode(path, decoded, error)) << error;
+        EXPECT_EQ(decoded.data, (std::vector<uint8_t>(pixels.begin(), pixels.end())));
+        const auto rejected = codec::write_image_u8(path, pixels.data(), 3, 2, 4, 95, std::string("metadata"), publication);
+        EXPECT_FALSE(rejected);
+        EXPECT_EQ(rejected.error().code(), lfs::ErrorCode::Unsupported);
+        ASSERT_TRUE(codec::decode(path, decoded, error)) << error;
+        EXPECT_EQ(decoded.data, (std::vector<uint8_t>(pixels.begin(), pixels.end())));
+    }
+
+    TEST_F(JxlCodec, EncoderAtomicFailureAndNoReplacePreserveExistingFile) {
+        const std::array<uint8_t, 18> input{0, 1, 2, 3};
+        const std::array<uint8_t, 3> old{9, 8, 7};
+        const auto path = write(old);
+        codec::JxlEncodeOptions options;
+        options.max_output_bytes = 1;
+        EXPECT_FALSE(codec::write_jxl(path, input, 3, 2, 3, codec::SampleType::UInt8, 9, options));
+        options = {};
+        EXPECT_FALSE(codec::write_jxl(path, input, 3, 2, 3, codec::SampleType::UInt8, 9, options, {.overwrite = false}));
+        options.cancelled = [] { return true; };
+        EXPECT_FALSE(codec::write_jxl(path, input, 3, 2, 3, codec::SampleType::UInt8, 9, options));
+        std::ifstream file(path, std::ios::binary);
+        EXPECT_EQ((std::vector<uint8_t>((std::istreambuf_iterator<char>(file)), {})), (std::vector<uint8_t>(old.begin(), old.end())));
     }
 
     TEST_F(JxlCodec, FixedFixtureDecodesWithoutInvokingTheEncoder) {

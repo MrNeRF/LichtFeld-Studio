@@ -15,6 +15,8 @@ bool exercise_image_codec_exports() {
     const auto png_memory = codec::encode_png_memory({}, 1, 1, 3, 8, 3, encoded);
     const auto tiff_memory = codec::encode_tiff_memory({}, 1, 1, 3, 8, 3, encoded);
     const auto exr_memory = codec::encode_exr_memory({}, encoded);
+    const auto jxl_memory = codec::encode_jxl_memory({}, 1, 1, 3, codec::SampleType::UInt8, 3, encoded);
+    const auto jxl_file = codec::write_jxl(path, {}, 1, 1, 3, codec::SampleType::UInt8, 3);
     codec::Image jxl_image;
     const bool jxl = !codec::decode_jxl(std::span<const uint8_t>{}, jxl_image, error);
     const bool original_jpeg = !codec::write_jpeg(path, nullptr, 1, 1, 3, 90, std::nullopt, error);
@@ -23,5 +25,5 @@ bool exercise_image_codec_exports() {
     const bool image = !codec::write_image_u8("invalid.png", nullptr, 1, 1, 3, 95, std::nullopt, error);
     const lfs::core::AtomicFileOptions options{.overwrite = false, .durable = false, .create_directories = false};
     const auto atomic = codec::write_image_u8(path, nullptr, 1, 1, 3, 95, std::nullopt, options);
-    return jxl && !exr_memory && !memory && !png_memory && !tiff_memory && original_jpeg && full_chroma_jpeg && png && image && !atomic && !error.empty();
+    return jxl && !jxl_memory && !jxl_file && codec::jxl_encoder_version() > 0 && !exr_memory && !memory && !png_memory && !tiff_memory && original_jpeg && full_chroma_jpeg && png && image && !atomic && !error.empty();
 }

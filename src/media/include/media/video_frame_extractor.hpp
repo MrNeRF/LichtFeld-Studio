@@ -57,7 +57,8 @@ namespace lfs::io {
         PNG,
         JPG,
         EXR,
-        TIFF16
+        TIFF16,
+        JXL
     };
 
     enum class ResolutionMode {
@@ -128,6 +129,9 @@ namespace lfs::io {
             bool overwrite_metadata = false;
             bool allow_hardware_encode = true;
             media::ColorTransfer tiff16_transfer = media::ColorTransfer::Srgb;
+            bool jxl_lossless = true;
+            float jxl_distance = 1.f;
+            int jxl_effort = 4;
         };
 
         struct ValidatedLayout {

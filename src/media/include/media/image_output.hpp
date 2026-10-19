@@ -21,6 +21,13 @@ namespace lfs::media {
         std::string provenance;
         std::function<bool()> cancelled;
     };
+    struct JxlOutputOptions {
+        bool lossless = true;
+        float distance = 1.f;
+        int effort = 4;
+        bool overwrite = false;
+        std::function<bool()> cancelled;
+    };
     // Synchronous CPU image output independent of decoder or renderer. Float
     // RGB/RGBA must be linear with declared primaries. Straight alpha is converted
     // to EXR premultiplied convention. Failed/cancelled writes never commit target.
@@ -30,5 +37,8 @@ namespace lfs::media {
         // Relative scene-linear RGB/RGBA to UINT16 SDR. Explicit transfer,
         // primaries preserved, straight alpha, finite samples clamped to [0,1].
         [[nodiscard]] static SinkResult writeTiff16(const std::filesystem::path&, const FrameView&, const Tiff16OutputOptions& = {});
+        // SDR sRGB RGB8 or relative linear BT709/BT2020 Float32 RGB/RGBA.
+        // Preserve precision; straight alpha in output, no implicit tone mapping.
+        [[nodiscard]] static SinkResult writeJxl(const std::filesystem::path&, const FrameView&, const JxlOutputOptions& = {});
     };
 } // namespace lfs::media

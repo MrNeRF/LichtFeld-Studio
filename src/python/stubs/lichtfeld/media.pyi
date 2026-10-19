@@ -33,6 +33,8 @@ class FrameFileFormat(enum.Enum):
 
     TIFF16 = 3
 
+    JXL = 4
+
 class ExrPrecision(enum.Enum):
     Half = 0
 
@@ -359,6 +361,33 @@ class Tiff16OutputOptions:
     @provenance.setter
     def provenance(self, arg: str, /) -> None: ...
 
+class JxlOutputOptions:
+    def __init__(self) -> None: ...
+
+    @property
+    def lossless(self) -> bool: ...
+
+    @lossless.setter
+    def lossless(self, arg: bool, /) -> None: ...
+
+    @property
+    def distance(self) -> float: ...
+
+    @distance.setter
+    def distance(self, arg: float, /) -> None: ...
+
+    @property
+    def effort(self) -> int: ...
+
+    @effort.setter
+    def effort(self, arg: int, /) -> None: ...
+
+    @property
+    def overwrite(self) -> bool: ...
+
+    @overwrite.setter
+    def overwrite(self, arg: bool, /) -> None: ...
+
 class FileFrameSinkOptions:
     def __init__(self) -> None: ...
 
@@ -397,6 +426,12 @@ class FileFrameSinkOptions:
 
     @tiff16.setter
     def tiff16(self, arg: Tiff16OutputOptions, /) -> None: ...
+
+    @property
+    def jxl(self) -> JxlOutputOptions: ...
+
+    @jxl.setter
+    def jxl(self, arg: JxlOutputOptions, /) -> None: ...
 
 class FileExtraction:
     def __init__(self) -> None: ...
@@ -677,6 +712,9 @@ class IngestCapabilities:
     def tiff16(self) -> bool: ...
 
     @property
+    def jxl(self) -> bool: ...
+
+    @property
     def float_sdr_profile(self) -> str: ...
 
     @property
@@ -720,6 +758,9 @@ class ImageOutput:
 
     @staticmethod
     def write_tiff16(path: str | os.PathLike, frame: FrameSurface, options: Tiff16OutputOptions = ..., cancelled: object | None = None) -> None: ...
+
+    @staticmethod
+    def write_jxl(path: str | os.PathLike, frame: FrameSurface, options: JxlOutputOptions = ..., cancelled: object | None = None) -> None: ...
 
 class MediaIngest:
     @staticmethod

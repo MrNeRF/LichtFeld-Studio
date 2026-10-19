@@ -5,6 +5,36 @@
 #include "image_codecs.hpp"
 
 namespace lfs::core::image_codecs {
+    enum class JxlEncodingColor { SRGB,
+                                  LinearSRGB,
+                                  LinearBT2020 };
+    struct JxlEncodeOptions {
+        bool lossless = true;
+        float distance = 1.f; // Lossy perceptual distance, (0,25]; ignored for lossless.
+        int effort = 4;       // [1,9], explicit speed/compression tradeoff.
+        JxlEncodingColor color = JxlEncodingColor::SRGB;
+        bool premultiplied_alpha = false; // Float32 only; output alpha is straight.
+        size_t pixels = 64u * 1024 * 1024;
+        size_t encoder_bytes = size_t{1} << 30;
+        size_t max_output_bytes = 256u * 1024 * 1024;
+        size_t max_threads = 0; // Same bounded worker budget as JXL decoding.
+        std::function<bool()> cancelled;
+    };
+    [[nodiscard]] LFS_IMAGE_CODECS_API uint32_t jxl_encoder_version();
+    [[nodiscard]] LFS_IMAGE_CODECS_API Status validate_jxl_encode_options(const JxlEncodeOptions&);
+    // Borrowed interleaved gray/gray-alpha/RGB/RGBA, native-endian UInt8/16 or
+    // Float32. Explicit byte stride, finite samples and declared output color.
+    // No implicit tone mapping, integer quantization, orientation or metadata
+    // copying. Lossy mode explicitly applies perceptual compression.
+    // Memory output is replaced only on success, including aliased input/output.
+    // File encoding drains bounded chunks to the existing atomic file service.
+    [[nodiscard]] LFS_IMAGE_CODECS_API Status encode_jxl_memory(
+        std::span<const uint8_t>, int width, int height, int channels, SampleType,
+        size_t row_stride, std::vector<uint8_t>&, const JxlEncodeOptions& = {});
+    [[nodiscard]] LFS_IMAGE_CODECS_API Status write_jxl(
+        const std::filesystem::path&, std::span<const uint8_t>, int width, int height,
+        int channels, SampleType, size_t row_stride, const JxlEncodeOptions& = {},
+        const AtomicFileOptions& = {});
     enum class JxlColorPolicy { SRGB,
                                 Native };
     // Per-call limits, not an aggregate process RAM budget. The decoder's
