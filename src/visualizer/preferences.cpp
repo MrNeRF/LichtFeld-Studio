@@ -335,10 +335,10 @@ namespace lfs::vis {
                                     "scene_upscaler", "marketplace_view"})
                 (void)field<std::string>(values, key, {});
             for (const char* key : {"remember_camera_navigation", "remember_camera_view_snap",
-                                    "camera_view_snap", "new_project_align_grid",
+                                    "camera_view_snap", "new_project_align_grid", "gt_comparison_key_repeat",
                                     "scene_graph_selection_markers", "marketplace_git_checkout"})
                 (void)field<bool>(values, key, false);
-            for (const char* key : {"zoom_speed", "navigation_speed", "viewport_toolbar_free_y"})
+            for (const char* key : {"zoom_speed", "navigation_speed", "gt_comparison_repeat_rate", "viewport_toolbar_free_y"})
                 (void)field<float>(values, key, 0.0f);
             const auto scale = values.find("ui_scale");
             if (scale != values.end() && !scale->is_number() &&
@@ -863,6 +863,30 @@ namespace lfs::vis {
         if (it != impl_->values.end() && it->is_number())
             return clampNavigationSpeed(it->get<float>(), kDefaultNavigationSpeed);
         return kDefaultNavigationSpeed;
+    }
+    void UserPreferences::setGTComparisonKeyRepeat(const bool enabled) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["gt_comparison_key_repeat"] = enabled;
+        impl_->saveLocked();
+    }
+    bool UserPreferences::gtComparisonKeyRepeat() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        return lfs::core::persisted_settings::field<bool>(impl_->values, "gt_comparison_key_repeat", true);
+    }
+    void UserPreferences::setGTComparisonRepeatRate(const float value, const bool persist) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["gt_comparison_repeat_rate"] = std::isfinite(value) ? std::clamp(value, 1.0f, 20.0f) : 5.0f;
+        if (persist)
+            impl_->saveLocked();
+    }
+    float UserPreferences::gtComparisonRepeatRate() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const float value = lfs::core::persisted_settings::field<float>(impl_->values, "gt_comparison_repeat_rate", 5.0f);
+        return std::isfinite(value) ? std::clamp(value, 1.0f, 20.0f) : 5.0f;
     }
     void UserPreferences::setLanguage(const std::string& value) {
         if (value.empty())

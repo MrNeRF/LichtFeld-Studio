@@ -696,6 +696,7 @@ namespace lfs::vis {
             current_cursor_ = CursorType::Default;
         }
         held_keys_.clear();
+        gt_navigation_repeat_.stop();
         selection_drag_op_.reset();
         pending_click_drag_ = {};
         forced_mouse_press_action_ = input::Action::NONE;
@@ -741,6 +742,8 @@ namespace lfs::vis {
             mods |= input::KEYMOD_ALT;
         if (m & SDL_KMOD_MODE)
             mods |= input::KEYMOD_ALTGR;
+        if (m & SDL_KMOD_GUI)
+            mods |= input::KEYMOD_SUPER;
         return mods;
     }
 
@@ -1822,6 +1825,9 @@ namespace lfs::vis {
 
     void InputController::handleKey(const int physical_key, const int logical_key,
                                     const int scancode, int action, int mods, const bool owned_release, const bool gui_consumed) {
+        // Clear before any GUI/modal early return, including owned key releases.
+        if (action == input::ACTION_RELEASE)
+            gt_navigation_repeat_.release(physical_key);
         // Track modifier keys (always, even if GUI has focus)
         if (physical_key == input::KEY_LEFT_CONTROL || physical_key == input::KEY_RIGHT_CONTROL) {
             key_ctrl_pressed_ = (action != input::ACTION_RELEASE);
@@ -2111,24 +2117,11 @@ namespace lfs::vis {
 
             case input::Action::CAMERA_NEXT_VIEW:
             case input::Action::CAMERA_PREV_VIEW: {
-                if (const auto* scene_manager = services().sceneOrNull()) {
-                    const auto cameras_snapshot = scene_manager->getScene().getAllCamerasCached();
-                    const auto& cameras = *cameras_snapshot;
-                    if (!cameras.empty()) {
-                        const auto* rendering = services().renderingOrNull();
-                        const int current_uid = rendering ? rendering->getCurrentCameraId() : last_camview_;
-                        const auto current = std::ranges::find_if(cameras, [current_uid](const auto& camera) {
-                            return camera->uid() == current_uid;
-                        });
-                        const int count = static_cast<int>(cameras.size());
-                        const int delta = (bound_action == input::Action::CAMERA_NEXT_VIEW) ? 1 : -1;
-                        const int index = current == cameras.end()
-                                              ? (delta > 0 ? 0 : count - 1)
-                                              : (static_cast<int>(std::distance(cameras.begin(), current)) + delta + count) % count;
-                        cmd::GoToCamView{.cam_id = cameras[index]->uid()}.emit();
-                        if (auto* const viewer = lfs::python::get_visualizer()) {
-                            viewer->projectMarkSessionChapterCommitted("VIEW");
-                        }
+                const int delta = bound_action == input::Action::CAMERA_NEXT_VIEW ? 1 : -1;
+                if (advanceCameraView(delta)) {
+                    if (UserPreferences::instance().gtComparisonKeyRepeat()) {
+                        gt_navigation_repeat_modifiers_ = mods;
+                        gt_navigation_repeat_.start(physical_key, delta, input::GTNavigationRepeat::Clock::now());
                     }
                 }
                 return;
@@ -2439,7 +2432,53 @@ namespace lfs::vis {
             pan_coast_viewport_->camera.decayPanMomentum(elapsed);
     }
 
+    bool InputController::advanceCameraView(const int delta) {
+        if (const auto* scene_manager = services().sceneOrNull()) {
+            const auto cameras_snapshot = scene_manager->getScene().getAllCamerasCached();
+            const auto& cameras = *cameras_snapshot;
+            if (!cameras.empty()) {
+                const auto* rendering = services().renderingOrNull();
+                const int current_uid = rendering ? rendering->getCurrentCameraId() : last_camview_;
+                const auto current = std::ranges::find_if(cameras, [current_uid](const auto& camera) {
+                    return camera->uid() == current_uid;
+                });
+                const int count = static_cast<int>(cameras.size());
+                const int index = current == cameras.end()
+                                      ? (delta > 0 ? 0 : count - 1)
+                                      : (static_cast<int>(std::distance(cameras.begin(), current)) + delta + count) % count;
+                cmd::GoToCamView{.cam_id = cameras[index]->uid()}.emit();
+                if (auto* const viewer = lfs::python::get_visualizer()) {
+                    viewer->projectMarkSessionChapterCommitted("VIEW");
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void InputController::updateGTNavigationRepeat() {
+        if (!gt_navigation_repeat_.active())
+            return;
+        auto& preferences = UserPreferences::instance();
+        // The viewport owned the press. A transient unassigned focus does not
+        // revoke that hold; explicit GUI focus, text editing and modals do.
+        if (!input_router_ || input_router_->keyboardFocus() == input::InputTarget::Gui ||
+            input_router_->isTextInputActive() || input_router_->isModalOpen() ||
+            bindings_.isCapturing() || lfs::python::has_keyboard_capture_request() ||
+            !preferences.gtComparisonKeyRepeat() ||
+            !isKeyPressed(gt_navigation_repeat_.key()) || getModifierKeys() != gt_navigation_repeat_modifiers_) {
+            gt_navigation_repeat_.stop();
+            return;
+        }
+        if (const int delta = gt_navigation_repeat_.poll(input::GTNavigationRepeat::Clock::now(),
+                                                         preferences.gtComparisonRepeatRate());
+            delta != 0 && !advanceCameraView(delta)) {
+            gt_navigation_repeat_.stop();
+        }
+    }
+
     void InputController::update(float delta_time) {
+        updateGTNavigationRepeat();
         decayHeldDragMomentum();
         // Refresh once per input frame; mouse-move events can then query the
         // divider without taking RenderingManager's settings mutex repeatedly.

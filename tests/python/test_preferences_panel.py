@@ -86,6 +86,8 @@ def preferences_panel_module(monkeypatch):
         set_viewport_chrome_style_calls=[],
         viewport_toolbar_position="centered",
         set_viewport_toolbar_position_calls=[],
+        gt_comparison_key_repeat=True,
+        gt_comparison_repeat_rate=5.0,
         zoom_speed=11.0,
         navigation_speed=10.0,
         project_location="",
@@ -232,6 +234,10 @@ def preferences_panel_module(monkeypatch):
         set_viewport_chrome_style=set_viewport_chrome_style,
         get_viewport_toolbar_position=lambda: state.viewport_toolbar_position,
         set_viewport_toolbar_position=set_viewport_toolbar_position,
+        get_gt_comparison_key_repeat=lambda: state.gt_comparison_key_repeat,
+        set_gt_comparison_key_repeat=lambda value: setattr(state, "gt_comparison_key_repeat", bool(value)),
+        get_gt_comparison_repeat_rate=lambda: state.gt_comparison_repeat_rate,
+        set_gt_comparison_repeat_rate=lambda value, persist=True: setattr(state, "gt_comparison_repeat_rate", float(value)),
         get_zoom_speed_preference=lambda: state.zoom_speed,
         set_zoom_speed_preference=lambda value, persist=True: set_speed("zoom_speed", value),
         get_navigation_speed_preference=lambda: state.navigation_speed,
@@ -1550,3 +1556,64 @@ def test_drag_settings_use_one_sh_cap_and_localized_tooltips():
         assert not any("SOG" in data[key].upper() for key in tooltip_keys), path.name
         assert "-Y" in data["preferences.drag_axis_default"], path.name
         assert data["preferences"]["scene_graph_selection_markers_description"].strip(), path.name
+
+
+def test_camera_repeat_numeric_preference_and_step_buttons(preferences_panel_module, monkeypatch):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    writes = []
+
+    def set_rate(value, persist=True):
+        state.gt_comparison_repeat_rate = float(value)
+        writes.append((float(value), persist))
+
+    monkeypatch.setattr(module.lf.ui, "set_gt_comparison_repeat_rate", set_rate)
+    panel._set_gt_comparison_key_repeat(False)
+    assert not state.gt_comparison_key_repeat
+    panel._set_gt_comparison_repeat_rate("12")
+    assert state.gt_comparison_repeat_rate == 5
+    assert writes == []
+    assert panel._get_camera_repeat_rate_draft() == "12"
+    assert panel._commit_camera_repeat_rate()
+    assert state.gt_comparison_repeat_rate == 12
+    assert writes == [(12, True)]
+    for invalid in ("", "abc", "nan", "inf", "0", "21"):
+        panel._set_gt_comparison_repeat_rate(invalid)
+        assert panel._get_camera_repeat_rate_draft() == invalid
+        assert not panel._commit_camera_repeat_rate()
+        assert panel._get_camera_repeat_rate_draft() == "12"
+    assert writes == [(12, True)]
+    panel._step_camera_repeat_rate(None, None, [-1])
+    assert state.gt_comparison_repeat_rate == 11
+    panel._step_camera_repeat_rate(None, None, [1])
+    assert state.gt_comparison_repeat_rate == 12
+    panel._set_gt_comparison_repeat_rate("20")
+    panel._step_camera_repeat_rate(None, None, [1])
+    assert state.gt_comparison_repeat_rate == 20
+    panel._set_gt_comparison_repeat_rate("1")
+    panel._step_camera_repeat_rate(None, None, [-1])
+    assert state.gt_comparison_repeat_rate == 1
+    panel._reset_section("input")
+    assert state.gt_comparison_key_repeat
+    assert state.gt_comparison_repeat_rate == 5.0
+
+
+def test_camera_repeat_draft_survives_refresh_and_commits_on_enter(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    panel._set_gt_comparison_repeat_rate("")
+    assert panel._get_camera_repeat_rate_draft() == ""
+    assert state.gt_comparison_repeat_rate == 5
+    event = SimpleNamespace(get_bool_parameter=lambda key, default: False)
+    panel._on_camera_repeat_rate_change(None, event, ["1"])
+    assert panel._get_camera_repeat_rate_draft() == "1"
+    assert state.gt_comparison_repeat_rate == 5
+    event.get_bool_parameter = lambda key, default: True
+    panel._on_camera_repeat_rate_change(None, event, ["1"])
+    assert state.gt_comparison_repeat_rate == 1
+    panel._set_gt_comparison_repeat_rate("12")
+    panel._cancel_camera_repeat_rate()
+    assert panel._get_camera_repeat_rate_draft() == "1"
+    assert state.gt_comparison_repeat_rate == 1

@@ -2795,6 +2795,18 @@ def get_zoom_speed_preference() -> float:
 def set_navigation_speed_preference(speed: float, persist: bool = True) -> None:
     """Set the default WASD navigation speed (1-100)"""
 
+def get_gt_comparison_key_repeat() -> bool:
+    """Get whether held camera shortcuts repeat through dataset images"""
+
+def set_gt_comparison_key_repeat(enabled: bool) -> None:
+    """Enable held camera shortcuts through dataset images"""
+
+def get_gt_comparison_repeat_rate() -> float:
+    """Get camera image repeat rate in images per second"""
+
+def set_gt_comparison_repeat_rate(rate: float, persist: bool = True) -> None:
+    """Set camera image repeat rate (1-20 images per second)"""
+
 def get_navigation_speed_preference() -> float:
     """Get the default WASD navigation speed"""
 
