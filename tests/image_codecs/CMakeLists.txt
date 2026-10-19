@@ -12,6 +12,7 @@ endif()
 get_filename_component(LFS_CODEC_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 find_package(GTest REQUIRED)
 find_package(libheif CONFIG REQUIRED)
+find_package(lcms2 CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 find_package(OpenEXR 3.4.15 CONFIG REQUIRED)
 find_package(JPEG REQUIRED)
@@ -47,6 +48,7 @@ if(NOT TARGET lfs_image_codecs)
     add_subdirectory(${LFS_CODEC_ROOT}/src/core/image_codecs ${CMAKE_CURRENT_BINARY_DIR}/image-codecs)
 endif()
 add_executable(lichtfeld_image_codec_tests
+    ../test_jxl_codecs.cpp
     ../test_heif_codecs.cpp
     ../test_exr_codecs.cpp
     ../test_exr_memory.cpp
@@ -58,11 +60,12 @@ add_executable(lichtfeld_image_codec_tests
     ${LFS_CODEC_ROOT}/src/io/stb_image_impl.cpp)
 target_compile_features(lichtfeld_image_codec_tests PRIVATE cxx_std_20)
 target_compile_definitions(lichtfeld_image_codec_tests PRIVATE LFS_HEIF_FIXTURES="${LFS_CODEC_ROOT}/tests/data/heif")
+target_compile_definitions(lichtfeld_image_codec_tests PRIVATE LFS_JXL_FIXTURES="${LFS_CODEC_ROOT}/tests/data/jxl")
 target_include_directories(lichtfeld_image_codec_tests PRIVATE ${LFS_CODEC_ROOT}/src ${LFS_CODEC_ROOT}/src/core/include)
 target_include_directories(lichtfeld_image_codec_tests BEFORE PRIVATE ${ZLIB_INCLUDE_DIRS})
 target_include_directories(lichtfeld_image_codec_tests SYSTEM PRIVATE ${LFS_CODEC_ROOT}/external)
 target_link_libraries(lichtfeld_image_codec_tests PRIVATE
-    lfs_image_codecs heif
+    lfs_image_codecs heif PkgConfig::JXL lcms2::lcms2
     GTest::gtest_main Threads::Threads OpenEXR::OpenEXRCore OpenEXR::OpenEXR
     JPEG::JPEG PNG::PNG TIFF::TIFF WebP::webp ZLIB::ZLIB)
 if(MSVC)
@@ -76,7 +79,7 @@ if(WIN32 AND MSVC)
     target_compile_definitions(lichtfeld_image_codec_tests PRIVATE LFS_REQUIRE_LONG_PATHS_DISABLED)
 endif()
 add_test(NAME lichtfeld_image_codec_tests COMMAND lichtfeld_image_codec_tests
-    --gtest_filter=-ProductionJpeg.MemoryLargeImagesPreserveFileEncodingAndRecoverFromLimits:PngMemory.ParallelStripesMatchFileBytesAndKeepInputUnmodified:PngMemory.LargeImagesPreserveSamplesAndRecoverFromOutputLimits:TiffMemory.LargeImagesPreserveSamplesAndRecoverFromOutputLimits:ExrMemory.LargeImagesPreserveSamplesAndRecoverFromLimits)
+    --gtest_filter=-JxlCodec.LargeImagesPreserveSamplesAndRecoverFromLimits:ProductionJpeg.MemoryLargeImagesPreserveFileEncodingAndRecoverFromLimits:PngMemory.ParallelStripesMatchFileBytesAndKeepInputUnmodified:PngMemory.LargeImagesPreserveSamplesAndRecoverFromOutputLimits:TiffMemory.LargeImagesPreserveSamplesAndRecoverFromOutputLimits:ExrMemory.LargeImagesPreserveSamplesAndRecoverFromLimits)
 set_tests_properties(lichtfeld_image_codec_tests PROPERTIES LABELS "fast;image;cpu" TIMEOUT 120)
 add_test(NAME lichtfeld_jpeg_large_memory_test COMMAND lichtfeld_image_codec_tests
     --gtest_filter=ProductionJpeg.MemoryLargeImagesPreserveFileEncodingAndRecoverFromLimits)
@@ -93,11 +96,16 @@ add_test(NAME lichtfeld_exr_memory_stress_test COMMAND lichtfeld_image_codec_tes
     --gtest_filter=ExrMemory.LargeImagesPreserveSamplesAndRecoverFromLimits)
 set_tests_properties(lichtfeld_exr_memory_stress_test PROPERTIES LABELS "stress;image;cpu" TIMEOUT 180)
 
+add_test(NAME lichtfeld_jxl_memory_stress_test COMMAND lichtfeld_image_codec_tests
+    --gtest_filter=JxlCodec.LargeImagesPreserveSamplesAndRecoverFromLimits)
+set_tests_properties(lichtfeld_jxl_memory_stress_test PROPERTIES LABELS "stress;image;cpu" TIMEOUT 180)
+
 if(TARGET lfs_io)
     add_executable(lichtfeld_image_discovery_tests ../test_image_format_discovery.cpp)
     target_include_directories(lichtfeld_image_discovery_tests PRIVATE ${LFS_CODEC_ROOT}/src)
     target_compile_features(lichtfeld_image_discovery_tests PRIVATE cxx_std_23)
     target_compile_definitions(lichtfeld_image_discovery_tests PRIVATE LFS_HEIF_FIXTURES="${LFS_CODEC_ROOT}/tests/data/heif")
+    target_compile_definitions(lichtfeld_image_discovery_tests PRIVATE LFS_JXL_FIXTURES="${LFS_CODEC_ROOT}/tests/data/jxl")
     target_link_libraries(lichtfeld_image_discovery_tests PRIVATE lfs_io lfs_core lfs_image_codecs GTest::gtest_main)
     add_test(NAME lichtfeld_image_discovery_tests COMMAND lichtfeld_image_discovery_tests)
     set_tests_properties(lichtfeld_image_discovery_tests PROPERTIES LABELS "fast;image;cpu" TIMEOUT 60)

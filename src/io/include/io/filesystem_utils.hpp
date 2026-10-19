@@ -358,6 +358,7 @@ namespace lfs::io {
             ".exr",
             ".webp",
             ".avif",
+            ".jxl",
             ".heif",
 #if defined(_WIN32) || defined(__APPLE__)
             ".heic",
@@ -373,7 +374,7 @@ namespace lfs::io {
     inline bool is_legacy_image_file(const std::filesystem::path& path) {
         auto ext = path.extension().string();
         detail::ascii_lower_inplace(ext);
-        return ext != ".exr" && ext != ".webp" && ext != ".avif" && ext != ".heif" && ext != ".heic" && is_image_file(path);
+        return ext != ".exr" && ext != ".webp" && ext != ".avif" && ext != ".jxl" && ext != ".heif" && ext != ".heic" && is_image_file(path);
     }
 
     inline std::string strip_extension(const std::string& filename) {

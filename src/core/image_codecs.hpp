@@ -64,6 +64,9 @@ namespace lfs::core::image_codecs {
     // Validate Radiance scanline payload completeness without decoding pixels.
     LFS_IMAGE_CODECS_API bool radiance_scanlines_complete(const std::filesystem::path& path);
     LFS_IMAGE_CODECS_API bool decode(const std::filesystem::path& path, Image& result, std::string& error);
+    // Display policy is dispatched here for profiled codecs. JXL defaults to
+    // canonical sRGB even without display; native JXL access is explicit.
+    LFS_IMAGE_CODECS_API bool decode(const std::filesystem::path& path, Image& result, std::string& error, bool display);
     inline constexpr std::string_view tiff_sdr_encoding = "tiff16-sdr-v1";
     // Immutable, lazily initialized once per supported transfer; shared by
     // export and metadata validation. Unknown transfers return an empty span.
@@ -79,11 +82,14 @@ namespace lfs::core::image_codecs {
     // TIFF metadata only. Pixel decode APIs retain the original file encoding.
     LFS_IMAGE_CODECS_API bool read_tiff_metadata(const std::filesystem::path&, TiffMetadata&, std::string& error);
     LFS_IMAGE_CODECS_API bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target, Probe& result, std::string& error);
+    LFS_IMAGE_CODECS_API bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target, Probe& result, std::string& error, bool display);
     // EXR memory reads use the file decoder's Float32 RGBA sample policy.
     // EXR targets require Float32 RGB/RGBA (zero channels selects RGBA) and
     // stage decoding before allocating/writing caller storage.
     LFS_IMAGE_CODECS_API bool decode_memory(const std::uint8_t* data, size_t size, Image& result, std::string& error);
+    LFS_IMAGE_CODECS_API bool decode_memory(const std::uint8_t* data, size_t size, Image& result, std::string& error, bool display);
     LFS_IMAGE_CODECS_API bool decode_memory_to_buffer(const std::uint8_t* data, size_t size, DecodeTarget& target, Probe& result, std::string& error);
+    LFS_IMAGE_CODECS_API bool decode_memory_to_buffer(const std::uint8_t* data, size_t size, DecodeTarget& target, Probe& result, std::string& error, bool display);
 
     struct JpegEncodeOptions {
         int quality = 95; // Clamped to [1, 100], matching the file writer.

@@ -8,6 +8,7 @@
 #include "io/loaders/blender_loader.hpp"
 #include "io/loaders/colmap_loader.hpp"
 #include "io/project_document.hpp"
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdlib>
@@ -68,6 +69,40 @@ namespace {
         EXPECT_EQ(lfs::io::count_image_files(dataset, false), 3);
         ASSERT_TRUE(lfs::io::project::first_dataset_image(config).has_value());
         EXPECT_EQ(lfs::io::project::first_dataset_image(config)->lexically_normal(), dataset / "frame.exr");
+    }
+    TEST_F(ImageFormatDiscoveryTest, JxlDatasetUsesTheSharedReaderAndPreservesLegacyPreference) {
+        const auto dataset = temp_dir_ / "jxl";
+        const auto image = dataset / "frame.JXL";
+        write_minimal_colmap_text_dataset(dataset, "frame.JXL");
+        fs::copy_file(fs::path(LFS_JXL_FIXTURES) / "rgb8.jxl", image);
+        EXPECT_TRUE(lfs::io::is_image_file(image));
+        EXPECT_FALSE(lfs::io::is_legacy_image_file(image));
+        EXPECT_EQ(lfs::io::count_image_files(dataset, false), 1);
+        lfs::io::ColmapLoader loader;
+        ASSERT_TRUE(loader.load(dataset, {.validate_only = true}).has_value());
+        auto [samples, width, height, channels] = lfs::core::load_image(image, 1, 0);
+        const auto owner = std::unique_ptr<unsigned char, decltype(&std::free)>(samples, &std::free);
+        ASSERT_NE(samples, nullptr);
+        EXPECT_EQ(width, 2);
+        EXPECT_EQ(height, 2);
+        EXPECT_EQ(channels, 3);
+        EXPECT_EQ(samples[0], 255);
+        EXPECT_EQ(samples[1], 0);
+        EXPECT_EQ(samples[2], 0);
+        std::ifstream input(image, std::ios::binary);
+        const std::vector<uint8_t> encoded((std::istreambuf_iterator<char>(input)), {});
+        auto [memory, mw, mh, mc] = lfs::core::load_image_from_memory(encoded.data(), encoded.size(), 1, 0);
+        const auto memory_owner = std::unique_ptr<unsigned char, decltype(&std::free)>(memory, &std::free);
+        ASSERT_NE(memory, nullptr);
+        ASSERT_EQ(mw, width);
+        ASSERT_EQ(mh, height);
+        ASSERT_EQ(mc, channels);
+        EXPECT_EQ(std::memcmp(memory, samples, size_t(width) * height * channels), 0);
+        lfs::core::param::DatasetConfig config;
+        config.data_path = dataset;
+        config.images = ".";
+        ASSERT_TRUE(lfs::io::project::first_dataset_image(config));
+        EXPECT_EQ(lfs::io::project::first_dataset_image(config)->lexically_normal(), image);
     }
     TEST_F(ImageFormatDiscoveryTest, FlatExrAndWebpDatasetsUseExistingCpuDecoders) {
         for (const auto extension : {".exr", ".webp"}) {

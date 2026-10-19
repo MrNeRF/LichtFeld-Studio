@@ -6,7 +6,6 @@
 #include "core/native_fs.hpp"
 
 #include "image_codecs.hpp"
-#include "image_heif.hpp"
 
 #if LFS_HAS_CUDA
 #include "core/cuda/image_quantize.hpp"
@@ -45,21 +44,6 @@ namespace image_codecs = lfs::core::image_codecs;
 
 namespace {
 
-    bool decode_display_image(const std::filesystem::path& path, image_codecs::Image& image, std::string& error) {
-        auto extension = lfs::core::path_to_utf8(path.extension());
-        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (extension == ".avif" || extension == ".heic" || extension == ".heif")
-            return image_codecs::decode_heif(path, image, error, true);
-        return image_codecs::decode(path, image, error);
-    }
-
-    bool decode_display_to_buffer(const std::filesystem::path& path, image_codecs::DecodeTarget& target, image_codecs::Probe& info, std::string& error) {
-        auto extension = lfs::core::path_to_utf8(path.extension());
-        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (extension == ".avif" || extension == ".heic" || extension == ".heif")
-            return image_codecs::decode_heif_to_buffer(path, target, info, error, true);
-        return image_codecs::decode_to_buffer(path, target, info, error);
-    }
     struct TiffDisplayEncoding {
         std::string transfer;
         bool bt2020 = false;
@@ -573,7 +557,7 @@ namespace {
         const auto encoding = tiff_display_encoding(p);
         image_codecs::Image decoded;
         std::string error;
-        if (!decode_display_image(p, decoded, error))
+        if (!image_codecs::decode(p, decoded, error, true))
             throw std::runtime_error("Load failed: " + lfs::core::path_to_utf8(p) + (error.empty() ? "" : " : " + error));
         if (encoding)
             tiff_to_display_rgb(decoded, *encoding);
@@ -693,7 +677,7 @@ namespace {
                 error.clear();
             }
         }
-        if (!decoded_embedded && !encoding && decode_display_to_buffer(p, target, direct_info, error)) {
+        if (!decoded_embedded && !encoding && image_codecs::decode_to_buffer(p, target, direct_info, error, true)) {
             source_width = direct_info.width;
             source_height = direct_info.height;
             base = static_cast<T*>(target.data);
@@ -701,7 +685,7 @@ namespace {
             if (target.data)
                 std::free(target.data);
             image_codecs::Image decoded;
-            if (!decode_display_image(p, decoded, error))
+            if (!image_codecs::decode(p, decoded, error, true))
                 throw std::runtime_error("Load failed: " + path_utf8 + (error.empty() ? "" : " : " + error));
             if (decoded.width <= 0 || decoded.height <= 0 || decoded.channels <= 0)
                 throw std::runtime_error("Invalid image dimensions: " + path_utf8);
@@ -788,14 +772,16 @@ namespace lfs::core {
         image_codecs::DecodeTarget target{3, image_codecs::SampleType::UInt8, nullptr, allocate_image_buffer, nullptr};
         image_codecs::Probe direct_info;
         std::string direct_error;
-        if ((image_codecs::is_heif({data, size}) ? image_codecs::decode_heif_to_buffer(std::span<const uint8_t>{data, size}, target, direct_info, direct_error, true) : image_codecs::decode_memory_to_buffer(data, size, target, direct_info, direct_error)))
+        const bool direct = image_codecs::decode_memory_to_buffer(data, size, target, direct_info, direct_error, true);
+        if (direct)
             return ::resize_loaded_rgb(static_cast<unsigned char*>(target.data), direct_info.width,
                                        direct_info.height, res_div, max_width);
         if (target.data)
             std::free(target.data);
         image_codecs::Image decoded;
         std::string error;
-        if (!(image_codecs::is_heif({data, size}) ? image_codecs::decode_heif(std::span<const uint8_t>{data, size}, decoded, error, true) : image_codecs::decode_memory(data, size, decoded, error)))
+        const bool success = image_codecs::decode_memory(data, size, decoded, error, true);
+        if (!success)
             throw std::runtime_error("Load from memory failed: " + error);
         const size_t pixel_count = static_cast<size_t>(decoded.width) * decoded.height;
         auto* out = static_cast<unsigned char*>(std::malloc(pixel_count * 3));
