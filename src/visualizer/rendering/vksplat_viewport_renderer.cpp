@@ -99,12 +99,6 @@ namespace lfs::vis {
         constexpr std::uint32_t kRingPickPhaseNone = 0u;
         constexpr std::uint32_t kRingPickPhaseFindMin = 1u;
         constexpr std::uint32_t kRingPickPhaseWritePick = 2u;
-        // Readback frames of deferred-wants-with-zero-admissions before the
-        // pool counts as frozen: long enough to outlast the publish
-        // protection window (3) and the eviction freshness window (12), so
-        // only a genuinely unevictable pool qualifies.
-        constexpr std::uint32_t kLodAdmissionFrozenFrames = 30u;
-
         // Bytes one pool page occupies on the GPU: canonical quantized
         // page-input regions (mirrors ensureLodPageInputStorage's layout)
         // plus the per-node traversal metadata (bounds 16 B + links 16 B).
@@ -8148,12 +8142,6 @@ namespace lfs::vis {
                 lod_rendered_capacity = lod_stats->rendered_capacity;
             }
             auto& lod_feedback = *feedback;
-            // Start the next frame at the threshold that actually fit. The
-            // gradual controller can refine it, but cannot undo same-frame repair.
-            if (std::isfinite(lod_stats->threshold_scale) && lod_stats->threshold_scale > 1.0f) {
-                lod_feedback.pixel_scale_feedback = std::min(
-                    64.0f, lod_feedback.pixel_scale_feedback * lod_stats->threshold_scale);
-            }
             lod_feedback.last_candidate_count = lod_stats->candidate_count;
             lod_feedback.last_overflow_count = lod_stats->overflow_count;
             const bool overflowed =
@@ -8214,10 +8202,6 @@ namespace lfs::vis {
                 }
             }
 
-            // Damped threshold controller with a wide deadband; the per-frame
-            // rate clamp keeps the limit (and with it the global transition
-            // band and the touch set) stable at rest.
-            const float previous_feedback = lod_feedback.pixel_scale_feedback;
             // Admission freeze: wants deferred, zero admissions, nothing in
             // flight — every resident page is part of the live cut and can
             // never age out, so the deferred set is permanent at this
@@ -8228,49 +8212,14 @@ namespace lfs::vis {
                 lod_page_cache_.admittedRequestCount() == 0 &&
                 !lod_page_cache_.hasOutstandingWork();
             lod_feedback.frozen_frames = admission_frozen ? lod_feedback.frozen_frames + 1 : 0;
-            if (lod_stats->rendered_capacity > 0) {
-                const bool converging = miss_count > 0 || lod_page_cache_.hasOutstandingWork();
-                const double fill_ratio =
-                    static_cast<double>(lod_stats->candidate_count) /
-                    static_cast<double>(lod_stats->rendered_capacity);
-                float target = lod_feedback.pixel_scale_feedback;
-                if (overflowed) {
-                    target *= static_cast<float>(
-                        std::clamp(std::pow(std::max(fill_ratio / 0.97, 1.0), 0.85), 1.02, 1.15));
-                } else if (fill_ratio < 0.85 &&
-                           lod_feedback.frozen_frames < kLodAdmissionFrozenFrames) {
-                    // While streaming converges, parents stand in for missing
-                    // children and the candidate count runs low — recover
-                    // GENTLY rather than freezing: a coarse cut always has
-                    // misses in flight, so a freeze would let one transient
-                    // overflow ratchet the limit up with no path back down.
-                    // Do NOT coarsen toward "the touch set fits the pool":
-                    // the cut uses only a sliver of each touched chunk, so
-                    // that equilibrium is dozens of times coarser than the
-                    // splat budget. Overcommit is the designed operating
-                    // point — parents stand in for missing chunks and
-                    // priority admission allocates pages toward the gaze.
-                    // The one exception is a sustained admission freeze:
-                    // descending further only grows a want set that can
-                    // never be served (budget ≈ pool pathologies dig to the
-                    // 0.05 floor and freeze whole level bands). Halt the
-                    // descent there — one-sided, never force-coarsen.
-                    const double floor_rate = converging ? 0.98 : 0.90;
-                    target *= static_cast<float>(
-                        std::clamp(std::pow(std::max(fill_ratio / 0.85, 0.05), 0.5), floor_rate, 1.0));
-                }
-                // The ceiling must accommodate tight budgets on km-scale
-                // scenes: close-up views legitimately need the limit dozens of
-                // times coarser to fit the cut, or capacity-clamp truncation
-                // punches holes in the image. Recovery handles coming back.
-                constexpr float kMaxRatePerFrame = 1.03f;
-                lod_feedback.pixel_scale_feedback = std::clamp(
-                    std::clamp(target,
-                               lod_feedback.pixel_scale_feedback / kMaxRatePerFrame,
-                               lod_feedback.pixel_scale_feedback * kMaxRatePerFrame),
-                    0.05f,
-                    64.0f);
-            }
+            const float previous_feedback = advanceGpuLodPixelScaleFeedback(
+                lod_feedback.pixel_scale_feedback,
+                {.candidates = lod_stats->candidate_count,
+                 .capacity = lod_stats->rendered_capacity,
+                 .overflow = lod_stats->overflow_count,
+                 .threshold_scale = lod_stats->threshold_scale,
+                 .converging = miss_count > 0 || lod_page_cache_.hasOutstandingWork(),
+                 .admission_frozen = lod_feedback.frozen_frames >= kLodAdmissionFrozenFrames});
             if (identity.target == target.value)
                 lod_feedback_changed |= lod_stats->threshold_scale <= 1.0f &&
                                         lod_feedback.pixel_scale_feedback != previous_feedback;
