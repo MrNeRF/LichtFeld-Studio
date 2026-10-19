@@ -37,7 +37,9 @@
 #include "io/splat_tile_source.hpp"
 #include "training/dataset.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -1629,15 +1631,21 @@ namespace lfs::python {
             "save_image",
             [](const LogicalPath& path, const PyTensor& image, bool include_provenance) {
                 auto t = image.tensor().contiguous().cpu();
-                const auto comment = core::provenance_to_json(
-                    include_provenance ? core::make_provenance_stamp()
-                                       : core::make_minimal_provenance_stamp());
+                auto extension = core::path_to_utf8(path.extension());
+                std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return std::tolower(c); });
+                // Generic JXL output is pixel-only. Do not synthesize a comment
+                // that its shared writer correctly rejects as unsupported.
+                std::optional<std::string> comment;
+                if (extension != ".jxl")
+                    comment = core::provenance_to_json(
+                        include_provenance ? core::make_provenance_stamp()
+                                           : core::make_minimal_provenance_stamp());
                 core::save_image(path, std::move(t), comment);
             },
             nb::arg("path"), nb::arg("image"),
             nb::arg("include_provenance") = true,
-            "Save display image tensor to PNG, JPG or TIFF. Accepts [H,W,C] or [C,H,W] float [0,1]. "
-            "include_provenance (default true) writes a full Comment stamp on PNG and JPEG; when false, a minimal build stamp is still embedded.");
+            "Save display image tensor to PNG, JPG, TIFF or JPEG XL. Accepts [H,W,C] or [C,H,W] float [0,1]. "
+            "include_provenance (default true) writes a full Comment stamp on supported formats; false writes a minimal stamp. JPEG XL stores pixels without a provenance stamp.");
         m.def(
             "save_exr_image",
             [](const std::filesystem::path& path, const PyTensor& image, media::FrameColor color,

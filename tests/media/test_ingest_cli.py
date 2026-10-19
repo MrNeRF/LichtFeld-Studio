@@ -290,6 +290,15 @@ class IngestCLI(unittest.TestCase):
                 self.assertEqual(actual["frames_accepted"],len(metadata["frames"]))
                 progress=[json.loads(line) for line in stderr.splitlines() if line.startswith(b'{')]
                 self.assertTrue(progress)
+    def test_jxl_missing_primaries_uses_format_neutral_diagnostic(self):
+        destination = self.root / "jxl-no-primaries"
+        result, _ = self.invoke("extract", self.source(), "--output", destination,
+                                "--format", "jxl", "--input-transfer", "linear", code=3)
+        message = result["error"]["message"]
+        self.assertIn("primaries", message)
+        self.assertNotIn("EXR", message)
+        self.assertFalse(destination.exists())
+
     def test_jxl_output_options_and_verified_resume(self):
         output=self.root/"jxl-cli"
         args=("extract",self.source(),"--output",output,"--interval","1","--end","0.35",
@@ -314,6 +323,9 @@ class IngestCLI(unittest.TestCase):
         for index,flags in enumerate((("--format","png","--jxl-effort","1"),
                                       ("--format","jxl","--jxl-distance","0"),
                                       ("--format","jxl","--jxl-effort","10"),
+                                      ("--format","jxl","--jxl-effort","1"),
+                                      ("--format","jxl","--jxl-effort","2"),
+                                      ("--format","jxl","--jxl-effort","3"),
                                       ("--format","jxl","--exr-precision","float"),
                                       ("--format","jxl","--hdr-to-sdr"),
                                       ("--format","jxl","--quality","95"))):

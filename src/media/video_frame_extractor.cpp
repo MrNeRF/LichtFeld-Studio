@@ -1023,9 +1023,17 @@ namespace lfs::io {
             if ((params.output_format != media::FramePixelFormat::RGB8 && !float_output) ||
                 (float_output && (!provided_sink || params.convert_hdr_to_sdr)) ||
                 ((params.format == ImageFormat::EXR || params.format == ImageFormat::TIFF16 || params.format == ImageFormat::JXL) && !float_output)) {
-                failure_ = make_error({.code = ErrorCode::Unsupported, .domain = ErrorDomain::IO, .detail = "EXR requires float samples; float extraction requires a CPU sink and the SDR profile", .detection = LFS_SOURCE_SITE_CURRENT()});
+                failure_ = make_error({.code = ErrorCode::Unsupported, .domain = ErrorDomain::IO, .detail = "Float image extraction requires Float32 samples, a CPU sink and no implicit HDR-to-SDR tone mapping", .detection = LFS_SOURCE_SITE_CURRENT()});
                 error = std::string(failure_->detail());
                 return false;
+            }
+            if (params.format == ImageFormat::JXL) {
+                const auto valid = media::validateJxlOutputOptions({.lossless = params.jxl_lossless, .distance = params.jxl_distance, .effort = params.jxl_effort}, params.output_format);
+                if (!valid) {
+                    failure_ = valid.error();
+                    error = std::string(failure_->detail());
+                    return false;
+                }
             }
             const bool external_sink = provided_sink != nullptr;
             const bool custom_sink = external_sink && !legacy_file_policy;

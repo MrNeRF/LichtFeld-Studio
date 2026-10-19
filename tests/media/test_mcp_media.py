@@ -177,7 +177,13 @@ class McpMedia(unittest.TestCase):
                         {"format": "jxl", "exr_precision": "half"},
                         {"format": "png", "jxl_effort": 1},
                         {"format": "jxl", "jxl_distance": 0.},
-                        {"format": "jxl", "jxl_effort": 10}):
+                        {"format": "jxl", "jxl_effort": 10},
+                        {"format": "jxl", "jxl_effort": 1},
+                        {"format": "jxl", "jxl_effort": 2},
+                        {"format": "jxl", "jxl_effort": 3},
+                        {"format": "jxl", "jxl_effort": 4.5},
+                        {"format": "jxl", "jxl_effort": True},
+                        {"format": "jxl", "jxl_effort": 4294967300}):
             result, output = self.invoke(**options)
             self.assertFalse(result["start"].get("success", False))
             self.assertEqual(result["start"]["error"]["code"], "InvalidArgument")

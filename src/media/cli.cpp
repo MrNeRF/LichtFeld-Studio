@@ -77,7 +77,7 @@ namespace {
                              "  [--name PATTERN] [--metadata] [--resume] [--sharpness THRESHOLD] [--window]\n"
                              "  [--algorithm laplacian|tenengrad|combined] [--candidates N] [--hdr-to-sdr] [--quiet]\n"
                              "  TIFF16: [--tiff16-transfer srgb|bt709|linear] [--overwrite] (relative SDR only)\n"
-                             "  JXL: [--jxl-distance N (enables lossy)] [--jxl-effort 1..9] [--overwrite] (linear Float32 SDR)\n"
+                             "  JXL: [--jxl-distance N (enables lossy)] [--jxl-effort N] [--overwrite] (linear Float32 SDR; effort 4..9 lossless, 1..9 lossy)\n"
                              "  EXR: [--exr-precision half|float] [--exr-compression zip|none] [--overwrite]\n"
                              "       [--float-profile sdr|pq-nits|hlg-scene] [--input-transfer auto|linear|srgb|bt709] [--input-primaries auto|bt709|bt2020]\n";
                 return 0;

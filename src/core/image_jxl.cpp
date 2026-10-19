@@ -157,7 +157,7 @@ namespace lfs::core::image_codecs {
                 const auto cancelled = [&] { return options.cancelled && options.cancelled(); };
                 if (cancelled())
                     return encode_error(ErrorCode::Cancelled, "cancelled before encoding");
-                if (auto valid = validate_jxl_encode_options(options); !valid)
+                if (auto valid = validate_jxl_encode_options(options, type); !valid)
                     return valid;
                 const bool floating = type == SampleType::Float32;
                 const bool alpha = channels == 2 || channels == 4;
@@ -262,9 +262,14 @@ namespace lfs::core::image_codecs {
                                     JxlEncoderFrameSettingsSetOption(frame, JXL_ENC_FRAME_SETTING_EFFORT, options.effort)})
                     if (auto result = check(status); !result)
                         return result;
-                if (alpha)
-                    if (auto result = check(JxlEncoderSetExtraChannelDistance(frame, 0, 0.f)); !result)
-                        return result;
+                if (alpha) {
+                    // Distance >=10 otherwise resamples alpha despite distance 0.
+                    for (auto status : {JxlEncoderSetExtraChannelDistance(frame, 0, 0.f),
+                                        JxlEncoderFrameSettingsSetOption(frame, JXL_ENC_FRAME_SETTING_RESAMPLING, 1),
+                                        JxlEncoderFrameSettingsSetOption(frame, JXL_ENC_FRAME_SETTING_EXTRA_CHANNEL_RESAMPLING, 1)})
+                        if (auto result = check(status); !result)
+                            return result;
+                }
                 if (floating && options.lossless)
                     // The default adaptive predictor in libjxl 0.12 can reject
                     // finite IEEE32 patterns with mixed signs. Left prediction
@@ -279,6 +284,7 @@ namespace lfs::core::image_codecs {
                 JxlEncoderCloseInput(encoder.get());
                 std::array<uint8_t, 64 * 1024> buffer;
                 size_t total = 0;
+                const size_t output_limit = options.max_output_bytes ? options.max_output_bytes : size_t{256} * 1024 * 1024;
                 for (;;) {
                     if (cancelled())
                         return encode_error(ErrorCode::Cancelled, "cancelled while producing output");
@@ -288,7 +294,7 @@ namespace lfs::core::image_codecs {
                     if (memory.exhausted)
                         return encode_error(ErrorCode::ResourceExhausted, "encoder allocation limit exhausted");
                     const size_t count = buffer.size() - available;
-                    if (count > options.max_output_bytes - total)
+                    if (count > output_limit - total)
                         return encode_error(ErrorCode::ResourceExhausted, "encoded output byte limit exhausted");
                     if (count) {
                         if (auto result = write(std::span<const uint8_t>(buffer.data(), count)); !result)
@@ -577,6 +583,14 @@ namespace lfs::core::image_codecs {
         return {};
     }
 
+    Status validate_jxl_encode_options(const JxlEncodeOptions& options, SampleType type) {
+        if (auto valid = validate_jxl_encode_options(options); !valid)
+            return valid;
+        if (type == SampleType::Float32 && options.lossless && options.effort < 4)
+            return encode_error(ErrorCode::InvalidArgument, "lossless Float32 requires effort in [4,9] with libjxl 0.12; efforts 1-3 remain available for integer or lossy input");
+        return {};
+    }
+
     Status encode_jxl_memory(std::span<const uint8_t> input, int width, int height, int channels, SampleType type,
                              size_t stride, std::vector<uint8_t>& output, const JxlEncodeOptions& options) {
         std::vector<uint8_t> candidate;
@@ -592,7 +606,22 @@ namespace lfs::core::image_codecs {
     Status write_jxl(const std::filesystem::path& path, std::span<const uint8_t> input, int width, int height,
                      int channels, SampleType type, size_t stride, const JxlEncodeOptions& options, const AtomicFileOptions& publication) {
         try {
+            if (auto valid = validate_jxl_encode_options(options, type); !valid)
+                return valid;
             auto encoding = options;
+            if (!encoding.max_output_bytes) {
+                constexpr size_t minimum = size_t{256} * 1024 * 1024;
+                constexpr size_t overhead = 1024 * 1024;
+                encoding.max_output_bytes = minimum;
+                // Packed raw extent, not stride padding. Invalid views are rejected
+                // by encode_image; arithmetic here must remain safe before that.
+                const size_t sample = sample_bytes(type);
+                if (width > 0 && height > 0 && channels >= 1 && channels <= 4 && sample &&
+                    size_t(width) <= (SIZE_MAX - overhead) / 2 / size_t(height) / size_t(channels) / sample) {
+                    const size_t raw = size_t(width) * size_t(height) * size_t(channels) * sample;
+                    encoding.max_output_bytes = std::max(minimum, raw * 2 + overhead);
+                }
+            }
             encoding.cancelled = [a = options.cancelled, b = publication.cancelled] { return (a && a()) || (b && b()); };
             return writeFileAtomically(path, [&](FILE* stream) { return encode_image(input, width, height, channels, type, stride, encoding, [&](std::span<const uint8_t> bytes) -> Status {
                                                                      if (std::fwrite(bytes.data(), 1, bytes.size(), stream) != bytes.size()) {

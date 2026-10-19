@@ -66,9 +66,13 @@ namespace lfs::media {
     SinkResult validateJxlOutputOptions(const JxlOutputOptions& options) {
         return core::image_codecs::validate_jxl_encode_options({.lossless = options.lossless, .distance = options.distance, .effort = options.effort});
     }
+    SinkResult validateJxlOutputOptions(const JxlOutputOptions& options, FramePixelFormat format) {
+        return core::image_codecs::validate_jxl_encode_options({.lossless = options.lossless, .distance = options.distance, .effort = options.effort},
+                                                               format == FramePixelFormat::RGB8 ? core::image_codecs::SampleType::UInt8 : core::image_codecs::SampleType::Float32);
+    }
     SinkResult ImageOutput::writeJxl(const std::filesystem::path& path, const FrameView& frame, const JxlOutputOptions& options) {
         return outputBoundary([&]() -> SinkResult {
-            if (auto valid = validateJxlOutputOptions(options); !valid)
+            if (auto valid = validateJxlOutputOptions(options, frame.layout.format); !valid)
                 return valid;
             if (auto required = frame.requiredBytes(); !required)
                 return SinkResult::failure(required.error());

@@ -24,7 +24,7 @@ namespace lfs::media {
     struct JxlOutputOptions {
         bool lossless = true;
         float distance = 1.f;
-        int effort = 4;
+        int effort = 4; // Float32 lossless: 4..9; integer or lossy: 1..9.
         bool overwrite = false;
         std::function<bool()> cancelled;
     };

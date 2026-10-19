@@ -226,7 +226,7 @@ namespace lfs::app {
                     {"format", {{"type", "string"}, {"enum", option_names<FrameFileFormat>()}}},
                     {"tiff16_transfer", {{"type", "string"}, {"enum", {"linear", "srgb", "bt709"}}}},
                     {"jxl_distance", {{"type", "number"}, {"exclusiveMinimum", 0}, {"maximum", 25}}},
-                    {"jxl_effort", {{"type", "integer"}, {"minimum", 1}, {"maximum", 9}}},
+                    {"jxl_effort", {{"type", "integer"}, {"minimum", 1}, {"maximum", 9}, {"description", "Lossless Float32 requires effort 4..9; lossy allows 1..9"}}},
                     {"jpeg_quality", integer},
                     {"exr_precision", {{"type", "string"}, {"enum", option_names<ExrPrecision>()}}},
                     {"exr_compression", {{"type", "string"}, {"enum", option_names<ExrCompression>()}}},
@@ -362,6 +362,8 @@ namespace lfs::app {
                                    const bool exr = format == "exr";
                                    const bool tiff = format == "tiff16";
                                    const bool jxl = format == "jxl";
+                                   if (args.contains("jxl_effort") && (!args["jxl_effort"].is_number_integer() || args["jxl_effort"] < 1 || args["jxl_effort"] > 9))
+                                       return mcp::invalid_argument_result("JXL effort requires an integer in [1,9]; lossless Float32 requires [4,9]", "media.extract");
                                    if ((!exr && (args.contains("exr_precision") || args.contains("exr_compression"))) ||
                                        (!(exr || tiff || jxl) && (args.contains("overwrite") || args.contains("input_transfer") || args.contains("input_primaries") || args.contains("float_profile"))) ||
                                        ((exr || tiff || jxl) && (args.contains("jpeg_quality") || args.value("convert_hdr_to_sdr", false))) ||
@@ -388,7 +390,7 @@ namespace lfs::app {
                                    files.files.jxl.distance = args.value("jxl_distance", 1.f);
                                    files.files.jxl.effort = args.value("jxl_effort", 4);
                                    if (jxl)
-                                       if (const auto valid = validateJxlOutputOptions(files.files.jxl); !valid)
+                                       if (const auto valid = validateJxlOutputOptions(files.files.jxl, FramePixelFormat::RGBFloat32); !valid)
                                            return mcp::invalid_argument_result(std::string(valid.error().detail()), "media.extract");
                                    files.files.exr.precision = *precision;
                                    files.files.exr.compression = *compression;

@@ -65,4 +65,5 @@ namespace lfs::media {
     [[nodiscard]] LFS_MEDIA_API SinkResult validateExrOutputOptions(const ExrOutputOptions&);
     [[nodiscard]] LFS_MEDIA_API SinkResult validateTiff16OutputOptions(const Tiff16OutputOptions&);
     [[nodiscard]] LFS_MEDIA_API SinkResult validateJxlOutputOptions(const JxlOutputOptions&);
+    [[nodiscard]] LFS_MEDIA_API SinkResult validateJxlOutputOptions(const JxlOutputOptions&, FramePixelFormat);
 } // namespace lfs::media

@@ -143,8 +143,21 @@ more limited interoperability than integer level-5 images. Application reads
 still default to canonical sRGB; explicit Native reads are needed to compare
 lossless source samples. Lossy DATA color can differ from ORIGINAL color.
 
-Encoder limits are per call: 64 Mi pixels, 1 GiB tracked provider allocation
-payload and 256 MiB emitted encoded output by default. They are configurable
+Lossless Float32 requires effort 4..9 with libjxl 0.12, including positive-only
+input. Efforts 1..3 are rejected before provider allocation or file publication;
+they remain available for integer input and lossy Float32. Video-extraction
+preflight rejects the unsupported combination before creating an output
+folder. Requested effort is never changed silently. With alpha present, both
+color and extra-channel resampling are fixed at 1 so alpha remains exact even
+at lossy distance 10..25; high-distance files can therefore be larger than
+libjxl's automatically resampled output.
+
+Encoder limits are per call: 64 Mi pixels and 1 GiB tracked provider allocation
+payload. `max_output_bytes = 0` uses a 256 MiB memory-output cap; streamed file
+output instead uses `max(256 MiB, 2 * packed_raw_bytes + 1 MiB)`, with checked
+arithmetic. A nonzero value is an explicit hard cap for either API. This lets
+large lossless Float32 files exceed 256 MiB without raising the encoder RAM
+budget or staging a whole encoded file in memory. They are configurable
 through `JxlEncodeOptions`, and are separate from borrowed input, optional
 packing, the memory-result vector and library/CMS/runner overhead. They do not
 constitute a whole-process RAM bound or guarantee every allowed image can be
@@ -182,5 +195,8 @@ The existing generic display-byte writer and `save_image` also route `.jxl`
 through the shared lossless sRGB writer. Their existing UInt8 display-image
 policy remains in force; use `ImageOutput::writeJxl` for Float32 masters.
 JPEG quality does not select JXL lossiness in this compatibility path.
-Nonempty generic metadata comments are explicitly rejected for JXL pending
-the common metadata policy, rather than silently discarded.
+Nonempty explicit generic metadata comments are rejected for JXL pending the
+common metadata policy. The Python convenience binding omits its automatically
+generated provenance stamp for JXL in both full and minimal-provenance modes;
+this format-specific behavior is documented in its generated stub. Other
+formats retain their existing stamp policy.

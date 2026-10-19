@@ -11,17 +11,20 @@ namespace lfs::core::image_codecs {
     struct JxlEncodeOptions {
         bool lossless = true;
         float distance = 1.f; // Lossy perceptual distance, (0,25]; ignored for lossless.
-        int effort = 4;       // [1,9], explicit speed/compression tradeoff.
+        int effort = 4;       // [1,9]; lossless Float32 requires [4,9] with libjxl 0.12.
         JxlEncodingColor color = JxlEncodingColor::SRGB;
         bool premultiplied_alpha = false; // Float32 only; output alpha is straight.
         size_t pixels = 64u * 1024 * 1024;
         size_t encoder_bytes = size_t{1} << 30;
-        size_t max_output_bytes = 256u * 1024 * 1024;
+        // 0: memory output uses 256 MiB; files use max(256 MiB, 2*raw + 1 MiB).
+        // A nonzero value is an explicit hard limit for either output API.
+        size_t max_output_bytes = 0;
         size_t max_threads = 0; // Same bounded worker budget as JXL decoding.
         std::function<bool()> cancelled;
     };
     [[nodiscard]] LFS_IMAGE_CODECS_API uint32_t jxl_encoder_version();
     [[nodiscard]] LFS_IMAGE_CODECS_API Status validate_jxl_encode_options(const JxlEncodeOptions&);
+    [[nodiscard]] LFS_IMAGE_CODECS_API Status validate_jxl_encode_options(const JxlEncodeOptions&, SampleType);
     // Borrowed interleaved gray/gray-alpha/RGB/RGBA, native-endian UInt8/16 or
     // Float32. Explicit byte stride, finite samples and declared output color.
     // No implicit tone mapping, integer quantization, orientation or metadata

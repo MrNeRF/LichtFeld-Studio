@@ -195,6 +195,39 @@ class MediaBindings(unittest.TestCase):
         media.ImageOutput.write_jxl(path, frame, options)
         self.assertEqual(path.read_bytes(), original)
 
+    def test_jxl_lossless_float_effort_is_rejected_before_publication(self):
+        color = media.FrameColor()
+        color.transfer = media.ColorTransfer.Linear
+        color.primaries = media.ColorPrimaries.Bt709
+        frame = media.FrameSurface.from_bytes(1, 1, media.FramePixelFormat.RGBFloat32,
+                                              struct.pack("=3f", -0., -.25, 1.25), color=color)
+        options = media.JxlOutputOptions()
+        path = self.root / "jxl-effort-existing.jxl"
+        media.ImageOutput.write_jxl(path, frame, options)
+        original = path.read_bytes()
+        options.overwrite = True
+        for effort in (1, 2, 3):
+            options.effort = effort
+            for target in (path, self.root / "jxl-effort-new.jxl"):
+                with self.assertRaisesRegex(MEDIA_ERROR, "lossless Float32 requires effort"):
+                    media.ImageOutput.write_jxl(target, frame, options)
+            self.assertEqual(path.read_bytes(), original)
+            self.assertFalse((self.root / "jxl-effort-new.jxl").exists())
+            request = self.request()
+            request.output_format = media.FramePixelFormat.RGBFloat32
+            request.input_color.transfer = media.ColorTransfer.Linear
+            request.input_color.primaries = media.ColorPrimaries.Bt709
+            files = media.FileExtraction()
+            files.files.format = media.FrameFileFormat.JXL
+            files.files.output_directory = self.root / f"jxl-effort-preflight-{effort}"
+            files.files.jxl.effort = effort
+            with self.assertRaisesRegex(MEDIA_ERROR, "lossless Float32 requires effort"):
+                media.MediaIngest.extract_files(request, files)
+            self.assertFalse(files.files.output_directory.exists())
+        options.lossless = False
+        options.effort = 1
+        media.ImageOutput.write_jxl(self.root / "jxl-lossy-effort1.jxl", frame, options)
+
     def test_jxl_public_writer_and_lossless_lossy_sequences(self):
         color = media.FrameColor()
         color.transfer = media.ColorTransfer.Linear

@@ -480,49 +480,63 @@ namespace {
     }
 
     TEST_F(JxlCodec, EncoderLosslessFileMemoryAndIndependentReaderAgreeForEveryLayout) {
-        for (const auto type : {codec::SampleType::UInt8, codec::SampleType::UInt16, codec::SampleType::Float32})
-            for (bool padded : {false, true})
-                for (int channels = 1; channels <= 4; ++channels) {
-                    SCOPED_TRACE(::testing::Message() << "type=" << int(type) << ", channels=" << channels << ", padded=" << padded);
-                    const size_t sample = type == codec::SampleType::Float32 ? 4 : type == codec::SampleType::UInt16 ? 2
-                                                                                                                     : 1;
-                    const size_t row = 3 * channels * sample, stride = row + (padded ? 3 : 0);
-                    std::vector<uint8_t> pixels(stride + row + 1, 0xa5), expected(2 * row);
-                    for (int y = 0; y < 2; ++y)
-                        for (int x = 0; x < 3 * channels; ++x) {
-                            const size_t offset = y * row + x * sample;
-                            if (sample == 4) {
-                                const float value = (channels % 2 == 0 && x % channels == channels - 1) ? .5f : float(x - 2) / 4;
-                                std::memcpy(expected.data() + offset, &value, sample);
-                            } else if (sample == 2) {
-                                const uint16_t value = uint16_t(x * 5003 + y * 97);
-                                std::memcpy(expected.data() + offset, &value, sample);
-                            } else {
-                                expected[offset] = uint8_t(x * 17 + y * 3);
+        for (int effort : {1, 2, 3, 4, 5, 9})
+            for (const auto type : {codec::SampleType::UInt8, codec::SampleType::UInt16, codec::SampleType::Float32})
+                for (bool padded : {false, true})
+                    for (int channels = 1; channels <= 4; ++channels) {
+                        SCOPED_TRACE(::testing::Message() << "effort=" << effort << ", type=" << int(type) << ", channels=" << channels << ", padded=" << padded);
+                        const size_t sample = type == codec::SampleType::Float32 ? 4 : type == codec::SampleType::UInt16 ? 2
+                                                                                                                         : 1;
+                        const size_t row = 3 * channels * sample, stride = row + (padded ? 3 : 0);
+                        std::vector<uint8_t> pixels(stride + row + 1, 0xa5), expected(2 * row);
+                        for (int y = 0; y < 2; ++y)
+                            for (int x = 0; x < 3 * channels; ++x) {
+                                const size_t offset = y * row + x * sample;
+                                if (sample == 4) {
+                                    const float value = (channels % 2 == 0 && x % channels == channels - 1) ? .5f : (x == 0 ? -0.0f : float(x - 2) / 4);
+                                    std::memcpy(expected.data() + offset, &value, sample);
+                                } else if (sample == 2) {
+                                    const uint16_t value = uint16_t(x * 5003 + y * 97);
+                                    std::memcpy(expected.data() + offset, &value, sample);
+                                } else {
+                                    expected[offset] = uint8_t(x * 17 + y * 3);
+                                }
                             }
+                        if (channels % 2 == 0)
+                            std::fill_n(expected.data() + (channels - 1) * sample, sample, uint8_t{0});
+                        for (int y = 0; y < 2; ++y)
+                            std::memcpy(pixels.data() + 1 + y * stride, expected.data() + y * row, row);
+                        const auto original = pixels;
+                        codec::JxlEncodeOptions options;
+                        options.effort = effort;
+                        options.color = sample == 4 ? codec::JxlEncodingColor::LinearSRGB : codec::JxlEncodingColor::SRGB;
+                        std::vector<uint8_t> encoded{0x12};
+                        const auto status = codec::encode_jxl_memory(std::span(pixels).subspan(1), 3, 2, channels, type, stride, encoded, options);
+                        if (type == codec::SampleType::Float32 && effort < 4) {
+                            ASSERT_FALSE(status);
+                            EXPECT_EQ(status.error().code(), lfs::ErrorCode::InvalidArgument);
+                            EXPECT_NE(status.error().detail().find("[4,9]"), std::string_view::npos);
+                            EXPECT_EQ(encoded, (std::vector<uint8_t>{0x12}));
+                            const std::array<uint8_t, 1> sentinel{0x12};
+                            const auto path = write(sentinel);
+                            EXPECT_FALSE(codec::write_jxl(path, std::span(pixels).subspan(1), 3, 2, channels, type, stride, options));
+                            std::ifstream previous(path, std::ios::binary);
+                            EXPECT_EQ((std::vector<uint8_t>((std::istreambuf_iterator<char>(previous)), {})), (std::vector<uint8_t>{0x12}));
+                            continue;
                         }
-                    if (channels % 2 == 0)
-                        std::fill_n(expected.data() + (channels - 1) * sample, sample, uint8_t{0});
-                    for (int y = 0; y < 2; ++y)
-                        std::memcpy(pixels.data() + 1 + y * stride, expected.data() + y * row, row);
-                    const auto original = pixels;
-                    codec::JxlEncodeOptions options;
-                    options.color = sample == 4 ? codec::JxlEncodingColor::LinearSRGB : codec::JxlEncodingColor::SRGB;
-                    std::vector<uint8_t> encoded;
-                    const auto status = codec::encode_jxl_memory(std::span(pixels).subspan(1), 3, 2, channels, type, stride, encoded, options);
-                    ASSERT_TRUE(status) << (status ? "" : status.error().detail());
-                    EXPECT_EQ(direct_decode(encoded, channels, type), expected);
-                    codec::Image decoded;
-                    std::string error;
-                    ASSERT_TRUE(native_decode(encoded, decoded, error)) << error;
-                    EXPECT_EQ(decoded.data, expected);
-                    const auto path = write({});
-                    ASSERT_TRUE(codec::write_jxl(path, std::span(pixels).subspan(1), 3, 2, channels, type, stride, options));
-                    std::ifstream file(path, std::ios::binary);
-                    const std::vector<uint8_t> stored((std::istreambuf_iterator<char>(file)), {});
-                    EXPECT_EQ(stored, encoded);
-                    EXPECT_EQ(pixels, original);
-                }
+                        ASSERT_TRUE(status) << (status ? "" : status.error().detail());
+                        EXPECT_EQ(direct_decode(encoded, channels, type), expected);
+                        codec::Image decoded;
+                        std::string error;
+                        ASSERT_TRUE(native_decode(encoded, decoded, error)) << error;
+                        EXPECT_EQ(decoded.data, expected);
+                        const auto path = write({});
+                        ASSERT_TRUE(codec::write_jxl(path, std::span(pixels).subspan(1), 3, 2, channels, type, stride, options));
+                        std::ifstream file(path, std::ios::binary);
+                        const std::vector<uint8_t> stored((std::istreambuf_iterator<char>(file)), {});
+                        EXPECT_EQ(stored, encoded);
+                        EXPECT_EQ(pixels, original);
+                    }
     }
 
     TEST_F(JxlCodec, EncoderColorDeclarationsMatchTheSamplesWithoutImplicitConversion) {
@@ -659,6 +673,47 @@ namespace {
             }));
         for (auto& call : calls)
             EXPECT_EQ(call.get(), encoded);
+    }
+
+    TEST_F(JxlCodec, EncoderLossyHighDistanceKeepsEveryAlphaSample) {
+        constexpr int width = 128, height = 96;
+        for (auto type : {codec::SampleType::UInt8, codec::SampleType::UInt16, codec::SampleType::Float32})
+            for (int channels : {2, 4})
+                for (float distance : {9.9f, 10.f, 25.f}) {
+                    SCOPED_TRACE(::testing::Message() << int(type) << "/" << channels << "/" << distance);
+                    const size_t sample = type == codec::SampleType::UInt8 ? 1 : type == codec::SampleType::UInt16 ? 2
+                                                                                                                   : 4;
+                    std::vector<uint8_t> input(width * height * channels * sample);
+                    for (size_t i = 0; i < width * height * channels; ++i) {
+                        const uint32_t code = uint32_t((i * 97 + i / channels * 31) % 256);
+                        if (sample == 1)
+                            input[i] = uint8_t(code);
+                        else if (sample == 2) {
+                            const uint16_t value = uint16_t(code * 257);
+                            std::memcpy(input.data() + i * sample, &value, sample);
+                        } else {
+                            const float value = float(code) / 255.f;
+                            std::memcpy(input.data() + i * sample, &value, sample);
+                        }
+                    }
+                    codec::JxlEncodeOptions options;
+                    options.lossless = false;
+                    options.distance = distance;
+                    options.color = sample == 4 ? codec::JxlEncodingColor::LinearSRGB : codec::JxlEncodingColor::SRGB;
+                    std::vector<uint8_t> encoded;
+                    ASSERT_TRUE(codec::encode_jxl_memory(input, width, height, channels, type, width * channels * sample, encoded, options));
+                    const auto decoded = direct_decode(encoded, channels, type);
+                    ASSERT_EQ(decoded.size(), input.size());
+                    codec::Image app;
+                    std::string error;
+                    ASSERT_TRUE(native_decode(encoded, app, error)) << error;
+                    ASSERT_EQ(app.data.size(), input.size());
+                    for (size_t pixel = 0; pixel < width * height; ++pixel) {
+                        const auto offset = (pixel * channels + channels - 1) * sample;
+                        ASSERT_EQ(std::memcmp(decoded.data() + offset, input.data() + offset, sample), 0) << pixel;
+                        ASSERT_EQ(std::memcmp(app.data.data() + offset, input.data() + offset, sample), 0) << pixel;
+                    }
+                }
     }
 
     TEST_F(JxlCodec, EncoderFloatAlphaAndNonfiniteInputHaveExplicitPolicies) {

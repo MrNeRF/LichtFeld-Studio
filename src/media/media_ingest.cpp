@@ -143,7 +143,7 @@ namespace lfs::media {
                             return failure(ErrorCode::InvalidArgument, "JXL video extraction requires declared linear Float32 output; RGB8 sRGB is available for independent image writers", 0);
                         if (request.float_color_profile != FloatColorProfile::Sdr)
                             return failure(ErrorCode::Unsupported, "JXL extraction requires relative SDR; PQ/HLG masters require EXR", 0);
-                        if (auto valid = validateJxlOutputOptions(files->files.jxl); !valid)
+                        if (auto valid = validateJxlOutputOptions(files->files.jxl, request.output_format); !valid)
                             return std::move(valid).error();
                     }
                     if (files->files.output_directory.empty() ||
