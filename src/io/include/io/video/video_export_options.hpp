@@ -81,7 +81,7 @@ namespace lfs::io::video {
             return std::unexpected(std::string(*error));
         if (auto error = videoEncodingRangeError(options.framerate, options.crf))
             return std::unexpected(std::move(*error));
-        if (options.codec != media::VideoEncodeCodec::H264 && options.codec != media::VideoEncodeCodec::HEVC)
+        if (options.codec != media::VideoEncodeCodec::H264 && options.codec != media::VideoEncodeCodec::HEVC && options.codec != media::VideoEncodeCodec::AV1)
             return std::unexpected("Unknown video codec (got " + std::to_string(static_cast<int>(options.codec)) + ")");
 
         return {};

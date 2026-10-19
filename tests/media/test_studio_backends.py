@@ -351,6 +351,73 @@ class StudioBackends(unittest.TestCase):
                     self.assertEqual(probe["streams"][0]["codec_name"], codec)
                     self.assertEqual(len(probe["frames"]), 12)
 
+    @unittest.skipUnless(os.environ.get("LFS_MEDIA_TEST_NVENC_AV1") == "1",
+                         "requires explicit qualification on an AV1-capable NVENC GPU")
+    def test_native_av1_8k_extent(self):
+        path = self.root / "native-av1-8k.mp4"
+        actual, _ = self.invoke(operation="native-encode-session", output=str(path), av1=True,
+                                width=7680, height=4320, frames=2)
+        self.assertEqual(actual["backend"], "nvenc")
+        probe = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_streams", "-show_frames", "-of", "json", str(path)]))
+        stream = probe["streams"][0]
+        self.assertEqual((stream["codec_name"], stream["width"], stream["height"]), ("av1", 7680, 4320))
+        self.assertEqual(len(probe["frames"]), 2)
+        raw = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(path), "-vf", "scale=64:36",
+                                       "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"], timeout=60)
+        size = 64 * 36 * 3 // 2
+        self.assertEqual(len(raw), 2 * size)
+        for index in range(2):
+            luma = raw[index * size:index * size + 64 * 36]
+            self.assertLess(sum(abs(value - (32 + index * 16)) for value in luma) / len(luma), 3)
+
+    @unittest.skipUnless(os.environ.get("LFS_MEDIA_TEST_NVENC_AV1") == "1",
+                         "requires explicit qualification on an AV1-capable NVENC GPU")
+    def test_native_av1_quality_boundaries(self):
+        for crf in (1, 18, 51):
+            path = self.root / f"av1-quality-{crf}.mp4"
+            actual, _ = self.invoke(operation="native-encode-session", output=str(path), av1=True, crf=crf)
+            self.assertEqual(actual["backend"], "nvenc")
+            probe = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_streams", "-show_frames", "-of", "json", str(path)]))
+            self.assertEqual(probe["streams"][0]["codec_name"], "av1")
+            self.assertEqual(len(probe["frames"]), 12)
+
+    def test_av1_zero_quality_preserves_codec_on_native_or_cpu_fallback(self):
+        path = self.root / "av1-zero.mp4"
+        actual, _ = self.invoke(operation="native-encode", output=str(path), av1=True, crf=0, allow_software=True)
+        self.assertIn(actual["backend"], ("nvenc", "software"))
+        probe = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_streams", "-show_frames", "-of", "json", str(path)]))
+        self.assertEqual(probe["streams"][0]["codec_name"], "av1")
+        self.assertEqual(len(probe["frames"]), 12)
+        pixels = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(path), "-pix_fmt", "rgb24", "-f", "rawvideo", "-"])
+        size = 320 * 240 * 3
+        self.assertEqual(len(pixels), 12 * size)
+        for index in range(12):
+            frame = pixels[index * size:(index + 1) * size]
+            self.assertLess(sum(abs(value - (64 + index * 12)) for value in frame) / len(frame), 3)
+
+    @unittest.skipUnless(os.environ.get("LFS_MEDIA_TEST_NVENC_AV1") == "1",
+                         "requires explicit qualification on an AV1-capable NVENC GPU")
+    def test_native_av1_session_and_tensor_producer(self):
+        for operation in ("native-encode-session", "native-encode"):
+            with self.subTest(operation=operation):
+                path = self.root / (operation + "-av1.mp4")
+                actual, _ = self.invoke(operation=operation, output=str(path), av1=True, spherical=True)
+                if operation == "native-encode-session":
+                    self.assertEqual(actual["backend"], "nvenc")
+                probe = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_streams", "-show_frames", "-of", "json", str(path)]))
+                stream = probe["streams"][0]
+                self.assertEqual((stream["codec_name"], stream["codec_tag_string"], stream["pix_fmt"]), ("av1", "av01", "yuv420p"))
+                self.assertEqual(len(probe["frames"]), 12)
+                for index, frame in enumerate(probe["frames"]):
+                    self.assertAlmostEqual(float(frame["best_effort_timestamp_time"]), index / 10)
+                if operation == "native-encode-session":
+                    raw = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(path), "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"])
+                    size = 320 * 240 * 3 // 2
+                    self.assertEqual(len(raw), 12 * size)
+                    for index in range(12):
+                        luma = raw[index * size:index * size + 320 * 240]
+                        self.assertLess(sum(abs(value - (32 + index * 16)) for value in luma) / len(luma), 3)
+
     def test_native_session_preserves_distinct_queued_cuda_frames(self):
         path = self.root / "cuda-session.mp4"
         actual, _ = self.invoke(operation="native-encode-session", output=str(path))

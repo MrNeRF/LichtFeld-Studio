@@ -7,12 +7,15 @@
 
 namespace lfs::media {
     enum class VideoEncodeCodec { H264,
-                                  HEVC };
+                                  HEVC,
+                                  AV1 };
     [[nodiscard]] inline constexpr std::optional<VideoEncodeCodec> videoEncodeCodecFromId(std::string_view id) {
         if (id == "h264")
             return VideoEncodeCodec::H264;
         if (id == "hevc")
             return VideoEncodeCodec::HEVC;
+        if (id == "av1")
+            return VideoEncodeCodec::AV1;
         return std::nullopt;
     }
 } // namespace lfs::media

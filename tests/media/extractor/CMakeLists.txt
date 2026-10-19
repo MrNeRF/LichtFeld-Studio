@@ -164,3 +164,15 @@ if(WIN32)
     set_tests_properties(MediaJxlUInt16RoundTripContracts PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")
 endif()
+
+# Keep missing-provider/error paths deterministic on CPU CI, using real AOM output.
+add_executable(media_av1_provider_runner av1_provider_contracts.cpp encode_session_contracts.cpp)
+target_compile_features(media_av1_provider_runner PRIVATE cxx_std_23)
+target_compile_definitions(media_av1_provider_runner PRIVATE LFS_MEDIA_EXPORTS)
+target_include_directories(media_av1_provider_runner PRIVATE
+    ${MEDIA_ROOT}/src ${MEDIA_ROOT}/src/media/include ${MEDIA_ROOT}/src/core/include)
+target_include_directories(media_av1_provider_runner SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})
+target_link_libraries(media_av1_provider_runner PRIVATE lfs_file_io lfs_logger lfs_error ${FFMPEG_LIBRARIES} nlohmann_json::nlohmann_json)
+set_target_properties(media_av1_provider_runner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME MediaAv1ProviderFallbackContracts COMMAND media_av1_provider_runner)
+set_tests_properties(MediaAv1ProviderFallbackContracts PROPERTIES LABELS "media;cpu;offline" TIMEOUT 60)

@@ -290,6 +290,8 @@ nlohmann::json runNativeVideoContracts(const nlohmann::json& request) {
         options.spherical_video = request.value("spherical", false);
         if (request.value("hevc", false))
             options.codec = media::VideoEncodeCodec::HEVC;
+        if (request.value("av1", false))
+            options.codec = media::VideoEncodeCodec::AV1;
         auto opened = session.open(core::utf8_to_path(request.at("output").get<std::string>()), options);
         if (!opened)
             throw std::runtime_error(std::string(opened.error().detail()));
@@ -335,15 +337,20 @@ nlohmann::json runNativeVideoContracts(const nlohmann::json& request) {
     options.width = 320;
     options.height = 240;
     options.framerate = 10;
-    options.crf = 18;
+    options.crf = request.value("crf", 18);
     if (request.value("hevc", false))
         options.codec = media::VideoEncodeCodec::HEVC;
+    if (request.value("av1", false))
+        options.codec = media::VideoEncodeCodec::AV1;
     CudaStream stream;
     io::video::VideoEncoder encoder;
     auto opened = encoder.open(core::utf8_to_path(request.at("output").get<std::string>()), options);
     if (!opened)
         throw std::runtime_error(opened.error());
-    require(encoder.backend() == media::VideoEncodeBackend::Cuda, "native encoder silently fell back to software");
+    const auto actual_backend = encoder.backend();
+    require(actual_backend == media::VideoEncodeBackend::Cuda ||
+                (request.value("allow_software", false) && actual_backend == media::VideoEncodeBackend::Software),
+            "native encoder silently fell back to software");
     // Exercise all existing Studio producers through the shared session.
     std::vector<std::uint8_t> rgba(options.width * options.height * 4, 64);
     auto first = encoder.writeFrame(rgba, options.width, options.height);
@@ -374,5 +381,5 @@ nlohmann::json runNativeVideoContracts(const nlohmann::json& request) {
     if (!closed)
         throw std::runtime_error(closed.error());
     require(!encoder.isOpen() && encoder.close().has_value(), "native encoder close");
-    return {{"success", true}, {"backend", "nvenc"}, {"frames", 12}};
+    return {{"success", true}, {"backend", actual_backend == media::VideoEncodeBackend::Cuda ? "nvenc" : "software"}, {"frames", 12}};
 }
