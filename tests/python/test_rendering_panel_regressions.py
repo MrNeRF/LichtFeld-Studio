@@ -16,6 +16,7 @@ class _BindingModelStub:
     def __init__(self):
         self.bindings = {}
         self.func_bindings = {}
+        self.events = {}
         self.handle = _HandleStub()
 
     def bind(self, name, getter, setter):
@@ -24,8 +25,8 @@ class _BindingModelStub:
     def bind_func(self, name, getter):
         self.func_bindings[name] = getter
 
-    def bind_event(self, _name, _handler):
-        pass
+    def bind_event(self, name, handler):
+        self.events[name] = handler
 
     def bind_record_list(self, _name):
         pass

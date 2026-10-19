@@ -11,6 +11,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/resource_messages.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
@@ -19,6 +20,7 @@
 #include "gui/frustum_overlay_key.hpp"
 #include "gui/guide_segment_clipping.hpp"
 #include "gui/import_error.hpp"
+#include "gui/utils/native_drag_scheduler.hpp"
 #include "gui/viewport_gizmo_geometry.hpp"
 #include "gui/volume_guide_visibility.hpp"
 #include "gui/vram_hud_sample_policy.hpp"
@@ -168,6 +170,8 @@ namespace lfs::vis::gui {
         constexpr auto kInteractiveTrainingToggleMinInterval = std::chrono::milliseconds(3000);
 
         void setCursorIfChanged(SDL_Cursor* const cursor) {
+            if (NativeDragScheduler::ownsNativeCursor())
+                return;
             if (SDL_GetCursor() != cursor)
                 SDL_SetCursor(cursor);
         }
@@ -3605,7 +3609,7 @@ namespace lfs::vis::gui {
                 return std::nullopt;
             }
             std::error_code filesystem_error;
-            if (!std::filesystem::is_regular_file(paths->windowStateFile(), filesystem_error)) {
+            if (!lfs::core::native_fs::is_regular_file(paths->windowStateFile(), filesystem_error)) {
                 if (filesystem_error == std::make_error_code(std::errc::no_such_file_or_directory))
                     LOG_DEBUG("Unable to inspect window state: {}", filesystem_error.message());
                 else if (filesystem_error)
@@ -3655,7 +3659,7 @@ namespace lfs::vis::gui {
             try {
                 const auto path = paths->windowStateFile();
                 std::error_code error;
-                if (std::filesystem::exists(path, error)) {
+                if (lfs::core::native_fs::exists(path, error)) {
                     std::optional<nlohmann::json> old;
                     try {
                         old = lfs::core::persisted_settings::readObject(path);
@@ -3750,6 +3754,7 @@ namespace lfs::vis::gui {
         state.load();
         if (state.file_association == "declined")
             return;
+        ensureProjectFileAssociation();
         if (areFileAssociationsRegistered())
             return;
 
@@ -4426,8 +4431,8 @@ namespace lfs::vis::gui {
 #ifdef LFS_DEV_LOCALE_SOURCE_DIR
         {
             const auto source_locale_dir = lfs::core::utf8_to_path(LFS_DEV_LOCALE_SOURCE_DIR);
-            if (std::filesystem::exists(source_locale_dir) &&
-                std::filesystem::is_directory(source_locale_dir)) {
+            if (lfs::core::native_fs::exists(source_locale_dir) &&
+                lfs::core::native_fs::is_directory(source_locale_dir)) {
                 locale_dir = source_locale_dir;
             }
         }
@@ -4747,14 +4752,14 @@ namespace lfs::vis::gui {
 #ifdef LFS_DEV_RMLUI_SOURCE_DIR
         {
             const auto dir = lfs::core::utf8_to_path(LFS_DEV_RMLUI_SOURCE_DIR);
-            if (std::filesystem::exists(dir) && std::filesystem::is_directory(dir))
+            if (lfs::core::native_fs::exists(dir) && lfs::core::native_fs::is_directory(dir))
                 dev_resource_watch_.rml_dir = dir;
         }
 #endif
 #ifdef LFS_DEV_LOCALE_SOURCE_DIR
         {
             const auto dir = lfs::core::utf8_to_path(LFS_DEV_LOCALE_SOURCE_DIR);
-            if (std::filesystem::exists(dir) && std::filesystem::is_directory(dir))
+            if (lfs::core::native_fs::exists(dir) && lfs::core::native_fs::is_directory(dir))
                 dev_resource_watch_.locale_dir = dir;
         }
 #endif
@@ -4786,16 +4791,15 @@ namespace lfs::vis::gui {
                     return;
 
                 std::error_code ec;
-                if (!std::filesystem::exists(dir, ec) || ec ||
-                    !std::filesystem::is_directory(dir, ec) || ec) {
+                if (!lfs::core::native_fs::exists(dir, ec) || ec ||
+                    !lfs::core::native_fs::is_directory(dir, ec) || ec) {
                     if (ec)
                         result.scan_failed = true;
                     return;
                 }
 
                 try {
-                    std::filesystem::recursive_directory_iterator it(
-                        dir, std::filesystem::directory_options::skip_permission_denied, ec);
+                    std::filesystem::recursive_directory_iterator it(lfs::core::native_fs::traversal_path(dir), std::filesystem::directory_options::skip_permission_denied, ec);
                     const std::filesystem::recursive_directory_iterator end;
                     if (ec) {
                         result.scan_failed = true;
@@ -4813,11 +4817,11 @@ namespace lfs::vis::gui {
                         if (!watched)
                             continue;
 
-                        const auto mtime = std::filesystem::last_write_time(it->path(), entry_ec);
+                        const auto mtime = lfs::core::native_fs::last_write_time(it->path(), entry_ec);
                         if (entry_ec)
                             continue;
 
-                        const std::string key = lfs::core::path_to_utf8(it->path().lexically_normal());
+                        const std::string key = lfs::core::path_to_utf8(lfs::core::native_fs::entry_path(dir, it->path()).lexically_normal());
                         next_times[key] = mtime;
 
                         if (!detect_changes)
@@ -5262,6 +5266,7 @@ namespace lfs::vis::gui {
                     grid.projection = proj;
                     grid.view_projection = proj * view;
                     grid.view_position = panel.viewport->getTranslation();
+                    grid.pivot = panel.viewport->camera.getPivot();
                     grid.plane = rendering_manager->getGridPlaneForPanel(panel.panel);
                     grid.opacity = params.grid_opacity;
                     grid.orthographic = settings.orthographic;
@@ -5274,6 +5279,7 @@ namespace lfs::vis::gui {
                     params.grid_projection = first_grid.projection;
                     params.grid_view_projection = first_grid.view_projection;
                     params.grid_view_position = first_grid.view_position;
+                    params.grid_pivot = first_grid.pivot;
                     params.grid_orthographic = first_grid.orthographic;
                 }
             }
@@ -7105,7 +7111,10 @@ namespace lfs::vis::gui {
             viewer_->getWindowManager() &&
             viewer_->getWindowManager()->manualResizeEdgeMask() != 0;
         if (!window_resize_active) {
-            const auto rml_cursor = rmlui_manager_.consumeCursorRequest();
+            auto rml_cursor = rmlui_manager_.consumeCursorRequest();
+            if (const auto overlay_cursor = rml_viewport_overlay_.cursorRequest();
+                !block_underlay_input && overlay_cursor != RmlCursorRequest::None)
+                rml_cursor = overlay_cursor;
             const bool floating_resize_applied =
                 !floating_panel_cursor_hidden_ && has_floating_panels &&
                 reg.apply_floating_resize_cursor();
@@ -8226,7 +8235,7 @@ namespace lfs::vis::gui {
             size_t available_bytes = e.available_bytes;
             if (project_save) {
                 std::error_code space_error;
-                const auto space = std::filesystem::space(path.parent_path(), space_error);
+                const auto space = lfs::core::native_fs::space(path.parent_path(), space_error);
                 if (!space_error)
                     available_bytes = static_cast<size_t>(space.available);
             }
@@ -8843,7 +8852,7 @@ namespace lfs::vis::gui {
     }
 
     bool GuiManager::isViewportExportLocked() const {
-        return async_tasks_.isExporting() || async_tasks_.isExportingVideo();
+        return (async_tasks_.isExporting() && !async_tasks_.isDragExport()) || async_tasks_.isExportingVideo();
     }
 
     void GuiManager::setStartupPluginLoadState(const bool started,

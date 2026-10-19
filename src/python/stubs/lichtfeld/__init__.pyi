@@ -623,6 +623,17 @@ def focus_selection() -> bool:
     Focus the active viewport on the selection, or the whole scene when nothing is selected
     """
 
+def go_home() -> None:
+    """Move the active viewport to its home view"""
+
+def set_home() -> None:
+    """Make the active viewport's current view its home view"""
+
+def reset_home() -> None:
+    """
+    Restore the default home view of the active viewport and move the camera there
+    """
+
 def get_camera_navigation_mode() -> str:
     """
     Get the active camera navigation mode ('orbit', 'trackball', 'fpv', or 'drone')
@@ -2153,6 +2164,13 @@ class OptimizationParams:
     def cropbox_loss_weight(self, arg: float, /) -> None: ...
 
     @property
+    def cropbox_growth_inside(self) -> float:
+        """Share of new splats placed inside the active crop box"""
+
+    @cropbox_growth_inside.setter
+    def cropbox_growth_inside(self, arg: float, /) -> None: ...
+
+    @property
     def lambda_dssim(self) -> float:
         """Weight for structural similarity loss"""
 
@@ -2608,6 +2626,12 @@ class DatasetParams:
     @property
     def images(self) -> str:
         """Subfolder name containing images"""
+
+    @property
+    def init_path(self) -> str:
+        """
+        Training initialization file; empty when training starts from the dataset's points
+        """
 
     @property
     def test_every(self) -> int:

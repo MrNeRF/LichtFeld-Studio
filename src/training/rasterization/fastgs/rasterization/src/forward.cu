@@ -56,28 +56,23 @@ namespace {
             return static_cast<size_t>(n_instances) * sizeof(uint);
         }
 
-        [[nodiscard]] size_t key_buffer_offset_bytes() const noexcept {
-            constexpr size_t alignment = alignof(raster::InstanceKey);
-            const size_t bytes = per_index_buffer_bytes();
-            return (bytes + alignment - 1) & ~(alignment - 1);
-        }
-
         [[nodiscard]] raster::InstanceKey* keys_current() const noexcept {
-            return reinterpret_cast<raster::InstanceKey*>(base + key_buffer_offset_bytes());
+            return reinterpret_cast<raster::InstanceKey*>(base);
         }
 
         [[nodiscard]] raster::InstanceKey* keys_alternate() const noexcept {
             return reinterpret_cast<raster::InstanceKey*>(
-                base + key_buffer_offset_bytes() + per_key_buffer_bytes());
+                base + per_key_buffer_bytes());
         }
 
         [[nodiscard]] uint* primitive_indices_current() const noexcept {
-            return reinterpret_cast<uint*>(base);
+            // Both possible sort outputs must be disjoint from the retained phase prefix.
+            return reinterpret_cast<uint*>(base + 2 * per_key_buffer_bytes());
         }
 
         [[nodiscard]] uint* primitive_indices_alternate() const noexcept {
             return reinterpret_cast<uint*>(
-                base + key_buffer_offset_bytes() + 2 * per_key_buffer_bytes());
+                base + 2 * per_key_buffer_bytes() + per_index_buffer_bytes());
         }
 
         [[nodiscard]] void* cub_workspace() const noexcept {
@@ -482,13 +477,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             if (n > std::numeric_limits<size_t>::max() / bytes_per_instance) {
                 throw std::overflow_error("FastGS exact sort workspace size overflow");
             }
-            const size_t unaligned_data_bytes = n * bytes_per_instance;
-            const size_t data_padding =
-                n % 2 == 0 ? 0 : alignof(InstanceKey) - alignof(uint);
-            if (data_padding > std::numeric_limits<size_t>::max() - unaligned_data_bytes) {
-                throw std::overflow_error("FastGS exact sort workspace size overflow");
-            }
-            const size_t data_bytes = unaligned_data_bytes + data_padding;
+            const size_t data_bytes = n * bytes_per_instance;
             const size_t cub_offset_bytes = aligned_cub_workspace_offset(data_bytes);
             if (cub_bytes > std::numeric_limits<size_t>::max() - cub_offset_bytes) {
                 throw std::overflow_error("FastGS exact sort workspace size overflow");

@@ -208,6 +208,7 @@ namespace lfs::vis {
             bool polygon_closed = false;
             int dragged_polygon_vertex = -1;
             bool preview_dirty = false;
+            std::optional<std::size_t> preview_view_key;
             core::Tensor working_selection;
             core::Tensor live_delta_selection;
             bool ring_has_hit = false;
@@ -339,6 +340,7 @@ namespace lfs::vis {
         std::unordered_map<int, std::shared_ptr<core::Tensor>> testing_camera_screen_positions_;
         std::optional<ViewportInfo> testing_viewport_;
         std::optional<int> testing_hovered_gaussian_id_;
+        [[nodiscard]] std::size_t interactivePreviewViewKey(const ViewerViewportContext& context) const;
         mutable bool passive_ring_preview_key_valid_ = false;
         mutable std::size_t passive_ring_preview_key_ = 0;
         mutable bool passive_ring_has_hit_ = false;

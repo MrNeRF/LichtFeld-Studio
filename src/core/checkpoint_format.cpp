@@ -3,6 +3,7 @@
 
 #include "core/checkpoint_format.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -21,7 +22,7 @@ namespace lfs::core {
             }
 
             std::error_code size_error;
-            const auto file_size = std::filesystem::file_size(path, size_error);
+            const auto file_size = native_fs::file_size(path, size_error);
             if (size_error) {
                 return std::unexpected("Failed to inspect checkpoint size: " + size_error.message());
             }

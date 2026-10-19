@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "py_plugins.hpp"
+#include "core/native_fs.hpp"
 #include "py_ui.hpp"
 #include "python_runtime.hpp"
 
@@ -238,7 +239,7 @@ namespace lfs::python {
                 }
                 const auto directory = paths->pluginDataDir() / plugin_name;
                 std::error_code error;
-                std::filesystem::create_directories(directory, error);
+                lfs::core::native_fs::create_directories(directory, error);
                 if (error) {
                     throw std::runtime_error(
                         std::format("Unable to create plugin data directory '{}': {}",

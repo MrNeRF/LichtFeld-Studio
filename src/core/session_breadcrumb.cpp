@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/session_breadcrumb.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -27,7 +28,7 @@
 namespace lfs::core {
 
     namespace {
-        namespace fs = std::filesystem;
+        namespace fs = lfs::core::native_fs;
         using json = nlohmann::json;
 
         constexpr std::uintmax_t PREVIOUS_LOG_MAX_BYTES = 1024ULL * 1024ULL;

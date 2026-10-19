@@ -255,6 +255,9 @@ _vulkan_add_slang_shader(rasterize_forward               alphablend_shader.slang
 _vulkan_add_slang_shader(rasterize_forward_3dgut         alphablend_shader.slang EXPORT_MODE=0 LFS_3DGUT_RASTERIZE=1)
 _vulkan_add_slang_shader(rasterize_forward_plain         alphablend_shader.slang EXPORT_MODE=0 LFS_RASTER_OVERLAYS=0)
 _vulkan_add_slang_shader(rasterize_forward_3dgut_plain   alphablend_shader.slang EXPORT_MODE=0 LFS_3DGUT_RASTERIZE=1 LFS_RASTER_OVERLAYS=0)
+# Spark RAD scenes get their own 3DGUT variants so LOD-parent kernels stay out of the ordinary loop.
+_vulkan_add_slang_shader(rasterize_forward_3dgut_rad       alphablend_shader.slang EXPORT_MODE=0 LFS_3DGUT_RASTERIZE=1 LFS_SPARK_RAD_RASTER=1)
+_vulkan_add_slang_shader(rasterize_forward_3dgut_plain_rad alphablend_shader.slang EXPORT_MODE=0 LFS_3DGUT_RASTERIZE=1 LFS_RASTER_OVERLAYS=0 LFS_SPARK_RAD_RASTER=1)
 _vulkan_add_slang_shader(rasterize_forward_light         alphablend_shader.slang EXPORT_MODE=0 LFS_SKIP_DENSE_TILES=1)
 _vulkan_add_slang_shader(rasterize_forward_light_plain   alphablend_shader.slang EXPORT_MODE=0 LFS_RASTER_OVERLAYS=0 LFS_SKIP_DENSE_TILES=1)
 _vulkan_add_slang_shader(tile_batch_descriptors          tile_batch_shader.slang TILE_BATCH_ENTRY=2)

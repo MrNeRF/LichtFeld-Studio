@@ -77,7 +77,7 @@ PANEL_SPECS = {
     ),
     "histogram": _PanelSpec(
         "lfs_plugins.histogram_panel", "HistogramPanel", "lfs.histogram", "Histogram",
-        "BOTTOM_DOCK", 97, "rmlui/histogram_panel.rml", "FILL", (860, 660),
+        "BOTTOM_DOCK", 97, "rmlui/histogram_panel.rml", "FILL", (1000, 300),
         update_policy="dirty", has_poll=True,
     ),
     "scripts": _PanelSpec(
@@ -103,7 +103,7 @@ PANEL_SPECS = {
     "plugin_marketplace": _PanelSpec(
         "lfs_plugins.plugin_marketplace_panel", "PluginMarketplacePanel",
         "lfs.plugin_marketplace", "Plugin Marketplace", "FLOATING", 91,
-        "rmlui/plugin_marketplace.rml", "FILL", (770, 560),
+        "rmlui/plugin_marketplace.rml", "FILL", (840, 600),
         update_policy="dirty",
     ),
     "asset_manager": _PanelSpec(

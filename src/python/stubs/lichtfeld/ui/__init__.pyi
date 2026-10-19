@@ -229,6 +229,12 @@ def remember_camera_view_snap() -> bool:
 def set_remember_camera_view_snap(enabled: bool) -> None:
     """Enable or disable camera view snap persistence"""
 
+def take_splat_export_request() -> list[str]: ...
+
+def get_splat_drag_preferences() -> dict: ...
+
+def set_splat_drag_preferences(arg: dict, /) -> None: ...
+
 def scene_graph_selection_markers() -> bool:
     """Return whether Scene Graph selection markers are visible"""
 
@@ -401,9 +407,15 @@ def set_panel_enabled(panel_id: str, enabled: bool) -> None:
     """Enable or disable a panel by id"""
 
 def save_startup_sidebar() -> bool:
-    """Save the right sidebar as a startup default; .licht GUIL overrides it."""
+    """
+    Save the right sidebar as a startup default; saved .licht workspaces take precedence.
+    """
+
 def clear_startup_sidebar() -> None:
-    """Clear startup sidebar defaults without changing the current workspace."""
+    """
+    Clear startup sidebar defaults without changing the current project workspace.
+    """
+
 def reset_layout() -> str:
     """
     Reset the saved UI layout and apply the default dock arrangement immediately.
@@ -1949,6 +1961,11 @@ def open_mesh_file_dialog(start_dir: str = '') -> str:
     Open a file dialog to select a mesh file. Returns empty string if cancelled.
     """
 
+def open_init_file_dialog(start_dir: str = '') -> str:
+    """
+    Open a file dialog to select a training initialization file: a splat, point cloud or mesh. Returns empty string if cancelled.
+    """
+
 def open_checkpoint_file_dialog() -> str:
     """
     Open a file dialog to select a checkpoint file. Returns empty string if cancelled.
@@ -2131,6 +2148,34 @@ def is_ctrl_down() -> bool:
 
 def is_shift_down() -> bool:
     """Check if Shift is currently held"""
+
+def is_mouse_button_down(button: int = 0) -> bool:
+    """Check if a mouse button is held: 0 left, 1 right, 2 middle"""
+
+def begin_value_drag() -> bool:
+    """
+    Hide and lock the pointer for a value drag from a UI event handler. Motion keeps accumulating past the window edge; returns False when the pointer cannot be locked.
+    """
+
+def take_value_drag_delta() -> float:
+    """
+    Horizontal pointer motion in window points since the previous call during a value drag.
+    """
+
+def value_drag_state() -> str:
+    """
+    'active' while the value drag holds the pointer, 'cancelled' after Escape, the right button or focus loss ended it, otherwise 'idle'.
+    """
+
+def request_viewport_overlay_sync() -> None:
+    """
+    Run the viewport overlay's document sync on the next frame. It does not wake the frame loop; pair it with request_redraw when no input will arrive.
+    """
+
+def end_value_drag() -> None:
+    """
+    Release the value drag pointer lock and return the pointer to where the drag started.
+    """
 
 @overload
 def tr(key: str) -> str:
@@ -2772,6 +2817,18 @@ def apply_rendering_defaults() -> None:
     """
     Explicitly apply user defaults to the current project; other rendering fields are preserved.
     """
+
+def get_marketplace_preferences() -> dict:
+    """Get Marketplace preferences from the canonical user preferences store"""
+
+def set_marketplace_view(view: str) -> None:
+    """Set the Marketplace layout (card or list)"""
+
+def set_marketplace_git_checkout(enabled: bool) -> None:
+    """Set whether Marketplace installs use Git checkouts"""
+
+def reset_marketplace_preferences() -> None:
+    """Reset Marketplace layout and installation preferences"""
 
 def get_project_manager_preferences() -> dict:
     """

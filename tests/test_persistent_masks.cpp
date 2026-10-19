@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  *  - frozen GPU mask rebuilt once across N unchanged calls; rebuilt on range change
- *  - cropbox damping mask rebuilt once across unchanged steps; rebuilt on topology
+ *  - crop box damping follows each view and box move; a disabled box installs nothing
  */
 
 #include "core/camera.hpp"
@@ -14,6 +14,7 @@
 #include "training/trainer.hpp"
 #include "training_cropbox_mask.hpp"
 
+#include <cmath>
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
@@ -84,9 +85,76 @@ TEST(PersistentMasksTest, FrozenMaskRebuiltOnceAcrossUnchangedCalls) {
     EXPECT_EQ(frozen_mask_rebuild_count(), 3u);
 }
 
-// Cropbox damping: rebuild exactly once across N unchanged installs; again on
-// topology (N) change. Geometry fingerprint also invalidates (cropbox move).
-TEST(PersistentMasksTest, CropboxDampingRebuiltOnceAcrossUnchangedSteps) {
+// Catches crop damping that lags the view or the box: splats inside, in front of or behind the box
+// in this view train at full rate, the rest at cropbox_lr_scale, and a moved box applies at once.
+TEST(PersistentMasksTest, CropboxViewDampingFollowsTheViewAndTheBox) {
+    Scene scene;
+    // Trainer(scene) requires cameras (hasTrainingData).
+    const auto cameras = scene.addGroup("Cameras");
+    const auto train_group = scene.addCameraGroup("Training", cameras, 1);
+    scene.addCamera("camera.png", train_group, make_test_camera());
+
+    auto model = make_splat(5);
+    {
+        auto cpu = model->means().cpu();
+        float* p = cpu.ptr<float>();
+        // Inside the box at z = 10, behind it, in front of it, beside it, behind but off-axis.
+        const float centres[] = {0, 0, 10, 0, 0, 20, 0, 0, 5, 5, 0, 10, 0, 5, 20};
+        std::copy(std::begin(centres), std::end(centres), p);
+        model->means() = cpu.to(Device::CUDA);
+        // Small splats, so their footprint margin stays well inside the gaps between them.
+        model->scaling_raw() = Tensor::from_vector(std::vector<float>(15, std::log(0.01f)), {size_t{5}, size_t{3}}, Device::CUDA);
+    }
+    auto* model_ptr = model.get();
+    const auto model_id = scene.addSplat("Model", std::move(model));
+    scene.setTrainingModelNode("Model");
+    const auto cropbox_id = scene.addCropBox("Model_cropbox", model_id);
+    CropBoxData cropbox;
+    cropbox.min = {-1, -1, -1};
+    cropbox.max = {1, 1, 1};
+    cropbox.enabled = true;
+    cropbox.inverse = false;
+    scene.setCropBoxData(cropbox_id, cropbox);
+    scene.setNodeTransform("Model_cropbox", glm::translate(glm::mat4(1.f), glm::vec3(0.f, 0.f, 10.f)));
+
+    Trainer trainer(scene);
+    TrainerCropboxMaskTestAccess::set_cropbox_lr_scale(trainer, 0.1f);
+    AdamConfig cfg{.lr = 0.001f};
+    AdamOptimizer opt(*model_ptr, cfg);
+    const auto camera = make_test_camera();
+    const auto damped = [&] {
+        TrainerCropboxMaskTestAccess::refresh(trainer);
+        TrainerCropboxMaskTestAccess::install_view(trainer, *model_ptr, opt, *camera);
+        if (!opt.crop_damping_mask().is_valid())
+            return std::vector<bool>{};
+        const auto values = opt.crop_damping_mask().to(DataType::Float32).cpu().to_vector();
+        return std::vector<bool>(values.begin(), values.end());
+    };
+
+    EXPECT_EQ(damped(), (std::vector<bool>{false, false, false, true, true}));
+    EXPECT_FALSE(TrainerCropboxMaskTestAccess::contains_camera(trainer, *camera));
+
+    // A box around the camera: its pixels are weighted by the surface they show.
+    scene.setNodeTransform("Model_cropbox", glm::mat4(1.f));
+    TrainerCropboxMaskTestAccess::refresh(trainer);
+    EXPECT_TRUE(TrainerCropboxMaskTestAccess::contains_camera(trainer, *camera));
+
+    scene.setNodeTransform("Model_cropbox", glm::translate(glm::mat4(1.f), glm::vec3(5.f, 0.f, 10.f)));
+    EXPECT_EQ(damped(), (std::vector<bool>{true, true, true, false, true}))
+        << "a moved box must apply on the next step";
+
+    TrainerCropboxMaskTestAccess::set_cropbox_lr_scale(trainer, 1.0f);
+    EXPECT_TRUE(damped().empty()) << "scale 1 installs no damping";
+    TrainerCropboxMaskTestAccess::set_cropbox_lr_scale(trainer, 0.1f);
+
+    // A published snapshot replaces the scene read: the viewer says there is no box.
+    trainer.setCropBoxSnapshot(std::nullopt);
+    EXPECT_TRUE(damped().empty());
+    EXPECT_FALSE(TrainerCropboxMaskTestAccess::snapshot(trainer).has_value());
+}
+
+// Catches training changes when the crop box is off: no box, no masks, no ROI geometry.
+TEST(PersistentMasksTest, DisabledCropboxInstallsNothing) {
     Scene scene;
     // Trainer(scene) requires cameras (hasTrainingData).
     const auto cameras = scene.addGroup("Cameras");
@@ -116,7 +184,7 @@ TEST(PersistentMasksTest, CropboxDampingRebuiltOnceAcrossUnchangedSteps) {
     CropBoxData cropbox;
     cropbox.min = {-1, -1, -1};
     cropbox.max = {1, 1, 1};
-    cropbox.enabled = true;
+    cropbox.enabled = false;
     cropbox.inverse = false;
     scene.setCropBoxData(cropbox_id, cropbox);
     scene.setNodeTransform("Model_cropbox", glm::translate(glm::mat4(1.f), glm::vec3(10.f, 0.f, 0.f)));
@@ -125,26 +193,10 @@ TEST(PersistentMasksTest, CropboxDampingRebuiltOnceAcrossUnchangedSteps) {
     TrainerCropboxMaskTestAccess::set_cropbox_lr_scale(trainer, 0.1f);
     AdamConfig cfg{.lr = 0.001f};
     AdamOptimizer opt(*model_ptr, cfg);
-
-    TrainerCropboxMaskTestAccess::reset_rebuild_count(trainer);
-    TrainerCropboxMaskTestAccess::install(trainer, *model_ptr, opt);
-    EXPECT_EQ(TrainerCropboxMaskTestAccess::rebuild_count(trainer), 1u);
-    ASSERT_TRUE(opt.crop_damping_mask().is_valid());
-    EXPECT_EQ(opt.crop_damping_mask().numel(), 5u);
-
-    for (int i = 0; i < 8; ++i) {
-        TrainerCropboxMaskTestAccess::install(trainer, *model_ptr, opt);
-    }
-    EXPECT_EQ(TrainerCropboxMaskTestAccess::rebuild_count(trainer), 1u)
-        << "unchanged cropbox/topology must not rebuild the damping mask";
-
-    // Scale change forces rebuild (cache key includes scale).
-    TrainerCropboxMaskTestAccess::set_cropbox_lr_scale(trainer, 0.2f);
-    TrainerCropboxMaskTestAccess::install(trainer, *model_ptr, opt);
-    EXPECT_EQ(TrainerCropboxMaskTestAccess::rebuild_count(trainer), 2u);
-
-    // Cropbox transform change → geometry fingerprint miss → rebuild.
-    scene.setNodeTransform("Model_cropbox", glm::translate(glm::mat4(1.f), glm::vec3(11.f, 0.f, 0.f)));
-    TrainerCropboxMaskTestAccess::install(trainer, *model_ptr, opt);
-    EXPECT_EQ(TrainerCropboxMaskTestAccess::rebuild_count(trainer), 3u);
+    TrainerCropboxMaskTestAccess::refresh(trainer);
+    TrainerCropboxMaskTestAccess::install_view(trainer, *model_ptr, opt, *make_test_camera());
+    TrainerCropboxMaskTestAccess::install_score(trainer, *model_ptr, opt);
+    EXPECT_FALSE(TrainerCropboxMaskTestAccess::snapshot(trainer).has_value());
+    EXPECT_FALSE(opt.crop_damping_mask().is_valid());
+    EXPECT_FALSE(opt.crop_score_mask().is_valid());
 }

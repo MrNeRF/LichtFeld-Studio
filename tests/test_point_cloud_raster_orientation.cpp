@@ -18,6 +18,7 @@
 #include <optional>
 #include <string>
 #include <tuple>
+#include <vector>
 
 namespace {
 
@@ -138,6 +139,70 @@ namespace {
                                                                                                                               : "Equirectangular";
             return std::string(name) + (transparent ? "Rgba" : "Rgb");
         });
+
+    TEST(PointCloudRasterTest, ClippedTargetMatchesFullRenderColumns) {
+        int device_count = 0;
+        if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        constexpr int width = 64;
+        constexpr int height = 32;
+        constexpr int origin_x = 40;
+        std::vector<float> means;
+        std::vector<float> rgb;
+        for (int i = 0; i < 200; ++i) {
+            means.insert(means.end(), {static_cast<float>(i % 20) * 0.2f - 2.0f,
+                                       static_cast<float>(i / 20) * 0.2f - 1.0f,
+                                       -3.0f - static_cast<float>(i % 7) * 0.1f});
+            rgb.insert(rgb.end(), {static_cast<float>(i % 5) / 4.0f, static_cast<float>(i % 3) / 2.0f, 0.5f});
+        }
+        auto positions = Tensor::from_vector(means, {200, 3}, Device::CUDA);
+        auto colors = Tensor::from_vector(rgb, {200, 3}, Device::CUDA);
+        const glm::mat4 view(1.0f);
+        const auto projection = lfs::rendering::createProjectionMatrix(
+            {width, height}, 60.0f, false, 1.0f, 0.1f, 100.0f);
+        const auto render = [&](const int target_width, const int origin) {
+            auto image = Tensor::empty({3, height, static_cast<size_t>(target_width)}, Device::CUDA);
+            auto depth = Tensor::empty({1, height, static_cast<size_t>(target_width)}, Device::CUDA);
+            lfs::rendering::pcraster::LaunchParams params{};
+            params.positions = positions.ptr<float>();
+            params.colors = colors.ptr<float>();
+            params.n_points = 200;
+            std::copy_n(glm::value_ptr(view), 16, params.view);
+            std::copy_n(glm::value_ptr(projection), 16, params.view_proj);
+            params.width = target_width;
+            params.height = height;
+            params.camera_width = width;
+            params.camera_height = height;
+            params.origin_x = origin;
+            params.channels = 3;
+            params.focal_y = height / 2.0f;
+            params.voxel_size = 0.05f;
+            params.scaling_modifier = 1.0f;
+            params.far_plane = 100.0f;
+            params.bg_a = 1.0f;
+            params.image = image.ptr<float>();
+            params.depth = depth.ptr<float>();
+            params.stream = image.stream();
+            EXPECT_EQ(lfs::rendering::pcraster::launchPointCloudRaster(params), cudaSuccess);
+            EXPECT_EQ(cudaStreamSynchronize(params.stream), cudaSuccess);
+            return image.cpu().to_vector();
+        };
+        const auto full = render(width, 0);
+        const auto clipped = render(width - origin_x, origin_x);
+        int covered = 0;
+        for (int channel = 0; channel < 3; ++channel) {
+            for (int y = 0; y < height; ++y) {
+                for (int x = 0; x < width - origin_x; ++x) {
+                    const float expected = full[(channel * height + y) * width + origin_x + x];
+                    ASSERT_EQ(clipped[(channel * height + y) * (width - origin_x) + x], expected)
+                        << "channel " << channel << " x " << x << " y " << y;
+                    covered += channel == 2 && expected > 0.0f;
+                }
+            }
+        }
+        EXPECT_GT(covered, 0);
+    }
 
     TEST(ViewportArtifactServiceTest, PointCloudDepthUsesTopDownRows) {
         int device_count = 0;

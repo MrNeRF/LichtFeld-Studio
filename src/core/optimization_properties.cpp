@@ -146,6 +146,15 @@ namespace lfs::core::param {
             .precision(3)
             .ui_step(0.01)
             .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::cropbox_growth_inside,
+                        "cropbox_growth_inside", "ROI growth inside", d.cropbox_growth_inside, 0.0f, 1.0f,
+                        "Share of new splats placed inside the active crop box")
+            .locale("training.advanced.cropbox_growth_inside")
+            .tooltip("training.tooltip.cropbox_growth_inside")
+            .precision(2)
+            .ui_step(0.05)
+            .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
 
             // Loss parameters
             .all_strategies()
@@ -837,6 +846,15 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.extent")
             .precision(1)
             .ui_step(0.5)
+            .all_strategies()
+            .int_prop(&OptimizationParameters::init_mesh_resolution,
+                      "init_mesh_resolution", "Mesh Init Resolution", d.init_mesh_resolution,
+                      Mesh2SplatOptions::kMinResolution, kMaxInitMeshResolution,
+                      "Mesh2Splat raster resolution when the init file is a mesh; lowered automatically to fit the splat budget")
+            .locale("training.init.mesh_resolution")
+            .tooltip("training.tooltip.mesh_resolution")
+            .precision(0)
+            .ui_step(128)
 
             // Sparsity
             .all_strategies()

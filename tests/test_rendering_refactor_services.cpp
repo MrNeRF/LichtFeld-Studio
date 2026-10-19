@@ -5,7 +5,6 @@
 #include "core/editor_context.hpp"
 #include "core/error_bus.hpp"
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
@@ -21,6 +20,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
+#include "tools/unified_tool_registry.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -344,14 +344,12 @@ namespace lfs::vis {
     protected:
         void SetUp() override {
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
             services().clear();
         }
 
         void TearDown() override {
             services().clear();
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
         }
     };
 
@@ -537,16 +535,18 @@ namespace lfs::vis {
     protected:
         void SetUp() override {
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
             services().clear();
             op::undoHistory().clear();
+            UnifiedToolRegistry::instance().clearActiveTool();
         }
 
         void TearDown() override {
+            // The crop commands activate the crop box tool in the process-wide registry; a
+            // later input test would otherwise route its drags to the crop box.
+            UnifiedToolRegistry::instance().clearActiveTool();
             op::undoHistory().clear();
             services().clear();
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
         }
     };
 
@@ -1909,6 +1909,33 @@ namespace lfs::vis {
         ASSERT_EQ(state.cropboxes.size(), 1u);
         EXPECT_EQ(state.cropboxes.front().parent_node_index, 0);
         EXPECT_FALSE(scene.hasPreparedCombinedModel());
+    }
+
+    TEST_F(SceneManagerRenderStateTest, PlyComparisonPairsVisibleMeshesAfterSplats) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        auto mesh = std::make_shared<lfs::core::MeshData>();
+        mesh->vertices = lfs::core::Tensor::from_vector(
+            std::vector<float>{0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f}, {3, 3}, lfs::core::Device::CPU);
+        mesh->indices = lfs::core::Tensor::from_vector(
+            std::vector<int32_t>{0, 1, 2}, {1, 3}, lfs::core::Device::CPU);
+        const auto mesh_id = scene.addMesh("mesh", mesh);
+        scene.setNodeVisibility(scene.addMesh("hidden", mesh), false);
+        const auto splat_id = scene.addSplat("splat", makeTestSplat(0.0f));
+
+        const auto nodes = plyComparisonNodes(scene);
+        ASSERT_EQ(nodes.size(), 2u);
+        EXPECT_EQ(nodes[0].node->id, splat_id);
+        EXPECT_TRUE(nodes[0].splat_slot.has_value());
+        EXPECT_EQ(nodes[1].node->id, mesh_id);
+        EXPECT_FALSE(nodes[1].splat_slot.has_value());
+
+        const auto right = resolvePlyComparisonDepthSample(scene, 0, SplitViewPanelId::Right);
+        ASSERT_NE(right.node, nullptr);
+        EXPECT_EQ(right.node->id, mesh_id);
+        EXPECT_EQ(right.model, nullptr);
+        EXPECT_EQ(right.visible_index, -1);
     }
 
     TEST_F(SceneManagerRenderStateTest, PlyComparisonConsolidatedUsesPreparedCombinedWithoutRebuild) {

@@ -4,6 +4,7 @@
 
 import lichtfeld as lf
 import threading
+import shutil
 
 from .asset_index import AssetIndex, resolve_asset_manager_storage_path, resolve_default_asset_directory
 from .asset_watch import scan_all_asset_folders, scan_asset_folder
@@ -14,6 +15,11 @@ from .types import Panel
 from .rendering_defaults import RenderingDefaultsSection, vignette_value, set_vignette_value
 from .ui import PanelStateBinding, RuntimeState
 from .panels import panel_class
+from .marketplace_preferences import (
+    read_preferences as read_marketplace_preferences,
+    reset_preferences as reset_marketplace_preferences,
+    set_preference as set_marketplace_preference,
+)
 from .project_manager_preferences import (
     read_preferences as read_project_manager_preferences,
     reset_preferences as reset_project_manager_preferences,
@@ -97,6 +103,7 @@ class PreferencesPanel(Panel):
         self._theme_families = []
         self._language_catalog = []
         self._last_state = None
+        self._marketplace_git_available = shutil.which("git") is not None
         self._section = "general"
         self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
         self._mcp_enabled = True
@@ -142,6 +149,12 @@ class PreferencesPanel(Panel):
         model.bind_func("show_viewport", lambda: self._section == "viewport")
         model.bind_event("show_viewport", lambda *_: self._set_section("viewport"))
         model.bind_func("panel_label", lambda: lf.ui.tr("preferences.title"))
+        model.bind_func("marketplace_git_available", lambda: self._marketplace_git_available)
+        model.bind_func("show_marketplace", lambda: self._section == "marketplace")
+        model.bind_event("show_marketplace", lambda *_: self._set_section("marketplace"))
+        for key in ("view", "git_checkout"):
+            model.bind("marketplace_" + key, lambda k=key: read_marketplace_preferences()[k],
+                       lambda value, k=key: self._set_marketplace_preference(k, value))
         model.bind_func("show_general", lambda: self._section == "general")
         model.bind_func("show_appearance", lambda: self._section == "appearance")
         model.bind_func("show_input", lambda: self._section == "input")
@@ -218,6 +231,10 @@ class PreferencesPanel(Panel):
             lf.ui.scene_graph_selection_markers,
             self._set_scene_graph_selection_markers,
         )
+        for key in ("format", "sh_degree", "up_axis"):
+            model.bind("splat_drag_" + key,
+                       lambda k=key: self._get_splat_drag_preference(k),
+                       lambda value, k=key: self._set_splat_drag_preference(k, value))
         model.bind("mcp_enabled", lambda: self._mcp_enabled, self._set_mcp_enabled)
         model.bind("mcp_expose_network", lambda: self._mcp_expose_network, self._set_mcp_expose_network)
         model.bind("mcp_port", lambda: self._mcp_port, self._set_mcp_port)
@@ -381,6 +398,7 @@ class PreferencesPanel(Panel):
 
     def _state(self):
         project_manager_preferences = read_project_manager_preferences()
+        splat_drag_preferences = lf.ui.get_splat_drag_preferences()
         return (
             lf.ui.get_theme(),
             lf.ui.get_theme_family(),
@@ -390,6 +408,7 @@ class PreferencesPanel(Panel):
             lf.ui.get_viewport_toolbar_position(),
             float(lf.ui.get_ui_scale_preference()),
             bool(lf.ui.get_native_floating_windows()),
+            tuple(splat_drag_preferences[key] for key in ("format", "sh_degree", "up_axis")),
             self._scene_upscaler(),
             self._scene_upscaler_preset(),
             lf.ui.get_current_language(),
@@ -401,6 +420,7 @@ class PreferencesPanel(Panel):
             lf.get_camera_view_snap_enabled(),
             getattr(lf.ui, "get_embed_dataset_by_default", lambda: False)(),
             lf.project_auto_save_on_close_enabled(),
+            tuple(read_marketplace_preferences().values()),
             project_manager_preferences["defaultView"],
             project_manager_preferences["openAtStartup"],
             project_manager_preferences["rememberState"],
@@ -876,6 +896,26 @@ class PreferencesPanel(Panel):
             lf.set_camera_view_snap_enabled(lf.get_camera_view_snap_enabled())
         self._refresh_selection()
 
+    def _get_splat_drag_preference(self, key):
+        value = lf.ui.get_splat_drag_preferences()[key]
+        return value if key == "format" else str(value)
+
+    def _set_splat_drag_preference(self, key, value):
+        if self._mcp_safe_mode:
+            return
+        if key != "format":
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                return
+        if key == "sh_degree" and not 0 <= value <= 3:
+            return
+        if key == "up_axis" and value not in (-2, 2, -3, 3):
+            return
+        lf.ui.set_splat_drag_preferences({key: value})
+        if self._handle:
+            self._handle.dirty("splat_drag_" + key)
+
     def _set_scene_graph_selection_markers(self, enabled):
         if self._mcp_safe_mode:
             return
@@ -1017,6 +1057,21 @@ class PreferencesPanel(Panel):
         reload_preferences = getattr(panel, "reload_project_manager_preferences", None)
         if callable(reload_preferences):
             reload_preferences()
+
+    @staticmethod
+    def _notify_marketplace_preferences_changed():
+        panel = lf.ui.get_panel_object("lfs.plugin_marketplace")
+        reload_preferences = getattr(panel, "reload_marketplace_preferences", None)
+        if callable(reload_preferences):
+            reload_preferences()
+
+    def _set_marketplace_preference(self, key, value):
+        if key == "git_checkout" and value and not self._marketplace_git_available:
+            return
+        set_marketplace_preference(key, value)
+        self._notify_marketplace_preferences_changed()
+        if self._handle:
+            self._handle.dirty("marketplace_" + key)
 
     def _set_project_manager_default_view(self, value):
         try:
@@ -1356,7 +1411,7 @@ class PreferencesPanel(Panel):
 
     def _consume_section_request(self):
         section = lf.ui.take_preferences_section_request()
-        if section in ("general", "appearance", "viewport", "input", "interface", "file_associations", "mcp"):
+        if section in ("general", "appearance", "viewport", "input", "interface", "file_associations", "mcp", "marketplace"):
             if section == "file_associations" and not self._has_file_associations():
                 return
             self._set_section(section)
@@ -1438,6 +1493,7 @@ class PreferencesPanel(Panel):
                 "has_file_associations",
                 "show_mcp",
                 "show_portal",
+                "show_marketplace",
                 "show_section_reset",
                 "reset_section_label",
             ):
@@ -1574,7 +1630,7 @@ class PreferencesPanel(Panel):
                 return
             errors = [
                 self._reset_section(section)
-                for section in ("general", "appearance", "viewport", "input", "interface", "mcp")
+                for section in ("general", "appearance", "viewport", "input", "interface", "marketplace", "mcp")
             ]
             errors.append(lf.ui.reset_window_state())
             error = next((item for item in errors if item), None)
@@ -1613,6 +1669,9 @@ class PreferencesPanel(Panel):
             reset_project_manager_preferences()
             self._notify_project_manager_preferences_changed()
             self._read_project_location()
+        elif section == "marketplace":
+            reset_marketplace_preferences()
+            self._notify_marketplace_preferences_changed()
         elif section == "appearance":
             if hasattr(lf.ui, "set_theme_vignette_style"):
                 lf.ui.set_theme_vignette_style(0.3, 0.7, 0.5)
@@ -1640,6 +1699,8 @@ class PreferencesPanel(Panel):
             lf.ui.set_native_floating_windows(False)
             if not self._mcp_safe_mode:
                 lf.ui.set_scene_graph_selection_markers(False)
+                lf.ui.set_splat_drag_preferences({"format": "ply", "sh_degree": 3, "up_axis": -2})
+            self._refresh_selection()
             return lf.ui.reset_layout()
         elif section == "mcp":
             if not self._mcp_safe_mode:
@@ -1677,10 +1738,14 @@ class PreferencesPanel(Panel):
             self._handle.dirty("remember_navigation")
             self._handle.dirty("remember_view_snap")
             self._handle.dirty("scene_graph_selection_markers")
+            for key in ("format", "sh_degree", "up_axis"):
+                self._handle.dirty("splat_drag_" + key)
             self._dirty_mcp()
             self._dirty_project_location()
             self._handle.dirty("embed_dataset_by_default")
             self._handle.dirty("auto_save_on_close")
+            self._handle.dirty("marketplace_view")
+            self._handle.dirty("marketplace_git_checkout")
             self._handle.dirty("project_manager_default_view")
             self._handle.dirty("project_manager_open_at_startup")
             self._handle.dirty("project_manager_remember_state")

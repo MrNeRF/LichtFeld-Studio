@@ -7,6 +7,7 @@
 #include "core/image_codecs.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
@@ -58,7 +59,7 @@ namespace lfs::rendering {
             if (requested.empty() || requested.is_absolute()) {
                 return requested;
             }
-            if (std::filesystem::exists(requested)) {
+            if (lfs::core::native_fs::exists(requested)) {
                 return requested;
             }
 
@@ -68,7 +69,7 @@ namespace lfs::rendering {
                 lfs::core::getExecutableDir() / "assets" / requested,
             };
             for (const auto& candidate : candidates) {
-                if (std::filesystem::exists(candidate)) {
+                if (lfs::core::native_fs::exists(candidate)) {
                     return candidate;
                 }
             }
@@ -91,7 +92,7 @@ namespace lfs::rendering {
             return std::unexpected("Environment map path is empty");
         }
         const std::string path_utf8 = lfs::core::path_to_utf8(resolved_path);
-        if (!std::filesystem::exists(resolved_path)) {
+        if (!lfs::core::native_fs::exists(resolved_path)) {
             return std::unexpected(std::format("Environment map not found: {}", path_utf8));
         }
 
@@ -143,13 +144,13 @@ namespace lfs::rendering {
         const auto resolved_path = resolveEnvironmentPath(environment_path);
         if (resolved_path.empty())
             throw std::runtime_error("Environment map path is empty");
-        auto extension = resolved_path.extension().string();
+        auto extension = lfs::core::path_to_utf8(resolved_path.extension());
         std::transform(extension.begin(), extension.end(), extension.begin(),
                        [](const unsigned char value) { return static_cast<char>(std::tolower(value)); });
         if (extension == ".hdr") {
             if (!lfs::core::image_codecs::radiance_scanlines_complete(resolved_path)) {
                 const auto path_utf8 = lfs::core::path_to_utf8(resolved_path);
-                throw std::runtime_error(std::filesystem::exists(resolved_path)
+                throw std::runtime_error(lfs::core::native_fs::exists(resolved_path)
                                              ? std::format("Environment map pixel data is incomplete: {}", path_utf8)
                                              : std::format("Environment map not found: {}", path_utf8));
             }
@@ -534,8 +535,9 @@ namespace lfs::rendering {
             }
 
             const glm::mat4 view = request.frame_view.getViewMatrix();
+            const glm::ivec2 camera_size = request.frame_view.cameraSize();
             const glm::mat4 projection = createProjectionMatrix(
-                request.frame_view.size,
+                camera_size,
                 focalLengthToVFov(request.frame_view.focal_length_mm),
                 request.frame_view.orthographic,
                 request.frame_view.ortho_scale,
@@ -592,13 +594,17 @@ namespace lfs::rendering {
             std::copy_n(glm::value_ptr(view_proj), 16, params.view_proj);
             params.width = width;
             params.height = height;
+            params.camera_width = camera_size.x;
+            params.camera_height = camera_size.y;
+            params.origin_x = request.frame_view.subregion_origin.x;
+            params.origin_y = request.frame_view.subregion_origin.y;
             params.channels = channels;
             params.equirectangular = request.render.equirectangular;
             params.orthographic = request.frame_view.orthographic;
             params.ortho_scale = request.frame_view.ortho_scale;
             params.focal_y = lfs::core::fov2focal(
                 focalLengthToVFovRad(request.frame_view.focal_length_mm),
-                request.frame_view.size.y);
+                camera_size.y);
             params.voxel_size = request.render.voxel_size;
             params.scaling_modifier = request.render.scaling_modifier;
             params.far_plane = request.frame_view.far_plane;

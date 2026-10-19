@@ -18,18 +18,22 @@ src/io/project/span_streambuf.hpp:setg(first, first, first);
 src/io/project/span_streambuf.hpp:setg(first, first,
 
 # --- text-mode: deliberate line-oriented or /proc reads (not structured binary)
-src/io/cache_image_loader.cpp:std::ifstream meminfo("/proc/meminfo");
+src/io/cache_image_loader.cpp:std::ifstream meminfo(lfs::core::native_fs::native_path("/proc/meminfo"));
 src/io/formats/colmap.cpp:if (!lfs::core::open_file_for_read(file_path, file)) {
-src/io/formats/colmap.cpp:std::ifstream points_stream(points_path);
-src/io/formats/colmap.cpp:std::ofstream stream(path, std::ios::trunc);
-src/io/formats/ply.cpp:std::ifstream stream(path);
-src/io/formats/rad.cpp:std::ifstream meminfo("/proc/meminfo");
+src/io/formats/colmap.cpp:std::ifstream points_stream(lfs::core::native_fs::native_path(points_path));
+src/io/formats/colmap.cpp:std::ofstream stream(lfs::core::native_fs::native_path(path), std::ios::trunc);
+src/io/formats/ply.cpp:std::ifstream stream(lfs::core::native_fs::native_path(path));
+src/io/formats/rad.cpp:std::ifstream meminfo(lfs::core::native_fs::native_path("/proc/meminfo"));
 src/io/formats/transforms.cpp:if (!lfs::core::open_file_for_read(dir_path / "train.txt", train_file)) {
 src/io/formats/transforms.cpp:if (!lfs::core::open_file_for_read(dir_path / "test.txt", val_file)) {
-src/io/ply_to_rad_lod.cpp:std::ifstream meminfo("/proc/meminfo");
+src/io/ply_to_rad_lod.cpp:std::ifstream meminfo(lfs::core::native_fs::native_path("/proc/meminfo"));
 src/training/metrics/metrics.cpp:if (lfs::core::open_file_for_write(csv_path_, csv_file)) {
 src/training/metrics/metrics.cpp:if (lfs::core::open_file_for_write(csv_path_, std::ios::app, csv_file)) {
 src/training/metrics/metrics.cpp:if (!lfs::core::open_file_for_write(txt_path_, report_file)) {
 src/training/metrics/metrics.cpp:if (lfs::core::open_file_for_write(eval_dir / "per_image_metrics.csv", per_image_csv)) {
-src/training/training_snapshot_service.cpp:std::ifstream input("/proc/self/status");
-src/training/training_snapshot_service.cpp:std::ifstream input("/proc/meminfo");
+src/training/training_snapshot_service.cpp:std::ifstream input(lfs::core::native_fs::native_path("/proc/self/status"));
+src/training/training_snapshot_service.cpp:std::ifstream input(lfs::core::native_fs::native_path("/proc/meminfo"));
+
+src/io/formats/colmap.cpp:std::ifstream points_stream(lfs::core::native_fs::native_path(points_path));
+src/io/formats/colmap.cpp:std::ofstream stream(lfs::core::native_fs::native_path(path), std::ios::trunc);
+src/io/formats/ply.cpp:std::ifstream stream(lfs::core::native_fs::native_path(path));

@@ -165,13 +165,13 @@ def test_independent_scalar_drag_cancel_release_and_threshold():
     assert values["scale"] == pytest.approx(0.83, abs=1e-15)
 
 
-def test_scrub_drag_precision_modifiers_and_mid_drag_change():
+def test_scrub_drag_acceleration_modifiers_and_mid_drag_change():
     module = import_module("lfs_plugins.scrub_fields")
     rows = [
         ("plain", [(10, {})], 50),
-        ("shift", [(10, {"shift_key": True})], 41),
-        ("ctrl", [(10, {"ctrl_key": True})], 100),
-        ("change", [(5, {}), (2, {"shift_key": True}), (1, {"ctrl_key": True})], 55),
+        ("shift", [(5, {"shift_key": True})], 90),
+        ("ctrl", [(5, {"ctrl_key": True})], 90),
+        ("change", [(5, {}), (2, {"shift_key": True}), (1, {"ctrl_key": True})], 75),
     ]
     for _, moves, expected in rows:
         values = {"speed": 40}

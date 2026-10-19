@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "rad.hpp"
+#include "core/native_fs.hpp"
 #include "rad_dequant_math.hpp"
 
 #include "io/cuda/rad_encode_quant.hpp"
@@ -3318,11 +3319,11 @@ namespace lfs::io {
             const std::size_t chunk_area_start) {
             RadSourceStamp stamp;
             std::error_code ec;
-            stamp.file_size = std::filesystem::file_size(rad_path, ec);
+            stamp.file_size = lfs::core::native_fs::file_size(rad_path, ec);
             if (ec) {
                 return std::unexpected(std::format("Failed to stat RAD file: {}", ec.message()));
             }
-            const auto mtime = std::filesystem::last_write_time(rad_path, ec);
+            const auto mtime = lfs::core::native_fs::last_write_time(rad_path, ec);
             if (ec) {
                 return std::unexpected(std::format("Failed to read RAD mtime: {}", ec.message()));
             }
@@ -3531,7 +3532,7 @@ namespace lfs::io {
                 return static_cast<std::size_t>(status.ullAvailPhys);
             }
 #else
-            std::ifstream meminfo("/proc/meminfo");
+            std::ifstream meminfo(lfs::core::native_fs::native_path("/proc/meminfo"));
             std::string line;
             while (std::getline(meminfo, line)) {
                 if (line.rfind("MemAvailable:", 0) == 0) {
@@ -4609,7 +4610,7 @@ namespace lfs::io {
             std::chrono::high_resolution_clock::now() - start);
 
         // Get file size
-        auto file_size = std::filesystem::file_size(options.output_path);
+        auto file_size = lfs::core::native_fs::file_size(options.output_path);
         LOG_INFO("RAD saved: {} gaussians, {:.1f} MB in {}ms",
                  splat_data.size(),
                  static_cast<double>(file_size) / (1024.0 * 1024.0),
@@ -4658,7 +4659,7 @@ namespace lfs::io {
                 meta_path_ = rad_meta_sidecar_path(rad_path);
                 {
                     std::error_code ec;
-                    const auto space = std::filesystem::space(meta_path_.parent_path(), ec);
+                    const auto space = lfs::core::native_fs::space(meta_path_.parent_path(), ec);
                     if (!ec && space.available < total_bytes + (std::uint64_t{1} << 28)) {
                         return std::unexpected(
                             std::format("not enough disk space for sidecar: need {} GB, {} GB free",
@@ -4688,7 +4689,7 @@ namespace lfs::io {
                             "failed to size sidecar temp file: {}", io_error_detail()));
                     }
                 }
-                out_.open(tmp_path_, std::ios::binary | std::ios::in | std::ios::out);
+                out_.open(lfs::core::native_fs::native_path(tmp_path_), std::ios::binary | std::ios::in | std::ios::out);
                 if (!out_.is_open()) {
                     removeTmp();
                     return std::unexpected(std::format(
@@ -4775,7 +4776,7 @@ namespace lfs::io {
                 out_.close();
 
                 std::error_code rename_ec;
-                std::filesystem::rename(tmp_path_, meta_path_, rename_ec);
+                lfs::core::native_fs::rename(tmp_path_, meta_path_, rename_ec);
                 if (rename_ec) {
                     removeTmp();
                     open_ = false;
@@ -4804,7 +4805,7 @@ namespace lfs::io {
         private:
             void removeTmp() {
                 std::error_code ec;
-                std::filesystem::remove(tmp_path_, ec);
+                lfs::core::native_fs::remove(tmp_path_, ec);
             }
 
             RadMetaHeader header_{};
@@ -5572,7 +5573,7 @@ namespace lfs::io {
         const auto meta_path = rad_meta_sidecar_path(rad_path);
         {
             std::error_code ec;
-            const auto space = std::filesystem::space(meta_path.parent_path(), ec);
+            const auto space = lfs::core::native_fs::space(meta_path.parent_path(), ec);
             if (!ec && space.available < total_bytes + (std::uint64_t{1} << 28)) {
                 return make_error(ErrorCode::WRITE_FAILURE,
                                   std::format("Not enough disk space for sidecar: need {} GB, {} GB free",
@@ -5594,7 +5595,7 @@ namespace lfs::io {
             ~TmpGuard() {
                 if (!keep) {
                     std::error_code ec;
-                    std::filesystem::remove(path, ec);
+                    lfs::core::native_fs::remove(path, ec);
                 }
             }
         } tmp_guard{.path = tmp_path};
@@ -5662,7 +5663,7 @@ namespace lfs::io {
                         record_error("Failed to open RAD file for sidecar build");
                         return;
                     }
-                    scratch.out.open(tmp_path, std::ios::binary | std::ios::in | std::ios::out);
+                    scratch.out.open(lfs::core::native_fs::native_path(tmp_path), std::ios::binary | std::ios::in | std::ios::out);
                     if (!scratch.out.is_open()) {
                         record_error(std::format("Failed to open sidecar temp file: {}", io_error_detail()));
                         return;
@@ -5788,7 +5789,7 @@ namespace lfs::io {
         }
 
         {
-            std::fstream rmw(tmp_path, std::ios::binary | std::ios::in | std::ios::out);
+            std::fstream rmw(lfs::core::native_fs::native_path(tmp_path), std::ios::binary | std::ios::in | std::ios::out);
             if (!rmw.is_open()) {
                 return make_error(ErrorCode::WRITE_FAILURE,
                                   std::format("Failed to reopen sidecar temp file: {}", io_error_detail()),
@@ -5821,7 +5822,7 @@ namespace lfs::io {
         }
 
         std::error_code rename_ec;
-        std::filesystem::rename(tmp_path, meta_path, rename_ec);
+        lfs::core::native_fs::rename(tmp_path, meta_path, rename_ec);
         if (rename_ec) {
             // A concurrent builder may have won the race; adopt its result if
             // it validates, otherwise surface the rename failure.

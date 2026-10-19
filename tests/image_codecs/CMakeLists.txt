@@ -30,6 +30,8 @@ add_executable(lichtfeld_image_codec_tests
     ../test_exr_codecs.cpp
     ../test_image_codec_dependencies.cpp
     ../test_tiff_orientation.cpp
+    ../test_stb_paths.cpp
+    ${LFS_CODEC_ROOT}/src/io/stb_image_impl.cpp
     ${LFS_CODEC_ROOT}/src/core/image_codecs.cpp
     ${LFS_CODEC_ROOT}/src/core/image_exr.cpp)
 target_compile_features(lichtfeld_image_codec_tests PRIVATE cxx_std_20)
@@ -43,6 +45,10 @@ target_link_libraries(lichtfeld_image_codec_tests PRIVATE
 if(MSVC)
     target_compile_options(lichtfeld_image_codec_tests PRIVATE /utf-8 /W4)
     target_compile_definitions(lichtfeld_image_codec_tests PRIVATE NOMINMAX)
+endif()
+if(WIN32 AND MSVC)
+    target_sources(lichtfeld_image_codec_tests PRIVATE ../native_filesystem_test.manifest)
+    target_compile_definitions(lichtfeld_image_codec_tests PRIVATE LFS_REQUIRE_LONG_PATHS_DISABLED)
 endif()
 add_test(NAME lichtfeld_image_codec_tests COMMAND lichtfeld_image_codec_tests)
 set_tests_properties(lichtfeld_image_codec_tests PROPERTIES LABELS "fast;image;cpu" TIMEOUT 120)

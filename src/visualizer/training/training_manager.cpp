@@ -10,6 +10,7 @@
 #include "core/events.hpp"
 #include "core/guarded_task.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
 #include "core/reactive/store.hpp"
@@ -28,6 +29,7 @@
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat/Ops.h"
 #include "training/rasterization/gsplat_rasterizer.hpp"
+#include "training/training_cropbox_mask.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/post_work_utils.hpp"
@@ -1238,6 +1240,12 @@ namespace lfs::vis {
         return getCurrentIteration() == *checkpoint_baseline_iteration_;
     }
 
+    void TrainerManager::syncCropBox() {
+        if (!trainer_ || !scene_)
+            return;
+        trainer_->setCropBoxSnapshot(lfs::training::resolve_training_cropbox_geom(*scene_));
+    }
+
     bool TrainerManager::startTraining() {
         LOG_TIMER("TrainerManager::startTraining");
 
@@ -1393,7 +1401,7 @@ namespace lfs::vis {
         if (!trainer_->isInitialized() && params.init_path && !params.init_path->empty()) {
             std::error_code path_error;
             const auto init_path = lfs::core::utf8_to_path(*params.init_path);
-            if (!std::filesystem::exists(init_path, path_error)) {
+            if (!lfs::core::native_fs::exists(init_path, path_error)) {
                 const auto reason = path_error
                                         ? std::format("Cannot access training initialization file '{}': {}",
                                                       *params.init_path,
@@ -1848,6 +1856,7 @@ namespace lfs::vis {
         completion_pending_.store(true, std::memory_order_release);
 
         last_training_error_.clear();
+        syncCropBox();
         auto worker = std::make_unique<std::jthread>(
             [this](const std::stop_token stop_token) {
                 trainingInitializationThreadFunc(stop_token);

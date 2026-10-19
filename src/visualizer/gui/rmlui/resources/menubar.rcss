@@ -456,7 +456,7 @@ body {
 
 .menu-item .checkmark {
     width: 16dp;
-    margin-left: 4dp;
+    margin-left: 12dp;
     flex-shrink: 0;
     white-space: nowrap;
     text-align: center;
@@ -474,6 +474,7 @@ body {
     margin-left: 24dp;
     flex-shrink: 0;
     white-space: nowrap;
+    text-align: left;
 }
 
 .menu-item .submenu-arrow {

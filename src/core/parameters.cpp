@@ -5,6 +5,7 @@
 #include "core/parameters.hpp"
 #include "core/file_extensions.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
@@ -535,7 +536,7 @@ namespace lfs::core {
             }
 
             std::expected<nlohmann::json, std::string> read_json_file(const std::filesystem::path& path) {
-                if (!std::filesystem::exists(path)) {
+                if (!lfs::core::native_fs::exists(path)) {
                     return std::unexpected(std::format("Config file not found: {}", path_to_utf8(path)));
                 }
 
@@ -750,7 +751,7 @@ namespace lfs::core {
                 auto absolute = std::filesystem::absolute(utf8_to_path(std::string(path)), error);
                 if (error)
                     return std::string(path);
-                auto canonical = std::filesystem::weakly_canonical(absolute, error);
+                auto canonical = lfs::core::native_fs::weakly_canonical(absolute, error);
                 return path_to_utf8((error ? absolute : canonical).lexically_normal());
             };
             if (const auto file = eval_mask_splat_file(spec))
@@ -897,6 +898,10 @@ namespace lfs::core {
                 return std::format("init_num_pts must be positive (got {})", init_num_pts);
             if (!std::isfinite(init_extent) || init_extent <= 0.0f)
                 return std::format("init_extent must be finite and positive (got {})", init_extent);
+            if (init_mesh_resolution < Mesh2SplatOptions::kMinResolution ||
+                init_mesh_resolution > kMaxInitMeshResolution)
+                return std::format("init_mesh_resolution must be within [{}, {}] (got {})",
+                                   Mesh2SplatOptions::kMinResolution, kMaxInitMeshResolution, init_mesh_resolution);
             if (!std::isfinite(init_scaling) || init_scaling <= 0.0f)
                 return std::format("init_scaling must be finite and positive (got {})", init_scaling);
             if (!std::isfinite(init_opacity) || init_opacity <= 0.0f || init_opacity >= 1.0f)
@@ -966,6 +971,7 @@ namespace lfs::core {
                 std::pair{"min_opacity", min_opacity},
                 std::pair{"cropbox_lr_scale", cropbox_lr_scale},
                 std::pair{"cropbox_loss_weight", cropbox_loss_weight},
+                std::pair{"cropbox_growth_inside", cropbox_growth_inside},
                 std::pair{"mask_threshold", mask_threshold},
                 std::pair{"prune_opacity", prune_opacity},
                 std::pair{"grow_fraction", grow_fraction},
@@ -1071,7 +1077,7 @@ namespace lfs::core {
                     if (path.empty()) {
                         return "--add-splat path cannot be empty";
                     }
-                    if (!add_splats_applied && !std::filesystem::exists(path)) {
+                    if (!add_splats_applied && !lfs::core::native_fs::exists(path)) {
                         return std::format("Added splat does not exist: '{}'",
                                            lfs::core::path_to_utf8(path));
                     }
@@ -1089,7 +1095,7 @@ namespace lfs::core {
                 return "--data-path project.licht and --resume are mutually exclusive";
             }
             if (project_path) {
-                auto extension = project_path->extension().string();
+                auto extension = lfs::core::path_to_utf8(project_path->extension());
                 std::ranges::transform(
                     extension, extension.begin(),
                     [](const unsigned char character) {
@@ -1105,7 +1111,7 @@ namespace lfs::core {
                 }
             }
             if (resume_project) {
-                auto resume_extension = resume_project->extension().string();
+                auto resume_extension = lfs::core::path_to_utf8(resume_project->extension());
                 std::ranges::transform(
                     resume_extension, resume_extension.begin(),
                     [](const unsigned char character) {
@@ -1141,7 +1147,7 @@ namespace lfs::core {
                 if (optimization.ppisp_sidecar_path.empty()) {
                     return "PPISP sidecar freeze requires a sidecar path";
                 }
-                if (!std::filesystem::exists(optimization.ppisp_sidecar_path)) {
+                if (!lfs::core::native_fs::exists(optimization.ppisp_sidecar_path)) {
                     return std::format("PPISP sidecar does not exist: '{}'",
                                        lfs::core::path_to_utf8(optimization.ppisp_sidecar_path));
                 }

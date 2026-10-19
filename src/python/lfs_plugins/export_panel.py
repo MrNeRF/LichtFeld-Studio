@@ -3,7 +3,7 @@
 """Export panel for exporting scene nodes."""
 
 import html
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Set
 from enum import IntEnum
 
@@ -317,9 +317,9 @@ class ExportPanel(Panel):
     def on_mount(self, doc):
         super().on_mount(doc)
         self._doc = doc
-        self._exporting = False
+        self._cached_export_state = self._export_state()
+        self._exporting = bool(self._cached_export_state.get("active", False))
         self._last_progress = -1.0
-        self._cached_export_state = {}
         self._selection_seeded = False
         self._last_node_key = None
         self._last_colmap_source_path = ""
@@ -380,7 +380,9 @@ class ExportPanel(Panel):
             rml_widgets.request_model_update(self._handle)
 
     def on_update(self, doc):
-        if self._exporting:
+        # Drag export can start outside this panel. Opening it during that job
+        # must show progress directly, without exposing the manual export form.
+        if self._exporting or self._export_state().get("active", False):
             dirty = self._update_export_progress()
             dirty |= self._scrub_fields.sync_all()
             return dirty
@@ -393,6 +395,18 @@ class ExportPanel(Panel):
             return True
 
         dirty = False
+        requested = lf.ui.take_splat_export_request()
+        if requested:
+            self._selected_nodes = set(requested)
+            self._selection_seeded = True
+            self._pinned_sh_degree = True
+            self._last_node_key = None
+            if self._format == ExportFormat.COLMAP:
+                self._format = ExportFormat.PLY
+                self._rebuild_format_records()
+                self._dirty_model()
+            self._dirty_model("export_label", "can_export", "export_error_text")
+            dirty = True
         current_lang = lf.ui.get_current_language()
         if current_lang != self._last_lang:
             self._last_lang = current_lang

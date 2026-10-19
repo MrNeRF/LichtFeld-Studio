@@ -7,6 +7,7 @@
 #include "core/alloc_counter.hpp"
 #include "core/camera.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include <algorithm>
@@ -237,7 +238,7 @@ namespace lfs::training {
         if (cameras.empty())
             return 0.0f;
         const auto count = std::count_if(cameras.begin(), cameras.end(), [](const auto& cam) {
-            auto ext = cam->image_path().extension().string();
+            auto ext = lfs::core::path_to_utf8(cam->image_path().extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             return ext != ".jpg" && ext != ".jpeg";
         });

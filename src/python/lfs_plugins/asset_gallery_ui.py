@@ -7,7 +7,7 @@ import time
 import copy
 import threading
 from .gallery_logging import failure as log_failure
-from pathlib import Path
+from _lfs_path_io import Path
 
 import lichtfeld as lf
 from .gallery_messages import tr, localize_message

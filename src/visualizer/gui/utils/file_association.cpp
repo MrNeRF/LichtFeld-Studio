@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/utils/file_association.hpp"
+#include <core/native_fs.hpp>
 
 #ifdef _WIN32
 #include <array>
@@ -25,6 +26,7 @@ namespace lfs::vis::gui {
             const wchar_t* ext;
             const wchar_t* prog_id;
             const wchar_t* friendly_name;
+            bool owned = false; // LichtFeld's own format, so it may take the class default
         };
 
         constexpr wchar_t REGISTERED_APP_NAME[] = L"LichtFeld Studio";
@@ -32,6 +34,9 @@ namespace lfs::vis::gui {
         constexpr wchar_t CAPABILITIES_FILE_ASSOCIATIONS_PATH[] =
             L"Software\\LichtFeldStudio\\Capabilities\\FileAssociations";
         constexpr wchar_t REGISTERED_APPLICATIONS_PATH[] = L"Software\\RegisteredApplications";
+        constexpr wchar_t SETTINGS_PATH[] = L"Software\\LichtFeldStudio";
+        constexpr wchar_t PROJECT_ASSOCIATION_VALUE[] = L"ProjectFileAssociation";
+        constexpr wchar_t PROJECT_ASSOCIATION_DISABLED[] = L"disabled";
         constexpr wchar_t APPLICATION_DESCRIPTION[] =
             L"LichtFeld Studio supports PLY, SOG, SSOG (.ssog, lod-meta.json), SPZ, RAD, USD, USDA, USDC, and USDZ splat files, and LICHT project files.";
 
@@ -45,7 +50,7 @@ namespace lfs::vis::gui {
             {L".usda", L"LichtFeldStudio.usda", L"USDA Gaussian Splat"},
             {L".usdc", L"LichtFeldStudio.usdc", L"USDC Gaussian Splat"},
             {L".usdz", L"LichtFeldStudio.usdz", L"USDZ Gaussian Splat"},
-            {L".licht", L"LichtFeldStudio.licht", L"LichtFeld Studio Project"},
+            {L".licht", L"LichtFeldStudio.licht", L"LichtFeld Studio Project", true},
         }};
 
         bool setRegString(HKEY parent, const std::wstring& subkey, const std::wstring& value_name,
@@ -246,10 +251,12 @@ namespace lfs::vis::gui {
                                paths.command);
 
             const auto ext_key = paths.classes + ext.ext;
-            // Register as an available handler only. Windows should keep the effective
-            // default app decision in the system-managed Default Apps flow.
+            // Shared formats register as an available handler only, leaving the default to the Default Apps flow.
+            // LichtFeld's own format also becomes the class default; a choice made in Default Apps still wins.
             ok &= setRegString(HKEY_CURRENT_USER, ext_key + L"\\OpenWithProgids", ext.prog_id,
                                L"");
+            if (ext.owned)
+                ok &= setRegString(HKEY_CURRENT_USER, ext_key, L"", ext.prog_id);
             ok &= setRegString(HKEY_CURRENT_USER, paths.application_key + L"\\SupportedTypes",
                                ext.ext, L"");
             ok &= setRegString(HKEY_CURRENT_USER, CAPABILITIES_FILE_ASSOCIATIONS_PATH, ext.ext,
@@ -351,6 +358,14 @@ namespace lfs::vis::gui {
             SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
         }
 
+        void setProjectAssociationOptOut(const bool opted_out) {
+            if (opted_out)
+                setRegString(HKEY_CURRENT_USER, SETTINGS_PATH, PROJECT_ASSOCIATION_VALUE,
+                             PROJECT_ASSOCIATION_DISABLED);
+            else
+                deleteRegValue(HKEY_CURRENT_USER, SETTINGS_PATH, PROJECT_ASSOCIATION_VALUE);
+        }
+
     } // namespace
 
     bool registerFileAssociation(std::string_view extension) {
@@ -361,6 +376,8 @@ namespace lfs::vis::gui {
         const auto paths = currentAssociationPaths();
         bool ok = registerExtensionRows(*ext, paths);
         ok &= writeSharedAppKeys(paths);
+        if (ext->owned)
+            setProjectAssociationOptOut(false);
         notifyAssociationChange();
 
         if (ok)
@@ -379,6 +396,8 @@ namespace lfs::vis::gui {
         bool ok = unregisterExtensionRows(*ext, paths);
         if (!capabilitiesHasFileAssociations())
             ok &= deleteSharedAppKeys(paths);
+        if (ext->owned)
+            setProjectAssociationOptOut(true);
         notifyAssociationChange();
         LOG_INFO("File association unregistered for {}", asciiFromWide(ext->ext));
         return ok;
@@ -403,6 +422,7 @@ namespace lfs::vis::gui {
         for (const auto& ext : EXTENSIONS)
             ok &= registerExtensionRows(ext, paths);
         ok &= writeSharedAppKeys(paths);
+        setProjectAssociationOptOut(false);
         notifyAssociationChange();
 
         if (ok)
@@ -419,6 +439,7 @@ namespace lfs::vis::gui {
         for (const auto& ext : EXTENSIONS)
             ok &= unregisterExtensionRows(ext, paths);
         ok &= deleteSharedAppKeys(paths);
+        setProjectAssociationOptOut(true);
         notifyAssociationChange();
         LOG_INFO("File associations unregistered");
         return ok;
@@ -442,6 +463,29 @@ namespace lfs::vis::gui {
                 return false;
         }
         return true;
+    }
+
+    void ensureProjectFileAssociation() {
+        const auto* licht = findExtension(".licht");
+        const auto paths = currentAssociationPaths();
+        std::wstring command;
+        const auto registered = getRegString(HKEY_CURRENT_USER,
+                                             paths.classes + licht->prog_id + L"\\shell\\open\\command", L"",
+                                             command)
+                                    ? detail::executableFromOpenCommand(command)
+                                    : std::nullopt;
+        std::wstring opt_out;
+        const bool opted_out = getRegString(HKEY_CURRENT_USER, SETTINGS_PATH, PROJECT_ASSOCIATION_VALUE, opt_out) &&
+                               opt_out == PROJECT_ASSOCIATION_DISABLED;
+        if (!detail::projectAssociationNeedsRegistration(opted_out, registered))
+            return;
+
+        const bool ok = registerExtensionRows(*licht, paths) && writeSharedAppKeys(paths);
+        notifyAssociationChange();
+        if (ok)
+            LOG_INFO("Registered .licht project files for this user");
+        else
+            LOG_WARN("Could not register .licht project files for this user");
     }
 
     bool openFileAssociationSettings() {
@@ -477,7 +521,31 @@ namespace lfs::vis::gui {
     bool registerFileAssociation(std::string_view) { return false; }
     bool unregisterFileAssociation(std::string_view) { return false; }
     std::vector<FileAssociationStatus> fileAssociationsStatus() { return {}; }
+    void ensureProjectFileAssociation() {}
 
 #endif
+
+    namespace detail {
+        std::optional<std::filesystem::path> executableFromOpenCommand(const std::wstring_view command) {
+            const auto start = command.find_first_not_of(L' ');
+            if (start == std::wstring_view::npos)
+                return std::nullopt;
+            if (command[start] == L'"') {
+                const auto end = command.find(L'"', start + 1);
+                if (end == std::wstring_view::npos || end == start + 1)
+                    return std::nullopt;
+                return std::filesystem::path(std::wstring(command.substr(start + 1, end - start - 1)));
+            }
+            const auto end = command.find(L' ', start);
+            return std::filesystem::path(std::wstring(command.substr(start, end - start)));
+        }
+
+        bool projectAssociationNeedsRegistration(const bool opted_out,
+                                                 const std::optional<std::filesystem::path>& registered_executable) {
+            if (opted_out)
+                return false;
+            return !registered_executable || !lfs::core::native_fs::exists(*registered_executable);
+        }
+    } // namespace detail
 
 } // namespace lfs::vis::gui

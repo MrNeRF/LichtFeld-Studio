@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "preferences.hpp"
+#include "core/native_fs.hpp"
 #include "rendering/rendering_types.hpp"
 #include "visualizer/navigation_up_axis.hpp"
 
@@ -176,7 +177,7 @@ namespace lfs::vis {
                     expanded);
             }
             absolute = absolute.lexically_normal();
-            std::filesystem::create_directories(absolute, error);
+            lfs::core::native_fs::create_directories(absolute, error);
             if (error) {
                 return preferencePathError(
                     lfs::ErrorCode::PermissionDenied,
@@ -184,7 +185,7 @@ namespace lfs::vis {
                     error.message(),
                     absolute);
             }
-            if (!std::filesystem::is_directory(absolute, error) || error) {
+            if (!lfs::core::native_fs::is_directory(absolute, error) || error) {
                 return preferencePathError(
                     lfs::ErrorCode::InvalidArgument,
                     display_name + " path is not a directory.",
@@ -202,7 +203,7 @@ namespace lfs::vis {
                  std::to_string(
                      std::chrono::steady_clock::now().time_since_epoch().count()));
             {
-                std::ofstream output(probe, std::ios::binary | std::ios::trunc);
+                std::ofstream output(lfs::core::native_fs::native_path(probe), std::ios::binary | std::ios::trunc);
                 if (!output) {
                     return preferencePathError(
                         lfs::ErrorCode::PermissionDenied,
@@ -214,7 +215,7 @@ namespace lfs::vis {
                 output.flush();
                 if (!output) {
                     std::error_code ignored;
-                    std::filesystem::remove(probe, ignored);
+                    lfs::core::native_fs::remove(probe, ignored);
                     return preferencePathError(
                         lfs::ErrorCode::PermissionDenied,
                         display_name + " is not writable.",
@@ -222,7 +223,7 @@ namespace lfs::vis {
                         absolute);
                 }
             }
-            std::filesystem::remove(probe, error);
+            lfs::core::native_fs::remove(probe, error);
             if (error) {
                 return preferencePathError(
                     lfs::ErrorCode::PermissionDenied,
@@ -242,14 +243,13 @@ namespace lfs::vis {
 
         [[nodiscard]] bool containsLichtProject(const std::filesystem::path& directory) {
             std::error_code error;
-            if (!std::filesystem::is_directory(directory, error) || error)
+            if (!lfs::core::native_fs::is_directory(directory, error) || error)
                 return false;
 
             constexpr int max_depth = 4;
-            std::filesystem::recursive_directory_iterator iterator(
-                directory,
-                std::filesystem::directory_options::skip_permission_denied,
-                error);
+            std::filesystem::recursive_directory_iterator iterator(lfs::core::native_fs::traversal_path(directory),
+                                                                   std::filesystem::directory_options::skip_permission_denied,
+                                                                   error);
             const std::filesystem::recursive_directory_iterator end;
             while (iterator != end) {
                 if (error) {
@@ -332,11 +332,11 @@ namespace lfs::vis {
                                     "legacy_working_directory", "new_project_navigation_up_axis",
                                     "camera_navigation_mode", "status_bar_progress_style",
                                     "viewport_chrome_style", "viewport_toolbar_position",
-                                    "scene_upscaler"})
+                                    "scene_upscaler", "marketplace_view"})
                 (void)field<std::string>(values, key, {});
             for (const char* key : {"remember_camera_navigation", "remember_camera_view_snap",
                                     "camera_view_snap", "new_project_align_grid",
-                                    "scene_graph_selection_markers"})
+                                    "scene_graph_selection_markers", "marketplace_git_checkout"})
                 (void)field<bool>(values, key, false);
             for (const char* key : {"zoom_speed", "navigation_speed", "viewport_toolbar_free_y"})
                 (void)field<float>(values, key, 0.0f);
@@ -448,7 +448,7 @@ namespace lfs::vis {
             persisted_values = json::object();
             reset_project_manager_on_save = false;
 
-            std::ifstream input(path);
+            std::ifstream input(lfs::core::native_fs::native_path(path));
             if (!input)
                 return;
 
@@ -966,6 +966,36 @@ namespace lfs::vis {
         impl_->loadLocked();
         return lfs::core::persisted_settings::field<bool>(impl_->values, "remember_camera_view_snap", false);
     }
+    void UserPreferences::setSplatDrag(const SplatDragPreferenceState& state) {
+        if ((state.format != "ply" && state.format != "spz") || !state.axes.valid())
+            return;
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["splat_drag"] = {{"format", state.format}, {"sh_degree", std::clamp(state.sh_degree, 0, 3)}, {"up_axis", state.axes.up}};
+        impl_->saveLocked();
+    }
+    SplatDragPreferenceState UserPreferences::splatDrag() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        SplatDragPreferenceState state;
+        const auto it = impl_->values.find("splat_drag");
+        if (it == impl_->values.end() || !it->is_object())
+            return state;
+        using lfs::core::persisted_settings::field;
+        state.format = field<std::string>(*it, "format", "ply");
+        if (state.format != "ply" && state.format != "spz")
+            state.format = "ply";
+        state.sh_degree = std::clamp(field<int>(*it, "sh_degree", 3), 0, 3);
+        // Preserve the old checkbox for existing users, while fresh settings
+        // retain source axes unless the native drag recognizes Blender.
+        if (!it->contains("up_axis") && field<bool>(*it, "blender_axes", false))
+            state.axes = SplatDragAxes::blender();
+        else
+            state.axes = {field<int>(*it, "up_axis", -2)};
+        if (!state.axes.valid())
+            state.axes = {};
+        return state;
+    }
     void UserPreferences::setSceneGraphSelectionMarkers(const bool enabled) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
@@ -1040,6 +1070,47 @@ namespace lfs::vis {
             return 0.5f;
         const float value = it->get<float>();
         return std::clamp(std::isfinite(value) ? value : 0.5f, 0.0f, 1.0f);
+    }
+
+    void UserPreferences::setMarketplaceView(const std::string_view value) {
+        if (value != "card" && value != "list")
+            throw std::invalid_argument("Unsupported Marketplace view");
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["marketplace_view"] = std::string(value);
+        impl_->saveLocked();
+    }
+
+    std::string UserPreferences::marketplaceView() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("marketplace_view");
+        if (it == impl_->values.end() || !it->is_string())
+            return "list";
+        const auto value = it->get<std::string>();
+        return value == "card" || value == "list" ? value : "list";
+    }
+
+    void UserPreferences::setMarketplaceGitCheckout(const bool enabled) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["marketplace_git_checkout"] = enabled;
+        impl_->saveLocked();
+    }
+
+    bool UserPreferences::marketplaceGitCheckout() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("marketplace_git_checkout");
+        return it != impl_->values.end() && it->is_boolean() && it->get<bool>();
+    }
+
+    void UserPreferences::resetMarketplacePreferences() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values.erase("marketplace_view");
+        impl_->values.erase("marketplace_git_checkout");
+        impl_->saveLocked();
     }
 
     void UserPreferences::setProjectManagerDefaultView(const std::string_view value) {
@@ -1350,7 +1421,7 @@ namespace lfs::vis {
         const auto resolved = lfs::core::UserPaths::resolve();
         if (!resolved)
             return {};
-        std::ifstream input(resolved->preferencesFile());
+        std::ifstream input(lfs::core::native_fs::native_path(resolved->preferencesFile()));
         if (!input)
             return {};
         try {

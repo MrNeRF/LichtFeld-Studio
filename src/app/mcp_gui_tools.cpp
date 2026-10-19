@@ -1987,7 +1987,12 @@ namespace lfs::app {
                 break;
             }
             case core::ExportFormat::HTML_VIEWER: {
-                if (auto result = vis::gui::export_html_viewer(*merged, vis::gui::HtmlViewerExportOptions{.output_path = path, .provenance = stamp}); !result)
+                const auto bg_color = vis::gui::resolve_html_export_background_color();
+                if (auto result = vis::gui::export_html_viewer(*merged, vis::gui::HtmlViewerExportOptions{
+                                                                            .output_path = path,
+                                                                            .provenance = stamp,
+                                                                            .background_color = bg_color});
+                    !result)
                     return std::unexpected(result.error());
                 break;
             }
@@ -2442,7 +2447,7 @@ namespace lfs::app {
                         {"path", json{{"type", "string"}, {"description", "Path to a splat file or SSOG directory"}}}},
                     .required = {"path"}}},
             [viewer](const json& args) -> json {
-                std::filesystem::path path = args["path"].get<std::string>();
+                std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
 
                 auto result = post_and_wait(viewer, [viewer, path]() {
                     return viewer->loadPLY(path);
@@ -3817,7 +3822,7 @@ namespace lfs::app {
                         {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
@@ -3862,7 +3867,7 @@ namespace lfs::app {
                         {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
@@ -3914,7 +3919,7 @@ namespace lfs::app {
                         {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
@@ -3969,7 +3974,7 @@ namespace lfs::app {
                         {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
@@ -4014,7 +4019,7 @@ namespace lfs::app {
                         {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
@@ -4059,7 +4064,7 @@ namespace lfs::app {
                         {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
@@ -4104,7 +4109,7 @@ namespace lfs::app {
                         {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
@@ -4149,7 +4154,7 @@ namespace lfs::app {
                         {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
@@ -4190,7 +4195,7 @@ namespace lfs::app {
                         {"format", json{{"type", "string"}, {"description", "Output format: auto, binary, or text"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto source_arg = optional_string_arg(args, "source_path");
                 const auto format = parse_colmap_write_format(args.value("format", "auto"));
 

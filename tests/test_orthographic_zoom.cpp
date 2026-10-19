@@ -3,7 +3,6 @@
 
 #include "core/camera.hpp"
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/services.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
@@ -33,14 +32,12 @@ namespace lfs::vis {
             services().clear();
             gui::guiFocusState().reset();
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
         }
 
         void TearDown() override {
             services().clear();
             gui::guiFocusState().reset();
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
             input::InputBindings::setPersistenceEnabled(previous_persistence_enabled_);
             setHome(previous_home_);
         }

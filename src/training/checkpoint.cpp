@@ -8,6 +8,7 @@
 #include "components/sparsity_optimizer.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
@@ -498,7 +499,7 @@ namespace lfs::training {
 
         std::error_code size_error;
         const auto file_size =
-            std::filesystem::file_size(path, size_error);
+            lfs::core::native_fs::file_size(path, size_error);
         if (size_error) {
             return std::unexpected(
                 "Failed to inspect checkpoint size: " +

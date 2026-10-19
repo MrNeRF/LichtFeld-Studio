@@ -3,6 +3,7 @@
 """Filesystem-folder discovery for Asset Manager .licht projects."""
 
 from __future__ import annotations
+from _lfs_path_io import native_path
 
 import json
 import logging
@@ -11,7 +12,7 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Any, Callable, Iterable, Iterator
 from types import SimpleNamespace
 
@@ -277,7 +278,7 @@ class _DirectoryScanCache:
             fd, temp_name = tempfile.mkstemp(
                 prefix=f"{self._path.stem}.",
                 suffix=".tmp",
-                dir=str(self._path.parent),
+                dir=native_path(str(self._path.parent)),
             )
             temp_path = Path(temp_name)
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -285,7 +286,7 @@ class _DirectoryScanCache:
                 stream.write("\n")
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temp_path, self._path)
+            os.replace(native_path(temp_path), native_path(self._path))
             self._changed = False
         except Exception as exc:
             _log.error("Failed to save Asset Manager scan cache %s: %s", self._path, exc)
@@ -404,7 +405,7 @@ def iter_licht_projects(
         kept_directories: list[Path] = []
         licht_names: list[str] = []
         try:
-            entries = os.scandir(current)
+            entries = os.scandir(native_path(current))
         except OSError as exc:
             cache.drop(current_text)
             _on_error(exc)
@@ -744,7 +745,7 @@ def _known_path_is_unchanged(index: Any, existing: Any, path: str) -> bool:
     if not _existing_skips_inspection(existing):
         return False
     try:
-        stat = os.stat(path)
+        stat = os.stat(native_path(path))
     except OSError:
         return False
     identity = getattr(existing, "stat_identity", None) or {}

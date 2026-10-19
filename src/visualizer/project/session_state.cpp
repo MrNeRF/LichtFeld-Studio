@@ -4,6 +4,7 @@
  */
 
 #include "project/session_state.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/error.hpp"
 #include "core/error_bus.hpp"
@@ -3156,7 +3157,7 @@ namespace lfs::vis::project {
                     64U * 1024U * 1024U;
             std::error_code error;
             const auto size =
-                std::filesystem::file_size(
+                lfs::core::native_fs::file_size(
                     path, error);
             if (error)
                 return {.text = std::nullopt,

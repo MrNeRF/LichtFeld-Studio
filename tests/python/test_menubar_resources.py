@@ -27,11 +27,12 @@ def _theme_size_values(node, key):
 
 
 def test_every_scrollbar_uses_the_theme_size():
-    # Catches a panel or theme drifting back to its own scrollbar width.
+    # Keep intentional family metrics while preventing panels from overriding them.
     themes_dir = PROJECT_ROOT / "src" / "visualizer" / "gui" / "assets" / "themes"
     for theme_path in themes_dir.glob("*.json"):
         theme = json.loads(theme_path.read_text(encoding="utf-8"))
-        assert set(_theme_size_values(theme, "scrollbar_size")) <= {4.0}, theme_path.name
+        expected_scrollbar_size = 6.0 if theme.get("id") == "graphite" else 4.0
+        assert set(_theme_size_values(theme, "scrollbar_size")) <= {expected_scrollbar_size}, theme_path.name
         assert set(_theme_size_values(theme, "grab_min_size")) <= {12.0}, theme_path.name
 
     resources_dir = PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
@@ -386,7 +387,7 @@ def test_theme_auto_visibility_and_variant_button_width_are_capability_driven():
     assert "SDL_SYSTEM_THEME_DARK" in theme_cpp
 
 
-def test_all_optional_theme_gradients_reach_rml_consumers():
+def test_optional_theme_gradients_remain_supported_and_active_consumers_resolve():
     theme_cpp = (
         PROJECT_ROOT / "src" / "visualizer" / "theme" / "theme.cpp"
     ).read_text(encoding="utf-8")
@@ -452,48 +453,21 @@ def test_all_optional_theme_gradients_reach_rml_consumers():
         assert f"hashGradient(seed, gradients.{gradient})" in rml_theme_cpp
         assert f"t.gradients.{gradient}" in rml_theme_cpp
         resource = (resources / resource_name).read_text(encoding="utf-8")
-        assert f"@{{{token}}}" in resource
+        # Legacy histogram gradients still parse and hash, but charts now use
+        # solid semantic colors rather than consuming these decorators.
+        if not gradient.startswith("histogram_"):
+            assert f"@{{{token}}}" in resource
 
 
-def test_histogram_history_icons_follow_theme_contrast():
-    resources = (
-        PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
-    )
-    histogram_theme = (resources / "histogram_panel.theme.rcss").read_text(
-        encoding="utf-8"
-    )
-    rml_theme_cpp = (
-        PROJECT_ROOT
-        / "src"
-        / "visualizer"
-        / "gui"
-        / "rmlui"
-        / "rml_theme.cpp"
-    ).read_text(encoding="utf-8")
-
-    assert (
-        ".histogram-history-icon {\n"
-        "    image-color: @{text};\n"
-        "}"
-        in histogram_theme
-    )
-    assert (
-        ".histogram-history-btn:hover .histogram-history-icon {\n"
-        "    image-color: @{primary};\n"
-        "}"
-        in histogram_theme
-    )
-    assert (
-        ".histogram-history-btn:disabled .histogram-history-icon {\n"
-        "    image-color: @{panel.histogram_history_icon_disabled};\n"
-        "}"
-        in histogram_theme
-    )
-    assert (
-        '{"panel.histogram_history_icon_disabled", '
-        "colorToRmlAlpha(p.text_dim, is_light ? 0.68f : 0.52f)}"
-        in rml_theme_cpp
-    )
+def test_histogram_controls_and_chart_follow_semantic_theme_colors():
+    resources = PROJECT_ROOT / "src/visualizer/gui/rmlui/resources"
+    theme = (resources / "histogram_panel.theme.rcss").read_text(encoding="utf-8")
+    rml = (resources / "histogram_panel.rml").read_text(encoding="utf-8")
+    assert "histogram-history-icon" not in rml
+    assert "vertical-gradient" not in theme
+    assert "@{panel.histogram_fill_decor}" not in theme
+    assert "background-color: @{primary};" in theme
+    assert "background-color: @{warning};" in theme
 
 
 def test_signal_family_keeps_a_distinct_visual_language():
@@ -759,7 +733,7 @@ def test_scene_tree_aligns_hierarchy_and_keeps_row_actions_trailing():
     assert "margin-right: 6dp;" in scene_view_rule
 
     tree_rule = _rule_body(scene_rcss, "#tree-container")
-    assert "overflow-y: scroll;" in tree_rule
+    assert "overflow-y: auto;" in tree_rule
 
     node_name_rule = _rule_body(scene_rcss, ".node-name")
     assert "flex-grow: 1;" in node_name_rule

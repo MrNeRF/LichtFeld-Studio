@@ -31,6 +31,8 @@ class Action(enum.Enum):
 
     CAMERA_SET_HOME = 11
 
+    CAMERA_RESTORE_HOME = 91
+
     CAMERA_FOCUS_SELECTION = 12
 
     CAMERA_SET_PIVOT = 13

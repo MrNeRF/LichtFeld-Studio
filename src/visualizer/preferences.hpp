@@ -5,6 +5,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "gui/utils/splat_drag_preferences.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -83,6 +84,12 @@ namespace lfs::vis {
         void setViewportToolbarFreeY(float value);
         [[nodiscard]] float viewportToolbarFreeY();
 
+        void setMarketplaceView(std::string_view value);
+        [[nodiscard]] std::string marketplaceView();
+        void setMarketplaceGitCheckout(bool enabled);
+        [[nodiscard]] bool marketplaceGitCheckout();
+        void resetMarketplacePreferences();
+
         void setProjectManagerDefaultView(std::string_view value);
         [[nodiscard]] std::string projectManagerDefaultView();
         void setOpenProjectManagerAtStartup(bool enabled);
@@ -92,6 +99,9 @@ namespace lfs::vis {
         void setProjectManagerState(std::string_view serialized_state);
         [[nodiscard]] std::string projectManagerState();
         void resetProjectManagerPreferences();
+
+        void setSplatDrag(const SplatDragPreferenceState& state);
+        [[nodiscard]] SplatDragPreferenceState splatDrag();
 
         void setMcp(const McpPreferenceState& state);
         [[nodiscard]] McpPreferenceState mcp();

@@ -1030,12 +1030,12 @@ namespace lfs::core::tensor_ops {
                     return;
                 // Contiguous segments - use vectorized warp reduction
                 if (should_use_warp_reduce(n, outer_size)) {
-                    LOG_DEBUG("[REDUCE] Using warp segmented reduce: outer={} reduce={} inner=1", outer_size, reduce_size);
+                    LOG_DEBUG("[REDUCE] Using warp segmented reduce: outer=%zu reduce=%zu inner=1", outer_size, reduce_size);
                     // Note: For Mean, the fused kernel already divides by reduce_size
                     launch_warp_segmented_reduce(input_f, output_f, outer_size, reduce_size, op, stream);
                     return;
                 } else {
-                    LOG_DEBUG("[REDUCE] Fallback to CUB: outer={} reduce={} inner=1", outer_size, reduce_size);
+                    LOG_DEBUG("[REDUCE] Fallback to CUB: outer=%zu reduce=%zu inner=1", outer_size, reduce_size);
                 }
             } else {
                 // Strided segments - strided memory access is slow on GPU
@@ -1052,7 +1052,7 @@ namespace lfs::core::tensor_ops {
                 bool use_strided_warp = small_inner_stride && should_use_warp_reduce(n, output_size);
 
                 if (use_strided_warp) {
-                    LOG_DEBUG("[REDUCE] Using warp STRIDED reduce: outer={} reduce={} inner={}", outer_size, reduce_size, inner_size);
+                    LOG_DEBUG("[REDUCE] Using warp STRIDED reduce: outer=%zu reduce=%zu inner=%zu", outer_size, reduce_size, inner_size);
                     // Note: For Mean, the fused kernel already divides by reduce_size
                     launch_warp_strided_reduce(input_f, output_f, outer_size, reduce_size, inner_size, op, stream);
                     return;
@@ -1060,7 +1060,7 @@ namespace lfs::core::tensor_ops {
             }
 
             // SLOW PATH: Use CUB/Thrust for very large tensors
-            LOG_DEBUG("[REDUCE] Using SLOW PATH (CUB/Thrust): outer={} reduce={} inner={}", outer_size, reduce_size, inner_size);
+            LOG_DEBUG("[REDUCE] Using SLOW PATH (CUB/Thrust): outer=%zu reduce=%zu inner=%zu", outer_size, reduce_size, inner_size);
             float init_val = 0.0f;
 
             switch (op) {

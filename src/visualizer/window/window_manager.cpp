@@ -8,6 +8,8 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/utils/native_drag_scheduler.hpp"
+#include "gui/utils/native_file_drag.hpp"
 #include "input/input_controller.hpp"
 #include "input/sdl_coordinate_utils.hpp"
 #include "input/sdl_key_mapping.hpp"
@@ -544,7 +546,36 @@ namespace lfs::vis {
           monitor_size_(monitor_width, monitor_height) {
     }
 
+    gui::NativeDragContext& WindowManager::nativeFileDragContext() {
+        if (!native_file_drag_)
+            native_file_drag_ = std::make_unique<gui::NativeDragContext>();
+        return *native_file_drag_;
+    }
+
+    gui::NativeDragScheduler& WindowManager::nativeDragScheduler() {
+        if (!native_drag_scheduler_)
+            native_drag_scheduler_ = std::make_unique<gui::NativeDragScheduler>();
+        return *native_drag_scheduler_;
+    }
+
+    void WindowManager::dispatchNativeDrags(std::function<bool()> frame) {
+        native_transfer_frame_ = std::move(frame);
+        if (native_drag_scheduler_)
+            native_drag_scheduler_->dispatch();
+    }
+
+    bool WindowManager::advanceNativeTransferFrame() {
+        if (!native_transfer_frame_)
+            return false;
+        auto frame = native_transfer_frame_;
+        wakeEventLoop();
+        return frame();
+    }
+
     WindowManager::~WindowManager() {
+        // Release our Wayland proxies/queue while SDL's borrowed display is
+        // still alive. One context also avoids rebinding globals on panel reload.
+        native_file_drag_.reset();
         SDL_RemoveEventWatch(watchEvent, this);
 #if defined(__linux__)
         if (g_x11_error_owner == this) {
@@ -694,6 +725,8 @@ namespace lfs::vis {
 
     bool WindowManager::init() {
         configureValidationLayerSearchPath();
+        // Preserve the initiating press when this same gesture activates us.
+        SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
 
         if (shouldPreferX11OnGnome()) {
             SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11,wayland");
@@ -953,7 +986,7 @@ namespace lfs::vis {
         // Drain previously queued events before pumping new native events.
         drainQueuedEvents();
         pumping_events_ = true;
-        while (SDL_PollEvent(&event))
+        while (!gui::preserveNativeDragInput() && SDL_PollEvent(&event))
             dispatchPolledEvent(event);
         pumping_events_ = false;
         dispatched_events_.clear();
@@ -962,10 +995,23 @@ namespace lfs::vis {
         finishTitlebarDragIfReleased();
         frame_input_.finalize(window_);
         suppressFrameInputForManualResize();
+        pinFrameInputForValueDrag();
         flushPendingTitlebarDoubleClick();
     }
 
     void WindowManager::waitEvents(std::optional<double> timeout_seconds) {
+        if (gui::preserveNativeDragInput()) {
+            // SDL's native pump removes WM_LBUTTONUP from OLE's message queue.
+            // Keep rendering during a hover-time export, but let DoDragDrop
+            // consume the release itself when the receiver's GetData returns.
+            pollEvents();
+            SDL_Delay(1);
+            return;
+        }
+        // A native receiver is waiting for our export. Minimized windows and
+        // renderer recovery must not turn the modal frame into an infinite wait.
+        if (native_drag_scheduler_ && native_drag_scheduler_->busy())
+            timeout_seconds = timeout_seconds ? std::min(*timeout_seconds, 0.025) : std::optional<double>{0.025};
         frame_input_.beginFrame();
         SDL_Event event;
         if (vulkan_context_ &&
@@ -996,6 +1042,7 @@ namespace lfs::vis {
         finishTitlebarDragIfReleased();
         frame_input_.finalize(window_);
         suppressFrameInputForManualResize();
+        pinFrameInputForValueDrag();
         flushPendingTitlebarDoubleClick();
     }
 
@@ -1069,8 +1116,20 @@ namespace lfs::vis {
 
         gui::RmlUIManager::InputDispatchResult dispatched;
         if (eventTargetsWindow(event, main_window_id) && !shouldSuppressGuiRoutingForResize(event, main_window_id)) {
-            if (auto* gui = services().guiOrNull())
-                dispatched = gui->dispatchInputEvent(event);
+            if (auto* gui = services().guiOrNull()) {
+                // A value drag owns the hidden pointer; the UI sees it resting at the grab point.
+                const auto anchor = input_controller_ ? input_controller_->valueDragAnchor() : std::nullopt;
+                if (!anchor) {
+                    dispatched = gui->dispatchInputEvent(event);
+                } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+                    SDL_Event pinned = event;
+                    pinned.button.x = anchor->x;
+                    pinned.button.y = anchor->y;
+                    dispatched = gui->dispatchInputEvent(pinned);
+                } else if (event.type != SDL_EVENT_MOUSE_MOTION) {
+                    dispatched = gui->dispatchInputEvent(event);
+                }
+            }
         }
 
         switch (event.type) {
@@ -1265,6 +1324,10 @@ namespace lfs::vis {
         }
 
         case SDL_EVENT_DROP_FILE:
+            if (gui::NativeDragScheduler::outgoingDragActive()) {
+                pending_drop_files_.clear();
+                break;
+            }
             LOG_DEBUG("SDL drop file: window={} data={}", event.drop.windowID,
                       event.drop.data ? event.drop.data : "(null)");
             if (!eventTargetsWindow(event, main_window_id))
@@ -1286,6 +1349,10 @@ namespace lfs::vis {
             break;
 
         case SDL_EVENT_DROP_COMPLETE:
+            if (gui::NativeDragScheduler::outgoingDragActive()) {
+                pending_drop_files_.clear();
+                break;
+            }
             LOG_DEBUG("SDL drop complete: window={} pending_files={}", event.drop.windowID,
                       pending_drop_files_.size());
             if (!eventTargetsWindow(event, main_window_id))
@@ -1445,6 +1512,8 @@ namespace lfs::vis {
     }
 
     void WindowManager::setResizeCursorForEdge(const ResizeEdge edge) {
+        if (gui::NativeDragScheduler::ownsNativeCursor())
+            return;
         if constexpr (!kUseManualBorderlessResize)
             return;
 
@@ -1596,6 +1665,21 @@ namespace lfs::vis {
         updateWindowSize("manual-resize-end", ResizeIntent::Exact);
         lfs::core::events::ui::WindowResizeInteraction{.active = false}.emit();
         wakeEventLoop();
+    }
+
+    void WindowManager::pinFrameInputForValueDrag() {
+        const auto pin = input_controller_ ? input_controller_->takeValueDragPin() : std::nullopt;
+        if (!pin)
+            return;
+        const glm::vec2 pixels = *pin * input::windowPixelScale(window_);
+        frame_input_.mouse_x = pixels.x;
+        frame_input_.mouse_y = pixels.y;
+        frame_input_.mouse_dx = 0.0f;
+        frame_input_.mouse_dy = 0.0f;
+        for (auto& event : frame_input_.mouse_button_events) {
+            event.x = pixels.x;
+            event.y = pixels.y;
+        }
     }
 
     void WindowManager::suppressFrameInputForManualResize() {

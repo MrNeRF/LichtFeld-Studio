@@ -155,6 +155,7 @@ namespace lfs::vis::input {
         ASSET_GALLERY_COPY_LINK,
         ASSET_REFRESH,
         TOGGLE_PYTHON_CONSOLE,
+        CAMERA_RESTORE_HOME,
 
     };
 

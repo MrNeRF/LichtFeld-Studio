@@ -22,6 +22,7 @@
 #include <chrono>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <glm/glm.hpp>
 #include <memory>
 #include <mutex>
@@ -94,6 +95,11 @@ namespace lfs::vis {
             }
             void startGalleryProjectExport(const GalleryProjectExportRequest& request);
             void cancelExport();
+            bool beginDragExport(lfs::core::ExportFormat format, std::function<void()> cancel);
+            std::function<void()> dragExportWorkerStart() const;
+            void reportDragExport(float progress, std::string stage = {});
+            void finishDragExport(bool cancelled, std::string error = {});
+            [[nodiscard]] bool isDragExport() const { return bool(drag_export_cancel_); }
 
             // Import
             [[nodiscard]] bool isImporting() const {
@@ -237,7 +243,8 @@ namespace lfs::vis {
                                   bool rad_streamable,
                                   int spz_version,
                                   lfs::core::ProvenanceStamp provenance,
-                                  int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations);
+                                  int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations,
+                                  std::optional<glm::vec3> background_color = std::nullopt);
             void startColmapExport(const std::filesystem::path& path);
             void startGalleryPublicationExport(GalleryScenePublishRequest publication,
                                                std::optional<GalleryProjectExportRequest> source = std::nullopt);
@@ -329,6 +336,7 @@ namespace lfs::vis {
                 std::optional<std::jthread> thread;
             };
             ExportState export_state_;
+            std::function<void()> drag_export_cancel_;
 
             struct VideoExportState {
                 JobHandle job;

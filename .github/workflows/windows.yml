@@ -203,26 +203,79 @@ jobs:
         shell: cmd
         run: ctest --test-dir %BUILD_DIR% --output-on-failure --no-tests=error -R "^lichtfeld\.python_runtime_state$"
 
+      - name: Run splat drag contracts
+        shell: cmd
+        run: ctest --test-dir %BUILD_DIR% --output-on-failure --no-tests=error -R "^(splat_drag_axes_contract|splat_transfer_contract|native_drag_contract|file_transfer_progress_contract|native_modal_frame_contract)$"
+
+      - name: Provision a network share for path tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $local = Join-Path $env:RUNNER_TEMP 'lfs-unc-share'
+          New-Item -ItemType Directory -Force -Path $local | Out-Null
+          Start-Service LanmanServer
+          New-SmbShare -Name 'lfs-unc-tests' -Path $local -FullAccess "$env:USERDOMAIN\$env:USERNAME" | Out-Null
+          $network = '\\localhost\lfs-unc-tests'
+          Set-Content -Path (Join-Path $network 'probe.txt') -Value 'probe'
+          if (-not (Test-Path (Join-Path $local 'probe.txt'))) { throw "Share $network does not expose $local" }
+          Remove-Item (Join-Path $local 'probe.txt')
+          "LFS_TEST_UNC_ROOT=$network" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "LFS_TEST_UNC_LOCAL=$local" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "LFS_TEST_REQUIRE_UNC=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Build and run CPU-only format tests
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cmake --build %BUILD_DIR% --target lichtfeld_format_tests -j %NUMBER_OF_PROCESSORS%
-          ctest --test-dir %BUILD_DIR% --output-on-failure -R "^lichtfeld_format_tests$"
+          ctest --test-dir %BUILD_DIR% --output-on-failure --no-tests=error -R "^lichtfeld_format_tests$"
 
       - name: Build and run EXR image codec tests
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cmake --build %BUILD_DIR% --target lichtfeld_image_codec_tests -j %NUMBER_OF_PROCESSORS%
-          ctest --test-dir %BUILD_DIR% --output-on-failure -R "^lichtfeld_image_codec_tests$"
+          ctest --test-dir %BUILD_DIR% --output-on-failure --no-tests=error -R "^lichtfeld_image_codec_tests$"
 
       - name: Build and run CPU-only Unicode path tests
         shell: cmd
+        env:
+          VCPKG_RUNTIME_SUBDIR: ${{ matrix.build_type == 'Debug' && 'debug\bin' || 'bin' }}
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake --build %BUILD_DIR% --target unicode_path_test -j %NUMBER_OF_PROCESSORS%
+          set PATH=%CD%\%BUILD_DIR%;%CD%\%BUILD_DIR%\vcpkg_installed\x64-windows\%VCPKG_RUNTIME_SUBDIR%;%CD%\%BUILD_DIR%\vcpkg_installed\x64-windows\bin;%PATH%
+          cmake --build %BUILD_DIR% --target unicode_path_test lichtfeld_native_filesystem_tests -j %NUMBER_OF_PROCESSORS%
+          if errorlevel 1 exit /b 1
           %BUILD_DIR%\tests\unicode_path_test.exe --gtest_color=no
+          if errorlevel 1 exit /b 1
+          %BUILD_DIR%\tests\lichtfeld_native_filesystem_tests.exe --gtest_color=no
+
+      - name: Test Python paths without executable long-path opt-in
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          if not exist %BUILD_DIR%\path-policy-off-python mkdir %BUILD_DIR%\path-policy-off-python
+          copy /Y %BUILD_DIR%\vcpkg_installed\x64-windows\tools\python3\python.exe %BUILD_DIR%\path-policy-off-python\python.exe
+          if errorlevel 1 exit /b 1
+          copy /Y %BUILD_DIR%\vcpkg_installed\x64-windows\tools\python3\python312.dll %BUILD_DIR%\path-policy-off-python\python312.dll
+          if errorlevel 1 exit /b 1
+          mt.exe -nologo -manifest tests\native_filesystem_test.manifest -outputresource:%BUILD_DIR%\path-policy-off-python\python.exe;#1
+          if errorlevel 1 exit /b 1
+          set PYTHONHOME=%CD%\%BUILD_DIR%\vcpkg_installed\x64-windows\tools\python3
+          set PYTHONPATH=%CD%\src\python
+          set LFS_REQUIRE_LONG_PATHS_DISABLED=1
+          set PYTHONUTF8=1
+          %BUILD_DIR%\path-policy-off-python\python.exe -m unittest tests/python/test_native_path_io.py
+
+      - name: Test native Python path metadata without long-path opt-in
+        if: matrix.build_type == 'Release'
+        shell: cmd
+        run: |
+          set PYTHONHOME=%CD%\%BUILD_DIR%\vcpkg_installed\x64-windows\tools\python3
+          set PYTHONPATH=%CD%\src\python;%CD%\%BUILD_DIR%\src\python
+          set PYTHONUTF8=1
+          set LFS_REQUIRE_LONG_PATHS_DISABLED=1
+          %BUILD_DIR%\path-policy-off-python\python.exe -c "import os, unittest; build = os.path.abspath(os.environ['BUILD_DIR']); dll_dirs = [build, os.path.join(build, 'vcpkg_installed', 'x64-windows', 'bin'), os.path.join(os.environ['CUDA_PATH'], 'bin')]; dll_handles = [os.add_dll_directory(path) for path in dll_dirs]; suite = unittest.defaultTestLoader.discover('tests/python', pattern='test_native_binding_path_io.py'); result = unittest.TextTestRunner(verbosity=2).run(suite); raise SystemExit(not result.wasSuccessful())"
 
       - name: Build and run CPU-only visualizer and RmlUi tests
         shell: cmd
@@ -231,8 +284,8 @@ jobs:
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           set PATH=%CD%\%BUILD_DIR%;%CD%\%BUILD_DIR%\vcpkg_installed\x64-windows\%VCPKG_RUNTIME_SUBDIR%;%CD%\%BUILD_DIR%\vcpkg_installed\x64-windows\bin;%CD%\%BUILD_DIR%\vcpkg_installed\x64-windows\tools\python3;%CUDA_PATH%\bin;%PATH%
-          cmake --build %BUILD_DIR% --target lichtfeld_visualizer_tests lichtfeld_rmlui_tests -j %NUMBER_OF_PROCESSORS%
-          ctest --test-dir %BUILD_DIR% --output-on-failure -R "^(lichtfeld_visualizer_tests|lichtfeld\.rmlui)$"
+          cmake --build %BUILD_DIR% --target lichtfeld_visualizer_tests lichtfeld_rmlui_tests lichtfeld_native_third_party_tests -j %NUMBER_OF_PROCESSORS%
+          ctest --test-dir %BUILD_DIR% --output-on-failure -R "^(lichtfeld_visualizer_tests|lichtfeld\.rmlui|lichtfeld\.native_third_party_paths)$"
 
       - name: Verify nvJPEG2000 runtime bundle
         shell: pwsh

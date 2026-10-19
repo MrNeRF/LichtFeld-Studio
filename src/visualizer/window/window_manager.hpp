@@ -10,6 +10,7 @@
 #include "visualizer/visualizer.hpp"
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
@@ -23,6 +24,10 @@ namespace lfs::vis {
 
     class InputController;
     class VulkanContext;
+    namespace gui {
+        class NativeDragContext;
+        class NativeDragScheduler;
+    } // namespace gui
 
     class LFS_VIS_API WindowManager {
     public:
@@ -73,6 +78,10 @@ namespace lfs::vis {
         void refreshResizeCursor();
         [[nodiscard]] unsigned manualResizeEdgeMask() const;
 
+        gui::NativeDragContext& nativeFileDragContext();
+        gui::NativeDragScheduler& nativeDragScheduler();
+        void dispatchNativeDrags(std::function<bool()> frame);
+        bool advanceNativeTransferFrame();
         SDL_Window* getWindow() const { return window_; }
         VulkanContext* getVulkanContext() const { return vulkan_context_.get(); }
         glm::ivec2 getWindowSize() const { return window_size_; }
@@ -119,6 +128,9 @@ namespace lfs::vis {
 
         SDL_Window* window_ = nullptr;
         std::unique_ptr<VulkanContext> vulkan_context_;
+        std::unique_ptr<gui::NativeDragContext> native_file_drag_;
+        std::unique_ptr<gui::NativeDragScheduler> native_drag_scheduler_;
+        std::function<bool()> native_transfer_frame_;
         GraphicsBackend graphics_backend_ = GraphicsBackend::Vulkan;
         std::string title_;
         glm::ivec2 window_size_;
@@ -166,6 +178,7 @@ namespace lfs::vis {
         void updateManualResize();
         void finishManualResize();
         void suppressFrameInputForManualResize();
+        void pinFrameInputForValueDrag();
         [[nodiscard]] bool isManualResizeActive() const { return manual_resize_edge_ != ResizeEdge::NoEdge; }
         void beginTitlebarDrag(int local_x, int local_y);
         void updateTitlebarDrag();

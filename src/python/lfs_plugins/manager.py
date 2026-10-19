@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Plugin manager for discovery, loading, and lifecycle."""
+from _lfs_path_io import logical_path, native_path, open
 
 import importlib.machinery
 import importlib.util
@@ -13,7 +14,7 @@ import time
 import traceback
 import types
 import uuid
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Callable, Dict, List, Optional
 
 from .capabilities import CapabilityRegistry
@@ -255,12 +256,12 @@ class PluginManager:
                     if self._plugins.get(plugin.info.name) is plugin:
                         del self._plugins[plugin.info.name]
             if published and target_dir is not None and target_dir.exists():
-                shutil.rmtree(target_dir, ignore_errors=True)
+                shutil.rmtree(native_path(target_dir, force_extended=True), ignore_errors=True)
             if staging_dir.exists() and staging_dir.parent == self._plugins_dir and staging_dir.name.startswith("."):
-                shutil.rmtree(staging_dir, ignore_errors=True)
+                shutil.rmtree(native_path(staging_dir, force_extended=True), ignore_errors=True)
             raise
             if staging_dir.exists() and staging_dir.parent == self._plugins_dir and staging_dir.name.startswith("."):
-                shutil.rmtree(staging_dir, ignore_errors=True)
+                shutil.rmtree(native_path(staging_dir, force_extended=True), ignore_errors=True)
             raise
 
     @staticmethod
@@ -274,8 +275,10 @@ class PluginManager:
         new_root = str(target_dir)
 
         def rebase(path: str) -> str:
-            if path == old_root or path.startswith(old_root + os.sep):
-                return new_root + path[len(old_root):]
+            logical = logical_path(path)
+            if logical == old_root or logical.startswith(old_root + os.sep):
+                relocated = new_root + logical[len(old_root):]
+                return native_path(relocated) if logical != path else relocated
             return path
 
         plugin.info.path = target_dir
@@ -355,7 +358,7 @@ class PluginManager:
 
             # The old tree is the rollback point until every replacement step,
             # including metadata and optional reload, has completed.
-            shutil.rmtree(backup_dir)
+            shutil.rmtree(native_path(backup_dir, force_extended=True))
             committed = True
             return current_info.name
         except Exception:
@@ -363,7 +366,7 @@ class PluginManager:
                 if moved_venv and new_venv.exists() and not old_venv.exists():
                     new_venv.replace(old_venv)
                 if plugin_dir.exists():
-                    shutil.rmtree(plugin_dir)
+                    shutil.rmtree(native_path(plugin_dir, force_extended=True))
                 if backup_dir.exists() and not plugin_dir.exists():
                     backup_dir.replace(plugin_dir)
             except Exception:
@@ -371,9 +374,9 @@ class PluginManager:
             raise
         finally:
             if staging_dir.exists():
-                shutil.rmtree(staging_dir, ignore_errors=True)
+                shutil.rmtree(native_path(staging_dir, force_extended=True), ignore_errors=True)
             if committed and backup_dir.exists():
-                shutil.rmtree(backup_dir, ignore_errors=True)
+                shutil.rmtree(native_path(backup_dir, force_extended=True), ignore_errors=True)
 
     def get_active_plugins_snapshot(self) -> List[tuple]:
         """Return thread-safe snapshot of active plugins."""
@@ -584,8 +587,8 @@ class PluginManager:
         paths_to_add = []
         venv_site = self._get_venv_site_packages(plugin)
         if venv_site and venv_site.exists():
-            paths_to_add.append(str(venv_site))
-        paths_to_add.append(str(plugin.info.path))
+            paths_to_add.append(native_path(venv_site))
+        paths_to_add.append(native_path(plugin.info.path))
 
         # Persistently add paths so lazy imports work later
         plugin.sys_paths = []
@@ -602,11 +605,11 @@ class PluginManager:
         code = compile(source_code, str(entry_file), "exec")
 
         module = types.ModuleType(module_name)
-        module.__file__ = str(entry_file)
-        module.__loader__ = importlib.machinery.SourceFileLoader(module_name, str(entry_file))
+        module.__file__ = native_path(entry_file)
+        module.__loader__ = importlib.machinery.SourceFileLoader(module_name, native_path(entry_file))
         module.__package__ = module_name
-        module.__path__ = [str(plugin.info.path)]
-        module.__spec__ = importlib.util.spec_from_file_location(module_name, entry_file, loader=module.__loader__, submodule_search_locations=[str(plugin.info.path)])
+        module.__path__ = [native_path(plugin.info.path)]
+        module.__spec__ = importlib.util.spec_from_file_location(module_name, entry_file, loader=module.__loader__, submodule_search_locations=[native_path(plugin.info.path)])
         module.__lfs_plugin_name__ = plugin.info.name
 
         sys.modules[module_name] = module

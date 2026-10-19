@@ -129,11 +129,18 @@ namespace lfs::vis::gui {
             core::Scene& scene,
             const glm::mat3& delta_rotation);
 
+        // The numeric transform fields share this minimum scale.
+        inline constexpr float MIN_VOLUME_AXIS_SCALE = 0.001f;
+
+        // Raises each axis scale of a crop volume transform to MIN_VOLUME_AXIS_SCALE.
+        void clampVolumeAxisScale(glm::mat4& transform);
+
         // For cropbox/ellipsoid bounds scaling
         void applyBoundsScale(
             GizmoTransformContext& ctx,
             core::Scene& scene,
-            const glm::vec3& new_size);
+            const glm::vec3& new_size,
+            const glm::vec3& new_pivot_world);
 
     } // namespace gizmo_ops
 

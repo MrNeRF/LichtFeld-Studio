@@ -333,6 +333,15 @@ EXPECTED_NUMBER_ROWS = {
         10.0,
         False,
     ),
+    "init_mesh_resolution": (
+        "training.init.mesh_resolution",
+        "training.tooltip.mesh_resolution",
+        0,
+        128,
+        16,
+        2048,
+        True,
+    ),
     "min_opacity": (
         "training.thresholds.min_opacity",
         "training.tooltip.min_opacity",
@@ -521,6 +530,7 @@ EXPECTED_ADVANCED_IDS = (
     "late_lr_anneal",
     "cropbox_lr_scale",
     "cropbox_loss_weight",
+    "cropbox_growth_inside",
     "scale_reg_decay_power",
     "erank_reg",
     "dc_reg",
@@ -575,13 +585,13 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
     assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
     assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
-    assert len(property_view.MIGRATED_PROP_IDS) == 66
-    assert len(set(property_view.MIGRATED_PROP_IDS)) == 66
+    assert len(property_view.MIGRATED_PROP_IDS) == 67
+    assert len(set(property_view.MIGRATED_PROP_IDS)) == 67
 
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 94
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 96
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 
@@ -620,6 +630,24 @@ def test_auto_advanced_roster_and_exclusions_follow_declaration_order(lf):
         "future_scalar",
         "future_enum",
     )
+
+
+def test_registry_placement_groups_auto_rows_and_leaves_new_ones_in_more_parameters(lf):
+    group_info = lf.ui.property_group_info("optimization")
+    resolved = {run.id: run.prop_ids for run in property_view.resolve_runs(group_info)}
+    placed = [
+        prop_id
+        for run_id in property_view.REGISTRY_PLACEMENT
+        for prop_id in resolved[run_id]
+    ]
+    assert sorted(placed) == sorted(EXPECTED_ADVANCED_IDS)
+    assert resolved[property_view.AUTO_ADVANCED_RUN_ID] == ()
+
+    future_group = {
+        "properties": [*group_info["properties"], {"id": "future_scalar", "type": "float"}]
+    }
+    resolved = {run.id: run.prop_ids for run in property_view.resolve_runs(future_group)}
+    assert resolved[property_view.AUTO_ADVANCED_RUN_ID] == ("future_scalar",)
 
 
 def test_strategy_applicability_filters_auto_rows_and_search(lf):
