@@ -50,8 +50,10 @@ budget; caller threads are not counted in it. `max_threads=1` selects serial
 decoding. Decoder allocation accounting is atomic for parallel callbacks.
 
 Owning output is replaced only after the complete image and container have
-been validated. Decode targets stage validation before allocating or writing
-caller storage. libjxl emits the requested type and channels into uninitialized
+been validated. The owning Image path decodes directly into a private candidate
+vector, then moves it to the result without a full-image copy. A failed decode
+leaves the previous result intact. Decode targets stage validation before
+allocating or writing caller storage. libjxl emits the requested type and channels into uninitialized
 private staging; the validated result reaches caller storage with one copy,
 without an intermediate scalar per-sample conversion. Integer targets are bounded;
 request Float32 for unbounded samples. Decoding is synchronous and has no new
@@ -62,6 +64,12 @@ cooperative cancellation API.
 `.jxl` participates in existing dataset discovery and image lookup without
 changing the preference for legacy images over same-stem companions. Loader
 and prepared-cache policies are reused. The photo picker recognizes `.jxl`.
+COLMAP models must reference the actual `.jxl` filenames: a model that still
+names `.JPG` files does not resolve a same-stem `.jxl` companion automatically,
+as with EXR and WebP. Re-encoding images requires updating those model names.
+Lossless JXL can cost more to decode than other encodings of the same pixels.
+Prepared-cache reuse avoids repeated source decoding during training, but cold
+loads and evaluation paths that read source images still pay that decode cost.
 No Python signatures change, so no stub edits are required.
 Display selection is passed through the shared generic file/memory dispatch
 for JXL and HEIF. Existing generic overloads remain available; other codec
@@ -86,10 +94,11 @@ this is not a full metadata/JPEG-reconstruction conformance certification.
 Three small official bitstreams and their license/provenance are retained as
 offline regressions for ICC profiles, patches, coalesced static layers and
 Float32 reconstruction beyond the integer range. Float32 output limits are
-checked before caller allocation. The focused JXL suite has 25 tests, including
+checked before caller allocation. The focused JXL suite has 26 tests, including
 ICC-only PQ/HLG rejection, canonical sRGB consistency across precisions and
 profile representations, serial/parallel equality, simultaneous parallel
-readers, allocation-limit recovery and distinct input diagnostics.
+readers, allocation-limit recovery, distinct input diagnostics and preservation
+of owning output when trailing input invalidates an otherwise decoded image.
 
 The official Microsoft vcpkg Git registry is pinned at
 `b3ae22aef2b857af6e80d756c13f15db12be4e8a` for `libjxl` alone (0.12.0).

@@ -252,6 +252,7 @@ namespace lfs::core::image_codecs {
             JxlBasicInfo basic{};
             Image candidate;
             std::unique_ptr<uint8_t[]> staging;
+            uint8_t* pixels = nullptr;
             size_t staging_bytes = 0;
             unsigned frames = 0, images = 0, boxes = 0;
             bool header = false, color = false;
@@ -312,9 +313,15 @@ namespace lfs::core::image_codecs {
                     if (JxlDecoderImageOutBufferSize(decoder.get(), &format, &bytes) != JXL_DEC_SUCCESS || bytes != expected || bytes > limits.output_bytes)
                         return fail(error, "inconsistent output buffer size");
                     candidate = {info.width, info.height, info.channels, info.sample_type, {}};
-                    staging.reset(new uint8_t[bytes]);
+                    if (requested) {
+                        staging.reset(new uint8_t[bytes]);
+                        pixels = staging.get();
+                    } else {
+                        candidate.data.resize(bytes);
+                        pixels = candidate.data.data();
+                    }
                     staging_bytes = bytes;
-                    if (JxlDecoderSetImageOutBuffer(decoder.get(), &format, staging.get(), bytes) != JXL_DEC_SUCCESS)
+                    if (JxlDecoderSetImageOutBuffer(decoder.get(), &format, pixels, bytes) != JXL_DEC_SUCCESS)
                         return fail(error, "cannot set output buffer");
                     break;
                 }
@@ -334,7 +341,7 @@ namespace lfs::core::image_codecs {
                     if (candidate.sample_type == SampleType::Float32)
                         for (size_t offset = 0; offset < staging_bytes; offset += sizeof(float)) {
                             float value;
-                            std::memcpy(&value, staging.get() + offset, sizeof(value));
+                            std::memcpy(&value, pixels + offset, sizeof(value));
                             if (!std::isfinite(value))
                                 return fail(error, "nonfinite decoded sample");
                         }
@@ -346,7 +353,6 @@ namespace lfs::core::image_codecs {
                         std::memcpy(destination, staging.get(), staging_bytes);
                         requested->data = destination;
                     } else {
-                        candidate.data.assign(staging.get(), staging.get() + staging_bytes);
                         image = std::move(candidate);
                     }
                     return true;
