@@ -908,6 +908,7 @@ if(NOT LFS_HAS_CUDA)
         test_undistort_portable.cpp
         test_pipelined_loader_backends.cpp
         test_viewer_no_cuda.cpp
+        test_lod_page_cache.cpp
     )
     if(LFS_TENSOR_VULKAN)
         list(APPEND TEST_SOURCES

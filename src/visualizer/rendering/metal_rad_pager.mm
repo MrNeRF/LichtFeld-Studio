@@ -48,7 +48,8 @@ namespace lfs::vis {
         auto& i = *impl_;
         if (!std::isfinite(settings.vram_fraction) || settings.vram_fraction <= 0 || settings.vram_fraction > 1)
             throw std::invalid_argument(std::format("Metal RAD pool fraction must be in (0, 1] (fraction={})", settings.vram_fraction));
-        if (i.model == &model && i.tree == model.lod_tree.get() && i.settings.pool_splats == settings.pool_splats && i.settings.vram_fraction == settings.vram_fraction) {
+        const bool same_model = i.model == &model && i.tree == model.lod_tree.get();
+        if (same_model && i.settings.pool_splats == settings.pool_splats && i.settings.vram_fraction == settings.vram_fraction) {
             i.settings.fade_frames = settings.fade_frames;
             return;
         }
@@ -56,6 +57,38 @@ namespace lfs::vis {
         if (!tree || !tree->rad_source.valid() || tree->rad_source.chunk_size < kPage || tree->rad_source.chunk_size % kPage != 0 ||
             !tree->has_tree() || !tree->total_nodes() || tree->total_nodes() > std::numeric_limits<uint32_t>::max())
             throw std::invalid_argument(std::format("Metal RAD paging requires the native ordered chunk hierarchy (tree_present={}, source_valid={}, chunk_splats={}, required_page_splats={}, ordered_tree={}, nodes={})", tree != nullptr, tree && tree->rad_source.valid(), tree ? tree->rad_source.chunk_size : 0, kPage, tree && tree->has_tree(), tree ? tree->total_nodes() : 0));
+        const size_t nodes = tree->total_nodes(), chunks = (nodes + kPage - 1) / kPage;
+        const auto rest = uint32_t(model.max_sh_coeffs_rest());
+        const auto slots = core::sh_float4_slots_for_rest(rest);
+        const uint64_t page_bytes = kPage * uint64_t(12 + 8 + slots * 4 + 8 + 8 + 2 + 8 + 12) + 64;
+        const uint64_t staging = 32 * (sizeof(core::RadPagePackedDesc) + core::rad_page_staging_bytes(kPage));
+        const uint64_t recommended = i.device.recommendedMaxWorkingSetSize;
+        const uint64_t budget = recommended ? recommended - recommended / 5 : std::numeric_limits<uint64_t>::max();
+        const uint64_t allocated = i.device.currentAllocatedSize;
+        const uint64_t free = budget > allocated ? budget - allocated : 0;
+        // The shared pool policy sizes the pool and the VRAM fraction caps it.
+        // The pool is always a copy here, so resident tensors never make it
+        // free. The current pool and staging count toward their replacement.
+        const size_t current_pages = same_model ? i.cache.snapshot().physical_pages : 0;
+        const uint64_t available = free + (same_model ? current_pages * page_bytes + staging : 0);
+        const size_t requested = detail::lodPoolPages({.logical_chunks = chunks,
+                                                       .full_pool = model.has_deleted_mask(),
+                                                       .out_of_core = nodes > size_t(model.size()),
+                                                       .budget_splats = settings.pool_splats,
+                                                       .vram_fraction = settings.vram_fraction,
+                                                       .free_bytes = size_t(std::min<uint64_t>(free, std::numeric_limits<size_t>::max())),
+                                                       .current_pages = current_pages,
+                                                       .page_bytes = size_t(page_bytes)});
+        const uint64_t pool_budget = uint64_t(double(available) * settings.vram_fraction);
+        const size_t affordable = pool_budget > staging ? size_t((pool_budget - staging) / page_bytes) : 0;
+        const size_t pages = std::min({requested, affordable, size_t(std::numeric_limits<uint32_t>::max() / kPage)});
+        if (!pages)
+            throw core::MemoryAllocationError({.domain = core::MemoryDomain::MetalDevice, .requested_bytes = staging + page_bytes * std::max<size_t>(1, requested), .label = "viewer.rad.pool", .operation = "rad.pool.admission"});
+        if (same_model && pages == current_pages) {
+            // A refreshed budget that keeps the page count keeps the cache.
+            i.settings = settings;
+            return;
+        }
         auto meta = tree->meta_view;
         if (!meta.valid()) {
             auto opened = io::open_rad_meta_sidecar(tree->rad_source.path);
@@ -69,7 +102,6 @@ namespace lfs::vis {
                 throw std::runtime_error(std::format("Metal RAD metadata sidecar unavailable (path={}, error={})", tree->rad_source.path.string(), opened.error()));
             meta = std::move(*opened);
         }
-        const size_t nodes = tree->total_nodes(), chunks = (nodes + kPage - 1) / kPage;
         if (meta.node_count != nodes || meta.chunk_count != chunks || tree->rad_source.chunks.size() != chunks)
             throw std::invalid_argument(std::format("Metal RAD metadata and payload chunk extents differ (meta_nodes={}, tree_nodes={}, meta_chunks={}, expected_chunks={}, source_chunks={})", meta.node_count, nodes, meta.chunk_count, chunks, tree->rad_source.chunks.size()));
         // Stop producers before draining or replacing storage. Neither worker
@@ -83,20 +115,6 @@ namespace lfs::vis {
         i.deleted_pointer = nullptr;
         i.frozen_frames = 0;
         i.last_publish_frame = 0;
-        const auto rest = uint32_t(model.max_sh_coeffs_rest());
-        const auto slots = core::sh_float4_slots_for_rest(rest);
-        const uint64_t page_bytes = kPage * uint64_t(12 + 8 + slots * 4 + 8 + 8 + 2 + 8 + 12) + 64;
-        const uint64_t staging = 32 * (sizeof(core::RadPagePackedDesc) + core::rad_page_staging_bytes(kPage));
-        const uint64_t recommended = i.device.recommendedMaxWorkingSetSize;
-        const uint64_t budget = recommended ? recommended - recommended / 5 : std::numeric_limits<uint64_t>::max();
-        const uint64_t allocated = i.device.currentAllocatedSize;
-        const uint64_t free = budget > allocated ? budget - allocated : 0;
-        const uint64_t pool_budget = uint64_t(double(free) * settings.vram_fraction);
-        const size_t requested = settings.pool_splats ? (settings.pool_splats / kPage + (settings.pool_splats % kPage != 0)) : chunks;
-        const size_t affordable = pool_budget > staging ? size_t((pool_budget - staging) / page_bytes) : 0;
-        const size_t pages = std::min({chunks, requested, affordable, size_t(std::numeric_limits<uint32_t>::max() / kPage)});
-        if (!pages)
-            throw core::MemoryAllocationError({.domain = core::MemoryDomain::MetalDevice, .requested_bytes = staging + page_bytes * std::max<size_t>(1, requested), .label = "viewer.rad.pool", .operation = "rad.pool.admission"});
         core::RadPagePool pool;
         pool.page_splats = uint32_t(kPage);
         pool.sh_slots = slots;

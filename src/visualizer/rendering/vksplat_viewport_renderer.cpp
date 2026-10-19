@@ -122,69 +122,33 @@ namespace lfs::vis {
                                               const std::size_t pool_budget_splats,
                                               const float pool_vram_fraction,
                                               const std::size_t current_pool_pages) {
-            if (logical_chunks == 0 || splat_data.has_deleted_mask()) {
-                return logical_chunks;
-            }
             const bool rad_backed = splat_data.lod_tree && splat_data.lod_tree->rad_source.valid();
             const bool host_resident_leaves =
                 rad_backed && splat_data.means_raw().device() != lfs::core::Device::GPU;
             const bool out_of_core =
                 rad_backed &&
                 splat_data.lod_tree->total_nodes() > static_cast<std::size_t>(splat_data.size());
-            if (!out_of_core && !host_resident_leaves) {
-                // Tensors live in VRAM (non-RAD, or RAD fully migrated at
-                // load): a bounded pool would only add double residency.
-                return logical_chunks;
-            }
-            if (!out_of_core && pool_budget_splats > 0) {
-                // Explicit splat budget for host-resident streaming.
-                constexpr std::size_t kMinBudgetPoolPages = 2048;
-                const std::size_t budget_pages =
-                    (pool_budget_splats + LodPageCache::kChunkSplats - 1) / LodPageCache::kChunkSplats;
-                return std::clamp(budget_pages, std::min(kMinBudgetPoolPages, logical_chunks),
-                                  logical_chunks);
-            }
-            // Out-of-core, or host-resident leaves on auto budget: the pool is
-            // real VRAM the renderer must share — size it from headroom. A
-            // host-resident model previously fell through to a FULL pool here,
-            // which allocates pages x page_bytes regardless of free VRAM
-            // (issue #1295: 94K pages = 16.6 GB on a card with 11.8 free).
-            {
-                // Only a coarse LOD prefix is host-resident, so the pool must
-                // hold the cut's whole working set or streaming thrashes. Size
-                // it from VRAM headroom; the splat-count budget setting was
-                // tuned for host-resident streaming and is far too small here.
-                constexpr std::size_t kMinPoolPages = 2048;
-                const std::size_t page_bytes = std::max<std::size_t>(lodPageDeviceBytes(splat_data), 1);
-                std::size_t free_bytes = 0;
+            // Tensors live in VRAM (non-RAD, or RAD fully migrated at load):
+            // a bounded pool would only add double residency.
+            detail::LodPoolSizing sizing{
+                .logical_chunks = logical_chunks,
+                .full_pool = splat_data.has_deleted_mask() || (!out_of_core && !host_resident_leaves),
+                .out_of_core = out_of_core,
+                .budget_splats = pool_budget_splats,
+                .vram_fraction = pool_vram_fraction,
+                .current_pages = current_pool_pages,
+                .page_bytes = lodPageDeviceBytes(splat_data),
+            };
+            if (logical_chunks > 0 && !sizing.full_pool && (out_of_core || pool_budget_splats == 0)) {
                 try {
-                    free_bytes = lfs::core::gpu_backend_memory_info(lfs::core::default_gpu_backend()).free_bytes;
+                    sizing.free_bytes = lfs::core::gpu_backend_memory_info(lfs::core::default_gpu_backend()).free_bytes;
                 } catch (const std::exception& error) {
                     LOG_WARN("LOD memory budget query failed: {}", error.what());
                 }
-                if (free_bytes > 0) {
-                    // The current pool's own allocation counts as available to
-                    // its replacement, otherwise resizing feeds back on itself.
-                    const double budget_bytes =
-                        (static_cast<double>(free_bytes) +
-                         static_cast<double>(current_pool_pages) * static_cast<double>(page_bytes)) *
-                        std::clamp(pool_vram_fraction, 0.05f, 0.9f);
-                    auto budget_pages =
-                        static_cast<std::size_t>(budget_bytes / static_cast<double>(page_bytes));
-                    // Scratch/ring reallocations wobble the free-VRAM reading
-                    // by a few pages between frames; an unquantized re-derive
-                    // reconfigure-loops (each pool reset moves free VRAM,
-                    // landing on a new count, resetting again). Page-quantum
-                    // steps absorb the wobble so the re-derive is idempotent.
-                    constexpr std::size_t kPoolPageQuantum = 512;
-                    budget_pages -= budget_pages % kPoolPageQuantum;
-                    return std::clamp(budget_pages,
-                                      std::min(kMinPoolPages, logical_chunks),
-                                      logical_chunks);
-                }
-                LOG_ERROR("LOD pool sizing: no backend memory budget available; using minimum pool");
-                return std::min(kMinPoolPages, logical_chunks);
+                if (sizing.free_bytes == 0)
+                    LOG_ERROR("LOD pool sizing: no backend memory budget available; using minimum pool");
             }
+            return detail::lodPoolPages(sizing);
         }
 
         std::vector<std::uint32_t> collectProtectedLodChunks(

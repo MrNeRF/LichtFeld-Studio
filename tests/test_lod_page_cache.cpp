@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "rendering/gpu_lod_target_feedback.hpp"
 #include "rendering/lod_page_cache.hpp"
 
 #include <gtest/gtest.h>
@@ -21,6 +22,43 @@ namespace {
         EXPECT_TRUE(lfs::vis::detail::lodPageCacheNeedsReconfigure(true, true, 128, 256));
         EXPECT_TRUE(lfs::vis::detail::lodPageCacheNeedsReconfigure(false, false, 128, 128));
         EXPECT_FALSE(lfs::vis::detail::lodPageCacheNeedsReconfigure(true, false, 128, 128));
+    }
+
+    TEST(LodPageCache, PoolPolicyFloorsOutOfCorePoolsAtWorkingSet) {
+        using lfs::vis::detail::lodPoolPages;
+        constexpr std::size_t kGiB = std::size_t{1} << 30;
+        EXPECT_EQ(lodPoolPages({.logical_chunks = 425, .full_pool = true}), 425u);
+        // A 4x-budget pool (196 pages) cannot hold a close view's touch set.
+        EXPECT_EQ(lodPoolPages({.logical_chunks = 425, .out_of_core = true, .budget_splats = 400000, .free_bytes = 20 * kGiB, .page_bytes = 300000}), 425u);
+        // Out-of-core pools ignore the splat budget and quantize VRAM headroom.
+        EXPECT_EQ(lodPoolPages({.logical_chunks = 22746, .out_of_core = true, .budget_splats = 400000, .vram_fraction = 0.15f, .free_bytes = 20 * kGiB, .page_bytes = 300000}),
+                  10240u);
+        EXPECT_EQ(lodPoolPages({.logical_chunks = 22746, .out_of_core = true, .free_bytes = 0, .page_bytes = 300000}), 2048u);
+        // Host-resident streaming honors an explicit budget above the floor.
+        EXPECT_EQ(lodPoolPages({.logical_chunks = 22746, .budget_splats = 3000 * 2048, .page_bytes = 300000}), 3000u);
+        EXPECT_EQ(lodPoolPages({.logical_chunks = 22746, .budget_splats = 4096, .page_bytes = 300000}), 2048u);
+    }
+
+    TEST(GpuLodFeedback, BudgetFillConvergesIntoDeadband) {
+        using lfs::vis::advanceGpuLodPixelScaleFeedback;
+        float feedback = 1.0f;
+        // Underfill descends at most 3% per frame; frozen admission halts it.
+        EXPECT_FLOAT_EQ(advanceGpuLodPixelScaleFeedback(feedback, {.candidates = 400, .capacity = 1000}), 1.0f);
+        EXPECT_FLOAT_EQ(feedback, 1.0f / 1.03f);
+        const float frozen = feedback;
+        (void)advanceGpuLodPixelScaleFeedback(feedback, {.candidates = 400, .capacity = 1000, .admission_frozen = true});
+        EXPECT_EQ(feedback, frozen);
+        // Inside the deadband the feedback holds exactly, so viewers can settle.
+        (void)advanceGpuLodPixelScaleFeedback(feedback, {.candidates = 900, .capacity = 1000});
+        EXPECT_EQ(feedback, frozen);
+        // Same-frame repair applies in full before the rate-limited raise.
+        EXPECT_FLOAT_EQ(advanceGpuLodPixelScaleFeedback(feedback, {.candidates = 1000, .capacity = 1000, .overflow = 5, .threshold_scale = 2.0f}),
+                        2.0f * frozen);
+        EXPECT_GT(feedback, 2.0f * frozen);
+        EXPECT_LE(feedback, 2.0f * frozen * 1.03f + 1e-6f);
+        feedback = 0.05f;
+        (void)advanceGpuLodPixelScaleFeedback(feedback, {.candidates = 1, .capacity = 1000});
+        EXPECT_EQ(feedback, 0.05f);
     }
 
     std::vector<LodPageCache::PendingUpload> drainAndComplete(LodPageCache& cache) {

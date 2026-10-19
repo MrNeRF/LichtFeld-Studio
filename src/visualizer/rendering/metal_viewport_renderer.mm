@@ -236,7 +236,10 @@ namespace lfs::vis {
             bool gpu_lod_active = false;
             uint64_t gpu_tree_signature = 0;
             uint32_t gpu_capacity = 0, gpu_source_count = 0, gpu_chunks = 0;
-            float lod_feedback = 1; // pixel-scale feedback the cut was selected with
+            // The cut's request (base limit, no frame counters) and the
+            // pixel-scale feedback it was selected with.
+            rendering::SplatLodParameters lod_request{};
+            float lod_feedback = 1;
             uint32_t publication_count = 0;
             bool points = false;
             // Host copies of the tensor results, read after completion: the
@@ -359,10 +362,11 @@ namespace lfs::vis {
             std::unique_ptr<rendering::SplatRasterizer> raster;
             std::unique_ptr<rendering::SplatLodSelector> lod;
             // Budget-fill feedback on the GPU LOD threshold, advanced once per
-            // completed cut of `lod_feedback_tree`. Settled once a cut selected
-            // with the current feedback left it unchanged.
+            // completed cut of `lod_feedback_tree`. Settled once a cut of the
+            // current request, selected with the current feedback, left it unchanged.
             float lod_feedback = 1;
             uint64_t lod_feedback_tree = 0, lod_feedback_serial = 0;
+            rendering::SplatLodParameters lod_feedback_request{};
             bool lod_feedback_settled = false;
             core::GpuBackend backend{};
             std::unique_ptr<rendering::SplatPointRenderer> points;
@@ -1138,6 +1142,7 @@ namespace lfs::vis {
                                                      .converging = completed.lodMisses() > 0 || (pager && (pager->pending() || pager->cache().hasOutstandingWork())),
                                                      .admission_frozen = pager && pager->frozen()});
                     state.lod_feedback_serial = completed.producer_value;
+                    state.lod_feedback_request = completed.lod_request;
                     state.lod_feedback_settled = completed.lod_feedback == state.lod_feedback;
                 }
             }
@@ -1375,6 +1380,9 @@ namespace lfs::vis {
                 f.gpu_source_count = source_count;
                 f.gpu_tree_signature = gpu_tree->signature;
                 f.gpu_chunks = gpu_tree->chunks;
+                f.lod_request = lod_parameters;
+                f.lod_request.pixel_scale_limit = p.pixel_scale_limit;
+                f.lod_request.current_frame = f.lod_request.fade_frames = 0;
                 f.lod_feedback = state.lod_feedback;
             }
             const auto* lod_cut = gpu_lod ? &gpu_cut : host_cut ? &host_cut_tensors : nullptr;
@@ -1512,8 +1520,10 @@ namespace lfs::vis {
                         completion_retry();
                 }];
             });
-            // Keep rendering until the budget-fill feedback settles.
-            const bool refine = (pager && (pager->pending() || !pager->rootReady())) || (gpu_lod && !state.lod_feedback_settled);
+            // Keep rendering until the budget-fill feedback settles for this request.
+            const bool lod_feedback_settled = state.lod_feedback_settled &&
+                                              std::memcmp(&state.lod_feedback_request, &f.lod_request, sizeof(f.lod_request)) == 0;
+            const bool refine = (pager && (pager->pending() || !pager->rootReady())) || (gpu_lod && !lod_feedback_settled);
             if (pager && gpu_lod)
                 pager->noteRendererCompletion(serial);
             f.producer_value = serial;

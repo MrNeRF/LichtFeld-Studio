@@ -60,7 +60,9 @@ static void run() {
     core::MetalTensorReader reader;
     vis::MetalRadPager pager(reader.device());
     pager.configure(model, context.device(), nullptr, {.pool_splats = 4096, .fade_frames = 0});
-    require(pager.pool().page_splats == 2048 && pager.physicalNodes() == 4096, "Native page-pool sizing differs");
+    // The shared pool policy keeps out-of-core pools at >= 2048 pages: this
+    // small fixture pages every chunk whatever the splat budget.
+    require(pager.pool().page_splats == 2048 && pager.physicalNodes() == pager.cache().snapshot().logical_chunks * 2048, "Native page-pool sizing differs");
     require(pager.cache().snapshot().resident_chunks == 0, "RAD pages published before any GPU upload");
     const auto await = [&](uint32_t chunk, std::span<const uint32_t> touches) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
@@ -78,13 +80,14 @@ static void run() {
     interest[0] = 0xffffffffu;
     interest[1] = std::bit_cast<uint32_t>(2.f);
     await(1, interest);
-    const uint32_t replaced_page = pager.cache().snapshot().chunk_to_page[1];
     interest[1] = 0;
     interest[2] = std::bit_cast<uint32_t>(100.f);
     await(2, interest);
-    require(pager.cache().snapshot().chunk_to_page[0] != 0xffffffffu, "Pinned root was evicted");
-    require(pager.cache().snapshot().chunk_to_page[1] == 0xffffffffu && pager.cache().snapshot().chunk_to_page[2] == replaced_page,
-            "Native page eviction retained a stale logical mapping");
+    const auto& mapping = pager.cache().snapshot().chunk_to_page;
+    const uint32_t replaced_page = mapping[2];
+    require(mapping[0] != 0xffffffffu, "Pinned root was evicted");
+    require(mapping[1] != 0xffffffffu && mapping[1] != replaced_page && mapping[0] != replaced_page,
+            "Native pages of distinct chunks alias");
     // Consume metadata produced by the actual packed decoder, on the native
     // tensor reader, before resetting an active producer/cache generation.
     const auto& metadata = pager.pool().regions[8];
@@ -99,7 +102,12 @@ static void run() {
     interest.back() = std::bit_cast<uint32_t>(1000.f);
     pager.advance(interest);
     const auto signature = pager.signature();
+    // A budget refresh keeps an unchanged pool; a new model replaces the generation.
     pager.configure(model, context.device(), nullptr, {.pool_splats = 6144, .fade_frames = 0});
+    require(pager.signature() == signature, "A budget refresh with an unchanged page count reset the RAD cache");
+    const auto replacement = io::load_rad(rad, {.out_of_core = true, .preview_splats = 2048});
+    require(bool(replacement), "RAD replacement load failed");
+    pager.configure(*replacement, context.device(), nullptr, {.pool_splats = 6144, .fade_frames = 0});
     [command waitUntilCompleted];
     require(command.status == MTLCommandBufferStatusCompleted, "RAD page consumer failed during generation replacement");
     const auto links = static_cast<const core::RadMetaLinksQ*>(snapshot.contents);
@@ -136,7 +144,8 @@ static void run() {
         require(max_color > .1f, "RAD streaming lost all visible coverage");
         const auto status = renderer.gpuLodSelectionStatus(vis::RenderTargetId{1});
         if (status.active) {
-            require(status.pool_pages == 3 && status.chunk_count > status.pool_pages && status.selected > 0 && status.overflow == 0,
+            // Below the 2048-page floor the pool pages every chunk.
+            require(status.pool_pages == status.chunk_count && status.chunk_count >= 3 && status.selected > 0 && status.overflow == 0,
                     "Native RAD cut/diagnostics are not backed by the actual pool");
             native_cut = true;
             settled |= !output->lod_streaming_active;
@@ -173,7 +182,7 @@ static void run() {
     interest.back() = std::bit_cast<uint32_t>(4.f);
     await(uint32_t(interest.size() - 1), interest);
     require(pager.pool().page_splats == 2048, "Legacy RAD file block leaked into the GPU page stride");
-    std::printf("RAD paging, eviction, generation replacement and native desktop cut passed; fixture=%s\n", directory.c_str());
+    std::printf("RAD paging, generation replacement, and native desktop cut passed; fixture=%s\n", directory.c_str());
 }
 int main() {
     @autoreleasepool {
