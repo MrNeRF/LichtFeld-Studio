@@ -4091,6 +4091,7 @@ namespace lfs::vis::gui {
         const auto left = scene.addSplat("left", makeTwoPointTestSplat(0.f, 1.f));
         const auto right = scene.addSplat("right", makeTwoPointTestSplat(2.f, 3.f));
         manager.selectNode(right);
+        scene.setSelection({3});
         Viewport viewport(640, 480);
         Tensor preview = Tensor::from_vector(std::vector<int>{0, 0, 1, 0}, {size_t{4}}, Device::CPU).to(DataType::UInt8);
         const FrameContext ctx{
@@ -4100,11 +4101,20 @@ namespace lfs::vis::gui {
             .scene_state = manager.buildRenderState(),
             .settings = RenderSettings{},
             .render_size = {640, 480},
+            .gaussian_selection_visible = true,
             .cursor_preview = {.active = true, .add_mode = false, .preview_selection = &preview},
         };
         const std::vector<glm::mat4> transforms{glm::mat4(1.f)};
         auto a = buildPointCloudNodeRenderRequest(ctx, scene, *scene.getNodeById(left), {320, 480}, transforms);
         auto b = buildPointCloudNodeRenderRequest(ctx, scene, *scene.getNodeById(right), {320, 480}, transforms);
+        for (const auto* request : {&a, &b}) {
+            ASSERT_NE(request->overlay.selection_mask, nullptr);
+            EXPECT_EQ(request->overlay.selection_mask->numel(), 2u);
+        }
+        const auto left_mask = a.overlay.selection_mask->cpu();
+        const auto right_mask = b.overlay.selection_mask->cpu();
+        EXPECT_EQ(left_mask.ptr<std::uint8_t>()[1], 0);
+        EXPECT_NE(right_mask.ptr<std::uint8_t>()[1], 0);
         EXPECT_EQ(a.overlay.transient_mask.mask, nullptr);
         ASSERT_NE(b.overlay.transient_mask.mask, nullptr);
         EXPECT_EQ(b.overlay.transient_mask.mask->numel(), 2u);

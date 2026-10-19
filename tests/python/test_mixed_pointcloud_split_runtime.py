@@ -202,3 +202,43 @@ assert lf.get_scene().add_point_cloud('Native cloud', means, colors) >= 0
     assert _color_counts(image)[1] > 1000
     _editor(endpoint, "assert not lf.ui.get_split_view_info()['enabled']")
     _editor(endpoint, "assert lf.get_scene().get_node('Native cloud').point_cloud() is not None")
+
+
+@pytest.mark.parametrize('selected_name', ['left_splat', 'right_splat'])
+def test_splat_point_mode_comparison_keeps_selection_visible(tmp_path, selected_name, camera_runtime):
+    paths = [tmp_path / 'left_splat.ply', tmp_path / 'right_splat.ply']
+    for path in paths:
+        _front_splats(path, z=0.)
+    endpoint = camera_runtime
+    _editor(endpoint, f"import lichtfeld as lf; lf.load_files({[str(p) for p in paths]!r}, discard_changes=True)")
+    assert _tool(endpoint, 'runtime_job_wait', {'job_id': 'import.dataset', 'timeout_ms': 30000}).get('success')
+    _editor(endpoint, """
+identity=[1.,0.,0.,0.,0.,1.,0.,0.,0.,0.,1.,0.,0.,0.,0.,1.]
+for name in ('left_splat', 'right_splat'):
+    lf.set_node_visualizer_world_transform(name, identity, record_history=False)
+lf.select_nodes([])
+""")
+    _tool(endpoint, 'render_settings_set', {
+        'split_view_mode': 1, 'point_cloud_mode': True, 'split_position': .5,
+        'voxel_size': .04, 'show_grid': False, 'show_camera_frustums': False,
+        'show_coord_axes': False, 'render_scale': 1.,
+    })
+    _tool(endpoint, 'camera_set_view', {'eye': [0., 0., 6.], 'target': [0., 0., 0.]})
+    _tool(endpoint, 'ui_tool_invoke', {'tool_id': 'builtin.select', 'submode_id': 'rectangle'})
+    baseline = _window(endpoint)
+    baseline.save(tmp_path / 'point-mode-before.png')
+    assert _color_counts(baseline)[0] > 1000
+    offset = 0 if selected_name == 'left_splat' else 961
+    _editor(endpoint, f"lf.select_node({selected_name!r}); lf.get_scene().set_selection(list(range({offset}, {offset + 961})))")
+    assert _tool(endpoint, 'selection_get', {'max_indices': 0})['selected_count'] == 961
+    selected = _window(endpoint)
+    selected.save(tmp_path / 'point-mode-selected.png')
+    # The untouched panel stays red. The default selection tint is light red,
+    # so count its raised green/blue channels rather than a hue change.
+    red_before = _color_counts(baseline)[0]
+    red_after = _color_counts(selected)[0]
+    assert red_after > red_before * .2, (red_before, red_after)
+    def highlighted_pixels(image):
+        return sum(r > 180 and 25 < g < 120 and 25 < b < 120 and abs(g - b) < 10
+                   for r, g, b in image.crop((90, 180, image.width - 35, image.height - 55)).getdata())
+    assert highlighted_pixels(selected) > highlighted_pixels(baseline) + 1000

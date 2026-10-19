@@ -2942,6 +2942,22 @@ namespace lfs::vis {
                     .filters = state.filters,
                     .overlay = state.overlay,
                     .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(frame_settings)};
+                if (model_override && scene_manager &&
+                    splitViewUsesPLYComparison(frame_settings.split_view_mode)) {
+                    const auto& source_scene = scene_manager->getScene();
+                    for (const auto& slot : source_scene.getVisibleSplatNodeSlots()) {
+                        if (slot.node && slot.node->model.get() == model_override) {
+                            // Each panel draws one owned model. Scope selection,
+                            // brush preview and crop filters to that same node.
+                            auto scoped = buildPointCloudNodeRenderRequest(
+                                frame_ctx, source_scene, *slot.node, panel_size,
+                                *request.scene.model_transforms);
+                            request.filters = std::move(scoped.filters);
+                            request.overlay = std::move(scoped.overlay);
+                            break;
+                        }
+                    }
+                }
                 auto auxiliary_engine = ensure_auxiliary_rendering_engine();
                 if (!auxiliary_engine) {
                     return std::unexpected(auxiliary_engine.error());
