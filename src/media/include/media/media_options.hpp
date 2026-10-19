@@ -18,7 +18,7 @@ namespace lfs::media {
     inline constexpr auto outputOptionValues = std::array<NamedOption<T>, 0>{};
     template <>
     inline constexpr auto outputOptionValues<FrameFileFormat> = std::array{
-        NamedOption{FrameFileFormat::PNG, "png"sv}, NamedOption{FrameFileFormat::JPEG, "jpeg"sv}, NamedOption{FrameFileFormat::EXR, "exr"sv}, NamedOption{FrameFileFormat::TIFF16, "tiff16"sv}, NamedOption{FrameFileFormat::JXL, "jxl"sv}};
+        NamedOption{FrameFileFormat::PNG, "png"sv}, NamedOption{FrameFileFormat::JPEG, "jpeg"sv}, NamedOption{FrameFileFormat::EXR, "exr"sv}, NamedOption{FrameFileFormat::TIFF16, "tiff16"sv}, NamedOption{FrameFileFormat::JXL, "jxl"sv}, NamedOption{FrameFileFormat::AVIF, "avif"sv}};
     template <>
     inline constexpr auto outputOptionValues<ExrPrecision> = std::array{
         NamedOption{ExrPrecision::Half, "half"sv}, NamedOption{ExrPrecision::Float, "float"sv}};
@@ -66,4 +66,6 @@ namespace lfs::media {
     [[nodiscard]] LFS_MEDIA_API SinkResult validateTiff16OutputOptions(const Tiff16OutputOptions&);
     [[nodiscard]] LFS_MEDIA_API SinkResult validateJxlOutputOptions(const JxlOutputOptions&);
     [[nodiscard]] LFS_MEDIA_API SinkResult validateJxlOutputOptions(const JxlOutputOptions&, FramePixelFormat);
+
+    [[nodiscard]] LFS_MEDIA_API SinkResult validateAvifOutputOptions(const AvifOutputOptions&);
 } // namespace lfs::media

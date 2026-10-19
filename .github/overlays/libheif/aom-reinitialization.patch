@@ -1,0 +1,25 @@
+--- a/libheif/plugins/encoder_aom.cc
++++ b/libheif/plugins/encoder_aom.cc
+@@ -65,7 +65,7 @@
+     aom_codec_destroy(&codec);
+   }
+ 
+-  aom_codec_ctx_t codec;
++  aom_codec_ctx_t codec{};
+ 
+   // --- parameters
+ 
+@@ -1023,6 +1023,13 @@
+   aom_codec_flags_t encoder_flags = 0;
+   if (bpp_y > 8) {
+     encoder_flags = (aom_codec_flags_t) (encoder_flags | AOM_CODEC_USE_HIGHBITDEPTH);
++  }
++
++  // A still image and its alpha image reuse this encoder. Release the previous
++  // codec before reinitialization, which otherwise overwrites its allocations.
++  if (codec.priv) {
++    aom_codec_destroy(&codec);
++    codec = {};
+   }
+ 
+   // allocate aom_codec_ctx_t

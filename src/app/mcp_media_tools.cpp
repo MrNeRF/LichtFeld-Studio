@@ -225,6 +225,9 @@ namespace lfs::app {
                     {"allow_hardware_decode", boolean},
                     {"format", {{"type", "string"}, {"enum", option_names<FrameFileFormat>()}}},
                     {"tiff16_transfer", {{"type", "string"}, {"enum", {"linear", "srgb", "bt709"}}}},
+                    {"avif_quality", {{"type", "integer"}, {"minimum", 0}, {"maximum", 100}}},
+                    {"avif_speed", {{"type", "integer"}, {"minimum", 0}, {"maximum", 9}}},
+                    {"avif_depth", {{"type", "integer"}, {"enum", {8, 10, 12}}}},
                     {"jxl_distance", {{"type", "number"}, {"exclusiveMinimum", 0}, {"maximum", 25}}},
                     {"jxl_effort", {{"type", "integer"}, {"minimum", 1}, {"maximum", 9}, {"description", "Lossless Float32 requires effort 4..9; lossy allows 1..9"}}},
                     {"jpeg_quality", integer},
@@ -289,7 +292,7 @@ namespace lfs::app {
             request.end_seconds = args.value("end_seconds", -1.0);
             request.convert_hdr_to_sdr = args.value("convert_hdr_to_sdr", false);
             request.allow_hardware_decode = args.value("allow_hardware_decode", true);
-            if (args.value("format", "png") == "exr" || args.value("format", "png") == "tiff16" || args.value("format", "png") == "jxl")
+            if (args.value("format", "png") == "exr" || args.value("format", "png") == "tiff16" || args.value("format", "png") == "jxl" || args.value("format", "png") == "avif")
                 request.output_format = FramePixelFormat::RGBFloat32;
             const auto transfer = parseOutputOption<ColorTransfer>(args.value("input_transfer", "auto"));
             const auto primaries = parseOutputOption<ColorPrimaries>(args.value("input_primaries", "auto"));
@@ -331,7 +334,7 @@ namespace lfs::app {
                                [](const json&) {
                                    const auto caps = MediaIngest::capabilities();
                                    const auto codecs = MediaIngest::codecBuildInfo();
-                                   return json{{"success", true}, {"software_decode", caps.software_decode}, {"rgb8", caps.rgb8}, {"png", caps.png}, {"jpeg", caps.jpeg}, {"hardware_decode", caps.hardware_decode}, {"hdr_to_sdr", caps.hdr_to_sdr}, {"rgb_float_sdr", caps.rgb_float_sdr}, {"exr", caps.exr}, {"tiff16", caps.tiff16}, {"jxl", caps.jxl}, {"float_sdr_profile", caps.float_sdr_profile}, {"rgb_float_pq", caps.rgb_float_pq}, {"float_pq_profile", caps.float_pq_profile}, {"rgb_float_hlg", caps.rgb_float_hlg}, {"float_hlg_profile", caps.float_hlg_profile}, {"ffmpeg_version", codecs.ffmpeg_version}, {"ffmpeg_license", codecs.ffmpeg_license}, {"ffmpeg_configuration", codecs.ffmpeg_configuration}};
+                                   return json{{"success", true}, {"software_decode", caps.software_decode}, {"rgb8", caps.rgb8}, {"png", caps.png}, {"jpeg", caps.jpeg}, {"hardware_decode", caps.hardware_decode}, {"hdr_to_sdr", caps.hdr_to_sdr}, {"rgb_float_sdr", caps.rgb_float_sdr}, {"exr", caps.exr}, {"tiff16", caps.tiff16}, {"jxl", caps.jxl}, {"avif", caps.avif}, {"float_sdr_profile", caps.float_sdr_profile}, {"rgb_float_pq", caps.rgb_float_pq}, {"float_pq_profile", caps.float_pq_profile}, {"rgb_float_hlg", caps.rgb_float_hlg}, {"float_hlg_profile", caps.float_hlg_profile}, {"ffmpeg_version", codecs.ffmpeg_version}, {"ffmpeg_license", codecs.ffmpeg_license}, {"ffmpeg_configuration", codecs.ffmpeg_configuration}};
                                });
         registry.register_tool(mcp::McpTool{
                                    .name = "media.probe",
@@ -364,12 +367,18 @@ namespace lfs::app {
                                    const bool jxl = format == "jxl";
                                    if (args.contains("jxl_effort") && (!args["jxl_effort"].is_number_integer() || args["jxl_effort"] < 1 || args["jxl_effort"] > 9))
                                        return mcp::invalid_argument_result("JXL effort requires an integer in [1,9]; lossless Float32 requires [4,9]", "media.extract");
+
+                                   const bool avif = format == "avif";
+                                   for (const auto* option : {"avif_quality", "avif_speed", "avif_depth"})
+                                       if (args.contains(option) && !args[option].is_number_integer())
+                                           return mcp::invalid_argument_result("AVIF quality, speed and depth require integers", "media.extract");
                                    if ((!exr && (args.contains("exr_precision") || args.contains("exr_compression"))) ||
-                                       (!(exr || tiff || jxl) && (args.contains("overwrite") || args.contains("input_transfer") || args.contains("input_primaries") || args.contains("float_profile"))) ||
-                                       ((exr || tiff || jxl) && (args.contains("jpeg_quality") || args.value("convert_hdr_to_sdr", false))) ||
+                                       (!(exr || tiff || jxl || avif) && (args.contains("overwrite") || args.contains("input_transfer") || args.contains("input_primaries") || args.contains("float_profile"))) ||
+                                       ((exr || tiff || jxl || avif) && (args.contains("jpeg_quality") || args.value("convert_hdr_to_sdr", false))) ||
                                        (!tiff && args.contains("tiff16_transfer")) ||
-                                       (!jxl && (args.contains("jxl_distance") || args.contains("jxl_effort"))))
-                                       return mcp::invalid_argument_result("Image options must match EXR/TIFF16/JXL format; float output does not accept JPEG quality or HDR to SDR", "media.extract");
+                                       (!jxl && (args.contains("jxl_distance") || args.contains("jxl_effort"))) ||
+                                       (!avif && (args.contains("avif_quality") || args.contains("avif_speed") || args.contains("avif_depth"))))
+                                       return mcp::invalid_argument_result("Image options must match EXR/TIFF16/JXL/AVIF format; float output does not accept JPEG quality or HDR to SDR", "media.extract");
                                    const auto parsed_format = parseOutputOption<FrameFileFormat>(format);
                                    const auto precision = parseOutputOption<ExrPrecision>(args.value("exr_precision", "half"));
                                    const auto compression = parseOutputOption<ExrCompression>(args.value("exr_compression", "zip"));
@@ -385,6 +394,14 @@ namespace lfs::app {
                                        throw Exception(tiff_transfer.error());
                                    files.files.tiff16.transfer = *tiff_transfer;
                                    files.files.tiff16.overwrite = args.value("overwrite", false);
+                                   files.files.avif.overwrite = args.value("overwrite", false);
+                                   files.files.avif.lossless = !args.contains("avif_quality");
+                                   files.files.avif.quality = args.value("avif_quality", 90);
+                                   files.files.avif.speed = args.value("avif_speed", 8);
+                                   files.files.avif.bit_depth = args.value("avif_depth", 8);
+                                   if (avif)
+                                       if (const auto valid = validateAvifOutputOptions(files.files.avif); !valid)
+                                           return mcp::invalid_argument_result(std::string(valid.error().detail()), "media.extract");
                                    files.files.jxl.overwrite = args.value("overwrite", false);
                                    files.files.jxl.lossless = !args.contains("jxl_distance");
                                    files.files.jxl.distance = args.value("jxl_distance", 1.f);

@@ -13,7 +13,8 @@ namespace lfs::media {
                                  JPEG,
                                  EXR,
                                  TIFF16,
-                                 JXL };
+                                 JXL,
+                                 AVIF };
     struct FileFrameSinkOptions {
         std::filesystem::path output_directory;
         std::string filename_pattern = "frame_%d";
@@ -29,6 +30,7 @@ namespace lfs::media {
         int first_source_frame_number = 1;
         Tiff16OutputOptions tiff16;
         JxlOutputOptions jxl;
+        AvifOutputOptions avif;
     };
     class LFS_MEDIA_API FileFrameSink final : public FrameSink {
     public:

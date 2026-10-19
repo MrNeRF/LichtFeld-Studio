@@ -49,7 +49,9 @@ Windows ICC-over-HDR-NCLX inputs retain ICC precedence. HEVC alpha is unsupporte
 the existing AV1 display path preserves alpha and unpremultiplies associated RGB.
 
 The bundled libheif overlay retains the pinned sources and patches, uses dav1d,
-and disables HEVC decoders, encoders and dynamic plugin loading. OS codecs are
+and disables HEVC decoders/encoders and dynamic plugin loading. The optional
+AVIF output feature enables only the built-in AOM AV1 encoder; see
+[AVIF output](media-avif.md). OS codecs are
 not bundled. This distribution policy is distinct from source licenses and is
 not a general statement about patent obligations. No HEIC writer or Linux
 external-decoder fallback is provided.

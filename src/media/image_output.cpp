@@ -3,6 +3,7 @@
 #include "media/image_output.hpp"
 #include "core/atomic_file.hpp"
 #include "core/color_transfer.h"
+#include "core/image_avif.hpp"
 #include "core/image_codecs.hpp"
 #include "core/image_exr.hpp"
 #include "core/image_jxl.hpp"
@@ -62,7 +63,100 @@ namespace lfs::media {
                 return SinkResult::failure(outputError(ErrorCode::Internal, "Image output failed (nonstandard_exception=true)", 0, "ImageOutput", operation));
             }
         }
+        template <class Sample, class Fail>
+        SinkResult quantizeSdr(const FrameView& frame, ColorTransfer transfer, uint16_t maximum,
+                               const std::function<bool()>& cancelled, std::vector<Sample>& pixels, Fail&& fail) {
+            const auto& layout = frame.layout;
+            const bool rgba = layout.format == FramePixelFormat::RGBAFloat32;
+            const size_t channels = rgba ? 4 : 3;
+            const auto encode = [&](float v) {
+                v = std::clamp(v, 0.0f, 1.0f);
+                return transfer == ColorTransfer::Srgb    ? core::color::linearToSrgb(v)
+                       : transfer == ColorTransfer::Bt709 ? core::color::linearToBt709(v)
+                                                          : v;
+            };
+            const auto quantize = [&](float v) { return static_cast<Sample>(std::floor(std::clamp(double(v), 0.0, 1.0) * double(maximum) + 0.5)); };
+            for (int y = 0; y < layout.height; ++y) {
+                if (cancelled && cancelled())
+                    return fail(ErrorCode::Cancelled, "SDR conversion cancelled");
+                for (int x = 0; x < layout.width; ++x) {
+                    std::array<float, 4> sample{0, 0, 0, 1};
+                    std::memcpy(sample.data(), frame.pixels.data() + y * layout.row_stride + x * channels * 4, channels * 4);
+                    for (size_t c = 0; c < channels; ++c)
+                        if (!std::isfinite(sample[c]))
+                            return fail(ErrorCode::InvalidArgument, "SDR cannot encode non-finite samples");
+                    if (rgba && (sample[3] < 0 || sample[3] > 1))
+                        return fail(ErrorCode::InvalidArgument, "SDR alpha must be in [0,1]");
+                    const auto offset = (static_cast<size_t>(y) * layout.width + x) * channels;
+                    for (size_t c = 0; c < 3; ++c) {
+                        const float straight = rgba && layout.color.alpha == AlphaMode::Premultiplied
+                                                   ? (sample[3] > 0 ? sample[c] / sample[3] : 0)
+                                                   : sample[c];
+                        if (!std::isfinite(straight))
+                            return fail(ErrorCode::InvalidArgument, "SDR unassociated sample is not finite");
+                        pixels[offset + c] = quantize(encode(straight));
+                    }
+                    if (rgba)
+                        pixels[offset + 3] = quantize(sample[3]);
+                }
+            }
+            return {};
+        }
     } // namespace
+    SinkResult validateAvifOutputOptions(const AvifOutputOptions& options) {
+        if (auto valid = core::image_codecs::validate_avif_encode_options({.lossless = options.lossless, .quality = options.quality, .speed = options.speed, .bit_depth = options.bit_depth}); !valid)
+            return valid;
+        if (!core::image_codecs::avif_encoder_available())
+            return SinkResult::failure(outputError(ErrorCode::Unavailable, "Built-in AOM AVIF encoder unavailable", 0, "AVIF", "ImageOutput.writeAvif"));
+        return {};
+    }
+    SinkResult ImageOutput::writeAvif(const std::filesystem::path& path, const FrameView& frame, const AvifOutputOptions& options) {
+        return outputBoundary([&]() -> SinkResult {
+            const auto fail = [](ErrorCode code, std::string message) { return SinkResult::failure(outputError(code, std::move(message), 0, "AVIF", "ImageOutput.writeAvif")); };
+            if (auto valid = validateAvifOutputOptions(options); !valid)
+                return valid;
+            if (auto required = frame.requiredBytes(); !required)
+                return SinkResult::failure(required.error());
+            const auto& layout = frame.layout;
+            const bool bytes = layout.format == FramePixelFormat::RGB8;
+            const bool rgba = layout.format == FramePixelFormat::RGBAFloat32;
+            if (layout.color.units != ColorUnits::Relative ||
+                (bytes ? options.bit_depth != 8 || layout.color.transfer != ColorTransfer::Srgb || layout.color.primaries != ColorPrimaries::Bt709
+                       : (layout.format != FramePixelFormat::RGBFloat32 && !rgba) || layout.color.transfer != ColorTransfer::Linear ||
+                             (layout.color.primaries != ColorPrimaries::Bt709 && layout.color.primaries != ColorPrimaries::Bt2020)) ||
+                (!rgba && layout.color.alpha != AlphaMode::None) ||
+                (rgba && layout.color.alpha != AlphaMode::Independent && layout.color.alpha != AlphaMode::Premultiplied))
+                return fail(ErrorCode::Unsupported, "AVIF requires declared relative SDR sRGB RGB8 or linear BT709/BT2020 float RGB/RGBA with matching alpha");
+            const size_t channels = rgba ? 4 : 3;
+            if (size_t(layout.width) > SIZE_MAX / size_t(layout.height) / channels / 2)
+                return fail(ErrorCode::ResourceExhausted, "AVIF packed size overflows");
+            namespace codecs = core::image_codecs;
+            codecs::AvifEncodeOptions encoding{.lossless = options.lossless, .quality = options.quality, .speed = options.speed, .bit_depth = options.bit_depth, .primaries = layout.color.primaries == ColorPrimaries::Bt2020 ? codecs::AvifPrimaries::Bt2020 : codecs::AvifPrimaries::Bt709};
+            if (size_t(layout.height) > encoding.pixels / size_t(layout.width))
+                return fail(ErrorCode::ResourceExhausted, "AVIF pixel limit exceeded before conversion");
+            std::vector<uint16_t> converted;
+            std::vector<uint8_t> packed;
+            auto pixels = frame.pixels;
+            size_t stride = layout.row_stride;
+            if (!bytes) {
+                if (options.bit_depth == 8) {
+                    packed.resize(size_t(layout.width) * layout.height * channels);
+                    if (auto result = quantizeSdr(frame, ColorTransfer::Srgb, 255, options.cancelled, packed, fail); !result)
+                        return result;
+                    pixels = packed;
+                } else {
+                    converted.resize(size_t(layout.width) * layout.height * channels);
+                    if (auto result = quantizeSdr(frame, ColorTransfer::Srgb, uint16_t((1u << options.bit_depth) - 1), options.cancelled, converted, fail); !result)
+                        return result;
+                    pixels = {reinterpret_cast<const uint8_t*>(converted.data()), converted.size() * 2};
+                }
+                stride = size_t(layout.width) * channels * (options.bit_depth == 8 ? 1 : 2);
+            }
+            return codecs::write_avif(path, pixels, layout.width, layout.height, int(channels), stride, encoding,
+                                      {.overwrite = options.overwrite, .durable = false, .create_directories = false, .cancelled = options.cancelled});
+        },
+                              "ImageOutput.writeAvif");
+    }
     SinkResult validateJxlOutputOptions(const JxlOutputOptions& options) {
         return core::image_codecs::validate_jxl_encode_options({.lossless = options.lossless, .distance = options.distance, .effort = options.effort});
     }
@@ -136,37 +230,8 @@ namespace lfs::media {
             if (static_cast<size_t>(layout.width) > std::numeric_limits<size_t>::max() / layout.height / channels / 2)
                 return fail(ErrorCode::InvalidArgument, "TIFF16 packed size overflows");
             std::vector<uint16_t> pixels(static_cast<size_t>(layout.width) * layout.height * channels);
-            const auto encode = [&](float v) {
-                v = std::clamp(v, 0.0f, 1.0f);
-                return options.transfer == ColorTransfer::Srgb    ? core::color::linearToSrgb(v)
-                       : options.transfer == ColorTransfer::Bt709 ? core::color::linearToBt709(v)
-                                                                  : v;
-            };
-            const auto quantize = [](float v) { return static_cast<uint16_t>(std::floor(std::clamp(double(v), 0.0, 1.0) * 65535.0 + 0.5)); };
-            for (int y = 0; y < layout.height; ++y) {
-                if (options.cancelled && options.cancelled())
-                    return fail(ErrorCode::Cancelled, "TIFF16 conversion cancelled");
-                for (int x = 0; x < layout.width; ++x) {
-                    std::array<float, 4> sample{0, 0, 0, 1};
-                    std::memcpy(sample.data(), frame.pixels.data() + y * layout.row_stride + x * channels * 4, channels * 4);
-                    for (size_t c = 0; c < channels; ++c)
-                        if (!std::isfinite(sample[c]))
-                            return fail(ErrorCode::InvalidArgument, "TIFF16 cannot encode non-finite samples");
-                    if (rgba && (sample[3] < 0 || sample[3] > 1))
-                        return fail(ErrorCode::InvalidArgument, "TIFF16 alpha must be in [0,1]");
-                    const auto offset = (static_cast<size_t>(y) * layout.width + x) * channels;
-                    for (size_t c = 0; c < 3; ++c) {
-                        const float straight = rgba && layout.color.alpha == AlphaMode::Premultiplied
-                                                   ? (sample[3] > 0 ? sample[c] / sample[3] : 0)
-                                                   : sample[c];
-                        if (!std::isfinite(straight))
-                            return fail(ErrorCode::InvalidArgument, "TIFF16 unassociated sample is not finite");
-                        pixels[offset + c] = quantize(encode(straight));
-                    }
-                    if (rgba)
-                        pixels[offset + 3] = quantize(sample[3]);
-                }
-            }
+            if (auto converted = quantizeSdr(frame, options.transfer, 65535, options.cancelled, pixels, fail); !converted)
+                return converted;
             const auto lookup = core::image_codecs::tiff_transfer_function(outputOptionName(options.transfer));
             nlohmann::json description{{"lfsTransfer", outputOptionName(options.transfer)}, {"lfsPrimaries", outputOptionName(layout.color.primaries)}, {"lfsUnits", "relative"}, {"lfsAlpha", rgba ? "independent" : "none"}, {"lfsProvenance", options.provenance}, {"lfsOrigin", static_cast<int>(frame.info.origin)}, {"lfsQuantization", "clamp-round-half-up-uint16"}};
             description["lfsEncoding"] = core::image_codecs::tiff_sdr_encoding;

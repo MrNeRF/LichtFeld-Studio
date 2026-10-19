@@ -1,0 +1,241 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "core/image_avif.hpp"
+#include "core/image_heif.hpp"
+#include <array>
+#include <chrono>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <future>
+#include <gtest/gtest.h>
+#include <libheif/heif.h>
+#include <stdexcept>
+
+namespace {
+    namespace c = lfs::core::image_codecs;
+    namespace fs = std::filesystem;
+    class AvifEncode : public testing::Test {
+    protected:
+        fs::path directory;
+        void SetUp() override {
+            directory = fs::temp_directory_path() / ("avif-output-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+            fs::create_directories(directory);
+            ASSERT_TRUE(c::avif_encoder_available());
+        }
+        void TearDown() override {
+            std::error_code error;
+            fs::remove_all(directory, error);
+        }
+        static std::vector<uint8_t> bytes(const fs::path& path) {
+            std::ifstream stream(path, std::ios::binary);
+            return {(std::istreambuf_iterator<char>(stream)), {}};
+        }
+        static c::Image independent(std::span<const uint8_t> data, int bits, int channels) {
+            const auto require = [](heif_error e) { if (e.code != heif_error_Ok) throw std::runtime_error(e.message); };
+            std::unique_ptr<heif_context, decltype(&heif_context_free)> context(heif_context_alloc(), heif_context_free);
+            require(heif_context_read_from_memory_without_copy(context.get(), data.data(), data.size(), nullptr));
+            heif_image_handle* raw_handle = nullptr;
+            require(heif_context_get_primary_image_handle(context.get(), &raw_handle));
+            std::unique_ptr<heif_image_handle, decltype(&heif_image_handle_release)> handle(raw_handle, heif_image_handle_release);
+            const bool alpha = channels == 2 || channels == 4;
+            const bool gray = channels <= 2;
+            const auto chroma = gray ? heif_chroma_monochrome : bits == 8 ? (alpha ? heif_chroma_interleaved_RGBA : heif_chroma_interleaved_RGB)
+                                                                          : (alpha ? heif_chroma_interleaved_RRGGBBAA_LE : heif_chroma_interleaved_RRGGBB_LE);
+            heif_image* raw_image = nullptr;
+            require(heif_decode_image(handle.get(), &raw_image, gray ? heif_colorspace_monochrome : heif_colorspace_RGB, chroma, nullptr));
+            std::unique_ptr<heif_image, decltype(&heif_image_release)> image(raw_image, heif_image_release);
+            c::Image result{heif_image_handle_get_width(handle.get()), heif_image_handle_get_height(handle.get()), channels, bits == 8 ? c::SampleType::UInt8 : c::SampleType::UInt16, {}};
+            const size_t sample = bits == 8 ? 1 : 2;
+            result.data.resize(size_t(result.width) * result.height * channels * sample);
+            for (int channel = 0; channel < (gray ? channels : 1); ++channel) {
+                size_t stride = 0;
+                const auto* plane = heif_image_get_plane_readonly2(image.get(), gray ? (channel == 0 ? heif_channel_Y : heif_channel_Alpha) : heif_channel_interleaved, &stride);
+                if (!plane)
+                    throw std::runtime_error("missing independent output plane");
+                for (int y = 0; y < result.height; ++y)
+                    for (int x = 0; x < result.width; ++x)
+                        if (gray)
+                            std::memcpy(result.data.data() + (size_t(y) * result.width * channels + size_t(x) * channels + channel) * sample, plane + size_t(y) * stride + size_t(x) * sample, sample);
+                        else
+                            std::memcpy(result.data.data() + (size_t(y) * result.width + x) * channels * sample, plane + size_t(y) * stride + size_t(x) * channels * sample, channels * sample);
+            }
+            return result;
+        }
+    };
+    TEST_F(AvifEncode, ProviderPolicyKeepsHevcUnavailable) {
+        EXPECT_FALSE(c::avif_encoder_version().empty());
+        EXPECT_FALSE(heif_have_encoder_for_format(heif_compression_HEVC));
+        EXPECT_FALSE(heif_have_decoder_for_format(heif_compression_HEVC));
+        std::array<const heif_decoder_descriptor*, 8> decoders{};
+        const int count = heif_get_decoder_descriptors(heif_compression_AV1, decoders.data(), int(decoders.size()));
+        ASSERT_EQ(count, 1);
+        EXPECT_STREQ(heif_decoder_descriptor_get_id_name(decoders[0]), "dav1d");
+    }
+    TEST_F(AvifEncode, GenericWriterRejectsMetadataAndKeepsStraightAlpha) {
+        const std::array<uint8_t, 8> input{31, 71, 127, 0, 5, 9, 11, 255};
+        const auto path = directory / "image.AVIF";
+        ASSERT_TRUE(c::write_image_u8(path, input.data(), 2, 1, 4, 95, std::nullopt, {}));
+        const auto before = bytes(path);
+        c::Image decoded;
+        std::string error;
+        ASSERT_TRUE(c::decode_heif(path, decoded, error)) << error;
+        EXPECT_EQ(decoded.data, (std::vector<uint8_t>(input.begin(), input.end())));
+        EXPECT_FALSE(c::write_image_u8(path, input.data(), 2, 1, 4, 95, std::string("preserve me"), {}));
+        EXPECT_EQ(bytes(path), before);
+    }
+    TEST_F(AvifEncode, LosslessLayoutsPrecisionsPaddingAndIndependentDecoder) {
+        constexpr int width = 7, height = 5;
+        for (int bits : {8, 10, 12})
+            for (int channels : {1, 2, 3, 4}) {
+                SCOPED_TRACE(testing::Message() << bits << "/" << channels);
+                const size_t sample = bits == 8 ? 1 : 2, row = width * channels * sample, stride = row + 5;
+                std::vector<uint8_t> padded(1 + height * stride, 0xcd), packed(height * row);
+                for (int y = 0; y < height; ++y)
+                    for (int x = 0; x < width; ++x)
+                        for (int channel = 0; channel < channels; ++channel) {
+                            const uint16_t value = uint16_t((x * 17 + y * 43 + channel * 97) % (1 << bits));
+                            auto* target = packed.data() + size_t(y) * row + (x * channels + channel) * sample;
+                            if (sample == 1)
+                                *target = uint8_t(value);
+                            else
+                                std::memcpy(target, &value, sample);
+                            std::memcpy(padded.data() + 1 + size_t(y) * stride + (x * channels + channel) * sample, target, sample);
+                        }
+                const auto before = padded;
+                c::AvifEncodeOptions options{.bit_depth = bits};
+                std::vector<uint8_t> encoded;
+                ASSERT_TRUE(c::encode_avif_memory(std::span(padded).subspan(1), width, height, channels, stride, encoded, options));
+                EXPECT_EQ(padded, before);
+                EXPECT_EQ(independent(encoded, bits, channels).data, packed);
+                const auto path = directory / ("image-" + std::to_string(bits) + "-" + std::to_string(channels) + ".avif");
+                ASSERT_TRUE(c::write_avif(path, std::span(padded).subspan(1), width, height, channels, stride, options));
+                EXPECT_EQ(bytes(path), encoded);
+                c::Image app;
+                std::string error;
+                ASSERT_TRUE(c::decode_heif(encoded, app, error)) << error;
+                EXPECT_EQ(app.width, width);
+                EXPECT_EQ(app.height, height);
+                const int app_channels = channels <= 2 ? channels + 2 : channels;
+                ASSERT_EQ(app.channels, app_channels);
+                for (size_t pixel = 0; pixel < size_t(width) * height; ++pixel)
+                    for (int channel = 0; channel < app_channels; ++channel) {
+                        const int source_channel = channels <= 2 ? (channel == 3 ? 1 : 0) : channel;
+                        uint16_t original = packed[(pixel * channels + source_channel) * sample];
+                        uint16_t decoded = app.data[(pixel * app_channels + channel) * sample];
+                        if (sample == 2) {
+                            std::memcpy(&original, packed.data() + (pixel * channels + source_channel) * sample, 2);
+                            std::memcpy(&decoded, app.data.data() + (pixel * app_channels + channel) * sample, 2);
+                            original = uint16_t((uint32_t(original) * 65535 + ((1u << bits) - 1) / 2) / ((1u << bits) - 1));
+                        }
+                        EXPECT_EQ(decoded, original);
+                    }
+            }
+    }
+    TEST_F(AvifEncode, LimitsInvalidViewsCancellationAliasingAndRecovery) {
+        const std::array<uint8_t, 12> input{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+        std::vector<uint8_t> output{123};
+        const auto rejected = [&](c::AvifEncodeOptions options, size_t stride = 6) {
+            EXPECT_FALSE(c::encode_avif_memory(input, 2, 2, 3, stride, output, options));
+            EXPECT_EQ(output, (std::vector<uint8_t>{123}));
+        };
+        rejected({.quality = 101});
+        rejected({.speed = 10});
+        rejected({.bit_depth = 16});
+        rejected({.pixels = 3});
+        rejected({.max_output_bytes = 1});
+        rejected({.threads = 0});
+        rejected({}, 5);
+        rejected({.cancelled = [] { return true; }});
+        rejected({.cancelled = []() -> bool { throw std::runtime_error("callback sentinel"); }});
+        rejected({.cancelled = []() -> bool { throw 1; }});
+        ASSERT_TRUE(c::encode_avif_memory(input, 2, 2, 3, 6, output));
+        auto alias = std::vector<uint8_t>(input.begin(), input.end());
+        ASSERT_TRUE(c::encode_avif_memory(alias, 2, 2, 3, 6, alias));
+        EXPECT_EQ(alias, output);
+        const auto expected = output;
+        ASSERT_TRUE(c::encode_avif_memory(input, 2, 2, 3, 6, output, {.max_output_bytes = expected.size()}));
+        EXPECT_FALSE(c::encode_avif_memory(input, 2, 2, 3, 6, output, {.max_output_bytes = expected.size() - 1}));
+        EXPECT_EQ(output, expected);
+    }
+    TEST_F(AvifEncode, AtomicPublicationFailureKeepsPreviousDestination) {
+        const std::array<uint8_t, 3> input{1, 2, 3};
+        const auto path = directory / "previous.avif";
+        ASSERT_TRUE(c::write_avif(path, input, 1, 1, 3, 3));
+        const auto before = bytes(path);
+        EXPECT_FALSE(c::write_avif(path, input, 1, 1, 3, 3, {}, {.overwrite = false}));
+        EXPECT_FALSE(c::write_avif(path, input, 1, 1, 3, 3, {.max_output_bytes = 1}, {.overwrite = true}));
+        EXPECT_FALSE(c::write_avif(path, input, 1, 1, 3, 3, {}, {.overwrite = true, .cancelled = [] { return true; }}));
+        EXPECT_EQ(bytes(path), before);
+        EXPECT_EQ(std::distance(fs::directory_iterator(directory), fs::directory_iterator{}), 1);
+    }
+    TEST_F(AvifEncode, LosslessPreservesEvery12BitCodeAndHiddenColor) {
+        std::vector<uint16_t> input(4096 * 4);
+        for (size_t i = 0; i < 4096; ++i) {
+            input[i * 4] = uint16_t(i);
+            input[i * 4 + 1] = uint16_t(4095 - i);
+            input[i * 4 + 2] = uint16_t((i * 43) % 4096);
+            input[i * 4 + 3] = i % 2 ? 4095 : 0;
+        }
+        const auto data = std::span(reinterpret_cast<const uint8_t*>(input.data()), input.size() * 2);
+        std::vector<uint8_t> encoded;
+        ASSERT_TRUE(c::encode_avif_memory(data, 4096, 1, 4, data.size(), encoded, {.bit_depth = 12}));
+        const auto decoded = independent(encoded, 12, 4);
+        ASSERT_EQ(decoded.data.size(), data.size());
+        EXPECT_EQ(std::memcmp(decoded.data.data(), data.data(), data.size()), 0);
+        input[0] = 4096;
+        const auto before = encoded;
+        EXPECT_FALSE(c::encode_avif_memory(data, 4096, 1, 4, data.size(), encoded, {.bit_depth = 12}));
+        EXPECT_EQ(encoded, before);
+    }
+    TEST_F(AvifEncode, LossyAlphaIsExactAndParallelCallsRecover) {
+        constexpr int width = 32, height = 24;
+        std::vector<uint8_t> input(width * height * 4);
+        for (int y = 0; y < height; ++y)
+            for (int x = 0; x < width; ++x) {
+                const size_t i = (size_t(y) * width + x) * 4;
+                input[i] = uint8_t(x * 7);
+                input[i + 1] = uint8_t(y * 9);
+                input[i + 2] = uint8_t((x + y) * 4);
+                input[i + 3] = uint8_t(x * y);
+            }
+        const auto encode_one = [&] {
+            std::vector<uint8_t> bytes;
+            if (!c::encode_avif_memory(input, width, height, 4, width * 4, bytes, {.lossless = false, .quality = 70}))
+                throw std::runtime_error("parallel AVIF encode failed");
+            return bytes;
+        };
+        const auto encoded = encode_one();
+        const auto decoded = independent(encoded, 8, 4);
+        double error = 0;
+        for (size_t i = 0; i < input.size(); i += 4) {
+            EXPECT_EQ(input[i + 3], decoded.data[i + 3]);
+            for (size_t channel = 0; channel < 3; ++channel)
+                error += std::abs(int(input[i + channel]) - int(decoded.data[i + channel]));
+        }
+        EXPECT_LT(error / (width * height * 3), 20.0); // Fixture-specific, not a quality guarantee.
+        std::vector<std::future<std::vector<uint8_t>>> calls;
+        for (int i = 0; i < 4; ++i)
+            calls.push_back(std::async(std::launch::async, encode_one));
+        for (auto& call : calls)
+            EXPECT_EQ(call.get(), encoded);
+    }
+    TEST_F(AvifEncode, CancellationAfterEncodingDoesNotPublishAndRecovers) {
+        const std::array<uint8_t, 12> input{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+        const auto path = directory / "previous.avif";
+        ASSERT_TRUE(c::write_avif(path, input, 2, 2, 3, 6));
+        const auto before = bytes(path);
+        bool saw_output = false;
+        const auto cancelled = [&] {
+            for (const auto& entry : fs::directory_iterator(directory))
+                if (entry.path() != path && entry.is_regular_file() && entry.file_size() > 0)
+                    saw_output = true;
+            return saw_output;
+        };
+        EXPECT_FALSE(c::write_avif(path, input, 2, 2, 3, 6, {}, {.cancelled = cancelled}));
+        EXPECT_TRUE(saw_output);
+        EXPECT_EQ(bytes(path), before);
+        EXPECT_EQ(std::distance(fs::directory_iterator(directory), fs::directory_iterator{}), 1);
+        ASSERT_TRUE(c::write_avif(path, input, 2, 2, 3, 6));
+    }
+} // namespace

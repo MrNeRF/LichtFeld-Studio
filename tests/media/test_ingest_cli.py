@@ -299,6 +299,37 @@ class IngestCLI(unittest.TestCase):
         self.assertNotIn("EXR", message)
         self.assertFalse(destination.exists())
 
+    def test_avif_output_options_and_verified_resume(self):
+        output=self.root/"avif-cli"
+        args=("extract",self.source(),"--output",output,"--interval","1","--end","0.35",
+              "--format","avif","--input-transfer","linear","--input-primaries","bt709","--resume")
+        result,_=self.invoke(*args)
+        self.assertEqual(result["frames_accepted"],4)
+        paths=sorted(output.glob("*.avif"))
+        self.assertEqual(len(paths),4)
+        original={p.name:p.read_bytes() for p in paths}
+        metadata=json.loads((output/"extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(metadata["output"]["format"],"avif")
+        self.assertEqual(metadata["output"]["bit_depth"],8)
+        self.assertEqual(metadata["output"]["compression"],"lossless-integer-codes")
+        self.assertTrue(metadata["output"]["provider"])
+        self.assertIsNone(metadata["output"]["avif_quality"])
+        self.invoke(*args,"--overwrite")
+        self.assertEqual({p.name:p.read_bytes() for p in output.glob("*.avif")},original)
+        paths[0].unlink()
+        self.invoke(*args,"--overwrite")
+        self.assertEqual({p.name:p.read_bytes() for p in output.glob("*.avif")},original)
+        self.invoke(*args,"--overwrite","--avif-quality","70",code=4)
+        for index,flags in enumerate((("--format","png","--avif-speed","1"),
+                                      ("--format","avif","--avif-quality","101"),
+                                      ("--format","avif","--avif-speed","10"),
+                                      ("--format","avif","--exr-precision","float"),
+                                      ("--format","avif","--hdr-to-sdr"),
+                                      ("--format","avif","--quality","95"))):
+            destination=self.root/f"avif-invalid-{index}"
+            self.invoke("extract",self.source(),"--output",destination,*flags,code=2)
+            self.assertFalse(destination.exists())
+
     def test_jxl_output_options_and_verified_resume(self):
         output=self.root/"jxl-cli"
         args=("extract",self.source(),"--output",output,"--interval","1","--end","0.35",

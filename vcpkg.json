@@ -36,6 +36,7 @@
     "lcms",
     {
       "name": "libheif",
+      "features": ["avif-encode"],
       "default-features": false
     },
     "libjpeg-turbo",

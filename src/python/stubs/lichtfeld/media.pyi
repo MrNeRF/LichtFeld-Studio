@@ -35,6 +35,8 @@ class FrameFileFormat(enum.Enum):
 
     JXL = 4
 
+    AVIF = 5
+
 class ExrPrecision(enum.Enum):
     Half = 0
 
@@ -361,6 +363,39 @@ class Tiff16OutputOptions:
     @provenance.setter
     def provenance(self, arg: str, /) -> None: ...
 
+class AvifOutputOptions:
+    def __init__(self) -> None: ...
+
+    @property
+    def lossless(self) -> bool: ...
+
+    @lossless.setter
+    def lossless(self, arg: bool, /) -> None: ...
+
+    @property
+    def quality(self) -> int: ...
+
+    @quality.setter
+    def quality(self, arg: int, /) -> None: ...
+
+    @property
+    def speed(self) -> int: ...
+
+    @speed.setter
+    def speed(self, arg: int, /) -> None: ...
+
+    @property
+    def bit_depth(self) -> int: ...
+
+    @bit_depth.setter
+    def bit_depth(self, arg: int, /) -> None: ...
+
+    @property
+    def overwrite(self) -> bool: ...
+
+    @overwrite.setter
+    def overwrite(self, arg: bool, /) -> None: ...
+
 class JxlOutputOptions:
     def __init__(self) -> None: ...
 
@@ -432,6 +467,12 @@ class FileFrameSinkOptions:
 
     @jxl.setter
     def jxl(self, arg: JxlOutputOptions, /) -> None: ...
+
+    @property
+    def avif(self) -> AvifOutputOptions: ...
+
+    @avif.setter
+    def avif(self, arg: AvifOutputOptions, /) -> None: ...
 
 class FileExtraction:
     def __init__(self) -> None: ...
@@ -715,6 +756,9 @@ class IngestCapabilities:
     def jxl(self) -> bool: ...
 
     @property
+    def avif(self) -> bool: ...
+
+    @property
     def float_sdr_profile(self) -> str: ...
 
     @property
@@ -761,6 +805,9 @@ class ImageOutput:
 
     @staticmethod
     def write_jxl(path: str | os.PathLike, frame: FrameSurface, options: JxlOutputOptions = ..., cancelled: object | None = None) -> None: ...
+
+    @staticmethod
+    def write_avif(path: str | os.PathLike, frame: FrameSurface, options: AvifOutputOptions = ..., cancelled: object | None = None) -> None: ...
 
 class MediaIngest:
     @staticmethod

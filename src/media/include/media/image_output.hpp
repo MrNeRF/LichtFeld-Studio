@@ -28,6 +28,14 @@ namespace lfs::media {
         bool overwrite = false;
         std::function<bool()> cancelled;
     };
+    struct AvifOutputOptions {
+        bool lossless = true;
+        int quality = 90;
+        int speed = 8;
+        int bit_depth = 8;
+        bool overwrite = false;
+        std::function<bool()> cancelled;
+    };
     // Synchronous CPU image output independent of decoder or renderer. Float
     // RGB/RGBA must be linear with declared primaries. Straight alpha is converted
     // to EXR premultiplied convention. Failed/cancelled writes never commit target.
@@ -40,5 +48,9 @@ namespace lfs::media {
         // SDR sRGB RGB8 or relative linear BT709/BT2020 Float32 RGB/RGBA.
         // Preserve precision; straight alpha in output, no implicit tone mapping.
         [[nodiscard]] static SinkResult writeJxl(const std::filesystem::path&, const FrameView&, const JxlOutputOptions& = {});
+        // Relative linear float is clamped, sRGB-transferred and rounded to the
+        // selected 8/10/12-bit codes. Lossless applies to those integer codes.
+        // RGB8 requires declared sRGB BT709 and bit_depth=8. Straight alpha.
+        [[nodiscard]] static SinkResult writeAvif(const std::filesystem::path&, const FrameView&, const AvifOutputOptions& = {});
     };
 } // namespace lfs::media

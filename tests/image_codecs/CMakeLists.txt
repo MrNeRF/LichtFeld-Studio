@@ -48,6 +48,7 @@ if(NOT TARGET lfs_image_codecs)
     add_subdirectory(${LFS_CODEC_ROOT}/src/core/image_codecs ${CMAKE_CURRENT_BINARY_DIR}/image-codecs)
 endif()
 add_executable(lichtfeld_image_codec_tests
+    ../test_avif_encode.cpp
     ../test_jxl_codecs.cpp
     ../test_heif_codecs.cpp
     ../test_exr_codecs.cpp

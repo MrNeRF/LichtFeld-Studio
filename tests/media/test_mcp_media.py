@@ -162,6 +162,27 @@ class McpMedia(unittest.TestCase):
             self.assertEqual(result["start"]["error"]["code"], "InvalidArgument")
             self.assertFalse(output.exists())
 
+    def test_avif_job_and_schema_validation(self):
+        for options in ({}, {"avif_quality": 70, "avif_speed": 1}):
+            result, output = self.invoke(format="avif", input_transfer="linear", input_primaries="bt709", **options)
+            self.assertTrue(result["capabilities"]["avif"])
+            self.assertTrue(result["start"]["success"])
+            self.assertEqual(result["job"]["status"], "finished")
+            self.assertEqual(len(list(output.glob("*.avif"))), 4)
+            metadata = json.loads((output / "extraction_metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["output"]["format"], "avif")
+            self.assertEqual(metadata["output"]["bit_depth"], 8)
+            self.assertEqual(metadata["output"]["compression"], "lossy" if options else "lossless-integer-codes")
+        for options in ({"format": "avif", "jpeg_quality": 95},
+                        {"format": "avif", "exr_precision": "half"},
+                        {"format": "png", "avif_speed": 1},
+                        {"format": "avif", "avif_quality": 101},
+                        {"format": "avif", "avif_speed": 10}):
+            result, output = self.invoke(**options)
+            self.assertFalse(result["start"].get("success", False))
+            self.assertEqual(result["start"]["error"]["code"], "InvalidArgument")
+            self.assertFalse(output.exists())
+
     def test_jxl_job_and_schema_validation(self):
         for options in ({}, {"jxl_distance": 1., "jxl_effort": 1}):
             result, output = self.invoke(format="jxl", input_transfer="linear", input_primaries="bt709", **options)

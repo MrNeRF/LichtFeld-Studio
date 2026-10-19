@@ -26,7 +26,7 @@ namespace lfs::media {
             options_.output_directory.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos ||
             options_.filename_pattern.find('\0') != std::string::npos ||
             options_.first_source_frame_number < 0 ||
-            (options_.format != FrameFileFormat::PNG && options_.format != FrameFileFormat::JPEG && options_.format != FrameFileFormat::EXR && options_.format != FrameFileFormat::TIFF16 && options_.format != FrameFileFormat::JXL))
+            (options_.format != FrameFileFormat::PNG && options_.format != FrameFileFormat::JPEG && options_.format != FrameFileFormat::EXR && options_.format != FrameFileFormat::TIFF16 && options_.format != FrameFileFormat::JXL && options_.format != FrameFileFormat::AVIF))
             return sinkError(ErrorCode::InvalidArgument, "Invalid file sink directory or format");
         if (options_.format == FrameFileFormat::EXR) {
             if (auto valid = validateExrOutputOptions(options_.exr); !valid)
@@ -40,6 +40,9 @@ namespace lfs::media {
             options_.jpeg_quality = options_.jpeg_quality == 0 ? 90 : std::clamp(options_.jpeg_quality, 1, 100);
         if (options_.format == FrameFileFormat::JXL)
             if (auto valid = validateJxlOutputOptions(options_.jxl); !valid)
+                return valid;
+        if (options_.format == FrameFileFormat::AVIF)
+            if (auto valid = validateAvifOutputOptions(options_.avif); !valid)
                 return valid;
         std::error_code directory_error;
         lfs::core::native_fs::create_directories(options_.output_directory, directory_error);
@@ -68,8 +71,8 @@ namespace lfs::media {
         const auto required = frame.requiredBytes();
         if (!required)
             return SinkResult::failure(required.error());
-        if (options_.format != FrameFileFormat::EXR && options_.format != FrameFileFormat::TIFF16 && options_.format != FrameFileFormat::JXL && frame.layout.format != FramePixelFormat::RGB8)
-            return sinkError(ErrorCode::Unsupported, "PNG/JPEG file sink requires RGB8; use EXR, TIFF16 or JXL for float samples");
+        if (options_.format != FrameFileFormat::EXR && options_.format != FrameFileFormat::TIFF16 && options_.format != FrameFileFormat::JXL && options_.format != FrameFileFormat::AVIF && frame.layout.format != FramePixelFormat::RGB8)
+            return sinkError(ErrorCode::Unsupported, "PNG/JPEG file sink requires RGB8; use EXR, TIFF16, JXL or AVIF for float samples");
         const auto row_bytes = static_cast<std::size_t>(frame.layout.width) * pixelBytes(frame.layout.format);
         const auto height = static_cast<std::size_t>(frame.layout.height);
         if (row_bytes > std::numeric_limits<std::size_t>::max() / height)
@@ -78,9 +81,10 @@ namespace lfs::media {
             frame.info.legacy_source_frame - 1 > std::numeric_limits<int>::max() - options_.first_source_frame_number)
             return sinkError(ErrorCode::InvalidArgument, "File sink requires a positive source frame number");
         const int output_frame_number = options_.first_source_frame_number + frame.info.legacy_source_frame - 1;
-        const auto extension = options_.format == FrameFileFormat::JXL ? ".jxl" : options_.format == FrameFileFormat::TIFF16 ? ".tif"
-                                                                              : options_.format == FrameFileFormat::PNG      ? ".png"
-                                                                              : options_.format == FrameFileFormat::EXR      ? ".exr"
+        const auto extension = options_.format == FrameFileFormat::AVIF ? ".avif" : options_.format == FrameFileFormat::JXL  ? ".jxl"
+                                                                                : options_.format == FrameFileFormat::TIFF16 ? ".tif"
+                                                                                : options_.format == FrameFileFormat::PNG    ? ".png"
+                                                                                : options_.format == FrameFileFormat::EXR    ? ".exr"
                                                                                                                              : ".jpg";
         const auto filename = options_.output_directory /
                               (io::formatFrameFilenameStem(options_.filename_pattern, output_frame_number) + extension);
@@ -92,6 +96,8 @@ namespace lfs::media {
             return ImageOutput::writeTiff16(filename, frame, options_.tiff16);
         if (options_.format == FrameFileFormat::JXL)
             return ImageOutput::writeJxl(filename, frame, options_.jxl);
+        if (options_.format == FrameFileFormat::AVIF)
+            return ImageOutput::writeAvif(filename, frame, options_.avif);
         // Legacy extraction is already packed: no additional pixel copy.
         std::vector<std::uint8_t> packed;
         const auto* pixels = frame.pixels.data();

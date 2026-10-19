@@ -228,6 +228,95 @@ class MediaBindings(unittest.TestCase):
         options.effort = 1
         media.ImageOutput.write_jxl(self.root / "jxl-lossy-effort1.jxl", frame, options)
 
+    def test_avif_float_quantization_matches_independent_decoder(self):
+        color = media.FrameColor()
+        color.transfer = media.ColorTransfer.Linear
+        color.primaries = media.ColorPrimaries.Bt709
+        samples = (-.5, .003, 2., .25, .5, .75)
+        frame = media.FrameSurface.from_bytes(2, 1, media.FramePixelFormat.RGBFloat32,
+                                              struct.pack("=6f", *samples), color=color)
+        options = media.AvifOutputOptions()
+        def code(value, maximum, alpha=False):
+            value = min(1., max(0., value))
+            if not alpha:
+                value = 12.92 * value if value <= .0031308 else 1.055 * value ** (1./2.4) - .055
+            return math.floor(value * maximum + .5)
+        for bits in (8, 10, 12):
+            with self.subTest(bits=bits):
+                options.bit_depth = bits
+                path = self.root / f"avif-quantization-{bits}.avif"
+                media.ImageOutput.write_avif(path, frame, options)
+                fmt = "gbrp" if bits == 8 else f"gbrp{bits}le"
+                raw = subprocess.check_output([os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"), "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", fmt, "-"], timeout=30)
+                actual = tuple(raw) if bits == 8 else struct.unpack("<6H", raw)
+                maximum = (1 << bits)-1
+                expected = tuple(code(samples[pixel*3+channel], maximum)
+                                 for channel in (1, 2, 0) for pixel in range(2))
+                self.assertEqual(actual, expected)
+        options.overwrite = True
+        before = path.read_bytes()
+        for units in (media.ColorUnits.Nits, media.ColorUnits.SceneRelative):
+            color.units = units
+            invalid = media.FrameSurface.from_bytes(2, 1, media.FramePixelFormat.RGBFloat32,
+                                                    struct.pack("=6f", *samples), color=color)
+            with self.assertRaises(MEDIA_ERROR):
+                media.ImageOutput.write_avif(path, invalid, options)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_avif_public_writer_and_lossless_lossy_sequences(self):
+        color = media.FrameColor()
+        color.transfer = media.ColorTransfer.Linear
+        color.primaries = media.ColorPrimaries.Bt709
+        samples = (-.5, 0., 2., .25, .5, .75)
+        frame = media.FrameSurface.from_bytes(2, 1, media.FramePixelFormat.RGBFloat32,
+                                              struct.pack("=6f", *samples), color=color)
+        options = media.AvifOutputOptions()
+        path = self.root / "AVIF export é 日本語.avif"
+        media.ImageOutput.write_avif(path, frame, options)
+        original = path.read_bytes()
+        with self.assertRaises(MEDIA_ERROR):
+            media.ImageOutput.write_avif(path, frame, options)
+        options.overwrite = True
+        with self.assertRaises(MEDIA_ERROR):
+            media.ImageOutput.write_avif(path, frame, options, cancelled=lambda: True)
+        self.assertEqual(path.read_bytes(), original)
+        def failed():
+            raise ValueError("AVIF cancellation sentinel")
+        with self.assertRaisesRegex(ValueError, "AVIF cancellation sentinel"):
+            media.ImageOutput.write_avif(path, frame, options, cancelled=failed)
+        self.assertEqual(path.read_bytes(), original)
+        self.assertTrue(media.MediaIngest.capabilities().avif)
+        request = self.request()
+        request.output_format = media.FramePixelFormat.RGBFloat32
+        request.input_color.transfer = media.ColorTransfer.Linear
+        request.input_color.primaries = media.ColorPrimaries.Bt709
+        for lossless in (True, False):
+            output = media.FileExtraction()
+            output.files.output_directory = self.root / ("avif-lossless" if lossless else "avif-lossy")
+            output.files.format = media.FrameFileFormat.AVIF
+            output.files.avif.lossless = lossless
+            output.resume = True
+            report = media.MediaIngest.extract_files(request, output)
+            paths = sorted(output.files.output_directory.glob("*.avif"))
+            self.assertEqual(len(paths), report.frames_accepted)
+            self.assertEqual(report.frames_accepted, 4)
+            original = {p.name:p.read_bytes() for p in paths}
+            mtimes = {p.name:p.stat().st_mtime_ns for p in paths}
+            output.files.avif.overwrite = True
+            media.MediaIngest.extract_files(request, output)
+            self.assertEqual({p.name:p.read_bytes() for p in paths}, original)
+            self.assertEqual({p.name:p.stat().st_mtime_ns for p in paths}, mtimes)
+            if lossless:
+                output.files.avif.quality = 80
+                media.MediaIngest.extract_files(request, output)
+                self.assertEqual({p.name:p.stat().st_mtime_ns for p in paths}, mtimes)
+            paths[0].unlink()
+            media.MediaIngest.extract_files(request, output)
+            self.assertEqual({p.name:p.read_bytes() for p in paths}, original)
+            output.files.avif.speed -= 1
+            with self.assertRaises(MEDIA_ERROR):
+                media.MediaIngest.extract_files(request, output)
+
     def test_jxl_public_writer_and_lossless_lossy_sequences(self):
         color = media.FrameColor()
         color.transfer = media.ColorTransfer.Linear
