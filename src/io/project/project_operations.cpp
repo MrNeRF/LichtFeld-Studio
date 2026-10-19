@@ -5,6 +5,7 @@
 #include "core/native_fs.hpp"
 
 #include "core/image_io.hpp"
+#include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
@@ -2246,20 +2247,31 @@ namespace lfs::io::project {
             "the full I/O library is required for closed-file dataset embedding",
             "dataset_embed.composition");
     }
-#else
+
     lfs::Result<DatasetEmbedResult>
-    embed_dataset_file(const std::filesystem::path& path,
-                       ProjectOperationProgress progress,
-                       ProjectOperationCancel cancel) {
-        auto lease = acquire_operation_lock(path);
-        if (!lease) {
-            return std::move(lease).error();
-        }
-        auto document = ProjectDocument::open(path);
-        if (!document) {
-            return std::move(document).error();
-        }
-        auto dataset_uuid = document->project().dataset_reference();
+    write_training_project(const std::filesystem::path& destination,
+                           ParameterManagerSnapshot,
+                           const std::filesystem::path&,
+                           const std::optional<TrainingProjectInitialization>&,
+                           ProjectOperationProgress,
+                           ProjectOperationCancel) {
+        return fail<DatasetEmbedResult>(
+            lfs::ErrorCode::Unsupported, destination,
+            "Training projects are unavailable in the CPU format-test composition.",
+            "the full I/O library is required to embed the dataset",
+            "training_project.composition");
+    }
+#else
+    // Embeds the dataset PROJ references into `document`, which is bound to
+    // the file at `path`; `images` is the dataset's image folder setting.
+    static lfs::Result<DatasetEmbedResult>
+    embed_referenced_dataset(ProjectDocument& document,
+                             const std::filesystem::path& path,
+                             const WriterLockLease& lease,
+                             const std::string& images,
+                             ProjectOperationProgress progress,
+                             ProjectOperationCancel cancel) {
+        auto dataset_uuid = document.project().dataset_reference();
         if (!dataset_uuid) {
             return std::move(dataset_uuid).error();
         }
@@ -2270,20 +2282,16 @@ namespace lfs::io::project {
                 "REFS has no dataset record selected by PROJ", "dataset.reference");
         }
         auto root = resolve_path_reference(
-            document->references(), path.parent_path(), **dataset_uuid);
+            document.references(), path.parent_path(), **dataset_uuid);
         if (!root || !lfs::core::native_fs::is_directory(*root)) {
             return fail<DatasetEmbedResult>(
                 lfs::ErrorCode::NotFound, path,
                 "The external dataset folder could not be found.",
                 "the dataset reference is unreachable", "dataset.path");
         }
-        auto snapshot = document->parameters().snapshot();
-        if (!snapshot) {
-            return std::move(snapshot).error();
-        }
         std::string images_folder;
         auto files = discover_dataset_files(
-            *root, snapshot->dataset.images, images_folder);
+            *root, images, images_folder);
         if (progress) {
             progress(0.02F, "Scanning dataset");
         }
@@ -2339,13 +2347,13 @@ namespace lfs::io::project {
         ProjectDocumentSaveOptions options;
         options.commit.kind = CommitKind::Explicit;
         options.regenerate_dataset_preview = false;
-        options.writer_lock_lease = *lease;
+        options.writer_lock_lease = lease;
         options.disk_reserve_bytes = 64ull * 1024 * 1024;
-        if (auto marked = mark_contents_edit(*document, "dataset_embedded", 2); !marked)
+        if (auto marked = mark_contents_edit(document, "dataset_embedded", 2); !marked)
             return std::move(marked).error();
-        if (auto marked = document->save(path, options); !marked)
+        if (auto marked = document.save(path, options); !marked)
             return std::move(marked).error();
-        auto saved = document->embed_dataset_batch(
+        auto saved = document.embed_dataset_batch(
             manifest, sources, options,
             [progress](const float value, const std::string& stage) {
                 if (progress) {
@@ -2383,6 +2391,124 @@ namespace lfs::io::project {
             progress(1.0F, "Dataset embedding complete");
         }
         return result;
+    }
+
+    lfs::Result<DatasetEmbedResult>
+    embed_dataset_file(const std::filesystem::path& path,
+                       ProjectOperationProgress progress,
+                       ProjectOperationCancel cancel) {
+        auto lease = acquire_operation_lock(path);
+        if (!lease) {
+            return std::move(lease).error();
+        }
+        auto document = ProjectDocument::open(path);
+        if (!document) {
+            return std::move(document).error();
+        }
+        auto snapshot = document->parameters().snapshot();
+        if (!snapshot) {
+            return std::move(snapshot).error();
+        }
+        return embed_referenced_dataset(*document, path, *lease, snapshot->dataset.images,
+                                        std::move(progress), std::move(cancel));
+    }
+
+    lfs::Result<DatasetEmbedResult>
+    write_training_project(const std::filesystem::path& requested_destination,
+                           ParameterManagerSnapshot parameters,
+                           const std::filesystem::path& dataset_root,
+                           const std::optional<TrainingProjectInitialization>& initialization,
+                           ProjectOperationProgress progress,
+                           ProjectOperationCancel cancel) {
+        // A bare file name has no folder for the references and the disk
+        // space check, so resolve it against the working directory.
+        std::error_code destination_error;
+        const auto destination = std::filesystem::absolute(requested_destination, destination_error);
+        if (destination_error) {
+            return fail<DatasetEmbedResult>(
+                lfs::ErrorCode::InvalidArgument, requested_destination,
+                "The destination path is invalid.", destination_error.message(), "training_project.destination");
+        }
+        std::error_code dataset_error;
+        if (dataset_root.empty() || !lfs::core::native_fs::is_directory(dataset_root, dataset_error)) {
+            return fail<DatasetEmbedResult>(
+                lfs::ErrorCode::NotFound, dataset_root,
+                "The dataset folder could not be found.",
+                dataset_error ? dataset_error.message() : "write_training_project requires the dataset folder",
+                "dataset.path");
+        }
+        // Hold the writer lock from the first save until the dataset is
+        // embedded.
+        auto lease = acquire_operation_lock(destination);
+        if (!lease)
+            return std::move(lease).error();
+        std::optional<lfs::Result<DatasetEmbedResult>> embedded;
+        {
+            auto document = ProjectDocument::create(lfs::core::generate_uuid_v4());
+            if (!document)
+                return std::move(document).error();
+            const auto project_root = destination.parent_path();
+            const auto reference_file = [&](const std::filesystem::path& path, const std::string& key,
+                                            const std::string_view kind) -> std::optional<lfs::core::Uuid> {
+                if (path.empty())
+                    return std::nullopt;
+                auto minted = upsert_path_reference(document->edit_references(), project_root, path, key, kind);
+                if (!minted) {
+                    LOG_WARN("Training project does not reference '{}': {}", lfs::core::path_to_utf8(path),
+                             lfs::format_for_developer(minted.error()));
+                    return std::nullopt;
+                }
+                return *minted;
+            };
+            // PRMS may only name REFS rows of this document: reference the
+            // files the parameters name the way a save does.
+            parameters.for_each_role([&](const std::string_view role, const auto& values, auto& bindings) {
+                bindings = {};
+                bindings.background_image_reference = reference_file(
+                    values.bg_image_path, std::format("presets.{}.background_image", role), "background_image");
+                bindings.ppisp_reference = reference_file(
+                    values.ppisp_sidecar_path, std::format("presets.{}.ppisp_sidecar", role), "ppisp_sidecar");
+            });
+            if (auto set = document->edit_parameters().set_snapshot(parameters); !set)
+                return std::move(set).error();
+            if (initialization) {
+                if (auto set = document->edit_project().set_training_initialization(ProjectTrainingInitialization{
+                        .init_reference_uuid = reference_file(initialization->init_path, "training_init", "training_init"),
+                        .data_origin = initialization->data_origin,
+                        .scene_center = initialization->scene_center,
+                    });
+                    !set)
+                    return std::move(set).error();
+            }
+            auto reference = upsert_path_reference(
+                document->edit_references(), project_root, dataset_root, "dataset", "dataset");
+            if (!reference)
+                return std::move(reference).error();
+            if (auto set = document->edit_project().set_dataset_reference(*reference); !set)
+                return std::move(set).error();
+            ProjectDocumentSaveOptions options;
+            options.regenerate_dataset_preview = false;
+            options.writer_lock_lease = *lease;
+            // A first save publishes atomically and refuses an existing destination.
+            if (auto saved = document->save(destination, options); !saved)
+                return std::move(saved).error();
+            // The saved document is bound to the new file; embed into it
+            // without opening the file again.
+            embedded.emplace(embed_referenced_dataset(*document, destination, *lease, parameters.dataset.images,
+                                                      std::move(progress), std::move(cancel)));
+        }
+        // The document is closed here, so the file can be removed.
+        if (!*embedded) {
+            std::error_code removed;
+            lfs::core::native_fs::remove(destination, removed);
+            if (removed) {
+                return std::move(*embedded).error().with_suppressed(operation_error(
+                    lfs::ErrorCode::Unavailable, destination,
+                    "The incomplete training project could not be removed.", removed.message(),
+                    "training_project.cleanup"));
+            }
+        }
+        return std::move(*embedded);
     }
 #endif
 

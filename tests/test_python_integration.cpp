@@ -18,6 +18,8 @@
 #include "core/splat_data.hpp"
 #include "gui/line_renderer.hpp"
 #include "io/loader.hpp"
+#include "io/project_document.hpp"
+#include "licht_test_support.hpp"
 #include "python/gil.hpp"
 #include "python/python_buffer_analysis.hpp"
 #include "python/python_runtime.hpp"
@@ -42,6 +44,7 @@
 #include <cstdlib>
 #include <deque>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <future>
 #include <memory>
@@ -291,6 +294,12 @@ namespace {
         void projectWaitWrite() override {
             wait_thread = std::this_thread::get_id();
         }
+        lfs::Result<lfs::vis::ProjectTrainingSource> projectTrainingSource() override {
+            if (training_source)
+                return *training_source;
+            return lfs::vis::Visualizer::projectTrainingSource();
+        }
+        std::optional<lfs::vis::ProjectTrainingSource> training_source;
         std::thread::id poll_thread;
         std::thread::id wait_thread;
         int poll_calls = 0;
@@ -1427,6 +1436,56 @@ result_values = [1.0 if set_ok else 0.0, 1.0 if clear_ok else 0.0]
     ASSERT_EQ(result.values.size(), 2u);
     EXPECT_FLOAT_EQ(result.values[0], 1.0F);
     EXPECT_FLOAT_EQ(result.values[1], 1.0F);
+}
+
+// The binding writes the viewer's training source with the GIL released, calls the
+// progress callback, honours cancel, and runs inline when called on the viewer thread.
+TEST_F(PythonIntegrationTest, ProjectWriteTrainingCopyReportsProgressAndHonoursCancel) {
+    namespace licht = lfs::test::licht;
+    licht::TemporaryDirectory temporary;
+    const auto dataset = temporary.path / "dataset";
+    std::filesystem::create_directories(dataset / "images");
+    std::filesystem::create_directories(dataset / "sparse" / "0");
+    for (const auto* name : {"images/a.jpg", "sparse/0/cameras.bin", "sparse/0/images.bin", "sparse/0/points3D.bin"})
+        licht::write_file_bytes(dataset / name, licht::byte_vector(name));
+    auto parameters = licht::require_result(
+        licht::require_result(lfs::io::project::ProjectDocument::create(lfs::core::generate_uuid_v4()))
+            .parameters()
+            .snapshot());
+    parameters.dataset.images = "images";
+
+    TestVisualizer viewer;
+    viewer.training_source = lfs::vis::ProjectTrainingSource{.parameters = parameters, .dataset_root = dataset};
+    const ScopedVisualizer scoped_viewer(&viewer);
+    const auto script = [&](const std::string_view name) {
+        return std::format(R"PY(
+import lichtfeld as lf
+fractions = []
+copy = lf.project_write_training_copy("{0}/{1}.licht", progress=lambda value, message, out=fractions: out.append(value))
+canceled = 0.0
+try:
+    lf.project_write_training_copy("{0}/{1}-canceled.licht", cancel=lambda: True)
+except lf.Error as error:
+    canceled = 1.0 if error.code == "Cancelled" else 0.0
+result_shape = (3,)
+result_values = [float(copy.images_embedded), fractions[-1] if fractions else 0.0, canceled]
+)PY",
+                           temporary.path.generic_string(), name);
+    };
+
+    const auto posted = runPythonTensorSnippet(script("posted"));
+    EXPECT_EQ(posted.values, (std::vector<float>{1.0F, 1.0F, 1.0F}));
+    EXPECT_EQ(viewer.post_work_calls, 2);
+
+    viewer.on_viewer_thread = true;
+    const auto inline_on_viewer_thread = runPythonTensorSnippet(script("inline"));
+    EXPECT_EQ(inline_on_viewer_thread.values, (std::vector<float>{1.0F, 1.0F, 1.0F}));
+    EXPECT_EQ(viewer.post_work_calls, 2);
+
+    EXPECT_TRUE(std::filesystem::exists(temporary.path / "posted.licht"));
+    EXPECT_TRUE(std::filesystem::exists(temporary.path / "inline.licht"));
+    EXPECT_FALSE(std::filesystem::exists(temporary.path / "posted-canceled.licht"));
+    EXPECT_FALSE(std::filesystem::exists(temporary.path / "inline-canceled.licht"));
 }
 
 TEST_F(PythonIntegrationTest, CaptureViewportReleasesGilWhileWaitingForViewerThread) {

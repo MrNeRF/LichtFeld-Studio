@@ -676,6 +676,7 @@ set(TEST_FILES
     test_selection_chapter.cpp
     test_project_document.cpp
     test_project_thumbnail_sources.cpp
+    test_project_training_copy.cpp
     test_gallery_scene_publication.cpp
     test_project_lifecycle.cpp
     test_p8_compatibility.cpp

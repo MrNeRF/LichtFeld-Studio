@@ -1613,6 +1613,14 @@ namespace {
 
 namespace lfs::vis {
 
+    // Without a loaded dataset there is nothing to write a training project from.
+    TEST_F(VisualizerImplResetTest, ProjectTrainingSourceNeedsALoadedDataset) {
+        VisualizerImpl viewer(projectOptions());
+        const auto source = viewer.projectTrainingSource();
+        ASSERT_FALSE(source);
+        EXPECT_EQ(source.error().code(), lfs::ErrorCode::FailedPrecondition);
+    }
+
     class SceneGenerationRenderPublicationTest : public VisualizerImplResetTest {};
 
     TEST_F(SceneGenerationRenderPublicationTest, ContentMutationsScheduleSplatsButMatrixEditsStayResident) {

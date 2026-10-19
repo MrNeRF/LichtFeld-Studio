@@ -178,6 +178,8 @@ namespace lfs::vis {
             std::string expected_project_uuid = {}) override;
         lfs::Result<ProjectWritePoll>
         projectPollWrite() override;
+        lfs::Result<ProjectTrainingSource>
+        projectTrainingSource() override;
         bool consumeProjectSaveStarted() override;
         bool consumeProjectCreateSucceeded() override;
         bool projectCreatePending() const override;

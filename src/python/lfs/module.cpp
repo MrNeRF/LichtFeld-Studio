@@ -29,6 +29,7 @@
 #include "py_mcp.hpp"
 #include "py_mesh.hpp"
 #include "py_mesh2splat.hpp"
+#include "py_operation_callbacks.hpp"
 #include "py_operator.hpp"
 #include "py_packages.hpp"
 #include "py_params.hpp"
@@ -71,6 +72,7 @@
 #include "internal/resource_paths.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/formats/colmap.hpp"
+#include "io/project_operations.hpp"
 #include "io/project_recovery.hpp"
 #include "py_rml.hpp"
 #include "python/python_runtime.hpp"
@@ -362,6 +364,20 @@ namespace {
                 // Polling settles completed writes and mutates the session.
                 return viewer.projectPollWrite();
             },
+            python_viewer_shutdown_error());
+    }
+
+    lfs::Result<lfs::vis::ProjectTrainingSource> post_training_source_to_viewer(
+        lfs::vis::Visualizer& viewer) {
+        const lfs::core::TaskContext context{
+            .name = "python.project_training_source",
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id = lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+        return lfs::vis::post_guarded_and_wait<lfs::vis::ProjectTrainingSource>(
+            viewer, context,
+            [&viewer] { return viewer.projectTrainingSource(); },
             python_viewer_shutdown_error());
     }
 
@@ -1618,6 +1634,31 @@ NB_MODULE(lichtfeld, m) {
         if (!error.empty())
             throw std::runtime_error(error);
         return true; }, nb::arg("destination") = "", nb::arg("expected_commit") = "", "Clean the active saved project in the background, preserving its current resume point");
+    m.def(
+        "project_write_training_copy",
+        [](const std::string& destination, nb::object progress, nb::object cancel) {
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer) {
+                throw std::runtime_error("The viewer is not running.");
+            }
+            lfs::python::PyProgressCallback progress_callback{std::move(progress)};
+            lfs::python::PyCancelCallback cancel_callback{std::move(cancel)};
+            std::optional<lfs::Result<lfs::io::project::DatasetEmbedResult>> result;
+            {
+                nb::gil_scoped_release release;
+                auto source = post_training_source_to_viewer(*viewer);
+                if (!source) {
+                    result.emplace(std::move(source).error());
+                } else {
+                    result.emplace(lfs::io::project::write_training_project(
+                        lfs::core::utf8_to_path(destination), std::move(source->parameters), source->dataset_root,
+                        source->initialization, progress_callback.operation(), cancel_callback.operation()));
+                }
+            }
+            return lfs::python::unwrap(std::move(*result));
+        },
+        nb::arg("destination"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none(),
+        "Write a new untrained project from the pending parameters with the loaded dataset embedded; it blocks, so call it off the UI thread");
     m.def(
         "project_is_dirty", []() {
             auto* const viewer =
