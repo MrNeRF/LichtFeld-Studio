@@ -53,11 +53,11 @@ Owning output is replaced only after the complete image and container have
 been validated. The owning Image path decodes directly into a private candidate
 vector, then moves it to the result without a full-image copy. A failed decode
 leaves the previous result intact. Decode targets stage validation before
-allocating or writing caller storage. libjxl emits the requested type and channels into uninitialized
-private staging; the validated result reaches caller storage with one copy,
-without an intermediate scalar per-sample conversion. Integer targets are bounded;
-request Float32 for unbounded samples. Decoding is synchronous and has no new
-cooperative cancellation API.
+allocating or writing caller storage. libjxl emits the requested type and
+channels into uninitialized private staging; the validated result reaches
+caller storage with one copy, without an intermediate scalar per-sample
+conversion. Integer targets are bounded; request Float32 for unbounded samples.
+Decoding is synchronous and has no new cooperative cancellation API.
 
 ## Integration and verification
 

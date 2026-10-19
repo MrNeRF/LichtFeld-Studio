@@ -253,7 +253,7 @@ namespace lfs::core::image_codecs {
             Image candidate;
             std::unique_ptr<uint8_t[]> staging;
             uint8_t* pixels = nullptr;
-            size_t staging_bytes = 0;
+            size_t output_bytes = 0;
             unsigned frames = 0, images = 0, boxes = 0;
             bool header = false, color = false;
             for (;;) {
@@ -320,7 +320,7 @@ namespace lfs::core::image_codecs {
                         candidate.data.resize(bytes);
                         pixels = candidate.data.data();
                     }
-                    staging_bytes = bytes;
+                    output_bytes = bytes;
                     if (JxlDecoderSetImageOutBuffer(decoder.get(), &format, pixels, bytes) != JXL_DEC_SUCCESS)
                         return fail(error, "cannot set output buffer");
                     break;
@@ -334,29 +334,31 @@ namespace lfs::core::image_codecs {
                         return fail(error, "container box limit exhausted");
                     break;
                 case JXL_DEC_SUCCESS:
-                    if (!header || !color || frames != 1 || images != 1 || !staging_bytes)
+                    if (!header || !color || frames != 1 || images != 1 || !output_bytes)
                         return fail(error, "incomplete still image");
                     if ((!input.memory && input.remaining) || JxlDecoderReleaseInput(decoder.get()))
                         return fail(error, "unprocessed trailing input");
                     if (candidate.sample_type == SampleType::Float32)
-                        for (size_t offset = 0; offset < staging_bytes; offset += sizeof(float)) {
+                        for (size_t offset = 0; offset < output_bytes; offset += sizeof(float)) {
                             float value;
                             std::memcpy(&value, pixels + offset, sizeof(value));
                             if (!std::isfinite(value))
                                 return fail(error, "nonfinite decoded sample");
                         }
                     if (requested) {
-                        void* destination = requested->data ? requested->data : requested->allocate ? requested->allocate(staging_bytes, requested->user)
-                                                                                                    : std::malloc(staging_bytes);
+                        void* destination = requested->data ? requested->data : requested->allocate ? requested->allocate(output_bytes, requested->user)
+                                                                                                    : std::malloc(output_bytes);
                         if (!destination)
                             return fail(error, "cannot allocate target");
-                        std::memcpy(destination, staging.get(), staging_bytes);
+                        std::memcpy(destination, staging.get(), output_bytes);
                         requested->data = destination;
                     } else {
                         image = std::move(candidate);
                     }
                     return true;
                 default:
+                    if (status == JXL_DEC_ERROR && images == 1)
+                        return fail(error, "malformed trailing input after complete image");
                     error = "JXL: malformed or incomplete codestream (status=" + std::to_string(status) + ")";
                     return false;
                 }

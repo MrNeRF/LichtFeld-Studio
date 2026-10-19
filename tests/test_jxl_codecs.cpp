@@ -247,6 +247,7 @@ namespace {
             std::string error;
             for (const bool file : {false, true}) {
                 EXPECT_FALSE(file ? native_decode(write(invalid), image, error) : native_decode(invalid, image, error));
+                EXPECT_NE(error.find("trailing input"), std::string::npos) << error;
                 EXPECT_EQ(image.width, 7);
                 EXPECT_EQ(image.height, 8);
                 EXPECT_EQ(image.channels, 1);
