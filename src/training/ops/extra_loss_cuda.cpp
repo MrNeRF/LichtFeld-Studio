@@ -3,7 +3,6 @@
 
 #include "lfs/training/ops/extra_loss_cuda.hpp"
 
-#include "components/sparsity_optimizer_kernels.hpp"
 #include "training/kernels/regularization.cuh"
 
 namespace lfs::training {
@@ -21,14 +20,8 @@ namespace lfs::training {
             }
         }
 
-        void admm(In sigmoid, In z, In u, Out gradient, float rho, float grad_loss, bool accumulate) {
-            launch_admm_backward_fused(gradient.ptr<float>(), sigmoid.ptr<float>(), z.ptr<float>(), u.ptr<float>(),
-                                       rho, grad_loss, sigmoid.numel(), accumulate);
-        }
-
         const ExtraLossOps kCudaExtraLossOps{
             .regularize = regularize,
-            .admm = admm,
         };
     } // namespace
 

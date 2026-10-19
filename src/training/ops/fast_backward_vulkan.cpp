@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "lfs/training/ops/adam_vulkan.hpp"
 #include "lfs/training/ops/fast_vulkan.hpp"
+#include "lfs/training/ops/popspa_portable.hpp"
 #include "lfs/training/vram_ledger.hpp"
 #include "vulkan/fast_state.hpp"
 #include <array>
@@ -16,22 +17,50 @@ namespace lfs::training::vulkan {
             uint64_t image_gradient, alpha_gradient, depth_gradient, normal_gradient, screen_gradient;
             uint64_t densification, error, edge, scores;
             uint64_t mean_gradient, scale_gradient, rotation_gradient, opacity_gradient, dc_gradient, sh_gradient;
-            uint64_t sigmoid, z, u;
-            uint32_t densify, stage, slots, sparsity_count;
-            float scale_weight, flatten_weight, opacity_weight, rho, grad_loss;
+            uint32_t densify, stage, slots;
+            float scale_weight, flatten_weight, opacity_weight;
             uint32_t scale_elements, opacity_elements;
             uint64_t rendered_count, erank_loss, dc_loss, sh_loss, scale_loss;
             uint32_t log_scale;
             float scale_normalizer, erank_weight, dc_weight, sh_weight;
             uint64_t impact_sum, impact_peak;
         };
-        static_assert(sizeof(BackPush) == 592);
-        static_assert(offsetof(BackPush, impact_sum) == 576);
+        static_assert(sizeof(BackPush) == 552);
+        static_assert(offsetof(BackPush, impact_sum) == 536);
         static_assert(offsetof(BackPush, image_gradient) == 320);
-        static_assert(offsetof(BackPush, densify) == 464);
-        static_assert(offsetof(BackPush, scale_weight) == 480);
-        static_assert(offsetof(BackPush, opacity_elements) == 504);
+        static_assert(offsetof(BackPush, densify) == 440);
+        static_assert(offsetof(BackPush, scale_weight) == 452);
+        static_assert(offsetof(BackPush, opacity_elements) == 468);
     } // namespace
+    void fast_pop_scores(const FastSaved& saved, In bg_color, In bg_image, Out scores) {
+        LFS_ASSERT_MSG(saved.backend != nullptr, "Fast POP scores require a created state");
+        const auto& s = static_cast<const FastState&>(*saved.backend);
+        LFS_ASSERT_MSG(s.live, "Fast POP scores require a live forward frame");
+        if (s.push.instances == 0)
+            return;
+        const size_t pixels = size_t(s.push.width) * s.push.height;
+        for (auto [tensor, size] : {std::pair{&bg_color, size_t(3)}, std::pair{&bg_image, pixels * 3}})
+            LFS_ASSERT_MSG(!tensor->is_valid() || (tensor->dtype() == core::DataType::Float32 &&
+                                                   tensor->is_contiguous() && tensor->numel() == size),
+                           std::format("Fast POP background needs {} contiguous floats, got {}", size, tensor->numel()));
+        Tensor scratch = Tensor::zeros({s.push.count}, Device::GPU);
+        BackPush b{};
+        b.forward = s.push;
+        b.forward.background = address(bg_color);
+        b.forward.background_image = address(bg_image);
+        b.impact_sum = address(scratch);
+        auto reads = fast_storage(s);
+        for (const auto* t : {&bg_color, &bg_image})
+            if (t->is_valid())
+                reads.push_back(ref(*t));
+        reads.push_back(ref(scratch));
+        const auto context = core::internal::acquire_vulkan_context();
+        const std::array writes{ref(scratch)};
+        dispatch(context->caps().shader_atomic_float ? "fast_backward_atomic" : "fast_backward", b,
+                 reads, writes, std::min(s.push.grid_width * s.push.grid_height, context->caps().max_workgroup_count[0]),
+                 specialization(s.push, 0) | (1u << 23) | (1u << 24));
+        accumulate_pop_view_scores(scores, scratch);
+    }
     void fast_backward(FastSaved& saved, const RenderGradients& gradient, Out densification, In error,
                        In edge, Out scores, const BackwardAdam& adam, DensificationType type) {
         LFS_ASSERT_MSG(saved.backend != nullptr, "Fast backward requires a created state");
@@ -69,6 +98,9 @@ namespace lfs::training::vulkan {
             gradients[i] = s.temporary(20 + i, size_t(p.count) * widths[i]).reshape(lfs::core::TensorShape{size_t(p.count), widths[i]});
         const uint32_t slots = (p.rest * 3 + 3) / 4;
         gradients[5] = s.temporary(25, size_t((p.count + 31) / 32) * 32 * slots * 4);
+        // Projection writes live rows only; padded SH lanes must contribute zero to capture.
+        if (adam.groups[5].gradient.is_valid())
+            gradients[5].zero_();
         s.mark(15);
         s.mark(10);
         Tensor screen_gradient = s.temporary(26, size_t(p.visible) * 16);
@@ -121,18 +153,9 @@ namespace lfs::training::vulkan {
         b.scale_normalizer = adam.scale_reg_normalizer;
         b.erank_weight = adam.erank_reg_weight;
         b.dc_weight = adam.dc_reg_weight;
-        b.sh_weight = adam.groups[5].enabled ? adam.sh_rest_reg_weight : 0.f;
-        if (adam.sparsity_sigmoid.is_valid() && adam.sparsity_z.is_valid() && adam.sparsity_u.is_valid()) {
-            b.sigmoid = address(adam.sparsity_sigmoid);
-            b.z = address(adam.sparsity_z);
-            b.u = address(adam.sparsity_u);
-            b.sparsity_count = std::min({adam.sparsity_sigmoid.numel(), adam.sparsity_z.numel(), adam.sparsity_u.numel()});
-            b.rho = adam.sparsity_rho;
-            b.grad_loss = adam.sparsity_grad_loss;
-        }
+        b.sh_weight = (adam.groups[5].enabled || adam.groups[5].gradient.is_valid()) ? adam.sh_rest_reg_weight : 0.f;
         auto reads = fast_storage(s);
-        for (const Tensor* t : {&gradient.image, &gradient.alpha, &gradient.depth, &gradient.normal, &error, &edge,
-                                &adam.sparsity_sigmoid, &adam.sparsity_z, &adam.sparsity_u})
+        for (const Tensor* t : {&gradient.image, &gradient.alpha, &gradient.depth, &gradient.normal, &error, &edge})
             if (t->is_valid() && t->numel())
                 reads.push_back(ref(*t));
         std::vector<StorageRef> writes;
@@ -177,6 +200,15 @@ namespace lfs::training::vulkan {
         const AdamHyper hyper{adam.beta1, adam.beta2, adam.eps};
         for (size_t slot = 0; slot < adam.groups.size(); ++slot) {
             const auto& g = adam.groups[slot];
+            if (g.gradient.is_valid()) {
+                LFS_ASSERT_MSG(g.gradient.dtype() == core::DataType::Float32 && g.gradient.is_contiguous() &&
+                                   g.gradient.numel() == gradients[slot].numel(),
+                               std::format("Fast capture slot {} needs {} contiguous floats, got {}", slot,
+                                           gradients[slot].numel(), g.gradient.numel()));
+                auto target = g.gradient.reshape(core::TensorShape{gradients[slot].numel()});
+                target.add_(gradients[slot].reshape(core::TensorShape{gradients[slot].numel()}));
+                continue;
+            }
             if (!g.enabled)
                 continue;
             LFS_ASSERT_MSG(g.parameter.is_valid() && g.packed_moments.is_valid() && g.joint_bounds.is_valid(), "Enabled Fast Adam group is missing storage");
@@ -237,7 +269,9 @@ namespace lfs::training {
                                        {.full_image = {16, 16}, .intrinsics = {16, 16, 8, 8}}, {image, alpha, depth, normal}, share);
             auto gradient = Tensor::zeros({3, 16, 16}, core::Device::GPU);
             const BackwardAdamParam disabled{absent, absent, absent, absent, absent, absent, absent};
-            const BackwardAdam adam{{disabled, disabled, disabled, disabled, disabled, disabled}, absent, absent, absent, absent, absent};
+            const BackwardAdam adam{.groups = {disabled, disabled, disabled, disabled, disabled, disabled},
+                                    .scale_reg_loss = absent,
+                                    .opacity_reg_loss = absent};
             vulkan::fast_backward(saved, {gradient, absent, absent, absent}, absent, absent, absent, absent, adam, DensificationType::None);
         }
         void record_vram(const FastSaved& saved, In image, In alpha, bool backward, size_t primitives) {
@@ -275,7 +309,7 @@ namespace lfs::training {
                 s.timer = timer;
             }
         }
-        const FastRasterOps ops{create, vulkan::fast_forward, vulkan::fast_backward, release, warmup, record_vram, release_caches};
+        const FastRasterOps ops{.create = create, .forward = vulkan::fast_forward, .backward = vulkan::fast_backward, .release = release, .warmup = warmup, .record_vram = record_vram, .release_caches = release_caches, .pop_scores = vulkan::fast_pop_scores};
     } // namespace
     void vulkan_fast_set_timer(gpu_ops::FastSaved& saved, core::GpuElapsed* timer) {
         LFS_ASSERT_MSG(saved.backend != nullptr, "Fast timing requires a created state");

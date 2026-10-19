@@ -16,6 +16,7 @@
 #include "lfs/training/perf_bench.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "lfs/training/vram_ledger.hpp"
+#include "pop_scores_cuda.hpp"
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -694,6 +695,9 @@ namespace lfs::training {
             if (input->is_valid())
                 input->sync_to_stream(stream);
         }
+        for (const auto& group : adam.groups)
+            if (group.gradient.is_valid())
+                group.gradient.sync_to_stream(stream);
 
         // The blend backward derives the background alpha gradient per pixel
         // from grad_image and the background; no [H, W] map is materialized.
@@ -874,6 +878,10 @@ namespace lfs::training {
             }
         }
 
+        for (const auto& group : adam.groups)
+            if (group.gradient.is_valid())
+                core::Tensor(group.gradient).set_stream(stream);
+
         ctx.mark_forward_context_released();
         state.frame = {};
 
@@ -918,6 +926,8 @@ namespace lfs::training {
         dst.step_size = src.step_size;
         dst.bias_correction2_sqrt_rcp = src.bc2_sqrt_rcp;
         dst.enabled = src.enabled;
+        if (src.gradient.is_valid() && src.gradient.numel() > 0)
+            dst.gradient_out = core::Tensor(src.gradient).ptr<float>();
         if (src.screen_share.is_valid() && src.screen_share.numel() > 0 &&
             src.screen_share_limit > 0.f && src.screen_share_limit < 1.f) {
             dst.screen_share_max = src.screen_share.ptr<float>();
@@ -952,14 +962,6 @@ namespace lfs::training {
             adam.opacity_reg_loss.numel() > 0) {
             fused.opacity_reg_loss_out = adam.opacity_reg_loss.ptr<float>();
         }
-        if (adam.sparsity_sigmoid.is_valid() && adam.sparsity_sigmoid.numel() > 0) {
-            fused.sparsity_opa_sigmoid = adam.sparsity_sigmoid.ptr<float>();
-            fused.sparsity_z = adam.sparsity_z.is_valid() ? adam.sparsity_z.ptr<float>() : nullptr;
-            fused.sparsity_u = adam.sparsity_u.is_valid() ? adam.sparsity_u.ptr<float>() : nullptr;
-            fused.sparsity_n = static_cast<int>(adam.sparsity_sigmoid.numel());
-            fused.sparsity_rho = adam.sparsity_rho;
-            fused.sparsity_grad_loss = adam.sparsity_grad_loss;
-        }
         using lfs::gpu_ops::AdamSlot;
         fused.means = fast_adam_group(adam.groups[static_cast<std::size_t>(AdamSlot::Means)]);
         fused.scaling = fast_adam_group(adam.groups[static_cast<std::size_t>(AdamSlot::Scaling)]);
@@ -974,8 +976,9 @@ namespace lfs::training {
             fused.mean_step_far_mask = adam.mean_step_far_mask.ptr<bool>();
             fused.mean_step_far_mask_n = static_cast<int>(std::min(adam.mean_step_far_mask.numel(), static_cast<size_t>(fused.means.n_primitives)));
         }
-        fused.enabled = fused.means.enabled || fused.scaling.enabled || fused.rotation.enabled ||
-                        fused.opacity.enabled || fused.sh0.enabled || fused.shN.enabled;
+        fused.enabled = false;
+        for (const auto* group : {&fused.means, &fused.scaling, &fused.rotation, &fused.opacity, &fused.sh0, &fused.shN})
+            fused.enabled = fused.enabled || group->enabled || group->gradient_out != nullptr;
         return fused;
     }
 
@@ -1031,6 +1034,17 @@ namespace lfs::training {
         record_vram_tensor(scope, "saved.bg_color", state->frame.bg_color);
     }
 
+    void fast_pop_scores(const lfs::gpu_ops::FastSaved& saved, const core::Tensor& bg_color,
+                         const core::Tensor& bg_image, core::Tensor& scores) {
+        const auto* state = state_of(saved);
+        if (state == nullptr)
+            throw std::logic_error("fast raster op called without a created state");
+        const auto& frame = state->frame;
+        accumulate_fast_pop_scores(frame.forward_ctx, frame.means.is_valid() ? frame.means.shape()[0] : 0,
+                                   static_cast<uint32_t>(frame.width), static_cast<uint32_t>(frame.height),
+                                   bg_color, bg_image, scores);
+    }
+
     void fast_release_caches(lfs::gpu_ops::FastSaved& saved) noexcept {
         if (!saved.backend) {
             return;
@@ -1047,6 +1061,7 @@ namespace lfs::training {
             .warmup = fast_lfs::rasterization::warmup_kernels,
             .record_vram = fast_record_vram,
             .release_caches = fast_release_caches,
+            .pop_scores = fast_pop_scores,
         };
         return ops;
     }

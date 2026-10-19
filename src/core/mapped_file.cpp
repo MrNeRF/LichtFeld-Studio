@@ -81,7 +81,7 @@ namespace lfs::core {
         if (fd_ < 0) {
             return false;
         }
-        struct stat st {};
+        struct stat st{};
         if (fstat(fd_, &st) != 0 || st.st_size <= 0) {
             close();
             return false;

@@ -8,6 +8,7 @@
 
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
+#include "lfs/training/ops/popspa_portable.hpp"
 #include "lfs/training/vram_ledger.hpp"
 
 #include <bit>
@@ -59,6 +60,7 @@ namespace lfs::training {
             uint32_t count, width, height, tiles_x;
             uint64_t depth, normal, rays, v_depth, v_normal;
             uint32_t mode;
+            uint64_t pop_scores;
         };
 
         struct AccumulateParams {
@@ -402,6 +404,51 @@ namespace lfs::training {
             return {ops::RasterResult::Code::Success, true, {}};
         }
 
+        void pop_scores(const ops::GsplatSaved& saved, const Tensor& bg_color, const Tensor& bg_image,
+                        Tensor& scores) {
+            LFS_ASSERT_MSG(saved.backend != nullptr, "gsplat POP scores require a created state");
+            const auto& state = static_cast<const MetalGsplatState&>(*saved.backend);
+            LFS_ASSERT_MSG(state.live, "gsplat POP scores require a live forward frame");
+            const auto& f = state.frame;
+            LFS_ASSERT_MSG(f.mode == ops::GsplatRenderMode::RGB,
+                           std::format("gsplat POP scores require RGB mode, got {}", static_cast<int>(f.mode)));
+            if (f.intersections == 0)
+                return;
+            const Tensor image = bg_image.is_valid()
+                                     ? float_input(bg_image, 3 * size_t(f.width) * f.height, "POP background image")
+                                     : Tensor();
+            const Tensor color = !image.is_valid() && bg_color.is_valid()
+                                     ? float_input(bg_color, 3, "POP background color")
+                                     : Tensor();
+            Tensor scratch = Tensor::zeros({f.count}, Device::GPU);
+            const uint32_t tiles_x = (f.width + kTile - 1) / kTile;
+            const uint32_t tiles_y = (f.height + kTile - 1) / kTile;
+            const RasterParams p{
+                .camera = mk::address(f.camera),
+                .means = mk::address(f.means),
+                .scales = mk::address(f.scales),
+                .quats = mk::address(f.quats),
+                .opacities = mk::address(f.opacities),
+                .colors = mk::address(f.colors),
+                .bg_color = mk::address(color),
+                .bg_image = mk::address(image),
+                .tile_offsets = mk::address(f.tile_offsets),
+                .gaussian_ids = mk::address(f.gaussian_ids),
+                .alpha = mk::address(f.alpha),
+                .last_ids = mk::address(f.last_ids),
+                .count = f.count,
+                .width = f.width,
+                .height = f.height,
+                .tiles_x = tiles_x,
+                .pop_scores = mk::address(scratch),
+            };
+            mk::launch_2d("gsplat_rasterize_backward", p,
+                          {&f.camera, &f.means, &f.scales, &f.quats, &f.opacities, &f.colors, &color, &image,
+                           &f.tile_offsets, &f.gaussian_ids, &f.alpha, &f.last_ids, &scratch},
+                          tiles_x, tiles_y, kTile / 2, kTile);
+            accumulate_pop_view_scores(scores, scratch);
+        }
+
         void backward(ops::GsplatSaved& saved, const Tensor& grad_image, const Tensor& grad_alpha,
                       const ops::GsplatGradients& gradients, Tensor& densification, const Tensor& error_map,
                       const Tensor& edge_map, Tensor& edge_scores, Tensor& max_screen_share) {
@@ -601,6 +648,7 @@ namespace lfs::training {
             .release = release,
             .record_vram = record_vram,
             .release_caches = release_caches,
+            .pop_scores = pop_scores,
         };
         return ops;
     }

@@ -28,6 +28,7 @@ set(GSPLAT_SOURCES
         ProjectionUT3DGSFused.cu
         RasterizeToPixelsFromWorld3DGSBwd.cu
         RasterizeToPixelsFromWorld3DGSFwd.cu
+        PopScores.cu
         SphericalHarmonicsCUDA.cu
 )
 

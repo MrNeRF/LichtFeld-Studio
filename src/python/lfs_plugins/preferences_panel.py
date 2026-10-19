@@ -113,6 +113,7 @@ class PreferencesPanel(Panel):
         self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
         self._mcp_enabled = True
         self._mcp_expose_network = False
+        self._camera_repeat_rate_draft = None
         self._mcp_port = "45677"
         self._mcp_applied_port = 45677
         self._mcp_request_logging = False
@@ -271,6 +272,14 @@ class PreferencesPanel(Panel):
             lf.ui.get_navigation_speed_preference,
             self._set_navigation_speed,
         )
+        model.bind("gt_comparison_key_repeat", lf.ui.get_gt_comparison_key_repeat,
+                   self._set_gt_comparison_key_repeat)
+        model.bind("gt_comparison_repeat_rate", self._get_camera_repeat_rate_draft,
+                   self._set_gt_comparison_repeat_rate)
+        model.bind_event("step_camera_repeat_rate", self._step_camera_repeat_rate)
+        model.bind_event("camera_repeat_rate_change", self._on_camera_repeat_rate_change)
+        model.bind_event("commit_camera_repeat_rate", lambda *_: self._commit_camera_repeat_rate())
+        model.bind_event("cancel_camera_repeat_rate", lambda *_: self._cancel_camera_repeat_rate())
         model.bind("view_snap", lf.get_camera_view_snap_enabled, self._set_view_snap)
         model.bind("remember_navigation", lf.ui.remember_camera_navigation, self._set_remember_navigation)
         model.bind("remember_view_snap", lf.ui.remember_camera_view_snap, self._set_remember_view_snap)
@@ -503,6 +512,8 @@ class PreferencesPanel(Panel):
             float(lf.ui.get_zoom_speed_preference()),
             float(lf.ui.get_navigation_speed_preference()),
             tuple(sorted(lf.ui.get_trackpad_preferences().items())),
+            lf.ui.get_gt_comparison_key_repeat(),
+            float(lf.ui.get_gt_comparison_repeat_rate()),
             lf.get_camera_view_snap_enabled(),
             getattr(lf.ui, "get_embed_dataset_by_default", lambda: False)(),
             lf.project_auto_save_on_close_enabled(),
@@ -953,6 +964,48 @@ class PreferencesPanel(Panel):
             float(state["zoom_speed"]),
             bool(persist),
         )
+
+    def _set_gt_comparison_key_repeat(self, value):
+        lf.ui.set_gt_comparison_key_repeat(bool(value))
+        self._refresh_selection()
+
+    def _get_camera_repeat_rate_draft(self):
+        if self._camera_repeat_rate_draft is None:
+            return str(int(lf.ui.get_gt_comparison_repeat_rate()))
+        return self._camera_repeat_rate_draft
+
+    def _set_gt_comparison_repeat_rate(self, value):
+        # Retain empty and partial input until Enter or blur. Periodic refreshes
+        # must read this draft, rather than restore the saved value mid-edit.
+        self._camera_repeat_rate_draft = str(value)
+
+    def _on_camera_repeat_rate_change(self, _handle, event, args):
+        if args:
+            self._set_gt_comparison_repeat_rate(args[0])
+        if event.get_bool_parameter("linebreak", False):
+            self._commit_camera_repeat_rate()
+
+    def _cancel_camera_repeat_rate(self):
+        self._camera_repeat_rate_draft = None
+        self._refresh_selection()
+
+    def _commit_camera_repeat_rate(self):
+        try:
+            rate = float(self._get_camera_repeat_rate_draft())
+        except (TypeError, ValueError):
+            rate = 0
+        valid = 1 <= rate <= 20
+        if valid and round(rate) != lf.ui.get_gt_comparison_repeat_rate():
+            lf.ui.set_gt_comparison_repeat_rate(round(rate))
+        self._cancel_camera_repeat_rate()
+        return valid
+
+    def _step_camera_repeat_rate(self, _handle, _event, args):
+        if not args:
+            return
+        self._commit_camera_repeat_rate()
+        rate = lf.ui.get_gt_comparison_repeat_rate() + int(args[0])
+        lf.ui.set_gt_comparison_repeat_rate(max(1, min(20, rate)))
         self._refresh_selection()
 
     def _get_scrub_value(self, prop):
@@ -1810,6 +1863,9 @@ class PreferencesPanel(Panel):
             lf.ui.set_zoom_speed_preference(11.0)
             lf.ui.set_navigation_speed_preference(10.0)
             lf.ui.set_trackpad_preferences("mouse", False, 50.0, 50.0)
+            lf.ui.set_gt_comparison_key_repeat(True)
+            self._camera_repeat_rate_draft = None
+            lf.ui.set_gt_comparison_repeat_rate(5.0)
             lf.ui.set_remember_camera_navigation(False)
             lf.ui.set_remember_camera_view_snap(False)
             lf.set_camera_navigation_mode("orbit")
@@ -1860,6 +1916,8 @@ class PreferencesPanel(Panel):
             self._handle.dirty("trackpad_swipe_pans")
             self._handle.dirty("trackpad_swipe_speed")
             self._handle.dirty("trackpad_zoom_speed")
+            self._handle.dirty("gt_comparison_key_repeat")
+            self._handle.dirty("gt_comparison_repeat_rate")
             self._handle.dirty("view_snap")
             self._handle.dirty("remember_navigation")
             self._handle.dirty("remember_view_snap")

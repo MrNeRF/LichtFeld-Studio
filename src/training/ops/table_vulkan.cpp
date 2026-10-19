@@ -18,6 +18,7 @@
 #include "lfs/training/ops/morton_vulkan.hpp"
 #include "lfs/training/ops/mrnf_vulkan.hpp"
 #include "lfs/training/ops/photometric_vulkan.hpp"
+#include "lfs/training/ops/popspa_portable.hpp"
 #include "lfs/training/ops/ppisp_vulkan.hpp"
 #include "lfs/training/ops/refine_vulkan.hpp"
 #include "lfs/training/ops/session_vulkan.hpp"
@@ -52,6 +53,7 @@ namespace lfs::training {
             .lpips = &vulkan_lpips_ops(),
             .structure = &vulkan_structure_ops(),
             .blob = &vulkan_blob_ops(),
+            .popspa = &portable_popspa_ops(),
 #endif
         };
         return table;

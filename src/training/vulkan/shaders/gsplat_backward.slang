@@ -14,7 +14,7 @@ struct GsplatRasterParams {
     Ptr<uint, Access.ReadWrite> depths;
     Ptr<float, Access.ReadWrite> rendered_depth;
     uint count, width, height, tiles_x, tiles_y, edge_factor, mode;
-    Ptr<float, Access.ReadWrite> v_normal;
+    Ptr<float, Access.ReadWrite> v_normal, pop_scores;
 };
 float gsplat_background(GsplatRasterParams p, uint c, uint pixel) {
     return p.bg_image != 0 ? p.bg_image[c * p.width * p.height + pixel] : p.bg_color != 0 ? p.bg_color[c]
@@ -40,6 +40,7 @@ struct GsplatPixel {
     float3 origin, dir, v_c, buffer, depth_axis;
     float T, T_final, v_a, bg_accum, error, edge_weight;
     float v_depth, depth_buffer;
+    bool pop;
     int bin_final;
     bool active, radial_depth;
     float3x3 camera_R;
@@ -62,8 +63,33 @@ static GsplatPixel gsplat_pixel(GsplatRasterParams p, const uint i, const uint j
     px.T_final = 1.0f - p.alpha[pixel];
     px.T = px.T_final;
     px.bin_final = px.active ? p.last_ids[pixel] : 0;
-    px.v_c = float3(p.v_image[pixel], p.v_image[plane + pixel], p.v_image[2u * plane + pixel]);
-    px.v_a = p.v_alpha[pixel];
+    px.pop = p.pop_scores != 0;
+    if (px.pop && p.alpha[pixel] == 0.0f)
+        px.active = false;
+    if (px.pop && px.active) {
+        // Recover the forward float product directly: 1 - rendered alpha
+        // loses relative precision near the transmittance cutoff.
+        const uint tile = (i / 16u) * p.tiles_x + j / 16u;
+        float T = 1.0f;
+        for (int idx = p.tile_offsets[tile]; idx <= px.bin_final; ++idx) {
+            const uint g = p.gaussian_ids[idx];
+            const float3x3 M = gsplat_world_to_unit(gsplat_load4(p.quats, g), exp(gsplat_load3(p.scales, g)));
+            const float3 gro = mul(ray.origin - gsplat_load3(p.means, g), M);
+            const float3 grd = gsplat_safe_normalize(mul(ray.dir, M));
+            const float3 gcrod = cross(grd, gro);
+            const float alpha = min(0.999f, gsplat_sigmoid(p.opacities[g]) * exp(-0.5f * dot(gcrod, gcrod)));
+            if (alpha < kGsplatAlphaMin)
+                continue;
+            const float next_T = T * (1.0f - alpha);
+            if (next_T <= 1e-4f)
+                break;
+            T = next_T;
+        }
+        px.T_final = T;
+        px.T = T;
+    }
+    px.v_c = px.pop ? float3(0.0f) : float3(p.v_image[pixel], p.v_image[plane + pixel], p.v_image[2u * plane + pixel]);
+    px.v_a = px.pop ? 0.0f : p.v_alpha[pixel];
     px.bg_accum = 0.0f;
     if (p.bg_image != 0 || p.bg_color != 0) {
         for (uint c = 0; c < 3u; ++c)
@@ -71,7 +97,8 @@ static GsplatPixel gsplat_pixel(GsplatRasterParams p, const uint i, const uint j
     }
     px.error = p.error_map != 0 ? p.error_map[pixel] : 0.0f;
     px.edge_weight = p.edge_map != 0 ? p.edge_map[pixel] : 0.0f;
-    px.buffer = float3(0.0f);
+    px.buffer = px.pop ? float3(gsplat_background(p, 0u, pixel), gsplat_background(p, 1u, pixel),
+                                gsplat_background(p, 2u, pixel)) : float3(0.0f);
     px.v_depth = p.v_depth != 0 ? p.v_depth[pixel] : 0;
     px.depth_axis = float3(camera.R[0][2], camera.R[1][2], camera.R[2][2]);
     if (p.v_depth != 0 && (p.mode == 2 || p.mode == 4)) {
@@ -111,6 +138,12 @@ static bool gsplat_contribute(inout GsplatPixel px, const int isect, const float
     const float ra = 1.0f / (1.0f - alpha);
     px.T *= ra;
     const float fac = alpha * px.T;
+    if (px.pop) {
+        const float3 delta = fac * (rgb - px.buffer);
+        grad.edge += dot(delta, delta);
+        px.buffer = alpha * rgb + (1.0f - alpha) * px.buffer;
+        return true;
+    }
     grad.rgb += fac * px.v_c;
     grad.mean += (fac * px.v_depth) * (px.radial_depth ? normalize(xyzo.xyz-px.origin) : px.depth_axis);
     uint axis=gsplat_normal_axis(float3(m0.w,m1.w,m2.w));
@@ -259,6 +292,12 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
             GsplatGrad grad = (GsplatGrad)0;
             bool hit0 = gsplat_contribute(px0, batch_end - t, xyzo[t], m0[t], m1[t], m2[t], quats[t], colors[t].xyz, colors[t].w, bg, grad);
             bool hit1 = gsplat_contribute(px1, batch_end - t, xyzo[t], m0[t], m1[t], m2[t], quats[t], colors[t].xyz, colors[t].w, bg, grad);
+            if (p.pop_scores != 0) {
+                const float score = WaveActiveSum(grad.edge);
+                if (WaveIsFirstLane() && score != 0.0f)
+                    gsplat_atomic_add(p.pop_scores, ids[t], score);
+                continue;
+            }
             float values[17] = {grad.mean.x, grad.mean.y, grad.mean.z, grad.scale.x, grad.scale.y, grad.scale.z,
                                 grad.quat.x, grad.quat.y, grad.quat.z, grad.quat.w, grad.opacity, grad.rgb.x, grad.rgb.y, grad.rgb.z,
                                 grad.dens_w, grad.dens_e, grad.edge};

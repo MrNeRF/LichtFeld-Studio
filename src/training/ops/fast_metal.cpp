@@ -10,6 +10,7 @@
 
 #include "core/memory_pressure.hpp"
 #include "core/tensor_readback.hpp"
+#include "lfs/training/ops/popspa_portable.hpp"
 #include "lfs/training/vram_ledger.hpp"
 
 #include <algorithm>
@@ -544,7 +545,7 @@ namespace lfs::training {
 
         // FastAdamGroup of fast_backward.metal; the fields of FusedAdamParam.
         struct AdamGroupParams {
-            uint64_t param, packed, bounds, value_bounds, frozen, crop, screen_share;
+            uint64_t param, packed, bounds, value_bounds, frozen, crop, screen_share, gradient;
             int32_t frozen_n, crop_n, screen_share_n;
             int32_t joint_bits, value_bits, value_cells;
             int32_t primitives, elements, attributes;
@@ -552,12 +553,20 @@ namespace lfs::training {
             float screen_share_limit, screen_share_penalty;
             uint32_t enabled;
         };
-        static_assert(sizeof(AdamGroupParams) == 120);
+        static_assert(sizeof(AdamGroupParams) == 128);
 
         // Retain read-only storage even when parameter and moment updates are disabled.
         AdamGroupParams adam_group(const lfs::gpu_ops::BackwardAdamParam& src, std::vector<const Tensor*>& uses) {
             AdamGroupParams dst{};
             dst.param = address_if(src.parameter);
+            if (src.gradient.is_valid()) {
+                LFS_ASSERT_MSG(src.gradient.dtype() == DataType::Float32 && src.gradient.is_contiguous() &&
+                                   src.gradient.numel() >= size_t(src.elements),
+                               std::format("Fast capture needs {} contiguous float values, got {} ({})", src.elements,
+                                           src.gradient.numel(), src.gradient.shape().str()));
+                dst.gradient = mk::address(src.gradient);
+                uses.push_back(&src.gradient);
+            }
             uses.push_back(&src.parameter);
             if (src.value_bits == 16) {
                 dst.value_bits = 16;
@@ -589,7 +598,7 @@ namespace lfs::training {
             dst.attributes = src.attributes;
             dst.step_size = src.step_size;
             dst.bc2_sqrt_rcp = src.bc2_sqrt_rcp;
-            dst.enabled = src.enabled ? 1u : 0u;
+            dst.enabled = src.enabled && !src.gradient.is_valid() ? 1u : 0u;
             if (present(src.screen_share) && src.screen_share_limit > 0.f && src.screen_share_limit < 1.f) {
                 dst.screen_share = mk::address(src.screen_share);
                 dst.screen_share_n = static_cast<int32_t>(src.screen_share.numel());
@@ -625,13 +634,13 @@ namespace lfs::training {
 
         struct BackwardGeometryParams {
             uint64_t counts, means, scales, rotations, opacities, view, camera, n_touched, grads, normal_grads;
-            uint64_t densification, scale_loss, opacity_loss, sparsity_sigmoid, sparsity_z, sparsity_u;
+            uint64_t densification, scale_loss, opacity_loss;
             AdamGroupParams means_adam, rotation_adam, scaling_adam, opacity_adam;
             float beta1, beta2, eps;
-            float scale_reg_weight, flatten_reg_weight, opacity_reg_weight, sparsity_rho, sparsity_grad_loss;
+            float scale_reg_weight, flatten_reg_weight, opacity_reg_weight;
             float width, height, fx, fy;
             float clip_left, clip_right, clip_top, clip_bottom;
-            uint32_t n, sparsity_n, capacity;
+            uint32_t n, capacity;
             uint32_t log_scale;
             uint64_t rendered_count, erank_loss, mean_far;
             float scale_normalizer, erank_weight, mean_median;
@@ -660,6 +669,46 @@ namespace lfs::training {
                 throw std::invalid_argument(std::format("{} must be a float [3, {}, {}] map, got {} {}", name, f.height,
                                                         f.width, map.shape().str(), static_cast<int>(map.dtype())));
             return map.contiguous();
+        }
+
+        void pop_scores(const lfs::gpu_ops::FastSaved& saved, const Tensor& bg_color, const Tensor& bg_image,
+                        Tensor& scores) {
+            const auto* state = state_of(saved);
+            LFS_ASSERT_MSG(state && state->frame.live, "Fast POP scores require a live forward frame");
+            const auto& s = *state;
+            const auto& f = s.frame;
+            if (f.n_instances == 0)
+                return;
+            const Tensor image = channel_map(bg_image, f, "POP background image");
+            const Tensor color = !image.is_valid() && present(bg_color) ? bg_color.contiguous() : Tensor();
+            LFS_ASSERT_MSG(!color.is_valid() || (color.dtype() == DataType::Float32 && color.numel() == 3),
+                           std::format("Fast POP background needs 3 floats, got {}", color.numel()));
+            Tensor scratch = Tensor::zeros({f.n}, Device::GPU);
+            const BlendBackwardParams p{
+                .counts = mk::address(s.counts),
+                .ranges = mk::address(s.ranges),
+                .values = mk::address(s.values[f.sorted]),
+                .mean_box = mk::address(s.mean_box),
+                .conic_opacity = mk::address(s.conic_opacity),
+                .color_depth = mk::address(s.color_depth),
+                .bg_color = address_if(color),
+                .bg_image = address_if(image),
+                .n_contrib = mk::address(s.n_contrib),
+                .final_transmittance = mk::address(s.final_transmittance),
+                .impact_sum = mk::address(scratch),
+                .n_instances = f.n_instances,
+                .n_primitives = f.n,
+                .width = f.width,
+                .height = f.height,
+                .grid_w = f.grid_w,
+                .capacity = s.pending_capacity,
+            };
+            launch("fast_blend_backward", p,
+                   {&s.counts, &s.ranges, &s.values[f.sorted], &s.mean_box, &s.conic_opacity, &s.color_depth,
+                    &color, &image, &s.n_contrib, &s.final_transmittance, &scratch},
+                   f.grid_w * f.grid_h, 1, kBackwardThreads,
+                   {{kDensificationConstant, 0}, {kNormalChannelConstant, 0}, {kDepthGradConstant, 0}, {kEdgeWeightConstant, 0}, {kImpactScoreConstant, 2}});
+            accumulate_pop_view_scores(scores, scratch);
         }
 
         void backward(lfs::gpu_ops::FastSaved& saved, const lfs::gpu_ops::RenderGradients& gradients,
@@ -712,7 +761,7 @@ namespace lfs::training {
             const auto& group = [&](const AdamSlot slot) -> const lfs::gpu_ops::BackwardAdamParam& {
                 return adam.groups[static_cast<size_t>(slot)];
             };
-            if (!std::ranges::any_of(adam.groups, [](const auto& g) { return g.enabled; }))
+            if (!std::ranges::any_of(adam.groups, [](const auto& g) { return g.enabled || g.gradient.is_valid(); }))
                 throw std::runtime_error("FastGS fused Adam state is not available");
 
             reserve(s.grads, f.primitive_capacity * kGradStride, DataType::Float32,
@@ -821,7 +870,6 @@ namespace lfs::training {
 
             const bool scale_loss = adam.scale_reg_weight > 0.f && present(adam.scale_reg_loss);
             const bool opacity_loss = adam.opacity_reg_weight > 0.f && present(adam.opacity_reg_loss);
-            const bool sparsity = present(adam.sparsity_sigmoid);
             const auto& means_group = group(AdamSlot::Means);
 
             const ClipBounds clip = clip_bounds(f);
@@ -833,8 +881,6 @@ namespace lfs::training {
                 uses.push_back(&adam.scale_reg_loss);
             if (opacity_loss)
                 uses.push_back(&adam.opacity_reg_loss);
-            if (sparsity)
-                uses.insert(uses.end(), {&adam.sparsity_sigmoid, &adam.sparsity_z, &adam.sparsity_u});
             for (const Tensor* tensor : {&adam.rendered_count, &adam.erank_reg_loss, &adam.mean_step_far_mask})
                 if (present(*tensor))
                     uses.push_back(tensor);
@@ -853,9 +899,6 @@ namespace lfs::training {
 
                 .scale_loss = scale_loss ? mk::address(adam.scale_reg_loss) : 0,
                 .opacity_loss = opacity_loss ? mk::address(adam.opacity_reg_loss) : 0,
-                .sparsity_sigmoid = sparsity ? mk::address(adam.sparsity_sigmoid) : 0,
-                .sparsity_z = sparsity ? address_if(adam.sparsity_z) : 0,
-                .sparsity_u = sparsity ? address_if(adam.sparsity_u) : 0,
                 .means_adam = adam_group(means_group, uses),
                 .rotation_adam = adam_group(group(AdamSlot::Rotation), uses),
                 .scaling_adam = adam_group(group(AdamSlot::Scaling), uses),
@@ -866,8 +909,6 @@ namespace lfs::training {
                 .scale_reg_weight = adam.scale_reg_weight,
                 .flatten_reg_weight = adam.flatten_reg_weight,
                 .opacity_reg_weight = adam.opacity_reg_weight,
-                .sparsity_rho = adam.sparsity_rho,
-                .sparsity_grad_loss = adam.sparsity_grad_loss,
 
                 .width = static_cast<float>(f.width),
                 .height = static_cast<float>(f.height),
@@ -878,8 +919,6 @@ namespace lfs::training {
                 .clip_top = clip.top,
                 .clip_bottom = clip.bottom,
                 .n = f.n,
-
-                .sparsity_n = sparsity ? mk::count32(adam.sparsity_sigmoid.numel(), "sparsity") : 0,
                 .capacity = s.pending_capacity,
                 .log_scale = adam.scale_reg_log,
                 .rendered_count = address_if(adam.rendered_count),
@@ -1034,9 +1073,6 @@ namespace lfs::training {
                 .groups = {off, off, off, opacity, off, off},
                 .scale_reg_loss = none,
                 .opacity_reg_loss = none,
-                .sparsity_sigmoid = none,
-                .sparsity_z = none,
-                .sparsity_u = none,
             };
             const Tensor grad = Tensor::zeros_like(image);
             backward(saved, {.image = grad, .alpha = none, .depth = none, .normal = none}, none, none, none, none,
@@ -1058,6 +1094,7 @@ namespace lfs::training {
             .set_deferred_count = set_deferred_count,
             .resolve_deferred_count = resolve_deferred_count,
             .set_instance_capacity_for_testing = set_instance_capacity_for_testing,
+            .pop_scores = pop_scores,
         };
         return ops;
     }

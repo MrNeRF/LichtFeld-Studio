@@ -7,9 +7,8 @@ struct BackPush {
     uint64_t imageGradient, alphaGradient, depthGradient, normalGradient, screenGradient;
     uint64_t densification, error, edge, scores;
     uint64_t meanGradient, scaleGradient, rotationGradient, opacityGradient, dcGradient, shGradient;
-    uint64_t sigmoid, z, u;
-    uint densify, stage, slots, sparsityCount;
-    float scaleWeight, flattenWeight, opacityWeight, rho, gradLoss;
+    uint densify, stage, slots;
+    float scaleWeight, flattenWeight, opacityWeight;
     uint scaleElements, opacityElements;
     uint64_t renderedCount, erankLoss, dcLoss, shLoss, scaleLoss;
     uint logScale;
@@ -56,6 +55,8 @@ groupshared uint maxLast[128];
     if ((fastStage & (1u << 21)) == 0)
         b.scores = 0;
     // Per-splat removal impact: how much each pixel changes without the splat.
+    // POP reuses the impact walk, with squared RGB energy and no gradient writes.
+    const bool pop = (fastStage & (1u << 24)) != 0;
     const bool impact = (fastStage & (1u << 23)) != 0;
     FastPush p = b.forward;
     uint3 groups = spirv_asm {
@@ -172,7 +173,7 @@ result:
                     accum[15] += weight * (b.edge != 0 ? loadFloat(b.edge, pixel[k]) : 0);
                     if (impact) {
                         float3 difference = abs(color - behind[k]);
-                        float removal = weight * (difference.x + difference.y + difference.z);
+                        float removal = pop ? weight * weight * dot(difference, difference) : weight * (difference.x + difference.y + difference.z);
                         impactSum += removal;
                         impactPeak = max(impactPeak, removal);
                         behind[k] = alpha * color + oneMinus * behind[k];
@@ -183,19 +184,21 @@ result:
                 if (nativeWarp && !WaveActiveAnyTrue(accum[13] != 0))
                     continue;
                 if (impact) {
-                    if (nativeWarp) {
+                    if (nativeWarp || pop) {
                         impactSum = WaveActiveSum(impactSum);
                         impactPeak = WaveActiveMax(impactPeak);
                     }
-                    if (!nativeWarp || WaveGetLaneIndex() == 0) {
+                    if ((!nativeWarp && !pop) || WaveGetLaneIndex() == 0) {
                         if (impactSum != 0)
                             atomicFloat(b.impactSum, original, impactSum);
-                        if (impactPeak > 0) {
+                        if (!pop && impactPeak > 0) {
                             uint previous;
                             InterlockedMax(((Ptr<uint, Access.ReadWrite>)b.impactPeak)[original], asuint(impactPeak), previous);
                         }
                     }
                 }
+                if (pop)
+                    continue;
                 if (b.densify == 0 || b.densification == 0) {
                     accum[13] = 0;
                     accum[14] = 0;

@@ -49,24 +49,11 @@ namespace lfs::training {
             mk::launch("loss_reduce_final", reduce, {&reduction_temp, &loss}, 1, kMaxGroups);
         }
 
-        void admm(In sigmoid, In z, In u, Out gradient, float rho, float grad_loss, bool accumulate) {
-            const uint32_t n = element_count(sigmoid, "ADMM backward");
-            if (n == 0)
-                return;
-            struct {
-                uint64_t gradient, sigmoid, z, u;
-                uint32_t count, accumulate;
-                float rho, grad_loss;
-            } const params{mk::address(gradient), mk::address(sigmoid), mk::address(z), mk::address(u), n,
-                           accumulate ? 1u : 0u, rho, grad_loss};
-            mk::launch_items("extra_admm", params, {&gradient, &sigmoid, &z, &u}, n);
-        }
     } // namespace
 
     const lfs::gpu_ops::ExtraLossOps& metal_extra_loss_ops() {
         static const lfs::gpu_ops::ExtraLossOps ops{
             .regularize = regularize,
-            .admm = admm,
         };
         return ops;
     }

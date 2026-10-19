@@ -58,5 +58,7 @@ namespace lfs::gpu_ops {
             In gt_tile, In bg_tile, In error_map);
         // Drops cached camera and output tensors. True when every cache is gone.
         bool (*release_caches)(GsplatSaved&) noexcept;
+        // FastRasterOps::pop_scores for a live RGB forward frame.
+        void (*pop_scores)(const GsplatSaved&, In bg_color, In bg_image, Out scores) = nullptr;
     };
 } // namespace lfs::gpu_ops

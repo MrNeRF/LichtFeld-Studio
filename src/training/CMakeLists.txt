@@ -34,6 +34,8 @@ set(LFS_TRAINING_KERNEL_SOURCES
     kernels/l1_loss.cu
     kernels/ssim_reduction.cu
     kernels/regularization.cu
+    kernels/effective_rank_regularization.cu
+    kernels/popspa.cu
     kernels/bilateral_grid_forward.cu
     kernels/bilateral_grid_backward.cu
     kernels/bilateral_grid_tv.cu
@@ -52,7 +54,6 @@ set(LFS_TRAINING_KERNEL_SOURCES
     kernels/image_kernels.cu
     kernels/mesh_mask.cu
     kernels/mask_preprocess.cu
-    kernels/sparsity_optimizer_kernels.cu
 )
 
 # Create CUDA kernels library
@@ -116,8 +117,11 @@ set(TRAINING_NEW_SOURCES
     ops/requirements.cpp
     ops/fast_services.cpp
     ops/gsplat_services.cpp
+    losses/effective_rank_regularization.cpp
+    ops/popspa.cpp
     losses/mask_loss.cpp
     strategies/strategy_utils.cpp
+    strategies/postprocess_compaction.cpp
     strategies/mcmc.cpp
     strategies/mrnf.cpp
     strategies/blob_seeding.cpp
@@ -128,7 +132,7 @@ set(TRAINING_NEW_SOURCES
     components/ppisp.cpp
     components/ppisp_controller_pool.cpp
     components/ppisp_file.cpp
-    components/sparsity_optimizer.cpp
+    components/popspa_controller.cpp
     control/command_api.cpp
     metrics/compare_images.cpp
     metrics/eval_image_labels.cpp
@@ -142,6 +146,7 @@ set(TRAINING_NEW_SOURCES
         progress.cpp
         training_cropbox_mask.cpp
         trainer.cpp
+        trainer_popspa.cpp
         normal_auto_generate.cpp
         vram_ledger.cpp
         perf_bench.cpp
@@ -170,6 +175,8 @@ if(LFS_HAS_CUDA)
         ops/refine_cuda.cpp
         rasterization/fast_rasterizer_cuda.cpp
         rasterization/gsplat_rasterizer_cuda.cpp
+        rasterization/pop_scores_cuda.cpp
+        ops/popspa_cuda.cpp
         kernels/ppisp_controller.cu
     )
 else()
@@ -258,6 +265,7 @@ endif()
 # lfs_training - Training module with optimizer
 add_library(lfs_training STATIC ${TRAINING_NEW_SOURCES})
 target_link_libraries(lfs_training PRIVATE lfs_geometry_camera lfs_roi_masks)
+lfs_add_gpu_program(lfs_training popspa_program SOURCE ops/popspa.slang COMPUTE fold split shifted proxy penalty effective_rank export_float64)
 
 target_include_directories(lfs_training
     PUBLIC

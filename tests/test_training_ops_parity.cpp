@@ -858,17 +858,6 @@ namespace {
             keep(out.snapshot, backend, std::string("extra.") + name + ".grad", gradient, kReduce);
             keep(out.snapshot, backend, std::string("extra.") + name + ".loss", loss, kReduce);
         }
-        std::vector<float> unit(n);
-        for (size_t i = 0; i < n; ++i) {
-            unit[i] = static_cast<float>((i * 79 + 31) % 257) / 256.f;
-        }
-        const auto sigmoid = Tensor::from_vector(unit, {n, 1}, Device::GPU);
-        const auto z = sigmoid * 0.7f;
-        const auto u = sigmoid * 0.03f;
-        auto admm_grad = Tensor::full({n, 1}, 0.17f, Device::GPU);
-        table->admm(sigmoid, z, u, admm_grad, 0.03f, 0.7f, true);
-        keep(out.snapshot, backend, "extra.admm", admm_grad, kReduce);
-
         auto zero_values = Tensor::full({0}, 2.f, Device::GPU);
         auto untouched_loss = Tensor::full({1}, 7.f, Device::GPU);
         auto untouched_temp = Tensor::full({8}, 3.f, Device::GPU);
@@ -888,9 +877,6 @@ namespace {
         keep(out.snapshot, backend, "extra.zero_weight.loss", untouched_loss, kExact);
         keep(out.snapshot, backend, "extra.zero_weight.temp", untouched_temp, kExact);
 
-        auto overwrite = Tensor::full({n, 1}, 0.17f, Device::GPU);
-        table->admm(sigmoid, z, u, overwrite, 0.03f, 0.7f, false);
-        keep(out.snapshot, backend, "extra.admm.overwrite", overwrite, kReduce);
         return out;
     }
 
@@ -2437,9 +2423,6 @@ namespace {
                 .groups = prepared.groups,
                 .scale_reg_loss = september ? september_scale_loss : prepared.scale_reg_loss,
                 .opacity_reg_loss = prepared.opacity_reg_loss,
-                .sparsity_sigmoid = prepared.sparsity_sigmoid,
-                .sparsity_z = prepared.sparsity_z,
-                .sparsity_u = prepared.sparsity_u,
                 .beta1 = prepared.beta1,
                 .beta2 = prepared.beta2,
                 .eps = prepared.eps,

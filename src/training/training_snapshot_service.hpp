@@ -27,7 +27,8 @@ namespace lfs::training {
     class BilateralGrid;
     class PPISP;
     class PPISPControllerPool;
-    class ADMMSparsityOptimizer;
+    class POPSpaController;
+    class AdamOptimizer;
 
     struct TrainingSnapshotServiceConfig {
 #if defined(__APPLE__)
@@ -124,7 +125,8 @@ namespace lfs::training {
         const BilateralGrid* bilateral_grid = nullptr;
         const PPISP* ppisp = nullptr;
         const PPISPControllerPool* ppisp_controller_pool = nullptr;
-        const ADMMSparsityOptimizer* sparsity_optimizer = nullptr;
+        const POPSpaController* popspa_controller = nullptr;
+        const AdamOptimizer* popspa_optimizer = nullptr;
         std::span<const lfs::core::TensorExecutionTarget> mutating_queues;
         // Runs inside the measured safe-point clock after all mutation streams
         // are quiescent. The callback may only copy detached value state and

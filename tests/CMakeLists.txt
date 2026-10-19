@@ -886,6 +886,16 @@ function(lfs_tensor_private_access)
     endforeach()
 endfunction()
 
+# Shared by the full suite and the focused POPSpa target.
+set(POPSPA_TEST_FILES
+    test_pop_score_backends.cpp
+    test_popspa_controller.cpp
+    test_popspa_regularization.cpp
+    test_popspa_compaction.cpp
+    test_popspa_pipeline.cpp
+    test_popspa_ops.cpp
+)
+
 if(NOT LFS_HAS_CUDA)
     set(TEST_SOURCES
         test_main.cpp
@@ -938,7 +948,8 @@ if(NOT LFS_HAS_CUDA)
             test_training_ops_metal_fast.cpp
             test_roi_masks.cpp
             test_training_snapshot_service.cpp
-            test_ppisp_regularizer_portable.cpp)
+            test_ppisp_regularizer_portable.cpp
+            ${POPSPA_TEST_FILES})
         if(LFS_TENSOR_VULKAN)
             list(APPEND TEST_SOURCES
                 test_vulkan_trainer_start.cpp
@@ -1175,7 +1186,7 @@ set(TEST_FILES
     test_dual_rep_optimizer.cpp
     test_gut_shN_joint_adam.cpp
     test_gut_undistort_parity.cpp
-    test_sparsity_optimizer.cpp
+    ${POPSPA_TEST_FILES}
     test_mcmc_tensor_ops.cpp
     test_training_cropbox_mask.cpp
     test_training_parameters.cpp
@@ -1342,6 +1353,7 @@ set(TEST_FILES
     test_theme_registry.cpp
     test_viewport.cpp
     test_navigation_up_axis.cpp
+    test_gt_navigation_repeat.cpp
     test_input_controller_focus.cpp
     test_input_layout_chords.cpp
     test_keymap_layout_contract.cpp
@@ -1729,6 +1741,51 @@ target_link_libraries(lichtfeld_tests PRIVATE
 )
 
 target_link_libraries(lichtfeld_tests PRIVATE lfs_vulkan_rasterizer Vulkan::Vulkan)
+
+# Focused post-training compaction loop, including parameter and checkpoint
+# compatibility contracts, without compiling the unrelated tensor oracle suite.
+add_executable(popspa_tests
+    test_main.cpp
+    licht_test_support.cpp
+    ${POPSPA_TEST_FILES}
+    test_training_parameters.cpp
+    test_checkpoint_resume.cpp
+    test_training_snapshot_service.cpp
+    ${CMAKE_SOURCE_DIR}/src/python/lfs/py_params.cpp
+)
+target_include_directories(popspa_tests PRIVATE
+    ${CMAKE_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/tests
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/training
+    ${CMAKE_SOURCE_DIR}/src/app/include
+    ${CMAKE_SOURCE_DIR}/src/visualizer
+    ${NB_DIR}/include
+    ${CUDAToolkit_INCLUDE_DIRS}
+)
+target_compile_definitions(popspa_tests PRIVATE
+    TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data"
+    PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
+)
+target_link_libraries(popspa_tests PRIVATE
+    ${LFS_TEST_INTERNAL_LINK_LIBS}
+    GTest::gtest nanobind-static
+    lfs_vulkan_rasterizer Vulkan::Vulkan CUDA::cudart CUDA::curand CUDA::cupti
+)
+set_target_properties(popspa_tests PROPERTIES
+    CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON
+)
+if(COMMAND lfs_enable_fast_cxx_compile)
+    lfs_enable_fast_cxx_compile(popspa_tests)
+endif()
+add_test(NAME POPSpaContracts COMMAND popspa_tests
+    "--gtest_filter=*POPSpa*:PopScore*:CheckpointSparsityRoundTripTest.*:CheckpointVersionTest.*:TrainingParameters*"
+)
+set_tests_properties(POPSpaContracts PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    LABELS "fast;gpu"
+    TIMEOUT 180
+)
 
 # Compiler options for CUDA debugging
 target_compile_options(lichtfeld_tests PRIVATE
@@ -2449,19 +2506,19 @@ endif()
 # Custom targets for convenience
 add_custom_target(run_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -L fast
-    DEPENDS lichtfeld_tests lichtfeld_format_tests
+    DEPENDS lichtfeld_tests lichtfeld_format_tests popspa_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Running the fast developer test tier"
 )
 
 add_custom_target(run_full_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -LE nightly
-    DEPENDS lichtfeld_tests lichtfeld_format_tests
+    DEPENDS lichtfeld_tests lichtfeld_format_tests popspa_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Running fast and slow tests (excluding nightly)"
 )
 
-foreach(TEST_TARGET lichtfeld_tests)
+foreach(TEST_TARGET lichtfeld_tests popspa_tests)
     add_custom_command(TARGET ${TEST_TARGET} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${TEST_TARGET}>/resources/viewer"
         COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
@@ -2477,7 +2534,7 @@ endforeach()
 if(WIN32)
     # Copy Torch DLLs for testing on Windows
     file(GLOB TORCH_DLLS "${Torch_DIR}/../../../lib/*.dll")
-    foreach(TEST_TARGET lichtfeld_tests)
+    foreach(TEST_TARGET lichtfeld_tests popspa_tests)
         foreach(TORCH_DLL ${TORCH_DLLS})
             add_custom_command(
                 TARGET ${TEST_TARGET}

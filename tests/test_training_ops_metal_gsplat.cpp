@@ -11,6 +11,7 @@
 #include "core/sh_value_quant.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
+#include "lfs/training/ops/popspa.hpp"
 #include "lfs/training/ops/registry.hpp"
 
 #include <gtest/gtest.h>
@@ -427,7 +428,7 @@ namespace {
         }
 
         Rendered forward(const Scene& s, const Cam& cam, const uint32_t bases, const D3& bg,
-                         const bool q16 = false) {
+                         const bool q16 = false, const Tensor& bg_image = Tensor()) {
             const size_t n = s.n;
             std::vector<double> rest(lfs::core::sh_swizzled_float_count(n, kRest), 0.0);
             for (size_t p = 0; p < n; ++p)
@@ -478,7 +479,7 @@ namespace {
             };
             Rendered out;
             Tensor depth, normal;
-            const auto result = table_->forward(saved_, splats, view_, radial_, tangential_, bg_, Tensor(), params,
+            const auto result = table_->forward(saved_, splats, view_, radial_, tangential_, bg_, bg_image, params,
                                                 {out.image, out.alpha, depth, normal});
             EXPECT_EQ(result.code, ops::RasterResult::Code::Success) << result.message;
             return out;
@@ -507,6 +508,59 @@ namespace {
     }
 
     constexpr D3 kBackground{0.2, 0.5, 0.1};
+
+    TEST_P(PortableGsplat, PopScoresMatchLeaveOneOut) {
+        ASSERT_NE(table_->pop_scores, nullptr);
+        for (const auto model : {CameraModel::PINHOLE, CameraModel::FISHEYE}) {
+            for (const bool image_background : {false, true}) {
+                SCOPED_TRACE(static_cast<int>(model));
+                SCOPED_TRACE(image_background);
+                auto scene = make_scene(12);
+                auto cam = make_camera(model);
+                if (model == CameraModel::PINHOLE) {
+                    cam.radial = {-0.05f, 0.01f};
+                    cam.tangential = {0.002f, -0.001f};
+                }
+                Tensor bg_image;
+                if (image_background) {
+                    std::vector<double> values(3 * kH * kW);
+                    for (size_t i = 0; i < values.size(); ++i)
+                        values[i] = double(i % 97) / 97;
+                    bg_image = gpu(values, {3, kH, kW});
+                }
+                const auto full = host(forward(scene, cam, 4, kBackground, false, bg_image).image);
+                Tensor scores = Tensor::zeros({scene.n, 8}, Device::GPU, DataType::UInt8);
+                table_->pop_scores(saved_, bg_, bg_image, scores);
+                const auto once = scores.cpu();
+                table_->pop_scores(saved_, bg_, bg_image, scores);
+                const auto twice = scores.cpu();
+                double total = 0;
+                for (size_t i = 0; i < scene.n; ++i) {
+                    SCOPED_TRACE(i);
+                    auto removed = scene;
+                    removed.opacities[i] = -100;
+                    const auto without = host(forward(removed, cam, 4, kBackground, false, bg_image).image);
+                    double expected = 0;
+                    for (size_t p = 0; p < full.size(); ++p) {
+                        const double delta = double(full[p]) - without[p];
+                        expected += delta * delta;
+                    }
+                    const double score = ops::decode_pop_score(once.ptr<uint8_t>() + 8 * i, ops::PopScoreEncoding::Float32Pair);
+                    EXPECT_NEAR(score, expected, 1e-4 * expected + 1e-7);
+                    EXPECT_NEAR(ops::decode_pop_score(twice.ptr<uint8_t>() + 8 * i, ops::PopScoreEncoding::Float32Pair),
+                                2 * score, 1e-6 * score + 1e-9);
+                    total += score;
+                }
+                EXPECT_GT(total, 0.01);
+                for (size_t i = 0; i < scene.n; ++i)
+                    scene.means[3 * i + 2] = -100;
+                (void)forward(scene, cam, 4, kBackground, false, bg_image);
+                table_->pop_scores(saved_, bg_, bg_image, scores);
+                const auto unchanged = scores.cpu();
+                EXPECT_EQ(std::memcmp(twice.data_ptr(), unchanged.data_ptr(), scene.n * 8), 0);
+            }
+        }
+    }
 
     TEST_P(PortableGsplat, ForwardMatchesReference) {
         const auto scene = make_scene(40);
