@@ -231,6 +231,35 @@ namespace {
         }
     }
 
+    TEST_F(JxlCodec, OwningOutputSurvivesTrailingInputAfterPixelDecode) {
+        for (const int bits : {8, 16, 32}) {
+            const std::array<uint8_t, 18> u8{10, 20, 30};
+            const std::array<uint16_t, 18> u16{1000, 2000, 3000};
+            const std::array<float, 18> f32{.1f, .2f, .3f};
+            const void* samples = bits == 32 ? static_cast<const void*>(f32.data()) : bits == 16 ? static_cast<const void*>(u16.data())
+                                                                                                 : u8.data();
+            const size_t bytes = bits == 32 ? sizeof(f32) : bits == 16 ? sizeof(u16)
+                                                                       : sizeof(u8);
+            const auto valid = encode(samples, bytes, {.bits = bits, .floating = bits == 32});
+            auto invalid = valid;
+            invalid.push_back(0xff);
+            codec::Image image{7, 8, 1, codec::SampleType::UInt8, {123}};
+            std::string error;
+            for (const bool file : {false, true}) {
+                EXPECT_FALSE(file ? native_decode(write(invalid), image, error) : native_decode(invalid, image, error));
+                EXPECT_NE(error.find("trailing input"), std::string::npos) << error;
+                EXPECT_EQ(image.width, 7);
+                EXPECT_EQ(image.height, 8);
+                EXPECT_EQ(image.channels, 1);
+                EXPECT_EQ(image.sample_type, codec::SampleType::UInt8);
+                EXPECT_EQ(image.data, (std::vector<uint8_t>{123}));
+            }
+            ASSERT_TRUE(native_decode(valid, image, error)) << error;
+            EXPECT_EQ(image.data.size(), bytes);
+            EXPECT_EQ(std::memcmp(image.data.data(), samples, bytes), 0);
+        }
+    }
+
     TEST_F(JxlCodec, TargetIsAllocatedOnlyAfterSuccessfulDecode) {
         const std::array<uint8_t, 6> gray{0, 128, 255, 30, 60, 90};
         const auto encoded = encode(gray.data(), gray.size(), {.channels = 1});
