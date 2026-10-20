@@ -36,8 +36,13 @@ import utils;
 #define LFS_SELECTION_OUTLINE 0
 #endif
 
-// Outline variants are a separate, selected-tile-only mask dispatch.
+// 3DGUT shares color/outline evaluation. Legacy 3DGS retains its separate
+// selected-tile mask dispatch; HiGS uses its dedicated mask shader.
+#if LFS_3DGUT_RASTERIZE
+#define LFS_OUTLINE_ONLY 0
+#else
 #define LFS_OUTLINE_ONLY LFS_SELECTION_OUTLINE
+#endif
 
 #define SHARED_STRUCT 1
 
@@ -402,13 +407,18 @@ void main(
     int splats_left_to_process = tile_idx_end - tile_idx_start;
     for (int i = 0; i < shared_memory_rounds; i++)
     {
-      #if LFS_OUTLINE_ONLY
-        // Uniform exit before loading another batch. Once its first rank
-        // exceeds the final selected rank, selected coverage cannot increase.
-        // This remains safe for hidden selections and spans all depth waves.
-        uint first_slot = uint(sorted_gauss_idx[tile_idx_start + i * TILE_SIZE]);
-        if (outline_tiles[outline_rank_offset + first_slot] > outline_tile_bound)
-            break;
+      #if LFS_SELECTION_OUTLINE
+        // After the final selected rank, only ordinary color work can remain.
+        if (outline_tile_bound != 0u) {
+            uint first_slot = uint(sorted_gauss_idx[tile_idx_start + i * TILE_SIZE]);
+            if (outline_tiles[outline_rank_offset + first_slot] > outline_tile_bound) {
+              #if LFS_OUTLINE_ONLY
+                break;
+              #else
+                outline_active = false;
+              #endif
+            }
+        }
       #endif
         // break if thread_active is false for all, doesn't seem to speed up
         // equivalent to CUDA `if (__syncthreads_count(thread_active) == 0) break;`

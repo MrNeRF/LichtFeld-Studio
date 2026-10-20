@@ -1909,17 +1909,16 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                 raster_bindings.push_back({lod_weights, BufferUse::ComputeRead});
             }
             if (raster_outline) {
-                // Keep the normal color raster's register pressure and early
-                // termination unchanged. Only selected tiles run the mask shader.
-                const bool spark_rad = (uniforms.lod_enabled & 4u) != 0u;
-                auto& color_pipeline = use_gut_rasterization
-                                           ? (spark_rad ? (overlays_active ? pipeline_rasterize_forward_3dgut_rad : pipeline_rasterize_forward_3dgut_plain_rad)
-                                                        : (overlays_active ? pipeline_rasterize_forward_3dgut : pipeline_rasterize_forward_3dgut_plain))
-                                           : (overlays_active ? pipeline_rasterize_forward : pipeline_rasterize_forward_plain);
-                executeComputeIndirect(record,
-                                       indirect::byteOffset(indirect::DepthWave::kFullscreenWordOffset),
-                                       &wave_uniforms, sizeof(wave_uniforms),
-                                       color_pipeline[buffers.is_unsorted_1], raster_bindings);
+                // 3DGUT shares expensive ray/Gaussian evaluation with color.
+                // Its selected-rank bound disables outline work independently
+                // of ordinary color termination. Legacy 3DGS stays separate.
+                if (!use_gut_rasterization) {
+                    auto& color_pipeline = overlays_active ? pipeline_rasterize_forward : pipeline_rasterize_forward_plain;
+                    executeComputeIndirect(record,
+                                           indirect::byteOffset(indirect::DepthWave::kFullscreenWordOffset),
+                                           &wave_uniforms, sizeof(wave_uniforms),
+                                           color_pipeline[buffers.is_unsorted_1], raster_bindings);
+                }
                 raster_bindings.push_back({*outline_ids, BufferUse::ComputeReadWrite});
                 if (!use_gut_rasterization)
                     raster_bindings.push_back({transform_indices, BufferUse::ComputeRead});
