@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Non-mutating default checks shared by plugin preflight and registration."""
 
+import ast
 import math
 
 
@@ -61,3 +62,76 @@ def descriptor_default_issues(descriptor):
         type(descriptor).__name__, default=getattr(descriptor, "default", UNKNOWN),
         items=getattr(descriptor, "items", UNKNOWN), minimum=getattr(descriptor, "min", UNKNOWN),
         maximum=getattr(descriptor, "max", UNKNOWN))
+
+
+_PROPERTY_CONSTRUCTORS = {f"{prefix}.{kind}" for prefix in ("lfs_plugins.props", "lichtfeld.props")
+                          for kind in PROPERTY_KINDS}
+
+
+def _expr_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = _expr_name(node.value)
+        return f"{parent}.{node.attr}" if parent else node.attr
+    return ""
+
+
+def check_property_defaults(plugin_dir, *, package_prefix=None) -> list[str]:
+    """Check literal declarations without importing or executing plugin code."""
+    findings = []
+    for source in plugin_dir.rglob("*.py"):
+        if any(part in {".venv", "venv", "__pycache__", ".git"} for part in source.relative_to(plugin_dir).parts):
+            continue
+        try:
+            # Bytes let Python honor coding declarations and UTF-8 BOMs.
+            module = ast.parse(source.read_bytes(), filename=str(source))
+        except SyntaxError as error:
+            findings.append(f"{source.relative_to(plugin_dir).as_posix()}:{error.lineno or 1}: "
+                            f"cannot check property declarations: {error.msg}")
+            continue
+        aliases = {}
+        for node in module.body:
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in {"lichtfeld", "lichtfeld.props", "lfs_plugins.props"}:
+                        aliases[alias.asname or alias.name.split(".")[0]] = alias.name if alias.asname else alias.name.split(".")[0]
+            elif isinstance(node, ast.ImportFrom):
+                module_name = node.module
+                if node.level:
+                    if package_prefix is None:
+                        continue
+                    package = [package_prefix, *source.relative_to(plugin_dir).parent.parts]
+                    if node.level > len(package):
+                        continue
+                    module_name = ".".join([*package[:len(package) - node.level + 1], *(node.module or "").split(".")]).rstrip(".")
+                if module_name in {"lichtfeld", "lichtfeld.props", "lfs_plugins", "lfs_plugins.props"}:
+                    for alias in node.names:
+                        aliases[alias.asname or alias.name] = f"{module_name}.{alias.name}"
+        for node in ast.walk(module):
+            if not isinstance(node, ast.Call):
+                continue
+            name = _expr_name(node.func).split(".")
+            resolved = ".".join([aliases.get(name[0], name[0]), *name[1:]])
+            kind = resolved.rsplit(".", 1)[-1]
+            if resolved not in _PROPERTY_CONSTRUCTORS:
+                continue
+            values = {}
+            # Only EnumProperty accepts `items` as its first positional argument.
+            positional = ("items", "default") if kind == "EnumProperty" else ("default",)
+            arguments = [(key, value) for key, value in zip(positional, node.args)]
+            arguments.extend((kw.arg, kw.value) for kw in node.keywords if kw.arg in {"items", "default", "min", "max"})
+            for key, value in arguments:
+                try:
+                    values[{"min": "minimum", "max": "maximum"}.get(key, key)] = ast.literal_eval(value)
+                except (ValueError, TypeError, SyntaxError, RecursionError):
+                    pass  # Runtime registration checks expressions once resolved.
+            if (not any(key == "default" for key, _ in arguments)
+                    and not any(kw.arg is None for kw in node.keywords)
+                    and not any(isinstance(arg, ast.Starred) for arg in node.args)):
+                values["default"] = {"EnumProperty": None, "FloatProperty": 0.0, "IntProperty": 0,
+                                     "BoolProperty": False, "StringProperty": ""}[kind]
+            for issue in default_metadata_issues(kind, **values):
+                findings.append(f"{source.relative_to(plugin_dir).as_posix()}:{node.lineno}: {kind}: {issue}; "
+                                "automatic default metadata unavailable (plugin loading is unaffected)")
+    return findings

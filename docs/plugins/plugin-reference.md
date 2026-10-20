@@ -488,6 +488,26 @@ gate and do not require existing plugins to adopt a new manifest or API version.
 Properties with no usable default must be excluded by automatic reset consumers.
 This compatibility policy does not repair errors in a plugin's own code.
 
+#### Application and CI checks
+
+`python tools/check_property_contracts.py --source-only` checks shipped Python
+declarations and examples without loading the runtime or executing their code.
+The dedicated **Property Contracts** workflow runs this check and its regression
+tests without compiling the app or requiring CUDA/GPU dependencies.
+
+The existing Windows and Ubuntu build workflows reuse `lichtfeld_format_tests`
+through `--cpu-tests <executable>`. The gate requires the selected property
+contracts to execute: missing binaries, empty reports, failures and skips fail
+the check. Ubuntu also runs `--native --build-dir build` with its existing CUDA
+driver stub, without a display or GPU. A missing/wrong native module or missing
+built-in metadata is an error, not a skipped test. The native check validates
+declared enum defaults and context-resolved session defaults separately; it does
+not mistake automatic scalar sentinel values for invalid numeric bounds.
+When running native mode locally, use the Python interpreter matching the build.
+
+These strict developer/CI gates do not change the non-blocking compatibility
+policy of normal plugin loading.
+
 ### FloatVectorProperty
 
 ```text
