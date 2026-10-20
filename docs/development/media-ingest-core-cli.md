@@ -290,7 +290,9 @@ partial frames and inspect the structured result.
 
 The extractor publishes `extraction_metadata.json` through the existing shared
 atomic-file service for both SDR and float output. SDR retains its legacy
-replacement policy; float output retains its explicit metadata overwrite option.
+replacement policy; ordinary high-precision extraction retains its explicit
+metadata overwrite option. Verified resume regenerates the derived manifest
+after checkpoint and frame verification, without requiring image overwrite.
 The existing schemas and frame naming/timestamps are unchanged. This publication
 does not request durable filesystem synchronization.
 
@@ -336,18 +338,19 @@ Existing color, EXR precision/overrides, encoder backend and performance fields
 remain authoritative. No projection, vendor metadata or unknown calibration is
 inferred. These additions use the shared extractor for legacy, CLI, Python and
 host file extraction; custom in-memory sinks retain their existing `FrameInfo`.
-Manifest publication and overwrite policies are unchanged.
+Manifest publication continues to use the shared atomic-file service.
 When metadata is requested, publication failure is terminal rather than a
 best-effort warning; already published images are not rolled back. PNG/JPEG
-metadata is opt-in, while EXR retains its mandatory manifest and explicit
-overwrite policy. Verified replay and missing-image reconstruction retain the
+metadata is opt-in, while EXR, TIFF16, JXL and AVIF require a manifest. Ordinary
+high-precision extraction retains its explicit overwrite policy; verified resume
+may regenerate its manifest after successful verification. Verified replay and missing-image reconstruction retain the
 same selected source timestamps as uninterrupted extraction.
 
 ## Verified image-sequence resume
 
 `media-ingest extract ... --resume` and `FileExtraction.resume = true` opt into
 checkpointed file extraction. Defaults and ordinary extraction remain unchanged.
-PNG, JPEG and SDR linear EXR are supported through the existing file writers.
+PNG, JPEG, SDR linear EXR, TIFF16, JXL and AVIF use the existing file writers.
 This option does not resume an interrupted encoded video or a custom memory sink.
 
 The `.media-ingest-checkpoint` directory contains a versioned input/request
@@ -358,6 +361,13 @@ existing extraction without a checkpoint is not adopted. Changed requests,
 malformed checkpoints and modified/truncated output files fail without replacing
 those files. Missing recorded images can be reconstructed only when their
 regenerated encoded bytes match the recorded hash.
+
+A completed extraction can be resumed repeatedly without `--overwrite`. After
+all records and selected frames pass verification, its derived manifest is
+published atomically again. Healthy image bytes and modification times remain
+unchanged. A verification failure leaves the previous manifest intact. Existing
+high-precision metadata without a checkpoint identity is not adopted unless its
+ordinary overwrite option explicitly permits replacement.
 
 Checkpoint hashing uses the project's existing OpenSSL SHA-256 provider through
 a private media dependency. The algorithm, input bytes and checkpoint digest

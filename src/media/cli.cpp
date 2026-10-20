@@ -73,11 +73,12 @@ namespace {
                 std::cout << "media-ingest version\nmedia-ingest capabilities\nmedia-ingest source-exif INPUT\nmedia-ingest probe INPUT [--headers-only] [--timeout-ms N]\n"
                              "media-ingest extract INPUT --output DIRECTORY [--fps N | --interval N]\n"
                              "  [--start SECONDS] [--end SECONDS] [--rotate 0|90|180|270]\n"
-                             "  [--scale N | --size WIDTH HEIGHT] [--format png|jpeg|exr|tiff16|jxl] [--quality N]\n"
+                             "  [--scale N | --size WIDTH HEIGHT] [--format png|jpeg|exr|tiff16|jxl|avif] [--quality N]\n"
                              "  [--name PATTERN] [--metadata] [--resume] [--sharpness THRESHOLD] [--window]\n"
                              "  [--algorithm laplacian|tenengrad|combined] [--candidates N] [--hdr-to-sdr] [--quiet]\n"
                              "  TIFF16: [--tiff16-transfer srgb|bt709|linear] [--overwrite] (relative SDR only)\n"
-                             "  JXL: [--jxl-distance N (enables lossy)] [--jxl-effort N] [--overwrite] (linear Float32 SDR; effort 4..9 lossless, 1..9 lossy)\n"
+                             "  AVIF: [--avif-quality 0..100 (enables lossy)] [--avif-speed 0..9] [--avif-depth 8|10|12] [--overwrite]\n"
+                             "  JXL: [--jxl-distance N (enables lossy)] [--jxl-effort N] [--overwrite] (Float32 SDR default; --jxl-precision float32|uint16; --jxl-transfer linear|srgb; effort 4..9 for lossless Float32, otherwise 1..9)\n"
                              "  EXR: [--exr-precision half|float] [--exr-compression zip|none] [--overwrite]\n"
                              "       [--float-profile sdr|pq-nits|hlg-scene] [--input-transfer auto|linear|srgb|bt709] [--input-primaries auto|bt709|bt2020]\n";
                 return 0;
@@ -89,7 +90,7 @@ namespace {
             }
             if (args.size() == 2 && args[1] == "capabilities") {
                 const auto c = MediaIngest::capabilities();
-                std::cout << json{{"schema_version", 1}, {"success", true}, {"software_decode", c.software_decode}, {"rgb8", c.rgb8}, {"png", c.png}, {"jpeg", c.jpeg}, {"hardware_decode", c.hardware_decode}, {"hdr_to_sdr", c.hdr_to_sdr}, {"rgb_float_sdr", c.rgb_float_sdr}, {"exr", c.exr}, {"tiff16", c.tiff16}, {"jxl", c.jxl}, {"float_sdr_profile", c.float_sdr_profile}, {"rgb_float_pq", c.rgb_float_pq}, {"float_pq_profile", c.float_pq_profile}, {"rgb_float_hlg", c.rgb_float_hlg}, {"float_hlg_profile", c.float_hlg_profile}}.dump() << '\n';
+                std::cout << json{{"schema_version", 1}, {"success", true}, {"software_decode", c.software_decode}, {"rgb8", c.rgb8}, {"png", c.png}, {"jpeg", c.jpeg}, {"hardware_decode", c.hardware_decode}, {"hdr_to_sdr", c.hdr_to_sdr}, {"rgb_float_sdr", c.rgb_float_sdr}, {"exr", c.exr}, {"tiff16", c.tiff16}, {"jxl", c.jxl}, {"avif", c.avif}, {"float_sdr_profile", c.float_sdr_profile}, {"rgb_float_pq", c.rgb_float_pq}, {"float_pq_profile", c.float_pq_profile}, {"rgb_float_hlg", c.rgb_float_hlg}, {"float_hlg_profile", c.float_hlg_profile}}.dump() << '\n';
                 return 0;
             }
             if (args.size() == 3 && args[1] == "source-exif") {
@@ -105,6 +106,7 @@ namespace {
             request.input = lfs::core::utf8_to_path(args[2]);
             FileExtraction output;
             ProbeOptions probe;
+            bool avif_options = false;
             bool quiet = false, selection_set = false, geometry_set = false, exr_options = false, quality_set = false, exr_codec_options = false, tiff_options = false, jxl_options = false;
             for (size_t i = 3; i < args.size(); ++i) {
                 const auto& flag = args[i];
@@ -166,6 +168,23 @@ namespace {
                     output.files.exr.overwrite = true;
                     output.files.tiff16.overwrite = true;
                     output.files.jxl.overwrite = true;
+                    output.files.avif.overwrite = true;
+                } else if (flag == "--avif-quality") {
+                    avif_options = true;
+                    output.files.avif.lossless = false;
+                    output.files.avif.quality = number<int>(value());
+                } else if (flag == "--avif-speed") {
+                    avif_options = true;
+                    output.files.avif.speed = number<int>(value());
+                } else if (flag == "--avif-depth") {
+                    avif_options = true;
+                    output.files.avif.bit_depth = number<int>(value());
+                } else if (flag == "--jxl-precision") {
+                    jxl_options = true;
+                    output.files.jxl.precision = parse<JxlPrecision>(value());
+                } else if (flag == "--jxl-transfer") {
+                    jxl_options = true;
+                    output.files.jxl.transfer = parse<ColorTransfer>(value());
                 } else if (flag == "--jxl-distance") {
                     jxl_options = true;
                     output.files.jxl.lossless = false;
@@ -223,13 +242,15 @@ namespace {
             }
             if (tiff_options && output.files.format != FrameFileFormat::TIFF16)
                 throw std::invalid_argument("TIFF16 options require --format tiff16");
+            if (avif_options && output.files.format != FrameFileFormat::AVIF)
+                throw std::invalid_argument("AVIF options require --format avif");
             if (jxl_options && output.files.format != FrameFileFormat::JXL)
                 throw std::invalid_argument("JXL options require --format jxl");
             if (output.files.format != FrameFileFormat::EXR && exr_codec_options)
                 throw std::invalid_argument("EXR precision/compression require --format exr");
-            if (output.files.format == FrameFileFormat::EXR || output.files.format == FrameFileFormat::TIFF16 || output.files.format == FrameFileFormat::JXL) {
+            if (output.files.format == FrameFileFormat::EXR || output.files.format == FrameFileFormat::TIFF16 || output.files.format == FrameFileFormat::JXL || output.files.format == FrameFileFormat::AVIF) {
                 if (quality_set)
-                    throw std::invalid_argument("JPEG quality does not apply to EXR/TIFF16/JXL");
+                    throw std::invalid_argument("JPEG quality does not apply to EXR/TIFF16/JXL/AVIF");
                 request.output_format = FramePixelFormat::RGBFloat32;
                 output.write_metadata = true;
             } else if (exr_options) {

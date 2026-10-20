@@ -58,7 +58,8 @@ namespace lfs::io {
         JPG,
         EXR,
         TIFF16,
-        JXL
+        JXL,
+        AVIF
     };
 
     enum class ResolutionMode {
@@ -132,6 +133,12 @@ namespace lfs::io {
             bool jxl_lossless = true;
             float jxl_distance = 1.f;
             int jxl_effort = 4;
+            media::JxlPrecision jxl_precision = media::JxlPrecision::Float32;
+            media::ColorTransfer jxl_transfer = media::ColorTransfer::Linear;
+            bool avif_lossless = true;
+            int avif_quality = 90;
+            int avif_speed = 8;
+            int avif_bit_depth = 8;
         };
 
         struct ValidatedLayout {

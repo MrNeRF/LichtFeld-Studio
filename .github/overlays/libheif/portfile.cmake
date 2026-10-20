@@ -9,14 +9,18 @@ vcpkg_from_github(
         find-modules.diff
         gdk-pixbuf.patch
         symbol-exports.diff
+        aom-reinitialization.patch
 )
 
 vcpkg_find_acquire_program(PKGCONFIG)
 set(ENV{PKG_CONFIG} "${PKGCONFIG}")
+vcpkg_check_features(OUT_FEATURE_OPTIONS FEATURE_OPTIONS
+    FEATURES avif-encode WITH_AOM_ENCODER)
 
 vcpkg_cmake_configure(
     SOURCE_PATH "${SOURCE_PATH}"
     OPTIONS
+        ${FEATURE_OPTIONS}
         -DBUILD_TESTING=OFF
         -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF
         -DPLUGIN_DIRECTORY=  # empty
@@ -29,7 +33,7 @@ vcpkg_cmake_configure(
         -DWITH_KVAZAAR=OFF
         -DWITH_FFMPEG_DECODER=OFF
         -DWITH_AOM_DECODER=OFF
-        -DWITH_AOM_ENCODER=OFF
+        -DWITH_AOM_ENCODER_PLUGIN=OFF
         -DWITH_SvtEnc=OFF
         -DWITH_RAV1E=OFF
         -DWITH_UVG266=OFF
@@ -68,6 +72,14 @@ vcpkg_cmake_configure(
 vcpkg_cmake_install()
 vcpkg_copy_pdbs()
 vcpkg_cmake_config_fixup(CONFIG_PATH "lib/cmake/libheif")
+if("avif-encode" IN_LIST FEATURES)
+    # Static exports refer to AOM::aom. Keep dependency discovery with the
+    # provider package so every consumer gets a complete imported target.
+    set(heif_config "${CURRENT_PACKAGES_DIR}/share/libheif/libheif-config.cmake")
+    file(READ "${heif_config}" heif_config_text)
+    file(WRITE "${heif_config}"
+        "include(CMakeFindDependencyMacro)\nfind_dependency(AOM CONFIG HINTS \"\${CMAKE_CURRENT_LIST_DIR}/../aom\")\n${heif_config_text}")
+endif()
 vcpkg_fixup_pkgconfig()
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

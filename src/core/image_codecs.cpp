@@ -3,6 +3,7 @@
 
 #include "image_codecs.hpp"
 #include "core/source_metadata.hpp"
+#include "image_avif.hpp"
 #include "image_exr.hpp"
 #include "image_heif.hpp"
 #include "image_jxl.hpp"
@@ -3633,6 +3634,14 @@ namespace lfs::core::image_codecs {
                           const int width, const int height, const int channels, const int jpeg_quality,
                           const std::optional<std::string>& comment, const AtomicFileOptions& options,
                           const bool jpeg_full_chroma) {
+        if (lower_extension(path) == ".avif") {
+            if (comment && !comment->empty())
+                return Status::failure(make_error({.code = ErrorCode::Unsupported, .domain = ErrorDomain::IO, .detail = "AVIF metadata comments require an explicit metadata policy", .detection = LFS_SOURCE_SITE_CURRENT()}));
+            if (!data || width <= 0 || height <= 0 || channels < 1 || channels > 4 || size_t(width) > SIZE_MAX / size_t(height) / size_t(channels))
+                return Status::failure(make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Invalid packed AVIF byte image", .detection = LFS_SOURCE_SITE_CURRENT()}));
+            const size_t stride = size_t(width) * channels;
+            return write_avif(path, {data, stride * size_t(height)}, width, height, channels, stride, {}, options);
+        }
         if (lower_extension(path) == ".jxl") {
             if (comment && !comment->empty())
                 return Status::failure(make_error({.code = ErrorCode::Unsupported, .domain = ErrorDomain::IO, .detail = "JXL metadata comments require an explicit metadata policy", .detection = LFS_SOURCE_SITE_CURRENT()}));

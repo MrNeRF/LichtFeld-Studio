@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Production CPU CLI contracts; synthetic offline input and legacy references."""
 import argparse
+import array
 import ctypes
 import importlib.util
 import json
@@ -290,6 +291,29 @@ class IngestCLI(unittest.TestCase):
                 self.assertEqual(actual["frames_accepted"],len(metadata["frames"]))
                 progress=[json.loads(line) for line in stderr.splitlines() if line.startswith(b'{')]
                 self.assertTrue(progress)
+    def test_jxl_uint16_transfer_and_option_validation(self):
+        for transfer in ("linear", "srgb"):
+            output = self.root / ("jxl-u16-" + transfer)
+            args = ("extract", self.source(), "--output", output, "--interval", "1", "--end", "0.35",
+                    "--format", "jxl", "--jxl-precision", "uint16", "--jxl-transfer", transfer,
+                    "--jxl-effort", "1", "--input-transfer", "linear", "--input-primaries", "bt709", "--resume")
+            result, _ = self.invoke(*args)
+            self.assertEqual(result["frames_accepted"], 4)
+            metadata = json.loads((output / "extraction_metadata.json").read_text())
+            self.assertEqual(metadata["output"]["bit_depth"], 16)
+            self.assertEqual(metadata["output"]["transfer"], transfer)
+            self.assertEqual(metadata["output"]["compression"], "lossless-integer-codes")
+            before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in output.glob("*.jxl")}
+            self.invoke(*args, "--overwrite")
+            self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in output.glob("*.jxl")}, before)
+        for i, flags in enumerate((("--format", "png", "--jxl-precision", "uint16"),
+                                    ("--format", "jxl", "--jxl-precision", "half"),
+                                    ("--format", "jxl", "--jxl-transfer", "srgb"),
+                                    ("--format", "jxl", "--jxl-precision", "uint16", "--jxl-transfer", "bt709"))):
+            destination = self.root / f"jxl-u16-invalid-{i}"
+            self.invoke("extract", self.source(), "--output", destination, *flags, code=2)
+            self.assertFalse(destination.exists())
+
     def test_jxl_missing_primaries_uses_format_neutral_diagnostic(self):
         destination = self.root / "jxl-no-primaries"
         result, _ = self.invoke("extract", self.source(), "--output", destination,
@@ -298,6 +322,179 @@ class IngestCLI(unittest.TestCase):
         self.assertIn("primaries", message)
         self.assertNotIn("EXR", message)
         self.assertFalse(destination.exists())
+
+    def test_completed_high_precision_resume_preserves_frames_without_overwrite(self):
+        modes = (("exr", (), "exr"), ("tiff16", (), "tiff"),
+                 ("jxl", (), "jxl"), ("jxl", ("--jxl-precision", "uint16"), "jxl"),
+                 ("avif", (), "avif"), ("png", (), "png"))
+        for index, (fmt, flags, extension) in enumerate(modes):
+            with self.subTest(format=fmt, flags=flags):
+                output = self.root / f"completed-resume-{index}"
+                color = () if fmt == "png" else ("--input-transfer", "linear", "--input-primaries", "bt709")
+                args = ("extract", self.source(), "--output", output, "--interval", "1", "--end", "0.35",
+                        "--format", fmt, "--metadata", "--resume", *color, *flags)
+                self.invoke(*args)
+                images = sorted(output.glob("*." + extension))
+                # TIFF uses the shared sink's .tif suffix.
+                if fmt == "tiff16":
+                    images = sorted(output.glob("*.tif*"))
+                self.assertEqual(len(images), 4)
+                original = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in images}
+                for _ in range(2):
+                    result, _ = self.invoke(*args)
+                    self.assertEqual(result["frames_accepted"], 4)
+                    for p, (data, modified) in original.items():
+                        self.assertEqual(p.read_bytes(), data)
+                        self.assertEqual(p.stat().st_mtime_ns, modified)
+                manifest = output / "extraction_metadata.json"
+                before = manifest.read_bytes()
+                images[-1].write_bytes(b"corrupted")
+                self.invoke(*args, code=4)
+                self.assertEqual(manifest.read_bytes(), before)
+                images[-1].write_bytes(original[images[-1]][0])
+                self.invoke(*args)
+                images[1].unlink()
+                self.invoke(*args)
+                self.assertEqual(images[1].read_bytes(), original[images[1]][0])
+
+    def test_resume_does_not_adopt_untracked_metadata(self):
+        for fmt in ("exr", "tiff16", "jxl", "avif", "png"):
+            with self.subTest(format=fmt):
+                output = self.root / ("untracked-metadata-" + fmt)
+                output.mkdir()
+                manifest = output / "extraction_metadata.json"
+                manifest.write_bytes(b"unrelated metadata")
+                color = () if fmt == "png" else ("--input-transfer", "linear", "--input-primaries", "bt709")
+                self.invoke("extract", self.source(), "--output", output, "--format", fmt,
+                            "--interval", "1", "--end", "0.35", "--resume", *color, code=4)
+                self.assertEqual(manifest.read_bytes(), b"unrelated metadata")
+                self.assertEqual(list(output.glob("frame_*")), [])
+
+    def test_avif_manifest_reports_integer_storage_at_every_depth(self):
+        for depth in (8, 10, 12):
+            with self.subTest(depth=depth):
+                output = self.root / f"avif-manifest-{depth}"
+                self.invoke("extract", self.source(), "--output", output, "--interval", "1", "--end", "0.05",
+                            "--format", "avif", "--avif-depth", str(depth),
+                            "--input-transfer", "linear", "--input-primaries", "bt709")
+                metadata = json.loads((output / "extraction_metadata.json").read_text(encoding="utf-8"))
+                self.assertEqual(metadata["output"]["bit_depth"], depth)
+                self.assertEqual(metadata["output"]["pixel_format"], "rgb_uint8" if depth == 8 else "rgb_uint16")
+
+    def test_avif_independent_decoder_matrix_chroma_and_integer_reference(self):
+        def pixels(path, depth=16, identity_format=None):
+            if identity_format:
+                # MC=0 stores G, B, R planes. Read integer planes directly so
+                # the external reader's GBR/YUV naming cannot invoke a YUV matrix.
+                data = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(path), "-frames:v", "1",
+                                                "-pix_fmt", identity_format, "-f", "rawvideo", "-"], timeout=20)
+                values = array.array("B" if depth == 8 else "H", data)
+                if depth > 8 and sys.byteorder != "little":
+                    values.byteswap()
+                count = len(values) // 3
+                self.assertEqual(len(values), count * 3)
+                scale = 65535 / ((1 << depth) - 1)
+                return [round(values[plane * count + i] * scale)
+                        for i in range(count) for plane in (2, 0, 1)]
+            data = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(path), "-frames:v", "1",
+                                            "-pix_fmt", "rgb24" if depth == 8 else "rgb48le", "-f", "rawvideo", "-"], timeout=20)
+            if depth == 8:
+                # Compare normalized 8-bit codes, not swscale's 8-to-16 expansion.
+                return [value * 257 for value in data]
+            values = array.array("H", data)
+            if sys.byteorder != "little":
+                values.byteswap()
+            return values
+        for primaries in ("bt709", "bt2020"):
+            reference_dir = self.root / ("avif-reference-" + primaries)
+            args = ("extract", self.source(), "--interval", "1", "--end", "0.05",
+                    "--input-transfer", "linear", "--input-primaries", primaries)
+            self.invoke(*args, "--output", reference_dir, "--format", "tiff16")
+            reference = pixels(next(reference_dir.glob("*.tif*")))
+            for depth in (8, 10, 12):
+                for lossless in (False, True):
+                    with self.subTest(primaries=primaries, depth=depth, lossless=lossless):
+                        output = self.root / f"avif-independent-{primaries}-{depth}-{lossless}"
+                        quality = () if lossless else ("--avif-quality", "90")
+                        self.invoke(*args, "--output", output, "--format", "avif", "--avif-depth", str(depth), *quality)
+                        path = next(output.glob("*.avif"))
+                        probe = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_streams", "-show_frames",
+                                                                   "-read_intervals", "%+#1", "-of", "json", str(path)]))
+                        stream = probe["streams"][0]
+                        self.assertEqual(stream["color_space"], "gbr" if lossless else "bt709" if primaries == "bt709" else "bt2020nc")
+                        # Readers can name identity-matrix planes GBR or YUV444.
+                        # Preserve exact depth/chroma checks and verify RGB values below.
+                        suffix = f"{depth}le" if depth > 8 else ""
+                        formats = {"yuv444p" + suffix}
+                        if lossless:
+                            formats.add("gbrp" + suffix)
+                        self.assertIn(stream["pix_fmt"], formats)
+                        self.assertEqual(len(probe["frames"]), 1)
+                        self.assertIn(probe["frames"][0]["pix_fmt"], formats)
+                        self.assertEqual(stream["color_range"], "pc")
+                        self.assertEqual(stream["color_transfer"], "iec61966-2-1")
+                        actual = pixels(path, depth, probe["frames"][0]["pix_fmt"] if lossless else None)
+                        self.assertEqual(len(actual), len(reference))
+                        errors = [abs(a-b)/65535 for a,b in zip(actual, reference)]
+                        if lossless:
+                            self.assertLessEqual(max(errors), .51/((1 << depth)-1) + .0005)
+                        else:
+                            self.assertLess(sum(errors)/len(errors), .04)  # Fixture-specific quality check.
+
+    def test_avif_lossy_resume_rejects_previous_matrix_policy(self):
+        output = self.root / "avif-lossy-resume"
+        args = ("extract", self.source(), "--output", output, "--interval", "1", "--end", "0.35",
+                "--format", "avif", "--avif-quality", "75", "--resume",
+                "--input-transfer", "linear", "--input-primaries", "bt709")
+        self.invoke(*args)
+        self.invoke(*args)
+        images = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in output.glob("*.avif")}
+        manifest = output / "extraction_metadata.json"
+        before = manifest.read_bytes()
+        identity = output / ".media-ingest-checkpoint" / "identity.json"
+        original = identity.read_bytes()
+        previous = json.loads(original)
+        self.assertEqual(previous["avif"][0], "avif-sdr-ycbcr444-v2")
+        previous["avif"][0] = "avif-sdr-v1"
+        identity.write_text(json.dumps(previous), encoding="utf-8")
+        self.invoke(*args, code=4)
+        self.assertEqual(manifest.read_bytes(), before)
+        for path, (data, modified) in images.items():
+            self.assertEqual(path.read_bytes(), data)
+            self.assertEqual(path.stat().st_mtime_ns, modified)
+        identity.write_bytes(original)
+        self.invoke(*args)
+
+    def test_avif_output_options_and_verified_resume(self):
+        output=self.root/"avif-cli"
+        args=("extract",self.source(),"--output",output,"--interval","1","--end","0.35",
+              "--format","avif","--input-transfer","linear","--input-primaries","bt709","--resume")
+        result,_=self.invoke(*args)
+        self.assertEqual(result["frames_accepted"],4)
+        paths=sorted(output.glob("*.avif"))
+        self.assertEqual(len(paths),4)
+        original={p.name:p.read_bytes() for p in paths}
+        metadata=json.loads((output/"extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(metadata["output"]["format"],"avif")
+        self.assertEqual(metadata["output"]["bit_depth"],8)
+        self.assertEqual(metadata["output"]["compression"],"lossless-integer-codes")
+        self.assertTrue(metadata["output"]["provider"])
+        self.assertIsNone(metadata["output"]["avif_quality"])
+        self.invoke(*args,"--overwrite")
+        self.assertEqual({p.name:p.read_bytes() for p in output.glob("*.avif")},original)
+        paths[0].unlink()
+        self.invoke(*args,"--overwrite")
+        self.assertEqual({p.name:p.read_bytes() for p in output.glob("*.avif")},original)
+        self.invoke(*args,"--overwrite","--avif-quality","70",code=4)
+        for index,flags in enumerate((("--format","png","--avif-speed","1"),
+                                      ("--format","avif","--avif-quality","101"),
+                                      ("--format","avif","--avif-speed","10"),
+                                      ("--format","avif","--exr-precision","float"),
+                                      ("--format","avif","--hdr-to-sdr"),
+                                      ("--format","avif","--quality","95"))):
+            destination=self.root/f"avif-invalid-{index}"
+            self.invoke("extract",self.source(),"--output",destination,*flags,code=2)
+            self.assertFalse(destination.exists())
 
     def test_jxl_output_options_and_verified_resume(self):
         output=self.root/"jxl-cli"

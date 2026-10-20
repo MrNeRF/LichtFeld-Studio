@@ -63,10 +63,10 @@ namespace {
         EXPECT_EQ(count_limited.blocks.size(), 1);
         EXPECT_FALSE(heif_have_decoder_for_format(heif_compression_HEVC));
     }
-    TEST(ProductionHeif, DistributionUsesDav1dWithoutHevcOrEncoders) {
+    TEST(ProductionHeif, DistributionUsesDav1dAndAomWithoutHevc) {
         EXPECT_TRUE(heif_have_decoder_for_format(heif_compression_AV1));
         EXPECT_FALSE(heif_have_decoder_for_format(heif_compression_HEVC));
-        EXPECT_FALSE(heif_have_encoder_for_format(heif_compression_AV1));
+        EXPECT_TRUE(heif_have_encoder_for_format(heif_compression_AV1));
         EXPECT_FALSE(heif_have_encoder_for_format(heif_compression_HEVC));
         const heif_decoder_descriptor* decoder = nullptr;
         ASSERT_EQ(heif_get_decoder_descriptors(heif_compression_AV1, &decoder, 1), 1);

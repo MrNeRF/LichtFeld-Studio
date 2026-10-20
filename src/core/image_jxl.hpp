@@ -7,7 +7,8 @@
 namespace lfs::core::image_codecs {
     enum class JxlEncodingColor { SRGB,
                                   LinearSRGB,
-                                  LinearBT2020 };
+                                  LinearBT2020,
+                                  SRGBBT2020 };
     struct JxlEncodeOptions {
         bool lossless = true;
         float distance = 1.f; // Lossy perceptual distance, (0,25]; ignored for lossless.

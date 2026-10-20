@@ -161,10 +161,10 @@ namespace lfs::core::image_codecs {
                                                std::size_t row_stride, const std::optional<std::string>& description,
                                                const AtomicFileOptions& options, const TiffColorTags& color = {});
 
-    // Packed display bytes: preserve samples, PNG/TIFF/JXL alpha and legacy codec
+    // Packed display bytes: preserve samples, PNG/TIFF/JXL/AVIF alpha and legacy codec
     // defaults. JPEG drops RGBA alpha; gray-alpha JPEG is unsupported. This is
     // shared atomic file service; legacy callers keep overwrite enabled and do
-    // not create directories. No linear/EXR conversion. JXL is lossless sRGB;
+    // not create directories. No linear/EXR conversion. JXL and AVIF are lossless sRGB;
     // JPEG quality is ignored and nonempty metadata comments are rejected.
     LFS_IMAGE_CODECS_API bool write_image_u8(const std::filesystem::path& path, const std::uint8_t* data,
                                              int width, int height, int channels, int jpeg_quality,

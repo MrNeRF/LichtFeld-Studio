@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "resumable_file_sink.hpp"
 #include "core/atomic_file.hpp"
+#include "core/image_avif.hpp"
 #include "core/image_codecs.hpp"
 #include "core/image_jxl.hpp"
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "git_version.h"
+#include "media/media_options.hpp"
 #include "media/video_frame_extractor.hpp"
 #include <algorithm>
 #include <array>
@@ -115,9 +117,10 @@ namespace lfs::media::detail {
     } // namespace
 
     ResumableFileSink::ResumableFileSink(const IngestRequest& request, const FileExtraction& output)
-        : request_(request), output_(output), cancelled_([cancelled = request.cancelled, file_cancelled = output.files.format == FrameFileFormat::JXL ? output.files.jxl.cancelled : output.files.format == FrameFileFormat::EXR  ? output.files.exr.cancelled
-                                                                                                                                                                                 : output.files.format == FrameFileFormat::TIFF16 ? output.files.tiff16.cancelled
-                                                                                                                                                                                                                                  : output.files.image_output.cancelled] {
+        : request_(request), output_(output), cancelled_([cancelled = request.cancelled, file_cancelled = output.files.format == FrameFileFormat::AVIF ? output.files.avif.cancelled : output.files.format == FrameFileFormat::JXL  ? output.files.jxl.cancelled
+                                                                                                                                                                                   : output.files.format == FrameFileFormat::EXR    ? output.files.exr.cancelled
+                                                                                                                                                                                   : output.files.format == FrameFileFormat::TIFF16 ? output.files.tiff16.cancelled
+                                                                                                                                                                                                                                    : output.files.image_output.cancelled] {
               return (cancelled && cancelled()) || (file_cancelled && file_cancelled());
           }),
           checkpoint_(output.files.output_directory / ".media-ingest-checkpoint") {}
@@ -158,8 +161,13 @@ namespace lfs::media::detail {
         identity_["files"] = {f.filename_pattern, static_cast<int>(f.format), f.jpeg_quality, static_cast<int>(f.exr.precision), static_cast<int>(f.exr.compression), f.exr.provenance};
         if (f.format == FrameFileFormat::TIFF16)
             identity_["tiff16"] = {core::image_codecs::tiff_sdr_encoding, static_cast<int>(f.tiff16.transfer), f.tiff16.provenance};
-        if (f.format == FrameFileFormat::JXL)
+        if (f.format == FrameFileFormat::AVIF)
+            identity_["avif"] = {f.avif.lossless ? "avif-sdr-v1" : "avif-sdr-ycbcr444-v2", core::image_codecs::avif_encoder_version(), f.avif.lossless, f.avif.lossless ? Json(nullptr) : Json(f.avif.quality), f.avif.speed, f.avif.bit_depth};
+        if (f.format == FrameFileFormat::JXL) {
             identity_["jxl"] = {"jxl-sdr-v1", core::image_codecs::jxl_encoder_version(), f.jxl.lossless, f.jxl.lossless ? Json(nullptr) : Json(f.jxl.distance), f.jxl.effort};
+            if (f.jxl.precision == JxlPrecision::UInt16)
+                identity_["jxl_integer"] = {"uint16-clamp-round-half-up-v1", outputOptionName(f.jxl.transfer)};
+        }
         identity_["files"].push_back(f.first_source_frame_number);
         identity_["layout"] = {session.output.width, session.output.height, static_cast<int>(session.output.format), static_cast<int>(session.output.color.transfer), static_cast<int>(session.output.color.primaries)};
         identity_["metadata"] = output_.write_metadata;
@@ -178,6 +186,13 @@ namespace lfs::media::detail {
         }
         if (!lfs::core::native_fs::is_directory(lfs::core::native_fs::symlink_status(checkpoint_)))
             return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Checkpoint must be a non-symlink directory"));
+        const bool overwrite = f.format == FrameFileFormat::AVIF ? f.avif.overwrite : f.format == FrameFileFormat::JXL  ? f.jxl.overwrite
+                                                                                  : f.format == FrameFileFormat::TIFF16 ? f.tiff16.overwrite
+                                                                                  : f.format == FrameFileFormat::EXR    ? f.exr.overwrite
+                                                                                                                        : f.image_output.overwrite;
+        if ((!lfs::core::native_fs::exists(identity_path) || emptyReservation(identity_path)) &&
+            lfs::core::native_fs::exists(f.output_directory / "extraction_metadata.json") && !overwrite)
+            return SinkResult::failure(checkpointError(ErrorCode::AlreadyExists, "Cannot adopt existing extraction metadata without a checkpoint identity"));
         if (!lfs::core::native_fs::exists(identity_path) || emptyReservation(identity_path)) {
             // Before identity publication no image/record can have committed.
             // Only its own interrupted atomic temporary/reservation is recoverable.
@@ -247,9 +262,10 @@ namespace lfs::media::detail {
                                                        "Output frame number exceeds the supported range"));
         }
         const auto output_frame_number = output_.files.first_source_frame_number + frame.info.legacy_source_frame - 1;
-        const auto extension = output_.files.format == FrameFileFormat::JXL ? ".jxl" : output_.files.format == FrameFileFormat::TIFF16 ? ".tif"
-                                                                                   : output_.files.format == FrameFileFormat::PNG      ? ".png"
-                                                                                   : output_.files.format == FrameFileFormat::JPEG     ? ".jpg"
+        const auto extension = output_.files.format == FrameFileFormat::AVIF ? ".avif" : output_.files.format == FrameFileFormat::JXL  ? ".jxl"
+                                                                                     : output_.files.format == FrameFileFormat::TIFF16 ? ".tif"
+                                                                                     : output_.files.format == FrameFileFormat::PNG    ? ".png"
+                                                                                     : output_.files.format == FrameFileFormat::JPEG   ? ".jpg"
                                                                                                                                        : ".exr";
         const auto name = core::utf8_to_path(io::formatFrameFilenameStem(output_.files.filename_pattern, output_frame_number) + extension);
         if (name != name.filename() || name.empty() || !filenames_.insert(name).second)
@@ -297,6 +313,8 @@ namespace lfs::media::detail {
         staging_options.exr.overwrite = true;
         staging_options.tiff16.overwrite = true;
         staging_options.tiff16.cancelled = cancelled_;
+        staging_options.avif.overwrite = true;
+        staging_options.avif.cancelled = cancelled_;
         staging_options.jxl.overwrite = true;
         staging_options.jxl.cancelled = cancelled_;
         const auto staged = checkpoint_ / name;

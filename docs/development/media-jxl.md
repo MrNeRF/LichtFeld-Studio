@@ -132,7 +132,7 @@ Distance must remain valid but has no encoding effect in lossless mode. Alpha
 is encoded losslessly even when RGB is lossy. Lossy RGB, including invisible
 RGB, is not an exact-sample preservation contract.
 
-Color is declared as sRGB, linear sRGB or linear BT.2020. No tone mapping or
+Color is declared with linear or sRGB transfer and BT.709 or BT.2020 primaries. No tone mapping or
 implicit integer reduction is performed. Float32 inputs must be finite; alpha
 must be in `[0,1]`. Explicit premultiplied float input is unassociated, with
 RGB zeroed at alpha zero. Lossless Float32 uses left modular prediction:
@@ -171,8 +171,9 @@ memory output and existing destination files intact.
 BT.709/BT.2020 Float32 RGB/RGBA. `FileFrameSink` writes `.jxl` sequences through
 that same writer. Video extraction deliberately uses the existing declared
 linear Float32 SDR conversion path; legacy RGB8 extraction does not provide a
-complete sRGB color contract. Integer writer access remains available through
-the codec API and explicitly declared RGB8 through `ImageOutput`. PQ/HLG nits
+complete sRGB color contract. `ImageOutput` can explicitly quantize linear
+Float32 frames to UInt16 with linear/sRGB transfer; declared RGB8 remains a
+separate passthrough policy. PQ/HLG nits
 or scene-HDR master export remains an explicit separate policy; EXR is retained
 for those existing workflows.
 
@@ -180,8 +181,9 @@ CLI: `--format jxl` defaults to lossless; `--jxl-distance N` selects lossy and
 `--jxl-effort N` selects effort. Existing float-source declarations/overrides
 apply. Python exposes `JxlOutputOptions`, `ImageOutput.write_jxl` and
 `FileFrameSinkOptions.jxl`; MCP uses `format: "jxl"`, optional `jxl_distance`
-and `jxl_effort`. Shared preflight rejects incompatible options before output.
-Extraction manifests report JXL mode, nominal Float32 precision and effort,
+`jxl_effort`, `jxl_precision` and `jxl_transfer`. Shared preflight rejects
+incompatible options before output.
+Extraction manifests report JXL mode, effective Float32/UInt16 precision, transfer and effort,
 without EXR compression or JPEG quality labels. Resume identities include the
 libjxl version, encoding policy and effective settings; verified files are
 retained and missing files must reproduce their recorded encoded checksum.
@@ -193,10 +195,61 @@ is not silently copied into newly rendered or converted images.
 
 The existing generic display-byte writer and `save_image` also route `.jxl`
 through the shared lossless sRGB writer. Their existing UInt8 display-image
-policy remains in force; use `ImageOutput::writeJxl` for Float32 masters.
+policy remains in force; use `ImageOutput::writeJxl` for explicit Float32/UInt16 output.
 JPEG quality does not select JXL lossiness in this compatibility path.
 Nonempty explicit generic metadata comments are rejected for JXL pending the
 common metadata policy. The Python convenience binding omits its automatically
-generated provenance stamp for JXL in both full and minimal-provenance modes;
+generated provenance stamp for JXL/AVIF in both full and minimal-provenance modes;
 this format-specific behavior is documented in its generated stub. Other
 formats retain their existing stamp policy.
+
+
+### Choosing sequence size and precision
+
+The default remains lossless Float32, preserving the linear conversion's finite
+samples, including sub-black and above-white values. An 8-bit or 10-bit video
+source does not acquire new detail from that representation, and lossless float
+files can be much larger than PNG or integer JPEG XL. For practical dataset
+extraction, explicit distance 1 is a useful starting point to evaluate visually
+and in reconstruction; it is lossy and is not a fixed per-channel error bound:
+
+```sh
+media-ingest extract clip.mp4 --output frames --format jxl --jxl-distance 1
+```
+
+For lossless storage of quantized 16-bit SDR codes instead, select UInt16:
+
+```sh
+media-ingest extract clip.mp4 --output frames --format jxl --jxl-precision uint16 --jxl-transfer srgb
+media-ingest extract clip.mp4 --output linear-frames --format jxl --jxl-precision uint16 --jxl-transfer linear --jxl-effort 1
+```
+
+This implements the [sequence-size suggestion in the review of #3703](https://github.com/MrNeRF/LichtFeld-Studio/pull/3703#pullrequestreview-5577445673).
+The same options are exposed as `JxlOutputOptions.precision` (`JxlPrecision.Float32`
+or `UInt16`) and `transfer`, and as MCP `jxl_precision`/`jxl_transfer`.
+UInt16 reuses the TIFF16/AVIF SDR quantizer: clamp straight linear RGB to [0,1],
+apply the requested linear or sRGB transfer, and round half up to [0,65535].
+BT.709/BT.2020 primaries are preserved and declared in the file. Alpha is
+unassociated before RGB conversion and rounded without a color transfer;
+zero-alpha premultiplied RGB becomes zero. Nonfinite input, invalid alpha,
+missing color declarations and HDR units are rejected. Quantization is explicit:
+lossless UInt16 preserves the resulting integer codes, not the original floats.
+
+The conversion requires declared linear Float32 RGB/RGBA; RGB8 passthrough
+continues to use its existing sRGB policy and rejects a UInt16 conversion request.
+Float32 requires linear output transfer; sRGB transfer is available only with
+UInt16. UInt16 supports effort 1..9 even in lossless mode. Lossy UInt16 is also
+explicitly selectable with distance, retaining exact alpha codes.
+
+Conversion allocates one packed UInt16 staging buffer (6 bytes per RGB pixel or
+8 per RGBA pixel), checked against the pixel/extent bounds before allocation.
+It shares the existing per-row cancellation and finite/alpha checks. The core
+encoder borrows that packed buffer without another row-packing copy. This
+staging storage is additional to the borrowed Float32 frame and the provider's
+allocation budget; it is not a global RAM limit.
+
+Manifests report `rgb_uint16`, 16-bit precision, transfer, primaries and
+`clamp-round-half-up-uint16`; lossless mode reports `lossless-integer-codes`.
+Resume identities distinguish the conversion policy and transfer, rejecting
+incompatible settings before replacing frames. Existing default Float32 JXL
+checkpoint identities remain unchanged.

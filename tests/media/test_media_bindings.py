@@ -195,6 +195,78 @@ class MediaBindings(unittest.TestCase):
         media.ImageOutput.write_jxl(path, frame, options)
         self.assertEqual(path.read_bytes(), original)
 
+    def test_jxl_uint16_options_publication_and_verified_resume(self):
+        color = media.FrameColor()
+        color.transfer = media.ColorTransfer.Linear
+        color.primaries = media.ColorPrimaries.Bt2020
+        color.alpha = media.AlphaMode.Straight
+        payload = struct.pack("=8f", -.25, .0031308, 1.25, .5, .1, .25, .5, 0.)
+        frame = media.FrameSurface.from_bytes(2, 1, media.FramePixelFormat.RGBAFloat32, payload, color=color)
+        options = media.JxlOutputOptions()
+        options.precision = media.JxlPrecision.UInt16
+        options.effort = 1
+        options.overwrite = True
+        path = self.root / "uint16 日本語.jxl"
+        for transfer in (media.ColorTransfer.Linear, media.ColorTransfer.Srgb):
+            options.transfer = transfer
+            media.ImageOutput.write_jxl(path, frame, options)
+            previous = path.read_bytes()
+            with self.assertRaises(MEDIA_ERROR):
+                media.ImageOutput.write_jxl(path, frame, options, cancelled=lambda: True)
+            self.assertEqual(path.read_bytes(), previous)
+            def failed():
+                raise ValueError("UInt16 cancellation callback")
+            with self.assertRaisesRegex(ValueError, "UInt16 cancellation callback"):
+                media.ImageOutput.write_jxl(path, frame, options, cancelled=failed)
+            self.assertEqual(path.read_bytes(), previous)
+            for value in (float("nan"), float("inf"), -float("inf")):
+                invalid = media.FrameSurface.from_bytes(2, 1, media.FramePixelFormat.RGBAFloat32,
+                                struct.pack("=8f", value, .1, .2, .5, .1, .2, .3, 1.), color=color)
+                with self.assertRaises(MEDIA_ERROR):
+                    media.ImageOutput.write_jxl(path, invalid, options)
+                self.assertEqual(path.read_bytes(), previous)
+        options.transfer = media.ColorTransfer.Bt709
+        with self.assertRaises(MEDIA_ERROR):
+            media.ImageOutput.write_jxl(path, frame, options)
+        self.assertEqual(path.read_bytes(), previous)
+        options.transfer = media.ColorTransfer.Srgb
+        options.precision = media.JxlPrecision.Float32
+        options.effort = 4
+        with self.assertRaises(MEDIA_ERROR):
+            media.ImageOutput.write_jxl(path, frame, options)
+        self.assertEqual(path.read_bytes(), previous)
+        request = self.request()
+        request.output_format = media.FramePixelFormat.RGBFloat32
+        request.input_color.transfer = media.ColorTransfer.Linear
+        request.input_color.primaries = media.ColorPrimaries.Bt709
+        for transfer, name in ((media.ColorTransfer.Linear, "linear"), (media.ColorTransfer.Srgb, "srgb")):
+            files = self.resume_files(self.root / ("jxl-u16-" + name), media.FrameFileFormat.JXL)
+            files.files.jxl.precision = media.JxlPrecision.UInt16
+            files.files.jxl.transfer = transfer
+            files.files.jxl.effort = 1
+            self.interrupt_resume(request, files)
+            self.assertEqual(media.MediaIngest.extract_files(request, files).frames_accepted, 4)
+            images = sorted(files.files.output_directory.glob("*.jxl"))
+            original = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in images}
+            metadata = json.loads((files.files.output_directory / "extraction_metadata.json").read_text())
+            self.assertEqual(metadata["output"]["bit_depth"], 16)
+            self.assertEqual(metadata["output"]["transfer"], name)
+            self.assertEqual(metadata["output"]["compression"], "lossless-integer-codes")
+            self.assertEqual(metadata["output"]["quantization"], "clamp-round-half-up-uint16")
+            files.files.jxl.overwrite = True
+            media.MediaIngest.extract_files(request, files)
+            self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in images}, original)
+            files.files.jxl.transfer = media.ColorTransfer.Srgb if name == "linear" else media.ColorTransfer.Linear
+            with self.assertRaises(MEDIA_ERROR):
+                media.MediaIngest.extract_files(request, files)
+            self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in images}, original)
+            files.files.jxl.transfer = media.ColorTransfer.Linear
+            files.files.jxl.precision = media.JxlPrecision.Float32
+            files.files.jxl.effort = 4
+            with self.assertRaises(MEDIA_ERROR):
+                media.MediaIngest.extract_files(request, files)
+            self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in images}, original)
+
     def test_jxl_lossless_float_effort_is_rejected_before_publication(self):
         color = media.FrameColor()
         color.transfer = media.ColorTransfer.Linear
@@ -227,6 +299,207 @@ class MediaBindings(unittest.TestCase):
         options.lossless = False
         options.effort = 1
         media.ImageOutput.write_jxl(self.root / "jxl-lossy-effort1.jxl", frame, options)
+
+    def test_avif_public_writer_rejects_incompatible_color_without_publication(self):
+        path = self.root / "avif-color-policy.avif"
+        color = media.FrameColor()
+        color.transfer = media.ColorTransfer.Srgb
+        color.primaries = media.ColorPrimaries.Bt709
+        frame = media.FrameSurface.from_bytes(1, 1, media.FramePixelFormat.RGB8,
+                                              bytes((10, 20, 30)), color=color)
+        options = media.AvifOutputOptions()
+        media.ImageOutput.write_avif(path, frame, options)
+        original = path.read_bytes()
+        options.overwrite = True
+        cases = (
+            (media.FramePixelFormat.RGB8, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGB8, media.ColorTransfer.Srgb, media.ColorPrimaries.Bt2020, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Unspecified, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Unspecified, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.Nits),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.SceneRelative),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.Straight, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGBAFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+        )
+        for fmt, transfer, primaries, alpha, units in cases:
+            with self.subTest(format=fmt, transfer=transfer, primaries=primaries, alpha=alpha, units=units):
+                color.transfer, color.primaries, color.alpha, color.units = transfer, primaries, alpha, units
+                pixels = bytes((10, 20, 30)) if fmt == media.FramePixelFormat.RGB8 else struct.pack("=4f", .1, .2, .3, 1.) if fmt == media.FramePixelFormat.RGBAFloat32 else struct.pack("=3f", .1, .2, .3)
+                invalid = media.FrameSurface.from_bytes(1, 1, fmt, pixels, color=color)
+                for target in (path, self.root / "avif-invalid-new.avif"):
+                    with self.assertRaises(MEDIA_ERROR):
+                        media.ImageOutput.write_avif(target, invalid, options)
+                self.assertEqual(path.read_bytes(), original)
+                self.assertFalse((self.root / "avif-invalid-new.avif").exists())
+        media.ImageOutput.write_avif(path, frame, options)
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_avif_bt2020_premultiplied_alpha_and_nonfinite_rejection(self):
+        color = media.FrameColor()
+        color.transfer = media.ColorTransfer.Linear
+        color.primaries = media.ColorPrimaries.Bt2020
+        color.alpha = media.AlphaMode.Straight
+        options = media.AvifOutputOptions()
+        options.bit_depth = 12
+        straight = media.FrameSurface.from_bytes(2, 1, media.FramePixelFormat.RGBAFloat32,
+                    struct.pack("=8f", .25, .5, .75, .5, 0., 0., 0., 0.), color=color)
+        path = self.root / "avif-bt2020-straight.avif"
+        media.ImageOutput.write_avif(path, straight, options)
+        original = path.read_bytes()
+        color.alpha = media.AlphaMode.Premultiplied
+        premult = media.FrameSurface.from_bytes(2, 1, media.FramePixelFormat.RGBAFloat32,
+                    struct.pack("=8f", .125, .25, .375, .5, 9., 3., 1., 0.), color=color)
+        other = self.root / "avif-bt2020-premult.avif"
+        media.ImageOutput.write_avif(other, premult, options)
+        self.assertEqual(other.read_bytes(), original)
+        info = json.loads(subprocess.check_output([
+            os.environ.get("LFS_MEDIA_TEST_FFPROBE", "ffprobe"), "-v", "error",
+            "-show_streams", "-of", "json", str(path)], timeout=30))
+        primary = info["streams"][0]
+        self.assertEqual(primary["color_primaries"], "bt2020")
+        self.assertEqual(primary["color_transfer"], "iec61966-2-1")
+        options.overwrite = True
+        color.alpha = media.AlphaMode.Straight
+        for values in ((float("nan"), .2, .3, 1.), (.1, float("inf"), .3, 1.),
+                       (.1, .2, float("-inf"), 1.), (.1, .2, .3, float("nan")),
+                       (.1, .2, .3, -.1), (.1, .2, .3, 1.1)):
+            invalid = media.FrameSurface.from_bytes(1, 1, media.FramePixelFormat.RGBAFloat32,
+                                                   struct.pack("=4f", *values), color=color)
+            for target in (path, self.root / "avif-invalid-samples.avif"):
+                with self.assertRaises(MEDIA_ERROR):
+                    media.ImageOutput.write_avif(target, invalid, options)
+            self.assertEqual(path.read_bytes(), original)
+            self.assertFalse((self.root / "avif-invalid-samples.avif").exists())
+        media.ImageOutput.write_avif(path, straight, options)
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_avif_resume_rejects_corruption_and_inconsistent_checkpoint(self):
+        for damage in ("truncate", "mutate", "checksum", "record"):
+            with self.subTest(damage=damage):
+                request = self.request()
+                request.output_format = media.FramePixelFormat.RGBFloat32
+                request.input_color.transfer = media.ColorTransfer.Linear
+                request.input_color.primaries = media.ColorPrimaries.Bt709
+                files = self.resume_files(self.root / ("avif-corrupt-" + damage), media.FrameFileFormat.AVIF)
+                self.interrupt_resume(request, files)
+                checkpoint = files.files.output_directory / ".media-ingest-checkpoint"
+                images = sorted(files.files.output_directory.glob("*.avif"))
+                self.assertTrue(images)
+                original = images[0].read_bytes()
+                record = checkpoint / "frame-0.json"
+                record_before = record.read_bytes()
+                if damage == "truncate":
+                    images[0].write_bytes(original[:16])
+                elif damage == "mutate":
+                    changed = bytearray(original)
+                    changed[-1] ^= 1
+                    images[0].write_bytes(changed)
+                elif damage == "checksum":
+                    value = json.loads(record_before)
+                    value["file_sha256"] = "0" * 64
+                    record.write_text(json.dumps(value))
+                else:
+                    record.write_bytes(b'{"partial":')
+                before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in images}
+                damaged_record = record.read_bytes()
+                with self.assertRaises(MEDIA_ERROR):
+                    media.MediaIngest.extract_files(request, files)
+                self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in images}, before)
+                self.assertEqual(record.read_bytes(), damaged_record)
+                self.assertFalse((files.files.output_directory / "extraction_metadata.json").exists())
+                images[0].write_bytes(original)
+                record.write_bytes(record_before)
+                self.assertEqual(media.MediaIngest.extract_files(request, files).frames_accepted, 4)
+                self.assertEqual(images[0].read_bytes(), original)
+
+    def test_avif_float_quantization_matches_independent_decoder(self):
+        color = media.FrameColor()
+        color.transfer = media.ColorTransfer.Linear
+        color.primaries = media.ColorPrimaries.Bt709
+        samples = (-.5, .003, 2., .25, .5, .75)
+        frame = media.FrameSurface.from_bytes(2, 1, media.FramePixelFormat.RGBFloat32,
+                                              struct.pack("=6f", *samples), color=color)
+        options = media.AvifOutputOptions()
+        def code(value, maximum, alpha=False):
+            value = min(1., max(0., value))
+            if not alpha:
+                value = 12.92 * value if value <= .0031308 else 1.055 * value ** (1./2.4) - .055
+            return math.floor(value * maximum + .5)
+        for bits in (8, 10, 12):
+            with self.subTest(bits=bits):
+                options.bit_depth = bits
+                path = self.root / f"avif-quantization-{bits}.avif"
+                media.ImageOutput.write_avif(path, frame, options)
+                fmt = "gbrp" if bits == 8 else f"gbrp{bits}le"
+                raw = subprocess.check_output([os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"), "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", fmt, "-"], timeout=30)
+                actual = tuple(raw) if bits == 8 else struct.unpack("<6H", raw)
+                maximum = (1 << bits)-1
+                expected = tuple(code(samples[pixel*3+channel], maximum)
+                                 for channel in (1, 2, 0) for pixel in range(2))
+                self.assertEqual(actual, expected)
+        options.overwrite = True
+        before = path.read_bytes()
+        for units in (media.ColorUnits.Nits, media.ColorUnits.SceneRelative):
+            color.units = units
+            invalid = media.FrameSurface.from_bytes(2, 1, media.FramePixelFormat.RGBFloat32,
+                                                    struct.pack("=6f", *samples), color=color)
+            with self.assertRaises(MEDIA_ERROR):
+                media.ImageOutput.write_avif(path, invalid, options)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_avif_public_writer_and_lossless_lossy_sequences(self):
+        color = media.FrameColor()
+        color.transfer = media.ColorTransfer.Linear
+        color.primaries = media.ColorPrimaries.Bt709
+        samples = (-.5, 0., 2., .25, .5, .75)
+        frame = media.FrameSurface.from_bytes(2, 1, media.FramePixelFormat.RGBFloat32,
+                                              struct.pack("=6f", *samples), color=color)
+        options = media.AvifOutputOptions()
+        path = self.root / "AVIF export é 日本語.avif"
+        media.ImageOutput.write_avif(path, frame, options)
+        original = path.read_bytes()
+        with self.assertRaises(MEDIA_ERROR):
+            media.ImageOutput.write_avif(path, frame, options)
+        options.overwrite = True
+        with self.assertRaises(MEDIA_ERROR):
+            media.ImageOutput.write_avif(path, frame, options, cancelled=lambda: True)
+        self.assertEqual(path.read_bytes(), original)
+        def failed():
+            raise ValueError("AVIF cancellation sentinel")
+        with self.assertRaisesRegex(ValueError, "AVIF cancellation sentinel"):
+            media.ImageOutput.write_avif(path, frame, options, cancelled=failed)
+        self.assertEqual(path.read_bytes(), original)
+        self.assertTrue(media.MediaIngest.capabilities().avif)
+        request = self.request()
+        request.output_format = media.FramePixelFormat.RGBFloat32
+        request.input_color.transfer = media.ColorTransfer.Linear
+        request.input_color.primaries = media.ColorPrimaries.Bt709
+        for lossless in (True, False):
+            output = media.FileExtraction()
+            output.files.output_directory = self.root / ("avif-lossless" if lossless else "avif-lossy")
+            output.files.format = media.FrameFileFormat.AVIF
+            output.files.avif.lossless = lossless
+            output.resume = True
+            report = media.MediaIngest.extract_files(request, output)
+            paths = sorted(output.files.output_directory.glob("*.avif"))
+            self.assertEqual(len(paths), report.frames_accepted)
+            self.assertEqual(report.frames_accepted, 4)
+            original = {p.name:p.read_bytes() for p in paths}
+            mtimes = {p.name:p.stat().st_mtime_ns for p in paths}
+            output.files.avif.overwrite = True
+            media.MediaIngest.extract_files(request, output)
+            self.assertEqual({p.name:p.read_bytes() for p in paths}, original)
+            self.assertEqual({p.name:p.stat().st_mtime_ns for p in paths}, mtimes)
+            if lossless:
+                output.files.avif.quality = 80
+                media.MediaIngest.extract_files(request, output)
+                self.assertEqual({p.name:p.stat().st_mtime_ns for p in paths}, mtimes)
+            paths[0].unlink()
+            media.MediaIngest.extract_files(request, output)
+            self.assertEqual({p.name:p.read_bytes() for p in paths}, original)
+            output.files.avif.speed -= 1
+            with self.assertRaises(MEDIA_ERROR):
+                media.MediaIngest.extract_files(request, output)
 
     def test_jxl_public_writer_and_lossless_lossy_sequences(self):
         color = media.FrameColor()
@@ -398,10 +671,8 @@ class MediaBindings(unittest.TestCase):
         hashes = [hashlib.sha256(path.read_bytes()).hexdigest() for path in paths]
         mtimes = [path.stat().st_mtime_ns for path in paths]
         metadata_path = output.files.output_directory / "extraction_metadata.json"
-        metadata_before = metadata_path.read_bytes()
-        with self.assertRaises(MEDIA_ERROR):
-            media.MediaIngest.extract_files(request, output)
-        self.assertEqual(metadata_path.read_bytes(), metadata_before)
+        self.assertEqual(media.MediaIngest.extract_files(request, output).frames_accepted, 4)
+        self.assertEqual(json.loads(metadata_path.read_bytes())["output"], metadata["output"])
         output.files.tiff16.overwrite = True
         self.assertEqual(media.MediaIngest.extract_files(request, output).frames_accepted, 4)
         self.assertEqual([hashlib.sha256(path.read_bytes()).hexdigest() for path in paths], hashes)
@@ -699,7 +970,7 @@ class MediaBindings(unittest.TestCase):
         with self.assertRaises(MEDIA_ERROR):
             media.MediaIngest.extract_files(self.request(), files)
 
-    def test_completed_exr_resume_requires_manifest_replacement(self):
+    def test_completed_exr_resume_regenerates_manifest_without_image_overwrite(self):
         request = self.request()
         request.output_format = media.FramePixelFormat.RGBFloat32
         request.input_color.transfer = media.ColorTransfer.Linear
@@ -709,10 +980,9 @@ class MediaBindings(unittest.TestCase):
         image = next(files.files.output_directory.glob("frame_*.exr"))
         before = (image.read_bytes(), image.stat().st_mtime_ns)
         manifest = files.files.output_directory / "extraction_metadata.json"
-        original_manifest = manifest.read_bytes()
-        with self.assertRaises(MEDIA_ERROR):
-            media.MediaIngest.extract_files(request, files)
-        self.assertEqual(manifest.read_bytes(), original_manifest)
+        original_manifest = json.loads(manifest.read_bytes())
+        self.assertEqual(media.MediaIngest.extract_files(request, files).frames_accepted, 4)
+        self.assertEqual(json.loads(manifest.read_bytes())["output"], original_manifest["output"])
         files.files.exr.overwrite = True
         self.assertEqual(media.MediaIngest.extract_files(request, files).frames_accepted, 4)
         self.assertEqual((image.read_bytes(), image.stat().st_mtime_ns), before)

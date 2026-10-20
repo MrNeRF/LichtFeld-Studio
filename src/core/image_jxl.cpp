@@ -246,11 +246,11 @@ namespace lfs::core::image_codecs {
                 if (auto result = check(JxlEncoderSetBasicInfo(encoder.get(), &info)); !result)
                     return result;
                 JxlColorEncoding color;
-                if (options.color == JxlEncodingColor::SRGB)
+                if (options.color == JxlEncodingColor::SRGB || options.color == JxlEncodingColor::SRGBBT2020)
                     JxlColorEncodingSetToSRGB(&color, channels <= 2);
                 else
                     JxlColorEncodingSetToLinearSRGB(&color, channels <= 2);
-                if (options.color == JxlEncodingColor::LinearBT2020)
+                if (options.color == JxlEncodingColor::LinearBT2020 || options.color == JxlEncodingColor::SRGBBT2020)
                     color.primaries = JXL_PRIMARIES_2100;
                 if (auto result = check(JxlEncoderSetColorEncoding(encoder.get(), &color)); !result)
                     return result;
@@ -578,7 +578,7 @@ namespace lfs::core::image_codecs {
 
     Status validate_jxl_encode_options(const JxlEncodeOptions& options) {
         if (!std::isfinite(options.distance) || options.distance <= 0 || options.distance > 25 || options.effort < 1 || options.effort > 9 ||
-            (options.color != JxlEncodingColor::SRGB && options.color != JxlEncodingColor::LinearSRGB && options.color != JxlEncodingColor::LinearBT2020))
+            (options.color != JxlEncodingColor::SRGB && options.color != JxlEncodingColor::LinearSRGB && options.color != JxlEncodingColor::LinearBT2020 && options.color != JxlEncodingColor::SRGBBT2020))
             return encode_error(ErrorCode::InvalidArgument, "invalid color, distance (must be in (0,25]) or effort (must be in [1,9])");
         return {};
     }

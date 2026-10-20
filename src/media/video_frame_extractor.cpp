@@ -4,6 +4,7 @@
 
 #include "media/video_frame_extractor.hpp"
 #include "core/atomic_file.hpp"
+#include "core/image_avif.hpp"
 #include "core/image_jxl.hpp"
 #include "core/logger.hpp"
 #include "core/native_fs.hpp"
@@ -974,10 +975,10 @@ namespace lfs::io {
 
     bool isGeneratedFrameFilename(const std::string_view pattern, const std::string_view filename, const bool allow_zero) {
         // The writer appends one of these lowercase extensions.
-        if (!filename.ends_with(".png") && !filename.ends_with(".jpg") && !filename.ends_with(".exr") && !filename.ends_with(".tif") && !filename.ends_with(".tiff") && !filename.ends_with(".jxl"))
+        if (!filename.ends_with(".png") && !filename.ends_with(".jpg") && !filename.ends_with(".exr") && !filename.ends_with(".tif") && !filename.ends_with(".tiff") && !filename.ends_with(".jxl") && !filename.ends_with(".avif"))
             return false;
         return matchFrameNameSegments(parseFrameFilenamePattern(pattern), 0,
-                                      filename.substr(0, filename.size() - (filename.ends_with(".tiff") ? 5 : 4)), 0, allow_zero);
+                                      filename.substr(0, filename.find_last_of('.')), 0, allow_zero);
     }
 
     std::vector<std::filesystem::path> generatedExtractionFiles(
@@ -1022,13 +1023,13 @@ namespace lfs::io {
             const size_t pixel_bytes = float_output ? 12 : 3;
             if ((params.output_format != media::FramePixelFormat::RGB8 && !float_output) ||
                 (float_output && (!provided_sink || params.convert_hdr_to_sdr)) ||
-                ((params.format == ImageFormat::EXR || params.format == ImageFormat::TIFF16 || params.format == ImageFormat::JXL) && !float_output)) {
+                ((params.format == ImageFormat::EXR || params.format == ImageFormat::TIFF16 || params.format == ImageFormat::JXL || params.format == ImageFormat::AVIF) && !float_output)) {
                 failure_ = make_error({.code = ErrorCode::Unsupported, .domain = ErrorDomain::IO, .detail = "Float image extraction requires Float32 samples, a CPU sink and no implicit HDR-to-SDR tone mapping", .detection = LFS_SOURCE_SITE_CURRENT()});
                 error = std::string(failure_->detail());
                 return false;
             }
             if (params.format == ImageFormat::JXL) {
-                const auto valid = media::validateJxlOutputOptions({.lossless = params.jxl_lossless, .distance = params.jxl_distance, .effort = params.jxl_effort}, params.output_format);
+                const auto valid = media::validateJxlOutputOptions({.lossless = params.jxl_lossless, .distance = params.jxl_distance, .effort = params.jxl_effort, .precision = params.jxl_precision, .transfer = params.jxl_transfer}, params.output_format);
                 if (!valid) {
                     failure_ = valid.error();
                     error = std::string(failure_->detail());
@@ -1637,8 +1638,9 @@ namespace lfs::io {
                 } else if (params.format == ImageFormat::JPG) {
                     LOG_INFO("Using CPU JPEG encoding");
                 } else {
-                    LOG_INFO("Using CPU {} encoding", params.format == ImageFormat::JXL ? "JXL" : params.format == ImageFormat::TIFF16 ? "TIFF16"
-                                                                                              : float_output                           ? "EXR"
+                    LOG_INFO("Using CPU {} encoding", params.format == ImageFormat::AVIF ? "AVIF" : params.format == ImageFormat::JXL  ? "JXL"
+                                                                                                : params.format == ImageFormat::TIFF16 ? "TIFF16"
+                                                                                                : float_output                         ? "EXR"
                                                                                                                                        : "PNG");
                 }
 
@@ -1791,9 +1793,10 @@ namespace lfs::io {
                     if (frame_num < 1 || frame_num - 1 > std::numeric_limits<int>::max() - params.first_source_frame_number)
                         throw std::runtime_error("Output frame number exceeds the supported range");
                     const int output_number = params.first_source_frame_number + frame_num - 1;
-                    std::string ext = params.format == ImageFormat::JXL ? ".jxl" : params.format == ImageFormat::TIFF16 ? ".tif"
-                                                                               : params.format == ImageFormat::PNG      ? ".png"
-                                                                               : params.format == ImageFormat::EXR      ? ".exr"
+                    std::string ext = params.format == ImageFormat::AVIF ? ".avif" : params.format == ImageFormat::JXL  ? ".jxl"
+                                                                                 : params.format == ImageFormat::TIFF16 ? ".tif"
+                                                                                 : params.format == ImageFormat::PNG    ? ".png"
+                                                                                 : params.format == ImageFormat::EXR    ? ".exr"
                                                                                                                         : ".jpg";
                     return params.output_dir / (formatFrameFilenameStem(params.filename_pattern, output_number) + ext);
                 };
@@ -2611,9 +2614,10 @@ namespace lfs::io {
                                                                   : nlohmann::json(nullptr);
                         root["input"]["video"]["relative_origin_pts"] = stream_start_timestamp;
                         root["output"] = {
-                            {"format", params.format == ImageFormat::JXL ? "jxl" : params.format == ImageFormat::TIFF16 ? "tiff16"
-                                                                               : params.format == ImageFormat::PNG      ? "png"
-                                                                               : params.format == ImageFormat::EXR      ? "exr"
+                            {"format", params.format == ImageFormat::AVIF ? "avif" : params.format == ImageFormat::JXL  ? "jxl"
+                                                                                 : params.format == ImageFormat::TIFF16 ? "tiff16"
+                                                                                 : params.format == ImageFormat::PNG    ? "png"
+                                                                                 : params.format == ImageFormat::EXR    ? "exr"
                                                                                                                         : "jpg"},
                             {"size", (params.rotation == 90 || params.rotation == 270)
                                          ? nlohmann::json{out_height, out_width}
@@ -2675,6 +2679,19 @@ namespace lfs::io {
                                                             (output_color.primaries == media::ColorPrimaries::Bt709 ? " BT709, relative" : " BT2020, relative");
                             root["output"]["quantization"] = "clamp-round-half-up-uint16";
                         }
+                        if (params.format == ImageFormat::AVIF) {
+                            root["output"].erase("jpeg_quality");
+                            root["output"]["bit_depth"] = params.avif_bit_depth;
+                            root["output"]["pixel_format"] = params.avif_bit_depth == 8 ? "rgb_uint8" : "rgb_uint16";
+                            root["output"]["compression"] = params.avif_lossless ? "lossless-integer-codes" : "lossy";
+                            root["output"]["avif_quality"] = params.avif_lossless ? nlohmann::json(nullptr) : nlohmann::json(params.avif_quality);
+                            root["output"]["avif_speed"] = params.avif_speed;
+                            root["output"]["provider"] = core::image_codecs::avif_encoder_version();
+                            root["output"]["transfer"] = "srgb";
+                            root["output"]["color_profile"] = "integer-sdr";
+                            root["output"]["color_space"] = output_color.primaries == media::ColorPrimaries::Bt709 ? "sRGB, relative" : "sRGB transfer BT2020, relative";
+                            root["output"]["quantization"] = "clamp-round-half-up-uint" + std::to_string(params.avif_bit_depth);
+                        }
                         if (params.format == ImageFormat::JXL) {
                             root["output"].erase("jpeg_quality");
                             root["output"]["bit_depth"] = 32;
@@ -2682,6 +2699,16 @@ namespace lfs::io {
                             root["output"]["jxl_distance"] = params.jxl_lossless ? nlohmann::json(nullptr) : nlohmann::json(params.jxl_distance);
                             root["output"]["jxl_effort"] = params.jxl_effort;
                             root["output"]["libjxl_version"] = core::image_codecs::jxl_encoder_version();
+                            if (params.jxl_precision == media::JxlPrecision::UInt16) {
+                                root["output"]["bit_depth"] = 16;
+                                root["output"]["pixel_format"] = "rgb_uint16";
+                                root["output"]["compression"] = params.jxl_lossless ? "lossless-integer-codes" : "lossy";
+                                root["output"]["transfer"] = media::outputOptionName(params.jxl_transfer);
+                                root["output"]["color_profile"] = "uint16-sdr";
+                                root["output"]["color_space"] = std::string(media::outputOptionName(params.jxl_transfer)) +
+                                                                (output_color.primaries == media::ColorPrimaries::Bt709 ? " BT709, relative" : " BT2020, relative");
+                                root["output"]["quantization"] = "clamp-round-half-up-uint16";
+                            }
                         }
                         root["processing"] = {
                             {"decoder", {
@@ -2747,9 +2774,10 @@ namespace lfs::io {
                         root["output_size"] = (params.rotation == 90 || params.rotation == 270)
                                                   ? nlohmann::json{out_height, out_width}
                                                   : nlohmann::json{out_width, out_height};
-                        root["output_format"] = params.format == ImageFormat::JXL ? "jxl" : params.format == ImageFormat::TIFF16 ? "tiff16"
-                                                                                        : params.format == ImageFormat::PNG      ? "png"
-                                                                                        : params.format == ImageFormat::EXR      ? "exr"
+                        root["output_format"] = params.format == ImageFormat::AVIF ? "avif" : params.format == ImageFormat::JXL  ? "jxl"
+                                                                                          : params.format == ImageFormat::TIFF16 ? "tiff16"
+                                                                                          : params.format == ImageFormat::PNG    ? "png"
+                                                                                          : params.format == ImageFormat::EXR    ? "exr"
                                                                                                                                  : "jpg";
                         if (!float_output)
                             root["output_quality"] = params.jpg_quality;

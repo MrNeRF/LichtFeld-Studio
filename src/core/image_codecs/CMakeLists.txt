@@ -4,7 +4,7 @@ find_package(libheif CONFIG REQUIRED)
 find_package(lcms2 CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(JXL REQUIRED IMPORTED_TARGET GLOBAL libjxl>=0.12.0 libjxl_cms>=0.12.0 libjxl_threads>=0.12.0)
-add_library(lfs_image_codecs SHARED ../image_codecs.cpp ../image_heif.cpp ../image_heic_system.cpp ../image_exr.cpp ../image_exr_writer.cpp ../image_jxl.cpp)
+add_library(lfs_image_codecs SHARED ../image_codecs.cpp ../image_heif.cpp ../image_heic_system.cpp ../image_exr.cpp ../image_exr_writer.cpp ../image_jxl.cpp ../image_avif.cpp)
 target_compile_definitions(lfs_image_codecs PRIVATE LFS_IMAGE_CODECS_EXPORTS)
 target_include_directories(lfs_image_codecs PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../include"
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../.." "${CMAKE_CURRENT_SOURCE_DIR}/.."
