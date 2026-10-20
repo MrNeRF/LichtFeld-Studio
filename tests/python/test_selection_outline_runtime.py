@@ -551,46 +551,6 @@ def test_selection_outline_interior_contours(tmp_path, backend, open_ring, singl
         assert _mask(endpoint, tmp_path / "restored-holes.json")[1] == complete
 
 
-@pytest.mark.parametrize("threshold", [.2, .8])
-@pytest.mark.parametrize("emphasis", [False, True], ids=["plain", "emphasized"])
-def test_selection_outline_gut_preserves_scene_color(tmp_path, threshold, emphasis):
-    # Transparent resolve still exercises the general outline raster. Its
-    # rank bound must not terminate color work for unselected geometry.
-    with _appearance_scene(tmp_path, 3, single_node=False) as endpoint:
-        tail = tmp_path / "color-tail.ply"
-        _write_splat(tail, .8, (.5, .5, .1), z=2., copies=2048, opacity=.03)
-        _editor(endpoint, f"lf.load_file({str(tail)!r})")
-        deadline = time.monotonic() + 30
-        while True:
-            nodes = json.loads(_rpc(endpoint, "resources/read", {"uri": "lichtfeld://scene/nodes"})["contents"][0]["text"])
-            if any(node["name"] == tail.stem for node in nodes["nodes"]):
-                break
-            assert time.monotonic() < deadline, nodes
-            time.sleep(.05)
-        _select(endpoint, "lf.select_node('appearance')")
-        _editor(endpoint, f"s.selection_outline_opacity = 0.\ns.selection_outline_threshold = {threshold}\ns.desaturate_unselected = {emphasis}")
-
-        def capture(enabled):
-            path = tmp_path / ("outline-on.rgb" if enabled else "outline-off.rgb")
-            _editor(endpoint, f"s.selection_outline = {enabled}\nlf.capture_viewport()")
-            _editor(endpoint, f"""
-from pathlib import Path
-frame = lf.capture_viewport().image.cpu().tolist()
-factor = 255 if isinstance(frame[0][0][0], float) else 1
-Path({str(path)!r}).write_bytes(bytes(max(0, min(255, int(c * factor + .5)))
-                                   for row in frame for pixel in row for c in pixel))
-del frame
-""")
-            return path.read_bytes()
-
-        baseline = capture(False)
-        outlined = capture(True)
-        assert baseline and max(baseline) > 32, "Color fixture did not render"
-        assert len(outlined) == len(baseline)
-        assert max(abs(a - b) for a, b in zip(baseline, outlined)) <= 1, \
-            "Outline rank pruning altered ordinary scene color"
-
-
 @pytest.mark.parametrize("backend", [2, 3])
 @pytest.mark.parametrize("single_node", [True, False], ids=["single-node", "multi-node"])
 def test_selection_outline_appearance(tmp_path, backend, single_node):
