@@ -467,15 +467,21 @@ static float3 ppisp_apply_crf_bwd(const float3 rgb_in, device const float* crf, 
     return grad_in;
 }
 
-// Sum of a threadgroup of kThreadgroupWidth threads, as cub::BlockReduce adds:
-// ascending shuffle offsets within a simdgroup, then the simdgroup sums in order.
-static float ppisp_group_sum(const float value, threadgroup float* partials, const uint lane, const uint simd,
-                             const uint simds) {
+// Sum of a simdgroup in lane 0, as cub::BlockReduce adds: ascending shuffle offsets.
+static float ppisp_simd_sum(const float value, const uint lane) {
     float v = value;
     for (ushort offset = 1; offset < 32; offset <<= 1) {
         const float other = simd_shuffle_down(v, offset);
         v += lane + offset < 32 ? other : 0.0f;
     }
+    return v;
+}
+
+// Sum of a threadgroup of kThreadgroupWidth threads, as cub::BlockReduce adds:
+// ascending shuffle offsets within a simdgroup, then the simdgroup sums in order.
+static float ppisp_group_sum(const float value, threadgroup float* partials, const uint lane, const uint simd,
+                             const uint simds) {
+    const float v = ppisp_simd_sum(value, lane);
     threadgroup_barrier(mem_flags::mem_threadgroup);
     if (lane == 0)
         partials[simd] = v;
@@ -544,8 +550,8 @@ constant constexpr int kPpispGradients = 36;
 kernel void ppisp_backward(constant PpispBackwardParams& p [[buffer(0)]], uint index [[thread_position_in_grid]],
                            uint lane [[thread_index_in_simdgroup]], uint simd [[simdgroup_index_in_threadgroup]],
                            uint simds [[simdgroups_per_threadgroup]], uint local [[thread_index_in_threadgroup]]) {
-    threadgroup float partials[32];
-    threadgroup float totals[kPpispGradients];
+    // Simdgroup sums of every gradient slot; one barrier serves all 36 group sums.
+    threadgroup float partials[kPpispGradients][kThreadgroupWidth / 32];
     float g[kPpispGradients];
     for (int i = 0; i < kPpispGradients; ++i)
         g[i] = 0.0f;
@@ -593,22 +599,25 @@ kernel void ppisp_backward(constant PpispBackwardParams& p [[buffer(0)]], uint i
     }
 
     for (int i = 0; i < kPpispGradients; ++i) {
-        const float total = ppisp_group_sum(g[i], partials, lane, simd, simds);
-        if (local == 0)
-            totals[i] = total;
+        const float v = ppisp_simd_sum(g[i], lane);
+        if (lane == 0)
+            partials[i][simd] = v;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     if (local >= uint(kPpispGradients))
         return;
     const int i = int(local);
+    float total = partials[i][0];
+    for (uint s = 1; s < simds; ++s)
+        total += partials[i][s];
     if (i < 9) {
         if (p.frame_index != -1)
             ppisp_atomic_add(i == 0 ? p.grad_exposure + p.frame_index : p.grad_color + p.frame_index * 8 + (i - 1),
-                             totals[i]);
+                             total);
     } else if (p.camera_index != -1) {
         ppisp_atomic_add(i < 24 ? p.grad_vignetting + p.camera_index * 15 + (i - 9)
                                 : p.grad_crf + p.camera_index * 12 + (i - 24),
-                         totals[i]);
+                         total);
     }
 }
 
