@@ -5,6 +5,7 @@
 
 #include "cuda_backend_test.hpp"
 
+#include "core/cuda/driver_entry.hpp"
 #include "io/video/cuda_frame_handoff.hpp"
 
 #include <gtest/gtest.h>
@@ -78,7 +79,7 @@ TEST_F(VideoCudaFrameHandoff, WaitsForProducerAndConsumerStreams) {
     ASSERT_EQ(destination.status, cudaSuccess);
 
     CUcontext current_context = nullptr;
-    ASSERT_EQ(cuCtxGetCurrent(&current_context), CUDA_SUCCESS);
+    ASSERT_EQ(LFS_CUDA_DRIVER(cuCtxGetCurrent)(&current_context), CUDA_SUCCESS);
     ASSERT_NE(current_context, nullptr);
 
     CallbackGate producer_gate;
@@ -142,7 +143,7 @@ TEST_F(VideoCudaFrameHandoff, UnwindWaitsForConsumerStream) {
     ASSERT_EQ(consumer.status, cudaSuccess);
 
     CUcontext current_context = nullptr;
-    ASSERT_EQ(cuCtxGetCurrent(&current_context), CUDA_SUCCESS);
+    ASSERT_EQ(LFS_CUDA_DRIVER(cuCtxGetCurrent)(&current_context), CUDA_SUCCESS);
     ASSERT_NE(current_context, nullptr);
 
     lfs::media::detail::CudaDecodeContext decoder_context{};
