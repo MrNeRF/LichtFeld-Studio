@@ -10,6 +10,11 @@ from . import rml_widgets as w
 DEFAULTS = {
     "show_coord_axes": False, "show_pivot": False, "show_grid": True,
     "show_camera_frustums": False, "desaturate_unselected": False, "selection_outline": False,
+    "selection_outline_color": [0.0, 0.604, 0.733],
+    "selection_outline_opacity": 1.0,
+    "selection_outline_width": 2.0,
+    "selection_outline_threshold": 0.5,
+    "selection_outline_holes": True,
     "desaturate_cropping": False, "hide_outside_depth_box": False,
     "axes_size": 2.0, "grid_opacity": 0.5, "camera_frustum_scale": 0.25,
     "selection_color_preview": [0.0, 0.871, 0.298],
@@ -23,7 +28,7 @@ PICKER_CHANNELS = ("default_picker_r", "default_picker_g", "default_picker_b")
 def swatch_binding(prop):
     return f"default_{prop}_swatch"
 
-RANGES = {"axes_size": (0.5, 10), "grid_opacity": (0, 1),
+RANGES = {"selection_outline_opacity": (0, 1), "selection_outline_width": (1, 12), "selection_outline_threshold": (0.05, 0.95), "axes_size": (0.5, 10), "grid_opacity": (0, 1),
           "camera_frustum_scale": (0.01, 10), "lod_page_pool_splats": (0, 100_000_000),
           "lod_pool_vram_fraction": (0.05, 0.9)}
 

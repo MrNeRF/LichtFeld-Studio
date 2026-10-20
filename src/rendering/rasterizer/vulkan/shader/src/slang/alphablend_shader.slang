@@ -351,7 +351,7 @@ void main(
     float outline_selected_depth = previous_outline_depths.y;
     float outline_scene_coverage = previous_outline_depths.z;
     float outline_selected_coverage = previous_outline_depths.w;
-    outline_active = outline_active && outline_selected_coverage < 0.5f;
+    outline_active = outline_active && outline_selected_coverage < overlay_params[OVERLAY_PARAM_MARKER_FLAGS].w;
 #endif
     bool thread_active = LFS_OUTLINE_ONLY == 0 && is_inside && curr_pixel_state.a >= 0.0001f;
 
@@ -523,9 +523,9 @@ void main(
                 if (outline_active) {
                     // Match alpha compositing, including individually faint splats.
                     // Persist both accumulators across depth waves.
-                    if (outline_scene_coverage < 0.5f) {
+                    if (outline_scene_coverage < overlay_params[OVERLAY_PARAM_MARKER_FLAGS].w) {
                         outline_scene_coverage += (1.0f - outline_scene_coverage) * gauss_rgba.a;
-                        if (outline_scene_coverage >= 0.5f)
+                        if (outline_scene_coverage >= overlay_params[OVERLAY_PARAM_MARKER_FLAGS].w)
                             outline_scene_depth = splat_depth;
                     }
                     // Outline-only variants avoid the unrelated point-selection and ring work.
@@ -534,9 +534,9 @@ void main(
                     #else
                     uint outline_flags = read_byte(gaussian_overlay_flags, splat_id);
                     #endif
-                    if ((outline_flags & OVERLAY_FLAG_OUTLINE_SELECTED) != 0u && outline_selected_coverage < 0.5f) {
+                    if ((outline_flags & OVERLAY_FLAG_OUTLINE_SELECTED) != 0u && outline_selected_coverage < overlay_params[OVERLAY_PARAM_MARKER_FLAGS].w) {
                         outline_selected_coverage += (1.0f - outline_selected_coverage) * gauss_rgba.a;
-                        if (outline_selected_coverage >= 0.5f) {
+                        if (outline_selected_coverage >= overlay_params[OVERLAY_PARAM_MARKER_FLAGS].w) {
                             uint logical_id = splat_id;
                             if ((uniforms.lod_enabled & 1u) != 0u)
                                 logical_id = (uniforms.lod_enabled & 8u) != 0u
@@ -546,7 +546,7 @@ void main(
                             outline_selected_depth = splat_depth;
                         }
                     }
-                    outline_active = outline_selected_coverage < 0.5f || outline_scene_coverage < 0.5f;
+                    outline_active = outline_selected_coverage < overlay_params[OVERLAY_PARAM_MARKER_FLAGS].w || outline_scene_coverage < overlay_params[OVERLAY_PARAM_MARKER_FLAGS].w;
                 }
                 if (!thread_active) {
                     if (!outline_active)
@@ -671,7 +671,7 @@ void main(
         if (outline_id > 1u && outline_selected_depth > outline_scene_depth + epsilon)
             outline_id |= 0x80000000u;
         // Coverage is retained across waves; only the crossing splat supplies an ID.
-        if (outline_selected_coverage < 0.5f)
+        if (outline_selected_coverage < overlay_params[OVERLAY_PARAM_MARKER_FLAGS].w)
             outline_id |= 0x40000000u;
         outline_ids[pix_id] = outline_id;
         outline_scene_depths[pix_id] = float4(outline_scene_depth, outline_selected_depth, outline_scene_coverage, outline_selected_coverage);

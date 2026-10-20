@@ -473,6 +473,12 @@ namespace lfs::vis {
             .overlay =
                 {.markers =
                      {.show_object_outline = outline,
+                      .outline_color = ctx.settings.selection_outline_color,
+                      .outline_opacity = ctx.settings.selection_outline_opacity,
+                      .outline_width = ctx.settings.selection_outline_width,
+                      .outline_threshold = ctx.settings.selection_outline_threshold,
+                      .outline_holes = ctx.settings.selection_outline_holes,
+
                       .show_rings = ctx.settings.show_rings || ring_selection_mode,
                       .ring_width = ctx.settings.ring_width,
                       .show_center_markers = ctx.settings.show_center_markers},

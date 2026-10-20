@@ -12,6 +12,17 @@
 #include <optional>
 #include <vector>
 
+struct VulkanGSOutlineStyle {
+    float red = 0.0f;
+    float green = 0.604f;
+    float blue = 0.733f;
+    float opacity = 1.0f;
+    float width = 2.0f;
+    float threshold = 0.5f;
+    uint32_t holes = 1;
+};
+static_assert(sizeof(VulkanGSOutlineStyle) == 28);
+
 // Descriptor layouts for q16/f16 projection skip binding 2 (shN is a 64-bit
 // buffer device address in push constants, not a storage-buffer descriptor).
 [[nodiscard]] inline std::vector<int> vksplatSkipBinding(const int binding_count, const int skip) {
@@ -324,7 +335,8 @@ public:
                                 bool predicate_waves = true,
                                 std::span<const uint32_t> exact_depth_sample_mask = {},
                                 const _VulkanBuffer* outline_transform_indices = nullptr,
-                                bool single_node_outline = false);
+                                bool single_node_outline = false,
+                                const VulkanGSOutlineStyle& outline_style = {});
     [[nodiscard]] bool supportsFloat16Storage() const { return supports_float16_storage_; }
     [[nodiscard]] bool supportsConditionalRendering() const {
         return supports_conditional_rendering_;
@@ -367,7 +379,8 @@ public:
                                  bool overlays_active = true,
                                  bool predicate_waves = true,
                                  bool selection_outline = false,
-                                 bool single_node_outline = false);
+                                 bool single_node_outline = false,
+                                 const VulkanGSOutlineStyle& outline_style = {});
     // When set, forward forces the non-batched per-pixel rasterizer: the
     // load-balanced batched compose only covers a subset of pixels, leaving the
     // rest with shared-buffer residue, which corrupts a one-shot depth readback.
@@ -536,10 +549,15 @@ protected:
     _ComputePipelinePair pipeline_rasterize_outline_gut_plain_rad = _ComputePipelinePair(27);
     _ComputePipelinePair pipeline_rasterize_outline_plain = _ComputePipelinePair(21);
     _ComputePipelinePair pipeline_rasterize_outline_gut_plain = _ComputePipelinePair(27);
-    _ComputePipeline pipeline_outline_resolve = _ComputePipeline(3);
+    _ComputePipeline pipeline_outline_resolve = _ComputePipeline(4);
+    _ComputePipeline pipeline_outline_seeds = _ComputePipeline(3);
+    _ComputePipeline pipeline_outline_horizontal = _ComputePipeline(2);
+    _ComputePipeline pipeline_outline_background_init = _ComputePipeline(2);
+    _ComputePipeline pipeline_outline_background_union = _ComputePipeline(2);
     _ComputePipeline pipeline_outline_mask = _ComputePipeline(12);
     _ComputePipeline pipeline_outline_coverage = _ComputePipeline(2);
-    void executeOutlineCoverage(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
+    void executeOutlineCoverage(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers, float threshold);
+    void executeOutlineResolve(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers, const VulkanGSOutlineStyle& style);
     _ComputePipeline pipeline_outline_tiles = _ComputePipeline(5);
     void executeOutlineTiles(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
     _ComputePipeline pipeline_expected_depth_finalize = _ComputePipeline(2);

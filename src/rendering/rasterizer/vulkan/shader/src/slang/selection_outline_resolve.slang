@@ -1,58 +1,58 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-struct OutlineSize {
-    uint width;
-    uint height;
-};
+#include "selection_outline_common.slang"
 layout(binding=0) StructuredBuffer<uint> outline_ids;
 layout(binding=1) RWStructuredBuffer<float4> pixel_state;
-layout(binding=2) StructuredBuffer<float4> selection_colors;
+layout(binding=2) StructuredBuffer<uint> background_parents;
+layout(binding=3) StructuredBuffer<uint> nearest_seeds;
 
 [numthreads(8, 8, 1)]
-void main(uint3 dispatch_id : SV_DispatchThreadID, uniform OutlineSize size)
-{
+void main(uint3 dispatch_id : SV_DispatchThreadID, uniform OutlineSize size) {
     uint2 p = dispatch_id.xy;
-    if (p.x >= size.width || p.y >= size.height)
-        return;
+    if (p.x >= size.width || p.y >= size.height || size.opacity <= 0.0f) return;
     uint index = p.y * size.width + p.x;
-    uint center_sample = outline_ids[index];
-    uint center = center_sample & 0x3fffffffu;
-    // Bit 30 hides candidates below 50% accumulated selected coverage.
-    // Bit 31 records scene occlusion without cutting silhouette holes.
-    center = center > 1u && (center_sample & 0x40000000u) == 0u ? center : 0u;
-    float edge_alpha = (center_sample & 0x80000000u) != 0u ? 0.35f : 1.0f;
-    float distance_to_edge = 3.0f;
-    // Only the 3x3 neighborhood can contribute to this two-sided 2px line.
-    // Samples at distance >= 2 have zero coverage.
-    [unroll]
-    for (int y = -1; y <= 1; ++y) {
-        [unroll]
-        for (int x = -1; x <= 1; ++x) {
-            if (x == 0 && y == 0)
-                continue;
-            int2 q = int2(p) + int2(x, y);
-            if (q.x < 0 || q.y < 0 || q.x >= int(size.width) || q.y >= int(size.height))
-                continue; // Clipping at the viewport edge is not an object contour.
-            uint neighbor_sample = outline_ids[uint(q.y) * size.width + uint(q.x)];
-            uint neighbor = neighbor_sample & 0x3fffffffu;
-            neighbor = neighbor > 1u && (neighbor_sample & 0x40000000u) == 0u ? neighbor : 0u;
-            if (neighbor != center && (neighbor != 0u || center != 0u)) {
-                float distance = length(float2(x, y));
-                if (distance < distance_to_edge) {
-                    distance_to_edge = distance;
-                    if (center == 0u)
-                        edge_alpha = (neighbor_sample & 0x80000000u) != 0u ? 0.35f : 1.0f;
-                }
+    int2 normal = int2(1, 0);
+    float edge_alpha = 1.0f;
+    float coverage = 0.0f;
+    if (size.line_width > 2.0f) {
+        // Separable nearest-edge search: O(radius) reads in each direction,
+        // rather than a square O(radius^2) neighborhood for every pixel.
+        int radius = int(ceil(size.line_width * 0.5f + 0.5f));
+        float best_squared = 1.0e10f;
+        uint best = OUTLINE_INVALID_SEED;
+        uint2 best_position = uint2(0, 0);
+        for (int y = -radius; y <= radius; ++y) {
+            int qy = int(p.y) + y;
+            if (qy < 0 || qy >= int(size.height)) continue;
+            uint candidate = nearest_seeds[uint(qy) * size.width + p.x];
+            if (candidate == OUTLINE_INVALID_SEED) continue;
+            uint qx = candidate - uint(qy) * size.width;
+            float2 delta = float2(qx, qy) - float2(p);
+            float squared = dot(delta, delta);
+            if (squared < best_squared) {
+                best_squared = squared;
+                best = candidate;
+                best_position = uint2(qx, qy);
             }
         }
+        if (best == OUTLINE_INVALID_SEED) return;
+        float distance_to_seed = sqrt(best_squared);
+        if (distance_to_seed > size.line_width * 0.5f) return;
+        // Keep occluded alpha attached to the nearest boundary seed.
+        float seed_distance;
+        outlineBoundary(best_position, size, outline_ids, background_parents, seed_distance, normal, edge_alpha);
+        coverage = 1.0f - smoothstep(size.line_width * 0.5f, size.line_width * 0.5f + 1.0f, distance_to_seed + seed_distance);
+    } else {
+        float distance_to_edge;
+        if (!outlineBoundary(p, size, outline_ids, background_parents, distance_to_edge, normal, edge_alpha)) return;
+        coverage = 1.0f - smoothstep(size.line_width * 0.5f, size.line_width * 0.5f + 1.0f, distance_to_edge);
     }
-    float coverage = (1.0f - smoothstep(1.0f, 2.0f, distance_to_edge)) * edge_alpha * (254.0f / 255.0f);
+
+    coverage *= edge_alpha * size.opacity * (254.0f / 255.0f);
     if (coverage > 0.0f) {
-        // The raster buffer contains premultiplied RGB and transmittance.
-        // Match Blender's normal-view occluded alpha, without changing depth.
         float4 pixel = pixel_state[index];
-        pixel_state[index] = float4(lerp(pixel.rgb, selection_colors[0].rgb, coverage),
+        pixel_state[index] = float4(lerp(pixel.rgb, float3(size.red, size.green, size.blue), coverage),
                                     pixel.a * (1.0f - coverage));
     }
 }

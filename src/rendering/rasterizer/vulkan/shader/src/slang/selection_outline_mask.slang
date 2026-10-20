@@ -46,7 +46,8 @@ void main(uint3 pixel : SV_DispatchThreadID, uint3 lane : SV_GroupThreadID,
     bool has_indices = overlay_enabled(overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS].y);
     float2 coordinate = float2(pixel.xy) + (full_frame_binning(uniforms)
                               ? float2(uniforms.render_origin_x, uniforms.render_origin_y) : float2(0.0f));
-    bool active = inside && (scene_coverage < 0.5f || selected_coverage < 0.5f);
+    const float threshold = overlay_params[OVERLAY_PARAM_MARKER_FLAGS].w;
+    bool active = inside && (scene_coverage < threshold || selected_coverage < threshold);
     for (uint base = begin; base < end; base += 256u) {
         if (rank == 0u) any_active = 0u;
         GroupMemoryBarrierWithGroupSync();
@@ -77,19 +78,19 @@ void main(uint3 pixel : SV_DispatchThreadID, uint3 lane : SV_GroupThreadID,
                                   : evaluate_splat_for_profile(splat, coordinate, uniforms.splat_render_profile).a;
                 if (alpha < ALPHA_THRESHOLD)
                     continue;
-                if (scene_coverage < 0.5f) {
+                if (scene_coverage < threshold) {
                     scene_coverage += (1.0f - scene_coverage) * alpha;
-                    if (scene_coverage >= 0.5f)
+                    if (scene_coverage >= threshold)
                         scene_depth = batch_depths[j];
                 }
-                if (batch_selected[j] != 0u && selected_coverage < 0.5f) {
+                if (batch_selected[j] != 0u && selected_coverage < threshold) {
                     selected_coverage += (1.0f - selected_coverage) * alpha;
-                    if (selected_coverage >= 0.5f) {
+                    if (selected_coverage >= threshold) {
                         id = node_id;
                         selected_depth = batch_depths[j];
                     }
                 }
-                active = scene_coverage < 0.5f || selected_coverage < 0.5f;
+                active = scene_coverage < threshold || selected_coverage < threshold;
                 if (!active) break;
             }
         }
@@ -99,7 +100,7 @@ void main(uint3 pixel : SV_DispatchThreadID, uint3 lane : SV_GroupThreadID,
         float epsilon = 1.0e-4f * max(1.0f, abs(scene_depth));
         if (id > 1u && selected_depth > scene_depth + epsilon)
             id |= 0x80000000u;
-        if (selected_coverage < 0.5f)
+        if (selected_coverage < threshold)
             id |= 0x40000000u;
         outline_ids[index] = id;
         scene_depths[index] = float4(scene_depth, selected_depth, scene_coverage, selected_coverage);

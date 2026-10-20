@@ -1037,6 +1037,10 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
     createComputePipeline(pipeline_cumsum.add_block_offsets, spirv_paths.at("cumsum_add_block_offsets"));
     createComputePipeline(pipeline_radix_histogram_clear, spirv_paths.at("radix_histogram_clear"));
     createComputePipeline(pipeline_outline_resolve, spirv_paths.at("selection_outline_resolve"));
+    createComputePipeline(pipeline_outline_seeds, spirv_paths.at("selection_outline_seeds"));
+    createComputePipeline(pipeline_outline_horizontal, spirv_paths.at("selection_outline_horizontal"));
+    createComputePipeline(pipeline_outline_background_init, spirv_paths.at("selection_outline_background_init"));
+    createComputePipeline(pipeline_outline_background_union, spirv_paths.at("selection_outline_background_union"));
     createComputePipeline(pipeline_outline_coverage, spirv_paths.at("selection_outline_coverage"));
     createComputePipeline(pipeline_outline_mask, spirv_paths.at("selection_outline_mask"));
     createComputePipeline(pipeline_outline_tiles, spirv_paths.at("selection_outline_tiles"));
@@ -1426,13 +1430,62 @@ void VulkanGSRenderer::executeProjectionForward(
         tagged);
 }
 
-void VulkanGSRenderer::executeOutlineCoverage(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers) {
+void VulkanGSRenderer::executeOutlineCoverage(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers, const float threshold) {
     using lfs::rendering::vulkan::BufferUse;
-    const uint32_t dimensions[] = {uniforms.image_width, uniforms.image_height};
-    executeCompute({{dimensions[0], 8u}, {dimensions[1], 8u}}, &dimensions, sizeof(dimensions), pipeline_outline_coverage,
+    const struct {
+        uint32_t width, height;
+        float threshold;
+    } parameters{uniforms.image_width, uniforms.image_height, threshold};
+    executeCompute({{parameters.width, 8u}, {parameters.height, 8u}}, &parameters, sizeof(parameters), pipeline_outline_coverage,
                    std::vector<TaggedBinding>{
                        {buffers.pixel_state.deviceBuffer, BufferUse::ComputeRead},
                        {buffers.pixel_outline_ids.deviceBuffer, BufferUse::ComputeWrite},
+                   });
+}
+
+void VulkanGSRenderer::executeOutlineResolve(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers,
+                                             const VulkanGSOutlineStyle& style) {
+    using lfs::rendering::vulkan::BufferUse;
+    const struct {
+        uint32_t width, height;
+        VulkanGSOutlineStyle style;
+    } parameters{uniforms.image_width, uniforms.image_height, style};
+    const uint32_t dimensions[] = {uniforms.image_width, uniforms.image_height};
+    // The exterior-background classification is opt-in. The usual resolve binds
+    // the existing ID buffer as an unused descriptor and allocates no scratch.
+    const _VulkanBuffer* background = &buffers.pixel_outline_ids.deviceBuffer;
+    if (!style.holes) {
+        background = &resizeDeviceBuffer(buffers.outline_background, size_t(dimensions[0]) * dimensions[1] + 1u);
+        const std::vector<TaggedBinding> bindings{
+            {buffers.pixel_outline_ids.deviceBuffer, BufferUse::ComputeRead},
+            {*background, BufferUse::ComputeReadWrite},
+        };
+        executeCompute({{dimensions[0], 8u}, {dimensions[1], 8u}}, dimensions, sizeof(dimensions), pipeline_outline_background_init, bindings);
+        executeCompute({{dimensions[0], 8u}, {dimensions[1], 8u}}, dimensions, sizeof(dimensions), pipeline_outline_background_union, bindings);
+    }
+    const _VulkanBuffer* nearest = &buffers.pixel_outline_ids.deviceBuffer;
+    if (style.width > 2.0f) {
+        const size_t pixels = size_t(dimensions[0]) * dimensions[1];
+        auto& seeds = resizeDeviceBuffer(buffers.outline_seeds, pixels);
+        nearest = &resizeDeviceBuffer(buffers.outline_nearest, pixels);
+        executeCompute({{dimensions[0], 8u}, {dimensions[1], 8u}}, &parameters, sizeof(parameters), pipeline_outline_seeds,
+                       std::vector<TaggedBinding>{
+                           {buffers.pixel_outline_ids.deviceBuffer, BufferUse::ComputeRead},
+                           {seeds, BufferUse::ComputeWrite},
+                           {*background, BufferUse::ComputeRead},
+                       });
+        executeCompute({{dimensions[0], 8u}, {dimensions[1], 8u}}, &parameters, sizeof(parameters), pipeline_outline_horizontal,
+                       std::vector<TaggedBinding>{
+                           {seeds, BufferUse::ComputeRead},
+                           {*nearest, BufferUse::ComputeWrite},
+                       });
+    }
+    executeCompute({{dimensions[0], 8u}, {dimensions[1], 8u}}, &parameters, sizeof(parameters), pipeline_outline_resolve,
+                   std::vector<TaggedBinding>{
+                       {buffers.pixel_outline_ids.deviceBuffer, BufferUse::ComputeRead},
+                       {buffers.pixel_state.deviceBuffer, BufferUse::ComputeReadWrite},
+                       {*background, BufferUse::ComputeRead},
+                       {*nearest, BufferUse::ComputeRead},
                    });
 }
 
@@ -1466,7 +1519,8 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
     const bool overlays_active,
     const bool predicate_waves,
     const bool selection_outline,
-    const bool single_node_outline) {
+    const bool single_node_outline,
+    const VulkanGSOutlineStyle& outline_style) {
     PerfTimer::Timer<PerfTimer::RasterizeForward> timer(this);
     DEVICE_GUARD;
     const bool raster_outline = selection_outline && !single_node_outline;
@@ -1902,15 +1956,8 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
     }
     if (selection_outline) {
         if (single_node_outline)
-            executeOutlineCoverage(uniforms, buffers);
-        const uint32_t dimensions[] = {uniforms.image_width, uniforms.image_height};
-        executeCompute({{dimensions[0], 8u}, {dimensions[1], 8u}},
-                       dimensions, sizeof(dimensions), pipeline_outline_resolve,
-                       std::vector<TaggedBinding>{
-                           {*outline_ids, BufferUse::ComputeRead},
-                           {pixel_state, BufferUse::ComputeReadWrite},
-                           {selection_colors, BufferUse::ComputeRead},
-                       });
+            executeOutlineCoverage(uniforms, buffers, outline_style.threshold);
+        executeOutlineResolve(uniforms, buffers, outline_style);
     }
 }
 
@@ -3039,7 +3086,8 @@ void VulkanGSRenderer::executeMacroDepthWaves(
     const bool predicate_waves,
     const std::span<const uint32_t> exact_depth_sample_mask,
     const _VulkanBuffer* outline_transform_indices,
-    const bool single_node_outline) {
+    const bool single_node_outline,
+    const VulkanGSOutlineStyle& outline_style) {
     PerfTimer::Timer<PerfTimer::RasterizeForward> timer(this);
     DEVICE_GUARD;
 
@@ -3402,15 +3450,8 @@ void VulkanGSRenderer::executeMacroDepthWaves(
     }
     if (outline_transform_indices) {
         if (single_node_outline)
-            executeOutlineCoverage(uniforms, buffers);
-        const uint32_t dimensions[] = {uniforms.image_width, uniforms.image_height};
-        executeCompute({{dimensions[0], 8u}, {dimensions[1], 8u}},
-                       dimensions, sizeof(dimensions), pipeline_outline_resolve,
-                       std::vector<TaggedBinding>{
-                           {buffers.pixel_outline_ids.deviceBuffer, BufferUse::ComputeRead},
-                           {buffers.pixel_state.deviceBuffer, BufferUse::ComputeReadWrite},
-                           {selection_colors, BufferUse::ComputeRead},
-                       });
+            executeOutlineCoverage(uniforms, buffers, outline_style.threshold);
+        executeOutlineResolve(uniforms, buffers, outline_style);
     }
 }
 

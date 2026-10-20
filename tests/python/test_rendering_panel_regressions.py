@@ -624,3 +624,77 @@ def test_selection_group_color_picker_stays_inside_panel(rendering_panel_module)
     panel._open_picker(_PickerEvent(300, 40))
     assert popup.props["top"] == "42px"
     assert popup.props["left"] == "90px"
+
+
+@pytest.mark.parametrize("prop,value", [
+    ("selection_outline_opacity", .4),
+    ("selection_outline_width", 1.5),
+    ("selection_outline_threshold", .7),
+])
+def test_outline_appearance_commits_view_settings(rendering_panel_module, prop, value):
+    module = rendering_panel_module
+    writes, commits = [], []
+    module.lf.ui.mark_project_session_chapter_committed = commits.append
+    module.lf.get_render_settings = lambda: SimpleNamespace(
+        _set_without_session_dirty=lambda name, value: writes.append((name, value)))
+    panel = module.RenderingPanel()
+    panel._set_scrub_value(prop, value)
+    assert writes == [(prop, value)]
+    assert commits == []
+    panel._scrub_fields._commit_value(prop, value)
+    assert commits == ["VIEW"]
+
+
+def test_outline_controls_reuse_color_picker_and_conditional_container(rendering_panel_module):
+    from xml.etree import ElementTree as ET
+    root = Path(__file__).parents[2]
+    props = {"selection_outline_color", "selection_outline_opacity", "selection_outline_width",
+             "selection_outline_threshold", "selection_outline_holes"}
+    module = rendering_panel_module
+    assert "selection_outline_color" in module.COLOR_PROPS
+    assert "selection_outline_holes" in module.BOOL_PROPS
+    for filename, condition, prefix in (("rendering.rml", "selection_outline", ""),
+                                         ("preferences.rml", "default_selection_outline", "default_")):
+        doc = ET.parse(root / "src/visualizer/gui/rmlui/resources" / filename)
+        container = next(node for node in doc.iter() if node.get("data-if") == condition)
+        bindings = {node.get("data-value", node.get("data-checked", "")) for node in container.iter()}
+        for prop in props:
+            assert prefix + prop + ("_hex" if prop.endswith("_color") and not prefix else "") in bindings
+
+
+def test_outline_defaults_validate_and_save_only_committed_values(rendering_panel_module, monkeypatch):
+    import json
+    module = import_module("lfs_plugins.rendering_defaults")
+    monkeypatch.setattr(module, "lf", rendering_panel_module.lf)
+    saved, patches = {}, []
+    module.lf.ui.get_rendering_defaults_json = lambda: json.dumps(saved)
+    def persist(text):
+        patch = json.loads(text)
+        patches.append(patch)
+        saved.update(patch)
+    module.lf.ui.set_rendering_defaults_json = persist
+    section = module.RenderingDefaultsSection()
+    model = _BindingModelStub()
+    section.bind(model)
+    get, set_value = model.bindings["default_selection_outline_opacity"]
+    set_value("0.25")
+    assert patches == []
+    section._commit("selection_outline_opacity")
+    assert patches == [{"selection_outline_opacity": .25}]
+    section._set("selection_outline_opacity", "NaN")
+    section._set("selection_outline_width", "13")
+    assert len(patches) == 1
+    section._set("selection_outline_width", "12")
+    assert patches[-1] == {"selection_outline_width": 12}
+    section._set("selection_outline_color", "#336699")
+    assert saved["selection_outline_color"] == pytest.approx([.2, .4, .6])
+
+
+def test_outline_patterns_are_not_exposed(rendering_panel_module):
+    module = rendering_panel_module
+    assert "selection_outline_style" not in module.SELECT_PROPS
+    for name in ("rendering.rml", "preferences.rml"):
+        text = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources" / name).read_text()
+        assert "selection_outline_style" not in text
+        assert "selection_outline_dashed" not in text
+        assert "selection_outline_dotted" not in text
