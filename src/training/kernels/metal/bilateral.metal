@@ -176,56 +176,17 @@ kernel void bilateral_slice_backward_rgb(constant BilateralSliceParams& p [[buff
     bilateral_store(p, p.output, pixel, value + float3(kC2G_r, kC2G_g, kC2G_b) * gz_grad);
 }
 
-// The grid gradient takes one threadgroup of 16x16 threads per 32x32 pixel tile.
-// A tile covers at most 3x3 grid cells in x and y, so its gradients gather in a
-// threadgroup histogram before one device atomic per nonzero slot.
+// The grid gradient takes one threadgroup of 16x16 threads per 32x32 pixel tile,
+// each thread 2x2 pixels.
 constant constexpr int kBilateralTile = 32;
-constant constexpr int kBilateralFootprint = 3;
-constant constexpr int kBilateralStrideX = 4;
-constant constexpr int kBilateralMaxL = 32;
-constant constexpr int kBilateralSlots = 12 * kBilateralMaxL * kBilateralFootprint * kBilateralStrideX;
-
-static void bilateral_group_add(threadgroup atomic_uint* slot, const float value) {
-    uint old = atomic_load_explicit(slot, memory_order_relaxed);
-    while (!atomic_compare_exchange_weak_explicit(slot, &old, as_type<uint>(as_type<float>(old) + value),
-                                                  memory_order_relaxed, memory_order_relaxed)) {
-    }
-}
 
 kernel void bilateral_slice_backward_grid(constant BilateralSliceParams& p [[buffer(0)]],
                                           uint2 tile [[threadgroup_position_in_grid]],
                                           uint2 thread_in_tile [[thread_position_in_threadgroup]],
-                                          uint local [[thread_index_in_threadgroup]],
                                           uint lane [[thread_index_in_simdgroup]]) {
-    threadgroup atomic_uint histogram[kBilateralSlots];
     const int channels = p.exposure_chroma != 0 ? 9 : 12;
     const int L = p.L, H = p.H, W = p.W, h = p.h, w = p.w;
     const int px0 = int(tile.x) * kBilateralTile, py0 = int(tile.y) * kBilateralTile;
-    const int px1 = min(px0 + kBilateralTile, w), py1 = min(py0 + kBilateralTile, h);
-
-    const float x0f = w > 1 ? float(px0) / float(w - 1) * float(W - 1) : 0.0f;
-    const float x1f = w > 1 ? float(px1 - 1) / float(w - 1) * float(W - 1) : 0.0f;
-    const float y0f = h > 1 ? float(py0) / float(h - 1) * float(H - 1) : 0.0f;
-    const float y1f = h > 1 ? float(py1 - 1) / float(h - 1) * float(H - 1) : 0.0f;
-    int xmin = int(floor(x0f)), ymin = int(floor(y0f));
-    int fpx = min(int(floor(x1f)) + 1, W - 1) - xmin + 1;
-    int fpy = min(int(floor(y1f)) + 1, H - 1) - ymin + 1;
-    const bool global = fpx < 1 || fpy < 1 || fpx > kBilateralFootprint || fpy > kBilateralFootprint ||
-                        L > kBilateralMaxL;
-    if (fpx < 1) {
-        fpx = 1;
-        xmin = 0;
-    }
-    if (fpy < 1) {
-        fpy = 1;
-        ymin = 0;
-    }
-    const int slots = channels * L * fpy * kBilateralStrideX;
-    if (!global) {
-        for (int i = int(local); i < slots; i += int(kThreadgroupWidth))
-            atomic_store_explicit(&histogram[i], 0u, memory_order_relaxed);
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
 
     for (int dy = 0; dy < 2; ++dy) {
         for (int dx = 0; dx < 2; ++dx) {
@@ -256,8 +217,9 @@ kernel void bilateral_slice_backward_grid(constant BilateralSliceParams& p [[buf
             const int cy[8] = {c.y0, c.y0, c.y1, c.y1, c.y0, c.y0, c.y1, c.y1};
             const int cz[8] = {c.z0, c.z0, c.z0, c.z0, c.z1, c.z1, c.z1, c.z1};
             // A 32x4-pixel SIMD group spans few grid cells, so lanes in the same base
-            // cell sum their gradients first and one of them adds the totals. Per-lane
-            // adds into the shared histogram serialize on the same few slots.
+            // cell sum their gradients first and one of them adds the totals. Metal has
+            // no threadgroup float atomics; a shared histogram's compare-and-swap adds
+            // cost more than the device atomics they save.
             const int cell = (c.z0 * H + c.y0) * W + c.x0;
             bool pending = valid;
             while (simd_any(pending)) {
@@ -267,31 +229,12 @@ kernel void bilateral_slice_backward_grid(constant BilateralSliceParams& p [[buf
                 for (int ci = 0; ci < channels; ++ci) {
                     for (int k = 0; k < 8; ++k) {
                         const float value = simd_sum(mine ? weights[k] * dl[ci] : 0.0f);
-                        if (lane != leader)
-                            continue;
-                        if (global) {
+                        if (lane == leader)
                             ppisp_atomic_add(p.grad_grid + (ci * L + cz[k]) * H * W + cy[k] * W + cx[k], value);
-                        } else {
-                            const int slot = ((ci * L + cz[k]) * fpy + (cy[k] - ymin)) * kBilateralStrideX + (cx[k] - xmin);
-                            bilateral_group_add(&histogram[slot], value);
-                        }
                     }
                 }
             }
         }
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (global)
-        return;
-    for (int i = int(local); i < slots; i += int(kThreadgroupWidth)) {
-        const int lx = i % kBilateralStrideX;
-        const int ly = (i / kBilateralStrideX) % fpy;
-        const int zi = (i / (kBilateralStrideX * fpy)) % L;
-        const int ci = i / (kBilateralStrideX * fpy * L);
-        const float value = as_type<float>(atomic_load_explicit(&histogram[i], memory_order_relaxed));
-        if (lx >= fpx || value == 0.0f)
-            continue;
-        ppisp_atomic_add(p.grad_grid + (ci * L + zi) * H * W + (ymin + ly) * W + (xmin + lx), value);
     }
 }
 
