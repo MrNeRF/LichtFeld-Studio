@@ -1240,7 +1240,7 @@ namespace {
             }
             Tensor none;
             const Tensor grad = plane(w.image, 3, s.height, s.width);
-            std::array<std::vector<float>, 6> first;
+            std::array<std::vector<float>, 6> previous;
             for (int pass = 1; pass <= 3; ++pass) {
                 SCOPED_TRACE(pass);
                 if (pass == 3) {
@@ -1257,8 +1257,6 @@ namespace {
                     SCOPED_TRACE(slot);
                     const auto& group = adam.groups[slot];
                     const auto actual = download(group.gradient);
-                    if (pass == 1)
-                        first[slot] = actual;
                     double scale = 0;
                     for (double v : expected[slot])
                         scale = std::max(scale, std::abs(v));
@@ -1278,13 +1276,14 @@ namespace {
                             reg = sh_regularizer[i];
                         EXPECT_NEAR(actual[i], pass * expected[slot][i] + reg, pass * (1e-4 * scale + 1e-5)) << i;
                         if (pass > 1) {
-                            // Each backward pass introduces float reduction error;
-                            // accumulate its absolute budget along with the gradient.
-                            const double first_value = first[slot][i];
-                            const double per_pass_error = 2e-6 * std::abs(first_value) + 1e-7;
-                            EXPECT_NEAR(actual[i], pass * first_value + reg, pass * per_pass_error) << i;
+                            // Independent float reductions can round differently on
+                            // each pass. Check the added gradient against the CPU
+                            // oracle, with the same numerical budget as a single pass.
+                            const double increment = double(actual[i]) - previous[slot][i];
+                            EXPECT_NEAR(increment, expected[slot][i] + reg, 1e-4 * scale + 1e-5) << i;
                         }
                     }
+                    previous[slot] = actual;
                     const auto after = group.parameter.cpu();
                     EXPECT_EQ(std::memcmp(before[slot].data_ptr(), after.data_ptr(), before[slot].numel() * lfs::core::dtype_size(before[slot].dtype())), 0);
                     const auto after_moments = group.packed_moments.cpu();
