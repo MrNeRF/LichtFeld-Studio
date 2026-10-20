@@ -316,6 +316,15 @@ def _install_lf_stub(monkeypatch):
         open_folder_dialog=lambda title, start: "",
         get_mcp_status=lambda: dict(state.mcp_status),
         take_preferences_section_request=lambda: "",
+        get_vulkan_hardware=lambda: [],
+        get_cuda_hardware=lambda: [],
+        get_graphics_backend=lambda: "vulkan",
+        get_gpu_runtime_status=lambda: dict(
+            restart_required=False, tensor_backend="CUDA", tensor_gpu="Test GPU", rendering_gpu="Test GPU"),
+        get_tensor_backend_preferences=lambda: dict(
+            backend="auto", cuda_device="", vulkan_device="", rendering_vulkan_device="",
+            cuda_available=True, vulkan_available=True, metal_available=False,
+            vulkan_validation=0, force_fp32_half=False, force_no_atomic_float=False),
         themes=lambda: [],
         get_languages=lambda: [("en", "English")],
         get_theme=lambda: "dark",
@@ -773,7 +782,8 @@ def test_keymap_language_change_rebuilds_and_dirties_all(keymap_bindings_module)
 
     state.language[0] = "de"
 
-    panel.on_update(_DocStub())
+    # Check the section's invalidation independently of the parent panel refresh.
+    section.on_update(_DocStub())
 
     assert section._last_lang == "de"
     assert section._handle.dirty_all_calls == 1

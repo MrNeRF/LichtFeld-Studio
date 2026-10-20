@@ -61,6 +61,9 @@ SEAMS = {
     "src/visualizer/project/project_lifecycle.cpp": "Project loading binds the CUDA trainer thread to its device.",
     "src/visualizer/gui/gui_manager.cpp": "The GUI reports failure of the selected CUDA runtime.",
     "src/visualizer/preferences.cpp": "Preferences select a backend before tensor initialization.",
+    "src/visualizer/gpu_preferences_state.hpp": "Preference policy compares requested and active backend/device identities without dispatching tensor operations.",
+    "src/visualizer/window/vulkan_context.cpp": "Native Vulkan device selection negotiates physical GPU compatibility with the selected CUDA device.",
+    "src/visualizer/window/vulkan_graphics_context.cpp": "The Vulkan presenter adopts a compatible tensor device or retains an independent device for staged transfers.",
     "src/visualizer/window/metal_graphics_context.mm": "The platform presenter owns the final Metal image tensor and selects Metal allocation explicitly.",
 }
 # Exact private-interface exceptions pending ownership changes in other lanes.

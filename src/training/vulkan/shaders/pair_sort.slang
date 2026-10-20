@@ -2,6 +2,27 @@
 #define PAIR_SORT_SUBGROUP_MATCH 1
 #endif
 
+#ifndef PAIR_SORT_BALLOT_MATCH
+#define PAIR_SORT_BALLOT_MATCH 0
+#endif
+
+#if PAIR_SORT_BALLOT_MATCH
+// Partition equal 8-bit digits using core subgroup ballots, including a
+// separate validity mask so the sentinel 256 never matches digit zero.
+uint4 ballotMatch(uint digit) {
+    uint4 matches = WaveActiveBallot(digit < 256u);
+    [unroll] for (uint bit = 0; bit < 8; ++bit) {
+        bool set = (digit & (1u << bit)) != 0;
+        uint4 ones = WaveActiveBallot(set);
+        matches &= set ? ones : ~ones;
+    }
+    return matches;
+}
+#define PAIR_SORT_MATCH(value) ballotMatch(value)
+#else
+#define PAIR_SORT_MATCH(value) WaveMatch(value)
+#endif
+
 static const uint kWorkers = PAIR_SORT_SUBGROUP_MATCH != 0 ? 128 : 32;
 static const uint kItemsPerWorker = PAIR_SORT_SUBGROUP_MATCH != 0 ? 16 : 64;
 static const uint kPartitionWidth = kWorkers * kItemsPerWorker;
@@ -110,10 +131,15 @@ bool firstMatchingLane(uint4 matchMask, uint lane) {
                                        uint3 groupId : SV_GroupID,
                                        uint3 groupThreadId : SV_GroupThreadID,
                                        uniform SortParameters parameters) {
-    if (parameters.control != 0) {
-        parameters.elementCount = ((Ptr<uint, Access.Read>)parameters.control)[0];
-        parameters.partitionCount = (parameters.elementCount + kPartitionWidth - 1) / kPartitionWidth;
-    }
+    // Some drivers speculate physical loads across the optional-control test.
+    // The direct path still needs a valid read address; its source payload is
+    // nonempty and read-only throughout this dispatch.
+    const uint64_t controlAddress = parameters.control != 0
+        ? parameters.control : parameters.sourceValues;
+    const uint controlCount = ((Ptr<uint, Access.Read>)controlAddress)[0];
+    parameters.elementCount = parameters.control != 0 ? controlCount : parameters.elementCount;
+    parameters.partitionCount = parameters.control != 0
+        ? (parameters.elementCount + kPartitionWidth - 1) / kPartitionWidth : parameters.partitionCount;
     Ptr<uint, Access.Read> valuesIn = (Ptr<uint, Access.Read>)parameters.sourceValues;
     Ptr<uint, Access.ReadWrite> valuesOut = (Ptr<uint, Access.ReadWrite>)parameters.destinationValues;
     Ptr<uint, Access.ReadWrite> counts = (Ptr<uint, Access.ReadWrite>)parameters.partitionCounts;
@@ -132,7 +158,7 @@ bool firstMatchingLane(uint4 matchMask, uint lane) {
                 const uint digit = valid ? loadDigit(loadKey(parameters, index), parameters)
                                          : kDigitCount;
 #if PAIR_SORT_SUBGROUP_MATCH
-                const uint4 matches = WaveMatch(digit);
+                const uint4 matches = PAIR_SORT_MATCH(digit);
                 const uint subgroupLane = WaveGetLaneIndex();
                 if (valid && firstMatchingLane(matches, subgroupLane))
                     InterlockedAdd(localCounts[digit], matchCount(matches));
@@ -170,7 +196,8 @@ bool firstMatchingLane(uint4 matchMask, uint lane) {
             if (lane == 0u) {
                 uint chunkTotal = 0u;
                 for (uint previous = 0u; previous < kMaxSubgroups; ++previous) {
-                    if (previous < kWorkers / WaveGetLaneCount())
+                    // A 32-worker group still has one active subgroup on wave64.
+                    if (previous < (kWorkers + WaveGetLaneCount() - 1u) / WaveGetLaneCount())
                         chunkTotal += subgroupTotals[previous];
                 }
                 chunkCarry = carry + chunkTotal;
@@ -223,7 +250,7 @@ bool firstMatchingLane(uint4 matchMask, uint lane) {
             uint index = partition * kPartitionWidth + localIndex;
             bool valid = index < parameters.elementCount;
             uint digit = valid ? loadDigit(loadKey(parameters,index),parameters) : 0;
-            uint4 matches = WaveMatch(valid ? digit : 256);
+            uint4 matches = PAIR_SORT_MATCH(valid ? digit : 256);
             uint rank = subgroupCounts[subgroup*kDigitCount+digit] + matchPrefix(matches,subgroupLane);
             subgroupBarrier();
             if (valid && firstMatchingLane(matches,subgroupLane))

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/logger.hpp"
+#include "core/tensor_backend.hpp"
 #include "media/media_backends.hpp"
 #include "nvcodec_image_loader.hpp"
 #include "video/color_convert.cuh"
@@ -92,6 +93,7 @@ namespace lfs::io {
 
                 if (jpeg_batch_size > 0) {
                     NvCodecImageLoader::Options opts;
+                    opts.device_id = lfs::core::selected_cuda_device();
                     nvcodec = std::make_unique<NvCodecImageLoader>(opts);
                     const cudaError_t allocation_result = cudaMalloc(
                         &gpu_batch_buffer, jpeg_batch_size * frame_size);

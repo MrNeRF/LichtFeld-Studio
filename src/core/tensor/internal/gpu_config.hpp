@@ -38,12 +38,14 @@ namespace lfs::core {
                 GPUConfig cfg;
                 cudaDeviceProp prop;
 
-                // Query device 0 (can be extended for multi-GPU)
-                cudaError_t err = cudaGetDeviceProperties(&prop, 0);
+                // Worker entry points install the process-selected CUDA adapter.
+                cudaError_t err = cudaGetDevice(&cfg.device_id);
+                if (err == cudaSuccess)
+                    err = cudaGetDeviceProperties(&prop, cfg.device_id);
                 if (err != cudaSuccess) {
                     ensure_cuda_success(
                         err, "cudaGetDeviceProperties(tensor GPU configuration)",
-                        "device=0, fallback=conservative defaults",
+                        "selected device, fallback=conservative defaults",
                         LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                     // Fallback to safe defaults
                     cfg.sm_count = 108; // Assume A100/H100 for safety
@@ -55,7 +57,6 @@ namespace lfs::core {
                     return cfg;
                 }
 
-                cfg.device_id = 0;
                 cfg.sm_count = prop.multiProcessorCount;
                 cfg.max_threads_per_sm = prop.maxThreadsPerMultiProcessor;
                 cfg.max_threads_per_block = prop.maxThreadsPerBlock;

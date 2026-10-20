@@ -80,7 +80,7 @@ target_link_libraries(lfs_video
         spdlog::spdlog
         nlohmann_json::nlohmann_json
         $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart>
-        $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cuda_driver>
+        $<$<BOOL:${LFS_HAS_CUDA}>:lfs_cuda_driver>
 )
 
 # libplacebo's static pkg-config dependency chain includes shaderc and

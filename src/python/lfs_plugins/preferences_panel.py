@@ -90,6 +90,7 @@ class PreferencesPanel(Panel):
 
     EXPANDABLE_SECTIONS = (
         "tensor_backend",
+        "gpu_diagnostics",
         "language",
         "project_location",
         "project_manager",
@@ -116,13 +117,15 @@ class PreferencesPanel(Panel):
         self._scene_upscaler_presets = {}
         self._scene_upscaler_display_names = {}
         self._keymap = KeymapBindingsSection()
+        self._vulkan_hardware = []
+        self._cuda_hardware = []
         self._theme_catalog = []
         self._theme_families = []
         self._language_catalog = []
         self._last_state = None
         self._marketplace_git_available = shutil.which("git") is not None
         self._section = "general"
-        self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
+        self._expanded_sections = set(self.EXPANDABLE_SECTIONS) - {"gpu_diagnostics"}
         self._mcp_enabled = True
         self._mcp_expose_network = False
         self._camera_repeat_rate_draft = None
@@ -175,6 +178,7 @@ class PreferencesPanel(Panel):
             model.bind("marketplace_" + key, lambda k=key: read_marketplace_preferences()[k],
                        lambda value, k=key: self._set_marketplace_preference(k, value))
         model.bind_func("show_general", lambda: self._section == "general")
+        model.bind_func("show_hardware", lambda: self._section == "hardware")
         model.bind_func("show_appearance", lambda: self._section == "appearance")
         model.bind_func("show_input", lambda: self._section == "input")
         model.bind_func("show_interface", lambda: self._section == "interface")
@@ -202,11 +206,24 @@ class PreferencesPanel(Panel):
                 f"{section}_expanded",
                 lambda section=section: section in self._expanded_sections,
             )
-        for key in ("backend", "vulkan_device", "vulkan_validation", "force_fp32_half",
+        self._vulkan_hardware = list(lf.ui.get_vulkan_hardware())
+        self._cuda_hardware = list(lf.ui.get_cuda_hardware())
+        model.bind_record_list("cuda_devices")
+        model.bind_record_list("gpu_hardware")
+        model.bind_func("gpu_restart_required", lambda: lf.ui.get_gpu_runtime_status()["restart_required"])
+        model.bind_func("gpu_active_tensor", lambda: " · ".join(filter(None, (lf.ui.get_gpu_runtime_status()["tensor_backend"], lf.ui.get_gpu_runtime_status()["tensor_gpu"]))))
+        model.bind_func("gpu_active_rendering", lambda: " · ".join(filter(None, (lf.ui.get_graphics_backend(), lf.ui.get_gpu_runtime_status()["rendering_gpu"]))))
+        model.bind_func("gpu_tensor_cuda", lambda: self._gpu_requested_backend() == "cuda")
+        model.bind_func("gpu_tensor_vulkan", lambda: self._gpu_requested_backend() == "vulkan")
+        model.bind_event("refresh_gpu_hardware", lambda *_: self._refresh_gpu_hardware())
+        model.bind_record_list("tensor_devices")
+        model.bind_record_list("rendering_devices")
+        model.bind_func("rendering_vulkan_available", lambda: lf.ui.get_graphics_backend().lower() == "vulkan")
+        for key in ("backend", "vulkan_device", "cuda_device", "rendering_vulkan_device", "vulkan_validation", "force_fp32_half",
                     "force_no_atomic_float"):
             model.bind(
                 f"tensor_{key}",
-                lambda key=key: lf.ui.get_tensor_backend_preferences()[key],
+                lambda key=key: self._gpu_preference_value(key),
                 lambda value, key=key: self._set_tensor_preference(key, value),
             )
         model.bind_func(
@@ -353,6 +370,7 @@ class PreferencesPanel(Panel):
         model.bind_event("reset_current_section", self._on_reset_current_section)
         model.bind_event("reset_all_settings", self._on_reset_all_settings)
         model.bind_event("show_general", lambda *_: self._set_section("general"))
+        model.bind_event("show_hardware", lambda *_: self._set_section("hardware"))
         model.bind_event("show_appearance", lambda *_: self._set_section("appearance"))
         model.bind_event("show_input", lambda *_: self._set_section("input"))
         model.bind_event("show_interface", lambda *_: self._set_section("interface"))
@@ -390,6 +408,7 @@ class PreferencesPanel(Panel):
         model.bind_record_list("navigation_modes")
         model.bind_record_list("file_associations")
         self._handle = model.get_handle()
+        self._update_gpu_records()
         self._portal_state_binding.set_handle(self._handle)
         self._keymap.bind(model)
         self._reload_file_associations()
@@ -428,7 +447,7 @@ class PreferencesPanel(Panel):
             ),
         )
         self._mount_count += 1
-        self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
+        self._expanded_sections = set(self.EXPANDABLE_SECTIONS) - {"gpu_diagnostics"}
         self._dirty_expanded_sections()
         self._rebuild_records()
         self._refresh_project_folders()
@@ -464,6 +483,8 @@ class PreferencesPanel(Panel):
             self._sync_theme_variant_records()
             self._dirty_selection()
             self._dirty_mcp()
+            if self._handle:
+                self._handle.dirty_all()
         self._rendering_defaults.sync()
         self._scrub_fields.sync_all()
         self._keymap.on_update(doc)
@@ -477,6 +498,54 @@ class PreferencesPanel(Panel):
             self._handle.dirty(model_key)
         lf.ui.message_dialog(
             lf.ui.tr(title_key), lf.ui.tr("preferences.backend_unavailable"), "error")
+
+    def _gpu_requested_backend(self):
+        backend = lf.ui.get_tensor_backend_preferences()["backend"]
+        if backend != "auto":
+            return backend
+        if any(not item.get("tensor_reason") for item in self._cuda_hardware):
+            return "cuda"
+        if lf.ui.get_tensor_backend_preferences()["metal_available"]:
+            return "metal"
+        return "vulkan"
+
+    def _gpu_preference_value(self, key):
+        from .gpu_preferences import selected_value
+        value = lf.ui.get_tensor_backend_preferences()[key]
+        if key in ("vulkan_device", "rendering_vulkan_device", "cuda_device"):
+            return selected_value(self._cuda_hardware if key == "cuda_device" else self._vulkan_hardware, value)
+        return value
+
+    def _gpu_choices(self, role, backend="vulkan"):
+        from .gpu_preferences import device_choices
+        key = "rendering_vulkan_device" if role == "rendering" else "cuda_device" if backend == "cuda" else "vulkan_device"
+        return device_choices(self._cuda_hardware if backend == "cuda" else self._vulkan_hardware,
+                              lf.ui.get_tensor_backend_preferences()[key], role, lf.ui.tr)
+
+    def _update_gpu_records(self):
+        if not self._handle:
+            return
+        from .gpu_preferences import hardware_rows
+        self._handle.update_record_list("tensor_devices", self._gpu_choices("tensor"))
+        self._handle.update_record_list("cuda_devices", self._gpu_choices("tensor", "cuda"))
+        self._handle.update_record_list("rendering_devices", self._gpu_choices("rendering"))
+        rows = hardware_rows(self._vulkan_hardware, self._cuda_hardware, lf.ui.tr)
+        if lf.ui.get_tensor_backend_preferences()["metal_available"]:
+            native_name = lf.ui.get_gpu_runtime_status()["rendering_gpu"]
+            native = next((row for row in rows if row["name"] == native_name), None)
+            if native:
+                native["backends"] += " · Metal"
+            elif not rows:
+                rows.append({"name": native_name or lf.ui.tr("preferences.gpu_system_default"),
+                             "backends": "Metal", "memory": "", "details": ""})
+        self._handle.update_record_list("gpu_hardware", rows)
+
+    def _refresh_gpu_hardware(self):
+        self._vulkan_hardware = list(lf.ui.get_vulkan_hardware())
+        self._cuda_hardware = list(lf.ui.get_cuda_hardware())
+        self._update_gpu_records()
+        if self._handle:
+            self._handle.dirty_all()
 
     def _set_tensor_preference(self, key, value):
         state = dict(lf.ui.get_tensor_backend_preferences())
@@ -501,12 +570,15 @@ class PreferencesPanel(Panel):
             self._reject_backend_preference("tensor_backend", "preferences.tensor_backend")
             return
         if self._handle:
-            self._handle.dirty(f"tensor_{key}")
+            self._update_gpu_records()
+            self._handle.dirty_all()
 
     def _state(self):
         project_manager_preferences = read_project_manager_preferences()
         splat_drag_preferences = lf.ui.get_splat_drag_preferences()
         return (
+            tuple(sorted(lf.ui.get_tensor_backend_preferences().items())),
+            tuple(sorted(lf.ui.get_gpu_runtime_status().items())),
             lf.ui.get_theme(),
             lf.ui.get_theme_family(),
             lf.ui.get_theme_mode(),
@@ -547,6 +619,7 @@ class PreferencesPanel(Panel):
         lf.ui.open_file_association_settings()
 
     def _rebuild_records(self):
+        self._update_gpu_records()
         self._sync_scene_reconstruction_catalog()
         self._theme_catalog = sorted(
             lf.ui.themes(),
@@ -1571,7 +1644,7 @@ class PreferencesPanel(Panel):
 
     def _consume_section_request(self):
         section = lf.ui.take_preferences_section_request()
-        if section in ("general", "appearance", "viewport", "input", "interface", "file_associations", "mcp", "marketplace"):
+        if section in ("general", "hardware", "appearance", "viewport", "input", "interface", "file_associations", "mcp", "marketplace"):
             if section == "file_associations" and not self._has_file_associations():
                 return
             self._set_section(section)
@@ -1646,6 +1719,7 @@ class PreferencesPanel(Panel):
             for name in (
                 "show_viewport",
                 "show_general",
+                "show_hardware",
                 "show_appearance",
                 "show_input",
                 "show_interface",
@@ -1790,7 +1864,7 @@ class PreferencesPanel(Panel):
                 return
             errors = [
                 self._reset_section(section)
-                for section in ("general", "appearance", "viewport", "input", "interface", "marketplace", "mcp")
+                for section in ("general", "hardware", "appearance", "viewport", "input", "interface", "marketplace", "mcp")
             ]
             errors.append(lf.ui.reset_window_state())
             error = next((item for item in errors if item), None)
@@ -1815,11 +1889,12 @@ class PreferencesPanel(Panel):
         section = section or self._section
         if section == "portal":
             return None
-        if section == "general":
+        if section == "hardware":
             lf.ui.set_tensor_backend_preferences()
+            self._update_gpu_records()
             if self._handle:
-                for key in lf.ui.get_tensor_backend_preferences():
-                    self._handle.dirty(f"tensor_{key}")
+                self._handle.dirty_all()
+        elif section == "general":
             from .gallery_preferences import DEFAULTS, set_preference
             for key, value in DEFAULTS.items():
                 set_preference(key, value)

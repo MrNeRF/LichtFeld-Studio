@@ -31,7 +31,16 @@ groupshared float2 oldValueBounds;
 float4 loadOldBounds(Params p, uint block, uint lane) {
     if (lane == 0) {
         oldMomentBounds = ((Ptr<float4, Access.Read>)p.bounds)[block];
-        oldValueBounds = p.valueBounds != 0 ? ((Ptr<float2, Access.Read>)p.valueBounds)[block] : float2(0);
+        // Keep the physical read valid even when a driver speculates it past
+        // the optional-buffer test. Fall back to this group's own float4 block,
+        // not float2[block] of that allocation: other groups update their moment
+        // bounds in place. Discard the fallback value and preserve p.valueBounds
+        // itself, which also selects the SH codec.
+        uint64_t valueBoundsAddress = p.valueBounds != 0
+            ? p.valueBounds + uint64_t(block) * 8u
+            : p.bounds + uint64_t(block) * 16u;
+        float2 valueBounds = ((Ptr<float2, Access.Read>)valueBoundsAddress)[0];
+        oldValueBounds = p.valueBounds != 0 ? valueBounds : float2(0);
     }
     GroupMemoryBarrierWithGroupSync();
     return oldMomentBounds;

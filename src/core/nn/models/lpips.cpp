@@ -829,7 +829,14 @@ namespace lfs::core::nn::models {
         if (tile == 0)
             return lpips_error(lfs::ErrorCode::InvalidArgument, "LPIPS tiled input has an empty shape");
 
-        std::array<double, kBlocks> weighted{};
+        // Per tile and block: its score sum (masked) or mean, read back after the
+        // last tile. A readback per tile left the GPU idle while the next tile was recorded.
+        struct TileScore {
+            int block;
+            std::size_t region_count;
+            Tensor value;
+        };
+        std::vector<TileScore> tile_scores;
         std::array<std::size_t, kBlocks> counts{};
         const auto full_dim = [](const int dimension, const int block) {
             return static_cast<int>(static_cast<std::size_t>(dimension) >> block);
@@ -914,15 +921,21 @@ namespace lfs::core::nn::models {
                                 .contiguous()
                                 .unsqueeze(0)
                                 .unsqueeze(0);
-                        weighted[block] += static_cast<double>(score.mul(region_weights).sum().item<float>());
+                        tile_scores.push_back({block, region_count, score.mul(region_weights).sum()});
                     } else {
-                        weighted[block] += static_cast<double>(score.mean().item<float>()) * region_count;
+                        tile_scores.push_back({block, region_count, score.mean()});
                     }
                     counts[block] += region_count;
                 }
                 target_taps = LpipsTaps{};
                 pred_taps = LpipsTaps{};
             }
+        }
+        // The first readback waits for every tile; the rest find the GPU done.
+        std::array<double, kBlocks> weighted{};
+        for (const auto& score : tile_scores) {
+            const auto value = static_cast<double>(score.value.item<float>());
+            weighted[score.block] += mask ? value : value * score.region_count;
         }
         double total = 0.0;
         for (int block = 0; block < kBlocks; ++block) {

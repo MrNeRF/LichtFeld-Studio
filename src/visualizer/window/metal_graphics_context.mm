@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "metal_graphics_context.hpp"
+#include "preferences.hpp"
 
 #include "core/gpu_backend_fwd.hpp"
 #include "core/gpu_device_runtime.hpp"
@@ -258,6 +259,11 @@ kernel void clear_rgba8(device uchar4* destination [[buffer(0)]],
         }
         impl_->setError("LichtFeld Studio requires macOS 26 and Metal 4; no Vulkan fallback is available in this build.", true);
         return false;
+    }
+
+    void MetalGraphicsContext::publishPrimaryGpuState()
+    {
+        publishRenderingGpuIdentity({}, deviceName());
     }
 
     bool MetalGraphicsContext::initializeHeadless() {
@@ -550,6 +556,14 @@ kernel void clear_rgba8(device uchar4* destination [[buffer(0)]],
         thread_local std::string snapshot;
         snapshot = impl_->error();
         return snapshot;
+    }
+
+    std::string MetalGraphicsContext::deviceName() const
+    {
+        if (!impl_->reader)
+            return {};
+        NSString* name = [impl_->reader->device() name];
+        return name ? name.UTF8String : "";
     }
 
     GraphicsCapabilities MetalGraphicsContext::capabilities() const noexcept {

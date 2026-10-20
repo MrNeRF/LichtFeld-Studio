@@ -167,9 +167,12 @@ namespace lfs::vis::gui {
             int configured;
             int tensor;
             uint64_t language;
+            bool gpu_restart_required;
             bool operator==(const BackendStatusStamp&) const = default;
         };
         std::optional<BackendStatusStamp> backend_status_stamp_;
+        std::string renderer_gpu_name_;
+        std::string tensor_gpu_name_;
         float tooltip_overlay_height_ = 0.0f;
         float tooltip_max_overlay_height_ = 0.0f;
         int last_mouse_x_ = 0;
@@ -300,6 +303,8 @@ namespace lfs::vis::gui {
             std::string fps_label;
             std::string renderer_label, renderer_value, renderer_tooltip;
             std::string tensor_label, tensor_value, tensor_tooltip;
+            bool gpu_restart_required = false;
+            std::string gpu_restart_text, gpu_restart_tooltip;
             std::string upscaler_label, upscaler_value, upscaler_tooltip, upscaler_menu;
             bool upscaler_menu_expanded = false;
             bool preview_reduced = false;

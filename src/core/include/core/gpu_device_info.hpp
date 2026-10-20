@@ -9,8 +9,25 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace lfs::core {
+    struct VulkanHardwareDevice {
+        std::string name;
+        std::string uuid;
+        std::string tensor_unavailable_reason;
+        std::string rendering_unavailable_reason;
+        uint32_t index = 0;
+        bool discrete = false;
+        size_t total_memory_bytes = 0;
+        bool shared_memory = false;
+        uint32_t vendor_id = 0;
+        bool software = false;
+    };
+
+    // Discovery only: does not create or freeze a tensor device/context.
+    LFS_CORE_API std::vector<VulkanHardwareDevice> enumerate_vulkan_hardware();
+    LFS_CORE_API std::vector<VulkanHardwareDevice> enumerate_cuda_hardware();
     struct GpuDeviceInfo {
         std::string name;
         size_t total_memory_bytes = 0;

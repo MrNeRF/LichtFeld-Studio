@@ -7,7 +7,7 @@ namespace lfs::io {
 
     bool PipelinedImageLoader::decodes_on_gpu(lfs::core::GpuBackend) { return false; }
 
-    std::string_view PipelinedImageLoader::jpeg_decoder() { return "CPU"; }
+    std::string_view PipelinedImageLoader::jpeg_decoder(lfs::core::GpuBackend) { return "CPU"; }
 
     bool PipelinedImageLoader::attach_cuda_decode_stage() { return false; }
 

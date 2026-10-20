@@ -101,7 +101,7 @@ def preferences_panel_module(monkeypatch):
         },
     )
 
-    tensor_defaults = dict(backend="cuda", vulkan_device="", vulkan_validation=0,
+    tensor_defaults = dict(backend="cuda", cuda_device="", rendering_vulkan_device="", vulkan_device="", vulkan_validation=0,
                            force_fp32_half=False, force_no_atomic_float=False)
     state.tensor_preferences = dict(tensor_defaults, cuda_available=True, metal_available=False,
                                    vulkan_available=True)
@@ -209,6 +209,10 @@ def preferences_panel_module(monkeypatch):
             (panel_id, bool(enabled))
         ),
         take_preferences_section_request=take_preferences_section_request,
+        get_vulkan_hardware=lambda: [],
+        get_cuda_hardware=lambda: [],
+        get_graphics_backend=lambda: "vulkan",
+        get_gpu_runtime_status=lambda: dict(restart_required=False, tensor_backend="CUDA", tensor_gpu="Test GPU", rendering_gpu="Test GPU"),
         get_tensor_backend_preferences=lambda: dict(state.tensor_preferences),
         set_tensor_backend_preferences=set_tensor_backend_preferences,
         get_viewer_backend_preference=lambda: state.viewer_backend,
@@ -1610,6 +1614,25 @@ def test_marketplace_git_checkout_requires_git_without_changing_saved_choice(pre
     assert state.marketplace_preferences["git_checkout"] is True
     reopened._set_marketplace_preference("git_checkout", False)
     assert state.marketplace_preferences["git_checkout"] is False
+
+
+def test_general_reset_preserves_independent_gpu_choices(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    state.tensor_preferences.update(backend="vulkan", vulkan_device="training-gpu",
+                                    rendering_vulkan_device="viewer-gpu", cuda_device="cuda-gpu")
+    before = dict(state.tensor_preferences)
+    panel._reset_section("general")
+    assert state.tensor_preferences == before
+
+
+def test_status_bar_can_request_hardware_section(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    state.section_request = "hardware"
+    panel._consume_section_request()
+    assert panel._section == "hardware"
+    assert state.section_request == ""
 
 
 def test_splat_drag_preferences_convert_ui_values_and_respect_safe_mode(preferences_panel_module):

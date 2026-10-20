@@ -43,7 +43,7 @@ target_link_libraries(media_mcp_runner PRIVATE lfs_mcp lfs_media lfs_core)
 if(LFS_HAS_CUDA)
     # Resolve the driver dependency explicitly, including toolkit stubs on
     # build-only Linux hosts where no NVIDIA driver is installed.
-    target_link_libraries(media_mcp_runner PRIVATE CUDA::cuda_driver)
+    target_link_libraries(media_mcp_runner PRIVATE lfs_cuda_driver)
     if(MSVC)
         # CPU contract hosts must also load without the Windows display driver.
         # Match the existing CPU visualizer test policy; native GPU paths load

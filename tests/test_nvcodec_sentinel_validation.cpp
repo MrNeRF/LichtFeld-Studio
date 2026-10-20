@@ -12,6 +12,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -197,4 +198,20 @@ TEST(NvCodecAvailabilityTest, AvailableExactlyWhenADatasetJpegDecodesOnTheGpu) {
 
     EXPECT_EQ(lfs::io::NvCodecImageLoader::is_available(), decoded);
     EXPECT_EQ(lfs::io::NvCodecImageLoader::jpeg_decoder(), decoded ? "nvImageCodec (GPU)" : "CPU");
+}
+
+// A Vulkan training run names its JPEG decoder in the evaluation report. The availability
+// probe then decoded into a Vulkan buffer that CUDA cannot address, which faulted the
+// CUDA context for the rest of the process.
+TEST(NvCodecAvailabilityTest, ProbeLeavesCudaUsableWhenVulkanIsTheDefault) {
+    if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA) ||
+        !lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan)) {
+        GTEST_SKIP() << "needs CUDA and Vulkan devices";
+    }
+    // The probe runs once per process, so it needs a fresh one.
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    EXPECT_EXIT({
+        const lfs::test::DefaultGpuBackendForTesting vulkan(lfs::core::GpuBackend::Vulkan);
+        (void)lfs::io::NvCodecImageLoader::is_available();
+        std::_Exit(vulkan.switched() && cudaDeviceSynchronize() == cudaSuccess ? 0 : 1); }, ::testing::ExitedWithCode(0), "");
 }

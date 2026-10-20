@@ -123,6 +123,10 @@ namespace lfs::vis {
         }
     }
     std::vector<LodPageCache::PendingUpload> LodUploadEngine::configure(DeviceLayout layout, void* device, void* consumer) {
+        return configure(std::move(layout), device, consumer, true);
+    }
+
+    std::vector<LodPageCache::PendingUpload> LodUploadEngine::configure(DeviceLayout layout, void* device, void* consumer, bool external_interop) {
         auto results = drainAndSync();
         auto& s = *impl_;
         {
@@ -143,7 +147,7 @@ namespace lfs::vis {
             return results;
         const auto backend = *gpu_backend_of(s.layout.pool.regions[0]);
         const GpuBackendScope scope(backend);
-        s.queue = std::make_unique<TensorWorkQueue>(backend, device, consumer);
+        s.queue = std::make_unique<TensorWorkQueue>(backend, device, consumer, external_interop);
         s.slots.resize(kRingDepth);
         for (auto& slot : s.slots) {
             slot.host = Tensor::empty({kDescriptorBytes + kStagingBytes}, Device::CPU, DataType::UInt8, true);

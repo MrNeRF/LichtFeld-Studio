@@ -37,6 +37,9 @@ namespace lfs::core {
     };
 
     LFS_CORE_API lfs::Status adopt_vulkan_device(const VulkanDeviceHandles& handles);
+    // Physical-device support does not imply the logical device enabled this feature.
+    LFS_CORE_API lfs::Status adopt_vulkan_device(const VulkanDeviceHandles& handles,
+                                                 bool subgroup_size_control_enabled);
     LFS_CORE_API bool vulkan_backend_adopted();
     LFS_CORE_API bool tensor_backend_shares_vulkan_device();
     LFS_CORE_API bool tensor_backend_needs_vulkan_interop();

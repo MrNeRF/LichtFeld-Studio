@@ -21,6 +21,7 @@ namespace lfs::vis {
         bool initialize(SDL_Window* window, int framebuffer_width,
                         int framebuffer_height) override;
         bool initializeHeadless() override;
+        void publishPrimaryGpuState() override;
         void shutdown() override;
         void notifyFramebufferResized(int width, int height,
                                       GraphicsResizeIntent intent) override;
@@ -43,6 +44,7 @@ namespace lfs::vis {
         [[nodiscard]] RendererTerminalState terminalState() const noexcept override;
         [[nodiscard]] const std::string& lastError() const noexcept override;
         [[nodiscard]] GraphicsCapabilities capabilities() const noexcept override;
+        [[nodiscard]] std::string deviceName() const override;
         void flushPipelineCache() override;
         [[nodiscard]] lfs::core::SplatTensorAllocator
         splatTensorAllocator(bool preserve_float_shN = false) override;

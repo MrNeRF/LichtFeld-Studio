@@ -118,7 +118,7 @@ target_link_libraries(media_tiff_roundtrip PRIVATE lfs_media lfs_core lfs_image_
 if(LFS_HAS_CUDA)
     # Resolve lfs_core's driver symbols on build-only hosts using toolkit stubs,
     # matching the existing media MCP test host.
-    target_link_libraries(media_tiff_roundtrip PRIVATE CUDA::cuda_driver)
+    target_link_libraries(media_tiff_roundtrip PRIVATE lfs_cuda_driver)
 endif()
 target_include_directories(media_tiff_roundtrip PRIVATE ${MEDIA_ROOT}/src)
 set_target_properties(media_tiff_roundtrip PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")

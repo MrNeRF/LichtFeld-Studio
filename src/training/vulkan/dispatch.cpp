@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "dispatch.hpp"
+#include "core/logger.hpp"
 #include "core/tensor/backend/vulkan/vk_recorder.hpp"
 #include "training_shader_table.hpp"
 #include <map>
@@ -14,6 +15,11 @@ namespace lfs::training::vulkan {
             uint64_t parameters;
         };
         static_assert(sizeof(Push) == 8);
+        struct ShaderModule {
+            VkDevice device;
+            VkShaderModule handle;
+            ~ShaderModule() { vkDestroyShaderModule(device, handle, nullptr); }
+        };
         struct Pipeline {
             std::shared_ptr<VulkanContext> context;
             VkPipelineLayout layout = VK_NULL_HANDLE;
@@ -45,18 +51,48 @@ namespace lfs::training::vulkan {
             VkShaderModule shader = VK_NULL_HANDLE;
             vk_check(context.get(), vkCreateShaderModule(context->device(), &shader_info, nullptr, &shader),
                      "vkCreateShaderModule(training.dispatch)");
+            const ShaderModule shader_lifetime{context->device(), shader};
             auto pipeline = std::make_shared<Pipeline>();
             pipeline->context = context;
             VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Push)};
             VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
             layout_info.pushConstantRangeCount = 1;
             layout_info.pPushConstantRanges = &range;
-            vk_check(context.get(), vkCreatePipelineLayout(context->device(), &layout_info, nullptr, &pipeline->layout),
-                     "vkCreatePipelineLayout(training.dispatch)");
+            const VkResult layout_created = vkCreatePipelineLayout(context->device(), &layout_info, nullptr, &pipeline->layout);
+            if (layout_created != VK_SUCCESS)
+                pipeline->layout = VK_NULL_HANDLE; // Failed creation leaves the output undefined.
+            vk_check(context.get(), layout_created, "vkCreatePipelineLayout(training.dispatch)");
             VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
             stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
             stage.module = shader;
             stage.pName = "main";
+            VkPipelineShaderStageRequiredSubgroupSizeCreateInfo required_size{
+                VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO};
+            // Raster kernels have a shuffle-based logical warp path. Select
+            // wave32 for compatible AMD raster stages; other stages and vendors
+            // retain their existing subgroup selection.
+            const bool gsplat_raster =
+                (name == "gsplat_backward" || name == "gsplat_backward_atomic") && specialization == 0;
+            // Fast stage is packed into the low four bits; higher bits describe
+            // SH, output and densification variants of the same raster kernel.
+            const bool fast_raster =
+                (name == "fast_backward" || name == "fast_backward_atomic") && (specialization & 15u) == 0;
+            const bool fast_forward_raster = name == "fast_forward" && (specialization & 15u) == 5;
+            if ((gsplat_raster || fast_raster || fast_forward_raster) &&
+                context->caps().subgroup_size == 64 && context->caps().subgroup_size_control &&
+                context->caps().min_subgroup_size <= 32 && context->caps().max_subgroup_size >= 32) {
+                VkPhysicalDeviceSubgroupSizeControlProperties size_properties{
+                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES};
+                VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+                properties.pNext = &size_properties;
+                vkGetPhysicalDeviceProperties2(context->physical_device(), &properties);
+                if (properties.properties.vendorID == 0x1002 &&
+                    (size_properties.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) &&
+                    size_properties.maxComputeWorkgroupSubgroups >= (fast_forward_raster ? 8u : 4u)) {
+                    required_size.requiredSubgroupSize = 32;
+                    stage.pNext = &required_size;
+                }
+            }
             const VkSpecializationMapEntry entry{0, 0, sizeof(specialization)};
             const VkSpecializationInfo constants{1, &entry, sizeof(specialization), &specialization};
             if (specialization != UINT32_MAX)
@@ -64,9 +100,22 @@ namespace lfs::training::vulkan {
             VkComputePipelineCreateInfo info{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
             info.stage = stage;
             info.layout = pipeline->layout;
-            vk_check(context.get(), vkCreateComputePipelines(context->device(), context->pipeline_cache(), 1, &info, nullptr, &pipeline->handle),
-                     "vkCreateComputePipelines(training.dispatch)");
-            vkDestroyShaderModule(context->device(), shader, nullptr);
+            auto result = vkCreateComputePipelines(context->device(), context->pipeline_cache(), 1, &info, nullptr, &pipeline->handle);
+            if (result != VK_SUCCESS && info.stage.pNext && result != VK_ERROR_DEVICE_LOST) {
+                LOG_WARN("Vulkan training kernel {}: wave32 pipeline rejected (VkResult {}); falling back to the device default subgroup size",
+                         name, static_cast<int>(result));
+                if (pipeline->handle != VK_NULL_HANDLE) {
+                    vkDestroyPipeline(context->device(), pipeline->handle, nullptr);
+                    pipeline->handle = VK_NULL_HANDLE;
+                }
+                info.stage.pNext = nullptr;
+                result = vkCreateComputePipelines(context->device(), context->pipeline_cache(), 1, &info, nullptr, &pipeline->handle);
+            }
+            vk_check(context.get(), result, "vkCreateComputePipelines(training.dispatch)");
+            if (info.stage.pNext)
+                LOG_DEBUG("Vulkan training kernel {} stage {} uses required subgroup size 32", name, specialization);
+            if (info.stage.pNext && fast_forward_raster)
+                LOG_INFO("Vulkan Fast raster forward: using subgroup size 32");
             cache.emplace(key, pipeline);
             release_at_shutdown(*context, mutex, cache);
             return pipeline;

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/exportable_storage.hpp"
+#include "core/cuda/driver_entry.hpp"
 
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
@@ -48,8 +49,8 @@ namespace lfs::core {
         std::string cu_error(CUresult r) {
             const char* name = nullptr;
             const char* desc = nullptr;
-            cuGetErrorName(r, &name);
-            cuGetErrorString(r, &desc);
+            LFS_CUDA_DRIVER(cuGetErrorName)(r, &name);
+            LFS_CUDA_DRIVER(cuGetErrorString)(r, &desc);
             return std::format("CUDA driver error {}: {}",
                                name ? name : "?",
                                desc ? desc : "?");
@@ -72,7 +73,7 @@ namespace lfs::core {
         bool vmm_supported(int device) {
             int supported = 0;
             LFS_CUDA_BREADCRUMB("exportable.cuDeviceGetAttribute.vmm");
-            const CUresult r = cuDeviceGetAttribute(
+            const CUresult r = LFS_CUDA_DRIVER(cuDeviceGetAttribute)(
                 &supported,
                 CU_DEVICE_ATTRIBUTE_VIRTUAL_ADDRESS_MANAGEMENT_SUPPORTED,
                 device);
@@ -89,7 +90,7 @@ namespace lfs::core {
                 CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR_SUPPORTED;
 #endif
             LFS_CUDA_BREADCRUMB("exportable.cuDeviceGetAttribute.handle_type");
-            const CUresult r = cuDeviceGetAttribute(&supported, handle_attribute, device);
+            const CUresult r = LFS_CUDA_DRIVER(cuDeviceGetAttribute)(&supported, handle_attribute, device);
             return r == CUDA_SUCCESS && supported != 0;
         }
 
@@ -151,14 +152,14 @@ namespace lfs::core {
             if (slice.mapped) {
                 LFS_CUDA_BREADCRUMB_ARGS(
                     "exportable.cuMemUnmap.slice", a.va + slice.offset, slice.offset, slice.bytes);
-                const CUresult unmap_result = cuMemUnmap(a.va + slice.offset, slice.bytes);
+                const CUresult unmap_result = LFS_CUDA_DRIVER(cuMemUnmap)(a.va + slice.offset, slice.bytes);
                 log_cleanup_error("cuMemUnmap", unmap_result);
                 slice.mapped = false;
             }
             if (slice.created) {
                 LFS_CUDA_BREADCRUMB_ARGS(
                     "exportable.cuMemRelease.slice", a.va + slice.offset, slice.offset, slice.bytes);
-                const CUresult release_result = cuMemRelease(slice.mem_handle);
+                const CUresult release_result = LFS_CUDA_DRIVER(cuMemRelease)(slice.mem_handle);
                 log_cleanup_error("cuMemRelease", release_result);
                 slice.created = false;
                 slice.mem_handle = 0;
@@ -173,7 +174,7 @@ namespace lfs::core {
             if (a.reserved) {
                 LFS_CUDA_BREADCRUMB_ARGS(
                     "exportable.cuMemAddressFree.reservation", 0, a.va, a.reserved_size);
-                const CUresult free_result = cuMemAddressFree(a.va, a.reserved_size);
+                const CUresult free_result = LFS_CUDA_DRIVER(cuMemAddressFree)(a.va, a.reserved_size);
                 log_cleanup_error("cuMemAddressFree", free_result);
                 a.reserved = false;
                 a.va = 0;
@@ -242,14 +243,14 @@ namespace lfs::core {
 
             LFS_CUDA_BREADCRUMB_ARGS(
                 "exportable.cuMemCreate.slice", a.va + offset, offset, bytes);
-            if (const auto r = cuMemCreate(&slice.mem_handle, bytes, &a.prop, 0); r != CUDA_SUCCESS) {
+            if (const auto r = LFS_CUDA_DRIVER(cuMemCreate)(&slice.mem_handle, bytes, &a.prop, 0); r != CUDA_SUCCESS) {
                 return std::unexpected("cuMemCreate (exportable chunk) failed: " + cu_error(r));
             }
             slice.created = true;
 
             LFS_CUDA_BREADCRUMB_ARGS(
                 "exportable.cuMemMap.slice", a.va + offset, offset, bytes);
-            if (const auto r = cuMemMap(a.va + offset, bytes, 0, slice.mem_handle, 0); r != CUDA_SUCCESS) {
+            if (const auto r = LFS_CUDA_DRIVER(cuMemMap)(a.va + offset, bytes, 0, slice.mem_handle, 0); r != CUDA_SUCCESS) {
                 release_slice(a, slice);
                 return std::unexpected("cuMemMap (exportable chunk) failed: " + cu_error(r));
             }
@@ -261,7 +262,7 @@ namespace lfs::core {
             access.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
             LFS_CUDA_BREADCRUMB_ARGS(
                 "exportable.cuMemSetAccess.slice", a.va + offset, offset, bytes);
-            if (const auto r = cuMemSetAccess(a.va + offset, bytes, &access, 1); r != CUDA_SUCCESS) {
+            if (const auto r = LFS_CUDA_DRIVER(cuMemSetAccess)(a.va + offset, bytes, &access, 1); r != CUDA_SUCCESS) {
                 release_slice(a, slice);
                 return std::unexpected("cuMemSetAccess (exportable chunk) failed: " + cu_error(r));
             }
@@ -291,7 +292,7 @@ namespace lfs::core {
 #endif
             LFS_CUDA_BREADCRUMB_ARGS(
                 "exportable.cuMemExportToShareableHandle.slice", a.va + offset, offset, bytes);
-            if (const auto r = cuMemExportToShareableHandle(&native, slice.mem_handle, kCudaHandleType, 0);
+            if (const auto r = LFS_CUDA_DRIVER(cuMemExportToShareableHandle)(&native, slice.mem_handle, kCudaHandleType, 0);
                 r != CUDA_SUCCESS) {
                 release_slice(a, slice);
                 return std::unexpected("cuMemExportToShareableHandle (exportable chunk) failed: " +
@@ -323,7 +324,7 @@ namespace lfs::core {
     std::size_t exportable_allocation_granularity(const int device) {
         CUmemAllocationProp prop = make_prop(device);
         std::size_t granularity = 0;
-        const CUresult r = cuMemGetAllocationGranularity(&granularity, &prop, CU_MEM_ALLOC_GRANULARITY_MINIMUM);
+        const CUresult r = LFS_CUDA_DRIVER(cuMemGetAllocationGranularity)(&granularity, &prop, CU_MEM_ALLOC_GRANULARITY_MINIMUM);
         if (r != CUDA_SUCCESS || granularity == 0) {
             return kDefaultGranularity;
         }
@@ -450,8 +451,8 @@ namespace lfs::core {
 #endif
 
         LFS_CUDA_BREADCRUMB("exportable.cuMemGetAllocationGranularity.allocate");
-        if (const auto r = cuMemGetAllocationGranularity(&owned->granularity, &owned->prop,
-                                                         CU_MEM_ALLOC_GRANULARITY_MINIMUM);
+        if (const auto r = LFS_CUDA_DRIVER(cuMemGetAllocationGranularity)(&owned->granularity, &owned->prop,
+                                                                          CU_MEM_ALLOC_GRANULARITY_MINIMUM);
             r != CUDA_SUCCESS) {
             return std::unexpected("cuMemGetAllocationGranularity failed: " + cu_error(r));
         }
@@ -464,7 +465,7 @@ namespace lfs::core {
 
         LFS_CUDA_BREADCRUMB_ARGS(
             "exportable.cuMemAddressReserve.allocate", 0, 0, reserved_size);
-        if (const auto r = cuMemAddressReserve(&owned->va, reserved_size, 0, 0, 0); r != CUDA_SUCCESS) {
+        if (const auto r = LFS_CUDA_DRIVER(cuMemAddressReserve)(&owned->va, reserved_size, 0, 0, 0); r != CUDA_SUCCESS) {
             return std::unexpected("cuMemAddressReserve failed: " + cu_error(r));
         }
         owned->reserved = true;
