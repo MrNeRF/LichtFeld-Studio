@@ -176,3 +176,7 @@ target_link_libraries(media_av1_provider_runner PRIVATE lfs_file_io lfs_logger l
 set_target_properties(media_av1_provider_runner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME MediaAv1ProviderFallbackContracts COMMAND media_av1_provider_runner)
 set_tests_properties(MediaAv1ProviderFallbackContracts PROPERTIES LABELS "media;cpu;offline" TIMEOUT 60)
+if(WIN32)
+    set_tests_properties(MediaAv1ProviderFallbackContracts PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")
+endif()

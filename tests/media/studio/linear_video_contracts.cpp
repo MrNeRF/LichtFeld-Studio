@@ -112,7 +112,8 @@ namespace {
                         throw std::runtime_error("TIFF RGBA resize changed constant alpha");
             }
     }
-    void videoOutputContracts(lfs::core::Device device, bool require_videotoolbox) {
+    void videoOutputContracts(lfs::core::Device device, bool require_videotoolbox,
+                              lfs::media::VideoEncodeCodec codec = lfs::media::VideoEncodeCodec::H264) {
         using namespace lfs;
         const auto path = std::filesystem::temp_directory_path() /
                           ("lfs-video-reuse-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".mp4");
@@ -133,6 +134,7 @@ namespace {
             options.width = width;
             options.height = 96;
             options.framerate = 10;
+            options.codec = codec;
             const auto opened = encoder.open(path, options);
             if (!opened)
                 throw std::runtime_error(opened.error());
@@ -164,7 +166,10 @@ namespace {
             const auto description = media::MediaProbe::inspect(path);
             if (!description || !description->selected_video_stream)
                 throw std::runtime_error("Cannot inspect encoded color interpretation");
-            const auto& color = description->streams.at(*description->selected_video_stream).color;
+            const auto& stream = description->streams.at(*description->selected_video_stream);
+            if (codec == media::VideoEncodeCodec::AV1 && stream.codec != "av1")
+                throw std::runtime_error("AV1 Tensor export changed codec");
+            const auto& color = stream.color;
             if (color.matrix != "smpte170m" || color.range != "tv" || color.primaries || color.transfer)
                 throw std::runtime_error("Encoded color tags do not describe the supplied BT.601 limited-range planes");
             io::VideoPlayer player;
@@ -417,8 +422,11 @@ int main(int argc, char** argv) {
         // CUDA builds select NVENC by default even for a CPU source. Keep the
         // CPU-only contract independent of hardware; GPU profiles also exercise
         // CPU sources above, while non-CUDA builds cover the CPU producer here.
-        if (!cpu || !LFS_HAS_CUDA || require_videotoolbox)
-            videoOutputContracts(cpu ? core::Device::CPU : core::Device::GPU, require_videotoolbox);
+        if (!cpu || !LFS_HAS_CUDA || require_videotoolbox) {
+            const auto device = cpu ? core::Device::CPU : core::Device::GPU;
+            videoOutputContracts(device, require_videotoolbox);
+            videoOutputContracts(device, false, media::VideoEncodeCodec::AV1);
+        }
         auto renderer = cpu ? nullptr : io::createLinearTensorRenderer();
         if (!cpu && !renderer)
             throw std::runtime_error("Linear tensor op unavailable on an available GPU backend");

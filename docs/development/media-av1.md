@@ -76,6 +76,12 @@ accepting CPU output. A separate quality-zero test accepts either actual AV1
 backend and verifies the produced file. The 8K test establishes correctness on
 the tested hardware, not photographic quality or throughput.
 
+The existing portable Tensor video contract also exercises AV1 with CPU/GPU
+producers and noncontiguous views, reopening at two extents, 12 distinct decoded
+frames per extent, and unchanged limited-range BT.601 color interpretation.
+The AV1 stream must remain AV1. H.264 keeps its existing contract, including the
+separate native VideoToolbox requirement where requested.
+
 Existing H.264/HEVC and image-output regression suites remain applicable.
 Sanitizer runs instrument project session code; release provider dependencies
 are not fully instrumented. Hosted CI and untested GPU families require their
