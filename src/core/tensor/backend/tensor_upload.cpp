@@ -453,6 +453,23 @@ namespace lfs::core {
         cudaStream_t stream = nullptr;
         bool owns_stream = true;
         VulkanTimelinePoint consumer_point;
+        bool host_consumer = false;
+        std::optional<bool> consumer_external_interop;
+        void wait_host_consumer(uint64_t value) {
+#ifdef LFS_TENSOR_VULKAN
+            if (!value || !consumer)
+                return;
+            VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+            info.semaphoreCount = 1;
+            info.pSemaphores = &consumer;
+            info.pValues = &value;
+            internal::vk_check(nullptr, vkWaitSemaphores(device, &info, 30'000'000'000ull),
+                               "vkWaitSemaphores(foreign GPU consumer)");
+#else
+            (void)value;
+            throw std::runtime_error("Foreign GPU timeline waits require Vulkan");
+#endif
+        }
 #ifdef LFS_TENSOR_VULKAN
         VkDevice device = VK_NULL_HANDLE;
         VkSemaphore ready = VK_NULL_HANDLE, consumer = VK_NULL_HANDLE;
@@ -623,6 +640,7 @@ namespace lfs::core {
         if (backend != GpuBackend::CUDA)
             throw std::runtime_error("Independent tensor queues are unsupported on Vulkan");
 #if LFS_HAS_CUDA
+        activate_selected_cuda_device();
         check(cudaStreamCreateWithFlags(&s.stream,
                                         mode == Mode::LegacyOrdered ? cudaStreamDefault : cudaStreamNonBlocking));
 #else
@@ -797,11 +815,12 @@ namespace lfs::core {
     }
     void TensorWorkQueue::set_consumer_timeline(void* device, VulkanTimelinePoint point) {
         auto& s = *impl_;
-        if (s.vulkan_queue) {
+        if (s.vulkan_queue || s.backend == GpuBackend::Vulkan) {
 #ifdef LFS_TENSOR_VULKAN
-            const auto context_device = s.queue_context->device();
-            if (device != nullptr && static_cast<VkDevice>(device) != context_device)
-                throw std::invalid_argument("Cannot change the device of an exported tensor queue");
+            if (!s.vulkan_queue && device == nullptr)
+                throw std::runtime_error("A backend-owned Vulkan queue requires an explicit consumer device");
+            const auto context_device = s.queue_context ? s.queue_context->device() : internal::acquire_vulkan_context()->device();
+            s.host_consumer = device != nullptr && static_cast<VkDevice>(device) != context_device;
             if (s.consumer == point.semaphore && s.device == device)
                 return;
             if (s.consumer != VK_NULL_HANDLE || s.consumer_point.keep_alive)
@@ -833,6 +852,17 @@ namespace lfs::core {
             throw std::runtime_error("Consumer timeline replacement is unsupported on Vulkan");
         if (s.consumer == point.semaphore && s.device == device)
             return;
+        if (!s.consumer_external_interop.value_or(cuda_vulkan_direct_interop())) {
+#ifdef LFS_TENSOR_VULKAN
+            s.host_consumer = true;
+            if (s.consumer || s.consumer_point.keep_alive)
+                s.retired_timelines.push_back(std::move(s.consumer_point));
+            s.device = static_cast<VkDevice>(device);
+            s.consumer = static_cast<VkSemaphore>(point.semaphore);
+            s.consumer_point = std::move(point);
+            return;
+#endif
+        }
         if (s.ready && s.device != device)
             throw std::invalid_argument("Cannot change the device of an exported tensor queue");
 #if LFS_HAS_CUDA
@@ -859,6 +889,10 @@ namespace lfs::core {
     }
     void TensorWorkQueue::wait_timeline(uint64_t value) {
         auto& s = *impl_;
+        if (s.host_consumer) {
+            s.wait_host_consumer(value);
+            return;
+        }
         if (s.vulkan_queue) {
 #ifdef LFS_TENSOR_VULKAN
             if (value == 0 || s.consumer == VK_NULL_HANDLE)
@@ -890,9 +924,13 @@ namespace lfs::core {
         }
 #endif
     }
-    TensorWorkQueue::TensorWorkQueue(GpuBackend backend, void* device, void* consumer) : impl_(std::make_unique<Impl>()) {
+    TensorWorkQueue::TensorWorkQueue(GpuBackend backend, void* device, void* consumer)
+        : TensorWorkQueue(backend, device, consumer, true) {}
+
+    TensorWorkQueue::TensorWorkQueue(GpuBackend backend, void* device, void* consumer, bool external_interop) : impl_(std::make_unique<Impl>()) {
         auto& s = *impl_;
         s.backend = backend;
+        s.consumer_external_interop = external_interop;
 #ifdef LFS_TENSOR_VULKAN
         s.device = static_cast<VkDevice>(device);
         s.consumer = static_cast<VkSemaphore>(consumer);
@@ -904,7 +942,9 @@ namespace lfs::core {
 #ifdef LFS_TENSOR_VULKAN
             // The null device/consumer pair is the session storage timeline.
             // A private recorder would not compare equal to TensorExecutionTarget::current().
-            s.ready = internal::acquire_vulkan_context()->timeline();
+            const auto context = internal::acquire_vulkan_context();
+            s.host_consumer = s.device != VK_NULL_HANDLE && s.device != context->device();
+            s.ready = context->timeline();
             return;
 #else
             throw std::runtime_error("Vulkan tensor queues are unavailable in this build");
@@ -925,7 +965,12 @@ namespace lfs::core {
         }
 #if LFS_HAS_CUDA
 #ifdef LFS_TENSOR_VULKAN
+        activate_selected_cuda_device();
         check(cudaStreamCreateWithFlags(&s.stream, cudaStreamNonBlocking));
+        if (!s.consumer_external_interop.value_or(cuda_vulkan_direct_interop())) {
+            s.host_consumer = true;
+            return;
+        }
         if (!s.device)
             return;
         VkExportSemaphoreCreateInfo export_info{VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO};
@@ -973,7 +1018,7 @@ namespace lfs::core {
             (void)impl_.release();
         }
     }
-    void* TensorWorkQueue::timeline() const { return impl_->ready; }
+    void* TensorWorkQueue::timeline() const { return impl_->host_consumer ? nullptr : impl_->ready; }
     TensorCompletion TensorWorkQueue::execute(const std::function<void()>& commands, uint64_t value) {
         auto& s = *impl_;
         const GpuBackendScope backend(s.backend);
@@ -983,7 +1028,9 @@ namespace lfs::core {
             vulkan_scope.emplace(*this);
         uint64_t consumer_completion = 0;
         if (value && s.consumer) {
-            if (s.backend == GpuBackend::CUDA) {
+            if (s.host_consumer) {
+                s.wait_host_consumer(value);
+            } else if (s.backend == GpuBackend::CUDA) {
 #if LFS_HAS_CUDA
                 cudaExternalSemaphoreWaitParams params{};
                 params.params.fence.value = value;

@@ -20,6 +20,7 @@
 #include <cuda.h>
 #include <gtest/gtest.h>
 
+#include "core/cuda/driver_entry.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "io/formats/ply.hpp"
@@ -90,8 +91,8 @@ namespace {
             lfs::io::project::detail::set_splat_capture_stream_hook_for_testing(
                 [this] {
                     const auto stream = lfs::core::getCurrentCUDAStream();
-                    EXPECT_EQ(cuStreamWaitValue32(stream, reinterpret_cast<CUdeviceptr>(device_value),
-                                                  1, CU_STREAM_WAIT_VALUE_GEQ),
+                    EXPECT_EQ(LFS_CUDA_DRIVER(cuStreamWaitValue32)(stream, reinterpret_cast<CUdeviceptr>(device_value),
+                                                                   1, CU_STREAM_WAIT_VALUE_GEQ),
                               CUDA_SUCCESS);
                 });
         }

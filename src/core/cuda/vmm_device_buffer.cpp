@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda/vmm_device_buffer.hpp"
+#include "core/cuda/driver_entry.hpp"
 
 #include "core/crash_handler.hpp"
 #include "core/logger.hpp"
@@ -22,8 +23,8 @@ namespace lfs::core {
         [[nodiscard]] std::string driver_error_text(const CUresult status) {
             const char* name = nullptr;
             const char* description = nullptr;
-            (void)cuGetErrorName(status, &name);
-            (void)cuGetErrorString(status, &description);
+            (void)LFS_CUDA_DRIVER(cuGetErrorName)(status, &name);
+            (void)LFS_CUDA_DRIVER(cuGetErrorString)(status, &description);
             return std::format("{} ({})", name ? name : "unknown CUDA error",
                                description ? description : "no description");
         }
@@ -143,7 +144,7 @@ namespace lfs::core {
         prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
         prop.location.id = device;
         std::size_t granularity = 0;
-        if (cuMemGetAllocationGranularity(
+        if (LFS_CUDA_DRIVER(cuMemGetAllocationGranularity)(
                 &granularity, &prop, CU_MEM_ALLOC_GRANULARITY_MINIMUM) != CUDA_SUCCESS ||
             granularity == 0) {
             granularity = kGranularityBytes;
@@ -154,7 +155,7 @@ namespace lfs::core {
         }
 
         CUdeviceptr base = 0;
-        if (const CUresult status = cuMemAddressReserve(
+        if (const CUresult status = LFS_CUDA_DRIVER(cuMemAddressReserve)(
                 &base, reserved, granularity, 0, 0);
             status != CUDA_SUCCESS) {
             return vmm_error(ErrorCode::ResourceExhausted, label,
@@ -194,16 +195,16 @@ namespace lfs::core {
             const std::size_t offset = committed_bytes_;
             const std::size_t bytes = std::min(required - offset, max_chunk_bytes);
             CUmemGenericAllocationHandle handle = 0;
-            if (const CUresult status = cuMemCreate(&handle, bytes, &prop, 0);
+            if (const CUresult status = LFS_CUDA_DRIVER(cuMemCreate)(&handle, bytes, &prop, 0);
                 status != CUDA_SUCCESS) {
                 return Status::failure(vmm_error(
                     is_out_of_memory(status) ? ErrorCode::ResourceExhausted : ErrorCode::Internal,
                     label_, "cuMemCreate", status, bytes));
             }
 
-            if (const CUresult status = cuMemMap(base_ + offset, bytes, 0, handle, 0);
+            if (const CUresult status = LFS_CUDA_DRIVER(cuMemMap)(base_ + offset, bytes, 0, handle, 0);
                 status != CUDA_SUCCESS) {
-                (void)cuMemRelease(handle);
+                (void)LFS_CUDA_DRIVER(cuMemRelease)(handle);
                 return Status::failure(vmm_error(ErrorCode::Internal, label_, "cuMemMap", status, bytes));
             }
 
@@ -211,10 +212,10 @@ namespace lfs::core {
             access.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
             access.location.id = device_;
             access.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
-            if (const CUresult status = cuMemSetAccess(base_ + offset, bytes, &access, 1);
+            if (const CUresult status = LFS_CUDA_DRIVER(cuMemSetAccess)(base_ + offset, bytes, &access, 1);
                 status != CUDA_SUCCESS) {
-                (void)cuMemUnmap(base_ + offset, bytes);
-                (void)cuMemRelease(handle);
+                (void)LFS_CUDA_DRIVER(cuMemUnmap)(base_ + offset, bytes);
+                (void)LFS_CUDA_DRIVER(cuMemRelease)(handle);
                 return Status::failure(
                     vmm_error(ErrorCode::Internal, label_, "cuMemSetAccess", status, bytes));
             }
@@ -238,7 +239,7 @@ namespace lfs::core {
         while (!chunks_.empty() && chunks_.back().offset >= new_prefix) {
             Chunk& chunk = chunks_.back();
             if (chunk.mapped) {
-                if (const CUresult status = cuMemUnmap(
+                if (const CUresult status = LFS_CUDA_DRIVER(cuMemUnmap)(
                         base_ + chunk.offset, chunk.bytes);
                     status != CUDA_SUCCESS) {
                     return Status::failure(
@@ -248,7 +249,7 @@ namespace lfs::core {
                 chunk.mapped = false;
             }
             chunk.bytes = 0;
-            if (const CUresult status = cuMemRelease(chunk.handle); status != CUDA_SUCCESS) {
+            if (const CUresult status = LFS_CUDA_DRIVER(cuMemRelease)(chunk.handle); status != CUDA_SUCCESS) {
                 return Status::failure(
                     vmm_error(ErrorCode::Internal, label_, "cuMemRelease decommit chunk",
                               status));
@@ -278,20 +279,20 @@ namespace lfs::core {
         }
         for (const auto& chunk : chunks_) {
             if (chunk.mapped) {
-                if (const CUresult status = cuMemUnmap(base_ + chunk.offset, chunk.bytes);
+                if (const CUresult status = LFS_CUDA_DRIVER(cuMemUnmap)(base_ + chunk.offset, chunk.bytes);
                     status != CUDA_SUCCESS) {
                     LOG_ERROR("VMM CUDA cleanup cuMemUnmap failed: {}",
                               driver_error_text(status));
                 }
             }
-            if (const CUresult status = cuMemRelease(chunk.handle); status != CUDA_SUCCESS) {
+            if (const CUresult status = LFS_CUDA_DRIVER(cuMemRelease)(chunk.handle); status != CUDA_SUCCESS) {
                 LOG_ERROR("VMM CUDA cleanup cuMemRelease failed: {}",
                           driver_error_text(status));
             }
         }
         chunks_.clear();
         if (base_ != 0) {
-            if (const CUresult status = cuMemAddressFree(base_, reservation_bytes_);
+            if (const CUresult status = LFS_CUDA_DRIVER(cuMemAddressFree)(base_, reservation_bytes_);
                 status != CUDA_SUCCESS) {
                 LOG_ERROR("VMM CUDA cleanup cuMemAddressFree failed: {}",
                           driver_error_text(status));

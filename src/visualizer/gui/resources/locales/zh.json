@@ -979,6 +979,24 @@
     "zoom": "缩放"
   },
   "preferences": {
+    "hardware": "硬件与 GPU",
+    "gpu_active": "当前运行配置",
+    "gpu_next_start": "下次启动时的配置",
+    "gpu_training": "训练与计算",
+    "gpu_rendering": "视口渲染",
+    "gpu_training_device": "训练 GPU",
+    "gpu_rendering_device": "视口 GPU",
+    "gpu_independent_hint": "训练和视口可以使用不同的 GPU。GPU 之间的数据传输可能降低视口性能。",
+    "gpu_viewport_backend_hint": "此 LichtFeld Studio 构建版本的视口图形后端是固定的。",
+    "gpu_detected": "检测到的显卡",
+    "gpu_refresh": "刷新设备列表",
+    "gpu_diagnostics": "高级 Vulkan 诊断",
+    "gpu_diagnostics_hint": "仅在诊断 GPU 问题时更改这些选项。它们可能影响性能。",
+    "gpu_restart_required": "GPU 更改已保存，但尚未生效。请重启 LichtFeld Studio 以应用更改。",
+    "gpu_memory_shared": "共享内存 · 驱动程序报告 {size} GiB",
+    "gpu_memory_dedicated": "{size} GiB GPU 内存",
+    "gpu_system_default": "系统 GPU",
+    "gpu_unavailable": "不可用",
     "marketplace": "插件市场",
     "marketplace_layout": "布局",
     "marketplace_git_checkout_description": "通过 Git 克隆而非源码压缩包安装，可在插件文件夹中查看更改并使用 Git 工具。需要安装 Git；否则使用源码压缩包。",
@@ -1146,7 +1164,9 @@
     "viewport_defaults_invalid": "请输入支持范围内的有效值。",
     "sidebar_defaults_description": "保存当前右侧边栏宽度、场景分区和活动选项卡，供应用启动时使用。现有 .licht 项目会恢复各自的工作区。新建项目保留当前工作区。",
     "save_startup_sidebar": "保存启动侧边栏布局",
-    "clear_startup_sidebar": "清除启动侧边栏布局"
+    "clear_startup_sidebar": "清除启动侧边栏布局",
+    "gpu_software": "软件渲染（CPU）",
+    "gpu_memory_system": "系统内存 · 驱动程序报告 {size} GiB"
   },
   "main_panel": {
     "console": "控制台",
@@ -2338,6 +2358,8 @@
     "reload": "重新加载"
   },
   "status_bar": {
+    "gpu_restart_required": "需要重启",
+    "gpu_restart_tooltip": "GPU 设置已更改。在 LichtFeld Studio 重启前仍使用当前 GPU。点击查看硬件与 GPU 设置。",
     "preview_reduced": "预览分辨率已降低（GPU 显存）",
     "safe_mode": "安全模式",
     "mcp_preferences": "编辑",

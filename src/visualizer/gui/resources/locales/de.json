@@ -979,6 +979,24 @@
     "zoom": "Zoom"
   },
   "preferences": {
+    "hardware": "Hardware und GPUs",
+    "gpu_active": "Derzeit aktiv",
+    "gpu_next_start": "Konfiguration für den nächsten Start",
+    "gpu_training": "Training und Berechnungen",
+    "gpu_rendering": "Darstellung im Ansichtsfenster",
+    "gpu_training_device": "Training-GPU",
+    "gpu_rendering_device": "GPU für das Ansichtsfenster",
+    "gpu_independent_hint": "Training und Ansichtsfenster können verschiedene GPUs verwenden. Übertragungen zwischen GPUs können die Leistung des Ansichtsfensters verringern.",
+    "gpu_viewport_backend_hint": "Das Grafik-Backend des Ansichtsfensters ist in dieser Version von LichtFeld Studio festgelegt.",
+    "gpu_detected": "Erkannte Grafikkarten",
+    "gpu_refresh": "Geräteliste aktualisieren",
+    "gpu_diagnostics": "Erweiterte Vulkan-Diagnose",
+    "gpu_diagnostics_hint": "Ändern Sie diese Optionen nur zur Diagnose eines GPU-Problems. Sie können die Leistung beeinflussen.",
+    "gpu_restart_required": "Die GPU-Änderungen sind gespeichert, aber noch nicht aktiv. Starten Sie LichtFeld Studio neu, um sie anzuwenden.",
+    "gpu_memory_shared": "Gemeinsam genutzter Speicher · {size} GiB laut Treiber",
+    "gpu_memory_dedicated": "{size} GiB GPU-Speicher",
+    "gpu_system_default": "System-GPU",
+    "gpu_unavailable": "Nicht verfügbar",
     "marketplace": "Marketplace",
     "marketplace_layout": "Ansicht",
     "marketplace_git_checkout_description": "Installiert einen Git-Klon statt eines Quellarchivs. So können Sie Änderungen prüfen und Git-Werkzeuge im Plugin-Ordner nutzen. Erfordert Git; andernfalls wird ein Archiv verwendet.",
@@ -1146,7 +1164,9 @@
     "viewport_defaults_invalid": "Geben Sie einen gültigen Wert im unterstützten Bereich ein.",
     "sidebar_defaults_description": "Die aktuelle Breite der rechten Seitenleiste, die Szenenaufteilung und den aktiven Tab für den Programmstart speichern. Bestehende .licht-Projekte stellen ihren eigenen Arbeitsbereich wieder her. Ein neues Projekt behält den aktuellen Arbeitsbereich bei.",
     "save_startup_sidebar": "Seitenleiste für den Start speichern",
-    "clear_startup_sidebar": "Startlayout der Seitenleiste löschen"
+    "clear_startup_sidebar": "Startlayout der Seitenleiste löschen",
+    "gpu_software": "Software (CPU)",
+    "gpu_memory_system": "Systemspeicher · {size} GiB laut Treiber"
   },
   "main_panel": {
     "console": "Konsole",
@@ -2338,6 +2358,8 @@
     "reload": "Neu laden"
   },
   "status_bar": {
+    "gpu_restart_required": "Neustart erforderlich",
+    "gpu_restart_tooltip": "Die GPU-Einstellungen wurden geändert. Bis zum Neustart von LichtFeld Studio bleiben die aktuellen GPUs aktiv. Klicken Sie, um Hardware und GPUs zu prüfen.",
     "preview_reduced": "Vorschauauflösung reduziert (GPU-Speicher)",
     "safe_mode": "ABGESICHERTER MODUS",
     "mcp_preferences": "Bearbeiten",

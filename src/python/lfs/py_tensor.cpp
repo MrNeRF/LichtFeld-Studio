@@ -7,6 +7,7 @@
 #include "core/gpu_backend_fwd.hpp"
 #include "core/gpu_device_runtime.hpp"
 #include "core/logger.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/tensor_backend_vulkan.hpp"
 #include "core/tensor_completion.hpp"
 #include "core/tensor_cuda_interop.hpp"
@@ -1454,6 +1455,22 @@ namespace lfs::python {
         return oss.str();
     }
 
+#if LFS_HAS_CUDA
+    namespace {
+        int cuda_dlpack_device_id(const Tensor& tensor) {
+            const void* pointer = tensor.data_ptr();
+            // A storage-free CUDA tensor still belongs to the process device.
+            // CUDA reports device -1 for a null pointer, not a usable ordinal.
+            if (pointer == nullptr)
+                return lfs::core::selected_cuda_device();
+            cudaPointerAttributes attributes{};
+            if (const auto status = cudaPointerGetAttributes(&attributes, pointer); status != cudaSuccess)
+                throw std::runtime_error(std::string("DLPack CUDA device query failed: ") + cudaGetErrorString(status));
+            return attributes.device;
+        }
+    } // namespace
+#endif
+
     nb::tuple PyTensor::dlpack_device() const {
 #if !LFS_HAS_CUDA
         if (tensor_.device() == Device::GPU) {
@@ -1468,7 +1485,15 @@ namespace lfs::python {
         }
 #endif
         const int32_t device_type = tensor_.device() == Device::GPU ? kDLCUDA : kDLCPU;
-        return nb::make_tuple(device_type, 0);
+        int device_id = 0;
+#if LFS_HAS_CUDA
+        if (lfs::core::gpu_backend_of(tensor_) == lfs::core::GpuBackend::Vulkan) {
+            device_id = lfs::core::selected_cuda_device();
+        } else if (tensor_.device() == Device::GPU) {
+            device_id = cuda_dlpack_device_id(tensor_);
+        }
+#endif
+        return nb::make_tuple(device_type, device_id);
     }
 
     namespace {
@@ -1575,13 +1600,19 @@ namespace lfs::python {
         }
 #endif
 
+        int exported_device = 0;
+#if LFS_HAS_CUDA
+        if (exported.device() == Device::GPU) {
+            exported_device = cuda_dlpack_device_id(exported);
+        }
+#endif
         auto* ctx = new DLPackContext(std::move(exported));
         auto* managed = new DLManagedTensor{};
 
         DLTensor& dl = managed->dl_tensor;
         dl.data = const_cast<void*>(ctx->tensor.data_ptr());
         dl.device.device_type = ctx->tensor.device() == Device::GPU ? kDLCUDA : kDLCPU;
-        dl.device.device_id = 0;
+        dl.device.device_id = exported_device;
         dl.ndim = static_cast<int32_t>(ctx->tensor.ndim());
         dl.dtype = to_dl_dtype(ctx->tensor.dtype());
         dl.shape = ctx->shape.data();

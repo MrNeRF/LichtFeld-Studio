@@ -982,7 +982,10 @@ namespace lfs::core {
 
     void Tensor::set_memory_pool_iteration(int iteration) {
 #if LFS_HAS_CUDA
-        internal::backend_ops(GpuBackend::CUDA).set_allocation_iteration(iteration);
+        // Iteration telemetry must not construct CUDA's pool (and its reclaim
+        // stream) when the trainer runs on Vulkan or Metal.
+        if (configured_gpu_backend() == GpuBackend::CUDA)
+            internal::backend_ops(GpuBackend::CUDA).set_allocation_iteration(iteration);
 #endif
     }
 

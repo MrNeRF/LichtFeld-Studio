@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace lfs::core {
 
@@ -17,14 +18,31 @@ namespace lfs::core {
 
     // Configure before the first backend use. UI changes apply after restart.
     struct TensorBackendOptions {
-        std::string vulkan_device; // Empty selects automatically; otherwise index or UUID.
-        int vulkan_validation = 0; // 0: off, 1: API validation, 2: synchronization validation.
+        std::string vulkan_device;           // Empty selects automatically; otherwise index or UUID.
+        std::string rendering_vulkan_device; // Empty follows the tensor GPU for compatibility.
+        std::string cuda_device;             // Empty keeps the existing default; otherwise CUDA index or UUID.
+        int vulkan_validation = 0;           // 0: off, 1: API validation, 2: synchronization validation.
         bool force_fp32_half = false;
         bool force_no_atomic_float = false;
     };
 
+    // An inactive tensor backend's saved GPU must not steer the viewport.
+    inline std::string_view rendering_device_preference(const TensorBackendOptions& options, GpuBackend backend) {
+        if (!options.rendering_vulkan_device.empty())
+            return options.rendering_vulkan_device;
+        return backend == GpuBackend::Vulkan ? std::string_view(options.vulkan_device) : std::string_view{};
+    }
+
     LFS_CORE_API lfs::Status set_tensor_backend_options(const TensorBackendOptions& options);
     LFS_CORE_API TensorBackendOptions tensor_backend_options();
+    LFS_CORE_API TensorBackendOptions tensor_backend_options_snapshot();
+    // The configured process device is applied at CUDA worker/stream entry points.
+    LFS_CORE_API int selected_cuda_device();
+    LFS_CORE_API void activate_selected_cuda_device();
+    // Installed by the renderer before creating training queues. Foreign GPUs
+    // transfer through host memory; they must never import CUDA handles.
+    LFS_CORE_API void set_cuda_vulkan_direct_interop(bool enabled);
+    LFS_CORE_API bool cuda_vulkan_direct_interop();
 
     LFS_CORE_API lfs::Status set_default_gpu_backend(GpuBackend backend);
     LFS_CORE_API bool gpu_backend_available(GpuBackend backend);

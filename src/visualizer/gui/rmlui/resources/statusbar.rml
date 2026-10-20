@@ -2,7 +2,7 @@
 <head>
     <link type="text/rcss" href="statusbar.rcss"/>
 </head>
-<body id="body" data-model="status_bar" data-class-safe-mode="safe_mode">
+<body id="body" data-model="status_bar" data-class-safe-mode="safe_mode" data-class-gpu-restart-pending="gpu_restart_required">
   <div id="status-row">
     <div id="status-left">
         <span id="safe-mode-badge" class="hidden" data-class-hidden="!safe_mode" data-attr-title="safe_mode_text">{{ safe_mode_text }}</span>
@@ -114,7 +114,7 @@
         <span id="gpu-mem" data-style-color="gpu_mem_color">{{ gpu_mem_text }}</span>
         <div id="fps-group" class="status-item">
             <span id="fps-label" class="dim">{{ fps_label }}:</span><div
-                class="fps-metric" data-tooltip="status_bar.ui_fps_tooltip"><span
+                class="fps-metric fps-ui-metric" data-tooltip="status_bar.ui_fps_tooltip"><span
                 class="fps-caption dim">{{ fps_ui_label }}</span><span
                 id="fps-value" class="fps-number" data-style-color="fps_color">{{ fps_value }}</span></div><span
                 class="fps-separator dim">&#183;</span><div
@@ -137,6 +137,7 @@
             <span class="backend-label">{{ tensor_label }}</span>
             <span class="backend-value">{{ tensor_value }}</span>
         </div>
+        <button id="gpu-restart-chip" class="btn btn--warning gpu-restart-chip hidden" data-class-hidden="!gpu_restart_required" data-attr-title="gpu_restart_tooltip" data-event-click="open_gpu_preferences()"><span class="gpu-restart-label">{{ gpu_restart_text }}</span><span class="gpu-restart-symbol">!</span></button>
         <span id="git-commit" class="dim">{{ git_commit }}</span>
     </div>
   </div>

@@ -100,6 +100,7 @@ namespace lfs::vis {
         [[nodiscard]] virtual RendererTerminalState terminalState() const noexcept = 0;
         [[nodiscard]] virtual const std::string& lastError() const noexcept = 0;
         [[nodiscard]] virtual GraphicsCapabilities capabilities() const noexcept = 0;
+        [[nodiscard]] virtual std::string deviceName() const { return {}; }
         virtual void flushPipelineCache() = 0;
         [[nodiscard]] virtual lfs::core::SplatTensorAllocator
         splatTensorAllocator(bool preserve_float_shN = false) = 0;
@@ -108,6 +109,9 @@ namespace lfs::vis {
         // keeps native tensor adoption out of WindowManager and its callers.
         virtual void connectTensorBackend() = 0;
         virtual void disconnectTensorBackend() = 0;
+        // Called only by the primary window; auxiliary contexts must not replace
+        // the application GPU identity or trainer publication policy.
+        virtual void publishPrimaryGpuState() {}
     };
 
     [[nodiscard]] LFS_VIS_API std::unique_ptr<GraphicsContext> createGraphicsContext();

@@ -10,6 +10,7 @@
 #include "core/sh_value_quant.hpp"
 #include "core/splat_block.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
 #include <algorithm>
@@ -186,6 +187,8 @@ namespace lfs::core {
 
         const std::size_t reserve_gaussians =
             reserve_capacity > 0 ? std::max(reserve_capacity, capacity) : capacity;
+        if (device < 0)
+            device = default_gpu_backend() == GpuBackend::CUDA ? selected_cuda_device() : 0;
         auto& blocks = splat_block_ops(default_gpu_backend());
         const std::size_t gran = blocks.granularity(device);
         const Layout reserved_layout = compute_layout(reserve_gaussians, sh_degree, gran);

@@ -992,6 +992,24 @@
     "zoom": "Zoom"
   },
   "preferences": {
+    "hardware": "Hardware e GPU",
+    "gpu_active": "Configurazione attiva",
+    "gpu_next_start": "Configurazione per il prossimo avvio",
+    "gpu_training": "Training e calcolo",
+    "gpu_rendering": "Rendering della viewport",
+    "gpu_training_device": "GPU per il training",
+    "gpu_rendering_device": "GPU per la viewport",
+    "gpu_independent_hint": "Training e viewport possono usare GPU diverse. I trasferimenti tra GPU possono ridurre le prestazioni della viewport.",
+    "gpu_viewport_backend_hint": "Il backend della viewport è fisso per questa build di LichtFeld Studio.",
+    "gpu_detected": "Schede grafiche rilevate",
+    "gpu_refresh": "Aggiorna elenco GPU",
+    "gpu_diagnostics": "Diagnostica Vulkan avanzata",
+    "gpu_diagnostics_hint": "Modifica queste opzioni solo per diagnosticare un problema della GPU. Possono influire sulle prestazioni.",
+    "gpu_restart_required": "Le modifiche alle GPU sono salvate ma non sono ancora attive. Riavvia LichtFeld Studio per applicarle.",
+    "gpu_memory_shared": "Memoria condivisa · {size} GiB riportati dal driver",
+    "gpu_memory_dedicated": "{size} GiB di memoria GPU",
+    "gpu_system_default": "GPU di sistema",
+    "gpu_unavailable": "Non disponibile",
     "marketplace": "Marketplace",
     "marketplace_layout": "Layout",
     "marketplace_git_checkout_description": "Installa un clone Git anziché un archivio dei sorgenti, per esaminare le modifiche e usare Git nella cartella del plugin. Richiede Git; altrimenti viene usato un archivio.",
@@ -1159,7 +1177,9 @@
     "viewport_defaults_invalid": "Inserisci un valore valido nell’intervallo supportato.",
     "sidebar_defaults_description": "Salva larghezza, divisione Scene e scheda attiva della sidebar destra per l’avvio. I progetti .licht esistenti ripristinano il proprio workspace. Nuovo progetto mantiene il workspace corrente.",
     "save_startup_sidebar": "Salva sidebar per l’avvio",
-    "clear_startup_sidebar": "Rimuovi sidebar di avvio"
+    "clear_startup_sidebar": "Rimuovi sidebar di avvio",
+    "gpu_software": "Software (CPU)",
+    "gpu_memory_system": "Memoria di sistema · {size} GiB riportati dal driver"
   },
   "main_panel": {
     "console": "Console",
@@ -2351,6 +2371,8 @@
     "reload": "Ricarica"
   },
   "status_bar": {
+    "gpu_restart_required": "Riavvio necessario",
+    "gpu_restart_tooltip": "Le impostazioni GPU sono cambiate. Le GPU attuali restano in uso fino al riavvio. Fai clic per controllare Hardware e GPU.",
     "preview_reduced": "Risoluzione anteprima ridotta (memoria GPU)",
     "safe_mode": "MODALITÀ SICURA",
     "mcp_preferences": "Modifica",

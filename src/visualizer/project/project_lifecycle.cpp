@@ -1443,7 +1443,8 @@ namespace lfs::vis::project {
                     return;
                 }
 #if LFS_HAS_CUDA
-                (void)cudaSetDevice(0);
+                if (lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::CUDA)
+                    lfs::core::activate_selected_cuda_device();
 #endif
                 auto* scene_manager =
                     viewer_.getSceneManager();

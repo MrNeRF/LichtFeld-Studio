@@ -490,7 +490,7 @@ namespace lfs::vis {
             (vulkan_interop_available ||
              lfs::core::default_gpu_backend() != lfs::core::GpuBackend::CUDA)) {
             auto storage_result = lfs::core::SplatExportableStorage::create(
-                exportable_capacity, sh_degree, /*device=*/0, reserve_capacity);
+                exportable_capacity, sh_degree, /*device=*/-1, reserve_capacity);
             if (storage_result) {
                 splat_storage_ = std::move(*storage_result);
                 if (!(vulkan_interop_available &&
@@ -707,7 +707,8 @@ namespace lfs::vis {
                 new_state == TrainingState::Paused ||
                 new_state == TrainingState::Stopping;
 #if LFS_HAS_CUDA
-            lfs::core::SizeBucketedPool::instance().set_training_active(training_cache_active);
+            if (lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::CUDA)
+                lfs::core::SizeBucketedPool::instance().set_training_active(training_cache_active);
 #else
             (void)training_cache_active;
 #endif

@@ -979,6 +979,24 @@
     "zoom": "ズーム"
   },
   "preferences": {
+    "hardware": "ハードウェアとGPU",
+    "gpu_active": "現在使用中",
+    "gpu_next_start": "次回起動時の設定",
+    "gpu_training": "トレーニングと計算",
+    "gpu_rendering": "ビューポートの描画",
+    "gpu_training_device": "トレーニング用GPU",
+    "gpu_rendering_device": "ビューポート用GPU",
+    "gpu_independent_hint": "トレーニングとビューポートには別々のGPUを使用できます。GPU間の転送により、ビューポートのパフォーマンスが低下する場合があります。",
+    "gpu_viewport_backend_hint": "ビューポートの描画バックエンドは、このLichtFeld Studioのビルドでは固定されています。",
+    "gpu_detected": "検出されたグラフィックスカード",
+    "gpu_refresh": "デバイス一覧を更新",
+    "gpu_diagnostics": "Vulkanの詳細診断",
+    "gpu_diagnostics_hint": "GPUの問題を診断する場合のみ変更してください。パフォーマンスに影響する場合があります。",
+    "gpu_restart_required": "GPUの変更は保存されていますが、まだ適用されていません。LichtFeld Studioを再起動して適用してください。",
+    "gpu_memory_shared": "共有メモリ · ドライバーの報告値 {size} GiB",
+    "gpu_memory_dedicated": "GPUメモリ {size} GiB",
+    "gpu_system_default": "システムGPU",
+    "gpu_unavailable": "使用不可",
     "marketplace": "マーケットプレイス",
     "marketplace_layout": "レイアウト",
     "marketplace_git_checkout_description": "ソースアーカイブの代わりに Git クローンをインストールし、プラグインフォルダーで変更の確認や Git ツールの使用ができます。Git が必要です。利用できない場合はアーカイブを使用します。",
@@ -1146,7 +1164,9 @@
     "viewport_defaults_invalid": "対応範囲内の有効な値を入力してください。",
     "sidebar_defaults_description": "現在の右サイドバーの幅、シーンの分割位置、アクティブなタブをアプリ起動時の設定として保存します。既存の .licht プロジェクトでは、そのプロジェクトのワークスペースが復元されます。新規プロジェクトでは現在のワークスペースが維持されます。",
     "save_startup_sidebar": "起動時のサイドバーを保存",
-    "clear_startup_sidebar": "起動時のサイドバー設定をクリア"
+    "clear_startup_sidebar": "起動時のサイドバー設定をクリア",
+    "gpu_software": "ソフトウェア（CPU）",
+    "gpu_memory_system": "システムメモリ · ドライバーの報告値 {size} GiB"
   },
   "main_panel": {
     "console": "コンソール",
@@ -2338,6 +2358,8 @@
     "reload": "再読み込み"
   },
   "status_bar": {
+    "gpu_restart_required": "再起動が必要",
+    "gpu_restart_tooltip": "GPU設定が変更されました。LichtFeld Studioを再起動するまで、現在のGPUが使用されます。クリックしてハードウェアとGPUの設定を確認してください。",
     "preview_reduced": "プレビュー解像度を低下（GPUメモリ）",
     "safe_mode": "セーフモード",
     "mcp_preferences": "編集",

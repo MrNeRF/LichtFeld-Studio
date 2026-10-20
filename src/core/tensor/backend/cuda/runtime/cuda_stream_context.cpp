@@ -5,6 +5,7 @@
 #include "core/cuda_error.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
 #include "core/tensor/backend/cuda/runtime/stream_lifetime.hpp"
+#include "core/tensor_backend.hpp"
 #include "internal/tensor_impl.hpp"
 
 #include <format>

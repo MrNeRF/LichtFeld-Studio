@@ -129,6 +129,7 @@ namespace {
     // process* (NVML per-PID, not device-wide cudaMemGetInfo). Each phase is the delta
     // against the previous probe so the sum reconstructs the total context cost.
     void analyzeCudaContextDistribution() {
+        lfs::core::activate_selected_cuda_device();
         auto& p = lfs::diagnostics::VramProfiler::instance();
 
         // Phase 1: primary context creation. cudaFree(nullptr) is a documented idiom that
@@ -265,12 +266,12 @@ namespace {
 
                 const bool interactive =
                     !mode.params->optimization.headless && !mode.params->render_path;
-                // A Vulkan viewer still constructs a CUDA trainer when a dataset opens.
-                // The primary context has to exist before that open.
+                // Only a CUDA session needs a primary CUDA context. An explicit
+                // Vulkan choice must stay independent of the NVIDIA device.
 #if LFS_HAS_CUDA
                 const bool warm_cuda_context =
-                    lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA) &&
-                    (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA || interactive);
+                    lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::CUDA &&
+                    lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA);
 
                 // Driver-level tuning must precede *any* CUDA call, including the pre-flight
                 // gate and the cudaFree(nullptr) inside analyzeCudaContextDistribution.
@@ -289,7 +290,7 @@ namespace {
                 // plugin, and mesh2splat must not create a CUDA primary context just
                 // for HUD metrics.
 #if LFS_HAS_CUDA
-                if (warm_cuda_context) {
+                if (warm_cuda_context && lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::CUDA) {
                     analyzeCudaContextDistribution();
                 }
 #endif
@@ -364,6 +365,8 @@ int main(int argc, char* argv[]) {
                                         ? lfs::vis::TensorPreferenceState{}
                                         : lfs::vis::UserPreferences::instance().sanitizeTensorBackend();
     const auto options_status = lfs::core::set_tensor_backend_options(tensor_preferences.options);
+    lfs::vis::recordGpuStartupPreferences(use_default_preferences ? lfs::vis::TensorPreferenceState{}
+                                                                  : lfs::vis::UserPreferences::instance().tensorBackend());
     // An automatic preference leaves the choice to default_gpu_backend().
     const auto backend_status = tensor_preferences.backend
                                     ? lfs::core::set_default_gpu_backend(*tensor_preferences.backend)

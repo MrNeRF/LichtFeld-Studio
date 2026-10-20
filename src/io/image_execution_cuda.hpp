@@ -15,7 +15,7 @@ namespace lfs::io {
             return static_cast<cudaStream_t>(requested);
         if (const auto current = core::getCurrentCUDAStream())
             return current;
-        if (core::default_gpu_backend() != core::GpuBackend::CUDA)
+        if (core::TensorExecutionTarget::current().backend() != core::GpuBackend::CUDA)
             return nullptr;
         thread_local core::TensorWorkQueue queue(core::GpuBackend::CUDA);
         return static_cast<cudaStream_t>(queue.native_handle());

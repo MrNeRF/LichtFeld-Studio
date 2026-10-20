@@ -10,19 +10,23 @@ namespace lfs::app {
 
     enum class GpuPreflightDecision {
         UseCuda,
-        UseVulkanViewer,
+        UseVulkan,
         Fatal,
     };
 
     [[nodiscard]] inline GpuPreflightDecision decide_gpu_preflight(
-        const bool viewer_only,
+        [[maybe_unused]] const bool viewer_only,
         const bool cuda_usable,
-        const bool vulkan_usable) {
+        const bool vulkan_usable,
+        const bool explicit_cuda = false,
+        const bool cuda_hardware_problem = false) {
         if (cuda_usable) {
             return GpuPreflightDecision::UseCuda;
         }
-        if (viewer_only && vulkan_usable) {
-            return GpuPreflightDecision::UseVulkanViewer;
+        if (explicit_cuda || cuda_hardware_problem)
+            return GpuPreflightDecision::Fatal;
+        if (vulkan_usable) {
+            return GpuPreflightDecision::UseVulkan;
         }
         return GpuPreflightDecision::Fatal;
     }

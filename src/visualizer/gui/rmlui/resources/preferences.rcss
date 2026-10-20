@@ -414,6 +414,15 @@ body.floating-panel {
     word-break: break-word;
 }
 
+.gpu-running-card, .gpu-hardware-card { padding: 10dp; margin-bottom: 10dp; border-width: 1dp; border-radius: 5dp; }
+.gpu-device-name { font-weight: bold; white-space: normal; word-break: break-word; }
+.gpu-restart-notice { padding: 10dp; margin-bottom: 12dp; border-width: 1dp; border-radius: 5dp; }
+
+.gpu-section-title { font-weight: bold; font-size: 12dp; margin: 8dp 0 6dp; }
+
+.gpu-device-select { flex: 0 1 330dp; width: 330dp; min-width: 200dp; max-width: 100%; }
+
+.gpu-running-card .gpu-device-name { flex: 1; min-width: 0; }
 .preferences-repeat-rate {
     display: flex;
     align-items: center;

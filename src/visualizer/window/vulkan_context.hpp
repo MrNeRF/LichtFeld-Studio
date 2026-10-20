@@ -226,6 +226,9 @@ namespace lfs::vis {
         [[nodiscard]] VkExtent2D framebufferExtent() const;
         [[nodiscard]] std::size_t framesInFlight() const { return kFramesInFlight; }
         [[nodiscard]] std::size_t currentFrameSlot() const { return frame_index_; }
+        [[nodiscard]] bool directTensorInteropEnabled() const {
+            return cuda_device_matches_ && external_memory_interop_enabled_ && external_semaphore_interop_enabled_;
+        }
         [[nodiscard]] bool externalMemoryInteropEnabled() const { return external_memory_interop_enabled_; }
         [[nodiscard]] bool externalSemaphoreInteropEnabled() const { return external_semaphore_interop_enabled_; }
 #ifdef __APPLE__
@@ -271,6 +274,7 @@ namespace lfs::vis {
             bool vulkan_memory_model_device_scope = false;
             bool cooperative_matrix = false;
             bool complete = false;
+            bool subgroup_size_control = false;
         };
         [[nodiscard]] const TensorBackendDevice& tensorBackendDevice() const { return tensor_backend_device_; }
         [[nodiscard]] LFS_VIS_API lfs::core::TensorVulkanInterop& tensorInterop();
@@ -627,6 +631,7 @@ namespace lfs::vis {
         bool instance_external_memory_capabilities_enabled_ = false;
         bool instance_external_semaphore_capabilities_enabled_ = false;
         bool instance_surface_maintenance_enabled_ = false;
+        bool cuda_device_matches_ = true;
         bool external_memory_interop_enabled_ = false;
         bool external_semaphore_interop_enabled_ = false;
         bool metal_objects_enabled_ = false;

@@ -979,6 +979,24 @@
     "zoom": "줌"
   },
   "preferences": {
+    "hardware": "하드웨어 및 GPU",
+    "gpu_active": "현재 사용 중",
+    "gpu_next_start": "다음 실행 시 적용할 설정",
+    "gpu_training": "학습 및 연산",
+    "gpu_rendering": "뷰포트 렌더링",
+    "gpu_training_device": "학습 GPU",
+    "gpu_rendering_device": "뷰포트 GPU",
+    "gpu_independent_hint": "학습과 뷰포트에서 서로 다른 GPU를 사용할 수 있습니다. GPU 간 데이터 전송으로 뷰포트 성능이 저하될 수 있습니다.",
+    "gpu_viewport_backend_hint": "이 LichtFeld Studio 빌드에서는 뷰포트 그래픽 백엔드가 고정되어 있습니다.",
+    "gpu_detected": "감지된 그래픽 카드",
+    "gpu_refresh": "장치 목록 새로 고침",
+    "gpu_diagnostics": "고급 Vulkan 진단",
+    "gpu_diagnostics_hint": "GPU 문제를 진단할 때만 변경하세요. 성능에 영향을 줄 수 있습니다.",
+    "gpu_restart_required": "GPU 변경 사항이 저장되었지만 아직 적용되지 않았습니다. LichtFeld Studio를 다시 시작하여 적용하세요.",
+    "gpu_memory_shared": "공유 메모리 · 드라이버 보고값 {size} GiB",
+    "gpu_memory_dedicated": "GPU 메모리 {size} GiB",
+    "gpu_system_default": "시스템 GPU",
+    "gpu_unavailable": "사용 불가",
     "marketplace": "마켓플레이스",
     "marketplace_layout": "레이아웃",
     "marketplace_git_checkout_description": "소스 압축 파일 대신 Git 저장소를 복제하여 플러그인 폴더에서 변경 사항을 살펴보고 Git 도구를 사용할 수 있습니다. Git이 필요하며, 없으면 압축 파일을 사용합니다.",
@@ -1146,7 +1164,9 @@
     "viewport_defaults_invalid": "지원 범위 내의 올바른 값을 입력하세요.",
     "sidebar_defaults_description": "현재 오른쪽 사이드바 너비, 장면 분할 위치 및 활성 탭을 앱 시작 설정으로 저장합니다. 기존 .licht 프로젝트는 자체 작업 공간을 복원합니다. 새 프로젝트는 현재 작업 공간을 유지합니다.",
     "save_startup_sidebar": "시작 시 사이드바 저장",
-    "clear_startup_sidebar": "시작 사이드바 설정 지우기"
+    "clear_startup_sidebar": "시작 사이드바 설정 지우기",
+    "gpu_software": "소프트웨어(CPU)",
+    "gpu_memory_system": "시스템 메모리 · 드라이버 보고값 {size} GiB"
   },
   "main_panel": {
     "console": "콘솔",
@@ -2338,6 +2358,8 @@
     "reload": "다시 로드"
   },
   "status_bar": {
+    "gpu_restart_required": "다시 시작 필요",
+    "gpu_restart_tooltip": "GPU 설정이 변경되었습니다. LichtFeld Studio를 다시 시작할 때까지 현재 GPU가 사용됩니다. 클릭하여 하드웨어 및 GPU 설정을 확인하세요.",
     "preview_reduced": "미리 보기 해상도 감소 (GPU 메모리)",
     "safe_mode": "안전 모드",
     "mcp_preferences": "편집",

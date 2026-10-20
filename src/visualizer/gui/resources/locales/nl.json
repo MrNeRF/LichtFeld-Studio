@@ -979,6 +979,24 @@
     "zoom": "Zoom"
   },
   "preferences": {
+    "hardware": "Hardware en GPU’s",
+    "gpu_active": "Momenteel actief",
+    "gpu_next_start": "Configuratie voor de volgende start",
+    "gpu_training": "Training en berekeningen",
+    "gpu_rendering": "Weergave in het kijkvenster",
+    "gpu_training_device": "Trainings-GPU",
+    "gpu_rendering_device": "GPU voor het kijkvenster",
+    "gpu_independent_hint": "Training en het kijkvenster kunnen verschillende GPU’s gebruiken. Overdrachten tussen GPU’s kunnen de prestaties van het kijkvenster verminderen.",
+    "gpu_viewport_backend_hint": "De grafische backend van het kijkvenster staat vast voor deze versie van LichtFeld Studio.",
+    "gpu_detected": "Gedetecteerde grafische kaarten",
+    "gpu_refresh": "Apparaatlijst vernieuwen",
+    "gpu_diagnostics": "Geavanceerde Vulkan-diagnostiek",
+    "gpu_diagnostics_hint": "Wijzig deze opties alleen om een GPU-probleem te onderzoeken. Ze kunnen de prestaties beïnvloeden.",
+    "gpu_restart_required": "De GPU-wijzigingen zijn opgeslagen, maar nog niet actief. Herstart LichtFeld Studio om ze toe te passen.",
+    "gpu_memory_shared": "Gedeeld geheugen · {size} GiB volgens het stuurprogramma",
+    "gpu_memory_dedicated": "{size} GiB GPU-geheugen",
+    "gpu_system_default": "Systeem-GPU",
+    "gpu_unavailable": "Niet beschikbaar",
     "marketplace": "Marketplace",
     "marketplace_layout": "Indeling",
     "marketplace_git_checkout_description": "Installeert een Git-kloon in plaats van een bronarchief, zodat je wijzigingen kunt bekijken en Git in de pluginmap kunt gebruiken. Vereist Git; anders wordt een archief gebruikt.",
@@ -1146,7 +1164,9 @@
     "viewport_defaults_invalid": "Voer een geldige waarde binnen het ondersteunde bereik in.",
     "sidebar_defaults_description": "Sla de huidige breedte van de rechterzijbalk, de scèneverdeling en het actieve tabblad op voor het starten van de toepassing. Bestaande .licht-projecten herstellen hun eigen werkruimte. Een nieuw project behoudt de huidige werkruimte.",
     "save_startup_sidebar": "Zijbalk opslaan voor opstarten",
-    "clear_startup_sidebar": "Opstartinstellingen van zijbalk wissen"
+    "clear_startup_sidebar": "Opstartinstellingen van zijbalk wissen",
+    "gpu_software": "Software (CPU)",
+    "gpu_memory_system": "Systeemgeheugen · {size} GiB volgens het stuurprogramma"
   },
   "main_panel": {
     "console": "Console",
@@ -2338,6 +2358,8 @@
     "reload": "Herladen"
   },
   "status_bar": {
+    "gpu_restart_required": "Herstart vereist",
+    "gpu_restart_tooltip": "De GPU-instellingen zijn gewijzigd. De huidige GPU’s blijven in gebruik tot LichtFeld Studio opnieuw start. Klik om Hardware en GPU’s te bekijken.",
     "preview_reduced": "Voorbeeldresolutie verlaagd (GPU-geheugen)",
     "safe_mode": "VEILIGE MODUS",
     "mcp_preferences": "Bewerken",

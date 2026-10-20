@@ -4,6 +4,7 @@
  */
 
 #include "cuda_frame_handoff.hpp"
+#include "core/cuda/driver_entry.hpp"
 
 #include "core/include/core/logger.hpp"
 
@@ -18,7 +19,7 @@ namespace lfs::io::video {
 
         [[nodiscard]] std::string driverError(const CUresult result) {
             const char* description = nullptr;
-            if (cuGetErrorString(result, &description) == CUDA_SUCCESS && description)
+            if (LFS_CUDA_DRIVER(cuGetErrorString)(result, &description) == CUDA_SUCCESS && description)
                 return description;
             return "CUDA driver error " + std::to_string(static_cast<int>(result));
         }
@@ -27,16 +28,16 @@ namespace lfs::io::video {
             if (!decoder_context.context)
                 throw std::runtime_error("CUDA video decoder context is unavailable");
 
-            const CUresult push_result = cuCtxPushCurrent(static_cast<CUcontext>(decoder_context.context));
+            const CUresult push_result = LFS_CUDA_DRIVER(cuCtxPushCurrent)(static_cast<CUcontext>(decoder_context.context));
             if (push_result != CUDA_SUCCESS) {
                 throw std::runtime_error(
                     "Failed to activate CUDA video decoder context: " +
                     driverError(push_result));
             }
 
-            const CUresult sync_result = cuStreamSynchronize(static_cast<CUstream>(decoder_context.stream));
+            const CUresult sync_result = LFS_CUDA_DRIVER(cuStreamSynchronize)(static_cast<CUstream>(decoder_context.stream));
             CUcontext popped_context = nullptr;
-            const CUresult pop_result = cuCtxPopCurrent(&popped_context);
+            const CUresult pop_result = LFS_CUDA_DRIVER(cuCtxPopCurrent)(&popped_context);
 
             if (sync_result != CUDA_SUCCESS) {
                 throw std::runtime_error(

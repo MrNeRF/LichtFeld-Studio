@@ -979,6 +979,24 @@
     "zoom": "Zoom"
   },
   "preferences": {
+    "hardware": "Sprzęt i GPU",
+    "gpu_active": "Aktualnie używana konfiguracja",
+    "gpu_next_start": "Konfiguracja przy następnym uruchomieniu",
+    "gpu_training": "Trening i obliczenia",
+    "gpu_rendering": "Renderowanie widoku",
+    "gpu_training_device": "GPU do treningu",
+    "gpu_rendering_device": "GPU widoku",
+    "gpu_independent_hint": "Trening i widok mogą używać różnych GPU. Przesyłanie danych między GPU może obniżyć wydajność widoku.",
+    "gpu_viewport_backend_hint": "Backend graficzny widoku jest ustalony dla tej wersji LichtFeld Studio.",
+    "gpu_detected": "Wykryte karty graficzne",
+    "gpu_refresh": "Odśwież listę urządzeń",
+    "gpu_diagnostics": "Zaawansowana diagnostyka Vulkan",
+    "gpu_diagnostics_hint": "Zmieniaj te opcje tylko podczas diagnozowania problemów z GPU. Mogą wpływać na wydajność.",
+    "gpu_restart_required": "Zmiany GPU zostały zapisane, ale nie są jeszcze aktywne. Uruchom ponownie LichtFeld Studio, aby je zastosować.",
+    "gpu_memory_shared": "Pamięć współdzielona · {size} GiB według sterownika",
+    "gpu_memory_dedicated": "{size} GiB pamięci GPU",
+    "gpu_system_default": "Systemowe GPU",
+    "gpu_unavailable": "Niedostępne",
     "marketplace": "Marketplace",
     "marketplace_layout": "Układ",
     "marketplace_git_checkout_description": "Instaluje klon Git zamiast archiwum źródeł, umożliwiając przeglądanie zmian i używanie Git w folderze wtyczki. Wymaga Git; w przeciwnym razie używane jest archiwum.",
@@ -1146,7 +1164,9 @@
     "viewport_defaults_invalid": "Wprowadź prawidłową wartość z obsługiwanego zakresu.",
     "sidebar_defaults_description": "Zapisz bieżącą szerokość prawego paska bocznego, podział sceny i aktywną kartę na potrzeby uruchamiania aplikacji. Istniejące projekty .licht przywracają własną przestrzeń roboczą. Nowy projekt zachowuje bieżącą przestrzeń roboczą.",
     "save_startup_sidebar": "Zapisz pasek boczny na start",
-    "clear_startup_sidebar": "Wyczyść ustawienia startowe paska bocznego"
+    "clear_startup_sidebar": "Wyczyść ustawienia startowe paska bocznego",
+    "gpu_software": "Renderowanie programowe (CPU)",
+    "gpu_memory_system": "Pamięć systemowa · {size} GiB według sterownika"
   },
   "main_panel": {
     "console": "Konsola",
@@ -2338,6 +2358,8 @@
     "reload": "Przeładuj"
   },
   "status_bar": {
+    "gpu_restart_required": "Wymagane ponowne uruchomienie",
+    "gpu_restart_tooltip": "Ustawienia GPU zostały zmienione. Do ponownego uruchomienia LichtFeld Studio będą używane dotychczasowe GPU. Kliknij, aby sprawdzić Sprzęt i GPU.",
     "preview_reduced": "Obniżona rozdzielczość podglądu (pamięć GPU)",
     "safe_mode": "TRYB BEZPIECZNY",
     "mcp_preferences": "Edytuj",

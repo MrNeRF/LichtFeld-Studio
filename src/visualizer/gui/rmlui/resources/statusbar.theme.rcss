@@ -125,3 +125,9 @@ body,
 .upscaler-choice:hover { background-color: @{surface_bright}; }
 .upscaler-choice.selected { color: @{primary}; background-color: @{surface_bright}; }
 .upscaler-presets-label { color: @{text_dim}; }
+
+#gpu-restart-chip {
+    color: @{warning};
+    border-color: @{warning};
+    background-color: @{blend(surface,warning,0.16)};
+}

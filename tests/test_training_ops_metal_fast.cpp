@@ -424,6 +424,7 @@ namespace {
     }
 
     Tensor upload(const std::vector<float>& values, lfs::core::TensorShape shape) {
+        LFS_ASSERT_MSG(values.size() == shape.elements(), "Test upload shape exceeds its CPU vector");
         return Tensor::from_blob(const_cast<float*>(values.data()), std::move(shape), Device::CPU, DataType::Float32)
             .to(Device::GPU);
     }
@@ -672,11 +673,11 @@ namespace {
         // The background image covers the rendered tile.
         const int w = c.tile_w > 0 ? c.tile_w : s.width;
         const int h = c.tile_h > 0 ? c.tile_h : s.height;
-        if (fc.bg_image)
-            s.bg_image = random_image(w, h, 5u);
         Gpu g = upload_scene(s, fc.storage);
-        if (fc.bg_image)
+        if (fc.bg_image) {
+            s.bg_image = random_image(w, h, 5u);
             g.bg_image = plane(s.bg_image, 3, h, w);
+        }
         Frame frame;
         forward(frame, s, g, c);
         ASSERT_EQ(frame.result.code, ops::RasterResult::Code::Success) << frame.result.message;
@@ -708,6 +709,7 @@ namespace {
             {"sh3_half", 40, 3, 48, 40, ops::ShStorage::IeeeFloat16, false, {}},
             {"sh2_q16_of_layout_3", 32, 3, 40, 36, ops::ShStorage::Q16, true, {.active_bases = 9}},
             {"tile", 40, 2, 64, 48, ops::ShStorage::Float32, true, {.tile_x = 16, .tile_y = 8, .tile_w = 40, .tile_h = 32}},
+            {"odd_partial", 33, 3, 65, 37, ops::ShStorage::Float32, true, {.normals = true}},
             {"many_blocks", 4000, 3, 320, 240, ops::ShStorage::Float32, false, {.normals = true}},
         };
         for (const auto& fc : cases)
@@ -1203,10 +1205,11 @@ namespace {
         }
     }
 
-    TEST_P(PortableFastRaster, GradientCaptureAccumulatesWithoutAdamWrites) {
+    void check_gradient_capture_accumulation(const bool single_pixel) {
         for (const auto storage : {ops::ShStorage::Float32, ops::ShStorage::Q16}) {
             SCOPED_TRACE(static_cast<int>(storage));
-            Scene s = make_scene(24, 3, 48, 40, 61u, -2.3f, -1.6f);
+            Scene s = make_scene(24, 3, single_pixel ? 1 : 48, single_pixel ? 1 : 40, 61u, -2.3f, -1.6f);
+            const float initial = single_pixel ? 0.125f : 0.f;
             const auto n = size_t(s.count);
             s.sh0[0] = 2.1f; // Outside the DC regularizer's permitted range.
             Gpu g = upload_scene(s, storage);
@@ -1232,7 +1235,7 @@ namespace {
                 group.enabled = false;
                 // Capture must also work without a fused Adam codec.
                 group.joint_bits = 0;
-                group.gradient = Tensor::zeros(i == 5 ? lfs::core::TensorShape{expected[5].size()} : group.parameter.shape(), Device::GPU);
+                group.gradient = Tensor::full(i == 5 ? lfs::core::TensorShape{expected[5].size()} : group.parameter.shape(), initial, Device::GPU);
                 before[i] = group.parameter.cpu();
                 moments[i] = group.packed_moments.cpu();
                 bounds[i] = group.joint_bounds.cpu();
@@ -1262,6 +1265,7 @@ namespace {
                     double scale = 0;
                     for (double v : expected[slot])
                         scale = std::max(scale, std::abs(v));
+                    EXPECT_GT(scale, 0) << "The capture oracle must exercise slot " << slot;
                     for (size_t i = 0; i < actual.size(); ++i) {
                         double reg = 0;
                         if (pass == 3 && slot == 1)
@@ -1276,9 +1280,16 @@ namespace {
                         }
                         if (pass == 3 && slot == 5)
                             reg = sh_regularizer[i];
-                        EXPECT_NEAR(actual[i], pass * expected[slot][i] + reg, pass * (1e-4 * scale + 1e-5)) << i;
-                        if (pass > 1)
-                            EXPECT_NEAR(actual[i], pass * first[slot][i] + reg, 2e-6 * std::abs(actual[i]) + 1e-7) << i;
+                        EXPECT_NEAR(actual[i], initial + pass * expected[slot][i] + reg, pass * (1e-4 * scale + 1e-5)) << i;
+                        // Multiple tiles/subgroups atomically sum into the same
+                        // splat; a fresh backward need not reproduce the first
+                        // floating-point reduction. Check tight repeatability
+                        // with one contributing pixel, retaining the full CPU
+                        // reference above for the multi-tile scene.
+                        if (single_pixel && pass > 1) {
+                            const double captured = double(actual[i]) - initial;
+                            EXPECT_NEAR(captured, pass * (double(first[slot][i]) - initial) + reg, 2e-6 * std::abs(captured) + 1e-7) << i;
+                        }
                     }
                     const auto after = group.parameter.cpu();
                     EXPECT_EQ(std::memcmp(before[slot].data_ptr(), after.data_ptr(), before[slot].numel() * lfs::core::dtype_size(before[slot].dtype())), 0);
@@ -1295,6 +1306,14 @@ namespace {
                 }
             }
         }
+    }
+
+    TEST_P(PortableFastRaster, GradientCaptureAccumulatesWithoutAdamWrites) {
+        check_gradient_capture_accumulation(false);
+    }
+
+    TEST_P(PortableFastRaster, SinglePixelGradientCaptureAccumulatesWithoutAdamWrites) {
+        check_gradient_capture_accumulation(true);
     }
 
     TEST_P(PortableFastRaster, Q16ShRestFollowsReferenceGradient) {

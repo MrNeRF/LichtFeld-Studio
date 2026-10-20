@@ -495,6 +495,7 @@ namespace lfs::core::internal {
         caps_.vulkan_memory_model = adopted.vulkan_memory_model;
         caps_.vulkan_memory_model_device_scope = adopted.vulkan_memory_model_device_scope;
         caps_.cooperative_matrix = adopted.cooperative_matrix && caps_.subgroup_size == 32;
+        caps_.subgroup_size_control = caps_.subgroup_size_control && adopted.subgroup_size_control;
         caps_.host_visible_device_local = has_host_visible_device_local(memory_properties_);
         caps_.direct_host_uploads = false;
         caps_.external_memory = adopted.external_memory;
