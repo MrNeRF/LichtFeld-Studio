@@ -15,25 +15,25 @@ pytestmark = [pytest.mark.gpu, pytest.mark.integration]
 def test_gt_repeat_preferences_persist_and_clamp(camera_runtime, tmp_path):
     _editor(camera_runtime, """
 import lichtfeld as lf
-assert lf.ui.get_gt_comparison_key_repeat() is True
-assert lf.ui.get_gt_comparison_repeat_rate() == 5.0
-lf.ui.set_gt_comparison_key_repeat(False)
-lf.ui.set_gt_comparison_repeat_rate(200)
-assert lf.ui.get_gt_comparison_repeat_rate() == 20.0
-lf.ui.set_gt_comparison_repeat_rate(-2)
-assert lf.ui.get_gt_comparison_repeat_rate() == 1.0
-lf.ui.set_gt_comparison_repeat_rate(float('nan'))
-assert lf.ui.get_gt_comparison_repeat_rate() == 5.0
-lf.ui.set_gt_comparison_repeat_rate(7)
-lf.ui.set_gt_comparison_repeat_rate(12, persist=False)
-assert lf.ui.get_gt_comparison_repeat_rate() == 12.0
+assert lf.ui.get_camera_browse_repeat() is True
+assert lf.ui.get_camera_browse_repeat_rate() == 5.0
+lf.ui.set_camera_browse_repeat(False)
+lf.ui.set_camera_browse_repeat_rate(200)
+assert lf.ui.get_camera_browse_repeat_rate() == 20.0
+lf.ui.set_camera_browse_repeat_rate(-2)
+assert lf.ui.get_camera_browse_repeat_rate() == 1.0
+lf.ui.set_camera_browse_repeat_rate(float('nan'))
+assert lf.ui.get_camera_browse_repeat_rate() == 5.0
+lf.ui.set_camera_browse_repeat_rate(7)
+lf.ui.set_camera_browse_repeat_rate(12, persist=False)
+assert lf.ui.get_camera_browse_repeat_rate() == 12.0
 """)
     path = tmp_path / "home/.lichtfeld/config/preferences.json"
     preferences = json.loads(path.read_text())
-    assert preferences["gt_comparison_key_repeat"] is False
-    assert preferences["gt_comparison_repeat_rate"] == 7.0
-    _editor(camera_runtime, "import lichtfeld as lf\nlf.ui.set_gt_comparison_repeat_rate(12)")
-    assert json.loads(path.read_text())["gt_comparison_repeat_rate"] == 12.0
+    assert preferences["camera_browse_repeat"] is False
+    assert preferences["camera_browse_repeat_rate"] == 7.0
+    _editor(camera_runtime, "import lichtfeld as lf\nlf.ui.set_camera_browse_repeat_rate(12)")
+    assert json.loads(path.read_text())["camera_browse_repeat_rate"] == 12.0
 
 
 @pytest.mark.skipif(os.environ.get('LFS_TEST_WAYLAND_KEYS') != '1',
@@ -120,9 +120,9 @@ print(os.getpid())
     # Keep one virtual keyboard alive. Recreating it between holds can cause
     # compositor focus changes that do not occur with a physical keyboard.
     cases = [
-        ('Right', 1100, 'lf.ui.set_gt_comparison_key_repeat(False)'),
-        ('Right', 1100, 'lf.ui.set_gt_comparison_key_repeat(True)\nlf.ui.set_gt_comparison_repeat_rate(2)'),
-        ('Right', 1100, 'lf.ui.set_gt_comparison_repeat_rate(8)'),
+        ('Right', 1100, 'lf.ui.set_camera_browse_repeat(False)'),
+        ('Right', 1100, 'lf.ui.set_camera_browse_repeat(True)\nlf.ui.set_camera_browse_repeat_rate(2)'),
+        ('Right', 1100, 'lf.ui.set_camera_browse_repeat_rate(8)'),
         ('Left', 1100, ''),
         ('Right', 80, ''),
         ('Right', 1100, 'lf.ui.toggle_gt_comparison()\nassert not lf.ui.is_gt_comparison_active()'),

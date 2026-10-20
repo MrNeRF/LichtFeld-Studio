@@ -778,7 +778,7 @@ set(TEST_FILES
     test_theme_registry.cpp
     test_viewport.cpp
     test_navigation_up_axis.cpp
-    test_gt_navigation_repeat.cpp
+    test_camera_browse_repeat.cpp
     test_input_controller_focus.cpp
     test_input_key_repeat.cpp
     test_input_layout_chords.cpp

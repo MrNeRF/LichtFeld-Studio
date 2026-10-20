@@ -1,15 +1,15 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "input/gt_navigation_repeat.hpp"
+#include "input/camera_browse_repeat.hpp"
 #include <gtest/gtest.h>
 
 namespace {
-    using Repeat = lfs::vis::input::GTNavigationRepeat;
+    using Repeat = lfs::vis::input::CameraBrowseRepeat;
     using namespace std::chrono_literals;
 } // namespace
 
-TEST(GTNavigationRepeat, TapAndReleaseDoNotRepeat) {
+TEST(CameraBrowseRepeat, TapAndReleaseDoNotRepeat) {
     Repeat repeat;
     const Repeat::Clock::time_point now{};
     EXPECT_EQ(repeat.poll(now, 5), 0);
@@ -20,7 +20,7 @@ TEST(GTNavigationRepeat, TapAndReleaseDoNotRepeat) {
     EXPECT_EQ(repeat.poll(now + 2s, 5), 0);
 }
 
-TEST(GTNavigationRepeat, InitialDelayThenConfiguredCadence) {
+TEST(CameraBrowseRepeat, InitialDelayThenConfiguredCadence) {
     Repeat repeat;
     const Repeat::Clock::time_point now{};
     repeat.start(10, 1, now);
@@ -32,7 +32,7 @@ TEST(GTNavigationRepeat, InitialDelayThenConfiguredCadence) {
     EXPECT_EQ(repeat.poll(now + 600ms, 20), 1);
 }
 
-TEST(GTNavigationRepeat, SlowRateHasNoBurstAfterDelayedFrame) {
+TEST(CameraBrowseRepeat, SlowRateHasNoBurstAfterDelayedFrame) {
     Repeat repeat;
     const Repeat::Clock::time_point now{};
     repeat.start(10, -1, now);
@@ -43,7 +43,7 @@ TEST(GTNavigationRepeat, SlowRateHasNoBurstAfterDelayedFrame) {
     EXPECT_EQ(repeat.poll(now + 10500ms, 1), 0);
 }
 
-TEST(GTNavigationRepeat, DirectionChangeAndCancellation) {
+TEST(CameraBrowseRepeat, DirectionChangeAndCancellation) {
     Repeat repeat;
     const Repeat::Clock::time_point now{};
     repeat.start(10, 1, now);
@@ -56,7 +56,7 @@ TEST(GTNavigationRepeat, DirectionChangeAndCancellation) {
     EXPECT_EQ(repeat.poll(now + 1s, 5), 0);
 }
 
-TEST(GTNavigationRepeat, FrameQuantizationDoesNotAccumulateDrift) {
+TEST(CameraBrowseRepeat, FrameQuantizationDoesNotAccumulateDrift) {
     using namespace std::chrono;
     for (const float rate : {5.0f, 20.0f}) {
         Repeat repeat;

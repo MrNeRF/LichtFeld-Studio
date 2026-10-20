@@ -743,3 +743,23 @@ TEST(PreferencesMigration, ViewportVignetteIsGlobalAndValidated) {
     ASSERT_TRUE(paths);
     EXPECT_EQ(readPreferences(*paths)["viewport_vignette"]["radius"], 0.4);
 }
+
+TEST(PreferencesMigration, CameraBrowseRepeatKeepsValuesSavedUnderOldNames) {
+    const auto home = makeHome("lfs_camera_browse_repeat_rename");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    writePreferences(*paths, {{"schema_version", 1},
+                              {"gt_comparison_key_repeat", false},
+                              {"gt_comparison_repeat_rate", 9.0}});
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    EXPECT_FALSE(preferences.cameraBrowseRepeat());
+    EXPECT_FLOAT_EQ(preferences.cameraBrowseRepeatRate(), 9.0f);
+    preferences.setCameraBrowseRepeatRate(11.0f);
+    const auto saved = readPreferences(*paths);
+    EXPECT_EQ(saved["camera_browse_repeat"], false);
+    EXPECT_EQ(saved["camera_browse_repeat_rate"], 11.0);
+    EXPECT_FALSE(saved.contains("gt_comparison_key_repeat"));
+    EXPECT_FALSE(saved.contains("gt_comparison_repeat_rate"));
+}

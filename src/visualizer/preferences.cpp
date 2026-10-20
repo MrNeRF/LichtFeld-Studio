@@ -27,6 +27,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 #ifdef _WIN32
 #include <process.h>
@@ -335,10 +336,10 @@ namespace lfs::vis {
                                     "scene_upscaler", "marketplace_view"})
                 (void)field<std::string>(values, key, {});
             for (const char* key : {"remember_camera_navigation", "remember_camera_view_snap",
-                                    "camera_view_snap", "new_project_align_grid", "gt_comparison_key_repeat",
+                                    "camera_view_snap", "new_project_align_grid", "camera_browse_repeat",
                                     "scene_graph_selection_markers", "marketplace_git_checkout"})
                 (void)field<bool>(values, key, false);
-            for (const char* key : {"zoom_speed", "navigation_speed", "gt_comparison_repeat_rate", "viewport_toolbar_free_y"})
+            for (const char* key : {"zoom_speed", "navigation_speed", "camera_browse_repeat_rate", "viewport_toolbar_free_y"})
                 (void)field<float>(values, key, 0.0f);
             const auto scale = values.find("ui_scale");
             if (scale != values.end() && !scale->is_number() &&
@@ -364,6 +365,16 @@ namespace lfs::vis {
                 (void)field<bool>(*mcp, "expose_network", false);
                 (void)field<int>(*mcp, "port", 0);
                 (void)field<bool>(*mcp, "request_logging", false);
+            }
+        }
+
+        // Camera browsing preferences were first saved under GT comparison names.
+        void migrateRenamedKeysLocked() {
+            for (const auto& [from, to] : {std::pair{"gt_comparison_key_repeat", "camera_browse_repeat"},
+                                           std::pair{"gt_comparison_repeat_rate", "camera_browse_repeat_rate"}}) {
+                if (values.contains(from) && !values.contains(to))
+                    values[to] = values[from];
+                values.erase(from);
             }
         }
 
@@ -459,6 +470,7 @@ namespace lfs::vis {
                 values = std::move(parsed);
                 persisted_values = values;
                 input.close();
+                migrateRenamedKeysLocked();
                 logInvalidFieldsLocked();
                 const auto schema = values.find("schema_version");
                 if (schema != values.end() &&
@@ -864,28 +876,28 @@ namespace lfs::vis {
             return clampNavigationSpeed(it->get<float>(), kDefaultNavigationSpeed);
         return kDefaultNavigationSpeed;
     }
-    void UserPreferences::setGTComparisonKeyRepeat(const bool enabled) {
+    void UserPreferences::setCameraBrowseRepeat(const bool enabled) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        impl_->values["gt_comparison_key_repeat"] = enabled;
+        impl_->values["camera_browse_repeat"] = enabled;
         impl_->saveLocked();
     }
-    bool UserPreferences::gtComparisonKeyRepeat() {
+    bool UserPreferences::cameraBrowseRepeat() {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        return lfs::core::persisted_settings::field<bool>(impl_->values, "gt_comparison_key_repeat", true);
+        return lfs::core::persisted_settings::field<bool>(impl_->values, "camera_browse_repeat", true);
     }
-    void UserPreferences::setGTComparisonRepeatRate(const float value, const bool persist) {
+    void UserPreferences::setCameraBrowseRepeatRate(const float value, const bool persist) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        impl_->values["gt_comparison_repeat_rate"] = std::isfinite(value) ? std::clamp(value, 1.0f, 20.0f) : 5.0f;
+        impl_->values["camera_browse_repeat_rate"] = std::isfinite(value) ? std::clamp(value, 1.0f, 20.0f) : 5.0f;
         if (persist)
             impl_->saveLocked();
     }
-    float UserPreferences::gtComparisonRepeatRate() {
+    float UserPreferences::cameraBrowseRepeatRate() {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        const float value = lfs::core::persisted_settings::field<float>(impl_->values, "gt_comparison_repeat_rate", 5.0f);
+        const float value = lfs::core::persisted_settings::field<float>(impl_->values, "camera_browse_repeat_rate", 5.0f);
         return std::isfinite(value) ? std::clamp(value, 1.0f, 20.0f) : 5.0f;
     }
     void UserPreferences::setLanguage(const std::string& value) {
