@@ -382,7 +382,20 @@ class IngestCLI(unittest.TestCase):
                 self.assertEqual(metadata["output"]["pixel_format"], "rgb_uint8" if depth == 8 else "rgb_uint16")
 
     def test_avif_independent_decoder_matrix_chroma_and_integer_reference(self):
-        def pixels(path, depth=16):
+        def pixels(path, depth=16, identity_format=None):
+            if identity_format:
+                # MC=0 stores G, B, R planes. Read integer planes directly so
+                # the external reader's GBR/YUV naming cannot invoke a YUV matrix.
+                data = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(path), "-frames:v", "1",
+                                                "-pix_fmt", identity_format, "-f", "rawvideo", "-"], timeout=20)
+                values = array.array("B" if depth == 8 else "H", data)
+                if depth > 8 and sys.byteorder != "little":
+                    values.byteswap()
+                count = len(values) // 3
+                self.assertEqual(len(values), count * 3)
+                scale = 65535 / ((1 << depth) - 1)
+                return [round(values[plane * count + i] * scale)
+                        for i in range(count) for plane in (2, 0, 1)]
             data = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(path), "-frames:v", "1",
                                             "-pix_fmt", "rgb24" if depth == 8 else "rgb48le", "-f", "rawvideo", "-"], timeout=20)
             if depth == 8:
@@ -405,12 +418,22 @@ class IngestCLI(unittest.TestCase):
                         quality = () if lossless else ("--avif-quality", "90")
                         self.invoke(*args, "--output", output, "--format", "avif", "--avif-depth", str(depth), *quality)
                         path = next(output.glob("*.avif"))
-                        stream = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_streams", "-of", "json", str(path)]))["streams"][0]
+                        probe = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_streams", "-show_frames",
+                                                                   "-read_intervals", "%+#1", "-of", "json", str(path)]))
+                        stream = probe["streams"][0]
                         self.assertEqual(stream["color_space"], "gbr" if lossless else "bt709" if primaries == "bt709" else "bt2020nc")
-                        self.assertTrue(stream["pix_fmt"].startswith("gbrp" if lossless else "yuv444p"), stream)
+                        # Readers can name identity-matrix planes GBR or YUV444.
+                        # Preserve exact depth/chroma checks and verify RGB values below.
+                        suffix = f"{depth}le" if depth > 8 else ""
+                        formats = {"yuv444p" + suffix}
+                        if lossless:
+                            formats.add("gbrp" + suffix)
+                        self.assertIn(stream["pix_fmt"], formats)
+                        self.assertEqual(len(probe["frames"]), 1)
+                        self.assertIn(probe["frames"][0]["pix_fmt"], formats)
                         self.assertEqual(stream["color_range"], "pc")
                         self.assertEqual(stream["color_transfer"], "iec61966-2-1")
-                        actual = pixels(path, depth)
+                        actual = pixels(path, depth, probe["frames"][0]["pix_fmt"] if lossless else None)
                         self.assertEqual(len(actual), len(reference))
                         errors = [abs(a-b)/65535 for a,b in zip(actual, reference)]
                         if lossless:
