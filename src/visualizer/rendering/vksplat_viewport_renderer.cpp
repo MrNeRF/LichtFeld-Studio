@@ -117,7 +117,8 @@ namespace lfs::vis {
             return bytes;
         }
 
-        std::size_t requestedLodPhysicalPages(const std::size_t logical_chunks,
+        std::size_t requestedLodPhysicalPages(const VulkanContext& context,
+                                              const std::size_t logical_chunks,
                                               const lfs::core::SplatData& splat_data,
                                               const std::size_t pool_budget_splats,
                                               const float pool_vram_fraction,
@@ -141,12 +142,24 @@ namespace lfs::vis {
             };
             if (logical_chunks > 0 && !sizing.full_pool && (out_of_core || pool_budget_splats == 0)) {
                 try {
-                    sizing.free_bytes = lfs::core::gpu_backend_memory_info(lfs::core::default_gpu_backend()).free_bytes;
+                    // The pool lives on the viewer GPU, which can differ from
+                    // the tensor device and must supply its own heap budget.
+                    VkPhysicalDeviceMemoryProperties properties{};
+                    vkGetPhysicalDeviceMemoryProperties(context.physicalDevice(), &properties);
+                    std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> budgets{};
+                    vmaGetHeapBudgets(context.allocator(), budgets.data());
+                    std::size_t budget_bytes = 0, used_bytes = 0;
+                    for (uint32_t i = 0; i < properties.memoryHeapCount; ++i)
+                        if (properties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+                            budget_bytes += budgets[i].budget;
+                            used_bytes += budgets[i].usage;
+                        }
+                    sizing.free_bytes = budget_bytes > used_bytes ? budget_bytes - used_bytes : 0;
                 } catch (const std::exception& error) {
-                    LOG_WARN("LOD memory budget query failed: {}", error.what());
+                    LOG_WARN("LOD viewer memory budget query failed: {}", error.what());
                 }
                 if (sizing.free_bytes == 0)
-                    LOG_ERROR("LOD pool sizing: no backend memory budget available; using minimum pool");
+                    LOG_ERROR("LOD pool sizing: no viewer memory budget available; using minimum pool");
             }
             return detail::lodPoolPages(sizing);
         }
@@ -2115,6 +2128,7 @@ namespace lfs::vis {
             physical_pages = lod_page_cache_.snapshot().physical_pages;
         } else {
             physical_pages = requestedLodPhysicalPages(
+                *context_,
                 logical_chunks,
                 splat_data,
                 lod_page_pool_splats_,

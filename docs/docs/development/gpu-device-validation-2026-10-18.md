@@ -691,3 +691,100 @@ merge; no new native Linux GPU coverage or performance measurement is claimed.
 Evidence: `.local/gpu-backend-preferences/review-upstream` and
 `review-final-mask`, including `final-summary.json`, `portable-summary.json`,
 the archived failing mask reproduction and the final training `summary.json`.
+
+## Local integration with dev on 20 October 2026
+
+This follow-up remains local: the published PR head is `b52f84251` and is not
+updated by this integration. The incoming snapshot is
+`cc1dda56e12933bf27142b62b74e880d0abc7cff`, 36 upstream commits beyond the
+previous merged `dev` base `c002ec1b4`.
+The resolved merge is saved locally as `4bf0e5a3f`; the rendering/test adaptations
+are kept in a separate follow-up commit.
+
+The single textual conflict was at the end of
+`tests/python/test_preferences_panel.py`. Both the GPU reset/restart tests and
+the new upstream splat-drag preference tests are preserved. The other shared
+changes were reviewed after automatic merging, including Preferences and all
+ten locales, Python UI bindings/stubs, the window/input lifecycle, CUDA image
+loading, independent-device transfer gates, RAD/LOD streaming and FastGS/MRNF.
+
+### Semantic integration and local corrections
+
+- Preserve upstream MRNF growth exchange, live crop-box/ROI updates, fisheye/GUT
+  corrections, JPEG XL support, native drag/scrubbing and Metal RAD/LOD changes.
+  The new Fast backward impact fields increase the parameter block from 576 to
+  592 bytes; the host and Slang layouts agree. The added specialization bit 23
+  does not overlap the existing low-four-bit stage selector. Existing forward
+  and backward subgroup limits remain eight and four respectively.
+- Correct LOD memory-budget ownership: the pool is allocated by the Vulkan
+  viewer, so its free-memory estimate now queries that viewer's physical
+  device and VMA allocator, not the default tensor backend. Aggregate only
+  device-local heap budgets/usage and clamp subtraction to zero, matching the
+  existing conservative memory-counter convention. Keep upstream page floors,
+  budget fractions, current-pool adjustment, quantization and feedback policy.
+  This matters when training and viewing use different GPUs/vendors. The
+  unavailable-budget fallback still logs and uses the minimum pool.
+- Update the separate keymap test's UI mock with the GPU preference/inventory
+  APIs now required by the parent panel. Its language test continues to require
+  exactly one keymap invalidation while exercising that section independently
+  of the parent panel's separate full refresh. Production UI code is unchanged.
+- Align the existing CUDA ROI byte-contract test with the new upstream kernel
+  signature by passing null rays/depth/alpha for its original pinhole case.
+  The old call site no longer compiled against the new declaration. No kernel,
+  numerical tolerance or expected byte comparison is changed.
+
+### Local verification
+
+The combined CUDA/Vulkan Windows application and UI/policy/interop targets build.
+The artifact-only portable runner includes the current upstream tests for ROI,
+training-image operations and MRNF, as well as the existing Fast/gsplat, Adam,
+stable sorting, queue readback and prepared-image/cache contracts. Its fixture
+paths and entry point follow the repository test configuration; no runner
+changes are added to the product.
+
+| Check | Passed | Skipped | Disabled | Failed |
+|---|---:|---:|---:|---:|
+| GPU/device preferences Python tests | 106 | 0 | 0 | 0 |
+| Extended Python UI/localization/keymap/resources | 237 | 1 | 0 | 1 upstream |
+| GPU configuration policy | 13 | 0 | 0 | 0 |
+| Default source interop | 2 | 0 | 0 | 0 |
+| Radeon source interop | 1 | 0 | 0 | 0 |
+| Windows UI | 355 | 5 | 2 | 0 |
+| Portable numerical/strategy/cache suite, Radeon Vulkan selection | 160 | 84 | 3 | 0 |
+| Portable numerical/strategy/cache suite, NVIDIA Vulkan selection | 160 | 84 | 3 | 0 |
+| Final LOD page-cache and budget-feedback contracts | 19 | 0 | 0 | 0 |
+
+The extended Python row includes the 106 preference tests; it is not an
+additional disjoint count. Its only remaining failure is
+`test_every_scrollbar_uses_the_theme_size`: Graphite has a 4-pixel scrollbar
+while the upstream test expects 6. Both the test and theme have exactly the
+same Git blobs as this upstream snapshot. Neither is changed to conceal the
+failure. Temporary-directory permission errors in an initial isolated test
+attempt were resolved by using a workspace-local temporary directory.
+
+The two portable selections also execute CUDA-specific fixtures where available.
+The newly added removal-impact oracle, ROI masks, training-image contracts and
+MRNF strategy cases pass. Only the two existing large pair-sort throughput
+benchmarks are excluded; correctness/boundary/stability tests remain enabled.
+These runs are functional validation and do not supply new performance claims.
+The 19 LOD cases check pool/cache/feedback policy; a new large-RAD physical
+residency comparison across the two adapters is not claimed by these tests.
+
+Three-step resumed MCMC training completes and saves on CUDA, NVIDIA Vulkan and
+Radeon Vulkan. Fresh six-step MRNF training with growth exchange enabled also
+completes on all three, using images limited to 256 pixels and a 19,555-Gaussian
+cap. These short smokes confirm initialization, impact-enabled execution and
+saving; no actual growth-exchange victim/replacement log was emitted in these
+six steps, so an end-to-end replacement event is not claimed. Separate strategy
+unit tests exercise exchange selection/quota behavior.
+
+Backend-neutrality, I/O-discipline, CUDA log format, error-debt and whitespace
+checks pass without baseline changes. Logs and JSON counts are under
+`.local/gpu-backend-preferences/merge-dev-20261020`.
+
+No push, public comment, PR-body change or remote Mac source update is part of
+this follow-up. Full Mac/Linux runtime matrices and long training-quality /
+performance comparisons are not rerun here. Earlier tables describe their
+original revisions and cannot certify the new upstream FastGS/MRNF kernels or
+serve as matched timings for this new base. The extra local rendering correction
+does not change CUDA/Metal math; upstream's own training changes are retained.
