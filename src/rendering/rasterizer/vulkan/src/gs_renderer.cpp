@@ -1037,7 +1037,9 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
     createComputePipeline(pipeline_cumsum.add_block_offsets, spirv_paths.at("cumsum_add_block_offsets"));
     createComputePipeline(pipeline_radix_histogram_clear, spirv_paths.at("radix_histogram_clear"));
     createComputePipeline(pipeline_outline_resolve, spirv_paths.at("selection_outline_resolve"));
+    createComputePipeline(pipeline_outline_coverage, spirv_paths.at("selection_outline_coverage"));
     createComputePipeline(pipeline_outline_mask, spirv_paths.at("selection_outline_mask"));
+    createComputePipeline(pipeline_outline_tiles, spirv_paths.at("selection_outline_tiles"));
     createComputePipeline(pipeline_expected_depth_finalize,
                           spirv_paths.at("expected_depth_finalize"));
     createComputePipeline(pipeline_sorting_indirect_1.upsweep, spirv_paths.at("radix_sort/upsweep_indirect"));
@@ -1424,6 +1426,30 @@ void VulkanGSRenderer::executeProjectionForward(
         tagged);
 }
 
+void VulkanGSRenderer::executeOutlineCoverage(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers) {
+    using lfs::rendering::vulkan::BufferUse;
+    const uint32_t dimensions[] = {uniforms.image_width, uniforms.image_height};
+    executeCompute({{dimensions[0], 8u}, {dimensions[1], 8u}}, &dimensions, sizeof(dimensions), pipeline_outline_coverage,
+                   std::vector<TaggedBinding>{
+                       {buffers.pixel_state.deviceBuffer, BufferUse::ComputeRead},
+                       {buffers.pixel_outline_ids.deviceBuffer, BufferUse::ComputeWrite},
+                   });
+}
+
+void VulkanGSRenderer::executeOutlineTiles(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers) {
+    using lfs::rendering::vulkan::BufferUse;
+    const size_t tiles = size_t(uniforms.grid_width) * uniforms.grid_height;
+    auto& selected_tiles = clearDeviceBuffer(buffers.outline_tiles, tiles);
+    executeCompute({{uniforms.num_splats, 64u}}, &uniforms, sizeof(uniforms), pipeline_outline_tiles,
+                   std::vector<TaggedBinding>{
+                       {buffers.primitive_sort_indices.deviceBuffer, BufferUse::ComputeRead},
+                       {buffers.rect_tile_space.deviceBuffer, BufferUse::ComputeRead},
+                       {buffers.visible_count.deviceBuffer, BufferUse::ComputeRead},
+                       {buffers.overlay_flags.deviceBuffer, BufferUse::ComputeRead},
+                       {selected_tiles, BufferUse::ComputeReadWrite},
+                   });
+}
+
 void VulkanGSRenderer::executeLegacyDepthWaves(
     const VulkanGSRendererUniforms& uniforms,
     VulkanGSPipelineBuffers& buffers,
@@ -1439,9 +1465,11 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
     const bool use_gut_rasterization,
     const bool overlays_active,
     const bool predicate_waves,
-    const bool selection_outline) {
+    const bool selection_outline,
+    const bool single_node_outline) {
     PerfTimer::Timer<PerfTimer::RasterizeForward> timer(this);
     DEVICE_GUARD;
+    const bool raster_outline = selection_outline && !single_node_outline;
 
     if (armed == 0 || uniforms.sort_capacity != HIGS_DEPTH_WAVE_INSTANCES ||
         sort_bits <= 0 || sort_bits > 32) {
@@ -1529,10 +1557,12 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
     auto& pixel_depth_weight =
         resize_scratch(buffers.pixel_depth_weight, alloc_pixels);
     auto& n_contributors = resize_scratch(buffers.n_contributors, alloc_pixels);
+    if (raster_outline)
+        executeOutlineTiles(uniforms, buffers);
     const _VulkanBuffer* outline_ids = selection_outline
                                            ? &clearDeviceBuffer(buffers.pixel_outline_ids, alloc_pixels)
                                            : nullptr;
-    const _VulkanBuffer* outline_scene_depth = selection_outline
+    const _VulkanBuffer* outline_scene_depth = raster_outline
                                                    ? &resizeDeviceBuffer(buffers.pixel_outline_scene_depth, 4u * alloc_pixels)
                                                    : nullptr;
 
@@ -1824,23 +1854,34 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                 raster_bindings.push_back({lod_logical_indices, BufferUse::ComputeRead});
                 raster_bindings.push_back({lod_weights, BufferUse::ComputeRead});
             }
-            if (selection_outline) {
+            if (raster_outline) {
+                // Keep the normal color raster's register pressure and early
+                // termination unchanged. Only selected tiles run the mask shader.
+                const bool spark_rad = (uniforms.lod_enabled & 4u) != 0u;
+                auto& color_pipeline = use_gut_rasterization
+                                           ? (spark_rad ? (overlays_active ? pipeline_rasterize_forward_3dgut_rad : pipeline_rasterize_forward_3dgut_plain_rad)
+                                                        : (overlays_active ? pipeline_rasterize_forward_3dgut : pipeline_rasterize_forward_3dgut_plain))
+                                           : (overlays_active ? pipeline_rasterize_forward : pipeline_rasterize_forward_plain);
+                executeComputeIndirect(record,
+                                       indirect::byteOffset(indirect::DepthWave::kFullscreenWordOffset),
+                                       &wave_uniforms, sizeof(wave_uniforms),
+                                       color_pipeline[buffers.is_unsorted_1], raster_bindings);
                 raster_bindings.push_back({*outline_ids, BufferUse::ComputeReadWrite});
                 if (!use_gut_rasterization)
                     raster_bindings.push_back({transform_indices, BufferUse::ComputeRead});
-                const bool gpu_lod = (uniforms.lod_enabled & 32u) != 0u;
-                const auto& lod_ids = gpu_lod ? buffers.lod_gpu_indices.deviceBuffer : buffers.lod_indices.deviceBuffer;
-                const auto& logical_ids = gpu_lod ? buffers.lod_gpu_logical_indices.deviceBuffer : buffers.lod_logical_indices.deviceBuffer;
-                raster_bindings.push_back({(uniforms.lod_enabled & 1u) != 0u ? lod_ids : pixel_depth, BufferUse::ComputeRead});
-                raster_bindings.push_back({(uniforms.lod_enabled & 8u) != 0u ? logical_ids : pixel_depth, BufferUse::ComputeRead});
+                if (!use_gut_rasterization) {
+                    raster_bindings.push_back({lod_indices, BufferUse::ComputeRead});
+                    raster_bindings.push_back({lod_logical_indices, BufferUse::ComputeRead});
+                }
                 raster_bindings.push_back({*outline_scene_depth, BufferUse::ComputeReadWrite});
+                raster_bindings.push_back({buffers.outline_tiles.deviceBuffer, BufferUse::ComputeRead});
             }
             const bool spark_rad = (uniforms.lod_enabled & 4u) != 0u;
             auto& raster_pipeline = use_gut_rasterization
-                                        ? (selection_outline ? (spark_rad ? (overlays_active ? pipeline_rasterize_outline_gut_rad : pipeline_rasterize_outline_gut_plain_rad) : (overlays_active ? pipeline_rasterize_outline_gut : pipeline_rasterize_outline_gut_plain))
-                                                             : (spark_rad ? (overlays_active ? pipeline_rasterize_forward_3dgut_rad : pipeline_rasterize_forward_3dgut_plain_rad) : (overlays_active ? pipeline_rasterize_forward_3dgut : pipeline_rasterize_forward_3dgut_plain)))
-                                        : (selection_outline ? (overlays_active ? pipeline_rasterize_outline : pipeline_rasterize_outline_plain)
-                                                             : (overlays_active ? pipeline_rasterize_forward : pipeline_rasterize_forward_plain));
+                                        ? (raster_outline ? (spark_rad ? (overlays_active ? pipeline_rasterize_outline_gut_rad : pipeline_rasterize_outline_gut_plain_rad) : (overlays_active ? pipeline_rasterize_outline_gut : pipeline_rasterize_outline_gut_plain))
+                                                          : (spark_rad ? (overlays_active ? pipeline_rasterize_forward_3dgut_rad : pipeline_rasterize_forward_3dgut_plain_rad) : (overlays_active ? pipeline_rasterize_forward_3dgut : pipeline_rasterize_forward_3dgut_plain)))
+                                        : (raster_outline ? (overlays_active ? pipeline_rasterize_outline : pipeline_rasterize_outline_plain)
+                                                          : (overlays_active ? pipeline_rasterize_forward : pipeline_rasterize_forward_plain));
             executeComputeIndirect(record,
                                    indirect::byteOffset(indirect::DepthWave::kFullscreenWordOffset),
                                    &wave_uniforms, sizeof(wave_uniforms),
@@ -1860,6 +1901,8 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                        });
     }
     if (selection_outline) {
+        if (single_node_outline)
+            executeOutlineCoverage(uniforms, buffers);
         const uint32_t dimensions[] = {uniforms.image_width, uniforms.image_height};
         executeCompute({{dimensions[0], 8u}, {dimensions[1], 8u}},
                        dimensions, sizeof(dimensions), pipeline_outline_resolve,
@@ -2995,7 +3038,8 @@ void VulkanGSRenderer::executeMacroDepthWaves(
     const bool overlays_active,
     const bool predicate_waves,
     const std::span<const uint32_t> exact_depth_sample_mask,
-    const _VulkanBuffer* outline_transform_indices) {
+    const _VulkanBuffer* outline_transform_indices,
+    const bool single_node_outline) {
     PerfTimer::Timer<PerfTimer::RasterizeForward> timer(this);
     DEVICE_GUARD;
 
@@ -3040,6 +3084,8 @@ void VulkanGSRenderer::executeMacroDepthWaves(
     const size_t alloc_pixels = scratch_bucket.alloc_pixels;
     const size_t alloc_tiles = scratch_bucket.alloc_tiles;
     if (outline_transform_indices) {
+        if (!single_node_outline)
+            executeOutlineTiles(uniforms, buffers);
         clearDeviceBuffer(buffers.pixel_outline_ids, alloc_pixels);
         resizeDeviceBuffer(buffers.pixel_outline_scene_depth, 4u * alloc_pixels);
     }
@@ -3335,7 +3381,7 @@ void VulkanGSRenderer::executeMacroDepthWaves(
                 compose_pipeline[buffers.is_unsorted_1],
                 compose_bindings);
         }
-        if (outline_transform_indices) {
+        if (outline_transform_indices && !single_node_outline) {
             executeCompute({{uniforms.image_width, 16u}, {uniforms.image_height, 16u}},
                            &wave_uniforms, sizeof(wave_uniforms), pipeline_outline_mask,
                            std::vector<TaggedBinding>{
@@ -3350,10 +3396,13 @@ void VulkanGSRenderer::executeMacroDepthWaves(
                                {overlay_params, BufferUse::ComputeRead},
                                {buffers.pixel_outline_ids.deviceBuffer, BufferUse::ComputeReadWrite},
                                {buffers.pixel_outline_scene_depth.deviceBuffer, BufferUse::ComputeReadWrite},
+                               {buffers.outline_tiles.deviceBuffer, BufferUse::ComputeRead},
                            });
         }
     }
     if (outline_transform_indices) {
+        if (single_node_outline)
+            executeOutlineCoverage(uniforms, buffers);
         const uint32_t dimensions[] = {uniforms.image_width, uniforms.image_height};
         executeCompute({{dimensions[0], 8u}, {dimensions[1], 8u}},
                        dimensions, sizeof(dimensions), pipeline_outline_resolve,

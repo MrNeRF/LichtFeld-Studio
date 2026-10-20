@@ -323,7 +323,8 @@ public:
                                 bool overlays_active,
                                 bool predicate_waves = true,
                                 std::span<const uint32_t> exact_depth_sample_mask = {},
-                                const _VulkanBuffer* outline_transform_indices = nullptr);
+                                const _VulkanBuffer* outline_transform_indices = nullptr,
+                                bool single_node_outline = false);
     [[nodiscard]] bool supportsFloat16Storage() const { return supports_float16_storage_; }
     [[nodiscard]] bool supportsConditionalRendering() const {
         return supports_conditional_rendering_;
@@ -365,7 +366,8 @@ public:
                                  bool use_gut_rasterization = false,
                                  bool overlays_active = true,
                                  bool predicate_waves = true,
-                                 bool selection_outline = false);
+                                 bool selection_outline = false,
+                                 bool single_node_outline = false);
     // When set, forward forces the non-batched per-pixel rasterizer: the
     // load-balanced batched compose only covers a subset of pixels, leaving the
     // rest with shared-buffer residue, which corrupts a one-shot depth readback.
@@ -528,14 +530,18 @@ protected:
     _ComputePipelinePair pipeline_rasterize_forward_batches_plain = _ComputePipelinePair(7);
     _ComputePipeline pipeline_compose_tile_batches = _ComputePipeline(17);
     _ComputePipeline pipeline_compose_tile_batches_plain = _ComputePipeline(12);
-    _ComputePipelinePair pipeline_rasterize_outline = _ComputePipelinePair(20);
-    _ComputePipelinePair pipeline_rasterize_outline_gut = _ComputePipelinePair(28);
-    _ComputePipelinePair pipeline_rasterize_outline_gut_rad = _ComputePipelinePair(28);
-    _ComputePipelinePair pipeline_rasterize_outline_gut_plain_rad = _ComputePipelinePair(28);
-    _ComputePipelinePair pipeline_rasterize_outline_plain = _ComputePipelinePair(20);
-    _ComputePipelinePair pipeline_rasterize_outline_gut_plain = _ComputePipelinePair(28);
+    _ComputePipelinePair pipeline_rasterize_outline = _ComputePipelinePair(21);
+    _ComputePipelinePair pipeline_rasterize_outline_gut = _ComputePipelinePair(27);
+    _ComputePipelinePair pipeline_rasterize_outline_gut_rad = _ComputePipelinePair(27);
+    _ComputePipelinePair pipeline_rasterize_outline_gut_plain_rad = _ComputePipelinePair(27);
+    _ComputePipelinePair pipeline_rasterize_outline_plain = _ComputePipelinePair(21);
+    _ComputePipelinePair pipeline_rasterize_outline_gut_plain = _ComputePipelinePair(27);
     _ComputePipeline pipeline_outline_resolve = _ComputePipeline(3);
-    _ComputePipeline pipeline_outline_mask = _ComputePipeline(11);
+    _ComputePipeline pipeline_outline_mask = _ComputePipeline(12);
+    _ComputePipeline pipeline_outline_coverage = _ComputePipeline(2);
+    void executeOutlineCoverage(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
+    _ComputePipeline pipeline_outline_tiles = _ComputePipeline(5);
+    void executeOutlineTiles(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
     _ComputePipeline pipeline_expected_depth_finalize = _ComputePipeline(2);
     bool depth_capture_ = false;
     struct _CumsumComputePipeline {

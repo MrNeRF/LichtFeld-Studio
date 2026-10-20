@@ -317,3 +317,138 @@ lf.on_frame(outline_selection_cycle, duration_s=20.)
             "backend": backend, "roll": roll, "dense": dense,
             "single_a_pixels": len(mask_a), "single_b_pixels": len(mask_b), "both_pixels": len(both),
         }, indent=2))
+
+
+@pytest.mark.parametrize("backend", [2, 3])
+def test_selection_outline_ignores_other_objects_faint_halo(tmp_path, backend):
+    endpoint = os.environ.get("LFS_OUTLINE_TEST_ENDPOINT")
+    if not os.environ.get("LFS_EXECUTABLE") or not endpoint:
+        pytest.skip("Requires an owned GPU test application")
+    _rpc(endpoint, "initialize", {"protocolVersion": "2025-03-26", "capabilities": {},
+                                 "clientInfo": {"name": "outline-crossing-test", "version": "1"}})
+    _rpc(endpoint, "tools/list", {})
+    for resource in ("runtime/catalog", "runtime/state", "ui/state", "scene/state", "selection/current"):
+        _rpc(endpoint, "resources/read", {"uri": "lichtfeld://" + resource})
+    left, halo, right = (tmp_path / (name + ".ply") for name in ("left", "halo", "right"))
+    _write_splat(left, -1.2, (.2, .2, .1), z=-.4)
+    _write_splat(halo, -.1, (.8, .8, .1), z=-.4, opacity=.003)
+    _write_splat(right, .6, (.3, .3, .1))
+    header, body = left.read_bytes().split(b"end_header\n", 1)
+    left.write_bytes(header.replace(b"element vertex 1", b"element vertex 2") + b"end_header\n" +
+                     body + halo.read_bytes().split(b"end_header\n", 1)[1])
+    _editor(endpoint, f"""
+lf.clear_scene()
+s = lf.get_render_settings()
+s.raster_backend = {backend}
+s.selection_outline = True
+s.desaturate_unselected = False
+s.selection_color_center_marker = (1., 0., 0.)
+s.show_grid = False
+s.show_camera_frustums = False
+s.background_color = (0., 0., 0.)
+s.scene_upscaler = 'native'
+s.render_scale = 1.
+s.lod_enabled = False
+lf.set_camera((0., 0., 6.), (0., 0., 0.), (0., 1., 0.))
+""")
+    for path in (left, right):
+        _editor(endpoint, f"lf.load_file({str(path)!r})")
+        deadline = time.monotonic() + 30
+        while True:
+            nodes = json.loads(_rpc(endpoint, "resources/read", {"uri": "lichtfeld://scene/nodes"})["contents"][0]["text"])
+            if any(node["name"] == path.stem for node in nodes["nodes"]):
+                break
+            assert time.monotonic() < deadline, nodes
+            time.sleep(.05)
+    _select(endpoint, "lf.select_node('right')")
+    (width, _), baseline = _mask(endpoint, tmp_path / "right-only.json")
+    assert baseline
+    xmin, xmax = min(i % width for i in baseline), max(i % width for i in baseline)
+    ymin, ymax = min(i // width for i in baseline), max(i // width for i in baseline)
+    _select(endpoint, "lf.select_nodes(['left', 'right'])")
+    together = _mask(endpoint, tmp_path / "both.json")[1]
+    right_region = {i for i in together if xmin <= i % width <= xmax and ymin <= i // width <= ymax}
+    # A genuine 0.3% contribution may move the coverage edge by a pixel;
+    # it must not introduce an object-ID boundary through the opaque interior.
+    edge_neighborhood = {i + dy * width + dx for i in baseline
+                         for dy in range(-2, 3) for dx in range(-2, 3)}
+    assert not right_region - edge_neighborhood, "Another selected object's faint halo drew an interior contour"
+
+
+def test_selection_outline_mcp_roundtrip():
+    endpoint = os.environ.get("LFS_OUTLINE_TEST_ENDPOINT")
+    if not endpoint:
+        pytest.skip("Requires an owned test application")
+    _rpc(endpoint, "initialize", {"protocolVersion": "2025-03-26", "capabilities": {},
+                                 "clientInfo": {"name": "outline-mcp-test", "version": "1"}})
+    tools = _rpc(endpoint, "tools/list", {})["tools"]
+    for resource in ("runtime/catalog", "runtime/state", "ui/state", "scene/state", "selection/current"):
+        _rpc(endpoint, "resources/read", {"uri": "lichtfeld://" + resource})
+    setter = next(tool for tool in tools if tool["name"] == "render_settings_set")
+    assert setter["inputSchema"]["properties"]["selection_outline"]["type"] == "boolean"
+
+    def call(name, arguments):
+        result = _rpc(endpoint, "tools/call", {"name": name, "arguments": arguments})
+        assert not result.get("isError"), result
+        return result.get("structuredContent") or json.loads(result["content"][0]["text"])
+
+    original = call("render_settings_get", {})["settings"]["selection_outline"]
+    try:
+        for enabled in (False, True, False):
+            call("render_settings_set", {"selection_outline": enabled})
+            assert call("render_settings_get", {})["settings"]["selection_outline"] is enabled
+    finally:
+        call("render_settings_set", {"selection_outline": original})
+
+
+@pytest.mark.parametrize("backend", [2, 3])
+def test_selection_outline_single_node_respects_selection_depth_filter(tmp_path, backend):
+    endpoint = os.environ.get("LFS_OUTLINE_TEST_ENDPOINT")
+    if not endpoint:
+        pytest.skip("Requires an owned GPU test application")
+    _rpc(endpoint, "initialize", {"protocolVersion": "2025-03-26", "capabilities": {},
+                                 "clientInfo": {"name": "outline-filter-test", "version": "1"}})
+    _rpc(endpoint, "tools/list", {})
+    for resource in ("runtime/catalog", "runtime/state", "ui/state", "scene/state", "selection/current"):
+        _rpc(endpoint, "resources/read", {"uri": "lichtfeld://" + resource})
+    one, second = tmp_path / "one.ply", tmp_path / "second.ply"
+    _write_splat(one, -.6, (.2, .2, .1))
+    _write_splat(second, .6, (.2, .2, .1))
+    header, body = one.read_bytes().split(b"end_header\n", 1)
+    one.write_bytes(header.replace(b"element vertex 1", b"element vertex 2") + b"end_header\n" +
+                    body + second.read_bytes().split(b"end_header\n", 1)[1])
+    _editor(endpoint, f"lf.clear_scene()\nlf.load_file({str(one)!r})")
+    deadline = time.monotonic() + 30
+    while True:
+        nodes = json.loads(_rpc(endpoint, "resources/read", {"uri": "lichtfeld://scene/nodes"})["contents"][0]["text"])
+        if any(node["name"] == "one" for node in nodes["nodes"]):
+            break
+        assert time.monotonic() < deadline, nodes
+        time.sleep(.05)
+    _editor(endpoint, f"""
+s = lf.get_render_settings()
+s.raster_backend = {backend}
+s.selection_outline = True
+s.desaturate_unselected = False
+s.selection_color_center_marker = (1., 0., 0.)
+s.show_grid = False
+s.show_camera_frustums = False
+s.background_color = (0., 0., 0.)
+s.scene_upscaler = 'native'
+s.render_scale = 1.
+s.lod_enabled = False
+s.hide_outside_depth_box = False
+lf.set_camera((0., 0., 6.), (0., 0., 0.), (0., 1., 0.))
+""")
+    result = _rpc(endpoint, "tools/call", {"name": "render_settings_set", "arguments": {"depth_filter_enabled": False}})
+    assert not result.get("isError"), result
+    _select(endpoint, "lf.select_node('one')")
+    baseline = _mask(endpoint, tmp_path / "all.json")[1]
+    assert baseline
+    result = _rpc(endpoint, "tools/call", {"name": "render_settings_set", "arguments": {
+        "depth_filter_min": [0., -10., -10.], "depth_filter_max": [10., 10., 10.], "depth_filter_enabled": True}})
+    assert not result.get("isError"), result
+    filtered = _mask(endpoint, tmp_path / "filtered.json")[1]
+    assert 0 < len(filtered) < len(baseline), "Rendered coverage bypassed the object selection filter"
+    _rpc(endpoint, "tools/call", {"name": "render_settings_set", "arguments": {"depth_filter_enabled": False}})
+    _editor(endpoint, "s.desaturate_unselected = False")

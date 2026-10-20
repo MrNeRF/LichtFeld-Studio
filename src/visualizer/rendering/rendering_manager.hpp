@@ -893,6 +893,7 @@ namespace lfs::vis {
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;
         std::string last_logged_vksplat_render_error_;
+        bool last_vksplat_object_outline_ = false;
         std::optional<std::string> prepareImportRenderCheck(const RenderContext& context, const std::function<void()>& prepare_viewport);
         void noteImportRenderFrame(uint64_t scene_generation, std::string error = {});
         glm::ivec2 last_nonzero_viewport_size_{0, 0};

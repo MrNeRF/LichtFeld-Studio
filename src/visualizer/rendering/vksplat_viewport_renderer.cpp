@@ -774,6 +774,8 @@ namespace lfs::vis {
                 {"rasterize_outline_gut_plain", lfs::core::path_to_utf8((root / "generated/rasterize_outline_gut_plain.spv"))},
                 {"selection_outline_resolve", lfs::core::path_to_utf8((root / "generated/selection_outline_resolve.spv"))},
                 {"selection_outline_mask", lfs::core::path_to_utf8((root / "generated/selection_outline_mask.spv"))},
+                {"selection_outline_coverage", lfs::core::path_to_utf8((root / "generated/selection_outline_coverage.spv"))},
+                {"selection_outline_tiles", lfs::core::path_to_utf8((root / "generated/selection_outline_tiles.spv"))},
                 {"rasterize_forward", lfs::core::path_to_utf8((root / "generated/rasterize_forward.spv"))},
                 {"rasterize_forward_3dgut", lfs::core::path_to_utf8((root / "generated/rasterize_forward_3dgut.spv"))},
                 {"rasterize_forward_plain", lfs::core::path_to_utf8((root / "generated/rasterize_forward_plain.spv"))},
@@ -9533,7 +9535,7 @@ namespace lfs::vis {
                     {
                         LOG_TIMER("vksplat.render.record.executeSortPrimitivesByDepth");
                         renderer_.executeSortPrimitivesByDepthVisible(uniforms, buffers_, visible_capacity,
-                                                                      deterministic_export);
+                                                                      deterministic_export || request.overlay.markers.show_object_outline);
                     }
                     {
                         LOG_TIMER("vksplat.render.record.executeMacroCoverage");
@@ -9613,6 +9615,14 @@ namespace lfs::vis {
 
                 renderer_.executeWavePartition(
                     uniforms, buffers_, armed_depth_waves, higs_active);
+                const bool single_node_outline = request.overlay.markers.show_object_outline &&
+                                                 !overlay_bindings->raster_overlays_active &&
+                                                 request.overlay.emphasis.emphasized_node_mask.size() == 1u &&
+                                                 request.overlay.emphasis.emphasized_node_mask[0] &&
+                                                 request.scene.node_visibility_mask.size() <= 1u &&
+                                                 !request.filters.crop_region && !request.filters.ellipsoid_region &&
+                                                 request.filters.crop_regions.empty() && request.filters.ellipsoid_regions.empty() &&
+                                                 !request.filters.view_volume;
                 if (higs_active) {
                     renderer_.executeMacroDepthWaves(
                         uniforms,
@@ -9626,7 +9636,8 @@ namespace lfs::vis {
                         overlay_bindings->raster_overlays_active,
                         /*predicate_waves=*/!export_wave_batch,
                         request.exact_depth_sample_mask,
-                        request.overlay.markers.show_object_outline ? &overlay_bindings->transform_indices : nullptr);
+                        request.overlay.markers.show_object_outline ? &overlay_bindings->transform_indices : nullptr,
+                        single_node_outline);
                 } else {
                     renderer_.executeLegacyDepthWaves(
                         uniforms,
@@ -9643,7 +9654,8 @@ namespace lfs::vis {
                         request.gut,
                         overlay_bindings->raster_overlays_active,
                         /*predicate_waves=*/!export_wave_batch,
-                        request.overlay.markers.show_object_outline);
+                        request.overlay.markers.show_object_outline,
+                        single_node_outline);
                 }
                 LOG_TIMER("vksplat.render.record.composePixelState");
                 // Record compose into the rasterizer's batch so the entire frame

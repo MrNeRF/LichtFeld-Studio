@@ -1082,6 +1082,7 @@ namespace lfs::app {
                                  {"use_crop_box", settings.use_crop_box},
                                  {"show_ellipsoid", settings.show_ellipsoid},
                                  {"use_ellipsoid", settings.use_ellipsoid},
+                                 {"selection_outline", settings.selection_outline},
                                  {"desaturate_unselected", settings.desaturate_unselected},
                                  {"desaturate_cropping", settings.desaturate_cropping},
                                  {"hide_outside_depth_box", settings.hide_outside_depth_box},
@@ -1281,6 +1282,7 @@ namespace lfs::app {
             set_bool("use_crop_box", settings.use_crop_box);
             set_bool("show_ellipsoid", settings.show_ellipsoid);
             set_bool("use_ellipsoid", settings.use_ellipsoid);
+            set_bool("selection_outline", settings.selection_outline);
             set_bool("desaturate_unselected", settings.desaturate_unselected);
             set_bool("desaturate_cropping", settings.desaturate_cropping);
             set_bool("hide_outside_depth_box", settings.hide_outside_depth_box);
@@ -3334,6 +3336,7 @@ namespace lfs::app {
                         {"show_grid", json{{"type", "boolean"}}},
                         {"show_camera_frustums", json{{"type", "boolean"}}},
                         {"point_cloud_mode", json{{"type", "boolean"}}},
+                        {"selection_outline", json{{"type", "boolean"}}},
                         {"show_crop_box", json{{"type", "boolean"}}},
                         {"use_crop_box", json{{"type", "boolean"}}},
                         {"show_ellipsoid", json{{"type", "boolean"}}},
