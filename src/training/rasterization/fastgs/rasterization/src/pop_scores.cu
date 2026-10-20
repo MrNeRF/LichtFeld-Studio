@@ -5,9 +5,9 @@
 #include "buffer_utils.h"
 #include "helper_math.h"
 #include "kernel_utils.cuh"
-#include "training/kernels/warp_reduce.cuh"
 #include "pop_scores.h"
 #include "rasterization_config.h"
+#include "training/kernels/warp_reduce.cuh"
 #include <cooperative_groups.h>
 
 namespace cg = cooperative_groups;
