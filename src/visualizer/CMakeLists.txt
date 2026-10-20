@@ -214,23 +214,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/elements/terminal_element.cpp
 )
 
-# These large visualizer TUs exceed the COFF section limit in Debug and need
-# /bigobj. Let CMake select the supported spelling of the C++23 language flag.
-if(MSVC)
-    set_source_files_properties(
-            ${CMAKE_CURRENT_SOURCE_DIR}/sequencer/rml_sequencer_panel.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/sequencer/rml_sequencer_panel_timeline.cpp
-            PROPERTIES COMPILE_OPTIONS "/bigobj"
-    )
-    set_source_files_properties(
-            ${CMAKE_CURRENT_SOURCE_DIR}/visualizer_impl.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/project/project_lifecycle.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/gui/gui_manager.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/scene/scene_manager.cpp
-            PROPERTIES COMPILE_OPTIONS "/bigobj"
-    )
-endif()
-
 # Set include directories
 target_include_directories(lfs_visualizer
         PUBLIC
