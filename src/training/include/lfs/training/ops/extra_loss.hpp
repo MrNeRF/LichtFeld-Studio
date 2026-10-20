@@ -12,7 +12,5 @@ namespace lfs::gpu_ops {
     struct ExtraLossOps {
         void (*regularize)(In raw_parameter, Out gradient, Out loss, Out reduction_temp,
                            Regularizer, float weight);
-        void (*admm)(In sigmoid, In z, In u, Out opacity_gradient,
-                     float rho, float grad_loss, bool accumulate);
     };
 } // namespace lfs::gpu_ops

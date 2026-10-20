@@ -3448,7 +3448,7 @@ namespace lfs::vis::gui {
                              fps = static_cast<float>(export_options.framerate),
                              cam_state = frame_states[frame],
                              clip_time = lfs::io::video::videoExportSampleTime(frame, export_options.framerate)]() mutable
-                            -> std::expected<lfs::core::Tensor, std::string> {
+                                -> std::expected<lfs::core::Tensor, std::string> {
                                 if (sequence_uuid) {
                                     auto& sequencer_ui = viewer->getGuiManager()->sequencerUI();
                                     const auto* current = sequencer_ui.controller().plySequence();

@@ -17,6 +17,7 @@
 #include "lfs/training/ops/mcmc.hpp"
 #include "lfs/training/ops/morton.hpp"
 #include "lfs/training/ops/mrnf.hpp"
+#include "lfs/training/ops/popspa.hpp"
 #include "lfs/training/ops/ppisp.hpp"
 #include "lfs/training/ops/raster.hpp"
 #include "lfs/training/ops/refine.hpp"
@@ -62,6 +63,7 @@ namespace lfs::training {
         const ops::LpipsOps* lpips = nullptr;
         const ops::StructureOps* structure = nullptr;
         const ops::BlobOps* blob = nullptr;
+        const ops::PopspaOps* popspa = nullptr;
     };
 
     enum class Family {
@@ -86,6 +88,7 @@ namespace lfs::training {
         Lpips,
         Blob,
         Structure,
+        Popspa,
         Count
     };
 

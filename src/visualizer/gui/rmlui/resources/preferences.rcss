@@ -423,3 +423,14 @@ body.floating-panel {
 .gpu-device-select { flex: 0 1 330dp; width: 330dp; min-width: 200dp; max-width: 100%; }
 
 .gpu-running-card .gpu-device-name { flex: 1; min-width: 0; }
+.preferences-repeat-rate {
+    display: flex;
+    align-items: center;
+}
+
+.preferences-repeat-rate > .number-input {
+    flex: 0 0 60dp;
+    width: 60dp;
+    height: 18dp;
+    text-align: center;
+}

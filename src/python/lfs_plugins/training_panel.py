@@ -189,12 +189,11 @@ def _display_ppisp_activation_step(params):
     return step if step >= 0 else _resolved_ppisp_activation_step(params)
 
 
-SLIDER_PROPS = ["lambda_dssim", "init_opacity", "prune_ratio"]
+SLIDER_PROPS = ["lambda_dssim", "init_opacity"]
 
 SCRUB_FIELD_DEFS = {
     "lambda_dssim": ScrubFieldSpec(0.0, 1.0, 0.01, "%.3f"),
     "init_opacity": ScrubFieldSpec(0.01, 1.0, 0.01, "%.3f"),
-    "prune_ratio": ScrubFieldSpec(0.0, 1.0, 0.01, "%.3f"),
 }
 
 RENDER_SYNC = {
@@ -505,9 +504,6 @@ class TrainingPanel(Panel):
             "label_init_opacity", lambda: tr("training.init.init_opacity")
         )
         model.bind_func(
-            "label_prune_ratio", lambda: tr("training_params.prune_ratio")
-        )
-        model.bind_func(
             "label_no_save_steps", lambda: tr("training_panel.no_save_steps")
         )
         model.bind_func("label_add", lambda: tr("common.add"))
@@ -560,7 +556,6 @@ class TrainingPanel(Panel):
         "evaluation_fields": ("evaluation", "test_every evaluation", ("training.tooltip.test_every",)),
         "lambda_dssim": ("losses", "lambda_dssim ssim", ("training.tooltip.lambda_dssim",)),
         "init_opacity": ("init", "init_opacity", ("training.tooltip.init_opacity",)),
-        "prune_ratio": ("basic_params", "prune_ratio", ("training.tooltip.prune_ratio",)),
         "save_steps": ("save_steps", "save_steps eval_steps", ("training_panel.save_eval_steps",)),
     }
 

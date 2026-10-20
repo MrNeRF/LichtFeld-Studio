@@ -4,7 +4,6 @@
 #include "core/tensor.hpp"
 #include "cuda_backend_test.hpp"
 #include "lfs/training/ops/registry.hpp"
-#include "training/components/sparsity_optimizer_kernels.hpp"
 #include "training/kernels/regularization.cuh"
 
 #include <gtest/gtest.h>
@@ -54,23 +53,4 @@ namespace {
         }
     }
 
-    TEST_F(ExtraLossOpsTest, AdmmMatchesDirectLauncher) {
-        constexpr size_t n = 1027;
-        std::vector<float> values(n);
-        for (size_t i = 0; i < n; ++i) {
-            values[i] = float((i * 79 + 31) % 257) / 256.f;
-        }
-        const auto sigmoid = Tensor::from_vector(values, {n, 1}, Device::GPU);
-        const auto z = sigmoid * 0.7f;
-        const auto u = sigmoid * 0.03f;
-        for (const bool accumulate : {false, true}) {
-            auto actual = Tensor::full({n, 1}, 0.17f, Device::GPU);
-            auto expected = actual.clone();
-            lfs::training::training_ops(GpuBackend::CUDA).extra_loss->admm(sigmoid, z, u, actual, 0.03f, 0.7f, accumulate);
-            lfs::training::launch_admm_backward_fused(expected.ptr<float>(), sigmoid.ptr<float>(),
-                                                      z.ptr<float>(), u.ptr<float>(), 0.03f, 0.7f, n, accumulate);
-            ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-            EXPECT_EQ(bytes(actual), bytes(expected));
-        }
-    }
 } // namespace

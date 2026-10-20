@@ -4,7 +4,7 @@
 // The Metal photometric, mask, extra-loss and geometry ops against CPU
 // transliterations of their CUDA kernels (ssim.cu, ssim_reduction.cu,
 // l1_loss.cu, mask_preprocess.cu, regularization.cu,
-// sparsity_optimizer_kernels.cu, depth_loss.cu, normal_loss.cu,
+// depth_loss.cu, normal_loss.cu,
 // normal_consistency_loss.cu), evaluated in double. SSIM partials are rounded
 // to half as the CUDA workspace stores them. A finite-difference check covers
 // the SSIM gradient itself.
@@ -672,7 +672,7 @@ namespace {
         EXPECT_EQ(download(loss)[0], 0.f);
     }
 
-    // ---- Extra loss (regularization.cu, sparsity_optimizer_kernels.cu) ---------
+    // ---- Extra loss (regularization.cu) ------------------------------------------
 
     TEST_P(PortableLosses, ExtraLossMatchesReference) {
         constexpr size_t n = 1027;
@@ -704,19 +704,6 @@ namespace {
         Tensor loss = Tensor::full({1}, -9.f, Device::GPU), temp = Tensor::zeros({1024}, Device::GPU), none;
         table_->extra_loss->regularize(upload(uniform(n, 1), {n, 1}), none, loss, temp, ops::Regularizer::Scale, 0.f);
         EXPECT_EQ(download(loss)[0], -9.f) << "zero weight leaves the loss untouched";
-
-        const auto sig = uniform(n, 6), z = uniform(n, 7), u = uniform(n, 8, -0.1f, 0.1f), g0 = uniform(n, 9);
-        for (const bool accumulate : {true, false}) {
-            Tensor gradient = upload(g0, {n, 1});
-            table_->extra_loss->admm(upload(sig, {n, 1}), upload(z, {n, 1}), upload(u, {n, 1}), gradient, 0.03f, 0.7f,
-                                     accumulate);
-            Field want(n);
-            for (size_t i = 0; i < n; ++i) {
-                const double grad = 0.03 * (sig[i] - z[i] + u[i]) * sig[i] * (1.0 - sig[i]) * 0.7;
-                want[i] = accumulate ? g0[i] + grad : grad;
-            }
-            expect_field(download(gradient), want, 1e-7, 1e-6, std::format("admm accumulate={}", accumulate));
-        }
     }
 
     // ---- Geometry (depth_loss.cu, normal_loss.cu, normal_consistency_loss.cu) --

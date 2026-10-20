@@ -101,7 +101,8 @@ static FastBackwardPixel fast_backward_pixel(constant FastBlendBackwardParams& p
     const uint pixel = p.width * pix.y + pix.x;
     s.last = p.n_contrib[pixel];
     s.transmittance = p.final_transmittance[final_index];
-    s.grad_color = float3(p.grad_image[pixel], p.grad_image[n_pixels + pixel], p.grad_image[2u * n_pixels + pixel]);
+    if (kFastImpactScore != 2u)
+        s.grad_color = float3(p.grad_image[pixel], p.grad_image[n_pixels + pixel], p.grad_image[2u * n_pixels + pixel]);
     // dL/dT of output = color + T * background; alpha = 1 - T.
     const float3 bg = fast_background(p.bg_color, p.bg_image, pixel, n_pixels);
     if (kFastImpactScore != 0u)
@@ -161,9 +162,13 @@ static bool fast_accumulate_pixel(thread FastBackwardPixel& s, thread FastBlendA
         // How much the pixel changes when this splat is removed.
         const float3 difference = abs(color - s.behind);
         const float removal_impact = weight * (difference.x + difference.y + difference.z);
-        a.impact_sum += removal_impact;
+        a.impact_sum += kFastImpactScore == 2u ? weight * weight * dot(difference, difference) : removal_impact;
         a.impact_peak = fmax(a.impact_peak, removal_impact);
         s.behind = alpha * color + one_minus_alpha * s.behind;
+    }
+    if (kFastImpactScore == 2u) {
+        s.transmittance = transmittance_before;
+        return true;
     }
     const float normal_dot = kFastNormalChannel != 0u ? dot(normal, s.grad_normal) : 0.0f;
     a.densification_weight += weight;
@@ -344,11 +349,13 @@ kernel void fast_blend_backward(constant FastBlendBackwardParams& p [[buffer(0)]
                     if (lane == 0u) {
                         if (impact_sum != 0.0f)
                             fast_atomic_add(p.impact_sum + prim, impact_sum);
-                        if (impact_peak > 0.0f)
+                        if (kFastImpactScore != 2u && impact_peak > 0.0f)
                             atomic_fetch_max_explicit(p.impact_peak + prim, as_type<uint>(impact_peak),
                                                       memory_order_relaxed);
                     }
                 }
+                if (kFastImpactScore == 2u)
+                    continue;
                 float v[16] = {a.mean.x, a.mean.y, a.conic.x, a.conic.y, a.conic.z, a.opacity,
                                a.color.x, a.color.y, a.color.z, a.depth, a.normal.x, a.normal.y,
                                a.normal.z, a.densification_weight, a.densification_error, a.edge};
@@ -399,6 +406,7 @@ struct FastAdamGroup {
     device const uchar* frozen;
     device const uchar* crop;
     device const float* screen_share;
+    device float* gradient;
     int frozen_n, crop_n, screen_share_n;
     int joint_bits, value_bits, value_cells;
     int primitives, elements, attributes;
@@ -490,6 +498,12 @@ static void fast_adam_row(constant FastAdamGroup& g, thread const float* grads, 
 static void fast_adam_step(constant FastAdamGroup& g, thread const float* grads, const uint p, const uint row_elements,
                            const float step_scale, const float beta1, const float beta2, const float eps,
                            threadgroup float4* scratch, const FastLane t, const bool owner = true) {
+    if (g.gradient != nullptr) {
+        if (owner && p < uint(g.primitives))
+            for (uint i = 0; i < row_elements; ++i)
+                g.gradient[p * row_elements + i] += grads[i];
+        return;
+    }
     if (g.joint_bits == 16)
         fast_adam_row<16>(g, grads, p, row_elements, step_scale, beta1, beta2, eps, scratch, t, owner);
     else if (g.joint_bits == 8)
@@ -567,6 +581,36 @@ static void fast_adam_shN(constant FastAdamGroup& g, const uint p, const uint pa
     const bool f16 = kFastShStorage == kFastShFloat16;
     const uint cells = q16 ? uint(g.value_cells) : 0u;
     const uint layout_slots = sh_float4_slots(layout_rest);
+    if (g.gradient != nullptr) {
+        if (p >= uint(g.primitives))
+            return;
+        float basis[15];
+        if (compute)
+            fast_sh_basis(direction, basis);
+        const float2 vmm = q16 ? g.value_bounds[t.block] : float2(0.0f);
+        for (uint j = 0; j < kFastShSlotsPerThread; ++j) {
+            const uint k = part * kFastShSlotsPerThread + j;
+            if (k >= layout_slots)
+                continue;
+            const uint slot = sh_swizzled_index(p, k, layout_rest);
+            float4 grad = fast_shN_slot_grad(k, compute, basis, grad_color);
+            if (sh_weight > 0.0f) {
+                const float4 values = fast_shN_load(g, q16, f16, p, k, slot, cells, vmm);
+                const float coefficient = sh_weight / (float(primitives) * float((kFastShBases - 1u) * 3u));
+                for (uint c = 0; c < 4u; ++c) {
+                    const uint attribute = k * 4u + c;
+                    if (attribute < (kFastShBases - 1u) * 3u) {
+                        if (regularizer_allowed[attribute % 3u])
+                            grad[c] += 2.0f * coefficient * values[c];
+                        if (sh_loss != nullptr)
+                            atomic_fetch_add_explicit(sh_loss, coefficient * values[c] * values[c], memory_order_relaxed);
+                    }
+                }
+            }
+            reinterpret_cast<device float4*>(g.gradient)[slot] += grad;
+        }
+        return;
+    }
     const FastRowStep r = fast_row_step(g, p, 1.0f);
     const bool touch = r.touch && layout_slots > 0u && !(g.primitives > 0 && p >= uint(g.primitives));
     const uint active_slots = kFastShBases > 9u ? 12u : (kFastShBases > 4u ? 6u : 3u);
@@ -796,7 +840,7 @@ kernel void fast_backward_sh(constant FastBackwardShParams& p [[buffer(0)]],
     // and every part reads the color gradient before part 0 overwrites it.
     threadgroup_barrier(mem_flags::mem_device);
     fast_adam_step(p.sh0, sh0_grads, idx, 3u, 1.0f, p.beta1, p.beta2, p.eps, scratch, t, part == 0u);
-    if (kFastShBases > 1u && p.shN_adam.joint_bits == 8)
+    if (kFastShBases > 1u && (p.shN_adam.joint_bits == 8 || p.shN_adam.gradient != nullptr))
         fast_adam_shN(p.shN_adam, idx, part, kFastShLayoutRest, grad_color, direction, visible, regularizer_allowed, p.sh_weight, p.sh_loss, p.n, p.beta1, p.beta2,
                       p.eps, scratch, t);
     if (visible && part == 0u) {
@@ -821,18 +865,15 @@ struct FastBackwardGeometryParams {
     device float* densification;
     device atomic_float* scale_loss;
     device atomic_float* opacity_loss;
-    device const float* sparsity_sigmoid;
-    device const float* sparsity_z;
-    device const float* sparsity_u;
     FastAdamGroup means_adam;
     FastAdamGroup rotation_adam;
     FastAdamGroup scaling_adam;
     FastAdamGroup opacity_adam;
     float beta1, beta2, eps;
-    float scale_reg_weight, flatten_reg_weight, opacity_reg_weight, sparsity_rho, sparsity_grad_loss;
+    float scale_reg_weight, flatten_reg_weight, opacity_reg_weight;
         float width, height, fx, fy;
     float clip_left, clip_right, clip_top, clip_bottom;
-    uint n, sparsity_n, capacity;
+    uint n, capacity;
     uint log_scale;
     device float* rendered_count;
     device atomic_float* erank_loss;
@@ -868,11 +909,6 @@ static float fast_opacity_extra_grad(constant FastBackwardGeometryParams& p, con
     if (p.opacity_reg_weight > 0.0f && g.elements > 0) {
         const float opacity = fast_sigmoid(reinterpret_cast<device const float*>(g.param)[idx]);
         grad += p.opacity_reg_weight * opacity * (1.0f - opacity) / float(g.elements);
-    }
-    if (p.sparsity_sigmoid != nullptr && p.sparsity_z != nullptr && p.sparsity_u != nullptr && idx < p.sparsity_n) {
-        const float opacity = p.sparsity_sigmoid[idx];
-        grad += p.sparsity_rho * (opacity - p.sparsity_z[idx] + p.sparsity_u[idx]) * opacity * (1.0f - opacity) *
-                p.sparsity_grad_loss;
     }
     return grad;
 }

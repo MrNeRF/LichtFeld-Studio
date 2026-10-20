@@ -812,6 +812,7 @@ struct GsplatRasterParams {
     device const float* v_depth;
     device const float* v_normal;
     uint mode;
+    device float* pop_scores;
 };
 
 static float gsplat_background(constant GsplatRasterParams& p, const uint channel, const uint pixel) {
@@ -933,6 +934,7 @@ struct GsplatPixel {
     bool radial_depth;
     float v_depth, depth_buffer;
     float T, T_final, v_a, bg_accum, error, edge_weight;
+    bool pop;
     int bin_final;
     bool active;
 };
@@ -955,8 +957,33 @@ static GsplatPixel gsplat_pixel(constant GsplatRasterParams& p, const uint i, co
     px.T_final = 1.0f - p.alpha[pixel];
     px.T = px.T_final;
     px.bin_final = px.active ? p.last_ids[pixel] : 0;
-    px.v_c = float3(p.v_image[pixel], p.v_image[plane + pixel], p.v_image[2u * plane + pixel]);
-    px.v_a = p.v_alpha[pixel];
+    px.pop = p.pop_scores != nullptr;
+    if (px.pop && p.alpha[pixel] == 0.0f)
+        px.active = false;
+    if (px.pop && px.active) {
+        // Recover the forward float product directly: 1 - rendered alpha
+        // loses relative precision near the transmittance cutoff.
+        const uint tile = (i / kGsplatTile) * p.tiles_x + j / kGsplatTile;
+        float T = 1.0f;
+        for (int idx = p.tile_offsets[tile]; idx <= px.bin_final; ++idx) {
+            const uint g = p.gaussian_ids[idx];
+            const float3x3 M = gsplat_world_to_unit(gsplat_load4(p.quats, g), exp(gsplat_load3(p.scales, g)));
+            const float3 gro = M * (ray.origin - gsplat_load3(p.means, g));
+            const float3 grd = gsplat_safe_normalize(M * ray.dir);
+            const float3 gcrod = cross(grd, gro);
+            const float alpha = min(0.999f, gsplat_sigmoid(p.opacities[g]) * exp(-0.5f * dot(gcrod, gcrod)));
+            if (alpha < kGsplatAlphaMin)
+                continue;
+            const float next_T = T * (1.0f - alpha);
+            if (next_T <= 1e-4f)
+                break;
+            T = next_T;
+        }
+        px.T_final = T;
+        px.T = T;
+    }
+    px.v_c = px.pop ? float3(0.0f) : float3(p.v_image[pixel], p.v_image[plane + pixel], p.v_image[2u * plane + pixel]);
+    px.v_a = px.pop ? 0.0f : p.v_alpha[pixel];
     if(p.v_depth && (p.mode==2 || p.mode==4)) {
         px.v_depth/=max(p.alpha[pixel],1e-10f);
         if(p.alpha[pixel]>1e-10f) px.v_a-=px.v_depth*p.depth[pixel];
@@ -968,7 +995,8 @@ static GsplatPixel gsplat_pixel(constant GsplatRasterParams& p, const uint i, co
     }
     px.error = p.error_map != nullptr ? p.error_map[pixel] : 0.0f;
     px.edge_weight = p.edge_map != nullptr ? p.edge_map[pixel] : 0.0f;
-    px.buffer = float3(0.0f);
+    px.buffer = px.pop ? float3(gsplat_background(p, 0u, pixel), gsplat_background(p, 1u, pixel),
+                                gsplat_background(p, 2u, pixel)) : float3(0.0f);
     return px;
 }
 
@@ -1000,6 +1028,12 @@ static bool gsplat_contribute(thread GsplatPixel& px, const int isect, const flo
     const float ra = 1.0f / (1.0f - alpha);
     px.T *= ra;
     const float fac = alpha * px.T;
+    if (px.pop) {
+        const float3 delta = fac * (rgb - px.buffer);
+        grad.edge += dot(delta, delta);
+        px.buffer = alpha * rgb + (1.0f - alpha) * px.buffer;
+        return true;
+    }
     grad.rgb += fac * px.v_c;
     const float3 delta=xyzo.xyz-px.origin;
     const float depth=px.radial_depth?length(delta):dot(delta,px.depth_axis);
@@ -1076,6 +1110,12 @@ kernel void gsplat_rasterize_backward(constant GsplatRasterParams& p [[buffer(0)
             const bool hit1 = gsplat_contribute(px1, batch_end - t, xyzo, m0, m1, m2, quat, rgb, have_bg, grad);
             if (!simd_any(hit0 || hit1))
                 continue;
+            if (p.pop_scores != nullptr) {
+                const float score = simd_sum(grad.edge);
+                if (simd_is_first() && score != 0.0f)
+                    gsplat_atomic_add(p.pop_scores + as_type<uint>(s_rgb[t].w), score);
+                continue;
+            }
             const float values[kGsplatGradStride] = {
                 simd_sum(grad.mean.x),  simd_sum(grad.mean.y),  simd_sum(grad.mean.z),  simd_sum(grad.scale.x),
                 simd_sum(grad.scale.y), simd_sum(grad.scale.z), simd_sum(grad.quat.x),  simd_sum(grad.quat.y),

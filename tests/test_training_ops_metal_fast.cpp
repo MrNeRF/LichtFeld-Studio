@@ -11,6 +11,7 @@
 #include "core/gpu_backend_fwd.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
+#include "lfs/training/ops/popspa.hpp"
 #include "lfs/training/ops/registry.hpp"
 
 #include "cuda_backend_test.hpp"
@@ -553,7 +554,7 @@ namespace {
     // and regularizer tensors (absent unless a test sets them).
     struct AdamState {
         std::array<Tensor, 6> moments, bounds;
-        Tensor none, frozen, crop, screen_share, scale_loss, opacity_loss, sparsity_sigmoid, sparsity_z, sparsity_u;
+        Tensor none, frozen, crop, screen_share, scale_loss, opacity_loss;
         float frozen_lr_scale = 0.0f, cropbox_lr_scale = 1.0f, screen_share_limit = 0.0f, screen_share_penalty = 0.0f;
     };
 
@@ -599,9 +600,6 @@ namespace {
         return {.groups = {group(0), group(1), group(2), group(3), group(4), group(5)},
                 .scale_reg_loss = state.scale_loss,
                 .opacity_reg_loss = state.opacity_loss,
-                .sparsity_sigmoid = state.sparsity_sigmoid,
-                .sparsity_z = state.sparsity_z,
-                .sparsity_u = state.sparsity_u,
                 .beta1 = setup.beta1,
                 .beta2 = setup.beta2,
                 .eps = setup.eps};
@@ -1146,6 +1144,161 @@ namespace {
 
     // Q16 shN: the fused step moves the decoded values by -grad and re-encodes them
     // under the new block bounds.
+    TEST_P(PortableFastRaster, PopScoresMatchLeaveOneOut) {
+        ASSERT_NE(fast_ops().pop_scores, nullptr);
+        for (const bool image_background : {false, true}) {
+            SCOPED_TRACE(image_background);
+            Scene s = make_scene(12, 1, 40, 24, 47u, -2.3f, -1.6f);
+            if (image_background)
+                s.bg_image = random_image(s.width, s.height, 13u);
+            Gpu g = upload_scene(s, ops::ShStorage::Float32);
+            Frame frame;
+            forward(frame, s, g, {});
+            ASSERT_EQ(frame.result.code, ops::RasterResult::Code::Success) << frame.result.message;
+            const auto full = download(frame.image);
+            Tensor scores = Tensor::zeros({size_t(s.count), 8}, Device::GPU, DataType::UInt8);
+            fast_ops().pop_scores(frame.saved, g.bg_color, g.bg_image, scores);
+            const auto once = scores.cpu();
+            fast_ops().pop_scores(frame.saved, g.bg_color, g.bg_image, scores);
+            const auto twice = scores.cpu();
+            double total = 0;
+            for (int i = 0; i < s.count; ++i) {
+                SCOPED_TRACE(i);
+                Scene removed = s;
+                removed.opacities[i] = -100.f;
+                Gpu other = upload_scene(removed, ops::ShStorage::Float32);
+                Frame without;
+                forward(without, removed, other, {});
+                ASSERT_EQ(without.result.code, ops::RasterResult::Code::Success) << without.result.message;
+                const auto image = download(without.image);
+                double expected = 0;
+                for (size_t p = 0; p < full.size(); ++p) {
+                    const double delta = double(full[p]) - image[p];
+                    expected += delta * delta;
+                }
+                const double score = ops::decode_pop_score(once.ptr<uint8_t>() + 8 * i, ops::PopScoreEncoding::Float32Pair);
+                EXPECT_NEAR(score, expected, 1e-4 * expected + 1e-7);
+                EXPECT_NEAR(ops::decode_pop_score(twice.ptr<uint8_t>() + 8 * i, ops::PopScoreEncoding::Float32Pair),
+                            2 * score, 1e-6 * score + 1e-9);
+                total += score;
+                fast_ops().release(without.saved);
+            }
+            EXPECT_GT(total, 0.01);
+            // Scoring leaves the live frame available to backward.
+            AdamState state;
+            const auto adam = make_adam(g, state, s.count, {});
+            Tensor none;
+            const auto zero = Tensor::zeros_like(frame.image);
+            fast_ops().backward(frame.saved, {zero, none, none, none}, none, none, none, none, adam, DensificationType::None);
+            Scene missed = s;
+            for (int i = 0; i < missed.count; ++i)
+                missed.means[3 * i + 2] = -100.f;
+            Gpu missing = upload_scene(missed, ops::ShStorage::Float32);
+            Frame empty;
+            forward(empty, missed, missing, {});
+            ASSERT_EQ(empty.result.code, ops::RasterResult::Code::Success) << empty.result.message;
+            EXPECT_FALSE(empty.result.has_work);
+            fast_ops().pop_scores(empty.saved, missing.bg_color, missing.bg_image, scores);
+            const auto unchanged = scores.cpu();
+            EXPECT_EQ(std::memcmp(twice.data_ptr(), unchanged.data_ptr(), size_t(s.count) * 8), 0);
+            fast_ops().release(empty.saved);
+        }
+    }
+
+    TEST_P(PortableFastRaster, GradientCaptureAccumulatesWithoutAdamWrites) {
+        for (const auto storage : {ops::ShStorage::Float32, ops::ShStorage::Q16}) {
+            SCOPED_TRACE(static_cast<int>(storage));
+            Scene s = make_scene(24, 3, 48, 40, 61u, -2.3f, -1.6f);
+            const auto n = size_t(s.count);
+            s.sh0[0] = 2.1f; // Outside the DC regularizer's permitted range.
+            Gpu g = upload_scene(s, storage);
+            const LossWeights w = random_weights(s.width, s.height, 14u, false);
+            const auto render = reference_grads(s, make_view(s, false), w, false);
+            std::array<std::vector<double>, 6> expected{render.means, render.scales, render.rotations,
+                                                        render.opacities, render.sh0, std::vector<double>(padded(n) * float4_slots(g.layout_rest) * 4, 0)};
+            for (uint32_t i = 0; i < n; ++i)
+                for (uint32_t k = 0; k < rest_count(s.degree); ++k)
+                    for (uint32_t c = 0; c < 3; ++c)
+                        expected[5][swizzled_float_index(i, k, c, g.layout_rest)] = render.rest[i * 45 + k * 3 + c];
+            std::vector<double> sh_regularizer(expected[5].size(), 0);
+            for (uint32_t i = 0; i < n; ++i)
+                for (uint32_t k = 0; k < rest_count(s.degree); ++k)
+                    for (uint32_t c = 0; c < 3; ++c)
+                        sh_regularizer[swizzled_float_index(i, k, c, g.layout_rest)] =
+                            s.rest[i * 45 + k * 3 + c] / (n * rest_count(s.degree) * 3);
+            AdamState state;
+            auto adam = make_adam(g, state, s.count, {});
+            std::array<Tensor, 6> before, moments, bounds, value_bounds;
+            for (size_t i = 0; i < 6; ++i) {
+                auto& group = adam.groups[i];
+                group.enabled = false;
+                // Capture must also work without a fused Adam codec.
+                group.joint_bits = 0;
+                group.gradient = Tensor::zeros(i == 5 ? lfs::core::TensorShape{expected[5].size()} : group.parameter.shape(), Device::GPU);
+                before[i] = group.parameter.cpu();
+                moments[i] = group.packed_moments.cpu();
+                bounds[i] = group.joint_bounds.cpu();
+                value_bounds[i] = group.sh_value_bounds.is_valid() ? group.sh_value_bounds.cpu() : Tensor();
+            }
+            Tensor none;
+            const Tensor grad = plane(w.image, 3, s.height, s.width);
+            std::array<std::vector<float>, 6> first;
+            for (int pass = 1; pass <= 3; ++pass) {
+                SCOPED_TRACE(pass);
+                if (pass == 3) {
+                    adam.scale_reg_weight = 0.3f;
+                    adam.opacity_reg_weight = 0.4f;
+                    adam.dc_reg_weight = 0.2f;
+                    adam.sh_rest_reg_weight = 0.5f;
+                }
+                Frame frame;
+                forward(frame, s, g, {});
+                ASSERT_EQ(frame.result.code, ops::RasterResult::Code::Success) << frame.result.message;
+                fast_ops().backward(frame.saved, {grad, none, none, none}, none, none, none, none, adam, DensificationType::None);
+                for (size_t slot = 0; slot < 6; ++slot) {
+                    SCOPED_TRACE(slot);
+                    const auto& group = adam.groups[slot];
+                    const auto actual = download(group.gradient);
+                    if (pass == 1)
+                        first[slot] = actual;
+                    double scale = 0;
+                    for (double v : expected[slot])
+                        scale = std::max(scale, std::abs(v));
+                    for (size_t i = 0; i < actual.size(); ++i) {
+                        double reg = 0;
+                        if (pass == 3 && slot == 1)
+                            reg = 0.3 * std::exp(s.scales[i]) / (3 * n);
+                        if (pass == 3 && slot == 3) {
+                            const double o = 1.0 / (1.0 + std::exp(-double(s.opacities[i])));
+                            reg = 0.4 * o * (1 - o) / n;
+                        }
+                        if (pass == 3 && slot == 4) {
+                            const double limit = 0.5 / 0.28209479177387814;
+                            reg = (2.0 * 0.2 / 3.0) * (s.sh0[i] - std::clamp(double(s.sh0[i]), -limit, limit));
+                        }
+                        if (pass == 3 && slot == 5)
+                            reg = sh_regularizer[i];
+                        EXPECT_NEAR(actual[i], pass * expected[slot][i] + reg, pass * (1e-4 * scale + 1e-5)) << i;
+                        if (pass > 1)
+                            EXPECT_NEAR(actual[i], pass * first[slot][i] + reg, 2e-6 * std::abs(actual[i]) + 1e-7) << i;
+                    }
+                    const auto after = group.parameter.cpu();
+                    EXPECT_EQ(std::memcmp(before[slot].data_ptr(), after.data_ptr(), before[slot].numel() * lfs::core::dtype_size(before[slot].dtype())), 0);
+                    const auto after_moments = group.packed_moments.cpu();
+                    EXPECT_EQ(std::memcmp(moments[slot].data_ptr(), after_moments.data_ptr(), moments[slot].numel()), 0);
+                    if (value_bounds[slot].is_valid()) {
+                        const auto after_value_bounds = group.sh_value_bounds.cpu();
+                        EXPECT_EQ(std::memcmp(value_bounds[slot].data_ptr(), after_value_bounds.data_ptr(),
+                                              value_bounds[slot].numel() * sizeof(float)),
+                                  0);
+                    }
+                    const auto after_bounds = group.joint_bounds.cpu();
+                    EXPECT_EQ(std::memcmp(bounds[slot].data_ptr(), after_bounds.data_ptr(), bounds[slot].numel() * sizeof(float)), 0);
+                }
+            }
+        }
+    }
+
     TEST_P(PortableFastRaster, Q16ShRestFollowsReferenceGradient) {
         Scene s = make_scene(24, 2, 48, 40, 51u, -2.3f, -1.6f);
         Gpu g = upload_scene(s, ops::ShStorage::Q16);
@@ -1181,7 +1334,7 @@ namespace {
 
     double sigmoid(const double x) { return 1.0 / (1.0 + std::exp(-x)); }
 
-    // Masks, regularizers, sparsity and the
+    // Masks, regularizers and the
     // screen-share hinge on top of the render gradient, under the unit step.
     TEST_P(PortableFastRaster, FusedAdamTermsMatchReference) {
         Scene s = make_scene(24, 1, 48, 40, 61u, -2.3f, -1.6f);
@@ -1193,17 +1346,11 @@ namespace {
         const ReferenceGrads render = reference_grads(s, view, w, false);
 
         std::vector<uint8_t> frozen(n, 0), crop(n, 0);
-        std::vector<float> sparsity(n), z(n), u(n);
-        std::mt19937 rng(3u);
-        std::uniform_real_distribution<float> uniform(0.0f, 1.0f);
         for (size_t i = 0; i < n; ++i) {
             frozen[i] = i % 7 == 3;
             crop[i] = i % 5 == 1;
-            sparsity[i] = uniform(rng);
-            z[i] = uniform(rng);
-            u[i] = uniform(rng) - 0.5f;
         }
-        constexpr float scale_w = 0.3f, flatten_w = 0.2f, opacity_w = 0.4f, rho = 0.7f, grad_loss = 0.5f;
+        constexpr float scale_w = 0.3f, flatten_w = 0.2f, opacity_w = 0.4f;
         constexpr float limit = 0.01f, penalty = 0.5f;
         AdamState state;
         state.frozen = upload_mask(frozen);
@@ -1212,9 +1359,6 @@ namespace {
         state.cropbox_lr_scale = 0.5f;
         state.scale_loss = Tensor::zeros({1}, Device::GPU);
         state.opacity_loss = Tensor::zeros({1}, Device::GPU);
-        state.sparsity_sigmoid = upload(sparsity, {n});
-        state.sparsity_z = upload(z, {n});
-        state.sparsity_u = upload(u, {n});
         state.screen_share_limit = limit;
         state.screen_share_penalty = penalty;
 
@@ -1227,8 +1371,6 @@ namespace {
         adam.scale_reg_weight = scale_w;
         adam.flatten_reg_weight = flatten_w;
         adam.opacity_reg_weight = opacity_w;
-        adam.sparsity_rho = rho;
-        adam.sparsity_grad_loss = grad_loss;
         const Tensor grad_image = plane(w.image, 3, s.height, s.width);
         Tensor none;
         fast_ops().backward(frame.saved, {.image = grad_image, .alpha = none, .depth = none, .normal = none}, none,
@@ -1262,8 +1404,7 @@ namespace {
                 scale_loss += scale_w / (3.0 * n) * std::exp(sc[k]);
             }
             const double o = sigmoid(base.opacities[i]);
-            opacities[i] = row * (render.opacities[i] + opacity_w * o * (1.0 - o) / n +
-                                  rho * (sparsity[i] - z[i] + u[i]) * sparsity[i] * (1.0 - sparsity[i]) * grad_loss);
+            opacities[i] = row * (render.opacities[i] + opacity_w * o * (1.0 - o) / n);
             opacity_loss += opacity_w * o / n;
         }
         expect_grads(before.means, after.means, means, 1e-4, "means");

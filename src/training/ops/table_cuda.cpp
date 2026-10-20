@@ -17,6 +17,7 @@
 #include "lfs/training/ops/morton_cuda.hpp"
 #include "lfs/training/ops/mrnf_cuda.hpp"
 #include "lfs/training/ops/photometric_cuda.hpp"
+#include "lfs/training/ops/popspa_cuda.hpp"
 #include "lfs/training/ops/ppisp_cuda.hpp"
 #include "lfs/training/ops/refine_cuda.hpp"
 #include "lfs/training/ops/session_cuda.hpp"
@@ -49,6 +50,7 @@ namespace lfs::training {
             .lpips = &cuda_lpips_ops(),
             .structure = &cuda_structure_ops(),
             .blob = &cuda_blob_ops(),
+            .popspa = &cuda_popspa_ops(),
         };
         return table;
     }

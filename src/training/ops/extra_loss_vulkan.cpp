@@ -29,18 +29,15 @@ namespace lfs::training {
             uint64_t gradient;
             uint64_t loss;
             uint64_t scratch;
-            uint64_t z;
-            uint64_t u;
             uint32_t count;
             uint32_t partial_count;
             float weight;
-            float grad_loss;
             uint32_t kind;
             uint32_t accumulate;
         };
-        static_assert(sizeof(Push) == 72);
-        static_assert(offsetof(Push, count) == 48);
-        static_assert(offsetof(Push, accumulate) == 68);
+        static_assert(sizeof(Push) == 56);
+        static_assert(offsetof(Push, count) == 32);
+        static_assert(offsetof(Push, accumulate) == 48);
 
         struct Pipeline {
             std::shared_ptr<VulkanContext> context;
@@ -149,8 +146,8 @@ namespace lfs::training {
             const StorageRef scratch = ref(reduction_temp);
             const StorageRef grad = gradient.is_valid() ? ref(gradient) : StorageRef{};
             const Push push{vk::address(source), gradient.is_valid() ? vk::address(grad) : vk::address(source),
-                            vk::address(result), vk::address(scratch), 0, 0,
-                            static_cast<uint32_t>(count), blocks, weight, 0,
+                            vk::address(result), vk::address(scratch),
+                            static_cast<uint32_t>(count), blocks, weight,
                             kind == Regularizer::Scale ? 0u : 1u, gradient.is_valid() ? 1u : 0u};
             std::vector<StorageRef> reads{source};
             std::vector<StorageRef> writes{scratch};
@@ -165,25 +162,8 @@ namespace lfs::training {
             launch(push, 1, reduction_reads, reduction_writes, 1);
         }
 
-        void admm(In sigmoid, In z, In u, Out gradient,
-                  const float rho, const float grad_loss, const bool accumulate) {
-            const size_t count = sigmoid.numel();
-            if (count == 0)
-                return;
-            LFS_ASSERT_MSG(count <= UINT32_MAX, "Vulkan ADMM input exceeds 32-bit indexing");
-            const StorageRef source = ref(sigmoid), z_storage = ref(z), u_storage = ref(u), grad = ref(gradient);
-            const Push push{vk::address(source), vk::address(grad), 0, 0,
-                            vk::address(z_storage), vk::address(u_storage),
-                            static_cast<uint32_t>(count), 0, rho, grad_loss, 0, accumulate ? 1u : 0u};
-            const std::array reads{source, z_storage, u_storage, grad};
-            const std::array writes{grad};
-            const auto context = acquire_vulkan_context();
-            launch(push, 2, reads, writes, vk::dispatch_groups(*context, count));
-        }
-
         const ExtraLossOps kVulkanExtraLossOps{
             .regularize = regularize,
-            .admm = admm,
         };
     } // namespace
 

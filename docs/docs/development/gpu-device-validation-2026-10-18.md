@@ -788,3 +788,55 @@ performance comparisons are not rerun here. Earlier tables describe their
 original revisions and cannot certify the new upstream FastGS/MRNF kernels or
 serve as matched timings for this new base. The extra local rendering correction
 does not change CUDA/Metal math; upstream's own training changes are retained.
+
+## Dev sync 59 integration on 20 October 2026
+
+Merged the next incoming snapshot, `63d2ed5d352896b16fe4ff9f233f113ea68c9a72`
+(seven commits beyond the preceding snapshot). The sole textual conflict was
+the tail of `preferences.rcss`: preserve both the GPU cards/selectors/restart
+styles and upstream's new camera-repeat controls. Preference bindings, reset
+behavior, locales and the Vulkan context merge were reviewed. Incoming POPSpa,
+gradient capture, checkpoint changes and GUI-test fixes remain intact.
+
+The combined Windows application, policy/interop/UI targets and current-source
+portable numerical runner build. Three-step MCMC resume/save checks pass on
+CUDA, NVIDIA Vulkan and Radeon Vulkan. Validation counts:
+
+| Check | Passed | Skipped | Disabled | Failed |
+|---|---:|---:|---:|---:|
+| Python GPU/preferences/keymap/menu/toolbar | 187 | 2 | 0 | 0 |
+| GPU configuration policy | 13 | 0 | 0 | 0 |
+| Default-source interop | 2 | 0 | 0 | 0 |
+| Radeon-source interop | 1 | 0 | 0 | 0 |
+| Windows UI | 355 | 5 | 2 | 0 |
+| Portable suite, NVIDIA Vulkan selection | 181 | 86 | 3 | 0 |
+| Portable suite, Radeon Vulkan selection | 180 | 86 | 3 | 1 |
+
+The earlier Graphite scrollbar assertion now passes with the incoming upstream
+correction. New POP-score cases pass on both Vulkan adapters. No tolerances or
+kernel formulas were changed in this integration.
+
+The remaining AMD failure is the new
+`PortableFastRaster.GradientCaptureAccumulatesWithoutAdamWrites` accumulation
+assertion (absolute differences of a few `1e-7`). A single upstream-dispatch
+control initially passed, but ten repetitions exposed failures in six runs;
+the branch dispatcher failed in nine of ten. The control temporarily substitutes
+the exact incoming `dispatch.cpp`, disabling the branch's subgroup overrides;
+all other branch components remain in place. This is an isolated dispatcher
+comparison, not a complete upstream-build baseline or proof of identical
+failure rates. The backward shader is byte-identical to incoming dev.
+
+A trial using the default subgroup only for gradient capture did not reliably
+resolve the assertion and was discarded. The original dispatcher was restored
+and rebuilt before final application/interop/training checks. No test exclusion
+or tolerance relaxation hides this failure. The two existing pair-sort throughput
+benchmarks remain excluded from the functional portable runs, as before.
+
+Backend-neutrality, I/O-discipline, CUDA log-format and error-debt gates pass;
+the debt baseline is exactly upstream's. The merge includes an upstream trailing
+blank line in `extra_loss.metal`; the conflict resolution introduces no whitespace
+errors. Evidence is under `.local/gpu-backend-preferences/merge-dev-sync59`
+(initial build log under `merge-dev-20261020/sync59-build.log`).
+
+No new Mac/Linux runtime matrix, long quality run or performance comparison was
+performed. Earlier timing/quality tables retain their original revision context.
