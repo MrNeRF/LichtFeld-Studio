@@ -170,6 +170,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_startup_overlay_geometry.cpp
         test_vram_hud_geometry.cpp
         test_vram_hud_header_click.cpp
+        test_input_key_repeat.cpp
     )
     add_executable(lichtfeld_visualizer_tests
         ${LICHTFELD_VISUALIZER_TEST_SOURCES}
@@ -779,6 +780,7 @@ set(TEST_FILES
     test_navigation_up_axis.cpp
     test_gt_navigation_repeat.cpp
     test_input_controller_focus.cpp
+    test_input_key_repeat.cpp
     test_input_layout_chords.cpp
     test_keymap_layout_contract.cpp
     test_keymap_profile_io.cpp

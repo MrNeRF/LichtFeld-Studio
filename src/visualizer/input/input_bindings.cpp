@@ -1438,7 +1438,9 @@ namespace lfs::vis::input {
         return profiles;
     }
 
-    Action InputBindings::getActionForKey(ToolMode mode, int key, int modifiers) const {
+    Action InputBindings::getActionForKey(ToolMode mode, int key, int modifiers, bool* const on_repeat) const {
+        if (on_repeat)
+            *on_repeat = false;
         // AltGr is event-only and never stored on a shortcut. Masking it off would
         // match the bare digit or letter (German AltGr+4 is U+00BC, still key 4).
         if ((modifiers & KEYMOD_ALTGR) != 0)
@@ -1446,14 +1448,19 @@ namespace lfs::vis::input {
 
         const int mods = modifiers & MODIFIER_MASK;
         const auto find_in_mode = [&](ToolMode query_mode, bool allow_extra) -> Action {
+            const auto matched = [&](const KeyMapEntry& entry) {
+                if (on_repeat)
+                    *on_repeat = entry.on_repeat;
+                return entry.action;
+            };
             if (auto it = key_map_.find({query_mode, key, mods}); it != key_map_.end()) {
-                return it->second;
+                return matched(it->second);
             }
             if (allow_extra && mods != MODIFIER_NONE) {
                 if (auto it = key_map_.find({query_mode, key, MODIFIER_NONE});
                     it != key_map_.end() &&
-                    describe(it->second).allows_extra_modifiers) {
-                    return it->second;
+                    describe(it->second.action).allows_extra_modifiers) {
+                    return matched(it->second);
                 }
             }
             return Action::NONE;
@@ -1503,17 +1510,17 @@ namespace lfs::vis::input {
     Action InputBindings::getActionForShortcut(const ToolMode mode, const int physical_key,
                                                const int logical_key, const int modifiers,
                                                const int printed_punctuation,
-                                               const bool shift_needed_for_printed_key) const {
+                                               const bool shift_needed_for_printed_key,
+                                               bool* const on_repeat) const {
         // Try the exact printed chord before a number-row position. When Shift
         // changes the produced symbol, retry without that layout-only Shift if
         // no exact printed chord is bound (for example, Ctrl+4 on AZERTY).
         if (printed_punctuation != KEY_UNKNOWN) {
-            if (const auto action = getActionForKey(mode, printed_punctuation, modifiers);
+            if (const auto action = getActionForKey(mode, printed_punctuation, modifiers, on_repeat);
                 action != Action::NONE)
                 return action;
             if (shift_needed_for_printed_key) {
-                if (const auto action = getActionForKey(
-                        mode, printed_punctuation, modifiers & ~MODIFIER_SHIFT);
+                if (const auto action = getActionForKey(mode, printed_punctuation, modifiers & ~MODIFIER_SHIFT, on_repeat);
                     action != Action::NONE)
                     return action;
             }
@@ -1524,17 +1531,17 @@ namespace lfs::vis::input {
         if (physical_key != KEY_UNKNOWN && physical_key != logical_key &&
             logical_key >= KEY_0 && logical_key <= KEY_9 &&
             !(physical_key >= KEY_0 && physical_key <= KEY_9)) {
-            if (const auto action = getActionForKey(mode, physical_key, modifiers);
+            if (const auto action = getActionForKey(mode, physical_key, modifiers, on_repeat);
                 action != Action::NONE)
                 return action;
         }
         if (logical_key != KEY_UNKNOWN) {
-            if (const auto action = getActionForKey(mode, logical_key, modifiers);
+            if (const auto action = getActionForKey(mode, logical_key, modifiers, on_repeat);
                 action != Action::NONE)
                 return action;
         }
         if (physical_key != KEY_UNKNOWN && physical_key != logical_key) {
-            if (const auto action = getActionForKey(mode, physical_key, modifiers);
+            if (const auto action = getActionForKey(mode, physical_key, modifiers, on_repeat);
                 action != Action::NONE)
                 return action;
         }
@@ -1952,7 +1959,7 @@ namespace lfs::vis::input {
                 using T = std::decay_t<decltype(t)>;
 
                 if constexpr (std::is_same_v<T, KeyTrigger>) {
-                    key_map_[{binding.mode, t.key, t.modifiers}] = binding.action;
+                    key_map_[{binding.mode, t.key, t.modifiers}] = {binding.action, t.on_repeat};
                 } else if constexpr (std::is_same_v<T, MouseButtonTrigger>) {
                     mouse_button_map_[{binding.mode, t.button, t.modifiers, t.double_click}] = binding.action;
                 } else if constexpr (std::is_same_v<T, MouseScrollTrigger>) {
@@ -2869,6 +2876,7 @@ namespace lfs::vis::input {
         static constexpr ActionDescriptor d_camera_key{
             .allowed_kinds = K::TRIGGER_KIND_KEY,
             .inherits_from_global = true,
+            .repeats_on_hold = true,
             .ui_section = ActionSection::Navigation,
         };
         static constexpr ActionDescriptor d_camera_global_key{

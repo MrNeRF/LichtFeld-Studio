@@ -1892,9 +1892,10 @@ namespace lfs::vis {
         const int printed_punctuation = input::sdlPrintedKeyToAppKey(printed_keycode);
         const bool shift_needed_for_printed_key =
             (mods & input::MODIFIER_SHIFT) != 0 && printed_keycode != unshifted_keycode;
+        bool binding_repeats = false;
         auto bound_action = bindings_.getActionForShortcut(
             tool_mode, physical_key, logical_key, mods, printed_punctuation,
-            shift_needed_for_printed_key);
+            shift_needed_for_printed_key, &binding_repeats);
         if (bound_action == input::Action::NONE) {
             bound_action = resolveCrossToolActivationShortcut(
                 bindings_, tool_mode, physical_key, logical_key, mods);
@@ -2016,14 +2017,12 @@ namespace lfs::vis {
             break;
         }
 
-        // Only speed controls support key repeat
-        if (action == input::ACTION_REPEAT) {
-            if (bound_action != input::Action::CAMERA_SPEED_UP &&
-                bound_action != input::Action::CAMERA_SPEED_DOWN &&
-                bound_action != input::Action::ZOOM_SPEED_UP &&
-                bound_action != input::Action::ZOOM_SPEED_DOWN) {
-                return;
-            }
+        // A held key repeats when its binding or the action asks for it. Camera
+        // browsing repeats on its own timer at the preference rate instead.
+        if (action == input::ACTION_REPEAT &&
+            (bound_action == input::Action::CAMERA_NEXT_VIEW || bound_action == input::Action::CAMERA_PREV_VIEW ||
+             !(binding_repeats || input::describe(bound_action).repeats_on_hold))) {
+            return;
         }
 
         if (action == input::ACTION_PRESS) {
