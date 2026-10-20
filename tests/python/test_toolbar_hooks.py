@@ -2117,6 +2117,7 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     assert extra_by_id["util-viewport-export"]["selected"] is True
 
     # Overlay availability changes must invalidate cached crop toolbar records.
+    controller = module._toolbar_controller
     normal_signature = controller._toolbar_signature(None)
     monkeypatch.setattr(lf_stub, "get_depth_view", lambda: True)
     assert controller._toolbar_signature(None) != normal_signature
