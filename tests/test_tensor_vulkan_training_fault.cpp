@@ -149,8 +149,8 @@ namespace {
                     group->step_size = 0.01f;
                 }
                 const gpu_ops::BackwardAdamParam disabled{absent, absent, absent, absent, absent, absent, absent};
-                const gpu_ops::BackwardAdam aa{{ga, disabled, disabled, disabled, disabled, disabled}, absent, absent, absent, absent, absent};
-                const gpu_ops::BackwardAdam ab{{gb, disabled, disabled, disabled, disabled, disabled}, absent, absent, absent, absent, absent};
+                const gpu_ops::BackwardAdam aa{{ga, disabled, disabled, disabled, disabled, disabled}, absent, absent};
+                const gpu_ops::BackwardAdam ab{{gb, disabled, disabled, disabled, disabled, disabled}, absent, absent};
                 table.backward(reference, {gradient, absent, absent, absent}, absent, absent, absent, absent, aa, DensificationType::None);
                 table.backward(indirect, {gradient, absent, absent, absent}, absent, absent, absent, absent, ab, DensificationType::None);
                 check("updated means", mb, ma);

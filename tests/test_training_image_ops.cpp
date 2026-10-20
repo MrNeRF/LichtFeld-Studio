@@ -129,7 +129,7 @@ TEST_F(TrainingImageOpsBytes, Roi) {
         image_ops().roi(view, position, {}, {}, {}, actual, p);
         kernels::launch_roi_weight_map(view.ptr<float>(), position.ptr<float>(), 6, 6, 4.5f, 3.5f, 9, 7,
                                        glm::make_mat4(p.world_to_cropbox.data()), glm::make_vec3(p.minimum.data()),
-                                       glm::make_vec3(p.maximum.data()), inverse, 0.2f, direct.ptr<float>(),
+                                       glm::make_vec3(p.maximum.data()), inverse, 0.2f, nullptr, nullptr, nullptr, direct.ptr<float>(),
                                        lfs::core::getCurrentCUDAStream());
         expect_same(actual, direct);
         EXPECT_NE(bytes(actual), before);
