@@ -43,13 +43,19 @@ namespace lfs::training {
         const core::Camera& camera, core::SplatData& model, const core::Tensor& bg_color,
         int tile_x, int tile_y, int tile_w, int tile_h,
         float scaling_modifier, bool antialiased, GsplatRenderMode mode,
-        const core::Tensor& bg_image, RenderOutput& output) {
+        const core::Tensor& bg_image, RenderOutput& output,
+        const bool lens_camera_rays) {
         const auto [fx, fy, cx, cy] = camera.get_intrinsics();
         const auto degree = model.get_active_sh_degree();
         const auto max_degree = model.get_max_sh_degree();
         const bool q16 = model.shN_value_quantized();
         const bool undistorted = camera.is_undistort_prepared();
         const core::Tensor empty;
+        const core::Tensor& radial = undistorted ? empty : camera.radial_distortion();
+        const core::Tensor& tangential = undistorted ? empty : camera.tangential_distortion();
+        const auto camera_model = undistorted ? core::CameraModelType::PINHOLE : camera.camera_model_type();
+        const bool lens = camera_model != core::CameraModelType::PINHOLE ||
+                          (radial.is_valid() && radial.numel() > 0) || (tangential.is_valid() && tangential.numel() > 0);
         const lfs::gpu_ops::GsplatParams params{
             .full_image = {camera.image_height(), camera.image_width()},
             .intrinsics = {fx, fy, cx, cy},
@@ -61,18 +67,18 @@ namespace lfs::training {
                                                                                         : lfs::gpu_ops::ShStorage::Float32,
                    .active_bases = static_cast<uint32_t>((degree + 1) * (degree + 1)),
                    .layout_bases = static_cast<uint32_t>((max_degree + 1) * (max_degree + 1))},
-            .camera_model = undistorted ? core::CameraModelType::PINHOLE : camera.camera_model_type(),
+            .camera_model = camera_model,
             .render_mode = mode,
             .scaling_modifier = scaling_modifier,
             .antialiased = antialiased,
+            .camera_rays = lens_camera_rays && lens,
         };
         const lfs::gpu_ops::SplatInputs splats{
             model.means(), model.scaling_raw(), model.rotation_raw(), model.opacity_raw(),
             model.sh0(), model.shN(), q16 ? model.shN_value_bounds() : empty};
         saved.equirectangular = params.camera_model == core::CameraModelType::EQUIRECTANGULAR;
         const auto result = ops.forward(saved, splats, camera.world_view_transform(),
-                                        undistorted ? empty : camera.radial_distortion(),
-                                        undistorted ? empty : camera.tangential_distortion(), bg_color, bg_image, params,
+                                        radial, tangential, bg_color, bg_image, params,
                                         {output.image, output.alpha, output.depth, output.normal});
         output.width = tile_w > 0 ? tile_w : camera.image_width();
         output.height = tile_h > 0 ? tile_h : camera.image_height();

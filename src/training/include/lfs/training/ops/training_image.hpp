@@ -22,7 +22,11 @@ namespace lfs::gpu_ops {
 
     struct TrainingImageOps {
         void (*heatmap)(In loss, Out latest, Out ema, int slot, float ema_alpha);
-        void (*roi)(In view, In camera_position, Out weights, const RoiParams&);
+        // camera_rays: optional [H,W,3] camera-space rays (non-finite: no ray) for lens cameras;
+        // pinholes use the intrinsics. With surface_depth and surface_alpha ([H,W], a camera
+        // inside the box), a pixel is in the ROI when the surface it shows lies in the box.
+        void (*roi)(In view, In camera_position, In camera_rays, In surface_depth, In surface_alpha,
+                    Out weights, const RoiParams&);
         void (*resize_background)(In source, Out destination);
         void (*random_background)(Out destination, uint64_t seed);
         // `photometric_weight` is empty or a Float32 [H,W] map with zero for

@@ -17,6 +17,8 @@ namespace lfs::training::kernels {
     namespace {
 
         constexpr int kThreadsPerBlock = 256;
+        // Below this accumulated alpha a pixel shows mostly background colour, not a surface.
+        constexpr float kMinSurfaceAlpha = 0.5f;
         constexpr size_t kMaxBlocks = 65535;
         constexpr float kParallelEpsilon = 1.0e-8f;
 
@@ -110,6 +112,9 @@ namespace lfs::training::kernels {
             const float3 crop_max,
             const bool inverse,
             const float outside_weight,
+            const float* __restrict__ camera_rays,
+            const float* __restrict__ surface_depth,
+            const float* __restrict__ surface_alpha,
             float* __restrict__ output) {
             const size_t num_pixels = static_cast<size_t>(width) * height;
             for (size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -117,10 +122,22 @@ namespace lfs::training::kernels {
                  idx += static_cast<size_t>(blockDim.x) * gridDim.x) {
                 const int x = static_cast<int>(idx % width);
                 const int y = static_cast<int>(idx / width);
-                const float3 camera_direction = make_float3(
-                    (static_cast<float>(x) + 0.5f - cx) / fx,
-                    (static_cast<float>(y) + 0.5f - cy) / fy,
-                    1.0f);
+                float3 camera_direction;
+                if (camera_rays) {
+                    camera_direction = make_float3(
+                        camera_rays[3 * idx], camera_rays[3 * idx + 1], camera_rays[3 * idx + 2]);
+                    // The lens has no ray for this pixel.
+                    if (!isfinite(camera_direction.x) || !isfinite(camera_direction.y) ||
+                        !isfinite(camera_direction.z)) {
+                        output[idx] = inverse ? 1.0f : outside_weight;
+                        continue;
+                    }
+                } else {
+                    camera_direction = make_float3(
+                        (static_cast<float>(x) + 0.5f - cx) / fx,
+                        (static_cast<float>(y) + 0.5f - cy) / fy,
+                        1.0f);
+                }
 
                 const float3 world_direction = make_float3(
                     world_to_camera[0] * camera_direction.x +
@@ -134,12 +151,26 @@ namespace lfs::training::kernels {
                         world_to_camera[10] * camera_direction.z);
                 const float3 world_origin = make_float3(
                     camera_position[0], camera_position[1], camera_position[2]);
-                const bool hit = ray_intersects_aabb(
-                    transform_point(world_to_cropbox, world_origin),
-                    transform_direction(world_to_cropbox, world_direction),
-                    crop_min,
-                    crop_max);
-                const bool full_weight = inverse ? !hit : hit;
+                const float3 origin_in_box = transform_point(world_to_cropbox, world_origin);
+                const float3 direction_in_box = transform_direction(world_to_cropbox, world_direction);
+                bool in_roi;
+                if (surface_depth && surface_alpha) {
+                    // Mostly background colour: no surface, so nothing in the box is seen here.
+                    const float alpha = surface_alpha[idx];
+                    if (!(alpha >= kMinSurfaceAlpha)) {
+                        in_roi = false;
+                    } else {
+                        const float t = surface_depth[idx] / alpha;
+                        const float3 p = make_float3(origin_in_box.x + t * direction_in_box.x,
+                                                     origin_in_box.y + t * direction_in_box.y,
+                                                     origin_in_box.z + t * direction_in_box.z);
+                        in_roi = p.x >= crop_min.x && p.x <= crop_max.x && p.y >= crop_min.y &&
+                                 p.y <= crop_max.y && p.z >= crop_min.z && p.z <= crop_max.z;
+                    }
+                } else {
+                    in_roi = ray_intersects_aabb(origin_in_box, direction_in_box, crop_min, crop_max);
+                }
+                const bool full_weight = inverse ? !in_roi : in_roi;
                 output[idx] = full_weight ? 1.0f : outside_weight;
             }
         }
@@ -160,6 +191,9 @@ namespace lfs::training::kernels {
         const glm::vec3& crop_max,
         const bool inverse,
         const float outside_weight,
+        const float* camera_rays,
+        const float* surface_depth,
+        const float* surface_alpha,
         float* output,
         cudaStream_t stream) {
         LFS_ASSERT_MSG(world_to_camera != nullptr, "ROI world-to-camera pointer must not be null");
@@ -190,6 +224,9 @@ namespace lfs::training::kernels {
             make_float3(crop_max.x, crop_max.y, crop_max.z),
             inverse,
             outside_weight,
+            camera_rays,
+            surface_depth,
+            surface_alpha,
             output);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.roi_weight_map");
     }

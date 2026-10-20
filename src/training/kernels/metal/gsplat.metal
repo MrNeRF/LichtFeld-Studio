@@ -360,7 +360,11 @@ kernel void gsplat_camera_setup(constant GsplatSetupParams& p [[buffer(0)]]) {
             max_angle = (!converged || x <= 0.0f) ? FLT_MAX : x;
         }
         cam.max_angle = fmin(fmin(max_angle,kGsplatPi), fmax(max_radius / p.fx, max_radius / p.fy));
-        cam.backward_slope = cam.max_angle / fmax(res.x / 2.0f / p.fx, res.y / 2.0f / p.fy);
+        // Newton seeds on the line through the origin and the radius the lens reaches at
+        // max_angle, so it starts below the turning point for every radius up to it: a lens
+        // whose widest angle lies beyond half the image width keeps its rim.
+        const float t2 = cam.max_angle * cam.max_angle;
+        cam.backward_slope = cam.max_angle / (cam.max_angle * (1.0f + t2 * (k1 + t2 * (k2 + t2 * (k3 + t2 * k4)))));
     }
     *p.camera = cam;
 }

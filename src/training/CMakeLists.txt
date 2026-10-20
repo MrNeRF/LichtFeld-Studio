@@ -10,6 +10,12 @@ lfs_add_gpu_program(lfs_geometry_camera geometry_camera_program SOURCE ops/geome
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/gsplat_common.slangh"
             "${CMAKE_SOURCE_DIR}/src/core/tensor/backend/vulkan/shaders/sh_decode.slangh")
 
+add_library(lfs_roi_masks STATIC ops/roi_masks.cpp)
+target_include_directories(lfs_roi_masks PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(lfs_roi_masks PUBLIC lfs_core glm::glm)
+set_target_properties(lfs_roi_masks PROPERTIES POSITION_INDEPENDENT_CODE ON)
+lfs_add_gpu_program(lfs_roi_masks roi_masks_program SOURCE ops/roi_masks.slang COMPUTE reject)
+
 if(LFS_HAS_CUDA)
 # Add fastlfs backend
 add_subdirectory(rasterization/fastgs)
@@ -251,7 +257,7 @@ endif()
 
 # lfs_training - Training module with optimizer
 add_library(lfs_training STATIC ${TRAINING_NEW_SOURCES})
-target_link_libraries(lfs_training PRIVATE lfs_geometry_camera)
+target_link_libraries(lfs_training PRIVATE lfs_geometry_camera lfs_roi_masks)
 
 target_include_directories(lfs_training
     PUBLIC

@@ -732,6 +732,9 @@ namespace lfs::io {
                                                    const PrefetchedImage& item,
                                                    const SidecarCacheFormat kind,
                                                    void* cuda_stream) {
+        // Cache hits go to the hot queue, which only the GPU decode thread drains.
+        if (!is_nvcodec_available())
+            return;
         if (kind != SidecarCacheFormat::DepthFloat && !jpeg2k_cache_available_.load(std::memory_order_relaxed)) {
             return;
         }

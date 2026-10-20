@@ -98,6 +98,9 @@ namespace {
             crop_max,
             inverse,
             outside_weight,
+            nullptr,
+            nullptr,
+            nullptr,
             output.ptr<float>(),
             output.stream());
 
@@ -175,4 +178,73 @@ TEST_F(RoiWeightMapTest, RotatedTranslatedCameraUsesWorldSpaceRays) {
         false,
         glm::inverse(camera_to_world),
         camera_position);
+}
+
+// Catches a lens-distorted GUT camera weighting pixels through pinhole rays instead of its own rays
+// (fisheye pixels near the rim see a different part of the scene than the pinhole formula says).
+TEST(RoiWeightMapTest, CameraRaysReplaceThePinholeRays) {
+    constexpr int width = 9;
+    constexpr int height = 7;
+    constexpr float outside_weight = 0.2f;
+    const glm::vec3 crop_min{-0.6f, -0.4f, 2.0f};
+    const glm::vec3 crop_max{0.6f, 0.4f, 3.0f};
+    // Rays of a narrower lens than the pinhole intrinsics passed below, with two rayless pixels.
+    std::vector<float> rays;
+    std::vector<float> expected;
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const glm::vec3 ray{(x + 0.5f - 4.5f) / 12.0f, (y + 0.5f - 3.5f) / 12.0f, 1.0f};
+            const bool rayless = (x == 4 && y == 3) || (x == 0 && y == 0);
+            const float nan = std::numeric_limits<float>::quiet_NaN();
+            rays.insert(rays.end(), {rayless ? nan : ray.x, rayless ? nan : ray.y, rayless ? nan : ray.z});
+            const bool hit = !rayless && ray_intersects_box(glm::vec3(0.0f), ray, glm::mat4(1.0f), crop_min, crop_max);
+            expected.push_back(hit ? 1.0f : outside_weight);
+        }
+    }
+    const std::vector<float> identity{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    const auto w2c = lfs::core::Tensor::from_vector(identity, {size_t{4}, size_t{4}}, lfs::core::Device::GPU);
+    const auto camera_pos = lfs::core::Tensor::zeros({size_t{3}}, lfs::core::Device::GPU);
+    const auto rays_tensor = lfs::core::Tensor::from_vector(
+        rays, {size_t{height}, size_t{width}, size_t{3}}, lfs::core::Device::GPU);
+    auto output = lfs::core::Tensor::empty({size_t{height}, size_t{width}}, lfs::core::Device::GPU);
+    lfs::training::kernels::launch_roi_weight_map(
+        w2c.ptr<float>(), camera_pos.ptr<float>(), 6.0f, 6.0f, 4.5f, 3.5f, width, height,
+        glm::mat4(1.0f), crop_min, crop_max, false, outside_weight, rays_tensor.ptr<float>(), nullptr, nullptr,
+        output.ptr<float>(), output.stream());
+    const auto actual = output.cpu().to_vector();
+    ASSERT_EQ(actual.size(), expected.size());
+    EXPECT_EQ(actual[4 + 3 * width], outside_weight) << "a pixel without a ray must not count as seen";
+    EXPECT_GT(std::count(expected.begin(), expected.end(), 1.0f), 0);
+    for (size_t i = 0; i < actual.size(); ++i)
+        EXPECT_FLOAT_EQ(actual[i], expected[i]) << "pixel " << i;
+}
+
+// Catches in-box floaters seen from cameras standing inside the box: every ray of such a camera
+// starts in the box, so the ray test would count the far background as ROI. The surface the pixel
+// shows decides instead; pixels without a surface count as outside.
+TEST(RoiWeightMapTest, CameraInsideTheBoxWeighsPixelsByTheSurfaceTheyShow) {
+    constexpr int width = 4;
+    constexpr int height = 1;
+    constexpr float outside_weight = 0.1f;
+    const glm::vec3 crop_min{-2.0f, -2.0f, -2.0f};
+    const glm::vec3 crop_max{2.0f, 2.0f, 2.0f};
+    // Pinhole rays with z = 1 and z-depth: surfaces at z 1.5 (in the box), 10 (beyond it), a pixel with
+    // too little alpha and a surface at z 1.0 half covered (alpha 0.6, accumulated depth 0.6).
+    const std::vector<float> depth{1.5f, 10.0f, 1.0f, 0.6f};
+    const std::vector<float> alpha{1.0f, 1.0f, 0.2f, 0.6f};
+    const std::vector<float> identity{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    const auto w2c = lfs::core::Tensor::from_vector(identity, {size_t{4}, size_t{4}}, lfs::core::Device::GPU);
+    const auto camera_pos = lfs::core::Tensor::zeros({size_t{3}}, lfs::core::Device::GPU);
+    const auto depth_t = lfs::core::Tensor::from_vector(depth, {size_t{height}, size_t{width}}, lfs::core::Device::GPU);
+    const auto alpha_t = lfs::core::Tensor::from_vector(alpha, {size_t{height}, size_t{width}}, lfs::core::Device::GPU);
+    auto output = lfs::core::Tensor::empty({size_t{height}, size_t{width}}, lfs::core::Device::GPU);
+    const auto run = [&](const bool inverse) {
+        lfs::training::kernels::launch_roi_weight_map(
+            w2c.ptr<float>(), camera_pos.ptr<float>(), 100.0f, 100.0f, 2.0f, 0.5f, width, height,
+            glm::mat4(1.0f), crop_min, crop_max, inverse, outside_weight, nullptr, depth_t.ptr<float>(),
+            alpha_t.ptr<float>(), output.ptr<float>(), output.stream());
+        return output.cpu().to_vector();
+    };
+    EXPECT_EQ(run(false), (std::vector<float>{1.0f, outside_weight, outside_weight, 1.0f}));
+    EXPECT_EQ(run(true), (std::vector<float>{outside_weight, 1.0f, 1.0f, outside_weight}));
 }

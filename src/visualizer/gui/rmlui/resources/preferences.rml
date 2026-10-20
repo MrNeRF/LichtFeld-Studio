@@ -571,11 +571,22 @@
           <span class="text-accent">@tr:preferences.scene_graph</span>
         </div>
         <div class="section-content" data-if="scene_graph_expanded">
-          <div class="preferences-row preferences-checkbox-row preferences-interface-option">
+          <div class="preferences-row preferences-checkbox-row preferences-interface-option" data-tooltip="preferences.scene_graph_selection_markers_description">
             <span class="preferences-label">@tr:preferences.scene_graph_selection_markers</span>
             <input type="checkbox" data-checked="scene_graph_selection_markers" data-attrif-disabled="mcp_safe_mode" />
           </div>
-          <span class="preferences-description">@tr:preferences.scene_graph_selection_markers_description</span>
+          <div class="preferences-row" data-tooltip="preferences.drag_format_hint">
+            <span class="preferences-label">@tr:preferences.drag_default</span>
+            <select class="preferences-select" data-attrif-disabled="mcp_safe_mode" data-value="splat_drag_format"><option value="ply">@tr:preferences.drag_ply</option><option value="spz">@tr:preferences.drag_spz</option></select>
+          </div>
+          <div class="preferences-row" data-tooltip="preferences.drag_sh_hint">
+            <span class="preferences-label">@tr:preferences.drag_sh_limit</span>
+            <select class="preferences-select" data-attrif-disabled="mcp_safe_mode" data-value="splat_drag_sh_degree"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select>
+          </div>
+          <div class="preferences-row" data-if="splat_drag_format == 'ply'" data-tooltip="preferences.drag_axes_hint">
+            <span class="preferences-label">@tr:preferences.drag_up_axis</span>
+            <select class="preferences-select" data-attrif-disabled="mcp_safe_mode" data-value="splat_drag_up_axis"><option value="-2">@tr:preferences.drag_axis_default</option><option value="2">@tr:preferences.drag_axis_positive_y</option><option value="-3">@tr:preferences.drag_axis_negative_z</option><option value="3">@tr:preferences.drag_axis_positive_z</option></select>
+          </div>
         </div>
       </div>
 

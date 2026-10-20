@@ -162,6 +162,33 @@ class McpMedia(unittest.TestCase):
             self.assertEqual(result["start"]["error"]["code"], "InvalidArgument")
             self.assertFalse(output.exists())
 
+    def test_jxl_job_and_schema_validation(self):
+        for options in ({}, {"jxl_distance": 1., "jxl_effort": 1}):
+            result, output = self.invoke(format="jxl", input_transfer="linear", input_primaries="bt709", **options)
+            self.assertTrue(result["capabilities"]["jxl"])
+            self.assertTrue(result["start"]["success"])
+            self.assertEqual(result["job"]["status"], "finished")
+            self.assertEqual(len(list(output.glob("*.jxl"))), 4)
+            metadata = json.loads((output / "extraction_metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["output"]["format"], "jxl")
+            self.assertEqual(metadata["output"]["bit_depth"], 32)
+            self.assertEqual(metadata["output"]["compression"], "lossy" if options else "lossless")
+        for options in ({"format": "jxl", "jpeg_quality": 95},
+                        {"format": "jxl", "exr_precision": "half"},
+                        {"format": "png", "jxl_effort": 1},
+                        {"format": "jxl", "jxl_distance": 0.},
+                        {"format": "jxl", "jxl_effort": 10},
+                        {"format": "jxl", "jxl_effort": 1},
+                        {"format": "jxl", "jxl_effort": 2},
+                        {"format": "jxl", "jxl_effort": 3},
+                        {"format": "jxl", "jxl_effort": 4.5},
+                        {"format": "jxl", "jxl_effort": True},
+                        {"format": "jxl", "jxl_effort": 4294967300}):
+            result, output = self.invoke(**options)
+            self.assertFalse(result["start"].get("success", False))
+            self.assertEqual(result["start"]["error"]["code"], "InvalidArgument")
+            self.assertFalse(output.exists())
+
     def test_tiff16_job_and_schema_validation(self):
         result, output = self.invoke(format="tiff16", tiff16_transfer="bt709",
                                      input_transfer="linear", input_primaries="bt709")

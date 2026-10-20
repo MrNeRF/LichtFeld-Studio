@@ -40,6 +40,7 @@ def preferences_panel_module(monkeypatch):
 
     state = SimpleNamespace(
         language="it",
+        splat_drag_preferences={"format": "ply", "sh_degree": 3, "up_axis": -2},
         sidebar_clear_calls=[],
         set_language_calls=[],
         mcp_preferences={
@@ -165,6 +166,8 @@ def preferences_panel_module(monkeypatch):
     state.marketplace_preferences = {"view": "list", "git_checkout": False}
     state.marketplace_notifications = []
     lf_stub.ui = SimpleNamespace(
+        get_splat_drag_preferences=lambda: dict(state.splat_drag_preferences),
+        set_splat_drag_preferences=lambda values: state.splat_drag_preferences.update(values),
         get_marketplace_preferences=lambda: dict(state.marketplace_preferences),
         set_marketplace_view=lambda value: state.marketplace_preferences.update(view=value),
         set_marketplace_git_checkout=lambda value: state.marketplace_preferences.update(git_checkout=value),
@@ -1131,7 +1134,11 @@ def test_safe_mode_disables_preferences_and_status_bar_mcp_controls():
     preferences = (resources / "preferences.rml").read_text(encoding="utf-8")
     status_bar = (resources / "statusbar.rml").read_text(encoding="utf-8")
 
-    assert preferences.count('data-attrif-disabled="mcp_safe_mode"') == 8
+    import re
+    drag_controls = re.findall(r'<(?:input|select)\b[^>]*splat_drag_[^>]*>', preferences)
+    assert drag_controls
+    assert all('data-attrif-disabled="mcp_safe_mode"' in control for control in drag_controls)
+    assert preferences.count('data-attrif-disabled="mcp_safe_mode"') - len(drag_controls) == 8
     assert preferences.count('data-class-disabled="mcp_safe_mode"') == 2
     assert (
         '<button id="mcp-toggle" data-class-is-on="mcp_server_enabled" '
@@ -1620,3 +1627,127 @@ def test_status_bar_can_request_hardware_section(preferences_panel_module):
     panel._consume_section_request()
     assert panel._section == "hardware"
     assert state.section_request == ""
+
+
+def test_splat_drag_preferences_convert_ui_values_and_respect_safe_mode(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._set_splat_drag_preference("sh_degree", "2")
+    assert state.splat_drag_preferences["sh_degree"] == 2
+    assert panel._get_splat_drag_preference("sh_degree") == "2"
+    panel._mcp_safe_mode = True
+    panel._set_splat_drag_preference("sh_degree", "1")
+    assert state.splat_drag_preferences["sh_degree"] == 2
+
+
+@pytest.mark.parametrize("axis", [-2, 2, -3, 3])
+def test_drag_up_axis_accepts_the_four_maintainer_options(preferences_panel_module, axis):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._set_splat_drag_preference("up_axis", str(axis))
+    assert state.splat_drag_preferences["up_axis"] == axis
+    assert panel._get_splat_drag_preference("up_axis") == str(axis)
+
+
+@pytest.mark.parametrize("axis", ["0", "1", "-1", "4", "not-an-axis", None])
+def test_drag_up_axis_rejects_unsupported_values(preferences_panel_module, axis):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._set_splat_drag_preference("up_axis", axis)
+    assert state.splat_drag_preferences["up_axis"] == -2
+
+
+def test_drag_up_axis_respects_safe_mode(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._mcp_safe_mode = True
+    panel._set_splat_drag_preference("up_axis", "3")
+    assert state.splat_drag_preferences["up_axis"] == -2
+
+
+@pytest.mark.parametrize("key,value", [("format", "spz"), ("sh_degree", 1), ("up_axis", 3)])
+def test_external_drag_preference_changes_refresh_open_panel(preferences_panel_module, key, value):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._last_state = panel._state()
+    state.splat_drag_preferences[key] = value
+    assert panel._state() != panel._last_state
+    dirty = []
+    panel._handle = SimpleNamespace(dirty=dirty.append)
+    panel._dirty_selection()
+    assert {"splat_drag_format", "splat_drag_sh_degree", "splat_drag_up_axis"} <= set(dirty)
+
+
+@pytest.mark.parametrize("safe_mode", [False, True])
+def test_interface_reset_refreshes_drag_controls_and_respects_safe_mode(preferences_panel_module, safe_mode):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._mcp_safe_mode = safe_mode
+    customized = {"format": "spz", "sh_degree": 1, "up_axis": 3}
+    state.splat_drag_preferences.update(customized)
+    module.lf.ui.set_scene_graph_selection_markers = lambda _enabled: None
+    events = []
+    panel._refresh_selection = lambda: events.append("refresh")
+    module.lf.ui.reset_layout = lambda: events.append("layout")
+    panel._reset_section("interface")
+    expected = customized if safe_mode else {"format": "ply", "sh_degree": 3, "up_axis": -2}
+    assert state.splat_drag_preferences == expected
+    assert events == ["refresh", "layout"]
+
+
+def test_quick_export_offers_only_ply_and_spz_with_plain_translated_labels():
+    from xml.etree import ElementTree
+    root = Path(__file__).resolve().parents[2]
+    document = ElementTree.parse(root / "src/visualizer/gui/rmlui/resources/preferences.rml")
+    select = next(element for element in document.iter("select")
+                  if element.get("data-value") == "splat_drag_format")
+    assert [option.get("value") for option in select] == ["ply", "spz"]
+    for path in (root / "src/visualizer/gui/resources/locales").glob("*.json"):
+        preferences = json.loads(path.read_text(encoding="utf-8"))
+        assert preferences["preferences.drag_ply"] == "PLY", path.name
+        assert preferences["preferences.drag_spz"] == "SPZ", path.name
+
+
+@pytest.mark.parametrize("value", ["-1", "4", "invalid", None])
+def test_drag_sh_limit_rejects_invalid_ui_values(preferences_panel_module, value):
+    module, state = preferences_panel_module
+    module.PreferencesPanel()._set_splat_drag_preference("sh_degree", value)
+    assert state.splat_drag_preferences["sh_degree"] == 3
+
+
+def test_drag_settings_use_one_sh_cap_and_localized_tooltips():
+    from xml.etree import ElementTree
+    root = Path(__file__).resolve().parents[2]
+    document = ElementTree.parse(root / "src/visualizer/gui/rmlui/resources/preferences.rml")
+    cap = next(element for element in document.iter("select")
+               if element.get("data-value") == "splat_drag_sh_degree")
+    assert [option.get("value") for option in cap] == ["0", "1", "2", "3"]
+    text = (root / "src/visualizer/gui/rmlui/resources/preferences.rml").read_text(encoding="utf-8")
+    assert "splat_drag_maximum_quality" not in text
+    assert "splat_drag_ply_sh" not in text and "splat_drag_spz_sh" not in text
+    tooltip_keys = {"preferences.drag_format_hint", "preferences.drag_sh_hint", "preferences.drag_axes_hint"}
+    assert tooltip_keys <= {element.get("data-tooltip") for element in document.iter()}
+    inline = " ".join("".join(element.itertext()) for element in document.iter("span")
+                      if "preferences-description" in element.get("class", ""))
+    assert not any(key in inline for key in tooltip_keys)
+    marker_hint = "preferences.scene_graph_selection_markers_description"
+    marker_row = next(element for element in document.iter("div")
+                      if element.get("data-tooltip") == marker_hint)
+    marker = next(element for element in marker_row.iter("input")
+                  if element.get("data-checked") == "scene_graph_selection_markers")
+    assert marker.get("data-attrif-disabled") == "mcp_safe_mode"
+    assert marker_hint not in inline
+    axes = next(element for element in document.iter()
+                if element.get("data-tooltip") == "preferences.drag_axes_hint")
+    assert axes.get("data-if") == "splat_drag_format == 'ply'"
+    selector = next(element for element in axes.iter("select"))
+    assert selector.get("data-value") == "splat_drag_up_axis"
+    assert [option.get("value") for option in selector] == ["-2", "2", "-3", "3"]
+    assert selector[0].text == "@tr:preferences.drag_axis_default"
+    assert selector.get("data-attrif-disabled") == "mcp_safe_mode"
+    for path in (root / "src/visualizer/gui/resources/locales").glob("*.json"):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert all(data.get(key) for key in tooltip_keys), path.name
+        assert not any("SOG" in data[key].upper() for key in tooltip_keys), path.name
+        assert "-Y" in data["preferences.drag_axis_default"], path.name
+        assert data["preferences"]["scene_graph_selection_markers_description"].strip(), path.name

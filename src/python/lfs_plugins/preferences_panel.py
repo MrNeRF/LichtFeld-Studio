@@ -296,6 +296,10 @@ class PreferencesPanel(Panel):
             lf.ui.scene_graph_selection_markers,
             self._set_scene_graph_selection_markers,
         )
+        for key in ("format", "sh_degree", "up_axis"):
+            model.bind("splat_drag_" + key,
+                       lambda k=key: self._get_splat_drag_preference(k),
+                       lambda value, k=key: self._set_splat_drag_preference(k, value))
         model.bind("mcp_enabled", lambda: self._mcp_enabled, self._set_mcp_enabled)
         model.bind("mcp_expose_network", lambda: self._mcp_expose_network, self._set_mcp_expose_network)
         model.bind("mcp_port", lambda: self._mcp_port, self._set_mcp_port)
@@ -548,6 +552,7 @@ class PreferencesPanel(Panel):
 
     def _state(self):
         project_manager_preferences = read_project_manager_preferences()
+        splat_drag_preferences = lf.ui.get_splat_drag_preferences()
         return (
             tuple(sorted(lf.ui.get_tensor_backend_preferences().items())),
             tuple(sorted(lf.ui.get_gpu_runtime_status().items())),
@@ -559,6 +564,7 @@ class PreferencesPanel(Panel):
             lf.ui.get_viewport_toolbar_position(),
             float(lf.ui.get_ui_scale_preference()),
             bool(lf.ui.get_native_floating_windows()),
+            tuple(splat_drag_preferences[key] for key in ("format", "sh_degree", "up_axis")),
             self._scene_upscaler(),
             self._scene_upscaler_preset(),
             lf.ui.get_current_language(),
@@ -1079,6 +1085,26 @@ class PreferencesPanel(Panel):
         if enabled:
             lf.set_camera_view_snap_enabled(lf.get_camera_view_snap_enabled())
         self._refresh_selection()
+
+    def _get_splat_drag_preference(self, key):
+        value = lf.ui.get_splat_drag_preferences()[key]
+        return value if key == "format" else str(value)
+
+    def _set_splat_drag_preference(self, key, value):
+        if self._mcp_safe_mode:
+            return
+        if key != "format":
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                return
+        if key == "sh_degree" and not 0 <= value <= 3:
+            return
+        if key == "up_axis" and value not in (-2, 2, -3, 3):
+            return
+        lf.ui.set_splat_drag_preferences({key: value})
+        if self._handle:
+            self._handle.dirty("splat_drag_" + key)
 
     def _set_scene_graph_selection_markers(self, enabled):
         if self._mcp_safe_mode:
@@ -1869,6 +1895,8 @@ class PreferencesPanel(Panel):
             lf.ui.set_native_floating_windows(False)
             if not self._mcp_safe_mode:
                 lf.ui.set_scene_graph_selection_markers(False)
+                lf.ui.set_splat_drag_preferences({"format": "ply", "sh_degree": 3, "up_axis": -2})
+            self._refresh_selection()
             return lf.ui.reset_layout()
         elif section == "mcp":
             if not self._mcp_safe_mode:
@@ -1911,6 +1939,8 @@ class PreferencesPanel(Panel):
             self._handle.dirty("remember_navigation")
             self._handle.dirty("remember_view_snap")
             self._handle.dirty("scene_graph_selection_markers")
+            for key in ("format", "sh_degree", "up_axis"):
+                self._handle.dirty("splat_drag_" + key)
             self._dirty_mcp()
             self._dirty_project_location()
             self._handle.dirty("embed_dataset_by_default")

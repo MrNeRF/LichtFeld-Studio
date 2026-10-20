@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/color_transfer.h"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_codecs.hpp"
@@ -450,6 +451,77 @@ namespace {
     }
 
     using CacheAccess = lfs::io::PipelinedPreparedCacheTestAccess;
+
+    Tensor decoded_prepared_blob(PipelinedImageLoader& loader, const std::filesystem::path& file,
+                                 const lfs::io::LoadParams& params);
+
+    TEST_P(PipelinedLoaderBackends, JxlSourcesUseExistingLoaderAndPreparedCachePolicies) {
+        const GpuBackendScope scope(GetParam());
+        for (const bool wide : {false, true}) {
+            const auto file = path(wide ? "source16.jxl" : "source8.jxl");
+            std::filesystem::copy_file(std::filesystem::path(LFS_JXL_FIXTURES) / (wide ? "rgb16.jxl" : "rgb8.jxl"), file,
+                                       std::filesystem::copy_options::overwrite_existing);
+            PipelinedLoaderConfig config;
+            config.backend = GetParam();
+            PipelinedImageLoader loader(config);
+            lfs::io::LoadParams params;
+            params.decode_16bit = wide;
+            const auto image = loader.load_image_immediate(file, params).cpu();
+            ASSERT_EQ(image.shape(), (TensorShape{3, 2, 2}));
+            EXPECT_NEAR(image.ptr<float>()[0], 1.f, 2e-7f);
+            EXPECT_NEAR(image.ptr<float>()[4], wide ? 32768.f / 65535.f : 0.f, 2e-7f);
+            EXPECT_EQ(image.ptr<float>()[8], 0.f);
+            if (GetParam() != GpuBackend::CUDA) {
+                auto camera = distorted_camera();
+                params.undistort = &camera;
+                const auto cold = loader.load_image_immediate(file, params).cpu();
+                // The existing RGB8 prepared cache is JPEG; wide samples use
+                // lossless PNG16. Compare warm/spill with the actual cache
+                // representation, not an assumption that JPEG is lossless.
+                const auto cached = decoded_prepared_blob(loader, file, params);
+                if (wide)
+                    expect_close(cached, cold, 0.f);
+                expect_close(loader.load_image_immediate(file, params), cached, 0.f);
+                EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 1u);
+                EXPECT_EQ(loader.get_stats().hot_path_hits, 1u);
+                EXPECT_GT(loader.release_host_cache(std::numeric_limits<size_t>::max()), 0u);
+                EXPECT_EQ(loader.get_stats().jpeg_cache_bytes, 0u);
+                EXPECT_EQ(loader.get_stats().spill_cache_entries, 1u);
+                expect_close(loader.load_image_immediate(file, params), cached, 0.f);
+                EXPECT_EQ(loader.get_stats().hot_path_hits, 2u);
+            }
+        }
+    }
+
+    TEST_P(PipelinedLoaderBackends, JxlFloatPreparedCachePreservesWarmAndSpilledSamples) {
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP() << "Float prepared-cache policy belongs to the portable loader";
+        const GpuBackendScope scope(GetParam());
+        const auto file = path("float.jxl");
+        std::filesystem::copy_file(std::filesystem::path(LFS_JXL_FIXTURES) / "rgb32.jxl", file);
+        PipelinedLoaderConfig config;
+        config.backend = GetParam();
+        PipelinedImageLoader loader(config);
+        lfs::io::LoadParams params;
+        params.decode_float = true;
+        const auto original = loader.load_image_immediate(file, params).cpu();
+        ASSERT_EQ(original.shape(), (TensorShape{3, 2, 2}));
+        // libjxl uses sign-preserving sRGB extension outside the unit range.
+        // Its SIMD approximation need not match the host pow implementation
+        // in the last bits; cache restoration below remains bit-exact.
+        EXPECT_NEAR(original.ptr<float>()[0], lfs::core::color::linearToSrgb(2.f), 1e-4f);
+        EXPECT_NEAR(original.ptr<float>()[4], lfs::core::color::linearToSrgb(.5f), 1e-4f);
+        EXPECT_NEAR(original.ptr<float>()[8], -lfs::core::color::linearToSrgb(.25f), 1e-4f);
+        auto camera = distorted_camera();
+        params.undistort = &camera;
+        const auto cold = loader.load_image_immediate(file, params).cpu();
+        expect_close(loader.load_image_immediate(file, params), cold, 0.f);
+        EXPECT_EQ(loader.get_stats().hot_path_hits, 1u);
+        EXPECT_GT(loader.release_host_cache(std::numeric_limits<size_t>::max()), 0u);
+        EXPECT_EQ(loader.get_stats().spill_cache_entries, 1u);
+        expect_close(loader.load_image_immediate(file, params), cold, 0.f);
+        EXPECT_EQ(loader.get_stats().hot_path_hits, 2u);
+    }
 
     TEST_P(PipelinedLoaderBackends, CompressedCacheBudgetCountsReservedCapacityAndSpillsOnlyPayload) {
         const GpuBackendScope scope(GetParam());

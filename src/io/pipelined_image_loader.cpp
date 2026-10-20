@@ -1715,8 +1715,8 @@ namespace lfs::io {
             std::optional<PrefetchedImage> cold_rgb;
             try {
                 const bool needs_requested_processing = load_params_need_processing(request.params);
-
-                if (auto cached = load_cached_jpeg_blob(result.cache_key)) {
+                // Only the GPU decode thread drains the hot queue; without it every image decodes on the CPU.
+                if (auto cached = nvcodec_hot_path_ ? load_cached_jpeg_blob(result.cache_key) : nullptr) {
                     result.jpeg_data = std::move(cached);
                     result.is_cache_hit = true;
                     result.needs_processing = false;

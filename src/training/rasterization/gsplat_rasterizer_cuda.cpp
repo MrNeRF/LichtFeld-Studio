@@ -622,7 +622,7 @@ namespace lfs::training {
 
             // Build context for backward - store raw pointers
             GsplatRasterizeContext ctx;
-            if (channels == 8) {
+            if (channels == 8 || params.camera_rays) {
                 auto& rays = caches.camera_rays;
                 const core::TensorShape shape{H, W, 3UL};
                 if (!rays.is_valid() || rays.shape() != shape)

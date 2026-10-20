@@ -2,14 +2,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 find_package(libheif CONFIG REQUIRED)
 find_package(lcms2 CONFIG REQUIRED)
-add_library(lfs_image_codecs SHARED ../image_codecs.cpp ../image_heif.cpp ../image_heic_system.cpp ../image_exr.cpp ../image_exr_writer.cpp)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(JXL REQUIRED IMPORTED_TARGET GLOBAL libjxl>=0.12.0 libjxl_cms>=0.12.0 libjxl_threads>=0.12.0)
+add_library(lfs_image_codecs SHARED ../image_codecs.cpp ../image_heif.cpp ../image_heic_system.cpp ../image_exr.cpp ../image_exr_writer.cpp ../image_jxl.cpp)
 target_compile_definitions(lfs_image_codecs PRIVATE LFS_IMAGE_CODECS_EXPORTS)
 target_include_directories(lfs_image_codecs PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../include"
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../.." "${CMAKE_CURRENT_SOURCE_DIR}/.."
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../external")
 target_include_directories(lfs_image_codecs BEFORE PRIVATE ${ZLIB_INCLUDE_DIRS})
 target_link_libraries(lfs_image_codecs PUBLIC lfs_error lfs_file_io PRIVATE PNG::PNG JPEG::JPEG ZLIB::ZLIB
-    heif lcms2::lcms2 TIFF::TIFF WebP::webp OpenEXR::OpenEXRCore Threads::Threads nlohmann_json::nlohmann_json)
+    heif lcms2::lcms2 PkgConfig::JXL TIFF::TIFF WebP::webp OpenEXR::OpenEXRCore Threads::Threads nlohmann_json::nlohmann_json)
 set_target_properties(lfs_image_codecs PROPERTIES
     POSITION_INDEPENDENT_CODE ON CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON
     CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON

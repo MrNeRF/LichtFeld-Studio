@@ -161,6 +161,127 @@ class MediaBindings(unittest.TestCase):
         source_exif_fixture.check(self, json.loads(value), payload)
         self.assertEqual(json.loads(media.MediaIngest.source_exif_json(path))["status"], "io_error")
 
+    def test_jxl_public_writer_rejects_incompatible_color_without_publication(self):
+        path = self.root / "jxl-color-policy.jxl"
+        color = media.FrameColor()
+        color.transfer = media.ColorTransfer.Srgb
+        color.primaries = media.ColorPrimaries.Bt709
+        frame = media.FrameSurface.from_bytes(1, 1, media.FramePixelFormat.RGB8,
+                                              bytes((10, 20, 30)), color=color)
+        options = media.JxlOutputOptions()
+        media.ImageOutput.write_jxl(path, frame, options)
+        original = path.read_bytes()
+        options.overwrite = True
+        cases = (
+            (media.FramePixelFormat.RGB8, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGB8, media.ColorTransfer.Srgb, media.ColorPrimaries.Bt2020, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Unspecified, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Unspecified, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.Nits),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.SceneRelative),
+            (media.FramePixelFormat.RGBFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.Straight, media.ColorUnits.Relative),
+            (media.FramePixelFormat.RGBAFloat32, media.ColorTransfer.Linear, media.ColorPrimaries.Bt709, media.AlphaMode.NoAlpha, media.ColorUnits.Relative),
+        )
+        for fmt, transfer, primaries, alpha, units in cases:
+            with self.subTest(format=fmt, transfer=transfer, primaries=primaries, alpha=alpha, units=units):
+                color.transfer, color.primaries, color.alpha, color.units = transfer, primaries, alpha, units
+                pixels = bytes((10, 20, 30)) if fmt == media.FramePixelFormat.RGB8 else struct.pack("=4f", .1, .2, .3, 1.) if fmt == media.FramePixelFormat.RGBAFloat32 else struct.pack("=3f", .1, .2, .3)
+                invalid = media.FrameSurface.from_bytes(1, 1, fmt, pixels, color=color)
+                for target in (path, self.root / "jxl-invalid-new.jxl"):
+                    with self.assertRaises(MEDIA_ERROR):
+                        media.ImageOutput.write_jxl(target, invalid, options)
+                self.assertEqual(path.read_bytes(), original)
+                self.assertFalse((self.root / "jxl-invalid-new.jxl").exists())
+        media.ImageOutput.write_jxl(path, frame, options)
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_jxl_lossless_float_effort_is_rejected_before_publication(self):
+        color = media.FrameColor()
+        color.transfer = media.ColorTransfer.Linear
+        color.primaries = media.ColorPrimaries.Bt709
+        frame = media.FrameSurface.from_bytes(1, 1, media.FramePixelFormat.RGBFloat32,
+                                              struct.pack("=3f", -0., -.25, 1.25), color=color)
+        options = media.JxlOutputOptions()
+        path = self.root / "jxl-effort-existing.jxl"
+        media.ImageOutput.write_jxl(path, frame, options)
+        original = path.read_bytes()
+        options.overwrite = True
+        for effort in (1, 2, 3):
+            options.effort = effort
+            for target in (path, self.root / "jxl-effort-new.jxl"):
+                with self.assertRaisesRegex(MEDIA_ERROR, "lossless Float32 requires effort"):
+                    media.ImageOutput.write_jxl(target, frame, options)
+            self.assertEqual(path.read_bytes(), original)
+            self.assertFalse((self.root / "jxl-effort-new.jxl").exists())
+            request = self.request()
+            request.output_format = media.FramePixelFormat.RGBFloat32
+            request.input_color.transfer = media.ColorTransfer.Linear
+            request.input_color.primaries = media.ColorPrimaries.Bt709
+            files = media.FileExtraction()
+            files.files.format = media.FrameFileFormat.JXL
+            files.files.output_directory = self.root / f"jxl-effort-preflight-{effort}"
+            files.files.jxl.effort = effort
+            with self.assertRaisesRegex(MEDIA_ERROR, "lossless Float32 requires effort"):
+                media.MediaIngest.extract_files(request, files)
+            self.assertFalse(files.files.output_directory.exists())
+        options.lossless = False
+        options.effort = 1
+        media.ImageOutput.write_jxl(self.root / "jxl-lossy-effort1.jxl", frame, options)
+
+    def test_jxl_public_writer_and_lossless_lossy_sequences(self):
+        color = media.FrameColor()
+        color.transfer = media.ColorTransfer.Linear
+        color.primaries = media.ColorPrimaries.Bt709
+        samples = (-.5, 0., 2., .25, .5, .75)
+        frame = media.FrameSurface.from_bytes(2, 1, media.FramePixelFormat.RGBFloat32,
+                                              struct.pack("=6f", *samples), color=color)
+        options = media.JxlOutputOptions()
+        path = self.root / "JXL export é 日本語.jxl"
+        media.ImageOutput.write_jxl(path, frame, options)
+        original = path.read_bytes()
+        with self.assertRaises(MEDIA_ERROR):
+            media.ImageOutput.write_jxl(path, frame, options)
+        options.overwrite = True
+        with self.assertRaises(MEDIA_ERROR):
+            media.ImageOutput.write_jxl(path, frame, options, cancelled=lambda: True)
+        self.assertEqual(path.read_bytes(), original)
+        def failed():
+            raise ValueError("JXL cancellation sentinel")
+        with self.assertRaisesRegex(ValueError, "JXL cancellation sentinel"):
+            media.ImageOutput.write_jxl(path, frame, options, cancelled=failed)
+        self.assertEqual(path.read_bytes(), original)
+        self.assertTrue(media.MediaIngest.capabilities().jxl)
+        request = self.request()
+        request.output_format = media.FramePixelFormat.RGBFloat32
+        request.input_color.transfer = media.ColorTransfer.Linear
+        request.input_color.primaries = media.ColorPrimaries.Bt709
+        for lossless in (True, False):
+            output = media.FileExtraction()
+            output.files.output_directory = self.root / ("jxl-lossless" if lossless else "jxl-lossy")
+            output.files.format = media.FrameFileFormat.JXL
+            output.files.jxl.lossless = lossless
+            output.resume = True
+            report = media.MediaIngest.extract_files(request, output)
+            paths = sorted(output.files.output_directory.glob("*.jxl"))
+            self.assertEqual(len(paths), report.frames_accepted)
+            self.assertEqual(report.frames_accepted, 4)
+            original = {p.name:p.read_bytes() for p in paths}
+            mtimes = {p.name:p.stat().st_mtime_ns for p in paths}
+            output.files.jxl.overwrite = True
+            media.MediaIngest.extract_files(request, output)
+            self.assertEqual({p.name:p.read_bytes() for p in paths}, original)
+            self.assertEqual({p.name:p.stat().st_mtime_ns for p in paths}, mtimes)
+            if lossless:
+                output.files.jxl.distance = 2.
+                media.MediaIngest.extract_files(request, output)
+                self.assertEqual({p.name:p.stat().st_mtime_ns for p in paths}, mtimes)
+            paths[0].unlink()
+            media.MediaIngest.extract_files(request, output)
+            self.assertEqual({p.name:p.read_bytes() for p in paths}, original)
+            output.files.jxl.effort += 1
+            with self.assertRaises(MEDIA_ERROR):
+                media.MediaIngest.extract_files(request, output)
+
     def test_tiff16_public_output_precision_alpha_and_failures(self):
         ffmpeg = os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg")
         color = media.FrameColor()

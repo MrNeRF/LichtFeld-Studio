@@ -146,6 +146,15 @@ namespace lfs::core::param {
             .precision(3)
             .ui_step(0.01)
             .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::cropbox_growth_inside,
+                        "cropbox_growth_inside", "ROI growth inside", d.cropbox_growth_inside, 0.0f, 1.0f,
+                        "Share of new splats placed inside the active crop box")
+            .locale("training.advanced.cropbox_growth_inside")
+            .tooltip("training.tooltip.cropbox_growth_inside")
+            .precision(2)
+            .ui_step(0.05)
+            .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
 
             // Loss parameters
             .all_strategies()
@@ -568,6 +577,14 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.grow_until_iter")
             .precision(0)
             .ui_step(1000)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::growth_exchange,
+                       "growth_exchange", "Growth Exchange", d.growth_exchange,
+                       "Keeps error-guided growth working at the splat cap by freeing the splats whose removal changes the image least (MRNF)")
+            .locale("training.advanced.growth_exchange")
+            .tooltip("training.tooltip.growth_exchange")
+            .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
             .float_prop(&OptimizationParameters::opacity_decay,

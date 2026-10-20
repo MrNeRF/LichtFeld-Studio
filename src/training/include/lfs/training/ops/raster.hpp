@@ -107,6 +107,8 @@ namespace lfs::gpu_ops {
         float dc_reg_weight = 0.f;
         float sh_rest_reg_weight = 0.f;
         Tensor rendered_count, erank_reg_loss, dc_reg_loss, sh_rest_reg_loss;
+        // Optional per-splat [N] float32 outputs: summed and peak per-pixel blend weight.
+        Tensor impact_sum, impact_peak;
     };
 
     struct RasterResult {

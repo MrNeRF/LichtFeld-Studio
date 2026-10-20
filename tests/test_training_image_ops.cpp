@@ -126,7 +126,7 @@ TEST_F(TrainingImageOpsBytes, Roi) {
         auto actual = Tensor::full({7, 9}, -1.f, Device::GPU);
         auto direct = actual.clone();
         const auto before = bytes(actual);
-        image_ops().roi(view, position, actual, p);
+        image_ops().roi(view, position, {}, {}, {}, actual, p);
         kernels::launch_roi_weight_map(view.ptr<float>(), position.ptr<float>(), 6, 6, 4.5f, 3.5f, 9, 7,
                                        glm::make_mat4(p.world_to_cropbox.data()), glm::make_vec3(p.minimum.data()),
                                        glm::make_vec3(p.maximum.data()), inverse, 0.2f, direct.ptr<float>(),

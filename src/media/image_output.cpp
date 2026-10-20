@@ -5,6 +5,7 @@
 #include "core/color_transfer.h"
 #include "core/image_codecs.hpp"
 #include "core/image_exr.hpp"
+#include "core/image_jxl.hpp"
 #include "core/path_utils.hpp"
 #include "media/media_options.hpp"
 #include <algorithm>
@@ -62,6 +63,39 @@ namespace lfs::media {
             }
         }
     } // namespace
+    SinkResult validateJxlOutputOptions(const JxlOutputOptions& options) {
+        return core::image_codecs::validate_jxl_encode_options({.lossless = options.lossless, .distance = options.distance, .effort = options.effort});
+    }
+    SinkResult validateJxlOutputOptions(const JxlOutputOptions& options, FramePixelFormat format) {
+        return core::image_codecs::validate_jxl_encode_options({.lossless = options.lossless, .distance = options.distance, .effort = options.effort},
+                                                               format == FramePixelFormat::RGB8 ? core::image_codecs::SampleType::UInt8 : core::image_codecs::SampleType::Float32);
+    }
+    SinkResult ImageOutput::writeJxl(const std::filesystem::path& path, const FrameView& frame, const JxlOutputOptions& options) {
+        return outputBoundary([&]() -> SinkResult {
+            if (auto valid = validateJxlOutputOptions(options, frame.layout.format); !valid)
+                return valid;
+            if (auto required = frame.requiredBytes(); !required)
+                return SinkResult::failure(required.error());
+            const auto& layout = frame.layout;
+            const bool rgb8 = layout.format == FramePixelFormat::RGB8;
+            const bool rgba = layout.format == FramePixelFormat::RGBAFloat32;
+            if (layout.color.units != ColorUnits::Relative ||
+                (rgb8 ? layout.color.transfer != ColorTransfer::Srgb || layout.color.primaries != ColorPrimaries::Bt709
+                      : (layout.format != FramePixelFormat::RGBFloat32 && !rgba) || layout.color.transfer != ColorTransfer::Linear ||
+                            (layout.color.primaries != ColorPrimaries::Bt709 && layout.color.primaries != ColorPrimaries::Bt2020)) ||
+                (!rgba && layout.color.alpha != AlphaMode::None) ||
+                (rgba && layout.color.alpha != AlphaMode::Independent && layout.color.alpha != AlphaMode::Premultiplied))
+                return SinkResult::failure(outputError(ErrorCode::Unsupported, "JXL requires declared relative SDR sRGB RGB8 or linear BT709/BT2020 float RGB/RGBA with matching alpha", 0, "JXL", "ImageOutput.writeJxl"));
+            namespace codecs = core::image_codecs;
+            codecs::JxlEncodeOptions encoding{.lossless = options.lossless, .distance = options.distance, .effort = options.effort, .color = rgb8 ? codecs::JxlEncodingColor::SRGB : layout.color.primaries == ColorPrimaries::Bt2020 ? codecs::JxlEncodingColor::LinearBT2020
+                                                                                                                                                                                                                                      : codecs::JxlEncodingColor::LinearSRGB,
+                                              .premultiplied_alpha = rgba && layout.color.alpha == AlphaMode::Premultiplied};
+            return codecs::write_jxl(path, frame.pixels, layout.width, layout.height, rgba ? 4 : 3,
+                                     rgb8 ? codecs::SampleType::UInt8 : codecs::SampleType::Float32, layout.row_stride, encoding,
+                                     {.overwrite = options.overwrite, .durable = false, .create_directories = false, .cancelled = options.cancelled});
+        },
+                              "ImageOutput.writeJxl");
+    }
     SinkResult validateExrOutputOptions(const ExrOutputOptions& options) {
         if (outputOptionName(options.precision) == "unknown" || outputOptionName(options.compression) == "unknown" ||
             options.provenance.find('\0') != std::string::npos || options.provenance.size() > 1024 * 1024)

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "metal_viewport_renderer.hpp"
 #include "float_color_readback.hpp"
+#include "gpu_lod_target_feedback.hpp"
 #include "core/logger.hpp"
 #include "core/gpu_elapsed.hpp"
 #include "core/memory_pressure.hpp"
@@ -235,6 +236,10 @@ namespace lfs::vis {
             bool gpu_lod_active = false;
             uint64_t gpu_tree_signature = 0;
             uint32_t gpu_capacity = 0, gpu_source_count = 0, gpu_chunks = 0;
+            // The cut's request (base limit, no frame counters) and the
+            // pixel-scale feedback it was selected with.
+            rendering::SplatLodParameters lod_request{};
+            float lod_feedback = 1;
             uint32_t publication_count = 0;
             bool points = false;
             // Host copies of the tensor results, read after completion: the
@@ -253,6 +258,11 @@ namespace lfs::vis {
             LodCutStatus lodStatus() const {
                 const auto counts = static_cast<const uint32_t*>(lod_counts.contents);
                 return {counts[0], counts[1], std::bit_cast<float>(counts[2])};
+            }
+            // Touched chunks that were not resident.
+            size_t lodMisses() const {
+                const auto* touches = static_cast<const uint32_t*>(lod_touches.contents);
+                return size_t(std::count_if(touches, touches + gpu_chunks, [](uint32_t t) { return t != 0 && t != 0xffffffffu; }));
             }
             Image color, depth;
         };
@@ -351,6 +361,13 @@ namespace lfs::vis {
             // maps, all on the backend of the resident splats.
             std::unique_ptr<rendering::SplatRasterizer> raster;
             std::unique_ptr<rendering::SplatLodSelector> lod;
+            // Budget-fill feedback on the GPU LOD threshold, advanced once per
+            // completed cut of `lod_feedback_tree`. Settled once a cut of the
+            // current request, selected with the current feedback, left it unchanged.
+            float lod_feedback = 1;
+            uint64_t lod_feedback_tree = 0, lod_feedback_serial = 0;
+            rendering::SplatLodParameters lod_feedback_request{};
+            bool lod_feedback_settled = false;
             core::GpuBackend backend{};
             std::unique_ptr<rendering::SplatPointRenderer> points;
             core::GpuBackend point_backend{};
@@ -1101,11 +1118,38 @@ namespace lfs::vis {
             }
             const bool gpu_lod = request.lod_gpu_traversal.enabled && (!pager || pager->rootReady());
             auto* gpu_tree = gpu_lod ? (pager ? &paged_tree : &i.prepareLodTree(model)) : nullptr;
+            if (gpu_lod) {
+                if (state.lod_feedback_tree != gpu_tree->signature) {
+                    state.lod_feedback = 1;
+                    state.lod_feedback_tree = gpu_tree->signature;
+                    state.lod_feedback_serial = 0;
+                    state.lod_feedback_settled = false;
+                }
+                std::array<const Frame*, std::tuple_size_v<decltype(state.frames)>> ready{};
+                size_t ready_count = 0;
+                for (const auto& candidate : state.frames)
+                    if (candidate && candidate->lodResultReady() && candidate->gpu_tree_signature == gpu_tree->signature && candidate->producer_value > state.lod_feedback_serial)
+                        ready[ready_count++] = candidate.get();
+                std::sort(ready.begin(), ready.begin() + ready_count, [](const Frame* a, const Frame* b) { return a->producer_value < b->producer_value; });
+                for (size_t n = 0; n < ready_count; ++n) {
+                    const auto& completed = *ready[n];
+                    const auto cut = completed.lodStatus();
+                    advanceGpuLodPixelScaleFeedback(state.lod_feedback,
+                                                    {.candidates = cut.selected,
+                                                     .capacity = completed.gpu_capacity,
+                                                     .overflow = cut.overflow,
+                                                     .threshold_scale = cut.threshold_multiplier,
+                                                     .converging = completed.lodMisses() > 0 || (pager && (pager->pending() || pager->cache().hasOutstandingWork())),
+                                                     .admission_frozen = pager && pager->frozen()});
+                    state.lod_feedback_serial = completed.producer_value;
+                    state.lod_feedback_request = completed.lod_request;
+                    state.lod_feedback_settled = completed.lod_feedback == state.lod_feedback;
+                }
+            }
             const uint32_t source_count = pager && gpu_lod ? pager->physicalNodes() : uint32_t(model.size());
             const uint32_t logical_count = pager ? pager->nodes() : source_count;
             const uint32_t draw_count = gpu_lod ? uint32_t(std::clamp<size_t>(request.lod_gpu_traversal.output_capacity, gpu_tree->roots, std::min(gpu_tree->nodes, source_count)))
-                                                : uint32_t(pager ? model.size() : request.lod_indices ? request.lod_count
-                                                                                                      : model.size());
+                                                : uint32_t(request.lod_indices ? request.lod_count : model.size());
             const int node_degree = request.scene.node_active_sh_degrees.empty() ? model.get_active_sh_degree() : *std::max_element(request.scene.node_active_sh_degrees.begin(), request.scene.node_active_sh_degrees.end());
             const int max_degree = std::clamp(node_degree, 0, std::min(3, model.get_max_sh_degree()));
             const uint32_t degree = static_cast<uint32_t>(std::clamp(request.sh_degree, 0, max_degree));
@@ -1305,7 +1349,7 @@ namespace lfs::vis {
                     const auto& t = gpu_tree->tensors;
                     tree = {&t[0], &t[1], &t[2], &t[3], &t[4], &t[5]};
                 }
-                lod_parameters.pixel_scale_limit = p.pixel_scale_limit;
+                lod_parameters.pixel_scale_limit = p.pixel_scale_limit * state.lod_feedback;
                 lod_parameters.object_scale = p.object_scale;
                 lod_parameters.behind_camera_penalty = p.behind_camera_penalty;
                 lod_parameters.cone_foveation = p.cone_foveation;
@@ -1335,6 +1379,10 @@ namespace lfs::vis {
                 f.gpu_source_count = source_count;
                 f.gpu_tree_signature = gpu_tree->signature;
                 f.gpu_chunks = gpu_tree->chunks;
+                f.lod_request = lod_parameters;
+                f.lod_request.pixel_scale_limit = p.pixel_scale_limit;
+                f.lod_request.current_frame = f.lod_request.fade_frames = 0;
+                f.lod_feedback = state.lod_feedback;
             }
             const auto* lod_cut = gpu_lod ? &gpu_cut : host_cut ? &host_cut_tensors : nullptr;
             // Projection flags of the native derivation: Spark opacity, portal edge math.
@@ -1471,7 +1519,10 @@ namespace lfs::vis {
                         completion_retry();
                 }];
             });
-            const bool refine = pager && (pager->pending() || !pager->rootReady());
+            // Keep rendering until the budget-fill feedback settles for this request.
+            const bool lod_feedback_settled = state.lod_feedback_settled &&
+                                              std::memcmp(&state.lod_feedback_request, &f.lod_request, sizeof(f.lod_request)) == 0;
+            const bool refine = (pager && (pager->pending() || !pager->rootReady())) || (gpu_lod && !lod_feedback_settled);
             if (pager && gpu_lod)
                 pager->noteRendererCompletion(serial);
             f.producer_value = serial;
@@ -1737,10 +1788,11 @@ namespace lfs::vis {
         status.capacity = completed->gpu_capacity;
         status.selected = std::min(cut.selected, completed->gpu_capacity);
         status.overflow = cut.overflow;
-        status.pixel_scale_feedback = cut.threshold_multiplier;
+        const auto& state = i.target(slot);
+        status.pixel_scale_feedback = state.lod_feedback;
         const auto* touches = static_cast<const uint32_t*>(completed->lod_touches.contents);
         status.resident_chunks = status.chunk_count = status.pool_pages = completed->gpu_chunks;
-        const auto& pager = i.target(slot).pager;
+        const auto& pager = state.pager;
         if (pager && completed->rad_signature == pager->signature()) {
             status.resident_chunks = pager->cache().snapshot().resident_chunks;
             status.pool_pages = pager->cache().snapshot().physical_pages;

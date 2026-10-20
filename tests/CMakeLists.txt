@@ -928,6 +928,7 @@ if(NOT LFS_HAS_CUDA)
         test_undistort_portable.cpp
         test_pipelined_loader_backends.cpp
         test_viewer_no_cuda.cpp
+        test_lod_page_cache.cpp
     )
     if(LFS_TENSOR_VULKAN)
         list(APPEND TEST_SOURCES
@@ -955,6 +956,7 @@ if(NOT LFS_HAS_CUDA)
             test_training_ops_metal_losses.cpp
             test_training_ops_metal_adam_sh.cpp
             test_training_ops_metal_fast.cpp
+            test_roi_masks.cpp
             test_training_snapshot_service.cpp
             test_ppisp_regularizer_portable.cpp)
         if(LFS_TENSOR_VULKAN)
@@ -969,6 +971,7 @@ if(NOT LFS_HAS_CUDA)
         list(APPEND TEST_SOURCES test_video_videotoolbox.cpp test_mcp_render_capture_utils.cpp)
     endif()
     add_executable(lichtfeld_tests ${TEST_SOURCES})
+    target_compile_definitions(lichtfeld_tests PRIVATE LFS_JXL_FIXTURES="${CMAKE_SOURCE_DIR}/tests/data/jxl")
     target_link_libraries(lichtfeld_tests PRIVATE ${FFMPEG_LIBRARIES})
     target_include_directories(lichtfeld_tests SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})
     target_compile_definitions(lichtfeld_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}" TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
@@ -1010,7 +1013,7 @@ if(NOT LFS_HAS_CUDA)
         target_link_libraries(lichtfeld_tests PRIVATE Vulkan::Vulkan)
     endif()
     if(LFS_BUILD_TRAINER)
-        target_link_libraries(lichtfeld_tests PRIVATE lfs_training)
+        target_link_libraries(lichtfeld_tests PRIVATE lfs_training lfs_roi_masks)
         if(APPLE)
             # lfs_training resolves CPython from the host process, which the app
             # embeds; the test binary must load it whole.
@@ -1570,6 +1573,7 @@ list(APPEND TEST_FILES test_png_parallel_writer.cpp)
 list(APPEND TEST_FILES test_rad_gpu_encode.cpp)
 list(APPEND TEST_FILES test_rad_meta_sidecar.cpp)
 list(APPEND TEST_FILES test_rad_spark_paging.cpp)
+list(APPEND TEST_FILES test_roi_masks.cpp)
 
 # Keep the source manifest strict: a stale entry should fail configuration
 # instead of silently dropping coverage from the executable.
@@ -1609,6 +1613,7 @@ list(APPEND TEST_SOURCES
 
 # Create test executable
 add_executable(lichtfeld_tests ${TEST_SOURCES})
+target_compile_definitions(lichtfeld_tests PRIVATE LFS_JXL_FIXTURES="${CMAKE_SOURCE_DIR}/tests/data/jxl")
 target_link_libraries(lichtfeld_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_include_directories(lichtfeld_tests SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})
 
@@ -1720,6 +1725,7 @@ endif()
 # Link libraries
 target_link_libraries(lichtfeld_tests PRIVATE
     lfs_shared_image_cuda
+    lfs_roi_masks
     ${LFS_TEST_INTERNAL_LINK_LIBS}
 
     # External libraries

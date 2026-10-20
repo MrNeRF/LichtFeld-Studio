@@ -7,6 +7,7 @@
 #include "core/splat_data.hpp"
 #include "io/formats/rad.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -26,6 +27,60 @@ namespace lfs::vis {
             const std::size_t current_pages,
             const std::size_t requested_pages) {
             return !same_model || (sizing_dirty && current_pages != requested_pages);
+        }
+
+        // What the page-pool sizing policy sees of a model and its device.
+        struct LodPoolSizing {
+            std::size_t logical_chunks = 0;
+            // Deleted mask, or all tensors already in VRAM: page every chunk.
+            bool full_pool = false;
+            // More tree nodes than resident splats: the pool is the working set.
+            bool out_of_core = false;
+            std::size_t budget_splats = 0; // explicit host-streaming budget, 0 = auto
+            float vram_fraction = 0.15f;
+            std::size_t free_bytes = 0; // device headroom, 0 = unknown
+            std::size_t current_pages = 0, page_bytes = 1;
+        };
+
+        // Physical pages of the LOD page pool, shared by every GPU LOD viewer.
+        [[nodiscard]] inline std::size_t lodPoolPages(const LodPoolSizing& sizing) {
+            const std::size_t chunks = sizing.logical_chunks;
+            if (chunks == 0 || sizing.full_pool)
+                return chunks;
+            constexpr std::size_t kMinPoolPages = 2048;
+            if (!sizing.out_of_core && sizing.budget_splats > 0) {
+                // Explicit splat budget for host-resident streaming.
+                const std::size_t budget_pages =
+                    (sizing.budget_splats + lfs::core::SplatLodTree::kChunkSplats - 1) /
+                    lfs::core::SplatLodTree::kChunkSplats;
+                return std::clamp(budget_pages, std::min(kMinPoolPages, chunks), chunks);
+            }
+            // Out-of-core, or host-resident leaves on auto budget: the pool is
+            // real VRAM the renderer must share — size it from headroom. A
+            // host-resident model previously fell through to a FULL pool here,
+            // which allocates pages x page_bytes regardless of free VRAM
+            // (issue #1295: 94K pages = 16.6 GB on a card with 11.8 free).
+            // Only a coarse LOD prefix is host-resident, so the pool must
+            // hold the cut's whole working set or streaming thrashes. Size
+            // it from VRAM headroom; the splat-count budget setting was
+            // tuned for host-resident streaming and is far too small here.
+            if (sizing.free_bytes == 0)
+                return std::min(kMinPoolPages, chunks);
+            // The current pool's own allocation counts as available to
+            // its replacement, otherwise resizing feeds back on itself.
+            const double page_bytes = static_cast<double>(std::max<std::size_t>(sizing.page_bytes, 1));
+            const double budget_bytes =
+                (static_cast<double>(sizing.free_bytes) + static_cast<double>(sizing.current_pages) * page_bytes) *
+                std::clamp(sizing.vram_fraction, 0.05f, 0.9f);
+            auto budget_pages = static_cast<std::size_t>(budget_bytes / page_bytes);
+            // Scratch/ring reallocations wobble the free-VRAM reading
+            // by a few pages between frames; an unquantized re-derive
+            // reconfigure-loops (each pool reset moves free VRAM,
+            // landing on a new count, resetting again). Page-quantum
+            // steps absorb the wobble so the re-derive is idempotent.
+            constexpr std::size_t kPoolPageQuantum = 512;
+            budget_pages -= budget_pages % kPoolPageQuantum;
+            return std::clamp(budget_pages, std::min(kMinPoolPages, chunks), chunks);
         }
     } // namespace detail
 

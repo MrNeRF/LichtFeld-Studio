@@ -58,6 +58,7 @@ namespace lfs::training {
         constexpr uint32_t kShStorageConstant = 67;
         constexpr uint32_t kDepthGradConstant = 68;
         constexpr uint32_t kEdgeWeightConstant = 69;
+        constexpr uint32_t kImpactScoreConstant = 70;
 
         // Tensors captured by forward for the backward of the same frame.
         struct Frame {
@@ -603,7 +604,7 @@ namespace lfs::training {
             uint64_t counts, ranges, values, mean_box, conic_opacity, color_depth, normals;
             uint64_t grad_image, grad_alpha, grad_depth, grad_normal, bg_color, bg_image, n_contrib,
                 final_transmittance;
-            uint64_t grads, normal_grads, densification, error_map, edge_weight, edge_score;
+            uint64_t grads, normal_grads, densification, error_map, edge_weight, edge_score, impact_sum, impact_peak;
             uint32_t n_instances, n_primitives, width, height;
             uint32_t grid_w, capacity, unused1, unused2;
         };
@@ -686,6 +687,13 @@ namespace lfs::training {
                 throw std::invalid_argument(std::format("edge scores need {} contiguous values, got {}", f.n,
                                                         edge_scores.numel()));
 
+            const bool impact = present(adam.impact_sum) && present(adam.impact_peak);
+            if (impact && (adam.impact_sum.dtype() != DataType::Float32 || adam.impact_peak.dtype() != DataType::Float32 ||
+                           adam.impact_sum.numel() < f.n || adam.impact_peak.numel() < f.n ||
+                           !adam.impact_sum.is_contiguous() || !adam.impact_peak.is_contiguous()))
+                throw std::invalid_argument(std::format("impact outputs need {} contiguous float values, got {} and {}", f.n,
+                                                        adam.impact_sum.numel(), adam.impact_peak.numel()));
+
             const bool update_densification = densification.is_valid() && densification.ndim() == 2 &&
                                               densification.shape()[1] >= f.n;
             if (update_densification && !densification.is_contiguous())
@@ -748,6 +756,8 @@ namespace lfs::training {
                     .error_map = pixel_error ? mk::address(error) : 0,
                     .edge_weight = address_if(edge_weight),
                     .edge_score = address_if(edge_scores),
+                    .impact_sum = impact ? mk::address(adam.impact_sum) : 0,
+                    .impact_peak = impact ? mk::address(adam.impact_peak) : 0,
                     .n_instances = f.n_instances,
                     .n_primitives = f.n,
                     .width = f.width,
@@ -758,16 +768,19 @@ namespace lfs::training {
                     .unused2 = 0,
                 };
                 const Tensor& normals_use = normal_channel ? s.normals : none;
+                const Tensor& impact_sum_use = impact ? adam.impact_sum : none;
+                const Tensor& impact_peak_use = impact ? adam.impact_peak : none;
                 launch("fast_blend_backward", params,
                        {&s.counts, &s.ranges, &s.values[f.sorted], &s.mean_box, &s.conic_opacity, &s.color_depth, &normals_use,
                         &grad_image, &grad_alpha, &grad_depth, &grad_normal, &bg_use, &s.n_contrib,
                         &s.final_transmittance, &s.grads, &normal_grads_use, &densification_use, &error, &edge_weight,
-                        &edge_scores},
+                        &edge_scores, &impact_sum_use, &impact_peak_use},
                        f.grid_w * f.grid_h, 1, kBackwardThreads,
                        {{kDensificationConstant, blend_densification},
                         {kNormalChannelConstant, normal_channel ? 1u : 0u},
                         {kDepthGradConstant, present(grad_depth) ? 1u : 0u},
-                        {kEdgeWeightConstant, present(edge_weight) && present(edge_scores) ? 1u : 0u}});
+                        {kEdgeWeightConstant, present(edge_weight) && present(edge_scores) ? 1u : 0u},
+                        {kImpactScoreConstant, impact ? 1u : 0u}});
             }
 
             const uint32_t blocks = div_up(f.n, 256);

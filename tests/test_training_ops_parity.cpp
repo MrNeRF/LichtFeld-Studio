@@ -1281,12 +1281,12 @@ namespace {
             .outside_weight = 0.2f,
             .inverse = false};
         auto weights = Tensor::full({7, 9}, -1.f, Device::GPU);
-        table->roi(view, position, weights, roi);
+        table->roi(view, position, {}, {}, {}, weights, roi);
         keep(out.snapshot, backend, "image.roi", weights, kReduce);
         auto inverse_roi = roi;
         inverse_roi.inverse = true;
         auto inverse_weights = Tensor::full({7, 9}, -1.f, Device::GPU);
-        table->roi(view, position, inverse_weights, inverse_roi);
+        table->roi(view, position, {}, {}, {}, inverse_weights, inverse_roi);
         keep(out.snapshot, backend, "image.roi.inverse", inverse_weights, kReduce);
 
         const auto source = pattern({3, 13, 19}, 1.f, 4);

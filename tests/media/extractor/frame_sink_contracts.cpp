@@ -81,6 +81,19 @@ int runFrameSinkUnitContracts() {
     require(!files.write(file_view).has_value(), "duplicate filenames rejected");
     files.abort({SinkOutcome::Failed, 1, {}});
     std::filesystem::remove(directory / "frame_1.png");
+    // Isolate JXL from legacy assertions and stale-file fixtures below.
+    {
+        FileFrameSinkOptions jxl_options;
+        jxl_options.output_directory = directory / "jxl";
+        jxl_options.format = FrameFileFormat::JXL;
+        FileFrameSink jxl(jxl_options);
+        auto declared = file_view;
+        declared.layout.color = {ColorTransfer::Srgb, ColorPrimaries::Bt709, AlphaMode::None};
+        require(jxl.begin({}).has_value() && jxl.write(declared).has_value(), "JXL sink accepts declared padded sRGB bytes");
+        require(jxl.complete({SinkOutcome::Completed, 1, {}}).has_value(), "JXL sink completes");
+        require(lfs::core::image_codecs::decode(jxl_options.output_directory / "frame_1.jxl", decoded, error), "JXL sink output is discoverable and decodable");
+        require(decoded.data == std::vector<uint8_t>({1, 2, 3, 4, 5, 6}), "JXL sink preserves packed source bytes");
+    }
     for (const int quality : {0, -5, 101}) {
         const auto suffix = std::to_string(quality);
         FileFrameSink png({directory, "png_" + suffix + "_%d", FrameFileFormat::PNG, quality});

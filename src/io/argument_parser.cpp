@@ -54,6 +54,7 @@ namespace lfs::io::args {
             OptimizationCliBinding{"--min-opacity", "min_opacity", Float},
             OptimizationCliBinding{"--cropbox-lr-scale", "cropbox_lr_scale", Float},
             OptimizationCliBinding{"--cropbox-loss-weight", "cropbox_loss_weight", Float},
+            OptimizationCliBinding{"--cropbox-growth-inside", "cropbox_growth_inside", Float},
             OptimizationCliBinding{"--thin-structure-weight", "thin_structure_weight", Float},
             OptimizationCliBinding{"--late-lr-anneal", "late_lr_anneal", Float},
             OptimizationCliBinding{"--gradient-loss-weight", "gradient_loss_weight", Float},
@@ -809,6 +810,7 @@ namespace {
             ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", lfs::io::args::optimization_cli_help("--min-opacity"), {"min-opacity"});
             ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::io::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
             ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::io::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
+            ::args::ValueFlag<float> cropbox_growth_inside(training_group, "share", lfs::io::args::optimization_cli_help("--cropbox-growth-inside"), {"cropbox-growth-inside"});
             ::args::ValueFlag<float> thin_structure_weight(training_group, "weight", lfs::io::args::optimization_cli_help("--thin-structure-weight"), {"thin-structure-weight"});
             ::args::ValueFlag<float> late_lr_anneal(training_group, "fraction", lfs::io::args::optimization_cli_help("--late-lr-anneal"), {"late-lr-anneal"});
             ::args::ValueFlag<float> gradient_loss_weight(training_group, "weight", lfs::io::args::optimization_cli_help("--gradient-loss-weight"), {"gradient-loss-weight"});
@@ -1583,6 +1585,7 @@ namespace {
                                         eval_mask_opacity_val = cli_option_present({"--eval-mask-opacity"}) ? std::optional<float>(::args::get(eval_mask_opacity)) : std::optional<float>(),
                                         cropbox_lr_scale_val = cli_option_present({"--cropbox-lr-scale"}) ? std::optional<float>(::args::get(cropbox_lr_scale)) : std::optional<float>(),
                                         cropbox_loss_weight_val = cli_option_present({"--cropbox-loss-weight"}) ? std::optional<float>(::args::get(cropbox_loss_weight)) : std::optional<float>(),
+                                        cropbox_growth_inside_val = cli_option_present({"--cropbox-growth-inside"}) ? std::optional<float>(::args::get(cropbox_growth_inside)) : std::optional<float>(),
                                         init_num_pts_val = cli_option_present({"--init-num-pts"}) ? std::optional<int>(::args::get(init_num_pts)) : std::optional<int>(),
                                         init_extent_val = cli_option_present({"--init-extent"}) ? std::optional<float>(::args::get(init_extent)) : std::optional<float>(),
                                         init_origin_x_val = cli_option_present({"--init-origin-x"}) ? std::optional<float>(::args::get(init_origin_x)) : std::optional<float>(),
@@ -1763,6 +1766,7 @@ namespace {
                 setVal(min_opacity_val, opt.min_opacity);
                 setVal(cropbox_lr_scale_val, opt.cropbox_lr_scale);
                 setVal(cropbox_loss_weight_val, opt.cropbox_loss_weight);
+                setVal(cropbox_growth_inside_val, opt.cropbox_growth_inside);
                 setVal(init_num_pts_val, opt.init_num_pts);
                 setVal(init_extent_val, opt.init_extent);
                 setVal(init_origin_x_val, opt.init_origin_x);
@@ -1921,6 +1925,7 @@ namespace {
                 note_opt("min_opacity", min_opacity_val.has_value());
                 note_opt("cropbox_lr_scale", cropbox_lr_scale_val.has_value());
                 note_opt("cropbox_loss_weight", cropbox_loss_weight_val.has_value());
+                note_opt("cropbox_growth_inside", cropbox_growth_inside_val.has_value());
                 note_opt("init_num_pts", init_num_pts_val.has_value());
                 note_opt("init_extent", init_extent_val.has_value());
                 note_opt("init_origin_x", init_origin_x_val.has_value());

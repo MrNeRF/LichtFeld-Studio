@@ -181,6 +181,12 @@ int runFloatExrUnitContracts() {
     require(!legacy.extract(legacy_exr, legacy_error) && legacy.lastError()->code() == lfs::ErrorCode::Unsupported &&
                 !std::filesystem::exists(legacy_exr.output_dir),
             "legacy RGB8 EXR request must not write JPEG bytes or invent EXR metadata");
+    auto legacy_jxl = legacy_exr;
+    legacy_jxl.format = lfs::io::ImageFormat::JXL;
+    legacy_jxl.output_dir = directory / "legacy-jxl";
+    require(!legacy.extract(legacy_jxl, legacy_error) && legacy.lastError()->code() == lfs::ErrorCode::Unsupported &&
+                legacy_error.find("EXR") == std::string::npos && !std::filesystem::exists(legacy_jxl.output_dir),
+            "legacy JXL float requirement uses a format-neutral diagnostic before publication");
     options.overwrite = true;
     std::array<float, 3> bad{.2f, .3f, .4f};
     FrameView bad_view{{1, 1, 12, FramePixelFormat::RGBFloat32, {ColorTransfer::Linear, ColorPrimaries::Bt709, AlphaMode::None}}, {}, {reinterpret_cast<const uint8_t*>(bad.data()), sizeof(bad)}};

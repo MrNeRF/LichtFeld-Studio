@@ -36,6 +36,8 @@ namespace lfs::training {
         // is a zeroed float32 [N] per-view scratch vector.
         const float* edge_weight_map = nullptr;
         float* edge_score_out = nullptr;
+        float* impact_sum_out = nullptr;
+        float* impact_peak_out = nullptr;
     };
 
 } // namespace lfs::training

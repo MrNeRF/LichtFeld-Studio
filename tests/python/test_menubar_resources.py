@@ -27,11 +27,12 @@ def _theme_size_values(node, key):
 
 
 def test_every_scrollbar_uses_the_theme_size():
-    # Catches a panel or theme drifting back to its own scrollbar width.
+    # Keep intentional family metrics while preventing panels from overriding them.
     themes_dir = PROJECT_ROOT / "src" / "visualizer" / "gui" / "assets" / "themes"
     for theme_path in themes_dir.glob("*.json"):
         theme = json.loads(theme_path.read_text(encoding="utf-8"))
-        assert set(_theme_size_values(theme, "scrollbar_size")) <= {4.0}, theme_path.name
+        expected_scrollbar_size = 6.0 if theme.get("id") == "graphite" else 4.0
+        assert set(_theme_size_values(theme, "scrollbar_size")) <= {expected_scrollbar_size}, theme_path.name
         assert set(_theme_size_values(theme, "grab_min_size")) <= {12.0}, theme_path.name
 
     resources_dir = PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"

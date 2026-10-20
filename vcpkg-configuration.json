@@ -1,3 +1,11 @@
 {
-  "overlay-ports": [".github/overlays"]
+  "overlay-ports": [".github/overlays"],
+  "registries": [
+    {
+      "kind": "git",
+      "repository": "https://github.com/microsoft/vcpkg",
+      "baseline": "b3ae22aef2b857af6e80d756c13f15db12be4e8a",
+      "packages": ["libjxl"]
+    }
+  ]
 }

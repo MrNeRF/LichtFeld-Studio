@@ -98,6 +98,10 @@ namespace lfs::training {
         [[nodiscard]] const lfs::core::Tensor& frozen_mask() const { return frozen_mask_; }
         void set_frozen_lr_scale(float scale);
         void set_crop_damping_mask(lfs::core::Tensor mask);
+        // Rows whose refine, sampling and keep scores are scaled by cropbox_lr_scale.
+        void set_crop_score_mask(lfs::core::Tensor mask);
+        // Rows inside the crop box ROI and the share of new splats they receive.
+        void set_crop_roi_rows(lfs::core::Tensor rows, float growth_inside);
         void set_cropbox_lr_scale(float scale);
         void set_per_splat_mean_step(bool enabled, float median_extent);
         // Retain the allocation for both explicit and fused Adam; CPU inputs are uploaded.
@@ -116,6 +120,13 @@ namespace lfs::training {
         [[nodiscard]] const lfs::core::Tensor& crop_damping_mask() const noexcept {
             return crop_damping_mask_;
         }
+        [[nodiscard]] const lfs::core::Tensor& crop_score_mask() const noexcept {
+            return crop_score_mask_;
+        }
+        [[nodiscard]] const lfs::core::Tensor& crop_roi_rows() const noexcept {
+            return crop_roi_rows_;
+        }
+        [[nodiscard]] float cropbox_growth_inside() const noexcept { return cropbox_growth_inside_; }
         [[nodiscard]] float cropbox_lr_scale() const noexcept { return cropbox_lr_scale_; }
 
         // Gradient management
@@ -193,6 +204,9 @@ namespace lfs::training {
         lfs::core::Tensor frozen_mask_;
         float frozen_lr_scale_ = 0.0f;
         lfs::core::Tensor crop_damping_mask_;
+        lfs::core::Tensor crop_score_mask_;
+        lfs::core::Tensor crop_roi_rows_;
+        float cropbox_growth_inside_ = 1.0f;
         float cropbox_lr_scale_ = 1.0f;
         bool per_splat_mean_step_ = false;
         float mean_step_median_extent_ = 0.0f;

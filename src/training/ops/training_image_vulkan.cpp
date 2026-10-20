@@ -11,13 +11,16 @@
 #include "core/tensor/internal/tensor_impl.hpp"
 #include "training_shader_table.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
+#include <format>
 #include <map>
 #include <mutex>
 #include <ranges>
 #include <string_view>
 #include <tuple>
+#include <vector>
 
 namespace lfs::training {
     core::Tensor vulkan_flip_error_map(const core::Tensor&, const core::Tensor&, float);
@@ -33,7 +36,7 @@ namespace lfs::training {
         };
         struct alignas(16) Push {
             uint64_t input, output, secondary, tertiary;
-            uint64_t camera, unused0, unused1, unused2;
+            uint64_t camera, rays, depth, alpha;
             uint32_t count, width, height, source_width;
             uint32_t source_height, channels, slot, slot_count;
             float fx, fy, cx, cy;
@@ -142,12 +145,28 @@ namespace lfs::training {
             const std::array writes{b, c};
             launch(p, kHeatmap, 0, reads, writes, 1);
         }
-        void roi(In view, In camera, Out weights, const RoiParams& params) {
-            LFS_ASSERT_MSG(params.image.w > 0 && params.image.h > 0 && params.intrinsics.fx > 0 && params.intrinsics.fy > 0, "ROI dimensions and focal lengths must be positive");
+        void roi(In view, In camera, In camera_rays, In surface_depth, In surface_alpha, Out weights, const RoiParams& params) {
+            const size_t pixels = static_cast<size_t>(std::max(params.image.w, 0)) * static_cast<size_t>(std::max(params.image.h, 0));
+            const auto present = [](const Tensor& t) { return t.is_valid() && t.numel() > 0; };
+            const bool rays = present(camera_rays);
+            const bool surface = present(surface_depth) && present(surface_alpha);
+            LFS_ASSERT_MSG(params.image.w > 0 && params.image.h > 0 && (rays || (params.intrinsics.fx > 0 && params.intrinsics.fy > 0)),
+                           std::format("ROI needs a positive image and, without rays, focal lengths: {}x{} f=({}, {})",
+                                       params.image.w, params.image.h, params.intrinsics.fx, params.intrinsics.fy));
+            for (const auto [tensor, channels, used] : {std::tuple{&camera_rays, size_t{3}, rays}, std::tuple{&surface_depth, size_t{1}, surface},
+                                                        std::tuple{&surface_alpha, size_t{1}, surface}})
+                LFS_ASSERT_MSG(!used || (tensor->numel() == pixels * channels && tensor->dtype() == core::DataType::Float32 && tensor->is_contiguous()),
+                               std::format("ROI per-pixel input needs {} contiguous floats, got {}", pixels * channels, tensor->numel()));
             Push p{};
             p.input = vk::address(ref(view));
             p.output = vk::address(ref(weights));
             p.camera = vk::address(ref(camera));
+            if (rays)
+                p.rays = vk::address(ref(camera_rays));
+            if (surface) {
+                p.depth = vk::address(ref(surface_depth));
+                p.alpha = vk::address(ref(surface_alpha));
+            }
             p.width = static_cast<uint32_t>(params.image.w);
             p.height = static_cast<uint32_t>(params.image.h);
             p.count = count32(static_cast<size_t>(p.width) * p.height);
@@ -162,7 +181,10 @@ namespace lfs::training {
             p.crop_min = {params.minimum[0], params.minimum[1], params.minimum[2], 0};
             p.crop_max = {params.maximum[0], params.maximum[1], params.maximum[2], 0};
             const auto a = ref(view), b = ref(camera), c = ref(weights);
-            const std::array reads{a, b};
+            std::vector reads{a, b};
+            for (const Tensor* t : {&camera_rays, &surface_depth, &surface_alpha})
+                if (present(*t) && (t == &camera_rays ? rays : surface))
+                    reads.push_back(ref(*t));
             const std::array writes{c};
             const auto context = acquire_vulkan_context();
             const uint32_t gx = static_cast<uint32_t>((p.count + 255) / 256);

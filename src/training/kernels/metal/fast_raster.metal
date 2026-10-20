@@ -23,7 +23,7 @@ constant constexpr float kFastDilation = 0.3f;
 constant constexpr float kFastDilationMip = 0.1f;
 constant constexpr uint kFastInvalid = 0xffffffffu;
 
-// Function constants of this family use indices 60..69.
+// Function constants of this family use indices 60..70.
 constant uint kFastShBases [[function_constant(60)]];
 constant uint kFastRenderDepth [[function_constant(61)]];
 constant uint kFastRenderNormal [[function_constant(62)]];
@@ -35,6 +35,8 @@ constant uint kFastShStorage [[function_constant(67)]];
 // Backward only: whether the blend receives a depth gradient and edge weights.
 constant uint kFastDepthGrad [[function_constant(68)]];
 constant uint kFastEdgeWeight [[function_constant(69)]];
+// Backward only: whether the blend writes per-splat removal impact (sum and peak).
+constant uint kFastImpactScore [[function_constant(70)]];
 
 // Screen mean plus the conservative pixel AABB [x0, x1) x [y0, y1) of the
 // contribution ellipse.

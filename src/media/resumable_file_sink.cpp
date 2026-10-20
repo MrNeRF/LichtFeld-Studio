@@ -3,6 +3,7 @@
 #include "resumable_file_sink.hpp"
 #include "core/atomic_file.hpp"
 #include "core/image_codecs.hpp"
+#include "core/image_jxl.hpp"
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "git_version.h"
@@ -114,8 +115,9 @@ namespace lfs::media::detail {
     } // namespace
 
     ResumableFileSink::ResumableFileSink(const IngestRequest& request, const FileExtraction& output)
-        : request_(request), output_(output), cancelled_([cancelled = request.cancelled, file_cancelled = output.files.format == FrameFileFormat::EXR ? output.files.exr.cancelled : output.files.format == FrameFileFormat::TIFF16 ? output.files.tiff16.cancelled
-                                                                                                                                                                                                                                    : output.files.image_output.cancelled] {
+        : request_(request), output_(output), cancelled_([cancelled = request.cancelled, file_cancelled = output.files.format == FrameFileFormat::JXL ? output.files.jxl.cancelled : output.files.format == FrameFileFormat::EXR  ? output.files.exr.cancelled
+                                                                                                                                                                                 : output.files.format == FrameFileFormat::TIFF16 ? output.files.tiff16.cancelled
+                                                                                                                                                                                                                                  : output.files.image_output.cancelled] {
               return (cancelled && cancelled()) || (file_cancelled && file_cancelled());
           }),
           checkpoint_(output.files.output_directory / ".media-ingest-checkpoint") {}
@@ -156,6 +158,8 @@ namespace lfs::media::detail {
         identity_["files"] = {f.filename_pattern, static_cast<int>(f.format), f.jpeg_quality, static_cast<int>(f.exr.precision), static_cast<int>(f.exr.compression), f.exr.provenance};
         if (f.format == FrameFileFormat::TIFF16)
             identity_["tiff16"] = {core::image_codecs::tiff_sdr_encoding, static_cast<int>(f.tiff16.transfer), f.tiff16.provenance};
+        if (f.format == FrameFileFormat::JXL)
+            identity_["jxl"] = {"jxl-sdr-v1", core::image_codecs::jxl_encoder_version(), f.jxl.lossless, f.jxl.lossless ? Json(nullptr) : Json(f.jxl.distance), f.jxl.effort};
         identity_["files"].push_back(f.first_source_frame_number);
         identity_["layout"] = {session.output.width, session.output.height, static_cast<int>(session.output.format), static_cast<int>(session.output.color.transfer), static_cast<int>(session.output.color.primaries)};
         identity_["metadata"] = output_.write_metadata;
@@ -243,8 +247,9 @@ namespace lfs::media::detail {
                                                        "Output frame number exceeds the supported range"));
         }
         const auto output_frame_number = output_.files.first_source_frame_number + frame.info.legacy_source_frame - 1;
-        const auto extension = output_.files.format == FrameFileFormat::TIFF16 ? ".tif" : output_.files.format == FrameFileFormat::PNG ? ".png"
-                                                                                      : output_.files.format == FrameFileFormat::JPEG  ? ".jpg"
+        const auto extension = output_.files.format == FrameFileFormat::JXL ? ".jxl" : output_.files.format == FrameFileFormat::TIFF16 ? ".tif"
+                                                                                   : output_.files.format == FrameFileFormat::PNG      ? ".png"
+                                                                                   : output_.files.format == FrameFileFormat::JPEG     ? ".jpg"
                                                                                                                                        : ".exr";
         const auto name = core::utf8_to_path(io::formatFrameFilenameStem(output_.files.filename_pattern, output_frame_number) + extension);
         if (name != name.filename() || name.empty() || !filenames_.insert(name).second)
@@ -292,6 +297,8 @@ namespace lfs::media::detail {
         staging_options.exr.overwrite = true;
         staging_options.tiff16.overwrite = true;
         staging_options.tiff16.cancelled = cancelled_;
+        staging_options.jxl.overwrite = true;
+        staging_options.jxl.cancelled = cancelled_;
         const auto staged = checkpoint_ / name;
         Result<std::string> encoded_digest = std::string{};
         if (gpu_jpeg_) {

@@ -619,8 +619,6 @@ namespace lfs::vis::gui {
                 return "tools";
             if (idname == "lfs_plugins.view_menu.ViewMenu")
                 return "view";
-            if (idname == "lfs_plugins.help_menu.HelpMenu")
-                return "help";
             return nullptr;
         }
 
@@ -697,6 +695,7 @@ namespace lfs::vis::gui {
             handle.RegisterMember("label", &MenuLabelView::label);
             handle.RegisterMember("access", &MenuLabelView::access);
             handle.RegisterMember("active", &MenuLabelView::active);
+            handle.RegisterMember("logo", &MenuLabelView::logo);
         }
         if (auto handle = ctor.RegisterStruct<MenuDropdownLeafView>()) {
             handle.RegisterMember("index", &MenuDropdownLeafView::index);
@@ -788,6 +787,7 @@ namespace lfs::vis::gui {
         }
         ctor.RegisterArray<std::vector<MenuToolbarButtonView>>();
         ctor.Bind("menu_labels", &menu_labels_);
+        ctor.Bind("brand_logo_src", &brand_logo_src_);
         ctor.Bind("dropdown_items", &dropdown_items_);
         ctor.Bind("menu_camera_buttons", &camera_buttons_);
         ctor.Bind("menu_snap_buttons", &snap_buttons_);
@@ -836,7 +836,6 @@ namespace lfs::vis::gui {
         dropdown_overlay_ = document_->GetElementById("dropdown-overlay");
         dropdown_container_ = document_->GetElementById("dropdown-container");
         dropdown_popup_ = document_->GetElementById("dropdown-popup");
-        brand_logo_ = document_->GetElementById("brand-logo");
         project_title_container_ = document_->GetElementById("project-title");
         project_title_el_ = document_->GetElementById("project-title-content");
         menu_toolbar_ = document_->GetElementById("menu-toolbar");
@@ -873,7 +872,6 @@ namespace lfs::vis::gui {
         dropdown_container_ = nullptr;
         dropdown_popup_ = nullptr;
         dropdown_overlay_ = nullptr;
-        brand_logo_ = nullptr;
         project_title_container_ = nullptr;
         project_title_el_ = nullptr;
         menu_toolbar_ = nullptr;
@@ -921,7 +919,6 @@ namespace lfs::vis::gui {
         dropdown_container_ = nullptr;
         dropdown_popup_ = nullptr;
         dropdown_overlay_ = nullptr;
-        brand_logo_ = nullptr;
         project_title_container_ = nullptr;
         project_title_el_ = nullptr;
         menu_toolbar_ = nullptr;
@@ -963,7 +960,6 @@ namespace lfs::vis::gui {
         dropdown_overlay_ = document_->GetElementById("dropdown-overlay");
         dropdown_container_ = document_->GetElementById("dropdown-container");
         dropdown_popup_ = document_->GetElementById("dropdown-popup");
-        brand_logo_ = document_->GetElementById("brand-logo");
         project_title_container_ = document_->GetElementById("project-title");
         project_title_el_ = document_->GetElementById("project-title-content");
         menu_toolbar_ = document_->GetElementById("menu-toolbar");
@@ -1038,10 +1034,13 @@ namespace lfs::vis::gui {
         menu_labels_.clear();
         menu_labels_.reserve(current_labels_.size());
         for (size_t i = 0; i < current_labels_.size(); ++i) {
+            // Help has no label of its own: the brand logo is its entry.
+            const bool logo = current_idnames_[i] == "lfs_plugins.help_menu.HelpMenu";
             menu_labels_.push_back(MenuLabelView{
                 .index = static_cast<int>(i),
-                .label = current_labels_[i],
+                .label = logo ? std::string{} : current_labels_[i],
                 .active = static_cast<int>(i) == active_index_,
+                .logo = logo,
             });
         }
         assignTopLevelAccessKeys(menu_labels_, current_idnames_);
@@ -2538,12 +2537,8 @@ namespace lfs::vis::gui {
 
         rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/menubar.theme.rcss"));
 
-        if (brand_logo_) {
-            const auto logo_path = lfs::vis::getAssetPath("lichtfeld-icon.png");
-            brand_logo_->SetAttribute("src", rml_theme::pathToRmlImageSource(logo_path));
-            brand_logo_->SetProperty("width", "20dp");
-            brand_logo_->SetProperty("height", "20dp");
-        }
+        brand_logo_src_ = rml_theme::pathToRmlImageSource(lfs::vis::getAssetPath("lichtfeld-icon.png"));
+        menu_model_.DirtyVariable("brand_logo_src");
         return true;
     }
 

@@ -64,6 +64,9 @@ namespace lfs::core::image_codecs {
     // Validate Radiance scanline payload completeness without decoding pixels.
     LFS_IMAGE_CODECS_API bool radiance_scanlines_complete(const std::filesystem::path& path);
     LFS_IMAGE_CODECS_API bool decode(const std::filesystem::path& path, Image& result, std::string& error);
+    // Display policy is dispatched here for profiled codecs. JXL defaults to
+    // canonical sRGB even without display; native JXL access is explicit.
+    LFS_IMAGE_CODECS_API bool decode(const std::filesystem::path& path, Image& result, std::string& error, bool display);
     inline constexpr std::string_view tiff_sdr_encoding = "tiff16-sdr-v1";
     // Immutable, lazily initialized once per supported transfer; shared by
     // export and metadata validation. Unknown transfers return an empty span.
@@ -79,11 +82,14 @@ namespace lfs::core::image_codecs {
     // TIFF metadata only. Pixel decode APIs retain the original file encoding.
     LFS_IMAGE_CODECS_API bool read_tiff_metadata(const std::filesystem::path&, TiffMetadata&, std::string& error);
     LFS_IMAGE_CODECS_API bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target, Probe& result, std::string& error);
+    LFS_IMAGE_CODECS_API bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target, Probe& result, std::string& error, bool display);
     // EXR memory reads use the file decoder's Float32 RGBA sample policy.
     // EXR targets require Float32 RGB/RGBA (zero channels selects RGBA) and
     // stage decoding before allocating/writing caller storage.
     LFS_IMAGE_CODECS_API bool decode_memory(const std::uint8_t* data, size_t size, Image& result, std::string& error);
+    LFS_IMAGE_CODECS_API bool decode_memory(const std::uint8_t* data, size_t size, Image& result, std::string& error, bool display);
     LFS_IMAGE_CODECS_API bool decode_memory_to_buffer(const std::uint8_t* data, size_t size, DecodeTarget& target, Probe& result, std::string& error);
+    LFS_IMAGE_CODECS_API bool decode_memory_to_buffer(const std::uint8_t* data, size_t size, DecodeTarget& target, Probe& result, std::string& error, bool display);
 
     struct JpegEncodeOptions {
         int quality = 95; // Clamped to [1, 100], matching the file writer.
@@ -155,10 +161,11 @@ namespace lfs::core::image_codecs {
                                                std::size_t row_stride, const std::optional<std::string>& description,
                                                const AtomicFileOptions& options, const TiffColorTags& color = {});
 
-    // Packed display bytes: preserve samples, PNG/TIFF alpha and legacy codec
+    // Packed display bytes: preserve samples, PNG/TIFF/JXL alpha and legacy codec
     // defaults. JPEG drops RGBA alpha; gray-alpha JPEG is unsupported. This is
     // shared atomic file service; legacy callers keep overwrite enabled and do
-    // not create directories. No linear/EXR conversion.
+    // not create directories. No linear/EXR conversion. JXL is lossless sRGB;
+    // JPEG quality is ignored and nonempty metadata comments are rejected.
     LFS_IMAGE_CODECS_API bool write_image_u8(const std::filesystem::path& path, const std::uint8_t* data,
                                              int width, int height, int channels, int jpeg_quality,
                                              const std::optional<std::string>& comment, std::string& error,

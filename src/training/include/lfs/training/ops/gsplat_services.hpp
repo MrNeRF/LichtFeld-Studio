@@ -21,7 +21,8 @@ namespace lfs::training {
         const core::Camera&, core::SplatData&, const core::Tensor& bg_color,
         int tile_x, int tile_y, int tile_w, int tile_h,
         float scaling_modifier, bool antialiased, GsplatRenderMode,
-        const core::Tensor& bg_image, RenderOutput&);
+        const core::Tensor& bg_image, RenderOutput&,
+        bool lens_camera_rays = false);
 
     RenderOutput gsplat_infer(
         const lfs::gpu_ops::GsplatRasterOps&, lfs::gpu_ops::GsplatSaved&,

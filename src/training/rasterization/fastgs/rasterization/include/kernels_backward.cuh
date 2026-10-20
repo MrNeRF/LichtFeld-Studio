@@ -613,6 +613,21 @@ namespace fast_lfs::rasterization::kernels::backward {
         return -grad_alpha;
     }
 
+    __device__ __forceinline__ float3 background_color_at(
+        const BackgroundAlphaGradient& background,
+        const uint pixel_idx,
+        const uint n_pixels) {
+        if (background.bg_image != nullptr) {
+            return make_float3(background.bg_image[pixel_idx],
+                               background.bg_image[n_pixels + pixel_idx],
+                               background.bg_image[2 * n_pixels + pixel_idx]);
+        }
+        if (background.bg_color != nullptr) {
+            return make_float3(background.bg_color[0], background.bg_color[1], background.bg_color[2]);
+        }
+        return make_float3(0.0f);
+    }
+
     __device__ __forceinline__ int reverse_tile_primitive_idx(const int T_eff, const int reverse_i) {
         return T_eff - reverse_i - 1;
     }
@@ -639,8 +654,10 @@ namespace fast_lfs::rasterization::kernels::backward {
     // WARP_BWD_WALK_BEGIN / WARP_BWD_WALK_END mark the reverse-walk body: zero
     // The sync-count assertion depends on the block.sync and __syncthreads calls below.
     // ---------------------------------------------------------------------------
-    template <DensificationType DENSIFICATION_TYPE, bool NORMAL_CHANNEL, int WARP_CULL_MODE = 0>
-    __global__ void __launch_bounds__(config::block_size_blend_backward, 8) blend_backward_cu(
+    // The removal-impact walk keeps a colour composite per pixel live; at 8 blocks per SM it spills
+    // on every fragment, at 6 it fits in registers and runs faster.
+    template <DensificationType DENSIFICATION_TYPE, bool NORMAL_CHANNEL, bool IMPACT_SCORE, int WARP_CULL_MODE = 0>
+    __global__ void __launch_bounds__(config::block_size_blend_backward, IMPACT_SCORE ? 6 : 8) blend_backward_cu(
         const uint2* __restrict__ tile_instance_ranges,
         const uint* __restrict__ instance_primitive_indices,
         const uint* __restrict__ primitive_work_indices,
@@ -667,6 +684,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float* __restrict__ densification_error_map,
         const float* __restrict__ edge_weight_map,
         float* __restrict__ edge_score_out,
+        float* __restrict__ impact_sum_out,
+        float* __restrict__ impact_peak_out,
         FastGSForwardStatus* __restrict__ status,
         const uint n_instances,
         const uint n_primitives,
@@ -775,6 +794,12 @@ namespace fast_lfs::rasterization::kernels::backward {
                              : make_float3(0.0f);
         float grad_T0 = inside0 ? background_transmittance_grad(background_grad, grad_c0, pixel_idx0, n_pixels) : 0.0f;
         float grad_T1 = inside1 ? background_transmittance_grad(background_grad, grad_c1, pixel_idx1, n_pixels) : 0.0f;
+        float3 behind0 = make_float3(0.0f);
+        float3 behind1 = make_float3(0.0f);
+        if constexpr (IMPACT_SCORE) {
+            behind0 = inside0 ? background_color_at(background_grad, pixel_idx0, n_pixels) : make_float3(0.0f);
+            behind1 = inside1 ? background_color_at(background_grad, pixel_idx1, n_pixels) : make_float3(0.0f);
+        }
         const float grad_d0 = (inside0 && grad_depth_map != nullptr) ? grad_depth_map[pixel_idx0] : 0.0f;
         const float grad_d1 = (inside1 && grad_depth_map != nullptr) ? grad_depth_map[pixel_idx1] : 0.0f;
         float3 grad_n0 = make_float3(0.0f);
@@ -1003,6 +1028,8 @@ namespace fast_lfs::rasterization::kernels::backward {
                     }
 
                     BlendBackwardAccum accum = make_zero_blend_backward_accum();
+                    float impact_sum = 0.0f;
+                    float impact_peak = 0.0f;
                     bool has_contribution = false;
 
                     // Lambda-like: process one pixel's contribution into accum.
@@ -1010,7 +1037,8 @@ namespace fast_lfs::rasterization::kernels::backward {
                                                 const float2 pixel, const float pixel_error,
                                                 const float edge_weight,
                                                 float& T, float3& grad_c, float& grad_T,
-                                                const float grad_d, const float3& grad_n) {
+                                                const float grad_d, const float3& grad_n,
+                                                float3& behind) {
                         if (!use || !inside || static_cast<uint>(tile_primitive_idx) >= last)
                             return;
                         const float2 delta = mean2d - pixel;
@@ -1033,6 +1061,15 @@ namespace fast_lfs::rasterization::kernels::backward {
                         const float blending_weight = transmittance_before * alpha;
                         if (edge_score_out != nullptr) {
                             accum.edge_weighted_contribution += blending_weight * edge_weight;
+                        }
+                        if constexpr (IMPACT_SCORE) {
+                            const float removal_impact = blending_weight *
+                                                         (fabsf(color.x - behind.x) +
+                                                          fabsf(color.y - behind.y) +
+                                                          fabsf(color.z - behind.z));
+                            impact_sum += removal_impact;
+                            impact_peak = fmaxf(impact_peak, removal_impact);
+                            behind = alpha * color + one_minus_alpha * behind;
                         }
                         float normal_dot_grad = 0.0f;
                         if constexpr (NORMAL_CHANNEL) {
@@ -1086,9 +1123,9 @@ namespace fast_lfs::rasterization::kernels::backward {
                     };
 
                     accumulate_pixel(use0, inside0, last0, pixel0, pixel_error0, edge_weight0,
-                                     T0, grad_c0, grad_T0, grad_d0, grad_n0);
+                                     T0, grad_c0, grad_T0, grad_d0, grad_n0, behind0);
                     accumulate_pixel(use1, inside1, last1, pixel1, pixel_error1, edge_weight1,
-                                     T1, grad_c1, grad_T1, grad_d1, grad_n1);
+                                     T1, grad_c1, grad_T1, grad_d1, grad_n1, behind1);
 
                     // Warp-reduce → one global atomic per splat per warp.
                     const unsigned contrib_mask = __ballot_sync(0xffffffffu, has_contribution);
@@ -1125,6 +1162,14 @@ namespace fast_lfs::rasterization::kernels::backward {
                         const float edge_score = edge_score_out != nullptr
                                                      ? reduce_field(accum.edge_weighted_contribution)
                                                      : 0.0f;
+                        float reduced_impact_sum = 0.0f;
+                        float reduced_impact_peak = 0.0f;
+                        if constexpr (IMPACT_SCORE) {
+                            reduced_impact_sum = reduce_field(impact_sum);
+                            reduced_impact_peak = n_contrib == 1u
+                                                      ? __shfl_sync(0xffffffffu, impact_peak, src_lane)
+                                                      : lfs::core::warp_ops::warp_reduce_max(impact_peak);
+                        }
                         if (lane_id == 0u) {
                             atomicAdd(&grad_mean2d[work_idx].x, clamp_grad(mean_x));
                             atomicAdd(&grad_mean2d[work_idx].y, clamp_grad(mean_y));
@@ -1147,6 +1192,13 @@ namespace fast_lfs::rasterization::kernels::backward {
                             }
                             if (edge_score_out != nullptr) {
                                 atomicAdd(&edge_score_out[primitive_idx], edge_score);
+                            }
+                            if constexpr (IMPACT_SCORE) {
+                                atomicAdd(&impact_sum_out[primitive_idx], reduced_impact_sum);
+                                if (reduced_impact_peak > 0.0f) {
+                                    atomicMax(reinterpret_cast<int*>(&impact_peak_out[primitive_idx]),
+                                              __float_as_int(reduced_impact_peak));
+                                }
                             }
                         }
                     }

@@ -290,6 +290,49 @@ class IngestCLI(unittest.TestCase):
                 self.assertEqual(actual["frames_accepted"],len(metadata["frames"]))
                 progress=[json.loads(line) for line in stderr.splitlines() if line.startswith(b'{')]
                 self.assertTrue(progress)
+    def test_jxl_missing_primaries_uses_format_neutral_diagnostic(self):
+        destination = self.root / "jxl-no-primaries"
+        result, _ = self.invoke("extract", self.source(), "--output", destination,
+                                "--format", "jxl", "--input-transfer", "linear", code=3)
+        message = result["error"]["message"]
+        self.assertIn("primaries", message)
+        self.assertNotIn("EXR", message)
+        self.assertFalse(destination.exists())
+
+    def test_jxl_output_options_and_verified_resume(self):
+        output=self.root/"jxl-cli"
+        args=("extract",self.source(),"--output",output,"--interval","1","--end","0.35",
+              "--format","jxl","--input-transfer","linear","--input-primaries","bt709","--resume")
+        result,_=self.invoke(*args)
+        self.assertEqual(result["frames_accepted"],4)
+        paths=sorted(output.glob("*.jxl"))
+        self.assertEqual(len(paths),4)
+        original={p.name:p.read_bytes() for p in paths}
+        metadata=json.loads((output/"extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(metadata["output"]["format"],"jxl")
+        self.assertEqual(metadata["output"]["bit_depth"],32)
+        self.assertEqual(metadata["output"]["compression"],"lossless")
+        self.assertGreater(metadata["output"]["libjxl_version"],0)
+        self.assertIsNone(metadata["output"]["jxl_distance"])
+        self.invoke(*args,"--overwrite")
+        self.assertEqual({p.name:p.read_bytes() for p in output.glob("*.jxl")},original)
+        paths[0].unlink()
+        self.invoke(*args,"--overwrite")
+        self.assertEqual({p.name:p.read_bytes() for p in output.glob("*.jxl")},original)
+        self.invoke(*args,"--overwrite","--jxl-distance","1",code=4)
+        for index,flags in enumerate((("--format","png","--jxl-effort","1"),
+                                      ("--format","jxl","--jxl-distance","0"),
+                                      ("--format","jxl","--jxl-effort","10"),
+                                      ("--format","jxl","--jxl-effort","1"),
+                                      ("--format","jxl","--jxl-effort","2"),
+                                      ("--format","jxl","--jxl-effort","3"),
+                                      ("--format","jxl","--exr-precision","float"),
+                                      ("--format","jxl","--hdr-to-sdr"),
+                                      ("--format","jxl","--quality","95"))):
+            destination=self.root/f"jxl-invalid-{index}"
+            self.invoke("extract",self.source(),"--output",destination,*flags,code=2)
+            self.assertFalse(destination.exists())
+
     def test_tiff16_output_and_option_validation(self):
         output=self.root/"tiff16-cli"
         result,_=self.invoke("extract",self.source(),"--output",output,"--interval","1","--end","0.35",

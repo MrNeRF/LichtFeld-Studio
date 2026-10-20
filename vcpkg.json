@@ -39,6 +39,10 @@
       "default-features": false
     },
     "libjpeg-turbo",
+    {
+      "name": "libjxl",
+      "default-features": false
+    },
     "libpng",
     "libwebp",
     "nanobind",

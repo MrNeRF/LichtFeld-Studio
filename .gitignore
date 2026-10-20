@@ -21,6 +21,8 @@ data
 tests/data/*
 !tests/data/heif/
 !tests/data/heif/**
+!tests/data/jxl/
+!tests/data/jxl/**
 !tests/data/keymap_contract/
 !tests/data/keymap_contract/*.digest
 !tests/data/keymap_layouts/

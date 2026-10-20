@@ -23,7 +23,12 @@ namespace lfs::training::kernels {
         const glm::vec3& crop_max,
         bool inverse,
         float outside_weight,
-        float* output, // [H,W] CUDA
+        const float* camera_rays, // [H,W,3] CUDA camera-space rays (NaN: no ray), or null for pinhole
+        // With both set (a camera inside the box), a pixel is in the ROI when the surface it shows
+        // lies in the box, not when its ray crosses it: every ray of such a camera starts inside.
+        const float* surface_depth, // [H,W] CUDA accumulated depth in the rays' units, or null
+        const float* surface_alpha, // [H,W] CUDA accumulated alpha, or null
+        float* output,              // [H,W] CUDA
         cudaStream_t stream = nullptr);
 
 } // namespace lfs::training::kernels

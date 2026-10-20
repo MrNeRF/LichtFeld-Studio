@@ -3,7 +3,7 @@
 
 struct Parameters {
     uint64_t input, output, secondary, tertiary;
-    uint64_t camera, unused0, unused1, unused2;
+    uint64_t camera, rays, depth, alpha;
     uint count, width, height, sourceWidth;
     uint sourceHeight, channels, slot, slotCount;
     float fx, fy, cx, cy;
@@ -82,12 +82,31 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Paramet
         if (index >= p.count) return;
         uint x = index % p.width, y = index / p.width;
         float3 camera = float3((float(x) + 0.5f - p.cx) / p.fx, (float(y) + 0.5f - p.cy) / p.fy, 1.0f);
+        if (p.rays != 0) {
+            Ptr<float, Access.Read> rays = (Ptr<float, Access.Read>)p.rays;
+            camera = float3(rays[3 * index], rays[3 * index + 1], rays[3 * index + 2]);
+            // The lens has no ray for this pixel.
+            if (!all(isfinite(camera))) {
+                output[index] = p.inverse != 0 ? 1.0f : p.outsideWeight;
+                return;
+            }
+        }
         Ptr<float, Access.Read> view = (Ptr<float, Access.Read>)p.input;
-        float3 world = float3(view[0]*camera.x + view[4]*camera.y + view[8],
-                              view[1]*camera.x + view[5]*camera.y + view[9],
-                              view[2]*camera.x + view[6]*camera.y + view[10]);
+        float3 world = float3(view[0]*camera.x + view[4]*camera.y + view[8]*camera.z,
+                              view[1]*camera.x + view[5]*camera.y + view[9]*camera.z,
+                              view[2]*camera.x + view[6]*camera.y + view[10]*camera.z);
         Ptr<float, Access.Read> cam = (Ptr<float, Access.Read>)p.camera;
-        bool hit = rayHitsBox(transformPoint(p, float3(cam[0],cam[1],cam[2])), transformDirection(p, world), p.cropMin.xyz, p.cropMax.xyz);
+        float3 originInBox = transformPoint(p, float3(cam[0],cam[1],cam[2]));
+        float3 directionInBox = transformDirection(p, world);
+        bool hit;
+        if (p.depth != 0 && p.alpha != 0) {
+            // Below half coverage a pixel shows mostly background, so no surface in the box.
+            float alpha = ((Ptr<float, Access.Read>)p.alpha)[index];
+            float3 point = originInBox + (((Ptr<float, Access.Read>)p.depth)[index] / alpha) * directionInBox;
+            hit = alpha >= 0.5f && all(point >= p.cropMin.xyz) && all(point <= p.cropMax.xyz);
+        } else {
+            hit = rayHitsBox(originInBox, directionInBox, p.cropMin.xyz, p.cropMax.xyz);
+        }
         output[index] = ((p.inverse != 0) != hit) ? 1.0f : p.outsideWeight;
         return;
     }

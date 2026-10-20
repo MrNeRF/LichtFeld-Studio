@@ -280,6 +280,8 @@ namespace {
         std::vector<double> image, alpha, depth, normal;
         std::vector<std::vector<int>> lists;                   // per pixel, front to back
         std::vector<double> weight, weight_error, weight_edge; // per splat
+        // Per splat: summed and peak per-pixel change when the splat is removed.
+        std::vector<double> impact_sum, impact_peak;
     };
 
     // Front-to-back blend over splats ordered by (depth key, index). With
@@ -304,10 +306,18 @@ namespace {
         r.weight.assign(s.count, 0.0);
         r.weight_error.assign(s.count, 0.0);
         r.weight_edge.assign(s.count, 0.0);
+        r.impact_sum.assign(s.count, 0.0);
+        r.impact_peak.assign(s.count, 0.0);
+        struct Fragment {
+            int splat;
+            double alpha, weight;
+        };
+        std::vector<Fragment> fragments;
         for (int py = 0; py < v.height; ++py) {
             for (int px = 0; px < v.width; ++px) {
                 const size_t pixel = size_t{static_cast<size_t>(py)} * v.width + px;
                 double color[3] = {0, 0, 0}, depth = 0, normal[3] = {0, 0, 0}, transmittance = 1.0;
+                fragments.clear();
                 auto blend = [&](const int i, const bool gate) {
                     const Splat& g = splats[i];
                     const double dx = g.mean[0] - (px + 0.5), dy = g.mean[1] - (py + 0.5);
@@ -323,6 +333,7 @@ namespace {
                         normal[c] += w * g.normal[c];
                     }
                     depth += w * g.depth;
+                    fragments.push_back({i, alpha, w});
                     r.weight[i] += w;
                     if (error != nullptr)
                         r.weight_error[i] += w * (*error)[pixel];
@@ -356,6 +367,19 @@ namespace {
                 }
                 r.alpha[pixel] = 1.0 - transmittance;
                 r.depth[pixel] = depth;
+                // Back to front, each splat covers the composite of everything behind it.
+                double behind[3] = {bg[0], bg[1], bg[2]};
+                for (auto f = fragments.rbegin(); f != fragments.rend(); ++f) {
+                    const Splat& g = splats[f->splat];
+                    double change = 0.0;
+                    for (int c = 0; c < 3; ++c)
+                        change += std::abs(std::clamp(g.color[c], 0.0, 4.0) - behind[c]);
+                    const double impact = f->weight * change;
+                    r.impact_sum[f->splat] += impact;
+                    r.impact_peak[f->splat] = std::max(r.impact_peak[f->splat], impact);
+                    for (int c = 0; c < 3; ++c)
+                        behind[c] = f->alpha * std::clamp(g.color[c], 0.0, 4.0) + (1.0 - f->alpha) * behind[c];
+                }
             }
         }
         return r;
@@ -1087,6 +1111,37 @@ namespace {
             expect_close(std::vector<float>(dens.begin() + n, dens.end()), row1, 2e-3 * scale, "densification row 1");
             expect_close(download(edge_scores), r.weight_edge, 1e-4, "edge scores");
         }
+    }
+
+    // Catches a removal impact that misses the composite behind each splat: MRNF's growth
+    // exchange frees the splats whose removal changes the image least.
+    TEST_P(PortableFastRaster, RemovalImpactMatchesReference) {
+        Scene s = make_scene(30, 1, 48, 40, 45u, -2.3f, -1.6f);
+        const View view = make_view(s, false);
+        const Rendered r = render(s, Params(s), view, nullptr);
+        const auto n = static_cast<size_t>(s.count);
+        Gpu g = upload_scene(s, ops::ShStorage::Float32);
+        Frame frame;
+        forward(frame, s, g, {});
+        ASSERT_EQ(frame.result.code, ops::RasterResult::Code::Success) << frame.result.message;
+        AdamState state;
+        ops::BackwardAdam adam = make_adam(g, state, s.count, {});
+        adam.impact_sum = Tensor::zeros({n}, Device::GPU);
+        adam.impact_peak = Tensor::zeros({n}, Device::GPU);
+        const LossWeights w = random_weights(s.width, s.height, 13u, false);
+        const Tensor grad_image = plane(w.image, 3, s.height, s.width);
+        Tensor none;
+        fast_ops().backward(frame.saved, {.image = grad_image, .alpha = none, .depth = none, .normal = none}, none,
+                            none, none, none, adam, DensificationType::None);
+        double scale = 1.0;
+        for (const double v : r.impact_sum)
+            scale = std::max(scale, v);
+        expect_close(download(adam.impact_sum), r.impact_sum, 1e-4 * scale, "impact sum");
+        expect_close(download(adam.impact_peak), r.impact_peak, 1e-5, "impact peak");
+        double total = 0.0;
+        for (const double v : r.impact_sum)
+            total += v;
+        EXPECT_GT(total, 1.0) << "the scene must exercise the impact walk";
     }
 
     // Q16 shN: the fused step moves the decoded values by -grad and re-encodes them

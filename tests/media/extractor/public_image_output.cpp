@@ -46,5 +46,16 @@ int main() {
         return 4;
     }
     auto tiff_collision = ImageOutput::writeTiff16(tiff_path, view, tiff_options);
-    return !tiff_collision && tiff_collision.error().code() == lfs::ErrorCode::AlreadyExists && std::filesystem::file_size(tiff_path) > 100 ? 0 : 5;
+    if (tiff_collision || tiff_collision.error().code() != lfs::ErrorCode::AlreadyExists || std::filesystem::file_size(tiff_path) <= 100)
+        return 5;
+    auto jxl_path = path;
+    jxl_path.replace_extension(".jxl");
+    Cleanup jxl_cleanup{jxl_path};
+    auto jxl_result = ImageOutput::writeJxl(jxl_path, surface->view());
+    if (!jxl_result) {
+        std::cerr << jxl_result.error().detail();
+        return 6;
+    }
+    auto jxl_collision = ImageOutput::writeJxl(jxl_path, surface->view());
+    return !jxl_collision && jxl_collision.error().code() == lfs::ErrorCode::AlreadyExists && std::filesystem::file_size(jxl_path) > 10 ? 0 : 7;
 }
