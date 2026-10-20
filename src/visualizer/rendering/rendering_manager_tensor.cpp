@@ -738,8 +738,7 @@ namespace lfs::vis {
                         lfs::rendering::FrameMetadata metadata{};
                         metadata.viewer_backend = lfs::rendering::ViewerBackend::Metal;
                         metadata.valid = true;
-                        return PanelOutput{.image = columns(outputs->color), .depth = columns(outputs->depth),
-                                           .metadata = std::move(metadata)};
+                        return PanelOutput{.image = columns(outputs->color), .depth = columns(outputs->depth), .metadata = std::move(metadata)};
                     }
                     if (!entry.splat_slot) {
                         lfs::rendering::FrameMetadata metadata{};

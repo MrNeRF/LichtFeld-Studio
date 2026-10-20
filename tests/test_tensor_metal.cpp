@@ -1496,7 +1496,9 @@ namespace {
             const Tensor preview = Tensor::from_vector(std::vector<int>{1}, {1}, Device::GPU).to(DataType::Bool);
             const auto render = [&](const Tensor* selected, const Tensor* previewed) {
                 return rasterize_points(gpu_points, gpu_colors, raster, nullptr, nullptr, nullptr, nullptr,
-                                        selected, previewed).first.cpu().to_vector();
+                                        selected, previewed)
+                    .first.cpu()
+                    .to_vector();
             };
             const size_t plane = 33 * 33, center = 16 * 33 + 16;
             const auto plain = render(nullptr, nullptr), selected = render(&selection, nullptr);
