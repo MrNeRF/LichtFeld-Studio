@@ -27,7 +27,7 @@ def _theme_size_values(node, key):
 
 
 def test_every_scrollbar_uses_the_theme_size():
-    # Dev uses the same compact scrollbar metric for every theme, including Graphite.
+    # All themes use the same compact scrollbar metric, including Graphite.
     themes_dir = PROJECT_ROOT / "src" / "visualizer" / "gui" / "assets" / "themes"
     for theme_path in themes_dir.glob("*.json"):
         theme = json.loads(theme_path.read_text(encoding="utf-8"))
