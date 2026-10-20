@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -762,4 +763,24 @@ TEST(PreferencesMigration, CameraBrowseRepeatKeepsValuesSavedUnderOldNames) {
     EXPECT_EQ(saved["camera_browse_repeat_rate"], 11.0);
     EXPECT_FALSE(saved.contains("gt_comparison_key_repeat"));
     EXPECT_FALSE(saved.contains("gt_comparison_repeat_rate"));
+}
+
+TEST(PreferencesMigration, CameraBrowseRepeatRateIsClampedAndPersistedOnRequest) {
+    const auto home = makeHome("lfs_camera_browse_repeat_rate");
+    const ScopedLfsHome scoped_home(home);
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    EXPECT_TRUE(preferences.cameraBrowseRepeat());
+    EXPECT_FLOAT_EQ(preferences.cameraBrowseRepeatRate(), 5.0f);
+    preferences.setCameraBrowseRepeatRate(200.0f);
+    EXPECT_FLOAT_EQ(preferences.cameraBrowseRepeatRate(), 20.0f);
+    preferences.setCameraBrowseRepeatRate(-2.0f);
+    EXPECT_FLOAT_EQ(preferences.cameraBrowseRepeatRate(), 1.0f);
+    preferences.setCameraBrowseRepeatRate(std::numeric_limits<float>::quiet_NaN());
+    EXPECT_FLOAT_EQ(preferences.cameraBrowseRepeatRate(), 5.0f);
+    preferences.setCameraBrowseRepeatRate(7.0f);
+    preferences.setCameraBrowseRepeatRate(12.0f, false);
+    EXPECT_FLOAT_EQ(preferences.cameraBrowseRepeatRate(), 12.0f);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    EXPECT_EQ(readPreferences(*paths)["camera_browse_repeat_rate"], 7.0);
 }
