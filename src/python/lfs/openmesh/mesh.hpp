@@ -822,10 +822,10 @@ namespace lfs::python::openmesh_bindings {
                  nb::arg("fh_from"), nb::arg("fh_to"), nb::arg("copy_build_in") = false)
 
             // ArrayKernel
-            .def("is_valid_handle", (bool (Mesh::*)(OM::VertexHandle) const) & Mesh::is_valid_handle)
-            .def("is_valid_handle", (bool (Mesh::*)(OM::HalfedgeHandle) const) & Mesh::is_valid_handle)
-            .def("is_valid_handle", (bool (Mesh::*)(OM::EdgeHandle) const) & Mesh::is_valid_handle)
-            .def("is_valid_handle", (bool (Mesh::*)(OM::FaceHandle) const) & Mesh::is_valid_handle)
+            .def("is_valid_handle", (bool(Mesh::*)(OM::VertexHandle) const) & Mesh::is_valid_handle)
+            .def("is_valid_handle", (bool(Mesh::*)(OM::HalfedgeHandle) const) & Mesh::is_valid_handle)
+            .def("is_valid_handle", (bool(Mesh::*)(OM::EdgeHandle) const) & Mesh::is_valid_handle)
+            .def("is_valid_handle", (bool(Mesh::*)(OM::FaceHandle) const) & Mesh::is_valid_handle)
 
             .def("delete_isolated_vertices",
                  [](Mesh& _self) {

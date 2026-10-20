@@ -504,9 +504,9 @@ namespace lfs::training {
                 .pop_scores = mk::address(scratch),
             };
             launch_backward(2, p,
-                          {&f.camera, &f.means, &f.scales, &f.quats, &f.opacities, &f.colors, &color, &image,
-                           &f.tile_offsets, &f.gaussian_ids, &f.alpha, &f.last_ids, &scratch, &f.depths},
-                          std::min(tiles_x * tiles_y, core::internal::acquire_vulkan_context()->caps().max_workgroup_count[0]));
+                            {&f.camera, &f.means, &f.scales, &f.quats, &f.opacities, &f.colors, &color, &image,
+                             &f.tile_offsets, &f.gaussian_ids, &f.alpha, &f.last_ids, &scratch, &f.depths},
+                            std::min(tiles_x * tiles_y, core::internal::acquire_vulkan_context()->caps().max_workgroup_count[0]));
             accumulate_pop_view_scores(scores, scratch);
         }
 
