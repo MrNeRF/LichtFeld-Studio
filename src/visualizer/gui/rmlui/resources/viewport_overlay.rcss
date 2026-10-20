@@ -2243,3 +2243,17 @@ body {
     justify-content: center;
     row-gap: 4dp;
 }
+
+.comparison-name {
+    position: absolute;
+    box-sizing: border-box;
+    padding: 4dp 8dp;
+    border-radius: 4dp;
+    background-color: rgba(20, 23, 28, 160);
+    color: rgba(255, 255, 255, 210);
+    font-size: 12dp;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+}

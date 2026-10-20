@@ -413,3 +413,15 @@ body.floating-panel {
     white-space: normal;
     word-break: break-word;
 }
+
+.preferences-repeat-rate {
+    display: flex;
+    align-items: center;
+}
+
+.preferences-repeat-rate > .number-input {
+    flex: 0 0 60dp;
+    width: 60dp;
+    height: 18dp;
+    text-align: center;
+}

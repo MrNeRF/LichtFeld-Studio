@@ -171,7 +171,7 @@ for index in range(2):
 import lichtfeld as lf
 params = lf.optimization_params()
 params.set("init_opacity", 0.5)
-params.set("prune_ratio", 0.6)
+params.set("lambda_dssim", 0.2)
 assert lf.project_save_as({str(point_cloud)!r}, wait=True)
 """,
             "show_console": False, "wait_for_completion": True,

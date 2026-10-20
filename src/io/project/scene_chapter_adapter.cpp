@@ -320,6 +320,7 @@ namespace lfs::io::project {
                 .locked = node.locked.get(),
                 .training_enabled = node.training_enabled,
                 .payload_diverged = node.payload_diverged,
+                .point_cloud_source = node.point_cloud_source,
                 .georef_pose = std::nullopt,
                 .payload = std::nullopt,
                 .cropbox = std::nullopt,
@@ -711,6 +712,7 @@ namespace lfs::io::project {
                     .locked = record.locked,
                     .training_enabled = record.training_enabled,
                     .payload_diverged = record.payload_diverged,
+                    .point_cloud_source = record.point_cloud_source,
                     .payload_hydration =
                         is_geometry
                             ? (defer_geometry_payloads

@@ -949,9 +949,17 @@ namespace lfs::io {
 
     lfs::Result<LoaderCompletion> PipelinedImageLoader::get_completion() {
         try {
-            const auto sequence_id = output_queue_.pop();
-            if (auto completion = take_completion(sequence_id)) {
-                return std::move(*completion);
+            for (;;) {
+                const auto sequence_id = output_queue_.pop();
+                if (auto completion = take_completion(sequence_id)) {
+                    return std::move(*completion);
+                }
+                // clear() wakes workers blocked on a full output queue; their
+                // old-generation tokens land after the ledger was emptied. Skip them.
+                if (loader_generation_.load(std::memory_order_acquire) > 0) {
+                    continue;
+                }
+                break;
             }
             return lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::Internal,
@@ -971,20 +979,26 @@ namespace lfs::io {
     }
 
     std::optional<LoaderCompletion> PipelinedImageLoader::try_get_completion() {
-        const auto sequence_id = output_queue_.try_pop();
-        if (!sequence_id) {
-            return std::nullopt;
+        while (const auto sequence_id = output_queue_.try_pop()) {
+            if (auto completion = take_completion(*sequence_id)) {
+                return completion;
+            }
         }
-        return take_completion(*sequence_id);
+        return std::nullopt;
     }
 
     std::optional<LoaderCompletion> PipelinedImageLoader::try_get_completion_for(
         const std::chrono::milliseconds timeout) {
-        const auto sequence_id = output_queue_.try_pop_for(timeout);
-        if (!sequence_id) {
-            return std::nullopt;
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (const auto sequence_id = output_queue_.try_pop_for(
+                   std::max(std::chrono::milliseconds(0),
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                deadline - std::chrono::steady_clock::now())))) {
+            if (auto completion = take_completion(*sequence_id)) {
+                return completion;
+            }
         }
-        return take_completion(*sequence_id);
+        return std::nullopt;
     }
 
     size_t PipelinedImageLoader::ready_count() const {

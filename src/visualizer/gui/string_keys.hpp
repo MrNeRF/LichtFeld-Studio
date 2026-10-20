@@ -611,9 +611,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* BG_IMAGE = "training_params.bg_image";
         inline constexpr const char* BG_IMAGE_BROWSE = "training_params.bg_image_browse";
         inline constexpr const char* BG_IMAGE_CLEAR = "training_params.bg_image_clear";
-        inline constexpr const char* SPARSIFY_STEPS = "training_params.sparsify_steps";
-        inline constexpr const char* INIT_RHO = "training_params.init_rho";
-        inline constexpr const char* PRUNE_RATIO = "training_params.prune_ratio";
         inline constexpr const char* PPISP = "training_params.ppisp";
         inline constexpr const char* PPISP_CONTROLLER = "training_params.ppisp_controller";
         inline constexpr const char* PPISP_LR = "training_params.ppisp_lr";

@@ -28,6 +28,26 @@ class SectionSpec:
         return f"pv_header_{self.id}"
 
 
+POPSPA_PROPS = (
+    "popspa_target_count",
+    "popspa_first_prune_count",
+    "popspa_sparsify_steps",
+    "popspa_refine_steps",
+    "popspa_projection_interval",
+    "popspa_seed",
+    "popspa_rho",
+    "popspa_erank_weight",
+    "popspa_thin_scale_weight",
+    "popspa_erank_epsilon",
+    "popspa_means_lr",
+    "popspa_scales_lr",
+    "popspa_opacities_lr",
+    "popspa_quaternions_lr",
+    "popspa_sh0_lr",
+    "popspa_shn_lr",
+    "popspa_ssim_weight",
+)
+
 NUMBER_PROPS = (
     "iterations",
     "max_cap",
@@ -66,8 +86,7 @@ NUMBER_PROPS = (
     "init_mesh_resolution",
     "min_opacity",
     "prune_opacity",
-    "sparsify_steps",
-    "init_rho",
+    *POPSPA_PROPS,
     "ppisp_controller_lr",
     "eval_mask_opacity",
 )
@@ -110,7 +129,6 @@ BESPOKE_OR_HIDDEN = {
     "ppisp_controller_activation_step": "derived -1 schedule semantics",
     "bg_modulation": "legacy mirror controlled by bg_mode",
     "headless": "runtime-only read-only flag",
-    "prune_ratio": "scrub slider",
     "steps_scaler": "driven by apply_step_scaling via the iterations lock; raw edits desync step counts",
     "eval_mask": "mesh file browser and path display",
     "eval_mask_report": "headline set select and also-score checkboxes",
@@ -190,8 +208,7 @@ BASIC_RUNS = (
     _run("basic_sparsity_toggle", "enable_sparsity"),
     _run(
         "sparsity",
-        "sparsify_steps",
-        "init_rho",
+        *POPSPA_PROPS,
         visibility_condition_id="dep_sparsity",
     ),
     _run("basic_gut", "gut", disabled_condition_id="gut_disabled"),

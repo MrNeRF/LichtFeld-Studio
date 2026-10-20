@@ -251,6 +251,8 @@ namespace lfs::vis::input {
         bool allows_extra_modifiers = false;
         bool prefers_single_click = false;
         bool inherits_from_global = false;
+        // Held keys repeat the action even when the binding's on_repeat is off.
+        bool repeats_on_hold = false;
         ActionSection ui_section = ActionSection::None;
     };
 
@@ -315,10 +317,12 @@ namespace lfs::vis::input {
 
         // Query effective bindings. Mode-local bindings are checked first; actions
         // marked as inherited then fall back to GLOBAL.
-        Action getActionForKey(ToolMode mode, int key, int modifiers) const;
+        // on_repeat, when given, receives the matched key binding's on_repeat flag.
+        Action getActionForKey(ToolMode mode, int key, int modifiers, bool* on_repeat = nullptr) const;
         Action getActionForShortcut(ToolMode mode, int physical_key, int logical_key,
                                     int modifiers, int printed_punctuation = KEY_UNKNOWN,
-                                    bool shift_needed_for_printed_key = false) const;
+                                    bool shift_needed_for_printed_key = false,
+                                    bool* on_repeat = nullptr) const;
         Action getActionForMouseButton(ToolMode mode, MouseButton button, int modifiers, bool is_double_click = false) const;
         // held_keys: non-modifier keys currently held in press order; chord lookup
         // checks newest first (e.g. R+Scroll for Camera Roll). Pass an empty list
@@ -388,7 +392,11 @@ namespace lfs::vis::input {
         using ScrollChordKey = std::tuple<ToolMode, int, int>;
         using DragChordKey = std::tuple<ToolMode, MouseButton, int, int>;
 
-        std::map<KeyMapKey, Action> key_map_;
+        struct KeyMapEntry {
+            Action action = Action::NONE;
+            bool on_repeat = false;
+        };
+        std::map<KeyMapKey, KeyMapEntry> key_map_;
         std::map<MouseMapKey, Action> mouse_button_map_;
         std::map<ScrollMapKey, Action> scroll_map_;
         std::map<DragMapKey, Action> drag_map_;

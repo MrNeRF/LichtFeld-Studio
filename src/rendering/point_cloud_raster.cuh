@@ -32,6 +32,10 @@ namespace lfs::rendering::pcraster {
         const std::int32_t* transform_indices;
         const std::uint8_t* visibility_mask;
         const bool* deleted_mask;
+        const std::uint8_t* selection_mask;
+        const std::uint8_t* preview_mask;
+        const float* selection_colors; // [258, 4], matches PointCloudOverlayState
+        bool preview_additive;
         std::size_t n_points;
         int n_transforms;
         int n_visibility;

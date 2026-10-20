@@ -9,7 +9,6 @@
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
 #include "components/ppisp_file.hpp"
-#include "components/sparsity_optimizer.hpp"
 #include "control/command_api.hpp"
 #include "control/control_boundary.hpp"
 #include "core/assert.hpp"
@@ -1130,7 +1129,10 @@ namespace lfs::training {
         eval_ppisp_applied_.store(0);
         eval_ppisp_exif_.store(0);
         eval_ppisp_nearest_.store(0);
-        sparsity_optimizer_.reset();
+        popspa_controller_.reset();
+        popspa_optimizer_.reset();
+        popspa_dataset_validated_ = false;
+        popspa_completed_iteration_.store(-1);
         evaluator_.reset();
 
         // Clear datasets (will be recreated)
@@ -1161,9 +1163,8 @@ namespace lfs::training {
 
     int Trainer::get_active_sparsify_steps() const {
         const auto params = getParams();
-        return params.optimization.enable_sparsity
-                   ? std::max(0, params.optimization.sparsify_steps)
-                   : 0;
+        return params.optimization.resolved_total_iterations() -
+               static_cast<int>(params.optimization.iterations);
     }
 
     int Trainer::get_sparsity_boundary_iteration() const {
@@ -1175,14 +1176,9 @@ namespace lfs::training {
     }
 
     lfs::core::param::OptimizationParameters Trainer::get_runtime_optimization_params() const {
-        const auto params = getParams();
-        auto runtime_params = params.optimization;
-        const int sparsify_steps = runtime_params.enable_sparsity
-                                       ? std::max(0, runtime_params.sparsify_steps)
-                                       : 0;
-        runtime_params.iterations = static_cast<size_t>(
-            std::max(0, static_cast<int>(runtime_params.iterations) + sparsify_steps));
-        return runtime_params;
+        // POPSpa runs after regular training with its own Adam, so the strategy
+        // keeps the regular horizon and its LR decay.
+        return getParams().optimization;
     }
 
     void Trainer::sync_strategy_optimization_params() {
@@ -1958,55 +1954,6 @@ namespace lfs::training {
         const lfs::core::param::OptimizationParameters& opt_params) {
         lfs::training::losses::OpacityRegularization::Params params{.weight = opt_params.opacity_reg};
         return lfs::training::losses::OpacityRegularization::forward(splatData.opacity_raw(), optimizer.get_grad(ParamType::Opacity), params);
-    }
-
-    std::expected<std::pair<lfs::core::Tensor, SparsityLossContext>, std::string>
-    Trainer::compute_sparsity_loss_forward(const int iter, const lfs::core::SplatData& splat_data) {
-        if (!sparsity_optimizer_ || !sparsity_optimizer_->should_apply_loss(iter)) {
-            auto zero = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-            return std::make_pair(std::move(zero), SparsityLossContext{});
-        }
-
-        if (!sparsity_optimizer_->is_initialized()) {
-            if (auto result = sparsity_optimizer_->initialize(splat_data.opacity_raw()); !result) {
-                return std::unexpected(result.error());
-            }
-            LOG_DEBUG("Sparsity optimizer initialized at iteration {}", iter);
-        }
-
-        return sparsity_optimizer_->compute_loss_forward(splat_data.opacity_raw());
-    }
-
-    std::expected<void, std::string> Trainer::handle_sparsity_update(const int iter, lfs::core::SplatData& splat_data) {
-        if (!sparsity_optimizer_ || !sparsity_optimizer_->should_update(iter)) {
-            return {};
-        }
-        return sparsity_optimizer_->update_state(splat_data.opacity_raw());
-    }
-
-    std::expected<void, std::string> Trainer::apply_sparsity_pruning(const int iter, lfs::core::SplatData& splat_data) {
-        if (!sparsity_optimizer_ || !sparsity_optimizer_->should_prune(iter)) {
-            return {};
-        }
-
-        auto mask_result = sparsity_optimizer_->get_prune_mask(splat_data.opacity_raw());
-        if (!mask_result) {
-            return std::unexpected(mask_result.error());
-        }
-
-        // Strategies may keep pruned rows as reusable slots. Publish the active
-        // count here, once, so progress and UI polling need no GPU reduction.
-        splat_data.refresh_deleted_count();
-        const size_t n_before = reported_gaussian_count(splat_data);
-        strategy_->remove_gaussians(*mask_result);
-        splat_data.refresh_deleted_count();
-        const size_t n_after = reported_gaussian_count(splat_data);
-
-        LOG_INFO("Sparsity pruning: {} -> {} Gaussians ({}% reduction)",
-                 n_before, n_after, n_before > 0 ? static_cast<int>(100.0f * (n_before - n_after) / n_before) : 0);
-
-        sparsity_optimizer_.reset();
-        return {};
     }
 
     bool Trainer::morton_reorder_due(const int iter) const {
@@ -3115,28 +3062,6 @@ namespace lfs::training {
                 }
             }
 
-            // Initialize sparsity optimizer
-            if (params.optimization.enable_sparsity) {
-                constexpr int UPDATE_INTERVAL = 50;
-                const int regular_iters = get_regular_iterations();
-                const int sparsify_steps = get_active_sparsify_steps();
-                const int first_sparsify_iter = sparsify_steps > 0 ? regular_iters + 1 : regular_iters;
-
-                const ADMMSparsityOptimizer::Config config{
-                    .sparsify_steps = sparsify_steps,
-                    .init_rho = params.optimization.init_rho,
-                    .prune_ratio = params.optimization.prune_ratio,
-                    .update_every = UPDATE_INTERVAL,
-                    .start_iteration = get_sparsity_boundary_iteration()};
-
-                sparsity_optimizer_ = SparsityOptimizerFactory::create("admm", config);
-                if (sparsity_optimizer_) {
-                    LOG_INFO("Sparsity: regular={}, start={}, steps={}, total={}, prune={:.0f}%",
-                             regular_iters, first_sparsify_iter, sparsify_steps, get_total_iterations(),
-                             params.optimization.prune_ratio * 100);
-                }
-            }
-
             // Initialize background color tensor from params
             {
                 const auto& bg_color = params.optimization.bg_color;
@@ -3720,7 +3645,10 @@ namespace lfs::training {
         eval_ppisp_applied_.store(0);
         eval_ppisp_exif_.store(0);
         eval_ppisp_nearest_.store(0);
-        sparsity_optimizer_.reset();
+        popspa_controller_.reset();
+        popspa_optimizer_.reset();
+        popspa_dataset_validated_ = false;
+        popspa_completed_iteration_.store(-1);
         evaluator_.reset();
         progress_.reset();
         train_dataset_.reset();
@@ -3788,6 +3716,7 @@ namespace lfs::training {
             return;
         }
 
+        auto accepted = params;
         bool bg_image_path_changed = false;
         {
             std::lock_guard<std::mutex> lock(params_mutex_);
@@ -3795,13 +3724,14 @@ namespace lfs::training {
                 pending_params_ = params;
                 return;
             }
+            preserve_active_popspa_parameters(accepted);
             const auto& current = pending_params_ ? *pending_params_ : params_;
             bg_image_path_changed =
-                params.optimization.bg_image_path != current.optimization.bg_image_path;
-            params_ = params;
+                accepted.optimization.bg_image_path != current.optimization.bg_image_path;
+            params_ = accepted;
             pending_params_.reset();
         }
-        apply_param_side_effects(params, bg_image_path_changed);
+        apply_param_side_effects(accepted, bg_image_path_changed);
     }
 
     void Trainer::set_lpips_weights_path(std::optional<std::filesystem::path> path) {
@@ -3820,6 +3750,7 @@ namespace lfs::training {
             }
             update = std::move(pending_params_);
             pending_params_.reset();
+            preserve_active_popspa_parameters(*update);
             bg_image_path_changed =
                 update->optimization.bg_image_path != params_.optimization.bg_image_path;
             params_ = *update;
@@ -3889,6 +3820,15 @@ namespace lfs::training {
         const int iter,
         const bool in_controller_phase) const {
 
+        if (popspa_controller_.is_initialized() && iter >= get_regular_iterations()) {
+            switch (popspa_controller_.phase()) {
+            case POPSpaPhase::FirstScore:
+            case POPSpaPhase::SecondScore: return TrainingProgress::Phase::Score;
+            case POPSpaPhase::Recover:
+            case POPSpaPhase::Complete: return TrainingProgress::Phase::Recover;
+            default: return TrainingProgress::Phase::Sparse;
+            }
+        }
         if (in_controller_phase) {
             return TrainingProgress::Phase::Controller;
         }
@@ -4121,7 +4061,7 @@ namespace lfs::training {
                 callback_stream_,
             };
         const TrainingSnapshotCaptureRequest request{
-            .iteration = current_iteration_.load(),
+            .iteration = project_snapshot_iteration(),
             .strategy = *strategy_,
             .params = checkpoint_params,
             .bilateral_grid = bilateral_grid_.get(),
@@ -4129,10 +4069,8 @@ namespace lfs::training {
             .ppisp_controller_pool =
                 controller_pool_for_save(
                     current_iteration_.load()),
-            .sparsity_optimizer =
-                dynamic_cast<
-                    const ADMMSparsityOptimizer*>(
-                    sparsity_optimizer_.get()),
+            .popspa_controller = popspa_controller_.is_initialized() ? &popspa_controller_ : nullptr,
+            .popspa_optimizer = popspa_controller_.is_initialized() ? popspa_optimizer_.get() : nullptr,
             .mutating_streams = mutating_streams,
         };
         return project_snapshot_service_->initialize(
@@ -4305,6 +4243,7 @@ namespace lfs::training {
         requested_project_base_commit_uuid_ = {};
         requested_project_autosave_sequence_ = 0;
         prestaged_project_chapters_.reset();
+        popspa_cli_project_chapters_.reset();
         prestaged_project_request_id_ = 0;
         clear_prepared_project_request();
     }
@@ -4411,11 +4350,11 @@ namespace lfs::training {
         {
             std::lock_guard lock(
                 project_snapshot_mutex_);
-            if (!prestaged_project_chapters_ ||
-                prestaged_project_request_id_ !=
-                    request_id ||
-                prestaged_project_chapters_
-                    ->snapshot_uuid.is_nil()) {
+            const bool cli_capture = request_id == 0 && popspa_cli_project_chapters_ &&
+                                     params_.save_project_at_iteration == static_cast<size_t>(capture_iteration);
+            const auto& reserved = cli_capture ? popspa_cli_project_chapters_ : prestaged_project_chapters_;
+            if (!reserved || (!cli_capture && prestaged_project_request_id_ != request_id) ||
+                reserved->snapshot_uuid.is_nil()) {
                 fail_project_request_locked(
                     request_id,
                     "Snapshot UUID was not reserved for this request");
@@ -4424,9 +4363,7 @@ namespace lfs::training {
                     "was not reserved before the optimizer safe point");
                 return;
             }
-            snapshot_uuid =
-                prestaged_project_chapters_
-                    ->snapshot_uuid;
+            snapshot_uuid = reserved->snapshot_uuid;
         }
 
         const auto checkpoint_params =
@@ -4450,10 +4387,8 @@ namespace lfs::training {
             .ppisp_controller_pool =
                 controller_pool_for_save(
                     capture_iteration),
-            .sparsity_optimizer =
-                dynamic_cast<
-                    const ADMMSparsityOptimizer*>(
-                    sparsity_optimizer_.get()),
+            .popspa_controller = popspa_controller_.is_initialized() ? &popspa_controller_ : nullptr,
+            .popspa_optimizer = popspa_controller_.is_initialized() ? popspa_optimizer_.get() : nullptr,
             .mutating_streams = mutating_streams,
         };
         auto prepared =
@@ -4633,8 +4568,11 @@ namespace lfs::training {
         {
             std::lock_guard lock(
                 project_snapshot_mutex_);
-            if (prestaged_project_request_id_ ==
-                prepared_project_request_id_) {
+            if (prepared_project_request_id_ == 0 && popspa_cli_project_chapters_ &&
+                popspa_cli_project_chapters_->snapshot_uuid == prepared_project_snapshot_->snapshot_uuid()) {
+                chapters = std::move(popspa_cli_project_chapters_);
+            } else if (prestaged_project_request_id_ ==
+                       prepared_project_request_id_) {
                 chapters = std::move(
                     prestaged_project_chapters_);
                 prestaged_project_request_id_ = 0;
@@ -4691,10 +4629,8 @@ namespace lfs::training {
             .ppisp = ppisp_.get(),
             .ppisp_controller_pool =
                 controller_pool_for_save(iteration),
-            .sparsity_optimizer =
-                dynamic_cast<
-                    const ADMMSparsityOptimizer*>(
-                    sparsity_optimizer_.get()),
+            .popspa_controller = popspa_controller_.is_initialized() ? &popspa_controller_ : nullptr,
+            .popspa_optimizer = popspa_controller_.is_initialized() ? popspa_optimizer_.get() : nullptr,
             .mutating_streams = mutating_streams,
             .capture_additional_cpu_state =
                 [this, cpu_state, chapters,
@@ -6304,6 +6240,20 @@ namespace lfs::training {
                     return StepDisposition::Stop;
                 }
 
+                const bool in_popspa = popspa_optimizing();
+                const auto popspa_params = in_popspa
+                                               ? std::optional{popspa_step_parameters()}
+                                               : std::nullopt;
+                const auto& step_params = popspa_params ? *popspa_params : params_.optimization;
+                auto& gaussian_optimizer = active_gaussian_optimizer();
+                if (in_popspa) {
+                    gaussian_optimizer.zero_grad(iter);
+                    if (ppisp_)
+                        ppisp_->zero_grad();
+                    if (bilateral_grid_)
+                        bilateral_grid_->zero_grad();
+                }
+
                 lfs::core::Tensor* bg_ptr = nullptr;
                 {
                     nvtxRangePush("background_for_step");
@@ -6315,11 +6265,11 @@ namespace lfs::training {
                 lfs::core::Tensor& bg = *bg_ptr;
 
                 lfs::core::Tensor bg_image;
-                if (params_.optimization.bg_mode == lfs::core::param::BackgroundMode::Image) {
+                if (step_params.bg_mode == lfs::core::param::BackgroundMode::Image) {
                     LFS_VRAM_SCOPE("train.background_image");
                     LOG_VRAM_DIFF("train.background_image");
                     bg_image = get_background_image_for_camera(cam->image_width(), cam->image_height());
-                } else if (params_.optimization.bg_mode == lfs::core::param::BackgroundMode::Random) {
+                } else if (step_params.bg_mode == lfs::core::param::BackgroundMode::Random) {
                     LFS_VRAM_SCOPE("train.random_background");
                     LOG_VRAM_DIFF("train.random_background");
                     bg_image = get_random_background_for_camera(cam->image_width(), cam->image_height(), iter);
@@ -6336,7 +6286,7 @@ namespace lfs::training {
                     stable_gt = kernels::composite_over_background(source_gt, pipelined_mask_, background_);
                 }
 
-                const bool fastgs_path = !params_.optimization.gut;
+                const bool fastgs_path = !step_params.gut;
 
                 if (!loss_accumulator_.is_valid()) {
                     loss_accumulator_ = core::Tensor::zeros({1}, core::Device::CUDA);
@@ -6345,9 +6295,9 @@ namespace lfs::training {
                 }
                 if (live_vram_profiler_enabled() && strategy_) {
                     record_splat_vram_breakdown(strategy_->get_model());
-                    record_optimizer_vram_breakdown(strategy_->get_optimizer());
+                    record_optimizer_vram_breakdown(gaussian_optimizer);
                     publish_training_state_ledger(strategy_->get_model(),
-                                                  &strategy_->get_optimizer());
+                                                  &gaussian_optimizer);
                     record_vram_tensor("train.persistent", "loss_accumulator", loss_accumulator_);
                     record_vram_tensor("train.persistent", "pipelined_mask", pipelined_mask_);
                     record_vram_tensor("train.persistent", "pipelined_depth", pipelined_depth_);
@@ -6370,29 +6320,28 @@ namespace lfs::training {
                 // Determine controller phase before render (does not depend on render results)
                 const bool known_ppisp_camera = ppisp_ && ppisp_->is_known_camera(cam->camera_id());
                 const int ppisp_cam_idx = known_ppisp_camera ? ppisp_->camera_index(cam->camera_id()) : -1;
-                const int ppisp_activation_step = params_.optimization.resolved_ppisp_controller_activation_step(get_total_iterations());
-                const bool ppisp_frozen = is_ppisp_frozen();
+                const int ppisp_activation_step = step_params.resolved_ppisp_controller_activation_step(get_total_iterations());
+                const bool ppisp_frozen = in_popspa || is_ppisp_frozen();
                 const bool in_controller_phase = ppisp_controller_pool_ && known_ppisp_camera &&
-                                                 params_.optimization.ppisp_use_controller &&
+                                                 step_params.ppisp_use_controller &&
                                                  !ppisp_frozen &&
-                                                 params_.optimization.ppisp_freeze_gaussians_on_distill &&
+                                                 step_params.ppisp_freeze_gaussians_on_distill &&
                                                  iter >= ppisp_activation_step &&
                                                  ppisp_cam_idx >= 0 &&
                                                  ppisp_cam_idx < ppisp_controller_pool_->num_cameras();
                 const bool freeze_gaussians_this_iter = ppisp_controller_pool_ &&
-                                                        params_.optimization.ppisp_use_controller &&
-                                                        params_.optimization.ppisp_freeze_gaussians_on_distill &&
+                                                        step_params.ppisp_use_controller &&
+                                                        step_params.ppisp_freeze_gaussians_on_distill &&
                                                         iter >= ppisp_activation_step;
-                const bool use_pixel_error_densification =
-                    (params_.optimization.strategy == "mcmc") ||
-                    (params_.optimization.strategy == "igs+") ||
-                    (core::param::is_mrnf_strategy(params_.optimization.strategy) &&
-                     params_.optimization.use_error_map);
+                const bool use_pixel_error_densification = !in_popspa && ((step_params.strategy == "mcmc") ||
+                                                                          (step_params.strategy == "igs+") ||
+                                                                          (core::param::is_mrnf_strategy(step_params.strategy) &&
+                                                                           step_params.use_error_map));
                 const bool use_ssim_error = use_pixel_error_densification;
                 DensificationType densification_type = DensificationType::None;
-                if (params_.optimization.strategy == "mcmc")
+                if (!in_popspa && step_params.strategy == "mcmc")
                     densification_type = DensificationType::MCMC;
-                else if (core::param::is_mrnf_strategy(params_.optimization.strategy))
+                else if (!in_popspa && core::param::is_mrnf_strategy(step_params.strategy))
                     densification_type = DensificationType::MRNF;
                 const bool update_gaussians_this_iter = !freeze_gaussians_this_iter;
                 const bool run_fastgs_gaussian_backward =
@@ -6482,13 +6431,6 @@ namespace lfs::training {
                     maybe_morton_reorder(iter);
                     fastgs_strategy_hooks_at_start = true;
 
-                    if (sparsity_optimizer_ &&
-                        sparsity_optimizer_->is_initialized() &&
-                        static_cast<size_t>(model.size()) != model_size_before) {
-                        LOG_WARN("Sparsity: resetting ADMM state after topology change at iter {} ({} -> {})",
-                                 iter, model_size_before, model.size());
-                        sparsity_optimizer_->reset();
-                    }
                     if (static_cast<size_t>(model.size()) != model_size_before) {
                         // Defer topology fan-out until the densify barrier stabilizes
                         // exportable q16 so cache rebuilds cannot race the next forward.
@@ -6528,7 +6470,7 @@ namespace lfs::training {
                     syncTrainingSceneTopology(scene_, model_after);
                 }
 
-                const bool normal_supervision_started = normal_supervision_active(iter);
+                const bool normal_supervision_started = !in_popspa && normal_supervision_active(iter);
 
                 FastGSFusedExtraGradients fused_extra_gradients;
                 if (fastgs_path && core::param::is_mrnf_strategy(params_.optimization.strategy) &&
@@ -6548,10 +6490,10 @@ namespace lfs::training {
                 lfs::core::Tensor fused_sh_rest_reg_loss_gpu;
                 lfs::core::Tensor sparsity_loss_gpu;
                 const bool run_gut_gaussian_backward =
-                    params_.optimization.gut && update_gaussians_this_iter;
+                    step_params.gut && update_gaussians_this_iter;
                 if (run_fastgs_gaussian_backward || run_gut_gaussian_backward) {
                     auto& model = strategy_->get_model();
-                    edge_score_scratch = strategy_->edge_score_scratch(iter);
+                    edge_score_scratch = in_popspa ? lfs::core::Tensor{} : strategy_->edge_score_scratch(iter);
                     if (edge_score_scratch.is_valid() &&
                         edge_score_scratch.dtype() == lfs::core::DataType::Float32 &&
                         edge_score_scratch.numel() == static_cast<size_t>(model.size())) {
@@ -6591,7 +6533,7 @@ namespace lfs::training {
                             fused_extra_gradients.edge_score_out = edge_score_scratch.ptr<float>();
                         }
                         {
-                            auto impact = strategy_->impact_scratch(iter);
+                            auto impact = in_popspa ? std::pair<lfs::core::Tensor, lfs::core::Tensor>{} : strategy_->impact_scratch(iter);
                             impact_sum_scratch = std::move(impact.first);
                             impact_peak_scratch = std::move(impact.second);
                             if (impact_sum_scratch.is_valid() && impact_peak_scratch.is_valid() &&
@@ -6603,20 +6545,20 @@ namespace lfs::training {
                                 fused_extra_gradients.impact_peak_out = impact_peak_scratch.ptr<float>();
                             }
                         }
-                        const float scale_weight = params_.optimization.scale_reg_at(iter);
-                        const bool log_scale_reg = core::param::is_mrnf_strategy(params_.optimization.strategy);
+                        const float scale_weight = step_params.scale_reg_at(iter);
+                        const bool log_scale_reg = core::param::is_mrnf_strategy(step_params.strategy);
                         fused_extra_gradients.scale_reg_weight = scale_weight;
                         fused_extra_gradients.scale_reg_log = log_scale_reg;
                         fused_extra_gradients.scale_reg_normalizer =
                             log_scale_reg ? train_frame_scale_ : 1.0f;
-                        fused_extra_gradients.erank_reg_weight = params_.optimization.erank_reg;
-                        fused_extra_gradients.dc_reg_weight = params_.optimization.dc_reg;
-                        fused_extra_gradients.sh_rest_reg_weight = params_.optimization.sh_rest_reg;
+                        fused_extra_gradients.erank_reg_weight = step_params.erank_reg;
+                        fused_extra_gradients.dc_reg_weight = step_params.dc_reg;
+                        fused_extra_gradients.sh_rest_reg_weight = step_params.sh_rest_reg;
                         // Fused path shares the configured opacity_reg weight between gradient and loss accumulation.
                         fused_extra_gradients.opacity_reg_weight =
-                            params_.optimization.opacity_reg;
+                            step_params.opacity_reg;
                         if (normal_supervision_started) {
-                            fused_extra_gradients.flatten_reg_weight = params_.optimization.normal_flatten_weight;
+                            fused_extra_gradients.flatten_reg_weight = step_params.normal_flatten_weight;
                         }
                         // Fused backward owns regularization accumulation, avoiding
                         // separate full-N kernels and their temporary allocations.
@@ -6630,28 +6572,28 @@ namespace lfs::training {
                                 fused_scale_reg_loss_.ptr<float>();
                             fused_scale_reg_loss_gpu = fused_scale_reg_loss_;
                         }
-                        if (params_.optimization.erank_reg > 0.0f) {
+                        if (step_params.erank_reg > 0.0f) {
                             if (!fused_erank_reg_loss_.is_valid())
                                 fused_erank_reg_loss_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
                             fused_erank_reg_loss_.zero_();
                             fused_erank_reg_loss_gpu = fused_erank_reg_loss_;
                             fused_extra_gradients.erank_reg_loss_out = fused_erank_reg_loss_gpu.ptr<float>();
                         }
-                        if (params_.optimization.dc_reg > 0.0f) {
+                        if (step_params.dc_reg > 0.0f) {
                             if (!fused_dc_reg_loss_.is_valid())
                                 fused_dc_reg_loss_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
                             fused_dc_reg_loss_.zero_();
                             fused_dc_reg_loss_gpu = fused_dc_reg_loss_;
                             fused_extra_gradients.dc_reg_loss_out = fused_dc_reg_loss_gpu.ptr<float>();
                         }
-                        if (params_.optimization.sh_rest_reg > 0.0f && model.get_active_sh_degree() > 0) {
+                        if (step_params.sh_rest_reg > 0.0f && model.get_active_sh_degree() > 0) {
                             if (!fused_sh_rest_reg_loss_.is_valid())
                                 fused_sh_rest_reg_loss_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
                             fused_sh_rest_reg_loss_.zero_();
                             fused_sh_rest_reg_loss_gpu = fused_sh_rest_reg_loss_;
                             fused_extra_gradients.sh_rest_reg_loss_out = fused_sh_rest_reg_loss_gpu.ptr<float>();
                         }
-                        if (params_.optimization.opacity_reg > 0.0f) {
+                        if (step_params.opacity_reg > 0.0f) {
                             if (!fused_opacity_reg_loss_.is_valid()) {
                                 fused_opacity_reg_loss_ = lfs::core::Tensor::zeros(
                                     {1}, lfs::core::Device::CUDA);
@@ -6664,11 +6606,11 @@ namespace lfs::training {
                     } else {
                         // Freeze / non-backward FastGS iterations: keep legacy loss-only
                         // path so reported loss stays valid without a fused backward.
-                        if (params_.optimization.scale_reg_at(iter) > 0.0f) {
+                        if (step_params.scale_reg_at(iter) > 0.0f) {
                             auto scale_loss_result =
                                 lfs::training::losses::ScaleRegularization::forward_loss_only(
                                     model.scaling_raw(),
-                                    {.weight = params_.optimization.scale_reg_at(iter)});
+                                    {.weight = step_params.scale_reg_at(iter)});
                             if (!scale_loss_result) {
                                 return lfs::from_legacy_expected<StepDisposition>(
                                            std::unexpected(scale_loss_result.error()),
@@ -6682,11 +6624,11 @@ namespace lfs::training {
                             }
                             fused_scale_reg_loss_gpu = *scale_loss_result;
                         }
-                        if (params_.optimization.opacity_reg > 0.0f) {
+                        if (step_params.opacity_reg > 0.0f) {
                             auto opacity_loss_result =
                                 lfs::training::losses::OpacityRegularization::forward_loss_only(
                                     model.opacity_raw(),
-                                    {.weight = params_.optimization.opacity_reg});
+                                    {.weight = step_params.opacity_reg});
                             if (!opacity_loss_result) {
                                 return lfs::from_legacy_expected<StepDisposition>(
                                            std::unexpected(opacity_loss_result.error()),
@@ -6700,29 +6642,6 @@ namespace lfs::training {
                             }
                             fused_opacity_reg_loss_gpu = *opacity_loss_result;
                         }
-                    }
-                    if (run_fastgs_gaussian_backward &&
-                        sparsity_optimizer_ && sparsity_optimizer_->should_apply_loss(iter)) {
-                        auto sparsity_result = compute_sparsity_loss_forward(iter, model);
-                        if (!sparsity_result) {
-                            return lfs::from_legacy_expected<StepDisposition>(
-                                       std::unexpected(sparsity_result.error()),
-                                       lfs::LegacyErrorContext{
-                                           .code = lfs::ErrorCode::Internal,
-                                           .domain = lfs::ErrorDomain::Training,
-                                           .operation = "sparsity loss forward (fastgs)",
-                                           .source = LFS_SOURCE_SITE_CURRENT(),
-                                       })
-                                .error();
-                        }
-                        auto& [loss_tensor, ctx] = *sparsity_result;
-                        sparsity_loss_gpu = std::move(loss_tensor);
-                        fused_extra_gradients.sparsity_opa_sigmoid = ctx.opa_sigmoid_ptr;
-                        fused_extra_gradients.sparsity_z = ctx.z_ptr;
-                        fused_extra_gradients.sparsity_u = ctx.u_ptr;
-                        fused_extra_gradients.sparsity_n = static_cast<int>(ctx.n);
-                        fused_extra_gradients.sparsity_rho = ctx.rho;
-                        fused_extra_gradients.sparsity_grad_loss = 1.0f;
                     }
                 }
 
@@ -6753,7 +6672,7 @@ namespace lfs::training {
                         LFS_VRAM_SCOPE("train.rasterize_forward");
                         LOG_VRAM_DIFF("train.rasterize_forward");
                         current_phase = StepPhase::Forward;
-                        if (params_.optimization.gut) {
+                        if (step_params.gut) {
                             const MutationStamp forward_stamp{
                                 static_cast<std::uint64_t>(iter), mutation_epoch_,
                                 StepPhase::Forward, fastgs_strategy_hooks_at_start};
@@ -6765,10 +6684,10 @@ namespace lfs::training {
                                         *cam, strategy_->get_model(), bg,
                                         0, 0, 0, 0,
                                         1.0f, false,
-                                        (normal_supervision_started && (params_.optimization.normal_loss_weight > 0.f ||
-                                                                        params_.optimization.normal_consistency_weight > 0.f))
+                                        (normal_supervision_started && (step_params.normal_loss_weight > 0.f ||
+                                                                        step_params.normal_consistency_weight > 0.f))
                                             ? GsplatRenderMode::RGB_D_N
-                                        : ((params_.optimization.use_depth_loss && params_.optimization.depth_loss_weight > 0.f) ||
+                                        : ((step_params.use_depth_loss && step_params.depth_loss_weight > 0.f) ||
                                            roi_surface_weights)
                                             ? GsplatRenderMode::RGB_D
                                             : GsplatRenderMode::RGB,
@@ -6819,14 +6738,14 @@ namespace lfs::training {
                         } else {
                             const bool render_normal =
                                 normal_supervision_started &&
-                                ((params_.optimization.normal_loss_weight > 0.0f &&
+                                ((step_params.normal_loss_weight > 0.0f &&
                                   normal_prior_usable_ &&
                                   cam->has_normal()) ||
-                                 params_.optimization.normal_consistency_weight > 0.0f);
+                                 step_params.normal_consistency_weight > 0.0f);
                             const bool render_depth =
                                 render_normal || roi_surface_weights ||
-                                (params_.optimization.use_depth_loss &&
-                                 params_.optimization.depth_loss_weight > 0.0f);
+                                (step_params.use_depth_loss &&
+                                 step_params.depth_loss_weight > 0.0f);
                             const MutationStamp forward_stamp{
                                 static_cast<std::uint64_t>(iter), mutation_epoch_,
                                 StepPhase::Forward, fastgs_strategy_hooks_at_start};
@@ -6836,7 +6755,7 @@ namespace lfs::training {
                                 auto rasterize_result = fast_rasterize_forward(
                                     *cam, strategy_->get_model(), bg,
                                     0, 0, 0, 0,
-                                    params_.optimization.mip_filter, bg_tile,
+                                    step_params.mip_filter, bg_tile,
                                     render_normal, render_depth);
                                 if (rasterize_result) {
                                     output = std::move(rasterize_result->first);
@@ -6850,6 +6769,11 @@ namespace lfs::training {
                                 if (forward_error.code() == lfs::ErrorCode::FailedPrecondition &&
                                     forward_error.detail().find(
                                         "instance count exceeds 32-bit") != std::string::npos) {
+                                    if (in_popspa) {
+                                        nvtxRangePop();
+                                        nvtxRangePop();
+                                        return std::move(forward_error);
+                                    }
                                     LOG_ERROR(
                                         "Skipping iteration {} after FastGS instance overflow "
                                         "(bad frame, training continues): {}",
@@ -6884,7 +6808,10 @@ namespace lfs::training {
                                 }
                             }
 
-                            if (fast_ctx->forward_ctx.n_instances == 0) {
+                            // POPSpa keeps empty views in the optimizer schedule:
+                            // backward produces zero photo gradients, then shape,
+                            // ADMM and Adam still commit the configured step.
+                            if (fast_ctx->forward_ctx.n_instances == 0 && !in_popspa) {
                                 fast_ctx->release_forward_context();
                                 nvtxRangePop();
                                 nvtxRangePop();
@@ -6927,9 +6854,9 @@ namespace lfs::training {
 
                     lfs::core::Tensor roi_weight;
                     if (strategy_)
-                        install_cropbox_view_damping(strategy_->get_model(), strategy_->get_optimizer(), *cam);
+                        install_cropbox_view_damping(strategy_->get_model(), gaussian_optimizer, *cam);
                     const auto& cropbox_loss_geometry =
-                        params_.optimization.cropbox_loss_weight < 1.0f ? cropbox_ : std::nullopt_t{std::nullopt};
+                        step_params.cropbox_loss_weight < 1.0f ? cropbox_ : std::nullopt_t{std::nullopt};
                     if (cropbox_loss_geometry) {
                         LFS_ASSERT_MSG(
                             output.width > 0 && output.height > 0,
@@ -6995,7 +6922,7 @@ namespace lfs::training {
                             cropbox_loss_geometry->min,
                             cropbox_loss_geometry->max,
                             cropbox_loss_geometry->inverse,
-                            params_.optimization.cropbox_loss_weight,
+                            step_params.cropbox_loss_weight,
                             roi_rays,
                             roi_surface ? roi_surface_depth.ptr<float>() : nullptr,
                             roi_surface ? roi_surface_alpha.ptr<float>() : nullptr,
@@ -7020,7 +6947,7 @@ namespace lfs::training {
                         std::lock_guard<std::mutex> controller_lock(ppisp_controller_pool_->predict_mutex());
 
                         lfs::core::Tensor corrected_image = output.image;
-                        if (bilateral_grid_ && params_.optimization.bilateral_grid_active()) {
+                        if (bilateral_grid_ && step_params.bilateral_grid_active()) {
                             LFS_VRAM_SCOPE("train.bilateral_grid.forward");
                             LOG_VRAM_DIFF("train.bilateral_grid.forward");
                             corrected_image = bilateral_grid_->apply(output.image, cam->uid());
@@ -7045,8 +6972,8 @@ namespace lfs::training {
                         {
                             LFS_VRAM_SCOPE("train.photometric_loss");
                             LOG_VRAM_DIFF("train.photometric_loss");
-                            const bool use_mask = params_.optimization.mask_mode != lfs::core::param::MaskMode::None &&
-                                                  (cam->has_mask() || (params_.optimization.use_alpha_as_mask && cam->has_alpha()));
+                            const bool use_mask = step_params.mask_mode != lfs::core::param::MaskMode::None &&
+                                                  (cam->has_mask() || (step_params.use_alpha_as_mask && cam->has_alpha()));
                             lfs::core::Tensor mask;
                             if (use_mask) {
                                 if (!composite_target_alpha_ && pipelined_mask_.is_valid() &&
@@ -7056,13 +6983,13 @@ namespace lfs::training {
                                     mask = cam->load_and_get_mask(
                                         params_.dataset.resize_factor,
                                         params_.dataset.max_width,
-                                        params_.optimization.invert_masks,
-                                        params_.optimization.mask_threshold,
-                                        params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
+                                        step_params.invert_masks,
+                                        step_params.mask_threshold,
+                                        step_params.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
                                 }
                             }
                             const auto structure_map = get_thin_structure_map(
-                                cam->uid(), stable_gt, params_.optimization.thin_structure_weight,
+                                cam->uid(), stable_gt, step_params.thin_structure_weight,
                                 use_mask && params_.optimization.mask_mode != lfs::core::param::MaskMode::AlphaConsistent
                                     ? mask
                                     : lfs::core::Tensor{});
@@ -7072,7 +6999,7 @@ namespace lfs::training {
 
                                 auto result = compute_photometric_loss_with_mask(
                                     corrected_image, gt_tile, mask_tile, roi_weight, output.alpha,
-                                    params_.optimization, raw_loss_input, structure_map, iter);
+                                    step_params, raw_loss_input, structure_map, iter);
                                 if (!result) {
                                     nvtxRangePop();
                                     nvtxRangePop();
@@ -7091,7 +7018,7 @@ namespace lfs::training {
                                 tile_grad = result->grad_corrected;
                             } else {
                                 auto result = compute_photometric_loss_with_gradient(
-                                    corrected_image, gt_tile, params_.optimization, raw_loss_input, iter);
+                                    corrected_image, gt_tile, step_params, raw_loss_input, iter);
                                 if (!result) {
                                     nvtxRangePop();
                                     nvtxRangePop();
@@ -7148,7 +7075,7 @@ namespace lfs::training {
                         // Normal phase: full forward + backward through all components
                         auto tile_context_guard = makeScopeGuard(cleanup_tile_context);
 
-                        const auto& opt = params_.optimization;
+                        const auto& opt = step_params;
                         const bool exposure_correction = opt.use_exposure_correction;
                         const bool grid_on = bilateral_grid_ && opt.bilateral_grid_active();
                         const bool ppisp_on = ppisp_ && opt.ppisp_active();
@@ -7281,15 +7208,15 @@ namespace lfs::training {
                         };
 
                         // 1) Compute photometric loss (populates ssim_map in workspace)
-                        const bool use_mask = params_.optimization.mask_mode != lfs::core::param::MaskMode::None &&
-                                              (cam->has_mask() || (params_.optimization.use_alpha_as_mask && cam->has_alpha()));
+                        const bool use_mask = step_params.mask_mode != lfs::core::param::MaskMode::None &&
+                                              (cam->has_mask() || (step_params.use_alpha_as_mask && cam->has_alpha()));
                         const bool used_masked_fused =
-                            (params_.optimization.thin_structure_weight > 0.0f || roi_weight.is_valid() ||
+                            (step_params.thin_structure_weight > 0.0f || roi_weight.is_valid() ||
                              (use_mask &&
-                              (params_.optimization.mask_mode == lfs::core::param::MaskMode::Segment ||
-                               params_.optimization.mask_mode == lfs::core::param::MaskMode::Ignore ||
-                               params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore))) &&
-                            params_.optimization.lambda_dssim > 0.0f;
+                              (step_params.mask_mode == lfs::core::param::MaskMode::Segment ||
+                               step_params.mask_mode == lfs::core::param::MaskMode::Ignore ||
+                               step_params.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore))) &&
+                            step_params.lambda_dssim > 0.0f;
                         {
                             LFS_VRAM_SCOPE("train.photometric_loss");
                             LOG_VRAM_DIFF("train.photometric_loss");
@@ -7301,13 +7228,13 @@ namespace lfs::training {
                                     mask_tile = cam->load_and_get_mask(
                                         params_.dataset.resize_factor,
                                         params_.dataset.max_width,
-                                        params_.optimization.invert_masks,
-                                        params_.optimization.mask_threshold,
-                                        params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
+                                        step_params.invert_masks,
+                                        step_params.mask_threshold,
+                                        step_params.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
                                 }
                             }
                             const auto structure_map = get_thin_structure_map(
-                                cam->uid(), stable_gt, params_.optimization.thin_structure_weight,
+                                cam->uid(), stable_gt, step_params.thin_structure_weight,
                                 use_mask && params_.optimization.mask_mode != lfs::core::param::MaskMode::AlphaConsistent
                                     ? mask_tile
                                     : lfs::core::Tensor{});
@@ -7315,7 +7242,7 @@ namespace lfs::training {
 
                                 auto result = compute_photometric_loss_with_mask(
                                     corrected_image, gt_tile, mask_tile, roi_weight, output.alpha,
-                                    params_.optimization, raw_loss_input, structure_map, iter);
+                                    step_params, raw_loss_input, structure_map, iter);
                                 if (!result) {
                                     nvtxRangePop();
                                     nvtxRangePop();
@@ -7337,7 +7264,7 @@ namespace lfs::training {
                                 normal_terms_weight = result->normal_pixel_weight;
                             } else {
                                 auto result = compute_photometric_loss_with_gradient(
-                                    corrected_image, gt_tile, params_.optimization, raw_loss_input, iter);
+                                    corrected_image, gt_tile, step_params, raw_loss_input, iter);
                                 if (!result) {
                                     nvtxRangePop();
                                     nvtxRangePop();
@@ -7359,8 +7286,8 @@ namespace lfs::training {
                         }
 
                         if ((run_fastgs_gaussian_backward || run_gut_gaussian_backward) &&
-                            params_.optimization.use_depth_loss &&
-                            params_.optimization.depth_loss_weight > 0.0f &&
+                            step_params.use_depth_loss &&
+                            step_params.depth_loss_weight > 0.0f &&
                             output.depth.is_valid() &&
                             output.depth.numel() > 0 &&
                             output.alpha.is_valid() &&
@@ -7430,11 +7357,11 @@ namespace lfs::training {
                                     const size_t depth_partials =
                                         lfs::training::kernels::depth_loss_partial_count(num_depth_pixels);
                                     const int total_iterations =
-                                        std::max(1, params_.optimization.resolved_total_iterations());
+                                        std::max(1, step_params.resolved_total_iterations());
                                     const float depth_progress =
                                         std::min(static_cast<float>(iter) / static_cast<float>(total_iterations), 1.0f);
                                     const float depth_weight_now =
-                                        params_.optimization.depth_loss_weight *
+                                        step_params.depth_loss_weight *
                                         std::pow(kDepthLossFinalScale, depth_progress);
 
                                     if (!depth_loss_scalar_.is_valid()) {
@@ -7488,7 +7415,7 @@ namespace lfs::training {
 
                         if ((run_fastgs_gaussian_backward || run_gut_gaussian_backward) &&
                             normal_supervision_started &&
-                            params_.optimization.normal_loss_weight > 0.0f &&
+                            step_params.normal_loss_weight > 0.0f &&
                             output.normal.is_valid() &&
                             output.normal.numel() > 0 &&
                             output.alpha.is_valid() &&
@@ -7582,7 +7509,7 @@ namespace lfs::training {
                                         normal_loss_partials_.ptr<float>(),
                                         render_w,
                                         render_h,
-                                        params_.optimization.normal_loss_weight,
+                                        step_params.normal_loss_weight,
                                         normal_stream,
                                         normal_pixel_weight);
 
@@ -7646,7 +7573,7 @@ namespace lfs::training {
                                                 fy,
                                                 cx,
                                                 cy,
-                                                params_.optimization.normal_loss_weight,
+                                                step_params.normal_loss_weight,
                                                 normal_stream,
                                                 normal_pixel_weight,
                                                 gsplat_ctx ? gsplat_ctx->camera_rays.ptr<float>() : nullptr,
@@ -7666,7 +7593,7 @@ namespace lfs::training {
 
                         if ((run_fastgs_gaussian_backward || run_gut_gaussian_backward) &&
                             normal_supervision_started &&
-                            params_.optimization.normal_consistency_weight > 0.0f &&
+                            step_params.normal_consistency_weight > 0.0f &&
                             output.normal.is_valid() &&
                             output.normal.numel() > 0 &&
                             output.depth.is_valid() &&
@@ -7766,7 +7693,7 @@ namespace lfs::training {
                                     fy,
                                     cx,
                                     cy,
-                                    params_.optimization.normal_consistency_weight,
+                                    step_params.normal_consistency_weight,
                                     consistency_stream,
                                     consistency_pixel_weight,
                                     gsplat_ctx ? gsplat_ctx->camera_rays.ptr<float>() : nullptr,
@@ -7782,7 +7709,7 @@ namespace lfs::training {
                         if (use_pixel_error_densification) {
                             LFS_VRAM_SCOPE("train.densification_error_map");
                             LOG_VRAM_DIFF("train.densification_error_map");
-                            if (use_ssim_error && params_.optimization.lambda_dssim > 0.0f) {
+                            if (use_ssim_error && step_params.lambda_dssim > 0.0f) {
                                 lfs::core::Tensor ssim_map;
                                 lfs::core::Tensor cs_map;
                                 if (used_masked_fused && raw_loss_input.is_valid()) {
@@ -7794,7 +7721,7 @@ namespace lfs::training {
                                 } else if (raw_loss_input.is_valid()) {
                                     ssim_map = photometric_loss_.arena().decoupled().ssim_map;
                                     cs_map = photometric_loss_.arena().decoupled().cs_map;
-                                } else if (params_.optimization.lambda_dssim < 1.0f) {
+                                } else if (step_params.lambda_dssim < 1.0f) {
                                     ssim_map = photometric_loss_.fused_workspace().ssim_map;
                                     cs_map = photometric_loss_.fused_workspace().cs_map;
                                 } else {
@@ -7802,7 +7729,7 @@ namespace lfs::training {
                                     cs_map = photometric_loss_.ssim_workspace().cs_map;
                                 }
                                 const bool use_cs =
-                                    params_.optimization.densify_error_map ==
+                                    step_params.densify_error_map ==
                                         lfs::core::param::DensifyErrorMap::SsimCs &&
                                     cs_map.is_valid();
                                 const lfs::core::Tensor& densify_src = use_cs ? cs_map : ssim_map;
@@ -7835,7 +7762,7 @@ namespace lfs::training {
                                     pred_chw = pred_chw.permute({2, 0, 1}).contiguous();
                                     gt_chw = gt_chw.permute({2, 0, 1}).contiguous();
                                 }
-                                const bool use_cs = params_.optimization.densify_error_map ==
+                                const bool use_cs = step_params.densify_error_map ==
                                                     lfs::core::param::DensifyErrorMap::SsimCs;
                                 lfs::training::kernels::ssim_error_map_forward(
                                     pred_chw, gt_chw, densification_ssim_workspace_,
@@ -7857,7 +7784,7 @@ namespace lfs::training {
                             }
 
                             if (use_mask &&
-                                params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore) {
+                                step_params.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore) {
                                 // The pipelined loader returns normalized Float32 masks;
                                 // Camera masks retain their raw UInt8 band levels.
                                 const float keep_min =
@@ -7871,8 +7798,8 @@ namespace lfs::training {
                             }
 
                             if (use_mask &&
-                                (params_.optimization.mask_mode == lfs::core::param::MaskMode::Segment ||
-                                 params_.optimization.mask_mode == lfs::core::param::MaskMode::Ignore)) {
+                                (step_params.mask_mode == lfs::core::param::MaskMode::Segment ||
+                                 step_params.mask_mode == lfs::core::param::MaskMode::Ignore)) {
                                 const auto mask_for_error =
                                     (mask_tile.dtype() == lfs::core::DataType::UInt8 ||
                                      mask_tile.dtype() == lfs::core::DataType::Bool)
@@ -7899,7 +7826,7 @@ namespace lfs::training {
                                                                     params_.optimization.densify_structure_weight);
                         }
 
-                        if (tile_error_map.is_valid() && core::param::is_mrnf_strategy(params_.optimization.strategy)) {
+                        if (tile_error_map.is_valid() && core::param::is_mrnf_strategy(step_params.strategy)) {
                             LFS_VRAM_SCOPE("train.densification_error_map");
                             LOG_VRAM_DIFF("train.densification_error_map.normalize");
                             const auto map_mean = tile_error_map.mean();
@@ -8004,7 +7931,7 @@ namespace lfs::training {
                             loss_tensor_gpu = loss_tensor_gpu + kernels::gradient_residual_loss_gradient(
                                                                     tile_raw_residual->raw, tile_raw_residual->target,
                                                                     tile_raw_residual->pixel_weight, raster_grad,
-                                                                    params_.optimization.gradient_loss_weight,
+                                                                    step_params.gradient_loss_weight,
                                                                     gradient_residual_workspace_);
                         }
 
@@ -8020,12 +7947,12 @@ namespace lfs::training {
                                                       : lfs::core::Tensor::zeros_like(output.alpha);
                                 tile_context_guard.release();
                                 gsplat_rasterize_backward(*gsplat_ctx, raster_grad, grad_alpha,
-                                                          strategy_->get_model(), strategy_->get_optimizer(),
+                                                          strategy_->get_model(), gaussian_optimizer,
                                                           use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},
                                                           edge_weight_scoring_active_ ? edge_weight_map : lfs::core::Tensor{},
                                                           edge_weight_scoring_active_ ? edge_score_scratch : lfs::core::Tensor{},
                                                           tile_grad_depth, tile_grad_normal,
-                                                          normal_supervision_started ? params_.optimization.normal_flatten_weight : 0.f);
+                                                          normal_supervision_started ? step_params.normal_flatten_weight : 0.f);
                                 if (edge_weight_scoring_active_) {
                                     strategy_->on_edge_score_accumulated(iter);
                                 }
@@ -8048,13 +7975,13 @@ namespace lfs::training {
                                     if (strategy_->is_refining(iter))
                                         model_write_lock.lock();
                                     fast_rasterize_backward(*fast_ctx, raster_grad, strategy_->get_model(),
-                                                            strategy_->get_optimizer(), tile_grad_alpha,
+                                                            gaussian_optimizer, tile_grad_alpha,
                                                             use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},
                                                             densification_type,
                                                             iter,
                                                             fused_extra_gradients,
                                                             tile_grad_depth,
-                                                            tile_grad_normal);
+                                                            tile_grad_normal, in_popspa);
                                     if (fused_extra_gradients.edge_score_out != nullptr) {
                                         strategy_->on_edge_score_accumulated(iter);
                                     }
@@ -8078,7 +8005,7 @@ namespace lfs::training {
                     }
                 }
 
-                if (tiles_processed == 0) {
+                if (tiles_processed == 0 && !in_popspa) {
                     if (auto degenerate = check_invisible_iteration(iter))
                         return std::move(*degenerate);
                     LOG_DEBUG("Skipping iteration {} - no visible primitives", iter);
@@ -8088,8 +8015,10 @@ namespace lfs::training {
                 }
                 invisible_iteration_streak_ = 0;
 
-                update_camera_loss_heatmap(*cam, loss_tensor_gpu);
-                maybe_publish_camera_loss_heatmap(iter);
+                if (tiles_processed > 0) {
+                    update_camera_loss_heatmap(*cam, loss_tensor_gpu);
+                    maybe_publish_camera_loss_heatmap(iter);
+                }
 
                 if (in_controller_phase) {
                     current_phase = StepPhase::OptimizerCommit;
@@ -8110,14 +8039,14 @@ namespace lfs::training {
                     PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::OptBegin, iter);
                     // Normal phase: regularization losses + optimizer steps for all components
 
-                    if (params_.optimization.scale_reg_at(iter) > 0.0f) {
+                    if (step_params.scale_reg_at(iter) > 0.0f) {
                         nvtxRangePush("compute_scale_reg_loss");
                         LFS_VRAM_SCOPE("train.regularizers.scale_loss");
                         LOG_VRAM_DIFF("train.regularizers.scale_loss");
                         if (fastgs_path) {
                             loss_tensor_gpu = loss_tensor_gpu + fused_scale_reg_loss_gpu;
                         } else {
-                            auto scale_loss_result = compute_scale_reg_loss(strategy_->get_model(), strategy_->get_optimizer(), params_.optimization);
+                            auto scale_loss_result = compute_scale_reg_loss(strategy_->get_model(), gaussian_optimizer, step_params);
                             if (!scale_loss_result) {
                                 return lfs::from_legacy_expected<StepDisposition>(
                                            std::unexpected(scale_loss_result.error()),
@@ -8140,7 +8069,7 @@ namespace lfs::training {
                     if (fused_sh_rest_reg_loss_gpu.is_valid())
                         loss_tensor_gpu = loss_tensor_gpu + fused_sh_rest_reg_loss_gpu;
 
-                    if (params_.optimization.opacity_reg > 0.0f) {
+                    if (step_params.opacity_reg > 0.0f) {
                         nvtxRangePush("compute_opacity_reg_loss");
                         LFS_VRAM_SCOPE("train.regularizers.opacity_loss");
                         LOG_VRAM_DIFF("train.regularizers.opacity_loss");
@@ -8148,7 +8077,7 @@ namespace lfs::training {
                             loss_tensor_gpu = loss_tensor_gpu + fused_opacity_reg_loss_gpu;
                         } else {
                             auto opacity_loss_result = compute_opacity_reg_loss(
-                                strategy_->get_model(), strategy_->get_optimizer(), params_.optimization);
+                                strategy_->get_model(), gaussian_optimizer, step_params);
                             if (!opacity_loss_result) {
                                 return lfs::from_legacy_expected<StepDisposition>(
                                            std::unexpected(opacity_loss_result.error()),
@@ -8165,15 +8094,15 @@ namespace lfs::training {
                         nvtxRangePop();
                     }
 
-                    if (bilateral_grid_ && params_.optimization.bilateral_grid_active()) {
+                    if (!in_popspa && bilateral_grid_ && step_params.bilateral_grid_active()) {
                         const bool grid_active_this_iter =
-                            !params_.optimization.use_exposure_correction ||
-                            iter >= params_.optimization.exposure_correction_grid_start_iter;
+                            !step_params.use_exposure_correction ||
+                            iter >= step_params.exposure_correction_grid_start_iter;
                         if (grid_active_this_iter) {
                             current_phase = StepPhase::OptimizerCommit;
                             LFS_VRAM_SCOPE("train.bilateral_grid.step");
                             LOG_VRAM_DIFF("train.bilateral_grid.step");
-                            const float tv_weight = params_.optimization.tv_loss_weight;
+                            const float tv_weight = step_params.tv_loss_weight;
 
                             loss_tensor_gpu = loss_tensor_gpu + bilateral_grid_->tv_loss_gpu(cam->uid()) * tv_weight;
                             bilateral_grid_->step_image(cam->uid(), tv_weight);
@@ -8182,7 +8111,7 @@ namespace lfs::training {
                         }
                     }
 
-                    if (ppisp_ && params_.optimization.ppisp_active() && !ppisp_frozen) {
+                    if (ppisp_ && step_params.ppisp_active() && !ppisp_frozen) {
                         current_phase = StepPhase::OptimizerCommit;
                         nvtxRangePush("ppisp_reg_and_step");
                         LFS_VRAM_SCOPE("train.ppisp.reg_and_step");
@@ -8191,7 +8120,7 @@ namespace lfs::training {
                         loss_tensor_gpu = loss_tensor_gpu + ppisp_->reg_loss_gpu();
                         ppisp_->reg_backward();
                         ppisp_->optimizer_step();
-                        if (params_.optimization.use_exposure_correction) {
+                        if (step_params.use_exposure_correction) {
                             nvtxRangePush("ppisp_project_mean");
                             ppisp_->project_mean();
                             nvtxRangePop();
@@ -8205,57 +8134,19 @@ namespace lfs::training {
                     }
                 }
 
-                // Sparsity loss - ALL ON GPU, no CPU sync here
-                if (sparsity_optimizer_ &&
-                    sparsity_optimizer_->should_apply_loss(iter) &&
-                    (!fastgs_path || update_gaussians_this_iter)) {
-                    nvtxRangePush("sparsity_loss");
-                    LFS_VRAM_SCOPE("train.regularizers.sparsity_loss");
-                    LOG_VRAM_DIFF("train.regularizers.sparsity_loss");
-                    if (!run_fastgs_gaussian_backward) {
-                        auto sparsity_result = compute_sparsity_loss_forward(iter, strategy_->get_model());
-                        if (!sparsity_result) {
-                            nvtxRangePop();
-                            return lfs::from_legacy_expected<StepDisposition>(
-                                       std::unexpected(sparsity_result.error()),
-                                       lfs::LegacyErrorContext{
-                                           .code = lfs::ErrorCode::Internal,
-                                           .domain = lfs::ErrorDomain::Training,
-                                           .operation = "sparsity loss forward",
-                                           .source = LFS_SOURCE_SITE_CURRENT(),
-                                       })
-                                .error();
-                        }
-                        auto& [loss_tensor, ctx] = *sparsity_result;
-                        sparsity_loss_gpu = std::move(loss_tensor);
-
-                        if (ctx.n > 0) {
-                            if (auto result = sparsity_optimizer_->compute_loss_backward(
-                                    ctx, 1.0f, strategy_->get_optimizer().get_grad(ParamType::Opacity));
-                                !result) {
-                                nvtxRangePop();
-                                return lfs::from_legacy_expected<StepDisposition>(
-                                           std::unexpected(result.error()),
-                                           lfs::LegacyErrorContext{
-                                               .code = lfs::ErrorCode::Internal,
-                                               .domain = lfs::ErrorDomain::Training,
-                                               .operation = "sparsity loss backward",
-                                               .source = LFS_SOURCE_SITE_CURRENT(),
-                                           })
-                                    .error();
-                            }
-                        }
-                    }
-                    nvtxRangePop();
-                }
-
-                // Sparsification phase logging (once per phase transition)
-                if (params_.optimization.enable_sparsity) {
-                    const int first_sparsify_iter = get_sparsity_boundary_iteration() + 1;
-                    if (get_active_sparsify_steps() > 0 && iter == first_sparsify_iter) {
-                        LOG_INFO("Entering sparsification: {} Gaussians, target prune={}%",
-                                 strategy_->get_model().size(), params_.optimization.prune_ratio * 100);
-                    }
+                if (in_popspa) {
+                    auto& model = strategy_->get_model();
+                    auto regularization = popspa_controller_.regularization(
+                        model.opacity_raw(), model.scaling_raw(),
+                        gaussian_optimizer.get_grad(ParamType::Opacity),
+                        gaussian_optimizer.get_grad(ParamType::Scaling));
+                    if (!regularization)
+                        return std::move(regularization).error();
+                    sparsity_loss_gpu = std::move(*regularization);
+                    if (ppisp_)
+                        ppisp_->zero_grad();
+                    if (bilateral_grid_)
+                        bilateral_grid_->zero_grad();
                 }
 
                 // Loss readback at intervals, async: enqueue the D2H into the
@@ -8387,7 +8278,7 @@ namespace lfs::training {
                             strategy_->post_backward(iter, r_output);
                             maybe_morton_reorder(iter);
                         }
-                        if (!fastgs_path) {
+                        if (!fastgs_path && !in_popspa) {
                             // Refine may have changed the rows since the forward pass.
                             install_cropbox_view_damping(model, strategy_->get_optimizer(), *cam);
                         }
@@ -8398,7 +8289,17 @@ namespace lfs::training {
                                                 : StepPhase::OptimizerCommit;
                             ++mutation_epoch_;
                             persistent_commit = true;
-                            strategy_->step(iter);
+                            if (in_popspa) {
+                                if (auto projected = popspa_controller_.after_backward(model.opacity_raw()); !projected)
+                                    return std::move(projected).error();
+                                gaussian_optimizer.step(iter, false);
+                                gaussian_optimizer.zero_grad(iter);
+                                if (auto advanced = popspa_controller_.finish_optimization_step(); !advanced)
+                                    return std::move(advanced).error();
+                                popspa_completed_iteration_.store(iter, std::memory_order_release);
+                            } else {
+                                strategy_->step(iter);
+                            }
                         }
 
                         if (save_regular_phase_output &&
@@ -8438,26 +8339,6 @@ namespace lfs::training {
                                 iter);
                         }
 
-                        if (sparsity_optimizer_ &&
-                            sparsity_optimizer_->is_initialized() &&
-                            static_cast<size_t>(model.size()) != model_size_before) {
-                            LOG_WARN("Sparsity: resetting ADMM state after topology change at iter {} ({} -> {})",
-                                     iter, model_size_before, model.size());
-                            sparsity_optimizer_->reset();
-                        }
-
-                        current_phase = StepPhase::RefinementCommit;
-                        ++mutation_epoch_;
-                        persistent_commit = true;
-                        if (auto result = handle_sparsity_update(iter, model); !result) {
-                            LOG_ERROR("Sparsity update: {}", result.error());
-                        }
-                        ++mutation_epoch_;
-                        persistent_commit = true;
-                        if (auto result = apply_sparsity_pruning(iter, model); !result) {
-                            LOG_ERROR("Sparsity pruning: {}", result.error());
-                        }
-
                         const bool topology_changed =
                             static_cast<size_t>(model.size()) != model_size_before;
                         if (topology_changed) {
@@ -8479,7 +8360,7 @@ namespace lfs::training {
                                 .error();
                         }
 
-                        if (topology_changed && !params_.optimization.headless) {
+                        if (topology_changed && !step_params.headless) {
                             // Interactive sessions: densify/prune transients leave the
                             // pool at a high-water mark it never revisits. Return the
                             // slack to the driver at the commit boundary (device-sync
@@ -8498,7 +8379,10 @@ namespace lfs::training {
                     }
 
                     // Clean evaluation - let the evaluator handle everything
-                    if (evaluator_->is_enabled() && evaluator_->should_evaluate(iter, get_total_iterations())) {
+                    // POPSpa may still compact at this iteration's boundary,
+                    // including a zero-step recovery. Evaluate after Complete.
+                    const bool defer_popspa_final_eval = popspa_enabled() && iter == get_total_iterations();
+                    if (!defer_popspa_final_eval && evaluator_->is_enabled() && evaluator_->should_evaluate(iter, get_total_iterations())) {
                         lfs::diagnostics::VramProfiler::instance().mark("evaluation");
                         evaluator_->print_evaluation_header(iter);
                         eval_ppisp_applied_.store(0);
@@ -8541,10 +8425,10 @@ namespace lfs::training {
                         LOG_INFO("{}", metrics.to_string());
                         for (const auto& line : metrics.mask_set_summaries())
                             LOG_INFO("{}", line);
-                        if (ppisp_ && params_.optimization.ppisp_active() && ppisp_->isFinalized()) {
+                        if (ppisp_ && step_params.ppisp_active() && ppisp_->isFinalized()) {
                             ppisp_->log_eval_diagnostics();
                         }
-                        if (bilateral_grid_ && params_.optimization.bilateral_grid_active()) {
+                        if (bilateral_grid_ && step_params.bilateral_grid_active()) {
                             bilateral_grid_->log_eval_diagnostics();
                         }
                         // B2: retain only the current active shape after evaluation.
@@ -8555,7 +8439,7 @@ namespace lfs::training {
 
                     // Publish a project generation at specified steps unless
                     // the sparsity-boundary save already handled it.
-                    for (size_t save_step : params_.optimization.save_steps) {
+                    for (size_t save_step : step_params.save_steps) {
                         if (iter == static_cast<int>(save_step) &&
                             iter != get_total_iterations() &&
                             !save_regular_phase_output) {
@@ -8595,7 +8479,7 @@ namespace lfs::training {
                                 }
 
                                 RenderOutput rendered_timelapse_output;
-                                if (params_.optimization.gut) {
+                                if (step_params.gut) {
                                     rendered_timelapse_output = gsplat_rasterize(*cam_to_use, strategy_->get_model(), background_,
                                                                                  1.0f, false, GsplatRenderMode::RGB, true);
                                 } else {
@@ -8612,7 +8496,7 @@ namespace lfs::training {
                                                                         : lfs::core::make_minimal_provenance_stamp();
                                 if (params_.include_provenance) {
                                     stamp.iteration = iter;
-                                    const auto strategy = lfs::core::param::canonical_strategy_name(params_.optimization.strategy);
+                                    const auto strategy = lfs::core::param::canonical_strategy_name(step_params.strategy);
                                     if (!strategy.empty())
                                         stamp.strategy = std::string(strategy);
                                 }
@@ -8641,7 +8525,10 @@ namespace lfs::training {
                     lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::PostStep, ctx);
                 }
 
-                consume_requested_project_snapshot(iter);
+                if (popspa_controller_.is_initialized())
+                    consume_popspa_project_snapshot(iter);
+                else
+                    consume_requested_project_snapshot(iter);
 
                 const auto project_hook =
                     getParams()
@@ -8685,13 +8572,21 @@ namespace lfs::training {
                                 iter);
                         }
                     } else {
-                        if (iter + 1 == target &&
+                        if (!in_popspa &&
+                            !(popspa_enabled() && target > get_regular_iterations()) &&
+                            iter + 1 == target &&
                             !prepared_project_snapshot_) {
                             prepare_project_snapshot_at_safe_point(
                                 target,
                                 project_hook_destination);
                         }
                         if (iter == target) {
+                            // The explicit request consumed above may have started
+                            // a writer. A CLI target names this exact iteration:
+                            // drain that writer without abandoning pending requests
+                            // before preparing the independent CLI capture.
+                            if (in_popspa && project_writer_thread_.joinable())
+                                project_writer_thread_.join();
                             if (!prepared_project_snapshot_) {
                                 prepare_project_snapshot_at_safe_point(
                                     iter,
@@ -8705,24 +8600,27 @@ namespace lfs::training {
 
                 if (live_vram_profiler_enabled() && strategy_) {
                     record_splat_vram_breakdown(strategy_->get_model());
-                    record_optimizer_vram_breakdown(strategy_->get_optimizer());
+                    record_optimizer_vram_breakdown(gaussian_optimizer);
                     publish_training_state_ledger(strategy_->get_model(),
-                                                  &strategy_->get_optimizer());
+                                                  &gaussian_optimizer);
                     lfs::diagnostics::VramProfiler::instance().sampleCudaMemory();
                 }
                 PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::StepEnd, iter);
                 if (PerfBenchCollector::enabled() && strategy_) {
                     auto& bench = PerfBenchCollector::instance();
                     const auto ledger = compute_training_state_ledger(
-                        strategy_->get_model(), &strategy_->get_optimizer());
+                        strategy_->get_model(), &gaussian_optimizer);
                     bench.set_ledger(ledger);
                     bench.set_training_state_reserved_bytes(
                         compute_training_state_reserved_bytes(
-                            strategy_->get_model(), &strategy_->get_optimizer()));
+                            strategy_->get_model(), &gaussian_optimizer));
                     bench.on_step_end(iter,
                                       current_loss_.load(),
                                       strategy_->get_model().size());
                 }
+
+                if (auto advanced = advance_popspa_boundaries(iter, stop_token); !advanced)
+                    return std::move(advanced).error();
 
                 // Return Continue if we should continue training
                 if (iter < get_total_iterations() && !stop_requested_.load() && !stop_token.stop_requested()) {
@@ -9177,11 +9075,49 @@ namespace lfs::training {
             bool logged_epoch2_loader_cache = false;
             const size_t epoch2_loader_sample_count =
                 train_dataset_ ? train_dataset_->size() * size_t{2} : size_t{0};
-            while (iter <= get_total_iterations()) {
+            std::optional<POPSpaPhase> popspa_sampler_phase;
+            const auto popspa_project_hook = getParams().save_project_at_iteration;
+            while (iter <= get_total_iterations() ||
+                   (popspa_enabled() && (!popspa_controller_.is_initialized() ||
+                                         popspa_controller_.phase() != POPSpaPhase::Complete))) {
                 lfs::core::Tensor::set_memory_pool_iteration(iter);
 
                 if (stop_token.stop_requested() || stop_requested_.load())
                     break;
+                if (auto advanced = advance_popspa_boundaries(iter - 1, stop_token); !advanced) {
+                    terminal_error = std::move(advanced).error();
+                    break;
+                }
+                if (iter > get_total_iterations() || stop_token.stop_requested() || stop_requested_.load())
+                    break;
+                // The regular-phase save consumes the initially reserved UUID.
+                // Reserve another outside the optimizer safe point for a CLI
+                // snapshot inside POPSpa. Its layout is prepared after this step,
+                // since intervening POPSpa boundaries can compact the model.
+                if (popspa_project_hook && *popspa_project_hook == static_cast<size_t>(iter) && popspa_enabled()) {
+                    bool needs_reservation = false;
+                    {
+                        std::lock_guard lock(project_snapshot_mutex_);
+                        needs_reservation = !popspa_cli_project_chapters_;
+                    }
+                    if (needs_reservation) {
+                        auto chapters = reserve_project_snapshot_chapters();
+                        if (!chapters) {
+                            terminal_error = std::move(chapters).error();
+                            break;
+                        }
+                        std::lock_guard lock(project_snapshot_mutex_);
+                        if (!popspa_cli_project_chapters_)
+                            popspa_cli_project_chapters_ = std::move(*chapters);
+                    }
+                }
+                if (popspa_optimizing() && popspa_sampler_phase != popspa_controller_.phase()) {
+                    popspa_sampler_phase = popspa_controller_.phase();
+                    const uint64_t seed = static_cast<uint64_t>(params_.optimization.popspa_seed) +
+                                          (*popspa_sampler_phase == POPSpaPhase::Recover ? 1 : 0);
+                    train_dataloader->restart(InfiniteRandomSampler(
+                        train_dataset_->size(), seed, popspa_controller_.phase_step()));
+                }
                 if (callback_busy_.load(std::memory_order_acquire)) {
                     const cudaError_t callback_status = cudaStreamQuery(callback_stream_);
                     if (callback_status == cudaSuccess) {
@@ -9337,11 +9273,18 @@ namespace lfs::training {
                     lfs::diagnostics::VramProfiler::instance().mark("densification_stop");
             }
 
+            // Evaluate the actual compacted model after all POPSpa boundaries,
+            // even if eval_steps lists only the regular training horizon. This also
+            // covers resuming an already completed POPSpa model.
+            const bool popspa_complete = popspa_enabled() && popspa_controller_.is_initialized() &&
+                                         popspa_controller_.phase() == POPSpaPhase::Complete &&
+                                         current_iteration_.load() >= get_total_iterations();
             // A resume at the terminal iteration starts at max+1, so there is no
             // training step in which to service an evaluation scheduled at max.
-            if (iter > get_total_iterations() &&
-                evaluator_->is_enabled() &&
-                evaluator_->should_evaluate(current_iteration_.load(), get_total_iterations())) {
+            const bool terminal_eval_due = !popspa_enabled() && iter > get_total_iterations() &&
+                                           evaluator_->should_evaluate(current_iteration_.load(), get_total_iterations());
+            if (!terminal_error && !stop_token.stop_requested() && !stop_requested_.load() &&
+                evaluator_->is_enabled() && (popspa_complete || terminal_eval_due)) {
                 evaluate_at(current_iteration_.load(), stop_token);
             }
 
@@ -9414,7 +9357,10 @@ namespace lfs::training {
             }
         }
 
-        const int terminal_iteration = current_iteration_.load();
+        const int terminal_iteration = popspa_completed_iteration_.load(std::memory_order_acquire) >= 0
+                                           ? popspa_completed_iteration_.load(std::memory_order_acquire)
+                                           : current_iteration_.load();
+        current_iteration_.store(terminal_iteration);
         const bool user_stopped = stop_requested_.load() || stop_token.stop_requested();
         apply_pending_params_at_safe_point();
         pending_snapshot_finish_reason_ =
@@ -9703,6 +9649,8 @@ namespace lfs::training {
     }
 
     int Trainer::project_snapshot_iteration() const {
+        if (const int completed = popspa_completed_iteration_.load(std::memory_order_acquire); completed >= 0)
+            return completed;
         const int current = current_iteration_.load();
         if (is_paused_.load() && !evaluation_active_.load() && current > 0) {
             return current - 1;
@@ -10027,12 +9975,22 @@ namespace lfs::training {
                     "Cannot seek {} to byte zero",
                     source_name));
         }
+        const auto saved_header = core::load_checkpoint_header(source, source_bytes);
+        if (!saved_header)
+            return std::unexpected(saved_header.error());
+        const bool restore_popspa = popspa_enabled() ||
+                                    core::has_flag(saved_header->flags, core::CheckpointFlags::HAS_POPSPA);
+        source.clear();
+        source.seekg(0, std::ios::beg);
+        if (restore_popspa && !popspa_optimizer_)
+            initialize_popspa_optimizer();
         auto result = lfs::training::load_checkpoint(
             source, source_bytes, *strategy_, params_,
             bilateral_grid_.get(), ppisp_.get(),
             ppisp_controller_pool_.get(),
-            dynamic_cast<ADMMSparsityOptimizer*>(sparsity_optimizer_.get()),
-            splat_tensor_allocator_, source_name, preloaded_model);
+            splat_tensor_allocator_, source_name, preloaded_model,
+            restore_popspa ? &popspa_controller_ : nullptr,
+            restore_popspa ? popspa_optimizer_.get() : nullptr);
         if (!result) {
             return result;
         }
@@ -10056,7 +10014,10 @@ namespace lfs::training {
                 return std::unexpected(storage_result.error());
             }
             apply_frozen_ranges_to_optimizer(strategy_->get_model(), strategy_->get_optimizer());
+            if (popspa_optimizer_)
+                apply_frozen_ranges_to_optimizer(strategy_->get_model(), *popspa_optimizer_, 0.0f);
         }
+        popspa_dataset_validated_ = false;
         if (params_.optimization.enable_sparsity) {
             const size_t stop_refine_limit = static_cast<size_t>(std::max(0, get_regular_iterations()));
             if (params_.optimization.stop_refine > stop_refine_limit) {
@@ -10068,6 +10029,7 @@ namespace lfs::training {
         sync_strategy_optimization_params();
 
         current_iteration_ = *result;
+        popspa_completed_iteration_.store(popspa_controller_.is_initialized() ? *result : -1, std::memory_order_release);
 
         LOG_INFO("Restored training state from checkpoint at iteration {}", *result);
         return result;

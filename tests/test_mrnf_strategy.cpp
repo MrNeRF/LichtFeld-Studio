@@ -1073,16 +1073,16 @@ TEST(MRNFStrategyTest, GrowAndSplitUsesIgsPlusSplitRule) {
     EXPECT_NEAR(opacities_ptr[initial_size], std::log(0.3f / 0.7f), 1e-5f);
 }
 
-TEST(MRNFStrategyTest, StepScalingDoesNotScaleSparsifySteps) {
+TEST(MRNFStrategyTest, StepScalingDoesNotScalePOPSpaSteps) {
     auto params = vanilla_mrnf_params();
     params.grow_until_iter = 15000;
-    params.sparsify_steps = 15000;
+    params.popspa_sparsify_steps = 15000;
     params.steps_scaler = 0.5f;
 
     params.apply_step_scaling();
 
     EXPECT_EQ(params.grow_until_iter, 7500u);
-    EXPECT_EQ(params.sparsify_steps, 15000);
+    EXPECT_EQ(params.popspa_sparsify_steps, 15000);
     EXPECT_EQ(params.refine_every, 82u);
     EXPECT_EQ(params.stop_refine, 14250u);
 }
@@ -2217,7 +2217,7 @@ TEST(MRNFStrategyTest, CheckpointLoadPreservesDatasetFarFieldProtection) {
 
     std::stringstream checkpoint(std::ios::in | std::ios::out | std::ios::binary);
     const auto saved = serialize_checkpoint(checkpoint, 100, original, params,
-                                            nullptr, nullptr, nullptr, nullptr);
+                                            nullptr, nullptr, nullptr);
     ASSERT_TRUE(saved);
 
     auto resumed_model = create_mrnf_test_splat_data(8);
@@ -2226,7 +2226,7 @@ TEST(MRNFStrategyTest, CheckpointLoadPreservesDatasetFarFieldProtection) {
     resumed.initialize(params.optimization);
     checkpoint.seekg(0);
     const auto loaded = load_checkpoint(checkpoint, saved->bytes, resumed, params,
-                                        nullptr, nullptr, nullptr, nullptr);
+                                        nullptr, nullptr, nullptr);
     ASSERT_TRUE(loaded) << loaded.error();
     ASSERT_EQ(*loaded, 100);
     ASSERT_NE(resumed.get_optimizer().mean_step_far_mask(), nullptr);

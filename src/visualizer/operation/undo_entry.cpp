@@ -286,6 +286,7 @@ namespace lfs::vis::op {
             else
                 node->training_enabled = target.training_enabled;
             node->payload_diverged = target.payload_diverged;
+            node->point_cloud_source = target.point_cloud_source;
             restorePlyPathForSnapshot(scene_manager, target.uuid, target.source_path);
         }
 
@@ -806,6 +807,7 @@ namespace lfs::vis::op {
             snapshot.locked = node.locked.get();
             snapshot.training_enabled = node.training_enabled;
             snapshot.payload_diverged = node.payload_diverged;
+            snapshot.point_cloud_source = node.point_cloud_source;
 
             if (node.parent_id != lfs::core::NULL_NODE) {
                 if (const auto* parent = scene_manager.getScene().getNodeById(node.parent_id)) {
@@ -852,6 +854,7 @@ namespace lfs::vis::op {
             snapshot.locked = node.locked.get();
             snapshot.training_enabled = node.training_enabled;
             snapshot.payload_diverged = node.payload_diverged;
+            snapshot.point_cloud_source = node.point_cloud_source;
             snapshot.gaussian_count = node.gaussian_count.load(std::memory_order_acquire);
             snapshot.centroid = node.centroid;
 
@@ -1639,6 +1642,7 @@ namespace lfs::vis::op {
                 existing->locked.setQuiet(snapshot.locked);
                 existing->training_enabled = snapshot.training_enabled;
                 existing->payload_diverged = snapshot.payload_diverged;
+                existing->point_cloud_source = snapshot.point_cloud_source;
                 existing->gaussian_count.store(snapshot.gaussian_count, std::memory_order_release);
                 existing->centroid = snapshot.centroid;
                 existing->transform_dirty = true;
@@ -1664,6 +1668,7 @@ namespace lfs::vis::op {
             restored->locked.setQuiet(snapshot.locked);
             restored->training_enabled = snapshot.training_enabled;
             restored->payload_diverged = snapshot.payload_diverged;
+            restored->point_cloud_source = snapshot.point_cloud_source;
             restored->gaussian_count.store(snapshot.gaussian_count, std::memory_order_release);
             restored->centroid = snapshot.centroid;
             restored->transform_dirty = true;

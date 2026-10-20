@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 namespace lfs::vis {
@@ -652,16 +653,90 @@ namespace lfs::vis {
         return items;
     }
 
+    lfs::rendering::PointCloudRenderRequest buildPointCloudNodeRenderRequest(
+        const FrameContext& ctx, const core::Scene& scene, const core::SceneNode& node,
+        const glm::ivec2 render_size, const std::vector<glm::mat4>& transforms) {
+        FrameContext scoped = ctx;
+        scoped.scene_state.transform_indices.reset();
+        scoped.scene_state.node_visibility_mask.clear();
+        scoped.scene_state.selection_mask = scene.selectionMaskSliceForNode(node.id);
+        scoped.scene_state.selected_cropbox_index = -1;
+        std::erase_if(scoped.scene_state.cropboxes, [&](const auto& box) {
+            return box.parent_splat_id != node.id;
+        });
+        std::erase_if(scoped.scene_state.ellipsoids, [&](const auto& ellipsoid) {
+            return ellipsoid.parent_splat_id != node.id;
+        });
+        // Selection on the other comparison side must not suppress this node's
+        // enabled crop filter, nor apply its brush-preview mask to this cloud.
+        scoped.cursor_preview = {};
+        scoped.scene_manager = nullptr;
+        scoped.gizmo.cropbox_active = ctx.gizmo.cropbox_active && ctx.scene_manager &&
+                                      ctx.scene_manager->getSelectedNodeCropBoxId() == scene.getCropBoxForSplat(node.id);
+        scoped.gizmo.ellipsoid_active = ctx.gizmo.ellipsoid_active && ctx.scene_manager &&
+                                        ctx.scene_manager->getSelectedNodeEllipsoidId() == scene.getEllipsoidForSplat(node.id);
+        auto request = buildPointCloudRenderRequest(scoped, render_size, transforms);
+        // Preview tensors use the visible combined-model order. Keep only the
+        // edited node's slice, with ownership through the render request.
+        const auto* preview = ctx.cursor_preview.preview_selection
+                                  ? ctx.cursor_preview.preview_selection
+                                  : ctx.cursor_preview.selection_tensor;
+        size_t offset = 0;
+        if (!ctx.training_active && preview && preview->is_valid() && preview->ndim() == 1) {
+            for (const auto& slot : scene.getVisibleSplatNodeSlots()) {
+                if (!slot.node || !slot.node->model)
+                    continue;
+                const size_t count = slot.node->model->size();
+                if (slot.node->id == node.id) {
+                    const bool selected = slot.slot_index < ctx.scene_state.selected_node_mask.size() &&
+                                          ctx.scene_state.selected_node_mask[slot.slot_index];
+                    if (selected && offset + count <= preview->numel()) {
+                        auto& transient = request.overlay.transient_mask;
+                        transient.owned_mask = std::make_shared<core::Tensor>(preview->slice(0, offset, offset + count));
+                        transient.mask = transient.owned_mask.get();
+                        transient.additive = ctx.cursor_preview.add_mode;
+                    }
+                    break;
+                }
+                offset += count;
+            }
+        }
+        return request;
+    }
+
     std::vector<PlyComparisonNode> plyComparisonNodes(const core::Scene& scene) {
         std::vector<PlyComparisonNode> nodes;
         for (const auto& slot : scene.getVisibleSplatNodeSlots()) {
             nodes.push_back({.node = slot.node, .splat_slot = slot.slot_index});
+        }
+        for (const auto* node : scene.getNodes()) {
+            if (node && node->type == core::NodeType::POINTCLOUD && node->point_cloud &&
+                node->point_cloud->size() > 0 && scene.isNodeEffectivelyVisible(node->id)) {
+                nodes.push_back({.node = node, .splat_slot = std::nullopt});
+            }
         }
         for (const auto& mesh : scene.getVisibleMeshes()) {
             if (const auto* const node = scene.getNodeById(mesh.node_id)) {
                 nodes.push_back({.node = node, .splat_slot = std::nullopt});
             }
         }
+        // Match the scene tree's depth-first order, independent of model type
+        // and of the retained Gaussian render-slot order.
+        std::unordered_map<core::NodeId, PlyComparisonNode> by_id;
+        for (const auto& entry : nodes)
+            by_id.emplace(entry.node->id, entry);
+        nodes.clear();
+        const auto visit = [&](auto&& self, const core::NodeId id) -> void {
+            const auto* node = scene.getNodeById(id);
+            if (!node)
+                return;
+            if (const auto it = by_id.find(id); it != by_id.end())
+                nodes.push_back(it->second);
+            for (const auto child : node->children)
+                self(self, child);
+        };
+        for (const auto root : scene.getRootNodes())
+            visit(visit, root);
         return nodes;
     }
 

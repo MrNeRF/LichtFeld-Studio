@@ -90,9 +90,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--ppisp-holdout-appearance", "ppisp_holdout_appearance", Enum},
             OptimizationCliBinding{"--normal-loss-space", "normal_loss_space", Enum},
             OptimizationCliBinding{"--enable-sparsity", "enable_sparsity", Bool},
-            OptimizationCliBinding{"--sparsify-steps", "sparsify_steps", Integer},
-            OptimizationCliBinding{"--init-rho", "init_rho", Float},
-            OptimizationCliBinding{"--prune-ratio", "prune_ratio", Float},
+            OptimizationCliBinding{"--popspa-target-count", "popspa_target_count", Integer},
             OptimizationCliBinding{"--enable-mip", "mip_filter", Bool},
             OptimizationCliBinding{"--bilateral-grid", "use_bilateral_grid", Bool},
             OptimizationCliBinding{"--exposure-correction", "use_exposure_correction", Bool},
@@ -894,10 +892,8 @@ namespace {
             // =============================================================================
             ::args::Group sparsity_sep(parser, " ");
             ::args::Group sparsity_group(parser, "SPARSITY OPTIMIZATION:");
+            ::args::ValueFlag<int> popspa_target_count(sparsity_group, "popspa_target_count", lfs::core::args::optimization_cli_help("--popspa-target-count"), {"popspa-target-count"});
             ::args::Flag enable_sparsity(sparsity_group, "enable_sparsity", lfs::core::args::optimization_cli_help("--enable-sparsity"), {"enable-sparsity"});
-            ::args::ValueFlag<int> sparsify_steps(sparsity_group, "sparsify_steps", lfs::core::args::optimization_cli_help("--sparsify-steps"), {"sparsify-steps"});
-            ::args::ValueFlag<float> init_rho(sparsity_group, "init_rho", lfs::core::args::optimization_cli_help("--init-rho"), {"init-rho"});
-            ::args::ValueFlag<float> prune_ratio(sparsity_group, "prune_ratio", lfs::core::args::optimization_cli_help("--prune-ratio"), {"prune-ratio"});
 
             // =============================================================================
             // RENDERING OPTIONS
@@ -1458,14 +1454,6 @@ namespace {
                 }
             }
 
-            // Validate prune_ratio (0.0-1.0)
-            if (prune_ratio) {
-                float ratio = ::args::get(prune_ratio);
-                if (ratio < 0.0f || ratio > 1.0f) {
-                    return std::unexpected("ERROR: --prune-ratio must be between 0.0 and 1.0");
-                }
-            }
-
             std::optional<lfs::core::param::BackgroundMode> parsed_bg_mode;
             if (bg_mode) {
                 parsed_bg_mode = parse_bg_mode(::args::get(bg_mode));
@@ -1559,9 +1547,7 @@ namespace {
                                         timelapse_images_val = cli_option_present({"--timelapse-images"}) ? std::optional<std::vector<std::string>>(::args::get(timelapse_images)) : std::optional<std::vector<std::string>>(),
                                         timelapse_every_val = cli_option_present({"--timelapse-every"}) ? std::optional<int>(::args::get(timelapse_every)) : std::optional<int>(),
                                         // Sparsity parameters
-                                        sparsify_steps_val = cli_option_present({"--sparsify-steps"}) ? std::optional<int>(::args::get(sparsify_steps)) : std::optional<int>(),
-                                        init_rho_val = cli_option_present({"--init-rho"}) ? std::optional<float>(::args::get(init_rho)) : std::optional<float>(),
-                                        prune_ratio_val = cli_option_present({"--prune-ratio"}) ? std::optional<float>(::args::get(prune_ratio)) : std::optional<float>(),
+                                        popspa_target_count_val = cli_option_present({"--popspa-target-count"}) ? std::optional<int>(::args::get(popspa_target_count)) : std::optional<int>(),
                                         // Perf / profiling
                                         perf_bench_flag = bool(perf_bench),
                                         perf_bench_warmup_val = cli_option_present({"--perf-bench-warmup"}) ? std::optional<int>(::args::get(perf_bench_warmup)) : std::optional<int>(),
@@ -1741,9 +1727,7 @@ namespace {
                 }
 
                 // Sparsity parameters
-                setVal(sparsify_steps_val, opt.sparsify_steps);
-                setVal(init_rho_val, opt.init_rho);
-                setVal(prune_ratio_val, opt.prune_ratio);
+                setVal(popspa_target_count_val, opt.popspa_target_count);
 
                 // Perf / profiling
                 setFlag(perf_bench_flag, opt.perf_bench);
@@ -1881,9 +1865,7 @@ namespace {
                 note_opt("init_extent", init_extent_val.has_value());
                 note_opt("init_mesh_resolution", init_mesh_resolution_val.has_value());
                 note_opt("strategy", strategy_val.has_value());
-                note_opt("sparsify_steps", sparsify_steps_val.has_value());
-                note_opt("init_rho", init_rho_val.has_value());
-                note_opt("prune_ratio", prune_ratio_val.has_value());
+                note_opt("popspa_target_count", popspa_target_count_val.has_value());
                 note_opt("perf_bench", perf_bench_flag);
                 note_opt("perf_bench_warmup", perf_bench_warmup_val.has_value());
                 note_opt("profile_start_iter", profile_start_val.has_value());

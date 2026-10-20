@@ -852,6 +852,37 @@ namespace {
         EXPECT_FALSE((*nodes)[2].camera->has_image);
     }
 
+    TEST(ProjectChapterTest, SceneGraphPointCloudSourceRoundTripsAndDefaultsFalse) {
+        const auto id = uuid_literal("53000000-0000-4000-8000-000000000011");
+        SceneGraphChapter chapter;
+        ASSERT_TRUE(chapter.upsert_node(SceneNodeRecord{
+            .uuid = id,
+            .type = "splat",
+            .name = "Raw points",
+            .point_cloud_source = true,
+        }));
+        auto parsed = SceneGraphChapter::parse(chapter.dom().dump());
+        ASSERT_TRUE(parsed);
+        auto found = parsed->find(id);
+        ASSERT_TRUE(found && *found);
+        EXPECT_TRUE((*found)->point_cloud_source);
+        auto legacy = lfs::io::JsonChapterDom::Json::parse(chapter.dom().dump());
+        legacy["nodes"][0].erase("point_cloud_source");
+        auto old = SceneGraphChapter::parse(legacy.dump());
+        ASSERT_TRUE(old);
+        auto old_found = old->find(id);
+        ASSERT_TRUE(old_found && *old_found);
+        EXPECT_FALSE((*old_found)->point_cloud_source);
+        auto cleared = SceneNodeRecord{.uuid = id, .type = "splat", .name = "Ordinary splat"};
+        ASSERT_TRUE(chapter.upsert_node(cleared));
+        auto without_hint = lfs::io::JsonChapterDom::Json::parse(chapter.dom().dump());
+        EXPECT_FALSE(without_hint["nodes"][0].contains("point_cloud_source"));
+        legacy["nodes"][0]["point_cloud_source"] = "invalid";
+        auto invalid = SceneGraphChapter::parse(legacy.dump());
+        ASSERT_FALSE(invalid);
+        EXPECT_EQ(invalid.error().code(), lfs::ErrorCode::DataLoss);
+    }
+
     TEST(ProjectChapterTest, SceneGraphCameraHasImageDefaultsTrueWhenAbsent) {
         const auto node_id =
             uuid_literal("53000000-0000-4000-8000-000000000010");

@@ -62,6 +62,42 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
         assert data["training_panel"]["color_blue_prefix"] == "B:"
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_sparsity_toggle_controls_popspa_rows_and_search(
+    training_panel_module, monkeypatch, enabled
+):
+    module = training_panel_module
+    params = SimpleNamespace(
+        has_params=lambda: True, mask_mode=SimpleNamespace(value=0),
+        use_depth_loss=False, use_normal_loss=False, ppisp=False,
+        use_exposure_correction=False, ppisp_use_controller=False,
+        use_bilateral_grid=False, strategy="mcmc", random=False,
+        enable_sparsity=enabled, enable_eval=False, eval_mask="", undistort=False,
+    )
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    panel = module.TrainingPanel()
+    assert panel._property_view_condition_visible("dep_sparsity") is enabled
+    view = module.property_view
+    sparsity_run = next(run for run in view.BASIC_RUNS if run.id == "sparsity")
+    assert sparsity_run.prop_ids == view.POPSPA_PROPS
+    assert sparsity_run.visibility_condition_id == "dep_sparsity"
+    assert not set(view.POPSPA_PROPS) & set(view.PROP_VISIBILITY_CONDITION_IDS)
+    # Search hides the whole run while sparsity is off, like ordinary rendering.
+    rows = [
+        dict(id=prop_id, kind="number", label_key="", name=prop_id,
+             tooltip_key="", precision=0, text="0", strategies=())
+        for prop_id in ("popspa_target_count", "popspa_sparsify_steps")
+    ]
+    binding = view.SectionBinding(
+        "sparsity", rows, lambda: params, {}, lambda _binding: None,
+        search_accessor=lambda: "s",
+        visibility_condition_id="dep_sparsity",
+        visibility_predicate=panel._property_view_condition_visible,
+    )
+    visible = {row["id"] for row in binding._records()}
+    assert visible == ({"popspa_target_count", "popspa_sparsify_steps"} if enabled else set())
+
+
 @pytest.fixture
 def training_panel_module(monkeypatch):
     project_root = Path(__file__).parent.parent.parent
@@ -151,7 +187,6 @@ class _StrategyParamsStub:
                 "scaling_lr": 0.007,
                 "lambda_dssim": 0.2,
                 "init_opacity": 0.5,
-                "prune_ratio": 0.6,
                 "sh_degree": 3,
                 "depth_loss_mode": "ssi",
                 "ppisp_controller_activation_step": 25_000,
@@ -165,7 +200,6 @@ class _StrategyParamsStub:
                 "scaling_lr": 0.02,
                 "lambda_dssim": 0.35,
                 "init_opacity": 0.1,
-                "prune_ratio": 0.4,
                 "sh_degree": 2,
                 "depth_loss_mode": "ssi-depth",
                 "ppisp_controller_activation_step": 12_000,
@@ -293,7 +327,6 @@ def test_strategy_switch_resyncs_generated_rows_and_requests_panel_update(
     assert panel._text_bufs[binding.input_key("scaling_lr")] == "0.020000"
     assert panel._get_scrub_value("lambda_dssim") == pytest.approx(0.35)
     assert panel._get_scrub_value("init_opacity") == pytest.approx(0.1)
-    assert panel._get_scrub_value("prune_ratio") == pytest.approx(0.4)
     assert model.bindings["sh_degree_str"][0]() == "2"
     assert model.bindings["depth_loss_mode_str"][0]() == "ssi-depth"
     assert panel._text_bufs["ppisp_activation_step_str"] == "12,000"
@@ -2052,7 +2085,6 @@ def test_restored_control_echo_is_not_an_edit(
     ("prop", "saved", "control_echo"),
     [
         ("init_opacity", 0.5, 0.4999999701976776),
-        ("prune_ratio", 0.6000000238418579, 0.5999999642372131),
         ("lambda_dssim", 0.2, 0.20000000298023224),
     ],
 )

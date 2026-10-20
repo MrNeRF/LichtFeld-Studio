@@ -360,22 +360,157 @@ EXPECTED_NUMBER_ROWS = {
         math.inf,
         False,
     ),
-    "sparsify_steps": (
-        "training_params.sparsify_steps",
-        "training.tooltip.sparsify_steps",
+    "popspa_target_count": (
+        "training_params.popspa_target_count",
+        "training.tooltip.popspa_target_count",
         0,
         1_000,
-        1_000,
-        50_000,
+        1,
+        2_147_483_647,
         True,
     ),
-    "init_rho": (
-        "training_params.init_rho",
-        "training.tooltip.init_rho",
-        4,
+    "popspa_first_prune_count": (
+        "training_params.popspa_first_prune_count",
+        "training.tooltip.popspa_first_prune_count",
+        0,
+        1_000,
+        0,
+        2_147_483_647,
+        True,
+    ),
+    "popspa_sparsify_steps": (
+        "training_params.popspa_sparsify_steps",
+        "training.tooltip.popspa_sparsify_steps",
+        0,
+        100,
+        0,
+        2_147_483_647,
+        True,
+    ),
+    "popspa_refine_steps": (
+        "training_params.popspa_refine_steps",
+        "training.tooltip.popspa_refine_steps",
+        0,
+        100,
+        0,
+        2_147_483_647,
+        True,
+    ),
+    "popspa_projection_interval": (
+        "training_params.popspa_projection_interval",
+        "training.tooltip.popspa_projection_interval",
+        0,
+        1,
+        1,
+        2_147_483_647,
+        True,
+    ),
+    "popspa_seed": (
+        "training_params.popspa_seed",
+        "training.tooltip.popspa_seed",
+        0,
+        1,
+        0,
+        2_147_483_647,
+        True,
+    ),
+    "popspa_rho": (
+        "training_params.popspa_rho",
+        "training.tooltip.popspa_rho",
+        8,
+        5e-05,
+        9.999999960041972e-13,
+        1.0,
+        False,
+    ),
+    "popspa_erank_weight": (
+        "training_params.popspa_erank_weight",
+        "training.tooltip.popspa_erank_weight",
+        8,
         0.001,
         0.0,
-        0.01,
+        100.0,
+        False,
+    ),
+    "popspa_thin_scale_weight": (
+        "training_params.popspa_thin_scale_weight",
+        "training.tooltip.popspa_thin_scale_weight",
+        8,
+        0.1,
+        0.0,
+        100.0,
+        False,
+    ),
+    "popspa_erank_epsilon": (
+        "training_params.popspa_erank_epsilon",
+        "training.tooltip.popspa_erank_epsilon",
+        8,
+        1e-08,
+        9.999999960041972e-13,
+        1.0,
+        False,
+    ),
+    "popspa_means_lr": (
+        "training_params.popspa_means_lr",
+        "training.tooltip.popspa_means_lr",
+        8,
+        1.6e-07,
+        0.0,
+        1.0,
+        False,
+    ),
+    "popspa_scales_lr": (
+        "training_params.popspa_scales_lr",
+        "training.tooltip.popspa_scales_lr",
+        8,
+        0.0005,
+        0.0,
+        1.0,
+        False,
+    ),
+    "popspa_opacities_lr": (
+        "training_params.popspa_opacities_lr",
+        "training.tooltip.popspa_opacities_lr",
+        8,
+        0.005,
+        0.0,
+        1.0,
+        False,
+    ),
+    "popspa_quaternions_lr": (
+        "training_params.popspa_quaternions_lr",
+        "training.tooltip.popspa_quaternions_lr",
+        8,
+        0.0001,
+        0.0,
+        1.0,
+        False,
+    ),
+    "popspa_sh0_lr": (
+        "training_params.popspa_sh0_lr",
+        "training.tooltip.popspa_sh0_lr",
+        8,
+        0.00025,
+        0.0,
+        1.0,
+        False,
+    ),
+    "popspa_shn_lr": (
+        "training_params.popspa_shn_lr",
+        "training.tooltip.popspa_shn_lr",
+        8,
+        1.25e-05,
+        0.0,
+        1.0,
+        False,
+    ),
+    "popspa_ssim_weight": (
+        "training_params.popspa_ssim_weight",
+        "training.tooltip.popspa_ssim_weight",
+        8,
+        0.02,
+        0.0,
+        1.0,
         False,
     ),
     "ppisp_controller_lr": (
@@ -586,13 +721,13 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
     assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
     assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
-    assert len(property_view.MIGRATED_PROP_IDS) == 67
-    assert len(set(property_view.MIGRATED_PROP_IDS)) == 67
+    assert len(property_view.MIGRATED_PROP_IDS) == 82
+    assert len(set(property_view.MIGRATED_PROP_IDS)) == 82
 
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 97
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 112
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 
@@ -613,7 +748,6 @@ def test_auto_advanced_roster_and_exclusions_follow_declaration_order(lf):
         "ppisp_controller_activation_step",
         "bg_modulation",
         "headless",
-        "prune_ratio",
         "steps_scaler",
         "eval_mask",
         "eval_mask_report",

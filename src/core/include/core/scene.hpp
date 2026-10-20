@@ -178,6 +178,7 @@ namespace lfs::core {
         // In-memory payload no longer matches the source file (edited, generated,
         // pasted, ...); drives the embed-vs-reference decision on project save.
         bool payload_diverged = false;
+        bool point_cloud_source = false;
         PayloadHydrationState payload_hydration =
             PayloadHydrationState::NotApplicable;
         std::optional<GeoreferencePose> georef_pose;
@@ -246,6 +247,7 @@ namespace lfs::core {
             bool locked = false;
             bool training_enabled = true;
             bool payload_diverged = false;
+            bool point_cloud_source = false;
             PayloadHydrationState payload_hydration =
                 PayloadHydrationState::NotApplicable;
             std::optional<GeoreferencePose> georef_pose;
@@ -662,6 +664,10 @@ namespace lfs::core {
         [[nodiscard]] bool isPointCloudModified() const { return point_cloud_modified_; }
 
         [[nodiscard]] std::shared_ptr<lfs::core::PointCloud> getInitialPointCloud() const { return initial_point_cloud_; }
+        // Resolve the training seed by its retained identity or DATASET ancestry,
+        // never by the display order of unrelated point-cloud nodes.
+        [[nodiscard]] const SceneNode* getDatasetPointCloudNode() const;
+
         [[nodiscard]] const lfs::core::Tensor& getSceneCenter() const { return scene_center_; }
         [[nodiscard]] bool imagesHaveAlpha() const { return images_have_alpha_; }
 

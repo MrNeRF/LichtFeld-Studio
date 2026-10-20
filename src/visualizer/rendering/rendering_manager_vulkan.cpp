@@ -5,6 +5,7 @@
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#include "core/error.hpp"
 #include "core/image_loader.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
@@ -2253,9 +2254,11 @@ namespace lfs::vis {
         const lfs::core::SplatData* model = nullptr;
         SceneRenderState scene_state;
         size_t comparison_identity = 0;
+        bool has_comparison_point_cloud = false;
         auto sample_model_under_lock = [&]() {
             scene_state = {};
             comparison_identity = 0;
+            has_comparison_point_cloud = false;
             if (!scene_manager) {
                 model = nullptr;
                 return;
@@ -2284,8 +2287,19 @@ namespace lfs::vis {
                         comparison_identity ^=
                             reinterpret_cast<size_t>(right_node->model.get());
                     }
+                    if (left_node && left_node->point_cloud)
+                        comparison_identity ^= reinterpret_cast<size_t>(left_node->point_cloud.get());
+                    if (right_node && right_node->point_cloud)
+                        comparison_identity ^= reinterpret_cast<size_t>(right_node->point_cloud.get());
                 }
-                return;
+                if (pair) {
+                    has_comparison_point_cloud = std::any_of(visible_nodes.begin(), visible_nodes.end(), [](const auto& entry) {
+                        return entry.node->point_cloud && entry.node->point_cloud->size() > 0;
+                    });
+                    return;
+                }
+                // Invalid comparison settings must still yield a normal, populated
+                // scene snapshot for the full-view fallback (including a lone cloud).
             }
             model = scene_manager->getModelForRendering();
             scene_state = scene_manager->buildRenderState();
@@ -2326,7 +2340,7 @@ namespace lfs::vis {
                                      [](const auto& mesh) { return mesh.mesh != nullptr; });
             has_environment = environmentBackgroundEnabled(frame_settings);
             has_render_content =
-                has_visible_gaussian_model || has_point_cloud || has_meshes || has_environment;
+                has_visible_gaussian_model || has_point_cloud || has_comparison_point_cloud || has_meshes || has_environment;
         };
         refresh_content_flags();
         const size_t model_ptr = comparison_identity != 0 ? comparison_identity
@@ -2852,7 +2866,8 @@ namespace lfs::vis {
                 const lfs::core::SplatData* model_override = nullptr,
                 const std::vector<glm::mat4>* model_transforms_override = nullptr,
                 const std::optional<VksplatViewportRenderer::OutputSlot> vksplat_output_slot = std::nullopt,
-                const lfs::rendering::ViewportRenderRequest* request_override = nullptr)
+                const lfs::rendering::ViewportRenderRequest* request_override = nullptr,
+                const bool force_point_cloud = false)
             -> std::expected<RenderedPanel, std::string> {
             const lfs::core::SplatData* const panel_model = model_override ? model_override : model;
             const bool panel_has_visible_gaussian_model =
@@ -2898,7 +2913,7 @@ namespace lfs::vis {
                 return std::unexpected("No renderable model for split-view panel");
             }
 
-            if (frame_settings.point_cloud_mode) {
+            if (frame_settings.point_cloud_mode || force_point_cloud) {
                 auto state = buildSplitViewPointCloudPanelRenderState(frame_ctx, panel_size, &source_viewport);
                 if (frame_settings.split_view_mode == SplitViewMode::PLYComparison && panel_id) {
                     // Clip like the Gaussian panels: the camera spans the whole viewport.
@@ -2927,6 +2942,22 @@ namespace lfs::vis {
                     .filters = state.filters,
                     .overlay = state.overlay,
                     .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(frame_settings)};
+                if (model_override && scene_manager &&
+                    splitViewUsesPLYComparison(frame_settings.split_view_mode)) {
+                    const auto& source_scene = scene_manager->getScene();
+                    for (const auto& slot : source_scene.getVisibleSplatNodeSlots()) {
+                        if (slot.node && slot.node->model.get() == model_override) {
+                            // Each panel draws one owned model. Scope selection,
+                            // brush preview and crop filters to that same node.
+                            auto scoped = buildPointCloudNodeRenderRequest(
+                                frame_ctx, source_scene, *slot.node, panel_size,
+                                *request.scene.model_transforms);
+                            request.filters = std::move(scoped.filters);
+                            request.overlay = std::move(scoped.overlay);
+                            break;
+                        }
+                    }
+                }
                 auto auxiliary_engine = ensure_auxiliary_rendering_engine();
                 if (!auxiliary_engine) {
                     return std::unexpected(auxiliary_engine.error());
@@ -3827,7 +3858,7 @@ namespace lfs::vis {
                 }
             }
         } else if (splitViewUsesPLYComparison(frame_settings.split_view_mode) && scene_manager &&
-                   (has_visible_gaussian_model || has_meshes)) {
+                   (has_visible_gaussian_model || has_point_cloud || has_comparison_point_cloud || has_meshes)) {
             const auto& scene = scene_manager->getScene();
             const auto visible_nodes = plyComparisonNodes(scene);
             const auto pair = plyComparisonPairForOffset(visible_nodes.size(), frame_settings.split_view_offset);
@@ -3896,26 +3927,58 @@ namespace lfs::vis {
 
                     ply_comparison_meshes = {left_node.splat_slot ? nullptr : left_node.node->mesh.get(),
                                              right_node.splat_slot ? nullptr : right_node.node->mesh.get()};
-                    auto left = left_node.splat_slot
-                                    ? render_panel_image(
-                                          context.viewport,
-                                          {std::max(left_layout.panel.width, 1), render_size.y},
-                                          SplitViewPanelId::Left,
-                                          left_visibility,
-                                          left_model,
-                                          left_transform_override,
-                                          VksplatViewportRenderer::OutputSlot::SplitLeft)
-                                    : mesh_background_panel();
-                    auto right = right_node.splat_slot
-                                     ? render_panel_image(
-                                           context.viewport,
-                                           {std::max(right_layout.panel.width, 1), render_size.y},
-                                           SplitViewPanelId::Right,
-                                           right_visibility,
-                                           right_model,
-                                           right_transform_override,
-                                           VksplatViewportRenderer::OutputSlot::SplitRight)
-                                     : mesh_background_panel();
+                    const auto render_comparison_node = [&](const PlyComparisonNode& entry,
+                                                            const auto& layout,
+                                                            const SplitViewPanelId panel,
+                                                            const auto& visibility,
+                                                            const core::SplatData* node_model,
+                                                            const std::vector<glm::mat4>* transforms,
+                                                            const auto output_slot)
+                        -> lfs::Result<RenderedPanel> {
+                        const lfs::LegacyErrorContext error_context{
+                            .code = lfs::ErrorCode::Internal,
+                            .domain = lfs::ErrorDomain::Rendering,
+                            .operation = "render comparison panel",
+                            .source = LFS_SOURCE_SITE_CURRENT()};
+                        const glm::ivec2 size{std::max(layout.panel.width, 1), render_size.y};
+                        if (entry.node->point_cloud || (entry.node->point_cloud_source && entry.node->model)) {
+                            const std::vector<glm::mat4> cloud_transforms{
+                                scene_coords::nodeVisualizerWorldTransform(scene, entry.node->id)};
+                            auto request = buildPointCloudNodeRenderRequest(
+                                frame_ctx, scene, *entry.node, size, cloud_transforms);
+                            request.frame_view.subregion_origin = {layout.panel.x, 0};
+                            request.frame_view.subregion_full_size = render_size;
+                            auto engine = ensure_auxiliary_rendering_engine();
+                            if (!engine)
+                                return lfs::make_error({.code = lfs::ErrorCode::Unavailable,
+                                                        .domain = lfs::ErrorDomain::Rendering,
+                                                        .user_message = engine.error(),
+                                                        .detection = LFS_SOURCE_SITE_CURRENT()});
+                            auto result = entry.node->point_cloud
+                                              ? (*engine)->renderPointCloudImage(*entry.node->point_cloud, request)
+                                              : (*engine)->renderPointCloudImage(*entry.node->model, request);
+                            if (!result || !result->image)
+                                return lfs::make_error({.code = lfs::ErrorCode::Internal,
+                                                        .domain = lfs::ErrorDomain::Rendering,
+                                                        .user_message = result ? "Point-cloud comparison returned no image" : result.error(),
+                                                        .detection = LFS_SOURCE_SITE_CURRENT()});
+                            return RenderedPanel{.image = std::move(result->image),
+                                                 .metadata = std::move(result->metadata),
+                                                 .flip_y = result->metadata.flip_y};
+                        }
+                        if (entry.splat_slot)
+                            return lfs::from_legacy_expected(render_panel_image(
+                                                                 context.viewport, size, panel, visibility, node_model, transforms,
+                                                                 output_slot, nullptr, entry.node->point_cloud_source),
+                                                             error_context);
+                        return mesh_background_panel();
+                    };
+                    auto left = render_comparison_node(left_node, left_layout, SplitViewPanelId::Left,
+                                                       left_visibility, left_model, left_transform_override,
+                                                       VksplatViewportRenderer::OutputSlot::SplitLeft);
+                    auto right = render_comparison_node(right_node, right_layout, SplitViewPanelId::Right,
+                                                        right_visibility, right_model, right_transform_override,
+                                                        VksplatViewportRenderer::OutputSlot::SplitRight);
                     if (left && right) {
                         pending_split_view.enabled = true;
                         pending_split_view.split_position = frame_settings.split_position;
@@ -3941,12 +4004,10 @@ namespace lfs::vis {
                     } else {
                         render_error = std::format(
                             "PLY comparison panel rendering failed (left: {}; right: {})",
-                            left ? "ok" : left.error(),
-                            right ? "ok" : right.error());
+                            left ? "ok" : lfs::format_for_developer(left.error()),
+                            right ? "ok" : lfs::format_for_developer(right.error()));
                     }
                 }
-            } else {
-                render_error = "PLY comparison requires at least two visible models";
             }
         }
 

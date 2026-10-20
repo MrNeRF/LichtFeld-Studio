@@ -401,11 +401,25 @@ namespace lfs::core {
             // Mesh2Splat raster resolution when the init file is a mesh
             int init_mesh_resolution = Mesh2SplatOptions{}.resolution_target;
 
-            // Sparsity optimization parameters
+            // POPSpa post-training sparsification
             bool enable_sparsity = false;
-            int sparsify_steps = 15000;
-            float init_rho = 0.0005f;
-            float prune_ratio = 0.6f;
+            int popspa_target_count = 256000;
+            int popspa_first_prune_count = 0;
+            int popspa_sparsify_steps = 5000;
+            int popspa_refine_steps = 5000;
+            int popspa_projection_interval = 50;
+            int popspa_seed = 42;
+            float popspa_rho = 0.0005f;
+            float popspa_erank_weight = 0.01f;
+            float popspa_thin_scale_weight = 1.0f;
+            float popspa_erank_epsilon = 1e-7f;
+            float popspa_means_lr = 1.6e-6f;
+            float popspa_scales_lr = 0.005f;
+            float popspa_opacities_lr = 0.05f;
+            float popspa_quaternions_lr = 0.001f;
+            float popspa_sh0_lr = 0.0025f;
+            float popspa_shn_lr = 0.000125f;
+            float popspa_ssim_weight = 0.2f;
 
             // Perf / profiling instruments (CLI-only; no env toggles)
             bool perf_bench = false;     // --perf-bench → write perf_bench.json

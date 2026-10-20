@@ -7,6 +7,7 @@
 #include "core/events.hpp"
 #include "core/export.hpp"
 #include "core/services.hpp"
+#include "input/camera_browse_repeat.hpp"
 #include "input/input_bindings.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/rendering_types.hpp"
@@ -164,7 +165,7 @@ namespace lfs::vis {
             const bool drone_settling =
                 (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasDroneMotion()) ||
                 keyboard_camera.hasDroneMotion();
-            return movement_active || orbit_coasting || pan_coasting ||
+            return camera_browse_repeat_.active() || movement_active || orbit_coasting || pan_coasting ||
                    keyboard_camera.isGliding() || wasd_coasting || drone_settling;
         }
         [[nodiscard]] bool isCameraNavigating() const {
@@ -354,6 +355,11 @@ namespace lfs::vis {
         } pending_camera_context_menu_;
 
         // Key states
+        input::CameraBrowseRepeat camera_browse_repeat_;
+        int camera_browse_repeat_modifiers_ = 0;
+        bool advanceCameraView(int delta);
+        void updateCameraBrowseRepeat();
+
         bool key_ctrl_pressed_ = false;
         bool key_alt_pressed_ = false;
         // Non-modifier keys currently held in press order (logical keycodes).

@@ -576,11 +576,14 @@ add_subdirectory(external EXCLUDE_FROM_ALL)
 # preprocessor and report the selected C++ language version accurately.
 # This is intentionally added after external/ so vendored targets keep their
 # upstream compiler settings.
+# Template-heavy C++ units can exceed the COFF section limit, especially in
+# Debug. Enable large objects consistently instead of maintaining a file allowlist.
 if(MSVC)
     add_compile_options(
         $<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>
         $<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>
         $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
+        $<$<COMPILE_LANGUAGE:CXX>:/bigobj>
         $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>
     )
 endif()
@@ -1207,9 +1210,6 @@ elseif(WIN32)
         set_target_properties(${PROJECT_NAME} PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY              "${CMAKE_BINARY_DIR}/$<CONFIG>"
         )
-    endif()
-    if(MSVC)
-        target_compile_options(${PROJECT_NAME} PRIVATE /bigobj)
     endif()
 endif()
 

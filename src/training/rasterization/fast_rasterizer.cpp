@@ -9,11 +9,13 @@
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_exportable_storage.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include "training/rasterization/fastgs/rasterization/include/forward.h"
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <ctime>
@@ -74,12 +76,6 @@ namespace lfs::training {
         fused_adam.erank_reg_loss_out = fused_extra_gradients.erank_reg_loss_out;
         fused_adam.sh_rest_reg_loss_out = fused_extra_gradients.sh_rest_reg_loss_out;
         fused_adam.dc_reg_loss_out = fused_extra_gradients.dc_reg_loss_out;
-        fused_adam.sparsity_opa_sigmoid = fused_extra_gradients.sparsity_opa_sigmoid;
-        fused_adam.sparsity_z = fused_extra_gradients.sparsity_z;
-        fused_adam.sparsity_u = fused_extra_gradients.sparsity_u;
-        fused_adam.sparsity_n = fused_extra_gradients.sparsity_n;
-        fused_adam.sparsity_rho = fused_extra_gradients.sparsity_rho;
-        fused_adam.sparsity_grad_loss = fused_extra_gradients.sparsity_grad_loss;
         fused_adam.means = convert_param(optimizer_fused.means);
         fused_adam.scaling = convert_param(optimizer_fused.scaling);
         fused_adam.rotation = convert_param(optimizer_fused.rotation);
@@ -681,7 +677,8 @@ namespace lfs::training {
         int iteration,
         const FastGSFusedExtraGradients& fused_extra_gradients,
         const core::Tensor& grad_depth,
-        const core::Tensor& grad_normal) {
+        const core::Tensor& grad_normal,
+        const bool defer_optimizer_step) {
 
         if (grad_image.ndim() != 3 || grad_image.shape()[0] != 3) {
             throw std::runtime_error("FastGS backward expects a [3, H, W] image gradient");
@@ -787,8 +784,37 @@ namespace lfs::training {
         // loss path); do not allocate a separate pre-blend cache.
         auto raw_image = ctx.image;
 
-        const auto fused_adam = make_fastgs_fused_adam_settings(
-            optimizer.prepare_fastgs_fused_adam(iteration, stream), fused_extra_gradients);
+        std::array<core::Tensor*, 6> captured_gradients{};
+        size_t captured_count = 0;
+        const cudaStream_t backward_stream = ctx.forward_ctx.stream;
+        const auto optimizer_fused = defer_optimizer_step ? FastGSFusedAdamState{} : optimizer.prepare_fastgs_fused_adam(iteration, stream);
+        auto fused_adam = make_fastgs_fused_adam_settings(optimizer_fused, fused_extra_gradients);
+        if (defer_optimizer_step) {
+            auto capture = [&](auto& param, ParamType type, const core::Tensor& value, int attributes) {
+                auto& grad = optimizer.get_grad(type);
+                captured_gradients[captured_count++] = &grad;
+                param.gradient_out = grad.ptr<float>();
+                param.param = const_cast<float*>(value.ptr<float>());
+                param.n_primitives = n_primitives;
+                param.n_elements = static_cast<int>(grad.numel());
+                param.n_attributes = attributes;
+            };
+            capture(fused_adam.means, ParamType::Means, ctx.means, 3);
+            capture(fused_adam.scaling, ParamType::Scaling, ctx.raw_scales, 3);
+            capture(fused_adam.rotation, ParamType::Rotation, ctx.raw_rotations, 4);
+            capture(fused_adam.opacity, ParamType::Opacity, ctx.raw_opacities, 1);
+            capture(fused_adam.sh0, ParamType::Sh0, gaussian_model.sh0(), 3);
+            if (ctx.active_sh_bases > 1) {
+                // SH values may be packed; capture uses only the swizzled Float32 gradient.
+                auto& grad = optimizer.get_grad(ParamType::ShN);
+                captured_gradients[captured_count++] = &grad;
+                fused_adam.shN.gradient_out = grad.ptr<float>();
+                fused_adam.shN.n_primitives = n_primitives;
+            }
+            fused_adam.enabled = true;
+            for (size_t i = 0; i < captured_count; ++i)
+                captured_gradients[i]->sync_to_stream(backward_stream);
+        }
         if (!fused_adam.enabled) {
             throw std::runtime_error("FastGS fused Adam state is not available");
         }
@@ -859,11 +885,13 @@ namespace lfs::training {
             fused_extra_gradients.impact_peak_out);
 
         ctx.mark_forward_context_released();
+        for (size_t i = 0; i < captured_count; ++i)
+            captured_gradients[i]->set_stream(backward_stream);
 
         if (!backward_result.success) {
             throw std::runtime_error(std::string("Backward failed: ") + backward_result.error_message);
         }
-        if (fused_adam.enabled) {
+        if (fused_adam.enabled && !defer_optimizer_step) {
             optimizer.commit_fastgs_fused_adam(iteration);
         }
     }

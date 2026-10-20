@@ -160,12 +160,11 @@ def _display_ppisp_activation_step(params):
     return step if step >= 0 else _resolved_ppisp_activation_step(params)
 
 
-SLIDER_PROPS = ["lambda_dssim", "init_opacity", "prune_ratio"]
+SLIDER_PROPS = ["lambda_dssim", "init_opacity"]
 
 SCRUB_FIELD_DEFS = {
     "lambda_dssim": ScrubFieldSpec(0.0, 1.0, 0.01, "%.3f"),
     "init_opacity": ScrubFieldSpec(0.01, 1.0, 0.01, "%.3f"),
-    "prune_ratio": ScrubFieldSpec(0.0, 1.0, 0.01, "%.3f"),
 }
 
 RENDER_SYNC = {
@@ -471,9 +470,6 @@ class TrainingPanel(Panel):
         )
         model.bind_func(
             "label_init_opacity", lambda: tr("training.init.init_opacity")
-        )
-        model.bind_func(
-            "label_prune_ratio", lambda: tr("training_params.prune_ratio")
         )
         model.bind_func(
             "label_no_save_steps", lambda: tr("training_panel.no_save_steps")

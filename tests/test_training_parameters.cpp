@@ -918,4 +918,90 @@ namespace {
         }
     }
 
+    TEST_F(TrainingParametersTest, POPSpaRoundTripsAndLegacyAdmmKeysAreIgnored) {
+        OptimizationParameters params;
+        EXPECT_FALSE(params.enable_sparsity);
+        params.enable_sparsity = true;
+        params.popspa_target_count = 12345;
+        const auto json = params.to_json();
+        for (const auto* key : {"sparsity_method", "sparsify_steps", "init_rho", "prune_ratio"})
+            EXPECT_FALSE(json.contains(key)) << key;
+        const auto restored = OptimizationParameters::from_json(json);
+        EXPECT_TRUE(restored.enable_sparsity);
+        EXPECT_EQ(restored.popspa_target_count, 12345);
+        EXPECT_EQ(restored.resolved_total_iterations(), static_cast<int>(params.iterations) + 10000);
+        EXPECT_TRUE(restored.validate().empty()) << restored.validate();
+
+        // Files written while opacity ADMM existed still load: the ADMM keys are
+        // ignored and their sparsity flag now runs POPSpa.
+        auto legacy = json;
+        legacy["sparsity_method"] = "opacity_admm";
+        legacy["sparsify_steps"] = 15000;
+        legacy["init_rho"] = 0.0005f;
+        legacy["prune_ratio"] = 0.6f;
+        const auto from_legacy = OptimizationParameters::from_json(legacy);
+        EXPECT_TRUE(from_legacy.enable_sparsity);
+        EXPECT_EQ(from_legacy.popspa_target_count, 12345);
+        EXPECT_EQ(from_legacy.resolved_total_iterations(), restored.resolved_total_iterations());
+        EXPECT_TRUE(from_legacy.validate().empty()) << from_legacy.validate();
+    }
+
+    TEST_F(TrainingParametersTest, POPSpaSnapshotMayTargetPostprocessingIterations) {
+        lfs::core::param::TrainingParameters params;
+        params.optimization.enable_sparsity = true;
+        params.save_project_at_iteration = params.optimization.iterations + 1;
+        EXPECT_TRUE(params.validate().empty()) << params.validate();
+        params.save_project_at_iteration = params.optimization.resolved_total_iterations();
+        EXPECT_TRUE(params.validate().empty()) << params.validate();
+        params.save_project_at_iteration = params.optimization.resolved_total_iterations() + 1;
+        EXPECT_FALSE(params.validate().empty());
+        params.optimization.enable_sparsity = false;
+        params.save_project_at_iteration = params.optimization.iterations + 1;
+        EXPECT_FALSE(params.validate().empty());
+        params.save_project_at_iteration = params.optimization.iterations;
+        EXPECT_TRUE(params.validate().empty()) << params.validate();
+    }
+
+    TEST_F(TrainingParametersTest, POPSpaRejectsInvalidConfigurationAndOverflow) {
+        OptimizationParameters baseline;
+        baseline.enable_sparsity = true;
+        auto params = baseline;
+        for (const auto member : {&OptimizationParameters::popspa_target_count,
+                                  &OptimizationParameters::popspa_projection_interval}) {
+            params = baseline;
+            params.*member = 0;
+            EXPECT_FALSE(params.validate().empty());
+        }
+        params = baseline;
+        params.popspa_first_prune_count = params.popspa_target_count - 1;
+        EXPECT_FALSE(params.validate().empty());
+        params = baseline;
+        params.popspa_sparsify_steps = std::numeric_limits<int>::max();
+        EXPECT_FALSE(params.validate().empty());
+        EXPECT_EQ(params.resolved_total_iterations(), std::numeric_limits<int>::max());
+        for (const auto member : {
+                 &OptimizationParameters::popspa_rho,
+                 &OptimizationParameters::popspa_erank_weight,
+                 &OptimizationParameters::popspa_thin_scale_weight,
+                 &OptimizationParameters::popspa_erank_epsilon,
+                 &OptimizationParameters::popspa_means_lr,
+                 &OptimizationParameters::popspa_scales_lr,
+                 &OptimizationParameters::popspa_opacities_lr,
+                 &OptimizationParameters::popspa_quaternions_lr,
+                 &OptimizationParameters::popspa_sh0_lr,
+                 &OptimizationParameters::popspa_shn_lr,
+                 &OptimizationParameters::popspa_ssim_weight,
+             }) {
+            for (const float value : {-1.0f, std::numeric_limits<float>::infinity(),
+                                      std::numeric_limits<float>::quiet_NaN()}) {
+                params = baseline;
+                params.*member = value;
+                EXPECT_FALSE(params.validate().empty());
+            }
+        }
+        params = baseline;
+        params.popspa_ssim_weight = 1.1f;
+        EXPECT_FALSE(params.validate().empty());
+    }
+
 } // namespace

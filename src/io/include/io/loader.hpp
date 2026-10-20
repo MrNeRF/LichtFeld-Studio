@@ -141,6 +141,8 @@ namespace lfs::io {
         std::vector<std::string> warnings;
         std::optional<ImportGeoreference> georeference;
         std::optional<std::vector<std::uint8_t>> license_bytes;
+        // Keep legacy editable SplatData storage; comparisons draw these as points.
+        bool point_cloud_source = false;
     };
 
     /**
