@@ -158,7 +158,7 @@
         <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
       </div>
       <div class="setting-row" data-tooltip="training.tooltip.sh_degree" data-if="!pv_search_active">
-        <span class="prop-label">{{label_sh_degree}}</span>
+        <span class="prop-label" data-reset-prop="sh_degree">{{label_sh_degree}}</span>
         <select data-value="sh_degree_str">
           <option value="0" data-tooltip="training.tooltip.opt.sh_degree.0">0</option>
           <option value="1" data-tooltip="training.tooltip.opt.sh_degree.1">1</option>
@@ -172,21 +172,21 @@
     <div data-class-disabled-overlay="live_disabled">
       <div class="setting-row" data-for="row : pv_basic_exposure_correction_rows"
            data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
+        <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
       <div data-if="dep_ppisp_params">
         <div class="setting-row" data-for="row : pv_ppisp_exif_rows"
              data-attr-data-tooltip="row.tooltip_key">
-          <span class="prop-label">{{row.label}}</span>
+          <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
           <input type="checkbox" data-checked="row.checked"
                  data-event-click="pv_value_change(row.id, !row.checked)" />
         </div>
       </div>
       <div class="setting-row" data-for="row : pv_basic_mask_mode_rows"
            data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
+        <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
         <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
         <select data-if="row.kind == 'select'" data-value="row.value"
@@ -198,13 +198,13 @@
       <div class="mask-settings-group" data-if="dep_mask_mode">
         <div class="setting-row" data-for="row : pv_mask_invert_rows"
              data-attr-data-tooltip="row.tooltip_key">
-          <span class="prop-label">{{row.label}}</span>
+          <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
           <input type="checkbox" data-checked="row.checked"
                  data-event-click="pv_value_change(row.id, !row.checked)" />
         </div>
         <div class="setting-row" data-for="row : pv_mask_threshold_rows" data-if="dep_mask_threshold"
              data-attr-data-tooltip="row.tooltip_key">
-          <span class="prop-label">{{row.label}}</span>
+          <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
           <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
                  data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
                  data-event-change="pv_change(row.id, ev.value)"
@@ -215,7 +215,7 @@
         </div>
         <div class="setting-row" data-for="row : pv_mask_alpha_rows"
              data-attr-data-tooltip="row.tooltip_key">
-          <span class="prop-label">{{row.label}}</span>
+          <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
           <input type="checkbox" data-checked="row.checked"
                  data-event-click="pv_value_change(row.id, !row.checked)" />
         </div>
@@ -223,7 +223,7 @@
         <div data-if="dep_mask_segment">
           <div class="setting-row" data-for="row : pv_mask_penalties_rows"
                data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
                    data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
                    data-event-change="pv_change(row.id, ev.value)"
@@ -236,7 +236,7 @@
       </div>
       <div class="setting-row" data-for="row : pv_basic_depth_toggle_rows"
            data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
+        <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
         <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
         <select data-if="row.kind == 'select'" data-value="row.value"
@@ -255,13 +255,13 @@
       </div>
       <div class="setting-row" data-for="row : pv_basic_depth_weight_rows" data-if="dep_depth_loss &amp;&amp; row.kind == 'checkbox'"
            data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
+        <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
       <div class="setting-row" data-for="row : pv_basic_depth_weight_rows" data-if="dep_depth_loss &amp;&amp; row.kind == 'number'"
            data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
+        <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
         <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
                data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
                data-event-change="pv_change(row.id, ev.value)"
@@ -272,19 +272,19 @@
       </div>
       <div class="setting-row" data-for="row : pv_basic_normal_toggle_rows"
            data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
+        <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
       <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'checkbox'"
            data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
+        <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
       <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'number'"
            data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
+        <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
         <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
                data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
                data-event-change="pv_change(row.id, ev.value)"
@@ -295,7 +295,7 @@
       </div>
       <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'select'"
            data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
+        <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
         <select data-value="row.value" data-event-change="pv_value_change(row.id, ev.value)">
           <option data-for="item : pv_basic_normal_weights_options" data-if="item.prop_id == row.id"
                   data-attr-value="item.value" data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
@@ -303,20 +303,20 @@
       </div>
       <div class="setting-row" data-for="row : pv_basic_undistort_rows"
            data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
+        <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
       <div class="setting-row" data-for="row : pv_basic_sparsity_toggle_rows"
            data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
+        <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
       <div data-if="dep_sparsity" data-class-disabled-overlay="adv_disabled">
         <div class="setting-row" data-for="row : pv_sparsity_rows"
              data-attr-data-tooltip="row.tooltip_key">
-          <span class="prop-label">{{row.label}}</span>
+          <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
           <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
                  data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
                  data-event-change="pv_change(row.id, ev.value)"
@@ -328,26 +328,26 @@
       </div>
       <div class="setting-row" data-for="row : pv_basic_gut_rows"
            data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="gut_disabled">
-        <span class="prop-label">{{row.label}}</span>
+        <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
       <div class="setting-row" data-for="row : pv_basic_mip_filter_rows"
            data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
+        <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
       <div class="setting-row" data-for="row : pv_bg_mode_rows"
            data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
+        <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
         <select data-value="row.value" data-event-change="pv_value_change(row.id, ev.value)">
           <option data-for="item : pv_bg_mode_options" data-if="item.prop_id == row.id" data-attr-value="item.value"
                   data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
         </select>
       </div>
       <div class="setting-row" data-tooltip="training.tooltip.bg_color" data-if="dep_bg_color &amp;&amp; !pv_search_active">
-        <span class="prop-label">{{label_bg_color}}</span>
+        <span class="prop-label" data-reset-prop="bg_color">{{label_bg_color}}</span>
         <div class="setting-row__control-col setting-row__control-col--color color-compact-control">
           <div class="color-swatch" id="swatch-bg_color" data-event-click="color_click('bg_color')"></div>
           <input type="text" class="color-hex visible" data-value="bg_color_hex" />
@@ -433,7 +433,7 @@
         <div data-class-disabled-overlay="live_disabled">
           <div class="setting-row" data-for="row : pv_bilateral_toggle_rows"
                data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="checkbox" data-checked="row.checked"
                    data-event-click="pv_value_change(row.id, !row.checked)" />
           </div>
@@ -441,7 +441,7 @@
             <span class="status-text status-muted" data-if="pv_bilateral_rows.size > 0 || pv_exposure_grid_start_rows.size > 0">{{pv_header_bilateral_grid}}</span>
             <div class="setting-row" data-for="row : pv_bilateral_rows"
                  data-attr-data-tooltip="row.tooltip_key">
-              <span class="prop-label">{{row.label}}</span>
+              <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
               <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
                      data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
                      data-event-change="pv_change(row.id, ev.value)"
@@ -453,7 +453,7 @@
             <div class="setting-row" data-for="row : pv_exposure_grid_start_rows"
                  data-if="dep_exposure_correction"
                  data-attr-data-tooltip="row.tooltip_key">
-              <span class="prop-label">{{row.label}}</span>
+              <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
               <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
                      data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
                      data-event-change="pv_change(row.id, ev.value)"
@@ -465,14 +465,14 @@
           </div>
           <div class="setting-row" data-for="row : pv_ppisp_toggle_rows"
                data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="checkbox" data-checked="row.checked"
                    data-event-click="pv_value_change(row.id, !row.checked)" />
           </div>
           <div data-if="dep_ppisp">
             <div class="setting-row" data-for="row : pv_ppisp_freeze_rows"
                  data-attr-data-tooltip="row.tooltip_key">
-              <span class="prop-label">{{row.label}}</span>
+              <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
               <input type="checkbox" data-checked="row.checked"
                      data-event-click="pv_value_change(row.id, !row.checked)" />
             </div>
@@ -489,7 +489,7 @@
             </div>
             <div class="setting-row" data-for="row : pv_ppisp_controller_rows"
                  data-attr-data-tooltip="row.tooltip_key">
-              <span class="prop-label">{{row.label}}</span>
+              <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
               <input type="checkbox" data-checked="row.checked"
                      data-event-click="pv_value_change(row.id, !row.checked)" />
             </div>
@@ -502,7 +502,7 @@
               </div>
               <div class="setting-row" data-for="row : pv_ppisp_controller_tail_rows"
                    data-attr-data-tooltip="row.tooltip_key">
-                <span class="prop-label">{{row.label}}</span>
+                <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
                 <input type="text" class="number-input" data-if="row.kind == 'number'"
                        data-pv-input="1" data-value="row.text" data-attr-data-pv-id="row.id"
                        data-event-focus="pv_focus(row.id)"
@@ -521,7 +521,7 @@
           <span class="status-text status-muted" data-if="pv_ppisp_registry_rows.size > 0">{{pv_header_ppisp_correction}}</span>
           <div class="setting-row" data-for="row : pv_ppisp_registry_rows"
                data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="text" class="number-input" data-if="row.kind == 'number'"
                    data-pv-input="1" data-value="row.text" data-attr-data-pv-id="row.id"
                    data-event-focus="pv_focus(row.id)"
@@ -556,7 +556,7 @@
           </div>
           <div class="setting-row" data-for="row : pv_refinement_locked_rows"
                data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="step_scaling_params_locked">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
                    data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
                    data-event-change="pv_change(row.id, ev.value)"
@@ -567,7 +567,7 @@
           </div>
           <div class="setting-row" data-for="row : pv_refinement_grow_rows" data-if="dep_mrnf"
                data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="step_scaling_params_locked">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
                    data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
                    data-event-change="pv_change(row.id, ev.value)"
@@ -578,7 +578,7 @@
           </div>
           <div class="setting-row" data-for="row : pv_refinement_locked_tail_rows"
                data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="step_scaling_params_locked">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
                    data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
                    data-event-change="pv_change(row.id, ev.value)"
@@ -589,7 +589,7 @@
           </div>
           <div class="setting-row" data-for="row : pv_refinement_igs_rows" data-if="dep_igs"
                data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="text" class="number-input" data-if="row.kind == 'number'"
                    data-pv-input="1" data-value="row.text" data-attr-data-pv-id="row.id"
                    data-event-focus="pv_focus(row.id)"
@@ -603,7 +603,7 @@
           </div>
           <div class="setting-row" data-for="row : pv_refinement_registry_rows"
                data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="text" class="number-input" data-if="row.kind == 'number'"
                    data-pv-input="1" data-value="row.text" data-attr-data-pv-id="row.id"
                    data-event-focus="pv_focus(row.id)"
@@ -634,7 +634,7 @@
         <div data-class-disabled-overlay="adv_disabled">
           <div class="setting-row" data-for="row : pv_learning_rates_rows"
                data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
                    data-attr-data-pv-id="row.id"
                    data-event-focus="pv_focus(row.id)"
@@ -646,7 +646,7 @@
           </div>
           <div class="setting-row" data-for="row : pv_learning_rates_registry_rows"
                data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="text" class="number-input" data-if="row.kind == 'number'"
                    data-pv-input="1" data-value="row.text" data-attr-data-pv-id="row.id"
                    data-event-focus="pv_focus(row.id)"
@@ -682,7 +682,7 @@
           </div>
           <div class="setting-row" data-for="row : pv_loss_numbers_rows"
                data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
                    data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
                    data-event-change="pv_change(row.id, ev.value)"
@@ -693,7 +693,7 @@
           </div>
           <div class="setting-row" data-for="row : pv_losses_registry_rows"
                data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="text" class="number-input" data-if="row.kind == 'number'"
                    data-pv-input="1" data-value="row.text" data-attr-data-pv-id="row.id"
                    data-event-focus="pv_focus(row.id)"
@@ -729,7 +729,7 @@
           </div>
           <div class="setting-row" data-for="row : pv_init_main_rows"
                data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="text" class="number-input" data-if="row.kind == 'number'"
                    data-pv-input="1" data-value="row.text" data-attr-data-pv-id="row.id"
                    data-event-focus="pv_focus(row.id)"
@@ -744,7 +744,7 @@
           <div data-if="dep_random">
             <div class="setting-row" data-for="row : pv_init_random_rows"
                  data-attr-data-tooltip="row.tooltip_key">
-              <span class="prop-label">{{row.label}}</span>
+              <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
               <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
                      data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
                      data-event-change="pv_change(row.id, ev.value)"
@@ -757,7 +757,7 @@
           <div data-if="dep_init_mesh">
             <div class="setting-row" data-for="row : pv_init_mesh_rows"
                  data-attr-data-tooltip="row.tooltip_key">
-              <span class="prop-label">{{row.label}}</span>
+              <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
               <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
                      data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
                      data-event-change="pv_change(row.id, ev.value)"
@@ -781,25 +781,25 @@
         <div data-if="has_dataset" data-class-disabled-overlay="dataset_disabled">
           <div class="setting-row" data-for="row : pv_dataset_eval_rows"
                data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="checkbox" data-checked="row.checked"
                    data-event-click="pv_value_change(row.id, !row.checked)" />
           </div>
           <div class="setting-row" data-for="row : pv_dataset_eval_train_rows" data-if="dep_eval"
                data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="checkbox" data-checked="row.checked"
                    data-event-click="pv_value_change(row.id, !row.checked)" />
           </div>
           <div class="setting-row" data-for="row : pv_dataset_eval_flip_rows" data-if="dep_eval"
                data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="checkbox" data-checked="row.checked"
                    data-event-click="pv_value_change(row.id, !row.checked)" />
           </div>
           <div class="setting-row" data-for="row : pv_dataset_eval_space_rows" data-if="dep_undistort"
                data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <select data-value="row.value" data-event-change="pv_value_change(row.id, ev.value)">
               <option data-for="item : pv_dataset_eval_space_options" data-if="item.prop_id == row.id"
                       data-attr-value="item.value" data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
@@ -807,7 +807,7 @@
           </div>
           <div class="setting-row" data-for="row : pv_dataset_eval_bit_depth_rows" data-if="dep_eval"
                data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <select data-value="row.value" data-event-change="pv_value_change(row.id, ev.value)">
               <option data-for="item : pv_dataset_eval_bit_depth_options" data-if="item.prop_id == row.id"
                       data-attr-value="item.value" data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
@@ -855,7 +855,7 @@
           </div>
           <div class="setting-row" data-for="row : pv_dataset_eval_mask_opacity_rows" data-if="dep_eval_mask_splat"
                data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
                    data-attr-data-pv-id="row.id"
                    data-event-focus="pv_focus(row.id)"
@@ -915,7 +915,7 @@
         <div data-class-disabled-overlay="adv_disabled">
           <div class="setting-row" data-for="row : pv_advanced_registry_rows"
                data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="text" class="number-input" data-if="row.kind == 'number'"
                    data-pv-input="1" data-value="row.text" data-attr-data-pv-id="row.id"
                    data-event-focus="pv_focus(row.id)"

@@ -1,4 +1,5 @@
 {
+  "common.reset_default_hint": "Doble clic para restaurar el valor predeterminado: {value}",
   "preferences.drag_sh_hint": "Limita el detalle del color dependiente de la vista. Se exporta el menor valor entre este límite y el grado SH disponible.",
   "preferences.drag_format_hint": "Formato de los archivos al arrastrar splats fuera de LichtFeld.",
   "preferences.drag_sh_limit": "Grado SH máximo",

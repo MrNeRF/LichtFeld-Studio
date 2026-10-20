@@ -1,4 +1,5 @@
 {
+  "common.reset_default_hint": "Double-cliquez pour rétablir la valeur par défaut : {value}",
   "preferences.drag_sh_hint": "Limite les détails de couleur dépendant du point de vue. Le degré exporté est le plus petit entre cette limite et le degré SH disponible.",
   "preferences.drag_format_hint": "Format des fichiers créés en faisant glisser des splats hors de LichtFeld.",
   "preferences.drag_sh_limit": "Degré SH maximal",

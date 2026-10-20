@@ -2471,3 +2471,46 @@ def test_external_change_refreshes_derived_activation_step(ready_panel_settings,
     change("optimization", prop, value)
     panel.on_update(None)
     assert panel._text_bufs["ppisp_activation_step_str"] == expected
+
+
+@pytest.mark.parametrize("locked", [False, True])
+def test_label_reset_respects_coupled_step_lock(training_panel_module, monkeypatch, locked):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    panel._auto_scale_steps_locked = locked
+    monkeypatch.setattr(panel, "_can_edit_configuration", lambda: True)
+    params = SimpleNamespace(has_params=lambda: True, strategy="mrnf",
+        prop_info=lambda prop: {"readonly": False}, builtin_default=lambda prop: 100)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    prop = next(run.prop_ids[0] for run in module.property_view.RUNS
+                if run.disabled_condition_id == "step_scaling_params_locked")
+    assert panel._reset_default(prop) == (None if locked else 100)
+
+
+def test_label_reset_rejects_training_runtime_and_forced_method_fields(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    params = SimpleNamespace(has_params=lambda: True, strategy="igs+",
+        prop_info=lambda prop: {"readonly": False}, builtin_default=lambda prop: False)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(panel, "_can_edit_configuration", lambda: False)
+    monkeypatch.setattr(module, "_trainer_run_is_finished", lambda: False)
+    assert panel._reset_default("iterations") is None
+    monkeypatch.setattr(panel, "_can_edit_configuration", lambda: True)
+    assert panel._reset_default("gut") is None
+    assert panel._reset_default("strategy") is None
+
+
+def test_label_reset_uses_iterations_scaling_path(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    panel._auto_scale_steps_locked = True
+    calls = []
+    params = SimpleNamespace(has_params=lambda: True, strategy="mrnf", iterations=60000, steps_scaler=2.,
+        apply_step_scaling=lambda value: calls.append(value))
+    params.get = lambda prop: getattr(params, prop)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(panel, "_reset_default", lambda prop: 30000)
+    monkeypatch.setattr(panel, "_sync_text_bufs", lambda: None)
+    assert panel._apply_reset("iterations", 30000)
+    assert calls == [1.0] and params.iterations == 30000

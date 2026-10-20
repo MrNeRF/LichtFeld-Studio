@@ -931,6 +931,9 @@ def test_title_bar_close_listener_discards_unconfirmed_mcp_port(
             close_button if element_id == "close-btn" else None
         ),
         query_selector_all=lambda _selector: [],
+        add_event_listener=lambda *_: None,
+        set_attribute=lambda *_: None,
+        has_attribute=lambda *_: False,
     )
     monkeypatch.setattr(panel, "_dirty_expanded_sections", lambda: None)
     monkeypatch.setattr(panel, "_rebuild_records", lambda: None)
@@ -1208,6 +1211,15 @@ def test_preferences_close_retains_the_mounted_document(preferences_panel_module
     panel = module.PreferencesPanel()
 
     class Document:
+        def has_attribute(self, _name):
+            return False
+
+        def set_attribute(self, _name, _value):
+            pass
+
+        def add_event_listener(self, _name, _callback):
+            pass
+
         def get_element_by_id(self, _element_id):
             return None
 

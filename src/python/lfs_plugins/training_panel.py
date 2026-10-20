@@ -9,6 +9,7 @@ import time
 import lichtfeld as lf
 
 from . import rml_widgets as w
+from .default_reset import LabelDefaultReset, values_match
 from . import property_view
 from .property_view import parse_number as _parse_num
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
@@ -277,6 +278,7 @@ class TrainingPanel(Panel):
         self._deferred_update_deadline = None
         self._deferred_update_generation = 0
         self._escape_revert = w.EscapeRevertController()
+        self._default_reset = LabelDefaultReset(self._reset_default, self._apply_reset)
         self._scrub_fields = ScrubFieldController(
             SCRUB_FIELD_DEFS,
             self._get_scrub_value,
@@ -826,12 +828,7 @@ class TrainingPanel(Panel):
 
     def _bind_disabled(self, model, p):
         def _params_edit_locked():
-            if _trainer_run_is_finished():
-                return False
-            return not (
-                RuntimeState.trainer_state.value == "ready"
-                and RuntimeState.iteration.value == 0
-            )
+            return not self._can_edit_configuration()
 
         model.bind_func("struct_disabled", _params_edit_locked)
         model.bind_func("live_disabled", _params_edit_locked)
@@ -1468,6 +1465,7 @@ class TrainingPanel(Panel):
         self._loss_graph_el = doc.get_element_by_id("loss-graph-el")
         self._psnr_graph_el = doc.get_element_by_id("psnr-graph-el")
         self._scrub_fields.mount(doc)
+        self._default_reset.mount(doc)
         self._sync_section_states()
         self._subscribe_reactive_state()
         self._request_reactive_update()
@@ -1750,6 +1748,7 @@ class TrainingPanel(Panel):
         self._doc = None
         self._escape_revert.clear()
         self._scrub_fields.unmount()
+        self._default_reset.unmount()
 
     def _update_loss_graph(self):
         if not self._loss_graph_el:
@@ -2030,6 +2029,55 @@ class TrainingPanel(Panel):
             d.resize_factor = int(val_str)
         except (ValueError, TypeError, RuntimeError):
             pass
+
+    @staticmethod
+    def _can_edit_configuration():
+        return _trainer_run_is_finished() or (
+            RuntimeState.trainer_state.value == "ready" and RuntimeState.iteration.value == 0)
+
+    def _reset_default(self, prop):
+        params = lf.optimization_params()
+        if params is None or not params.has_params():
+            return None
+        if not self._can_edit_configuration():
+            return None
+        # Preserve the coupled-step lock, even if an event is dispatched directly.
+        if self._auto_scale_steps_locked and any(
+                run.disabled_condition_id == "step_scaling_params_locked" and prop in run.prop_ids
+                for run in property_view.RUNS):
+            return None
+        if prop == "bg_color":
+            return params.builtin_default(prop)
+        if prop == "gut" and params.strategy == "igs+":
+            return None
+        info = params.prop_info(prop)
+        if info.get("readonly") or prop in ("strategy", "raster_backend", "steps_scaler"):
+            return None
+        return params.builtin_default(prop)
+
+    def _apply_reset(self, prop, value):
+        # Recheck runtime locks at commit time rather than trusting DOM state.
+        if self._reset_default(prop) is None:
+            return False
+        self._scrub_fields.prepare_reset(prop)
+        params = lf.optimization_params()
+        committed = (-1.0 if property_view.canonical_strategy_name(params.strategy) == "mrnf"
+                     and prop in ("grow_fraction", "shs_lr") else value)
+        accepted = (self._set_training_bg_color(value) if prop == "bg_color"
+                    else self._set_property_view_value(prop, committed))
+        if not accepted:
+            return False
+        binding = self._pv_binding_by_prop.get(prop)
+        if binding is not None:
+            binding.finish_edit(prop)
+        self._sync_text_bufs()
+        if self._handle:
+            self._handle.dirty_all()
+        params = lf.optimization_params()
+        if prop == "bg_color":
+            self._escape_revert.rebase([BG_COLOR_HEX_KEY] + [key for key, _ in BG_COLOR_CHANNELS])
+            return values_match(params.bg_color, value)
+        return values_match(params.get(prop), value)
 
     def _set_property_view_value(self, prop, value):
         params = lf.optimization_params()

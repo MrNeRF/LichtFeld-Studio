@@ -1,4 +1,5 @@
 {
+  "common.reset_default_hint": "双击恢复默认值：{value}",
   "preferences.drag_sh_hint": "限制随视角变化的颜色细节。导出阶数取此上限与源数据SH阶数中的较小值。",
   "preferences.drag_format_hint": "将高斯点从LichtFeld拖出时创建的文件格式。",
   "preferences.drag_sh_limit": "最大SH阶数",

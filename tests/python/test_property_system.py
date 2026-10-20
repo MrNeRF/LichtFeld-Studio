@@ -642,3 +642,17 @@ class TestUILayout:
         """UILayout class should exist in ui submodule."""
         assert hasattr(lf.ui, "UILayout")
         # Can't instantiate directly without an active panel draw context
+
+
+@pytest.mark.parametrize("prop, expected", [
+    ("raster_backend", "3dgs"),
+    ("mesh_shadow_resolution", "2048"),
+    ("grid_plane", "1"),
+])
+def test_render_label_defaults_match_native_enum_descriptors(lf, prop, expected):
+    settings = lf.get_render_settings()
+    if settings is None:
+        pytest.skip("Requires a rendering context")
+    info = settings.prop_info(prop)
+    descriptor = settings.get_all_properties()[prop]
+    assert info["default_identifier"] == info["builtin_default"] == descriptor.default == expected

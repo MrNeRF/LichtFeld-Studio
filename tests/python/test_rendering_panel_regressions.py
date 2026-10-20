@@ -603,3 +603,45 @@ def test_selection_group_color_picker_stays_inside_panel(rendering_panel_module)
     panel._open_picker(_PickerEvent(300, 40))
     assert popup.props["top"] == "42px"
     assert popup.props["left"] == "90px"
+
+
+@pytest.mark.parametrize("prop,value", [("axes_size", 2.0), ("show_grid", True),
+    ("mesh_shadow_resolution", "2048"), ("lod_max_splats", 0)])
+def test_label_reset_uses_registry_defaults_and_commits(rendering_panel_module, monkeypatch, prop, value):
+    module = rendering_panel_module
+    settings = _RenderSettingsStub(**{prop: 99})
+    settings.prop_info = lambda key: {"builtin_default": value, "readonly": False}
+    monkeypatch.setattr(module.lf, "get_render_settings", lambda: settings)
+    panel = module.RenderingPanel()
+    assert panel._reset_default(prop) == value
+    assert panel._apply_reset(prop, value)
+    assert getattr(settings, prop) == value
+
+
+def test_render_labels_never_reset_paths_or_unregistered_properties(rendering_panel_module, monkeypatch):
+    module = rendering_panel_module
+    settings = _RenderSettingsStub(prop_info=lambda key: {"default": ""})
+    monkeypatch.setattr(module.lf, "get_render_settings", lambda: settings)
+    panel = module.RenderingPanel()
+    assert panel._reset_default("environment_map_path") is None
+    assert panel._reset_default("delete") is None
+
+
+@pytest.mark.parametrize("info", [
+    {"default": 2, "type": "enum"},
+    {"default": 2, "builtin_default": None, "type": "enum"},
+    {"builtin_default": "3dgs", "readonly": True},
+])
+def test_label_reset_requires_a_resolved_editable_default(rendering_panel_module, monkeypatch, info):
+    module = rendering_panel_module
+    settings = _RenderSettingsStub(prop_info=lambda key: info)
+    monkeypatch.setattr(module.lf, "get_render_settings", lambda: settings)
+    assert module.RenderingPanel()._reset_default("raster_backend") is None
+
+
+def test_label_reset_uses_resolved_enum_identifier(rendering_panel_module, monkeypatch):
+    module = rendering_panel_module
+    settings = _RenderSettingsStub(prop_info=lambda key: {
+        "type": "enum", "default": 2, "builtin_default": "3dgs", "default_identifier": "3dgs"})
+    monkeypatch.setattr(module.lf, "get_render_settings", lambda: settings)
+    assert module.RenderingPanel()._reset_default("raster_backend") == "3dgs"

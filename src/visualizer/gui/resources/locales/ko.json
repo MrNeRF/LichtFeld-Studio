@@ -1,4 +1,5 @@
 {
+  "common.reset_default_hint": "두 번 클릭하여 기본값으로 복원: {value}",
   "preferences.drag_sh_hint": "시점에 따라 달라지는 색상 세부 정보를 제한합니다. 이 한도와 사용 가능한 SH 차수 중 더 낮은 값을 사용합니다.",
   "preferences.drag_format_hint": "스플랫을 LichtFeld 밖으로 드래그할 때 생성되는 파일 형식입니다.",
   "preferences.drag_sh_limit": "최대 SH 차수",

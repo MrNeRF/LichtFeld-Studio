@@ -1,4 +1,5 @@
 {
+  "common.reset_default_hint": "Kliknij dwukrotnie, aby przywrócić wartość domyślną: {value}",
   "preferences.drag_sh_hint": "Ogranicza szczegóły koloru zależne od kierunku patrzenia. Eksport używa mniejszej wartości z tego limitu i dostępnego stopnia SH.",
   "preferences.drag_format_hint": "Format plików tworzonych przy przeciąganiu splatów poza LichtFeld.",
   "preferences.drag_sh_limit": "Maksymalny stopień SH",

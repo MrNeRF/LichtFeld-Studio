@@ -78,6 +78,19 @@ class ScrubFieldController:
         self._active_prop = None
         self._doc = None
 
+    def prepare_reset(self, prop):
+        """Discard an active text draft before an external committed reset."""
+        state = self._fields.get(prop)
+        if state is None:
+            return
+        if self._active_prop == prop:
+            self._finish_active_drag(False)
+        if state.editing:
+            state.cancel_on_blur = True
+            state.input_el.blur()
+            if state.editing:
+                self._exit_edit(state)
+
     def set_spec(self, prop: str, spec: ScrubFieldSpec) -> bool:
         self._specs[prop] = spec
         state = self._fields.get(prop)
