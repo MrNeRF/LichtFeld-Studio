@@ -195,7 +195,8 @@ static void bilateral_group_add(threadgroup atomic_uint* slot, const float value
 kernel void bilateral_slice_backward_grid(constant BilateralSliceParams& p [[buffer(0)]],
                                           uint2 tile [[threadgroup_position_in_grid]],
                                           uint2 thread_in_tile [[thread_position_in_threadgroup]],
-                                          uint local [[thread_index_in_threadgroup]]) {
+                                          uint local [[thread_index_in_threadgroup]],
+                                          uint lane [[thread_index_in_simdgroup]]) {
     threadgroup atomic_uint histogram[kBilateralSlots];
     const int channels = p.exposure_chroma != 0 ? 9 : 12;
     const int L = p.L, H = p.H, W = p.W, h = p.h, w = p.w;
@@ -230,12 +231,12 @@ kernel void bilateral_slice_backward_grid(constant BilateralSliceParams& p [[buf
         for (int dx = 0; dx < 2; ++dx) {
             const int wi = px0 + int(thread_in_tile.x) * 2 + dx;
             const int hi = py0 + int(thread_in_tile.y) * 2 + dy;
-            if (wi >= w || hi >= h)
-                continue;
-            const int pixel = hi * w + wi;
+            // Every lane stays in the loop: the SIMD reductions below need the whole group.
+            const bool valid = wi < w && hi < h;
+            const int pixel = valid ? hi * w + wi : 0;
             const float3 rgb = bilateral_finite_or(bilateral_load(p, p.rgb, pixel), 0.5f);
-            const float3 grad = bilateral_finite_or(bilateral_load(p, p.grad_output, pixel), 0.0f);
-            const BilateralCell c = bilateral_cell(p, wi, hi, rgb);
+            const float3 grad = valid ? bilateral_finite_or(bilateral_load(p, p.grad_output, pixel), 0.0f) : 0.0f;
+            const BilateralCell c = bilateral_cell(p, min(wi, w - 1), min(hi, h - 1), rgb);
             float dl[12];
             if (p.exposure_chroma != 0) {
                 float sampled[9];
@@ -254,14 +255,26 @@ kernel void bilateral_slice_backward_grid(constant BilateralSliceParams& p [[buf
             const int cx[8] = {c.x0, c.x1, c.x0, c.x1, c.x0, c.x1, c.x0, c.x1};
             const int cy[8] = {c.y0, c.y0, c.y1, c.y1, c.y0, c.y0, c.y1, c.y1};
             const int cz[8] = {c.z0, c.z0, c.z0, c.z0, c.z1, c.z1, c.z1, c.z1};
-            for (int ci = 0; ci < channels; ++ci) {
-                for (int k = 0; k < 8; ++k) {
-                    const float value = weights[k] * dl[ci];
-                    if (global) {
-                        ppisp_atomic_add(p.grad_grid + (ci * L + cz[k]) * H * W + cy[k] * W + cx[k], value);
-                    } else {
-                        const int slot = ((ci * L + cz[k]) * fpy + (cy[k] - ymin)) * kBilateralStrideX + (cx[k] - xmin);
-                        bilateral_group_add(&histogram[slot], value);
+            // A 32x4-pixel SIMD group spans few grid cells, so lanes in the same base
+            // cell sum their gradients first and one of them adds the totals. Per-lane
+            // adds into the shared histogram serialize on the same few slots.
+            const int cell = (c.z0 * H + c.y0) * W + c.x0;
+            bool pending = valid;
+            while (simd_any(pending)) {
+                const ushort leader = ushort(simd_min(pending ? lane : 32u));
+                const bool mine = pending && cell == simd_shuffle(cell, leader);
+                pending = pending && !mine;
+                for (int ci = 0; ci < channels; ++ci) {
+                    for (int k = 0; k < 8; ++k) {
+                        const float value = simd_sum(mine ? weights[k] * dl[ci] : 0.0f);
+                        if (lane != leader)
+                            continue;
+                        if (global) {
+                            ppisp_atomic_add(p.grad_grid + (ci * L + cz[k]) * H * W + cy[k] * W + cx[k], value);
+                        } else {
+                            const int slot = ((ci * L + cz[k]) * fpy + (cy[k] - ymin)) * kBilateralStrideX + (cx[k] - xmin);
+                            bilateral_group_add(&histogram[slot], value);
+                        }
                     }
                 }
             }
