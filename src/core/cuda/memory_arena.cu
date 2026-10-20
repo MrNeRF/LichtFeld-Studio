@@ -4,6 +4,7 @@
 
 #include "core/alloc_counter.hpp"
 #include "core/assert.hpp"
+#include "core/cuda/driver_entry.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
@@ -124,8 +125,8 @@ namespace lfs::core {
         prop.location.id = device;
 
         size_t granularity = 0;
-        CUresult result = cuMemGetAllocationGranularity(&granularity, &prop,
-                                                        CU_MEM_ALLOC_GRANULARITY_MINIMUM);
+        CUresult result = LFS_CUDA_DRIVER(cuMemGetAllocationGranularity)(&granularity, &prop,
+                                                                         CU_MEM_ALLOC_GRANULARITY_MINIMUM);
 
         // If this VMM function succeeds, VMM is supported
         if (result == CUDA_SUCCESS && granularity > 0) {
@@ -1113,8 +1114,8 @@ namespace lfs::core {
                 if (chunk.is_mapped) {
                     lfs::diagnostics::VramProfiler::instance().recordDeallocation(
                         reinterpret_cast<void*>(arena.d_ptr + chunk.offset));
-                    cuMemUnmap(arena.d_ptr + chunk.offset, chunk.size);
-                    cuMemRelease(chunk.handle);
+                    LFS_CUDA_DRIVER(cuMemUnmap)(arena.d_ptr + chunk.offset, chunk.size);
+                    LFS_CUDA_DRIVER(cuMemRelease)(chunk.handle);
                     chunk.is_mapped = false;
                 }
             }
@@ -1122,7 +1123,7 @@ namespace lfs::core {
         }
 
         if (arena.d_ptr) {
-            cuMemAddressFree(arena.d_ptr, arena.virtual_size);
+            LFS_CUDA_DRIVER(cuMemAddressFree)(arena.d_ptr, arena.virtual_size);
             arena.d_ptr = 0;
             arena.virtual_size = 0;
         }
@@ -1543,8 +1544,8 @@ namespace lfs::core {
                 prop.location.id = device;
 
                 size_t granularity = 0;
-                CUresult result = cuMemGetAllocationGranularity(&granularity, &prop,
-                                                                CU_MEM_ALLOC_GRANULARITY_MINIMUM);
+                CUresult result = LFS_CUDA_DRIVER(cuMemGetAllocationGranularity)(&granularity, &prop,
+                                                                                 CU_MEM_ALLOC_GRANULARITY_MINIMUM);
                 if (result != CUDA_SUCCESS) {
                     // Fall back to default granularity
                     granularity = 2 << 20; // 2MB
@@ -1553,7 +1554,7 @@ namespace lfs::core {
 
                 // Reserve virtual address space (this is FREE!)
                 arena.virtual_size = config_.virtual_size;
-                result = cuMemAddressReserve(&arena.d_ptr, arena.virtual_size, 0, 0, 0);
+                result = LFS_CUDA_DRIVER(cuMemAddressReserve)(&arena.d_ptr, arena.virtual_size, 0, 0, 0);
                 if (result != CUDA_SUCCESS) {
                     LOG_WARN("VMM reservation failed, using traditional allocation");
                     arena.d_ptr = 0;
@@ -1650,7 +1651,7 @@ namespace lfs::core {
         prop.location.id = arena.device;
 
         CUmemGenericAllocationHandle handle;
-        CUresult result = cuMemCreate(&handle, commit_size, &prop, 0);
+        CUresult result = LFS_CUDA_DRIVER(cuMemCreate)(&handle, commit_size, &prop, 0);
 
         // If large allocation fails, try splitting into smaller chunks
         if (result != CUDA_SUCCESS && commit_size > arena.granularity * 4) {
@@ -1663,20 +1664,20 @@ namespace lfs::core {
             size_t total_allocated = 0;
             for (int i = 0; i < 4 && total_allocated < commit_size; ++i) {
                 CUmemGenericAllocationHandle chunk_handle;
-                result = cuMemCreate(&chunk_handle, chunk_size, &prop, 0);
+                result = LFS_CUDA_DRIVER(cuMemCreate)(&chunk_handle, chunk_size, &prop, 0);
                 if (result == CUDA_SUCCESS) {
                     // Map this chunk
                     const size_t map_offset = align_up(
                         arena.committed_size + total_allocated, arena.granularity);
 
-                    result = cuMemMap(arena.d_ptr + map_offset, chunk_size, 0, chunk_handle, 0);
+                    result = LFS_CUDA_DRIVER(cuMemMap)(arena.d_ptr + map_offset, chunk_size, 0, chunk_handle, 0);
                     if (result == CUDA_SUCCESS) {
                         CUmemAccessDesc access_desc = {};
                         access_desc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
                         access_desc.location.id = arena.device;
                         access_desc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
 
-                        result = cuMemSetAccess(arena.d_ptr + map_offset, chunk_size, &access_desc, 1);
+                        result = LFS_CUDA_DRIVER(cuMemSetAccess)(arena.d_ptr + map_offset, chunk_size, &access_desc, 1);
                         if (result == CUDA_SUCCESS) {
                             {
                                 std::lock_guard<std::mutex> lock(arena.chunks_mutex);
@@ -1691,11 +1692,11 @@ namespace lfs::core {
                             total_allocated += chunk_size;
                             LOG_TRACE("VMM chunk %d: %zu MB", i, chunk_size >> 20);
                         } else {
-                            cuMemUnmap(arena.d_ptr + map_offset, chunk_size);
-                            cuMemRelease(chunk_handle);
+                            LFS_CUDA_DRIVER(cuMemUnmap)(arena.d_ptr + map_offset, chunk_size);
+                            LFS_CUDA_DRIVER(cuMemRelease)(chunk_handle);
                         }
                     } else {
-                        cuMemRelease(chunk_handle);
+                        LFS_CUDA_DRIVER(cuMemRelease)(chunk_handle);
                     }
                 }
             }
@@ -1721,9 +1722,9 @@ namespace lfs::core {
         // Map with proper alignment
         const size_t map_offset = align_up(arena.committed_size, arena.granularity);
 
-        result = cuMemMap(arena.d_ptr + map_offset, commit_size, 0, handle, 0);
+        result = LFS_CUDA_DRIVER(cuMemMap)(arena.d_ptr + map_offset, commit_size, 0, handle, 0);
         if (result != CUDA_SUCCESS) {
-            cuMemRelease(handle);
+            LFS_CUDA_DRIVER(cuMemRelease)(handle);
             return false;
         }
 
@@ -1732,10 +1733,10 @@ namespace lfs::core {
         access_desc.location.id = arena.device;
         access_desc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
 
-        result = cuMemSetAccess(arena.d_ptr + map_offset, commit_size, &access_desc, 1);
+        result = LFS_CUDA_DRIVER(cuMemSetAccess)(arena.d_ptr + map_offset, commit_size, &access_desc, 1);
         if (result != CUDA_SUCCESS) {
-            cuMemUnmap(arena.d_ptr + map_offset, commit_size);
-            cuMemRelease(handle);
+            LFS_CUDA_DRIVER(cuMemUnmap)(arena.d_ptr + map_offset, commit_size);
+            LFS_CUDA_DRIVER(cuMemRelease)(handle);
             return false;
         }
 
@@ -1871,7 +1872,7 @@ namespace lfs::core {
             }
             if (chunk.is_mapped) {
                 const CUresult unmap_status =
-                    cuMemUnmap(arena.d_ptr + chunk.offset, chunk.size);
+                    LFS_CUDA_DRIVER(cuMemUnmap)(arena.d_ptr + chunk.offset, chunk.size);
                 if (unmap_status != CUDA_SUCCESS) {
                     LOG_ERROR("Failed to unmap rasterizer arena chunk at offset=%zu bytes; "
                               "stopping boundary decommit",
@@ -1880,7 +1881,7 @@ namespace lfs::core {
                 }
                 lfs::diagnostics::VramProfiler::instance().recordDeallocation(
                     reinterpret_cast<void*>(arena.d_ptr + chunk.offset));
-                const CUresult release_status = cuMemRelease(chunk.handle);
+                const CUresult release_status = LFS_CUDA_DRIVER(cuMemRelease)(chunk.handle);
                 if (release_status != CUDA_SUCCESS) {
                     LOG_ERROR("Failed to release rasterizer arena physical handle at offset=%zu bytes",
                               chunk.offset);

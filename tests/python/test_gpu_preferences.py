@@ -74,3 +74,14 @@ def test_inventory_distinguishes_identical_cards_and_matches_both_api_indices():
     assert "Vulkan #1 / CUDA #0" in rows[0]["name"]
     assert rows[0]["name"].endswith("aaaaaaaa")
     assert "Vulkan #2" in rows[1]["name"]
+
+
+def test_software_device_uses_system_memory_and_cpu_label():
+    devices = [gpu("c" * 32, name="llvmpipe", software=True, memory_bytes=32 * 1024 ** 3)]
+    def tr(key):
+        return {"preferences.gpu_software": "Software (CPU)",
+                "preferences.gpu_memory_system": "System memory · {size} GiB"}.get(key, key)
+    row = hardware_rows(devices, [], tr)[0]
+    assert row["memory"] == "System memory · 32.0 GiB"
+    assert row["details"] == "Software (CPU)"
+    assert device_choices(devices, "", "tensor", tr)[1]["label"] == "llvmpipe · Software (CPU)"

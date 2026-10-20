@@ -5745,6 +5745,7 @@ namespace lfs::python {
                 item["memory_bytes"] = device.total_memory_bytes;
                 item["shared_memory"] = device.shared_memory;
                 item["discrete"] = device.discrete;
+                item["software"] = device.software;
                 item["tensor_reason"] = device.tensor_unavailable_reason;
                 item["rendering_reason"] = device.rendering_unavailable_reason;
                 result.append(item);

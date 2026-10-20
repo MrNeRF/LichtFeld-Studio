@@ -1,6 +1,6 @@
 # GPU selection and independent rendering
 
-This branch starts from `4ef50cbbc7f649cfed1d76d1d1770a3bff62d27f` on `dev`, including the merged image-cache changes. It keeps the existing cache implementation. Hardware discovery and device selection are separate from tensor context initialization.
+Hardware discovery and device selection are separate from tensor context initialization. Training and viewport choices are independent of the image-cache implementation.
 
 ## User behavior
 
@@ -9,7 +9,7 @@ This branch starts from `4ef50cbbc7f649cfed1d76d1d1770a3bff62d27f` on `dev`, inc
 - Saved choices take effect on the next application start. The active configuration remains visible in Preferences and in the R/T status tooltips.
 - A persistent **Restart needed** action opens the hardware preferences. Selecting the actual running configuration again clears it. Narrow windows use a compact action with the same tooltip.
 - An unavailable device or backend falls back for the current run and logs the reason in the CLI. The saved request is retained, so a temporarily disconnected card can be selected on a later launch. Device menus list only enumerated hardware; an absent saved identity displays Auto without creating a synthetic option or overwriting the saved request.
-- Auto preserves the existing CUDA default. An inactive Vulkan tensor preference does not redirect the viewer when CUDA or Metal is active.
+- Auto preserves the existing CUDA default. It may choose Vulkan when no CUDA GPU is detected. An explicit CUDA choice, a detected NVIDIA GPU with an unavailable CUDA runtime, an incompatible driver or insufficient compute capability produces an actionable startup error instead of silently switching training to Vulkan. An inactive Vulkan tensor preference does not redirect the viewer when CUDA or Metal is active.
 
 Names are presentation only. Selection uses normalized UUIDs, with index aliases resolved against the current inventory. Identically named adapters include index and UUID suffixes in their labels. Integrated memory is identified as shared; its reported heap is not described as dedicated VRAM or as the BIOS reservation.
 
@@ -21,7 +21,7 @@ Foreign Vulkan buffers are padded for packed shader loads, while their logical b
 
 Consumer queues know whether their own context supports external interop. A headless or secondary context does not change the primary application's interop policy. A foreign Vulkan consumer uses a host wait instead of importing a semaphore from another device. Host waits have a bounded timeout and report failures.
 
-CUDA selection is activated on worker threads as well as the main thread. Device information, decoder selection, streams, allocation and DLPack metadata follow the selected adapter. Linux Vulkan-enabled builds use dynamic CUDA driver lookup so an absent CUDA driver does not by itself prevent the application from loading.
+CUDA selection is activated on worker threads as well as the main thread. An arbitrary caller thread binds on its first CUDA backend operation; explicit worker/stream scopes also activate the selected device. Stream lookup and subsequent backend operations do not query the driver on every launch. Device information, decoder selection, streams, allocation and DLPack metadata follow the selected adapter, including tensors without storage. Linux Vulkan-enabled builds use dynamic CUDA driver lookup so an absent CUDA driver does not by itself prevent the application from loading.
 
 CPU-decoded image/mask helpers resolve the current execution target, including a loader's explicit backend scope. CUDA stream/codec decisions follow that target, and masked-fill guards inspect the actual staging tensor. A CUDA loader in a process whose default is Vulkan therefore keeps CUDA image operations consistent with its allocations. Unscoped callers retain the process-default behavior; image formulas and precision are unchanged.
 
@@ -51,10 +51,10 @@ For independent-device viewer tests, open the same checkpoint on each configurat
 
 The local validation artifacts live under `.local/gpu-backend-preferences`. Detailed final measurements and platform limitations must be recorded there after all runs complete. One physical CUDA adapter is available on the Windows test machine; simulated policy tests cannot substitute for testing two physical CUDA adapters. WSL validation cannot establish native Radeon Linux performance.
 
-The measured results and exact platform coverage are in [the validation report](gpu-device-validation-2026-10-18.md). Builds without Vulkan tensor support preserve an inactive saved Vulkan device choice; startup sanitization only validates devices for compiled backends.
+Builds without Vulkan tensor support preserve an inactive saved Vulkan device choice; startup sanitization only validates devices for compiled backends. Benchmark results and platform coverage belong in the PR discussion and local validation artifacts.
 
 ## Optional Vulkan execution policies
 
-Compatible AMD devices can use a stable ballot-based integer radix-sort pipeline. Selection checks compute ballot/arithmetic support, subgroup size control for 32 lanes, workgroup limits and shared-memory capacity. The generic and existing NVIDIA-match shader modules retain their previous contents. Pipeline creation failures log a warning and cache the generic fallback; DeviceLost propagates rather than being hidden by a retry. Failed shader/layout output handles are never destroyed, and partially created pipelines are cleaned up.
+Compatible AMD devices can use a stable ballot-based integer radix-sort pipeline. Selection checks compute ballot/arithmetic support, subgroup size control for 32 lanes, workgroup limits and shared-memory capacity. Other devices retain their existing pipeline-selection policy; shared shader-source changes can affect generated SPIR-V for every variant. Pipeline creation failures log a warning and cache the generic fallback; DeviceLost propagates rather than being hidden by a retry. Failed shader/layout output handles are never destroyed, and partially created pipelines are cleaned up.
 
-Fast raster forward may request 32 lanes only on AMD devices whose default subgroup is 64 and whose compute subgroup controls support 32. Its 256-thread workgroup requires at least eight supported workgroup subgroups. Existing backward policies retain their four-subgroup requirement. This uses the existing shader and floating-point arithmetic; it does not introduce alternate precision or extra scratch storage. Successful activation is logged, and pipeline rejection retries the device-default subgroup with a CLI warning. Other vendors and unsupported devices retain their existing policy. See the validation report for repeated timings, fixed-input equivalence, training quality comparisons and platform limitations.
+Fast raster forward may request 32 lanes only on AMD devices whose default subgroup is 64 and whose compute subgroup controls support 32. Its 256-thread workgroup requires at least eight supported workgroup subgroups. Existing backward policies retain their four-subgroup requirement. This uses the existing shader and floating-point arithmetic; it does not introduce alternate precision or extra scratch storage. Successful activation is logged, and pipeline rejection retries the device-default subgroup with a CLI warning. Other vendors and unsupported devices retain their existing policy.

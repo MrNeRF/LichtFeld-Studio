@@ -1455,6 +1455,22 @@ namespace lfs::python {
         return oss.str();
     }
 
+#if LFS_HAS_CUDA
+    namespace {
+        int cuda_dlpack_device_id(const Tensor& tensor) {
+            const void* pointer = tensor.data_ptr();
+            // A storage-free CUDA tensor still belongs to the process device.
+            // CUDA reports device -1 for a null pointer, not a usable ordinal.
+            if (pointer == nullptr)
+                return lfs::core::selected_cuda_device();
+            cudaPointerAttributes attributes{};
+            if (const auto status = cudaPointerGetAttributes(&attributes, pointer); status != cudaSuccess)
+                throw std::runtime_error(std::string("DLPack CUDA device query failed: ") + cudaGetErrorString(status));
+            return attributes.device;
+        }
+    } // namespace
+#endif
+
     nb::tuple PyTensor::dlpack_device() const {
 #if !LFS_HAS_CUDA
         if (tensor_.device() == Device::GPU) {
@@ -1474,10 +1490,7 @@ namespace lfs::python {
         if (lfs::core::gpu_backend_of(tensor_) == lfs::core::GpuBackend::Vulkan) {
             device_id = lfs::core::selected_cuda_device();
         } else if (tensor_.device() == Device::GPU) {
-            cudaPointerAttributes attributes{};
-            if (const auto status = cudaPointerGetAttributes(&attributes, tensor_.data_ptr()); status != cudaSuccess)
-                throw std::runtime_error(std::string("DLPack CUDA device query failed: ") + cudaGetErrorString(status));
-            device_id = attributes.device;
+            device_id = cuda_dlpack_device_id(tensor_);
         }
 #endif
         return nb::make_tuple(device_type, device_id);
@@ -1590,10 +1603,7 @@ namespace lfs::python {
         int exported_device = 0;
 #if LFS_HAS_CUDA
         if (exported.device() == Device::GPU) {
-            cudaPointerAttributes attributes{};
-            if (const auto status = cudaPointerGetAttributes(&attributes, exported.data_ptr()); status != cudaSuccess)
-                throw std::runtime_error(std::string("DLPack CUDA device query failed: ") + cudaGetErrorString(status));
-            exported_device = attributes.device;
+            exported_device = cuda_dlpack_device_id(exported);
         }
 #endif
         auto* ctx = new DLPackContext(std::move(exported));

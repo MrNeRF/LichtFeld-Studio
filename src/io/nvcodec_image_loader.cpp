@@ -4,6 +4,7 @@
 
 #include "io/nvcodec_image_loader.hpp"
 #include "core/assert.hpp"
+#include "core/cuda/driver_entry.hpp"
 #include "core/cuda/mask_normalization.hpp"
 #include "core/cuda_error.hpp"
 #include "core/environment.hpp"
@@ -1057,7 +1058,7 @@ namespace lfs::io {
         ~Impl() noexcept {
             try {
                 CUcontext current_ctx = nullptr;
-                const CUresult ctx_result = cuCtxGetCurrent(&current_ctx);
+                const CUresult ctx_result = LFS_CUDA_DRIVER(cuCtxGetCurrent)(&current_ctx);
                 if (ctx_result == CUDA_SUCCESS && current_ctx != nullptr) {
                     auto completion_status = completion_error.load();
                     for (const auto event : decoder_done) {

@@ -33,6 +33,7 @@ namespace lfs::vis {
         std::string tensor_backend, tensor_gpu, rendering_gpu;
     };
     LFS_VIS_API void recordGpuStartupPreferences(const TensorPreferenceState& requested);
+    [[nodiscard]] LFS_VIS_API std::optional<core::GpuBackend> gpuStartupBackendRequest();
     LFS_VIS_API void publishRenderingGpuIdentity(std::string uuid, std::string name, bool tensor_adoption_available = false);
     [[nodiscard]] LFS_VIS_API GpuPreferenceRuntimeStatus gpuPreferenceRuntimeStatus();
 

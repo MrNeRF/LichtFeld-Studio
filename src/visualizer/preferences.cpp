@@ -1199,6 +1199,11 @@ namespace lfs::vis {
         startup_gpu_preferences = requested;
     }
 
+    std::optional<core::GpuBackend> gpuStartupBackendRequest() {
+        std::lock_guard lock(gpu_runtime_mutex);
+        return startup_gpu_preferences ? startup_gpu_preferences->backend : std::nullopt;
+    }
+
     void publishRenderingGpuIdentity(std::string uuid, std::string name, const bool tensor_adoption_available) {
         std::lock_guard lock(gpu_runtime_mutex);
         rendering_gpu_identity = std::move(uuid);

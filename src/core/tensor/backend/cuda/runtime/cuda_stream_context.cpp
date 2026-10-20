@@ -15,7 +15,6 @@ namespace lfs::core {
     static thread_local cudaStream_t tl_current_stream = nullptr;
 
     cudaStream_t getCurrentCUDAStream() {
-        activate_selected_cuda_device();
         return tl_current_stream;
     }
 

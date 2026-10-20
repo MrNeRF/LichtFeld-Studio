@@ -30,8 +30,14 @@ namespace lfs::core::internal {
     GpuBackendOps& backend_ops(const GpuBackend backend) {
         if (backend == GpuBackend::CUDA) {
 #if LFS_HAS_CUDA
-            activate_selected_cuda_device();
-            static CudaBackendOps* const cuda_ops = new CudaBackendOps();
+            // Bind an arbitrary caller thread on its first CUDA operation.
+            // Keep driver queries and the selection's atomic load out of the
+            // per-operation path; worker/stream scopes also bind explicitly.
+            static thread_local CudaBackendOps* const cuda_ops = [] {
+                activate_selected_cuda_device();
+                static CudaBackendOps* const shared_ops = new CudaBackendOps();
+                return shared_ops;
+            }();
             return *cuda_ops;
 #else
             LFS_ASSERT_MSG(false, "GPU backend 'CUDA' is not compiled into this build");

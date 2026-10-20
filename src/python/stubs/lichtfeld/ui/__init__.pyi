@@ -2918,23 +2918,29 @@ def set_scene_reconstruction(backend_id: str, preset_id: str) -> bool:
 def reset_scene_reconstruction_preferences() -> None:
     """Clear all saved scene reconstruction backend and preset preferences"""
 
+def get_graphics_backend() -> str:
+    """Get the graphics backend compiled into this application"""
+
+def get_vulkan_hardware() -> list:
+    """
+    Enumerate Vulkan GPU names and identities without initializing tensor contexts
+    """
+
+def get_cuda_hardware() -> list:
+    """Discover CUDA adapters without selecting a tensor backend"""
+
+def get_gpu_runtime_status() -> dict:
+    """
+    Get running GPU identities and whether saved GPU changes require a restart
+    """
+
 def get_tensor_backend_preferences() -> dict:
     """Get saved tensor backend preferences; changes apply after restart"""
 
-def get_graphics_backend() -> str:
-    """Get the compiled graphics backend."""
-
-def get_vulkan_hardware() -> list[dict]:
-    """Enumerate Vulkan GPU names, UUIDs and capability exclusions."""
-
-def get_cuda_hardware() -> list[dict]:
-    """Discover CUDA GPU names, UUIDs, memory and compatibility."""
-
-def get_gpu_runtime_status() -> dict:
-    """Running GPU identities and whether saved GPU changes require restart."""
-
 def set_tensor_backend_preferences(backend: str = 'auto', vulkan_device: str = '', vulkan_validation: int = 0, force_fp32_half: bool = False, force_no_atomic_float: bool = False, rendering_vulkan_device: str = '', cuda_device: str = '') -> None:
-    """Save tensor backend preferences for the next application start"""
+    """
+    Save tensor and rendering GPU preferences for the next application start
+    """
 
 def get_mcp_preferences() -> dict:
     """Get effective MCP HTTP server preferences"""

@@ -58,16 +58,13 @@ target_include_directories(lfs_cuda_diagnostics_compile_check
 
 find_package(OpenMP REQUIRED COMPONENTS CXX)
 # On ELF systems a direct libcuda dependency prevents a complete build from
-# loading on a Vulkan-only computer. Reuse nvImageCodec's existing driver
-# dispatch library: it resolves the real driver lazily and reports unavailable
-# symbols as errors. Keep Windows' SDK linkage and delay loading unchanged.
+# loading on a Vulkan-only computer. The core-owned driver_entry.hpp resolves
+# entry points through the CUDA runtime, independently of optional codecs.
+# Keep Windows' SDK linkage and delay loading unchanged.
 add_library(lfs_cuda_driver INTERFACE)
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND LFS_TENSOR_VULKAN)
-    if(NOT TARGET dynlink_cuda)
-        message(FATAL_ERROR "A complete Linux CUDA+Vulkan build requires nvImageCodec's WITH_DYNAMIC_CUDA and WITH_DYNAMIC_LINK options")
-    endif()
-    target_link_libraries(lfs_cuda_driver INTERFACE dynlink_cuda ${CMAKE_DL_LIBS})
-    target_link_options(lfs_cuda_driver INTERFACE "LINKER:--exclude-libs,libdynlink_cuda.a")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Deliberately no libcuda dependency: LFS_CUDA_DRIVER calls use cudart's
+    # lazy entry-point lookup, as the existing diagnostics backend does.
 else()
     target_link_libraries(lfs_cuda_driver INTERFACE CUDA::cuda_driver)
 endif()

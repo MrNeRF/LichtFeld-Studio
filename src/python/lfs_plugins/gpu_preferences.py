@@ -31,6 +31,8 @@ def device_choices(devices, requested, role, tr):
             label += f" · #{device['index']} · " + device["uuid"][-8:]
         if reason:
             label += " · " + tr("preferences.gpu_unavailable")
+        if device.get("software"):
+            label += " · " + tr("preferences.gpu_software")
         choices.append({"value": device["uuid"], "label": label, "disabled": bool(reason)})
     return choices
 
@@ -43,13 +45,17 @@ def hardware_rows(vulkan, cuda, tr):
             key = identity(device["uuid"]) or f"{backend}:{device['index']}"
             indices.setdefault(key, []).append(f"{backend} #{device['index']}")
             row = rows.setdefault(key, {"name": device["name"], "backends": [], "memory": "", "details": []})
+            if device.get("software"):
+                row["details"].append(tr("preferences.gpu_software"))
             reason = device.get("tensor_reason", "")
             row["backends"].append(backend + (" · " + tr("preferences.gpu_unavailable") if reason else ""))
             if reason:
                 row["details"].append(backend + ": " + reason)
             size = device.get("memory_bytes", 0)
             if size:
-                label = "preferences.gpu_memory_shared" if device.get("shared_memory") else "preferences.gpu_memory_dedicated"
+                label = ("preferences.gpu_memory_system" if device.get("software") else
+                         "preferences.gpu_memory_shared" if device.get("shared_memory") else
+                         "preferences.gpu_memory_dedicated")
                 row["memory"] = tr(label).replace("{size}", f"{size / (1024 ** 3):.1f}")
     names = [row["name"] for row in rows.values()]
     result = []

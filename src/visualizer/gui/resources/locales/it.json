@@ -1177,7 +1177,9 @@
     "viewport_defaults_invalid": "Inserisci un valore valido nell’intervallo supportato.",
     "sidebar_defaults_description": "Salva larghezza, divisione Scene e scheda attiva della sidebar destra per l’avvio. I progetti .licht esistenti ripristinano il proprio workspace. Nuovo progetto mantiene il workspace corrente.",
     "save_startup_sidebar": "Salva sidebar per l’avvio",
-    "clear_startup_sidebar": "Rimuovi sidebar di avvio"
+    "clear_startup_sidebar": "Rimuovi sidebar di avvio",
+    "gpu_software": "Software (CPU)",
+    "gpu_memory_system": "Memoria di sistema · {size} GiB riportati dal driver"
   },
   "main_panel": {
     "console": "Console",

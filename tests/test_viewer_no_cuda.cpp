@@ -135,6 +135,22 @@ TEST(ViewerNoCuda, PreflightTrainingCudaUnusableUsesVulkan) {
     EXPECT_EQ(decide_gpu_preflight(true, false, false), GpuPreflightDecision::Fatal);
 }
 
+TEST(ViewerNoCuda, PreflightNeverOverridesAnExplicitCudaRequest) {
+    for (const bool viewer : {false, true}) {
+        EXPECT_EQ(decide_gpu_preflight(viewer, false, true, true), GpuPreflightDecision::Fatal);
+        EXPECT_EQ(decide_gpu_preflight(viewer, false, false, true), GpuPreflightDecision::Fatal);
+        EXPECT_EQ(decide_gpu_preflight(viewer, true, true, true), GpuPreflightDecision::UseCuda);
+    }
+}
+
+TEST(ViewerNoCuda, PreflightAutoDoesNotHideACudaHardwareOrDriverProblem) {
+    for (const bool viewer : {false, true}) {
+        EXPECT_EQ(decide_gpu_preflight(viewer, false, true, false, true), GpuPreflightDecision::Fatal);
+        EXPECT_EQ(decide_gpu_preflight(viewer, false, false, false, true), GpuPreflightDecision::Fatal);
+        EXPECT_EQ(decide_gpu_preflight(viewer, true, true, false, true), GpuPreflightDecision::UseCuda);
+    }
+}
+
 TEST(ViewerNoCuda, HoverGroupCountMatchesCpu) {
     if (!gpu_backend_available(GpuBackend::Vulkan)) {
         GTEST_SKIP() << "Vulkan backend unavailable";

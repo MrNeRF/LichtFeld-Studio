@@ -17,10 +17,14 @@ namespace lfs::app {
     [[nodiscard]] inline GpuPreflightDecision decide_gpu_preflight(
         [[maybe_unused]] const bool viewer_only,
         const bool cuda_usable,
-        const bool vulkan_usable) {
+        const bool vulkan_usable,
+        const bool explicit_cuda = false,
+        const bool cuda_hardware_problem = false) {
         if (cuda_usable) {
             return GpuPreflightDecision::UseCuda;
         }
+        if (explicit_cuda || cuda_hardware_problem)
+            return GpuPreflightDecision::Fatal;
         if (vulkan_usable) {
             return GpuPreflightDecision::UseVulkan;
         }

@@ -3,6 +3,7 @@
 
 #include "backend/tensor_completion.hpp"
 #include "backend/tensor_vulkan_interop.hpp"
+#include "core/cuda/driver_entry.hpp"
 #include "core/tensor_backend_vulkan.hpp"
 #include "core/tensor_completion.hpp"
 
@@ -109,6 +110,8 @@ namespace lfs::core {
                               std::move(tensor.missing), std::move(rendering.missing), index,
                               props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU});
             auto& entry = result.back();
+            entry.vendor_id = props.properties.vendorID;
+            entry.software = props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU;
             entry.shared_memory = props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
             VkPhysicalDeviceMemoryProperties memory{};
             vkGetPhysicalDeviceMemoryProperties(devices.devices[index], &memory);
@@ -137,6 +140,7 @@ namespace lfs::core {
             }
             VulkanHardwareDevice item;
             item.name = properties.name;
+            item.vendor_id = 0x10de;
             item.index = index;
             item.discrete = !properties.integrated;
             item.shared_memory = properties.integrated;
@@ -704,8 +708,8 @@ namespace lfs::core {
         CUdevice device{};
         unsigned flags = 0;
         int active = 0;
-        if (cudaGetDevice(&ordinal) != cudaSuccess || cuDeviceGet(&device, ordinal) != CUDA_SUCCESS ||
-            cuDevicePrimaryCtxGetState(device, &flags, &active) != CUDA_SUCCESS || active == 0)
+        if (cudaGetDevice(&ordinal) != cudaSuccess || LFS_CUDA_DRIVER(cuDeviceGet)(&device, ordinal) != CUDA_SUCCESS ||
+            LFS_CUDA_DRIVER(cuDevicePrimaryCtxGetState)(device, &flags, &active) != CUDA_SUCCESS || active == 0)
             return false;
         return true;
 #else

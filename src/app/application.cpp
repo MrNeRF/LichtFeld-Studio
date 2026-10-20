@@ -14,6 +14,7 @@
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
+#include "core/gpu_device_info.hpp"
 #include "core/image_loader.hpp"
 #include "core/legacy_settings_migration.hpp"
 #include "core/logger.hpp"
@@ -67,6 +68,7 @@
 #include "visualizer/input/input_bindings.hpp"
 #include "visualizer/preferences.hpp"
 #include "window/graphics_context.hpp"
+#include <algorithm>
 #include <condition_variable>
 #if LFS_HAS_CUDA
 #include <cuda_runtime.h>
@@ -1536,16 +1538,18 @@ namespace lfs::app {
         const auto vulkan_usable = [] {
             return lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan);
         };
-        const auto fallback_to_vulkan = [&](const std::string& reason) {
-            if (!vulkan_usable())
-                return false;
-            const auto status = lfs::core::set_default_gpu_backend(lfs::core::GpuBackend::Vulkan);
-            if (!status)
-                return false;
-            LOG_WARN("GPU fallback: requested=CUDA/Auto, effective=Vulkan, reason={}; saved preference preserved", reason);
-            return true;
-        };
-        switch (decide_gpu_preflight(viewer_only, cuda_usable, !cuda_usable && vulkan_usable())) {
+        const bool explicit_cuda = lfs::vis::gpuStartupBackendRequest() == lfs::core::GpuBackend::CUDA;
+        bool nvidia_present = false;
+        if (!cuda_usable) {
+            const auto hardware = lfs::core::enumerate_vulkan_hardware();
+            nvidia_present = std::ranges::any_of(hardware, [](const auto& device) {
+                return device.vendor_id == 0x10de && !device.software;
+            });
+        }
+        // A CUDA-capable computer with a broken driver is not a Vulkan-only
+        // computer. Preserve the actionable failure and the user's request.
+        const bool may_fallback = !cuda_usable && !explicit_cuda && !nvidia_present;
+        switch (decide_gpu_preflight(viewer_only, cuda_usable, may_fallback && vulkan_usable(), explicit_cuda, nvidia_present)) {
         case GpuPreflightDecision::UseVulkan: {
             const lfs::Status backend = lfs::core::set_default_gpu_backend(
                 lfs::core::GpuBackend::Vulkan);
@@ -1558,15 +1562,19 @@ namespace lfs::app {
                     show_dialog);
                 return false;
             }
-            LOG_WARN("GPU fallback: requested=CUDA/Auto, effective=Vulkan, reason=no usable CUDA GPU; viewer and training use Vulkan");
+            LOG_WARN("GPU fallback: requested=Auto, effective=Vulkan, reason=no CUDA GPU detected; viewer and training use Vulkan");
             return true;
         }
         case GpuPreflightDecision::Fatal:
             reportFatalStartupError(
                 "LichtFeld Studio - No usable GPU",
-                std::format("No usable NVIDIA GPU found. LichtFeld Studio requires an "
-                            "NVIDIA GPU with compute capability {}.{} or newer.{}",
-                            LFS_MIN_SM / 10, LFS_MIN_SM % 10, kMinGpuHint),
+                std::format("CUDA is unavailable{}. LichtFeld Studio requires an NVIDIA GPU with compute capability {}.{} or newer.{} "
+                            "For NVIDIA hardware, install or update the NVIDIA driver (570 or newer; CUDA 12.8 required). "
+                            "{}",
+                            nvidia_present ? " on the detected NVIDIA GPU" : "",
+                            LFS_MIN_SM / 10, LFS_MIN_SM % 10, kMinGpuHint,
+                            nvidia_present ? "To use Vulkan instead, select it explicitly in Hardware & GPUs."
+                                           : "To use another GPU, select Auto or Vulkan in Hardware & GPUs."),
                 show_dialog);
             return false;
         case GpuPreflightDecision::UseCuda:
@@ -1575,12 +1583,13 @@ namespace lfs::app {
 
         const auto info = lfs::core::check_cuda_version();
         if (info.query_failed) {
-            LOG_WARN("Failed to query CUDA driver version");
+            reportFatalStartupError("LichtFeld Studio - CUDA driver query failed",
+                                    "Could not query the NVIDIA CUDA driver. Install or update the NVIDIA driver (570 or newer; CUDA 12.8 required).",
+                                    show_dialog);
+            return false;
         } else {
             LOG_INFO("CUDA driver version: {}.{}", info.major, info.minor);
             if (!info.supported) {
-                if (fallback_to_vulkan(std::format("CUDA driver {}.{} is older than 12.8", info.major, info.minor)))
-                    return true;
                 reportFatalStartupError(
                     "LichtFeld Studio - Incompatible driver",
                     std::format("CUDA {}.{} is too old. LichtFeld Studio requires CUDA 12.8 or "
@@ -1593,8 +1602,6 @@ namespace lfs::app {
 
         cudaDeviceProp prop{};
         if (const cudaError_t err = cudaGetDeviceProperties(&prop, lfs::core::selected_cuda_device()); err != cudaSuccess) {
-            if (fallback_to_vulkan(std::format("CUDA device query failed: {}", cudaGetErrorString(err))))
-                return true;
             reportFatalStartupError(
                 "LichtFeld Studio - No usable GPU",
                 std::format("No usable NVIDIA GPU found ({}). LichtFeld Studio requires an "
@@ -1608,9 +1615,6 @@ namespace lfs::app {
                  prop.totalGlobalMem / (1024 * 1024));
 
         if (const int device_sm = prop.major * 10 + prop.minor; device_sm < LFS_MIN_SM) {
-            if (fallback_to_vulkan(std::format("{} has SM {}.{}, this build requires {}.{}",
-                                               prop.name, prop.major, prop.minor, LFS_MIN_SM / 10, LFS_MIN_SM % 10)))
-                return true;
             reportFatalStartupError(
                 "LichtFeld Studio - Incompatible GPU",
                 std::format("This PC's GPU ({}) has compute capability {}.{}, below the {}.{} "
@@ -1620,6 +1624,7 @@ namespace lfs::app {
                 show_dialog);
             return false;
         }
+        lfs::core::activate_selected_cuda_device();
         return true;
 #else
         if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan)) {
