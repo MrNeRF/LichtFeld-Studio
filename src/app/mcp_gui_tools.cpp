@@ -2058,14 +2058,10 @@ namespace lfs::app {
 
             const core::PointCloud* point_cloud = nullptr;
             glm::mat4 point_cloud_transform{1.0f};
-            for (const auto* node : scene.getNodes()) {
-                if (!node || node->type != core::NodeType::POINTCLOUD || !node->point_cloud ||
-                    !scene.isNodeEffectivelyVisible(node->id)) {
-                    continue;
-                }
+            if (const auto* node = scene.getDatasetPointCloudNode();
+                node && scene.isNodeEffectivelyVisible(node->id)) {
                 point_cloud = node->point_cloud.get();
                 point_cloud_transform = scene.getWorldTransform(node->id);
-                break;
             }
             if (!point_cloud) {
                 for (const auto* node : scene.getNodes()) {

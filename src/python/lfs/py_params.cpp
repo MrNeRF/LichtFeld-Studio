@@ -1086,7 +1086,75 @@ namespace lfs::python {
                 "enable_sparsity",
                 [](PyOptimizationParams& self) { return self.params().enable_sparsity; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.enable_sparsity = v; }); },
-                "Enable sparsity optimization")
+                "Run POPSpa sparsification after training")
+            .def_prop_rw(
+                "popspa_target_count",
+                [](PyOptimizationParams& self) { return self.params().popspa_target_count; },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.popspa_target_count = v; }); })
+            .def_prop_rw(
+                "popspa_first_prune_count",
+                [](PyOptimizationParams& self) { return self.params().popspa_first_prune_count; },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.popspa_first_prune_count = v; }); })
+            .def_prop_rw(
+                "popspa_sparsify_steps",
+                [](PyOptimizationParams& self) { return self.params().popspa_sparsify_steps; },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.popspa_sparsify_steps = v; }); })
+            .def_prop_rw(
+                "popspa_refine_steps",
+                [](PyOptimizationParams& self) { return self.params().popspa_refine_steps; },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.popspa_refine_steps = v; }); })
+            .def_prop_rw(
+                "popspa_projection_interval",
+                [](PyOptimizationParams& self) { return self.params().popspa_projection_interval; },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.popspa_projection_interval = v; }); })
+            .def_prop_rw(
+                "popspa_seed",
+                [](PyOptimizationParams& self) { return self.params().popspa_seed; },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.popspa_seed = v; }); })
+            .def_prop_rw(
+                "popspa_rho",
+                [](PyOptimizationParams& self) { return self.params().popspa_rho; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_rho = v; }); })
+            .def_prop_rw(
+                "popspa_erank_weight",
+                [](PyOptimizationParams& self) { return self.params().popspa_erank_weight; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_erank_weight = v; }); })
+            .def_prop_rw(
+                "popspa_thin_scale_weight",
+                [](PyOptimizationParams& self) { return self.params().popspa_thin_scale_weight; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_thin_scale_weight = v; }); })
+            .def_prop_rw(
+                "popspa_erank_epsilon",
+                [](PyOptimizationParams& self) { return self.params().popspa_erank_epsilon; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_erank_epsilon = v; }); })
+            .def_prop_rw(
+                "popspa_means_lr",
+                [](PyOptimizationParams& self) { return self.params().popspa_means_lr; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_means_lr = v; }); })
+            .def_prop_rw(
+                "popspa_scales_lr",
+                [](PyOptimizationParams& self) { return self.params().popspa_scales_lr; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_scales_lr = v; }); })
+            .def_prop_rw(
+                "popspa_opacities_lr",
+                [](PyOptimizationParams& self) { return self.params().popspa_opacities_lr; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_opacities_lr = v; }); })
+            .def_prop_rw(
+                "popspa_quaternions_lr",
+                [](PyOptimizationParams& self) { return self.params().popspa_quaternions_lr; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_quaternions_lr = v; }); })
+            .def_prop_rw(
+                "popspa_sh0_lr",
+                [](PyOptimizationParams& self) { return self.params().popspa_sh0_lr; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_sh0_lr = v; }); })
+            .def_prop_rw(
+                "popspa_shn_lr",
+                [](PyOptimizationParams& self) { return self.params().popspa_shn_lr; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_shn_lr = v; }); })
+            .def_prop_rw(
+                "popspa_ssim_weight",
+                [](PyOptimizationParams& self) { return self.params().popspa_ssim_weight; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_ssim_weight = v; }); })
             .def_prop_rw(
                 "mip_filter",
                 [](PyOptimizationParams& self) { return self.params().mip_filter; },

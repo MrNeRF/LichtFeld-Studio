@@ -2650,12 +2650,21 @@ namespace lfs::io::project {
                 .locked = *locked,
                 .training_enabled = *training,
                 .payload_diverged = *diverged,
+                .point_cloud_source = false,
                 .georef_pose = std::nullopt,
                 .payload = std::nullopt,
                 .cropbox = std::nullopt,
                 .ellipsoid = std::nullopt,
                 .camera = std::nullopt,
             };
+            if (JsonChapterDom::read_json_ref(element, "point_cloud_source")) {
+                auto point_source = JsonChapterDom::read<bool>(element, "point_cloud_source");
+                if (!point_source)
+                    return fail<SceneNodeRecord>(
+                        lfs::ErrorCode::DataLoss, "A scene node source hint is invalid.",
+                        "point_cloud_source must be a boolean", "SCNG", "nodes.point_cloud_source");
+                result.point_cloud_source = *point_source;
+            }
 
             if (const Json* pose =
                     JsonChapterDom::read_json_ref(element, "georef_pose");
@@ -2906,6 +2915,10 @@ namespace lfs::io::project {
         element["locked"] = value.locked;
         element["training_enabled"] = value.training_enabled;
         element["payload_diverged"] = value.payload_diverged;
+        if (value.point_cloud_source)
+            element["point_cloud_source"] = true;
+        else
+            element.erase("point_cloud_source");
         if (pose) {
             element["georef_pose"] = std::move(*pose);
         } else {

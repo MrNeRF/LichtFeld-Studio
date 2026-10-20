@@ -488,6 +488,7 @@ namespace lfs::vis::op {
         bool locked = false;
         bool training_enabled = true;
         bool payload_diverged = false;
+        bool point_cloud_source = false;
         lfs::core::PayloadHydrationState payload_hydration =
             lfs::core::PayloadHydrationState::NotApplicable;
         size_t gaussian_count = 0;
@@ -535,6 +536,7 @@ namespace lfs::vis::op {
         bool locked = false;
         bool training_enabled = true;
         bool payload_diverged = false;
+        bool point_cloud_source = false;
         std::optional<std::filesystem::path> source_path;
         int order_index = -1;
     };
@@ -546,6 +548,7 @@ namespace lfs::vis::op {
 
     struct PendingHydratedPayload {
         bool payload_diverged = false;
+        bool point_cloud_source = false;
         const void* storage_identity = nullptr;
     };
 

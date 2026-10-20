@@ -1911,7 +1911,47 @@ namespace lfs::vis {
         EXPECT_FALSE(scene.hasPreparedCombinedModel());
     }
 
-    TEST_F(SceneManagerRenderStateTest, PlyComparisonPairsVisibleMeshesAfterSplats) {
+    TEST_F(SceneManagerRenderStateTest, RawPointSourceDeleteUndoKeepsRenderingHint) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        const auto id = scene.addSplat("Raw points", makeTwoPointTestSplat(0.0f, 1.0f));
+        scene.getNodeById(id)->point_cloud_source = true;
+        const auto uuid = scene.getNodeById(id)->uuid;
+        manager.selectNode(id);
+        scene.setSelection({0, 1});
+        const auto deleted = manager.deleteSelectedGaussiansWithHistory();
+        ASSERT_TRUE(deleted) << deleted.error();
+        EXPECT_EQ(scene.getNodeByUuid(uuid), nullptr);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        const auto* restored = scene.getNodeByUuid(uuid);
+        ASSERT_NE(restored, nullptr);
+        EXPECT_TRUE(restored->point_cloud_source);
+        ASSERT_NE(restored->model, nullptr);
+        EXPECT_EQ(restored->model->size(), 2u);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, DatasetPointCloudLookupIgnoresUnrelatedCloudOrder) {
+        core::Scene scene;
+        const auto unrelated = scene.addPointCloud("Imported", makeTestPointCloud());
+        EXPECT_EQ(scene.getDatasetPointCloudNode(), nullptr);
+        const auto dataset = scene.addDataset("Dataset");
+        const auto seed = makeTestPointCloud();
+        const auto seed_id = scene.addPointCloud("Seed", seed, dataset);
+        ASSERT_NE(scene.getDatasetPointCloudNode(), nullptr);
+        EXPECT_EQ(scene.getDatasetPointCloudNode()->id, seed_id);
+        scene.setInitialPointCloud(seed);
+        ASSERT_TRUE(scene.moveNode(dataset, core::NULL_NODE, 0));
+        ASSERT_TRUE(scene.moveNode(unrelated, core::NULL_NODE, 0));
+        EXPECT_EQ(scene.getDatasetPointCloudNode()->id, seed_id);
+        // Retained seed identity still works if its display parent changes.
+        ASSERT_TRUE(scene.reparent(seed_id, core::NULL_NODE));
+        EXPECT_EQ(scene.getDatasetPointCloudNode()->id, seed_id);
+        scene.removeNodeById(seed_id);
+        EXPECT_EQ(scene.getDatasetPointCloudNode(), nullptr);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, PlyComparisonUsesSceneTreeOrder) {
         SceneManager manager;
         manager.changeContentType(SceneManager::ContentType::SplatFiles);
         auto& scene = manager.getScene();
@@ -1926,16 +1966,28 @@ namespace lfs::vis {
 
         const auto nodes = plyComparisonNodes(scene);
         ASSERT_EQ(nodes.size(), 2u);
-        EXPECT_EQ(nodes[0].node->id, splat_id);
-        EXPECT_TRUE(nodes[0].splat_slot.has_value());
-        EXPECT_EQ(nodes[1].node->id, mesh_id);
-        EXPECT_FALSE(nodes[1].splat_slot.has_value());
+        EXPECT_EQ(nodes[0].node->id, mesh_id);
+        EXPECT_FALSE(nodes[0].splat_slot.has_value());
+        EXPECT_EQ(nodes[1].node->id, splat_id);
+        EXPECT_TRUE(nodes[1].splat_slot.has_value());
 
-        const auto right = resolvePlyComparisonDepthSample(scene, 0, SplitViewPanelId::Right);
-        ASSERT_NE(right.node, nullptr);
-        EXPECT_EQ(right.node->id, mesh_id);
-        EXPECT_EQ(right.model, nullptr);
-        EXPECT_EQ(right.visible_index, -1);
+        const auto left = resolvePlyComparisonDepthSample(scene, 0, SplitViewPanelId::Left);
+        ASSERT_NE(left.node, nullptr);
+        EXPECT_EQ(left.node->id, mesh_id);
+        EXPECT_EQ(left.model, nullptr);
+        EXPECT_EQ(left.visible_index, -1);
+
+        ASSERT_TRUE(scene.moveNode(splat_id, core::NULL_NODE, 0));
+        const auto reordered = plyComparisonNodes(scene);
+        ASSERT_EQ(reordered.size(), 2u);
+        EXPECT_EQ(reordered[0].node->id, splat_id);
+        EXPECT_EQ(reordered[1].node->id, mesh_id);
+        ASSERT_TRUE(reordered[0].splat_slot.has_value());
+        EXPECT_EQ(reordered[0].splat_slot, nodes[1].splat_slot);
+        EXPECT_FALSE(reordered[1].splat_slot.has_value());
+        const auto moved = resolvePlyComparisonDepthSample(scene, 0, SplitViewPanelId::Left);
+        EXPECT_EQ(moved.node->id, splat_id);
+        EXPECT_EQ(moved.visible_index, static_cast<int>(*reordered[0].splat_slot));
     }
 
     TEST_F(SceneManagerRenderStateTest, PlyComparisonConsolidatedUsesPreparedCombinedWithoutRebuild) {
@@ -4008,4 +4060,67 @@ namespace lfs::vis::gui {
         EXPECT_TRUE(activeVolumeGuideVisible(true, 8, volumes));
         EXPECT_FALSE(activeVolumeGuideVisible(true, 9, volumes));
     }
+
+    TEST_F(SceneManagerRenderStateTest, RawPointSourceClipboardPreservesHintInNodesAndGroups) {
+        for (const bool grouped : {false, true}) {
+            SceneManager manager;
+            manager.changeContentType(SceneManager::ContentType::SplatFiles);
+            auto& scene = manager.getScene();
+            const auto parent = grouped ? scene.addGroup("Source group") : core::NULL_NODE;
+            const auto id = scene.addSplat("Raw source", makeTwoPointTestSplat(0.f, 1.f), parent);
+            scene.getNodeById(id)->point_cloud_source = true;
+            manager.selectNode(grouped ? parent : id);
+            ASSERT_TRUE(manager.copySelectedNodes());
+            const auto pasted = manager.pasteNodes();
+            ASSERT_EQ(pasted.size(), 1u);
+            const auto* root = scene.getNode(pasted.front());
+            ASSERT_NE(root, nullptr);
+            const auto* cloud = grouped ? scene.getNodeById(root->children.front()) : root;
+            ASSERT_NE(cloud, nullptr);
+            ASSERT_NE(cloud->model, nullptr);
+            EXPECT_TRUE(cloud->point_cloud_source);
+        }
+    }
+
+    TEST_F(SceneManagerRenderStateTest, PointNodePreviewIsSlicedOnlyForEditedNode) {
+        using core::DataType;
+        using core::Device;
+        using core::Tensor;
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto left = scene.addSplat("left", makeTwoPointTestSplat(0.f, 1.f));
+        const auto right = scene.addSplat("right", makeTwoPointTestSplat(2.f, 3.f));
+        manager.selectNode(right);
+        scene.setSelection({3});
+        Viewport viewport(640, 480);
+        Tensor preview = Tensor::from_vector(std::vector<int>{0, 0, 1, 0}, {size_t{4}}, Device::CPU).to(DataType::UInt8);
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .model = manager.getModelForRendering(),
+            .scene_state = manager.buildRenderState(),
+            .settings = RenderSettings{},
+            .render_size = {640, 480},
+            .gaussian_selection_visible = true,
+            .cursor_preview = {.active = true, .add_mode = false, .preview_selection = &preview},
+        };
+        const std::vector<glm::mat4> transforms{glm::mat4(1.f)};
+        auto a = buildPointCloudNodeRenderRequest(ctx, scene, *scene.getNodeById(left), {320, 480}, transforms);
+        auto b = buildPointCloudNodeRenderRequest(ctx, scene, *scene.getNodeById(right), {320, 480}, transforms);
+        for (const auto* request : {&a, &b}) {
+            ASSERT_NE(request->overlay.selection_mask, nullptr);
+            EXPECT_EQ(request->overlay.selection_mask->numel(), 2u);
+        }
+        const auto left_mask = a.overlay.selection_mask->cpu();
+        const auto right_mask = b.overlay.selection_mask->cpu();
+        EXPECT_EQ(left_mask.ptr<std::uint8_t>()[1], 0);
+        EXPECT_NE(right_mask.ptr<std::uint8_t>()[1], 0);
+        EXPECT_EQ(a.overlay.transient_mask.mask, nullptr);
+        ASSERT_NE(b.overlay.transient_mask.mask, nullptr);
+        EXPECT_EQ(b.overlay.transient_mask.mask->numel(), 2u);
+        EXPECT_EQ(b.overlay.transient_mask.mask->ptr<std::uint8_t>()[0], 1);
+        EXPECT_EQ(b.overlay.transient_mask.mask->ptr<std::uint8_t>()[1], 0);
+        EXPECT_FALSE(b.overlay.transient_mask.additive);
+    }
+
 } // namespace lfs::vis::gui

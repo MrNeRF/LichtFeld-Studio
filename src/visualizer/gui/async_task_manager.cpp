@@ -225,16 +225,11 @@ namespace lfs::vis::gui {
             });
         }
 
-        for (const auto* node : scene.getNodes()) {
-            if (!node || node->type != core::NodeType::POINTCLOUD || !node->point_cloud ||
-                !scene.isNodeEffectivelyVisible(node->id)) {
-                continue;
-            }
+        if (const auto* node = scene.getDatasetPointCloudNode();
+            node && scene.isNodeEffectivelyVisible(node->id)) {
             snapshot.point_cloud = node->point_cloud;
             snapshot.point_cloud_transform = scene.getWorldTransform(node->id);
-            break;
         }
-
         // If no live POINTCLOUD node exists (e.g. the splat model replaced it
         // once training started), the export will fall through to the source
         // COLMAP points3D file. Those points are in the original COLMAP frame

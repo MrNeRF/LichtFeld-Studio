@@ -182,6 +182,7 @@ namespace lfs::io {
             .warnings = std::move(warnings),
             .georeference = std::nullopt};
 
+        result.point_cloud_source = !is_gaussian;
         LOG_INFO("PLY loaded successfully in {}ms", load_time.count());
 
         return result;

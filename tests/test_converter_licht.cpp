@@ -182,7 +182,7 @@ namespace {
 
             std::ostringstream stream(std::ios::binary | std::ios::out);
             const auto serialized = lfs::training::serialize_checkpoint(
-                stream, 17, strategy, parameters, nullptr, nullptr, nullptr, nullptr);
+                stream, 17, strategy, parameters, nullptr, nullptr, nullptr);
             ASSERT_TRUE(serialized) << lfs::format_for_developer(serialized.error());
             const auto encoded = stream.str();
             ASSERT_FALSE(encoded.empty());

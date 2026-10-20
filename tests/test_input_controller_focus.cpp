@@ -539,6 +539,8 @@ namespace lfs::vis {
         ASSERT_TRUE(rendering_manager.isGTComparisonActive());
         const auto press = [&](const int key, const int expected_uid) {
             controller.handleKey(key, input::ACTION_PRESS, input::KEYMOD_NONE);
+            // Browsing repeats on its own timer; an OS repeat must not add a step.
+            controller.handleKey(key, input::ACTION_REPEAT, input::KEYMOD_NONE);
             controller.handleKey(key, input::ACTION_RELEASE, input::KEYMOD_NONE);
             controller.update(0.016f);
             EXPECT_EQ(rendering_manager.getCurrentCameraId(), expected_uid);

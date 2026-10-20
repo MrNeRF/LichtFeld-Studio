@@ -1842,8 +1842,7 @@ namespace {
 
         std::ostringstream stream(std::ios::binary | std::ios::out);
         auto serialized = lfs::training::serialize_checkpoint(
-            stream, 11, strategy, parameters, nullptr, nullptr, nullptr,
-            nullptr);
+            stream, 11, strategy, parameters, nullptr, nullptr, nullptr);
         ASSERT_TRUE(serialized)
             << lfs::format_for_developer(serialized.error());
         const auto encoded = stream.str();
@@ -3673,7 +3672,7 @@ namespace {
                 checkpoint_stream, 17,
                 checkpoint_strategy,
                 checkpoint_parameters,
-                nullptr, nullptr, nullptr, nullptr);
+                nullptr, nullptr, nullptr);
         ASSERT_TRUE(serialized_checkpoint)
             << lfs::format_for_developer(
                    serialized_checkpoint.error());
@@ -4358,7 +4357,7 @@ namespace {
         (void)require_result(
             lfs::training::serialize_checkpoint(
                 stream, iteration, strategy, parameters,
-                nullptr, nullptr, nullptr, nullptr));
+                nullptr, nullptr, nullptr));
         const auto encoded = stream.str();
         std::vector<std::byte> bytes(encoded.size());
         std::memcpy(
