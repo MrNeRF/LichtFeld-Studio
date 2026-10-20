@@ -447,14 +447,46 @@ two explicit default fields: `default` is the numeric `EnumItem.value`, and
 control. The number is never an index into `items`. For example, the rendering
 shadow-resolution default is `2048` with identifier `"2048"`; the raster-backend
 default is `2` with identifier `"3dgs"`. Reordering the items does not change the
-default. Invalid declared enum defaults are rejected during group registration.
-Python descriptor conversion follows its existing policy of skipping invalid
-descriptors with a diagnostic; it does not guess a replacement enum default.
+default. Invalid or ambiguous defaults are omitted from automatic-default
+metadata with a warning. The property and its ordinary access remain available;
+registration does not guess a replacement value or rewrite the descriptor.
 
 Group metadata describes the declared schema defaults. Optimization
 `prop_info()` resolves its defaults from the current session's default source,
 so its two fields refer to that same resolved value. This does not change the
 existing session reset behavior or turn a schema default into a factory reset.
+
+#### Checking plugin defaults
+
+Run `LichtFeld-Studio plugin check my_plugin` before distributing a plugin.
+The checker reports source file and line for recognized literal declarations:
+missing enum identifiers, duplicate identifiers, incompatible scalar default
+types, unrepresentable numeric defaults and defaults outside declared bounds.
+It inspects source without importing or executing the plugin, including its
+`__init__.py`, and ignores virtual environments. Module-level import aliases are supported
+for `lfs_plugins.props` and `lichtfeld.props` constructors.
+
+```python
+from lfs_plugins.props import EnumProperty, FloatProperty, PropertyGroup
+
+class Settings(PropertyGroup):
+    mode = EnumProperty(items=[("fast", "Fast", ""), ("full", "Full", "")], default="fast")
+    quality = FloatProperty(default=0.5, min=0.0, max=1.0)
+```
+
+Dynamic expressions and custom constructors cannot be fully checked statically.
+Resolved supported Python descriptors are checked again at registration using
+the same rules. Warnings in the application log identify the group and property.
+An imprecise default disables only that property's automatic-default metadata;
+the plugin's loading, descriptor values, normal editing and callbacks keep
+their existing behavior. Fixing a declaration and registering it again restores
+its default metadata without resetting an existing instance.
+
+The explicit check command returns a nonzero status for findings, making it
+usable in plugin CI. These findings are not an additional installation/loading
+gate and do not require existing plugins to adopt a new manifest or API version.
+Properties with no usable default must be excluded by automatic reset consumers.
+This compatibility policy does not repair errors in a plugin's own code.
 
 ### FloatVectorProperty
 

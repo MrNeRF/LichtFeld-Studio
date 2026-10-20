@@ -26,7 +26,7 @@ TEST(PropertyDefaults, ResolvesValueRatherThanPosition) {
     std::ranges::reverse(meta.enum_items);
     EXPECT_EQ(enum_default_identifier(meta), "medium");
     meta.default_value = int64_t{1};
-    EXPECT_THROW((void)enum_default_identifier(meta), std::invalid_argument);
+    EXPECT_FALSE(enum_default_identifier(meta));
 }
 
 TEST(PropertyDefaults, SupportsZeroAndNegativeValues) {
@@ -49,7 +49,7 @@ TEST(PropertyDefaults, RejectsWrongVariantAndUnknownContextValues) {
     auto meta = sparse_enum();
     for (const PropDefault& value : {PropDefault{2.0}, PropDefault{std::string("medium")}, PropDefault{false}}) {
         meta.default_value = value;
-        EXPECT_THROW((void)enum_default_identifier(meta), std::invalid_argument);
+        EXPECT_FALSE(enum_default_identifier(meta));
     }
     EXPECT_THROW((void)enum_identifier(meta, 100), std::invalid_argument);
     meta.type = PropType::Int;
@@ -57,17 +57,32 @@ TEST(PropertyDefaults, RejectsWrongVariantAndUnknownContextValues) {
     EXPECT_THROW((void)enum_identifier(meta, 2048), std::invalid_argument);
 }
 
-TEST(PropertyDefaults, InvalidReplacementPreservesRegisteredGroup) {
+TEST(PropertyDefaults, InvalidDefaultRetainsPropertyAndOrdinaryAccess) {
     constexpr auto group_id = "tests.property_defaults";
     auto& registry = PropertyRegistry::instance();
     registry.register_group({group_id, "Defaults", {sparse_enum()}});
     auto invalid = sparse_enum();
     invalid.default_value = int64_t{1};
-    EXPECT_THROW(registry.register_group({group_id, "Invalid", {invalid}}), std::invalid_argument);
+    int current = 512;
+    invalid.getter = [](const PropertyObjectRef& ref) -> std::any { return *static_cast<const int*>(ref.ptr); };
+    invalid.setter = [](PropertyObjectRef& ref, const std::any& value) { *static_cast<int*>(ref.ptr) = std::any_cast<int>(value); };
+    EXPECT_NO_THROW(registry.register_group({group_id, "Legacy", {invalid}}));
     const auto saved = registry.get_property(group_id, "resolution");
     ASSERT_TRUE(saved);
-    EXPECT_EQ(enum_default_identifier(*saved), "medium");
+    EXPECT_FALSE(saved->default_value);
+    auto ref = PropertyObjectRef::cpp(&current);
+    EXPECT_EQ(std::any_cast<int>(saved->getter(ref)), 512);
+    saved->setter(ref, 4096);
+    EXPECT_EQ(current, 4096);
     registry.unregister_group(group_id);
+}
+
+TEST(PropertyDefaults, AmbiguousIdentifiersAndValuesDisableAutomaticDefaults) {
+    auto meta = sparse_enum();
+    meta.enum_items.push_back({"Alias", "medium", 8192});
+    EXPECT_FALSE(enum_default_identifier(meta));
+    meta.enum_items.back() = {"Alias", "alias", 2048};
+    EXPECT_FALSE(enum_default_identifier(meta));
 }
 
 TEST(PropertyDefaults, OperatorArgumentsDoNotAcquireSchemaDefaults) {

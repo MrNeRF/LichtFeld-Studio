@@ -20,16 +20,25 @@ namespace lfs::core::prop {
         });
         if (item == meta.enum_items.end())
             throw std::invalid_argument("Unknown enum value for property: " + meta.id);
+        if (std::ranges::count_if(meta.enum_items, [value, &item](const auto& entry) {
+                return entry.value == value || entry.identifier == item->identifier;
+            }) != 1)
+            throw std::invalid_argument("Ambiguous enum value or identifier for property: " + meta.id);
         return item->identifier;
     }
 
+    // Missing or imprecise legacy metadata must not prevent ordinary access.
     [[nodiscard]] inline std::optional<std::string> enum_default_identifier(const PropertyMeta& meta) {
         if (meta.type != PropType::Enum || !meta.default_value)
             return std::nullopt;
         const auto value = std::get_if<int64_t>(&*meta.default_value);
         if (!value)
-            throw std::invalid_argument("Enum default must store an integer value: " + meta.id);
-        return enum_identifier(meta, *value);
+            return std::nullopt;
+        try {
+            return enum_identifier(meta, *value);
+        } catch (const std::invalid_argument&) {
+            return std::nullopt;
+        }
     }
 
 } // namespace lfs::core::prop

@@ -72,6 +72,12 @@ LichtFeld-Studio plugin check my_plugin
 LichtFeld-Studio plugin list
 ```
 
+`plugin check` checks the manifest, assets, environment and recognized literal
+property defaults without running plugin code. Its findings are intended for
+authors and CI, not as a new loading requirement. Dynamic defaults are also
+checked when registered: warnings appear in the application log, and only an
+unsafe automatic default is omitted. See the [property default contract](plugin-reference.md#checking-plugin-defaults).
+
 Create a plugin from Python when you only want the source package:
 
 ```python

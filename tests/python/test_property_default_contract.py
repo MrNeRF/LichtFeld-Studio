@@ -13,9 +13,10 @@ def _assert_enum_default(info):
 @pytest.mark.parametrize("group", ["render_settings", "optimization"])
 def test_declared_enum_defaults_resolve_by_value(lf, group):
     properties = lf.ui.property_group_info(group)["properties"]
-    enums = [p for p in properties if p["type"] == "enum" and "default" in p]
+    enums = [p for p in properties if p["type"] == "enum"]
     assert enums
     for info in enums:
+        assert "default" in info and "default_identifier" in info, info["id"]
         _assert_enum_default(info)
 
 
@@ -75,22 +76,55 @@ def test_non_enum_defaults_preserve_falsey_values(lf):
         lf.ui.unregister_property_group(group)
 
 
-def test_invalid_python_enum_default_is_not_guessed(lf):
-    from lfs_plugins.props import BoolProperty, EnumProperty
+def test_invalid_python_enum_default_retains_ordinary_plugin_behavior(lf):
+    from lfs_plugins.props import BoolProperty, EnumProperty, PropertyGroup
 
-    class Example:
-        @classmethod
-        def _get_property_descriptors(cls):
-            return {"mode": EnumProperty(items=[("only", "Only", "")], default="missing"),
-                    "enabled": BoolProperty(default=False)}
+    class Example(PropertyGroup):
+        mode = EnumProperty(items=[("only", "Only", "")], default="missing")
+        enabled = BoolProperty(default=False)
 
     group = "tests.invalid_enum_default_contract"
     lf.ui.register_property_group(group, "Contract", Example)
     try:
-        # Python descriptor conversion already skips invalid descriptors with a
-        # diagnostic. Preserve that policy rather than inventing a first item.
-        properties = lf.ui.property_group_info(group)["properties"]
-        assert [p["id"] for p in properties] == ["enabled"]
+        properties = {p["id"]: p for p in lf.ui.property_group_info(group)["properties"]}
+        assert set(properties) == {"mode", "enabled"}
+        assert "default" not in properties["mode"]
+        assert "default_identifier" not in properties["mode"]
+        instance = Example()
+        assert instance.mode == "missing"  # Existing descriptor behavior is preserved.
+        instance.mode = "only"
+        assert instance.mode == "only"
+        Example.mode.default = "only"
+        lf.ui.register_property_group(group, "Contract", Example)
+        fixed = {p["id"]: p for p in lf.ui.property_group_info(group)["properties"]}
+        assert fixed["mode"]["default_identifier"] == "only"
+        assert instance.mode == "only"  # Reloading metadata does not reset values.
+    finally:
+        lf.ui.unregister_property_group(group)
+
+
+@pytest.mark.parametrize("kind, kwargs, edited", [
+    ("EnumProperty", {"items": [("a", "A", ""), ("a", "Again", "")], "default": "a"}, "a"),
+    ("IntProperty", {"default": "legacy"}, 7),
+    ("FloatProperty", {"default": 2.0, "min": 0.0, "max": 1.0}, 0.75),
+])
+def test_imprecise_defaults_preserve_properties_and_callbacks(lf, kind, kwargs, edited):
+    from lfs_plugins import props
+    changes = []
+    descriptor = getattr(props, kind)(**kwargs, update=lambda obj, _ctx: changes.append(obj.value))
+    example = type("LegacySettings", (props.PropertyGroup,), {"value": descriptor})
+    group = "tests.legacy_default_contract"
+    lf.ui.register_property_group(group, "Contract", example)
+    try:
+        info = lf.ui.property_group_info(group)["properties"][0]
+        assert info["id"] == "value"
+        assert "default" not in info
+        assert "default_identifier" not in info
+        instance = example()
+        assert instance.value == kwargs["default"]
+        instance.value = edited
+        assert instance.value == edited
+        assert changes == [edited]
     finally:
         lf.ui.unregister_property_group(group)
 

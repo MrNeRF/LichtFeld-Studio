@@ -182,6 +182,34 @@ hot_reload = true
 class TestPluginLoading:
     """Tests for plugin loading."""
 
+    def test_imprecise_default_does_not_block_plugin_loading(self, sample_plugin, lf):
+        from lfs_plugins import PluginManager, PluginState
+        from lfs_plugins.validator import validate_plugin
+
+        (sample_plugin / "__init__.py").write_text('''import lichtfeld as lf
+from lfs_plugins.props import EnumProperty, PropertyGroup
+class Settings(PropertyGroup):
+    mode = EnumProperty(items=[("ok", "OK", "")], default="missing")
+instance = Settings()
+def on_load():
+    lf.ui.register_property_group("tests.legacy_plugin_load", "Legacy", Settings)
+    instance.mode = "ok"
+def on_unload():
+    lf.ui.unregister_property_group("tests.legacy_plugin_load")
+''')
+        assert any("is not in items" in issue for issue in validate_plugin(sample_plugin))
+        manager = PluginManager.instance()
+        try:
+            assert manager.load("sample_plugin") is True
+            assert manager.get_state("sample_plugin") == PluginState.ACTIVE
+            module = sys.modules["lfs_plugins.sample_plugin"]
+            assert module.instance.mode == "ok"
+            info = lf.ui.property_group_info("tests.legacy_plugin_load")["properties"][0]
+            assert info["id"] == "mode" and "default" not in info
+        finally:
+            manager.unload("sample_plugin")
+            lf.ui.unregister_property_group("tests.legacy_plugin_load")
+
     def test_load_plugin(self, sample_plugin):
         """Should load a valid plugin."""
         from lfs_plugins import PluginManager, PluginState

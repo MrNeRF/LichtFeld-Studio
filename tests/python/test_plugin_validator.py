@@ -279,3 +279,90 @@ def on_unload():
     assert any("missing tool.lichtfeld.lichtfeld_version" in error for error in errors)
     assert any("missing tool.lichtfeld.required_features" in error for error in errors)
     assert any("v1 manifest requires" in error for error in errors)
+
+
+@pytest.mark.parametrize("declaration, message", [
+    ('EnumProperty(items=[("a", "A", "")], default="missing")', "is not in items"),
+    ('EnumProperty(items=[("a", "A", ""), ("a", "Again", "")])', "duplicate enum identifier"),
+    ('EnumProperty(items=[("a", "A", "")], default=0)', "string identifier"),
+    ('EnumProperty(items=[("", "Empty", "")])', "non-empty string identifier"),
+    ('IntProperty(default=True)', "incompatible type"),
+    ('FloatProperty(default="0.5")', "incompatible type"),
+    ('BoolProperty(default=1)', "incompatible type"),
+    ('StringProperty(default=12)', "incompatible type"),
+    ('IntProperty(default=0, min=1)', "below the declared minimum"),
+    ('IntProperty(min=1)', "below the declared minimum"),
+    ('FloatProperty(default=2.0, max=1.0)', "above the declared maximum"),
+])
+def test_checker_reports_literal_default_issues_without_executing_plugin(tmp_path, declaration, message):
+    from lfs_plugins.validator import validate_plugin
+    plugin_dir = tmp_path / "example_plugin"
+    _write_plugin(plugin_dir, f'''from lfs_plugins.props import EnumProperty, IntProperty, FloatProperty, BoolProperty, StringProperty
+raise RuntimeError("Plugin code must not execute during preflight")
+class Settings:
+    value = {declaration}
+''')
+    findings = validate_plugin(plugin_dir)
+    assert len(findings) == 1
+    assert message in findings[0]
+    assert "panels/main_panel.py:4:" in findings[0]
+    assert "plugin loading is unaffected" in findings[0]
+
+
+@pytest.mark.parametrize("imports, constructor", [
+    ("from lfs_plugins.props import EnumProperty as Choice", "Choice"),
+    ("import lfs_plugins.props as p", "p.EnumProperty"),
+    ("from lfs_plugins import props", "props.EnumProperty"),
+    ("import lichtfeld as lf", "lf.props.EnumProperty"),
+    ("from lichtfeld import props as p", "p.EnumProperty"),
+])
+def test_checker_resolves_supported_property_import_aliases(tmp_path, imports, constructor):
+    from lfs_plugins.validator import validate_plugin
+    plugin_dir = tmp_path / "example_plugin"
+    _write_plugin(plugin_dir, f'{imports}\nvalue = {constructor}(items=[("a", "A", "")], default="missing")\n')
+    assert any("is not in items" in finding for finding in validate_plugin(plugin_dir))
+
+
+def test_checker_includes_init_and_ignores_virtualenv(tmp_path):
+    from lfs_plugins.validator import validate_plugin
+    plugin_dir = tmp_path / "example_plugin"
+    _write_plugin(plugin_dir, "")
+    source = 'from lfs_plugins.props import EnumProperty\nx = EnumProperty(items=[], default="missing")\n'
+    with (plugin_dir / "__init__.py").open("a") as stream:
+        stream.write(source)
+    ignored = plugin_dir / "venv" / "bad.py"
+    ignored.parent.mkdir()
+    ignored.write_text(source)
+    findings = validate_plugin(plugin_dir)
+    assert len(findings) == 1 and "__init__.py:" in findings[0]
+
+
+def test_checker_does_not_guess_dynamic_expressions_or_custom_constructors(tmp_path):
+    from lfs_plugins.validator import validate_plugin
+    plugin_dir = tmp_path / "example_plugin"
+    _write_plugin(plugin_dir, '''from lfs_plugins.props import EnumProperty as Choice
+from other_package import EnumProperty
+a = Choice(items=make_items(), default=get_default())
+b = EnumProperty(items=[], default="custom semantics")
+''')
+    assert validate_plugin(plugin_dir) == []
+
+
+@pytest.mark.parametrize("kind, kwargs", [
+    ("BoolProperty", {"default": False}), ("IntProperty", {"default": 0}),
+    ("FloatProperty", {"default": 0.0}), ("StringProperty", {"default": ""}),
+    ("EnumProperty", {"items": [("a", "A", "")], "default": None}),
+    ("EnumProperty", {"items": [("a", "A", "")], "default": "a"}),
+])
+def test_shared_contract_accepts_valid_falsey_and_implicit_defaults(kind, kwargs):
+    from lfs_plugins.property_contract import default_metadata_issues
+    assert default_metadata_issues(kind, **kwargs) == []
+
+
+@pytest.mark.parametrize("kind, value", [
+    ("FloatProperty", float("nan")), ("FloatProperty", float("inf")),
+    ("FloatProperty", 10**1000), ("IntProperty", 2**40),
+])
+def test_shared_contract_reports_unrepresentable_defaults_without_throwing(kind, value):
+    from lfs_plugins.property_contract import default_metadata_issues
+    assert default_metadata_issues(kind, default=value)

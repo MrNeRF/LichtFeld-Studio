@@ -6,6 +6,10 @@ import ast
 import re
 import sys
 from _lfs_path_io import Path
+from .property_contract import PROPERTY_KINDS, default_metadata_issues
+
+_PROPERTY_CONSTRUCTORS = {f"{prefix}.{kind}" for prefix in ("lfs_plugins.props", "lichtfeld.props")
+                          for kind in PROPERTY_KINDS}
 
 from .compat import (
     LICHTFELD_VERSION,
@@ -26,7 +30,7 @@ def _read_text(path: Path) -> str:
 
 
 def validate_plugin(plugin_path: str | Path) -> list[str]:
-    """Validate plugin structure and manifest. Returns list of errors (empty if valid)."""
+    """Preflight structure, compatibility and literal defaults without loading a plugin."""
     plugin_dir = Path(plugin_path)
     errors = []
 
@@ -75,9 +79,59 @@ def validate_plugin(plugin_path: str | Path) -> list[str]:
             errors.append("Missing on_unload() function")
 
     errors.extend(_check_panel_assets(plugin_dir))
+    errors.extend(_check_property_defaults(plugin_dir))
     errors.extend(_check_venv(plugin_dir))
 
     return errors
+
+
+def _check_property_defaults(plugin_dir: Path) -> list[str]:
+    """Check literal declarations without importing or executing plugin code."""
+    findings = []
+    for source in plugin_dir.rglob("*.py"):
+        if any(part in {".venv", "venv", "__pycache__", ".git"} for part in source.parts):
+            continue
+        try:
+            module = ast.parse(_read_text(source), filename=str(source))
+        except SyntaxError:
+            continue
+        aliases = {}
+        for node in module.body:
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in {"lichtfeld", "lichtfeld.props", "lfs_plugins.props"}:
+                        aliases[alias.asname or alias.name.split(".")[0]] = alias.name if alias.asname else alias.name.split(".")[0]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                if node.module in {"lichtfeld", "lichtfeld.props", "lfs_plugins", "lfs_plugins.props"}:
+                    for alias in node.names:
+                        aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+        for node in ast.walk(module):
+            if not isinstance(node, ast.Call):
+                continue
+            name = _expr_name(node.func).split(".")
+            resolved = ".".join([aliases.get(name[0], name[0]), *name[1:]])
+            kind = resolved.rsplit(".", 1)[-1]
+            if resolved not in _PROPERTY_CONSTRUCTORS:
+                continue
+            values = {}
+            # Only EnumProperty accepts `items` as its first positional argument.
+            positional = ("items", "default") if kind == "EnumProperty" else ("default",)
+            arguments = [(key, value) for key, value in zip(positional, node.args)]
+            arguments.extend((kw.arg, kw.value) for kw in node.keywords if kw.arg in {"items", "default", "min", "max"})
+            for key, value in arguments:
+                try:
+                    values[{"min": "minimum", "max": "maximum"}.get(key, key)] = ast.literal_eval(value)
+                except (ValueError, TypeError, SyntaxError, RecursionError):
+                    pass  # Runtime registration checks expressions once resolved.
+            if (not any(key == "default" for key, _ in arguments)
+                    and not any(kw.arg is None for kw in node.keywords)
+                    and not any(isinstance(arg, ast.Starred) for arg in node.args)):
+                values["default"] = {"EnumProperty": None, "FloatProperty": 0.0, "IntProperty": 0,
+                                     "BoolProperty": False, "StringProperty": ""}[kind]
+            for issue in default_metadata_issues(kind, **values):
+                findings.append(f"{_display_path(plugin_dir, source)}:{node.lineno}: {kind}: {issue}; "
+                                "automatic default metadata unavailable (plugin loading is unaffected)")
+    return findings
 
 
 def _check_venv(plugin_dir: Path) -> list[str]:

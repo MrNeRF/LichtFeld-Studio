@@ -1041,13 +1041,15 @@ namespace lfs::python {
             case core::prop::PropType::Enum: {
                 nb::object cls = props_module.attr("EnumProperty");
                 nb::list items;
-                const auto default_id = core::prop::enum_default_identifier(meta).value();
+                const auto default_id = core::prop::enum_default_identifier(meta);
+                if (!default_id)
+                    continue;
                 for (const auto& item : meta.enum_items) {
                     items.append(nb::make_tuple(item.identifier, item.name, ""));
                 }
                 prop_obj = cls(
                     nb::arg("items") = items,
-                    nb::arg("default") = default_id,
+                    nb::arg("default") = *default_id,
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
                 break;
