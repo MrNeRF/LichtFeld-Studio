@@ -840,3 +840,58 @@ errors. Evidence is under `.local/gpu-backend-preferences/merge-dev-sync59`
 
 No new Mac/Linux runtime matrix, long quality run or performance comparison was
 performed. Earlier timing/quality tables retain their original revision context.
+
+## Gradient-capture investigation and test correction
+
+The repeated-capture failure above was investigated without changing production
+math. Artifact-only instrumentation records each capture destination before the
+addition, its independently computed increment, and the result afterward. Across
+ten repetitions, Float32/Q16 SH, three backward calls and six parameter groups
+on each adapter, all **224,640 component additions** match the rounded FP32 sum
+of the recorded operands. The independently calculated raster gradients vary
+between fresh backward calls: observed maxima reach about `9.54e-7` on Radeon
+and `4.77e-7` on NVIDIA. The CPU-reference assertions continue to pass.
+
+The uninstrumented original test also fails in 15 of 30 NVIDIA repetitions.
+Thus a single NVIDIA suite pass did not establish stability. The problematic
+assertion compares a fresh atomic raster reduction against a multiple of the
+first reduction, assuming more repeatability than that concurrent sum provides.
+
+A separate source-clean build of dev `63d2ed5d3`, with its own application/core/
+training libraries, confirms the same repeatability assertion fails on NVIDIA
+(three of ten repetitions). On Radeon, clean dev fails the broader CPU-gradient
+oracle on every repetition, returning zeros for expected nonzero gradients;
+that is a separate baseline correctness limitation, not evidence of the same
+small rounding residual. It persists with the corrected test. Its cause was
+not isolated here, and no claim is made that the test correction repairs that
+baseline runtime. The branch's full CPU-gradient oracle passes on Radeon.
+
+The committed change is restricted to the test:
+
+- Keep the original 48x40 multi-tile scene and its independent CPU-reference
+  comparison on every accumulation pass, with the original numerical tolerance.
+- Add a one-pixel scene with a single contributing pixel, retaining the tight
+  repeatability check without concurrent tile/subgroup contributions to a splat.
+- Seed that capture destination with `0.125` to verify pre-existing contents
+  survive; compare the captured increment with the same tight tolerance, after
+  subtracting the seed. Require nonzero reference gradients for all six slots.
+- Exercise Float32 and Q16 SH, regularizers on the final pass, padded SH lanes,
+  and the existing byte comparisons proving parameters/moments/bounds stay put.
+
+No dispatcher, runtime selection, subgroup policy, shader, CUDA or Metal source
+change remains. Diagnostic instrumentation was removed and the original Vulkan
+library rebuilt before final checks.
+
+Both capture cases pass **30 repetitions per adapter** on the branch (120 test
+executions total). The corrected cases also pass ten NVIDIA repetitions against
+the clean-dev runtime. The final expanded portable suites report **182 passed,
+87 skipped, three disabled and zero failures on each adapter**. The same two
+throughput benchmarks remain excluded; no correctness test is excluded.
+Backend-neutrality, I/O discipline, CUDA log-format, error-debt and diff checks
+pass without baseline changes. Native Metal execution of the new test was not
+performed; no new training timings or long-run quality results are claimed.
+
+Evidence: `.local/gpu-backend-preferences/gradient-capture-investigation`,
+including the operand-level diagnostic summary, original/corrected repeated
+runs, clean-dev builds and the final portable JSON results. Clean-dev source
+remains unchanged; its corrected test is compiled from an artifact-only copy.
