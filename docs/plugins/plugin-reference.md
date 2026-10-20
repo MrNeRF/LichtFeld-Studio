@@ -441,6 +441,21 @@ EnumProperty(
 )
 ```
 
+Enum metadata returned by `lf.ui.property_group_info()` and `prop_info()` has
+two explicit default fields: `default` is the numeric `EnumItem.value`, and
+`default_identifier` is its string identifier for an `EnumProperty` or select
+control. The number is never an index into `items`. For example, the rendering
+shadow-resolution default is `2048` with identifier `"2048"`; the raster-backend
+default is `2` with identifier `"3dgs"`. Reordering the items does not change the
+default. Invalid declared enum defaults are rejected during group registration.
+Python descriptor conversion follows its existing policy of skipping invalid
+descriptors with a diagnostic; it does not guess a replacement enum default.
+
+Group metadata describes the declared schema defaults. Optimization
+`prop_info()` resolves its defaults from the current session's default source,
+so its two fields refer to that same resolved value. This does not change the
+existing session reset behavior or turn a schema default into a factory reset.
+
 ### FloatVectorProperty
 
 ```text

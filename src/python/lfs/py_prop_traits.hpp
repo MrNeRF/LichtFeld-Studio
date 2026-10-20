@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "core/property_system.hpp"
+#include "core/property_defaults.hpp"
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
@@ -296,6 +296,14 @@ namespace lfs::python {
 
     inline nb::object prop_default_to_python(const core::prop::PropDefault& value) {
         return std::visit([](const auto& item) { return nb::cast(item); }, value);
+    }
+
+    inline void add_property_default_info(nb::dict& info, const core::prop::PropertyMeta& meta) {
+        if (!meta.default_value)
+            return;
+        info["default"] = prop_default_to_python(*meta.default_value);
+        if (const auto identifier = core::prop::enum_default_identifier(meta))
+            info["default_identifier"] = *identifier;
     }
 
 } // namespace lfs::python

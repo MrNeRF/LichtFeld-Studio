@@ -10,6 +10,7 @@
 #include "core/logger.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/path_utils.hpp"
+#include "core/property_defaults.hpp"
 #include "python/python_runtime.hpp"
 #include "training/trainer.hpp"
 #include "visualizer/core/parameter_manager.hpp"
@@ -436,6 +437,7 @@ namespace lfs::python {
         case PropType::Enum:
             info["type"] = "enum";
             info["default"] = std::any_cast<int>(default_value);
+            info["default_identifier"] = enum_identifier(*meta, std::any_cast<int>(default_value));
             {
                 nb::list items;
                 for (const auto& ei : meta->enum_items) {
@@ -566,13 +568,10 @@ namespace lfs::python {
             case PropType::Enum: {
                 nb::object cls = props_module.attr("EnumProperty");
                 nb::list items;
-                std::string default_id;
                 const int default_enum = std::any_cast<int>(default_value);
+                const auto default_id = enum_identifier(meta, default_enum);
                 for (const auto& item : meta.enum_items) {
                     items.append(nb::make_tuple(item.identifier, item.name, ""));
-                    if (item.value == default_enum) {
-                        default_id = item.identifier;
-                    }
                 }
                 prop_obj = cls(
                     nb::arg("items") = items,

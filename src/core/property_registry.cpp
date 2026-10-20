@@ -5,6 +5,7 @@
 #include "core/property_registry.hpp"
 
 #include "core/logger.hpp"
+#include "core/property_defaults.hpp"
 
 #include <stdexcept>
 
@@ -16,6 +17,11 @@ namespace lfs::core::prop {
     }
 
     void PropertyRegistry::register_group(PropertyGroup group) {
+        for (const auto& property : group.properties) {
+            // Validate before replacing a registered group. A malformed enum
+            // default must not silently select a different item in the UI.
+            (void)enum_default_identifier(property);
+        }
         if (group.id == "optimization") {
             for (const auto& property : group.properties) {
                 if (!property.strategy_applicability_explicit) {

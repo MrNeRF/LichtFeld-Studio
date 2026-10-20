@@ -12,6 +12,7 @@
 #include <cmath>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
+#include <stdexcept>
 
 namespace lfs::python {
 
@@ -224,9 +225,9 @@ namespace lfs::python {
                     const auto item = std::ranges::find_if(meta.enum_items, [&](const auto& enum_item) {
                         return enum_item.identifier == identifier;
                     });
-                    if (item != meta.enum_items.end()) {
-                        meta.default_value = static_cast<int64_t>(item->value);
-                    }
+                    if (item == meta.enum_items.end())
+                        throw std::invalid_argument("Unknown enum default identifier for property: " + prop_id);
+                    meta.default_value = static_cast<int64_t>(item->value);
                     break;
                 }
                 case core::prop::PropType::Vec2: {
@@ -477,9 +478,7 @@ namespace lfs::python {
             if (meta.max_value) {
                 property["max"] = *meta.max_value;
             }
-            if (meta.default_value) {
-                property["default"] = prop_default_to_python(*meta.default_value);
-            }
+            add_property_default_info(property, meta);
             if (!meta.strategies.empty()) {
                 property["strategies"] = meta.strategies;
             }

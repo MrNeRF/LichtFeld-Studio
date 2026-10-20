@@ -110,6 +110,9 @@ namespace lfs::core::prop {
         double soft_min = 0.0;
         double soft_max = 1.0;
         double step = 1.0;
+        // Declared schema default. Enum defaults are EnumItem::value, not an
+        // item index or identifier. Context/session defaults are resolved by
+        // their owning API and do not mutate this declaration.
         std::optional<PropDefault> default_value;
         std::vector<EnumItem> enum_items;
         std::vector<std::string> strategies;

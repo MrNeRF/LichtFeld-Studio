@@ -679,14 +679,14 @@ namespace lfs::python {
         };
 
         auto add_int_enum = [&](int Proxy::*member, const std::string& id, const std::string& name,
-                                const std::string& desc, std::vector<EnumItem> items, int default_idx) {
+                                const std::string& desc, std::vector<EnumItem> items, int default_value) {
             PropertyMeta meta;
             meta.id = id;
             meta.name = name;
             meta.description = desc;
             meta.type = PropType::Enum;
             meta.enum_items = items;
-            meta.default_value = static_cast<int64_t>(default_idx);
+            meta.default_value = static_cast<int64_t>(default_value);
             meta.getter = [member, items](const PropertyObjectRef& ref) -> std::any {
                 int val = static_cast<const Proxy*>(ref.ptr)->*member;
                 for (const auto& item : items) {
@@ -927,7 +927,7 @@ namespace lfs::python {
                       {"1024", "1024", 1024},
                       {"2048", "2048", 2048},
                       {"4096", "4096", 4096}},
-                     2);
+                     2048);
 
         PropertyRegistry::instance().register_group(std::move(group));
     }
@@ -1041,13 +1041,9 @@ namespace lfs::python {
             case core::prop::PropType::Enum: {
                 nb::object cls = props_module.attr("EnumProperty");
                 nb::list items;
-                std::string default_id;
-                for (size_t i = 0; i < meta.enum_items.size(); ++i) {
-                    const auto& item = meta.enum_items[i];
+                const auto default_id = core::prop::enum_default_identifier(meta).value();
+                for (const auto& item : meta.enum_items) {
                     items.append(nb::make_tuple(item.identifier, item.name, ""));
-                    if (static_cast<int>(i) == std::get<int64_t>(meta.default_value.value())) {
-                        default_id = item.identifier;
-                    }
                 }
                 prop_obj = cls(
                     nb::arg("items") = items,
