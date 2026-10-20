@@ -133,7 +133,9 @@ namespace lfs::python {
             if (meta->max_value) {
                 info["max"] = *meta->max_value;
             }
-            add_property_default_info(info, *meta);
+            if (meta->default_value) {
+                info["default"] = prop_default_to_python(*meta->default_value);
+            }
 
             return info;
         }

@@ -118,7 +118,7 @@ namespace lfs::python {
     } // namespace
 
     static core::prop::PropertyMeta python_property_to_meta(nb::object descriptor, const std::string& prop_id,
-                                                            const bool operator_arg, const bool default_usable) {
+                                                            const bool operator_arg) {
         core::prop::PropertyMeta meta;
         meta.id = prop_id;
         meta.source = core::prop::PropSource::PYTHON;
@@ -203,7 +203,7 @@ namespace lfs::python {
             }
         }
 
-        if (!operator_arg && default_usable && nb::hasattr(descriptor, "default")) {
+        if (!operator_arg && nb::hasattr(descriptor, "default")) {
             nb::object default_val = descriptor.attr("default");
             if (!default_val.is_none()) {
                 switch (meta.type) {
@@ -224,8 +224,9 @@ namespace lfs::python {
                     const auto item = std::ranges::find_if(meta.enum_items, [&](const auto& enum_item) {
                         return enum_item.identifier == identifier;
                     });
-                    if (item != meta.enum_items.end())
+                    if (item != meta.enum_items.end()) {
                         meta.default_value = static_cast<int64_t>(item->value);
+                    }
                     break;
                 }
                 case core::prop::PropType::Vec2: {
@@ -416,11 +417,6 @@ namespace lfs::python {
         group.id = group_id;
         group.name = group_name;
 
-        const auto validate_default = nb::module_::import_("lfs_plugins.property_contract").attr("descriptor_default_issues");
-        const auto origin = nb::hasattr(property_group_class, "__module__")
-                                ? nb::cast<std::string>(property_group_class.attr("__module__"))
-                                : group_id;
-
         for (auto [key, value] : descriptors) {
             try {
                 std::string prop_id = nb::cast<std::string>(key);
@@ -430,13 +426,7 @@ namespace lfs::python {
                     nb::cast<nb::object>(class_dict[key]).is(descriptor);
                 const bool operator_arg =
                     direct_descriptor && is_legacy_operator_arg_descriptor(descriptor);
-                const auto issues = nb::cast<nb::list>(validate_default(descriptor));
-                const bool default_usable = issues.size() == 0;
-                for (auto issue : issues) {
-                    LOG_WARN("Property metadata '{}.{}' from '{}': {}; automatic default unavailable; property retained",
-                             group_id, prop_id, origin, nb::cast<std::string>(issue));
-                }
-                auto meta = python_property_to_meta(std::move(descriptor), prop_id, operator_arg, default_usable);
+                auto meta = python_property_to_meta(std::move(descriptor), prop_id, operator_arg);
                 group.properties.push_back(std::move(meta));
             } catch (const std::exception& e) {
                 LOG_WARN("Failed to convert property '{}': {}", group_id, e.what());
@@ -487,7 +477,9 @@ namespace lfs::python {
             if (meta.max_value) {
                 property["max"] = *meta.max_value;
             }
-            add_property_default_info(property, meta);
+            if (meta.default_value) {
+                property["default"] = prop_default_to_python(*meta.default_value);
+            }
             if (!meta.strategies.empty()) {
                 property["strategies"] = meta.strategies;
             }

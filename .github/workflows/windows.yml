@@ -230,10 +230,6 @@ jobs:
           cmake --build %BUILD_DIR% --target lichtfeld_format_tests -j %NUMBER_OF_PROCESSORS%
           ctest --test-dir %BUILD_DIR% --output-on-failure --no-tests=error -R "^lichtfeld_format_tests$"
 
-      - name: Require CPU property contracts without skips
-        shell: cmd
-        run: '"%BUILD_DIR%\vcpkg_installed\x64-windows\tools\python3\python.exe" tools/check_property_contracts.py --cpu-tests "%BUILD_DIR%\tests\lichtfeld_format_tests.exe"'
-
       - name: Build and run EXR image codec tests
         shell: cmd
         run: |

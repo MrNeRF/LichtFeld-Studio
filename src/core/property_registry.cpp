@@ -5,7 +5,6 @@
 #include "core/property_registry.hpp"
 
 #include "core/logger.hpp"
-#include "core/property_defaults.hpp"
 
 #include <stdexcept>
 
@@ -17,15 +16,6 @@ namespace lfs::core::prop {
     }
 
     void PropertyRegistry::register_group(PropertyGroup group) {
-        for (auto& property : group.properties) {
-            // Legacy declarations remain usable. Only unsafe automatic default
-            // metadata is omitted; getters, setters and ordinary UI are retained.
-            if (property.type == PropType::Enum && property.default_value && !enum_default_identifier(property)) {
-                LOG_WARN("Property metadata '{}.{}': invalid or ambiguous enum default; automatic default unavailable; property retained",
-                         group.id, property.id);
-                property.default_value.reset();
-            }
-        }
         if (group.id == "optimization") {
             for (const auto& property : group.properties) {
                 if (!property.strategy_applicability_explicit) {

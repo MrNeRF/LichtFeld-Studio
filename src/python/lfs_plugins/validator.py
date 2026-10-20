@@ -6,7 +6,6 @@ import ast
 import re
 import sys
 from _lfs_path_io import Path
-from .property_contract import check_property_defaults
 
 from .compat import (
     LICHTFELD_VERSION,
@@ -27,7 +26,7 @@ def _read_text(path: Path) -> str:
 
 
 def validate_plugin(plugin_path: str | Path) -> list[str]:
-    """Preflight structure, compatibility and literal defaults without loading a plugin."""
+    """Validate plugin structure and manifest. Returns list of errors (empty if valid)."""
     plugin_dir = Path(plugin_path)
     errors = []
 
@@ -76,11 +75,9 @@ def validate_plugin(plugin_path: str | Path) -> list[str]:
             errors.append("Missing on_unload() function")
 
     errors.extend(_check_panel_assets(plugin_dir))
-    errors.extend(check_property_defaults(plugin_dir))
     errors.extend(_check_venv(plugin_dir))
 
     return errors
-
 
 
 def _check_venv(plugin_dir: Path) -> list[str]:

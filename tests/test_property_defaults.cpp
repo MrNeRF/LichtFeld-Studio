@@ -57,43 +57,12 @@ TEST(PropertyDefaults, RejectsWrongVariantAndUnknownContextValues) {
     EXPECT_THROW((void)enum_identifier(meta, 2048), std::invalid_argument);
 }
 
-TEST(PropertyDefaults, InvalidDefaultRetainsPropertyAndOrdinaryAccess) {
-    constexpr auto group_id = "tests.property_defaults";
-    auto& registry = PropertyRegistry::instance();
-    registry.register_group({group_id, "Defaults", {sparse_enum()}});
-    auto invalid = sparse_enum();
-    invalid.default_value = int64_t{1};
-    int current = 512;
-    invalid.getter = [](const PropertyObjectRef& ref) -> std::any { return *static_cast<const int*>(ref.ptr); };
-    invalid.setter = [](PropertyObjectRef& ref, const std::any& value) { *static_cast<int*>(ref.ptr) = std::any_cast<int>(value); };
-    EXPECT_NO_THROW(registry.register_group({group_id, "Legacy", {invalid}}));
-    const auto saved = registry.get_property(group_id, "resolution");
-    ASSERT_TRUE(saved);
-    EXPECT_FALSE(saved->default_value);
-    auto ref = PropertyObjectRef::cpp(&current);
-    EXPECT_EQ(std::any_cast<int>(saved->getter(ref)), 512);
-    saved->setter(ref, 4096);
-    EXPECT_EQ(current, 4096);
-    registry.unregister_group(group_id);
-}
-
 TEST(PropertyDefaults, AmbiguousIdentifiersAndValuesDisableAutomaticDefaults) {
     auto meta = sparse_enum();
     meta.enum_items.push_back({"Alias", "medium", 8192});
     EXPECT_FALSE(enum_default_identifier(meta));
     meta.enum_items.back() = {"Alias", "alias", 2048};
     EXPECT_FALSE(enum_default_identifier(meta));
-}
-
-TEST(PropertyDefaults, OperatorArgumentsDoNotAcquireSchemaDefaults) {
-    auto& registry = PropertyRegistry::instance();
-    auto arg = sparse_enum();
-    arg.default_value = int64_t{1};
-    registry.register_operator_args("tests.property_defaults", {arg});
-    const auto saved = registry.get_property("operator.tests.property_defaults", "resolution");
-    ASSERT_TRUE(saved);
-    EXPECT_FALSE(saved->default_value);
-    registry.unregister_operator_args("tests.property_defaults");
 }
 
 TEST(PropertyDefaults, BuilderPreservesUnderlyingEnumValues) {
