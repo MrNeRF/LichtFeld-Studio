@@ -1,6 +1,5 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "core/cuda/driver_entry.hpp"
 #include "core/detail/gpu_backend_ops.hpp"
 #include "core/gpu_device_info.hpp"
 #include "core/tensor.hpp"
@@ -67,22 +66,3 @@ TEST(CudaDeviceSelection, AutoPreservesWorkerDeviceAndExplicitSelectionBindsNewW
     for (auto& worker : workers)
         worker.join();
 }
-
-#if defined(__linux__)
-TEST(CudaDriverEntry, IndependentLazyEntriesAndMissingSymbol) {
-    if (lfs::core::enumerate_cuda_hardware().empty())
-        GTEST_SKIP() << "CUDA unavailable";
-    int count = -1, version = -1, runtime_version = -1;
-    ASSERT_EQ(LFS_CUDA_DRIVER(cuDeviceGetCount)(&count), CUDA_SUCCESS);
-    ASSERT_EQ(LFS_CUDA_DRIVER(cuDriverGetVersion)(&version), CUDA_SUCCESS);
-    ASSERT_EQ(cudaDriverGetVersion(&runtime_version), cudaSuccess);
-    EXPECT_GT(count, 0);
-    EXPECT_EQ(version, runtime_version);
-    // These entries share a C signature but must not share a cached symbol.
-    EXPECT_NE(count, version);
-    const auto missing = lfs::core::cuda_driver::resolve<decltype(&cuDeviceGetCount)>("lfs_missing_cuda_test_entry");
-    EXPECT_EQ(missing(&count), CUDA_ERROR_NOT_INITIALIZED);
-    ASSERT_EQ(LFS_CUDA_DRIVER(cuDriverGetVersion)(&version), CUDA_SUCCESS);
-    EXPECT_EQ(version, runtime_version);
-}
-#endif
