@@ -282,7 +282,7 @@ namespace lfs::core {
             const bool use_pinned) {
             auto* const timing = active_tensor_load_timing;
             const auto run_timed =
-                [timing](double serialization_detail::TensorLoadTiming::* member,
+                [timing](double serialization_detail::TensorLoadTiming::*member,
                          auto&& fn) {
                     if (timing == nullptr) {
                         fn();
@@ -330,7 +330,7 @@ namespace lfs::core {
                 }
                 auto* const timing = active_tensor_load_timing;
                 const auto run_timed =
-                    [timing](double TensorLoadTiming::* member, auto&& fn) {
+                    [timing](double TensorLoadTiming::*member, auto&& fn) {
                         if (timing == nullptr) {
                             fn();
                             return;

@@ -2343,10 +2343,9 @@ namespace lfs::core::internal {
     void MetalBackendOps::rasterize_points(const PointRasterProgram& program, ExecContext) {
         LFS_FACADE_TRACE(rasterize_points);
         struct Params {
-            uint64_t positions, colors, parameters, scratch, image, depth, transforms, indices, visibility, deleted;
-            uint32_t count, width, height, channels, transform_count, visibility_count, flags;
+            uint64_t positions, colors, parameters, scratch, image, depth, transforms, indices, visibility, deleted, overlay;
+            uint32_t count, width, height, transform_count, visibility_count, flags;
             float ortho_scale, focal_y, voxel_size, far_plane;
-            uint32_t padding;
         };
         static_assert(sizeof(Params) == 128);
         const auto context = acquire_context();
@@ -2364,10 +2363,10 @@ namespace lfs::core::internal {
             .indices = address(program.indices),
             .visibility = address(program.visibility),
             .deleted = address(program.deleted),
+            .overlay = address(program.overlay),
             .count = checked_u32(program.count, "Metal point raster count exceeds uint32"),
             .width = program.width,
             .height = program.height,
-            .channels = program.channels,
             .transform_count = program.transform_count,
             .visibility_count = program.visibility_count,
             .flags = program.flags,
@@ -2375,12 +2374,11 @@ namespace lfs::core::internal {
             .focal_y = program.focal_y,
             .voxel_size = program.voxel_size,
             .far_plane = program.far_plane,
-            .padding = 0,
         };
-        std::array<StorageRef, 10> uses{program.positions, program.colors, program.parameters,
+        std::array<StorageRef, 11> uses{program.positions, program.colors, program.parameters,
                                         program.scratch, program.image, program.depth};
         size_t used = 6;
-        for (const auto& operand : {program.transforms, program.indices, program.visibility, program.deleted}) {
+        for (const auto& operand : {program.transforms, program.indices, program.visibility, program.deleted, program.overlay}) {
             if (operand)
                 uses[used++] = *operand;
         }

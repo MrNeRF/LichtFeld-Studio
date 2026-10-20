@@ -60,7 +60,8 @@ namespace lfs::vis::gui {
                    element->GetId() != "overlay-body" &&
                    element->GetId() != "dm-root" &&
                    element->GetId() != "viewport-content" &&
-                   !element->IsClassSet("viewport-split-divider");
+                   !element->IsClassSet("viewport-split-divider") &&
+                   !element->IsClassSet("comparison-name");
         }
 
         [[nodiscard]] bool isViewportOverlayHoverRoot(const Rml::Element* const element) {
@@ -445,6 +446,12 @@ namespace lfs::vis::gui {
 
     void RmlViewportOverlay::setSplitDividerOverlay(SplitDividerOverlayState state) {
         const bool changed =
+            split_divider_overlay_.left_name != state.left_name ||
+            split_divider_overlay_.right_name != state.right_name ||
+            split_divider_overlay_.left_name_right != state.left_name_right ||
+            split_divider_overlay_.right_name_right != state.right_name_right ||
+            split_divider_overlay_.name_bottom != state.name_bottom ||
+            split_divider_overlay_.name_max_width != state.name_max_width ||
             split_divider_overlay_.visible != state.visible ||
             std::abs(split_divider_overlay_.x - state.x) > 0.5f ||
             std::abs(split_divider_overlay_.y - state.y) > 0.5f ||
@@ -908,6 +915,17 @@ namespace lfs::vis::gui {
             overlay->SetProperty("height", std::format("{:.1f}px", std::max(split_divider_overlay_.height, 0.0f)));
             markRenderNeeded(RenderReason::SplitDivider);
         }
+        const auto apply_name = [&](const char* id, const std::string& name, float right) {
+            if (auto* element = document_->GetElementById(id)) {
+                element->SetClass("hidden", name.empty());
+                element->SetInnerRML(Rml::StringUtilities::EncodeRml(name));
+                element->SetProperty("right", std::format("{:.1f}px", vp_size_.x - right));
+                element->SetProperty("bottom", std::format("{:.1f}px", vp_size_.y - split_divider_overlay_.name_bottom));
+                element->SetProperty("max-width", std::format("{:.1f}px", split_divider_overlay_.name_max_width));
+            }
+        };
+        apply_name("comparison-name-left", split_divider_overlay_.left_name, split_divider_overlay_.left_name_right);
+        apply_name("comparison-name-right", split_divider_overlay_.right_name, split_divider_overlay_.right_name_right);
     }
 
     void RmlViewportOverlay::applyGTMetricsOverlay() {

@@ -1051,9 +1051,9 @@
     "navigation_mode": "ナビゲーションモード",
     "zoom_speed": "ズーム速度",
     "zoom_speed_tooltip": "マウスホイールでカメラをズームする際の既定の速度。",
-    "gt_comparison_key_repeat": "矢印キーの長押しでカメラ画像を切り替え",
-    "gt_comparison_repeat_rate": "1秒あたりの画像数",
-    "gt_comparison_key_repeat_tooltip": "左右の矢印キーを長押しするとカメラ画像を切り替えます。GT比較の有無を問いません。離すと停止します。",
+    "camera_browse_repeat": "矢印キーの長押しでカメラ画像を切り替え",
+    "camera_browse_repeat_rate": "1秒あたりの画像数",
+    "camera_browse_repeat_tooltip": "左右の矢印キーを長押しするとカメラ画像を切り替えます。GT比較の有無を問いません。離すと停止します。",
     "navigation_speed": "ナビゲーション速度",
     "navigation_speed_tooltip": "WASD でカメラを移動する際の既定の速度。",
     "camera_view_snap": "軸ビューにスナップ",
@@ -1635,7 +1635,7 @@
     "create": "作成"
   },
   "notification": {
-    "split_view_requires_two_models": "分割ビューには、表示中のモデル（スプラットまたはメッシュ）が2つ必要です。",
+    "split_view_requires_two_models": "分割ビューには、表示中のモデル（スプラット、点群、またはメッシュ）が2つ必要です。",
     "merge_nodes_kept": "統合時にスプラット以外のノードを {} 個保持しました。",
     "duplicate_training_data_skipped": "複製時に学習データ（データセット、カメラ、画像）はスキップされました。",
     "dropped_not_recognized": "ドロップされた",

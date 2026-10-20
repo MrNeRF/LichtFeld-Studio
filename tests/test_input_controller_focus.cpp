@@ -561,6 +561,8 @@ namespace lfs::vis {
         ASSERT_TRUE(rendering_manager.isGTComparisonActive());
         const auto press = [&](const int key, const int expected_uid) {
             controller.handleKey(key, input::ACTION_PRESS, input::KEYMOD_NONE);
+            // Browsing repeats on its own timer; an OS repeat must not add a step.
+            controller.handleKey(key, input::ACTION_REPEAT, input::KEYMOD_NONE);
             controller.handleKey(key, input::ACTION_RELEASE, input::KEYMOD_NONE);
             controller.update(0.016f);
             EXPECT_EQ(rendering_manager.getCurrentCameraId(), expected_uid);
@@ -2347,7 +2349,7 @@ namespace lfs::vis {
         bool published = false;
         bool source_open_at_publish = false;
 #ifdef __linux__
-        struct stat source_identity{};
+        struct stat source_identity {};
         ASSERT_EQ(::stat(profile_path.c_str(), &source_identity), 0);
 #endif
         loaded.setOnBindingsChanged([&] {
@@ -2362,7 +2364,7 @@ namespace lfs::vis {
                 const auto fd = std::strtol(fd_text.c_str(), &parsed_end, 10);
                 if (parsed_end == fd_text.c_str() || fd < 0)
                     continue;
-                struct stat open_identity{};
+                struct stat open_identity {};
                 if (::fstat(static_cast<int>(fd), &open_identity) != 0)
                     continue;
                 if (open_identity.st_dev == source_identity.st_dev &&

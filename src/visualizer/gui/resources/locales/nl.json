@@ -1051,9 +1051,9 @@
     "navigation_mode": "Navigatiemodus",
     "zoom_speed": "Zoomsnelheid",
     "zoom_speed_tooltip": "Standaardsnelheid voor het zoomen van de camera met het muiswiel.",
-    "gt_comparison_key_repeat": "Camerabeelden doorlopen met ingedrukte pijltjestoetsen",
-    "gt_comparison_repeat_rate": "Beelden per seconde",
-    "gt_comparison_key_repeat_tooltip": "Houd Links of Rechts ingedrukt om camerabeelden te doorlopen, met of zonder GT-vergelijking. Laat los om te stoppen.",
+    "camera_browse_repeat": "Camerabeelden doorlopen met ingedrukte pijltjestoetsen",
+    "camera_browse_repeat_rate": "Beelden per seconde",
+    "camera_browse_repeat_tooltip": "Houd Links of Rechts ingedrukt om camerabeelden te doorlopen, met of zonder GT-vergelijking. Laat los om te stoppen.",
     "navigation_speed": "Navigatiesnelheid",
     "navigation_speed_tooltip": "Standaardsnelheid voor het bewegen van de camera met WASD.",
     "camera_view_snap": "Asweergaven uitlijnen",
@@ -1635,7 +1635,7 @@
     "create": "Maken"
   },
   "notification": {
-    "split_view_requires_two_models": "Voor de gesplitste weergave zijn twee zichtbare modellen nodig (splats of meshes).",
+    "split_view_requires_two_models": "Voor de gesplitste weergave zijn twee zichtbare modellen nodig (splats, puntenwolken of meshes).",
     "merge_nodes_kept": "Bij het samenvoegen zijn {} niet-splat-knooppunten behouden.",
     "duplicate_training_data_skipped": "Trainingsgegevens (datasets, camera’s en afbeeldingen) zijn overgeslagen bij het dupliceren.",
     "dropped_not_recognized": "Het gesleepte",

@@ -1064,9 +1064,9 @@
     "navigation_mode": "Modalità di navigazione",
     "zoom_speed": "Velocità di zoom",
     "zoom_speed_tooltip": "Velocità predefinita per lo zoom con la rotellina del mouse.",
-    "gt_comparison_key_repeat": "Tieni premute le frecce per scorrere le immagini",
-    "gt_comparison_repeat_rate": "Immagini al secondo",
-    "gt_comparison_key_repeat_tooltip": "Tieni premuto Sinistra o Destra per scorrere le immagini delle fotocamere, con o senza confronto GT. Rilascia per fermarti.",
+    "camera_browse_repeat": "Tieni premute le frecce per scorrere le immagini",
+    "camera_browse_repeat_rate": "Immagini al secondo",
+    "camera_browse_repeat_tooltip": "Tieni premuto Sinistra o Destra per scorrere le immagini delle fotocamere, con o senza confronto GT. Rilascia per fermarti.",
     "navigation_speed": "Velocità di navigazione",
     "navigation_speed_tooltip": "Velocità predefinita per muovere la camera con WASD.",
     "camera_view_snap": "Aggancia alle viste assiali",
@@ -1648,7 +1648,7 @@
     "create": "Crea"
   },
   "notification": {
-    "split_view_requires_two_models": "La vista divisa richiede due modelli visibili (splat o mesh).",
+    "split_view_requires_two_models": "La vista divisa richiede due modelli visibili (splat, nuvole di punti o mesh).",
     "merge_nodes_kept": "L’unione ha mantenuto {} nodi non splat.",
     "duplicate_training_data_skipped": "I dati di addestramento (dataset, fotocamere e immagini) sono stati esclusi dalla duplicazione.",
     "dropped_not_recognized": "L'elemento trascinato",

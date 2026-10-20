@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <span>
 #include <utility>
 
 namespace lfs::core {
@@ -100,6 +101,11 @@ namespace lfs::core {
         std::array<float, 3> crop_max{};
         bool crop_inverse = false;
         bool crop_desaturate = false;
+        // RGBA rows on the host: selection group g tints with row g, the brush
+        // preview with row 256. Required with a selection or preview mask.
+        std::span<const float> selection_colors{};
+        // Preview marks unselected points (adding) or selected ones (removing).
+        bool preview_additive = false;
     };
 
     // Splat Float32 [N,3] points with Float32 [N,3] colors in [0,1] as
@@ -110,14 +116,18 @@ namespace lfs::core {
     // Optional column-major Float32 [T,16] transforms apply per Int32 [N]
     // index (clamped to [0,T-1], zero without indices); a Bool/UInt8 [T]
     // visibility table hides points by that index, and a Bool/UInt8 [N]
-    // deleted mask hides points. Runs on the
-    // Vulkan and Metal backends; CUDA builds rasterize in the renderer.
+    // deleted mask hides points. Bool/UInt8 [N] selection groups (0 = none)
+    // and preview flags tint and enlarge disks using selection_colors.
+    // All tensors share a GPU backend. Runs on Vulkan and Metal; CUDA builds
+    // rasterize in the renderer.
     LFS_CORE_API std::pair<Tensor, Tensor> rasterize_points(const Tensor& points, const Tensor& colors,
                                                             const PointRaster& raster,
                                                             const Tensor* transforms = nullptr,
                                                             const Tensor* indices = nullptr,
                                                             const Tensor* visibility = nullptr,
-                                                            const Tensor* deleted = nullptr);
+                                                            const Tensor* deleted = nullptr,
+                                                            const Tensor* selection = nullptr,
+                                                            const Tensor* preview = nullptr);
 
     // For each Float32 [N,3] point, return whether a reference point is within
     // the inclusive radius. references is a Bool or UInt8 [N] mask; nonzero

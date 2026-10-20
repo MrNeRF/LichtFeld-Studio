@@ -535,6 +535,24 @@ namespace lfs::rendering {
                 deleted_mask_cuda = deleted_mask_cuda.contiguous();
             }
 
+            // A mask sized for another point count is stale; draw the points without it.
+            const auto prepare_overlay_mask = [&](const Tensor* source) {
+                if (!source || !source->is_valid() || source->numel() != positions_source.size(0))
+                    return Tensor{};
+                Tensor result = source->to(lfs::core::DataType::UInt8);
+                if (result.device() != lfs::core::Device::GPU)
+                    result = result.gpu();
+                return result.contiguous();
+            };
+            Tensor selection_cuda = prepare_overlay_mask(request.overlay.selection_mask.get());
+            Tensor preview_cuda = prepare_overlay_mask(request.overlay.transient_mask.mask);
+            std::vector<float> selection_colors;
+            if (selection_cuda.is_valid() || preview_cuda.is_valid()) {
+                selection_colors.reserve(kSelectionColorTableCount * 4);
+                for (const auto& color : request.overlay.selection_colors)
+                    selection_colors.insert(selection_colors.end(), {color.r, color.g, color.b, color.a});
+            }
+
             const glm::mat4 view = request.frame_view.getViewMatrix();
             // A clipped target keeps the full camera: points project into camera_size and
             // land at pixel - subregion_origin in the target.
@@ -603,6 +621,8 @@ namespace lfs::rendering {
                                    request.frame_view.background_color.b},
                     .crop_inverse = request.filters.crop_inverse,
                     .crop_desaturate = request.filters.crop_desaturate,
+                    .selection_colors = selection_colors,
+                    .preview_additive = request.overlay.transient_mask.additive,
                 };
                 std::copy_n(glm::value_ptr(view), 16, raster.view.begin());
                 std::copy_n(glm::value_ptr(raster_view_proj), 16, raster.view_projection.begin());
@@ -621,7 +641,8 @@ namespace lfs::rendering {
                 auto [image_tensor, depth_tensor] = lfs::core::rasterize_points(
                     positions_cuda, colors_cuda, raster, optional_tensor(transforms_cuda),
                     optional_tensor(transform_indices_cuda), optional_tensor(visibility_cuda),
-                    optional_tensor(deleted_mask_cuda));
+                    optional_tensor(deleted_mask_cuda), optional_tensor(selection_cuda),
+                    optional_tensor(preview_cuda));
                 if (crop_full_camera) {
                     const auto window = [&](const Tensor& full) {
                         return full
@@ -659,6 +680,15 @@ namespace lfs::rendering {
                 transform_indices_cuda.is_valid() ? transform_indices_cuda.ptr<std::int32_t>() : nullptr;
             params.visibility_mask = visibility_cuda.is_valid() ? visibility_cuda.ptr<std::uint8_t>() : nullptr;
             params.deleted_mask = deleted_mask_cuda.is_valid() ? deleted_mask_cuda.ptr<bool>() : nullptr;
+            Tensor selection_colors_cuda;
+            if (!selection_colors.empty())
+                selection_colors_cuda = Tensor::from_vector(
+                    selection_colors, {kSelectionColorTableCount, size_t{4}}, lfs::core::Device::GPU);
+            params.selection_mask = selection_cuda.is_valid() ? selection_cuda.ptr<std::uint8_t>() : nullptr;
+            params.preview_mask = preview_cuda.is_valid() ? preview_cuda.ptr<std::uint8_t>() : nullptr;
+            params.selection_colors = selection_colors_cuda.is_valid() ? selection_colors_cuda.ptr<float>() : nullptr;
+            params.preview_additive = request.overlay.transient_mask.additive;
+            lfs::core::pin_operands({&selection_cuda, &preview_cuda, &selection_colors_cuda});
             params.n_points = static_cast<std::size_t>(positions_source.size(0));
             params.n_transforms = static_cast<int>(transforms.size());
             params.n_visibility = static_cast<int>(request.scene.node_visibility_mask.size());

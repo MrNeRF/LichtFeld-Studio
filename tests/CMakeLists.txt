@@ -386,6 +386,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         test_training_manager_capacity.cpp
         test_vram_hud_geometry.cpp
         test_vram_hud_header_click.cpp
+        test_input_key_repeat.cpp
     )
     # Match the renderer sources in src/visualizer: Metal builds (including
     # Vulkan-graphics/Metal-tensor hybrids) use the Metal scene renderer and
@@ -1349,12 +1350,14 @@ set(TEST_FILES
     test_rml_pointer_routing.cpp
     test_point_cloud_raster_orientation.cpp
     test_point_cloud_vulkan_projection.cpp
+    test_point_cloud_selection_overlay.cpp
     test_viewport_grid.cpp
     test_theme_registry.cpp
     test_viewport.cpp
     test_navigation_up_axis.cpp
-    test_gt_navigation_repeat.cpp
+    test_camera_browse_repeat.cpp
     test_input_controller_focus.cpp
+    test_input_key_repeat.cpp
     test_input_layout_chords.cpp
     test_keymap_layout_contract.cpp
     test_keymap_profile_io.cpp

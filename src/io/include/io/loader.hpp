@@ -157,6 +157,8 @@ namespace lfs::io {
         // Set when the source is a 3D Tiles tileset, whether it streams or loaded flat.
         bool is_tileset = false;
         std::optional<PhotoReconstructionView> photo_view;
+        // Keep legacy editable SplatData storage; comparisons draw these as points.
+        bool point_cloud_source = false;
     };
 
     /**

@@ -754,7 +754,7 @@ namespace lfs::vis {
             current_cursor_ = CursorType::Default;
         }
         held_keys_.clear();
-        gt_navigation_repeat_.stop();
+        camera_browse_repeat_.stop();
         selection_drag_op_.reset();
         pending_click_drag_ = {};
         forced_mouse_press_action_ = input::Action::NONE;
@@ -2220,7 +2220,7 @@ namespace lfs::vis {
                                     const int scancode, int action, int mods, const bool owned_release, const bool gui_consumed) {
         // Clear before any GUI/modal early return, including owned key releases.
         if (action == input::ACTION_RELEASE)
-            gt_navigation_repeat_.release(physical_key);
+            camera_browse_repeat_.release(physical_key);
         // Track modifier keys (always, even if GUI has focus)
         if (physical_key == input::KEY_LEFT_CONTROL || physical_key == input::KEY_RIGHT_CONTROL) {
             key_ctrl_pressed_ = (action != input::ACTION_RELEASE);
@@ -2308,9 +2308,10 @@ namespace lfs::vis {
         const int printed_punctuation = input::sdlPrintedKeyToAppKey(printed_keycode);
         const bool shift_needed_for_printed_key =
             (mods & input::MODIFIER_SHIFT) != 0 && printed_keycode != unshifted_keycode;
+        bool binding_repeats = false;
         auto bound_action = bindings_.getActionForShortcut(
             tool_mode, physical_key, logical_key, mods, printed_punctuation,
-            shift_needed_for_printed_key);
+            shift_needed_for_printed_key, &binding_repeats);
         if (bound_action == input::Action::NONE) {
             bound_action = resolveCrossToolActivationShortcut(
                 bindings_, tool_mode, physical_key, logical_key, mods);
@@ -2450,14 +2451,12 @@ namespace lfs::vis {
             break;
         }
 
-        // Only speed controls support key repeat
-        if (action == input::ACTION_REPEAT) {
-            if (bound_action != input::Action::CAMERA_SPEED_UP &&
-                bound_action != input::Action::CAMERA_SPEED_DOWN &&
-                bound_action != input::Action::ZOOM_SPEED_UP &&
-                bound_action != input::Action::ZOOM_SPEED_DOWN) {
-                return;
-            }
+        // A held key repeats when its binding or the action asks for it. Camera
+        // browsing repeats on its own timer at the preference rate instead.
+        if (action == input::ACTION_REPEAT &&
+            (bound_action == input::Action::CAMERA_NEXT_VIEW || bound_action == input::Action::CAMERA_PREV_VIEW ||
+             !(binding_repeats || input::describe(bound_action).repeats_on_hold))) {
+            return;
         }
 
         if (action == input::ACTION_PRESS) {
@@ -2589,9 +2588,9 @@ namespace lfs::vis {
             case input::Action::CAMERA_PREV_VIEW: {
                 const int delta = bound_action == input::Action::CAMERA_NEXT_VIEW ? 1 : -1;
                 if (advanceCameraView(delta)) {
-                    if (UserPreferences::instance().gtComparisonKeyRepeat()) {
-                        gt_navigation_repeat_modifiers_ = mods;
-                        gt_navigation_repeat_.start(physical_key, delta, input::GTNavigationRepeat::Clock::now());
+                    if (UserPreferences::instance().cameraBrowseRepeat()) {
+                        camera_browse_repeat_modifiers_ = mods;
+                        camera_browse_repeat_.start(physical_key, delta, input::CameraBrowseRepeat::Clock::now());
                     }
                 }
                 return;
@@ -2923,8 +2922,8 @@ namespace lfs::vis {
         return false;
     }
 
-    void InputController::updateGTNavigationRepeat() {
-        if (!gt_navigation_repeat_.active())
+    void InputController::updateCameraBrowseRepeat() {
+        if (!camera_browse_repeat_.active())
             return;
         auto& preferences = UserPreferences::instance();
         // The viewport owned the press. A transient unassigned focus does not
@@ -2932,22 +2931,22 @@ namespace lfs::vis {
         if (!input_router_ || input_router_->keyboardFocus() == input::InputTarget::Gui ||
             input_router_->isTextInputActive() || input_router_->isModalOpen() ||
             bindings_.isCapturing() || lfs::python::has_keyboard_capture_request() ||
-            !preferences.gtComparisonKeyRepeat() ||
-            !isKeyPressed(gt_navigation_repeat_.key()) || getModifierKeys() != gt_navigation_repeat_modifiers_) {
-            gt_navigation_repeat_.stop();
+            !preferences.cameraBrowseRepeat() ||
+            !isKeyPressed(camera_browse_repeat_.key()) || getModifierKeys() != camera_browse_repeat_modifiers_) {
+            camera_browse_repeat_.stop();
             return;
         }
-        if (const int delta = gt_navigation_repeat_.poll(input::GTNavigationRepeat::Clock::now(),
-                                                         preferences.gtComparisonRepeatRate());
+        if (const int delta = camera_browse_repeat_.poll(input::CameraBrowseRepeat::Clock::now(),
+                                                         preferences.cameraBrowseRepeatRate());
             delta != 0 && !advanceCameraView(delta)) {
-            gt_navigation_repeat_.stop();
+            camera_browse_repeat_.stop();
         }
     }
 
     void InputController::update(float delta_time) {
         if (drag_view_ != kNoView && !dragViewport())
             clearViewportDragState();
-        updateGTNavigationRepeat();
+        updateCameraBrowseRepeat();
         decayHeldDragMomentum();
         maybeInitializeDepthViewRange();
 

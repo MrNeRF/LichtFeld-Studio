@@ -1051,9 +1051,9 @@
     "navigation_mode": "导航模式",
     "zoom_speed": "缩放速度",
     "zoom_speed_tooltip": "使用鼠标滚轮缩放相机的默认速度。",
-    "gt_comparison_key_repeat": "按住方向键浏览相机图像",
-    "gt_comparison_repeat_rate": "每秒图像数",
-    "gt_comparison_key_repeat_tooltip": "按住左键或右键浏览相机图像，无需开启GT对比。松开即停止。",
+    "camera_browse_repeat": "按住方向键浏览相机图像",
+    "camera_browse_repeat_rate": "每秒图像数",
+    "camera_browse_repeat_tooltip": "按住左/右方向键浏览相机图像，无需开启GT对比。松开即停止。",
     "navigation_speed": "导航速度",
     "navigation_speed_tooltip": "使用 WASD 移动相机的默认速度。",
     "camera_view_snap": "对齐轴视图",
@@ -1635,7 +1635,7 @@
     "create": "创建"
   },
   "notification": {
-    "split_view_requires_two_models": "分屏视图需要两个可见的模型（Splat 或网格）。",
+    "split_view_requires_two_models": "分屏视图需要两个可见的模型（Splat、点云或网格）。",
     "merge_nodes_kept": "合并保留了 {} 个非 splat 节点。",
     "duplicate_training_data_skipped": "复制时已跳过训练数据（数据集、相机和图像）。",
     "dropped_not_recognized": "拖放的",

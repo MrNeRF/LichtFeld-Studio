@@ -438,10 +438,9 @@ namespace lfs::core::internal {
         LFS_FACADE_TRACE(rasterize_points);
         const auto context = acquire_vulkan_context();
         struct Push {
-            uint64_t positions, colors, parameters, scratch, image, depth, transforms, indices, visibility, deleted;
-            uint32_t count, width, height, channels, transform_count, visibility_count, flags;
+            uint64_t positions, colors, parameters, scratch, image, depth, transforms, indices, visibility, deleted, overlay;
+            uint32_t count, width, height, transform_count, visibility_count, flags;
             float ortho_scale, focal_y, voxel_size, far_plane;
-            uint32_t padding;
         };
         static_assert(sizeof(Push) == 128);
         const auto address = [](const std::optional<StorageRef>& storage) {
@@ -458,10 +457,10 @@ namespace lfs::core::internal {
             .indices = address(program.indices),
             .visibility = address(program.visibility),
             .deleted = address(program.deleted),
+            .overlay = address(program.overlay),
             .count = static_cast<uint32_t>(program.count),
             .width = program.width,
             .height = program.height,
-            .channels = program.channels,
             .transform_count = program.transform_count,
             .visibility_count = program.visibility_count,
             .flags = program.flags,
@@ -469,11 +468,10 @@ namespace lfs::core::internal {
             .focal_y = program.focal_y,
             .voxel_size = program.voxel_size,
             .far_plane = program.far_plane,
-            .padding = 0,
         };
-        std::array<StorageRef, 7> reads{program.positions, program.colors, program.parameters};
+        std::array<StorageRef, 8> reads{program.positions, program.colors, program.parameters};
         size_t read_count = 3;
-        for (const auto& operand : {program.transforms, program.indices, program.visibility, program.deleted}) {
+        for (const auto& operand : {program.transforms, program.indices, program.visibility, program.deleted, program.overlay}) {
             if (operand)
                 reads[read_count++] = *operand;
         }

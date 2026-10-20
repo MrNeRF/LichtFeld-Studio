@@ -8,7 +8,7 @@
 
 namespace lfs::vis::input {
     // Use wall time: the animation timestep is clamped and OS repeat rates vary.
-    class GTNavigationRepeat {
+    class CameraBrowseRepeat {
     public:
         using Clock = std::chrono::steady_clock;
         void start(int key, int direction, Clock::time_point now) {

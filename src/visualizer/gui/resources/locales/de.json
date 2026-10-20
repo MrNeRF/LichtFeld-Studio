@@ -1051,9 +1051,9 @@
     "navigation_mode": "Navigationsmodus",
     "zoom_speed": "Zoomgeschwindigkeit",
     "zoom_speed_tooltip": "Standardgeschwindigkeit für das Zoomen der Kamera mit dem Mausrad.",
-    "gt_comparison_key_repeat": "Kamerabilder mit gehaltenen Pfeiltasten wechseln",
-    "gt_comparison_repeat_rate": "Bilder pro Sekunde",
-    "gt_comparison_key_repeat_tooltip": "Links oder Rechts gedrückt halten, um Kamerabilder zu wechseln, mit oder ohne GT-Vergleich. Loslassen zum Stoppen.",
+    "camera_browse_repeat": "Kamerabilder mit gehaltenen Pfeiltasten wechseln",
+    "camera_browse_repeat_rate": "Bilder pro Sekunde",
+    "camera_browse_repeat_tooltip": "Links oder Rechts gedrückt halten, um Kamerabilder zu wechseln, mit oder ohne GT-Vergleich. Loslassen zum Stoppen.",
     "navigation_speed": "Navigationsgeschwindigkeit",
     "navigation_speed_tooltip": "Standardgeschwindigkeit für die Kamerabewegung mit WASD.",
     "camera_view_snap": "Ansichten an Achsen ausrichten",
@@ -1635,7 +1635,7 @@
     "create": "Erstellen"
   },
   "notification": {
-    "split_view_requires_two_models": "Die geteilte Ansicht benötigt zwei sichtbare Modelle (Splats oder Meshes).",
+    "split_view_requires_two_models": "Die geteilte Ansicht benötigt zwei sichtbare Modelle (Splats, Punktwolken oder Meshes).",
     "merge_nodes_kept": "Beim Zusammenführen wurden {} Nicht-Splat-Knoten beibehalten.",
     "duplicate_training_data_skipped": "Trainingsdaten (Datensätze, Kameras und Bilder) wurden beim Duplizieren übersprungen.",
     "dropped_not_recognized": "Das abgelegte",

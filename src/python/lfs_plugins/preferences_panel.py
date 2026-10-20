@@ -32,6 +32,18 @@ __lfs_panel_classes__ = ["PreferencesPanel"]
 __lfs_panel_ids__ = ["lfs.preferences"]
 
 
+def draft_change_handler(set_draft, commit):
+    """Change handler for a text field that keeps a draft and commits it on Enter."""
+
+    def on_change(_handle, event, args):
+        if args:
+            set_draft(args[0])
+        if event.get_bool_parameter("linebreak", False):
+            commit()
+
+    return on_change
+
+
 @panel_class("preferences")
 class PreferencesPanel(Panel):
     """Floating home for application-level preferences."""
@@ -272,12 +284,13 @@ class PreferencesPanel(Panel):
             lf.ui.get_navigation_speed_preference,
             self._set_navigation_speed,
         )
-        model.bind("gt_comparison_key_repeat", lf.ui.get_gt_comparison_key_repeat,
-                   self._set_gt_comparison_key_repeat)
-        model.bind("gt_comparison_repeat_rate", self._get_camera_repeat_rate_draft,
-                   self._set_gt_comparison_repeat_rate)
+        model.bind("camera_browse_repeat", lf.ui.get_camera_browse_repeat,
+                   self._set_camera_browse_repeat)
+        model.bind("camera_browse_repeat_rate", self._get_camera_repeat_rate_draft,
+                   self._set_camera_browse_repeat_rate)
         model.bind_event("step_camera_repeat_rate", self._step_camera_repeat_rate)
-        model.bind_event("camera_repeat_rate_change", self._on_camera_repeat_rate_change)
+        model.bind_event("camera_repeat_rate_change",
+                         draft_change_handler(self._set_camera_browse_repeat_rate, self._commit_camera_repeat_rate))
         model.bind_event("commit_camera_repeat_rate", lambda *_: self._commit_camera_repeat_rate())
         model.bind_event("cancel_camera_repeat_rate", lambda *_: self._cancel_camera_repeat_rate())
         model.bind("view_snap", lf.get_camera_view_snap_enabled, self._set_view_snap)
@@ -354,10 +367,11 @@ class PreferencesPanel(Panel):
         model.bind_event("portal_open", self._open_portal_verification)
         model.bind_event("set_file_association", self._on_set_file_association)
         model.bind_event("toggle_mcp_enabled", self._on_toggle_mcp_enabled)
-        model.bind_event("mcp_port_change", self._on_mcp_port_change)
-        model.bind_event("confirm_mcp_port", self._on_confirm_mcp_port)
-        model.bind_event("project_location_change", self._on_project_location_change)
-        model.bind_event("confirm_project_location", self._on_confirm_project_location)
+        model.bind_event("mcp_port_change", draft_change_handler(self._set_mcp_port, self._commit_mcp_port))
+        model.bind_event("confirm_mcp_port", lambda *_: self._commit_mcp_port())
+        model.bind_event("project_location_change",
+                         draft_change_handler(self._set_project_location_draft, self._commit_project_location))
+        model.bind_event("confirm_project_location", lambda *_: self._commit_project_location())
         model.bind_event("browse_project_location", self._on_browse_project_location)
         model.bind_event("use_default_project_location", self._on_use_default_project_location)
         model.bind_event("open_mcp_log_folder", self._on_open_mcp_log_folder)
@@ -512,8 +526,8 @@ class PreferencesPanel(Panel):
             float(lf.ui.get_zoom_speed_preference()),
             float(lf.ui.get_navigation_speed_preference()),
             tuple(sorted(lf.ui.get_trackpad_preferences().items())),
-            lf.ui.get_gt_comparison_key_repeat(),
-            float(lf.ui.get_gt_comparison_repeat_rate()),
+            lf.ui.get_camera_browse_repeat(),
+            float(lf.ui.get_camera_browse_repeat_rate()),
             lf.get_camera_view_snap_enabled(),
             getattr(lf.ui, "get_embed_dataset_by_default", lambda: False)(),
             lf.project_auto_save_on_close_enabled(),
@@ -965,25 +979,19 @@ class PreferencesPanel(Panel):
             bool(persist),
         )
 
-    def _set_gt_comparison_key_repeat(self, value):
-        lf.ui.set_gt_comparison_key_repeat(bool(value))
+    def _set_camera_browse_repeat(self, value):
+        lf.ui.set_camera_browse_repeat(bool(value))
         self._refresh_selection()
 
     def _get_camera_repeat_rate_draft(self):
         if self._camera_repeat_rate_draft is None:
-            return str(int(lf.ui.get_gt_comparison_repeat_rate()))
+            return str(int(lf.ui.get_camera_browse_repeat_rate()))
         return self._camera_repeat_rate_draft
 
-    def _set_gt_comparison_repeat_rate(self, value):
+    def _set_camera_browse_repeat_rate(self, value):
         # Retain empty and partial input until Enter or blur. Periodic refreshes
         # must read this draft, rather than restore the saved value mid-edit.
         self._camera_repeat_rate_draft = str(value)
-
-    def _on_camera_repeat_rate_change(self, _handle, event, args):
-        if args:
-            self._set_gt_comparison_repeat_rate(args[0])
-        if event.get_bool_parameter("linebreak", False):
-            self._commit_camera_repeat_rate()
 
     def _cancel_camera_repeat_rate(self):
         self._camera_repeat_rate_draft = None
@@ -995,8 +1003,8 @@ class PreferencesPanel(Panel):
         except (TypeError, ValueError):
             rate = 0
         valid = 1 <= rate <= 20
-        if valid and round(rate) != lf.ui.get_gt_comparison_repeat_rate():
-            lf.ui.set_gt_comparison_repeat_rate(round(rate))
+        if valid and round(rate) != lf.ui.get_camera_browse_repeat_rate():
+            lf.ui.set_camera_browse_repeat_rate(round(rate))
         self._cancel_camera_repeat_rate()
         return valid
 
@@ -1004,8 +1012,8 @@ class PreferencesPanel(Panel):
         if not args:
             return
         self._commit_camera_repeat_rate()
-        rate = lf.ui.get_gt_comparison_repeat_rate() + int(args[0])
-        lf.ui.set_gt_comparison_repeat_rate(max(1, min(20, rate)))
+        rate = lf.ui.get_camera_browse_repeat_rate() + int(args[0])
+        lf.ui.set_camera_browse_repeat_rate(max(1, min(20, rate)))
         self._refresh_selection()
 
     def _get_scrub_value(self, prop):
@@ -1266,15 +1274,6 @@ class PreferencesPanel(Panel):
         self._notify_project_manager_preferences_changed()
         self._refresh_selection()
 
-    def _on_project_location_change(self, _handle, event, args):
-        if args:
-            self._set_project_location_draft(args[0])
-        if event.get_bool_parameter("linebreak", False):
-            self._commit_project_location()
-
-    def _on_confirm_project_location(self, _handle, _event, _args):
-        self._commit_project_location()
-
     def _on_browse_project_location(self, _handle, _event, _args):
         start = self._project_location or lf.ui.get_default_project_location()
         chosen = lf.ui.open_folder_dialog(
@@ -1354,15 +1353,6 @@ class PreferencesPanel(Panel):
             return
         self._mcp_port = str(value).strip()
         self._dirty_mcp()
-
-    def _on_mcp_port_change(self, _handle, event, args):
-        if args:
-            self._set_mcp_port(args[0])
-        if event.get_bool_parameter("linebreak", False):
-            self._commit_mcp_port()
-
-    def _on_confirm_mcp_port(self, _handle, _event, _args):
-        self._commit_mcp_port()
 
     def _commit_mcp_port(self):
         port = self._validated_mcp_port()
@@ -1863,9 +1853,9 @@ class PreferencesPanel(Panel):
             lf.ui.set_zoom_speed_preference(11.0)
             lf.ui.set_navigation_speed_preference(10.0)
             lf.ui.set_trackpad_preferences("mouse", False, 50.0, 50.0)
-            lf.ui.set_gt_comparison_key_repeat(True)
+            lf.ui.set_camera_browse_repeat(True)
             self._camera_repeat_rate_draft = None
-            lf.ui.set_gt_comparison_repeat_rate(5.0)
+            lf.ui.set_camera_browse_repeat_rate(5.0)
             lf.ui.set_remember_camera_navigation(False)
             lf.ui.set_remember_camera_view_snap(False)
             lf.set_camera_navigation_mode("orbit")
@@ -1916,8 +1906,8 @@ class PreferencesPanel(Panel):
             self._handle.dirty("trackpad_swipe_pans")
             self._handle.dirty("trackpad_swipe_speed")
             self._handle.dirty("trackpad_zoom_speed")
-            self._handle.dirty("gt_comparison_key_repeat")
-            self._handle.dirty("gt_comparison_repeat_rate")
+            self._handle.dirty("camera_browse_repeat")
+            self._handle.dirty("camera_browse_repeat_rate")
             self._handle.dirty("view_snap")
             self._handle.dirty("remember_navigation")
             self._handle.dirty("remember_view_snap")

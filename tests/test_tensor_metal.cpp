@@ -1477,6 +1477,51 @@ namespace {
         }
     }
 
+    TEST_F(TensorMetal, PointRasterTintsSelection) {
+        const Tensor points = Tensor::from_vector({0.0f, 0.0f, -1.0f}, {1, 3}, Device::CPU);
+        const std::vector<float> color{0.2f, 0.4f, 0.6f};
+        const Tensor colors = Tensor::from_vector(color, {1, 3}, Device::CPU);
+        std::vector<float> table(258 * 4, 0.0f);
+        table[3 * 4 + 2] = 1.0f;
+        table[256 * 4 + 1] = 1.0f;
+        auto raster = raster_camera(33, 33);
+        raster.selection_colors = table;
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            const Tensor gpu_points = points.to(Device::GPU), gpu_colors = colors.to(Device::GPU);
+            const Tensor selection = Tensor::from_vector(std::vector<int>{3}, {1}, Device::GPU).to(DataType::UInt8);
+            const Tensor preview = Tensor::from_vector(std::vector<int>{1}, {1}, Device::GPU).to(DataType::Bool);
+            const auto render = [&](const Tensor* selected, const Tensor* previewed) {
+                return rasterize_points(gpu_points, gpu_colors, raster, nullptr, nullptr, nullptr, nullptr,
+                                        selected, previewed).first.cpu().to_vector();
+            };
+            const size_t plane = 33 * 33, center = 16 * 33 + 16;
+            const auto plain = render(nullptr, nullptr), selected = render(&selection, nullptr);
+            // Packed colors are rounded to the nearest 8-bit value.
+            constexpr float tolerance = 0.5f / 255.0f + 1.0e-6f;
+            for (size_t c = 0; c < 3; ++c) {
+                const float expected = color[c] + ((c == 2 ? 1.0f : 0.0f) - color[c]) * 0.75f;
+                EXPECT_NEAR(selected[c * plane + center], expected, tolerance);
+                EXPECT_NEAR(selected[c * plane + center + 2], expected, tolerance);
+                EXPECT_FLOAT_EQ(plain[c * plane + center + 2], raster.background[c]);
+            }
+            for (const bool additive : {true, false}) {
+                SCOPED_TRACE(additive);
+                raster.preview_additive = additive;
+                const auto previewed = render(nullptr, &preview);
+                for (size_t c = 0; c < 3; ++c) {
+                    const float expected = additive
+                                               ? color[c] + ((c == 1 ? 1.0f : 0.0f) - color[c]) * 0.9f
+                                               : color[c];
+                    EXPECT_NEAR(previewed[c * plane + center], expected, tolerance);
+                }
+            }
+        }
+    }
+
     TEST_F(TensorMetal, PointRasterMatchesVulkan) {
         if (!gpu_backend_available(GpuBackend::Vulkan))
             GTEST_SKIP() << "No Vulkan device";
@@ -1494,6 +1539,9 @@ namespace {
         const Tensor indices = Tensor::from_vector(index_values, {count}, Device::CPU);
         const Tensor visibility = Tensor::from_vector(std::vector<int>{1, 1, 0}, {3}, Device::CPU).to(DataType::UInt8);
         const Tensor deleted = random_tensor(count, 0.0f, 1.0f, 304) > 0.9f;
+        const Tensor selection = random_tensor(count, 0.0f, 3.99f, 305).to(DataType::UInt8);
+        const Tensor preview = random_tensor(count, 0.0f, 1.0f, 306) > 0.5f;
+        const auto selection_colors = random_tensor(258 * 4, 0.0f, 1.0f, 307).to_vector();
 
         std::vector<std::pair<std::string, PointRaster>> cases;
         cases.emplace_back("perspective", raster_camera(160, 120));
@@ -1520,6 +1568,11 @@ namespace {
         ellipsoid.crop_to_local = box.crop_to_local;
         ellipsoid.crop_min = {1.0f, 0.6f, 1.5f};
         cases.emplace_back("ellipsoid", ellipsoid);
+        auto overlay = box;
+        overlay.transparent_background = true;
+        overlay.selection_colors = selection_colors;
+        overlay.preview_additive = true;
+        cases.emplace_back("selection and preview", overlay);
 
         for (const auto& [name, raster] : cases) {
             for (const bool nodes : {false, true}) {
@@ -1528,9 +1581,13 @@ namespace {
                     GpuBackendScope scope(backend);
                     const Tensor gpu_transforms = transforms.to(Device::GPU), gpu_indices = indices.to(Device::GPU);
                     const Tensor gpu_visibility = visibility.to(Device::GPU), gpu_deleted = deleted.to(Device::GPU);
+                    const bool overlays = !raster.selection_colors.empty();
+                    const Tensor gpu_selection = overlays ? selection.to(Device::GPU) : Tensor{};
+                    const Tensor gpu_preview = overlays ? preview.to(Device::GPU) : Tensor{};
                     const auto [image, depth] = rasterize_points(
                         points.to(Device::GPU), colors.to(Device::GPU), raster, nodes ? &gpu_transforms : nullptr,
-                        nodes ? &gpu_indices : nullptr, nodes ? &gpu_visibility : nullptr, nodes ? &gpu_deleted : nullptr);
+                        nodes ? &gpu_indices : nullptr, nodes ? &gpu_visibility : nullptr, nodes ? &gpu_deleted : nullptr,
+                        overlays ? &gpu_selection : nullptr, overlays ? &gpu_preview : nullptr);
                     return std::pair{image.cpu().to_vector(), depth.cpu().to_vector()};
                 };
                 const auto [metal_image, metal_depth] = rasterize(GpuBackend::Metal);
