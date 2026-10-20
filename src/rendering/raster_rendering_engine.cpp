@@ -534,22 +534,17 @@ namespace lfs::rendering {
                 deleted_mask_device = deleted_mask_cuda.ptr<bool>();
             }
 
-            const auto prepare_overlay_mask = [](const Tensor* source) {
-                if (!source || !source->is_valid())
+            // A mask sized for another point count is stale; draw the points without it.
+            const auto prepare_overlay_mask = [&](const Tensor* source) {
+                if (!source || !source->is_valid() || source->numel() != positions_source.size(0))
                     return Tensor{};
                 Tensor result = source->to(lfs::core::DataType::UInt8);
                 if (result.device() != lfs::core::Device::CUDA)
                     result = result.cuda();
                 return result.contiguous();
             };
-            const auto* selection_source = request.overlay.selection_mask.get();
-            const auto* preview_source = request.overlay.transient_mask.mask;
-            for (const auto* mask : {selection_source, preview_source}) {
-                if (mask && mask->is_valid() && mask->numel() != positions_source.size(0))
-                    return std::unexpected("Point cloud overlay mask must match point count");
-            }
-            Tensor selection_cuda = prepare_overlay_mask(selection_source);
-            Tensor preview_cuda = prepare_overlay_mask(preview_source);
+            Tensor selection_cuda = prepare_overlay_mask(request.overlay.selection_mask.get());
+            Tensor preview_cuda = prepare_overlay_mask(request.overlay.transient_mask.mask);
             Tensor selection_colors_cuda;
             if (selection_cuda.is_valid() || preview_cuda.is_valid()) {
                 std::vector<float> colors;

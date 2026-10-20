@@ -4,6 +4,7 @@
 
 #include "environment_math.hpp"
 #include "point_cloud_raster.cuh"
+#include "point_cloud_style.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -194,9 +195,9 @@ namespace lfs::rendering::pcraster {
             b = fminf(fmaxf(b, 0.0f), 1.0f);
             if (desaturate) {
                 const float gray = 0.299f * r + 0.587f * g + 0.114f * b;
-                r = r + (gray - r) * 0.75f;
-                g = g + (gray - g) * 0.75f;
-                b = b + (gray - b) * 0.75f;
+                r = r + (gray - r) * DESATURATE_BLEND;
+                g = g + (gray - g) * DESATURATE_BLEND;
+                b = b + (gray - b) * DESATURATE_BLEND;
             }
 
             // Match the selection-group and additive/subtractive preview colors
@@ -206,12 +207,12 @@ namespace lfs::rendering::pcraster {
             const bool in_preview = params.preview_mask && params.preview_mask[idx] != 0;
             const bool preview = in_preview && (params.preview_additive ? !committed : committed);
             if (params.selection_colors && (committed || preview)) {
-                const float* tint = params.selection_colors + 4 * (preview ? 256 : group);
-                const float blend = preview ? 0.9f : 0.75f;
+                const float* tint = params.selection_colors + 4 * (preview ? SELECTION_PREVIEW_COLOR_INDEX : group);
+                const float blend = preview ? SELECTION_PREVIEW_BLEND : SELECTION_COMMITTED_BLEND;
                 r += (tint[0] - r) * blend;
                 g += (tint[1] - g) * blend;
                 b += (tint[2] - b) * blend;
-                const float scale = preview ? 1.6f : 1.35f;
+                const float scale = preview ? SELECTION_PREVIEW_SCALE : SELECTION_COMMITTED_SCALE;
                 radius = static_cast<int>(ceilf(fmaxf(radius + 1.0f, radius * scale)));
             }
 

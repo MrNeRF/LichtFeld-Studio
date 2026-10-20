@@ -2,9 +2,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/point_cloud.hpp"
 #include "core/tensor.hpp"
+#include "point_cloud_style.hpp"
 #include "rendering/rendering.hpp"
 #include <cuda_runtime.h>
+#include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <regex>
+#include <string>
 
 TEST(PointCloudSelectionOverlay, CommittedAndTransientColorsReachRasterImage) {
     int devices = 0;
@@ -45,4 +50,30 @@ TEST(PointCloudSelectionOverlay, CommittedAndTransientColorsReachRasterImage) {
     ASSERT_TRUE(plain) << plain.error();
     EXPECT_LT(image_max(*plain, 0), .01f);
     EXPECT_LT(image_max(*plain, 1), .01f);
+    // A mask sized for another point count is skipped, not an error.
+    request.overlay.selection_mask = std::make_shared<Tensor>(
+        Tensor::from_vector(std::vector<int>{3, 3}, {size_t{2}}, Device::CPU).to(DataType::UInt8));
+    auto stale = engine->renderPointCloudImage(cloud, request);
+    ASSERT_TRUE(stale) << stale.error();
+    EXPECT_LT(image_max(*stale, 0), .01f);
+}
+
+TEST(PointCloudSelectionOverlay, SoftwareStyleMatchesViewportShader) {
+    std::ifstream file(std::filesystem::path(PROJECT_ROOT_PATH) /
+                       "src/visualizer/rendering/resources/viewport/point_cloud.vert");
+    ASSERT_TRUE(file);
+    const std::string shader(std::istreambuf_iterator<char>(file), {});
+    const auto shader_value = [&](const std::string& name) {
+        std::smatch match;
+        const std::regex constant("const (?:float|uint) " + name + " = ([0-9.]+)u?;");
+        return std::regex_search(shader, match, constant) ? std::stod(match[1]) : -1.0;
+    };
+    using namespace lfs::rendering::pcraster;
+    EXPECT_EQ(shader_value("SELECTION_PREVIEW_COLOR_INDEX"), SELECTION_PREVIEW_COLOR_INDEX);
+    EXPECT_EQ(lfs::rendering::kSelectionPreviewColorIndex, SELECTION_PREVIEW_COLOR_INDEX);
+    EXPECT_FLOAT_EQ(shader_value("DESATURATE_BLEND"), DESATURATE_BLEND);
+    EXPECT_FLOAT_EQ(shader_value("SELECTION_COMMITTED_BLEND"), SELECTION_COMMITTED_BLEND);
+    EXPECT_FLOAT_EQ(shader_value("SELECTION_PREVIEW_BLEND"), SELECTION_PREVIEW_BLEND);
+    EXPECT_FLOAT_EQ(shader_value("SELECTION_COMMITTED_SCALE"), SELECTION_COMMITTED_SCALE);
+    EXPECT_FLOAT_EQ(shader_value("SELECTION_PREVIEW_SCALE"), SELECTION_PREVIEW_SCALE);
 }
