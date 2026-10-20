@@ -50,6 +50,9 @@ float outline_splat_alpha(Splat_2D_AlphaBlend splat, float2 coordinate, float ma
 }
 
 groupshared uint any_active;
+groupshared uint scene_open;
+// One bit per batch entry, so compaction keeps the raster order.
+groupshared uint batch_keep[8];
 
 groupshared float2 batch_positions[256];
 groupshared float4 batch_conics[256];
@@ -91,37 +94,58 @@ void main(uint3 pixel : SV_DispatchThreadID, uint3 lane : SV_GroupThreadID,
         // individual pixels remain below threshold. All lanes exit together.
         if (outline_tiles[rank_offset + uint(sorted_ids[base])] > tile_bound)
             break;
-        if (rank == 0u) any_active = 0u;
+        if (rank == 0u) {
+            any_active = 0u;
+            scene_open = 0u;
+        }
+        if (rank < 8u) batch_keep[rank] = 0u;
         GroupMemoryBarrierWithGroupSync();
         bool wave_active = WaveActiveAnyTrue(active);
-        if (WaveIsFirstLane() && wave_active)
-            InterlockedOr(any_active, 1u);
+        bool wave_scene_open = WaveActiveAnyTrue(active && scene_coverage < threshold);
+        if (WaveIsFirstLane()) {
+            if (wave_active) InterlockedOr(any_active, 1u);
+            if (wave_scene_open) InterlockedOr(scene_open, 1u);
+        }
         GroupMemoryBarrierWithGroupSync();
         if (any_active == 0u) break;
+        uint slot = 0u;
+        uint selected = 0u;
+        bool keep = false;
         if (base + rank < end) {
-            uint slot = uint(sorted_ids[base + rank]);
-            // Macro lists cover several render tiles. Reuse the projection's
-            // conservative tile rectangle before fetching/evaluating a splat.
-            bool relevant = overlaps_render_tile(slot, group.xy, uniforms);
-            uint selected = read_byte(flags, slot) & OVERLAY_FLAG_OUTLINE_SELECTED;
-            batch_selected[rank] = relevant ? 0x80000000u | selected : 0u;
-            if (relevant) {
-                batch_positions[rank] = positions[slot];
-                batch_conics[rank] = conics[slot];
-                // The cutoff depends on the splat, not the pixel. Avoid
-                // repeating its logarithm in every lane of the mask batch.
-                batch_maximum_power[rank] = power_threshold_for_opacity(batch_conics[rank].w);
-                batch_depths[rank] = depths[slot];
-                batch_nodes[rank] = has_indices && selected != 0u
-                                        ? uint(max(read_int32(transform_indices, uint(logical_ids[slot])), 0)) : 0u;
-            }
+            slot = uint(sorted_ids[base + rank]);
+            selected = read_byte(flags, slot) & OVERLAY_FLAG_OUTLINE_SELECTED;
+            // Once every pixel has settled its scene coverage, only selected
+            // splats can change the mask. Macro lists cover several render
+            // tiles; reuse the projection's conservative tile rectangle.
+            keep = (scene_open != 0u || selected != 0u) && overlaps_render_tile(slot, group.xy, uniforms);
+        }
+        if (keep) InterlockedOr(batch_keep[rank / 32u], 1u << (rank % 32u));
+        GroupMemoryBarrierWithGroupSync();
+        uint batch_count = 0u;
+        uint destination = 0u;
+        for (uint word = 0u; word < 8u; ++word) {
+            uint bits = batch_keep[word];
+            if (word == rank / 32u)
+                destination = batch_count + countbits(bits & ((1u << (rank % 32u)) - 1u));
+            batch_count += countbits(bits);
+        }
+        if (keep) {
+            batch_selected[destination] = selected;
+            batch_positions[destination] = positions[slot];
+            float4 conic = conics[slot];
+            batch_conics[destination] = conic;
+            // The cutoff depends on the splat, not the pixel. Avoid
+            // repeating its logarithm in every lane of the mask batch.
+            batch_maximum_power[destination] = power_threshold_for_opacity(conic.w);
+            batch_depths[destination] = depths[slot];
+            batch_nodes[destination] = has_indices && selected != 0u
+                                           ? uint(max(read_int32(transform_indices, uint(logical_ids[slot])), 0)) : 0u;
         }
         GroupMemoryBarrierWithGroupSync();
         if (active) {
-            for (uint j = 0u; j < min(256u, end - base); ++j) {
+            for (uint j = 0u; j < batch_count; ++j) {
                 uint candidate = batch_selected[j];
-                if (candidate == 0u || (scene_coverage >= threshold &&
-                    (candidate & OVERLAY_FLAG_OUTLINE_SELECTED) == 0u))
+                if (scene_coverage >= threshold && candidate == 0u)
                     continue;
                 uint node_id = batch_nodes[j] + 2u;
                 Splat_2D_AlphaBlend splat;
