@@ -347,6 +347,9 @@ namespace lfs::io {
             nvimgcodecImageInfo_t info{};
             info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
             info.struct_size = sizeof(nvimgcodecImageInfo_t);
+            // nvjpeg writes the probe image, so it must be CUDA memory even when
+            // Vulkan is the process default.
+            const GpuBackendScope cuda_scope(GpuBackend::CUDA);
             Tensor pixels;
             if (nvimgcodecCodeStreamCreateFromHostMem(instance, &code_stream, kProbeJpeg.data(), kProbeJpeg.size(),
                                                       nullptr) == NVIMGCODEC_STATUS_SUCCESS &&
