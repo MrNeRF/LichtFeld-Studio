@@ -575,7 +575,7 @@ constant constexpr uint kFastShParts = kShMaxSlots / kFastShSlotsPerThread;
 // the threadgroup must call it.
 static void fast_adam_shN(constant FastAdamGroup& g, const uint p, const uint part, const uint layout_rest,
                           const float3 grad_color, const float3 direction, const bool compute, const bool3 regularizer_allowed,
-                          const float sh_weight, device atomic_float* sh_loss, const uint primitives, const float beta1,
+                          const float sh_weight, thread float& sh_loss, const uint primitives, const float beta1,
                           const float beta2, const float eps, threadgroup float4* scratch, const FastLane t) {
     const bool q16 = kFastShStorage == kFastShQ16;
     const bool f16 = kFastShStorage == kFastShFloat16;
@@ -602,8 +602,7 @@ static void fast_adam_shN(constant FastAdamGroup& g, const uint p, const uint pa
                     if (attribute < (kFastShBases - 1u) * 3u) {
                         if (regularizer_allowed[attribute % 3u])
                             grad[c] += 2.0f * coefficient * values[c];
-                        if (sh_loss != nullptr)
-                            atomic_fetch_add_explicit(sh_loss, coefficient * values[c] * values[c], memory_order_relaxed);
+                        sh_loss += coefficient * values[c] * values[c];
                     }
                 }
             }
@@ -642,8 +641,7 @@ static void fast_adam_shN(constant FastAdamGroup& g, const uint p, const uint pa
                 const float coefficient = sh_weight / (float(primitives) * float((kFastShBases - 1u) * 3u));
                 if (regularizer_allowed[attribute % 3u])
                     grad[c] += 2.0f * coefficient * value;
-                if (sh_loss != nullptr)
-                    atomic_fetch_add_explicit(sh_loss, coefficient * value * value, memory_order_relaxed);
+                sh_loss += coefficient * value * value;
             }
             const float2 us = fast_shN_moment(grad[c], fast_slot_codes(packed, c), old_mm, r.apply, active_slot,
                                               beta1, beta2, r.step, eps, g.bc2_sqrt_rcp, value);
@@ -815,6 +813,7 @@ kernel void fast_backward_sh(constant FastBackwardShParams& p [[buffer(0)]],
         }
     }
     bool3 regularizer_allowed = bool3(false);
+    float dc_loss = 0.0f, sh_loss = 0.0f;
     if (idx < p.n && (p.dc_weight > 0.0f || p.sh_weight > 0.0f)) {
         const float3 colour = visible ? p.color_depth[idx].xyz
                                       : fast_sh_color(p.sh0_values, p.shN, p.sh_bounds,
@@ -825,15 +824,12 @@ kernel void fast_backward_sh(constant FastBackwardShParams& p [[buffer(0)]],
         if (part == 0u && p.sh0.param != nullptr) {
             device const float* dc = reinterpret_cast<device const float*>(p.sh0.param) + idx * 3u;
             const float limit = 0.5f / 0.28209479177387814f;
-            float loss = 0.0f;
             for (uint c = 0; c < 3u; ++c) {
                 const float delta = dc[c] > limit ? dc[c] - limit : (dc[c] < -limit ? dc[c] + limit : 0.0f);
                 if (regularizer_allowed[c])
                     sh0_grads[c] += (2.0f * p.dc_weight / 3.0f) * delta;
-                loss += (p.dc_weight / (3.0f * float(p.n))) * delta * delta;
+                dc_loss += (p.dc_weight / (3.0f * float(p.n))) * delta * delta;
             }
-            if (p.dc_loss != nullptr && loss != 0.0f)
-                atomic_fetch_add_explicit(p.dc_loss, loss, memory_order_relaxed);
         }
     }
     // The mean gradient reads the rest coefficients before any part updates them,
@@ -841,8 +837,20 @@ kernel void fast_backward_sh(constant FastBackwardShParams& p [[buffer(0)]],
     threadgroup_barrier(mem_flags::mem_device);
     fast_adam_step(p.sh0, sh0_grads, idx, 3u, 1.0f, p.beta1, p.beta2, p.eps, scratch, t, part == 0u);
     if (kFastShBases > 1u && (p.shN_adam.joint_bits == 8 || p.shN_adam.gradient != nullptr))
-        fast_adam_shN(p.shN_adam, idx, part, kFastShLayoutRest, grad_color, direction, visible, regularizer_allowed, p.sh_weight, p.sh_loss, p.n, p.beta1, p.beta2,
+        fast_adam_shN(p.shN_adam, idx, part, kFastShLayoutRest, grad_color, direction, visible, regularizer_allowed, p.sh_weight, sh_loss, p.n, p.beta1, p.beta2,
                       p.eps, scratch, t);
+    // The regularizer losses are only reported. One atomic per SIMD group: an add
+    // per coefficient into one address cost more than the regularizers themselves.
+    if (p.dc_loss != nullptr) {
+        const float total = simd_sum(dc_loss);
+        if (simd_lane == 0u && total != 0.0f)
+            atomic_fetch_add_explicit(p.dc_loss, total, memory_order_relaxed);
+    }
+    if (p.sh_loss != nullptr) {
+        const float total = simd_sum(sh_loss);
+        if (simd_lane == 0u && total != 0.0f)
+            atomic_fetch_add_explicit(p.sh_loss, total, memory_order_relaxed);
+    }
     if (visible && part == 0u) {
         device float* g = p.grads + idx * kFastGradStride;
         g[6] = mean_grad.x;
