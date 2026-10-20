@@ -378,6 +378,72 @@ lf.set_camera((0., 0., 6.), (0., 0., 0.), (0., 1., 0.))
     assert not right_region - edge_neighborhood, "Another selected object's faint halo drew an interior contour"
 
 
+
+@pytest.mark.parametrize("backend", [2, 3])
+@pytest.mark.parametrize("threshold", [.2, .5, .8])
+def test_selection_outline_batch_pruning_preserves_sparse_and_hidden_selection(tmp_path, backend, threshold):
+    endpoint = os.environ.get("LFS_OUTLINE_TEST_ENDPOINT")
+    if not os.environ.get("LFS_EXECUTABLE") or not endpoint:
+        pytest.skip("Requires an owned GPU test application")
+    _rpc(endpoint, "initialize", {"protocolVersion": "2025-03-26", "capabilities": {},
+                                 "clientInfo": {"name": "outline-depth-bound-test", "version": "1"}})
+    _rpc(endpoint, "tools/list", {})
+    for resource in ("runtime/catalog", "runtime/state", "ui/state", "scene/state", "selection/current"):
+        _rpc(endpoint, "resources/read", {"uri": "lichtfeld://" + resource})
+    selected, behind, front, distant = (tmp_path / (name + ".ply")
+                                         for name in ("selected", "behind", "front", "distant"))
+    _write_splat(selected, 0., (.14, .14, .05))
+    _write_splat(behind, 0., (3., 3., .05), z=2., copies=2048)
+    _write_splat(front, 0., (3., 3., .05), z=-1., copies=8)
+    _write_splat(distant, 0., (.3, .3, .05), z=1.)
+    _editor(endpoint, f"""
+lf.clear_scene()
+s = lf.get_render_settings()
+s.raster_backend = {backend}
+s.selection_outline = True
+s.selection_outline_color = (1., 0., 0.)
+s.selection_outline_opacity = 1.
+s.selection_outline_width = 2.
+s.selection_outline_threshold = {threshold}
+s.selection_outline_holes = True
+s.desaturate_unselected = False
+s.show_grid = False
+s.show_camera_frustums = False
+s.background_color = (0., 0., 0.)
+s.scene_upscaler = 'native'
+s.render_scale = 1.
+s.lod_enabled = False
+lf.set_camera((0., 0., 6.), (0., 0., 0.), (0., 1., 0.))
+""")
+
+    def load(path):
+        _editor(endpoint, f"lf.load_file({str(path)!r})")
+        deadline = time.monotonic() + 30
+        while True:
+            nodes = json.loads(_rpc(endpoint, "resources/read", {"uri": "lichtfeld://scene/nodes"})["contents"][0]["text"])
+            if any(node["name"] == path.stem for node in nodes["nodes"]):
+                return
+            assert time.monotonic() < deadline, nodes
+            time.sleep(.05)
+
+    load(selected)
+    load(behind)  # Force the general multi-node mask, with a long irrelevant tail.
+    _select(endpoint, "lf.select_node('selected')")
+    baseline = _mask(endpoint, tmp_path / "background-tail.json")[1]
+    assert baseline
+    load(front)
+    _select(endpoint, "lf.select_node('selected')")
+    assert _mask(endpoint, tmp_path / "opaque-foreground.json")[1] == baseline, \
+        "Scene transmittance prematurely terminated the selected-only silhouette"
+    load(distant)
+    _select(endpoint, "lf.select_node('distant')")
+    far_mask = _mask(endpoint, tmp_path / "distant-selected.json")[1]
+    assert far_mask and far_mask != baseline, "Selection mask was stale after changing objects"
+    _select(endpoint, "lf.select_node('selected')")
+    assert _mask(endpoint, tmp_path / "selected-again.json")[1] == baseline
+    _editor(endpoint, "s.selection_outline_threshold = .5")
+
+
 def test_selection_outline_mcp_roundtrip():
     endpoint = os.environ.get("LFS_OUTLINE_TEST_ENDPOINT")
     if not endpoint:

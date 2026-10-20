@@ -1492,7 +1492,7 @@ void VulkanGSRenderer::executeOutlineResolve(const VulkanGSRendererUniforms& uni
 void VulkanGSRenderer::executeOutlineTiles(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers) {
     using lfs::rendering::vulkan::BufferUse;
     const size_t tiles = size_t(uniforms.grid_width) * uniforms.grid_height;
-    auto& selected_tiles = clearDeviceBuffer(buffers.outline_tiles, tiles);
+    auto& selected_tiles = clearDeviceBuffer(buffers.outline_tiles, tiles + size_t(uniforms.num_splats));
     executeCompute({{uniforms.num_splats, 64u}}, &uniforms, sizeof(uniforms), pipeline_outline_tiles,
                    std::vector<TaggedBinding>{
                        {buffers.primitive_sort_indices.deviceBuffer, BufferUse::ComputeRead},
@@ -3445,6 +3445,7 @@ void VulkanGSRenderer::executeMacroDepthWaves(
                                {buffers.pixel_outline_ids.deviceBuffer, BufferUse::ComputeReadWrite},
                                {buffers.pixel_outline_scene_depth.deviceBuffer, BufferUse::ComputeReadWrite},
                                {buffers.outline_tiles.deviceBuffer, BufferUse::ComputeRead},
+                               {buffers.rect_tile_space.deviceBuffer, BufferUse::ComputeRead},
                            });
         }
     }

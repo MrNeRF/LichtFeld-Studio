@@ -554,7 +554,7 @@ protected:
     _ComputePipeline pipeline_outline_horizontal = _ComputePipeline(2);
     _ComputePipeline pipeline_outline_background_init = _ComputePipeline(2);
     _ComputePipeline pipeline_outline_background_union = _ComputePipeline(2);
-    _ComputePipeline pipeline_outline_mask = _ComputePipeline(12);
+    _ComputePipeline pipeline_outline_mask = _ComputePipeline(13);
     _ComputePipeline pipeline_outline_coverage = _ComputePipeline(2);
     void executeOutlineCoverage(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers, float threshold);
     void executeOutlineResolve(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers, const VulkanGSOutlineStyle& style);

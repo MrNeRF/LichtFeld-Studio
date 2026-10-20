@@ -265,7 +265,7 @@ struct VulkanGSPipelineBuffers {
     Buffer<int32_t> tile_batch_n_contributors; // (num_batches, TILE_SIZE)
     Buffer<float> pixel_state;                 // (H, W, 4)
     Buffer<float> pixel_depth;                 // (H, W, 1), median view-space depth
-    Buffer<uint32_t> outline_tiles;            // Optional render-tile membership of selected projected splats
+    Buffer<uint32_t> outline_tiles;            // Tile selected-rank bounds followed by inverse visible-slot depth ranks
     Buffer<uint32_t> outline_seeds;
     Buffer<uint32_t> outline_nearest;
     Buffer<uint32_t> outline_background;     // Optional exterior background disjoint-set forest

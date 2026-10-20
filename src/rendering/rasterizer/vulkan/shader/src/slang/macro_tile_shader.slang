@@ -81,19 +81,24 @@ layout(binding=1) StructuredBuffer<int64_t> rect_tile_space;
 #endif
 layout(binding=2) StructuredBuffer<uint> visible_count;
 layout(binding=3) ByteAddressBuffer overlay_flags;
+// Tile prefix: final selected depth rank + 1; zero means untouched.
+// Tail: inverse depth ranks for visible slots. A projected depth is not a
+// safe substitute: the raster is ordered by squared radial distance.
 layout(binding=4) RWStructuredBuffer<uint> outline_tiles;
 
 [numthreads(64, 1, 1)]
 void main(uint3 thread : SV_DispatchThreadID, uniform Uniforms uniforms) {
     if (thread.x >= min(visible_count[0], uniforms.num_splats)) return;
     uint slot = uint(primitive_sort_indices[thread.x]);
+    uint rank = thread.x + 1u;
+    outline_tiles[uniforms.grid_width * uniforms.grid_height + slot] = rank;
     if ((read_byte(overlay_flags, slot) & OVERLAY_FLAG_OUTLINE_SELECTED) == 0u) return;
     rectangle rect = load_rect(int(slot), rect_tile_space);
     bool wrap = base_camera_model(uniforms.camera_model) == uint(CameraModel::EQUIRECTANGULAR);
     for (uint y = uint(rect.min_y); y < min(uint(rect.max_y), uniforms.grid_height); ++y)
         for (uint x = uint(rect.min_x); x < uint(rect.max_x); ++x) {
             if (!wrap && x >= uniforms.grid_width) break;
-            InterlockedOr(outline_tiles[y * uniforms.grid_width + x % uniforms.grid_width], 1u);
+            InterlockedMax(outline_tiles[y * uniforms.grid_width + x % uniforms.grid_width], rank);
         }
 }
 

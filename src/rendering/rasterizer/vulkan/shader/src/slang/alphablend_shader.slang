@@ -344,7 +344,11 @@ void main(
 #if LFS_SELECTION_OUTLINE
     uint outline_id = uniforms.depth_wave > 0u && is_inside ? outline_ids[pix_id] & 0x3fffffffu : 0u;
     const bool outline_has_indices = overlay_enabled(overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS].y);
-    bool outline_active = is_inside && outline_tiles[(pix_coord.y / 16u) * uniforms.grid_width + pix_coord.x / 16u] != 0u;
+    // All lanes in this workgroup belong to the same render tile. The
+    // prepass stores its final selected rank in the canonical radial sort.
+    uint outline_tile_bound = outline_tiles[groupID.y * uniforms.grid_width + groupID.x];
+    uint outline_rank_offset = uniforms.grid_width * uniforms.grid_height;
+    bool outline_active = is_inside && outline_tile_bound != 0u;
     float4 previous_outline_depths = uniforms.depth_wave > 0u && is_inside
                                         ? outline_scene_depths[pix_id] : float4(FAR_DEPTH, FAR_DEPTH, 0.0f, 0.0f);
     float outline_scene_depth = previous_outline_depths.x;
@@ -398,6 +402,14 @@ void main(
     int splats_left_to_process = tile_idx_end - tile_idx_start;
     for (int i = 0; i < shared_memory_rounds; i++)
     {
+      #if LFS_OUTLINE_ONLY
+        // Uniform exit before loading another batch. Once its first rank
+        // exceeds the final selected rank, selected coverage cannot increase.
+        // This remains safe for hidden selections and spans all depth waves.
+        uint first_slot = uint(sorted_gauss_idx[tile_idx_start + i * TILE_SIZE]);
+        if (outline_tiles[outline_rank_offset + first_slot] > outline_tile_bound)
+            break;
+      #endif
         // break if thread_active is false for all, doesn't seem to speed up
         // equivalent to CUDA `if (__syncthreads_count(thread_active) == 0) break;`
         const uint subgroup_idx = thread_rank / SUBGROUP_SIZE;
