@@ -754,6 +754,7 @@ namespace lfs::vis {
             current_cursor_ = CursorType::Default;
         }
         held_keys_.clear();
+        camera_browse_repeat_.stop();
         selection_drag_op_.reset();
         pending_click_drag_ = {};
         forced_mouse_press_action_ = input::Action::NONE;
@@ -799,6 +800,8 @@ namespace lfs::vis {
             mods |= input::KEYMOD_ALT;
         if (m & SDL_KMOD_MODE)
             mods |= input::KEYMOD_ALTGR;
+        if (m & SDL_KMOD_GUI)
+            mods |= input::KEYMOD_SUPER;
         return mods;
     }
 
@@ -2215,6 +2218,9 @@ namespace lfs::vis {
 
     void InputController::handleKey(const int physical_key, const int logical_key,
                                     const int scancode, int action, int mods, const bool owned_release, const bool gui_consumed) {
+        // Clear before any GUI/modal early return, including owned key releases.
+        if (action == input::ACTION_RELEASE)
+            camera_browse_repeat_.release(physical_key);
         // Track modifier keys (always, even if GUI has focus)
         if (physical_key == input::KEY_LEFT_CONTROL || physical_key == input::KEY_RIGHT_CONTROL) {
             key_ctrl_pressed_ = (action != input::ACTION_RELEASE);
@@ -2302,9 +2308,10 @@ namespace lfs::vis {
         const int printed_punctuation = input::sdlPrintedKeyToAppKey(printed_keycode);
         const bool shift_needed_for_printed_key =
             (mods & input::MODIFIER_SHIFT) != 0 && printed_keycode != unshifted_keycode;
+        bool binding_repeats = false;
         auto bound_action = bindings_.getActionForShortcut(
             tool_mode, physical_key, logical_key, mods, printed_punctuation,
-            shift_needed_for_printed_key);
+            shift_needed_for_printed_key, &binding_repeats);
         if (bound_action == input::Action::NONE) {
             bound_action = resolveCrossToolActivationShortcut(
                 bindings_, tool_mode, physical_key, logical_key, mods);
@@ -2444,14 +2451,12 @@ namespace lfs::vis {
             break;
         }
 
-        // Only speed controls support key repeat
-        if (action == input::ACTION_REPEAT) {
-            if (bound_action != input::Action::CAMERA_SPEED_UP &&
-                bound_action != input::Action::CAMERA_SPEED_DOWN &&
-                bound_action != input::Action::ZOOM_SPEED_UP &&
-                bound_action != input::Action::ZOOM_SPEED_DOWN) {
-                return;
-            }
+        // A held key repeats when its binding or the action asks for it. Camera
+        // browsing repeats on its own timer at the preference rate instead.
+        if (action == input::ACTION_REPEAT &&
+            (bound_action == input::Action::CAMERA_NEXT_VIEW || bound_action == input::Action::CAMERA_PREV_VIEW ||
+             !(binding_repeats || input::describe(bound_action).repeats_on_hold))) {
+            return;
         }
 
         if (action == input::ACTION_PRESS) {
@@ -2581,24 +2586,11 @@ namespace lfs::vis {
 
             case input::Action::CAMERA_NEXT_VIEW:
             case input::Action::CAMERA_PREV_VIEW: {
-                if (const auto* scene_manager = services().sceneOrNull()) {
-                    const auto cameras_snapshot = scene_manager->getScene().getAllCamerasCached();
-                    const auto& cameras = *cameras_snapshot;
-                    if (!cameras.empty()) {
-                        const auto* rendering = services().renderingOrNull();
-                        const int current_uid = rendering ? rendering->getCurrentCameraId() : last_camview_;
-                        const auto current = std::ranges::find_if(cameras, [current_uid](const auto& camera) {
-                            return camera->uid() == current_uid;
-                        });
-                        const int count = static_cast<int>(cameras.size());
-                        const int delta = (bound_action == input::Action::CAMERA_NEXT_VIEW) ? 1 : -1;
-                        const int index = current == cameras.end()
-                                              ? (delta > 0 ? 0 : count - 1)
-                                              : (static_cast<int>(std::distance(cameras.begin(), current)) + delta + count) % count;
-                        cmd::GoToCamView{.cam_id = cameras[index]->uid()}.emit();
-                        if (auto* const viewer = lfs::python::get_visualizer()) {
-                            viewer->projectMarkSessionChapterCommitted("VIEW");
-                        }
+                const int delta = bound_action == input::Action::CAMERA_NEXT_VIEW ? 1 : -1;
+                if (advanceCameraView(delta)) {
+                    if (UserPreferences::instance().cameraBrowseRepeat()) {
+                        camera_browse_repeat_modifiers_ = mods;
+                        camera_browse_repeat_.start(physical_key, delta, input::CameraBrowseRepeat::Clock::now());
                     }
                 }
                 return;
@@ -2906,9 +2898,55 @@ namespace lfs::vis {
             panCoastViewport()->camera.decayPanMomentum(elapsed);
     }
 
+    bool InputController::advanceCameraView(const int delta) {
+        if (const auto* scene_manager = services().sceneOrNull()) {
+            const auto cameras_snapshot = scene_manager->getScene().getAllCamerasCached();
+            const auto& cameras = *cameras_snapshot;
+            if (!cameras.empty()) {
+                const auto* rendering = services().renderingOrNull();
+                const int current_uid = rendering ? rendering->getCurrentCameraId() : last_camview_;
+                const auto current = std::ranges::find_if(cameras, [current_uid](const auto& camera) {
+                    return camera->uid() == current_uid;
+                });
+                const int count = static_cast<int>(cameras.size());
+                const int index = current == cameras.end()
+                                      ? (delta > 0 ? 0 : count - 1)
+                                      : (static_cast<int>(std::distance(cameras.begin(), current)) + delta + count) % count;
+                cmd::GoToCamView{.cam_id = cameras[index]->uid()}.emit();
+                if (auto* const viewer = lfs::python::get_visualizer()) {
+                    viewer->projectMarkSessionChapterCommitted("VIEW");
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void InputController::updateCameraBrowseRepeat() {
+        if (!camera_browse_repeat_.active())
+            return;
+        auto& preferences = UserPreferences::instance();
+        // The viewport owned the press. A transient unassigned focus does not
+        // revoke that hold; explicit GUI focus, text editing and modals do.
+        if (!input_router_ || input_router_->keyboardFocus() == input::InputTarget::Gui ||
+            input_router_->isTextInputActive() || input_router_->isModalOpen() ||
+            bindings_.isCapturing() || lfs::python::has_keyboard_capture_request() ||
+            !preferences.cameraBrowseRepeat() ||
+            !isKeyPressed(camera_browse_repeat_.key()) || getModifierKeys() != camera_browse_repeat_modifiers_) {
+            camera_browse_repeat_.stop();
+            return;
+        }
+        if (const int delta = camera_browse_repeat_.poll(input::CameraBrowseRepeat::Clock::now(),
+                                                         preferences.cameraBrowseRepeatRate());
+            delta != 0 && !advanceCameraView(delta)) {
+            camera_browse_repeat_.stop();
+        }
+    }
+
     void InputController::update(float delta_time) {
         if (drag_view_ != kNoView && !dragViewport())
             clearViewportDragState();
+        updateCameraBrowseRepeat();
         decayHeldDragMomentum();
         maybeInitializeDepthViewRange();
 

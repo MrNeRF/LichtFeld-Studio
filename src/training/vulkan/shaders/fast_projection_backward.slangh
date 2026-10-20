@@ -52,12 +52,7 @@ void flattenRegularization(BackPush back, uint i, inout float grads[3]) {
 }
 float opacityRegularization(BackPush back, uint i) {
     float opacity = 1 / (1 + exp(-loadFloat(back.forward.opacities, i)));
-    float g = back.opacityWeight > 0 && back.opacityElements > 0 ? back.opacityWeight * opacity * (1 - opacity) / float(back.opacityElements) : 0;
-    if (back.sigmoid != 0 && i < back.sparsityCount) {
-        float o = loadFloat(back.sigmoid, i);
-        g += back.rho * (o - loadFloat(back.z, i) + loadFloat(back.u, i)) * o * (1 - o) * back.gradLoss;
-    }
-    return g;
+    return back.opacityWeight > 0 && back.opacityElements > 0 ? back.opacityWeight * opacity * (1 - opacity) / float(back.opacityElements) : 0;
 }
 float3 shPositionGradient(FastPush p, uint primitive_idx, float3 grad_color) {
     float3 position = load3(p.means, primitive_idx), cam_position = load3(p.camera, 0), dcolor_dposition = 0;

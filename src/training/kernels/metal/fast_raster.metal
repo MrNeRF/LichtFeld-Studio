@@ -36,6 +36,7 @@ constant uint kFastShStorage [[function_constant(67)]];
 constant uint kFastDepthGrad [[function_constant(68)]];
 constant uint kFastEdgeWeight [[function_constant(69)]];
 // Backward only: whether the blend writes per-splat removal impact (sum and peak).
+// 0: no scoring, 1: summed/peak L1 removal impact, 2: squared RGB POP energy only.
 constant uint kFastImpactScore [[function_constant(70)]];
 
 // Screen mean plus the conservative pixel AABB [x0, x1) x [y0, y1) of the

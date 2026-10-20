@@ -67,8 +67,11 @@ namespace lfs::training {
             required.set(static_cast<size_t>(Family::Geometry));
             required.set(static_cast<size_t>(Family::SharedImage));
         }
-        if (opt.scale_reg > 0.f || opt.opacity_reg > 0.f || opt.enable_sparsity) {
+        if (opt.scale_reg > 0.f || opt.opacity_reg > 0.f) {
             required.set(static_cast<size_t>(Family::ExtraLoss));
+        }
+        if (opt.enable_sparsity) {
+            required.set(static_cast<size_t>(Family::Popspa));
         }
         if (opt.bilateral_grid_active()) {
             required.set(static_cast<size_t>(Family::Bilateral));

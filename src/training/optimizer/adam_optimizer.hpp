@@ -89,10 +89,14 @@ namespace lfs::training {
     public:
         explicit AdamOptimizer(lfs::core::SplatData& splat_data, const AdamConfig& config);
 
-        void step(int iteration);
-        // Groups and optimizer scalars. Loss and sparsity tensors stay unbound (absent_);
+        // Post-training refinement can update resident SH coefficients immediately.
+        void step(int iteration, bool apply_sh_warmup = true);
+        // Groups and optimizer scalars. Loss tensors stay unbound (absent_);
         // the caller overlays those when it builds the backward hand-off.
         lfs::gpu_ops::BackwardAdam prepare_fastgs_fused_adam(int iteration, lfs::core::TensorExecutionTarget execution_stream = lfs::core::TensorExecutionTarget::default_queue(lfs::core::default_gpu_backend()));
+        // Backward adds raw gradients into get_grad() instead of updating, so manual
+        // gradients can join them before step(). Resident SH rest is captured from its first step.
+        lfs::gpu_ops::BackwardAdam prepare_fastgs_gradient_capture(lfs::core::TensorExecutionTarget execution_stream);
         void commit_fastgs_fused_adam(int iteration);
         void set_frozen_mask(lfs::core::Tensor mask);
         [[nodiscard]] const lfs::core::Tensor& frozen_mask() const { return frozen_mask_; }
@@ -225,7 +229,7 @@ namespace lfs::training {
         std::string param_name(ParamType type) const;
         void init_state(ParamType type, bool allocate_grad = false);
         void ensure_grad(ParamType type);
-        void step_shN(int iteration);
+        void step_shN(int iteration, bool apply_sh_warmup);
         [[nodiscard]] const lfs::gpu_ops::AdamOps& adam_ops() const;
         [[nodiscard]] lfs::gpu_ops::AdamHyper adam_hyper() const;
         [[nodiscard]] lfs::gpu_ops::AdamModifiers adam_modifiers() const;

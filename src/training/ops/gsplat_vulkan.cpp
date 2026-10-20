@@ -14,6 +14,7 @@
 
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
+#include "lfs/training/ops/popspa_portable.hpp"
 #include "lfs/training/vram_ledger.hpp"
 
 #include <bit>
@@ -88,9 +89,9 @@ namespace lfs::training {
             uint64_t alpha, last_ids, v_image, v_alpha, grads, densification, error_map, edge_map, edge_scores;
             uint64_t v_depth, depths, rendered_depth;
             uint32_t count, width, height, tiles_x, tiles_y, edge_factor, mode;
-            uint64_t v_normal;
+            uint64_t v_normal, pop_scores;
         };
-        static_assert(sizeof(BackParams) == 216 && offsetof(BackParams, count) == 176);
+        static_assert(sizeof(BackParams) == 224 && offsetof(BackParams, count) == 176);
         template <class P>
         void launch_backward(uint32_t stage, const P& p, std::initializer_list<const Tensor*> tensors, uint32_t groups) {
             std::vector<mk::StorageRef> refs;
@@ -462,6 +463,53 @@ namespace lfs::training {
             return {ops::RasterResult::Code::Success, true, {}};
         }
 
+        void pop_scores(const ops::GsplatSaved& saved, const Tensor& bg_color, const Tensor& bg_image,
+                        Tensor& scores) {
+            LFS_ASSERT_MSG(saved.backend != nullptr, "gsplat POP scores require a created state");
+            const auto& state = static_cast<const VulkanGsplatState&>(*saved.backend);
+            LFS_ASSERT_MSG(state.live, "gsplat POP scores require a live forward frame");
+            const auto& f = state.frame;
+            LFS_ASSERT_MSG(f.mode == ops::GsplatRenderMode::RGB,
+                           std::format("gsplat POP scores require RGB mode, got {}", static_cast<int>(f.mode)));
+            if (f.intersections == 0)
+                return;
+            const Tensor image = bg_image.is_valid()
+                                     ? float_input(bg_image, 3 * size_t(f.width) * f.height, "POP background image")
+                                     : Tensor();
+            const Tensor color = !image.is_valid() && bg_color.is_valid()
+                                     ? float_input(bg_color, 3, "POP background color")
+                                     : Tensor();
+            Tensor scratch = Tensor::zeros({f.count}, Device::GPU);
+            const uint32_t tiles_x = (f.width + kTile - 1) / kTile;
+            const uint32_t tiles_y = (f.height + kTile - 1) / kTile;
+            const BackParams p{
+                .camera = mk::address(f.camera),
+                .means = mk::address(f.means),
+                .scales = mk::address(f.scales),
+                .quats = mk::address(f.quats),
+                .opacities = mk::address(f.opacities),
+                .colors = mk::address(f.colors),
+                .bg_color = mk::address(color),
+                .bg_image = mk::address(image),
+                .tile_offsets = mk::address(f.tile_offsets),
+                .gaussian_ids = mk::address(f.gaussian_ids),
+                .alpha = mk::address(f.alpha),
+                .last_ids = mk::address(f.last_ids),
+                .depths = mk::address(f.depths),
+                .count = f.count,
+                .width = f.width,
+                .height = f.height,
+                .tiles_x = tiles_x,
+                .tiles_y = tiles_y,
+                .pop_scores = mk::address(scratch),
+            };
+            launch_backward(2, p,
+                            {&f.camera, &f.means, &f.scales, &f.quats, &f.opacities, &f.colors, &color, &image,
+                             &f.tile_offsets, &f.gaussian_ids, &f.alpha, &f.last_ids, &scratch, &f.depths},
+                            std::min(tiles_x * tiles_y, core::internal::acquire_vulkan_context()->caps().max_workgroup_count[0]));
+            accumulate_pop_view_scores(scores, scratch);
+        }
+
         void backward(ops::GsplatSaved& saved, const Tensor& grad_image, const Tensor& grad_alpha,
                       const ops::GsplatGradients& gradients, Tensor& densification, const Tensor& error_map,
                       const Tensor& edge_map, Tensor& edge_scores, Tensor& max_screen_share) {
@@ -712,7 +760,8 @@ namespace lfs::training {
             .backward = backward,
             .release = release,
             .record_vram = record_vram,
-            .release_caches = release_caches};
+            .release_caches = release_caches,
+            .pop_scores = pop_scores};
         return ops;
     }
 } // namespace lfs::training

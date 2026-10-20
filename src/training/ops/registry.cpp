@@ -55,6 +55,9 @@ namespace lfs::training {
                 return ops.blob != nullptr;
             case Family::Structure:
                 return ops.structure != nullptr;
+            case Family::Popspa:
+                return ops.popspa != nullptr && (ops.fast == nullptr || ops.fast->pop_scores != nullptr) &&
+                       (ops.gsplat == nullptr || ops.gsplat->pop_scores != nullptr);
             case Family::Count:
                 return false;
             }
@@ -127,6 +130,7 @@ namespace lfs::training {
         case Family::Lpips: return "Lpips";
         case Family::Blob: return "Blob";
         case Family::Structure: return "Structure";
+        case Family::Popspa: return "Popspa";
         case Family::Count: break;
         }
         return {};

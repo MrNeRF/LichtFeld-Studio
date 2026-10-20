@@ -289,11 +289,12 @@ namespace lfs::core {
         };
 
         // Point-cloud rasterization: each visible point splats a depth-tested
-        // disk. `parameters` is Float32 [kPointRasterParameters] holding the
+        // disk. `parameters` starts with kPointRasterParameters floats holding the
         // column-major view and view-projection matrices, the crop transform,
         // the crop box min and max (or the ellipsoid radii in min) and the
-        // background color; `scratch` is Int32 [2 * width * height]. Flags
-        // are PointRasterFlag bits.
+        // background color, followed by 258 RGBA rows with an overlay.
+        // `overlay` is UInt8 [N,2] (selection group, preview flag);
+        // `scratch` is Int32 [2 * width * height]. Flags are PointRasterFlag bits.
         enum PointRasterFlag : uint32_t {
             kPointRasterCropBox = 1u,
             kPointRasterCropEllipsoid = 2u,
@@ -302,14 +303,16 @@ namespace lfs::core {
             kPointRasterEquirectangular = 16u,
             kPointRasterOrthographic = 32u,
             kPointRasterTransparent = 64u,
+            kPointRasterPreviewAdditive = 128u,
         };
         inline constexpr size_t kPointRasterParameters = 57;
 
         struct PointRasterProgram {
             StorageRef positions, colors, parameters, scratch, image, depth;
             std::optional<StorageRef> transforms, indices, visibility, deleted;
+            std::optional<StorageRef> overlay;
             size_t count = 0;
-            uint32_t width = 0, height = 0, channels = 3, transform_count = 0, visibility_count = 0, flags = 0;
+            uint32_t width = 0, height = 0, transform_count = 0, visibility_count = 0, flags = 0;
             float ortho_scale = 1.0f, focal_y = 1.0f, voxel_size = 0.0f, far_plane = 0.0f;
         };
 

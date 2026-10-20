@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// ExtraLossOps kernels: ports of regularization.cu and
-// sparsity_optimizer_kernels.cu. Reductions end in loss_reduce_final.
+// ExtraLossOps kernels: ports of regularization.cu. Reductions end in
+// loss_reduce_final.
 
 struct ExtraRegularizeParams {
     device const float* raw;
@@ -44,22 +44,3 @@ kernel void extra_regularize(constant ExtraRegularizeParams& p [[buffer(0)]],
         p.partials[group] = sum;
 }
 
-struct ExtraAdmmParams {
-    device float* gradient;
-    device const float* sigmoid;
-    device const float* z;
-    device const float* u;
-    uint count;
-    uint accumulate;
-    float rho;
-    float grad_loss;
-};
-
-// grad = rho * (opa - z + u) * opa * (1 - opa) * grad_loss
-kernel void extra_admm(constant ExtraAdmmParams& p [[buffer(0)]], uint i [[thread_position_in_grid]]) {
-    if (i >= p.count)
-        return;
-    const float opa = p.sigmoid[i];
-    const float grad = p.rho * (opa - p.z[i] + p.u[i]) * (opa * (1.0f - opa)) * p.grad_loss;
-    p.gradient[i] = p.accumulate != 0 ? p.gradient[i] + grad : grad;
-}

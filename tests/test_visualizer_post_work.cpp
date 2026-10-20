@@ -978,7 +978,7 @@ namespace {
         (void)lfs::test::licht::require_result(
             lfs::training::serialize_checkpoint(
                 stream, 11, strategy, parameters,
-                nullptr, appearance, nullptr, nullptr));
+                nullptr, appearance, nullptr));
         const auto encoded = stream.str();
         std::vector<std::byte> bytes(encoded.size());
         std::memcpy(
@@ -1196,7 +1196,8 @@ namespace {
                 for (auto* params : {&snapshot.mrnf_session, &snapshot.mrnf_current,
                                      &snapshot.mcmc_session, &snapshot.mcmc_current}) {
                     params->enable_sparsity = enable_sparsity;
-                    params->sparsify_steps = sparsify_steps;
+                    params->popspa_sparsify_steps = sparsify_steps;
+                    params->popspa_refine_steps = 0;
                 }
             }
             if (gut || max_cap >= 0) {

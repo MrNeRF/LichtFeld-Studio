@@ -3,6 +3,7 @@
 
 #include "lfs/training/ops/gsplat_cuda.hpp"
 #include "rasterization/gsplat_rasterizer_cuda.hpp"
+#include "rasterization/pop_scores_cuda.hpp"
 
 namespace lfs::training {
     const lfs::gpu_ops::GsplatRasterOps& cuda_gsplat_ops() {
@@ -13,6 +14,7 @@ namespace lfs::training {
             .release = gsplat_release,
             .record_vram = gsplat_record_vram,
             .release_caches = gsplat_release_caches,
+            .pop_scores = gsplat_pop_scores,
         };
         return ops;
     }

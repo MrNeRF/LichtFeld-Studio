@@ -507,6 +507,15 @@ namespace lfs::training {
             prefetch_next_batch();
         }
 
+        // Restarts sampling from `sampler`. Queued requests are dropped, but the
+        // loader and its decoded image cache stay warm.
+        void restart(Sampler sampler) {
+            loader_->clear();
+            sampler_ = std::move(sampler);
+            sequence_to_camera_.clear();
+            prefetch_next_batch();
+        }
+
         void shutdown() {
             if (shutdown_)
                 return;

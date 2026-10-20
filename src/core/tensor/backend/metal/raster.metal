@@ -16,14 +16,21 @@ struct PointRasterParams {
     device const int* indices;
     device const uchar* visibility;
     device const uchar* deleted;
-    uint count, width, height, channels, transform_count, visibility_count, flags;
+    device const uchar* overlay;
+    uint count, width, height, transform_count, visibility_count, flags;
     float ortho_scale, focal_y, voxel_size, far_plane;
-    uint padding;
 };
 
 constant uint kRasterCropBox = 1u, kRasterCropEllipsoid = 2u, kRasterCropInverse = 4u, kRasterCropDesaturate = 8u,
-              kRasterEquirectangular = 16u, kRasterOrthographic = 32u, kRasterTransparent = 64u;
+              kRasterEquirectangular = 16u, kRasterOrthographic = 32u, kRasterTransparent = 64u,
+              kRasterPreviewAdditive = 128u;
 constant uint kRasterEmpty = 0xffffffffu;
+constant uint kRasterSelectionColors = 57u;
+
+// Mirror src/rendering/point_cloud_style.hpp.
+constant uint SELECTION_PREVIEW_COLOR_INDEX = 256u;
+constant float SELECTION_COMMITTED_BLEND = 0.75f, SELECTION_PREVIEW_BLEND = 0.9f;
+constant float SELECTION_COMMITTED_SCALE = 1.35f, SELECTION_PREVIEW_SCALE = 1.6f;
 
 // Row `row` of a column-major 4x4 matrix times (x, y, z, w).
 static float raster_row(device const float* m, int row, float x, float y, float z, float w) {
@@ -114,6 +121,18 @@ static bool raster_splat(constant PointRasterParams& p, uint i, thread RasterSpl
     float3 color = clamp(float3(p.colors[i * 3], p.colors[i * 3 + 1], p.colors[i * 3 + 2]), 0.0f, 1.0f);
     if (desaturate)
         color += (dot(color, float3(0.299f, 0.587f, 0.114f)) - color) * 0.75f;
+    const uint group = p.overlay != nullptr ? p.overlay[2 * i] : 0;
+    const bool committed = group != 0;
+    const bool in_preview = p.overlay != nullptr && p.overlay[2 * i + 1] != 0;
+    const bool is_preview = in_preview && ((p.flags & kRasterPreviewAdditive) != 0 ? !committed : committed);
+    if (committed || is_preview) {
+        device const float* tint = p.parameters + kRasterSelectionColors +
+                                   4 * (is_preview ? SELECTION_PREVIEW_COLOR_INDEX : group);
+        const float blend = is_preview ? SELECTION_PREVIEW_BLEND : SELECTION_COMMITTED_BLEND;
+        color += (float3(tint[0], tint[1], tint[2]) - color) * blend;
+        const float scale = is_preview ? SELECTION_PREVIEW_SCALE : SELECTION_COMMITTED_SCALE;
+        splat.radius = int(ceil(max(splat.radius + 1.0f, splat.radius * scale)));
+    }
     const uint3 bytes = uint3(clamp(color, 0.0f, 1.0f) * 255.0f + 0.5f);
     splat.color = bytes.x | (bytes.y << 8) | (bytes.z << 16);
     splat.depth = as_type<uint>(max(depth, 0.0f));
@@ -140,8 +159,8 @@ kernel void point_raster(constant PointRasterParams& p [[buffer(0)]], uint i [[t
         const uint color = p.scratch[pixels + i];
         for (uint c = 0; c < 3; ++c)
             p.image[c * pixels + i] = empty ? background[c] : float((color >> (8 * c)) & 0xffu) / 255.0f;
-        if (p.channels == 4)
-            p.image[3 * pixels + i] = empty && (p.flags & kRasterTransparent) != 0 ? 0.0f : 1.0f;
+        if ((p.flags & kRasterTransparent) != 0)
+            p.image[3 * pixels + i] = empty ? 0.0f : 1.0f;
         p.depth[i] = empty ? p.far_plane : as_type<float>(depth_bits);
         return;
     }

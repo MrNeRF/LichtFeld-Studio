@@ -266,7 +266,10 @@ namespace lfs::vis {
         const auto* model = scene_state.combined_model;
         const bool has_model = hasRenderableGaussians(model);
         const bool has_points = scene_state.point_cloud && scene_state.point_cloud->size() > 0;
-        if (!has_model && !has_points && scene_state.meshes.empty()) {
+        const bool ply_split_pairs_models =
+            splitViewUsesPLYComparison(frame_settings.split_view_mode) &&
+            plyComparisonNodes(context.scene_manager->getScene()).size() >= 2;
+        if (!has_model && !has_points && !ply_split_pairs_models && scene_state.meshes.empty()) {
             if (view.tensor_temporal_pipeline_)
                 view.tensor_temporal_pipeline_->resetAll();
             if (view.metal_scene_upscaler_)
@@ -396,9 +399,6 @@ namespace lfs::vis {
             view.viewport_interaction_context_.updatePickContext(panels);
         }
 
-        const bool ply_split_pairs_models =
-            splitViewUsesPLYComparison(frame_settings.split_view_mode) &&
-            plyComparisonNodes(context.scene_manager->getScene()).size() >= 2;
         if (!has_model && !has_points && !ply_split_pairs_models) {
             // Meshes only: the compositor draws them over the background.
             view.dirty_mask_.exchange(0, std::memory_order_acq_rel);
@@ -480,6 +480,34 @@ namespace lfs::vis {
                 view.metal_scene_upscaler_->resetAll();
         }
 
+        const auto render_point_source =
+            [&](const lfs::rendering::PointCloudRenderRequest& pc_request, const RenderTargetId target,
+                const lfs::core::Tensor& positions, const lfs::core::Tensor& colors,
+                const lfs::core::SplatData* deleted_source)
+            -> std::expected<SceneRenderer::OutputTensors, std::string> {
+            auto request = buildPointSceneRequest(pc_request, frame_settings);
+            request.positions = &positions;
+            request.colors = &colors;
+            request.positions_revision = point_cloud_data_revision_;
+            request.colors_revision = point_cloud_data_revision_;
+            if (deleted_source && deleted_source->has_deleted_mask() && deleted_source->deleted_mask_matches_size()) {
+                request.deleted_mask = &deleted_source->deleted();
+                request.deleted_mask_revision = deleted_source->deleted_mask_version();
+            }
+            request.selection_revision = point_cloud_preview_selection_revision_;
+            request.preview_selection_revision = point_cloud_preview_selection_revision_;
+            request.synchronize_output = context.preparing_import;
+            if (!point_scene_renderer_)
+                point_scene_renderer_ = createPointSceneRenderer(*context.graphics_context);
+            auto rendered = point_scene_renderer_->render(request, target);
+            if (!rendered)
+                return std::unexpected(rendered.error());
+            auto outputs = point_scene_renderer_->readOutputTensors(target);
+            if (!outputs)
+                return std::unexpected(lfs::format_for_developer(outputs.error()));
+            return std::move(*outputs);
+        };
+        constexpr float SH_C0 = 0.28209479177387814f;
         // Points draw the dataset cloud, or the splat centers in point-cloud mode.
         // The main view and the GT comparison panel render them the same way.
         const auto render_point_scene =
@@ -495,7 +523,6 @@ namespace lfs::vis {
             const lfs::core::Tensor* positions = nullptr;
             const lfs::core::Tensor* colors = nullptr;
             if (splats_as_points) {
-                constexpr float SH_C0 = 0.28209479177387814f;
                 const auto& sh0 = model->sh0_raw();
                 const void* sh0_key = sh0.is_valid() ? sh0.data_ptr() : nullptr;
                 const std::size_t sh0_count = sh0.is_valid() ? static_cast<std::size_t>(sh0.size(0)) : 0;
@@ -512,27 +539,7 @@ namespace lfs::vis {
                 positions = &scene_state.point_cloud->means;
                 colors = &scene_state.point_cloud->colors;
             }
-            auto request = buildPointSceneRequest(pc_request, frame_settings);
-            request.positions = positions;
-            request.colors = colors;
-            request.positions_revision = point_cloud_data_revision_;
-            request.colors_revision = point_cloud_data_revision_;
-            if (splats_as_points && model->has_deleted_mask() && model->deleted_mask_matches_size()) {
-                request.deleted_mask = &model->deleted();
-                request.deleted_mask_revision = model->deleted_mask_version();
-            }
-            request.selection_revision = point_cloud_preview_selection_revision_;
-            request.preview_selection_revision = point_cloud_preview_selection_revision_;
-            request.synchronize_output = context.preparing_import;
-            if (!point_scene_renderer_)
-                point_scene_renderer_ = createPointSceneRenderer(*context.graphics_context);
-            auto rendered = point_scene_renderer_->render(request, target);
-            if (!rendered)
-                return std::unexpected(rendered.error());
-            auto outputs = point_scene_renderer_->readOutputTensors(target);
-            if (!outputs)
-                return std::unexpected(lfs::format_for_developer(outputs.error()));
-            return std::move(*outputs);
+            return render_point_source(pc_request, target, *positions, *colors, splats_as_points ? model : nullptr);
         };
         const auto point_cloud_transforms = [&]() {
             return frame_settings.point_cloud_mode && has_model
@@ -698,6 +705,41 @@ namespace lfs::vis {
                 const auto render_side = [&](const PlyComparisonNode& entry, const std::size_t index,
                                              const SplitViewPanelId panel_id, const RenderTargetId target)
                     -> std::expected<PanelOutput, std::string> {
+                    const auto* node = entry.node;
+                    // Raw PLY clouds, and every splat side in point-cloud mode, draw as points
+                    // through the full-viewport camera; the panel keeps this side's columns.
+                    if (node->point_cloud ||
+                        (node->model && (node->point_cloud_source || frame_settings.point_cloud_mode))) {
+                        const bool reconstructed = reconstruction_runtime_ready && (spatial_requested || temporal_setup.eligible);
+                        const auto& layout = reconstructed ? output_layouts[index] : layouts[index];
+                        const glm::ivec2 full_size = reconstructed ? size : render_size;
+                        const std::vector<glm::mat4> transforms{scene_coords::nodeVisualizerWorldTransform(scene, node->id)};
+                        FrameContext panel_context = frame_context;
+                        panel_context.render_size = full_size;
+                        panel_context.scene_jitter_pixels = {};
+                        const auto pc_request = buildPointCloudNodeRenderRequest(panel_context, scene, *node, full_size, transforms);
+                        lfs::core::Tensor colors;
+                        if (!node->point_cloud)
+                            colors = (node->model->sh0_raw().slice(1, 0, 1).squeeze(1) * SH_C0 + 0.5f).clamp(0.0f, 1.0f);
+                        const lfs::core::Tensor means = node->point_cloud ? lfs::core::Tensor{} : node->model->get_means();
+                        auto outputs = node->point_cloud
+                                           ? render_point_source(pc_request, target, node->point_cloud->means, node->point_cloud->colors, nullptr)
+                                           : render_point_source(pc_request, target, means, colors, node->model.get());
+                        if (!outputs)
+                            return std::unexpected(outputs.error());
+                        const auto columns = [&](const std::shared_ptr<lfs::core::Tensor>& full) {
+                            if (!full)
+                                return full;
+                            const auto begin = static_cast<size_t>(std::clamp(layout.panel.x, 0, full_size.x - 1));
+                            const auto end = std::min(begin + static_cast<size_t>(std::max(layout.panel.width, 1)),
+                                                      static_cast<size_t>(full_size.x));
+                            return std::make_shared<lfs::core::Tensor>(full->slice(1, begin, end).contiguous());
+                        };
+                        lfs::rendering::FrameMetadata metadata{};
+                        metadata.viewer_backend = lfs::rendering::ViewerBackend::Metal;
+                        metadata.valid = true;
+                        return PanelOutput{.image = columns(outputs->color), .depth = columns(outputs->depth), .metadata = std::move(metadata)};
+                    }
                     if (!entry.splat_slot) {
                         lfs::rendering::FrameMetadata metadata{};
                         metadata.viewer_backend = lfs::rendering::ViewerBackend::Metal;

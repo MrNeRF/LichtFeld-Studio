@@ -11,16 +11,21 @@ static const uint LFS_PUSH_CONSTANT_SIZE = 128;
 [SpecializationConstant] const uint kPhase = 0;
 
 static const uint kCropBox = 1u, kCropEllipsoid = 2u, kCropInverse = 4u, kCropDesaturate = 8u;
-static const uint kEquirectangular = 16u, kOrthographic = 32u, kTransparent = 64u;
+static const uint kEquirectangular = 16u, kOrthographic = 32u, kTransparent = 64u, kPreviewAdditive = 128u;
 static const uint kEmpty = 0xffffffffu;
+static const uint kSelectionColors = 57u;
+
+// Mirror src/rendering/point_cloud_style.hpp.
+static const uint SELECTION_PREVIEW_COLOR_INDEX = 256u;
+static const float SELECTION_COMMITTED_BLEND = 0.75f, SELECTION_PREVIEW_BLEND = 0.9f;
+static const float SELECTION_COMMITTED_SCALE = 1.35f, SELECTION_PREVIEW_SCALE = 1.6f;
 
 #include "byte_read.slangh"
 
 struct Parameters {
-    uint64_t positions, colors, parameters, scratch, image, depth, transforms, indices, visibility, deleted;
-    uint count, width, height, channels, transformCount, visibilityCount, flags;
+    uint64_t positions, colors, parameters, scratch, image, depth, transforms, indices, visibility, deleted, overlay;
+    uint count, width, height, transformCount, visibilityCount, flags;
     float orthoScale, focalY, voxelSize, farPlane;
-    uint padding;
 };
 
 // Row `row` of a column-major 4x4 matrix at `m` times (x, y, z, 1).
@@ -95,6 +100,18 @@ bool splatOf(Parameters p, uint i, out Splat splat) {
     Ptr<float, Access.Read> colors = (Ptr<float, Access.Read>)p.colors;
     float3 color = clamp(float3(colors[i * 3], colors[i * 3 + 1], colors[i * 3 + 2]), 0.0f, 1.0f);
     if (desaturate) color += (dot(color, float3(0.299f, 0.587f, 0.114f)) - color) * 0.75f;
+    const uint group = p.overlay != 0 ? loadByte(p.overlay, 2 * i) : 0;
+    const bool committed = group != 0;
+    const bool inPreview = p.overlay != 0 && loadByte(p.overlay, 2 * i + 1) != 0;
+    const bool isPreview = inPreview && ((p.flags & kPreviewAdditive) != 0 ? !committed : committed);
+    if (committed || isPreview) {
+        Ptr<float, Access.Read> tint = parameters + kSelectionColors +
+                                      4 * (isPreview ? SELECTION_PREVIEW_COLOR_INDEX : group);
+        const float blend = isPreview ? SELECTION_PREVIEW_BLEND : SELECTION_COMMITTED_BLEND;
+        color += (float3(tint[0], tint[1], tint[2]) - color) * blend;
+        const float scale = isPreview ? SELECTION_PREVIEW_SCALE : SELECTION_COMMITTED_SCALE;
+        splat.radius = int(ceil(max(splat.radius + 1.0f, splat.radius * scale)));
+    }
     const uint3 bytes = uint3(clamp(color, 0.0f, 1.0f) * 255.0f + 0.5f);
     splat.color = bytes.x | (bytes.y << 8) | (bytes.z << 16);
     splat.depth = asuint(max(depth, 0.0f));
@@ -122,8 +139,8 @@ void main(uint3 tid : SV_DispatchThreadID, uniform Parameters p) {
         const uint color = scratch[pixels + i];
         for (uint c = 0; c < 3; ++c)
             image[c * pixels + i] = empty ? background[c] : float((color >> (8 * c)) & 0xffu) / 255.0f;
-        if (p.channels == 4)
-            image[3 * pixels + i] = empty && (p.flags & kTransparent) != 0 ? 0.0f : 1.0f;
+        if ((p.flags & kTransparent) != 0)
+            image[3 * pixels + i] = empty ? 0.0f : 1.0f;
         ((Ptr<float, Access.ReadWrite>)p.depth)[i] = empty ? p.farPlane : asfloat(depthBits);
         return;
     }

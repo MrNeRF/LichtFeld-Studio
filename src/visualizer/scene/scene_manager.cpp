@@ -256,6 +256,7 @@ namespace lfs::vis {
                 size_t count;
                 int degree;
                 bool payload_diverged;
+                bool point_cloud_source = false;
                 std::array<core::Tensor, 4> fields;
                 std::array<size_t, 4> capacities;
             };
@@ -270,6 +271,7 @@ namespace lfs::vis {
                             .count = static_cast<size_t>(node.model->size()),
                             .degree = node.model->get_max_sh_degree(),
                             .payload_diverged = node.payload_diverged,
+                            .point_cloud_source = node.point_cloud_source,
                             .fields = {},
                             .capacities = {}};
                 const auto tensors = fields(*node.model);
@@ -314,6 +316,7 @@ namespace lfs::vis {
                         target.copy_from(saved);
                     }
                     node.payload_diverged = state.payload_diverged;
+                    node.point_cloud_source = state.point_cloud_source;
                 }
                 states_ = std::move(current);
                 scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
@@ -1216,6 +1219,7 @@ namespace lfs::vis {
                 if (node_id == core::NULL_NODE) {
                     throw std::runtime_error("Failed to add splat node '" + name + "'");
                 }
+                scene_.getNodeById(node_id)->point_cloud_source = load_result.point_cloud_source;
                 const auto* const added = scene_.getNodeById(node_id);
                 assert(added);
                 const std::string added_name = added ? added->name : name;
@@ -1418,6 +1422,7 @@ namespace lfs::vis {
                 throw std::runtime_error("Failed to add splat node '" + name + "'");
             }
             scene_.setNodeVisibility(node_id, is_visible);
+            scene_.getNodeById(node_id)->point_cloud_source = load_result.point_cloud_source;
             const auto* const added = scene_.getNodeById(node_id);
             assert(added);
             const std::string added_name = added ? added->name : name;
@@ -5499,6 +5504,7 @@ namespace lfs::vis {
         result.local_transform = node->local_transform.get();
         result.visible = node->visible;
         result.locked = node->locked;
+        result.point_cloud_source = node->point_cloud_source;
 
         if (node->model && node->model->size() > 0) {
             if (node->model->has_deleted_mask() &&
@@ -5987,6 +5993,7 @@ namespace lfs::vis {
                                 if (child_id == core::NULL_NODE)
                                     continue;
                                 if (auto* pasted_child = scene_.getNodeById(child_id)) {
+                                    pasted_child->point_cloud_source = child.point_cloud_source;
                                     pasted_child->local_transform.setQuiet(child.local_transform);
                                     pasted_child->visible.setQuiet(child.visible);
                                     pasted_child->locked.setQuiet(child.locked);
@@ -6058,6 +6065,8 @@ namespace lfs::vis {
             }
 
             if (entry.hierarchy) {
+                if (auto* mutable_node = scene_.getMutableNode(pasted_name))
+                    mutable_node->point_cloud_source = entry.hierarchy->point_cloud_source;
                 pasteNodeHierarchy(*entry.hierarchy, pasted_node->id);
             }
 
@@ -6293,6 +6302,7 @@ namespace lfs::vis {
             bool had_deleted_mask = false;
             core::Tensor previous_deleted_mask;
             bool payload_diverged = false;
+            bool point_cloud_source = false;
         };
 
         std::vector<std::pair<core::NodeId, TrainingRemovalImpact>> removed_node_impacts;
@@ -6397,6 +6407,7 @@ namespace lfs::vis {
                                                      ? node->model->deleted().clone()
                                                      : core::Tensor{},
                         .payload_diverged = node->payload_diverged,
+                        .point_cloud_source = node->point_cloud_source,
                     });
                 } catch (const std::exception& error) {
                     return std::unexpected(
@@ -6422,6 +6433,7 @@ namespace lfs::vis {
                     node->model->clear_deleted();
                 }
                 node->payload_diverged = prepared.payload_diverged;
+                node->point_cloud_source = prepared.point_cloud_source;
             }
         };
 

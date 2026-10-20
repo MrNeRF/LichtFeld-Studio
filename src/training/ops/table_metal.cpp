@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "lfs/training/ops/popspa_portable.hpp"
 #include "metal_families.hpp"
 
 namespace lfs::training {
@@ -49,6 +50,7 @@ namespace lfs::training {
             .lpips = &metal_lpips_ops(),
             .structure = &metal_structure_ops(),
             .blob = &metal_blob_ops(),
+            .popspa = &portable_popspa_ops(),
         };
         return table;
     }

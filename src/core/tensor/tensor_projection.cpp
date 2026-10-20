@@ -108,7 +108,8 @@ namespace lfs::core {
 
     std::pair<Tensor, Tensor> rasterize_points(const Tensor& points, const Tensor& colors, const PointRaster& raster,
                                                const Tensor* transforms, const Tensor* indices,
-                                               const Tensor* visibility, const Tensor* deleted) {
+                                               const Tensor* visibility, const Tensor* deleted,
+                                               const Tensor* selection, const Tensor* preview) {
         const auto site = LFS_SOURCE_SITE_CURRENT();
         tensor_contract::require_valid(points, "rasterize_points", "points", site);
         tensor_contract::require_dtype(points, DataType::Float32, "rasterize_points", "points", site);
@@ -166,6 +167,22 @@ namespace lfs::core {
                            std::format("rasterize_points needs a deleted flag per point (deleted={}, points={})",
                                        deleted->numel(), count));
         }
+        for (const auto& [mask, name] : {std::pair{selection, "selection"}, std::pair{preview, "preview"}}) {
+            if (!mask)
+                continue;
+            tensor_contract::require_valid(*mask, "rasterize_points", name, site);
+            tensor_contract::require_dtype(*mask, {DataType::Bool, DataType::UInt8}, "rasterize_points", name, site);
+            tensor_contract::require_same_device(points, *mask, "rasterize_points", "points", name, site);
+            internal::require_same_gpu_backend(points, *mask, "rasterize_points");
+            LFS_ASSERT_MSG(mask->numel() == count,
+                           std::format("rasterize_points needs a {} entry per point (entries={}, points={})",
+                                       name, mask->numel(), count));
+        }
+        const bool has_overlay = selection || preview;
+        if (has_overlay)
+            LFS_ASSERT_MSG(raster.selection_colors.size() >= 257 * 4,
+                           std::format("rasterize_points selection colors need at least 257 RGBA rows (size={})",
+                                       raster.selection_colors.size()));
 
         const uint32_t channels = raster.transparent_background ? 4u : 3u;
         auto image = internal::allocate_like(
@@ -178,17 +195,31 @@ namespace lfs::core {
 
         // Layout of internal::kPointRasterParameters, as the kernels read it.
         std::vector<float> values;
-        values.reserve(internal::kPointRasterParameters);
+        values.reserve(internal::kPointRasterParameters + (has_overlay ? 258 * 4 : 0));
         for (const auto* block : {&raster.view, &raster.view_projection, &raster.crop_to_local})
             values.insert(values.end(), block->begin(), block->end());
         for (const auto* block : {&raster.crop_min, &raster.crop_max, &raster.background})
             values.insert(values.end(), block->begin(), block->end());
         LFS_DEBUG_ASSERT_MSG(values.size() == internal::kPointRasterParameters,
                              "rasterize_points parameter block must match the kernels' layout");
+        if (has_overlay) {
+            values.insert(values.end(), raster.selection_colors.begin(),
+                          raster.selection_colors.begin() + std::min(raster.selection_colors.size(), size_t{258 * 4}));
+            values.resize(internal::kPointRasterParameters + 258 * 4, 0.0f);
+        }
         Tensor parameters;
         {
             GpuBackendScope scope(*gpu_backend_of(points));
             parameters = Tensor::from_vector(values, {values.size()}, Device::CPU).to(Device::GPU);
+        }
+        Tensor overlay;
+        if (has_overlay) {
+            const auto mask_bytes = [&](const Tensor* mask) {
+                return mask->to(DataType::UInt8).reshape({static_cast<int>(count)});
+            };
+            const auto groups = selection ? mask_bytes(selection) : Tensor::zeros_like(mask_bytes(preview));
+            const auto preview_flags = preview ? mask_bytes(preview) : Tensor::zeros_like(groups);
+            overlay = Tensor::stack({groups, preview_flags}, 1).contiguous();
         }
 
         const auto positions = points.contiguous();
@@ -199,7 +230,7 @@ namespace lfs::core {
         const auto removed = deleted ? deleted->contiguous() : Tensor{};
         pin_operands({&positions, &rgb, &parameters, transforms ? &matrices : nullptr,
                       indices ? &node_indices : nullptr, visibility ? &visible : nullptr,
-                      deleted ? &removed : nullptr});
+                      deleted ? &removed : nullptr, has_overlay ? &overlay : nullptr});
         const auto stream = prepare_inputs_for_stream({&positions, &rgb, &parameters}, image.stream());
         const auto optional_ref = [&](const bool used, const Tensor& tensor) -> std::optional<internal::StorageRef> {
             if (!used)
@@ -222,6 +253,8 @@ namespace lfs::core {
             flags |= internal::kPointRasterOrthographic;
         if (raster.transparent_background)
             flags |= internal::kPointRasterTransparent;
+        if (raster.preview_additive)
+            flags |= internal::kPointRasterPreviewAdditive;
         internal::backend_ops_for(positions).rasterize_points(
             {.positions = internal::storage_ref(positions),
              .colors = internal::storage_ref(rgb),
@@ -233,10 +266,10 @@ namespace lfs::core {
              .indices = optional_ref(indices != nullptr, node_indices),
              .visibility = optional_ref(visibility != nullptr, visible),
              .deleted = optional_ref(deleted != nullptr, removed),
+             .overlay = optional_ref(has_overlay, overlay),
              .count = count,
              .width = static_cast<uint32_t>(raster.width),
              .height = static_cast<uint32_t>(raster.height),
-             .channels = channels,
              .transform_count = static_cast<uint32_t>(transforms ? transforms->numel() / 16 : 0),
              .visibility_count = static_cast<uint32_t>(visibility ? visibility->numel() : 0),
              .flags = flags,

@@ -6533,7 +6533,30 @@ namespace lfs::vis::gui {
         rml_viewport_overlay_.setViewportBounds(
             viewport_layout_.pos, viewport_layout_.size,
             {panel_input.screen_x, panel_input.screen_y});
-        rml_viewport_overlay_.setSplitDividerOverlay({});
+        // Each view draws its split divider as a shape overlay; the active view's
+        // RML overlay only labels the two comparison panels.
+        RmlViewportOverlay::SplitDividerOverlayState split_divider_state;
+        if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
+            rendering && splitViewUsesPLYComparison(rendering->settingsForView(viewport_layout_.view).split_view_mode)) {
+            const auto view = viewport_layout_.view;
+            const auto divider_x = rendering->getSplitDividerScreenX(view, viewport_layout_.pos, viewport_layout_.size);
+            const auto content_bounds = rendering->getContentBounds(view, glm::ivec2(
+                                                                              std::max(static_cast<int>(viewport_layout_.size.x), 0),
+                                                                              std::max(static_cast<int>(viewport_layout_.size.y), 0)));
+            if (divider_x && content_bounds.width > 0.0f && content_bounds.height > 0.0f) {
+                const auto info = rendering->viewState(view).split_view_service_.getInfo();
+                const float inset = 10.0f * current_ui_scale_;
+                split_divider_state.left_name = info.left_name;
+                split_divider_state.right_name = info.right_name;
+                split_divider_state.left_name_right = *divider_x - viewport_layout_.pos.x - inset;
+                split_divider_state.right_name_right = content_bounds.x + content_bounds.width - inset;
+                split_divider_state.name_bottom = content_bounds.y + content_bounds.height - inset;
+                const float left_width = *divider_x - viewport_layout_.pos.x - content_bounds.x;
+                const float right_width = content_bounds.width - left_width;
+                split_divider_state.name_max_width = std::max(0.0f, std::min(left_width, right_width) - 2.0f * inset);
+            }
+        }
+        rml_viewport_overlay_.setSplitDividerOverlay(split_divider_state);
         RmlViewportOverlay::LodStatsOverlayState lod_stats_state;
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
             lod_stats_state = makeLodStatsOverlayState(rendering->getLodStats());

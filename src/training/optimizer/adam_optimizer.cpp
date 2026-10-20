@@ -314,7 +314,7 @@ namespace lfs::training {
         screen_share_n_ = static_cast<int>(splat_data_._max_screen_share.numel());
     }
 
-    void AdamOptimizer::step(const int iteration) {
+    void AdamOptimizer::step(const int iteration, const bool apply_sh_warmup) {
         LFS_TRACE("kernel.adam.step");
         validate_mean_step_far_mask();
         refresh_screen_share_buffer();
@@ -409,7 +409,7 @@ namespace lfs::training {
             };
             adam_ops().step_batch(steps, masks, adam_hyper(), adam_modifiers());
         }
-        step_shN(iteration);
+        step_shN(iteration, apply_sh_warmup);
     }
 
     size_t AdamOptimizer::compute_state_growth(ParamType type, size_t n_new) const {
@@ -706,12 +706,12 @@ namespace lfs::training {
         state.capacity = std::max(state.capacity, alloc_cap);
     }
 
-    void AdamOptimizer::step_shN(const int iteration) {
+    void AdamOptimizer::step_shN(const int iteration, const bool apply_sh_warmup) {
         auto& param = get_param(ParamType::ShN);
         if (!param.is_valid() || param.numel() == 0) {
             return;
         }
-        if (iteration <= SH_WARMUP_ITERATIONS || splat_data_.active_sh_coeffs_rest() == 0) {
+        if ((apply_sh_warmup && iteration <= SH_WARMUP_ITERATIONS) || splat_data_.active_sh_coeffs_rest() == 0) {
             return;
         }
 
@@ -1069,9 +1069,6 @@ namespace lfs::training {
                        bind_group(ParamType::Sh0, sh0), bind_group(ParamType::ShN, shN)},
             .scale_reg_loss = absent_,
             .opacity_reg_loss = absent_,
-            .sparsity_sigmoid = absent_,
-            .sparsity_z = absent_,
-            .sparsity_u = absent_,
 
             .beta1 = beta1,
             .beta2 = beta2,
@@ -1079,6 +1076,53 @@ namespace lfs::training {
             .per_splat_mean_step = per_splat_mean_step_,
             .mean_step_median_extent = mean_step_median_extent_,
             .mean_step_far_mask = mean_step_far_mask_storage_,
+        };
+    }
+
+    lfs::gpu_ops::BackwardAdam AdamOptimizer::prepare_fastgs_gradient_capture(
+        const lfs::core::TensorExecutionTarget execution_stream) {
+        const int primitives = static_cast<int>(splat_data_.size());
+        const auto capture = [&](const ParamType type, const int attributes) {
+            auto& gradient = get_grad(type);
+            gradient.sync_to_stream(execution_stream);
+            return lfs::gpu_ops::BackwardAdamParam{
+                .parameter = get_param(type),
+                .packed_moments = absent_,
+                .joint_bounds = absent_,
+                .sh_value_bounds = absent_,
+                .frozen_mask = absent_,
+                .crop_damping_mask = absent_,
+                .screen_share = absent_,
+                .primitives = primitives,
+                .elements = static_cast<int>(gradient.numel()),
+                .attributes = attributes,
+                .gradient = gradient,
+            };
+        };
+        const auto off = [&](const ParamType type) {
+            return lfs::gpu_ops::BackwardAdamParam{
+                .parameter = get_param(type),
+                .packed_moments = absent_,
+                .joint_bounds = absent_,
+                .sh_value_bounds = absent_,
+                .frozen_mask = absent_,
+                .crop_damping_mask = absent_,
+                .screen_share = absent_,
+                .primitives = primitives,
+            };
+        };
+        const auto layout_rest = static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest());
+        return {
+            .groups = {capture(ParamType::Means, 3), capture(ParamType::Scaling, 3), capture(ParamType::Rotation, 4),
+                       capture(ParamType::Opacity, 1), capture(ParamType::Sh0, 3),
+                       splat_data_.active_sh_coeffs_rest() > 0
+                           ? capture(ParamType::ShN, static_cast<int>(lfs::core::sh_float4_slots_for_rest(layout_rest) * 4u))
+                           : off(ParamType::ShN)},
+            .scale_reg_loss = absent_,
+            .opacity_reg_loss = absent_,
+            .beta1 = static_cast<float>(config_.beta1),
+            .beta2 = static_cast<float>(config_.beta2),
+            .eps = static_cast<float>(config_.eps),
         };
     }
 

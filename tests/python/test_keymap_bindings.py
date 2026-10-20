@@ -285,6 +285,10 @@ def _install_lf_stub(monkeypatch):
     lf_stub.get_zoom_toward_cursor_enabled = lambda: True
     lf_stub.set_zoom_toward_cursor_enabled = lambda _enabled: None
     lf_stub.ui = SimpleNamespace(
+        get_camera_browse_repeat=lambda: True,
+        set_camera_browse_repeat=lambda _enabled: None,
+        get_camera_browse_repeat_rate=lambda: 5.0,
+        set_camera_browse_repeat_rate=lambda _rate, persist=True: None,
         PanelSpace=panel_space,
         PanelHeightMode=panel_height_mode,
         PanelOption=panel_option,

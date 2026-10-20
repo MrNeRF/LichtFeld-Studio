@@ -75,11 +75,14 @@ namespace lfs::gpu_ops {
         float screen_share_limit = 0.f;
         float screen_share_penalty = 0.f;
         bool enabled = false;
+        // When valid, backward adds this group's raw gradient into it, laid out like the
+        // optimizer gradient, and leaves the parameter and its moments untouched.
+        Tensor gradient;
     };
 
     // A successful backward schedules exactly one update of every enabled Adam
     // binding, including its moment and bound updates and the requested
-    // regularization and sparsity contributions. Those writes are ordered
+    // regularization contributions. Those writes are ordered
     // before later dependent work. The trainer does its existing bookkeeping
     // once and does not run another parameter update. CUDA performs the update
     // inside backward with the fused kernels. Another backend may compute
@@ -88,7 +91,6 @@ namespace lfs::gpu_ops {
     struct BackwardAdam {
         std::array<BackwardAdamParam, 6> groups;
         Out scale_reg_loss, opacity_reg_loss;
-        In sparsity_sigmoid, sparsity_z, sparsity_u;
 
         float beta1 = 0.9f;
         float beta2 = 0.999f;
@@ -96,8 +98,6 @@ namespace lfs::gpu_ops {
         float scale_reg_weight = 0.f;
         float flatten_reg_weight = 0.f;
         float opacity_reg_weight = 0.f;
-        float sparsity_rho = 0.f;
-        float sparsity_grad_loss = 0.f;
         bool per_splat_mean_step = false;
         float mean_step_median_extent = 0.f;
         Tensor mean_step_far_mask;
@@ -157,6 +157,11 @@ namespace lfs::gpu_ops {
         void (*set_deferred_count)(FastSaved&, bool) = nullptr;
         RasterResult (*resolve_deferred_count)(FastSaved&, bool wait) = nullptr;
         void (*set_instance_capacity_for_testing)(FastSaved&, uint32_t) = nullptr;
+
+        // Adds the live forward frame's POPSpa removal energy, the sum over pixels of
+        // |T * alpha * (color - color behind)|^2, into scores ([N, 8], the PopspaOps
+        // encoding). The frame stays live; backward or release still follows.
+        void (*pop_scores)(const FastSaved&, In bg_color, In bg_image, Out scores) = nullptr;
     };
 
 } // namespace lfs::gpu_ops

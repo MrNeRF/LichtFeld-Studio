@@ -67,19 +67,15 @@ namespace lfs::training {
         const int iteration,
         const FastGSFusedExtraGradients& fused_extra_gradients,
         const lfs::core::Tensor& grad_depth,
-        const lfs::core::Tensor& grad_normal) {
+        const lfs::core::Tensor& grad_normal,
+        const bool defer_optimizer_step) {
         const auto& ops = cuda_fast_ops();
         const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
-        const auto prepared = optimizer.prepare_fastgs_fused_adam(iteration, lfs::core::TensorExecutionTarget::current());
+        const auto prepared = defer_optimizer_step
+                                  ? optimizer.prepare_fastgs_gradient_capture(lfs::core::TensorExecutionTarget::current())
+                                  : optimizer.prepare_fastgs_fused_adam(iteration, lfs::core::TensorExecutionTarget::current());
         lfs::core::Tensor scale_loss = device_f32(fused_extra_gradients.scale_reg_loss_out, {1});
         lfs::core::Tensor opacity_loss = device_f32(fused_extra_gradients.opacity_reg_loss_out, {1});
-        const auto sparsity_n = static_cast<std::size_t>(std::max(fused_extra_gradients.sparsity_n, 0));
-        lfs::core::Tensor sparsity_sigmoid = device_f32(
-            const_cast<float*>(fused_extra_gradients.sparsity_opa_sigmoid), {sparsity_n});
-        lfs::core::Tensor sparsity_z = device_f32(
-            const_cast<float*>(fused_extra_gradients.sparsity_z), {sparsity_n});
-        lfs::core::Tensor sparsity_u = device_f32(
-            const_cast<float*>(fused_extra_gradients.sparsity_u), {sparsity_n});
         const auto edge_n = ctx.width > 0 && ctx.height > 0
                                 ? static_cast<std::size_t>(ctx.height) * static_cast<std::size_t>(ctx.width)
                                 : 0;
@@ -103,9 +99,6 @@ namespace lfs::training {
                     .groups = prepared.groups,
                     .scale_reg_loss = scale_loss,
                     .opacity_reg_loss = opacity_loss,
-                    .sparsity_sigmoid = sparsity_sigmoid,
-                    .sparsity_z = sparsity_z,
-                    .sparsity_u = sparsity_u,
 
                     .beta1 = prepared.beta1,
                     .beta2 = prepared.beta2,
@@ -113,8 +106,6 @@ namespace lfs::training {
                     .scale_reg_weight = fused_extra_gradients.scale_reg_weight,
                     .flatten_reg_weight = fused_extra_gradients.flatten_reg_weight,
                     .opacity_reg_weight = fused_extra_gradients.opacity_reg_weight,
-                    .sparsity_rho = fused_extra_gradients.sparsity_rho,
-                    .sparsity_grad_loss = fused_extra_gradients.sparsity_grad_loss,
                     .per_splat_mean_step = prepared.per_splat_mean_step,
                     .mean_step_median_extent = prepared.mean_step_median_extent,
                     .mean_step_far_mask = prepared.mean_step_far_mask,
@@ -131,7 +122,7 @@ namespace lfs::training {
                     .impact_peak = device_f32(fused_extra_gradients.impact_peak_out, {static_cast<size_t>(gaussian_model.size())}),
                 },
                 densification_type);
-            if (fastgs_adam_enabled(prepared)) {
+            if (!defer_optimizer_step && fastgs_adam_enabled(prepared)) {
                 optimizer.commit_fastgs_fused_adam(iteration);
             }
             publish_frame(ctx);

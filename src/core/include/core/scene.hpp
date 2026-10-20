@@ -189,6 +189,7 @@ namespace lfs::core {
         // Model is a view-dependent proxy the app replaces at any time (streamed
         // splats): it cannot be trained or edited in place. Runtime only.
         bool model_streamed = false;
+        bool point_cloud_source = false;
         PayloadHydrationState payload_hydration =
             PayloadHydrationState::NotApplicable;
         std::optional<GeoreferencePose> georef_pose;
@@ -257,6 +258,7 @@ namespace lfs::core {
             bool locked = false;
             bool training_enabled = true;
             bool payload_diverged = false;
+            bool point_cloud_source = false;
             PayloadHydrationState payload_hydration =
                 PayloadHydrationState::NotApplicable;
             std::optional<GeoreferencePose> georef_pose;
@@ -697,6 +699,10 @@ namespace lfs::core {
         }
 
         [[nodiscard]] std::shared_ptr<lfs::core::PointCloud> getInitialPointCloud() const { return initial_point_cloud_; }
+        // Resolve the training seed by its retained identity or DATASET ancestry,
+        // never by the display order of unrelated point-cloud nodes.
+        [[nodiscard]] const SceneNode* getDatasetPointCloudNode() const;
+
         [[nodiscard]] const lfs::core::Tensor& getSceneCenter() const { return scene_center_; }
         [[nodiscard]] bool imagesHaveAlpha() const { return images_have_alpha_; }
 
