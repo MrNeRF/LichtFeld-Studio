@@ -80,7 +80,9 @@ if(WIN32 AND MSVC)
 endif()
 add_test(NAME lichtfeld_image_codec_tests COMMAND lichtfeld_image_codec_tests
     --gtest_filter=-JxlCodec.EncoderLargeImagesPreserveSamplesAndRejectPixelBudget:JxlCodec.LargeImagesPreserveSamplesAndRecoverFromLimits:ProductionJpeg.MemoryLargeImagesPreserveFileEncodingAndRecoverFromLimits:PngMemory.ParallelStripesMatchFileBytesAndKeepInputUnmodified:PngMemory.LargeImagesPreserveSamplesAndRecoverFromOutputLimits:TiffMemory.LargeImagesPreserveSamplesAndRecoverFromOutputLimits:ExrMemory.LargeImagesPreserveSamplesAndRecoverFromLimits)
-set_tests_properties(lichtfeld_image_codec_tests PROPERTIES LABELS "fast;image;cpu" TIMEOUT 120)
+# This is the aggregate codec suite, including the EXR compression matrix.
+# Allow the full matrix to complete on hosted Windows Debug runners.
+set_tests_properties(lichtfeld_image_codec_tests PROPERTIES LABELS "fast;image;cpu" TIMEOUT 300)
 add_test(NAME lichtfeld_jpeg_large_memory_test COMMAND lichtfeld_image_codec_tests
     --gtest_filter=ProductionJpeg.MemoryLargeImagesPreserveFileEncodingAndRecoverFromLimits)
 set_tests_properties(lichtfeld_jpeg_large_memory_test PROPERTIES LABELS "stress;image;cpu" TIMEOUT 180)
