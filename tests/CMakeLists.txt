@@ -2,6 +2,20 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # Testing module - comprehensive tests for all components
+if(LFS_HAS_CUDA AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Independent of the full/visualizer suites: CPU CI enables only format tests.
+    # This executable supplies fake CUDART lookup functions and needs no driver.
+    find_package(GTest CONFIG REQUIRED)
+    add_executable(cuda_driver_entry_tests test_cuda_driver_entry.cpp)
+    target_include_directories(cuda_driver_entry_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/core/include)
+    target_include_directories(cuda_driver_entry_tests SYSTEM PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
+    target_compile_features(cuda_driver_entry_tests PRIVATE cxx_std_23)
+    target_compile_definitions(cuda_driver_entry_tests PRIVATE LFS_HAS_CUDA=1)
+    target_link_libraries(cuda_driver_entry_tests PRIVATE GTest::gtest_main)
+    add_test(NAME CudaDriverEntryContracts COMMAND cuda_driver_entry_tests)
+endif()
+
 if(BUILD_TESTS OR BUILD_VISUALIZER_TESTS)
     find_package(GTest CONFIG REQUIRED)
     add_executable(gpu_configuration_policy_tests test_gpu_configuration_policy.cpp)
@@ -19,16 +33,6 @@ if(BUILD_TESTS OR BUILD_VISUALIZER_TESTS)
         target_link_libraries(cuda_device_selection_tests PRIVATE lfs_core CUDA::cudart GTest::gtest)
         add_test(NAME CudaDeviceSelection COMMAND cuda_device_selection_tests)
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-            # A separate executable supplies fake CUDART entry lookup functions;
-            # exercise version compatibility even on CI hosts without a driver.
-            add_executable(cuda_driver_entry_tests test_cuda_driver_entry.cpp)
-            target_include_directories(cuda_driver_entry_tests PRIVATE
-                ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/core/include)
-            target_include_directories(cuda_driver_entry_tests SYSTEM PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
-            target_compile_features(cuda_driver_entry_tests PRIVATE cxx_std_23)
-            target_compile_definitions(cuda_driver_entry_tests PRIVATE LFS_HAS_CUDA=1)
-            target_link_libraries(cuda_driver_entry_tests PRIVATE GTest::gtest_main)
-            add_test(NAME CudaDriverEntryContracts COMMAND cuda_driver_entry_tests)
             add_executable(cuda_driver_entry_live_tests test_cuda_driver_entry_live.cpp)
             target_include_directories(cuda_driver_entry_live_tests PRIVATE
                 ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/core/include)
