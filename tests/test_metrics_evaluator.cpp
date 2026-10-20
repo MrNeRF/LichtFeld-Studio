@@ -35,6 +35,7 @@
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -244,6 +245,24 @@ TEST(EvalMetricsCsv, HeaderAppendsGeometryColumnsWithoutRenamingExisting) {
     present.bias_b = 0.003f;
     present.flip = 0.125f;
     EXPECT_EQ(present.to_csv_row(), "200,1.000000,0.500000,,0.010000,10,12.500000,0.250000,0.001000,-0.002000,0.003000,0.000000,0.000000,0.000000,0.125000");
+}
+
+// Images for a Vulkan run decode on CPU threads, so its report must not name nvImageCodec.
+TEST(MetricsReporter, VulkanRunRecordsCpuJpegDecoding) {
+    if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan))
+        GTEST_SKIP() << "Vulkan device unavailable";
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_metrics_report_decoder";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    {
+        const lfs::test::DefaultGpuBackendForTesting vulkan(lfs::core::GpuBackend::Vulkan);
+        ASSERT_TRUE(vulkan.switched());
+        lfs::training::MetricsReporter(tmp).save_report();
+    }
+    std::ifstream report(tmp / "metrics_report.txt");
+    const std::string text{std::istreambuf_iterator<char>(report), std::istreambuf_iterator<char>()};
+    EXPECT_NE(text.find("JPEG Decoder: CPU\n"), std::string::npos) << text;
+    std::filesystem::remove_all(tmp);
 }
 
 TEST(EvalMetricsEvent, ZeroLpipsRemainsPresent) {
