@@ -1606,14 +1606,27 @@ def test_camera_repeat_draft_survives_refresh_and_commits_on_enter(preferences_p
     panel._set_camera_browse_repeat_rate("")
     assert panel._get_camera_repeat_rate_draft() == ""
     assert state.camera_browse_repeat_rate == 5
+    on_change = module.draft_change_handler(panel._set_camera_browse_repeat_rate, panel._commit_camera_repeat_rate)
     event = SimpleNamespace(get_bool_parameter=lambda key, default: False)
-    panel._on_camera_repeat_rate_change(None, event, ["1"])
+    on_change(None, event, ["1"])
     assert panel._get_camera_repeat_rate_draft() == "1"
     assert state.camera_browse_repeat_rate == 5
     event.get_bool_parameter = lambda key, default: True
-    panel._on_camera_repeat_rate_change(None, event, ["1"])
+    on_change(None, event, ["1"])
     assert state.camera_browse_repeat_rate == 1
     panel._set_camera_browse_repeat_rate("12")
     panel._cancel_camera_repeat_rate()
     assert panel._get_camera_repeat_rate_draft() == "1"
     assert state.camera_browse_repeat_rate == 1
+
+
+def test_draft_change_handler_keeps_draft_until_enter(preferences_panel_module):
+    module, _state = preferences_panel_module
+    calls = []
+    on_change = module.draft_change_handler(lambda value: calls.append(value), lambda: calls.append("commit"))
+    typing = SimpleNamespace(get_bool_parameter=lambda key, default: False)
+    enter = SimpleNamespace(get_bool_parameter=lambda key, default: key == "linebreak")
+    on_change(None, typing, ["4"])
+    on_change(None, typing, [])
+    on_change(None, enter, ["45"])
+    assert calls == ["4", "45", "commit"]

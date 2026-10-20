@@ -31,6 +31,18 @@ __lfs_panel_classes__ = ["PreferencesPanel"]
 __lfs_panel_ids__ = ["lfs.preferences"]
 
 
+def draft_change_handler(set_draft, commit):
+    """Change handler for a text field that keeps a draft and commits it on Enter."""
+
+    def on_change(_handle, event, args):
+        if args:
+            set_draft(args[0])
+        if event.get_bool_parameter("linebreak", False):
+            commit()
+
+    return on_change
+
+
 @panel_class("preferences")
 class PreferencesPanel(Panel):
     """Floating home for application-level preferences."""
@@ -229,7 +241,8 @@ class PreferencesPanel(Panel):
         model.bind("camera_browse_repeat_rate", self._get_camera_repeat_rate_draft,
                    self._set_camera_browse_repeat_rate)
         model.bind_event("step_camera_repeat_rate", self._step_camera_repeat_rate)
-        model.bind_event("camera_repeat_rate_change", self._on_camera_repeat_rate_change)
+        model.bind_event("camera_repeat_rate_change",
+                         draft_change_handler(self._set_camera_browse_repeat_rate, self._commit_camera_repeat_rate))
         model.bind_event("commit_camera_repeat_rate", lambda *_: self._commit_camera_repeat_rate())
         model.bind_event("cancel_camera_repeat_rate", lambda *_: self._cancel_camera_repeat_rate())
         model.bind("view_snap", lf.get_camera_view_snap_enabled, self._set_view_snap)
@@ -308,10 +321,11 @@ class PreferencesPanel(Panel):
         model.bind_event("portal_open", self._open_portal_verification)
         model.bind_event("set_file_association", self._on_set_file_association)
         model.bind_event("toggle_mcp_enabled", self._on_toggle_mcp_enabled)
-        model.bind_event("mcp_port_change", self._on_mcp_port_change)
-        model.bind_event("confirm_mcp_port", self._on_confirm_mcp_port)
-        model.bind_event("project_location_change", self._on_project_location_change)
-        model.bind_event("confirm_project_location", self._on_confirm_project_location)
+        model.bind_event("mcp_port_change", draft_change_handler(self._set_mcp_port, self._commit_mcp_port))
+        model.bind_event("confirm_mcp_port", lambda *_: self._commit_mcp_port())
+        model.bind_event("project_location_change",
+                         draft_change_handler(self._set_project_location_draft, self._commit_project_location))
+        model.bind_event("confirm_project_location", lambda *_: self._commit_project_location())
         model.bind_event("browse_project_location", self._on_browse_project_location)
         model.bind_event("use_default_project_location", self._on_use_default_project_location)
         model.bind_event("open_mcp_log_folder", self._on_open_mcp_log_folder)
@@ -875,12 +889,6 @@ class PreferencesPanel(Panel):
         # must read this draft, rather than restore the saved value mid-edit.
         self._camera_repeat_rate_draft = str(value)
 
-    def _on_camera_repeat_rate_change(self, _handle, event, args):
-        if args:
-            self._set_camera_browse_repeat_rate(args[0])
-        if event.get_bool_parameter("linebreak", False):
-            self._commit_camera_repeat_rate()
-
     def _cancel_camera_repeat_rate(self):
         self._camera_repeat_rate_draft = None
         self._refresh_selection()
@@ -1150,15 +1158,6 @@ class PreferencesPanel(Panel):
         self._notify_project_manager_preferences_changed()
         self._refresh_selection()
 
-    def _on_project_location_change(self, _handle, event, args):
-        if args:
-            self._set_project_location_draft(args[0])
-        if event.get_bool_parameter("linebreak", False):
-            self._commit_project_location()
-
-    def _on_confirm_project_location(self, _handle, _event, _args):
-        self._commit_project_location()
-
     def _on_browse_project_location(self, _handle, _event, _args):
         start = self._project_location or lf.ui.get_default_project_location()
         chosen = lf.ui.open_folder_dialog(
@@ -1238,15 +1237,6 @@ class PreferencesPanel(Panel):
             return
         self._mcp_port = str(value).strip()
         self._dirty_mcp()
-
-    def _on_mcp_port_change(self, _handle, event, args):
-        if args:
-            self._set_mcp_port(args[0])
-        if event.get_bool_parameter("linebreak", False):
-            self._commit_mcp_port()
-
-    def _on_confirm_mcp_port(self, _handle, _event, _args):
-        self._commit_mcp_port()
 
     def _commit_mcp_port(self):
         port = self._validated_mcp_port()
