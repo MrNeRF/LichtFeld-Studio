@@ -26,14 +26,19 @@ reader still returns gray as RGB, gray-alpha as RGBA and UInt16 normalized to
 [0, 65535]. This difference is explicit and tested against direct dav1d decode.
 
 Input is straight alpha, with sRGB transfer and declared BT.709 or BT.2020
-primaries. Full-range NCLX is written; RGB uses an identity matrix and 4:4:4,
-so lossless RGB is not subjected to a lossy chroma conversion. Alpha is encoded
+primaries. Full-range NCLX is written. Lossless RGB uses an identity matrix and
+4:4:4 to preserve the integer codes. Lossy RGB uses BT.709 YCbCr (MC=1) or
+BT.2020 non-constant-luminance YCbCr (MC=9), retaining 4:4:4. Alpha is encoded
 losslessly even when color uses lossy quality. All provider configuration calls
 are checked. The encoder is explicitly AOM rather than whichever provider has
 the highest plugin priority.
 
 Defaults are lossless, quality 90 (ignored for lossless), speed 8, 8-bit output
-and one thread. Higher speed is faster; supported speed is 0..9, lossy quality
+and one thread. This conservative default bounds work per concurrent call and
+keeps the sequence encoder configuration fixed for reproducible resume checksums;
+it is not a throughput optimum. The core API permits an explicit thread count,
+but sequences do not currently expose that tuning. Higher speed is faster;
+supported speed is 0..9, lossy quality
 0..100 and depth 8/10/12. Core limits bound pixels and serialized output bytes,
 not libaom/libheif working allocations or their internal encoded representation.
 Serialization uses the existing atomic file service and does not build a second
@@ -53,7 +58,9 @@ conversion; existing EXR workflows remain available. No implicit tone map.
 FileFrameSink writes `.avif` sequences through the same public writer. Resume
 identity includes provider/version, quantization policy, depth, speed and
 effective compression settings. Ignored lossless quality does not invalidate a
-checkpoint. Existing files retain bytes and mtimes; missing files must reproduce
+checkpoint. Lossy checkpoints use a new YCbCr policy identity; older identity-matrix
+lossy checkpoints are rejected rather than mixing encodings. Lossless checkpoint
+identity is unchanged. Existing files retain bytes and mtimes; missing files must reproduce
 the stored checksum. Generated-name matching handles the five-character suffix.
 
 CLI: `--format avif`, `--avif-quality` (enables lossy), `--avif-speed` and

@@ -671,10 +671,8 @@ class MediaBindings(unittest.TestCase):
         hashes = [hashlib.sha256(path.read_bytes()).hexdigest() for path in paths]
         mtimes = [path.stat().st_mtime_ns for path in paths]
         metadata_path = output.files.output_directory / "extraction_metadata.json"
-        metadata_before = metadata_path.read_bytes()
-        with self.assertRaises(MEDIA_ERROR):
-            media.MediaIngest.extract_files(request, output)
-        self.assertEqual(metadata_path.read_bytes(), metadata_before)
+        self.assertEqual(media.MediaIngest.extract_files(request, output).frames_accepted, 4)
+        self.assertEqual(json.loads(metadata_path.read_bytes())["output"], metadata["output"])
         output.files.tiff16.overwrite = True
         self.assertEqual(media.MediaIngest.extract_files(request, output).frames_accepted, 4)
         self.assertEqual([hashlib.sha256(path.read_bytes()).hexdigest() for path in paths], hashes)
@@ -972,7 +970,7 @@ class MediaBindings(unittest.TestCase):
         with self.assertRaises(MEDIA_ERROR):
             media.MediaIngest.extract_files(self.request(), files)
 
-    def test_completed_exr_resume_requires_manifest_replacement(self):
+    def test_completed_exr_resume_regenerates_manifest_without_image_overwrite(self):
         request = self.request()
         request.output_format = media.FramePixelFormat.RGBFloat32
         request.input_color.transfer = media.ColorTransfer.Linear
@@ -982,10 +980,9 @@ class MediaBindings(unittest.TestCase):
         image = next(files.files.output_directory.glob("frame_*.exr"))
         before = (image.read_bytes(), image.stat().st_mtime_ns)
         manifest = files.files.output_directory / "extraction_metadata.json"
-        original_manifest = manifest.read_bytes()
-        with self.assertRaises(MEDIA_ERROR):
-            media.MediaIngest.extract_files(request, files)
-        self.assertEqual(manifest.read_bytes(), original_manifest)
+        original_manifest = json.loads(manifest.read_bytes())
+        self.assertEqual(media.MediaIngest.extract_files(request, files).frames_accepted, 4)
+        self.assertEqual(json.loads(manifest.read_bytes())["output"], original_manifest["output"])
         files.files.exr.overwrite = True
         self.assertEqual(media.MediaIngest.extract_files(request, files).frames_accepted, 4)
         self.assertEqual((image.read_bytes(), image.stat().st_mtime_ns), before)

@@ -120,9 +120,11 @@ namespace lfs::media {
                                                                                                                                                    : io::ImageFormat::JPG;
                     p.jpg_quality = files->files.jpeg_quality;
                     p.generate_metadata = files->write_metadata || files->files.format == FrameFileFormat::EXR || files->files.format == FrameFileFormat::TIFF16 || files->files.format == FrameFileFormat::JXL || files->files.format == FrameFileFormat::AVIF;
-                    p.overwrite_metadata = files->files.format == FrameFileFormat::AVIF ? files->files.avif.overwrite : files->files.format == FrameFileFormat::JXL  ? files->files.jxl.overwrite
-                                                                                                                    : files->files.format == FrameFileFormat::TIFF16 ? files->files.tiff16.overwrite
-                                                                                                                                                                     : files->files.exr.overwrite;
+                    // Resume regenerates the derived manifest only after the sink
+                    // verifies the checkpoint identity and every recorded frame.
+                    p.overwrite_metadata = files->resume || (files->files.format == FrameFileFormat::AVIF ? files->files.avif.overwrite : files->files.format == FrameFileFormat::JXL  ? files->files.jxl.overwrite
+                                                                                                                                      : files->files.format == FrameFileFormat::TIFF16 ? files->files.tiff16.overwrite
+                                                                                                                                                                                       : files->files.exr.overwrite);
                     p.tiff16_transfer = files->files.tiff16.transfer;
                     p.jxl_lossless = files->files.jxl.lossless;
                     p.jxl_distance = files->files.jxl.distance;

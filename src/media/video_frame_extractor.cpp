@@ -2682,6 +2682,7 @@ namespace lfs::io {
                         if (params.format == ImageFormat::AVIF) {
                             root["output"].erase("jpeg_quality");
                             root["output"]["bit_depth"] = params.avif_bit_depth;
+                            root["output"]["pixel_format"] = params.avif_bit_depth == 8 ? "rgb_uint8" : "rgb_uint16";
                             root["output"]["compression"] = params.avif_lossless ? "lossless-integer-codes" : "lossy";
                             root["output"]["avif_quality"] = params.avif_lossless ? nlohmann::json(nullptr) : nlohmann::json(params.avif_quality);
                             root["output"]["avif_speed"] = params.avif_speed;

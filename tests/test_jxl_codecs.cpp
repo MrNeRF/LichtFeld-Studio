@@ -453,12 +453,12 @@ namespace {
 
     // Independent provider reader: do not validate the writer solely through
     // the application decoder, which could hide matching policy mistakes.
-    std::vector<uint8_t> direct_decode(std::span<const uint8_t> bytes, int channels, codec::SampleType type, bool srgb = false) {
+    std::vector<uint8_t> direct_decode(std::span<const uint8_t> bytes, int channels, codec::SampleType type, bool srgb = false, bool original = false) {
         std::unique_ptr<JxlDecoder, decltype(&JxlDecoderDestroy)> decoder(JxlDecoderCreate(nullptr), JxlDecoderDestroy);
-        if (!decoder || JxlDecoderSubscribeEvents(decoder.get(), JXL_DEC_FULL_IMAGE | (srgb ? JXL_DEC_COLOR_ENCODING : 0)) != JXL_DEC_SUCCESS ||
+        if (!decoder || JxlDecoderSubscribeEvents(decoder.get(), JXL_DEC_FULL_IMAGE | (srgb || original ? JXL_DEC_COLOR_ENCODING : 0)) != JXL_DEC_SUCCESS ||
             JxlDecoderSetInput(decoder.get(), bytes.data(), bytes.size()) != JXL_DEC_SUCCESS)
             throw std::runtime_error("Independent JXL decoder initialization failed");
-        if (srgb && (!JxlGetDefaultCms() || JxlDecoderSetCms(decoder.get(), *JxlGetDefaultCms()) != JXL_DEC_SUCCESS))
+        if ((srgb || original) && (!JxlGetDefaultCms() || JxlDecoderSetCms(decoder.get(), *JxlGetDefaultCms()) != JXL_DEC_SUCCESS))
             throw std::runtime_error("Independent JXL CMS initialization failed");
         JxlDecoderCloseInput(decoder.get());
         const JxlPixelFormat format{uint32_t(channels), type == codec::SampleType::Float32 ? JXL_TYPE_FLOAT : type == codec::SampleType::UInt16 ? JXL_TYPE_UINT16
@@ -467,9 +467,14 @@ namespace {
         std::vector<uint8_t> result;
         for (;;) {
             const auto status = JxlDecoderProcessInput(decoder.get());
-            if (status == JXL_DEC_COLOR_ENCODING && srgb) {
+            if (status == JXL_DEC_COLOR_ENCODING && (srgb || original)) {
                 JxlColorEncoding color;
-                JxlColorEncodingSetToSRGB(&color, channels <= 2);
+                if (original) {
+                    if (JxlDecoderGetColorAsEncodedProfile(decoder.get(), JXL_COLOR_PROFILE_TARGET_ORIGINAL, &color) != JXL_DEC_SUCCESS)
+                        throw std::runtime_error("Independent JXL original profile failed");
+                } else {
+                    JxlColorEncodingSetToSRGB(&color, channels <= 2);
+                }
                 if (JxlDecoderSetOutputColorProfile(decoder.get(), &color, nullptr, 0) != JXL_DEC_SUCCESS)
                     throw std::runtime_error("Independent JXL sRGB output failed");
             } else if (status == JXL_DEC_NEED_IMAGE_OUT_BUFFER) {
@@ -594,6 +599,7 @@ namespace {
             ASSERT_TRUE(transform);
             cmsDoTransform(transform.get(), input.data(), expected.data(), width * height);
             for (bool lossless : {false, true}) {
+                SCOPED_TRACE(::testing::Message() << "color=" << int(color) << " lossless=" << lossless);
                 codec::JxlEncodeOptions options;
                 options.color = color;
                 options.lossless = lossless;
@@ -607,14 +613,20 @@ namespace {
                 ASSERT_TRUE(codec::decode_jxl_to_buffer(encoded, target, info, error)) << error;
                 const auto independent = direct_decode(encoded, 3, codec::SampleType::Float32, true);
                 ASSERT_EQ(independent.size(), actual.size() * sizeof(float));
+                const auto native_bytes = direct_decode(encoded, 3, codec::SampleType::Float32, false, true);
+                ASSERT_EQ(native_bytes.size(), actual.size() * sizeof(float));
+                std::vector<float> native(actual.size()), transformed(actual.size());
+                std::memcpy(native.data(), native_bytes.data(), native_bytes.size());
+                cmsDoTransform(transform.get(), native.data(), transformed.data(), width * height);
                 for (size_t i = 0; i < actual.size(); ++i) {
                     float reference;
                     std::memcpy(&reference, independent.data() + i * sizeof(float), sizeof(float));
                     EXPECT_NEAR(actual[i], reference, .000001f);
-                    // A perceptual lossy distance is not a per-channel error bound.
-                    // Compare source colors with LittleCMS only when samples are lossless.
-                    if (lossless)
-                        EXPECT_NEAR(actual[i], expected[i], .0005f);
+                    EXPECT_NEAR(actual[i], transformed[i], .0005f);
+                    // Retain the source-color bound for the linear fixture. Lossy
+                    // distortion is separate from the decoded-sample CMS check above.
+                    if (lossless || color == codec::JxlEncodingColor::LinearBT2020)
+                        EXPECT_NEAR(actual[i], expected[i], lossless ? .0005f : .01f);
                 }
             }
         }

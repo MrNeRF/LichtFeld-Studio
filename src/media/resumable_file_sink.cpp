@@ -162,7 +162,7 @@ namespace lfs::media::detail {
         if (f.format == FrameFileFormat::TIFF16)
             identity_["tiff16"] = {core::image_codecs::tiff_sdr_encoding, static_cast<int>(f.tiff16.transfer), f.tiff16.provenance};
         if (f.format == FrameFileFormat::AVIF)
-            identity_["avif"] = {"avif-sdr-v1", core::image_codecs::avif_encoder_version(), f.avif.lossless, f.avif.lossless ? Json(nullptr) : Json(f.avif.quality), f.avif.speed, f.avif.bit_depth};
+            identity_["avif"] = {f.avif.lossless ? "avif-sdr-v1" : "avif-sdr-ycbcr444-v2", core::image_codecs::avif_encoder_version(), f.avif.lossless, f.avif.lossless ? Json(nullptr) : Json(f.avif.quality), f.avif.speed, f.avif.bit_depth};
         if (f.format == FrameFileFormat::JXL) {
             identity_["jxl"] = {"jxl-sdr-v1", core::image_codecs::jxl_encoder_version(), f.jxl.lossless, f.jxl.lossless ? Json(nullptr) : Json(f.jxl.distance), f.jxl.effort};
             if (f.jxl.precision == JxlPrecision::UInt16)
@@ -186,6 +186,13 @@ namespace lfs::media::detail {
         }
         if (!lfs::core::native_fs::is_directory(lfs::core::native_fs::symlink_status(checkpoint_)))
             return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Checkpoint must be a non-symlink directory"));
+        const bool overwrite = f.format == FrameFileFormat::AVIF ? f.avif.overwrite : f.format == FrameFileFormat::JXL  ? f.jxl.overwrite
+                                                                                  : f.format == FrameFileFormat::TIFF16 ? f.tiff16.overwrite
+                                                                                  : f.format == FrameFileFormat::EXR    ? f.exr.overwrite
+                                                                                                                        : f.image_output.overwrite;
+        if ((!lfs::core::native_fs::exists(identity_path) || emptyReservation(identity_path)) &&
+            lfs::core::native_fs::exists(f.output_directory / "extraction_metadata.json") && !overwrite)
+            return SinkResult::failure(checkpointError(ErrorCode::AlreadyExists, "Cannot adopt existing extraction metadata without a checkpoint identity"));
         if (!lfs::core::native_fs::exists(identity_path) || emptyReservation(identity_path)) {
             // Before identity publication no image/record can have committed.
             // Only its own interrupted atomic temporary/reservation is recoverable.

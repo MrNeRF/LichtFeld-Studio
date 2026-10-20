@@ -159,3 +159,8 @@ target_include_directories(media_jxl_roundtrip PRIVATE "${MEDIA_ROOT}/src")
 target_link_libraries(media_jxl_roundtrip PRIVATE lfs_media lfs_image_codecs PkgConfig::JXL)
 set_target_properties(media_jxl_roundtrip PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME MediaJxlUInt16RoundTripContracts COMMAND media_jxl_roundtrip)
+set_tests_properties(MediaJxlUInt16RoundTripContracts PROPERTIES LABELS "media;cpu;offline" TIMEOUT 60)
+if(WIN32)
+    set_tests_properties(MediaJxlUInt16RoundTripContracts PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")
+endif()

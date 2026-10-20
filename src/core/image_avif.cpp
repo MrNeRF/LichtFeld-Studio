@@ -98,7 +98,9 @@ namespace lfs::core::image_codecs {
                     return failure(ErrorCode::ResourceExhausted, "cannot allocate color profile");
                 for (auto status : {heif_nclx_color_profile_set_color_primaries(color.get(), options.primaries == AvifPrimaries::Bt709 ? 1 : 9),
                                     heif_nclx_color_profile_set_transfer_characteristics(color.get(), 13),
-                                    heif_nclx_color_profile_set_matrix_coefficients(color.get(), gray ? 1 : 0)})
+                                    heif_nclx_color_profile_set_matrix_coefficients(color.get(), gray ? 1 : options.lossless                        ? 0
+                                                                                                        : options.primaries == AvifPrimaries::Bt709 ? 1
+                                                                                                                                                    : 9)})
                     if (auto result = check(status); !result)
                         return result;
                 color->full_range_flag = 1;

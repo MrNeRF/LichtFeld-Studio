@@ -224,6 +224,58 @@ namespace {
         EXPECT_FALSE(c::encode_avif_memory(data, 4096, 1, 4, data.size(), encoded, {.bit_depth = 12}));
         EXPECT_EQ(encoded, before);
     }
+    TEST_F(AvifEncode, LossyUsesDeclaredYcbcr444WhileLosslessKeepsIdentity) {
+        for (int bits : {8, 10, 12})
+            for (auto primaries : {c::AvifPrimaries::Bt709, c::AvifPrimaries::Bt2020})
+                for (bool lossless : {false, true}) {
+                    SCOPED_TRACE(testing::Message() << bits << "/" << int(primaries) << "/" << lossless);
+                    constexpr int width = 24, height = 16;
+                    const size_t sample = bits == 8 ? 1 : 2;
+                    std::vector<uint8_t> input(width * height * 3 * sample);
+                    for (size_t i = 0; i < width * height * 3; ++i) {
+                        const uint16_t code = uint16_t((i * 11 + i / 3 * 5) % (1u << bits));
+                        if (sample == 1)
+                            input[i] = uint8_t(code);
+                        else
+                            std::memcpy(input.data() + i * sample, &code, sample);
+                    }
+                    std::vector<uint8_t> encoded;
+                    ASSERT_TRUE(c::encode_avif_memory(input, width, height, 3, width * 3 * sample, encoded,
+                                                      {.lossless = lossless, .quality = 90, .bit_depth = bits, .primaries = primaries}));
+                    std::unique_ptr<heif_context, decltype(&heif_context_free)> context(heif_context_alloc(), heif_context_free);
+                    ASSERT_EQ(heif_context_read_from_memory_without_copy(context.get(), encoded.data(), encoded.size(), nullptr).code, heif_error_Ok);
+                    heif_image_handle* raw_handle = nullptr;
+                    ASSERT_EQ(heif_context_get_primary_image_handle(context.get(), &raw_handle).code, heif_error_Ok);
+                    std::unique_ptr<heif_image_handle, decltype(&heif_image_handle_release)> handle(raw_handle, heif_image_handle_release);
+                    heif_color_profile_nclx* raw_color = nullptr;
+                    ASSERT_EQ(heif_image_handle_get_nclx_color_profile(handle.get(), &raw_color).code, heif_error_Ok);
+                    std::unique_ptr<heif_color_profile_nclx, decltype(&heif_nclx_color_profile_free)> color(raw_color, heif_nclx_color_profile_free);
+                    EXPECT_EQ(int(color->matrix_coefficients), lossless ? 0 : primaries == c::AvifPrimaries::Bt709 ? 1
+                                                                                                                   : 9);
+                    EXPECT_EQ(int(color->color_primaries), primaries == c::AvifPrimaries::Bt709 ? 1 : 9);
+                    EXPECT_EQ(color->transfer_characteristics, 13);
+                    EXPECT_EQ(color->full_range_flag, 1);
+                    heif_image* raw_image = nullptr;
+                    ASSERT_EQ(heif_decode_image(handle.get(), &raw_image, heif_colorspace_undefined, heif_chroma_undefined, nullptr).code, heif_error_Ok);
+                    std::unique_ptr<heif_image, decltype(&heif_image_release)> image(raw_image, heif_image_release);
+                    EXPECT_EQ(heif_image_get_chroma_format(image.get()), heif_chroma_444);
+                    const auto decoded = independent(encoded, bits, 3);
+                    if (lossless)
+                        EXPECT_EQ(decoded.data, input);
+                    else {
+                        double error = 0;
+                        for (size_t i = 0; i < width * height * 3; ++i) {
+                            uint16_t a = input[i * sample], b = decoded.data[i * sample];
+                            if (sample == 2) {
+                                std::memcpy(&a, input.data() + i * sample, sample);
+                                std::memcpy(&b, decoded.data.data() + i * sample, sample);
+                            }
+                            error += std::abs(int(a) - int(b));
+                        }
+                        EXPECT_LT(error / (width * height * 3), ((1u << bits) - 1) * .04);
+                    }
+                }
+    }
     TEST_F(AvifEncode, LossyAlphaIsExactAndParallelCallsRecover) {
         constexpr int width = 32, height = 24;
         std::vector<uint8_t> input(width * height * 4);
