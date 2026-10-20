@@ -49,8 +49,10 @@ namespace lfs::core {
         std::string cu_error(CUresult r) {
             const char* name = nullptr;
             const char* desc = nullptr;
-            LFS_CUDA_DRIVER(cuGetErrorName)(r, &name);
-            LFS_CUDA_DRIVER(cuGetErrorString)(r, &desc);
+            LFS_CUDA_DRIVER(cuGetErrorName)
+            (r, &name);
+            LFS_CUDA_DRIVER(cuGetErrorString)
+            (r, &desc);
             return std::format("CUDA driver error {}: {}",
                                name ? name : "?",
                                desc ? desc : "?");

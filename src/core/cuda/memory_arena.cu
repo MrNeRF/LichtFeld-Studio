@@ -1114,8 +1114,10 @@ namespace lfs::core {
                 if (chunk.is_mapped) {
                     lfs::diagnostics::VramProfiler::instance().recordDeallocation(
                         reinterpret_cast<void*>(arena.d_ptr + chunk.offset));
-                    LFS_CUDA_DRIVER(cuMemUnmap)(arena.d_ptr + chunk.offset, chunk.size);
-                    LFS_CUDA_DRIVER(cuMemRelease)(chunk.handle);
+                    LFS_CUDA_DRIVER(cuMemUnmap)
+                    (arena.d_ptr + chunk.offset, chunk.size);
+                    LFS_CUDA_DRIVER(cuMemRelease)
+                    (chunk.handle);
                     chunk.is_mapped = false;
                 }
             }
@@ -1123,7 +1125,8 @@ namespace lfs::core {
         }
 
         if (arena.d_ptr) {
-            LFS_CUDA_DRIVER(cuMemAddressFree)(arena.d_ptr, arena.virtual_size);
+            LFS_CUDA_DRIVER(cuMemAddressFree)
+            (arena.d_ptr, arena.virtual_size);
             arena.d_ptr = 0;
             arena.virtual_size = 0;
         }
@@ -1692,11 +1695,14 @@ namespace lfs::core {
                             total_allocated += chunk_size;
                             LOG_TRACE("VMM chunk %d: %zu MB", i, chunk_size >> 20);
                         } else {
-                            LFS_CUDA_DRIVER(cuMemUnmap)(arena.d_ptr + map_offset, chunk_size);
-                            LFS_CUDA_DRIVER(cuMemRelease)(chunk_handle);
+                            LFS_CUDA_DRIVER(cuMemUnmap)
+                            (arena.d_ptr + map_offset, chunk_size);
+                            LFS_CUDA_DRIVER(cuMemRelease)
+                            (chunk_handle);
                         }
                     } else {
-                        LFS_CUDA_DRIVER(cuMemRelease)(chunk_handle);
+                        LFS_CUDA_DRIVER(cuMemRelease)
+                        (chunk_handle);
                     }
                 }
             }
@@ -1724,7 +1730,8 @@ namespace lfs::core {
 
         result = LFS_CUDA_DRIVER(cuMemMap)(arena.d_ptr + map_offset, commit_size, 0, handle, 0);
         if (result != CUDA_SUCCESS) {
-            LFS_CUDA_DRIVER(cuMemRelease)(handle);
+            LFS_CUDA_DRIVER(cuMemRelease)
+            (handle);
             return false;
         }
 
@@ -1735,8 +1742,10 @@ namespace lfs::core {
 
         result = LFS_CUDA_DRIVER(cuMemSetAccess)(arena.d_ptr + map_offset, commit_size, &access_desc, 1);
         if (result != CUDA_SUCCESS) {
-            LFS_CUDA_DRIVER(cuMemUnmap)(arena.d_ptr + map_offset, commit_size);
-            LFS_CUDA_DRIVER(cuMemRelease)(handle);
+            LFS_CUDA_DRIVER(cuMemUnmap)
+            (arena.d_ptr + map_offset, commit_size);
+            LFS_CUDA_DRIVER(cuMemRelease)
+            (handle);
             return false;
         }
 
