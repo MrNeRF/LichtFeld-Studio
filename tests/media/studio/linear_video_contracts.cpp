@@ -156,6 +156,10 @@ namespace {
                 auto frame = core::Tensor::from_vector(values, {96, static_cast<size_t>(width) * 2, 3},
                                                        index < 6 ? device : core::Device::CPU)
                                  .slice(1, 0, width);
+                const auto expected_device = index < 6 ? device : core::Device::CPU;
+                if (frame.device() != expected_device ||
+                    (expected_device == core::Device::GPU && core::gpu_backend_of(frame) != core::default_gpu_backend()))
+                    throw std::runtime_error("Video producer did not preserve the requested Tensor backend");
                 const auto written = encoder.writeFrame(frame);
                 if (!written)
                     throw std::runtime_error(written.error());
