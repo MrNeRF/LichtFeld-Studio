@@ -5,7 +5,7 @@
 #include "buffer_utils.h"
 #include "helper_math.h"
 #include "kernel_utils.cuh"
-#include "lfs/core/warp_reduce.cuh"
+#include "training/kernels/warp_reduce.cuh"
 #include "pop_scores.h"
 #include "rasterization_config.h"
 #include <cooperative_groups.h>
