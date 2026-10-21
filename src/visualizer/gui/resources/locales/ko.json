@@ -2246,6 +2246,7 @@
     "status_loading": "불러오는 중",
     "status_error": "오류",
     "status_disabled": "비활성화됨",
+    "status_restart_required": "재시작 필요",
     "error.enter_github_url": "GitHub URL을 입력하세요",
     "status.installed": "설치됨: {}",
     "status.install_failed": "설치 실패",

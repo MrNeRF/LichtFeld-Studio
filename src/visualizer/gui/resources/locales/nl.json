@@ -2246,6 +2246,7 @@
     "status_loading": "bezig met laden",
     "status_error": "fout",
     "status_disabled": "uitgeschakeld",
+    "status_restart_required": "herstart vereist",
     "error.enter_github_url": "Voer een GitHub-URL in",
     "status.installed": "Geïnstalleerd: {}",
     "status.install_failed": "Installatie mislukt",

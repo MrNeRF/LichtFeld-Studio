@@ -2244,6 +2244,7 @@
     "status_loading": "loading",
     "status_error": "error",
     "status_disabled": "disabled",
+    "status_restart_required": "restart required",
     "error.enter_github_url": "Please enter a GitHub URL",
     "status.installed": "Installed: {}",
     "status.install_failed": "Install failed",

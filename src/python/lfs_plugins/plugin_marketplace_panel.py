@@ -499,7 +499,8 @@ class PluginMarketplacePanel(Panel):
         status_class = "status-muted"
         if is_installed:
             if mgr.is_restart_required(plugin_name):
-                status_text = f"{tr('plugin_manager.status')}: Restart required"
+                state_str = tr("plugin_manager.status_restart_required")
+                status_text = f"{tr('plugin_manager.status')}: {state_str}"
                 status_class = "status-warning"
             else:
                 state_keys = {

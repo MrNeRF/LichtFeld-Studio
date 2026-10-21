@@ -2246,6 +2246,7 @@
     "status_loading": "正在加载",
     "status_error": "错误",
     "status_disabled": "已禁用",
+    "status_restart_required": "需要重启",
     "error.enter_github_url": "请输入 GitHub URL",
     "status.installed": "已安装：{}",
     "status.install_failed": "安装失败",

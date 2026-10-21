@@ -2246,6 +2246,7 @@
     "status_loading": "読み込み中",
     "status_error": "エラー",
     "status_disabled": "無効",
+    "status_restart_required": "再起動が必要",
     "error.enter_github_url": "GitHub URL を入力してください",
     "status.installed": "インストール済み: {}",
     "status.install_failed": "インストール失敗",

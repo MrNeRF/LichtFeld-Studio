@@ -2246,6 +2246,7 @@
     "status_loading": "ładowanie",
     "status_error": "błąd",
     "status_disabled": "wyłączony",
+    "status_restart_required": "wymagany restart",
     "error.enter_github_url": "Wpisz URL GitHub",
     "status.installed": "Zainstalowano: {}",
     "status.install_failed": "Instalacja nie powiodła się",

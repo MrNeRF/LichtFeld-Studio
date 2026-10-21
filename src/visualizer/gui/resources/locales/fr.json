@@ -2246,6 +2246,7 @@
     "status_loading": "chargement en cours",
     "status_error": "erreur",
     "status_disabled": "désactivé",
+    "status_restart_required": "redémarrage requis",
     "error.enter_github_url": "Veuillez entrer une URL GitHub",
     "status.installed": "Installé : {}",
     "status.install_failed": "Échec de l'installation",
