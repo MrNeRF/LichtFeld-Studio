@@ -186,3 +186,62 @@ separate sanitized representation.
 The cooperative deadline compares elapsed whole milliseconds with the positive
 millisecond timeout, avoiding overflow from widening an extreme timeout to
 nanoseconds. The maximum signed 64-bit timeout is covered by the CLI regression.
+
+## Image camera and location summary
+
+`source-metadata INPUT` adds a `summary` with scope `static_image_properties`.
+The original `metadata` object and the `source-exif` command remain unchanged.
+Internally, `summarizeImageMetadata` consumes the existing immutable catalog;
+it does not reopen the source, decode pixels, apply image transforms or affect
+the training exposure reader. This interface remains internal alongside the
+stream summary until the metadata contracts stabilize.
+
+| Directory | Interpreted fields |
+|---|---|
+| Image IFD | Camera make/model, EXIF orientation code, modification civil time |
+| Exif IFD | Exposure duration, f-number, photographic sensitivity and explicit extended sensitivity fields, focal length, 35 mm equivalent focal length, lens make/model, original/digitized civil time, subseconds and UTC offsets |
+| GPS IFD | Signed latitude/longitude, altitude with reference 0/1, map datum, UTC date and seconds of day |
+
+Orientation is an EXIF code, including mirror cases, not a clockwise angle.
+Focal lengths are in millimetres, exposure in seconds, coordinates in degrees
+and altitude in metres. Photographic sensitivity is not automatically relabelled
+ISO: its extended marker is unsupported in that fact, while separately present
+standard-output, recommended-exposure and ISO-speed fields retain their own
+semantics. Zero equivalent focal length is unknown, not a zero-length lens.
+
+EXIF groups use the envelope ordinal and full directory path; TIFF groups use
+the observed directory ordinal and reader-supplied kind. Thumbnail and other
+image IFDs remain distinct. Numeric tag IDs in unrelated directories are not
+interpreted as GPS or Exif fields. A limited catalog cannot borrow missing
+operands from retained originals outside its reference index.
+
+Each fact owns its value and a source-bound handle. Compound facts additionally
+retain handles to their operands and name their derivation. Duplicate tag
+occurrences remain separate and carry `ambiguous: true`; duplicate hemisphere,
+altitude or time-component references prevent arbitrary selection. Callers must
+not resolve different image directories or duplicate facts by taking the first
+semantic match. The source references identify their original groups.
+
+Exact EXIF rationals remain rational values for scalar fields. TIFF rationals
+are already floating-point values from libtiff and are not reconstructed into
+invented exact fractions. DMS coordinates and GPS seconds of day explicitly
+derive double values; original components remain in the catalog. GPS dates and
+times are separate observations from the same GPS directory, not a clock mapping
+to the video. No datum, geoid, accuracy, timezone or UTC timestamp is inferred.
+
+Original and digitized dates are validated as civil dates and assembled with
+subseconds and an offset only from the same Exif directory. Fractional digits
+are retained without conversion through floating point. An absent or explicitly
+unknown offset yields a local civil timestamp with `Timezone unspecified`, not
+UTC. Modification time remains a civil field; it is not joined across IFDs.
+Partial dates, leap-second values and non-ASCII text are not normalized into
+valid timestamps. Unknown, invalid, ambiguous and unsupported observations are
+explicit; unrecognized tags remain available in the original catalog.
+
+The image summary has independent fact and aggregate text limits, defaulting to
+4096 facts and 64 KiB. Text accounting includes semantic names, stored strings,
+diagnostics and derivations. Grouping scratch storage scales with the retained
+catalog index and directory paths; it is not a provider-wide memory ceiling.
+Allocation failure returns `ResourceExhausted`. Newer altitude-reference modes,
+MakerNotes, XMP, vendor telemetry, calibration, metadata writing and automatic
+pose or exposure changes are outside this interpretation table.

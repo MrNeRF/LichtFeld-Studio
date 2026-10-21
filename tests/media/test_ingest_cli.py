@@ -184,6 +184,43 @@ class IngestCLI(unittest.TestCase):
         self.assertEqual(catalog["error"]["code"], probe["error"]["code"])
         self.assertFalse(path.exists())
 
+    def test_camera_metadata_summary_real_carriers(self):
+        path = self.root / "Camera metadata é 日本語.bin"
+        cases = [(carrier, little, False) for carrier in ("jpeg", "png", "tiff") for little in (True, False)]
+        cases += [("tiff", little, True) for little in (True, False)]
+        for carrier, little, big in cases:
+            with self.subTest(carrier=carrier, little=little, big=big):
+                source_exif_fixture.write_camera_metadata(path, carrier=carrier, little=little, big=big)
+                before, modified = path.read_bytes(), path.stat().st_mtime_ns
+                result, stderr = self.invoke("source-metadata", path)
+                self.assertEqual(stderr, b"")
+                self.assertTrue(result["success"])
+                self.assertEqual(result["metadata"]["image_exif"]["status"], "collected", result)
+                summary = result["summary"]
+                self.assertEqual(summary["scope"], "static_image_properties")
+                self.assertFalse(summary["limited"])
+                facts = {item["semantic"]: item for item in summary["facts"]}
+                for semantic in ("camera.make", "camera.model", "lens.model", "lens.focal_length", "gps.latitude", "gps.longitude", "gps.altitude_sea_level", "time.original"):
+                    self.assertIn(semantic, facts, result)
+                    self.assertEqual(facts[semantic]["state"], "present", facts[semantic])
+                    self.assertFalse(facts[semantic]["ambiguous"])
+                self.assertEqual(facts["camera.make"]["value"], "Test Camera")
+                self.assertEqual(facts["lens.focal_length"]["unit"], "millimetres")
+                self.assertEqual(facts["gps.latitude"]["value"], -45.5)
+                self.assertEqual(facts["gps.longitude"]["value"], -73.25)
+                self.assertEqual(facts["gps.altitude_sea_level"]["value"], -12.5)
+                self.assertEqual(facts["gps.utc_seconds_of_day"]["value"], 36240.5)
+                self.assertEqual(facts["gps.utc_date"]["value"], "2024-02-29")
+                self.assertEqual(facts["time.original"]["value"], "2024-02-29T12:34:56.000123+02:30")
+                self.assertEqual(len(facts["time.original"]["inputs"]), 2)
+                references = result["metadata"]["records"]
+                for item in summary["facts"]:
+                    self.assertIn(item["source"], references)
+                    for operand in item["inputs"]:
+                        self.assertIn(operand, references)
+                self.assertEqual(path.read_bytes(), before)
+                self.assertEqual(path.stat().st_mtime_ns, modified)
+
     def test_source_metadata_catalog_preserves_existing_descriptions(self):
         path = self.root / "Metadata catalog é 日本語.bin"
         writers = [lambda: source_exif_fixture.write_png(path, duplicate=True)]

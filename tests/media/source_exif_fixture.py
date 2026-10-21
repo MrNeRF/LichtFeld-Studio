@@ -24,6 +24,90 @@ def write_png(path, *, post_idat=False, duplicate=False, idat_chunks=1, damaged_
     return tiff
 
 
+def write_camera_metadata(path, *, carrier="png", little=True, big=False):
+    """Independent byte-level camera/GPS fixture, including nested IFDs."""
+    if big and carrier != "tiff":
+        raise ValueError("EXIF envelopes use classic TIFF")
+    order = "<" if little else ">"
+    slot, count_width, entry_width = (8, 8, 20) if big else (4, 2, 12)
+    byte_order = "little" if little else "big"
+    integer = lambda n: n.to_bytes(slot, byte_order)
+    short = lambda n: struct.pack(order + "H", n)
+    long = lambda n: struct.pack(order + "I", n)
+    rational = lambda n, d: struct.pack(order + "II", n, d)
+    header_size = 16 if big else 8
+    directories = [
+        [(256, 4, 1, long(1)), (257, 4, 1, long(1)),
+         (258, 3, 3, short(8) * 3), (259, 3, 1, short(1)),
+         (262, 3, 1, short(2)), (271, 2, 12, b"Test Camera\0"),
+         (272, 2, 8, b"Model A\0"), (273, 16 if big else 4, 1, b""),
+         (274, 3, 1, short(6)), (277, 3, 1, short(3)),
+         (278, 4, 1, long(1)), (279, 4, 1, long(3)),
+         (0x8769, 18 if big else 4, 1, b""),
+         (0x8825, 18 if big else 4, 1, b"")],
+        [(0x829a, 5, 1, rational(1, 125)),
+         (0x829d, 5, 1, rational(28, 10)),
+         (0x8827, 3, 1, short(200)), (0x9000, 7, 4, b"0232"),
+         (0x9003, 2, 20, b"2024:02:29 12:34:56\0"),
+         (0x9011, 2, 7, b"+02:30\0"),
+         (0x9101, 7, 4, b"\x01\x02\x03\0"),
+         (0x920a, 5, 1, rational(350, 10)),
+         (0x9291, 2, 7, b"000123\0"),
+         (0xa434, 2, 7, b"Lens A\0")],
+        [(0, 1, 4, b"\x02\x03\0\0"), (1, 2, 2, b"S\0"),
+         (2, 5, 3, rational(45, 1) + rational(30, 1) + rational(0, 1)),
+         (3, 2, 2, b"W\0"),
+         (4, 5, 3, rational(73, 1) + rational(15, 1) + rational(0, 1)),
+         (5, 1, 1, b"\x01"), (6, 5, 1, rational(125, 10)),
+         (7, 5, 3, rational(10, 1) + rational(4, 1) + rational(1, 2)),
+         (18, 2, 7, b"WGS-84\0"), (29, 2, 11, b"2024:02:29\0")]]
+    offsets = []
+    next_offset = header_size
+    for tags in directories:
+        offsets.append(next_offset)
+        next_offset += count_width + entry_width * len(tags) + slot
+    payload = bytearray()
+    tables = bytearray()
+    pixel_slot = None
+    for directory, tags in enumerate(directories):
+        tables.extend(len(tags).to_bytes(count_width, byte_order))
+        for id_, type_, count, value in sorted(tags):
+            if directory == 0 and id_ in (0x8769, 0x8825):
+                value = integer(offsets[1 if id_ == 0x8769 else 2])
+            if directory == 0 and id_ == 273:
+                pixel_slot = header_size + len(tables) + (12 if big else 8)
+            tables.extend(struct.pack(order + "HH" + ("Q" if big else "I"), id_, type_, count))
+            if len(value) > slot:
+                payload.extend(bytes((-(next_offset + len(payload))) % (8 if big else 2)))
+                tables.extend(integer(next_offset + len(payload)))
+                payload.extend(value)
+            else:
+                tables.extend(value.ljust(slot, b"\0"))
+        tables.extend(bytes(slot))
+    header = (b"II" if little else b"MM") + short(43 if big else 42)
+    header += short(8) + short(0) + integer(header_size) if big else integer(header_size)
+    data = bytearray(header + tables + payload)
+    data[pixel_slot:pixel_slot + slot] = integer(len(data))
+    data.extend(b"\x14\x50\xa0")
+    if carrier == "tiff":
+        path.write_bytes(data)
+    elif carrier == "jpeg":
+        previous = write_jpeg(path)
+        base = path.read_bytes()
+        metadata = b"Exif\0\0" + data
+        path.write_bytes(base[:2] + b"\xff\xe1" + struct.pack(">H", len(metadata) + 2) + metadata + base[2 + 2 * (len(previous) + 4):])
+    elif carrier == "png":
+        previous = write_png(path)
+        base = path.read_bytes()
+        marker = b"eXIf" + previous
+        start = base.index(marker) - 4
+        replacement = struct.pack(">I", len(data)) + b"eXIf" + data
+        replacement += struct.pack(">I", zlib.crc32(b"eXIf" + data))
+        path.write_bytes(base[:start] + replacement + base[start + len(previous) + 12:])
+    else:
+        raise ValueError(carrier)
+
+
 def check_png(test, result, payload, *, count=1, status="collected"):
     test.assertEqual(result["status"], status)
     test.assertEqual(result["scope"], "png-chunks-through-iend")
