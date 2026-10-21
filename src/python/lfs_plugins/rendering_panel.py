@@ -62,8 +62,9 @@ LOD_BUDGET_FALLBACK_MAX = 5_000_000
 LOD_BUDGET_HARD_MAX = 500_000_000
 
 BOOL_PROPS = [
+    "selection_outline_holes",
     "show_coord_axes", "show_pivot", "show_grid", "show_camera_frustums",
-    "point_cloud_mode", "desaturate_unselected", "desaturate_cropping", "hide_outside_depth_box",
+    "point_cloud_mode", "selection_outline", "desaturate_unselected", "desaturate_cropping", "hide_outside_depth_box",
     "equirectangular", "mip_filter",
     "mesh_wireframe", "mesh_backface_culling", "mesh_shadow_enabled",
     "apply_appearance_correction", "ppisp_vignette_enabled",
@@ -71,6 +72,7 @@ BOOL_PROPS = [
 ]
 
 SLIDER_PROPS = [
+    "selection_outline_opacity", "selection_outline_width", "selection_outline_threshold",
     "axes_size", "grid_opacity", "camera_frustum_scale", "voxel_size",
     "focal_length_mm", "render_scale", "color_exposure", "environment_exposure", "environment_rotation_degrees",
     "mesh_wireframe_width", "mesh_light_intensity", "mesh_ambient",
@@ -82,6 +84,10 @@ SLIDER_PROPS = [
 ]
 
 SCRUB_FIELD_DEFS = {
+    "selection_outline_opacity": ScrubFieldSpec(0, 1, 0.01, "%.2f"),
+    "selection_outline_width": ScrubFieldSpec(1, 12, 0.01, "%.2f"),
+    "selection_outline_threshold": ScrubFieldSpec(0.05, 0.95, 0.01, "%.2f"),
+
     "axes_size": ScrubFieldSpec(0.5, 10.0, 0.01, "%.3f"),
     "grid_opacity": ScrubFieldSpec(0.0, 1.0, 0.01, "%.3f"),
     "camera_frustum_scale": ScrubFieldSpec(0.01, 10.0, 0.01, "%.3f"),
@@ -140,6 +146,7 @@ CHROM_FLOAT_PROPS = [
 BACKGROUND_COLOR_PROP = "background_color"
 
 COLOR_PROPS = [
+    "selection_outline_color",
     BACKGROUND_COLOR_PROP,
     "selection_color_preview",
     "selection_color_center_marker",
@@ -161,11 +168,18 @@ SECTION_NAMES = (
 )
 
 LOCALE_KEY = {
+    "selection_outline_opacity": "main_panel.selection_outline_opacity",
+    "selection_outline_width": "main_panel.selection_outline_width",
+    "selection_outline_threshold": "main_panel.selection_outline_threshold",
+    "selection_outline_holes": "main_panel.selection_outline_holes",
+    "selection_outline_color": "main_panel.selection_outline_color",
+
     "show_coord_axes": "main_panel.show_coord_axes",
     "show_pivot": "main_panel.show_pivot",
     "show_grid": "main_panel.show_grid",
     "show_camera_frustums": "main_panel.camera_frustums",
     "point_cloud_mode": "main_panel.point_cloud_mode",
+    "selection_outline": "main_panel.selection_outline",
     "desaturate_unselected": "main_panel.desaturate_unselected",
     "desaturate_cropping": "main_panel.desaturate_cropping",
     "hide_outside_depth_box": "main_panel.hide_outside_depth_box",
@@ -633,6 +647,9 @@ class RenderingPanel(Panel):
             return False
 
         dirty = False
+        if not getattr(s, "selection_outline", False) and self._color_edit_prop == "selection_outline_color":
+            self._hide_picker()
+            dirty = True
         dirty |= self._sync_environment_state()
         dirty |= self._sync_projection_state()
         dirty |= self._sync_lod_budget()

@@ -782,6 +782,13 @@ namespace lfs::python {
                    "Selection center marker color", {0.0, 0.604, 0.733});
 
         // Desaturation
+        add_color3(&Proxy::selection_outline_color, "selection_outline_color", "Outline color", "Selected object outline color", {0.0, 0.604, 0.733});
+        add_bool(&Proxy::selection_outline_holes, "selection_outline_holes", "Interior contours", "Include contours of fully enclosed holes", true);
+        add_float(&Proxy::selection_outline_opacity, "selection_outline_opacity", "Opacity", "Outline appearance", 1.0, 0, 1);
+        add_float(&Proxy::selection_outline_width, "selection_outline_width", "Width", "Outline appearance", 2.0, 1, 12);
+        add_float(&Proxy::selection_outline_threshold, "selection_outline_threshold", "Threshold", "Outline appearance", 0.5, 0.05, 0.95);
+        add_bool(&Proxy::selection_outline, "selection_outline", "Selection Outline",
+                 "Outline selected splat objects using precise per-pixel rendering", false);
         add_bool(&Proxy::desaturate_unselected, "desaturate_unselected", "Desaturate Unselected",
                  "Desaturate unselected PLYs when one is selected", false);
         add_bool(&Proxy::desaturate_cropping, "desaturate_cropping", "Desaturate Cropping",

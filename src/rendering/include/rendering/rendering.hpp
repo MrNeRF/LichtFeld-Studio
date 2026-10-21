@@ -108,6 +108,12 @@ namespace lfs::rendering {
     };
 
     struct GaussianMarkerOverlayState {
+        bool show_object_outline = false;
+        glm::vec3 outline_color{0.0f, 0.604f, 0.733f};
+        float outline_opacity = 1.0f;
+        float outline_width = 2.0f;
+        float outline_threshold = 0.5f;
+        bool outline_holes = true;
         bool show_rings = false;
         float ring_width = 0.002f;
         bool show_center_markers = false;

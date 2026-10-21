@@ -1082,6 +1082,12 @@ namespace lfs::app {
                                  {"use_crop_box", settings.use_crop_box},
                                  {"show_ellipsoid", settings.show_ellipsoid},
                                  {"use_ellipsoid", settings.use_ellipsoid},
+                                 {"selection_outline", settings.selection_outline},
+                                 {"selection_outline_opacity", settings.selection_outline_opacity},
+                                 {"selection_outline_width", settings.selection_outline_width},
+                                 {"selection_outline_threshold", settings.selection_outline_threshold},
+                                 {"selection_outline_holes", settings.selection_outline_holes},
+                                 {"selection_outline_color", settings.selection_outline_color},
                                  {"desaturate_unselected", settings.desaturate_unselected},
                                  {"desaturate_cropping", settings.desaturate_cropping},
                                  {"hide_outside_depth_box", settings.hide_outside_depth_box},
@@ -1281,6 +1287,53 @@ namespace lfs::app {
             set_bool("use_crop_box", settings.use_crop_box);
             set_bool("show_ellipsoid", settings.show_ellipsoid);
             set_bool("use_ellipsoid", settings.use_ellipsoid);
+            set_bool("selection_outline", settings.selection_outline);
+            set_bool("selection_outline_holes", settings.selection_outline_holes);
+            if (args.contains("selection_outline_opacity")) {
+                const auto& value = args["selection_outline_opacity"];
+                if (!value.is_number())
+                    return std::unexpected("Invalid selection_outline_opacity");
+                const double number = value.get<double>();
+                if (!std::isfinite(number) || number < 0 || number > 1)
+                    return std::unexpected("Invalid selection_outline_opacity");
+                settings.selection_outline_opacity = static_cast<float>(number);
+                touched = true;
+            }
+            if (args.contains("selection_outline_width")) {
+                const auto& value = args["selection_outline_width"];
+                if (!value.is_number())
+                    return std::unexpected("Invalid selection_outline_width");
+                const double number = value.get<double>();
+                if (!std::isfinite(number) || number < 1 || number > 12)
+                    return std::unexpected("Invalid selection_outline_width");
+                settings.selection_outline_width = static_cast<float>(number);
+                touched = true;
+            }
+            if (args.contains("selection_outline_threshold")) {
+                const auto& value = args["selection_outline_threshold"];
+                if (!value.is_number())
+                    return std::unexpected("Invalid selection_outline_threshold");
+                const double number = value.get<double>();
+                if (!std::isfinite(number) || number < 0.05 || number > 0.95)
+                    return std::unexpected("Invalid selection_outline_threshold");
+                settings.selection_outline_threshold = static_cast<float>(number);
+                touched = true;
+            }
+            if (args.contains("selection_outline_color")) {
+                const auto& value = args["selection_outline_color"];
+                if (!value.is_array() || value.size() != 3)
+                    return std::unexpected("Invalid selection_outline_color");
+                for (int i = 0; i < 3; ++i) {
+                    if (!value[i].is_number())
+                        return std::unexpected("Invalid selection_outline_color");
+                    const double channel = value[i].get<double>();
+                    if (!std::isfinite(channel) || channel < 0.0 || channel > 1.0)
+                        return std::unexpected("Invalid selection_outline_color");
+                    settings.selection_outline_color[i] = static_cast<float>(channel);
+                }
+                touched = true;
+            }
+
             set_bool("desaturate_unselected", settings.desaturate_unselected);
             set_bool("desaturate_cropping", settings.desaturate_cropping);
             set_bool("hide_outside_depth_box", settings.hide_outside_depth_box);
@@ -3334,6 +3387,12 @@ namespace lfs::app {
                         {"show_grid", json{{"type", "boolean"}}},
                         {"show_camera_frustums", json{{"type", "boolean"}}},
                         {"point_cloud_mode", json{{"type", "boolean"}}},
+                        {"selection_outline", json{{"type", "boolean"}}},
+                        {"selection_outline_holes", json{{"type", "boolean"}}},
+                        {"selection_outline_color", json{{"type", "array"}, {"items", json{{"type", "number"}, {"minimum", 0}, {"maximum", 1}}}, {"minItems", 3}, {"maxItems", 3}}},
+                        {"selection_outline_opacity", json{{"type", "number"}, {"minimum", 0}, {"maximum", 1}}},
+                        {"selection_outline_width", json{{"type", "number"}, {"minimum", 1}, {"maximum", 12}}},
+                        {"selection_outline_threshold", json{{"type", "number"}, {"minimum", 0.05}, {"maximum", 0.95}}},
                         {"show_crop_box", json{{"type", "boolean"}}},
                         {"use_crop_box", json{{"type", "boolean"}}},
                         {"show_ellipsoid", json{{"type", "boolean"}}},

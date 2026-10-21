@@ -1579,6 +1579,20 @@ install(CODE "
 " COMPONENT runtime)
 
 option(BUILD_SPLAT_TRANSFER_TESTS "Build splat drag export contract tests" ${BUILD_FORMAT_TESTS})
+option(BUILD_SELECTION_OUTLINE_TESTS "Build selection outline request and persistence contracts" ${BUILD_VISUALIZER_TESTS})
+if(BUILD_SELECTION_OUTLINE_TESTS)
+    add_executable(lfs_selection_outline_contract tools/selection_outline_test/main.cpp)
+    target_include_directories(lfs_selection_outline_contract PRIVATE
+        src src/visualizer src/rendering/include src/io/include)
+    # The visualizer references the driver API. Link its toolkit stub explicitly
+    # so Debug/hidden-symbol builds also link on GPU-less Linux CI runners.
+    target_link_libraries(lfs_selection_outline_contract PRIVATE lfs_visualizer lfs_core CUDA::cuda_driver)
+    target_compile_features(lfs_selection_outline_contract PRIVATE cxx_std_23)
+    enable_testing()
+    add_test(NAME selection_outline_contract COMMAND lfs_selection_outline_contract)
+    set_tests_properties(selection_outline_contract PROPERTIES TIMEOUT 30
+        ENVIRONMENT "LFS_HOME=${CMAKE_BINARY_DIR}/outline-test-profile;LFS_PLUGIN_AUTOLOAD=0")
+endif()
 if(BUILD_SPLAT_TRANSFER_TESTS)
     add_executable(lfs_splat_drag_axes_contract tools/splat_transfer_test/axes_contract.cpp)
     target_include_directories(lfs_splat_drag_axes_contract PRIVATE src/visualizer)

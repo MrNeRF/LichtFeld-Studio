@@ -181,6 +181,38 @@
           <span class="preferences-label">@tr:main_panel.camera_frustums</span>
           <input type="checkbox" class="" data-checked="default_show_camera_frustums" />
         </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.selection_outline">
+          <span class="preferences-label">@tr:main_panel.selection_outline</span>
+          <input type="checkbox" data-checked="default_selection_outline" />
+        </div>
+        <div data-if="default_selection_outline">
+          <div class="preferences-row" data-tooltip="tooltip.selection_outline_color">
+            <span class="preferences-label">@tr:main_panel.selection_outline_color</span>
+            <div class="preferences-color">
+              <div class="color-swatch" data-style-background-color="default_selection_outline_color_swatch" data-event-click="default_color_click('selection_outline_color')"></div>
+              <input type="text" class="preferences-select" data-value="default_selection_outline_color" />
+            </div>
+          </div>
+          <div id="picker-selection_outline_color" class="preferences-color-picker" data-if="default_color_editing == 'selection_outline_color'" data-event-mouseup="default_color_commit" data-event-dragend="default_color_commit">
+            <color-picker data-attr-red="default_picker_r" data-attr-green="default_picker_g" data-attr-blue="default_picker_b" data-event-change="default_picker_change" />
+          </div>
+          <div class="preferences-row" data-tooltip="tooltip.selection_outline_opacity">
+            <span class="preferences-label">@tr:main_panel.selection_outline_opacity</span>
+            <input type="text" class="preferences-select" data-value="default_selection_outline_opacity" />
+          </div>
+          <div class="preferences-row" data-tooltip="tooltip.selection_outline_width">
+            <span class="preferences-label">@tr:main_panel.selection_outline_width</span>
+            <input type="text" class="preferences-select" data-value="default_selection_outline_width" />
+          </div>
+          <div class="preferences-row" data-tooltip="tooltip.selection_outline_threshold">
+            <span class="preferences-label">@tr:main_panel.selection_outline_threshold</span>
+            <input type="text" class="preferences-select" data-value="default_selection_outline_threshold" />
+          </div>
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.selection_outline_holes">
+            <span class="preferences-label">@tr:main_panel.selection_outline_holes</span>
+            <input type="checkbox" data-checked="default_selection_outline_holes" />
+          </div>
+        </div>
         <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.desaturate_unselected">
           <span class="preferences-label">@tr:main_panel.desaturate_unselected</span>
           <input type="checkbox" class="" data-checked="default_desaturate_unselected" />

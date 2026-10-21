@@ -31,6 +31,12 @@ namespace lfs::vis {
         p.use_crop_box = s.use_crop_box;
         p.show_ellipsoid = s.show_ellipsoid;
         p.use_ellipsoid = s.use_ellipsoid;
+        p.selection_outline = s.selection_outline;
+        p.selection_outline_opacity = s.selection_outline_opacity;
+        p.selection_outline_width = s.selection_outline_width;
+        p.selection_outline_threshold = s.selection_outline_threshold;
+        p.selection_outline_holes = s.selection_outline_holes;
+        p.selection_outline_color = detail::to_array(s.selection_outline_color);
         p.desaturate_unselected = s.desaturate_unselected;
         p.desaturate_cropping = s.desaturate_cropping;
         p.hide_outside_depth_box = s.hide_outside_depth_box;
@@ -123,6 +129,12 @@ namespace lfs::vis {
         s.use_crop_box = p.use_crop_box;
         s.show_ellipsoid = p.show_ellipsoid;
         s.use_ellipsoid = p.use_ellipsoid;
+        s.selection_outline = p.selection_outline;
+        s.selection_outline_opacity = p.selection_outline_opacity;
+        s.selection_outline_width = p.selection_outline_width;
+        s.selection_outline_threshold = p.selection_outline_threshold;
+        s.selection_outline_holes = p.selection_outline_holes;
+        s.selection_outline_color = detail::to_vec3(p.selection_outline_color);
         s.desaturate_unselected = p.desaturate_unselected;
         s.desaturate_cropping = p.desaturate_cropping;
         s.hide_outside_depth_box = p.hide_outside_depth_box;

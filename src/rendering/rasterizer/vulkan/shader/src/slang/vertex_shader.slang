@@ -369,6 +369,12 @@ SplatActiveState compute_splat_active_state(
         }
     }
 
+    if (active && overlay_enabled(overlay_params[OVERLAY_PARAM_MARKER_FLAGS].z) &&
+        node_idx >= 0 && node_idx < node_count &&
+        (overlay_flags & OVERLAY_FLAG_NONSELECTABLE) == 0u &&
+        (read_byte(node_mask, uint(node_idx)) & 1u) != 0u) {
+        overlay_flags |= OVERLAY_FLAG_OUTLINE_SELECTED;
+    }
     SplatActiveState state;
     state.active = active;
     state.overlay_flags = overlay_flags;
