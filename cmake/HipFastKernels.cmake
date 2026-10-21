@@ -51,14 +51,15 @@ function(lfs_hip_fast_objects include_output objects_output)
             src/training/include/lfs/training/screen_share.cuh src/core/include/core/sh_value_codec.cuh
             src/training/include/lfs/training/ops/domain_types.hpp)
         set(_names backward.h forward.h buffer_utils.h fused_adam_types.h kernel_utils.cuh
-            kernels_backward.cuh kernels_forward.cuh rasterization_config.h visibility.cuh)
+            kernels_backward.cuh kernels_forward.cuh rasterization_config.h visibility.cuh rasterization_api.h pop_scores.h)
         foreach(_name IN LISTS _names)
             list(APPEND _inputs "src/training/rasterization/fastgs/rasterization/include/${_name}")
         endforeach()
         list(APPEND _inputs src/training/rasterization/fastgs/utils/helper_math.h
             src/training/rasterization/fastgs/utils/utils.h
             src/training/rasterization/fastgs/rasterization/src/forward.cu
-            src/training/rasterization/fastgs/rasterization/src/backward.cu)
+            src/training/rasterization/fastgs/rasterization/src/backward.cu
+            src/training/rasterization/fastgs/rasterization/src/pop_scores.cu)
         set(_outputs)
         foreach(_input IN LISTS _inputs)
             get_filename_component(_name "${_input}" NAME)
@@ -66,12 +67,15 @@ function(lfs_hip_fast_objects include_output objects_output)
         endforeach()
         list(APPEND _outputs "${_generated}/hip_fast_diagnostics.hpp")
         list(APPEND _outputs "${_generated}/hip_fast_wave.hpp")
+        list(APPEND _outputs "${_generated}/fast_instance_sort.hpp")
+        list(APPEND _outputs "${_generated}/fast_depth_sort.hpp")
+        list(APPEND _outputs "${_generated}/fast_tile_workload.hpp")
         list(TRANSFORM _inputs PREPEND "${_root}/")
         add_custom_command(OUTPUT "${_generated}/prepared.stamp"
             BYPRODUCTS ${_outputs}
             COMMAND "${Python3_EXECUTABLE}" "${_generator}" --root "${_root}" --output "${_generated}"
             COMMAND "${CMAKE_COMMAND}" -E touch "${_generated}/prepared.stamp"
-            DEPENDS "${_generator}" "${_root}/src/training/hip/fast_warp_staging.py" "${_root}/src/training/hip/fast_four_pixels.py" "${_root}/src/training/hip/fast_forward_pixels.py" ${_inputs} VERBATIM)
+            DEPENDS "${_generator}" "${_root}/src/training/hip/fast_warp_staging.py" "${_root}/src/training/hip/fast_four_pixels.py" "${_root}/src/training/hip/fast_forward_pixels.py" "${_root}/src/training/hip/fast_compact_sort.py" "${_root}/src/training/hip/fast_instance_sort.hpp" "${_root}/src/training/hip/fast_depth_sort.hpp" "${_root}/src/training/hip/fast_tile_workload.hpp" ${_inputs} VERBATIM)
         if(CMAKE_HOST_WIN32)
             set(_compiler "${LFS_HIP_ROOT}/lib/llvm/bin/clang++.exe")
             set(_extension obj)
@@ -138,7 +142,7 @@ function(lfs_hip_fast_objects include_output objects_output)
         if(LFS_HIP_FAST_RADIX_TUNING)
             list(APPEND _wave_flags -DLFS_HIP_FAST_RADIX_TUNING)
         endif()
-        foreach(_unit forward backward)
+        foreach(_unit forward backward pop_scores)
             set(_object "${_generated}/${_unit}.${_extension}")
             add_custom_command(OUTPUT "${_object}"
                 COMMAND "${_compiler}" -x hip -std=c++20 -O3 -DNDEBUG ${_platform_flags} ${_wave_flags}

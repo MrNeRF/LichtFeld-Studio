@@ -2,6 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "lfs/training/ops/registry.hpp"
+#ifdef LFS_HIP_APPLICATION_POPSPA
+#include "lfs/training/ops/popspa_hip.hpp"
+#endif
 #ifdef LFS_TENSOR_HIP
 #include "core/tensor_execution.hpp"
 #endif
@@ -151,6 +154,9 @@ namespace lfs::training {
         if (backend == core::GpuBackend::HIP) {
             static const TrainingOps pending = [] {
                 TrainingOps result{.backend = core::GpuBackend::HIP};
+#ifdef LFS_HIP_APPLICATION_POPSPA
+                result.popspa = &hip_popspa_ops();
+#endif
 #ifdef LFS_HIP_APPLICATION_BILATERAL
                 result.bilateral = &hip_bilateral_ops();
 #endif

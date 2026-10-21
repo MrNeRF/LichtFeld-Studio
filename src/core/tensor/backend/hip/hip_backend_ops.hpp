@@ -42,12 +42,21 @@ namespace lfs::core::internal {
         virtual void wait() = 0;
         virtual bool poll() = 0;
     };
+    class HipTimestamps {
+    public:
+        virtual ~HipTimestamps() = default;
+        virtual bool mark(size_t, void* queue) = 0;
+        virtual bool wait_event(size_t) = 0;
+        virtual bool wait_queue(void* queue) = 0;
+        virtual std::optional<float> milliseconds(size_t, size_t) const = 0;
+    };
     class HipBackendOps final : public GpuBackendOps {
     public:
         HipBackendOps(const std::filesystem::path& module, int device, size_t max_cached_bytes = 64 * 1024 * 1024);
         ~HipBackendOps() override;
         std::unique_ptr<HipUploadBuffer> create_upload_buffer();
         std::unique_ptr<HipFence> create_fence();
+        std::unique_ptr<HipTimestamps> create_timestamps(size_t count);
         std::unique_ptr<HipReadbackSlot> create_readback_slot(size_t bytes);
         LFS_CORE_API HipQueueLease execution_lease(ExecContext);
         LFS_CORE_API uint64_t storage_address(StorageRef, size_t required_bytes);

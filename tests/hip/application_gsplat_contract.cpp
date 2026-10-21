@@ -6,8 +6,10 @@
 #include <lfs/training/ops/registry.hpp>
 #include <lfs/training/ops/gsplat.hpp>
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <stdexcept>
 using namespace lfs;using namespace lfs::core;using namespace lfs::training;
 static void require(bool x,const char* m){if(!x)throw std::runtime_error(m);}
@@ -27,6 +29,30 @@ static RasterComparison evaluate(GpuBackend backend,int mode,unsigned degree=0,i
     gpu_ops::GsplatSaved saved{ops->create()};const auto status=ops->forward(saved,model,view,none,none,bg,bgi,p,out);
     if(status.code!=gpu_ops::RasterResult::Code::Success){std::fprintf(stderr,"Gsplat forward: %.*s\n",int(status.message.size()),status.message.data());throw std::runtime_error("Gsplat forward failed");}
     RasterComparison r;if(image.is_valid())r.image=image.cpu().to_vector();r.alpha=alpha.cpu().to_vector();if(depth.is_valid())r.depth=depth.cpu().to_vector();if(normal.is_valid())r.normal=normal.cpu().to_vector();
+    if(image.is_valid() && backend==GpuBackend::HIP) {
+        require(ops->pop_scores,"Missing HIP Gsplat POPSpa callback");
+        auto pop=Tensor::zeros({n,8},Device::GPU,DataType::UInt8);
+        ops->pop_scores(saved,bg,bgi,pop);
+        auto bytes=pop.cpu().to_vector_uint8();std::vector<double> values(n);
+        std::memcpy(values.data(),bytes.data(),n*sizeof(double));
+        const auto selected=size_t(std::max_element(values.begin(),values.end())-values.begin());
+        for(double value:values)require(std::isfinite(value)&&value>=0,"Invalid HIP Gsplat POPSpa energy");
+        ops->pop_scores(saved,bg,bgi,pop);
+        bytes=pop.cpu().to_vector_uint8();std::vector<double> twice(n);
+        std::memcpy(twice.data(),bytes.data(),n*sizeof(double));
+        for(size_t i=0;i<n;++i)near(twice[i],2*values[i],1e-9);
+        auto opacity=fixture.values[4];opacity[selected]=-80.f;
+        auto removed_opacity=Tensor::from_vector(opacity,{n,1},Device::GPU);
+        gpu_ops::SplatInputs removed{params[0],params[2],params[1],removed_opacity,params[3],rest,none};
+        Tensor ri,ra,rd,rn;gpu_ops::RenderOutputs ro{ri,ra,rd,rn};gpu_ops::GsplatSaved rs{ops->create()};
+        const auto removed_status=ops->forward(rs,removed,view,none,none,bg,bgi,p,ro);
+        require(removed_status.code==gpu_ops::RasterResult::Code::Success,"Gsplat removal reference failed");
+        const auto removed_image=ri.cpu().to_vector();double energy=0;
+        for(size_t i=0;i<r.image.size();++i){const double d=double(r.image[i])-removed_image[i];energy+=d*d;}
+        require(std::abs(energy-values[selected])<=1e-7+.004*energy,"HIP Gsplat POPSpa differs from removed Gaussian render");
+        ops->release(rs);require(ops->release_caches(rs),"Gsplat removal reference retained caches");
+        std::printf("PASS Gsplat POPSpa mode %d camera %d degree %u tile %d energy %.12g vs %.12g\n",mode,camera,degree,tile,values[selected],energy);
+    }
     Gradients gradients;const size_t counts[]{n*3,n*3,n*4,n,n*3,sh_swizzled_float_count(n,degree?15:0)};for(size_t i=0;i<6;++i)if(counts[i])gradients.values[i]=Tensor::full({counts[i]},.013f,Device::GPU);
     Tensor gi,gd,gn;if(image.is_valid())gi=Tensor::full(image.shape(),.001f,Device::GPU);if(depth.is_valid())gd=Tensor::full(depth.shape(),-.0007f,Device::GPU);if(normal.is_valid())gn=Tensor::full(normal.shape(),.0003f,Device::GPU);
     auto ga=Tensor::full(alpha.shape(),-.0002f,Device::GPU),density=Tensor::zeros({2,n},Device::GPU),error=Tensor::full({h,w},.1f,Device::GPU),edge=Tensor::full({h,w},.2f,Device::GPU),scores=Tensor::zeros({n},Device::GPU),shares=Tensor::zeros({n},Device::GPU);

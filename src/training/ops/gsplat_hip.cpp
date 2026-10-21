@@ -23,10 +23,12 @@ struct Implementation {
     int count=0,width=0,height=0,channels=0;bool live=false;
 #define ENTRY(name) decltype(&::name) name=nullptr
     ENTRY(lfs_hip_application_gsplat_create);ENTRY(lfs_hip_application_gsplat_forward);ENTRY(lfs_hip_application_gsplat_backward);ENTRY(lfs_hip_application_gsplat_release);ENTRY(lfs_hip_application_gsplat_info);ENTRY(lfs_hip_application_gsplat_destroy);
+    ENTRY(lfs_hip_application_gsplat_pop_scores);
 #undef ENTRY
     Implementation() {
 #define LOAD(name) name=owner.module->symbol<decltype(name)>(#name)
         LOAD(lfs_hip_application_gsplat_create);LOAD(lfs_hip_application_gsplat_forward);LOAD(lfs_hip_application_gsplat_backward);LOAD(lfs_hip_application_gsplat_release);LOAD(lfs_hip_application_gsplat_info);LOAD(lfs_hip_application_gsplat_destroy);
+        LOAD(lfs_hip_application_gsplat_pop_scores);
 #undef LOAD
         LfsHipError e{};if(int c=lfs_hip_application_gsplat_create(owner.queue.device,owner.queue.native_queue,2ull*1024*1024*1024,&handle,&e))throw hip::TrainingError(c,e);
     }
@@ -106,5 +108,19 @@ void release(GsplatSaved& saved)noexcept{auto* p=dynamic_cast<Saved*>(saved.back
 bool release_caches(GsplatSaved& saved)noexcept{auto* p=dynamic_cast<Saved*>(saved.backend.get());if(!p||!p->impl)return true;if(p->impl->live)return false;try{p->impl->close();p->impl.reset();saved.camera_rays={};return true;}catch(const std::exception& e){std::fprintf(stderr,"[error] HIP Gsplat caches retained: %s\n",e.what());return false;}}
 void record(const GsplatSaved& saved,In,In,In,In,In){auto* p=dynamic_cast<const Saved*>(saved.backend.get());if(!p||!p->impl)return;uint64_t bytes=0,intersections=0;LfsHipError e{};if(int c=p->impl->lfs_hip_application_gsplat_info(p->impl->handle,&bytes,&intersections,&e))throw hip::TrainingError(c,e);diagnostics::VramProfiler::instance().recordCurrentBytes("rasterizer.gsplat","hip.workspace",bytes,diagnostics::VramAllocationMethod::Arena);}
 }
-const gpu_ops::GsplatRasterOps& hip_gsplat_ops(){static const gpu_ops::GsplatRasterOps ops{create,forward,backward,release,record,release_caches};return ops;}
+const gpu_ops::GsplatRasterOps& hip_gsplat_ops(){static const gpu_ops::GsplatRasterOps ops{create,forward,backward,release,record,release_caches,
+    [](const GsplatSaved& saved,In background,In background_image,Out scores) {
+        const core::TensorExecutionTarget::Scope scope(core::TensorExecutionTarget::default_queue(core::GpuBackend::HIP));
+        const auto* box=dynamic_cast<const Saved*>(saved.backend.get());
+        require(box && box->impl && box->impl->live && box->impl->channels>=3,"HIP Gsplat POPSpa needs a live RGB forward");
+        auto& s=*box->impl;
+        require(scores.is_valid() && scores.dtype()==DataType::UInt8 && scores.ndim()==2 &&
+                scores.shape()[0]==size_t(s.count) && scores.shape()[1]==8,"HIP Gsplat POPSpa scores require UInt8 [N,8]");
+        require(!background.is_valid() || !background.numel() || background.numel()==3,"HIP Gsplat POPSpa background must have three channels");
+        require(!background_image.is_valid() || !background_image.numel() || background_image.numel()==size_t(s.width)*s.height*3,
+                "HIP Gsplat POPSpa background image extent mismatch");
+        const auto bg=s.bind(background),image=s.bind(background_image),output=s.owner.bind(scores,DataType::UInt8);
+        LfsHipError error{};
+        if(int code=s.lfs_hip_application_gsplat_pop_scores(s.handle,bg,image,output,&error))throw hip::TrainingError(code,error);
+    }};return ops;}
 }

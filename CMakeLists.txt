@@ -821,6 +821,13 @@ if(LFS_HIP_RUNTIME)
         target_include_directories(lfs_hip_application_photo_contract PRIVATE src/training/include src)
         target_compile_definitions(lfs_hip_application_photo_contract PRIVATE LFS_HIP_APPLICATION_PHOTOMETRIC LFS_TENSOR_PRIVATE_ACCESS)
         target_link_libraries(lfs_hip_application_photo_contract PRIVATE lfs_core ${CMAKE_DL_LIBS})
+        add_executable(lfs_hip_application_photo_perf EXCLUDE_FROM_ALL
+            tests/hip/application_photo_perf.cpp src/training/ops/photometric_hip.cpp
+            src/training/ops/registry.cpp src/training/ops/requirements.cpp src/training/hip/session.cpp)
+        target_compile_features(lfs_hip_application_photo_perf PRIVATE cxx_std_23)
+        target_include_directories(lfs_hip_application_photo_perf PRIVATE src/training/include src)
+        target_compile_definitions(lfs_hip_application_photo_perf PRIVATE LFS_HIP_APPLICATION_PHOTOMETRIC LFS_TENSOR_PRIVATE_ACCESS)
+        target_link_libraries(lfs_hip_application_photo_perf PRIVATE lfs_core ${CMAKE_DL_LIBS})
         add_executable(lfs_hip_application_adam_contract EXCLUDE_FROM_ALL
             tests/hip/application_adam_contract.cpp src/training/ops/adam_hip.cpp
             src/training/ops/registry.cpp src/training/ops/requirements.cpp src/training/hip/session.cpp)
@@ -855,6 +862,23 @@ if(LFS_HIP_RUNTIME)
         target_include_directories(lfs_hip_shared_image_contract PRIVATE src/training/include src)
         target_compile_definitions(lfs_hip_shared_image_contract PRIVATE LFS_HIP_APPLICATION_SHARED_IMAGE LFS_TENSOR_PRIVATE_ACCESS)
         target_link_libraries(lfs_hip_shared_image_contract PRIVATE lfs_core ${CMAKE_DL_LIBS})
+        add_executable(lfs_hip_popspa_primitives_contract EXCLUDE_FROM_ALL
+            tests/hip/popspa_primitives_contract.cpp src/training/ops/popspa_hip.cpp src/training/hip/session.cpp)
+        target_compile_features(lfs_hip_popspa_primitives_contract PRIVATE cxx_std_23)
+        target_include_directories(lfs_hip_popspa_primitives_contract PRIVATE src/training/include src)
+        target_compile_definitions(lfs_hip_popspa_primitives_contract PRIVATE LFS_TENSOR_PRIVATE_ACCESS)
+        target_link_libraries(lfs_hip_popspa_primitives_contract PRIVATE lfs_core ${CMAKE_DL_LIBS})
+        add_dependencies(lfs_hip_popspa_primitives_contract lfs_hip_training_build)
+        add_executable(lfs_hip_popspa_controller_contract EXCLUDE_FROM_ALL
+            tests/hip/popspa_controller_contract.cpp src/training/components/popspa_controller.cpp
+            src/training/losses/effective_rank_regularization.cpp
+            src/training/ops/registry.cpp src/training/ops/requirements.cpp
+            src/training/ops/popspa_hip.cpp src/training/hip/session.cpp)
+        target_compile_features(lfs_hip_popspa_controller_contract PRIVATE cxx_std_23)
+        target_include_directories(lfs_hip_popspa_controller_contract PRIVATE src/training/include src/training src)
+        target_compile_definitions(lfs_hip_popspa_controller_contract PRIVATE LFS_TENSOR_PRIVATE_ACCESS LFS_HIP_APPLICATION_POPSPA)
+        target_link_libraries(lfs_hip_popspa_controller_contract PRIVATE lfs_core ${CMAKE_DL_LIBS})
+        add_dependencies(lfs_hip_popspa_controller_contract lfs_hip_training_build)
         add_executable(lfs_hip_application_extra_contract EXCLUDE_FROM_ALL
             tests/hip/application_extra_contract.cpp src/training/ops/extra_loss_hip.cpp
             src/training/ops/registry.cpp src/training/ops/requirements.cpp src/training/hip/session.cpp)
@@ -881,6 +905,14 @@ if(LFS_HIP_RUNTIME)
         target_compile_definitions(lfs_hip_hardware_selection_contract PRIVATE LFS_TENSOR_PRIVATE_ACCESS)
         target_link_libraries(lfs_hip_hardware_selection_contract PRIVATE lfs_core)
         add_executable(lfs_hip_core_pool_contract EXCLUDE_FROM_ALL tests/hip/core_pool_contract.cpp)
+        add_executable(lfs_hip_gpu_elapsed_contract EXCLUDE_FROM_ALL tests/hip/gpu_elapsed_contract.cpp)
+        target_compile_features(lfs_hip_gpu_elapsed_contract PRIVATE cxx_std_23)
+        target_link_libraries(lfs_hip_gpu_elapsed_contract PRIVATE lfs_core)
+        add_executable(lfs_hip_movement_contract EXCLUDE_FROM_ALL tests/hip/movement_contract.cpp)
+        target_compile_features(lfs_hip_movement_contract PRIVATE cxx_std_23)
+        target_compile_definitions(lfs_hip_movement_contract PRIVATE LFS_TENSOR_PRIVATE_ACCESS)
+        target_include_directories(lfs_hip_movement_contract PRIVATE src)
+        target_link_libraries(lfs_hip_movement_contract PRIVATE lfs_core)
         add_executable(lfs_hip_inverse_warp_contract EXCLUDE_FROM_ALL tests/hip/inverse_warp_contract.cpp)
         add_executable(lfs_hip_point_filter_contract EXCLUDE_FROM_ALL tests/hip/point_filter_contract.cpp)
         target_compile_features(lfs_hip_point_filter_contract PRIVATE cxx_std_23)

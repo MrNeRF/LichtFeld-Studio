@@ -21,6 +21,7 @@
 #include <chrono>
 #ifdef LFS_TENSOR_HIP
 #include <cstdlib>
+#include "core/crash_handler.hpp"
 #include "core/detail/gpu_backend_ops.hpp"
 #endif
 #include <fstream>
@@ -211,6 +212,19 @@ namespace lfs::training {
             LOG_WARN("PerfBench: failed to allocate phase event pool; phase timings disabled");
             return false;
         }
+#ifdef LFS_TENSOR_HIP
+        if (timing_backend == core::GpuBackend::HIP) {
+            // The collector is process-lived; release its native events before
+            // HIP context teardown, including interrupted benchmark sessions.
+            static const bool registered = [] {
+                core::register_gpu_pre_shutdown_hook([]() noexcept {
+                    PerfBenchCollector::instance().destroy_phase_event_pool();
+                });
+                return true;
+            }();
+            (void)registered;
+        }
+#endif
         phase_samples_.assign(static_cast<std::size_t>(kPhaseSampleCap), PhaseSample{});
         phase_pool_ready_ = true;
         return true;
@@ -796,6 +810,12 @@ namespace lfs::training {
             if (timing_queue_ && !timing_queue_->is_default_queue()) {
                 static_cast<void>(phase_timer_->wait_queue(*timing_queue_));
             }
+#ifdef LFS_TENSOR_HIP
+            if (timing_queue_ && timing_queue_->is_default_queue() &&
+                timing_queue_->backend() == core::GpuBackend::HIP) {
+                static_cast<void>(phase_timer_->wait_queue(*timing_queue_));
+            }
+#endif
 
             std::vector<char> sample_ok(static_cast<std::size_t>(phase_sample_count_), 0);
             for (int i = 0; i < phase_sample_count_; ++i) {

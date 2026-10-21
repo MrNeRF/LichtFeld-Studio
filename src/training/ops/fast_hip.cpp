@@ -39,6 +39,7 @@ struct Implementation {
     ENTRY(lfs_hip_application_fast_create);
     ENTRY(lfs_hip_application_fast_forward);
     ENTRY(lfs_hip_application_fast_backward);
+    ENTRY(lfs_hip_application_fast_pop_scores);
     ENTRY(lfs_hip_application_fast_release);
     ENTRY(lfs_hip_application_fast_info);
     ENTRY(lfs_hip_application_fast_destroy);
@@ -56,6 +57,7 @@ struct Implementation {
         LOAD(lfs_hip_application_fast_create);
         LOAD(lfs_hip_application_fast_forward);
         LOAD(lfs_hip_application_fast_backward);
+        LOAD(lfs_hip_application_fast_pop_scores);
         LOAD(lfs_hip_application_fast_release);
         LOAD(lfs_hip_application_fast_info);
         LOAD(lfs_hip_application_fast_destroy);
@@ -242,6 +244,22 @@ void backward(FastSaved& saved, const RenderGradients& gradients, Out densificat
     s.live=false;
     if (code) throw hip::TrainingError(code,error);
 }
+void pop_scores(const FastSaved& saved, In background, In background_image, Out scores) {
+    const core::TensorExecutionTarget::Scope scope(core::TensorExecutionTarget::default_queue(core::GpuBackend::HIP));
+    const auto* owner=dynamic_cast<const FastState*>(saved.backend.get());
+    require(owner && owner->implementation && owner->implementation->live, "HIP FastGS POPSpa needs a live forward");
+    auto& s=*owner->implementation;
+    require(scores.is_valid() && scores.dtype()==DataType::UInt8 && scores.ndim()==2 &&
+            scores.shape()[0]==size_t(s.count) && scores.shape()[1]==8, "HIP FastGS POPSpa scores require UInt8 [N,8]");
+    require(!background.is_valid() || !background.numel() || background.numel()==3, "HIP FastGS POPSpa background must have three channels");
+    require(!background_image.is_valid() || !background_image.numel() || background_image.numel()==size_t(s.width)*s.height*3,
+            "HIP FastGS POPSpa background image extent mismatch");
+    const auto bg=s.bind(background,s.backward_inputs);
+    const auto image=s.bind(background_image,s.backward_inputs);
+    const auto output=s.bind(scores,s.backward_inputs,DataType::UInt8);
+    LfsHipError error{};
+    if(int code=s.lfs_hip_application_fast_pop_scores(s.handle,bg,image,output,&error))throw hip::TrainingError(code,error);
+}
 void release(FastSaved& saved) noexcept {
     if (!saved.backend) return;
     auto* owner=dynamic_cast<FastState*>(saved.backend.get());
@@ -273,7 +291,7 @@ void release_caches(FastSaved& saved) noexcept {
 }
 }
 const gpu_ops::FastRasterOps& hip_fast_ops() {
-    static const gpu_ops::FastRasterOps table{create,forward,backward,release,warmup,record_vram,release_caches};
+    static const gpu_ops::FastRasterOps table{create,forward,backward,release,warmup,record_vram,release_caches,nullptr,nullptr,nullptr,pop_scores};
     return table;
 }
 }

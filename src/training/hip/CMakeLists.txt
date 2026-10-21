@@ -69,6 +69,15 @@ add_custom_command(OUTPUT "${_application_morton}"
         --output "${_application_morton}"
     DEPENDS prepare_application_morton.py prepare_application_mcmc.py "../kernels/morton_reorder_kernels.cu" "../kernels/joint_adam_codec.cuh" VERBATIM)
 set(_application_extra "${CMAKE_CURRENT_BINARY_DIR}/hip-application-extra-generated/application_extra_generated.hpp")
+set(_application_popspa_directory "${CMAKE_CURRENT_BINARY_DIR}/hip-application-popspa-generated")
+set(_application_popspa "${_application_popspa_directory}/application_popspa_generated.hpp")
+add_custom_command(OUTPUT "${_application_popspa}"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/prepare_application_popspa.py"
+        --popspa "${CMAKE_CURRENT_SOURCE_DIR}/../kernels/popspa.cu"
+        --effective-rank "${CMAKE_CURRENT_SOURCE_DIR}/../kernels/effective_rank_regularization.cu"
+        --output "${_application_popspa}"
+    DEPENDS prepare_application_popspa.py prepare_application_mcmc.py
+        "../kernels/popspa.cu" "../kernels/effective_rank_regularization.cu" VERBATIM)
 add_custom_command(OUTPUT "${_application_extra}"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/prepare_application_extra.py"
         --regularization "${CMAKE_CURRENT_SOURCE_DIR}/../kernels/regularization.cu"
@@ -159,6 +168,7 @@ add_custom_command(OUTPUT "${_module}"
         "-I${CMAKE_CURRENT_BINARY_DIR}/hip-application-sh-generated"
         "-I${CMAKE_CURRENT_BINARY_DIR}/hip-application-image-generated"
         "-I${CMAKE_CURRENT_BINARY_DIR}/hip-application-extra-generated"
+        "-I${_application_popspa_directory}"
         "-I${CMAKE_CURRENT_BINARY_DIR}/hip-application-morton-generated"
         "-I${_application_lpips_directory}"
         "-I${_application_structure_directory}"
@@ -171,6 +181,7 @@ add_custom_command(OUTPUT "${_module}"
     DEPENDS training.hip training_api.h application_dispatch_api.h application_geometry.hpp application_color_api.h application_bilateral.hpp application_ppisp.hpp ${_color_objects} application_mrnf.hpp application_mrnf_api.h "${_application_mrnf}" application_controller.hpp application_controller_api.h application_blob.hpp application_blob_api.h "${_application_blob}" application_structure.hpp application_structure_api.h "${_application_structure}" application_lpips.hpp application_lpips_api.h "${_application_lpips}" application_fast.hpp application_fast_api.h application_mcmc.hpp application_mcmc_api.h application_refine.hpp application_refine_api.h application_photo.hpp application_photo_api.h application_adam.hpp application_adam_api.h application_sh.hpp application_sh_api.h application_image.hpp application_image_api.h application_extra.hpp application_extra_api.h application_morton.hpp application_morton_api.h ${_raster_objects} ${_fast_objects} ${_identity_object} "${_photometric}" "${_mcmc}" "${_refine}" "${_application_photo}" "${_application_adam}" "${_application_sh}" "${_application_image}" "${_application_extra}" "${_application_morton}"
         application_masks.hpp application_masks_api.h ${_mask_objects}
         application_gsplat.hpp application_gsplat_api.h
+        application_popspa.hpp application_popspa_api.h "${_application_popspa}"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../core/tensor/backend/hip/runtime_api.h"
         "${_compiler}" "${LFS_HIP_ROOT}/include/hip/hip_runtime.h"
         "${LFS_HIP_ROOT}/include/hipcub/hipcub.hpp"

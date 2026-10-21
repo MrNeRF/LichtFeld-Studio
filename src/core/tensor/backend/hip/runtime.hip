@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "hip_tensor_functors.hpp"
 #include "runtime_api.h"
+#include "timing_api.h"
 
 #include <hip/hip_fp16.h>
 #include <hip/hip_runtime.h>
@@ -19,6 +20,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <unordered_set>
+#include <vector>
 
 #include "hip_lens.hpp"
 
@@ -35,11 +37,18 @@ struct LfsHipReadback {
     bool pending = false, recorded = false;
 };
 
+struct LfsHipTiming {
+    std::vector<hipEvent_t> events;
+    std::vector<uint64_t> sequence;
+    uint64_t next_sequence = 0;
+};
+
 struct LfsHipContext {
     int device = 0;
     hipStream_t stream = nullptr;
     std::unordered_set<LfsHipBuffer*> buffers;
     std::unordered_set<LfsHipReadback*> readbacks;
+    std::unordered_set<LfsHipTiming*> timings;
     float* reduction_workspace = nullptr;
     void* scan_workspace = nullptr;
     size_t scan_workspace_bytes = 0;
@@ -1007,6 +1016,7 @@ int lfs_hip_context_destroy(LfsHipContext* context, LfsHipError* error) {
     return boundary(error, [&] {
         require(context, "Missing HIP context");
         require(context->readbacks.empty(), "Destroy HIP readback staging before its context");
+        require(context->timings.empty(), "Destroy HIP timing pools before their context");
         DeviceScope device(context->device);
         // On a runtime failure, retain the handle and unfreed allocations
         // for explicit recovery; never claim that queued work was drained.
@@ -1041,6 +1051,13 @@ int lfs_hip_upload(LfsHipContext* context, LfsHipBuffer* buffer, size_t offset, 
         validate(context, buffer, offset, bytes);
         require(host || !bytes, "Missing upload source");
         DeviceScope device(context->device);
+        // PAL Windows can dispatch a pageable copy ahead of earlier compute
+        // after an event marker when pointers are embedded in kernel structs
+        // (AMD rocm-systems #12571). This API is blocking already: complete the
+        // producer before enqueueing the copy, not only after the copy.
+        // Asynchronous pinned staging uses its separate event-backed API.
+        if (bytes)
+            check(hipStreamSynchronize(context->stream));
         if (bytes)
             check(hipMemcpyAsync(static_cast<char*>(buffer->data) + offset, host, bytes, hipMemcpyHostToDevice, context->stream));
         check(hipStreamSynchronize(context->stream));
@@ -1052,6 +1069,13 @@ int lfs_hip_download(LfsHipContext* context, const LfsHipBuffer* buffer, size_t 
         validate(context, buffer, offset, bytes);
         require(host || !bytes, "Missing download destination");
         DeviceScope device(context->device);
+        // PAL Windows can dispatch a pageable copy ahead of earlier compute
+        // after an event marker when pointers are embedded in kernel structs
+        // (AMD rocm-systems #12571). This API is blocking already: complete the
+        // producer before enqueueing the copy, not only after the copy.
+        // Asynchronous pinned staging uses its separate event-backed API.
+        if (bytes)
+            check(hipStreamSynchronize(context->stream));
         if (bytes)
             check(hipMemcpyAsync(host, static_cast<const char*>(buffer->data) + offset, bytes, hipMemcpyDeviceToHost, context->stream));
         check(hipStreamSynchronize(context->stream));
@@ -2100,3 +2124,4 @@ int lfs_hip_warp_rgb(LfsHipContext* context, LfsHipView input, uint32_t dtype,
 #include "external_memory_runtime.hpp"
 #include "point_filter_runtime.hpp"
 #include "predicate_runtime.hpp"
+#include "timing_runtime.hpp"

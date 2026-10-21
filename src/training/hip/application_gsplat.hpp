@@ -3,6 +3,7 @@
 #pragma once
 #include "application_gsplat_api.h"
 #include "GeometryFeatures.h"
+#include "PopScores.h"
 namespace lfs_hip_gsplat_detail {
 template<class T=float>T* ptr(uint64_t v){return reinterpret_cast<T*>(static_cast<uintptr_t>(v));}
 struct Work {
@@ -88,6 +89,20 @@ extern "C" int lfs_hip_application_gsplat_backward(LfsHipApplicationGsplat* s,co
         for(unsigned group=0;group<4;++group){size_t n=size_t(p.count)*attrs[group];hipLaunchKernelGGL(accumulate,dim3(blocks(n)),dim3(256),0,s->queue,ptr(destinations[group]),w.grad_params.as(offset),n);offset+=n;}
         if(p.channels!=1){require(b->grad_sh0,"Missing HIP Gsplat DC gradient");gsplat_lfs::launch_spherical_harmonics_swizzled_bwd_kernel(p.active_degree,p.layout_degree,p.channels,p.active_degree?w.directions.as():nullptr,ptr(p.sh0),ptr(p.shN),nullptr,w.grad_colors.as(),p.count,w.bases,false,w.grad_sh.as(),nullptr,s->queue);hipLaunchKernelGGL(accumulate_sh,dim3(blocks(size_t(p.count)*w.bases*3)),dim3(256),0,s->queue,w.grad_sh.as(),ptr(b->grad_sh0),ptr(b->grad_shN),p.count,w.bases,(p.layout_degree+1)*(p.layout_degree+1));}
         hipLaunchKernelGGL(metrics,dim3(blocks(p.count)),dim3(256),0,s->queue,w.grad_params.as(),w.radii.as<int32_t>(),w.means2d.as(),ptr(b->densification),ptr(b->screen_share),p.count,p.width,p.height,!b->error_map);hip_check(hipGetLastError(),"HIP Gsplat backward");s->live=false;
+    });
+}
+extern "C" int lfs_hip_application_gsplat_pop_scores(LfsHipApplicationGsplat* s,uint64_t background,uint64_t background_image,uint64_t scores,LfsHipError* error) {
+    using namespace lfs_hip_gsplat_detail;
+    return call(s,error,[&] {
+        require(s->live && s->work && s->input.channels >= 3 && scores,
+                "HIP Gsplat POPSpa scores need a live RGB forward and score buffer");
+        auto& w=*s->work;const auto& p=s->input;
+        if(!w.intersections)return;
+        gsplat_lfs::PopScoreInputs inputs{ptr(p.means),ptr(p.quats),ptr(p.scales),ptr(p.opacities),w.colors.as(),
+            ptr(background),ptr(background_image),ptr(p.view),ptr(p.K),ptr(p.radial),ptr(p.tangential),ptr(p.thin_prism),
+            w.offsets.as<int32_t>(),w.bins->sorted_ids.as<int32_t>(),
+            uint32_t(w.width),uint32_t(w.height),16u,uint32_t(w.channels),static_cast<CameraModelType>(p.camera_model)};
+        gsplat_lfs::launch_pop_scores(inputs,ptr<double>(scores),s->queue);
     });
 }
 extern "C" int lfs_hip_application_gsplat_release(LfsHipApplicationGsplat* s,LfsHipError* error){return lfs_hip_gsplat_detail::call(s,error,[&]{hip_check(hipStreamSynchronize(s->queue),"HIP Gsplat release completion");s->live=false;s->input={};});}

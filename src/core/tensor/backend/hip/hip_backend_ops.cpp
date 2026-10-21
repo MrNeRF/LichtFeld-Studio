@@ -12,6 +12,7 @@
 #include "external_access.hpp"
 #include "point_filter_api.h"
 #include "predicate_api.h"
+#include "timing_api.h"
 #include "../readback_buffer.hpp"
 #include <atomic>
 #include <core/detail/fused_pointwise.hpp>
@@ -1358,6 +1359,71 @@ namespace lfs::core::internal {
         check(impl_->lfs_hip_context_queue(impl_->context, &lease.native_queue, &lease.device, &error), error);
         return lease;
     }
+    std::unique_ptr<HipTimestamps> HipBackendOps::create_timestamps(size_t count) {
+        class Timestamps final : public HipTimestamps {
+            std::shared_ptr<Impl> owner_;
+            LfsHipTiming* pool_ = nullptr;
+            std::vector<bool> recorded_;
+            decltype(&lfs_hip_timing_mark) mark_;
+            decltype(&lfs_hip_timing_wait) wait_;
+            decltype(&lfs_hip_timing_elapsed) elapsed_;
+            decltype(&lfs_hip_timing_destroy) destroy_;
+
+        public:
+            Timestamps(std::shared_ptr<Impl> owner, size_t size)
+                : owner_(std::move(owner)), recorded_(size, false) {
+                std::lock_guard lock(owner_->mutex);
+                // Optional extension: resolve only when profiling is requested.
+                // Ordinary HIP dispatch still works with older private modules.
+                const auto create = owner_->symbol<decltype(&lfs_hip_timing_create)>("lfs_hip_timing_create");
+                mark_ = owner_->symbol<decltype(mark_)>("lfs_hip_timing_mark");
+                wait_ = owner_->symbol<decltype(wait_)>("lfs_hip_timing_wait");
+                elapsed_ = owner_->symbol<decltype(elapsed_)>("lfs_hip_timing_elapsed");
+                destroy_ = owner_->symbol<decltype(destroy_)>("lfs_hip_timing_destroy");
+                LfsHipError error{};
+                check(create(owner_->context, size, &pool_, &error), error);
+            }
+            ~Timestamps() override {
+                std::lock_guard lock(owner_->mutex);
+                LfsHipError error{};
+                if (destroy_(owner_->context, pool_, &error))
+                    std::fprintf(stderr, "[error] HIP timestamp teardown retained pool: %s\n", error.message);
+            }
+            bool mark(size_t index, void* target) override {
+                if (target || index >= recorded_.size()) return false;
+                std::lock_guard lock(owner_->mutex);
+                LfsHipError error{};
+                check(mark_(owner_->context, pool_, index, &error), error);
+                recorded_[index] = true;
+                return true;
+            }
+            bool wait_event(size_t index) override {
+                std::lock_guard lock(owner_->mutex);
+                if (index >= recorded_.size() || !recorded_[index]) return false;
+                LfsHipError error{};
+                check(wait_(owner_->context, pool_, index, &error), error);
+                return true;
+            }
+            bool wait_queue(void* target) override {
+                if (target) return false;
+                std::lock_guard lock(owner_->mutex);
+                owner_->sync();
+                return true;
+            }
+            std::optional<float> milliseconds(size_t begin, size_t end) const override {
+                std::lock_guard lock(owner_->mutex);
+                if (begin >= recorded_.size() || end >= recorded_.size()) return std::nullopt;
+                LfsHipError error{};
+                float value = 0.f;
+                int32_t ready = 0;
+                check(elapsed_(owner_->context, pool_, begin, end, &value, &ready, &error), error);
+                return ready ? std::optional<float>(value) : std::nullopt;
+            }
+        };
+        require(count > 0 && count <= 65536, "Invalid HIP timestamp pool size");
+        return std::make_unique<Timestamps>(impl_, count);
+    }
+
     std::unique_ptr<HipFence> HipBackendOps::create_fence() {
         class Fence final : public HipFence {
             std::shared_ptr<Impl> owner_;

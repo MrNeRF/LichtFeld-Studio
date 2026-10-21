@@ -12,6 +12,7 @@ from fast_warp_staging import adapt as warp_staged_backward
 from fast_warp_staging import adjacent_pixels as adjacent_pixel_backward
 from fast_four_pixels import adapt as four_pixel_backward
 from fast_forward_pixels import adapt as eight_pixel_forward
+from fast_compact_sort import kernels as compact_sort_kernels, forward as compact_sort_forward
 
 
 FILES = (
@@ -28,10 +29,11 @@ FAST_ROOT = "src/training/rasterization/fastgs/"
 RASTER_FILES = tuple(FAST_ROOT + "rasterization/include/" + name for name in (
     "backward.h", "forward.h", "buffer_utils.h", "fused_adam_types.h",
     "kernel_utils.cuh", "kernels_backward.cuh", "kernels_forward.cuh",
-    "rasterization_config.h", "visibility.cuh")) + (
+    "rasterization_config.h", "visibility.cuh", "rasterization_api.h", "pop_scores.h")) + (
     FAST_ROOT + "utils/helper_math.h", FAST_ROOT + "utils/utils.h",
     FAST_ROOT + "rasterization/src/forward.cu",
     FAST_ROOT + "rasterization/src/backward.cu",
+    FAST_ROOT + "rasterization/src/pop_scores.cu",
 )
 
 DIAGNOSTICS = r'''#pragma once
@@ -63,6 +65,14 @@ inline void lfs_fast_hip_check(hipError_t error, const char* name, const std::st
 #define LFS_CUDA_LAUNCH_CHECK(stream, name) lfs_fast_hip_check(hipGetLastError(), (name))
 #define LFS_ASSERT_MSG(condition, message) do { if (!(condition)) throw std::runtime_error(message); } while (false)
 #define LFS_DEBUG_ASSERT_MSG(condition, message) assert(condition)
+// Blocking scalar control reads must not rely on the PAL pageable-copy
+// fence after an event marker. The caller already waits for the result.
+inline hipError_t lfs_fast_ordered_d2h(void* destination, const void* source,
+    size_t bytes, hipMemcpyKind kind, hipStream_t stream) {
+    if(kind != hipMemcpyDeviceToHost) return hipErrorInvalidValue;
+    const auto status=hipStreamSynchronize(stream);
+    return status==hipSuccess ? hipMemcpyAsync(destination,source,bytes,kind,stream) : status;
+}
 struct LfsHipFastTiming {
     hipStream_t queue;
     bool active;
@@ -77,10 +87,13 @@ struct LfsHipFastTiming {
     }
     void mark(const char* phase) {
         if (!active) return;
+        const auto submitted = std::chrono::steady_clock::now();
         lfs_fast_hip_check(hipStreamSynchronize(queue), "HIP Fast timing phase");
         const auto now = std::chrono::steady_clock::now();
-        std::fprintf(stderr, "[profile] HIP FastGS %s_ms=%.6f\n", phase,
-            std::chrono::duration<double, std::milli>(now - previous).count());
+        std::fprintf(stderr, "[profile] HIP FastGS %s_ms=%.6f enqueue_wall_ms=%.6f completion_wait_ms=%.6f\n", phase,
+            std::chrono::duration<double, std::milli>(now - previous).count(),
+            std::chrono::duration<double, std::milli>(submitted - previous).count(),
+            std::chrono::duration<double, std::milli>(now - submitted).count());
         previous = now;
     }
 };
@@ -218,6 +231,10 @@ def prepare(root: Path, output: Path) -> None:
     known_headers = {Path(path).name for path in FILES + RASTER_FILES}
     for relative in FILES + RASTER_FILES:
         text = (root / relative).read_text(encoding="utf-8")
+        if relative.endswith("pop_scores.cu"):
+            # The application adapter supplies its retained HIP queue directly.
+            text = text.replace('#include "../../../../kernels/kernel_stream.hpp"', '')
+            text = text.replace('        stream = lfs::resolve_stream(stream);', '')
         text = text.replace("<cuda_runtime.h>", "<hip/hip_runtime.h>")
         text = text.replace("<cuda_fp16.h>", "<hip/hip_fp16.h>")
         text = text.replace("<cooperative_groups.h>", "<hip/hip_cooperative_groups.h>")
@@ -273,6 +290,15 @@ def prepare(root: Path, output: Path) -> None:
         if relative.endswith(("kernel_utils.cuh", "kernels_backward.cuh", "kernels_forward.cuh")):
             text = re.sub(r"\bexpf\(", "lfs_fast_exp(", text)
         if relative.endswith("kernels_forward.cuh"):
+            for old, new in (
+                ('        const uint max_instances) {', '        const uint max_instances, const uint* depth_order) {'),
+                ('        const uint work_idx = idx;', '        const uint work_idx = depth_order ? depth_order[idx] : idx;'),
+                ('uint current_write_offset = work_idx == 0 ? 0 : static_cast<uint>(primitive_offsets[work_idx - 1]);',
+                 'uint current_write_offset = idx == 0 ? 0 : static_cast<uint>(primitive_offsets[idx - 1]);'),
+            ):
+                if text.count(old) != 1:
+                    raise RuntimeError('HIP depth-ordered instance seam changed: ' + old)
+                text = text.replace(old, new)
             for old, new in (
                 ("const uint st0 = warp_id;", "const uint st0 = (warp_id & 1u) + ((warp_id >> 1) * 4u);"),
                 ("const uint st1 = warp_id + 4;", "const uint st1 = st0 + 2u;"),
@@ -389,8 +415,12 @@ def prepare(root: Path, output: Path) -> None:
             anchor = "float dilation_scale = 1.0f);"
             if text.count(anchor) != 1:
                 raise RuntimeError("FastGS forward interface changed")
-            text = text.replace(anchor, "float dilation_scale = 1.0f, const std::function<void(unsigned)>& hip_profile = {});")
+            text = text.replace(anchor, "float dilation_scale = 1.0f, const std::function<void(unsigned)>& hip_profile = {}, bool hip_presort_allowed = true, bool* hip_presort_attempted = nullptr);")
         if relative.endswith("/forward.cu"):
+            for scalar in ('h_n_visible', 'h_n_instances'):
+                seam='hipMemcpyAsync(&'+scalar+','
+                if text.count(seam)!=1: raise RuntimeError('HIP scalar read seam changed: '+scalar)
+                text=text.replace(seam,'lfs_fast_ordered_d2h(&'+scalar+',')
             sort_call = "hipcub::DeviceRadixSort::SortPairs("
             if text.count(sort_call) != 2:
                 raise RuntimeError("HIP Fast radix query/execute seam changed")
@@ -403,7 +433,7 @@ def prepare(root: Path, output: Path) -> None:
 #include <rocprim/device/device_radix_sort.hpp>
 #endif
 template<class Key, class Value, class Count>
-hipError_t lfs_fast_sort_pairs(void* temporary, size_t& bytes,
+hipError_t lfs_fast_full_sort_pairs(void* temporary, size_t& bytes,
     hipcub::DoubleBuffer<Key>& keys, hipcub::DoubleBuffer<Value>& values,
     Count count, int begin_bit, int end_bit, hipStream_t stream) {
 #ifdef LFS_HIP_FAST_RADIX_TUNING
@@ -424,14 +454,61 @@ hipError_t lfs_fast_sort_pairs(void* temporary, size_t& bytes,
         count, begin_bit, end_bit, stream);
 #endif
 }
+#include "fast_instance_sort.hpp"
+#include "fast_depth_sort.hpp"
+#include "fast_tile_workload.hpp"
 ''')
+            for seam in ('                    key_end_bit,\n                    stream)',
+                         '                    n_instances, 0, key_end_bit,\n                    stream)'):
+                if text.count(seam) != 1:
+                    raise RuntimeError('HIP instance sort call seam changed')
+                text = text.replace(seam, seam[:-1] + ', hip_depth_order.indices != nullptr)')
+            depth_anchor = '    check_cuda_with_fastgs_status(\n        hipcub::DeviceScan::InclusiveSum(\n            per_primitive_buffers.cub_workspace,'
+            if text.count(depth_anchor) != 1:
+                raise RuntimeError('HIP depth preparation seam changed')
+            text = text.replace(depth_anchor, '''    const auto hip_depth_order = lfs_hip_prepare_depth_order(phase_buffers_func,
+        per_primitive_buffers.depth_keys, per_primitive_buffers.n_touched_tiles,
+        static_cast<unsigned>(n_visible), stream, hip_presort_allowed, hip_presort_attempted);
+''' + depth_anchor)
+            for old, new in (
+                ('            per_primitive_buffers.n_touched_tiles,\n            per_primitive_buffers.offset,',
+                 '            hip_depth_order.tile_counts,\n            per_primitive_buffers.offset,'),
+                ('                static_cast<uint>(n_instances));\n            LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.create_instances");',
+                 '                static_cast<uint>(n_instances), hip_depth_order.indices);\n            LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.create_instances");'),
+            ):
+                if text.count(old) != 1:
+                    raise RuntimeError('HIP depth-ordered forward seam changed')
+                text = text.replace(old,new)
+            workload_anchor = '    check_cuda_with_fastgs_status(hipGetLastError(), "blend",'
+            if text.count(workload_anchor) != 1:
+                raise RuntimeError('HIP workload diagnostic seam changed')
+            text = text.replace(workload_anchor, '    lfs_hip_report_tile_workload(per_tile_buffers.instance_ranges, per_tile_buffers.n_contributions,\n        width, height, grid.x, n_tiles_u32, stream);\n' + workload_anchor)
             replacements = {
-                "    float dilation_scale) {": "    float dilation_scale, const std::function<void(unsigned)>& hip_profile) {\n    if (hip_profile) hip_profile(0);",
+                "    float dilation_scale) {": "    float dilation_scale, const std::function<void(unsigned)>& hip_profile, bool hip_presort_allowed, bool* hip_presort_attempted) {\n    if (hip_profile) hip_profile(0);",
                 "    check_cuda_with_fastgs_status(\n        hipcub::DeviceScan::InclusiveSum(\n            per_primitive_buffers.cub_workspace,": "    if (hip_profile) hip_profile(1);\n    check_cuda_with_fastgs_status(\n        hipcub::DeviceScan::InclusiveSum(\n            per_primitive_buffers.cub_workspace,",
                 "    FastGSSortWorkspace sort_workspace;": "    FastGSSortWorkspace sort_workspace;\n    if (hip_profile) hip_profile(2);",
                 "    // Production: warp cull ON": "    if (hip_profile) hip_profile(3);\n    // Production: warp cull ON",
                 "    ForwardResult result;": "    if (hip_profile) hip_profile(4);\n    ForwardResult result;",
             }
+            # Additional diagnostic seams are inserted only into HIP copies.
+            # Labels describe completed work; callbacks remain empty normally.
+            micro_seams = {
+                '    LFS_FASTGS_PHASE_CHECK("fastgs.forward.preprocess.visibility");': 5,
+                '    LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.count_visible_blocks");': 6,
+                '    LFS_FASTGS_PHASE_CHECK("hipcub::DeviceScan::InclusiveSum (FastGS visibility)");': 7,
+                '    LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.compact_visible");': 8,
+                '    const int n_visible = checked_fastgs_visible_count(h_n_visible, n_primitives);': 9,
+                '            LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.create_instances");': 12,
+                '            LFS_FASTGS_PHASE_CHECK("hipcub::DeviceRadixSort::SortPairs (Tile/Depth)");': 13,
+                '            LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.extract_instance_ranges");': 14,
+            }
+            for seam, phase in micro_seams.items():
+                if text.count(seam)!=1: raise RuntimeError(f'HIP forward micro-phase seam changed: {seam}')
+                text=text.replace(seam,seam+f'\n    if (hip_profile) hip_profile({phase});')
+            for seam, phase in [('        if (n_instances > 0) {',10),
+                                ('            kernels::forward::create_instances_cu<<<',11)]:
+                if text.count(seam)!=1: raise RuntimeError(f'HIP forward allocation seam changed: {seam}')
+                text=text.replace(seam,f'    if (hip_profile) hip_profile({phase});\n'+seam)
             for anchor, replacement in replacements.items():
                 if text.count(anchor) != 1:
                     raise RuntimeError(f"FastGS forward profiling boundary changed: {anchor}")
@@ -534,6 +611,10 @@ hipError_t lfs_fast_sort_pairs(void* temporary, size_t& bytes,
             text = text.replace(anchor, "template <DensificationType DENSIFICATION_TYPE, bool NORMAL_CHANNEL, bool IMPACT_SCORE, int WARP_CULL_MODE = 0, bool HIP_DEPTH_OR_EDGE = true>")
             for condition in ("grad_depth_map != nullptr", "edge_weight_map != nullptr", "edge_score_out != nullptr"):
                 text = text.replace(condition, "(HIP_DEPTH_OR_EDGE && " + condition + ")")
+        if relative.endswith("kernels_forward.cuh"):
+            text = compact_sort_kernels(text)
+        if relative.endswith("/forward.cu"):
+            text = compact_sort_forward(text)
         guard = """
 #if defined(__HIP_DEVICE_COMPILE__)
 #if defined(__AMDGCN_WAVEFRONT_SIZE__) && __AMDGCN_WAVEFRONT_SIZE__ != 32
@@ -551,6 +632,18 @@ hipError_t lfs_fast_sort_pairs(void* temporary, size_t& bytes,
     target = output / "hip_fast_wave.hpp"
     if not target.exists() or target.read_text(encoding="utf-8") != WAVE:
         target.write_text(WAVE, encoding="utf-8")
+    target = output / "fast_instance_sort.hpp"
+    instance_sort = (Path(__file__).parent / "fast_instance_sort.hpp").read_text(encoding="utf-8")
+    if not target.exists() or target.read_text(encoding="utf-8") != instance_sort:
+        target.write_text(instance_sort, encoding="utf-8")
+    target = output / "fast_depth_sort.hpp"
+    depth_sort = (Path(__file__).parent / "fast_depth_sort.hpp").read_text(encoding="utf-8")
+    if not target.exists() or target.read_text(encoding="utf-8") != depth_sort:
+        target.write_text(depth_sort, encoding="utf-8")
+    target = output / "fast_tile_workload.hpp"
+    workload = (Path(__file__).parent / "fast_tile_workload.hpp").read_text(encoding="utf-8")
+    if not target.exists() or target.read_text(encoding="utf-8") != workload:
+        target.write_text(workload, encoding="utf-8")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,20 @@
+{
+  "origin": "https://github.com/ROCm/rocm-systems/pull/12952",
+  "upstream_diff_sha256": "2a960c1ebfa76155dc22d3ac3d6354ba0200be5d54599d39e84be3ef13fc190a",
+  "runtime_patch_sha256": "6e356c5868872c4eb6966d2ac90b935059a732ce50583cd921b61050dbbadee0",
+  "license": "MIT (AMD rocm-systems)",
+  "sdk_version": "10.1.0",
+  "source_commit": "7da43026e4f2ef7600433c38c820732f7a205d22",
+  "therock_commit": "b324869fb3116353ac7eec5e6926aa3d452ac987",
+  "files": {
+    "projects/clr/rocclr/device/pal/palvirtual.cpp": {
+      "before_sha256": "d98b4c576347fb2169eedfb41deee1e8996fca590b42340055c235936b93aa78",
+      "after_sha256": "990417585cd2f27f8796a47c7eeff06beec38c9d48539655e5a4ed95a1401047"
+    },
+    "projects/clr/rocclr/device/pal/palvirtual.hpp": {
+      "before_sha256": "914283607ce619392cf8e3c1d13d62ee8b9703cbd92c2f7ecacadac6b867abfb",
+      "after_sha256": "7c04b624d1c3bc0daa3a14107c077dad82e48252abb24ffbc80d2b1babcd2e79"
+    }
+  },
+  "runtime_patch_lf_sha256": "6e356c5868872c4eb6966d2ac90b935059a732ce50583cd921b61050dbbadee0"
+}

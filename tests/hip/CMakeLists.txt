@@ -44,6 +44,23 @@ add_custom_command(OUTPUT "${_hip_smoke}"
 add_custom_target(hip_bringup ALL DEPENDS "${_hip_smoke}")
 
 enable_testing()
+option(LFS_HIP_PROBE_FAST_SORT "Build the standalone two-module FastGS sort comparison (Windows)" OFF)
+if(LFS_HIP_PROBE_FAST_SORT)
+    if(NOT CMAKE_HOST_WIN32)
+        message(FATAL_ERROR "The two-module FastGS sort comparison currently uses the Windows loader")
+    endif()
+    set(_sort_test "${CMAKE_CURRENT_BINARY_DIR}/lfs_hip_fast_sort_contract.exe")
+    add_custom_command(OUTPUT "${_sort_test}"
+        COMMAND "${_hip_compiler}" -x hip -std=c++20 -O3
+            "--offload-arch=${LFS_HIP_ARCHITECTURE}" "--hip-path=${LFS_HIP_ROOT}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/fast_sort_integration_contract.hip" -o "${_sort_test}"
+        DEPENDS fast_sort_integration_contract.hip
+            "../../src/training/hip/application_fast_api.h" "${_hip_compiler}"
+        VERBATIM)
+    # Invoke with two absolute DLL paths. Baseline must use the original full
+    # sort; candidate runs with DEPTH_PRESORT/COMPACT_TILE_KEYS enabled.
+    add_custom_target(hip_fast_sort_contract ALL DEPENDS "${_sort_test}")
+endif()
 option(LFS_HIP_PROBE_FAST_MATH "Test private FastGS HIP mathematical dependencies" OFF)
 option(LFS_HIP_PROBE_FAST_RASTER "Test private FastGS HIP forward and backward" OFF)
 if(LFS_HIP_PROBE_FAST_MATH OR LFS_HIP_PROBE_FAST_RASTER)
@@ -219,7 +236,8 @@ if(LFS_HIP_PROBE_TRAINING_SESSION)
                 "/Fe:${_core_test}" "/Fo:${CMAKE_CURRENT_BINARY_DIR}/"
             DEPENDS core_backend.cpp "../../src/core/tensor/backend/hip/hip_backend_ops.cpp"
                 "../../src/core/tensor/backend/hip/hip_backend_ops.hpp" "../../src/core/tensor/backend/hip/hip_unsupported_ops.cpp"
-                "../../src/core/tensor/backend/hip/runtime_api.h" VERBATIM)
+                "../../src/core/tensor/backend/hip/runtime_api.h"
+                "../../src/core/tensor/backend/hip/movement_ops.hpp" VERBATIM)
         add_custom_target(hip_core_backend_contract ALL DEPENDS "${_core_test}")
         add_dependencies(hip_core_backend_contract lfs_hip_runtime_build)
         add_test(NAME HipTensor.CoreBackendPointwiseAndOwnership COMMAND "${_core_test}" "${LFS_HIP_RUNTIME_LIBRARY}")

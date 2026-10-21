@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 #include <utility>
 using namespace lfs;
@@ -139,6 +140,16 @@ int main(int argc, char** argv) try {
         capture.impact_sum=impact_sum;capture.impact_peak=impact_peak;
         for(size_t i=0;i<5;++i)capture.groups[i].gradient=Tensor::full({n,size_t(capture.groups[i].attributes)},.03125f,Device::GPU);
         forward_again();const auto full_render=image.cpu().to_vector();
+        require(table.fast->pop_scores,"HIP FastGS POPSpa callback missing");
+        auto pop=Tensor::zeros({n,8},Device::GPU,DataType::UInt8);
+        table.fast->pop_scores(saved,absent,absent,pop);
+        const auto pop_bytes=pop.cpu().to_vector_uint8();
+        std::vector<double> pop_values(n);std::memcpy(pop_values.data(),pop_bytes.data(),n*sizeof(double));
+        table.fast->pop_scores(saved,absent,absent,pop);
+        const auto accumulated_bytes=pop.cpu().to_vector_uint8();
+        std::vector<double> accumulated(n);std::memcpy(accumulated.data(),accumulated_bytes.data(),n*sizeof(double));
+        for(size_t i=0;i<n;++i)require(std::isfinite(pop_values[i]) && pop_values[i]>=0 &&
+            std::abs(accumulated[i]-2*pop_values[i])<=1e-10+1e-6*pop_values[i],"HIP FastGS POPSpa did not accumulate");
         table.fast->backward(saved,{gradient,absent,absent,absent},absent,absent,absent,absent,capture,DensificationType::None);
         const auto sums=impact_sum.cpu().to_vector(),peaks=impact_peak.cpu().to_vector();
         const auto selected=size_t(std::max_element(sums.begin(),sums.end())-sums.begin());
@@ -164,16 +175,20 @@ int main(int argc, char** argv) try {
         const double numerical=(plus.first-minus.first)/.004;
         const double analytic=first_gradient[3][selected]-.03125f;
         require(std::abs(numerical-analytic)<=2e-5+0.03*std::abs(numerical),"Captured opacity gradient differs from finite difference");
-        double removal_sum=0,removal_peak=0;
+        double removal_sum=0,removal_peak=0,removal_energy=0;
         for(size_t pixel=0;pixel<size_t(height)*width;++pixel) {
             double value=0;for(size_t channel=0;channel<3;++channel) {
                 const size_t j=channel*height*width+pixel;
                 value+=std::abs(double(full_render[j])-removed.second[j]);
+                const double delta=double(full_render[j])-removed.second[j];removal_energy+=delta*delta;
             }
             removal_sum+=value;removal_peak=std::max(removal_peak,value);
         }
         require(std::abs(removal_sum-sums[selected])<=3e-4+0.003*removal_sum,"Impact sum differs from a removed Gaussian render");
         require(std::abs(removal_peak-peaks[selected])<=3e-5+0.003*removal_peak,"Impact peak differs from a removed Gaussian render");
+        require(removal_energy>1e-8 && std::abs(removal_energy-pop_values[selected])<=1e-7+0.003*removal_energy,
+                "HIP FastGS POPSpa removal energy differs from a removed Gaussian render");
+        std::printf("PASS FastGS POPSpa accumulation/live backward/removal energy %.12g vs %.12g\n",pop_values[selected],removal_energy);
         parameters[4]=Tensor::from_vector(unchanged[4],{n,1},Device::GPU);
         std::printf("PASS raw capture/accumulation/Adam preservation, finite difference %.9g vs %.9g, impact removal %.9g vs %.9g\n",analytic,numerical,double(sums[selected]),removal_sum);
         // Exercise shape changes and optional depth/normal through the real table.

@@ -33,8 +33,12 @@ def prepare(source: Path, output: Path) -> None:
         common[:common.index("#pragma once")] + "#pragma once\n"
         '#include <hip/hip_runtime.h>\n#include <glm/gtc/type_ptr.hpp>\n'
         + enums + "namespace gsplat_lfs {\n" + types, encoding="utf-8")
+    names += ["PopScores.h", "PopScores.cu"]
     for name in names:
         text = (source / name).read_text(encoding="utf-8")
+        if name == "PopScores.cu":
+            text = text.replace('#include "../../kernels/kernel_stream.hpp"', '#include "hip_check.hpp"')
+            text = text.replace('        stream = lfs::resolve_stream(stream);', '')
         text = text.replace('#include "core/cuda_error.hpp"', '#include "hip_check.hpp"')
         text = text.replace('#include "core/cuda_safe_format.hpp"', '#include "hip_check.hpp"')
         text = text.replace("#include <cuda_runtime.h>", "#include <hip/hip_runtime.h>")

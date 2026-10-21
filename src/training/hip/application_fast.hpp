@@ -6,6 +6,8 @@
 #include "application_fast_api.h"
 #include <exception>
 #ifdef LFS_HIP_FAST_RUNTIME
+#include "hip_fast_diagnostics.hpp"
+#include "pop_scores.h"
 struct LfsHipApplicationFast {
     int device;
     hipStream_t queue;
@@ -17,6 +19,34 @@ struct LfsHipApplicationFast {
         : device(device), queue(queue), budget{bytes}, workspace(budget, queue) {}
 };
 namespace {
+    void trace_fast_camera(const LfsHipFastForward& input, hipStream_t queue) {
+        static const std::string destination = [] {
+            const char* value = std::getenv("LFS_HIP_FAST_CAMERA_TRACE");
+            return value ? std::string(value) : std::string{};
+        }();
+        if (destination.empty())
+            return;
+        // Diagnostic only. Preserve exact camera bits to compare the consumed
+        // view order across processes, independently of device addresses.
+        std::array<float, 16> view;
+        hip_check(hipStreamSynchronize(queue), "HIP camera trace producer completion");
+        hip_check(hipMemcpy(view.data(), reinterpret_cast<const void*>(input.view),
+                            sizeof(view), hipMemcpyDeviceToHost), "HIP camera trace readback");
+        static std::mutex mutex;
+        static uint64_t sequence = 0;
+        const std::lock_guard lock(mutex);
+        FILE* file = std::fopen(destination.c_str(), "ab");
+        if (!file) {
+            std::fprintf(stderr, "[warning] HIP camera trace could not open its output file\n");
+            return;
+        }
+        std::fprintf(file, "%llu,%d,%d,%d,", static_cast<unsigned long long>(sequence++),
+                     input.width, input.height, input.count);
+        for (float value : view)
+            std::fprintf(file, "%08x", std::bit_cast<unsigned>(value));
+        std::fputc('\n', file);
+        std::fclose(file);
+    }
     template<class T = float> T* app_pointer(uint64_t value) {
         return reinterpret_cast<T*>(static_cast<uintptr_t>(value));
     }
@@ -108,6 +138,7 @@ int lfs_hip_application_fast_forward(LfsHipApplicationFast* state, const LfsHipF
         require(std::isfinite(input->fx) && input->fx > 0 && std::isfinite(input->fy) && input->fy > 0 &&
                 std::isfinite(input->cx) && std::isfinite(input->cy) && std::isfinite(input->dilation) && input->dilation > 0,
                 "Invalid application HIP camera intrinsics");
+        trace_fast_camera(*input, state->queue);
         state->live = false;
         state->input = *input;
         auto& f = state->workspace;
@@ -115,21 +146,46 @@ int lfs_hip_application_fast_forward(LfsHipApplicationFast* state, const LfsHipF
         f.phase_candidate = nullptr;
         f.phase_candidate_bytes = 0;
         auto allocate = [&](size_t bytes) { return f.allocate(bytes); };
-        f.result = fast_lfs::rasterization::forward(allocate, [](size_t) {}, [&](size_t bytes) { return f.allocate_phase(bytes); },
-            [&](const void* source, size_t bytes) {
-                auto* output = f.allocate(bytes);
-                hip_check(hipMemcpyAsync(output, source, bytes, hipMemcpyDeviceToDevice, state->queue), "retain HIP FastGS phase prefix");
-                return output;
-            }, [&](size_t bytes) { return f.tiles = f.allocate(bytes); },
-            app_pointer<float3>(input->means), app_pointer<float3>(input->scales), app_pointer<float4>(input->rotations),
-            app_pointer(input->opacities), app_pointer<float3>(input->sh0), app_pointer<float4>(input->shN),
-            app_pointer<float2>(input->sh_bounds), input->sh_cells, input->sh_bits,
-            app_pointer<float4>(input->view), app_pointer<float3>(input->camera),
-            app_pointer(input->image), app_pointer(input->alpha), app_pointer(input->depth), app_pointer(input->normal),
-            app_pointer(input->background_color), app_pointer(input->background_image),
-            input->count, input->active_bases, input->layout_bases, input->width, input->height,
-            input->fx, input->fy, input->cx, input->cy, 0.01f, 1e10f, input->mip_filter != 0,
-            state->queue, app_pointer(input->screen_share), input->dilation);
+        // Diagnostic only: each mark completes the preceding micro-phase.
+        // The normal path keeps an empty callback and introduces no GPU waits.
+        LfsHipFastTiming hip_timing(state->queue);
+        std::function<void(unsigned)> hip_profile;
+        if(hip_timing.active) hip_profile=[&](unsigned phase) {
+            switch(phase) {
+            case 0: break;
+            case 1: hip_timing.mark("forward_projection_workspace"); break;
+            case 2: hip_timing.mark("forward_offset_scan"); break;
+            case 3: hip_timing.mark("forward_retain_reset"); break;
+            case 4: hip_timing.mark("forward_blend"); break;
+            case 5: hip_timing.mark("forward_visibility"); break;
+            case 6: hip_timing.mark("forward_visibility_count"); break;
+            case 7: hip_timing.mark("forward_visibility_scan"); break;
+            case 8: hip_timing.mark("forward_compact"); break;
+            case 9: hip_timing.mark("forward_visible_readback"); break;
+            case 10: hip_timing.mark("forward_instance_readback"); break;
+            case 11: hip_timing.mark("forward_sort_workspace"); break;
+            case 12: hip_timing.mark("forward_emit_instances"); break;
+            case 13: hip_timing.mark("forward_radix_sort"); break;
+            case 14: hip_timing.mark("forward_ranges"); break;
+            }
+        };
+        f.forward_with_depth_fallback(input->count, [&] {
+            f.result = fast_lfs::rasterization::forward(allocate, [](size_t) {}, [&](size_t bytes) { return f.allocate_phase(bytes); },
+                [&](const void* source, size_t bytes) {
+                    auto* output = f.allocate(bytes);
+                    hip_check(hipMemcpyAsync(output, source, bytes, hipMemcpyDeviceToDevice, state->queue), "retain HIP FastGS phase prefix");
+                    return output;
+                }, [&](size_t bytes) { return f.tiles = f.allocate(bytes); },
+                app_pointer<float3>(input->means), app_pointer<float3>(input->scales), app_pointer<float4>(input->rotations),
+                app_pointer(input->opacities), app_pointer<float3>(input->sh0), app_pointer<float4>(input->shN),
+                app_pointer<float2>(input->sh_bounds), input->sh_cells, input->sh_bits,
+                app_pointer<float4>(input->view), app_pointer<float3>(input->camera),
+                app_pointer(input->image), app_pointer(input->alpha), app_pointer(input->depth), app_pointer(input->normal),
+                app_pointer(input->background_color), app_pointer(input->background_image),
+                input->count, input->active_bases, input->layout_bases, input->width, input->height,
+                input->fx, input->fy, input->cx, input->cy, 0.01f, 1e10f, input->mip_filter != 0,
+                state->queue, app_pointer(input->screen_share), input->dilation, hip_profile, f.depth_presort_allowed, &f.depth_presort_attempted);
+        });
         hip_check(hipGetLastError(), "application HIP FastGS forward submission");
         state->live = true;
     });
@@ -197,6 +253,22 @@ int lfs_hip_application_fast_backward(LfsHipApplicationFast* state, const LfsHip
         hip_check(hipGetLastError(), "application HIP FastGS backward submission");
         state->optimizer_submitted = false;
         state->live = false;
+    });
+}
+int lfs_hip_application_fast_pop_scores(LfsHipApplicationFast* state, uint64_t background,
+                                      uint64_t background_image, uint64_t scores, LfsHipError* error) {
+    return app_fast_boundary(state, error, [&] {
+        require(state->live && scores, "HIP FastGS POPSpa scores need a live forward and score buffer");
+        const auto& f = state->workspace;
+        fast_lfs::rasterization::ForwardContext ctx{};
+        ctx.per_primitive_buffers = f.result.per_primitive_buffers;
+        ctx.per_tile_buffers = f.tiles;
+        ctx.sorted_primitive_indices = f.result.sorted_primitive_indices;
+        ctx.primitive_work_indices = f.result.primitive_work_indices;
+        ctx.n_instances = f.result.n_instances;
+        ctx.n_visible = f.result.n_visible;
+        fast_lfs::rasterization::accumulate_pop_scores(ctx, state->input.width, state->input.height,
+            app_pointer(background), app_pointer(background_image), app_pointer<double>(scores), state->input.count, state->queue);
     });
 }
 int lfs_hip_application_fast_release(LfsHipApplicationFast* state, LfsHipError* error) {

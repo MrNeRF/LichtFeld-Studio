@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "../readback_buffer.hpp"
 #include "hip_backend_ops.hpp"
+#include "movement_ops.hpp"
 #include <core/tensor.hpp>
 #include <core/tensor_export.hpp>
 #include <stdexcept>
@@ -34,6 +35,4 @@ namespace lfs::core::internal {
     void HipBackendOps::index_fill(StorageRef output, StorageRef indices, const StridedLayout& output_layout, const IndexProgram& program, ScalarOperand value, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: index_fill"); }
     void HipBackendOps::index_put(StorageRef output, StorageRef indices, StorageRef values, const IndexProgram& program, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: index_put"); }
     void HipBackendOps::masked_scatter(StorageRef output, StorageRef mask, StorageRef source, const MaskProgram& program, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: masked_scatter"); }
-    void HipBackendOps::strided_upload(StorageRef host_input, StorageRef output, const StridedLayout& input_layout, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: strided_upload"); }
-    void HipBackendOps::pad(StorageRef input, StorageRef output, const StridedLayout& input_layout, const StridedLayout& output_layout, const std::array<size_t, MAX_TENSOR_RANK>& pad_before, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: pad"); }
 } // namespace lfs::core::internal

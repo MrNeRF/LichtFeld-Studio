@@ -9,6 +9,7 @@ extern "C" {
  * validated and retained by the Tensor adapter. The borrowed native HIP queue
  * and its context/module owner outlive this handle. No CUDA stream is admitted. */
 typedef struct LfsHipApplicationFast LfsHipApplicationFast;
+LFS_HIP_TRAIN_API int lfs_hip_application_fast_pop_scores(LfsHipApplicationFast*, uint64_t, uint64_t, uint64_t, LfsHipError*);
 enum { LFS_HIP_FAST_INSTANCE_OVERFLOW = 6 };
 typedef struct LfsHipFastForward {
     uint32_t struct_bytes;

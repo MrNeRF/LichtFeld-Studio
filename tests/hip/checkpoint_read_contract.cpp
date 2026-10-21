@@ -114,8 +114,8 @@ namespace {
             if (expected_sparsity) {
                 require(loaded_params.optimization.resolved_total_iterations() == 10020, "Old pre-tail settings did not migrate to POPSpa");
                 const auto unavailable = training::unavailable_training_reason(loaded_params, GpuBackend::HIP, {});
-                require(unavailable && unavailable->find("Popspa") != std::string::npos,
-                        "Migrated POPSpa training was admitted without native HIP callbacks");
+                if (unavailable)
+                    throw std::runtime_error("Migrated POPSpa checkpoint is missing native HIP training families: " + *unavailable);
             }
             written = test::write_checkpoint_fixture(directory, iteration, strategy, loaded_params, nullptr, nullptr, nullptr);
             if (!written)

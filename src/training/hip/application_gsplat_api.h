@@ -20,6 +20,7 @@ LFS_HIP_TRAIN_API int lfs_hip_application_gsplat_create(int32_t,uint64_t,uint64_
 LFS_HIP_TRAIN_API int lfs_hip_application_gsplat_forward(LfsHipApplicationGsplat*,const LfsHipGsplatForward*,LfsHipError*);
 LFS_HIP_TRAIN_API int lfs_hip_application_gsplat_backward(LfsHipApplicationGsplat*,const LfsHipGsplatBackward*,LfsHipError*);
 LFS_HIP_TRAIN_API int lfs_hip_application_gsplat_release(LfsHipApplicationGsplat*,LfsHipError*);
+LFS_HIP_TRAIN_API int lfs_hip_application_gsplat_pop_scores(LfsHipApplicationGsplat*,uint64_t,uint64_t,uint64_t,LfsHipError*);
 LFS_HIP_TRAIN_API int lfs_hip_application_gsplat_info(LfsHipApplicationGsplat*,uint64_t*,uint64_t*,LfsHipError*);
 LFS_HIP_TRAIN_API int lfs_hip_application_gsplat_destroy(LfsHipApplicationGsplat*,LfsHipError*);
 #ifdef __cplusplus

@@ -246,6 +246,8 @@ namespace {
         bool reuse_phase_helpers = false;
         char* phase_candidate = nullptr;
         size_t phase_candidate_bytes = 0;
+        bool depth_presort_allowed = true;
+        bool depth_presort_attempted = false;
         FastFrame(Budget& budget, hipStream_t queue) : budget(budget), queue(queue) {
             const char* value = std::getenv("LFS_HIP_FAST_ARENA_GROWTH");
             reserve_growth = value && std::string_view(value) == "1";
@@ -278,6 +280,64 @@ namespace {
                 phase_candidate_bytes = capacity;
             }
             return output;
+        }
+        template<class Submit>
+        void forward_with_depth_fallback(size_t model_count, Submit&& submit,
+                                         size_t extra_backward_bytes = 0) {
+            for (;;) {
+                cursor = 0;
+                phase_candidate = nullptr;
+                phase_candidate_bytes = 0;
+                depth_presort_attempted = false;
+                try {
+                    submit();
+                    if (depth_presort_attempted) {
+                        // Keep room for the mandatory backward helpers as well.
+                        // Otherwise optional forward storage could fit the budget
+                        // yet make an otherwise valid training step fail later.
+                        const size_t helper_count = reuse_phase_helpers
+                                                        ? std::max<size_t>(result.n_visible, 1)
+                                                        : model_count;
+                        const size_t helper_bytes = multiply(helper_count, 16 * sizeof(float));
+                        const bool reuses_phase = reuse_phase_helpers && phase_candidate &&
+                                                  phase_candidate_bytes >= helper_bytes;
+                        const size_t helper_charge = !reuses_phase &&
+                                                             (!helpers || helpers->bytes < helper_bytes)
+                                                         ? helper_bytes
+                                                         : 0;
+                        const uint64_t available = budget.limit - budget.live;
+                        if (helper_charge > available || extra_backward_bytes > available - helper_charge)
+                            throw Failure(LFS_HIP_TRAIN_RESOURCE_EXHAUSTED,
+                                          "HIP depth presort leaves insufficient backward workspace budget");
+                    }
+                    return;
+                } catch (const Failure& failure) {
+                    if (!depth_presort_attempted || failure.status != LFS_HIP_TRAIN_RESOURCE_EXHAUSTED)
+                        throw;
+                } catch (const LfsHipRasterFailure& failure) {
+                    if (!depth_presort_attempted || failure.code != hipErrorOutOfMemory)
+                        throw;
+                } catch (const std::bad_alloc&) {
+                    if (!depth_presort_attempted)
+                        throw;
+                }
+                // No optimizer has run in forward. Complete submitted readers
+                // before releasing the partial workspace and replay once with
+                // the original sort. Screen-share accumulation uses max, so
+                // replay does not double its contribution.
+                hip_check(hipStreamSynchronize(queue), "HIP depth sort fallback completion");
+                const auto pending_error = hipGetLastError();
+                if (pending_error != hipSuccess && pending_error != hipErrorOutOfMemory)
+                    hip_check(pending_error, "HIP depth sort fallback pending error");
+                buffers.clear();
+                helpers.reset();
+                sh_gradient.reset();
+                tiles = nullptr;
+                result = {};
+                depth_presort_allowed = false;
+                std::fprintf(stderr, "[warning] HIP visible-depth presort exceeded available memory; "
+                                     "retrying with the original sort and disabling presort for this workspace\n");
+            }
         }
         float* backward_helpers(size_t bytes) {
             // Only phase allocations qualify. Visibility, retained indices,
@@ -715,16 +775,25 @@ struct LfsHipTraining {
             -(r[0] * r[3] + r[4] * r[7] + r[8] * r[11]),
             -(r[1] * r[3] + r[5] * r[7] + r[9] * r[11]),
             -(r[2] * r[3] + r[6] * r[7] + r[10] * r[11]));
-        auto* camera = reinterpret_cast<float3*>(fast->allocate(sizeof(float3)));
-        hip_check(hipMemcpyAsync(camera, &fast->camera_center, sizeof(fast->camera_center), hipMemcpyHostToDevice, stream.value), "FastGS camera center");
-        auto allocate = [this](size_t bytes) { return fast->allocate(bytes); };
-        fast->result = fast_lfs::rasterization::forward(allocate, [](size_t) {}, [this](size_t bytes) { return fast->allocate_phase(bytes); }, [this](const void* source, size_t bytes) {
-                char* output = fast->allocate(bytes);
-                hip_check(hipMemcpyAsync(output, source, bytes, hipMemcpyDeviceToDevice, stream.value), "FastGS retained indices");
-                return output; }, [this](size_t bytes) { return fast->tiles = fast->allocate(bytes); }, reinterpret_cast<float3*>(parameter.as(layout.offsets[0])), reinterpret_cast<float3*>(parameter.as(layout.offsets[2])), reinterpret_cast<float4*>(parameter.as(layout.offsets[1])), parameter.as(layout.offsets[4]), reinterpret_cast<float3*>(parameter.as(layout.offsets[3])), sh ? sh->values.as<float4>() : nullptr, nullptr, 0, 0, f.camera.as<float4>(), camera, f.image.as(), f.alpha.as(), nullptr, nullptr, nullptr, nullptr, count, sh ? (sh->active + 1) * (sh->active + 1) : 1, sh ? sh->bases : 1, f.width, f.height, f.descriptor.fx, f.descriptor.fy, f.descriptor.cx, f.descriptor.cy, f.descriptor.near_plane, f.descriptor.far_plane, false, stream.value, nullptr, 1.0f, profile ? std::function<void(unsigned)>([this](unsigned phase) { mark(phase); }) : std::function<void(unsigned)>{});
-        intersections = fast->result.n_instances;
-        // Own stack camera data until its asynchronous upload has completed.
-        hip_check(hipStreamSynchronize(stream.value), "FastGS forward completion");
+        size_t extra_backward_bytes = 0;
+        if (sh) {
+            if (!fused_optimizer && (!fast->sh_gradient || fast->sh_gradient->bytes < sh->values.bytes))
+                extra_backward_bytes = sh->values.bytes;
+            else if (fused_optimizer && (!joint->sh_packed || joint->sh_packed->bytes != sh->storage_floats * 2))
+                extra_backward_bytes = multiply(sh->storage_floats, 2) + multiply((count + 255) / 256, 16);
+        }
+        fast->forward_with_depth_fallback(count, [&] {
+            auto* camera = reinterpret_cast<float3*>(fast->allocate(sizeof(float3)));
+            hip_check(hipMemcpyAsync(camera, &fast->camera_center, sizeof(fast->camera_center), hipMemcpyHostToDevice, stream.value), "FastGS camera center");
+            auto allocate = [this](size_t bytes) { return fast->allocate(bytes); };
+            fast->result = fast_lfs::rasterization::forward(allocate, [](size_t) {}, [this](size_t bytes) { return fast->allocate_phase(bytes); }, [this](const void* source, size_t bytes) {
+                    char* output = fast->allocate(bytes);
+                    hip_check(hipMemcpyAsync(output, source, bytes, hipMemcpyDeviceToDevice, stream.value), "FastGS retained indices");
+                    return output; }, [this](size_t bytes) { return fast->tiles = fast->allocate(bytes); }, reinterpret_cast<float3*>(parameter.as(layout.offsets[0])), reinterpret_cast<float3*>(parameter.as(layout.offsets[2])), reinterpret_cast<float4*>(parameter.as(layout.offsets[1])), parameter.as(layout.offsets[4]), reinterpret_cast<float3*>(parameter.as(layout.offsets[3])), sh ? sh->values.as<float4>() : nullptr, nullptr, 0, 0, f.camera.as<float4>(), camera, f.image.as(), f.alpha.as(), nullptr, nullptr, nullptr, nullptr, count, sh ? (sh->active + 1) * (sh->active + 1) : 1, sh ? sh->bases : 1, f.width, f.height, f.descriptor.fx, f.descriptor.fy, f.descriptor.cx, f.descriptor.cy, f.descriptor.near_plane, f.descriptor.far_plane, false, stream.value, nullptr, 1.0f, profile ? std::function<void(unsigned)>([this](unsigned phase) { mark(phase); }) : std::function<void(unsigned)>{}, fast->depth_presort_allowed, &fast->depth_presort_attempted);
+            intersections = fast->result.n_instances;
+            // Own stack camera data until its asynchronous upload has completed.
+            hip_check(hipStreamSynchronize(stream.value), "FastGS forward completion");
+        }, extra_backward_bytes);
     }
     void backward_fast(const LfsHipTrainRates& rates) {
         auto& f = *frame;
@@ -1550,6 +1619,7 @@ void lfs_hip_train_set_cancel(LfsHipTraining* session, int value) {
 #include "application_image.hpp"
 
 #include "application_extra.hpp"
+#include "application_popspa.hpp"
 
 #include "application_morton.hpp"
 #include "application_lpips.hpp"
