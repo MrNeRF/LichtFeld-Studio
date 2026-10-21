@@ -74,7 +74,7 @@ int main(int argc, char** argv) {
             // simulating an encoder that cannot be allocated.
             media::detail::registerGpuJpegFactory(+[](const media::detail::JpegSettings&) -> std::unique_ptr<media::detail::GpuJpegEncoder> { return nullptr; });
         const auto operation = request.value("operation", "extract");
-        if (operation == "native-preview" || operation == "native-encode" || operation == "native-encode-session" || operation == "native-conversion" || operation == "native-yuv-color") {
+        if (operation == "native-preview" || operation == "native-encode" || operation == "native-encode-session" || operation == "native-conversion" || operation == "native-yuv-color" || operation == "native-quality") {
             std::cout << runNativeVideoContracts(request).dump() << '\n';
             return 0;
         }

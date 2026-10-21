@@ -5194,7 +5194,7 @@ namespace lfs::python {
             [](int width, int height, int framerate, int crf, const std::string& path,
                bool include_provenance, const std::string& codec) {
                 if (!media::videoEncodeCodecFromId(codec))
-                    throw nb::value_error("Video codec must be 'h264' or 'hevc'");
+                    throw nb::value_error("Video codec must be 'h264', 'hevc' or 'av1'");
                 const bool dispatched = invoke_on_viewer(
                     [width, height, framerate, crf, path, include_provenance, codec] {
                         auto* const viewer = get_visualizer();
@@ -5217,7 +5217,7 @@ namespace lfs::python {
             "Export video with specified settings. Without a path a save dialog opens, "
             "which a script cannot answer; pass one to export directly. "
             "Uses the saved video reconstruction selection, as does the Sequencer button. "
-            "codec selects 'h264' (default) or 'hevc' using available native providers without changing codec on fallback. "
+            "codec selects 'h264' (default), 'hevc' or 'av1'; AV1 uses NVENC where available or the built-in libaom CPU fallback, without changing codec. "
             "include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded.");
 
         m.def(

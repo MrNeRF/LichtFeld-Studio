@@ -2630,7 +2630,7 @@ def reset_video_reconstruction_selection() -> None:
 
 def export_video(width: int, height: int, framerate: int, crf: int, path: str = '', include_provenance: bool = True, codec: str = 'h264') -> None:
     """
-    Export video with specified settings. Without a path a save dialog opens, which a script cannot answer; pass one to export directly. Uses the saved video reconstruction selection, as does the Sequencer button. codec selects 'h264' (default) or 'hevc' using available native providers without changing codec on fallback. include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded.
+    Export video with specified settings. Without a path a save dialog opens, which a script cannot answer; pass one to export directly. Uses the saved video reconstruction selection, as does the Sequencer button. codec selects 'h264' (default), 'hevc' or 'av1'; AV1 uses NVENC where available or the built-in libaom CPU fallback, without changing codec. include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded.
     """
 
 def add_keyframe() -> None:
