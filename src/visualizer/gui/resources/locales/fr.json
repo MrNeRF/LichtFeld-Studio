@@ -1,4 +1,5 @@
 {
+  "common.reset_default_hint": "Double-cliquez pour rétablir la valeur par défaut : {value}",
   "main_panel.selection_outline_color": "Couleur du contour",
   "main_panel.selection_outline_opacity": "Opacité",
   "main_panel.selection_outline_width": "Épaisseur",
@@ -786,7 +787,6 @@
     "button.remove": "Retirer",
     "distorted_warning.title": "Images distordues détectées",
     "distorted_warning.message": "Images distordues détectées. Activez Corriger la distorsion ou GUT pour entraîner avec des caméras à distorsion.",
-    "distorted_warning.btn_cancel": "Annuler",
     "distorted_warning.btn_undistort": "Corriger la distorsion",
     "distorted_warning.btn_gut": "GUT"
   },

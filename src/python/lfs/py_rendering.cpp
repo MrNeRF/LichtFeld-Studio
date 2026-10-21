@@ -25,6 +25,7 @@
 #include "rendering/rendering.hpp"
 #include "scene/scene_render_state.hpp"
 #include "visualizer/internal/viewport.hpp"
+#include "visualizer/ipc/render_settings_convert.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/post_work_utils.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
@@ -943,6 +944,26 @@ namespace lfs::python {
     PyRenderSettings::PyRenderSettings(vis::RenderSettingsProxy settings)
         : settings_(std::move(settings)),
           prop_(&settings_, "render_settings") {}
+
+    nb::dict PyRenderSettings::prop_info(const std::string& name) const {
+        auto info = prop_.prop_info(name);
+        const auto meta = core::prop::PropertyRegistry::instance().get_property("render_settings", name);
+        if (meta && meta->type == core::prop::PropType::Enum) {
+            // Descriptors and label resets share the value-based enum contract.
+            // Never offer a raw numeric default to a string-valued control.
+            const auto identifier = core::prop::enum_default_identifier(*meta);
+            info["builtin_default"] = identifier ? nb::cast(*identifier) : nb::none();
+            if (identifier)
+                info["default_identifier"] = *identifier;
+        } else if (meta && meta->getter) {
+            // Resolve scalar/color defaults through the same getter as the
+            // live value, preserving proxy conversions and canonical defaults.
+            auto defaults = vis::to_proxy(vis::RenderSettings{});
+            const auto ref = core::prop::PropertyObjectRef::cpp(&defaults);
+            info["builtin_default"] = any_to_python(meta->getter(ref), meta->type);
+        }
+        return info;
+    }
 
     void PyRenderSettings::set(const std::string& name, nb::object value) {
         set_impl(name, std::move(value), true);

@@ -559,6 +559,7 @@ namespace lfs::python {
         size_t active_camera_count() const { return scene_->getActiveCameraCount(); }
         std::vector<PySceneNode> get_active_cameras();
         bool has_active_distorted_cameras() const;
+        bool can_undistort_active_cameras() const;
 
         // Training data
         bool has_training_data() const { return scene_->hasTrainingData(); }

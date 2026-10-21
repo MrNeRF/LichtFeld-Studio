@@ -2067,6 +2067,9 @@ class OptimizationParams:
     def get(self, name: str) -> object:
         """Get property value by name"""
 
+    def builtin_default(self, name: str) -> object:
+        """Get the built-in default for the active method and step scaling"""
+
     def set(self, name: str, value: object) -> None:
         """Set property value by name"""
 

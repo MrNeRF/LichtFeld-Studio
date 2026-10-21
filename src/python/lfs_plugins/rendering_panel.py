@@ -8,6 +8,7 @@ import os
 import lichtfeld as lf
 
 from . import rml_widgets as w
+from .default_reset import LabelDefaultReset, values_match
 from .rendering_defaults import confirm_apply_defaults
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .selection_groups import GROUPS_LIST_ID, SelectionGroupsSection
@@ -324,6 +325,7 @@ class RenderingPanel(Panel):
         self._chrom_edit_pending = False
         self._render_slider_pending = False
         self._escape_revert = w.EscapeRevertController()
+        self._default_reset = LabelDefaultReset(self._reset_default, self._apply_reset)
         self._scrub_fields = ScrubFieldController(
             SCRUB_FIELD_DEFS,
             self._get_scrub_value,
@@ -387,6 +389,7 @@ class RenderingPanel(Panel):
             el.add_event_listener("change", self._on_color_text_change)
             el.add_event_listener("blur", self._on_color_text_blur)
         self._scrub_fields.mount(doc)
+        self._default_reset.mount(doc)
         self._selection_groups.mount(doc)
         self._sync_section_states()
         self._subscribe_reactive_state()
@@ -893,6 +896,44 @@ class RenderingPanel(Panel):
         self._doc = None
         self._escape_revert.clear()
         self._scrub_fields.unmount()
+        self._default_reset.unmount()
+
+    def _reset_default(self, prop):
+        settings = lf.get_render_settings()
+        if settings is None or prop not in BOOL_PROPS + SLIDER_PROPS + SELECT_PROPS + COLOR_PROPS + ["lod_max_splats", "environment_mode", "ppisp_mode"]:
+            return None
+        actual = "lod_debug_colors" if prop == "lod_debug_mode" else prop
+        info = settings.prop_info(actual)
+        return None if info.get("readonly") else info.get("builtin_default")
+
+    def _apply_reset(self, prop, value):
+        settings = lf.get_render_settings()
+        if settings is None:
+            return False
+        actual = "lod_debug_colors" if prop == "lod_debug_mode" else prop
+        self._scrub_fields.prepare_reset(prop)
+        if prop == "equirectangular":
+            self._set_equirectangular(value)
+        elif prop == "raster_backend":
+            self._set_raster_backend(value)
+        elif prop == "environment_mode":
+            self._set_environment_mode(value)
+        elif prop == "ppisp_mode":
+            self._set_ppisp_mode(value)
+        elif prop == "lod_max_splats":
+            self._set_render_property(prop, int(value))
+        elif prop == "mesh_wireframe" and not _mesh_wireframe_supported():
+            return False
+        else:
+            self._set_render_property(actual, value)
+        # Discard stale text so blur cannot restore the value preceding this reset.
+        if prop in COLOR_PROPS:
+            self._sync_color_text_bufs(prop)
+            self._escape_revert.rebase([f"{prop}_hex"] + [f"{prop}_{suffix}" for suffix, _ in COLOR_CHANNELS])
+        if self._handle:
+            self._handle.dirty_all()
+        self._scrub_fields.sync_all()
+        return values_match(getattr(lf.get_render_settings(), actual), value)
 
     def _get_scrub_value(self, prop):
         if prop == "lod_max_splats":

@@ -460,11 +460,22 @@ class _ElementStub:
 class _DocStub:
     def __init__(self, with_conflict_overlay=False, with_bindings_table=False):
         self.elements = {}
+        self.attributes = {}
+        self.listeners = []
         if with_conflict_overlay:
             self.elements["binding-conflict-overlay"] = _ElementStub()
             self.elements["binding-conflict-message"] = _ElementStub()
         if with_bindings_table:
             self.elements["bindings-table"] = _ElementStub()
+
+    def has_attribute(self, name):
+        return name in self.attributes
+
+    def set_attribute(self, name, value):
+        self.attributes[name] = value
+
+    def add_event_listener(self, name, callback):
+        self.listeners.append((name, callback))
 
     def get_element_by_id(self, element_id):
         return self.elements.get(element_id)
@@ -569,6 +580,14 @@ def test_keymap_section_is_wired_through_preferences(keymap_bindings_module):
     panel.on_mount(doc)
     assert doc.elements["bindings-table"].listeners == [("click", section._on_table_click)]
     assert doc.elements["binding-conflict-overlay"].classes["hidden"] is True
+    reset = panel._rendering_defaults._default_reset
+    reset_listeners = [("dblclick", reset._on_double_click), ("mouseover", reset._on_hover)]
+    assert all(doc.listeners.count(listener) == 1 for listener in reset_listeners)
+    # The reset controller must coexist with scrubbing and keymap listeners.
+    before_remount = list(doc.listeners)
+    panel._rendering_defaults.mount(doc)
+    assert doc.listeners == before_remount
+    assert doc.elements["bindings-table"].listeners == [("click", section._on_table_click)]
 
 
 def test_keymap_altgr_rejection_keeps_capture(keymap_bindings_module):

@@ -226,19 +226,19 @@
           <input type="checkbox" class="" data-checked="default_hide_outside_depth_box" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.axes_size">
-          <span class="preferences-label">@tr:main_panel.axes_size</span>
+          <span class="preferences-label" data-reset-prop="axes_size">@tr:main_panel.axes_size</span>
           <input type="text" class="preferences-select" data-value="default_axes_size" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.grid_opacity">
-          <span class="preferences-label">@tr:main_panel.grid_opacity</span>
+          <span class="preferences-label" data-reset-prop="grid_opacity">@tr:main_panel.grid_opacity</span>
           <input type="text" class="preferences-select" data-value="default_grid_opacity" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.camera_frustum_scale">
-          <span class="preferences-label">@tr:main_panel.camera_frustum_scale</span>
+          <span class="preferences-label" data-reset-prop="camera_frustum_scale">@tr:main_panel.camera_frustum_scale</span>
           <input type="text" class="preferences-select" data-value="default_camera_frustum_scale" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.selection_color_preview">
-          <span class="preferences-label">@tr:main_panel.preview</span>
+          <span class="preferences-label" data-reset-prop="selection_color_preview">@tr:main_panel.preview</span>
           <div class="preferences-color">
             <div class="color-swatch" data-style-background-color="default_selection_color_preview_swatch" data-event-click="default_color_click('selection_color_preview')"></div>
             <input type="text" class="preferences-select" data-value="default_selection_color_preview" />
@@ -248,7 +248,7 @@
           <color-picker data-attr-red="default_picker_r" data-attr-green="default_picker_g" data-attr-blue="default_picker_b" data-event-change="default_picker_change" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.selection_color_center_marker">
-          <span class="preferences-label">@tr:main_panel.center_marker</span>
+          <span class="preferences-label" data-reset-prop="selection_color_center_marker">@tr:main_panel.center_marker</span>
           <div class="preferences-color">
             <div class="color-swatch" data-style-background-color="default_selection_color_center_marker_swatch" data-event-click="default_color_click('selection_color_center_marker')"></div>
             <input type="text" class="preferences-select" data-value="default_selection_color_center_marker" />
@@ -259,11 +259,11 @@
         </div>
         <div class="section-header text-accent">@tr:preferences.viewport_performance_defaults</div>
         <div class="preferences-row" data-tooltip="tooltip.lod_page_pool_splats">
-          <span class="preferences-label">@tr:rendering_panel.lod_page_pool_splats</span>
+          <span class="preferences-label" data-reset-prop="lod_page_pool_splats">@tr:rendering_panel.lod_page_pool_splats</span>
           <input type="text" class="preferences-select" data-value="default_lod_page_pool_splats" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.lod_pool_vram_fraction">
-          <span class="preferences-label">@tr:rendering_panel.lod_pool_vram_fraction</span>
+          <span class="preferences-label" data-reset-prop="lod_pool_vram_fraction">@tr:rendering_panel.lod_pool_vram_fraction</span>
           <input type="text" class="preferences-select" data-value="default_lod_pool_vram_fraction" />
         </div>
         <span class="preferences-description status-error">{{rendering_defaults_error}}</span>

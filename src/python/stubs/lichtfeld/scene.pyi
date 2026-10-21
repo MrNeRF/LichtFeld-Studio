@@ -728,6 +728,11 @@ class Scene:
         Check if any active camera enabled for training has distortion or non-pinhole model
         """
 
+    def can_undistort_active_cameras(self) -> bool:
+        """
+        Check if all active cameras needing distortion handling can be undistorted
+        """
+
     def has_training_data(self) -> bool:
         """Check if training dataset is loaded"""
 

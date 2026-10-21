@@ -626,6 +626,51 @@ def test_selection_group_color_picker_stays_inside_panel(rendering_panel_module)
     assert popup.props["left"] == "90px"
 
 
+@pytest.mark.parametrize("prop,value", [("axes_size", 2.0), ("show_grid", True),
+    ("mesh_shadow_resolution", "2048"), ("lod_max_splats", 0),
+    ("selection_outline", False), ("selection_outline_color", [0.0, .604, .733]),
+    ("selection_outline_opacity", 1.0), ("selection_outline_width", 2.0),
+    ("selection_outline_threshold", .5), ("selection_outline_holes", True)])
+def test_label_reset_uses_registry_defaults_and_commits(rendering_panel_module, monkeypatch, prop, value):
+    module = rendering_panel_module
+    settings = _RenderSettingsStub(**{prop: 99})
+    settings.prop_info = lambda key: {"builtin_default": value, "readonly": False}
+    monkeypatch.setattr(module.lf, "get_render_settings", lambda: settings)
+    panel = module.RenderingPanel()
+    assert panel._reset_default(prop) == value
+    assert panel._apply_reset(prop, value)
+    assert getattr(settings, prop) == value
+
+
+def test_render_labels_never_reset_paths_or_unregistered_properties(rendering_panel_module, monkeypatch):
+    module = rendering_panel_module
+    settings = _RenderSettingsStub(prop_info=lambda key: {"default": ""})
+    monkeypatch.setattr(module.lf, "get_render_settings", lambda: settings)
+    panel = module.RenderingPanel()
+    assert panel._reset_default("environment_map_path") is None
+    assert panel._reset_default("delete") is None
+
+
+@pytest.mark.parametrize("info", [
+    {"default": 2, "type": "enum"},
+    {"default": 2, "builtin_default": None, "type": "enum"},
+    {"builtin_default": "3dgs", "readonly": True},
+])
+def test_label_reset_requires_a_resolved_editable_default(rendering_panel_module, monkeypatch, info):
+    module = rendering_panel_module
+    settings = _RenderSettingsStub(prop_info=lambda key: info)
+    monkeypatch.setattr(module.lf, "get_render_settings", lambda: settings)
+    assert module.RenderingPanel()._reset_default("raster_backend") is None
+
+
+def test_label_reset_uses_resolved_enum_identifier(rendering_panel_module, monkeypatch):
+    module = rendering_panel_module
+    settings = _RenderSettingsStub(prop_info=lambda key: {
+        "type": "enum", "default": 2, "builtin_default": "3dgs", "default_identifier": "3dgs"})
+    monkeypatch.setattr(module.lf, "get_render_settings", lambda: settings)
+    assert module.RenderingPanel()._reset_default("raster_backend") == "3dgs"
+
+
 @pytest.mark.parametrize("prop,value", [
     ("selection_outline_opacity", .4),
     ("selection_outline_width", 1.5),
@@ -698,3 +743,32 @@ def test_outline_patterns_are_not_exposed(rendering_panel_module):
         assert "selection_outline_style" not in text
         assert "selection_outline_dashed" not in text
         assert "selection_outline_dotted" not in text
+
+
+@pytest.mark.parametrize("prop,edited,default", [
+    ("selection_outline", True, False),
+    ("selection_outline_color", [.1, .2, .3], [0., .604, .733]),
+    ("selection_outline_opacity", .3, 1.),
+    ("selection_outline_width", 9., 2.),
+    ("selection_outline_threshold", .8, .5),
+    ("selection_outline_holes", False, True),
+])
+def test_outline_new_project_defaults_reset_without_applying_to_scene(
+        rendering_panel_module, monkeypatch, prop, edited, default):
+    import json
+    module = import_module("lfs_plugins.rendering_defaults")
+    monkeypatch.setattr(module, "lf", rendering_panel_module.lf)
+    saved = {prop: edited}
+    monkeypatch.setattr(module.lf.ui, "get_rendering_defaults_json", lambda: json.dumps(saved), raising=False)
+    monkeypatch.setattr(module.lf.ui, "set_rendering_defaults_json",
+                        lambda text: saved.update(json.loads(text)), raising=False)
+    def unexpected_scene_access():
+        raise AssertionError("Resetting new-project defaults must not access the active scene")
+    monkeypatch.setattr(module.lf, "get_render_settings", unexpected_scene_access)
+    section = module.RenderingDefaultsSection()
+    section._text[prop] = "stale draft"
+    value = section._default_reset._default_value(prop)
+    assert value == default
+    assert section._default_reset._apply_value(prop, value)
+    assert prop not in section._text
+    assert saved[prop] == pytest.approx(default)

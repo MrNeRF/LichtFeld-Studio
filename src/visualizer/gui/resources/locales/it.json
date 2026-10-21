@@ -1,4 +1,5 @@
 {
+  "common.reset_default_hint": "Doppio clic per ripristinare il valore predefinito: {value}",
   "main_panel.selection_outline_color": "Colore contorno",
   "main_panel.selection_outline_opacity": "Opacità",
   "main_panel.selection_outline_width": "Spessore",
@@ -799,7 +800,6 @@
     "button.remove": "Rimuovi",
     "distorted_warning.title": "Immagini distorte rilevate",
     "distorted_warning.message": "Rilevate immagini distorte. Attiva Rimuovi distorsione o GUT per addestrare con fotocamere con distorsione.",
-    "distorted_warning.btn_cancel": "Annulla",
     "distorted_warning.btn_undistort": "Rimuovi distorsione",
     "distorted_warning.btn_gut": "GUT"
   },

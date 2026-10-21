@@ -55,6 +55,18 @@ namespace lfs::python {
         return meta.getter(ref);
     }
 
+    std::any resolve_optimization_builtin_default(const PropertyMeta& meta, const OptimizationParameters& active) {
+        auto source = OptimizationParameters::defaults_for_strategy(active.strategy);
+        // Capacity-dependent defaults follow the current capacity, not edited rates.
+        if (meta.id != "max_cap")
+            source.max_cap = active.max_cap;
+        // Resetting iterations removes a manual override but retains dataset scaling.
+        const float scale = meta.id == "iterations" ? active.image_count_scaler : active.steps_scaler;
+        if (std::isfinite(scale) && scale > 0.0f && scale != 1.0f)
+            source.scale_steps(scale);
+        return resolve_optimization_default(meta, source);
+    }
+
     void register_dataset_properties() {
         PropertyGroup group;
         group.id = "dataset";
@@ -299,6 +311,36 @@ namespace lfs::python {
         p.resolve_mrnf_capacity_defaults();
         auto ref = PropertyObjectRef::cpp(&p);
         std::any value = meta->getter(ref);
+
+        switch (meta->type) {
+        case PropType::Bool:
+            return nb::cast(std::any_cast<bool>(value));
+        case PropType::Int:
+            return nb::cast(std::any_cast<int>(value));
+        case PropType::Float:
+            return nb::cast(std::any_cast<float>(value));
+        case PropType::String:
+            return nb::cast(std::any_cast<std::string>(value));
+        case PropType::SizeT:
+            return nb::cast(std::any_cast<size_t>(value));
+        case PropType::Enum:
+            return nb::cast(std::any_cast<int>(value));
+        default:
+            throw std::runtime_error("Unsupported property type");
+        }
+    }
+
+    nb::object PyOptimizationParams::builtin_default(const std::string& prop_id) const {
+        if (prop_id == "bg_color") {
+            const auto source = OptimizationParameters::defaults_for_strategy(params().strategy);
+            return nb::make_tuple(source.bg_color[0], source.bg_color[1], source.bg_color[2]);
+        }
+        auto meta = PropertyRegistry::instance().get_property("optimization", prop_id);
+        if (!meta) {
+            throw std::runtime_error("Unknown property: " + prop_id);
+        }
+
+        const std::any value = resolve_optimization_builtin_default(*meta, params());
 
         switch (meta->type) {
         case PropType::Bool:
@@ -882,6 +924,8 @@ namespace lfs::python {
             .def_prop_ro(
                 "__property_group__", [](PyOptimizationParams&) { return "optimization"; }, "Property group identifier")
             .def("get", &PyOptimizationParams::get, nb::arg("name"), "Get property value by name")
+            .def("builtin_default", &PyOptimizationParams::builtin_default, nb::arg("name"),
+                 "Get the built-in default for the active method and step scaling")
             .def("set", &PyOptimizationParams::set, nb::arg("name"), nb::arg("value"), "Set property value by name")
             .def("__getattr__", &PyOptimizationParams::get, nb::arg("name"), "Get property value by attribute name")
             .def("prop_info", &PyOptimizationParams::prop_info, nb::arg("prop_id"),

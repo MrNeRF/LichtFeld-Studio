@@ -19,20 +19,20 @@
             <option data-for="option : compare_metric_options" data-attr-value="option.value">{{ option.label }}</option>
           </select>
         </label>
-        <div class="histogram-toolbar-item histogram-bin-control hidden" data-class-hidden="!show_histogram_bins_control">
-          <label class="control-label" for="scrub-histogram-bin-count">{{ histogram_bins_label }}</label>
+        <div class="histogram-toolbar-item histogram-bin-control hidden" data-reset-row="1" data-class-hidden="!show_histogram_bins_control">
+          <label class="control-label" for="scrub-histogram-bin-count" data-reset-prop="histogram_bin_count">{{ histogram_bins_label }}</label>
           <div class="histogram-bin-scrub">
             <input id="histogram-bin-input" type="range" class="setting-slider" data-value="histogram_bin_count" min="16" max="128" step="1" />
           </div>
         </div>
-        <div class="histogram-toolbar-item histogram-bin-control hidden" data-class-hidden="!show_compare_bins_controls">
-          <label class="control-label" for="scrub-compare-x-bin-count">{{ compare_x_bins_label }}</label>
+        <div class="histogram-toolbar-item histogram-bin-control hidden" data-reset-row="1" data-class-hidden="!show_compare_bins_controls">
+          <label class="control-label" for="scrub-compare-x-bin-count" data-reset-prop="compare_x_bin_count">{{ compare_x_bins_label }}</label>
           <div class="histogram-bin-scrub">
             <input id="x-bin-input" type="range" class="setting-slider" data-value="compare_x_bin_count" min="8" max="48" step="1" />
           </div>
         </div>
-        <div class="histogram-toolbar-item histogram-bin-control hidden" data-class-hidden="!show_compare_bins_controls">
-          <label class="control-label" for="scrub-compare-y-bin-count">{{ compare_y_bins_label }}</label>
+        <div class="histogram-toolbar-item histogram-bin-control hidden" data-reset-row="1" data-class-hidden="!show_compare_bins_controls">
+          <label class="control-label" for="scrub-compare-y-bin-count" data-reset-prop="compare_y_bin_count">{{ compare_y_bins_label }}</label>
           <div class="histogram-bin-scrub">
             <input id="y-bin-input" type="range" class="setting-slider" data-value="compare_y_bin_count" min="8" max="48" step="1" />
           </div>

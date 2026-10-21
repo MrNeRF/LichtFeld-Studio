@@ -1005,3 +1005,36 @@ namespace {
     }
 
 } // namespace
+
+TEST_F(TrainingParametersTest, BuiltinLabelResetIgnoresSessionEdits) {
+    for (const auto* strategy : {"mrnf", "mcmc", "igs+"}) {
+        auto active = OptimizationParameters::defaults_for_strategy(strategy);
+        const auto original = active.means_lr;
+        active.means_lr = 0.0009f;
+        const auto value = lfs::python::resolve_optimization_builtin_default(optimization_meta("means_lr"), active);
+        EXPECT_FLOAT_EQ(std::any_cast<float>(value), original);
+        EXPECT_FLOAT_EQ(active.means_lr, 0.0009f);
+    }
+}
+
+TEST_F(TrainingParametersTest, BuiltinLabelResetPreservesDatasetAndStepScaling) {
+    auto active = OptimizationParameters::defaults_for_strategy("mrnf");
+    const auto baseline = active;
+    active.steps_scaler = 3.0f;
+    active.image_count_scaler = 2.0f;
+    EXPECT_EQ(std::any_cast<size_t>(lfs::python::resolve_optimization_builtin_default(
+                  optimization_meta("iterations"), active)),
+              baseline.iterations * 2);
+    EXPECT_EQ(std::any_cast<size_t>(lfs::python::resolve_optimization_builtin_default(
+                  optimization_meta("refine_every"), active)),
+              baseline.refine_every * 3);
+}
+
+TEST_F(TrainingParametersTest, BuiltinCapacityResetDoesNotReuseEditedCapacity) {
+    auto active = OptimizationParameters::defaults_for_strategy("mrnf");
+    const auto original = active.max_cap;
+    active.max_cap = original * 2;
+    EXPECT_EQ(std::any_cast<int>(lfs::python::resolve_optimization_builtin_default(
+                  optimization_meta("max_cap"), active)),
+              original);
+}

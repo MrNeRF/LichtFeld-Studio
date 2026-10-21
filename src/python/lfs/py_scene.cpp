@@ -953,16 +953,43 @@ namespace lfs::python {
         return result;
     }
 
+    namespace {
+        bool camera_needs_distortion_handling(const core::Camera& cam) {
+            return cam.radial_distortion().numel() != 0 ||
+                   cam.tangential_distortion().numel() != 0 ||
+                   cam.camera_model_type() != core::CameraModelType::PINHOLE;
+        }
+    }
+
     bool PyScene::has_active_distorted_cameras() const {
         if (!scene_) {
             return false;
         }
         for (const auto& cam : scene_->getActiveCameras()) {
-            if (cam && cam->has_distortion()) {
+            if (cam && camera_needs_distortion_handling(*cam)) {
                 return true;
             }
         }
         return false;
+    }
+
+    bool PyScene::can_undistort_active_cameras() const {
+        if (!scene_) {
+            return false;
+        }
+        bool has_any = false;
+        for (const auto& cam : scene_->getActiveCameras()) {
+            if (!cam) {
+                continue;
+            }
+            if (camera_needs_distortion_handling(*cam)) {
+                has_any = true;
+                if (!cam->has_distortion()) {
+                    return false;
+                }
+            }
+        }
+        return has_any;
     }
 
     void PyScene::set_camera_training_enabled(const std::string& name, bool enabled) {
@@ -1744,6 +1771,7 @@ Returns:
             .def_prop_ro("active_camera_count", &PyScene::active_camera_count, "Number of cameras enabled for training")
             .def("get_active_cameras", &PyScene::get_active_cameras, "Get camera nodes enabled for training")
             .def("has_active_distorted_cameras", &PyScene::has_active_distorted_cameras, "Check if any active camera enabled for training has distortion or non-pinhole model")
+            .def("can_undistort_active_cameras", &PyScene::can_undistort_active_cameras, "Check if all active cameras needing distortion handling can be undistorted")
             // Training data
             .def("has_training_data", &PyScene::has_training_data, "Check if training dataset is loaded")
             .def_prop_rw("is_point_cloud_modified", &PyScene::is_point_cloud_modified, &PyScene::set_point_cloud_modified, "Whether the point cloud has been modified since loading")

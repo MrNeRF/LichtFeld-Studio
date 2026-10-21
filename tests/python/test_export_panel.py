@@ -727,3 +727,18 @@ def test_drag_progress_translations_have_identical_parameters():
                           if field is not None]
             assert parameters == [""] * count, (path.name, key)
             assert text.format(*((2, 5, "Scena <è>") if count == 3 else ("Scena <è>",)))
+
+
+def test_label_reset_export_uses_available_sh_and_respects_export_lock(export_panel_module):
+    module = export_panel_module
+    if isinstance(module, tuple):
+        module = module[0]
+    panel = module.ExportPanel()
+    panel._max_export_sh_degree = 1
+    panel._export_sh_degree = 0
+    assert panel._reset_default("sh_degree") == 1
+    assert panel._apply_reset("sh_degree", 1)
+    assert panel._export_sh_degree == 1 and panel._pinned_sh_degree
+    panel._exporting = True
+    assert panel._reset_default("sh_degree") is None
+    assert not panel._apply_reset("spz_version", 4)

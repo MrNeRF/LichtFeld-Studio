@@ -6,6 +6,7 @@ import math
 
 import lichtfeld as lf
 from . import rml_widgets as w
+from .default_reset import LabelDefaultReset
 
 DEFAULTS = {
     "show_coord_axes": False, "show_pivot": False, "show_grid": True,
@@ -85,6 +86,7 @@ class RenderingDefaultsSection:
         self._reveal_picker = False
         self._doc = None
         self._escape_revert = w.EscapeRevertController()
+        self._default_reset = LabelDefaultReset(lambda prop: DEFAULTS.get(prop), self._apply_reset)
 
     def bind(self, model):
         for prop, default in DEFAULTS.items():
@@ -115,6 +117,7 @@ class RenderingDefaultsSection:
         self._handle = model.get_handle()
 
     def mount(self, doc):
+        self._default_reset.mount(doc)
         self._doc = doc
         for element in doc.query_selector_all('input[type="text"]'):
             prop = element.get_attribute("data-value", "")
@@ -180,11 +183,20 @@ class RenderingDefaultsSection:
         if prop == self._color_editing:
             self._dirty_picker()
 
+    def _apply_reset(self, prop, value):
+        self._discard(prop)
+        self._set(prop, value)
+        return not self._error
+
+    def unmount(self):
+        self._default_reset.unmount()
+        self._doc = None
+
     def _set(self, prop, value):
         try:
             default = DEFAULTS[prop]
             if isinstance(default, list):
-                value = w.hex_to_color(str(value))
+                value = value if isinstance(value, (tuple, list)) else w.hex_to_color(str(value))
                 if value is None:
                     raise ValueError("Invalid color")
                 value = list(w.normalize_color(value))

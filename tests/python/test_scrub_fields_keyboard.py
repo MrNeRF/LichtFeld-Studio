@@ -124,3 +124,16 @@ def test_mouse_drag_does_not_leave_the_scrub_field_with_keyboard_focus(mounted_s
     assert not state.editing
     # The press focused the field; Space after the drag belongs to the viewport.
     assert focused[-1] is controller._doc
+
+
+def test_committed_reset_discards_stale_text_before_blur(mounted_scrubs):
+    controller, values, _committed, _focused = mounted_scrubs
+    prop = "histogram_bin_count"
+    state = controller._fields[prop]
+    controller._enter_edit(state)
+    state.input_el.set_attribute("value", "120")
+    controller.prepare_reset(prop)
+    values[prop] = 56
+    controller.sync_all()
+    controller._on_input_blur(prop, None)
+    assert values[prop] == 56 and not state.editing
