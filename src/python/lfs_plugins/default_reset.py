@@ -158,6 +158,8 @@ class LabelDefaultReset:
             value = f"{value:g}"
         elif isinstance(value, bool):
             value = lf.ui.tr("common.yes" if value else "common.no")
+        elif isinstance(value, int):
+            value = f"{value:,}"
         hint = lf.ui.tr("common.reset_default_hint").replace("{value}", str(value))
         description = row.get_attribute("data-tooltip", "")
         # data-tooltip accepts localization keys; title accepts composed text.

@@ -257,3 +257,14 @@ def test_hover_uses_literal_title_and_preserves_translated_row_help(setup_reset)
                 break
             element = element.parent()
         assert resolved == f"Yes\nRestore: {default}"
+
+
+@pytest.mark.parametrize("value,display", [
+    (5_000_000, "5,000,000"), (30_000, "30,000"), (-12_345, "-12,345"),
+    (0, "0"), (True, "Yes"), (False, "No"), (.125, "0.125"), ("2048", "2048"),
+])
+def test_reset_hint_formats_integers_like_setting_fields(setup_reset, value, display):
+    s = setup_reset
+    s.current["default"] = value
+    s.doc.listeners["mouseover"](s.event)
+    assert s.label.attrs["title"] == f"Restore: {display}"
