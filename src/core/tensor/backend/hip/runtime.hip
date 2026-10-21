@@ -703,6 +703,41 @@ namespace {
                 output[offset] = source[i];
         }
     }
+    template <class Value, class Index>
+    __global__ void index_fill_kernel(Value* output, const Index* indices, Value value, LfsHipLayout destination, LfsHipLayout source_layout, unsigned dim) {
+        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < source_layout.elements; i += size_t(gridDim.x) * blockDim.x) {
+            size_t remaining = i, offset = 0, selected = 0;
+            for (unsigned r = source_layout.rank; r; --r) {
+                const size_t coordinate = remaining % source_layout.dims[r - 1];
+                remaining /= source_layout.dims[r - 1];
+                if (r - 1 == dim)
+                    selected = coordinate;
+                else
+                    offset += coordinate * destination.strides[r - 1];
+            }
+            output[offset + size_t(indices[selected]) * destination.strides[dim]] = value;
+        }
+    }
+    template <class Value, class Index>
+    void launch_index_fill(LfsHipContext* context, LfsHipView output, LfsHipView indices, LfsHipLayout destination, LfsHipLayout source_layout, unsigned dim, uint64_t value_bits) {
+        hipLaunchKernelGGL((index_fill_kernel<Value, Index>), dim3(blocks(source_layout.elements)), dim3(256), 0, context->stream,
+                           reinterpret_cast<Value*>(static_cast<char*>(output.buffer->data) + output.offset),
+                           reinterpret_cast<const Index*>(static_cast<const char*>(indices.buffer->data) + indices.offset),
+                           static_cast<Value>(value_bits), destination, source_layout, dim);
+        check(hipGetLastError());
+    }
+    template <class Index>
+    void dispatch_index_fill(LfsHipContext* context, LfsHipView output, LfsHipView indices, unsigned width, LfsHipLayout destination, LfsHipLayout source_layout, unsigned dim, size_t index_count, uint64_t value_bits) {
+        LfsHipLayout index_layout{};
+        index_layout.rank = 1;
+        index_layout.dims[0] = index_layout.elements = index_count;
+        index_layout.strides[0] = 1;
+        check_indices<Index>(context, indices, index_layout, destination.dims[dim]);
+        switch (width) {
+        case 1: launch_index_fill<uint8_t, Index>(context, output, indices, destination, source_layout, dim, value_bits); break;
+        case 4: launch_index_fill<uint32_t, Index>(context, output, indices, destination, source_layout, dim, value_bits); break;
+        }
+    }
     template <class Value, class Index, bool Add>
     void launch_index_update(LfsHipContext* context, LfsHipView output, LfsHipView indices, LfsHipView source, LfsHipLayout destination, LfsHipLayout source_layout, unsigned dim) {
         hipLaunchKernelGGL((index_update_kernel<Value, Index, Add>), dim3(blocks(source_layout.elements)), dim3(256), 0, context->stream,
@@ -1877,6 +1912,39 @@ int lfs_hip_index_update(LfsHipContext* context, LfsHipView output, uint32_t dty
             dispatch_index_update<int32_t>(context, output, indices, source, dtype, destination, source_layout, dim, index_count, add != 0);
         else
             dispatch_index_update<int64_t>(context, output, indices, source, dtype, destination, source_layout, dim, index_count, add != 0);
+    });
+}
+int lfs_hip_index_fill(LfsHipContext* context, LfsHipView output, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, const LfsHipLayout* output_layout, uint32_t dim, size_t index_count, uint64_t value_bits, LfsHipError* error) {
+    return boundary(error, [&] {
+        require(output_layout && dim < output_layout->rank, "Invalid HIP index fill descriptor");
+        require(dtype == LFS_HIP_F32 || dtype == LFS_HIP_I32 || dtype == LFS_HIP_U8 || dtype == LFS_HIP_BOOL,
+                "HIP index fill supports Float32, Int32 and byte data");
+        require(index_dtype == LFS_HIP_I32 || index_dtype == LFS_HIP_I64, "HIP fill indices must be int32 or int64");
+        const auto destination = *output_layout;
+        const size_t width = typed_bytes(dtype, 1), iw = typed_bytes(index_dtype, 1);
+        const size_t output_span = layout_span(destination, static_cast<unsigned>(width), true);
+        auto source_layout = destination;
+        source_layout.dims[dim] = index_count;
+        source_layout.elements = index_count;
+        for (unsigned r = 0; r < source_layout.rank; ++r)
+            if (r != dim) {
+                require(source_layout.dims[r] == 0 || source_layout.elements <= SIZE_MAX / source_layout.dims[r], "HIP index fill shape overflow");
+                source_layout.elements *= source_layout.dims[r];
+            }
+        validate(context, output.buffer, output.offset, output_span);
+        validate(context, indices.buffer, indices.offset, typed_bytes(index_dtype, index_count));
+        require(output.offset % width == 0 && indices.offset % iw == 0, "Unaligned HIP index fill");
+        require(output.buffer != indices.buffer || !output_span || !index_count ||
+                    indices.offset >= output.offset + output_span || output.offset >= indices.offset + typed_bytes(index_dtype, index_count),
+                "HIP fill output overlaps indices");
+        if (!source_layout.elements)
+            return;
+        require(destination.dims[dim] > 0, "HIP index fill cannot write an empty axis");
+        DeviceScope device(context->device);
+        if (index_dtype == LFS_HIP_I32)
+            dispatch_index_fill<int32_t>(context, output, indices, width, destination, source_layout, dim, index_count, value_bits);
+        else
+            dispatch_index_fill<int64_t>(context, output, indices, width, destination, source_layout, dim, index_count, value_bits);
     });
 }
 int lfs_hip_gather(LfsHipContext* context, LfsHipView input, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, LfsHipView output, const LfsHipLayout* input_layout, const LfsHipLayout* index_layout, uint32_t dim, uint32_t boundary_mode, uint32_t index_select, LfsHipError* error) {

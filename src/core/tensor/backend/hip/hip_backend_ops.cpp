@@ -21,6 +21,7 @@
 #include <core/tensor_image.hpp>
 #include <core/failure_report.hpp>
 #include <cstdio>
+#include <cstring>
 #include <mutex>
 #include <stdexcept>
 #include <unordered_map>
@@ -70,6 +71,12 @@ namespace lfs::core::internal {
         }
         uint64_t typed_scalar_bits(DataType type, ScalarOperand value) {
             switch(type) {
+            case DataType::Float32: {
+                require(value.kind==ScalarKind::Float,"HIP float fill requires a floating scalar");
+                uint32_t bits = 0;
+                std::memcpy(&bits, &value.value.float_value, sizeof(bits));
+                return bits;
+            }
             case DataType::Float16:
                 require(value.kind==ScalarKind::Float,"HIP half fill requires a floating scalar");
                 return detail::tensor_float_to_half_bits(value.value.float_value);
@@ -242,6 +249,7 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_index_cast);
         ENTRY(lfs_hip_gather);
         ENTRY(lfs_hip_index_update);
+        ENTRY(lfs_hip_index_fill);
         ENTRY(lfs_hip_count_nonzero);
         ENTRY(lfs_hip_reduce_typed_layout);
         ENTRY(lfs_hip_bias_f32);
@@ -351,6 +359,7 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_index_cast);
                 LOAD(lfs_hip_gather);
                 LOAD(lfs_hip_index_update);
+                LOAD(lfs_hip_index_fill);
                 LOAD(lfs_hip_count_nonzero);
                 LOAD(lfs_hip_reduce_typed_layout);
                 LOAD(lfs_hip_bias_f32);
@@ -891,6 +900,19 @@ namespace lfs::core::internal {
         queue(execution);
         std::lock_guard lock(impl_->mutex);
         impl_->index_update(output, indices, source, layout, program, true);
+    }
+    void HipBackendOps::index_fill(StorageRef output, StorageRef indices, const StridedLayout& layout, const IndexProgram& program, ScalarOperand value, ExecContext execution) {
+        queue(execution);
+        require(program.dim >= 0 && size_t(program.dim) < layout.rank && program.boundary_mode == 0,
+                "Invalid HIP index fill dimension or boundary");
+        const auto destination = native_layout(layout);
+        const auto bits = typed_scalar_bits(output.dtype, value);
+        std::lock_guard lock(impl_->mutex);
+        const auto out = impl_->view(output), idx = impl_->view(indices);
+        LfsHipError error{};
+        check(impl_->lfs_hip_index_fill(impl_->context, out, static_cast<uint32_t>(output.dtype), idx,
+              static_cast<uint32_t>(indices.dtype), &destination, static_cast<uint32_t>(program.dim),
+              program.index_size, bits, &error), error);
     }
     void HipBackendOps::strided_scatter(StorageRef input, StorageRef output, const StridedLayout& layout, ExecContext execution) {
         queue(execution);

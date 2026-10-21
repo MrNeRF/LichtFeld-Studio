@@ -64,6 +64,7 @@ int main(int argc, char** argv) try {
     LOAD(lfs_hip_copy_layouts);
     LOAD(lfs_hip_memory_info);
     LOAD(lfs_hip_trim_workspace);
+    LOAD(lfs_hip_index_fill);
 #undef LOAD
     LfsHipError error{};
     const auto check = [&](int status) { require(status == 0, error.message); };
@@ -531,6 +532,40 @@ int main(int argc, char** argv) try {
         std::puts("PASS RGB warp: context ownership, offsets, overlap, guards, bounded work, recovery and byte identity");
     }
     check(lfs_hip_context_synchronize(first, &error));
+    {
+        LfsHipBuffer* fill_indices = nullptr;
+        check(lfs_hip_buffer_allocate(first, 16, &fill_indices, &error));
+        LfsHipLayout layout{};
+        layout.rank = 2;
+        layout.dims[0] = 2;
+        layout.dims[1] = 3;
+        layout.strides[0] = 8;
+        layout.strides[1] = 2;
+        layout.elements = 6;
+        std::vector<uint8_t> original(64, 0x35), expected = original, observed(64);
+        int32_t positions[] = {2, 0};
+        const float fill_value = -1.25f;
+        uint32_t value_bits = 0;
+        std::memcpy(&value_bits, &fill_value, sizeof(value_bits));
+        for (size_t row = 0; row < 2; ++row)
+            for (int32_t column : positions)
+                std::memcpy(expected.data() + 8 + (row * 8 + size_t(column) * 2) * 4,
+                            &value_bits, sizeof(value_bits));
+        check(lfs_hip_upload(first, output, 0, original.data(), original.size(), &error));
+        check(lfs_hip_upload(first, fill_indices, 4, positions, sizeof(positions), &error));
+        check(lfs_hip_index_fill(first, {output, 8}, LFS_HIP_F32, {fill_indices, 4}, LFS_HIP_I32,
+                                 &layout, 1, 2, value_bits, &error));
+        check(lfs_hip_download(first, output, 0, observed.data(), observed.size(), &error));
+        require(observed == expected, "HIP index fill changed strided padding or float bits");
+        positions[1] = 3;
+        check(lfs_hip_upload(first, fill_indices, 4, positions, sizeof(positions), &error));
+        rejected(lfs_hip_index_fill(first, {output, 8}, LFS_HIP_F32, {fill_indices, 4}, LFS_HIP_I32,
+                                    &layout, 1, 2, value_bits, &error));
+        check(lfs_hip_download(first, output, 0, observed.data(), observed.size(), &error));
+        require(observed == expected, "Invalid HIP index fill partially changed output");
+        check(lfs_hip_buffer_release(first, fill_indices, &error));
+    }
+
     check(lfs_hip_buffer_release(first, input, &error));
     // Leave output live, with queued work: context destruction owns its cleanup.
     check(lfs_hip_fill_f32(first, output, 0, elements, 42, &error));

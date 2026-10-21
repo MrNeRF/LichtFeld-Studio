@@ -219,6 +219,7 @@ LFS_HIP_API int lfs_hip_count_nonzero(LfsHipContext*, LfsHipView input, uint32_t
 LFS_HIP_API int lfs_hip_convert(LfsHipContext*, LfsHipView input, uint32_t input_dtype, LfsHipView output, uint32_t output_dtype, size_t count, LfsHipError*);
 LFS_HIP_API int lfs_hip_index_cast(LfsHipContext*, LfsHipView input, LfsHipView output, size_t count, size_t extent, LfsHipError*);
 LFS_HIP_API int lfs_hip_index_update(LfsHipContext*, LfsHipView output, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, LfsHipView source, const LfsHipLayout* output_layout, uint32_t dim, size_t index_count, uint32_t add, LfsHipError*);
+LFS_HIP_API int lfs_hip_index_fill(LfsHipContext*, LfsHipView output, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, const LfsHipLayout* output_layout, uint32_t dim, size_t index_count, uint64_t value_bits, LfsHipError*);
 LFS_HIP_API int lfs_hip_gather(LfsHipContext*, LfsHipView input, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, LfsHipView output, const LfsHipLayout* input_layout, const LfsHipLayout* index_layout, uint32_t dim, uint32_t boundary_mode, uint32_t index_select, LfsHipError*);
 LFS_HIP_API int lfs_hip_reduce_layout_f32(LfsHipContext*, LfsHipView input, LfsHipView output, const LfsHipLayout*, uint32_t axes_mask, uint32_t operation, LfsHipError*);
 LFS_HIP_API int lfs_hip_broadcast_f32(LfsHipContext*, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, const LfsHipLayout* lhs_layout, const LfsHipLayout* rhs_layout, const LfsHipLayout* output_layout, uint32_t output_element_bytes, LfsHipError*);

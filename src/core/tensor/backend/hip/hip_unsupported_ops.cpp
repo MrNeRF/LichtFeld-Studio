@@ -32,7 +32,6 @@ namespace lfs::core::internal {
     void HipBackendOps::multinomial(StorageRef weights, StorageRef output, const RandomProgram& program, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: multinomial"); }
     void HipBackendOps::gather_fused_unary(StorageRef input, StorageRef indices, StorageRef output, PointwiseOp unary, const IndexProgram& program, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: gather_fused_unary"); }
     void HipBackendOps::scatter(StorageRef output, StorageRef indices, StorageRef source, const StridedLayout& output_layout, const StridedLayout& index_layout, const IndexProgram& program, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: scatter"); }
-    void HipBackendOps::index_fill(StorageRef output, StorageRef indices, const StridedLayout& output_layout, const IndexProgram& program, ScalarOperand value, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: index_fill"); }
     void HipBackendOps::index_put(StorageRef output, StorageRef indices, StorageRef values, const IndexProgram& program, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: index_put"); }
     void HipBackendOps::masked_scatter(StorageRef output, StorageRef mask, StorageRef source, const MaskProgram& program, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: masked_scatter"); }
 } // namespace lfs::core::internal

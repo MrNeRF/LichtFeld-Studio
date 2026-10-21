@@ -359,6 +359,63 @@ void test_index_updates(GpuBackendOps& gpu) {
                         gpu.deallocate(base_src, {});
                     }
 }
+void test_index_fill(GpuBackendOps& gpu) {
+    auto host = [](void* p) { return StorageRef{GpuBackend::HIP, p, 0, DataType::UInt8, nullptr, STORAGE_REF_HOST_MEMORY}; };
+    for (auto dtype : {DataType::Float32, DataType::Int32, DataType::UInt8, DataType::Bool}) {
+        const size_t width = dtype == DataType::Float32 || dtype == DataType::Int32 ? 4 : 1;
+        std::vector<uint8_t> initial(64, 0x35), expected = initial, result(initial.size());
+        StridedLayout layout{};
+        layout.rank = 2;
+        layout.dims = {2, 3};
+        layout.strides = {8, 2};
+        layout.element_count = 6;
+        int32_t host_indices[] = {2, 0};
+        ScalarOperand value{};
+        uint32_t bits = 0;
+        if (dtype == DataType::Float32) {
+            value.kind = ScalarKind::Float;
+            value.value.float_value = -1.25f;
+            std::memcpy(&bits, &value.value.float_value, sizeof(bits));
+        } else if (dtype == DataType::Int32) {
+            value.kind = ScalarKind::Int32;
+            value.value.int32_value = -17;
+            bits = static_cast<uint32_t>(-17);
+        } else if (dtype == DataType::UInt8) {
+            value.kind = ScalarKind::Int32;
+            value.value.int32_value = 231;
+            bits = 231;
+        } else {
+            value.kind = ScalarKind::Bool;
+            value.value.bool_value = true;
+            bits = 1;
+        }
+        for (size_t row = 0; row < 2; ++row)
+            for (int column : host_indices)
+                std::memcpy(expected.data() + 8 + (row * 8 + size_t(column) * 2) * width, &bits, width);
+        auto output = gpu.allocate(initial.size(), 256, {}), indices = gpu.allocate(16, 256, {});
+        auto base = output;
+        output.dtype = dtype;
+        output.byte_offset = 8;
+        indices.dtype = DataType::Int32;
+        indices.byte_offset = 4;
+        gpu.copy_host_to_device({host(initial.data()), base, initial.size()});
+        gpu.copy_host_to_device({host(host_indices), indices, sizeof(host_indices)});
+        IndexProgram program{};
+        program.dim = 1;
+        program.index_size = 2;
+        gpu.index_fill(output, indices, layout, program, value, {});
+        gpu.copy_device_to_host({base, host(result.data()), result.size()});
+        require(result == expected, "HIP index fill differs from strided CPU oracle or changed padding");
+        host_indices[1] = 3;
+        gpu.copy_host_to_device({host(host_indices), indices, sizeof(host_indices)});
+        reject([&] { gpu.index_fill(output, indices, layout, program, value, {}); });
+        gpu.copy_device_to_host({base, host(result.data()), result.size()});
+        require(result == expected, "Invalid HIP index fill partially changed destination");
+        gpu.deallocate(base, {});
+        indices.byte_offset = 0;
+        gpu.deallocate(indices, {});
+    }
+}
 void test_strided_writes(GpuBackendOps& gpu) {
     auto host = [](void* p) { return StorageRef{GpuBackend::HIP, p, 0, DataType::UInt8, nullptr, STORAGE_REF_HOST_MEMORY}; };
     for (auto dtype : {DataType::Float32, DataType::Float16, DataType::Int32, DataType::Int64, DataType::UInt8, DataType::Bool, DataType::UInt32})
@@ -1277,6 +1334,7 @@ int main(int argc, char** argv) try {
     test_random(gpu);
     test_strided_writes(gpu);
     test_index_updates(gpu);
+    test_index_fill(gpu);
     test_gathers(gpu);
     test_conversion_destinations<float>(gpu);
     test_conversion_destinations<detail::tensor_half_t>(gpu);
