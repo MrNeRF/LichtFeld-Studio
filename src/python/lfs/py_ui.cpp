@@ -11,6 +11,7 @@
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
 #include "core/provenance.hpp"
@@ -551,7 +552,7 @@ namespace lfs::python {
 
             std::filesystem::path icon_path = lfs::core::utf8_to_path(plugin_path) / "icons" / (icon_name + ".png");
 
-            if (!std::filesystem::exists(icon_path)) {
+            if (!lfs::core::native_fs::exists(icon_path)) {
                 icon_path = lfs::vis::getAssetPath("icon/" + icon_name + ".png");
             }
 
@@ -3399,6 +3400,19 @@ namespace lfs::python {
             "Open a file dialog to select a mesh file. Returns empty string if cancelled.");
 
         m.def(
+            "open_init_file_dialog",
+            [](const std::string& start_dir) -> std::string {
+                std::filesystem::path start_path;
+                if (!start_dir.empty()) {
+                    start_path = lfs::core::utf8_to_path(start_dir);
+                }
+                auto result = lfs::vis::gui::OpenInitFileDialog(start_path);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("start_dir") = "",
+            "Open a file dialog to select a training initialization file: a splat, point cloud or mesh. Returns empty string if cancelled.");
+
+        m.def(
             "open_checkpoint_file_dialog",
             []() -> std::string {
                 auto result = lfs::vis::gui::OpenCheckpointFileDialog();
@@ -3723,6 +3737,61 @@ namespace lfs::python {
             "is_shift_down",
             []() { return (SDL_GetModState() & SDL_KMOD_SHIFT) != 0; },
             "Check if Shift is currently held");
+
+        m.def(
+            "is_mouse_button_down",
+            [](const int button) {
+                constexpr std::array<int, 3> sdl_buttons{SDL_BUTTON_LEFT, SDL_BUTTON_RIGHT, SDL_BUTTON_MIDDLE};
+                if (button < 0 || button >= static_cast<int>(sdl_buttons.size()))
+                    throw nb::value_error("button must be 0 (left), 1 (right) or 2 (middle)");
+                return (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_MASK(sdl_buttons[button])) != 0;
+            },
+            nb::arg("button") = 0, "Check if a mouse button is held: 0 left, 1 right, 2 middle");
+
+        m.def(
+            "begin_value_drag",
+            []() {
+                auto* const controller = vis::InputController::instance();
+                return controller && controller->beginValueDrag();
+            },
+            "Hide and lock the pointer for a value drag from a UI event handler. Motion keeps "
+            "accumulating past the window edge; returns False when the pointer cannot be locked.");
+
+        m.def(
+            "take_value_drag_delta",
+            []() {
+                auto* const controller = vis::InputController::instance();
+                return controller ? controller->takeValueDragDelta() : 0.0f;
+            },
+            "Horizontal pointer motion in window points since the previous call during a value drag.");
+
+        m.def(
+            "value_drag_state",
+            []() -> std::string {
+                const auto* const controller = vis::InputController::instance();
+                if (controller && controller->isValueDragActive())
+                    return "active";
+                return controller && controller->isValueDragCancelled() ? "cancelled" : "idle";
+            },
+            "'active' while the value drag holds the pointer, 'cancelled' after Escape, the right "
+            "button or focus loss ended it, otherwise 'idle'.");
+
+        m.def(
+            "request_viewport_overlay_sync",
+            []() {
+                if (auto* const gui = lfs::python::get_gui_manager())
+                    gui->requestViewportOverlaySync();
+            },
+            "Run the viewport overlay's document sync on the next frame. It does not wake the "
+            "frame loop; pair it with request_redraw when no input will arrive.");
+
+        m.def(
+            "end_value_drag",
+            []() {
+                if (auto* const controller = vis::InputController::instance())
+                    controller->endValueDrag();
+            },
+            "Release the value drag pointer lock and return the pointer to where the drag started.");
 
         // Localization
         m.def(
@@ -5339,6 +5408,11 @@ namespace lfs::python {
             },
             nb::arg("speed"), nb::arg("persist") = true,
             "Set the default WASD navigation speed (1-100)");
+
+        m.def("get_camera_browse_repeat", [] { return vis::UserPreferences::instance().cameraBrowseRepeat(); }, "Get whether held camera shortcuts repeat through dataset images");
+        m.def("set_camera_browse_repeat", [](bool enabled) { vis::UserPreferences::instance().setCameraBrowseRepeat(enabled); }, nb::arg("enabled"), "Enable held camera shortcuts through dataset images");
+        m.def("get_camera_browse_repeat_rate", [] { return vis::UserPreferences::instance().cameraBrowseRepeatRate(); }, "Get camera image repeat rate in images per second");
+        m.def("set_camera_browse_repeat_rate", [](float rate, bool persist) { vis::UserPreferences::instance().setCameraBrowseRepeatRate(rate, persist); }, nb::arg("rate"), nb::arg("persist") = true, "Set camera image repeat rate (1-20 images per second)");
 
         m.def(
             "get_navigation_speed_preference",

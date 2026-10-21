@@ -6,12 +6,14 @@
 #include "core/base64.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/splat_data_transform.hpp"
 #include "io/atomic_output.hpp"
 #include "io/error.hpp"
 #include "sogs.hpp"
+#include <glm/common.hpp>
 
 #include <cmath>
 #include <filesystem>
@@ -130,7 +132,7 @@ namespace lfs::io {
             candidates.push_back(lfs::core::utf8_to_path(LFS_DEV_VIEWER_SOURCE_DIR));
 #endif
             for (const auto& dir : candidates) {
-                if (std::filesystem::exists(dir / "viewer_template.html")) {
+                if (lfs::core::native_fs::exists(dir / "viewer_template.html")) {
                     return dir;
                 }
             }
@@ -181,7 +183,8 @@ namespace lfs::io {
         Result<std::string> generate_html(const std::string& base64_sog,
                                           const glm::vec3& camera_position,
                                           const glm::vec3& camera_target,
-                                          const std::optional<core::ProvenanceStamp>& provenance) {
+                                          const std::optional<core::ProvenanceStamp>& provenance,
+                                          const std::optional<glm::vec3>& background_color) {
             auto resource_dir_result = resolve_viewer_resources_dir();
             if (!resource_dir_result)
                 return std::unexpected(resource_dir_result.error());
@@ -231,10 +234,18 @@ namespace lfs::io {
             const std::string js_import = "import { main } from './index.js';";
             html = replace_placeholder(html, js_import, js);
 
+            auto sanitize_channel = [](float v) noexcept -> float {
+                return std::isfinite(v) ? v : 0.0f;
+            };
+            glm::vec3 raw_bg = background_color.value_or(glm::vec3(0.0f));
+            raw_bg.r = sanitize_channel(raw_bg.r);
+            raw_bg.g = sanitize_channel(raw_bg.g);
+            raw_bg.b = sanitize_channel(raw_bg.b);
+            const glm::vec3 bg = glm::clamp(raw_bg, glm::vec3(0.0f), glm::vec3(1.0f));
             const std::string settings_fetch = "settings: fetch(settingsUrl).then(response => response.json())";
             std::ostringstream settings_stream;
             settings_stream << std::fixed << std::setprecision(6);
-            settings_stream << "settings:{\"camera\":{\"fov\":50,\"position\":[" << camera_position.x << "," << camera_position.y << "," << camera_position.z << "],\"target\":[" << camera_target.x << "," << camera_target.y << "," << camera_target.z << "],\"startAnim\":\"none\"},\"background\":{\"color\":[0,0,0]},\"animTracks\":[]}";
+            settings_stream << "settings:{\"camera\":{\"fov\":50,\"position\":[" << camera_position.x << "," << camera_position.y << "," << camera_position.z << "],\"target\":[" << camera_target.x << "," << camera_target.y << "," << camera_target.z << "],\"startAnim\":\"none\"},\"background\":{\"color\":[" << bg.r << "," << bg.g << "," << bg.b << "]},\"animTracks\":[]}";
             html = replace_placeholder(html, settings_fetch, settings_stream.str());
 
             const std::string content_fetch = "fetch(contentUrl)";
@@ -361,7 +372,7 @@ namespace lfs::io {
         const glm::vec3 camera_position{render_center.x + diag, render_center.y + vert_dist, render_center.z - diag};
         const glm::vec3 camera_target{render_center.x, render_center.y, render_center.z};
 
-        auto html_result = generate_html(base64_data, camera_position, camera_target, options.provenance);
+        auto html_result = generate_html(base64_data, camera_position, camera_target, options.provenance, options.background_color);
         if (!html_result) {
             return std::unexpected(html_result.error());
         }

@@ -181,7 +181,7 @@ namespace lfs::io::video {
     bool probeVideoFileMetadata(const std::filesystem::path& path, VideoMetadata& metadata,
                                 std::string& error) {
         AVFormatContext* context = nullptr;
-        const std::string path_utf8 = lfs::core::path_to_utf8(path);
+        const std::string path_utf8 = lfs::core::path_to_native_utf8(path);
         const int open_result = avformat_open_input(&context, path_utf8.c_str(), nullptr, nullptr);
         if (open_result < 0) {
             avformat_close_input(&context);

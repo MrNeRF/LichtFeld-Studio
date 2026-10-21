@@ -3,7 +3,6 @@
 
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
-#include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
 #include "gui/film_strip_renderer.hpp"
@@ -90,7 +89,6 @@ namespace {
                 previous_home_ = previous;
             setHome(temporary_.path.string().c_str());
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
             lfs::vis::services().clear();
             lfs::vis::op::undoHistory().clear();
             ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
@@ -100,7 +98,6 @@ namespace {
         void TearDown() override {
             lfs::vis::op::undoHistory().clear();
             lfs::vis::services().clear();
-            lfs::core::event::bus().clear_all();
             lfs::event::EventBridge::instance().clear_all();
             lfs::event::LocalizationManager::getInstance().reset();
             setHome(previous_home_ ? previous_home_->c_str() : nullptr);

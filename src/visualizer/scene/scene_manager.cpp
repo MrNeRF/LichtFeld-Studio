@@ -11,6 +11,7 @@
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/mesh_data.hpp"
+#include "core/native_fs.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
 #include "core/scene_merge.hpp"
@@ -247,6 +248,7 @@ namespace lfs::vis {
                 size_t count;
                 int degree;
                 bool payload_diverged;
+                bool point_cloud_source = false;
                 std::array<core::Tensor, 4> fields;
                 std::array<size_t, 4> capacities;
             };
@@ -261,6 +263,7 @@ namespace lfs::vis {
                             .count = static_cast<size_t>(node.model->size()),
                             .degree = node.model->get_max_sh_degree(),
                             .payload_diverged = node.payload_diverged,
+                            .point_cloud_source = node.point_cloud_source,
                             .fields = {},
                             .capacities = {}};
                 const auto tensors = fields(*node.model);
@@ -305,6 +308,7 @@ namespace lfs::vis {
                         target.copy_from(saved);
                     }
                     node.payload_diverged = state.payload_diverged;
+                    node.point_cloud_source = state.point_cloud_source;
                 }
                 states_ = std::move(current);
                 scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
@@ -451,6 +455,17 @@ namespace lfs::vis {
             }
         }
 
+        // Transient nodes are not part of the document, so removing a subtree
+        // of nothing but transient nodes leaves nothing to undo.
+        [[nodiscard]] bool isTransientSubtree(const core::Scene& scene, const core::NodeId root_id) {
+            std::vector<core::Uuid> uuids;
+            collectSubtreeUuids(scene, root_id, uuids);
+            return !uuids.empty() && std::ranges::all_of(uuids, [&](const core::Uuid& uuid) {
+                const auto* node = scene.getNodeByUuid(uuid);
+                return node && node->transient;
+            });
+        }
+
         [[nodiscard]] SelectionMode selectionModeFromString(const std::string& mode) {
             if (mode == "add") {
                 return SelectionMode::Add;
@@ -473,6 +488,11 @@ namespace lfs::vis {
             const size_t count = std::min(before.size(), after.size());
             diffs.reserve(count);
             for (size_t i = 0; i < count; ++i) {
+                // Transient nodes are not part of the document: editing one leaves nothing to undo.
+                if (const auto* node = scene_manager.getScene().getNodeByUuid(after[i].uuid);
+                    node && node->transient) {
+                    continue;
+                }
                 diffs.push_back(op::SceneGraphNodeMetadataDiff{
                     .before = before[i],
                     .after = after[i],
@@ -1028,7 +1048,7 @@ namespace lfs::vis {
                 }
             }
 
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             state::SceneLoaded::Type file_type = state::SceneLoaded::Type::PLY;
             if (ext == ".sog" || lfs::io::is_ssog_path(path)) {
@@ -1097,6 +1117,7 @@ namespace lfs::vis {
                 if (node_id == core::NULL_NODE) {
                     throw std::runtime_error("Failed to add splat node '" + name + "'");
                 }
+                scene_.getNodeById(node_id)->point_cloud_source = load_result.point_cloud_source;
                 const auto* const added = scene_.getNodeById(node_id);
                 assert(added);
                 const std::string added_name = added ? added->name : name;
@@ -1334,6 +1355,7 @@ namespace lfs::vis {
                 throw std::runtime_error("Failed to add splat node '" + name + "'");
             }
             scene_.setNodeVisibility(node_id, is_visible);
+            scene_.getNodeById(node_id)->point_cloud_source = load_result.point_cloud_source;
             const auto* const added = scene_.getNodeById(node_id);
             assert(added);
             const std::string added_name = added ? added->name : name;
@@ -1344,7 +1366,7 @@ namespace lfs::vis {
             }
 
             // RAD assets always enter LOD mode; availability still reflects tree presence.
-            auto add_ext = path.extension().string();
+            auto add_ext = lfs::core::path_to_utf8(path.extension());
             std::transform(add_ext.begin(), add_ext.end(), add_ext.begin(), ::tolower);
             const auto* splat_for_cropbox = scene_.getNodeById(node_id);
             if (splat_for_cropbox) {
@@ -1602,7 +1624,11 @@ namespace lfs::vis {
             return TrainingRemovalImpact::None;
         }
 
-        for (const auto* training_node = scene_.getNodeByUuid(scene_.getTrainingModelNodeUuid()); training_node;) {
+        // A transient training model is a preview the trainer never trained
+        // (e.g. a model trained elsewhere); removing it, or a node above it,
+        // leaves the trainer alone, and the scene clears the binding.
+        const auto* const bound = scene_.getNodeByUuid(scene_.getTrainingModelNodeUuid());
+        for (const auto* training_node = bound && !bound->transient ? bound : nullptr; training_node;) {
             if (training_node->id == root->id) {
                 return TrainingRemovalImpact::TrainingModel;
             }
@@ -1691,7 +1717,7 @@ namespace lfs::vis {
         const bool removes_training_model = training_removal_impact == TrainingRemovalImpact::TrainingModel;
 
         bool trainer_cleared = false;
-        const bool record_history = history_mode != HistoryMode::Skip;
+        const bool record_history = history_mode != HistoryMode::Skip && !isTransientSubtree(scene_, id);
         const bool capture_full_scene = history_mode != HistoryMode::Record;
         const bool preserve_node_ids = history_mode == HistoryMode::RecordPreserveIds;
         auto history_options = sceneGraphCaptureOptions(true, true);
@@ -1929,6 +1955,17 @@ namespace lfs::vis {
                 return result;
             }
             planned_removals.emplace_back(id, impact);
+        }
+
+        if (std::ranges::all_of(planned_removals, [&](const auto& planned) {
+                return isTransientSubtree(scene_, planned.first);
+            })) {
+            for (const auto& [id, impact] : planned_removals) {
+                if (const auto result = removeNodeImpl(id, keep_children, HistoryMode::Skip, impact); !result) {
+                    return result;
+                }
+            }
+            return {};
         }
 
         auto history_options = sceneGraphCaptureOptions(true, true);
@@ -3269,8 +3306,11 @@ namespace lfs::vis {
             // Camera uids key the viewport caches and selection, so an additive import must not reuse them.
             int first_uid = 0;
             for (const auto& camera : scene_.getAllCameras()) {
-                if (camera)
-                    first_uid = std::max(first_uid, camera->uid() + 1);
+                if (!camera)
+                    continue;
+                if (camera->uid() == std::numeric_limits<int>::max())
+                    throw std::overflow_error("No camera uid is left above the scene's highest one");
+                first_uid = std::max(first_uid, camera->uid() + 1);
             }
             auto result = lfs::io::read_colmap_cameras_only(sparse_path, 1.0f, first_uid);
             if (!result) {
@@ -3399,7 +3439,7 @@ namespace lfs::vis {
             if (checkpoint_params.dataset.data_path.empty()) {
                 throw std::runtime_error("Checkpoint has no dataset path and none provided");
             }
-            if (!std::filesystem::exists(checkpoint_params.dataset.data_path)) {
+            if (!lfs::core::native_fs::exists(checkpoint_params.dataset.data_path)) {
                 throw std::runtime_error("Dataset path does not exist: " +
                                          lfs::core::path_to_utf8(checkpoint_params.dataset.data_path));
             }
@@ -3871,7 +3911,7 @@ namespace lfs::vis {
             if (!splat_paths_.empty()) {
                 info.source_path = splat_paths_.begin()->second;
                 // Determine specific type from extension
-                auto ext = info.source_path.extension().string();
+                auto ext = lfs::core::path_to_utf8(info.source_path.extension());
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
                 if (lfs::io::is_ssog_path(info.source_path)) {
                     info.source_type = "SSOG";
@@ -5316,6 +5356,7 @@ namespace lfs::vis {
         result.local_transform = node->local_transform.get();
         result.visible = node->visible;
         result.locked = node->locked;
+        result.point_cloud_source = node->point_cloud_source;
 
         if (node->model && node->model->size() > 0) {
             if (node->model->has_deleted_mask() &&
@@ -5792,6 +5833,7 @@ namespace lfs::vis {
                                 if (child_id == core::NULL_NODE)
                                     continue;
                                 if (auto* pasted_child = scene_.getNodeById(child_id)) {
+                                    pasted_child->point_cloud_source = child.point_cloud_source;
                                     pasted_child->local_transform.setQuiet(child.local_transform);
                                     pasted_child->visible.setQuiet(child.visible);
                                     pasted_child->locked.setQuiet(child.locked);
@@ -5863,6 +5905,8 @@ namespace lfs::vis {
             }
 
             if (entry.hierarchy) {
+                if (auto* mutable_node = scene_.getMutableNode(pasted_name))
+                    mutable_node->point_cloud_source = entry.hierarchy->point_cloud_source;
                 pasteNodeHierarchy(*entry.hierarchy, pasted_node->id);
             }
 
@@ -6063,6 +6107,7 @@ namespace lfs::vis {
             bool had_deleted_mask = false;
             core::Tensor previous_deleted_mask;
             bool payload_diverged = false;
+            bool point_cloud_source = false;
         };
 
         std::vector<std::pair<core::NodeId, TrainingRemovalImpact>> removed_node_impacts;
@@ -6167,6 +6212,7 @@ namespace lfs::vis {
                                                      ? node->model->deleted().clone()
                                                      : core::Tensor{},
                         .payload_diverged = node->payload_diverged,
+                        .point_cloud_source = node->point_cloud_source,
                     });
                 } catch (const std::exception& error) {
                     return std::unexpected(
@@ -6192,6 +6238,7 @@ namespace lfs::vis {
                     node->model->clear_deleted();
                 }
                 node->payload_diverged = prepared.payload_diverged;
+                node->point_cloud_source = prepared.point_cloud_source;
             }
         };
 

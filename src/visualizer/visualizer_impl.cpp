@@ -1202,7 +1202,11 @@ namespace lfs::vis {
         main_loop_->setFrameErrorCallback([this](std::exception_ptr eptr) {
             handleFrameException(std::move(eptr));
         });
-        main_loop_->setFrameCompletedCallback([this]() { onFrameCompleted(); });
+        main_loop_->setFrameCompletedCallback([this]() {
+            onFrameCompleted();
+            if (window_manager_)
+                window_manager_->dispatchNativeDrags([this] { return main_loop_->runModalFrame(); });
+        });
     }
 
     void VisualizerImpl::handleFrameException(std::exception_ptr eptr) noexcept {
@@ -2304,6 +2308,8 @@ namespace lfs::vis {
 
         // Update editor context state from scene/trainer
         editor_context_.update(scene_manager_.get(), trainer_manager_.get());
+        if (trainer_manager_)
+            trainer_manager_->syncCropBox();
 
         if (pending_training_completion_refresh_frames_ > 0 &&
             (!trainer_manager_ || !trainer_manager_->isTrainingActive())) {
@@ -4664,6 +4670,18 @@ namespace lfs::vis {
                 "project.lifecycle");
         }
         return project_lifecycle_->pollWrite();
+    }
+
+    lfs::Result<ProjectTrainingSource>
+    VisualizerImpl::projectTrainingSource() {
+        if (!project_lifecycle_) {
+            return visualizerFailure<ProjectTrainingSource>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->trainingSource();
     }
 
     bool VisualizerImpl::consumeProjectSaveStarted() {

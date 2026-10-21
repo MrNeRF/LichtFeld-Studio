@@ -3,6 +3,7 @@
 
 #include "core/checkpoint_format.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -21,7 +22,7 @@ namespace lfs::core {
             }
 
             std::error_code size_error;
-            const auto file_size = std::filesystem::file_size(path, size_error);
+            const auto file_size = native_fs::file_size(path, size_error);
             if (size_error) {
                 return std::unexpected("Failed to inspect checkpoint size: " + size_error.message());
             }
@@ -100,8 +101,12 @@ namespace lfs::core {
         if (header.version >= CHECKPOINT_VERSION_HAS_SPARSITY) {
             known_flags |= static_cast<uint32_t>(CheckpointFlags::HAS_SPARSITY);
         }
+        if (header.version >= CHECKPOINT_VERSION_HAS_POPSPA)
+            known_flags |= static_cast<uint32_t>(CheckpointFlags::HAS_POPSPA);
         if ((static_cast<uint32_t>(header.flags) & ~known_flags) != 0)
             return std::unexpected("Invalid checkpoint: unknown feature flags");
+        if (has_flag(header.flags, CheckpointFlags::HAS_SPARSITY) && has_flag(header.flags, CheckpointFlags::HAS_POPSPA))
+            return std::unexpected("Invalid checkpoint: mutually exclusive sparsity features");
 
         if (header.params_json_size > MAX_CHECKPOINT_JSON_BYTES)
             return std::unexpected("Invalid checkpoint: parameter JSON exceeds byte budget");

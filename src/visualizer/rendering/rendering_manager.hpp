@@ -520,6 +520,15 @@ namespace lfs::vis {
         [[nodiscard]] std::optional<SplitViewPanelId> getCursorPreviewPanel() const {
             return viewport_overlay_service_.cursorPreview().panel;
         }
+        // True when the active cursor preview already highlights this splat with this preview selection.
+        [[nodiscard]] bool cursorPreviewShows(const int focused_gaussian_id, const bool add_mode,
+                                              const std::optional<SplitViewPanelId> panel,
+                                              const lfs::core::Tensor* const preview_selection) const {
+            const auto& cursor = viewport_overlay_service_.cursorPreview();
+            return cursor.active && cursor.focused_gaussian_id == focused_gaussian_id &&
+                   cursor.add_mode == add_mode && cursor.panel == panel &&
+                   cursor.preview_selection == preview_selection;
+        }
         void getCursorPreviewState(float& x, float& y, float& radius, bool& add_mode) const {
             const auto& cursor = viewport_overlay_service_.cursorPreview();
             x = cursor.x;
@@ -884,6 +893,7 @@ namespace lfs::vis {
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;
         std::string last_logged_vksplat_render_error_;
+        bool last_vksplat_object_outline_ = false;
         std::optional<std::string> prepareImportRenderCheck(const RenderContext& context, const std::function<void()>& prepare_viewport);
         void noteImportRenderFrame(uint64_t scene_generation, std::string error = {});
         glm::ivec2 last_nonzero_viewport_size_{0, 0};

@@ -17,6 +17,10 @@ namespace lfs::python {
         const core::prop::PropertyMeta& meta,
         const core::param::OptimizationParameters& source);
 
+    [[nodiscard]] std::any resolve_optimization_builtin_default(
+        const core::prop::PropertyMeta& meta,
+        const core::param::OptimizationParameters& active);
+
     class PyOptimizationParams {
     public:
         PyOptimizationParams() = default;
@@ -25,6 +29,7 @@ namespace lfs::python {
         void set(const std::string& prop_id, nb::object value);
         [[nodiscard]] nb::dict prop_info(const std::string& prop_id) const;
         void reset(const std::string& prop_id);
+        [[nodiscard]] nb::object builtin_default(const std::string& prop_id) const;
         [[nodiscard]] nb::list properties() const;
         [[nodiscard]] nb::dict get_all_properties() const;
 
@@ -51,6 +56,7 @@ namespace lfs::python {
 
         [[nodiscard]] bool has_params() const;
         [[nodiscard]] bool can_edit() const;
+        [[nodiscard]] std::string init_path() const;
     };
 
     void register_dataset_properties();

@@ -82,15 +82,6 @@ body {
     flex: none;
 }
 
-#brand-logo {
-    flex: none;
-    width: 20dp;
-    height: 20dp;
-    margin-left: 10dp;
-    margin-right: 8dp;
-    decorator: none;
-}
-
 #menu-window-controls {
     display: flex;
     flex-direction: row;
@@ -361,6 +352,17 @@ body {
     cursor: pointer;
 }
 
+.menu-label.logo {
+    display: flex;
+    align-items: center;
+    padding: 5dp 8dp;
+}
+
+.menu-label.logo img {
+    width: 20dp;
+    height: 20dp;
+}
+
 .access-key {
     display: inline;
     text-decoration: none;
@@ -446,7 +448,7 @@ body {
 
 .menu-item .checkmark {
     width: 16dp;
-    margin-left: 4dp;
+    margin-left: 12dp;
     flex-shrink: 0;
     white-space: nowrap;
     text-align: center;
@@ -464,6 +466,7 @@ body {
     margin-left: 24dp;
     flex-shrink: 0;
     white-space: nowrap;
+    text-align: left;
 }
 
 .menu-item .submenu-arrow {
@@ -518,7 +521,6 @@ body.toolbar-squeeze #menu-portal-connection {
 }
 
 /* Keep menus and native window controls reachable in narrow windows. */
-body.compact #brand-logo,
 body.compact .menu-window-utility-btn,
 body.compact .menu-window-separator,
 body.compact #menu-portal-connection span {

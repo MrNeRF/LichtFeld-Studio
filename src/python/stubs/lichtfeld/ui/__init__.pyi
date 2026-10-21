@@ -229,6 +229,12 @@ def remember_camera_view_snap() -> bool:
 def set_remember_camera_view_snap(enabled: bool) -> None:
     """Enable or disable camera view snap persistence"""
 
+def take_splat_export_request() -> list[str]: ...
+
+def get_splat_drag_preferences() -> dict: ...
+
+def set_splat_drag_preferences(arg: dict, /) -> None: ...
+
 def scene_graph_selection_markers() -> bool:
     """Return whether Scene Graph selection markers are visible"""
 
@@ -1955,6 +1961,11 @@ def open_mesh_file_dialog(start_dir: str = '') -> str:
     Open a file dialog to select a mesh file. Returns empty string if cancelled.
     """
 
+def open_init_file_dialog(start_dir: str = '') -> str:
+    """
+    Open a file dialog to select a training initialization file: a splat, point cloud or mesh. Returns empty string if cancelled.
+    """
+
 def open_checkpoint_file_dialog() -> str:
     """
     Open a file dialog to select a checkpoint file. Returns empty string if cancelled.
@@ -2137,6 +2148,34 @@ def is_ctrl_down() -> bool:
 
 def is_shift_down() -> bool:
     """Check if Shift is currently held"""
+
+def is_mouse_button_down(button: int = 0) -> bool:
+    """Check if a mouse button is held: 0 left, 1 right, 2 middle"""
+
+def begin_value_drag() -> bool:
+    """
+    Hide and lock the pointer for a value drag from a UI event handler. Motion keeps accumulating past the window edge; returns False when the pointer cannot be locked.
+    """
+
+def take_value_drag_delta() -> float:
+    """
+    Horizontal pointer motion in window points since the previous call during a value drag.
+    """
+
+def value_drag_state() -> str:
+    """
+    'active' while the value drag holds the pointer, 'cancelled' after Escape, the right button or focus loss ended it, otherwise 'idle'.
+    """
+
+def request_viewport_overlay_sync() -> None:
+    """
+    Run the viewport overlay's document sync on the next frame. It does not wake the frame loop; pair it with request_redraw when no input will arrive.
+    """
+
+def end_value_drag() -> None:
+    """
+    Release the value drag pointer lock and return the pointer to where the drag started.
+    """
 
 @overload
 def tr(key: str) -> str:
@@ -2772,6 +2811,18 @@ def get_zoom_speed_preference() -> float:
 
 def set_navigation_speed_preference(speed: float, persist: bool = True) -> None:
     """Set the default WASD navigation speed (1-100)"""
+
+def get_camera_browse_repeat() -> bool:
+    """Get whether held camera shortcuts repeat through dataset images"""
+
+def set_camera_browse_repeat(enabled: bool) -> None:
+    """Enable held camera shortcuts through dataset images"""
+
+def get_camera_browse_repeat_rate() -> float:
+    """Get camera image repeat rate in images per second"""
+
+def set_camera_browse_repeat_rate(rate: float, persist: bool = True) -> None:
+    """Set camera image repeat rate (1-20 images per second)"""
 
 def get_navigation_speed_preference() -> float:
     """Get the default WASD navigation speed"""

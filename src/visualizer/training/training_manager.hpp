@@ -92,6 +92,8 @@ namespace lfs::vis {
 
         // Link to scene for data access (Scene-based trainer mode)
         void setScene(core::Scene* scene) { scene_ = scene; }
+        // Publishes the training crop box to the trainer from the thread that owns the scene.
+        void syncCropBox();
         [[nodiscard]] const core::Scene* getScene() const { return scene_; }
 
         // Training control

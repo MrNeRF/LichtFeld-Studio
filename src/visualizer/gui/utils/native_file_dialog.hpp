@@ -33,6 +33,7 @@ namespace lfs::vis::gui {
                                                        const std::string& dialogTitle = {});
     LFS_VIS_API std::filesystem::path OpenPointCloudFileDialog(const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path OpenMeshFileDialog(const std::filesystem::path& defaultPath = {});
+    LFS_VIS_API std::filesystem::path OpenInitFileDialog(const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path OpenCheckpointFileDialog(const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path OpenPPISPFileDialog(const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path OpenProjectFileDialog(const std::filesystem::path& defaultPath = {});

@@ -5,6 +5,7 @@
 #include "ply_loader.hpp"
 #include "core/error_reporter.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "formats/ply.hpp"
@@ -36,12 +37,12 @@ namespace lfs::io {
         }
 
         // Validate file exists
-        if (!std::filesystem::exists(path)) {
+        if (!lfs::core::native_fs::exists(path)) {
             return make_error(ErrorCode::PATH_NOT_FOUND,
                               "PLY file does not exist", path);
         }
 
-        if (!std::filesystem::is_regular_file(path)) {
+        if (!lfs::core::native_fs::is_regular_file(path)) {
             return make_error(ErrorCode::NOT_A_FILE,
                               "Path is not a regular file", path);
         }
@@ -181,17 +182,18 @@ namespace lfs::io {
             .warnings = std::move(warnings),
             .georeference = std::nullopt};
 
+        result.point_cloud_source = !is_gaussian;
         LOG_INFO("PLY loaded successfully in {}ms", load_time.count());
 
         return result;
     }
 
     bool PLYLoader::canLoad(const std::filesystem::path& path) const {
-        if (!std::filesystem::exists(path) || std::filesystem::is_directory(path)) {
+        if (!lfs::core::native_fs::exists(path) || lfs::core::native_fs::is_directory(path)) {
             return false;
         }
 
-        auto ext = path.extension().string();
+        auto ext = lfs::core::path_to_utf8(path.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
         if (ext != ".ply")
             return false;

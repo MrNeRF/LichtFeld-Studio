@@ -191,6 +191,10 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/panels/menu_bar.cpp
         gui/panels/menu_bar.hpp
         gui/utils/native_file_dialog.cpp
+        gui/utils/native_file_drag.cpp
+        gui/utils/native_file_drag_wayland.cpp
+        gui/utils/splat_transfer.cpp
+        gui/utils/splat_export_request.cpp
         gui/utils/drag_drop_native.cpp
         gui/utils/file_association.cpp
 
@@ -211,23 +215,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/elements/scene_graph_element.cpp
         gui/rmlui/elements/terminal_element.cpp
 )
-
-# These large visualizer TUs exceed the COFF section limit in Debug and need
-# /bigobj. Let CMake select the supported spelling of the C++23 language flag.
-if(MSVC)
-    set_source_files_properties(
-            ${CMAKE_CURRENT_SOURCE_DIR}/sequencer/rml_sequencer_panel.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/sequencer/rml_sequencer_panel_timeline.cpp
-            PROPERTIES COMPILE_OPTIONS "/bigobj"
-    )
-    set_source_files_properties(
-            ${CMAKE_CURRENT_SOURCE_DIR}/visualizer_impl.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/project/project_lifecycle.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/gui/gui_manager.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/scene/scene_manager.cpp
-            PROPERTIES COMPILE_OPTIONS "/bigobj"
-    )
-endif()
 
 # Set include directories
 target_include_directories(lfs_visualizer
@@ -279,6 +266,9 @@ set_property(SOURCE
 # cmake/SetupNativeFileDialog.cmake.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET PkgConfig::LFS_GTK3)
     target_link_libraries(lfs_visualizer PRIVATE PkgConfig::LFS_GTK3)
+    pkg_check_modules(LFS_DRAG_WAYLAND REQUIRED IMPORTED_TARGET wayland-client)
+    target_link_libraries(lfs_visualizer PRIVATE PkgConfig::LFS_DRAG_WAYLAND)
+    target_compile_definitions(lfs_visualizer PRIVATE LFS_HAS_WAYLAND_DRAG=1)
 endif()
 
 target_sources(lfs_visualizer
@@ -303,7 +293,8 @@ add_executable(lfs_shader_compiler EXCLUDE_FROM_ALL
         tools/shader_compiler.cpp)
 target_compile_features(lfs_shader_compiler PRIVATE cxx_std_23)
 target_include_directories(lfs_shader_compiler PRIVATE
-        ${CMAKE_SOURCE_DIR}/src)
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/src/core/include)
 target_link_libraries(lfs_shader_compiler
         PRIVATE
         glslang::glslang
@@ -499,6 +490,7 @@ if (WIN32)
     )
     target_link_libraries(lfs_visualizer PRIVATE
             Advapi32    # Read the Windows application light/dark preference
+            Uuid
             Ole32       # OLE drag-drop (IDropTarget)
             Shell32     # SHChangeNotify (file association)
             dxgi        # DXGI per-process VRAM query

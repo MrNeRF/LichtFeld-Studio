@@ -5,6 +5,7 @@
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/formats/colmap.hpp"
@@ -53,14 +54,14 @@ namespace lfs::training {
             std::vector<std::filesystem::path> files;
             const auto collect = [&](const auto& entries) {
                 for (const auto& entry : entries) {
-                    if (entry.is_regular_file() && is_image(entry.path()))
-                        files.push_back(entry.path());
+                    if (lfs::core::native_fs::entry_is_regular_file(folder, entry) && is_image(entry.path()))
+                        files.push_back(lfs::core::native_fs::entry_path(folder, entry.path()));
                 }
             };
             if (recursive)
-                collect(std::filesystem::recursive_directory_iterator(folder));
+                collect(lfs::core::native_fs::recursive_directory_iterator(folder));
             else
-                collect(std::filesystem::directory_iterator(folder));
+                collect(lfs::core::native_fs::directory_iterator(folder));
             std::ranges::sort(files);
             std::map<std::string, std::filesystem::path> images;
             for (const auto& file : files) {
@@ -203,12 +204,12 @@ namespace lfs::training {
     } // namespace
 
     ImageSet resolve_image_set(const std::filesystem::path& path) {
-        if (!std::filesystem::is_directory(path))
+        if (!lfs::core::native_fs::is_directory(path))
             return {.images = path};
         for (const auto& sparse : lfs::io::get_colmap_search_paths(path)) {
             if (lfs::io::find_file_ci(sparse, "cameras.bin").empty() && lfs::io::find_file_ci(sparse, "cameras.txt").empty())
                 continue;
-            if (std::filesystem::is_directory(path / "images"))
+            if (lfs::core::native_fs::is_directory(path / "images"))
                 return {.images = path / "images", .sparse = sparse, .recursive = true};
             return {.images = path, .sparse = sparse};
         }
@@ -218,7 +219,7 @@ namespace lfs::training {
     ImagePairing pair_images_by_name(const std::filesystem::path& reference, const std::filesystem::path& test,
                                      const bool recursive) {
         ImagePairing pairing;
-        if (!std::filesystem::is_directory(reference)) {
+        if (!lfs::core::native_fs::is_directory(reference)) {
             const auto name = reference.filename();
             pairing.pairs.push_back({reference, test, image_name(name), pairing_key(name),
                                      pairing_key(test.filename())});
@@ -430,13 +431,13 @@ namespace lfs::training {
         });
         // Test images in a distorted reference lens are scored like native GUT renders: masks follow that lens.
         evaluation.optimization.gut = native_distorted_tests > 0;
-        std::filesystem::create_directories(params.output_path);
+        lfs::core::native_fs::create_directories(params.output_path);
         const auto report_path = params.output_path / "compare_report.txt";
         const auto json_path = params.output_path / "compare.json";
         const auto image_dir = params.output_path / "compare_images";
         for (const auto& previous : {report_path, json_path, image_dir}) {
             std::error_code error;
-            std::filesystem::remove_all(previous, error);
+            lfs::core::native_fs::remove_all(previous, error);
             if (error)
                 return evaluation_error(std::format("cannot replace {}: {}", lfs::core::path_to_utf8(previous),
                                                     error.message()),

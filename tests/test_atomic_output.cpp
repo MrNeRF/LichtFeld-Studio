@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/native_fs.hpp"
 #include "io/atomic_output.hpp"
 
 #include <array>
@@ -17,15 +18,15 @@
 
 namespace {
 
-    namespace fs = std::filesystem;
+    namespace fs = lfs::core::native_fs;
 
     std::string read_file(const fs::path& path) {
-        std::ifstream stream(path, std::ios::binary);
+        std::ifstream stream(lfs::core::native_fs::native_path(path), std::ios::binary);
         return {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
     }
 
     void write_file(const fs::path& path, const std::string& contents) {
-        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+        std::ofstream stream(lfs::core::native_fs::native_path(path), std::ios::binary | std::ios::trunc);
         ASSERT_TRUE(stream.is_open());
         stream.write(contents.data(), static_cast<std::streamsize>(contents.size()));
         stream.close();
@@ -92,7 +93,7 @@ namespace {
                     checkpoint,
                     lfs::io::AtomicOutputTempName::AppendSuffix,
                     lfs::io::AtomicOutputDurability::Durable);
-                std::ofstream stream(output.temp_path(), std::ios::binary | std::ios::trunc);
+                std::ofstream stream(lfs::core::native_fs::native_path(output.temp_path()), std::ios::binary | std::ios::trunc);
                 stream.write(new_contents.data(), static_cast<std::streamsize>(new_contents.size()));
                 stream.close();
                 if (!stream) {

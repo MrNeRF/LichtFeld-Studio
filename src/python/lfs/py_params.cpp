@@ -10,6 +10,7 @@
 #include "core/logger.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/path_utils.hpp"
+#include "core/property_defaults.hpp"
 #include "python/python_runtime.hpp"
 #include "training/trainer.hpp"
 #include "visualizer/core/parameter_manager.hpp"
@@ -52,6 +53,18 @@ namespace lfs::python {
         resolved_source.resolve_mrnf_capacity_defaults();
         auto ref = PropertyObjectRef::cpp(&resolved_source);
         return meta.getter(ref);
+    }
+
+    std::any resolve_optimization_builtin_default(const PropertyMeta& meta, const OptimizationParameters& active) {
+        auto source = OptimizationParameters::defaults_for_strategy(active.strategy);
+        // Capacity-dependent defaults follow the current capacity, not edited rates.
+        if (meta.id != "max_cap")
+            source.max_cap = active.max_cap;
+        // Resetting iterations removes a manual override but retains dataset scaling.
+        const float scale = meta.id == "iterations" ? active.image_count_scaler : active.steps_scaler;
+        if (std::isfinite(scale) && scale > 0.0f && scale != 1.0f)
+            source.scale_steps(scale);
+        return resolve_optimization_default(meta, source);
     }
 
     void register_dataset_properties() {
@@ -317,6 +330,36 @@ namespace lfs::python {
         }
     }
 
+    nb::object PyOptimizationParams::builtin_default(const std::string& prop_id) const {
+        if (prop_id == "bg_color") {
+            const auto source = OptimizationParameters::defaults_for_strategy(params().strategy);
+            return nb::make_tuple(source.bg_color[0], source.bg_color[1], source.bg_color[2]);
+        }
+        auto meta = PropertyRegistry::instance().get_property("optimization", prop_id);
+        if (!meta) {
+            throw std::runtime_error("Unknown property: " + prop_id);
+        }
+
+        const std::any value = resolve_optimization_builtin_default(*meta, params());
+
+        switch (meta->type) {
+        case PropType::Bool:
+            return nb::cast(std::any_cast<bool>(value));
+        case PropType::Int:
+            return nb::cast(std::any_cast<int>(value));
+        case PropType::Float:
+            return nb::cast(std::any_cast<float>(value));
+        case PropType::String:
+            return nb::cast(std::any_cast<std::string>(value));
+        case PropType::SizeT:
+            return nb::cast(std::any_cast<size_t>(value));
+        case PropType::Enum:
+            return nb::cast(std::any_cast<int>(value));
+        default:
+            throw std::runtime_error("Unsupported property type");
+        }
+    }
+
     void PyOptimizationParams::set(const std::string& prop_id, nb::object value) {
         auto meta = PropertyRegistry::instance().get_property("optimization", prop_id);
         if (!meta) {
@@ -436,6 +479,7 @@ namespace lfs::python {
         case PropType::Enum:
             info["type"] = "enum";
             info["default"] = std::any_cast<int>(default_value);
+            info["default_identifier"] = enum_identifier(*meta, std::any_cast<int>(default_value));
             {
                 nb::list items;
                 for (const auto& ei : meta->enum_items) {
@@ -566,13 +610,10 @@ namespace lfs::python {
             case PropType::Enum: {
                 nb::object cls = props_module.attr("EnumProperty");
                 nb::list items;
-                std::string default_id;
                 const int default_enum = std::any_cast<int>(default_value);
+                const auto default_id = enum_identifier(meta, default_enum);
                 for (const auto& item : meta.enum_items) {
                     items.append(nb::make_tuple(item.identifier, item.name, ""));
-                    if (item.value == default_enum) {
-                        default_id = item.identifier;
-                    }
                 }
                 prop_obj = cls(
                     nb::arg("items") = items,
@@ -600,6 +641,14 @@ namespace lfs::python {
         if (!tm)
             return false;
         return tm->hasTrainer() && tm->isDatasetEditable();
+    }
+
+    std::string PyDatasetConfig::init_path() const {
+        const auto* tm = get_trainer_manager();
+        if (!tm || !tm->hasTrainer())
+            return {};
+        const auto* trainer = tm->getTrainer();
+        return trainer ? trainer->getParams().init_path.value_or(std::string{}) : std::string{};
     }
 
     core::param::DatasetConfig& PyDatasetConfig::params() {
@@ -875,6 +924,8 @@ namespace lfs::python {
             .def_prop_ro(
                 "__property_group__", [](PyOptimizationParams&) { return "optimization"; }, "Property group identifier")
             .def("get", &PyOptimizationParams::get, nb::arg("name"), "Get property value by name")
+            .def("builtin_default", &PyOptimizationParams::builtin_default, nb::arg("name"),
+                 "Get the built-in default for the active method and step scaling")
             .def("set", &PyOptimizationParams::set, nb::arg("name"), nb::arg("value"), "Set property value by name")
             .def("__getattr__", &PyOptimizationParams::get, nb::arg("name"), "Get property value by attribute name")
             .def("prop_info", &PyOptimizationParams::prop_info, nb::arg("prop_id"),
@@ -940,6 +991,11 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) { return self.params().cropbox_loss_weight; },
                 [](PyOptimizationParams& self, float v) { self.set("cropbox_loss_weight", nb::cast(v)); },
                 "Scales pixel losses for camera rays outside the active crop box")
+            .def_prop_rw(
+                "cropbox_growth_inside",
+                [](PyOptimizationParams& self) { return self.params().cropbox_growth_inside; },
+                [](PyOptimizationParams& self, float v) { self.set("cropbox_growth_inside", nb::cast(v)); },
+                "Share of new splats placed inside the active crop box")
             .def_prop_rw(
                 "lambda_dssim",
                 [](PyOptimizationParams& self) { return self.params().lambda_dssim; },
@@ -1073,7 +1129,75 @@ namespace lfs::python {
                 "enable_sparsity",
                 [](PyOptimizationParams& self) { return self.params().enable_sparsity; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.enable_sparsity = v; }); },
-                "Enable sparsity optimization")
+                "Run POPSpa sparsification after training")
+            .def_prop_rw(
+                "popspa_target_count",
+                [](PyOptimizationParams& self) { return self.params().popspa_target_count; },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.popspa_target_count = v; }); })
+            .def_prop_rw(
+                "popspa_first_prune_count",
+                [](PyOptimizationParams& self) { return self.params().popspa_first_prune_count; },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.popspa_first_prune_count = v; }); })
+            .def_prop_rw(
+                "popspa_sparsify_steps",
+                [](PyOptimizationParams& self) { return self.params().popspa_sparsify_steps; },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.popspa_sparsify_steps = v; }); })
+            .def_prop_rw(
+                "popspa_refine_steps",
+                [](PyOptimizationParams& self) { return self.params().popspa_refine_steps; },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.popspa_refine_steps = v; }); })
+            .def_prop_rw(
+                "popspa_projection_interval",
+                [](PyOptimizationParams& self) { return self.params().popspa_projection_interval; },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.popspa_projection_interval = v; }); })
+            .def_prop_rw(
+                "popspa_seed",
+                [](PyOptimizationParams& self) { return self.params().popspa_seed; },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.popspa_seed = v; }); })
+            .def_prop_rw(
+                "popspa_rho",
+                [](PyOptimizationParams& self) { return self.params().popspa_rho; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_rho = v; }); })
+            .def_prop_rw(
+                "popspa_erank_weight",
+                [](PyOptimizationParams& self) { return self.params().popspa_erank_weight; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_erank_weight = v; }); })
+            .def_prop_rw(
+                "popspa_thin_scale_weight",
+                [](PyOptimizationParams& self) { return self.params().popspa_thin_scale_weight; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_thin_scale_weight = v; }); })
+            .def_prop_rw(
+                "popspa_erank_epsilon",
+                [](PyOptimizationParams& self) { return self.params().popspa_erank_epsilon; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_erank_epsilon = v; }); })
+            .def_prop_rw(
+                "popspa_means_lr",
+                [](PyOptimizationParams& self) { return self.params().popspa_means_lr; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_means_lr = v; }); })
+            .def_prop_rw(
+                "popspa_scales_lr",
+                [](PyOptimizationParams& self) { return self.params().popspa_scales_lr; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_scales_lr = v; }); })
+            .def_prop_rw(
+                "popspa_opacities_lr",
+                [](PyOptimizationParams& self) { return self.params().popspa_opacities_lr; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_opacities_lr = v; }); })
+            .def_prop_rw(
+                "popspa_quaternions_lr",
+                [](PyOptimizationParams& self) { return self.params().popspa_quaternions_lr; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_quaternions_lr = v; }); })
+            .def_prop_rw(
+                "popspa_sh0_lr",
+                [](PyOptimizationParams& self) { return self.params().popspa_sh0_lr; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_sh0_lr = v; }); })
+            .def_prop_rw(
+                "popspa_shn_lr",
+                [](PyOptimizationParams& self) { return self.params().popspa_shn_lr; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_shn_lr = v; }); })
+            .def_prop_rw(
+                "popspa_ssim_weight",
+                [](PyOptimizationParams& self) { return self.params().popspa_ssim_weight; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.popspa_ssim_weight = v; }); })
             .def_prop_rw(
                 "mip_filter",
                 [](PyOptimizationParams& self) { return self.params().mip_filter; },
@@ -1347,6 +1471,9 @@ namespace lfs::python {
             .def_prop_ro(
                 "images", [](const PyDatasetConfig& self) { return self.params().images; },
                 "Subfolder name containing images")
+            .def_prop_ro(
+                "init_path", &PyDatasetConfig::init_path,
+                "Training initialization file; empty when training starts from the dataset's points")
             .def_prop_rw(
                 "test_every",
                 [](const PyDatasetConfig& self) { return self.params().test_every; },

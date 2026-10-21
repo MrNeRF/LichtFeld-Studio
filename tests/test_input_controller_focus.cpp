@@ -539,6 +539,8 @@ namespace lfs::vis {
         ASSERT_TRUE(rendering_manager.isGTComparisonActive());
         const auto press = [&](const int key, const int expected_uid) {
             controller.handleKey(key, input::ACTION_PRESS, input::KEYMOD_NONE);
+            // Browsing repeats on its own timer; an OS repeat must not add a step.
+            controller.handleKey(key, input::ACTION_REPEAT, input::KEYMOD_NONE);
             controller.handleKey(key, input::ACTION_RELEASE, input::KEYMOD_NONE);
             controller.update(0.016f);
             EXPECT_EQ(rendering_manager.getCurrentCameraId(), expected_uid);
@@ -930,6 +932,41 @@ namespace lfs::vis {
         expect_framed_near("hidden node");
     }
 
+    // Fails if one far floater makes F park the camera beyond the zoom-out limit.
+    TEST_F(InputControllerFocusTest, FocusFramesThroughFarFloatersAndCanZoomOut) {
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        SceneManager scene_manager;
+        ToolContext tool_context(nullptr, &scene_manager, &viewport, nullptr);
+        controller.setToolContext(&tool_context);
+
+        constexpr size_t count = 500;
+        std::vector<float> means(count * 3, 0.0f), rotations(count * 4, 0.0f);
+        for (size_t i = 0; i < count; ++i) {
+            means[i * 3] = static_cast<float>(i % 10) * 0.2f - 1.0f;
+            means[i * 3 + 1] = static_cast<float>((i / 10) % 10) * 0.2f - 1.0f;
+            rotations[i * 4] = 1.0f;
+        }
+        means[0] = 90000.0f; // one floater
+        scene_manager.getScene().addSplat(
+            "model",
+            std::make_unique<lfs::core::SplatData>(
+                0, Tensor::from_vector(means, {count, size_t{3}}, Device::CPU),
+                Tensor::zeros({count, size_t{1}, size_t{3}}, Device::CPU),
+                Tensor::zeros({count, size_t{0}, size_t{3}}, Device::CPU),
+                Tensor::zeros({count, size_t{3}}, Device::CPU),
+                Tensor::from_vector(rotations, {count, size_t{4}}, Device::CPU),
+                Tensor::zeros({count, size_t{1}}, Device::CPU), 1.0f));
+
+        ASSERT_TRUE(controller.focusSelection());
+        const float framed = glm::length(viewport.camera.pivot - viewport.camera.t);
+        EXPECT_LT(framed, 100.0f);
+        viewport.camera.zoom(-1.0f);
+        EXPECT_GT(glm::length(viewport.camera.pivot - viewport.camera.t), framed);
+    }
+
     TEST_F(InputControllerFocusTest, FrameAndHomeKeysWorkWhileAPanelHasKeyboardFocus) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
@@ -968,6 +1005,65 @@ namespace lfs::vis {
         focus.want_text_input = true;
         controller.handleKey(input::KEY_F, input::ACTION_PRESS, input::KEYMOD_NONE);
         EXPECT_EQ(viewport.camera.getPivot(), defaults.home_pivot);
+    }
+
+    // Fails if Ctrl+H does not restore the default home, as the Reset Home button does.
+    TEST_F(InputControllerFocusTest, CtrlHRestoresTheDefaultHome) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        const decltype(viewport.camera) defaults{};
+
+        viewport.camera.pivot = glm::vec3(7.0f);
+        controller.handleKey(input::KEY_H, input::ACTION_PRESS, input::KEYMOD_SHIFT);
+        ASSERT_NE(viewport.camera.home_pivot, defaults.home_pivot);
+
+        controller.handleKey(input::KEY_H, input::ACTION_PRESS, input::KEYMOD_CTRL);
+        EXPECT_EQ(viewport.camera.home_t, defaults.home_t);
+        EXPECT_EQ(viewport.camera.home_pivot, defaults.home_pivot);
+        EXPECT_EQ(viewport.camera.getPivot(), defaults.home_pivot);
+    }
+
+    // Fails if WASD, Shift speed-up or the speed keys stop while a panel row holds keyboard focus.
+    TEST_F(InputControllerFocusTest, NavigationKeysWorkWhileAPanelHasKeyboardFocus) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        controller.initialize();
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        auto& focus = gui::guiFocusState();
+        focus.want_capture_keyboard = true;
+        focus.any_item_active = true;
+        ASSERT_FALSE(router.isViewportKeyboardFocused());
+
+        // Hold W for half a second. Without a window the release cannot be read
+        // back from SDL, so focus loss clears the held key as it does in the app.
+        const auto travel = [&](const int mods) {
+            SDL_SetModState(mods & input::KEYMOD_SHIFT ? SDL_KMOD_LSHIFT : SDL_KMOD_NONE);
+            const glm::vec3 start = viewport.camera.t;
+            controller.handleKey(input::KEY_W, input::ACTION_PRESS, mods);
+            for (int i = 0; i < 30; ++i)
+                controller.update(1.0f / 60.0f);
+            const float distance = glm::length(viewport.camera.t - start);
+            controller.onWindowFocusLost();
+            viewport.camera.clearWasdMomentum();
+            SDL_SetModState(SDL_KMOD_NONE);
+            return distance;
+        };
+        const float plain = travel(input::KEYMOD_NONE);
+        EXPECT_GT(plain, 0.0f);
+        EXPECT_GT(travel(input::KEYMOD_SHIFT), plain * 1.5f);
+
+        const float speed = viewport.camera.getWasdSpeed();
+        controller.handleKey(input::KEY_EQUAL, input::ACTION_PRESS, input::KEYMOD_CTRL);
+        EXPECT_GT(viewport.camera.getWasdSpeed(), speed);
+
+        // A focused text field keeps its keys.
+        focus.want_text_input = true;
+        EXPECT_EQ(travel(input::KEYMOD_NONE), 0.0f);
     }
 
     TEST_F(InputControllerFocusTest, DeleteNodeShortcutFiresWhenViewportFocused) {
@@ -2170,7 +2266,7 @@ namespace lfs::vis {
         std::ifstream persisted(profile_path);
         ASSERT_TRUE(persisted.is_open());
         const std::string contents((std::istreambuf_iterator<char>(persisted)), {});
-        EXPECT_NE(contents.find("\"version\": 32"), std::string::npos); // PROFILE_VERSION
+        EXPECT_NE(contents.find("\"version\": 33"), std::string::npos); // PROFILE_VERSION
         EXPECT_NE(contents.find("Gallery Primary Action"), std::string::npos);
         EXPECT_NE(contents.find("Copy Gallery Link"), std::string::npos);
         EXPECT_NE(contents.find("Refresh Assets"), std::string::npos);
@@ -2341,11 +2437,21 @@ namespace lfs::vis {
                       accelerator.action);
             const auto before = dispatched[accelerator.action];
             const int console_before = python_console_toggle_calls;
+            // The home keys move the viewport camera instead of publishing a command.
+            const bool home_action = accelerator.action == Action::CAMERA_RESET_HOME ||
+                                     accelerator.action == Action::CAMERA_SET_HOME ||
+                                     accelerator.action == Action::CAMERA_RESTORE_HOME;
+            if (home_action)
+                viewport.camera.pivot = glm::vec3(3.0f);
+            const auto camera_before = std::pair{viewport.camera.getPivot(), viewport.camera.home_pivot};
             controller.handleKey(physical_key, logical_key, scancode,
                                  ACTION_PRESS, trigger->modifiers);
             controller.handleKey(physical_key, logical_key, scancode,
                                  ACTION_RELEASE, trigger->modifiers);
-            if (accelerator.action == Action::TOGGLE_PYTHON_CONSOLE)
+            if (home_action)
+                EXPECT_NE(std::pair(viewport.camera.getPivot(), viewport.camera.home_pivot), camera_before)
+                    << getActionName(accelerator.action);
+            else if (accelerator.action == Action::TOGGLE_PYTHON_CONSOLE)
                 EXPECT_EQ(python_console_toggle_calls, console_before + 1);
             else if (accelerator.action != Action::OPEN_PREFERENCES)
                 EXPECT_EQ(dispatched[accelerator.action], before + 1)

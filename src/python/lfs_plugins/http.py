@@ -3,6 +3,7 @@
 """Shared HTTP helpers with a CA-bundle fallback for bundled Python runtimes."""
 
 from __future__ import annotations
+from _lfs_path_io import native_path
 
 import logging
 import os
@@ -41,7 +42,7 @@ def _load_ca_bundle_from_certifi() -> Optional[str]:
             _log.debug("Failed to resolve CA bundle from %s: %s", module_name, redact(exc))
             continue
 
-        if cafile and os.path.exists(cafile):
+        if cafile and os.path.exists(native_path(cafile)):
             return cafile
     return None
 

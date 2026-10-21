@@ -3,6 +3,7 @@
 
 #include "theme.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "internal/resource_paths.hpp"
 #include "preferences.hpp"
@@ -815,7 +816,7 @@ namespace lfs::vis {
 
             try {
                 g_theme_manifest_path = getAssetPath(std::string(THEMES_MANIFEST_ASSET_NAME));
-                g_theme_manifest_mtime = std::filesystem::last_write_time(g_theme_manifest_path);
+                g_theme_manifest_mtime = lfs::core::native_fs::last_write_time(g_theme_manifest_path);
 
                 std::ifstream file;
                 if (!lfs::core::open_file_for_read(g_theme_manifest_path, file))
@@ -884,7 +885,7 @@ namespace lfs::vis {
                 }
 
                 syncThemePresetName(preset);
-                preset.mtime = std::filesystem::last_write_time(preset.path);
+                preset.mtime = lfs::core::native_fs::last_write_time(preset.path);
             } catch (...) {
                 preset.path.clear();
             }
@@ -892,10 +893,10 @@ namespace lfs::vis {
         }
 
         bool hotReloadThemePreset(ThemePresetRecord& preset) {
-            if (!preset.loaded || preset.path.empty() || !std::filesystem::exists(preset.path))
+            if (!preset.loaded || preset.path.empty() || !lfs::core::native_fs::exists(preset.path))
                 return false;
 
-            const auto mtime = std::filesystem::last_write_time(preset.path);
+            const auto mtime = lfs::core::native_fs::last_write_time(preset.path);
             if (mtime == preset.mtime)
                 return false;
 
@@ -1086,8 +1087,8 @@ namespace lfs::vis {
         bool active_theme_reloaded = false;
 
         try {
-            if (!g_theme_manifest_path.empty() && std::filesystem::exists(g_theme_manifest_path)) {
-                const auto manifest_mtime = std::filesystem::last_write_time(g_theme_manifest_path);
+            if (!g_theme_manifest_path.empty() && lfs::core::native_fs::exists(g_theme_manifest_path)) {
+                const auto manifest_mtime = lfs::core::native_fs::last_write_time(g_theme_manifest_path);
                 if (manifest_mtime != g_theme_manifest_mtime) {
                     LOG_INFO("Hot-reloading theme manifest");
                     loadThemesFromFiles();
@@ -1103,9 +1104,9 @@ namespace lfs::vis {
         try {
             for (const auto& preset : g_theme_presets) {
                 if (preset.variant_mode.empty() || preset.path.empty() ||
-                    !std::filesystem::exists(preset.path))
+                    !lfs::core::native_fs::exists(preset.path))
                     continue;
-                if (std::filesystem::last_write_time(preset.path) == preset.mtime)
+                if (lfs::core::native_fs::last_write_time(preset.path) == preset.mtime)
                     continue;
 
                 LOG_INFO("Hot-reloading theme family catalog");

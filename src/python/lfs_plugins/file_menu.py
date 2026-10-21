@@ -3,7 +3,8 @@
 """File menu implementation using Blender-style operators."""
 
 from collections.abc import Callable
-from pathlib import Path, PureWindowsPath
+from _lfs_path_io import Path
+from pathlib import PureWindowsPath
 import threading
 import uuid
 

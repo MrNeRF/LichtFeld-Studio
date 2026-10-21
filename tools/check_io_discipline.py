@@ -28,7 +28,7 @@ DEFAULT_ROOTS = (
 )
 SOURCE_SUFFIXES = {".cpp", ".hpp", ".h", ".cc"}
 SETG_CALL = re.compile(r"\bsetg\s*\(")
-STREAM_CTOR = re.compile(r"\bstd::(ifstream|ofstream)\s+[A-Za-z_]\w*\s*\(")
+STREAM_CTOR = re.compile(r"\b(?:std|lfs::core::native_fs|fs)::(ifstream|ofstream)\s+[A-Za-z_]\w*\s*\(")
 OPEN_CALL = re.compile(r"\b(open_file_for_read|open_file_for_write)\s*\(")
 
 ALLOWLIST_HEADER = """\

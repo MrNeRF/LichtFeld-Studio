@@ -8,7 +8,7 @@ import logging
 import sys
 import threading
 import time
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Callable, Dict, Set, TYPE_CHECKING
 
 from .plugin import PluginState

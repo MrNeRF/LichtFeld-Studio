@@ -424,10 +424,14 @@ namespace {
         };
         const auto hit = [&](Rml::Element* element) {
             const auto p = element->GetAbsoluteOffset(Rml::BoxArea::Border), s = element->GetBox().GetSize(Rml::BoxArea::Border);
+            // A scrub field's drag handle covers its input and takes the press, so the field is the target.
+            auto* target = element;
+            if (auto* field = element->GetParentNode(); field && field->IsClassSet("transform-drag-field"))
+                target = field;
             auto* found = real_context_->GetElementAtPoint({p.x + s.x * 0.5f, p.y + s.y * 0.5f});
-            for (; found && found != element; found = found->GetParentNode()) {}
-            EXPECT_EQ(found, element) << element->GetId() << " " << element->GetClassNames()
-                                      << " @ " << p.x << "," << p.y << " size " << s.x << "," << s.y;
+            for (; found && found != target; found = found->GetParentNode()) {}
+            EXPECT_EQ(found, target) << element->GetId() << " " << element->GetClassNames()
+                                     << " @ " << p.x << "," << p.y << " size " << s.x << "," << s.y;
         };
         auto* const primary = real_document->GetElementById("primary-utility-toolbar");
         auto* const secondary = real_document->GetElementById("secondary-utility-toolbar");

@@ -2891,4 +2891,24 @@ namespace {
         EXPECT_TRUE(cpu.parameters.dataset.data_path.is_absolute());
     }
 
+    // A transient preview has no payload binding and is never saved, so a
+    // training snapshot leaves it out instead of failing on it.
+    TEST(P5SessionChapterTest, SnapshotLeavesTransientNodesOut) {
+        lfs::core::param::TrainingParameters params;
+        params.dataset.data_path = "data/bicycle";
+        params.optimization.strategy = std::string(lfs::core::param::kStrategyMCMC);
+        lfs::core::Scene scene;
+        const auto training = scene.addSplatPlaceholder("Train");
+        ASSERT_NE(training, lfs::core::NULL_NODE);
+        scene.setTrainingModelNode(scene.getNodeUuid(training));
+        ASSERT_NE(scene.addSplatPlaceholder("Preview"), lfs::core::NULL_NODE);
+        scene.getMutableNode("Preview")->transient = true;
+        lfs::training::ProjectSnapshotCpuState cpu;
+        auto captured = lfs::training::capture_project_snapshot_cpu_state(
+            scene, params, lfs::core::generate_uuid_v4(), 1, cpu);
+        ASSERT_TRUE(captured) << lfs::format_for_developer(captured.error());
+        EXPECT_TRUE(std::ranges::any_of(cpu.scene_graph.nodes, [](const auto& node) { return node.name == "Train"; }));
+        EXPECT_TRUE(std::ranges::none_of(cpu.scene_graph.nodes, [](const auto& node) { return node.name == "Preview"; }));
+    }
+
 } // namespace

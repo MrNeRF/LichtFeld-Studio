@@ -5,6 +5,7 @@
 #include "transforms.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "formats/colmap.hpp"
@@ -232,19 +233,19 @@ namespace lfs::io {
             // Use path concatenation for proper Unicode handling
             auto image_path_png = image_path;
             image_path_png += ".png";
-            if (std::filesystem::exists(image_path_png)) {
+            if (lfs::core::native_fs::exists(image_path_png)) {
                 // blender data set has not extension, must assumes png
                 image_path = image_path_png;
                 LOG_TRACE("Using PNG extension for image: {}", lfs::core::path_to_utf8(image_path));
-            } else if (!file_path.has_extension() && !std::filesystem::exists(image_path)) {
+            } else if (!file_path.has_extension() && !lfs::core::native_fs::exists(image_path)) {
                 auto image_path_upper_png = image_path;
                 image_path_upper_png += ".PNG";
-                if (std::filesystem::exists(image_path_upper_png)) {
+                if (lfs::core::native_fs::exists(image_path_upper_png)) {
                     image_path = image_path_upper_png;
                     LOG_TRACE("Using PNG extension for image: {}", lfs::core::path_to_utf8(image_path));
                 }
             }
-            if (std::filesystem::exists(images_image_path) && std::filesystem::is_regular_file(images_image_path)) {
+            if (lfs::core::native_fs::exists(images_image_path) && lfs::core::native_fs::is_regular_file(images_image_path)) {
                 image_path = images_image_path;
             }
             return image_path;
@@ -254,11 +255,11 @@ namespace lfs::io {
         if (frame_file_path.find('\\') != std::string::npos) {
             // A backslash can also be part of a POSIX filename; keep a working literal path.
             std::error_code ec;
-            if (!std::filesystem::is_regular_file(image_path, ec)) {
+            if (!lfs::core::native_fs::is_regular_file(image_path, ec)) {
                 auto portable_path = frame_file_path;
                 std::replace(portable_path.begin(), portable_path.end(), '\\', '/');
                 const auto alternate = resolve(portable_path);
-                if (std::filesystem::is_regular_file(alternate, ec))
+                if (lfs::core::native_fs::is_regular_file(alternate, ec))
                     image_path = alternate;
             }
         }
@@ -332,7 +333,7 @@ namespace lfs::io {
             } else {
                 const auto image_path = GetTransformImagePath(dir_path, file_path);
                 std::error_code exists_error;
-                if (!std::filesystem::is_regular_file(image_path, exists_error)) {
+                if (!lfs::core::native_fs::is_regular_file(image_path, exists_error)) {
                     return {1, 1};
                 }
                 const auto info = lfs::core::get_image_info(image_path);
@@ -535,10 +536,10 @@ namespace lfs::io {
         LOG_TIMER_TRACE("Read transforms file");
 
         std::filesystem::path transformsFile = transPath;
-        if (std::filesystem::is_directory(transPath)) {
-            if (std::filesystem::is_regular_file(transPath / "transforms_train.json")) {
+        if (lfs::core::native_fs::is_directory(transPath)) {
+            if (lfs::core::native_fs::is_regular_file(transPath / "transforms_train.json")) {
                 transformsFile = transPath / "transforms_train.json";
-            } else if (std::filesystem::is_regular_file(transPath / "transforms.json")) {
+            } else if (lfs::core::native_fs::is_regular_file(transPath / "transforms.json")) {
                 transformsFile = transPath / "transforms.json";
             } else {
                 LOG_ERROR("Could not find transforms file in: {}", lfs::core::path_to_utf8(transPath));
@@ -546,7 +547,7 @@ namespace lfs::io {
             }
         }
 
-        if (!std::filesystem::is_regular_file(transformsFile)) {
+        if (!lfs::core::native_fs::is_regular_file(transformsFile)) {
             LOG_ERROR("Not a valid file: {}", lfs::core::path_to_utf8(transformsFile));
             throw std::runtime_error(lfs::core::path_to_utf8(transformsFile) + " is not a valid file");
         }
@@ -562,7 +563,7 @@ namespace lfs::io {
         std::filesystem::path dir_path = transformsFile.parent_path();
 
         std::error_code file_size_error;
-        const uintmax_t transforms_file_size = std::filesystem::file_size(transformsFile, file_size_error);
+        const uintmax_t transforms_file_size = lfs::core::native_fs::file_size(transformsFile, file_size_error);
         if (file_size_error || transforms_file_size == 0 || transforms_file_size > MAX_TRANSFORMS_JSON_BYTES)
             throw std::runtime_error("Transforms JSON is empty or exceeds the 64 MiB input budget");
 
@@ -684,18 +685,18 @@ namespace lfs::io {
                     if (frame.mask_path.find('\\') != std::string::npos) {
                         // Preserve literal backslashes in existing POSIX filenames.
                         std::error_code ec;
-                        if (!std::filesystem::is_regular_file(camdata._mask_path, ec)) {
+                        if (!lfs::core::native_fs::is_regular_file(camdata._mask_path, ec)) {
                             auto portable_path = frame.mask_path;
                             std::replace(portable_path.begin(), portable_path.end(), '\\', '/');
                             const auto mask_path = dir_path / lfs::core::utf8_to_path(portable_path);
-                            if (std::filesystem::is_regular_file(mask_path, ec))
+                            if (lfs::core::native_fs::is_regular_file(mask_path, ec))
                                 camdata._mask_path = mask_path;
                         }
                     }
                 }
                 camdata._has_image = [&] {
                     std::error_code exists_error;
-                    return std::filesystem::is_regular_file(camdata._image_path, exists_error);
+                    return lfs::core::native_fs::is_regular_file(camdata._image_path, exists_error);
                 }();
 
                 camdata._image_name = lfs::core::path_to_utf8(camdata._image_path.filename());
@@ -769,8 +770,8 @@ namespace lfs::io {
 
         LOG_INFO("Loaded {} cameras from transforms file", camerasdata.size());
 
-        if (std::filesystem::is_regular_file(dir_path / "train.txt") &&
-            std::filesystem::is_regular_file(dir_path / "test.txt")) {
+        if (lfs::core::native_fs::is_regular_file(dir_path / "train.txt") &&
+            lfs::core::native_fs::is_regular_file(dir_path / "test.txt")) {
             throw_if_load_cancel_requested(options, "Transforms split metadata load cancelled");
             LOG_DEBUG("Found train.txt and test.txt files, loading image splits");
 
@@ -827,7 +828,7 @@ namespace lfs::io {
                                            const LoadOptions& options) {
         LOG_DEBUG("Loading simple PLY point cloud from: {}", lfs::core::path_to_utf8(filepath));
 
-        if (!std::filesystem::exists(filepath)) {
+        if (!lfs::core::native_fs::exists(filepath)) {
             throw std::runtime_error(std::format("PLY file not found: {}", lfs::core::path_to_utf8(filepath)));
         }
 

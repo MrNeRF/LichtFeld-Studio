@@ -283,6 +283,7 @@ namespace lfs::vis::project {
                    const std::filesystem::path& expected_path = {},
                    std::string expected_project_uuid = {});
         [[nodiscard]] ProjectWritePoll pollWrite();
+        [[nodiscard]] lfs::Result<ProjectTrainingSource> trainingSource();
         void joinPendingWrite();
         [[nodiscard]] ProjectMenuInfo menuInfo() const;
         [[nodiscard]] lfs::Result<void>
@@ -643,6 +644,9 @@ namespace lfs::vis::project {
         isTrainingCheckpointStale() const;
         [[nodiscard]] bool
         canFlushFinishedTrainerSnapshot() const;
+        // The loaded dataset's folder: the scene's, else the trainer's; empty
+        // without a dataset.
+        [[nodiscard]] std::filesystem::path loadedDatasetPath() const;
         // Keep these guards before snapshot adoption, without duplicating them
         // in the display reader. nullopt means the document needs further checks.
         [[nodiscard]] std::optional<bool> dirtyProjectPreflight() const;

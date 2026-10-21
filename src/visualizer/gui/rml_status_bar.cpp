@@ -1486,7 +1486,9 @@ namespace lfs::vis::gui {
             split_enabled = split_info_cache_.enabled;
             if (split_enabled) {
                 split_mode_rml = split_info_cache_.mode_label;
-                split_detail_rml = split_info_cache_.detail_label;
+                // Model names are already shown inside their comparison panels.
+                if (!splitViewUsesPLYComparison(rm->getSettings().split_view_mode))
+                    split_detail_rml = split_info_cache_.detail_label;
             }
         }
         setModelBool("show_split", model_.show_split, split_enabled);

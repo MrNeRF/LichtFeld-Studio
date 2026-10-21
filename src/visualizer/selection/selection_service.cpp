@@ -2248,11 +2248,17 @@ namespace lfs::vis {
 
         const auto render_cursor = screenToRender(cursor_pos, context->info);
         const bool add_mode = mode != SelectionMode::Remove;
+        auto* const preview = hit && picked_ring_id >= 0 ? &command_selection_buffer_ : nullptr;
+        // The render shows only the ring under the cursor. Moving within that
+        // ring or over empty space needs no new frame.
+        if (rendering_manager_->cursorPreviewShows(picked_ring_id, add_mode, context->panel, preview)) {
+            return;
+        }
         rendering_manager_->setCursorPreviewState(
             true, render_cursor.x, render_cursor.y, 0.0f, add_mode, nullptr, false, 0.0f,
             context->panel, picked_ring_id);
-        if (hit && picked_ring_id >= 0) {
-            rendering_manager_->setPreviewSelection(&command_selection_buffer_, add_mode);
+        if (preview) {
+            rendering_manager_->setPreviewSelection(preview, add_mode);
         } else {
             rendering_manager_->clearPreviewSelection();
         }
@@ -2308,12 +2314,21 @@ namespace lfs::vis {
         if (!session.preview_dirty && !continuous_refresh) {
             return;
         }
-        LOG_TIMER("SelectionService::refreshInteractivePreview");
-
         if (!session.viewport_context || !session.viewport_context->info.valid()) {
             return;
         }
         const auto& context = *session.viewport_context;
+        // Polygon and ring previews also follow the camera and the model. Refresh
+        // them when one of those changed, not on every frame.
+        std::optional<std::size_t> view_key;
+        if (continuous_refresh && context.viewport) {
+            view_key = interactivePreviewViewKey(context);
+            if (!session.preview_dirty && session.preview_view_key == view_key) {
+                return;
+            }
+        }
+        LOG_TIMER("SelectionService::refreshInteractivePreview");
+
         const auto& info = context.info;
         const bool add_mode = (session.mode != SelectionMode::Remove);
 
@@ -2400,6 +2415,37 @@ namespace lfs::vis {
 
         rendering_manager_->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
         session.preview_dirty = false;
+        session.preview_view_key = view_key;
+    }
+
+    std::size_t SelectionService::interactivePreviewViewKey(const ViewerViewportContext& context) const {
+        auto hash_combine = [](std::size_t& seed, const auto& value) {
+            seed ^= std::hash<std::decay_t<decltype(value)>>{}(value) +
+                    static_cast<std::size_t>(0x9e3779b9) + (seed << 6) + (seed >> 2);
+        };
+        std::size_t key = 0;
+        hash_combine(key, scene_manager_ ? scene_manager_->getScene().renderGeneration() : 0);
+        hash_combine(key, scene_manager_ ? scene_manager_->getScene().selectionGeneration() : 0);
+        hash_combine(key, context.panel);
+        hash_combine(key, context.info.x);
+        hash_combine(key, context.info.y);
+        hash_combine(key, context.info.width);
+        hash_combine(key, context.info.height);
+        hash_combine(key, context.info.render_width);
+        hash_combine(key, context.info.render_height);
+        const auto& camera = context.viewport->camera;
+        for (int i = 0; i < 3; ++i) {
+            hash_combine(key, camera.t[i]);
+            for (int j = 0; j < 3; ++j) {
+                hash_combine(key, camera.R[i][j]);
+            }
+        }
+        const auto settings = rendering_manager_->getSettings();
+        hash_combine(key, settings.focal_length_mm);
+        hash_combine(key, settings.orthographic);
+        hash_combine(key, settings.ortho_scale);
+        hash_combine(key, settings.equirectangular);
+        return key;
     }
 
     SelectionResult SelectionService::commitSelection(const core::Tensor& selection, const SelectionMode mode,

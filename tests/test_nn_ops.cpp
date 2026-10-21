@@ -452,6 +452,32 @@ TEST_F(NnOpsTest, LayerNormAndRmsNorm) {
     EXPECT_TRUE(all_close(host_f32(yr), rms_ref, kF32Rtol, kF32Atol));
 }
 
+// Rows span several warps, so every warp must normalise with the block-wide mean; under compute-sanitizer racecheck
+// this fails when the reduction scratch is reused before all warps have read the mean.
+TEST_F(NnOpsTest, LayerNormAcrossWarpsMatchesReference) {
+    const int rows = 257;
+    for (const int cols : {112, 224, 448, 896}) {
+        SCOPED_TRACE(cols);
+        std::vector<float> x(static_cast<std::size_t>(rows) * cols), w(cols), b(cols);
+        for (std::size_t i = 0; i < x.size(); ++i) {
+            x[i] = std::sin(0.13f * i) + 0.3f * std::cos(0.23f * i);
+        }
+        for (int c = 0; c < cols; ++c) {
+            w[c] = 0.7f + 0.001f * c;
+            b[c] = 0.03f * std::sin(0.1f * c);
+        }
+        const auto expected = cpu_layer_norm(x, w, b, rows, cols, 1e-6f);
+        for (const auto dtype : {lfs::core::DataType::Float32, lfs::core::DataType::Float16}) {
+            auto X = upload(x, {static_cast<std::size_t>(rows), static_cast<std::size_t>(cols)}, dtype);
+            auto W = upload(w, {static_cast<std::size_t>(cols)}, dtype);
+            auto B = upload(b, {static_cast<std::size_t>(cols)}, dtype);
+            auto y = lfs::core::nn::layer_norm(X, W, B, 1e-6f);
+            const bool half = dtype == lfs::core::DataType::Float16;
+            EXPECT_TRUE(all_close(host_f32(y), expected, half ? kF16Rtol : kF32Rtol, half ? kF16Atol : kF32Atol));
+        }
+    }
+}
+
 TEST_F(NnOpsTest, SoftmaxLastDim) {
     std::vector<float> x = {1.0f, 2.0f, 3.0f, -1.0f, 0.0f, 5.0f};
     auto X = upload(x, {2, 3}, lfs::core::DataType::Float32);

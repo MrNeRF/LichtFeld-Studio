@@ -7,6 +7,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "formats/transforms.hpp"
@@ -78,7 +79,7 @@ namespace lfs::io {
         auto start_time = std::chrono::high_resolution_clock::now();
 
         // Validate path exists
-        if (!std::filesystem::exists(path)) {
+        if (!lfs::core::native_fs::exists(path)) {
             return make_error(ErrorCode::PATH_NOT_FOUND,
                               "Blender/NeRF dataset path does not exist", path);
         }
@@ -95,12 +96,12 @@ namespace lfs::io {
         // Determine transforms file path
         std::filesystem::path transforms_file;
 
-        if (std::filesystem::is_directory(path)) {
+        if (lfs::core::native_fs::is_directory(path)) {
             // Look for transforms files in directory
-            if (std::filesystem::exists(path / "transforms_train.json")) {
+            if (lfs::core::native_fs::exists(path / "transforms_train.json")) {
                 transforms_file = path / "transforms_train.json";
                 LOG_DEBUG("Found transforms_train.json");
-            } else if (std::filesystem::exists(path / "transforms.json")) {
+            } else if (lfs::core::native_fs::exists(path / "transforms.json")) {
                 transforms_file = path / "transforms.json";
                 LOG_DEBUG("Found transforms.json");
             } else {
@@ -438,7 +439,7 @@ namespace lfs::io {
                         auto ply_path = json["ply_file_path"].get<std::string>();
                         pointcloud_path = base_path / lfs::core::utf8_to_path(ply_path);
                         // Keep existing native filenames; retry Windows separators on other platforms.
-                        if (ply_path.find('\\') != std::string::npos && !std::filesystem::exists(pointcloud_path)) {
+                        if (ply_path.find('\\') != std::string::npos && !lfs::core::native_fs::exists(pointcloud_path)) {
                             std::replace(ply_path.begin(), ply_path.end(), '\\', '/');
                             normalized_candidate = base_path / lfs::core::utf8_to_path(ply_path);
                         }
@@ -447,7 +448,7 @@ namespace lfs::io {
                     // Ignore parse errors - will fallback to default pointcloud.ply
                 }
             }
-            if (pointcloud_path.empty() || !std::filesystem::exists(pointcloud_path)) {
+            if (pointcloud_path.empty() || !lfs::core::native_fs::exists(pointcloud_path)) {
                 pointcloud_path = base_path / "pointcloud.ply";
             }
 
@@ -461,7 +462,7 @@ namespace lfs::io {
             std::optional<PointCloud> loaded_point_cloud;
             if (!normalized_candidate.empty()) {
                 std::error_code ec;
-                if (std::filesystem::is_regular_file(normalized_candidate, ec)) {
+                if (lfs::core::native_fs::is_regular_file(normalized_candidate, ec)) {
                     try {
                         loaded_point_cloud = load_simple_ply_point_cloud(normalized_candidate, options);
                         pointcloud_path = normalized_candidate;
@@ -472,7 +473,7 @@ namespace lfs::io {
                     }
                 }
             }
-            if (loaded_point_cloud || std::filesystem::exists(pointcloud_path)) {
+            if (loaded_point_cloud || lfs::core::native_fs::exists(pointcloud_path)) {
                 if (!loaded_point_cloud) {
                     loaded_point_cloud = load_simple_ply_point_cloud(pointcloud_path, options);
                 }
@@ -544,14 +545,14 @@ namespace lfs::io {
     }
 
     bool BlenderLoader::canLoad(const std::filesystem::path& path) const {
-        if (!std::filesystem::exists(path)) {
+        if (!lfs::core::native_fs::exists(path)) {
             return false;
         }
 
-        if (std::filesystem::is_directory(path)) {
+        if (lfs::core::native_fs::is_directory(path)) {
             // Check for transforms files in directory
-            return std::filesystem::exists(path / "transforms.json") ||
-                   std::filesystem::exists(path / "transforms_train.json");
+            return lfs::core::native_fs::exists(path / "transforms.json") ||
+                   lfs::core::native_fs::exists(path / "transforms_train.json");
         } else {
             // Check if it's a JSON file
             return path.extension() == ".json";

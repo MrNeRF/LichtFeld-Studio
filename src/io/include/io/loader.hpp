@@ -141,6 +141,8 @@ namespace lfs::io {
         std::vector<std::string> warnings;
         std::optional<ImportGeoreference> georeference;
         std::optional<std::vector<std::uint8_t>> license_bytes;
+        // Keep legacy editable SplatData storage; comparisons draw these as points.
+        bool point_cloud_source = false;
     };
 
     /**
@@ -217,6 +219,10 @@ namespace lfs::io {
     /// Check if PLY contains Gaussian splat properties (opacity, scaling, rotation)
     /// Returns false for simple point clouds (xyz + colors only)
     LFS_IO_API bool is_gaussian_splat_ply(const std::filesystem::path& filepath);
+
+    /// Check if the loader reads this file as a triangle mesh: a mesh format, a PLY with faces,
+    /// or a GLB without splat data
+    LFS_IO_API bool is_mesh_file(const std::filesystem::path& filepath);
 
     /// Load PLY as simple point cloud (xyz + optional colors and normals)
     /// Use this for PLY files that are NOT Gaussian splats

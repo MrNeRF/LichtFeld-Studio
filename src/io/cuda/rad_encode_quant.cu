@@ -441,7 +441,7 @@ namespace lfs::io::cuda {
                            "io.rad.quantize_batch_sync");
         } catch (const std::exception& e) {
             LOG_WARN(
-                "RAD GPU quantize_batch CUDA failure (CPU fallback exists): {}", e.what());
+                "RAD GPU quantize_batch CUDA failure (CPU fallback exists): %s", e.what());
             s.failed = true;
             return false;
         } catch (...) {

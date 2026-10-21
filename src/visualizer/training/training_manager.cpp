@@ -10,6 +10,7 @@
 #include "core/events.hpp"
 #include "core/guarded_task.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
 #include "core/reactive/store.hpp"
@@ -28,6 +29,7 @@
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat/Ops.h"
 #include "training/rasterization/gsplat_rasterizer.hpp"
+#include "training/training_cropbox_mask.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/post_work_utils.hpp"
@@ -392,7 +394,11 @@ namespace lfs::vis {
                   run_on_owner(std::move(run_on_owner)) {
                 const auto* const model_node =
                     scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
-                if (model_node && model_node->model) {
+                // Training starts from the dataset over a transient preview
+                // (see prepareTrainingModel); a rollback binds the preview again.
+                if (model_node && model_node->transient) {
+                    transient_model_uuid = model_node->uuid;
+                } else if (model_node && model_node->model) {
                     had_model = true;
                     model_name = model_node->name;
                     original_model = std::make_unique<lfs::core::SplatData>(
@@ -406,18 +412,13 @@ namespace lfs::vis {
                 }
 
                 if (!had_model) {
-                    for (const auto* node : scene.getNodes()) {
-                        if (!node || node->type != lfs::core::NodeType::POINTCLOUD ||
-                            !node->point_cloud) {
-                            continue;
-                        }
+                    if (const auto* node = scene.getDatasetPointCloudNode()) {
                         point_cloud = makeRestoreNodeDesc(*node);
                         const auto cropbox_id = scene.getCropBoxForSplat(node->id);
                         if (const auto* cropbox_node = scene.getNodeById(cropbox_id);
                             cropbox_node && cropbox_node->cropbox) {
                             cropbox = makeRestoreNodeDesc(*cropbox_node);
                         }
-                        break;
                     }
                 }
             }
@@ -462,6 +463,7 @@ namespace lfs::vis {
                 result.locked = node.locked.get();
                 result.training_enabled = node.training_enabled;
                 result.payload_diverged = node.payload_diverged;
+                result.point_cloud_source = node.point_cloud_source;
                 result.payload_hydration = node.payload_hydration;
                 result.georef_pose = node.georef_pose;
                 result.point_cloud = node.point_cloud;
@@ -483,7 +485,8 @@ namespace lfs::vis {
                         scene->replaceNodeModel(model_name, std::move(original_model));
                     } else if (graph_mutated) {
                         const auto model_id = scene->getTrainingModelNodeId();
-                        if (model_id != lfs::core::NULL_NODE) {
+                        if (model_id != lfs::core::NULL_NODE &&
+                            scene->getTrainingModelNodeUuid() != transient_model_uuid) {
                             scene->removeNodeById(model_id, false);
                         }
                         if (point_cloud) {
@@ -496,7 +499,9 @@ namespace lfs::vis {
                                 static_cast<void>(scene->restoreNodeWithUuid(std::move(restored_cropbox)));
                             }
                         }
-                        scene->setTrainingModelNode(lfs::core::Uuid{});
+                        scene->setTrainingModelNode(scene->getNodeByUuid(transient_model_uuid)
+                                                        ? transient_model_uuid
+                                                        : lfs::core::Uuid{});
                     }
                     scene->setInitialPointCloud(initial_point_cloud);
                     scene->setPointCloudModified(point_cloud_modified);
@@ -510,6 +515,7 @@ namespace lfs::vis {
 
             lfs::core::Scene* scene = nullptr;
             bool had_model = false;
+            lfs::core::Uuid transient_model_uuid;
             std::string model_name;
             std::unique_ptr<lfs::core::SplatData> original_model;
             std::optional<lfs::core::Scene::RestoreNodeDesc> point_cloud;
@@ -1238,6 +1244,12 @@ namespace lfs::vis {
         return getCurrentIteration() == *checkpoint_baseline_iteration_;
     }
 
+    void TrainerManager::syncCropBox() {
+        if (!trainer_ || !scene_)
+            return;
+        trainer_->setCropBoxSnapshot(lfs::training::resolve_training_cropbox_geom(*scene_));
+    }
+
     bool TrainerManager::startTraining() {
         LOG_TIMER("TrainerManager::startTraining");
 
@@ -1393,7 +1405,7 @@ namespace lfs::vis {
         if (!trainer_->isInitialized() && params.init_path && !params.init_path->empty()) {
             std::error_code path_error;
             const auto init_path = lfs::core::utf8_to_path(*params.init_path);
-            if (!std::filesystem::exists(init_path, path_error)) {
+            if (!lfs::core::native_fs::exists(init_path, path_error)) {
                 const auto reason = path_error
                                         ? std::format("Cannot access training initialization file '{}': {}",
                                                       *params.init_path,
@@ -1848,6 +1860,7 @@ namespace lfs::vis {
         completion_pending_.store(true, std::memory_order_release);
 
         last_training_error_.clear();
+        syncCropBox();
         auto worker = std::make_unique<std::jthread>(
             [this](const std::stop_token stop_token) {
                 trainingInitializationThreadFunc(stop_token);

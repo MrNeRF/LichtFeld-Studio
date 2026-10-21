@@ -31,6 +31,8 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/ElementText.h>
+#include <RmlUi/Core/ElementUtilities.h>
 #include <SDL3/SDL_keycode.h>
 #include <SDL3/SDL_video.h>
 #include <algorithm>
@@ -51,6 +53,11 @@ namespace lfs::vis::gui {
                 auto* const child = element->GetChild(i);
                 if (!child || child->GetDisplay() == Rml::Style::Display::None)
                     continue;
+                // Text nodes have no box of their own; an access-key label is text, span, text.
+                if (auto* const text = dynamic_cast<Rml::ElementText*>(child)) {
+                    children_width += static_cast<float>(Rml::ElementUtilities::GetStringWidth(text, text->GetText()));
+                    continue;
+                }
 
                 const auto position = child->GetComputedValues().position();
                 if (position == Rml::Style::Position::Absolute ||
@@ -114,9 +121,43 @@ namespace lfs::vis::gui {
                 const auto& child_box = child->GetBox();
                 const float frame_width = child_box.GetSize(Rml::BoxArea::Margin).x -
                                           child_box.GetSize().x;
-                width += untruncatedContentWidth(child) + frame_width;
+                float content_width = untruncatedContentWidth(child);
+                // A shortcut cell keeps the popup's shared shortcut width.
+                if (child->IsClassSet("shortcut"))
+                    content_width = std::max(content_width, child_box.GetSize().x);
+                width += content_width + frame_width;
             }
             return width;
+        }
+
+        // Gives the shortcut cells of one popup the widest shortcut's width, so the shortcuts form
+        // one left-aligned column at the popup edge and the checkmarks before them line up.
+        bool shareShortcutWidth(Rml::Element* popup) {
+            Rml::ElementList rows;
+            collectDirectMenuRows(popup, rows);
+            std::vector<Rml::Element*> cells;
+            float width = 0.0f;
+            for (auto* const row : rows) {
+                for (int i = 0; i < row->GetNumChildren(); ++i) {
+                    auto* const child = row->GetChild(i);
+                    if (!child || !child->IsClassSet("shortcut") || child->GetDisplay() == Rml::Style::Display::None)
+                        continue;
+                    cells.push_back(child);
+                    // An empty cell reports its own box, which already carries the shared width.
+                    if (child->GetNumChildren() > 0)
+                        width = std::max(width, untruncatedContentWidth(child));
+                }
+            }
+            width = std::ceil(width);
+            bool changed = false;
+            for (auto* const cell : cells) {
+                if (const auto* const current = cell->GetLocalProperty(Rml::PropertyId::MinWidth);
+                    current && current->unit == Rml::Unit::PX && current->Get<float>() == width)
+                    continue;
+                cell->SetProperty(Rml::PropertyId::MinWidth, Rml::Property(width, Rml::Unit::PX));
+                changed = true;
+            }
+            return changed;
         }
 
         float popupContentWidth(Rml::Element* popup) {
@@ -127,6 +168,30 @@ namespace lfs::vis::gui {
             for (auto* const row : rows)
                 width = std::max(width, menuRowContentWidth(row));
             return width;
+        }
+
+        // Toggle rows show a checkmark before the shortcut. In a popup with a toggle, every action
+        // row gets the checkmark slot and, when the popup has shortcuts, a shortcut cell, so the
+        // checkmarks share a column and the shortcuts still end at the popup edge.
+        template <typename View>
+        std::vector<View> withSharedCheckmarkColumn(std::vector<View> views) {
+            if (std::none_of(views.begin(), views.end(), [](const View& view) { return view.show_checkmark; }))
+                return views;
+            const bool has_shortcuts =
+                std::any_of(views.begin(), views.end(), [](const View& view) { return view.has_shortcut; });
+            for (auto& view : views) {
+                if constexpr (requires { view.is_label; }) {
+                    if (view.is_label)
+                        continue;
+                }
+                if constexpr (requires { view.has_children; }) {
+                    if (view.has_children)
+                        continue;
+                }
+                view.show_checkmark = true;
+                view.has_shortcut = view.has_shortcut || has_shortcuts;
+            }
+            return views;
         }
 
         MenuDropdownLeafView makeLeafItemView(const MenuItemDesc& item) {
@@ -281,7 +346,7 @@ namespace lfs::vis::gui {
                     view.separator_before = separator_before;
                     separator_before = false;
                     ++pos;
-                    view.children = buildLeafMenuItems(items, pos, warned_excess_depth);
+                    view.children = withSharedCheckmarkColumn(buildLeafMenuItems(items, pos, warned_excess_depth));
                     result.push_back(std::move(view));
                     break;
                 }
@@ -329,7 +394,7 @@ namespace lfs::vis::gui {
                     view.separator_before = separator_before;
                     separator_before = false;
                     ++pos;
-                    view.children = buildGrandchildMenuItems(items, pos, warned_excess_depth);
+                    view.children = withSharedCheckmarkColumn(buildGrandchildMenuItems(items, pos, warned_excess_depth));
                     result.push_back(std::move(view));
                     break;
                 }
@@ -379,7 +444,7 @@ namespace lfs::vis::gui {
                     view.separator_before = separator_before;
                     separator_before = false;
                     ++pos;
-                    view.children = buildChildMenuItems(items, pos, warned_excess_depth);
+                    view.children = withSharedCheckmarkColumn(buildChildMenuItems(items, pos, warned_excess_depth));
                     result.push_back(std::move(view));
                     break;
                 }
@@ -553,8 +618,6 @@ namespace lfs::vis::gui {
                 return "tools";
             if (idname == "lfs_plugins.view_menu.ViewMenu")
                 return "view";
-            if (idname == "lfs_plugins.help_menu.HelpMenu")
-                return "help";
             return nullptr;
         }
 
@@ -631,6 +694,7 @@ namespace lfs::vis::gui {
             handle.RegisterMember("label", &MenuLabelView::label);
             handle.RegisterMember("access", &MenuLabelView::access);
             handle.RegisterMember("active", &MenuLabelView::active);
+            handle.RegisterMember("logo", &MenuLabelView::logo);
         }
         if (auto handle = ctor.RegisterStruct<MenuDropdownLeafView>()) {
             handle.RegisterMember("index", &MenuDropdownLeafView::index);
@@ -722,6 +786,7 @@ namespace lfs::vis::gui {
         }
         ctor.RegisterArray<std::vector<MenuToolbarButtonView>>();
         ctor.Bind("menu_labels", &menu_labels_);
+        ctor.Bind("brand_logo_src", &brand_logo_src_);
         ctor.Bind("dropdown_items", &dropdown_items_);
         ctor.Bind("menu_camera_buttons", &camera_buttons_);
         ctor.Bind("menu_render_buttons", &render_buttons_);
@@ -771,7 +836,6 @@ namespace lfs::vis::gui {
         dropdown_overlay_ = document_->GetElementById("dropdown-overlay");
         dropdown_container_ = document_->GetElementById("dropdown-container");
         dropdown_popup_ = document_->GetElementById("dropdown-popup");
-        brand_logo_ = document_->GetElementById("brand-logo");
         project_title_container_ = document_->GetElementById("project-title");
         project_title_el_ = document_->GetElementById("project-title-content");
         menu_toolbar_ = document_->GetElementById("menu-toolbar");
@@ -810,7 +874,6 @@ namespace lfs::vis::gui {
         dropdown_container_ = nullptr;
         dropdown_popup_ = nullptr;
         dropdown_overlay_ = nullptr;
-        brand_logo_ = nullptr;
         project_title_container_ = nullptr;
         project_title_el_ = nullptr;
         menu_toolbar_ = nullptr;
@@ -860,7 +923,6 @@ namespace lfs::vis::gui {
         dropdown_container_ = nullptr;
         dropdown_popup_ = nullptr;
         dropdown_overlay_ = nullptr;
-        brand_logo_ = nullptr;
         project_title_container_ = nullptr;
         project_title_el_ = nullptr;
         menu_toolbar_ = nullptr;
@@ -903,7 +965,6 @@ namespace lfs::vis::gui {
         dropdown_overlay_ = document_->GetElementById("dropdown-overlay");
         dropdown_container_ = document_->GetElementById("dropdown-container");
         dropdown_popup_ = document_->GetElementById("dropdown-popup");
-        brand_logo_ = document_->GetElementById("brand-logo");
         project_title_container_ = document_->GetElementById("project-title");
         project_title_el_ = document_->GetElementById("project-title-content");
         menu_toolbar_ = document_->GetElementById("menu-toolbar");
@@ -981,10 +1042,13 @@ namespace lfs::vis::gui {
         menu_labels_.clear();
         menu_labels_.reserve(current_labels_.size());
         for (size_t i = 0; i < current_labels_.size(); ++i) {
+            // Help has no label of its own: the brand logo is its entry.
+            const bool logo = current_idnames_[i] == "lfs_plugins.help_menu.HelpMenu";
             menu_labels_.push_back(MenuLabelView{
                 .index = static_cast<int>(i),
-                .label = current_labels_[i],
+                .label = logo ? std::string{} : current_labels_[i],
                 .active = static_cast<int>(i) == active_index_,
+                .logo = logo,
             });
         }
         assignTopLevelAccessKeys(menu_labels_, current_idnames_);
@@ -1801,7 +1865,7 @@ namespace lfs::vis::gui {
     }
 
     std::vector<MenuDropdownRootView> RmlMenuBar::buildDropdownItems(const std::vector<MenuItemDesc>& items) {
-        auto built = buildRootMenuItems(items);
+        auto built = withSharedCheckmarkColumn(buildRootMenuItems(items));
         assignSiblingAccessKeys(built);
         return built;
     }
@@ -1968,11 +2032,11 @@ namespace lfs::vis::gui {
             else if (settings.show_center_markers)
                 active_mode = "centers";
 
-            render_buttons.push_back(make("menu-render-splats", "set_render_mode", "splats", "blob",
+            render_buttons.push_back(make("menu-render-splats", "set_render_mode", "splats", "splats",
                                           "toolbar.splat_rendering", "Splat Rendering",
                                           active_mode == "splats"));
             render_buttons.push_back(make("menu-render-points", "set_render_mode", "points",
-                                          "dots-diagonal", "toolbar.point_cloud", "Point Cloud",
+                                          "points", "toolbar.point_cloud", "Point Cloud",
                                           active_mode == "points"));
             render_buttons.push_back(make("menu-render-rings", "set_render_mode", "rings", "ring",
                                           "toolbar.gaussian_rings", "Gaussian Rings",
@@ -1983,7 +2047,7 @@ namespace lfs::vis::gui {
 
             const bool ortho = settings.orthographic;
             projection_buttons.push_back(make("menu-projection", "toggle_projection", "",
-                                              ortho ? "box" : "perspective",
+                                              ortho ? "orthographic" : "perspective",
                                               ortho ? "toolbar.orthographic" : "toolbar.perspective",
                                               ortho ? "Orthographic" : "Perspective", ortho));
             projection_buttons.push_back(make("menu-depth-view", "toggle_depth_view", "", "depth-map",
@@ -1992,7 +2056,7 @@ namespace lfs::vis::gui {
             bool view_snap = false;
             if (const auto* ic = lfs::vis::InputController::instance())
                 view_snap = ic->cameraViewSnapEnabled();
-            projection_buttons.push_back(make("menu-view-snap", "toggle_camera_view_snap", "", "check",
+            projection_buttons.push_back(make("menu-view-snap", "toggle_camera_view_snap", "", "magnet",
                                               "", "Snap Axis Views", view_snap));
         }
 
@@ -2491,6 +2555,12 @@ namespace lfs::vis::gui {
         if (collapsed)
             rml_context_->Update();
 
+        bool shared = false;
+        for (const auto& popup : popups)
+            shared = shareShortcutWidth(popup.element) || shared;
+        if (shared)
+            rml_context_->Update();
+
         bool fitted = false;
         for (const auto& popup : popups) {
             const float content_width = std::ceil(popupContentWidth(popup.element));
@@ -2549,12 +2619,8 @@ namespace lfs::vis::gui {
 
         rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/menubar.theme.rcss"));
 
-        if (brand_logo_) {
-            const auto logo_path = lfs::vis::getAssetPath("lichtfeld-icon.png");
-            brand_logo_->SetAttribute("src", rml_theme::pathToRmlImageSource(logo_path));
-            brand_logo_->SetProperty("width", "20dp");
-            brand_logo_->SetProperty("height", "20dp");
-        }
+        brand_logo_src_ = rml_theme::pathToRmlImageSource(lfs::vis::getAssetPath("lichtfeld-icon.png"));
+        menu_model_.DirtyVariable("brand_logo_src");
         return true;
     }
 

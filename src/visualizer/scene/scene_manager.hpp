@@ -420,6 +420,7 @@ namespace lfs::vis {
                 glm::mat4 local_transform{1.0f};
                 bool visible = true;
                 bool locked = false;
+                bool point_cloud_source = false;
                 std::unique_ptr<lfs::core::SplatData> data;
                 std::shared_ptr<lfs::core::MeshData> mesh;
                 std::unique_ptr<core::CropBoxData> cropbox;

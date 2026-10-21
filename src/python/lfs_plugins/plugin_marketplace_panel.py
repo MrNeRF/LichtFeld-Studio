@@ -8,7 +8,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 import lichtfeld as lf

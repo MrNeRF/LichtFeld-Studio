@@ -6,6 +6,7 @@ import lichtfeld as lf
 from . import rml_widgets as w
 from .panels import panel_class
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
+from .default_reset import LabelDefaultReset, values_match
 from .types import Panel
 from .selected_splat import active_splat_node
 from .ui import RuntimeState, PanelStateBinding, native_value as _native_store_value
@@ -46,6 +47,7 @@ class SplatSimplifyPanel(Panel):
         self._simplify_progress_value = "0"
         self._simplify_progress_stage = ""
         self._simplify_error_text = ""
+        self._default_reset = LabelDefaultReset(self._reset_default, self._apply_reset)
         self._scrub_fields = ScrubFieldController(SCRUB_FIELD_DEFS, self._get_scrub_value, self._set_scrub_value)
         self._reactive_binding = PanelStateBinding()
 
@@ -63,6 +65,25 @@ class SplatSimplifyPanel(Panel):
         {"simplify_target": self._set_simplify_target_count,
          "simplify_lod_base": self._set_simplify_lod_base,
          "simplify_opacity_prune_threshold": self._set_simplify_opacity_prune_threshold}[prop](value)
+
+    def _reset_default(self, prop):
+        if self._simplify_task_active or self._simplify_original_count <= 0:
+            return None
+        return {"simplify_target": self._default_simplify_target_count(),
+                "simplify_lod_base": DEFAULT_SIMPLIFY_LOD_BASE,
+                "simplify_opacity_prune_threshold": DEFAULT_SIMPLIFY_OPACITY_PRUNE_THRESHOLD}.get(prop)
+
+    def _apply_reset(self, prop, value):
+        if self._reset_default(prop) is None:
+            return False
+        self._scrub_fields.prepare_reset(prop)
+        self._set_scrub_value(prop, value)
+        if prop == "simplify_target":
+            self._simplify_target_touched = False
+        elif prop == "simplify_lod_base":
+            self._simplify_lod_base_touched = False
+        self._scrub_fields.sync_all()
+        return values_match(self._get_scrub_value(prop), value)
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("splat_simplify")
@@ -124,6 +145,7 @@ class SplatSimplifyPanel(Panel):
         super().on_mount(doc)
         self._sync_label()
         self._scrub_fields.mount(doc)
+        self._default_reset.mount(doc)
         self._refresh_simplify_source(force=True)
         self._sync_simplify_task_state(force=True)
         self._reactive_binding.set_handle(self._handle).watch(
@@ -140,6 +162,7 @@ class SplatSimplifyPanel(Panel):
     def on_unmount(self, doc):
         self._reactive_binding.close()
         self._scrub_fields.unmount()
+        self._default_reset.unmount()
         doc.remove_data_model("splat_simplify")
         self._handle = None
 

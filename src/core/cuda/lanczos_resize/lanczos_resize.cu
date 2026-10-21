@@ -395,7 +395,7 @@ namespace lfs::core {
             const int channels = static_cast<int>(input.size(2));
 
             if (channels < 1 || channels > 4) {
-                LOG_ERROR("lanczos_resize: Expected 1 to 4 channels, got {}", channels);
+                LOG_ERROR("lanczos_resize: Expected 1 to 4 channels, got %d", channels);
                 return Tensor();
             }
 
@@ -490,7 +490,7 @@ namespace lfs::core {
             return detail::lanczos_resize_impl<float>(
                 input, output_h, output_w, kernel_size, cuda_stream);
         } else {
-            LOG_ERROR("lanczos_resize: Unsupported dtype: {}",
+            LOG_ERROR("lanczos_resize: Unsupported dtype: %s",
                       dtype_name(input.dtype()));
             return Tensor();
         }
@@ -627,7 +627,7 @@ namespace lfs::core {
         const int input_h = static_cast<int>(input.size(1));
         const int input_w = static_cast<int>(input.size(2));
         if (channels != NUM_CHANNELS) {
-            LOG_ERROR("lanczos_resize_float_chw: Only 3-channel images supported, got {}", channels);
+            LOG_ERROR("lanczos_resize_float_chw: Only 3-channel images supported, got %d", channels);
             return Tensor();
         }
 

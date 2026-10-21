@@ -102,7 +102,7 @@ namespace {
                     std::stringstream source;
                     auto saved = serialize_checkpoint(source, 11, **strategy, params,
                                                       with_grid ? &grid : nullptr, &ppisp,
-                                                      with_controller ? &controller : nullptr, nullptr);
+                                                      with_controller ? &controller : nullptr);
                     ASSERT_TRUE(saved);
                     const auto bytes = source.str();
                     source.seekg(0);
@@ -140,7 +140,7 @@ namespace {
                     EXPECT_EQ(source.str(), bytes);
                     std::stringstream plain;
                     auto plain_saved = serialize_checkpoint(plain, 11, **strategy, params,
-                                                            with_grid ? &grid : nullptr, nullptr, nullptr, nullptr);
+                                                            with_grid ? &grid : nullptr, nullptr, nullptr);
                     ASSERT_TRUE(plain_saved);
                     const auto plain_bytes = plain.str();
                     plain.seekg(0);

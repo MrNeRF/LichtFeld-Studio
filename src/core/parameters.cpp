@@ -5,6 +5,7 @@
 #include "core/parameters.hpp"
 #include "core/file_extensions.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
@@ -535,7 +536,7 @@ namespace lfs::core {
             }
 
             std::expected<nlohmann::json, std::string> read_json_file(const std::filesystem::path& path) {
-                if (!std::filesystem::exists(path)) {
+                if (!lfs::core::native_fs::exists(path)) {
                     return std::unexpected(std::format("Config file not found: {}", path_to_utf8(path)));
                 }
 
@@ -591,9 +592,10 @@ namespace lfs::core {
         }
 
         int OptimizationParameters::resolved_total_iterations() const {
-            const int base_iters = static_cast<int>(iterations);
-            const int sparse_tail = enable_sparsity ? std::max(0, sparsify_steps) : 0;
-            return base_iters + sparse_tail;
+            uint64_t total = std::min(uint64_t(iterations), uint64_t(std::numeric_limits<int>::max()));
+            if (enable_sparsity)
+                total += uint64_t(std::max(0, popspa_sparsify_steps)) + uint64_t(std::max(0, popspa_refine_steps));
+            return static_cast<int>(std::min(total, uint64_t(std::numeric_limits<int>::max())));
         }
 
         bool OptimizationParameters::normal_supervision_active(const int iter) const {
@@ -750,7 +752,7 @@ namespace lfs::core {
                 auto absolute = std::filesystem::absolute(utf8_to_path(std::string(path)), error);
                 if (error)
                     return std::string(path);
-                auto canonical = std::filesystem::weakly_canonical(absolute, error);
+                auto canonical = lfs::core::native_fs::weakly_canonical(absolute, error);
                 return path_to_utf8((error ? absolute : canonical).lexically_normal());
             };
             if (const auto file = eval_mask_splat_file(spec))
@@ -887,16 +889,47 @@ namespace lfs::core {
                 return std::format("max_cap must be nonnegative (got {})", max_cap);
             if (sh_degree < 0 || sh_degree > 3)
                 return std::format("sh_degree must be within [0, 3] (got {})", sh_degree);
-            if (sparsify_steps < 0)
-                return std::format("sparsify_steps must be nonnegative (got {})", sparsify_steps);
-            if (enable_sparsity &&
-                static_cast<uint64_t>(iterations) + static_cast<uint64_t>(sparsify_steps) >
-                    static_cast<uint64_t>(std::numeric_limits<int>::max()))
-                return "iterations plus sparsify_steps must fit in a signed int";
+            {
+                if (popspa_target_count <= 0 || popspa_first_prune_count < 0 ||
+                    (popspa_first_prune_count != 0 && popspa_first_prune_count < popspa_target_count))
+                    return "POPSpa first prune count must be zero (auto) or at least the positive target count";
+                if (popspa_sparsify_steps < 0 || popspa_refine_steps < 0 || popspa_projection_interval <= 0 || popspa_seed < 0)
+                    return "POPSpa steps and seed must be nonnegative and projection interval positive";
+                if (enable_sparsity && uint64_t(iterations) + uint64_t(popspa_sparsify_steps) + uint64_t(popspa_refine_steps) > MAX_ITERATION_VALUE)
+                    return "iterations plus POPSpa steps must fit in a signed int";
+                if (const auto error = invalid_nonnegative(popspa_rho, "popspa_rho"); !error.empty())
+                    return error;
+                if (const auto error = invalid_nonnegative(popspa_erank_weight, "popspa_erank_weight"); !error.empty())
+                    return error;
+                if (const auto error = invalid_nonnegative(popspa_thin_scale_weight, "popspa_thin_scale_weight"); !error.empty())
+                    return error;
+                if (const auto error = invalid_nonnegative(popspa_erank_epsilon, "popspa_erank_epsilon"); !error.empty())
+                    return error;
+                if (const auto error = invalid_nonnegative(popspa_means_lr, "popspa_means_lr"); !error.empty())
+                    return error;
+                if (const auto error = invalid_nonnegative(popspa_scales_lr, "popspa_scales_lr"); !error.empty())
+                    return error;
+                if (const auto error = invalid_nonnegative(popspa_opacities_lr, "popspa_opacities_lr"); !error.empty())
+                    return error;
+                if (const auto error = invalid_nonnegative(popspa_quaternions_lr, "popspa_quaternions_lr"); !error.empty())
+                    return error;
+                if (const auto error = invalid_nonnegative(popspa_sh0_lr, "popspa_sh0_lr"); !error.empty())
+                    return error;
+                if (const auto error = invalid_nonnegative(popspa_shn_lr, "popspa_shn_lr"); !error.empty())
+                    return error;
+                if (const auto error = invalid_probability(popspa_ssim_weight, "popspa_ssim_weight"); !error.empty())
+                    return error;
+                if (popspa_rho == 0.0f || popspa_erank_epsilon == 0.0f)
+                    return "POPSpa rho and effective-rank epsilon must be positive";
+            }
             if (init_num_pts <= 0)
                 return std::format("init_num_pts must be positive (got {})", init_num_pts);
             if (!std::isfinite(init_extent) || init_extent <= 0.0f)
                 return std::format("init_extent must be finite and positive (got {})", init_extent);
+            if (init_mesh_resolution < Mesh2SplatOptions::kMinResolution ||
+                init_mesh_resolution > kMaxInitMeshResolution)
+                return std::format("init_mesh_resolution must be within [{}, {}] (got {})",
+                                   Mesh2SplatOptions::kMinResolution, kMaxInitMeshResolution, init_mesh_resolution);
             if (!std::isfinite(init_scaling) || init_scaling <= 0.0f)
                 return std::format("init_scaling must be finite and positive (got {})", init_scaling);
             if (!std::isfinite(init_opacity) || init_opacity <= 0.0f || init_opacity >= 1.0f)
@@ -950,7 +983,6 @@ namespace lfs::core {
                 std::pair{"ppisp_controller_lr", ppisp_controller_lr},
                 std::pair{"growth_grad_threshold", growth_grad_threshold},
                 std::pair{"means_noise_weight", means_noise_weight},
-                std::pair{"init_rho", init_rho},
                 std::pair{"screen_share_penalty", screen_share_penalty},
             };
             for (const auto& [name, value] : nonnegative_fields) {
@@ -966,13 +998,13 @@ namespace lfs::core {
                 std::pair{"min_opacity", min_opacity},
                 std::pair{"cropbox_lr_scale", cropbox_lr_scale},
                 std::pair{"cropbox_loss_weight", cropbox_loss_weight},
+                std::pair{"cropbox_growth_inside", cropbox_growth_inside},
                 std::pair{"mask_threshold", mask_threshold},
                 std::pair{"prune_opacity", prune_opacity},
                 std::pair{"grow_fraction", grow_fraction},
                 std::pair{"opacity_decay", opacity_decay},
                 std::pair{"scale_decay", scale_decay},
                 std::pair{"bounds_percentile", bounds_percentile},
-                std::pair{"prune_ratio", prune_ratio},
                 std::pair{"normal_start_fraction", normal_start_fraction},
                 std::pair{"normal_end_fraction", normal_end_fraction},
             };
@@ -1071,7 +1103,7 @@ namespace lfs::core {
                     if (path.empty()) {
                         return "--add-splat path cannot be empty";
                     }
-                    if (!add_splats_applied && !std::filesystem::exists(path)) {
+                    if (!add_splats_applied && !lfs::core::native_fs::exists(path)) {
                         return std::format("Added splat does not exist: '{}'",
                                            lfs::core::path_to_utf8(path));
                     }
@@ -1089,7 +1121,7 @@ namespace lfs::core {
                 return "--data-path project.licht and --resume are mutually exclusive";
             }
             if (project_path) {
-                auto extension = project_path->extension().string();
+                auto extension = lfs::core::path_to_utf8(project_path->extension());
                 std::ranges::transform(
                     extension, extension.begin(),
                     [](const unsigned char character) {
@@ -1105,7 +1137,7 @@ namespace lfs::core {
                 }
             }
             if (resume_project) {
-                auto resume_extension = resume_project->extension().string();
+                auto resume_extension = lfs::core::path_to_utf8(resume_project->extension());
                 std::ranges::transform(
                     resume_extension, resume_extension.begin(),
                     [](const unsigned char character) {
@@ -1123,9 +1155,10 @@ namespace lfs::core {
             if (save_project_at_iteration && *save_project_at_iteration == 0) {
                 return "--save-project-at-iter must be positive";
             }
-            if (save_project_at_iteration &&
-                *save_project_at_iteration >
-                    optimization.iterations) {
+            const auto project_snapshot_limit = optimization.enable_sparsity
+                                                    ? static_cast<size_t>(optimization.resolved_total_iterations())
+                                                    : optimization.iterations;
+            if (save_project_at_iteration && *save_project_at_iteration > project_snapshot_limit) {
                 return "--save-project-at-iter cannot exceed the training iteration limit";
             }
             if (!save_project_at_iteration &&
@@ -1141,7 +1174,7 @@ namespace lfs::core {
                 if (optimization.ppisp_sidecar_path.empty()) {
                     return "PPISP sidecar freeze requires a sidecar path";
                 }
-                if (!std::filesystem::exists(optimization.ppisp_sidecar_path)) {
+                if (!lfs::core::native_fs::exists(optimization.ppisp_sidecar_path)) {
                     return std::format("PPISP sidecar does not exist: '{}'",
                                        lfs::core::path_to_utf8(optimization.ppisp_sidecar_path));
                 }

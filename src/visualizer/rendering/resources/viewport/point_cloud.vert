@@ -63,6 +63,9 @@ const uint SELECTION_GROUP_MAX = 255u;
 const uint SELECTION_PREVIEW_COLOR_INDEX = 256u;
 const float SELECTION_COMMITTED_BLEND = 0.75;
 const float SELECTION_PREVIEW_BLEND = 0.9;
+const float SELECTION_COMMITTED_SCALE = 1.35;
+const float SELECTION_PREVIEW_SCALE = 1.6;
+const float DESATURATE_BLEND = 0.75;
 
 #define PC_N_TRANSFORMS    pc.counts.x
 #define PC_N_VISIBILITY    pc.counts.y
@@ -182,7 +185,7 @@ void main() {
     vec3 color = clamp(in_color, vec3(0.0), vec3(1.0));
     if (desaturate) {
         float gray = dot(color, vec3(0.299, 0.587, 0.114));
-        color = mix(color, vec3(gray), 0.75);
+        color = mix(color, vec3(gray), DESATURATE_BLEND);
     }
 
     uint selection_group = 0u;
@@ -199,10 +202,10 @@ void main() {
     }
     if (is_preview) {
         color = mix(color, selection_colors[SELECTION_PREVIEW_COLOR_INDEX].xyz, SELECTION_PREVIEW_BLEND);
-        diameter_px = clamp(max(diameter_px + 2.0, diameter_px * 1.6), 1.0, max_size);
+        diameter_px = clamp(max(diameter_px + 2.0, diameter_px * SELECTION_PREVIEW_SCALE), 1.0, max_size);
     } else if (is_committed) {
         color = mix(color, selection_colors[selection_group].xyz, SELECTION_COMMITTED_BLEND);
-        diameter_px = clamp(max(diameter_px + 2.0, diameter_px * 1.35), 1.0, max_size);
+        diameter_px = clamp(max(diameter_px + 2.0, diameter_px * SELECTION_COMMITTED_SCALE), 1.0, max_size);
     }
 
     gl_Position = clip;

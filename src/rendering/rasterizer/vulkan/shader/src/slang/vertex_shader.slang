@@ -369,6 +369,12 @@ SplatActiveState compute_splat_active_state(
         }
     }
 
+    if (active && overlay_enabled(overlay_params[OVERLAY_PARAM_MARKER_FLAGS].z) &&
+        node_idx >= 0 && node_idx < node_count &&
+        (overlay_flags & OVERLAY_FLAG_NONSELECTABLE) == 0u &&
+        (read_byte(node_mask, uint(node_idx)) & 1u) != 0u) {
+        overlay_flags |= OVERLAY_FLAG_OUTLINE_SELECTED;
+    }
     SplatActiveState state;
     state.active = active;
     state.overlay_flags = overlay_flags;
@@ -1098,7 +1104,13 @@ void main(
   #if TILE_CULLING_MODE == 0
     float2 radii = float2(radius);
   #else
+  #if LFS_3DGUT_PROJECTION && EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
+    float extend = spark_rad_opacity_path
+        ? sqrt(2.0f * power_threshold_for_spark_rad_opacity(gauss.opacities))
+        : extend_from_opacity(gauss.opacities);
+  #else
     float extend = no_diff extend_from_opacity(gauss.opacities);
+  #endif
     float2 radii = sqrt(max(splat_dist.cov_vs.xz, float2(0.0f))) * extend;
   #endif
     if (equirectangular_camera) {

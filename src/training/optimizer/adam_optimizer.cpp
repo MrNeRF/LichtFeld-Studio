@@ -193,6 +193,39 @@ namespace lfs::training {
         crop_damping_mask_ = std::move(mask);
     }
 
+    void AdamOptimizer::set_crop_roi_rows(lfs::core::Tensor rows, const float growth_inside) {
+        LFS_ASSERT_MSG(
+            std::isfinite(growth_inside) && growth_inside >= 0.0f && growth_inside <= 1.0f,
+            "AdamOptimizer crop growth share must be finite and within [0, 1]");
+        if (rows.is_valid()) {
+            LFS_ASSERT_MSG(
+                rows.dtype() == lfs::core::DataType::Bool && rows.ndim() == 1,
+                "AdamOptimizer crop ROI rows must be a 1D bool tensor");
+            if (rows.device() != lfs::core::Device::CUDA)
+                rows = rows.cuda();
+            if (!rows.is_contiguous())
+                rows = rows.contiguous();
+        }
+        crop_roi_rows_ = std::move(rows);
+        cropbox_growth_inside_ = growth_inside;
+    }
+
+    void AdamOptimizer::set_crop_score_mask(lfs::core::Tensor mask) {
+        if (mask.is_valid()) {
+            LFS_ASSERT_MSG(
+                mask.dtype() == lfs::core::DataType::Bool && mask.ndim() == 1,
+                "AdamOptimizer crop score mask must be a 1D bool tensor");
+            LFS_ASSERT_MSG(
+                mask.numel() == static_cast<size_t>(splat_data_.size()),
+                "AdamOptimizer crop score mask must match the model row count");
+            if (mask.device() != lfs::core::Device::CUDA)
+                mask = mask.cuda();
+            if (!mask.is_contiguous())
+                mask = mask.contiguous();
+        }
+        crop_score_mask_ = std::move(mask);
+    }
+
     void AdamOptimizer::set_cropbox_lr_scale(const float scale) {
         LFS_ASSERT_MSG(
             std::isfinite(scale) && scale >= 0.0f && scale <= 1.0f,
@@ -265,7 +298,7 @@ namespace lfs::training {
         screen_share_n_ = static_cast<int>(splat_data_._max_screen_share.numel());
     }
 
-    void AdamOptimizer::step(const int iteration) {
+    void AdamOptimizer::step(const int iteration, const bool apply_sh_warmup) {
         LFS_TRACE("kernel.adam.step");
         validate_mean_step_far_mask();
         refresh_screen_share_buffer();
@@ -378,7 +411,7 @@ namespace lfs::training {
                 mean_step_median_extent_, mean_step_far_mask_, mean_step_far_mask_n_,
                 screen_share_max_, screen_share_n_, screen_share_limit_, screen_share_penalty_);
         }
-        step_param(ParamType::ShN, iteration);
+        step_param(ParamType::ShN, iteration, apply_sh_warmup);
     }
 
     size_t AdamOptimizer::compute_state_growth(ParamType type, size_t n_new) const {
@@ -694,13 +727,13 @@ namespace lfs::training {
         state.capacity = std::max(state.capacity, alloc_cap);
     }
 
-    void AdamOptimizer::step_param(ParamType type, const int iteration) {
+    void AdamOptimizer::step_param(ParamType type, const int iteration, const bool apply_sh_warmup) {
         auto& param = get_param(type);
         if (!param.is_valid() || param.numel() == 0) {
             return;
         }
         if (type == ParamType::ShN &&
-            (iteration <= SH_WARMUP_ITERATIONS || splat_data_.active_sh_coeffs_rest() == 0)) {
+            ((apply_sh_warmup && iteration <= SH_WARMUP_ITERATIONS) || splat_data_.active_sh_coeffs_rest() == 0)) {
             return;
         }
 

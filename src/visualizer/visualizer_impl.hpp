@@ -179,6 +179,8 @@ namespace lfs::vis {
             std::string expected_project_uuid = {}) override;
         lfs::Result<ProjectWritePoll>
         projectPollWrite() override;
+        lfs::Result<ProjectTrainingSource>
+        projectTrainingSource() override;
         bool consumeProjectSaveStarted() override;
         bool consumeProjectCreateSucceeded() override;
         bool projectCreatePending() const override;
@@ -314,6 +316,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_DirectSplatLoadRejectsActiveTrainingWithoutConsent_Test;
         friend class VisualizerImplResetTest_DirectSplatLoadWithoutActiveTrainingStillReplacesScene_Test;
         friend class VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
+        friend class VisualizerImplResetTest_ProjectSaveLeavesTransientNodesOut_Test;
         friend class VisualizerImplResetTest_AsyncTrainingBindReturnsBeforeSlowWriteAndCoalescesStarts_Test;
         friend class VisualizerImplResetTest_AsyncTrainingBindFailureDoesNotStart_Test;
         friend class VisualizerImplResetTest_AsyncTrainingBindCloseDoesNotStart_Test;

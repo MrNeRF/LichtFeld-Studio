@@ -196,6 +196,22 @@ namespace lfs::io::project {
         friend bool operator==(const ProvenanceRecord&, const ProvenanceRecord&) = default;
     };
 
+    struct ProjectTrainingInitialization {
+        std::optional<lfs::core::Uuid> init_reference_uuid;
+        std::array<float, 3> data_origin{};
+        std::optional<std::array<float, 3>> scene_center;
+
+        friend bool operator==(const ProjectTrainingInitialization&, const ProjectTrainingInitialization&) = default;
+    };
+
+    // What a new project's ProjectTrainingInitialization is made from: the
+    // init file, and the training origin and scene center the scene had.
+    struct TrainingProjectInitialization {
+        std::filesystem::path init_path;
+        std::array<float, 3> data_origin{};
+        std::optional<std::array<float, 3>> scene_center;
+    };
+
     class LFS_IO_API ProjectChapter {
     public:
         ProjectChapter();
@@ -220,6 +236,9 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<std::optional<lfs::core::Uuid>> dataset_reference() const;
         [[nodiscard]] lfs::Result<void>
         set_dataset_reference(std::optional<lfs::core::Uuid> value);
+        [[nodiscard]] lfs::Result<std::optional<ProjectTrainingInitialization>> training_initialization() const;
+        [[nodiscard]] lfs::Result<void>
+        set_training_initialization(const std::optional<ProjectTrainingInitialization>& value);
         [[nodiscard]] lfs::Result<std::vector<lfs::core::Uuid>> project_lineage() const;
         [[nodiscard]] lfs::Result<void>
         set_project_lineage(std::span<const lfs::core::Uuid> value);
@@ -414,6 +433,7 @@ namespace lfs::io::project {
         bool locked = false;
         bool training_enabled = true;
         bool payload_diverged = false;
+        bool point_cloud_source = false;
         std::optional<GeorefPose> georef_pose = std::nullopt;
         std::optional<PayloadBinding> payload;
         std::optional<CropBoxRecord> cropbox = std::nullopt;
@@ -488,6 +508,18 @@ namespace lfs::io::project {
         ReferenceBindings mrnf_current_references;
         ReferenceBindings igs_current_references;
         lfs::core::param::DatasetConfig dataset;
+
+        // Calls fn(role, parameters, bindings) for every strategy role, so
+        // code that walks the reference bindings cannot miss one.
+        template <typename Fn>
+        void for_each_role(Fn&& fn) {
+            fn(std::string_view{"mcmc.session"}, mcmc_session, mcmc_session_references);
+            fn(std::string_view{"mrnf.session"}, mrnf_session, mrnf_session_references);
+            fn(std::string_view{"igs+.session"}, igs_session, igs_session_references);
+            fn(std::string_view{"mcmc.current"}, mcmc_current, mcmc_current_references);
+            fn(std::string_view{"mrnf.current"}, mrnf_current, mrnf_current_references);
+            fn(std::string_view{"igs+.current"}, igs_current, igs_current_references);
+        }
 
         // The pending parameters of the strategy selected in the project.
         [[nodiscard]] const lfs::core::param::OptimizationParameters&

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vksplat_viewport_renderer.hpp"
+#include "core/native_fs.hpp"
 #include "rendering/rasterizer/vulkan/src/display_color.h"
 
 #include "lod_page_dequant_cuda.hpp"
@@ -729,7 +730,7 @@ namespace lfs::vis {
 #endif
 
             for (const auto& path : search_paths) {
-                if (std::filesystem::exists(path / probe_file)) {
+                if (lfs::core::native_fs::exists(path / probe_file)) {
                     return path;
                 }
             }
@@ -745,98 +746,116 @@ namespace lfs::vis {
         [[nodiscard]] std::map<std::string, std::string> makeVkSplatSpirvPaths() {
             const std::filesystem::path root = resolveVkSplatSpirvRoot();
             return {
-                {"projection_forward", (root / "generated/projection_forward.spv").string()},
-                {"projection_forward_3dgut", (root / "generated/projection_forward_3dgut.spv").string()},
-                {"projection_forward_quant", (root / "generated/projection_forward_quant.spv").string()},
+                {"projection_forward", lfs::core::path_to_utf8((root / "generated/projection_forward.spv"))},
+                {"projection_forward_3dgut", lfs::core::path_to_utf8((root / "generated/projection_forward_3dgut.spv"))},
+                {"projection_forward_quant", lfs::core::path_to_utf8((root / "generated/projection_forward_quant.spv"))},
                 {"projection_forward_quant_3dgut",
-                 (root / "generated/projection_forward_quant_3dgut.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_quant_3dgut.spv"))},
                 {"projection_forward_shn_f16",
-                 (root / "generated/projection_forward_shn_f16.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_shn_f16.spv"))},
                 {"projection_forward_shn_f16_3dgut",
-                 (root / "generated/projection_forward_shn_f16_3dgut.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_shn_f16_3dgut.spv"))},
                 {"projection_forward_shn_q16",
-                 (root / "generated/projection_forward_shn_q16.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_shn_q16.spv"))},
                 {"projection_forward_shn_q16_3dgut",
-                 (root / "generated/projection_forward_shn_q16_3dgut.spv").string()},
-                {"selection_mask", (root / "generated/selection_mask.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_shn_q16_3dgut.spv"))},
+                {"selection_mask", lfs::core::path_to_utf8((root / "generated/selection_mask.spv"))},
                 {"selection_polygon_rasterize",
-                 (root / "generated/selection_polygon_rasterize.spv").string()},
-                {"generate_keys_wave", (root / "generated/generate_keys_wave.spv").string()},
-                {"compute_tile_ranges", (root / "generated/compute_tile_ranges.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/selection_polygon_rasterize.spv"))},
+                {"generate_keys_wave", lfs::core::path_to_utf8((root / "generated/generate_keys_wave.spv"))},
+                {"compute_tile_ranges", lfs::core::path_to_utf8((root / "generated/compute_tile_ranges.spv"))},
                 {"compute_tile_ranges_and_batch_counts",
-                 (root / "generated/compute_tile_ranges_and_batch_counts.spv").string()},
-                {"rasterize_forward", (root / "generated/rasterize_forward.spv").string()},
-                {"rasterize_forward_3dgut", (root / "generated/rasterize_forward_3dgut.spv").string()},
-                {"rasterize_forward_plain", (root / "generated/rasterize_forward_plain.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/compute_tile_ranges_and_batch_counts.spv"))},
+                {"rasterize_outline", lfs::core::path_to_utf8((root / "generated/rasterize_outline.spv"))},
+                {"rasterize_outline_gut", lfs::core::path_to_utf8((root / "generated/rasterize_outline_gut.spv"))},
+                {"rasterize_outline_gut_rad", lfs::core::path_to_utf8((root / "generated/rasterize_outline_gut_rad.spv"))},
+                {"rasterize_outline_gut_plain_rad", lfs::core::path_to_utf8((root / "generated/rasterize_outline_gut_plain_rad.spv"))},
+                {"rasterize_outline_plain", lfs::core::path_to_utf8((root / "generated/rasterize_outline_plain.spv"))},
+                {"rasterize_outline_gut_plain", lfs::core::path_to_utf8((root / "generated/rasterize_outline_gut_plain.spv"))},
+                {"selection_outline_background_init", lfs::core::path_to_utf8((root / "generated/selection_outline_background_init.spv"))},
+                {"selection_outline_background_union", lfs::core::path_to_utf8((root / "generated/selection_outline_background_union.spv"))},
+                {"selection_outline_seeds", lfs::core::path_to_utf8((root / "generated/selection_outline_seeds.spv"))},
+                {"selection_outline_horizontal", lfs::core::path_to_utf8((root / "generated/selection_outline_horizontal.spv"))},
+                {"selection_outline_resolve", lfs::core::path_to_utf8((root / "generated/selection_outline_resolve.spv"))},
+                {"selection_outline_mask", lfs::core::path_to_utf8((root / "generated/selection_outline_mask.spv"))},
+                {"selection_outline_coverage", lfs::core::path_to_utf8((root / "generated/selection_outline_coverage.spv"))},
+                {"selection_outline_tiles", lfs::core::path_to_utf8((root / "generated/selection_outline_tiles.spv"))},
+                {"rasterize_forward", lfs::core::path_to_utf8((root / "generated/rasterize_forward.spv"))},
+                {"rasterize_forward_3dgut", lfs::core::path_to_utf8((root / "generated/rasterize_forward_3dgut.spv"))},
+                {"rasterize_forward_plain", lfs::core::path_to_utf8((root / "generated/rasterize_forward_plain.spv"))},
                 {"rasterize_forward_3dgut_plain",
-                 (root / "generated/rasterize_forward_3dgut_plain.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_3dgut_plain.spv"))},
+                {"rasterize_forward_3dgut_rad",
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_3dgut_rad.spv"))},
+                {"rasterize_forward_3dgut_plain_rad",
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_3dgut_plain_rad.spv"))},
                 {"rasterize_forward_light",
-                 (root / "generated/rasterize_forward_light.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_light.spv"))},
                 {"rasterize_forward_light_plain",
-                 (root / "generated/rasterize_forward_light_plain.spv").string()},
-                {"tile_batch_descriptors", (root / "generated/tile_batch_descriptors.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_light_plain.spv"))},
+                {"tile_batch_descriptors", lfs::core::path_to_utf8((root / "generated/tile_batch_descriptors.spv"))},
                 {"rasterize_forward_batches",
-                 (root / "generated/rasterize_forward_batches.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_batches.spv"))},
                 {"rasterize_forward_batches_plain",
-                 (root / "generated/rasterize_forward_batches_plain.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/rasterize_forward_batches_plain.spv"))},
                 {"compose_tile_batches",
-                 (root / "generated/compose_tile_batches.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/compose_tile_batches.spv"))},
                 {"compose_tile_batches_plain",
-                 (root / "generated/compose_tile_batches_plain.spv").string()},
-                {"cumsum_single_pass", (root / "generated/cumsum_single_pass.spv").string()},
-                {"cumsum_block_scan", (root / "generated/cumsum_block_scan.spv").string()},
-                {"cumsum_scan_block_sums", (root / "generated/cumsum_scan_block_sums.spv").string()},
-                {"cumsum_add_block_offsets", (root / "generated/cumsum_add_block_offsets.spv").string()},
-                {"radix_histogram_clear", (root / "generated/radix_histogram_clear.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/compose_tile_batches_plain.spv"))},
+                {"cumsum_single_pass", lfs::core::path_to_utf8((root / "generated/cumsum_single_pass.spv"))},
+                {"cumsum_block_scan", lfs::core::path_to_utf8((root / "generated/cumsum_block_scan.spv"))},
+                {"cumsum_scan_block_sums", lfs::core::path_to_utf8((root / "generated/cumsum_scan_block_sums.spv"))},
+                {"cumsum_add_block_offsets", lfs::core::path_to_utf8((root / "generated/cumsum_add_block_offsets.spv"))},
+                {"radix_histogram_clear", lfs::core::path_to_utf8((root / "generated/radix_histogram_clear.spv"))},
                 {"expected_depth_finalize",
-                 (root / "generated/expected_depth_finalize.spv").string()},
-                {"radix_sort/upsweep_indirect", (root / "radix_sort/upsweep_indirect.spv").string()},
-                {"radix_sort/spine_indirect", (root / "radix_sort/spine_indirect.spv").string()},
-                {"radix_sort/downsweep_indirect", (root / "radix_sort/downsweep_indirect.spv").string()},
-                {"apply_depth_ordering", (root / "generated/apply_depth_ordering.spv").string()},
-                {"visible_flags", (root / "generated/visible_flags.spv").string()},
-                {"prepare_visible_sort", (root / "generated/prepare_visible_sort.spv").string()},
-                {"prepare_tile_sort", (root / "generated/prepare_tile_sort.spv").string()},
-                {"compact_visible_primitives", (root / "generated/compact_visible_primitives.spv").string()},
-                {"lod_map_indices", (root / "generated/lod_map_indices.spv").string()},
-                {"lod_select_threshold", (root / "generated/lod_select_threshold.spv").string()},
-                {"lod_compact_touch", (root / "generated/lod_compact_touch.spv").string()},
-                {"cull_splats", (root / "generated/cull_splats.spv").string()},
-                {"cull_prepare", (root / "generated/cull_prepare.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/expected_depth_finalize.spv"))},
+                {"radix_sort/upsweep_indirect", lfs::core::path_to_utf8((root / "radix_sort/upsweep_indirect.spv"))},
+                {"radix_sort/spine_indirect", lfs::core::path_to_utf8((root / "radix_sort/spine_indirect.spv"))},
+                {"radix_sort/downsweep_indirect", lfs::core::path_to_utf8((root / "radix_sort/downsweep_indirect.spv"))},
+                {"apply_depth_ordering", lfs::core::path_to_utf8((root / "generated/apply_depth_ordering.spv"))},
+                {"visible_flags", lfs::core::path_to_utf8((root / "generated/visible_flags.spv"))},
+                {"prepare_visible_sort", lfs::core::path_to_utf8((root / "generated/prepare_visible_sort.spv"))},
+                {"prepare_tile_sort", lfs::core::path_to_utf8((root / "generated/prepare_tile_sort.spv"))},
+                {"compact_visible_primitives", lfs::core::path_to_utf8((root / "generated/compact_visible_primitives.spv"))},
+                {"lod_map_indices", lfs::core::path_to_utf8((root / "generated/lod_map_indices.spv"))},
+                {"lod_select_threshold", lfs::core::path_to_utf8((root / "generated/lod_select_threshold.spv"))},
+                {"lod_compact_touch", lfs::core::path_to_utf8((root / "generated/lod_compact_touch.spv"))},
+                {"cull_splats", lfs::core::path_to_utf8((root / "generated/cull_splats.spv"))},
+                {"cull_prepare", lfs::core::path_to_utf8((root / "generated/cull_prepare.spv"))},
                 {"projection_forward_survivors",
-                 (root / "generated/projection_forward_survivors.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_survivors.spv"))},
                 {"projection_forward_quant_survivors",
-                 (root / "generated/projection_forward_quant_survivors.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_quant_survivors.spv"))},
                 {"projection_forward_shn_f16_survivors",
-                 (root / "generated/projection_forward_shn_f16_survivors.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_shn_f16_survivors.spv"))},
                 {"projection_forward_shn_q16_survivors",
-                 (root / "generated/projection_forward_shn_q16_survivors.spv").string()},
-                {"prepare_visible_chain", (root / "generated/prepare_visible_chain.spv").string()},
-                {"copy_visible_indices", (root / "generated/copy_visible_indices.spv").string()},
-                {"prepare_stable_depth_sort", (root / "generated/prepare_stable_depth_sort.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/projection_forward_shn_q16_survivors.spv"))},
+                {"prepare_visible_chain", lfs::core::path_to_utf8((root / "generated/prepare_visible_chain.spv"))},
+                {"copy_visible_indices", lfs::core::path_to_utf8((root / "generated/copy_visible_indices.spv"))},
+                {"prepare_stable_depth_sort", lfs::core::path_to_utf8((root / "generated/prepare_stable_depth_sort.spv"))},
                 {"cumsum_block_scan_indirect",
-                 (root / "generated/cumsum_block_scan_indirect.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/cumsum_block_scan_indirect.spv"))},
                 {"cumsum_scan_block_sums_indirect",
-                 (root / "generated/cumsum_scan_block_sums_indirect.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/cumsum_scan_block_sums_indirect.spv"))},
                 {"cumsum_add_block_offsets_indirect",
-                 (root / "generated/cumsum_add_block_offsets_indirect.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/cumsum_add_block_offsets_indirect.spv"))},
                 {"prepare_tile_sort_visible",
-                 (root / "generated/prepare_tile_sort_visible.spv").string()},
-                {"wave_partition", (root / "generated/wave_partition.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/prepare_tile_sort_visible.spv"))},
+                {"wave_partition", lfs::core::path_to_utf8((root / "generated/wave_partition.spv"))},
                 {"wave_partition_visible",
-                 (root / "generated/wave_partition_visible.spv").string()},
-                {"macro_coverage", (root / "generated/macro_coverage.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/wave_partition_visible.spv"))},
+                {"macro_coverage", lfs::core::path_to_utf8((root / "generated/macro_coverage.spv"))},
                 {"generate_macro_keys_wave",
-                 (root / "generated/generate_macro_keys_wave.spv").string()},
-                {"compute_macro_ranges", (root / "generated/compute_macro_ranges.spv").string()},
-                {"macro_batch_prepare", (root / "generated/macro_batch_prepare.spv").string()},
-                {"macro_raster", (root / "generated/macro_raster.spv").string()},
-                {"macro_raster_fp32", (root / "generated/macro_raster_fp32.spv").string()},
-                {"macro_raster_overlays", (root / "generated/macro_raster_overlays.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/generate_macro_keys_wave.spv"))},
+                {"compute_macro_ranges", lfs::core::path_to_utf8((root / "generated/compute_macro_ranges.spv"))},
+                {"macro_batch_prepare", lfs::core::path_to_utf8((root / "generated/macro_batch_prepare.spv"))},
+                {"macro_raster", lfs::core::path_to_utf8((root / "generated/macro_raster.spv"))},
+                {"macro_raster_fp32", lfs::core::path_to_utf8((root / "generated/macro_raster_fp32.spv"))},
+                {"macro_raster_overlays", lfs::core::path_to_utf8((root / "generated/macro_raster_overlays.spv"))},
                 {"macro_raster_overlays_fp32",
-                 (root / "generated/macro_raster_overlays_fp32.spv").string()},
-                {"macro_compose", (root / "generated/macro_compose.spv").string()},
-                {"macro_compose_overlays", (root / "generated/macro_compose_overlays.spv").string()},
+                 lfs::core::path_to_utf8((root / "generated/macro_raster_overlays_fp32.spv"))},
+                {"macro_compose", lfs::core::path_to_utf8((root / "generated/macro_compose.spv"))},
+                {"macro_compose_overlays", lfs::core::path_to_utf8((root / "generated/macro_compose_overlays.spv"))},
             };
         }
 
@@ -1595,8 +1614,8 @@ namespace lfs::vis {
                           MarkerFlags,
                           glm::vec4(request.overlay.markers.show_rings ? 1.0f : 0.0f,
                                     request.overlay.markers.show_center_markers ? 1.0f : 0.0f,
-                                    0.0f,
-                                    0.0f));
+                                    request.overlay.markers.show_object_outline ? 1.0f : 0.0f,
+                                    std::isfinite(request.overlay.markers.outline_threshold) ? std::clamp(request.overlay.markers.outline_threshold, 0.05f, 0.95f) : 0.5f));
                 const bool cursor_selection_enabled =
                     !request.overlay.cursor.saturation_preview &&
                     request.overlay.cursor.enabled &&
@@ -9520,7 +9539,7 @@ namespace lfs::vis {
                     {
                         LOG_TIMER("vksplat.render.record.executeSortPrimitivesByDepth");
                         renderer_.executeSortPrimitivesByDepthVisible(uniforms, buffers_, visible_capacity,
-                                                                      deterministic_export);
+                                                                      deterministic_export || request.overlay.markers.show_object_outline);
                     }
                     {
                         LOG_TIMER("vksplat.render.record.executeMacroCoverage");
@@ -9600,6 +9619,27 @@ namespace lfs::vis {
 
                 renderer_.executeWavePartition(
                     uniforms, buffers_, armed_depth_waves, higs_active);
+                const auto& marker = request.overlay.markers;
+                const auto bounded = [](const float value, const float low, const float high, const float fallback) {
+                    return std::isfinite(value) ? std::clamp(value, low, high) : fallback;
+                };
+                const VulkanGSOutlineStyle outline_style{
+                    bounded(marker.outline_color.r, 0.0f, 1.0f, 0.0f),
+                    bounded(marker.outline_color.g, 0.0f, 1.0f, 0.604f),
+                    bounded(marker.outline_color.b, 0.0f, 1.0f, 0.733f),
+                    bounded(marker.outline_opacity, 0.0f, 1.0f, 1.0f),
+                    bounded(marker.outline_width, 1.0f, 12.0f, 2.0f),
+                    bounded(marker.outline_threshold, 0.05f, 0.95f, 0.5f),
+                    marker.outline_holes ? 1u : 0u,
+                };
+                const bool single_node_outline = request.overlay.markers.show_object_outline &&
+                                                 !overlay_bindings->raster_overlays_active &&
+                                                 request.overlay.emphasis.emphasized_node_mask.size() == 1u &&
+                                                 request.overlay.emphasis.emphasized_node_mask[0] &&
+                                                 request.scene.node_visibility_mask.size() <= 1u &&
+                                                 !request.filters.crop_region && !request.filters.ellipsoid_region &&
+                                                 request.filters.crop_regions.empty() && request.filters.ellipsoid_regions.empty() &&
+                                                 !request.filters.view_volume;
                 if (higs_active) {
                     renderer_.executeMacroDepthWaves(
                         uniforms,
@@ -9612,7 +9652,9 @@ namespace lfs::vis {
                         overlay_bindings->overlay_params,
                         overlay_bindings->raster_overlays_active,
                         /*predicate_waves=*/!export_wave_batch,
-                        request.exact_depth_sample_mask);
+                        request.exact_depth_sample_mask,
+                        request.overlay.markers.show_object_outline ? &overlay_bindings->transform_indices : nullptr,
+                        single_node_outline, outline_style);
                 } else {
                     renderer_.executeLegacyDepthWaves(
                         uniforms,
@@ -9628,7 +9670,9 @@ namespace lfs::vis {
                         overlay_bindings->model_transforms,
                         request.gut,
                         overlay_bindings->raster_overlays_active,
-                        /*predicate_waves=*/!export_wave_batch);
+                        /*predicate_waves=*/!export_wave_batch,
+                        request.overlay.markers.show_object_outline,
+                        single_node_outline, outline_style);
                 }
                 LOG_TIMER("vksplat.render.record.composePixelState");
                 // Record compose into the rasterizer's batch so the entire frame

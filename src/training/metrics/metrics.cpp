@@ -12,6 +12,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
@@ -20,6 +21,7 @@
 #include "flip.cuh"
 #include "io/filesystem_utils.hpp"
 #include "io/loader.hpp"
+#include "io/nvcodec_image_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "kernels/image_kernels.hpp"
 #include "lfs/kernels/ssim.cuh"
@@ -423,7 +425,7 @@ namespace lfs::training {
 
         void write_json_file(const std::filesystem::path& path, const nlohmann::json& document) {
             std::error_code ec;
-            std::filesystem::create_directories(path.parent_path(), ec);
+            lfs::core::native_fs::create_directories(path.parent_path(), ec);
             auto temp_path = path;
             temp_path += ".tmp";
             {
@@ -438,7 +440,7 @@ namespace lfs::training {
                     return;
                 }
             }
-            std::filesystem::rename(temp_path, path, ec);
+            lfs::core::native_fs::rename(temp_path, path, ec);
             if (ec)
                 LOG_WARN("Eval: failed to replace '{}': {}", lfs::core::path_to_utf8(path), ec.message());
         }
@@ -1224,7 +1226,7 @@ namespace lfs::training {
           txt_path_(output_dir_ / "metrics_report.txt"),
           per_image_path_(output_dir_ / "per_image_metrics.json") {
         // Create CSV header if file doesn't exist
-        if (!std::filesystem::exists(csv_path_)) {
+        if (!lfs::core::native_fs::exists(csv_path_)) {
             std::ofstream csv_file;
             if (lfs::core::open_file_for_write(csv_path_, csv_file)) {
                 csv_file << EvalMetrics{}.to_csv_header() << std::endl;
@@ -1326,7 +1328,7 @@ namespace lfs::training {
 
     void MetricsReporter::write_training_config(const lfs::core::param::TrainingParameters& params) const {
         std::error_code ec;
-        std::filesystem::create_directories(output_dir_, ec);
+        lfs::core::native_fs::create_directories(output_dir_, ec);
         if (const auto saved = lfs::core::param::save_training_parameters_to_json(
                 params, output_dir_ / "training_config.json");
             !saved) {
@@ -1346,6 +1348,7 @@ namespace lfs::training {
         report_file << "3D Gaussian Splatting Evaluation Report\n";
         report_file << "==============================================\n";
         report_file << "Output Directory: " << lfs::core::path_to_utf8(output_dir_) << "\n";
+        report_file << "JPEG Decoder: " << lfs::io::NvCodecImageLoader::jpeg_decoder() << "\n";
 
         // Get current time
         const auto now = std::chrono::system_clock::now();
@@ -1431,7 +1434,7 @@ namespace lfs::training {
         report_file.close();
         std::cout << "Evaluation report saved to: " << lfs::core::path_to_utf8(txt_path_) << std::endl;
         std::cout << "Metrics CSV saved to: " << lfs::core::path_to_utf8(csv_path_) << std::endl;
-        if (std::filesystem::exists(per_image_path_))
+        if (lfs::core::native_fs::exists(per_image_path_))
             std::cout << "Per-image metrics JSON saved to: " << lfs::core::path_to_utf8(per_image_path_) << std::endl;
     }
 
@@ -1489,7 +1492,7 @@ namespace lfs::training {
         } else if (param::is_eval_mask_folder(spec)) {
             const auto folder = lfs::core::utf8_to_path(std::string(param::eval_mask_folder(spec)));
             std::error_code folder_error;
-            if (!std::filesystem::is_directory(folder, folder_error))
+            if (!lfs::core::native_fs::is_directory(folder, folder_error))
                 return evaluation_error(std::format("Evaluation mask folder '{}' does not exist",
                                                     lfs::core::path_to_utf8(folder)),
                                         LFS_SOURCE_SITE_CURRENT());
@@ -1590,7 +1593,7 @@ namespace lfs::training {
                                      : source.image_dir;
         const auto flip_dir = eval_dir / "flip";
         if (_params.optimization.enable_save_eval_images) {
-            std::filesystem::create_directories(_params.optimization.eval_flip ? flip_dir : eval_dir);
+            lfs::core::native_fs::create_directories(_params.optimization.eval_flip ? flip_dir : eval_dir);
         }
 
         const size_t val_dataset_size = val_dataset->size();

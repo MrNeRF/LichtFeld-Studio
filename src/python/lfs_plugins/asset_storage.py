@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Disposable project previews inside the LichtFeld home."""
+from _lfs_path_io import native_path
 
 import hashlib
 import logging
@@ -8,7 +9,7 @@ import os
 import tempfile
 import threading
 from contextlib import contextmanager
-from pathlib import Path
+from _lfs_path_io import Path
 
 from .environment import value as environment_value
 
@@ -62,7 +63,7 @@ def preview_capture(project_id):
     directory.mkdir(parents=True, exist_ok=True)
     with _preview_lock:
         prune_previews()
-        fd, name = tempfile.mkstemp(prefix=_preview_prefix(project_id), suffix=".png", dir=directory)
+        fd, name = tempfile.mkstemp(prefix=_preview_prefix(project_id), suffix=".png", dir=native_path(directory))
         os.close(fd)
         target = Path(name)
         _active_previews.add(target)

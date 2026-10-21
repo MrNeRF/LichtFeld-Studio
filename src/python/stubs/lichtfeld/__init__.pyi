@@ -331,6 +331,11 @@ def project_clean(destination: str = '', expected_commit: str = '') -> bool:
     Clean the active saved project in the background, preserving its current resume point
     """
 
+def project_write_training_copy(destination: str, progress: object | None = None, cancel: object | None = None) -> io.DatasetEmbedResult:
+    """
+    Write a new untrained project from the pending parameters with the loaded dataset embedded; it blocks, so call it off the UI thread
+    """
+
 def project_is_dirty() -> bool:
     """Return whether the active project has unsaved chapters"""
 
@@ -622,6 +627,12 @@ def focus_selection() -> bool:
     """
     Focus the active viewport on the selection, or the whole scene when nothing is selected
     """
+
+def go_home() -> None:
+    """Move the active viewport to its home view"""
+
+def set_home() -> None:
+    """Make the active viewport's current view its home view"""
 
 def reset_home() -> None:
     """
@@ -2061,6 +2072,9 @@ class OptimizationParams:
     def get(self, name: str) -> object:
         """Get property value by name"""
 
+    def builtin_default(self, name: str) -> object:
+        """Get the built-in default for the active method and step scaling"""
+
     def set(self, name: str, value: object) -> None:
         """Set property value by name"""
 
@@ -2156,6 +2170,13 @@ class OptimizationParams:
 
     @cropbox_loss_weight.setter
     def cropbox_loss_weight(self, arg: float, /) -> None: ...
+
+    @property
+    def cropbox_growth_inside(self) -> float:
+        """Share of new splats placed inside the active crop box"""
+
+    @cropbox_growth_inside.setter
+    def cropbox_growth_inside(self, arg: float, /) -> None: ...
 
     @property
     def lambda_dssim(self) -> float:
@@ -2305,10 +2326,112 @@ class OptimizationParams:
 
     @property
     def enable_sparsity(self) -> bool:
-        """Enable sparsity optimization"""
+        """Run POPSpa sparsification after training"""
 
     @enable_sparsity.setter
     def enable_sparsity(self, arg: bool, /) -> None: ...
+
+    @property
+    def popspa_target_count(self) -> int: ...
+
+    @popspa_target_count.setter
+    def popspa_target_count(self, arg: int, /) -> None: ...
+
+    @property
+    def popspa_first_prune_count(self) -> int: ...
+
+    @popspa_first_prune_count.setter
+    def popspa_first_prune_count(self, arg: int, /) -> None: ...
+
+    @property
+    def popspa_sparsify_steps(self) -> int: ...
+
+    @popspa_sparsify_steps.setter
+    def popspa_sparsify_steps(self, arg: int, /) -> None: ...
+
+    @property
+    def popspa_refine_steps(self) -> int: ...
+
+    @popspa_refine_steps.setter
+    def popspa_refine_steps(self, arg: int, /) -> None: ...
+
+    @property
+    def popspa_projection_interval(self) -> int: ...
+
+    @popspa_projection_interval.setter
+    def popspa_projection_interval(self, arg: int, /) -> None: ...
+
+    @property
+    def popspa_seed(self) -> int: ...
+
+    @popspa_seed.setter
+    def popspa_seed(self, arg: int, /) -> None: ...
+
+    @property
+    def popspa_rho(self) -> float: ...
+
+    @popspa_rho.setter
+    def popspa_rho(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_erank_weight(self) -> float: ...
+
+    @popspa_erank_weight.setter
+    def popspa_erank_weight(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_thin_scale_weight(self) -> float: ...
+
+    @popspa_thin_scale_weight.setter
+    def popspa_thin_scale_weight(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_erank_epsilon(self) -> float: ...
+
+    @popspa_erank_epsilon.setter
+    def popspa_erank_epsilon(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_means_lr(self) -> float: ...
+
+    @popspa_means_lr.setter
+    def popspa_means_lr(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_scales_lr(self) -> float: ...
+
+    @popspa_scales_lr.setter
+    def popspa_scales_lr(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_opacities_lr(self) -> float: ...
+
+    @popspa_opacities_lr.setter
+    def popspa_opacities_lr(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_quaternions_lr(self) -> float: ...
+
+    @popspa_quaternions_lr.setter
+    def popspa_quaternions_lr(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_sh0_lr(self) -> float: ...
+
+    @popspa_sh0_lr.setter
+    def popspa_sh0_lr(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_shn_lr(self) -> float: ...
+
+    @popspa_shn_lr.setter
+    def popspa_shn_lr(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_ssim_weight(self) -> float: ...
+
+    @popspa_ssim_weight.setter
+    def popspa_ssim_weight(self, arg: float, /) -> None: ...
 
     @property
     def mip_filter(self) -> bool:
@@ -2613,6 +2736,12 @@ class DatasetParams:
     @property
     def images(self) -> str:
         """Subfolder name containing images"""
+
+    @property
+    def init_path(self) -> str:
+        """
+        Training initialization file; empty when training starts from the dataset's points
+        """
 
     @property
     def test_every(self) -> int:

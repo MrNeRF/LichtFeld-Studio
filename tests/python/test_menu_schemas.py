@@ -141,6 +141,9 @@ def _install_lichtfeld_stub(monkeypatch):
             TOGGLE_PERFORMANCE_HUD="toggle_performance_hud",
             TOGGLE_UI="toggle_ui",
             TOGGLE_PYTHON_CONSOLE="toggle_python_console",
+            CAMERA_RESET_HOME="camera_reset_home",
+            CAMERA_SET_HOME="camera_set_home",
+            CAMERA_RESTORE_HOME="camera_restore_home",
         ),
         ToolMode=SimpleNamespace(GLOBAL="global"),
         is_bound=lambda _action, _mode: True,
@@ -156,6 +159,9 @@ def _install_lichtfeld_stub(monkeypatch):
             "open_preferences": "Ctrl+,",
             "toggle_performance_hud": "F10",
             "toggle_python_console": "Ctrl+`",
+            "camera_reset_home": "H",
+            "camera_set_home": "Shift+H",
+            "camera_restore_home": "Ctrl+H",
         }.get(action, "Unbound"),
     )
 
@@ -163,6 +169,9 @@ def _install_lichtfeld_stub(monkeypatch):
     lf_stub.ui = ui
     lf_stub.keymap = keymap
     lf_stub.reset_camera = lambda: None
+    lf_stub.go_home = lambda: state.setdefault("home_calls", []).append("go")
+    lf_stub.set_home = lambda: state.setdefault("home_calls", []).append("set")
+    lf_stub.reset_home = lambda: state.setdefault("home_calls", []).append("reset")
     lf_stub.toggle_ui = lambda: state.__setitem__("ui_toggled", True)
     lf_stub.toggle_independent_split_view = lambda: state.__setitem__("split_toggled", True)
     lf_stub.undo = SimpleNamespace(
@@ -337,14 +346,21 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert [item["label"] for item in theme_families[1]["items"]] == ["Night", "Day"]
     assert appearance[1]["items"][1]["label"] == "100%"
     # theme, ui_scale, separator, performance_hud, reset_view, console
-    assert view_items[5]["label"] == "tr:menu.view.performance_hud"
-    assert view_items[5]["shortcut"] == "F10"
-    view_items[5]["callback"]()
+    assert view_items[7]["label"] == "tr:menu.view.performance_hud"
+    assert view_items[7]["shortcut"] == "F10"
+    view_items[7]["callback"]()
     assert state.get("vram_hud_toggled") is True
-    assert view_items[0]["label"] == "tr:image_preview.reset_view"
-    assert view_items[2]["selected"]
-    view_items[2]["callback"]()
-    view_items[3]["callback"]()
+    assert [(item["label"], item["shortcut"]) for item in view_items[:3]] == [
+        ("tr:menu.view.home_view", "H"),
+        ("tr:input_settings.action.camera_set_home", "Shift+H"),
+        ("tr:toolbar.reset_home", "Ctrl+H"),
+    ]
+    for item in view_items[:3]:
+        item["callback"]()
+    assert state["home_calls"] == ["go", "set", "reset"]
+    assert view_items[4]["selected"]
+    view_items[4]["callback"]()
+    view_items[5]["callback"]()
     assert state["split_toggled"] and state["ui_toggled"]
 
     keymap = sys.modules["lichtfeld"].keymap
@@ -353,11 +369,11 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
         "open_preferences": "Alt+P",
         "copy_selection": "Alt+C",
     }.get(action, "")
-    assert view_mod.ViewMenu().menu_items()[5]["shortcut"] == "Ctrl+F10"
+    assert view_mod.ViewMenu().menu_items()[7]["shortcut"] == "Ctrl+F10"
     assert edit_mod.EditMenu().menu_items()[7]["shortcut"] == "Alt+P"
     assert edit_mod.EditMenu().menu_items()[4]["shortcut"] == "Alt+C"
     keymap.is_bound = lambda _action, _mode: False
-    assert view_mod.ViewMenu().menu_items()[5]["shortcut"] == ""
+    assert view_mod.ViewMenu().menu_items()[7]["shortcut"] == ""
     assert edit_mod.EditMenu().menu_items()[7]["shortcut"] == ""
     assert edit_mod.EditMenu().menu_items()[4]["shortcut"] == ""
 

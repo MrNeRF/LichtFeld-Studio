@@ -7,6 +7,7 @@
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/mesh2splat.hpp"
+#include "core/path_utils.hpp"
 
 #include <algorithm>
 #include <array>
@@ -83,6 +84,9 @@ namespace lfs::core {
             Inverted,
         };
         inline constexpr std::array kEvalPixelSets{EvalPixelSet::Mask, EvalPixelSet::Unmasked, EvalPixelSet::Inverted};
+
+        // Mesh2Splat allocates resolution^2 * 6 output splats up front: 2048 is already a 2.4 GB buffer.
+        inline constexpr int kMaxInitMeshResolution = 2048;
 
         // The set's name in eval_mask_report.
         [[nodiscard]] inline constexpr std::string_view eval_pixel_set_name(const EvalPixelSet set) noexcept {
@@ -201,7 +205,7 @@ namespace lfs::core {
         [[nodiscard]] inline std::filesystem::path default_dataset_output_path(
             const std::filesystem::path& dataset_path) {
             auto base_path = dataset_path;
-            auto ext = dataset_path.extension().string();
+            auto ext = lfs::core::path_to_utf8(dataset_path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -250,9 +254,13 @@ namespace lfs::core {
             float late_lr_anneal = 1.0f;
             float scaling_lr_end = 0.005f;
             float rotation_lr = 0.001f;
-            // Adam and refinement signals only; strategy noise, decay, and resets remain crop-unaware.
+            // With an active crop box: Adam steps and refine scores of splats that no camera sees
+            // inside, in front of or behind the box. Strategy noise, decay and resets are unscaled.
             float cropbox_lr_scale = 0.1f;
             float cropbox_loss_weight = 0.1f;
+            // With an active crop box: share of new splats placed inside it (0..1). 0 = auto: growth
+            // follows the ROI-weighted error with no fixed split.
+            float cropbox_growth_inside = 0.0f;
             float lambda_dssim = 0.2f;
             float min_opacity = 0.005f;
             size_t refine_every = 100;
@@ -371,6 +379,9 @@ namespace lfs::core {
             float growth_grad_threshold = 0.003f;
             float grow_fraction = 0.07f;
             size_t grow_until_iter = 15000;
+            // At the cap, frees the splats whose removal changes the image least so error-guided
+            // growth keeps working until grow_until_iter.
+            bool growth_exchange = false;
             float opacity_decay = 0.004f;
             float scale_decay = 0.002f;
             float means_noise_weight = 50.0f;
@@ -387,11 +398,28 @@ namespace lfs::core {
             int init_num_pts = 100'000; // Number of random points to initialize
             float init_extent = 3.0f;   // Extent of random point cloud
 
-            // Sparsity optimization parameters
+            // Mesh2Splat raster resolution when the init file is a mesh
+            int init_mesh_resolution = Mesh2SplatOptions{}.resolution_target;
+
+            // POPSpa post-training sparsification
             bool enable_sparsity = false;
-            int sparsify_steps = 15000;
-            float init_rho = 0.0005f;
-            float prune_ratio = 0.6f;
+            int popspa_target_count = 256000;
+            int popspa_first_prune_count = 0;
+            int popspa_sparsify_steps = 5000;
+            int popspa_refine_steps = 5000;
+            int popspa_projection_interval = 50;
+            int popspa_seed = 42;
+            float popspa_rho = 0.0005f;
+            float popspa_erank_weight = 0.01f;
+            float popspa_thin_scale_weight = 1.0f;
+            float popspa_erank_epsilon = 1e-7f;
+            float popspa_means_lr = 1.6e-6f;
+            float popspa_scales_lr = 0.005f;
+            float popspa_opacities_lr = 0.05f;
+            float popspa_quaternions_lr = 0.001f;
+            float popspa_sh0_lr = 0.0025f;
+            float popspa_shn_lr = 0.000125f;
+            float popspa_ssim_weight = 0.2f;
 
             // Perf / profiling instruments (CLI-only; no env toggles)
             bool perf_bench = false;     // --perf-bench → write perf_bench.json

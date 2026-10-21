@@ -9,7 +9,9 @@
 #include "core/error_reporter.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
+#include "core/stb_file.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "cuda/image_format_kernels.cuh"
@@ -55,6 +57,10 @@
 namespace lfs::io {
 
     namespace {
+        using core::stb_file::stb_is_16_bit;
+        using core::stb_file::stb_load;
+        using core::stb_file::stb_load_16;
+
         // Run-local cache payload: processed float32 depth, with no normalization.
         constexpr std::array<uint8_t, 8> FLOAT_DEPTH_MAGIC{'L', 'F', 'D', 'E', 'P', 'T', 'H', 1};
         constexpr size_t FLOAT_DEPTH_HEADER_BYTES = 16;
@@ -325,18 +331,18 @@ namespace lfs::io {
         void remove_stale_run_spill_directories() {
             const auto base = run_spill_base();
             std::error_code ec;
-            if (!std::filesystem::is_directory(base, ec) || ec)
+            if (!lfs::core::native_fs::is_directory(base, ec) || ec)
                 return;
 
             constexpr std::string_view prefix = "ppl_run_";
-            for (const auto& entry : std::filesystem::directory_iterator(base, ec)) {
+            for (const auto& entry : std::filesystem::directory_iterator(lfs::core::native_fs::traversal_path(base), ec)) {
                 if (ec)
                     break;
                 if (!entry.is_directory(ec) || ec) {
                     ec.clear();
                     continue;
                 }
-                const auto name = entry.path().filename().string();
+                const auto name = lfs::core::path_to_utf8(entry.path().filename());
                 if (!name.starts_with(prefix))
                     continue;
 
@@ -351,10 +357,11 @@ namespace lfs::io {
                     continue;
 
                 std::error_code remove_ec;
-                std::filesystem::remove_all(entry.path(), remove_ec);
+                lfs::core::native_fs::remove_all(entry.path(), remove_ec);
                 if (remove_ec) {
                     LOG_WARN("[PipelinedImageLoader] Failed to remove stale run spill {}: {}",
-                             lfs::core::path_to_utf8(entry.path()), remove_ec.message());
+                             lfs::core::path_to_utf8(lfs::core::native_fs::entry_path(base, entry.path())),
+                             remove_ec.message());
                 }
             }
         }
@@ -605,11 +612,11 @@ namespace lfs::io {
                 return false;
             }
             std::error_code ec;
-            const bool exists = std::filesystem::exists(path, ec);
+            const bool exists = lfs::core::native_fs::exists(path, ec);
             if (ec || !exists) {
                 return false;
             }
-            const bool regular = std::filesystem::is_regular_file(path, ec);
+            const bool regular = lfs::core::native_fs::is_regular_file(path, ec);
             return !ec && regular;
         }
 
@@ -646,7 +653,7 @@ namespace lfs::io {
 
         std::tuple<uint8_t*, int, int> load_grayscale_stb(const std::filesystem::path& path) {
             int w, h, c;
-            uint8_t* const data = stbi_load(lfs::core::path_to_utf8(path).c_str(), &w, &h, &c, 1);
+            uint8_t* const data = stb_load(path, &w, &h, &c, 1);
             return {data, w, h};
         }
 
@@ -692,12 +699,12 @@ namespace lfs::io {
         {
             const auto base = run_spill_base();
             std::error_code ec;
-            std::filesystem::create_directories(base, ec);
+            lfs::core::native_fs::create_directories(base, ec);
             if (!ec) {
                 run_spill_folder_ = base /
                                     ("ppl_run_" + std::to_string(current_process_id()) + "_" +
                                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-                std::filesystem::create_directories(run_spill_folder_, ec);
+                lfs::core::native_fs::create_directories(run_spill_folder_, ec);
             }
             if (ec) {
                 LOG_WARN("[PipelinedImageLoader] Run spill folder creation failed: {}", ec.message());
@@ -942,9 +949,17 @@ namespace lfs::io {
 
     lfs::Result<LoaderCompletion> PipelinedImageLoader::get_completion() {
         try {
-            const auto sequence_id = output_queue_.pop();
-            if (auto completion = take_completion(sequence_id)) {
-                return std::move(*completion);
+            for (;;) {
+                const auto sequence_id = output_queue_.pop();
+                if (auto completion = take_completion(sequence_id)) {
+                    return std::move(*completion);
+                }
+                // clear() wakes workers blocked on a full output queue; their
+                // old-generation tokens land after the ledger was emptied. Skip them.
+                if (loader_generation_.load(std::memory_order_acquire) > 0) {
+                    continue;
+                }
+                break;
             }
             return lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::Internal,
@@ -964,20 +979,26 @@ namespace lfs::io {
     }
 
     std::optional<LoaderCompletion> PipelinedImageLoader::try_get_completion() {
-        const auto sequence_id = output_queue_.try_pop();
-        if (!sequence_id) {
-            return std::nullopt;
+        while (const auto sequence_id = output_queue_.try_pop()) {
+            if (auto completion = take_completion(*sequence_id)) {
+                return completion;
+            }
         }
-        return take_completion(*sequence_id);
+        return std::nullopt;
     }
 
     std::optional<LoaderCompletion> PipelinedImageLoader::try_get_completion_for(
         const std::chrono::milliseconds timeout) {
-        const auto sequence_id = output_queue_.try_pop_for(timeout);
-        if (!sequence_id) {
-            return std::nullopt;
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (const auto sequence_id = output_queue_.try_pop_for(
+                   std::max(std::chrono::milliseconds(0),
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                deadline - std::chrono::steady_clock::now())))) {
+            if (auto completion = take_completion(*sequence_id)) {
+                return completion;
+            }
         }
-        return take_completion(*sequence_id);
+        return std::nullopt;
     }
 
     size_t PipelinedImageLoader::ready_count() const {
@@ -1194,16 +1215,15 @@ namespace lfs::io {
                 }
             }
         } else if (!decodes_16bit(params) && !decodes_float(path, params) && !needs_requested_processing) {
-            const std::string path_str = lfs::core::path_to_utf8(path);
             int w = 0, h = 0, ch = 0;
-            unsigned char* img_data = stbi_load(path_str.c_str(), &w, &h, &ch, 3);
+            unsigned char* img_data = stb_load(path, &w, &h, &ch, 3);
             const bool used_stbi = (img_data != nullptr);
             if (img_data) {
                 ch = 3;
             } else {
                 auto [decoded_data, ow, oh, oc] = lfs::core::load_image(path, 1, 0);
                 if (!decoded_data)
-                    throw std::runtime_error("Failed to decode image: " + path_str);
+                    throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
                 img_data = decoded_data;
                 w = ow;
                 h = oh;
@@ -1541,6 +1561,9 @@ namespace lfs::io {
                                                    const PrefetchedImage& item,
                                                    const SidecarCacheFormat kind,
                                                    void* cuda_stream) {
+        // Cache hits go to the hot queue, which only the GPU decode thread drains.
+        if (!is_nvcodec_available())
+            return;
         if (kind != SidecarCacheFormat::DepthFloat && !jpeg2k_cache_available_.load(std::memory_order_relaxed)) {
             return;
         }
@@ -1700,7 +1723,7 @@ namespace lfs::io {
             if (const auto it = spill_cache_.find(cache_key); it != spill_cache_.end()) {
                 spill_cache_bytes_ -= it->second.size_bytes;
                 std::error_code ec;
-                std::filesystem::remove(it->second.path, ec);
+                lfs::core::native_fs::remove(it->second.path, ec);
                 spill_cache_.erase(it);
             }
             return nullptr;
@@ -1720,7 +1743,7 @@ namespace lfs::io {
             if (const auto it = spill_cache_.find(cache_key); it != spill_cache_.end()) {
                 spill_cache_bytes_ -= it->second.size_bytes;
                 std::error_code ec;
-                std::filesystem::remove(it->second.path, ec);
+                lfs::core::native_fs::remove(it->second.path, ec);
                 spill_cache_.erase(it);
             }
             evict_jpeg_cache_if_needed(size);
@@ -1746,7 +1769,7 @@ namespace lfs::io {
         if (const auto it = spill_cache_.find(cache_key); it != spill_cache_.end()) {
             spill_cache_bytes_ -= it->second.size_bytes;
             std::error_code ec;
-            std::filesystem::remove(it->second.path, ec);
+            lfs::core::native_fs::remove(it->second.path, ec);
             spill_cache_.erase(it);
         }
     }
@@ -1843,7 +1866,7 @@ namespace lfs::io {
         if (run_spill_folder_.empty())
             return;
         std::error_code ec;
-        std::filesystem::remove_all(run_spill_folder_, ec);
+        lfs::core::native_fs::remove_all(run_spill_folder_, ec);
         if (ec) {
             LOG_WARN("[PipelinedImageLoader] Failed to remove run spill {}: {}",
                      lfs::core::path_to_utf8(run_spill_folder_), ec.message());
@@ -2450,8 +2473,10 @@ namespace lfs::io {
             std::optional<PrefetchedImage> cold_rgb;
             try {
                 const bool needs_requested_processing = load_params_need_processing(request.params);
+                // Only the GPU decode thread drains the hot queue; without it every image decodes on the CPU.
+                const bool gpu_decode = is_nvcodec_available();
 
-                if (auto cached = load_cached_jpeg_blob(result.cache_key)) {
+                if (auto cached = gpu_decode ? load_cached_jpeg_blob(result.cache_key) : nullptr) {
                     result.jpeg_data = std::move(cached);
                     result.is_cache_hit = true;
                     result.needs_processing = false;
@@ -2468,7 +2493,7 @@ namespace lfs::io {
                         stats_.total_bytes_read += result.raw_bytes.size();
                     }
 
-                    if (result.is_original_jpeg && !needs_requested_processing) {
+                    if (result.is_original_jpeg && !needs_requested_processing && gpu_decode) {
                         // An unchanged JPEG is already a usable encoded cache
                         // entry. Avoid a decode/re-encode and its quality loss.
                         auto data = std::make_shared<std::vector<uint8_t>>(std::move(result.raw_bytes));
@@ -3065,7 +3090,7 @@ namespace lfs::io {
                     bool used_gpu = false;
                     bool float_depth = false;
                     bool share_processed_mask_source = false;
-                    auto extension = item.path.extension().string();
+                    auto extension = lfs::core::path_to_utf8(item.path.extension());
                     std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char ch) {
                         return static_cast<char>(std::tolower(ch));
                     });
@@ -3073,7 +3098,7 @@ namespace lfs::io {
                     // nvimagecodec and the uint8 path truncate to 8 bits; 16-bit
                     // depth priors must keep their precision.
                     const bool depth_16bit =
-                        item.is_depth && stbi_is_16_bit(lfs::core::path_to_utf8(item.path).c_str());
+                        item.is_depth && stb_is_16_bit(item.path);
 
                     // Depth sidecars keep their first-touch 16-bit PNG precision by
                     // decoding with stb before the processed tensor is transcoded.
@@ -3121,9 +3146,7 @@ namespace lfs::io {
                         lfs::core::Tensor gpu_gray;
                         if (depth_16bit) {
                             int channels = 0;
-                            stbi_us* const gray16 = stbi_load_16(
-                                lfs::core::path_to_utf8(item.path).c_str(),
-                                &src_w, &src_h, &channels, 1);
+                            stbi_us* const gray16 = stb_load_16(item.path, &src_w, &src_h, &channels, 1);
                             if (!gray16)
                                 throw std::runtime_error("Failed to decode 16-bit depth");
                             const lfs::core::TensorShape shape(
@@ -3272,7 +3295,6 @@ namespace lfs::io {
 
                 } else if (item.is_normal) {
                     const lfs::core::CUDAStreamGuard stream_guard(sidecar_stream);
-                    const std::string path_utf8 = lfs::core::path_to_utf8(item.path);
                     int src_w = 0;
                     int src_h = 0;
                     int channels = 0;
@@ -3283,11 +3305,11 @@ namespace lfs::io {
                     // and world->camera rotation are all inverted in one GPU
                     // kernel; the loss re-normalizes per pixel, so resampling
                     // shrinkage is fine.
-                    const bool normal_16bit = stbi_is_16_bit(path_utf8.c_str());
+                    const bool normal_16bit = stb_is_16_bit(item.path);
                     bool normal_float = false;
                     lfs::core::Tensor gpu_staging;
                     if (normal_16bit) {
-                        stbi_us* const rgb16 = stbi_load_16(path_utf8.c_str(), &src_w, &src_h, &channels, 3);
+                        stbi_us* const rgb16 = stb_load_16(item.path, &src_w, &src_h, &channels, 3);
                         if (!rgb16)
                             throw std::runtime_error("Failed to decode 16-bit normal map");
                         // Float16 is only a 2-byte container for the uint16 samples (no UInt16 dtype).
@@ -3300,7 +3322,7 @@ namespace lfs::io {
                         synchronize_async_upload_before_free(gpu_staging.stream(), "normal");
                         stbi_image_free(rgb16);
                     } else {
-                        stbi_uc* const rgb8 = stbi_load(path_utf8.c_str(), &src_w, &src_h, &channels, 3);
+                        stbi_uc* const rgb8 = stb_load(item.path, &src_w, &src_h, &channels, 3);
                         if (rgb8) {
                             auto cpu_tensor = lfs::core::Tensor::from_blob(
                                 rgb8,
@@ -3407,7 +3429,7 @@ namespace lfs::io {
                     std::optional<MaskedImageFill> fill;
                     if (item.fill_masked_rgb && (item.rgb_mask_path || item.rgb_mask)) {
                         lfs::core::Tensor mask;
-                        auto mask_extension = item.rgb_mask_path ? item.rgb_mask_path->extension().string() : std::string{};
+                        auto mask_extension = item.rgb_mask_path ? lfs::core::path_to_utf8(item.rgb_mask_path->extension()) : std::string{};
                         std::transform(mask_extension.begin(), mask_extension.end(), mask_extension.begin(), [](unsigned char ch) {
                             return static_cast<char>(std::tolower(ch));
                         });

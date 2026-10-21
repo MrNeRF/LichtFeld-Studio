@@ -62,6 +62,42 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
         assert data["training_panel"]["color_blue_prefix"] == "B:"
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_sparsity_toggle_controls_popspa_rows_and_search(
+    training_panel_module, monkeypatch, enabled
+):
+    module = training_panel_module
+    params = SimpleNamespace(
+        has_params=lambda: True, mask_mode=SimpleNamespace(value=0),
+        use_depth_loss=False, use_normal_loss=False, ppisp=False,
+        use_exposure_correction=False, ppisp_use_controller=False,
+        use_bilateral_grid=False, strategy="mcmc", random=False,
+        enable_sparsity=enabled, enable_eval=False, eval_mask="", undistort=False,
+    )
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    panel = module.TrainingPanel()
+    assert panel._property_view_condition_visible("dep_sparsity") is enabled
+    view = module.property_view
+    sparsity_run = next(run for run in view.BASIC_RUNS if run.id == "sparsity")
+    assert sparsity_run.prop_ids == view.POPSPA_PROPS
+    assert sparsity_run.visibility_condition_id == "dep_sparsity"
+    assert not set(view.POPSPA_PROPS) & set(view.PROP_VISIBILITY_CONDITION_IDS)
+    # Search hides the whole run while sparsity is off, like ordinary rendering.
+    rows = [
+        dict(id=prop_id, kind="number", label_key="", name=prop_id,
+             tooltip_key="", precision=0, text="0", strategies=())
+        for prop_id in ("popspa_target_count", "popspa_sparsify_steps")
+    ]
+    binding = view.SectionBinding(
+        "sparsity", rows, lambda: params, {}, lambda _binding: None,
+        search_accessor=lambda: "s",
+        visibility_condition_id="dep_sparsity",
+        visibility_predicate=panel._property_view_condition_visible,
+    )
+    visible = {row["id"] for row in binding._records()}
+    assert visible == ({"popspa_target_count", "popspa_sparsify_steps"} if enabled else set())
+
+
 @pytest.fixture
 def training_panel_module(monkeypatch):
     project_root = Path(__file__).parent.parent.parent
@@ -151,7 +187,6 @@ class _StrategyParamsStub:
                 "scaling_lr": 0.007,
                 "lambda_dssim": 0.2,
                 "init_opacity": 0.5,
-                "prune_ratio": 0.6,
                 "sh_degree": 3,
                 "depth_loss_mode": "ssi",
                 "ppisp_controller_activation_step": 25_000,
@@ -165,7 +200,6 @@ class _StrategyParamsStub:
                 "scaling_lr": 0.02,
                 "lambda_dssim": 0.35,
                 "init_opacity": 0.1,
-                "prune_ratio": 0.4,
                 "sh_degree": 2,
                 "depth_loss_mode": "ssi-depth",
                 "ppisp_controller_activation_step": 12_000,
@@ -293,7 +327,6 @@ def test_strategy_switch_resyncs_generated_rows_and_requests_panel_update(
     assert panel._text_bufs[binding.input_key("scaling_lr")] == "0.020000"
     assert panel._get_scrub_value("lambda_dssim") == pytest.approx(0.35)
     assert panel._get_scrub_value("init_opacity") == pytest.approx(0.1)
-    assert panel._get_scrub_value("prune_ratio") == pytest.approx(0.4)
     assert model.bindings["sh_degree_str"][0]() == "2"
     assert model.bindings["depth_loss_mode_str"][0]() == "ssi-depth"
     assert panel._text_bufs["ppisp_activation_step_str"] == "12,000"
@@ -937,6 +970,30 @@ def test_training_rml_no_longer_includes_ppisp_auto_toggle():
     assert "label_ppisp_auto" not in content
 
 
+def test_training_rml_makes_every_panel_section_collapsible(training_panel_module):
+    project_root = Path(__file__).parent.parent.parent
+    training_rml = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "training.rml"
+    content = training_rml.read_text()
+
+    panel_blocks = {"basic_params", "advanced_params"}
+    for name in training_panel_module.SECTIONS:
+        if name in panel_blocks:
+            continue
+        dom_name = name.replace("_", "-")
+        assert f'id="hdr-{dom_name}" data-event-click="toggle_section(\'{name}\')"' in content
+        assert f'id="arrow-{dom_name}"' in content
+        assert f'class="section-content collapsed" id="sec-{dom_name}"' in content
+
+
+def test_training_panel_restores_new_sections_collapsed(training_panel_module):
+    panel = training_panel_module.TrainingPanel.__new__(training_panel_module.TrainingPanel)
+    panel._handle = None
+    panel.apply_chrome({"expanded": ["losses", "retired_section"]})
+
+    assert panel._collapsed == training_panel_module.INITIALLY_COLLAPSED - {"losses"}
+    assert panel.capture_chrome()["expanded"] == ["basic_params", "losses"]
+
+
 def test_training_rml_exposes_mrnf_grow_until_iter():
     project_root = Path(__file__).parent.parent.parent
     training_rml = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "training.rml"
@@ -1025,6 +1082,36 @@ def test_browse_background_image_uses_current_image_dialog(training_panel_module
     assert calls == [""]
     assert params.bg_image_path == selected_path
     assert panel._handle.dirty_all_count == 1
+
+
+# Catches the mesh resolution row showing for splat or point inits, or a file probe on every redraw.
+def test_mesh_resolution_row_follows_the_init_file(training_panel_module, monkeypatch):
+    dataset = SimpleNamespace(init_path="", has_params=lambda: True)
+    probes = []
+
+    def is_mesh_file(path):
+        probes.append(path)
+        return path.endswith(".obj")
+
+    monkeypatch.setattr(
+        training_panel_module,
+        "lf",
+        SimpleNamespace(dataset_params=lambda: dataset, io=SimpleNamespace(is_mesh_file=is_mesh_file)),
+    )
+    panel = training_panel_module.TrainingPanel()
+
+    assert panel._property_view_condition_visible("dep_init_mesh") is False
+    dataset.init_path = "/scan/model.obj"
+    assert panel._property_view_condition_visible("dep_init_mesh") is True
+    assert panel._property_view_condition_visible("dep_init_mesh") is True
+    dataset.init_path = "/scan/points.ply"
+    assert panel._property_view_condition_visible("dep_init_mesh") is False
+    assert probes == ["/scan/model.obj", "/scan/points.ply"]
+
+    training_rml = Path(__file__).parent.parent.parent / "src/visualizer/gui/rmlui/resources/training.rml"
+    content = training_rml.read_text()
+    guard = content.index('<div data-if="dep_init_mesh">')
+    assert guard < content.index("pv_init_mesh_rows") < content.index("</div>", guard + 1)
 
 
 # Catches a cleared path leaving pixel sets listed or a browse action ignoring its start directory.
@@ -1998,7 +2085,6 @@ def test_restored_control_echo_is_not_an_edit(
     ("prop", "saved", "control_echo"),
     [
         ("init_opacity", 0.5, 0.4999999701976776),
-        ("prune_ratio", 0.6000000238418579, 0.5999999642372131),
         ("lambda_dssim", 0.2, 0.20000000298023224),
     ],
 )
@@ -2385,3 +2471,46 @@ def test_external_change_refreshes_derived_activation_step(ready_panel_settings,
     change("optimization", prop, value)
     panel.on_update(None)
     assert panel._text_bufs["ppisp_activation_step_str"] == expected
+
+
+@pytest.mark.parametrize("locked", [False, True])
+def test_label_reset_respects_coupled_step_lock(training_panel_module, monkeypatch, locked):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    panel._auto_scale_steps_locked = locked
+    monkeypatch.setattr(panel, "_can_edit_configuration", lambda: True)
+    params = SimpleNamespace(has_params=lambda: True, strategy="mrnf",
+        prop_info=lambda prop: {"readonly": False}, builtin_default=lambda prop: 100)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    prop = next(run.prop_ids[0] for run in module.property_view.RUNS
+                if run.disabled_condition_id == "step_scaling_params_locked")
+    assert panel._reset_default(prop) == (None if locked else 100)
+
+
+def test_label_reset_rejects_training_runtime_and_forced_method_fields(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    params = SimpleNamespace(has_params=lambda: True, strategy="igs+",
+        prop_info=lambda prop: {"readonly": False}, builtin_default=lambda prop: False)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(panel, "_can_edit_configuration", lambda: False)
+    monkeypatch.setattr(module, "_trainer_run_is_finished", lambda: False)
+    assert panel._reset_default("iterations") is None
+    monkeypatch.setattr(panel, "_can_edit_configuration", lambda: True)
+    assert panel._reset_default("gut") is None
+    assert panel._reset_default("strategy") is None
+
+
+def test_label_reset_uses_iterations_scaling_path(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    panel._auto_scale_steps_locked = True
+    calls = []
+    params = SimpleNamespace(has_params=lambda: True, strategy="mrnf", iterations=60000, steps_scaler=2.,
+        apply_step_scaling=lambda value: calls.append(value))
+    params.get = lambda prop: getattr(params, prop)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(panel, "_reset_default", lambda prop: 30000)
+    monkeypatch.setattr(panel, "_sync_text_bufs", lambda: None)
+    assert panel._apply_reset("iterations", 30000)
+    assert calls == [1.0] and params.iterations == 30000
