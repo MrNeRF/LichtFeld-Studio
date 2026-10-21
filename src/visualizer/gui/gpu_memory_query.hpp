@@ -32,6 +32,9 @@ namespace lfs::vis::gui {
         // `total_used` what the GPU cannot use anymore, counting every GPU
         // client and the host memory other processes hold.
         bool unified_memory = false;
+#ifdef LFS_TENSOR_HIP
+        bool native_metrics_unavailable = false;
+#endif
     };
 
     struct LFS_VIS_API GpuProcessUsage {

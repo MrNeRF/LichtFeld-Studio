@@ -246,6 +246,10 @@ namespace lfs::python {
         if (backend == lfs::core::GpuBackend::Metal) {
             return "metal";
         }
+#ifdef LFS_TENSOR_HIP
+        if (backend == lfs::core::GpuBackend::HIP)
+            return "hip";
+#endif
         return "cuda";
     }
 
@@ -1472,6 +1476,10 @@ namespace lfs::python {
 #endif
 
     nb::tuple PyTensor::dlpack_device() const {
+#ifdef LFS_TENSOR_HIP
+        if (lfs::core::gpu_backend_of(tensor_) == lfs::core::GpuBackend::HIP)
+            return nb::make_tuple(int32_t(kDLROCM),lfs::core::selected_hip_device());
+#endif
 #if !LFS_HAS_CUDA
         if (tensor_.device() == Device::GPU) {
             throw std::runtime_error(
@@ -1560,8 +1568,22 @@ namespace lfs::python {
 
     nb::capsule PyTensor::dlpack(nb::object stream) const {
         Tensor exported = tensor_;
+#ifdef LFS_TENSOR_HIP
+        const bool native_hip=lfs::core::gpu_backend_of(tensor_)==lfs::core::GpuBackend::HIP;
+        if(native_hip) {
+            if(!stream.is_none() && nb::cast<int64_t>(stream)<kDLPackNoSync)
+                throw std::runtime_error("Invalid HIP DLPack consumer stream");
+            // Complete our native producer before handing the pointer to an
+            // arbitrary consumer stream. No CUDA event or runtime is involved.
+            lfs::core::TensorCompletion ready;ready.include(tensor_);ready.wait();
+        }
+#else
+        constexpr bool native_hip=false;
+#endif
 #if LFS_HAS_CUDA
-        if (lfs::core::gpu_backend_of(tensor_) == lfs::core::GpuBackend::Vulkan) {
+        if(native_hip) {
+            // Already synchronized through the native HIP producer above.
+        } else if (lfs::core::gpu_backend_of(tensor_) == lfs::core::GpuBackend::Vulkan) {
             const cudaStream_t consumer = stream.is_none() ||
                                                   nb::cast<int64_t>(stream) == kDLPackNoSync
                                               ? lfs::core::getCurrentCUDAStream()
@@ -1594,15 +1616,18 @@ namespace lfs::python {
             }
         }
 #else
-        if (tensor_.device() == Device::GPU) {
+        if (tensor_.device() == Device::GPU && !native_hip) {
             throw std::runtime_error(
                 "GPU DLPack export is unavailable without CUDA; call .cpu() first");
         }
 #endif
 
         int exported_device = 0;
+#ifdef LFS_TENSOR_HIP
+        if(native_hip)exported_device=lfs::core::selected_hip_device();
+#endif
 #if LFS_HAS_CUDA
-        if (exported.device() == Device::GPU) {
+        if (exported.device() == Device::GPU && !native_hip) {
             exported_device = cuda_dlpack_device_id(exported);
         }
 #endif
@@ -1611,7 +1636,7 @@ namespace lfs::python {
 
         DLTensor& dl = managed->dl_tensor;
         dl.data = const_cast<void*>(ctx->tensor.data_ptr());
-        dl.device.device_type = ctx->tensor.device() == Device::GPU ? kDLCUDA : kDLCPU;
+        dl.device.device_type = native_hip ? kDLROCM : ctx->tensor.device() == Device::GPU ? kDLCUDA : kDLCPU;
         dl.device.device_id = exported_device;
         dl.ndim = static_cast<int32_t>(ctx->tensor.ndim());
         dl.dtype = to_dl_dtype(ctx->tensor.dtype());
@@ -1621,6 +1646,15 @@ namespace lfs::python {
 
         managed->manager_ctx = ctx;
         managed->deleter = dlpack_deleter;
+
+        if(native_hip) {
+            return nb::steal<nb::capsule>(PyCapsule_New(managed,"dltensor",[](PyObject* capsule) {
+                if(PyCapsule_IsValid(capsule,"dltensor")) {
+                    auto* value=static_cast<DLManagedTensor*>(PyCapsule_GetPointer(capsule,"dltensor"));
+                    if(value && value->deleter)value->deleter(value);
+                }
+            }));
+        }
 
         // Per DLPack spec: the consumer will call managed->deleter themselves,
         // so we set the capsule destructor to nullptr to avoid double-free.
@@ -1632,6 +1666,10 @@ namespace lfs::python {
     PyTensor PyTensor::from_dlpack(nb::object obj) {
         nb::capsule capsule;
         bool stream_handshake = false;
+#ifdef LFS_TENSOR_HIP
+        if(lfs::core::configured_gpu_backend()==lfs::core::GpuBackend::HIP && dlpack_producer_is_cuda_ordered(obj))
+            throw std::runtime_error("CUDA DLPack storage cannot be imported into the active HIP backend; transfer the producer to CPU first");
+#endif
 
         if (nb::hasattr(obj, "__dlpack__")) {
             nb::object dlpack_fn = obj.attr("__dlpack__");
@@ -1676,6 +1714,13 @@ namespace lfs::python {
         }
 
         const DLTensor& dl = managed->dl_tensor;
+#ifdef LFS_TENSOR_HIP
+        if(dl.device.device_type==kDLROCM || dl.device.device_type==kDLROCMHost)
+            throw std::runtime_error("ROCm DLPack import requires foreign-allocation registration, which is not available yet; transfer the producer to CPU first");
+        if((dl.device.device_type==kDLCUDA || dl.device.device_type==kDLCUDAManaged) &&
+           lfs::core::configured_gpu_backend()==lfs::core::GpuBackend::HIP)
+            throw std::runtime_error("CUDA DLPack storage cannot be imported into the active HIP backend; transfer the producer to CPU first");
+#endif
         if (!dlpack_is_compact_row_major(dl)) {
             throw std::runtime_error(
                 "from_dlpack: non-contiguous producer tensors are not supported; "
@@ -1723,6 +1768,13 @@ namespace lfs::python {
 
     namespace {
         Device parse_device(const std::string& device) {
+#ifdef LFS_TENSOR_HIP
+            if(device=="hip") {
+                if(lfs::core::configured_gpu_backend()!=lfs::core::GpuBackend::HIP)
+                    throw std::runtime_error("Select the HIP tensor backend before using device='hip'");
+                return Device::GPU;
+            }
+#endif
             if (device == "cuda" || device == "gpu")
                 return Device::GPU;
             if (device == "cpu")
@@ -2047,9 +2099,9 @@ namespace lfs::python {
             .def_prop_ro("ndim", &PyTensor::ndim, "Number of dimensions")
             .def_prop_ro("numel", &PyTensor::numel, "Total number of elements")
             .def_prop_ro("device", &PyTensor::device,
-                         "Device: 'cpu', 'cuda', 'vulkan' or 'metal' according to the tensor backend")
+                         "Device: 'cpu', 'cuda', 'vulkan', 'metal' or 'hip' according to the tensor backend")
             .def_prop_ro("backend", &PyTensor::backend,
-                         "Backend: 'cpu' for CPU tensors, 'cuda', 'vulkan' or 'metal' for GPU tensors")
+                         "Backend: 'cpu' for CPU tensors; the active CUDA, Vulkan, Metal or HIP backend for GPU tensors")
             .def_prop_ro("dtype", &PyTensor::dtype, "Data type")
             .def_prop_ro("is_contiguous", &PyTensor::is_contiguous, "Whether memory is contiguous")
             .def_prop_ro("is_cuda", &PyTensor::is_cuda, "Whether tensor is on CUDA")

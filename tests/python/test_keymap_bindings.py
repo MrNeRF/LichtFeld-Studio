@@ -289,6 +289,8 @@ def _install_lf_stub(monkeypatch):
         set_camera_browse_repeat=lambda _enabled: None,
         get_camera_browse_repeat_rate=lambda: 5.0,
         set_camera_browse_repeat_rate=lambda _rate, persist=True: None,
+
+        get_hip_hardware=lambda: [],
         PanelSpace=panel_space,
         PanelHeightMode=panel_height_mode,
         PanelOption=panel_option,
@@ -322,7 +324,8 @@ def _install_lf_stub(monkeypatch):
         get_gpu_runtime_status=lambda: dict(
             restart_required=False, tensor_backend="CUDA", tensor_gpu="Test GPU", rendering_gpu="Test GPU"),
         get_tensor_backend_preferences=lambda: dict(
-            backend="auto", cuda_device="", vulkan_device="", rendering_vulkan_device="",
+            backend="auto", cuda_device="", hip_device="", vulkan_device="", rendering_vulkan_device="",
+            hip_available=False, hip_compiled=False,
             cuda_available=True, vulkan_available=True, metal_available=False,
             vulkan_validation=0, force_fp32_half=False, force_no_atomic_float=False),
         themes=lambda: [],

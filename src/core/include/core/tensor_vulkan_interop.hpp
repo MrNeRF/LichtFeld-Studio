@@ -59,6 +59,10 @@ namespace lfs::core {
         // freed while any queue has unfinished work faults.
         void run_while_idle(GpuBackend backend, const std::function<void()>& release);
         [[nodiscard]] std::shared_ptr<void> execution_scope(GpuBackend backend);
+        // Bracket consumer command recording AND queue submission. Required for
+        // host-synchronized external memory; empty for GPU-synchronized paths.
+        // The returned scope must be released on the thread that created it.
+        [[nodiscard]] std::shared_ptr<void> consumer_scope();
         [[nodiscard]] Tensor empty(TensorShape shape, DataType dtype,
                                    GpuBackend backend, size_t capacity = 0);
         [[nodiscard]] std::optional<TensorVulkanBuffer> buffer(const Tensor& tensor);

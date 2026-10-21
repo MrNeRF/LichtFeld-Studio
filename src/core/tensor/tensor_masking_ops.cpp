@@ -134,6 +134,15 @@ namespace lfs::core {
         void assert_async_index_tensor(const Tensor& indices, size_t upper_bound,
                                        std::string_view operation, bool check_bounds,
                                        const bool allow_negative = false) {
+#ifdef LFS_TENSOR_HIP
+            if (indices.device() == Device::GPU && internal::gpu_backend_tag(indices) == GpuBackend::HIP &&
+                (operation == "gather" || operation == "index_select_into" || operation == "index_copy_" || operation == "index_add_")) {
+                // These HIP kernels validate all indices before any output write.
+                // Clamp/wrap operate on the full signed Int64 value as well.
+                assert_index_tensor_host_only(indices, upper_bound, operation);
+                return;
+            }
+#endif
 #ifdef NDEBUG
             if (indices.device() == Device::GPU) {
                 assert_index_tensor_host_only(indices, upper_bound, operation);
@@ -141,6 +150,14 @@ namespace lfs::core {
             }
 #endif
             assert_index_tensor(indices, upper_bound, operation, check_bounds, allow_negative);
+        }
+
+        bool needs_int32_index_cast(const Tensor& indices, [[maybe_unused]] const Tensor& consumer) {
+#ifdef LFS_TENSOR_HIP
+            if (consumer.device() == Device::GPU && internal::gpu_backend_tag(consumer) == GpuBackend::HIP)
+                return false; // Native HIP indexing preserves Int64 and strides.
+#endif
+            return indices.dtype() == DataType::Int64;
         }
 
         Tensor index_cast(const Tensor& indices, const Tensor& consumer, size_t extent, BoundaryMode mode = BoundaryMode::Assert) {
@@ -530,8 +547,8 @@ namespace lfs::core {
 
         auto indices_same_device = ensure_same_device(indices);
 
-        // Keep Int64 indices, don't convert to Int32 (causes corruption)
-        bool is_int64 = indices_same_device.dtype() == DataType::Int64;
+        // HIP gather/select accept native Int64 indices directly.
+        const bool is_int64 = needs_int32_index_cast(indices_same_device, *this);
         Tensor indices_int32;
         if (is_int64) {
             // Only convert for the kernel call, not in-place
@@ -683,7 +700,7 @@ namespace lfs::core {
                 *this, indices.shape(), dtype_);
         }
         auto indices_same_device = ensure_same_device(indices);
-        const bool is_int64 = indices_same_device.dtype() == DataType::Int64;
+        const bool is_int64 = needs_int32_index_cast(indices_same_device, *this);
         Tensor indices_int32;
         if (is_int64) {
             indices_int32 = index_cast(indices_same_device, result, shape_[dim], mode);
@@ -697,7 +714,11 @@ namespace lfs::core {
             internal::backend_ops_for(*this).gather(
                 internal::storage_ref(*this), internal::storage_ref(kernel_index),
                 internal::storage_ref(result), internal::strided_layout(*this),
+#ifdef LFS_TENSOR_HIP
+                internal::strided_layout(internal::gpu_backend_tag(*this) == GpuBackend::HIP ? kernel_index : indices),
+#else
                 internal::strided_layout(indices),
+#endif
                 internal::IndexProgram{
                     .dim = dim,
                     .boundary_mode = static_cast<int>(mode),
@@ -1080,6 +1101,15 @@ namespace lfs::core {
                            dtype_ == DataType::Bool || dtype_ == DataType::UInt8,
                        "index_copy_ encountered an unsupported dtype");
 
+#ifdef LFS_TENSOR_HIP
+        if (device_ == Device::GPU && internal::gpu_backend_tag(*this) == GpuBackend::HIP &&
+            (shares_storage_with(src) || shares_storage_with(idx))) {
+            Tensor stable_source = shares_storage_with(src) ? src.clone() : src;
+            Tensor stable_indices = shares_storage_with(idx) ? idx.clone() : idx;
+            return index_copy_(dim, stable_indices, stable_source);
+        }
+#endif
+
         if (!is_contiguous()) {
             return mutate_logical_view(
                 [&](Tensor& materialized) {
@@ -1110,7 +1140,7 @@ namespace lfs::core {
         auto idx_same_device = ensure_same_device(idx);
         auto src_same_device = ensure_same_device(src);
 
-        const bool is_int64 = idx_same_device.dtype() == DataType::Int64;
+        const bool is_int64 = needs_int32_index_cast(idx_same_device, *this);
         Tensor idx_int32;
         if (is_int64) {
             idx_int32 = index_cast(idx_same_device, *this, shape_[dim]);
@@ -1192,6 +1222,15 @@ namespace lfs::core {
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,
                        "index_add_ currently supports only Float32 and Int32");
 
+#ifdef LFS_TENSOR_HIP
+        if (device_ == Device::GPU && internal::gpu_backend_tag(*this) == GpuBackend::HIP &&
+            (shares_storage_with(src) || shares_storage_with(idx))) {
+            Tensor stable_source = shares_storage_with(src) ? src.clone() : src;
+            Tensor stable_indices = shares_storage_with(idx) ? idx.clone() : idx;
+            return index_add_(dim, stable_indices, stable_source);
+        }
+#endif
+
         if (!is_contiguous()) {
             return mutate_logical_view(
                 [&](Tensor& materialized) {
@@ -1222,7 +1261,7 @@ namespace lfs::core {
 
             if (device_ == Device::GPU) {
                 // Convert int64 indices to int32 for kernel (kernel expects int* not int64_t*)
-                auto idx_int32 = (idx_same_device.dtype() == DataType::Int64)
+                auto idx_int32 = needs_int32_index_cast(idx_same_device, *this)
                                      ? index_cast(idx_same_device, *this, shape_[dim])
                                      : idx_same_device;
                 pin_operands({this, &idx_int32, &src_same_device});
@@ -1313,7 +1352,7 @@ namespace lfs::core {
 
         if (device_ == Device::GPU) {
             // Convert int64 indices to int32 for kernel (kernel expects int* not int64_t*)
-            auto idx_int32 = (idx_same_device.dtype() == DataType::Int64)
+            auto idx_int32 = needs_int32_index_cast(idx_same_device, *this)
                                  ? index_cast(idx_same_device, *this, shape_[dim])
                                  : idx_same_device;
             pin_operands({this, &idx_int32, &src_same_device});

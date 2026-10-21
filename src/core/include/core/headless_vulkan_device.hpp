@@ -99,7 +99,7 @@ namespace lfs::core {
         static std::optional<HeadlessAdoptedDevice> try_create(bool external_interop = false, bool push_descriptors = false,
                                                                std::string_view requested_device = {},
                                                                const std::optional<VulkanDeviceUuid>& cuda_uuid = std::nullopt) {
-#if !LFS_HAS_CUDA
+#if !LFS_HAS_CUDA && !defined(LFS_TENSOR_HIP)
             external_interop = false;
 #endif
             HeadlessAdoptedDevice device;

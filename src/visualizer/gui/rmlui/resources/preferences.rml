@@ -34,11 +34,16 @@
             <option value="cuda" data-if="tensor_cuda_available || tensor_backend == 'cuda'" data-attrif-disabled="!tensor_cuda_available">@tr:preferences.tensor_cuda</option>
             <option value="vulkan" data-if="tensor_vulkan_available || tensor_backend == 'vulkan'" data-attrif-disabled="!tensor_vulkan_available">@tr:preferences.tensor_vulkan</option>
             <option value="metal" data-if="tensor_metal_available || tensor_backend == 'metal'" data-attrif-disabled="!tensor_metal_available">@tr:preferences.tensor_metal</option>
+            <option value="hip" data-if="tensor_hip_compiled" data-attrif-disabled="!tensor_hip_available">ROCm / HIP</option>
           </select>
         </div>
         <div class="preferences-row" data-if="gpu_tensor_cuda">
           <span class="preferences-label">@tr:preferences.gpu_training_device</span>
           <select class="preferences-select gpu-device-select" data-value="tensor_cuda_device"><option data-for="device : cuda_devices" data-attr-value="device.value" data-attrif-disabled="device.disabled">{{ device.label }}</option></select>
+        </div>
+        <div class="preferences-row" data-if="gpu_tensor_hip">
+          <span class="preferences-label">@tr:preferences.gpu_training_device</span>
+          <select class="preferences-select gpu-device-select" data-value="tensor_hip_device"><option data-for="device : hip_devices" data-attr-value="device.value" data-attrif-disabled="device.disabled">{{ device.label }}</option></select>
         </div>
         <div class="preferences-row" data-if="gpu_tensor_vulkan">
           <span class="preferences-label">@tr:preferences.gpu_training_device</span>

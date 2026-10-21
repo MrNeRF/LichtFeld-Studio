@@ -5451,5 +5451,6 @@
   "project.session.newer_settings.title": "Project settings from a newer version",
   "project.session.newer_settings.message": "This project contains settings this version does not recognize. Default values were used for: {}",
   "preferences.drag_pause": "Pause training before dragging splats.",
-  "preferences.drag_failed": "Splat export failed. See the application log for details."
+  "preferences.drag_failed": "Splat export failed. See the application log for details.",
+  "ui.vram_native_unavailable_tooltip": "GPU utilization and memory budget are unavailable for this backend."
 }

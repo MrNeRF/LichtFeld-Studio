@@ -5451,5 +5451,6 @@
   "preferences.drag_rejected_node": "No se puede exportar: {}. No se transfirió ningún archivo. Consulta el registro para más detalles.",
   "preferences.drag_title": "Transferencia de splats",
   "preferences.drag_pause": "Pausa el entrenamiento antes de arrastrar los splats.",
-  "preferences.drag_failed": "Error al exportar los splats. Consulta el registro de la aplicación para ver los detalles."
+  "preferences.drag_failed": "Error al exportar los splats. Consulta el registro de la aplicación para ver los detalles.",
+  "ui.vram_native_unavailable_tooltip": "El uso de la GPU y el presupuesto de memoria no están disponibles para este backend."
 }

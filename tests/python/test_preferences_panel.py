@@ -101,10 +101,10 @@ def preferences_panel_module(monkeypatch):
         },
     )
 
-    tensor_defaults = dict(backend="cuda", cuda_device="", rendering_vulkan_device="", vulkan_device="", vulkan_validation=0,
+    tensor_defaults = dict(backend="cuda", cuda_device="", hip_device="", rendering_vulkan_device="", vulkan_device="", vulkan_validation=0,
                            force_fp32_half=False, force_no_atomic_float=False)
     state.tensor_preferences = dict(tensor_defaults, cuda_available=True, metal_available=False,
-                                   vulkan_available=True)
+                                   vulkan_available=True, hip_available=False, hip_compiled=False)
     state.backend_dialogs = []
     state.viewer_backend = "auto"
 
@@ -211,6 +211,7 @@ def preferences_panel_module(monkeypatch):
         take_preferences_section_request=take_preferences_section_request,
         get_vulkan_hardware=lambda: [],
         get_cuda_hardware=lambda: [],
+        get_hip_hardware=lambda: [],
         get_graphics_backend=lambda: "vulkan",
         get_gpu_runtime_status=lambda: dict(restart_required=False, tensor_backend="CUDA", tensor_gpu="Test GPU", rendering_gpu="Test GPU"),
         get_tensor_backend_preferences=lambda: dict(state.tensor_preferences),
@@ -1831,3 +1832,25 @@ def test_draft_change_handler_keeps_draft_until_enter(preferences_panel_module):
     on_change(None, typing, [])
     on_change(None, enter, ["45"])
     assert calls == ["4", "45", "commit"]
+
+def test_hip_selection_preserves_independent_device_choices(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    state.tensor_preferences.update(hip_compiled=True, hip_available=True, cuda_device="cuda-gpu",
+                                    vulkan_device="vulkan-gpu", rendering_vulkan_device="viewer-gpu")
+    panel._set_tensor_preference("backend", "hip")
+    panel._set_tensor_preference("hip_device", "hip-gpu")
+    assert state.tensor_preferences["backend"] == "hip"
+    assert state.tensor_preferences["hip_device"] == "hip-gpu"
+    assert state.tensor_preferences["cuda_device"] == "cuda-gpu"
+    assert state.tensor_preferences["vulkan_device"] == "vulkan-gpu"
+    assert state.tensor_preferences["rendering_vulkan_device"] == "viewer-gpu"
+
+
+def test_unavailable_hip_selection_is_rejected(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    before = dict(state.tensor_preferences)
+    panel._set_tensor_preference("backend", "hip")
+    assert state.tensor_preferences == before
+    assert state.backend_dialogs

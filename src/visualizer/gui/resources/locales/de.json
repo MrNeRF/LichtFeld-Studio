@@ -5451,5 +5451,6 @@
   "preferences.drag_rejected_node": "Export nicht möglich: {}. Es wurden keine Dateien übertragen. Details stehen im Protokoll.",
   "preferences.drag_title": "Splat-Übertragung",
   "preferences.drag_pause": "Vor dem Ziehen der Splats das Training pausieren.",
-  "preferences.drag_failed": "Splat-Export fehlgeschlagen. Details stehen im Anwendungsprotokoll."
+  "preferences.drag_failed": "Splat-Export fehlgeschlagen. Details stehen im Anwendungsprotokoll.",
+  "ui.vram_native_unavailable_tooltip": "GPU-Auslastung und Speicherbudget sind für dieses Backend nicht verfügbar."
 }

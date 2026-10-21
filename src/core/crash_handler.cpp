@@ -114,6 +114,10 @@ namespace lfs::core {
             // do not initialize a GPU, including in CPU-only processes.
             run_gpu_pre_shutdown_hooks_once();
             static_cast<void>(shutdown_gpu_backend(GpuBackend::Vulkan));
+#ifdef LFS_TENSOR_HIP
+            if (const auto status=shutdown_gpu_backend(GpuBackend::HIP);!status)
+                LOG_WARN("HIP shutdown retained live resources: {}",format_for_developer(status.error()));
+#endif
             // release every registered long-lived CUDA holder
             // (TLS FastGS sort workspaces, rasterizer image caches, PPISP shared
             // statics, mirror mult cache, nan-check scratch,) while the pool

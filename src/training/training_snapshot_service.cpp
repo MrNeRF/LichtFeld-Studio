@@ -1091,16 +1091,35 @@ namespace lfs::training {
             calibration.seal(0);
             calibration.wait(0);
             calibration.release(0);
-            lfs::core::GpuElapsed elapsed(d2h_queue->backend(), 2);
-            if (!elapsed.mark(0, *d2h_queue))
-                throw std::runtime_error("Cannot start readback calibration timer");
-            // Every iteration appends to the same slot; one seal covers the batch.
-            for (int i = 0; i < config.calibration_iterations; ++i)
-                calibration.enqueue(source->source, 0, bytes, 0, 0, true);
-            calibration.seal(0);
-            if (!elapsed.mark(1, *d2h_queue) || !elapsed.wait_event(1))
-                throw std::runtime_error("Cannot finish readback calibration timer");
-            const auto elapsed_ms = elapsed.milliseconds(0, 1);
+            std::optional<float> elapsed_ms;
+#ifdef LFS_TENSOR_HIP
+            if (d2h_queue->backend() == lfs::core::GpuBackend::HIP) {
+                // HIP device timestamps are not exposed by this adapter. A
+                // completed transfer batch provides a conservative throughput
+                // estimate including enqueue overhead, without presenting host
+                // timestamps as device timings or bypassing checkpoint capture.
+                const auto start = std::chrono::steady_clock::now();
+                for (int i = 0; i < config.calibration_iterations; ++i)
+                    calibration.enqueue(source->source, 0, bytes, 0, 0, true);
+                calibration.seal(0);
+                calibration.wait(0);
+                elapsed_ms = std::chrono::duration<float, std::milli>(
+                                 std::chrono::steady_clock::now() - start).count();
+                LOG_WARN("HIP checkpoint readback calibration uses synchronized wall time; device timestamps are unavailable");
+            } else
+#endif
+            {
+                lfs::core::GpuElapsed elapsed(d2h_queue->backend(), 2);
+                if (!elapsed.mark(0, *d2h_queue))
+                    throw std::runtime_error("Cannot start readback calibration timer");
+                // Every iteration appends to the same slot; one seal covers the batch.
+                for (int i = 0; i < config.calibration_iterations; ++i)
+                    calibration.enqueue(source->source, 0, bytes, 0, 0, true);
+                calibration.seal(0);
+                if (!elapsed.mark(1, *d2h_queue) || !elapsed.wait_event(1))
+                    throw std::runtime_error("Cannot finish readback calibration timer");
+                elapsed_ms = elapsed.milliseconds(0, 1);
+            }
             if (!elapsed_ms || !(*elapsed_ms > 0.0f))
                 throw std::runtime_error("Pinned D2H calibration duration is zero");
             process_pinned_d2h_bytes_per_second = static_cast<double>(bytes) * config.calibration_iterations /

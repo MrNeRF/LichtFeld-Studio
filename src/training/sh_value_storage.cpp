@@ -15,6 +15,10 @@
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_codec.hpp"
+#ifdef LFS_TENSOR_HIP
+#include "core/crash_handler.hpp"
+#include "core/tensor_backend.hpp"
+#endif
 
 #include <algorithm>
 #include <cassert>
@@ -35,7 +39,25 @@ namespace lfs::training::sh_value {
         using core::Tensor;
         using core::TensorShape;
 
+        #ifdef LFS_TENSOR_HIP
+        lfs::gpu_ops::State& hip_q16_run_slot() {
+            static lfs::gpu_ops::State state;
+            return state;
+        }
+        #endif
         [[nodiscard]] lfs::gpu_ops::BackendState& q16_run_state() {
+            #ifdef LFS_TENSOR_HIP
+            if(core::default_gpu_backend()==core::GpuBackend::HIP) {
+                static const bool registered=[] {
+                    core::register_gpu_pre_shutdown_hook([]() noexcept {hip_q16_run_slot().reset();});
+                    return true;
+                }();
+                (void)registered;
+                auto& state=hip_q16_run_slot();
+                if(!state)state=training_sh_ops().create_run_scratch();
+                return *state;
+            }
+            #endif
             static const lfs::gpu_ops::State state = training_sh_ops().create_run_scratch();
             return *state;
         }

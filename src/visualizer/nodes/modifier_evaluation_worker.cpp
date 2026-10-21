@@ -181,7 +181,11 @@ namespace lfs::vis {
                         backend = configured;
                     else
                         for (const auto candidate : core::kGpuBackends)
-                            if (core::gpu_backend_available(candidate)) {
+                            if (
+#ifdef LFS_TENSOR_HIP
+                                candidate != core::GpuBackend::HIP &&
+#endif
+                                core::gpu_backend_available(candidate)) {
                                 backend = candidate;
                                 break;
                             }

@@ -389,12 +389,20 @@ namespace lfs::vis::gui {
     }
 
     const char* gpuProcessMemoryTooltipKey(const GpuMemoryInfo& info) {
+#ifdef LFS_TENSOR_HIP
+        if(info.native_metrics_unavailable)
+            return "ui.vram_native_unavailable_tooltip";
+#endif
         if (info.unified_memory)
             return "ui.vram_process_metal_tooltip";
         return info.process_valid ? "ui.vram_process_nvml_tooltip" : "ui.vram_process_unavailable_tooltip";
     }
 
     const char* gpuDeviceMemoryTooltipKey(const GpuMemoryInfo& info) {
+#ifdef LFS_TENSOR_HIP
+        if(info.native_metrics_unavailable)
+            return "ui.vram_native_unavailable_tooltip";
+#endif
         if (info.unified_memory)
             return "ui.vram_device_unified_tooltip";
         return info.device_estimated ? "ui.vram_device_cuda_tooltip" : "ui.vram_device_nvml_tooltip";
@@ -418,8 +426,15 @@ namespace lfs::vis::gui {
             }
         }
 #endif
-        if (backend == lfs::core::GpuBackend::Vulkan || backend == lfs::core::GpuBackend::Metal) {
+        if (backend == lfs::core::GpuBackend::Vulkan || backend == lfs::core::GpuBackend::Metal
+#ifdef LFS_TENSOR_HIP
+            || backend == lfs::core::GpuBackend::HIP
+#endif
+        ) {
             GpuMemoryInfo info;
+#ifdef LFS_TENSOR_HIP
+            info.native_metrics_unavailable = backend == lfs::core::GpuBackend::HIP;
+#endif
             if (device) {
                 info.device_name = shortenGpuDeviceName(device->name);
                 info.total = device->total_memory_bytes;
@@ -476,6 +491,10 @@ namespace lfs::vis::gui {
     }
 
     float queryGpuUtilization() {
+#ifdef LFS_TENSOR_HIP
+        if(lfs::core::configured_gpu_backend()==lfs::core::GpuBackend::HIP)
+            return -1.f; // No native utilization sample: never read another vendor's GPU.
+#endif
 #ifdef __APPLE__
         if (const auto stats = acceleratorStats())
             return stats->utilization;

@@ -7585,6 +7585,9 @@ namespace lfs::vis {
         {
             LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.dispatch");
             try {
+                #ifdef LFS_TENSOR_HIP
+                auto hip_consumer_scope = context.tensorInterop().consumer_scope();
+                #endif
                 auto batch = DeviceGuard(&renderer_,
                                          false,
                                          query_signal_semaphore,
@@ -7896,6 +7899,9 @@ namespace lfs::vis {
         }
         try {
             LOG_TIMER("vksplat.selection_overlay.batch_total");
+            #ifdef LFS_TENSOR_HIP
+            auto hip_consumer_scope = context.tensorInterop().consumer_scope();
+            #endif
             auto batch = DeviceGuard(&renderer_,
                                      /*use_fence=*/false,
                                      render_complete_timeline_,
@@ -8807,6 +8813,9 @@ namespace lfs::vis {
             // No CPU fence spin: live-model lifetime is covered by the storage
             // retire-list + the trainer's release-fence wait, and the LOD page
             // buffer self-hazard waits GPU-side on the imported timeline.
+            #ifdef LFS_TENSOR_HIP
+            auto hip_consumer_scope = context.tensorInterop().consumer_scope();
+            #endif
             auto batch = DeviceGuard(&renderer_,
                                      /*use_fence=*/false,
                                      render_complete_timeline_,

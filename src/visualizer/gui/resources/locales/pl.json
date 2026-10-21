@@ -5451,5 +5451,6 @@
   "preferences.drag_rejected_node": "Nie można wyeksportować: {}. Nie przesłano żadnych plików. Szczegóły znajdują się w dzienniku.",
   "preferences.drag_title": "Przesyłanie splatów",
   "preferences.drag_pause": "Wstrzymaj trening przed przeciągnięciem splatów.",
-  "preferences.drag_failed": "Eksport splatów nie powiódł się. Szczegóły znajdują się w dzienniku aplikacji."
+  "preferences.drag_failed": "Eksport splatów nie powiódł się. Szczegóły znajdują się w dzienniku aplikacji.",
+  "ui.vram_native_unavailable_tooltip": "Wykorzystanie GPU i limit pamięci są niedostępne dla tego backendu."
 }

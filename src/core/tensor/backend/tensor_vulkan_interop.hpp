@@ -19,6 +19,7 @@ namespace lfs::core::internal {
         virtual void run_while_idle(const std::function<void()>& release) { release(); }
         virtual void release_timeline(void* semaphore) = 0;
         virtual std::shared_ptr<void> execution_scope() = 0;
+        virtual std::shared_ptr<void> consumer_scope() { return {}; }
         virtual Tensor empty_splat(TensorShape shape, size_t capacity, DataType dtype,
                                    std::string_view name, bool preserve_float_shN) = 0;
         virtual Tensor empty(TensorShape shape, DataType dtype, size_t capacity) = 0;
@@ -29,6 +30,9 @@ namespace lfs::core::internal {
 
     std::shared_ptr<TensorVulkanInteropBackend> make_cuda_vulkan_interop(VulkanInteropDevice device);
     std::shared_ptr<TensorVulkanInteropBackend> make_host_vulkan_interop(VulkanInteropDevice device, GpuBackend backend);
+#ifdef LFS_TENSOR_HIP
+    std::shared_ptr<TensorVulkanInteropBackend> make_hip_vulkan_interop(VulkanInteropDevice device);
+#endif
     std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_vulkan_interop(VulkanInteropDevice device);
     std::shared_ptr<TensorVulkanInteropBackend> make_metal_vulkan_interop(VulkanInteropDevice device);
 

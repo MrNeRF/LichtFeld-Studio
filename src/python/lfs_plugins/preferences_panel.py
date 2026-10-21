@@ -119,6 +119,7 @@ class PreferencesPanel(Panel):
         self._keymap = KeymapBindingsSection()
         self._vulkan_hardware = []
         self._cuda_hardware = []
+        self._hip_hardware = []
         self._theme_catalog = []
         self._theme_families = []
         self._language_catalog = []
@@ -208,18 +209,23 @@ class PreferencesPanel(Panel):
             )
         self._vulkan_hardware = list(lf.ui.get_vulkan_hardware())
         self._cuda_hardware = list(lf.ui.get_cuda_hardware())
+        self._hip_hardware = list(lf.ui.get_hip_hardware())
         model.bind_record_list("cuda_devices")
+        model.bind_record_list("hip_devices")
         model.bind_record_list("gpu_hardware")
         model.bind_func("gpu_restart_required", lambda: lf.ui.get_gpu_runtime_status()["restart_required"])
         model.bind_func("gpu_active_tensor", lambda: " · ".join(filter(None, (lf.ui.get_gpu_runtime_status()["tensor_backend"], lf.ui.get_gpu_runtime_status()["tensor_gpu"]))))
         model.bind_func("gpu_active_rendering", lambda: " · ".join(filter(None, (lf.ui.get_graphics_backend(), lf.ui.get_gpu_runtime_status()["rendering_gpu"]))))
         model.bind_func("gpu_tensor_cuda", lambda: self._gpu_requested_backend() == "cuda")
+        model.bind_func("gpu_tensor_hip", lambda: self._gpu_requested_backend() == "hip")
+        model.bind_func("tensor_hip_compiled", lambda: bool(lf.ui.get_tensor_backend_preferences()["hip_compiled"]))
+        model.bind_func("tensor_hip_available", lambda: bool(lf.ui.get_tensor_backend_preferences()["hip_available"]))
         model.bind_func("gpu_tensor_vulkan", lambda: self._gpu_requested_backend() == "vulkan")
         model.bind_event("refresh_gpu_hardware", lambda *_: self._refresh_gpu_hardware())
         model.bind_record_list("tensor_devices")
         model.bind_record_list("rendering_devices")
         model.bind_func("rendering_vulkan_available", lambda: lf.ui.get_graphics_backend().lower() == "vulkan")
-        for key in ("backend", "vulkan_device", "cuda_device", "rendering_vulkan_device", "vulkan_validation", "force_fp32_half",
+        for key in ("backend", "vulkan_device", "cuda_device", "hip_device", "rendering_vulkan_device", "vulkan_validation", "force_fp32_half",
                     "force_no_atomic_float"):
             model.bind(
                 f"tensor_{key}",
@@ -512,14 +518,14 @@ class PreferencesPanel(Panel):
     def _gpu_preference_value(self, key):
         from .gpu_preferences import selected_value
         value = lf.ui.get_tensor_backend_preferences()[key]
-        if key in ("vulkan_device", "rendering_vulkan_device", "cuda_device"):
-            return selected_value(self._cuda_hardware if key == "cuda_device" else self._vulkan_hardware, value)
+        if key in ("vulkan_device", "rendering_vulkan_device", "cuda_device", "hip_device"):
+            return selected_value(self._hip_hardware if key == "hip_device" else self._cuda_hardware if key == "cuda_device" else self._vulkan_hardware, value)
         return value
 
     def _gpu_choices(self, role, backend="vulkan"):
         from .gpu_preferences import device_choices
-        key = "rendering_vulkan_device" if role == "rendering" else "cuda_device" if backend == "cuda" else "vulkan_device"
-        return device_choices(self._cuda_hardware if backend == "cuda" else self._vulkan_hardware,
+        key = "rendering_vulkan_device" if role == "rendering" else "hip_device" if backend == "hip" else "cuda_device" if backend == "cuda" else "vulkan_device"
+        return device_choices(self._hip_hardware if backend == "hip" else self._cuda_hardware if backend == "cuda" else self._vulkan_hardware,
                               lf.ui.get_tensor_backend_preferences()[key], role, lf.ui.tr)
 
     def _update_gpu_records(self):
@@ -528,8 +534,9 @@ class PreferencesPanel(Panel):
         from .gpu_preferences import hardware_rows
         self._handle.update_record_list("tensor_devices", self._gpu_choices("tensor"))
         self._handle.update_record_list("cuda_devices", self._gpu_choices("tensor", "cuda"))
+        self._handle.update_record_list("hip_devices", self._gpu_choices("tensor", "hip"))
         self._handle.update_record_list("rendering_devices", self._gpu_choices("rendering"))
-        rows = hardware_rows(self._vulkan_hardware, self._cuda_hardware, lf.ui.tr)
+        rows = hardware_rows(self._vulkan_hardware, self._cuda_hardware, lf.ui.tr, self._hip_hardware)
         if lf.ui.get_tensor_backend_preferences()["metal_available"]:
             native_name = lf.ui.get_gpu_runtime_status()["rendering_gpu"]
             native = next((row for row in rows if row["name"] == native_name), None)
@@ -543,6 +550,7 @@ class PreferencesPanel(Panel):
     def _refresh_gpu_hardware(self):
         self._vulkan_hardware = list(lf.ui.get_vulkan_hardware())
         self._cuda_hardware = list(lf.ui.get_cuda_hardware())
+        self._hip_hardware = list(lf.ui.get_hip_hardware())
         self._update_gpu_records()
         if self._handle:
             self._handle.dirty_all()
@@ -551,12 +559,14 @@ class PreferencesPanel(Panel):
         state = dict(lf.ui.get_tensor_backend_preferences())
         if state.get(key) == value:
             return
-        if key == "backend" and value in ("cuda", "metal", "vulkan") and not state[f"{value}_available"]:
+        if key == "backend" and value in ("cuda", "metal", "vulkan", "hip") and not state[f"{value}_available"]:
             self._reject_backend_preference("tensor_backend", "preferences.tensor_backend")
             return
         state.pop("cuda_available", None)
         state.pop("metal_available", None)
         state.pop("vulkan_available", None)
+        state.pop("hip_available", None)
+        state.pop("hip_compiled", None)
         if key == "vulkan_validation":
             value = int(value)
         elif key in ("force_fp32_half", "force_no_atomic_float"):

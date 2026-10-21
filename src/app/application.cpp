@@ -95,6 +95,23 @@
 
 namespace lfs::app {
 
+#if LFS_BUILD_TRAINER
+    namespace {
+        void retire_headless_trainer(std::unique_ptr<training::Trainer>& trainer,
+                                     [[maybe_unused]] const bool has_python_scripts) {
+#ifdef LFS_TENSOR_HIP
+            // Ordinary native HIP headless runs release their owners before
+            // closing the context. Embedded Python may retain trainer handles.
+            if (core::configured_gpu_backend() == core::GpuBackend::HIP && !has_python_scripts) {
+                trainer.reset();
+                return;
+            }
+#endif
+            static_cast<void>(trainer.release());
+        }
+    }
+#endif
+
     std::optional<std::filesystem::path> prepare_lpips_weights(const bool allow_download) {
         if (const auto path = core::environment::value("LFS_LPIPS_WEIGHTS"))
             return core::utf8_to_path(*path);
@@ -1124,8 +1141,7 @@ namespace lfs::app {
                     }
                     record_final_export(training::export_final_splats(*trainer, with_export_folder(*params, params->resume_project->parent_path())));
                     trainer->shutdown();
-                    static_cast<void>(
-                        trainer.release());
+                    retire_headless_trainer(trainer, !params->python_scripts.empty());
                 } else if (params->resume_checkpoint) {
                     const auto ckpt_params_result = loadCheckpointParams(*params, scene);
                     if (!ckpt_params_result) {
@@ -1170,7 +1186,7 @@ namespace lfs::app {
                     }
                     record_final_export(training::export_final_splats(*trainer, with_export_folder(*params, ckpt_params_result->dataset.output_path)));
                     trainer->shutdown();
-                    static_cast<void>(trainer.release());
+                    retire_headless_trainer(trainer, !params->python_scripts.empty());
                 } else {
                     if (const auto result = training::loadTrainingDataIntoScene(*params, scene); !result) {
                         LOG_ERROR("Failed to load training data: {}", result.error());
@@ -1218,12 +1234,20 @@ namespace lfs::app {
                     }
                     record_final_export(training::export_final_splats(*trainer, *params));
                     trainer->shutdown();
-                    static_cast<void>(trainer.release());
+                    retire_headless_trainer(trainer, !params->python_scripts.empty());
                 }
 
                 if (final_export_failed) {
                     LOG_ERROR("Headless training finished but a final export failed");
                 }
+#ifdef LFS_TENSOR_HIP
+                if (core::configured_gpu_backend() == core::GpuBackend::HIP && params->python_scripts.empty()) {
+                    // Unwind Scene (including retired model generations) and
+                    // the coordinator before main performs backend teardown.
+                    core::mark_clean_exit();
+                    return final_export_failed ? 1 : 0;
+                }
+#endif
                 core::teardown_gpu_before_exit();
                 core::mark_clean_exit();
                 core::flush_and_exit(final_export_failed ? 1 : 0);
@@ -1306,12 +1330,18 @@ namespace lfs::app {
             core::Tensor::trim_memory_pool();
             const auto result = trainer->evaluate_current_model();
             trainer->shutdown();
-            static_cast<void>(trainer.release());
+            retire_headless_trainer(trainer, !params->python_scripts.empty());
             if (!result) {
                 LOG_ERROR("Evaluation failed: {}", lfs::format_for_developer(result.error()));
                 return 1;
             }
             LOG_INFO("Evaluation written to {}", core::path_to_utf8(params->dataset.output_path));
+#ifdef LFS_TENSOR_HIP
+            if (core::configured_gpu_backend() == core::GpuBackend::HIP && params->python_scripts.empty()) {
+                core::mark_clean_exit();
+                return 0;
+            }
+#endif
             core::teardown_gpu_before_exit();
             core::mark_clean_exit();
             core::flush_and_exit(0);
@@ -1495,6 +1525,15 @@ namespace lfs::app {
     // user-facing message (#1540). show_dialog is false for CLI-only modes: a modal in a
     // non-interactive process blocks it forever.
     bool preflightGpu(const bool show_dialog, const bool viewer_only) {
+#ifdef LFS_TENSOR_HIP
+        if (lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::HIP) {
+            if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::HIP))
+                return true;
+            reportFatalStartupError("LichtFeld Studio - No usable GPU",
+                                    "The selected ROCm / HIP backend has no compatible GPU or runtime.",show_dialog);
+            return false;
+        }
+#endif
         // Falling back changes the default, so it must not be resolved yet.
         if (lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::Metal) {
             // Training reaches Trainer::initialize, which names any missing families.

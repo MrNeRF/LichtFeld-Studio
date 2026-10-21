@@ -2,12 +2,88 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "lfs/training/ops/registry.hpp"
+#ifdef LFS_TENSOR_HIP
+#include "core/tensor_execution.hpp"
+#endif
+#ifdef LFS_HIP_APPLICATION_FAST
+#include "lfs/training/ops/fast_hip.hpp"
+#endif
+#ifdef LFS_HIP_APPLICATION_MCMC
+#include "lfs/training/ops/mcmc_hip.hpp"
+#endif
+#ifdef LFS_HIP_APPLICATION_REFINE
+#include "lfs/training/ops/refine_hip.hpp"
+#endif
+#ifdef LFS_HIP_APPLICATION_PHOTOMETRIC
+#include "lfs/training/ops/photometric_hip.hpp"
+#endif
+#ifdef LFS_HIP_APPLICATION_ADAM
+#include "lfs/training/ops/adam_hip.hpp"
+#endif
+#ifdef LFS_HIP_APPLICATION_SH
+#include "lfs/training/ops/sh_hip.hpp"
+#endif
+#ifdef LFS_HIP_APPLICATION_SESSION
+#include "lfs/training/ops/session_hip.hpp"
+#endif
+#ifdef LFS_HIP_APPLICATION_TRAINING_IMAGE
+#include "lfs/training/ops/training_image_hip.hpp"
+#endif
+
+#ifdef LFS_HIP_APPLICATION_EXTRA_LOSS
+#include "lfs/training/ops/extra_loss_hip.hpp"
+#endif
+
+#ifdef LFS_HIP_APPLICATION_MORTON
+#include "lfs/training/ops/morton_hip.hpp"
+#endif
+#ifdef LFS_HIP_APPLICATION_LPIPS
+#include "lfs/training/ops/lpips_hip.hpp"
+#endif
+#ifdef LFS_HIP_APPLICATION_STRUCTURE
+#include "lfs/training/ops/structure_hip.hpp"
+#endif
+#ifdef LFS_HIP_APPLICATION_BLOB
+#include "lfs/training/ops/blob_hip.hpp"
+#endif
+#ifdef LFS_HIP_APPLICATION_CONTROLLER
+#include "lfs/training/ops/controller_hip.hpp"
+#endif
+#ifdef LFS_HIP_APPLICATION_MRNF
+#include "lfs/training/ops/mrnf_hip.hpp"
+#endif
+#ifdef LFS_HIP_APPLICATION_BILATERAL
+#include "lfs/training/ops/bilateral_hip.hpp"
+#endif
+#ifdef LFS_HIP_APPLICATION_PPISP
+#include "lfs/training/ops/ppisp_hip.hpp"
+#endif
+#ifdef LFS_HIP_APPLICATION_GEOMETRY
+#include "lfs/training/ops/geometry_hip.hpp"
+#endif
+#ifdef LFS_HIP_APPLICATION_MASKS
+#include "lfs/training/ops/masks_hip.hpp"
+#endif
+#ifdef LFS_HIP_APPLICATION_GSPLAT
+#include "lfs/training/ops/gsplat_hip.hpp"
+#endif
 
 #include <array>
 #include <format>
 #include <stdexcept>
 
 namespace lfs::training {
+    namespace {
+        core::GpuBackend active_training_backend() {
+#ifdef LFS_TENSOR_HIP
+            // Model mutation in an explicit HIP execution scope must use its
+            // native kernels even when the process default selects another backend.
+            if (core::TensorExecutionTarget::current().backend() == core::GpuBackend::HIP)
+                return core::GpuBackend::HIP;
+#endif
+            return core::default_gpu_backend();
+        }
+    }
     namespace {
 
         // Families without a table slot still run in the CUDA trainer.
@@ -71,6 +147,78 @@ namespace lfs::training {
     const TrainingOps& vulkan_training_ops_table();
 
     const TrainingOps& training_ops(const core::GpuBackend backend) {
+#ifdef LFS_TENSOR_HIP
+        if (backend == core::GpuBackend::HIP) {
+            static const TrainingOps pending = [] {
+                TrainingOps result{.backend = core::GpuBackend::HIP};
+#ifdef LFS_HIP_APPLICATION_BILATERAL
+                result.bilateral = &hip_bilateral_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_PPISP
+                result.ppisp = &hip_ppisp_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_GEOMETRY
+                result.geometry = &hip_geometry_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_MASKS
+                result.masks = &hip_masks_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_GSPLAT
+                result.gsplat = &hip_gsplat_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_MRNF
+                result.mrnf = &hip_mrnf_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_CONTROLLER
+                result.controller = &hip_controller_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_BLOB
+                result.blob = &hip_blob_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_STRUCTURE
+                result.structure = &hip_structure_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_MORTON
+                result.morton = &hip_morton_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_LPIPS
+                result.lpips = &hip_lpips_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_EXTRA_LOSS
+                result.extra_loss = &hip_extra_loss_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_FAST
+                result.fast = &hip_fast_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_MCMC
+                result.mcmc = &hip_mcmc_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_REFINE
+                result.refine = &hip_refine_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_PHOTOMETRIC
+                result.photometric = &hip_photometric_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_ADAM
+                result.adam = &hip_adam_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_SH
+                result.sh = &hip_sh_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_SESSION
+                result.session = &hip_session_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_TRAINING_IMAGE
+                result.training_image = &hip_training_image_ops();
+#endif
+#ifdef LFS_HIP_APPLICATION_SHARED_IMAGE
+                result.shared_image = core::shared_image_ops(core::GpuBackend::HIP);
+#endif
+                return result;
+            }();
+            return pending;
+        }
+#endif
         static const TrainingOps& kCuda = cuda_training_ops_table();
         static const TrainingOps& kVulkan = vulkan_training_ops_table();
         static const TrainingOps& kMetal = metal_training_ops_table();
@@ -80,7 +228,7 @@ namespace lfs::training {
     }
 
     const ops::MortonOps& training_morton_ops() {
-        const auto backend = core::default_gpu_backend();
+        const auto backend = active_training_backend();
         const auto* morton = training_ops(backend).morton;
         if (!morton)
             throw std::runtime_error(unavailable_training_family(backend, Family::Morton)
@@ -89,7 +237,7 @@ namespace lfs::training {
     }
 
     const ops::SessionOps& training_session_ops() {
-        const auto backend = core::default_gpu_backend();
+        const auto backend = active_training_backend();
         const auto* session = training_ops(backend).session;
         if (!session)
             throw std::runtime_error(unavailable_training_family(backend, Family::Session)
@@ -98,10 +246,11 @@ namespace lfs::training {
     }
 
     const ops::ShOps& training_sh_ops() {
-        const auto* sh = training_ops(core::default_gpu_backend()).sh;
+        const auto backend = active_training_backend();
+        const auto* sh = training_ops(backend).sh;
         if (sh == nullptr) {
             throw std::runtime_error(
-                unavailable_training_family(core::default_gpu_backend(), Family::Sh)
+                unavailable_training_family(backend, Family::Sh)
                     .value_or("Sh training ops are unavailable"));
         }
         return *sh;

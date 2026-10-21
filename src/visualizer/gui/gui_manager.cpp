@@ -5284,6 +5284,13 @@ namespace lfs::vis::gui {
         // camera thumbnails can span several pages, so release all of them while
         // the Vulkan context and its allocator are still alive.
         cameraThumbnailCache().clear();
+#ifdef LFS_TENSOR_HIP
+        if (lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::HIP) {
+            // The process-wide overlay retains cameras and their HIP pose
+            // tensors. Release them before the native context is shut down.
+            cachedFrustumOverlay() = {};
+        }
+#endif
         // IconCache is process-global, but its Vulkan textures belong to this
         // device. Release them while the context and allocator are still alive;
         // static destruction happens after VulkanContext::shutdown().

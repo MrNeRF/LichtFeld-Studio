@@ -327,7 +327,12 @@ namespace lfs::core::internal {
             }
             Tensor empty_splat(TensorShape shape, size_t capacity, DataType dtype,
                                std::string_view, bool) override {
-                return empty(std::move(shape), dtype, capacity);
+                auto tensor=empty(std::move(shape),dtype,capacity);
+#ifdef LFS_TENSOR_HIP
+                if(backend_==GpuBackend::HIP&&tensor.numel())
+                    return Tensor::view_sharing_storage(tensor,0,tensor.shape(),tensor.capacity(),dtype,"hip.host_staging");
+#endif
+                return tensor;
             }
             Tensor empty(TensorShape shape, DataType dtype, size_t capacity) override {
                 GpuBackendScope scope(backend_);

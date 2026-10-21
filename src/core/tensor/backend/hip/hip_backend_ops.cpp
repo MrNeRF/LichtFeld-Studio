@@ -1,0 +1,1979 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "hip_backend_ops.hpp"
+#include "runtime_api.h"
+#include "sh_codec_api.h"
+#include "where_api.h"
+#include "inverse_warp_api.h"
+#include "inference_api.h"
+#include "gemm_api.h"
+#include "integer_reduce_api.h"
+#include "bias_api.h"
+#include "external_access.hpp"
+#include "point_filter_api.h"
+#include "predicate_api.h"
+#include "../readback_buffer.hpp"
+#include <atomic>
+#include <core/detail/fused_pointwise.hpp>
+#include <core/detail/tensor_half.hpp>
+#include <core/tensor.hpp>
+#include <core/tensor_image.hpp>
+#include <core/failure_report.hpp>
+#include <cstdio>
+#include <mutex>
+#include <stdexcept>
+#include <unordered_map>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+namespace lfs::core::internal {
+    namespace {
+        std::atomic<unsigned> live_contexts{0};
+        std::atomic<uint64_t> next_context_identity{1};
+        void require(bool value, const char* message) {
+            if (!value)
+                throw std::invalid_argument(message);
+        }
+        void check(int status, const LfsHipError& error) {
+            if (status)
+                throw std::runtime_error(std::string("HIP Tensor: ") + error.message + " (" + std::to_string(error.native_code) + ")");
+        }
+        void queue(ExecContext context) {
+            require(context.cuda_stream == nullptr, "HIP Tensor adapter accepts only its own default queue, never a CUDA stream");
+        }
+        float scalar_value(ScalarOperand value) {
+            switch (value.kind) {
+            case ScalarKind::Float: return value.value.float_value;
+            case ScalarKind::Int32: return static_cast<float>(value.value.int32_value);
+            case ScalarKind::Int64: return static_cast<float>(value.value.int64_value);
+            case ScalarKind::Bool: return value.value.bool_value ? 1.f : 0.f;
+            }
+            throw std::invalid_argument("Unknown HIP scalar kind");
+        }
+        LfsHipLayout native_layout(const StridedLayout& source) {
+            require(source.rank <= 8, "HIP Tensor rank exceeds eight dimensions");
+            LfsHipLayout result{};
+            result.rank = source.rank;
+            result.elements = source.element_count;
+            for (size_t i = 0; i < source.rank; ++i) {
+                result.dims[i] = source.dims[i];
+                result.strides[i] = source.strides[i];
+            }
+            return result;
+        }
+        uint64_t typed_scalar_bits(DataType type, ScalarOperand value) {
+            switch(type) {
+            case DataType::Float16:
+                require(value.kind==ScalarKind::Float,"HIP half fill requires a floating scalar");
+                return detail::tensor_float_to_half_bits(value.value.float_value);
+            case DataType::Int32:
+                require(value.kind==ScalarKind::Int32,"HIP Int32 fill requires Int32 scalar");
+                return static_cast<uint32_t>(value.value.int32_value);
+            case DataType::Int64:
+                require(value.kind==ScalarKind::Int64,"HIP Int64 fill requires Int64 scalar");
+                return static_cast<uint64_t>(value.value.int64_value);
+            case DataType::Bool:
+                require(value.kind==ScalarKind::Bool,"HIP Bool fill requires Bool scalar");
+                return value.value.bool_value ? 1 : 0;
+            case DataType::UInt8:
+                require(value.kind==ScalarKind::Int32 && value.value.int32_value>=0 && value.value.int32_value<=255,"HIP UInt8 fill scalar out of range");
+                return static_cast<uint8_t>(value.value.int32_value);
+            case DataType::UInt32:
+                require(value.kind==ScalarKind::Int64 && value.value.int64_value>=0 && uint64_t(value.value.int64_value)<=UINT32_MAX,"HIP UInt32 fill scalar out of range");
+                return static_cast<uint32_t>(value.value.int64_value);
+            default: throw std::invalid_argument("Unsupported HIP typed fill");
+            }
+        }
+        size_t byte_count(size_t count) {
+            require(count <= SIZE_MAX / 4, "HIP Tensor float count overflow");
+            return count * 4;
+        }
+        size_t checked_product(size_t a, size_t b) {
+            require(!b || a <= SIZE_MAX / b, "HIP concatenation extent overflow");
+            return a * b;
+        }
+    } // namespace
+    namespace {
+        class InventoryModule {
+#ifdef _WIN32
+            HMODULE module_ = nullptr;
+#else
+            void* module_ = nullptr;
+#endif
+        public:
+            explicit InventoryModule(const std::filesystem::path& path) {
+                require(path.is_absolute(), "HIP inventory module requires an absolute path");
+#ifdef _WIN32
+                module_ = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+#else
+                module_ = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+#endif
+                if (!module_) throw std::runtime_error("Cannot load HIP hardware inventory module");
+            }
+            ~InventoryModule() {
+#ifdef _WIN32
+                FreeLibrary(module_);
+#else
+                dlclose(module_);
+#endif
+            }
+            InventoryModule(const InventoryModule&) = delete;
+            InventoryModule& operator=(const InventoryModule&) = delete;
+            template<class F> F symbol(const char* name) const {
+#ifdef _WIN32
+                auto result = GetProcAddress(module_, name);
+#else
+                auto result = dlsym(module_, name);
+#endif
+                if (!result) throw std::runtime_error(std::string("Missing HIP inventory entry point: ") + name);
+                return reinterpret_cast<F>(result);
+            }
+            void validate() const {
+                require(symbol<decltype(&lfs_hip_runtime_abi)>("lfs_hip_runtime_abi")() == 1,
+                        "HIP hardware inventory ABI mismatch");
+            }
+        };
+    }
+    int hip_device_count(const std::filesystem::path& path) {
+        InventoryModule module(path); module.validate();
+        int32_t count = 0; LfsHipError error{};
+        check(module.symbol<decltype(&lfs_hip_device_count)>("lfs_hip_device_count")(&count, &error), error);
+        require(count >= 0, "HIP hardware inventory returned a negative device count");
+        return count;
+    }
+    LfsHipDevice hip_device_info(const std::filesystem::path& path, int ordinal) {
+        require(ordinal >= 0, "HIP device ordinal must be nonnegative");
+        InventoryModule module(path); module.validate();
+        LfsHipDevice result{}; LfsHipError error{};
+        check(module.symbol<decltype(&lfs_hip_device_info)>("lfs_hip_device_info")(ordinal, &result, &error), error);
+        result.name[sizeof(result.name)-1] = 0;
+        result.architecture[sizeof(result.architecture)-1] = 0;
+        result.pci_bus_id[sizeof(result.pci_bus_id)-1] = 0;
+        return result;
+    }
+    LfsHipDeviceIdentity hip_device_identity(const std::filesystem::path& path,int ordinal) {
+        require(ordinal>=0,"HIP device ordinal must be nonnegative");
+        InventoryModule module(path);module.validate();
+        LfsHipDeviceIdentity result{};result.struct_bytes=sizeof(result);LfsHipError error{};
+        check(module.symbol<decltype(&lfs_hip_device_identity)>("lfs_hip_device_identity")(ordinal,&result,&error),error);
+        result.compiled_architecture[sizeof(result.compiled_architecture)-1]=0;
+        require(result.struct_bytes==sizeof(result),"HIP device identity size mismatch");
+        return result;
+    }
+    struct HipBackendOps::Impl {
+#ifdef _WIN32
+        HMODULE module = nullptr;
+#else
+        void* module = nullptr;
+#endif
+        template <class F>
+        F symbol(const char* name) {
+#ifdef _WIN32
+            auto value = GetProcAddress(module, name);
+#else
+            auto value = dlsym(module, name);
+#endif
+            if (!value)
+                throw std::runtime_error(std::string("Missing HIP runtime entry point: ") + name);
+            return reinterpret_cast<F>(value);
+        }
+#define ENTRY(name) decltype(&::name) name = nullptr
+        ENTRY(lfs_hip_runtime_abi);
+        ENTRY(lfs_hip_chain_reduce_f32);
+        ENTRY(lfs_hip_pool_f32);
+        ENTRY(lfs_hip_where_scalar);
+        ENTRY(lfs_hip_where_layout);
+        ENTRY(lfs_hip_masked_fill);
+        ENTRY(lfs_hip_device_info);
+        ENTRY(lfs_hip_context_create);
+        ENTRY(lfs_hip_context_destroy);
+        ENTRY(lfs_hip_context_synchronize);
+        ENTRY(lfs_hip_context_queue);
+        ENTRY(lfs_hip_context_ready);
+        ENTRY(lfs_hip_host_callback);
+        ENTRY(lfs_hip_marker_record);
+        ENTRY(lfs_hip_buffer_allocate);
+        ENTRY(lfs_hip_buffer_import_external);
+        ENTRY(lfs_hip_filter_points);
+        ENTRY(lfs_hip_update_labels);
+        ENTRY(lfs_hip_and_live);
+        ENTRY(lfs_hip_histogram_u8);
+        ENTRY(lfs_hip_predicate_typed);
+        ENTRY(lfs_hip_project_points);
+        ENTRY(lfs_hip_mark_points_2d);
+        ENTRY(lfs_hip_buffer_release);
+        ENTRY(lfs_hip_buffer_address);
+        ENTRY(lfs_hip_upload);
+        ENTRY(lfs_hip_download);
+        ENTRY(lfs_hip_staged_upload);
+        ENTRY(lfs_hip_readback_create);
+        ENTRY(lfs_hip_readback_reserve);
+        ENTRY(lfs_hip_readback_append);
+        ENTRY(lfs_hip_readback_enqueue);
+        ENTRY(lfs_hip_readback_wait);
+        ENTRY(lfs_hip_readback_poll);
+        ENTRY(lfs_hip_readback_destroy);
+
+        ENTRY(lfs_hip_copy);
+        ENTRY(lfs_hip_memset);
+        ENTRY(lfs_hip_fill_f32);
+        ENTRY(lfs_hip_pointwise_f32);
+        ENTRY(lfs_hip_boolean_pointwise);
+        ENTRY(lfs_hip_clamp_i32);
+        ENTRY(lfs_hip_arange_f32);
+        ENTRY(lfs_hip_reduce_f32);
+        ENTRY(lfs_hip_memory_info);
+        ENTRY(lfs_hip_trim_workspace);
+        ENTRY(lfs_hip_chain_f32);
+        ENTRY(lfs_hip_strided_copy);
+        ENTRY(lfs_hip_strided_scatter);
+        ENTRY(lfs_hip_fill_strided_f32);
+        ENTRY(lfs_hip_fill_layout_bits);
+        ENTRY(lfs_hip_broadcast_f32);
+        ENTRY(lfs_hip_reduce_layout_f32);
+        ENTRY(lfs_hip_convert);
+        ENTRY(lfs_hip_index_cast);
+        ENTRY(lfs_hip_gather);
+        ENTRY(lfs_hip_index_update);
+        ENTRY(lfs_hip_count_nonzero);
+        ENTRY(lfs_hip_reduce_typed_layout);
+        ENTRY(lfs_hip_bias_f32);
+        ENTRY(lfs_hip_random);
+        ENTRY(lfs_hip_inverse_lens);
+        ENTRY(lfs_hip_warp_rgb);
+        ENTRY(lfs_hip_shared_image);
+        ENTRY(lfs_hip_shared_resize);
+        ENTRY(lfs_hip_shared_warp);
+        ENTRY(lfs_hip_inverse_warp);
+        ENTRY(lfs_hip_inference_f32);
+        ENTRY(lfs_hip_gemm_f32);
+        ENTRY(lfs_hip_sh_codec);
+        ENTRY(lfs_hip_cumsum);
+        ENTRY(lfs_hip_sort_pairs);
+        ENTRY(lfs_hip_select);
+        ENTRY(lfs_hip_copy_layouts);
+#undef ENTRY
+        LfsHipContext* context = nullptr;
+        bool counted = false;
+        int ordinal;
+        const uint64_t identity = next_context_identity.fetch_add(1, std::memory_order_relaxed);
+        LfsHipDevice device{};
+        struct Allocation {
+            LfsHipBuffer* handle;
+            size_t bytes;
+            std::unique_ptr<StorageMeta> metadata;
+            bool cacheable = true;
+            bool imported = false;
+            std::string diagnostic_origin;
+        };
+        std::unordered_map<void*, Allocation> allocations;
+        std::vector<Allocation> cached;
+        size_t cached_bytes = 0, cache_limit = 0, reserved_peak = 0;
+        HipDispatchMutex mutex;
+        // Extensions must not capture this context; native code stays loaded
+        // until queued kernels drain. A failed teardown pins this list.
+        std::unique_ptr<std::vector<std::shared_ptr<void>>> application_modules;
+        size_t live = 0, peak = 0;
+        size_t workspace_bytes = 0;
+        size_t algorithm_workspace_bytes = 0;
+        explicit Impl(const std::filesystem::path& path, int ordinal, size_t cache_limit) : ordinal(ordinal), cache_limit(cache_limit) {
+            require(path.is_absolute(), "HIP runtime module requires an absolute path");
+#ifdef _WIN32
+            module = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+#else
+            module = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+#endif
+            if (!module)
+                throw std::runtime_error("Cannot load HIP Tensor runtime module");
+            try {
+#define LOAD(name) name = symbol<decltype(name)>(#name)
+                LOAD(lfs_hip_runtime_abi);
+                LOAD(lfs_hip_chain_reduce_f32);
+                LOAD(lfs_hip_pool_f32);
+                LOAD(lfs_hip_where_scalar);
+                LOAD(lfs_hip_where_layout);
+                LOAD(lfs_hip_masked_fill);
+                LOAD(lfs_hip_device_info);
+                LOAD(lfs_hip_context_create);
+                LOAD(lfs_hip_context_destroy);
+                LOAD(lfs_hip_context_synchronize);
+                LOAD(lfs_hip_context_queue);
+                LOAD(lfs_hip_context_ready);
+                LOAD(lfs_hip_host_callback);
+                LOAD(lfs_hip_marker_record);
+                LOAD(lfs_hip_buffer_allocate);
+                LOAD(lfs_hip_buffer_import_external);
+                LOAD(lfs_hip_filter_points);
+                LOAD(lfs_hip_update_labels);
+                LOAD(lfs_hip_and_live);
+                LOAD(lfs_hip_histogram_u8);
+                LOAD(lfs_hip_predicate_typed);
+                LOAD(lfs_hip_project_points);
+                LOAD(lfs_hip_mark_points_2d);
+                LOAD(lfs_hip_buffer_release);
+                LOAD(lfs_hip_buffer_address);
+                LOAD(lfs_hip_upload);
+                LOAD(lfs_hip_download);
+                LOAD(lfs_hip_staged_upload);
+                LOAD(lfs_hip_readback_create);
+                LOAD(lfs_hip_readback_reserve);
+                LOAD(lfs_hip_readback_append);
+                LOAD(lfs_hip_readback_enqueue);
+                LOAD(lfs_hip_readback_wait);
+                LOAD(lfs_hip_readback_poll);
+                LOAD(lfs_hip_readback_destroy);
+
+                LOAD(lfs_hip_copy);
+                LOAD(lfs_hip_memset);
+                LOAD(lfs_hip_fill_f32);
+                LOAD(lfs_hip_pointwise_f32);
+                LOAD(lfs_hip_boolean_pointwise);
+                LOAD(lfs_hip_clamp_i32);
+                LOAD(lfs_hip_arange_f32);
+                LOAD(lfs_hip_reduce_f32);
+                LOAD(lfs_hip_memory_info);
+                LOAD(lfs_hip_trim_workspace);
+                LOAD(lfs_hip_chain_f32);
+                LOAD(lfs_hip_strided_copy);
+                LOAD(lfs_hip_strided_scatter);
+                LOAD(lfs_hip_fill_strided_f32);
+                LOAD(lfs_hip_fill_layout_bits);
+                LOAD(lfs_hip_broadcast_f32);
+                LOAD(lfs_hip_reduce_layout_f32);
+                LOAD(lfs_hip_convert);
+                LOAD(lfs_hip_index_cast);
+                LOAD(lfs_hip_gather);
+                LOAD(lfs_hip_index_update);
+                LOAD(lfs_hip_count_nonzero);
+                LOAD(lfs_hip_reduce_typed_layout);
+                LOAD(lfs_hip_bias_f32);
+                LOAD(lfs_hip_random);
+                LOAD(lfs_hip_inverse_lens);
+                LOAD(lfs_hip_warp_rgb);
+                LOAD(lfs_hip_shared_image);
+                LOAD(lfs_hip_shared_resize);
+                LOAD(lfs_hip_shared_warp);
+                LOAD(lfs_hip_inverse_warp);
+                LOAD(lfs_hip_inference_f32);
+                LOAD(lfs_hip_gemm_f32);
+                LOAD(lfs_hip_sh_codec);
+                LOAD(lfs_hip_cumsum);
+                LOAD(lfs_hip_sort_pairs);
+                LOAD(lfs_hip_select);
+                LOAD(lfs_hip_copy_layouts);
+#undef LOAD
+                require(lfs_hip_runtime_abi() == 1, "Incompatible HIP Tensor runtime ABI");
+                LfsHipError error{};
+                check(lfs_hip_device_info(ordinal, &device, &error), error);
+                check(lfs_hip_context_create(ordinal, &context, &error), error);
+                live_contexts.fetch_add(1, std::memory_order_relaxed);
+                counted = true;
+            } catch (...) {
+                unload();
+                throw;
+            }
+        }
+        void unload() noexcept {
+            if (!module)
+                return;
+#ifdef _WIN32
+            FreeLibrary(module);
+#else
+            dlclose(module);
+#endif
+            module = nullptr;
+        }
+        ~Impl() {
+            if (context) {
+                LfsHipError error{};
+                if (lfs_hip_context_destroy(context, &error)) {
+                    std::fprintf(stderr, "[error] HIP Tensor teardown failed; module retained: %s\n", error.message);
+                    (void)application_modules.release();
+                    return;
+                }
+            }
+            if (counted)
+                live_contexts.fetch_sub(1, std::memory_order_relaxed);
+            application_modules.reset();
+            unload();
+        }
+        LfsHipView view(StorageRef storage, size_t bytes = 0) {
+            require(context && storage.backend == GpuBackend::HIP, "HIP Tensor received a foreign backend or closed context");
+            const auto found = allocations.find(storage.data);
+            require(found != allocations.end(), "HIP Tensor received unknown storage");
+            require(storage.byte_offset <= found->second.bytes && bytes <= found->second.bytes - storage.byte_offset, "HIP Tensor view exceeds its allocation");
+            return {found->second.handle, storage.byte_offset};
+        }
+        void bias(StorageRef input,StorageRef bias,StorageRef output,int count,int channels,int spatial,bool relu) {
+            require(count>=0,"HIP bias count must be nonnegative");
+            if(!count)return;
+            require(channels>0&&spatial>0&&input.dtype==DataType::Float32&&bias.dtype==DataType::Float32&&output.dtype==DataType::Float32,"HIP bias requires Float32 operands and positive dimensions");
+            const auto in=view(input,byte_count(count)),b=view(bias,byte_count(channels)),out=view(output,byte_count(count));LfsHipError error{};
+            check(lfs_hip_bias_f32(context,in,b,out,uint32_t(count),uint32_t(channels),uint32_t(spatial),relu?1:0,&error),error);
+        }
+        bool empty_view(StorageRef storage) const {
+            if (storage.data)
+                return false;
+            require(context && storage.backend == GpuBackend::HIP && storage.byte_offset == 0 && !(storage.flags & STORAGE_REF_HOST_MEMORY), "Invalid HIP empty device view");
+            return true;
+        }
+        void refresh_algorithm_workspace() {
+            const bool reduction_exists = workspace_bytes > algorithm_workspace_bytes;
+            LfsHipMemoryInfo memory{};
+            LfsHipError error{};
+            check(lfs_hip_memory_info(context, &memory, &error), error);
+            algorithm_workspace_bytes = memory.workspace_bytes - (reduction_exists ? LFS_HIP_REDUCTION_WORKSPACE_FLOATS * sizeof(float) : 0);
+            workspace_bytes = memory.workspace_bytes;
+            peak = std::max(peak, live + workspace_bytes);
+            reserved_peak = std::max(reserved_peak, live + cached_bytes + workspace_bytes);
+        }
+        void observed_workspace() {
+            workspace_bytes = algorithm_workspace_bytes + LFS_HIP_REDUCTION_WORKSPACE_FLOATS * sizeof(float);
+            peak = std::max(peak, live + workspace_bytes);
+            reserved_peak = std::max(reserved_peak, live + cached_bytes + workspace_bytes);
+        }
+        void gather(StorageRef input, StorageRef indices, StorageRef output, const StridedLayout& input_layout, const StridedLayout& index_layout, const IndexProgram& program, bool select) {
+            require(input.dtype == output.dtype, "HIP gather input/output dtype mismatch");
+            require(program.dim >= 0 && size_t(program.dim) < input_layout.rank && program.boundary_mode >= 0 && program.boundary_mode <= 2, "Invalid HIP gather dimension or boundary");
+            const auto source = native_layout(input_layout), idx = native_layout(index_layout);
+            size_t count = 1;
+            if (select) {
+                for (size_t r = 0; r < input_layout.rank; ++r) {
+                    const size_t dim = r == size_t(program.dim) ? index_layout.element_count : input_layout.dims[r];
+                    if (!dim) {
+                        count = 0;
+                        break;
+                    }
+                }
+                if (count)
+                    for (size_t r = 0; r < input_layout.rank; ++r) {
+                        const size_t dim = r == size_t(program.dim) ? index_layout.element_count : input_layout.dims[r];
+                        require(dim <= SIZE_MAX / count, "HIP index_select shape overflow");
+                        count *= dim;
+                    }
+            } else
+                count = index_layout.element_count;
+            require(select || count == program.total_elements, "HIP gather output count mismatch");
+            const auto in = view(input), ix = view(indices), out = view(output);
+            LfsHipError error{};
+            const int status = lfs_hip_gather(context, in, static_cast<uint32_t>(input.dtype), ix, static_cast<uint32_t>(indices.dtype), out, &source, &idx, static_cast<uint32_t>(program.dim), static_cast<uint32_t>(program.boundary_mode), select ? 1 : 0, &error);
+            if (count && program.boundary_mode == 0 && (status == 0 || error.native_code == LFS_HIP_ERROR_INVALID_INDEX))
+                observed_workspace();
+            check(status, error);
+        }
+        void index_update(StorageRef output, StorageRef indices, StorageRef source, const StridedLayout& layout, const IndexProgram& program, bool add) {
+            require(source.dtype == output.dtype, "HIP indexed update source/output dtype mismatch");
+            require(program.dim >= 0 && size_t(program.dim) < layout.rank && program.boundary_mode == 0, "Invalid HIP indexed update dimension or boundary");
+            const auto destination = native_layout(layout);
+            const auto out = view(output), idx = view(indices), src = view(source);
+            LfsHipError error{};
+            const int status = lfs_hip_index_update(context, out, static_cast<uint32_t>(output.dtype), idx, static_cast<uint32_t>(indices.dtype), src, &destination, static_cast<uint32_t>(program.dim), program.index_size, add ? 1 : 0, &error);
+            bool nonempty = program.index_size != 0;
+            for (size_t r = 0; r < layout.rank; ++r)
+                if (r != size_t(program.dim) && !layout.dims[r])
+                    nonempty = false;
+            if (nonempty && (status == 0 || error.native_code == LFS_HIP_ERROR_INVALID_INDEX))
+                observed_workspace();
+            check(status, error);
+        }
+        void random(StorageRef output, const RandomProgram& program, uint32_t kind) {
+            require(output.dtype == (kind == LFS_HIP_RANDOM_INTEGER ? DataType::Int32 : DataType::Float32), "HIP random output dtype mismatch");
+            const auto out = view(output);
+            const LfsHipRandom native{kind, program.seed, program.count, program.first, program.second, program.low, program.high};
+            LfsHipError error{};
+            check(lfs_hip_random(context, out, &native, &error), error);
+        }
+        size_t count_nonzero(StorageRef input, size_t count) {
+            const auto in = view(input);
+            uint64_t result = 0;
+            LfsHipError error{};
+            check(lfs_hip_count_nonzero(context, in, static_cast<uint32_t>(input.dtype), count, &result, &error), error);
+            if (count)
+                observed_workspace();
+            require(result <= SIZE_MAX, "HIP nonzero count exceeds host size_t");
+            return static_cast<size_t>(result);
+        }
+        void sync() {
+            require(context, "HIP Tensor context is closed");
+            LfsHipError error{};
+            check(lfs_hip_context_synchronize(context, &error), error);
+        }
+        float reduce(StorageRef input, size_t count, uint32_t mode) {
+            require(input.dtype == DataType::Float32, "HIP reduction requires float32 input");
+            const auto src = view(input, byte_count(count));
+            LfsHipError error{};
+            float result = 0;
+            check(lfs_hip_reduce_f32(context, src, count, mode, &result, &error), error);
+            if (count)
+                workspace_bytes = algorithm_workspace_bytes + LFS_HIP_REDUCTION_WORKSPACE_FLOATS * sizeof(float);
+            peak = std::max(peak, live + workspace_bytes);
+            reserved_peak = std::max(reserved_peak, live + cached_bytes + workspace_bytes);
+            return result;
+        }
+        void trim_cache() {
+            sync();
+            while (!cached.empty()) {
+                LfsHipError error{};
+                check(lfs_hip_buffer_release(context, cached.back().handle, &error), error);
+                cached_bytes -= cached.back().bytes;
+                cached.pop_back();
+            }
+        }
+        void pointwise(const PointwiseProgram& program, StorageRef a, StorageRef b, StorageRef out, size_t count, bool binary) {
+            if(out.dtype==DataType::Bool&&(a.dtype==DataType::Int32||a.dtype==DataType::Int64||a.dtype==DataType::UInt32||a.dtype==DataType::Float16)) {
+                require(program.in_dtype==a.dtype&&program.out_dtype==DataType::Bool&&(!binary||b.dtype==a.dtype),
+                        "HIP typed predicate dtype mismatch");
+                LfsHipPredicate native{};native.struct_bytes=sizeof(native);native.op=uint32_t(program.op);native.dtype=uint32_t(a.dtype);
+                native.count=count;native.scalar_kind=uint32_t(program.scalar.kind);
+                switch(program.scalar.kind) {
+                case ScalarKind::Float:native.float_scalar=program.scalar.value.float_value;break;
+                case ScalarKind::Int32:native.integer_scalar=program.scalar.value.int32_value;break;
+                case ScalarKind::Int64:native.integer_scalar=program.scalar.value.int64_value;break;
+                case ScalarKind::Bool:native.integer_scalar=program.scalar.value.bool_value;break;
+                }
+                const auto bytes=checked_product(count,dtype_size(a.dtype));
+                const auto lhs=view(a,bytes),rhs=binary?view(b,bytes):LfsHipView{};
+                const auto result=view(out,count);LfsHipError error{};
+                check(lfs_hip_predicate_typed(context,lhs,rhs,result,&native,&error),error);return;
+            }
+            if (a.dtype == DataType::Int32 && !binary &&
+                (program.op == PointwiseOp::MinimumScalar || program.op == PointwiseOp::MaximumScalar)) {
+                require(program.in_dtype == DataType::Int32 && program.out_dtype == DataType::Int32 && out.dtype == DataType::Int32,
+                        "HIP integer min/max requires Int32 output");
+                const double bound = program.scalar.kind == ScalarKind::Int32 ? double(program.scalar.value.int32_value) : double(scalar_value(program.scalar));
+                require(std::isfinite(bound) && std::trunc(bound) == bound && bound >= INT32_MIN && bound <= INT32_MAX,
+                        "HIP integer min/max scalar must be representable as Int32");
+                const auto lhs = view(a, byte_count(count)), output = view(out, byte_count(count));
+                LfsHipError error{};
+                if (lhs.buffer != output.buffer || lhs.offset != output.offset)
+                    check(lfs_hip_copy(context, lhs, output, byte_count(count), &error), error);
+                const bool lower = program.op == PointwiseOp::MaximumScalar;
+                check(lfs_hip_clamp_i32(context, output, count, lower ? int32_t(bound) : INT32_MIN,
+                                       lower ? INT32_MAX : int32_t(bound), &error), error);
+                return;
+            }
+            if (a.dtype==DataType::Bool || a.dtype==DataType::UInt8) {
+                require(program.in_dtype==a.dtype && out.dtype==DataType::Bool && program.out_dtype==DataType::Bool &&
+                        (!binary || b.dtype==a.dtype),"HIP byte predicate dtype mismatch");
+                const auto lhs=view(a,count), output=view(out,count);
+                const auto rhs=binary ? view(b,count) : LfsHipView{};
+                LfsHipError error{};
+                check(lfs_hip_boolean_pointwise(context,static_cast<uint32_t>(program.op),lhs,rhs,output,count,scalar_value(program.scalar),&error),error);
+                return;
+            }
+
+            if (!(program.in_dtype == DataType::Float32 && a.dtype == DataType::Float32 &&
+                    out.dtype == program.out_dtype && (out.dtype == DataType::Float32 || out.dtype == DataType::Bool)))
+                throw std::invalid_argument("Unsupported HIP pointwise dtype combination: op="+std::to_string(unsigned(program.op))+
+                    ", input="+std::to_string(unsigned(a.dtype))+", declared_input="+std::to_string(unsigned(program.in_dtype))+
+                    ", output="+std::to_string(unsigned(out.dtype))+", declared_output="+std::to_string(unsigned(program.out_dtype)));
+            const bool predicate = (program.op >= PointwiseOp::EqualTensor && program.op <= PointwiseOp::LogicalXorTensor) ||
+                                   (program.op >= PointwiseOp::IsNan && program.op <= PointwiseOp::LogicalNot) ||
+                                   (program.op >= PointwiseOp::EqualScalar && program.op <= PointwiseOp::GreaterEqualScalar);
+            require((out.dtype == DataType::Bool) == predicate, "HIP pointwise output dtype does not match its operation");
+            const auto lhs = view(a, byte_count(count));
+            LfsHipView rhs{};
+            if (binary) {
+                require(b.dtype == DataType::Float32, "HIP binary rhs must be float32");
+                rhs = view(b, byte_count(count));
+            }
+            const auto output = view(out, out.dtype == DataType::Bool ? count : byte_count(count));
+            LfsHipError error{};
+            check(lfs_hip_pointwise_f32(context, static_cast<uint32_t>(program.op), lhs, rhs, output, count, scalar_value(program.scalar), &error), error);
+        }
+    };
+    bool hip_backend_is_live() noexcept { return live_contexts.load(std::memory_order_relaxed) != 0; }
+    HipBackendOps::HipBackendOps(const std::filesystem::path& path, int device, size_t max_cached_bytes) : impl_(std::make_shared<Impl>(path, device, max_cached_bytes)) {}
+    HipBackendOps::~HipBackendOps() = default;
+    StorageRef HipBackendOps::allocate(size_t bytes, size_t alignment, ExecContext execution) {
+        queue(execution);
+        require(bytes > 0 && alignment && alignment <= 256 && (alignment & (alignment - 1)) == 0, "Invalid HIP allocation size/alignment");
+        std::lock_guard lock(impl_->mutex);
+        require(impl_->context, "HIP Tensor context is closed");
+        Impl::Allocation allocation{};
+        const bool cacheable = execution.allocation_class == AllocationClass::Pooled;
+        auto found = std::find_if(impl_->cached.begin(), impl_->cached.end(), [&](const auto& entry) { return cacheable && entry.bytes == bytes; });
+        LfsHipError error{};
+        if (found != impl_->cached.end()) {
+            allocation = std::move(*found);
+            if (found != impl_->cached.end() - 1)
+                *found = std::move(impl_->cached.back());
+            impl_->cached.pop_back();
+            impl_->cached_bytes -= bytes;
+        } else {
+            int status = impl_->lfs_hip_buffer_allocate(impl_->context, bytes, &allocation.handle, &error);
+            // An optional cache must not prevent an otherwise viable allocation.
+            // Drain it and retry once; existing live tensors remain untouched.
+            if (status && error.native_code == 2 && !impl_->cached.empty()) {
+                impl_->trim_cache();
+                status = impl_->lfs_hip_buffer_allocate(impl_->context, bytes, &allocation.handle, &error);
+            }
+            check(status, error);
+            allocation.bytes = bytes;
+            allocation.cacheable = cacheable;
+        }
+        const auto handle = allocation.handle;
+        if(bytes<=512&&std::getenv("LFS_HIP_VALIDATION_ALLOCATION_TRACE"))allocation.diagnostic_origin=capture_host_stacktrace(1);
+        uint64_t address = 0;
+        try {
+            if (allocation.metadata)
+                address = allocation.metadata->gpu_descriptor.base_address;
+            else {
+                check(impl_->lfs_hip_buffer_address(impl_->context, handle, &address, &error), error);
+                allocation.metadata = std::make_unique<StorageMeta>();
+                allocation.metadata->backend = GpuBackend::HIP;
+                allocation.metadata->gpu_descriptor.base_address = address;
+                allocation.metadata->gpu_descriptor.byte_size = bytes;
+                allocation.metadata->gpu_descriptor.accounting_kind = StorageAccountingKind::HipOwned;
+            }
+            require(address && address % alignment == 0, "HIP allocation does not meet alignment");
+            auto* pointer = reinterpret_cast<void*>(static_cast<uintptr_t>(address));
+            require(!impl_->allocations.contains(pointer), "HIP allocator returned an already active address");
+            impl_->allocations.emplace(pointer, std::move(allocation));
+        } catch (...) {
+            if (impl_->lfs_hip_buffer_release(impl_->context, handle, &error))
+                std::fprintf(stderr, "[error] HIP allocation cleanup failed; context retains allocation: %s\n", error.message);
+            throw;
+        }
+        impl_->live += bytes;
+        impl_->peak = std::max(impl_->peak, impl_->live + impl_->workspace_bytes);
+        impl_->reserved_peak = std::max(impl_->reserved_peak, impl_->live + impl_->cached_bytes + impl_->workspace_bytes);
+        auto* pointer = reinterpret_cast<void*>(static_cast<uintptr_t>(address));
+        return {GpuBackend::HIP, pointer, 0, DataType::Float32, impl_->allocations.at(pointer).metadata.get(),
+                cacheable ? 0u : STORAGE_REF_DIRECT_ALLOCATION};
+    }
+    void HipBackendOps::deallocate(StorageRef storage, ExecContext execution) noexcept {
+        try {
+            queue(execution);
+            std::lock_guard lock(impl_->mutex);
+            require(storage.byte_offset == 0, "HIP deallocation requires allocation base");
+            const auto value = impl_->view(storage);
+            auto found = impl_->allocations.find(storage.data);
+            require(!found->second.imported, "HIP external storage must be released by its importer owner");
+            const size_t bytes = found->second.bytes;
+            if (found->second.cacheable && bytes <= impl_->cache_limit - impl_->cached_bytes) {
+                // Only one native queue is admitted. Reusing this handle queues
+                // later writes after every prior producer/consumer on that queue.
+                // External training consumers pin the owner until their stream
+                // completes, so its last-reference deleter cannot run too early.
+                impl_->cached.push_back(std::move(found->second));
+                impl_->cached_bytes += bytes;
+                impl_->live -= bytes;
+                impl_->allocations.erase(found);
+                return;
+            }
+            LfsHipError error{};
+            check(impl_->lfs_hip_buffer_release(impl_->context, value.buffer, &error), error);
+            impl_->live -= bytes;
+            impl_->allocations.erase(found);
+        } catch (const std::exception& error) { std::fprintf(stderr, "[error] HIP Tensor deallocation failed; allocation retained: %s\n", error.what()); }
+    }
+    // These small matrix building blocks reuse the native queue and storage
+    // validation; no host download or fallback to another GPU backend.
+    void HipBackendOps::dot_product(StorageRef lhs, StorageRef rhs, StorageRef output, size_t count, ExecContext execution) {
+        queue(execution);
+        require(lhs.dtype == DataType::Float32 && rhs.dtype == DataType::Float32 && output.dtype == DataType::Float32,
+                "HIP dot requires float32 operands");
+        const auto bytes = byte_count(count);
+        {
+            std::lock_guard lock(impl_->mutex);
+            (void)impl_->view(output, sizeof(float));
+            if (count) {
+                (void)impl_->view(lhs, bytes);
+                (void)impl_->view(rhs, bytes);
+            }
+        }
+        if (!count) {
+            load_fill(output, 1, {}, execution);
+            return;
+        }
+        auto product = allocate(bytes, 16, execution);
+        try {
+            binary({PointwiseOp::MulTensor, DataType::Float32, DataType::Float32, {}}, lhs, rhs, product, count, execution);
+            StridedLayout layout{};
+            layout.rank = 1;
+            layout.dims[0] = layout.element_count = count;
+            layout.strides[0] = 1;
+            ReduceProgram sum{};
+            sum.op = ReduceOp::Sum;
+            sum.axis_count = 1;
+            sum.result_dtype = DataType::Float32;
+            reduce(product, output, layout, sum, execution);
+        } catch (...) {
+            deallocate(product, execution);
+            throw;
+        }
+        deallocate(product, execution);
+    }
+    void HipBackendOps::diag(StorageRef diagonal, StorageRef output, size_t count, ExecContext execution) {
+        queue(execution);
+        require(diagonal.dtype == DataType::Float32 && output.dtype == DataType::Float32, "HIP diag requires float32");
+        const size_t bytes = byte_count(checked_product(count, count));
+        if (!count)
+            return;
+        std::lock_guard lock(impl_->mutex);
+        const auto src = impl_->view(diagonal, byte_count(count)), dst = impl_->view(output, bytes);
+        require(src.buffer != dst.buffer || src.offset >= dst.offset + bytes || dst.offset >= src.offset + byte_count(count),
+                "HIP diag input and output must not overlap");
+        LfsHipLayout layout{};
+        layout.rank = 1;
+        layout.dims[0] = layout.elements = count;
+        layout.strides[0] = count + 1;
+        LfsHipError error{};
+        check(impl_->lfs_hip_memset(impl_->context, dst, bytes, 0, &error), error);
+        check(impl_->lfs_hip_strided_scatter(impl_->context, src, dst, &layout, 4, 0, &error), error);
+    }
+    void HipBackendOps::eye(StorageRef output, size_t rows, size_t columns, ExecContext execution) {
+        queue(execution);
+        require(output.dtype == DataType::Float32, "HIP eye requires float32");
+        const size_t elements = checked_product(rows, columns);
+        const size_t bytes = byte_count(elements);
+        if (!elements)
+            return;
+        // Check the complete allocation before initializing any element.
+        {
+            std::lock_guard lock(impl_->mutex);
+            (void)impl_->view(output, bytes);
+        }
+        StridedLayout diagonal{};
+        diagonal.rank = 1;
+        diagonal.dims[0] = diagonal.element_count = std::min(rows, columns);
+        diagonal.strides[0] = columns + 1;
+        ScalarOperand one{};
+        one.value.float_value = 1.f;
+        memset({output, bytes, 0, false, execution});
+        fill_strided(output, diagonal, one, execution);
+    }
+    void HipBackendOps::broadcast_binary(const PointwiseProgram& program, StorageRef lhs, const StridedLayout& lhs_layout, StorageRef rhs, const StridedLayout& rhs_layout, StorageRef output, const StridedLayout& output_layout, ExecContext execution) {
+        queue(execution);
+        require(program.in_dtype == DataType::Float32 && lhs.dtype == DataType::Float32 && rhs.dtype == DataType::Float32 && output.dtype == program.out_dtype &&
+                    (output.dtype == DataType::Float32 || output.dtype == DataType::Bool),
+                "HIP broadcast requires float32 operands and float32/bool output");
+        const auto a = native_layout(lhs_layout), b = native_layout(rhs_layout), out = native_layout(output_layout);
+        std::lock_guard lock(impl_->mutex);
+        const auto av = impl_->view(lhs), bv = impl_->view(rhs), ov = impl_->view(output);
+        LfsHipError error{};
+        check(impl_->lfs_hip_broadcast_f32(impl_->context, static_cast<uint32_t>(program.op), av, bv, ov, &a, &b, &out, output.dtype == DataType::Bool ? 1 : 4, &error), error);
+    }
+    void HipBackendOps::reduce(StorageRef input, StorageRef output, const StridedLayout& layout, const ReduceProgram& program, ExecContext execution) {
+        queue(execution);
+        if(input.dtype!=DataType::Float32 || program.op==ReduceOp::Any || program.op==ReduceOp::All) {
+            require(output.dtype==program.result_dtype,"HIP reduction result dtype mismatch");
+            const auto native=native_layout(layout);
+            require(program.axis_count<=layout.rank,"HIP typed reduction axis count exceeds rank");
+            uint32_t mask=0;
+            for(size_t i=0;i<program.axis_count;++i) {
+                const int axis=program.axes[i];
+                require(axis>=0&&size_t(axis)<layout.rank&&!(mask&(1u<<axis)),"Invalid or duplicate HIP typed reduction axis");
+                mask|=1u<<axis;
+            }
+            std::lock_guard lock(impl_->mutex);
+            const auto in=impl_->view(input),out=impl_->view(output);LfsHipError error{};
+            check(impl_->lfs_hip_reduce_typed_layout(impl_->context,in,out,&native,mask,static_cast<uint32_t>(program.op),static_cast<uint32_t>(input.dtype),static_cast<uint32_t>(output.dtype),&error),error);
+            return;
+        }
+        require(input.dtype == DataType::Float32 && output.dtype == DataType::Float32 && program.result_dtype == DataType::Float32,
+                "HIP axis reductions require float32 input and output");
+        uint32_t op;
+        switch (program.op) {
+        case ReduceOp::Sum: op = LFS_HIP_REDUCE_SUM; break;
+        case ReduceOp::Mean: op = LFS_HIP_REDUCE_MEAN; break;
+        case ReduceOp::Min: op = LFS_HIP_REDUCE_MIN; break;
+        case ReduceOp::Max: op = LFS_HIP_REDUCE_MAX; break;
+        default: throw std::invalid_argument("HIP axis reduction operation not implemented");
+        }
+        const auto native = native_layout(layout);
+        require(program.axis_count <= layout.rank, "HIP reduction axis count exceeds rank");
+        uint32_t mask = 0;
+        for (size_t i = 0; i < program.axis_count; ++i) {
+            const int axis = program.axes[i];
+            require(axis >= 0 && size_t(axis) < layout.rank && !(mask & (1u << axis)), "Invalid or duplicate HIP reduction axis");
+            mask |= 1u << axis;
+        }
+        std::lock_guard lock(impl_->mutex);
+        const auto in = impl_->view(input), out = impl_->view(output);
+        LfsHipError error{};
+        check(impl_->lfs_hip_reduce_layout_f32(impl_->context, in, out, &native, mask, op, &error), error);
+        // Layout reductions use the same fixed workspace as scalar reductions.
+        bool nonempty_output = true;
+        for (size_t axis = 0; axis < layout.rank; ++axis)
+            if (program.axis_count && !(mask & (1u << axis)) && !layout.dims[axis])
+                nonempty_output = false;
+        if (nonempty_output)
+            impl_->workspace_bytes = impl_->algorithm_workspace_bytes + LFS_HIP_REDUCTION_WORKSPACE_FLOATS * sizeof(float);
+        impl_->peak = std::max(impl_->peak, impl_->live + impl_->workspace_bytes);
+        impl_->reserved_peak = std::max(impl_->reserved_peak, impl_->live + impl_->cached_bytes + impl_->workspace_bytes);
+    }
+    void HipBackendOps::strided_reduce(StorageRef input, StorageRef output, size_t outer, size_t reduced, size_t inner, const ReduceProgram& program, ExecContext execution) {
+        require(!inner || reduced <= SIZE_MAX / inner, "HIP reduction extent overflow");
+        const size_t stride = reduced * inner;
+        require(!stride || outer <= SIZE_MAX / stride, "HIP reduction extent overflow");
+        StridedLayout layout{};
+        layout.rank = 3;
+        layout.dims[0] = outer;
+        layout.dims[1] = reduced;
+        layout.dims[2] = inner;
+        layout.strides[0] = stride;
+        layout.strides[1] = inner;
+        layout.strides[2] = 1;
+        layout.element_count = outer * stride;
+        auto axis = program;
+        axis.axis_count = 1;
+        axis.axes[0] = 1;
+        reduce(input, output, layout, axis, execution);
+    }
+    void HipBackendOps::column_reduce(StorageRef input, StorageRef output, size_t rows, size_t columns, const ReduceProgram& program, ExecContext execution) {
+        strided_reduce(input, output, 1, rows, columns, program, execution);
+    }
+    void HipBackendOps::convert_type(StorageRef input, StorageRef output, size_t count, ExecContext execution) {
+        queue(execution);
+        static_assert(static_cast<unsigned>(DataType::Float32) == LFS_HIP_F32 && static_cast<unsigned>(DataType::Float16) == LFS_HIP_F16 &&
+                      static_cast<unsigned>(DataType::Int32) == LFS_HIP_I32 && static_cast<unsigned>(DataType::Int64) == LFS_HIP_I64 &&
+                      static_cast<unsigned>(DataType::UInt8) == LFS_HIP_U8 && static_cast<unsigned>(DataType::Bool) == LFS_HIP_BOOL && static_cast<unsigned>(DataType::UInt32) == LFS_HIP_U32);
+        std::lock_guard lock(impl_->mutex);
+        const auto in = impl_->view(input), out = impl_->view(output);
+        LfsHipError error{};
+        check(impl_->lfs_hip_convert(impl_->context, in, static_cast<uint32_t>(input.dtype), out, static_cast<uint32_t>(output.dtype), count, &error), error);
+    }
+    void HipBackendOps::index_cast(StorageRef input, StorageRef output, size_t count, size_t extent, ExecContext execution) {
+        queue(execution);
+        require(input.dtype == DataType::Int64 && output.dtype == DataType::Int32, "HIP index cast requires int64 input and int32 output");
+        std::lock_guard lock(impl_->mutex);
+        const auto in = impl_->view(input), out = impl_->view(output);
+        LfsHipError error{};
+        const int status = impl_->lfs_hip_index_cast(impl_->context, in, out, count, extent, &error);
+        if (count && (status == 0 || error.native_code == LFS_HIP_ERROR_INVALID_INDEX)) {
+            impl_->workspace_bytes = impl_->algorithm_workspace_bytes + LFS_HIP_REDUCTION_WORKSPACE_FLOATS * sizeof(float);
+            impl_->peak = std::max(impl_->peak, impl_->live + impl_->workspace_bytes);
+            impl_->reserved_peak = std::max(impl_->reserved_peak, impl_->live + impl_->cached_bytes + impl_->workspace_bytes);
+        }
+        check(status, error);
+    }
+    void HipBackendOps::gather(StorageRef input, StorageRef indices, StorageRef output, const StridedLayout& input_layout, const StridedLayout& index_layout, const IndexProgram& program, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        impl_->gather(input, indices, output, input_layout, index_layout, program, false);
+    }
+    void HipBackendOps::index_select(StorageRef input, StorageRef indices, StorageRef output, const StridedLayout& input_layout, const IndexProgram& program, ExecContext execution) {
+        queue(execution);
+        StridedLayout index_layout{};
+        index_layout.rank = 1;
+        index_layout.dims[0] = index_layout.element_count = program.index_size;
+        index_layout.strides[0] = 1;
+        std::lock_guard lock(impl_->mutex);
+        impl_->gather(input, indices, output, input_layout, index_layout, program, true);
+    }
+    size_t HipBackendOps::count_nonzero_bool(StorageRef input, size_t count, ExecContext execution) {
+        queue(execution);
+        require(input.dtype == DataType::Bool || input.dtype == DataType::UInt8, "HIP byte count requires bool/uint8 input");
+        std::lock_guard lock(impl_->mutex);
+        return impl_->count_nonzero(input, count);
+    }
+    size_t HipBackendOps::count_nonzero_float(StorageRef input, size_t count, ExecContext execution) {
+        queue(execution);
+        require(input.dtype == DataType::Float32, "HIP float count requires float32 input");
+        std::lock_guard lock(impl_->mutex);
+        return impl_->count_nonzero(input, count);
+    }
+    void HipBackendOps::index_copy(StorageRef output, StorageRef indices, StorageRef source, const StridedLayout& layout, const IndexProgram& program, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        impl_->index_update(output, indices, source, layout, program, false);
+    }
+    void HipBackendOps::index_add(StorageRef output, StorageRef indices, StorageRef source, const StridedLayout& layout, const IndexProgram& program, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        impl_->index_update(output, indices, source, layout, program, true);
+    }
+    void HipBackendOps::strided_scatter(StorageRef input, StorageRef output, const StridedLayout& layout, ExecContext execution) {
+        queue(execution);
+        require(input.dtype == output.dtype && dtype_size(input.dtype) > 0, "HIP strided scatter dtype mismatch");
+        const auto native = native_layout(layout);
+        std::lock_guard lock(impl_->mutex);
+        const auto in = impl_->view(input), out = impl_->view(output);
+        LfsHipError error{};
+        check(impl_->lfs_hip_strided_scatter(impl_->context, in, out, &native, static_cast<uint32_t>(dtype_size(input.dtype)), 0, &error), error);
+    }
+    void HipBackendOps::strided_scatter_immediate(StorageRef input, StorageRef output, const StridedLayout& layout, ExecContext execution) {
+        // Both native variants pass layout metadata by value to the GPU kernel.
+        strided_scatter(input, output, layout, execution);
+    }
+    void HipBackendOps::strided_scatter_int32_to_float32(StorageRef input, StorageRef output, const StridedLayout& layout, ExecContext execution) {
+        queue(execution);
+        require(input.dtype == DataType::Int32 && output.dtype == DataType::Float32, "HIP converted strided scatter requires int32/float32");
+        const auto native = native_layout(layout);
+        std::lock_guard lock(impl_->mutex);
+        const auto in = impl_->view(input), out = impl_->view(output);
+        LfsHipError error{};
+        check(impl_->lfs_hip_strided_scatter(impl_->context, in, out, &native, 4, 1, &error), error);
+    }
+    void HipBackendOps::uniform(StorageRef output, const RandomProgram& program, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        impl_->random(output, program, LFS_HIP_RANDOM_UNIFORM);
+    }
+    void HipBackendOps::bernoulli(StorageRef output, const RandomProgram& program, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        impl_->random(output, program, LFS_HIP_RANDOM_BERNOULLI);
+    }
+    void HipBackendOps::randint(StorageRef output, const RandomProgram& program, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        impl_->random(output, program, LFS_HIP_RANDOM_INTEGER);
+    }
+    void HipBackendOps::normal(StorageRef output, StorageRef, const RandomProgram& program, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        impl_->random(output, program, LFS_HIP_RANDOM_NORMAL);
+    }
+    void HipBackendOps::unary(const PointwiseProgram& p, StorageRef in, StorageRef out, size_t count, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        impl_->pointwise(p, in, {}, out, count, false);
+    }
+    void HipBackendOps::bias_add(StorageRef input,StorageRef bias,StorageRef output,int count,int channels,int spatial,ExecContext execution) {
+        queue(execution);std::lock_guard lock(impl_->mutex);impl_->bias(input,bias,output,count,channels,spatial,false);
+    }
+    void HipBackendOps::bias_relu(StorageRef input,StorageRef bias,StorageRef output,int count,int channels,int spatial,ExecContext execution) {
+        queue(execution);std::lock_guard lock(impl_->mutex);impl_->bias(input,bias,output,count,channels,spatial,true);
+    }
+    void HipBackendOps::relu(StorageRef input,StorageRef output,int count,ExecContext execution) {
+        require(count>=0,"HIP ReLU count must be nonnegative");if(!count)return;
+        unary(PointwiseProgram{PointwiseOp::Relu,DataType::Float32,DataType::Float32,{}},input,output,size_t(count),execution);
+    }
+    void HipBackendOps::binary(const PointwiseProgram& p, StorageRef a, StorageRef b, StorageRef out, size_t count, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        impl_->pointwise(p, a, b, out, count, true);
+    }
+    void HipBackendOps::scalar(const PointwiseProgram& p, StorageRef in, StorageRef out, size_t count, ExecContext execution) {
+        queue(execution);
+        require(p.scalar.scalar_on_right, "HIP scalar-on-left operations are not implemented");
+        std::lock_guard lock(impl_->mutex);
+        auto program = p;
+        // In-place Tensor scalar methods lower binary functors with the scalar
+        // operand stored separately, as in the existing native backend contract.
+        switch (program.op) {
+        case PointwiseOp::AddTensor: program.op = PointwiseOp::AddScalar; break;
+        case PointwiseOp::SubTensor: program.op = PointwiseOp::SubScalar; break;
+        case PointwiseOp::MulTensor: program.op = PointwiseOp::MulScalar; break;
+        case PointwiseOp::DivTensor: program.op = PointwiseOp::DivScalar; break;
+        default: break;
+        }
+        impl_->pointwise(program, in, {}, out, count, false);
+    }
+    void HipBackendOps::load_fill(StorageRef out, size_t count, ScalarOperand value, ExecContext execution) {
+        queue(execution);
+        if(out.dtype!=DataType::Float32) {
+            StridedLayout layout{}; layout.rank=1; layout.dims[0]=layout.element_count=count; layout.strides[0]=1;
+            fill_strided(out,layout,value,execution);
+            return;
+        }
+        std::lock_guard lock(impl_->mutex);
+        const auto dst = impl_->view(out, byte_count(count));
+        LfsHipError error{};
+        check(impl_->lfs_hip_fill_f32(impl_->context, dst.buffer, dst.offset, count, scalar_value(value), &error), error);
+    }
+    void HipBackendOps::load_arange(StorageRef out, size_t count, ScalarOperand start, ScalarOperand step, ExecContext execution) {
+        queue(execution);
+        require(out.dtype == DataType::Float32, "HIP arange requires float32");
+        std::lock_guard lock(impl_->mutex);
+        const auto dst = impl_->view(out, byte_count(count));
+        LfsHipError error{};
+        check(impl_->lfs_hip_arange_f32(impl_->context, dst, count, scalar_value(start), scalar_value(step), &error), error);
+    }
+    void HipBackendOps::copy_host_to_device(const CopyRequest& r) {
+        queue(r.context);
+        require(r.src.data || !r.bytes, "Missing HIP upload source");
+        std::lock_guard lock(impl_->mutex);
+        if (!r.bytes && impl_->empty_view(r.dst)) {
+            if (r.synchronous)
+                impl_->sync();
+            return;
+        }
+        const auto dst = impl_->view(r.dst, r.bytes);
+        LfsHipError error{};
+        const auto* host = r.src.data ? static_cast<const char*>(r.src.data) + r.src.byte_offset : nullptr;
+        check(impl_->lfs_hip_upload(impl_->context, dst.buffer, dst.offset, host, r.bytes, &error), error);
+    }
+    void HipBackendOps::copy_device_to_host(const CopyRequest& r) {
+        queue(r.context);
+        require(r.dst.data || !r.bytes, "Missing HIP download destination");
+        std::lock_guard lock(impl_->mutex);
+        if (!r.bytes && impl_->empty_view(r.src)) {
+            if (r.synchronous)
+                impl_->sync();
+            return;
+        }
+        const auto src = impl_->view(r.src, r.bytes);
+        LfsHipError error{};
+        auto* host = r.dst.data ? static_cast<char*>(r.dst.data) + r.dst.byte_offset : nullptr;
+        check(impl_->lfs_hip_download(impl_->context, src.buffer, src.offset, host, r.bytes, &error), error);
+    }
+    void HipBackendOps::copy_device_to_device(const CopyRequest& r) {
+        queue(r.context);
+        std::lock_guard lock(impl_->mutex);
+        if (!r.bytes) {
+            if (!impl_->empty_view(r.src))
+                (void)impl_->view(r.src);
+            if (!impl_->empty_view(r.dst))
+                (void)impl_->view(r.dst);
+            if (r.synchronous)
+                impl_->sync();
+            return;
+        }
+        const auto src = impl_->view(r.src, r.bytes), dst = impl_->view(r.dst, r.bytes);
+        LfsHipError error{};
+        check(impl_->lfs_hip_copy(impl_->context, src, dst, r.bytes, &error), error);
+        if (r.synchronous)
+            impl_->sync();
+    }
+    void HipBackendOps::memset(const FillRequest& r) {
+        queue(r.context);
+        std::lock_guard lock(impl_->mutex);
+        if (!r.bytes && impl_->empty_view(r.dst)) {
+            if (r.synchronous)
+                impl_->sync();
+            return;
+        }
+        const auto dst = impl_->view(r.dst, r.bytes);
+        LfsHipError error{};
+        check(impl_->lfs_hip_memset(impl_->context, dst, r.bytes, r.value, &error), error);
+        if (r.synchronous)
+            impl_->sync();
+    }
+    void HipBackendOps::record_stream(StorageRef storage, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        if (impl_->empty_view(storage))
+            return;
+        (void)impl_->view(storage);
+    }
+    void HipBackendOps::rehome_stream(StorageRef storage, ExecContext execution) { record_stream(storage, execution); }
+    std::unique_ptr<ReadbackBuffer> HipBackendOps::create_readback_buffer() {
+        class Staging final : public ReadbackBuffer {
+            std::shared_ptr<Impl> owner_;
+            LfsHipReadback* handle_ = nullptr;
+        public:
+            explicit Staging(std::shared_ptr<Impl> owner) : owner_(std::move(owner)) {
+                std::lock_guard lock(owner_->mutex);
+                LfsHipError error{};
+                check(owner_->lfs_hip_readback_create(owner_->context, &handle_, &error), error);
+            }
+            ~Staging() override {
+                std::lock_guard lock(owner_->mutex);
+                LfsHipError error{};
+                if (owner_->lfs_hip_readback_destroy(owner_->context, handle_, &error))
+                    // Context destruction will reject the retained staging and
+                    // retain the DLL if its pending transfer cannot be drained.
+                    std::fprintf(stderr, "[error] HIP readback teardown retained staging: %s\n", error.message);
+            }
+            void enqueue(StorageRef source, size_t bytes, ExecContext execution) override {
+                queue(execution);
+                std::lock_guard lock(owner_->mutex);
+                const auto view = !bytes && owner_->empty_view(source) ? LfsHipView{} : owner_->view(source, bytes);
+                LfsHipError error{};
+                check(owner_->lfs_hip_readback_enqueue(owner_->context, handle_, view.buffer, view.offset, bytes, &error), error);
+            }
+            void wait() override {
+                std::lock_guard lock(owner_->mutex);
+                LfsHipError error{};
+                check(owner_->lfs_hip_readback_wait(owner_->context, handle_, &error), error);
+            }
+            bool poll(void* destination) override {
+                std::lock_guard lock(owner_->mutex);
+                LfsHipError error{};
+                int32_t ready = 0;
+                check(owner_->lfs_hip_readback_poll(owner_->context, handle_, destination, &ready, &error), error);
+                return ready != 0;
+            }
+        };
+        return std::make_unique<Staging>(impl_);
+    }
+    std::unique_ptr<HipUploadBuffer> HipBackendOps::create_upload_buffer() {
+        class Upload final : public HipUploadBuffer {
+            std::shared_ptr<Impl> owner_;
+            LfsHipReadback* staging_ = nullptr;
+        public:
+            explicit Upload(std::shared_ptr<Impl> owner) : owner_(std::move(owner)) {
+                std::lock_guard lock(owner_->mutex);
+                LfsHipError error{};
+                check(owner_->lfs_hip_readback_create(owner_->context, &staging_, &error), error);
+            }
+            ~Upload() override {
+                std::lock_guard lock(owner_->mutex);
+                LfsHipError error{};
+                if (owner_->lfs_hip_readback_destroy(owner_->context, staging_, &error))
+                    std::fprintf(stderr, "[error] HIP upload teardown retained staging: %s\n", error.message);
+            }
+            void enqueue(StorageRef destination, const void* source, size_t bytes, ExecContext execution) override {
+                queue(execution);
+                std::lock_guard lock(owner_->mutex);
+                const auto view = !bytes && owner_->empty_view(destination) ? LfsHipView{} : owner_->view(destination, bytes);
+                LfsHipError error{};
+                check(owner_->lfs_hip_staged_upload(owner_->context, staging_, view.buffer, view.offset, source, bytes, &error), error);
+            }
+            void wait() override {
+                std::lock_guard lock(owner_->mutex);
+                LfsHipError error{};
+                check(owner_->lfs_hip_readback_wait(owner_->context, staging_, &error), error);
+            }
+            bool poll() override {
+                std::lock_guard lock(owner_->mutex);
+                LfsHipError error{};
+                int32_t ready = 0;
+                check(owner_->lfs_hip_readback_poll(owner_->context, staging_, nullptr, &ready, &error), error);
+                return ready != 0;
+            }
+        };
+        return std::make_unique<Upload>(impl_);
+    }
+    std::unique_ptr<HipReadbackSlot> HipBackendOps::create_readback_slot(size_t bytes) {
+        class Slot final : public HipReadbackSlot {
+            std::shared_ptr<Impl> owner_;
+            LfsHipReadback* staging_ = nullptr;
+            void* host_ = nullptr;
+            bool pending_ = false;
+        public:
+            Slot(std::shared_ptr<Impl> owner, size_t bytes) : owner_(std::move(owner)) {
+                std::lock_guard lock(owner_->mutex);
+                LfsHipError error{};
+                check(owner_->lfs_hip_readback_create(owner_->context, &staging_, &error), error);
+                try {
+                    uint64_t address = 0;
+                    check(owner_->lfs_hip_readback_reserve(owner_->context, staging_, bytes, &address, &error), error);
+                    host_ = reinterpret_cast<void*>(static_cast<uintptr_t>(address));
+                } catch (...) {
+                    if (owner_->lfs_hip_readback_destroy(owner_->context, staging_, &error))
+                        std::fprintf(stderr, "[error] HIP packed readback creation cleanup retained staging: %s\n", error.message);
+                    throw;
+                }
+            }
+            ~Slot() override {
+                std::lock_guard lock(owner_->mutex);
+                LfsHipError error{};
+                if (owner_->lfs_hip_readback_destroy(owner_->context, staging_, &error))
+                    std::fprintf(stderr, "[error] HIP packed readback teardown retained staging: %s\n", error.message);
+            }
+            void* data() const override { return host_; }
+            void append(StorageRef source, size_t bytes, size_t destination_offset) override {
+                std::lock_guard lock(owner_->mutex);
+                const auto input = owner_->view(source, bytes);
+                LfsHipError error{};
+                check(owner_->lfs_hip_readback_append(owner_->context, staging_, input.buffer, input.offset, bytes, destination_offset, &error), error);
+                pending_ = true;
+            }
+            void release() override {
+                if (!pending_)
+                    return;
+                std::lock_guard lock(owner_->mutex);
+                LfsHipError error{};
+                int32_t ready = 0;
+                check(owner_->lfs_hip_readback_poll(owner_->context, staging_, nullptr, &ready, &error), error);
+                require(ready != 0, "Cannot release incomplete HIP packed readback slot");
+                pending_ = false;
+            }
+        };
+        return std::make_unique<Slot>(impl_, bytes);
+    }
+    void HipBackendOps::retain_application_module(std::shared_ptr<void> module) {
+        require(bool(module), "Missing HIP application module owner");
+        std::lock_guard lock(impl_->mutex);
+        require(impl_->context != nullptr, "Cannot attach application code to a closed HIP context");
+        if (!impl_->application_modules)
+            impl_->application_modules = std::make_unique<std::vector<std::shared_ptr<void>>>();
+        auto& modules = *impl_->application_modules;
+        if (std::none_of(modules.begin(), modules.end(), [&](const auto& existing) { return existing.get() == module.get(); }))
+            modules.push_back(std::move(module));
+    }
+    StorageRef HipBackendOps::borrow_native_range(void* pointer, size_t bytes) {
+        std::lock_guard lock(impl_->mutex);
+        require(impl_->context != nullptr && pointer != nullptr,"HIP arena view needs a live native allocation");
+        const auto address=reinterpret_cast<uintptr_t>(pointer);
+        for(const auto& [base,allocation]:impl_->allocations) {
+            const auto begin=reinterpret_cast<uintptr_t>(base);
+            if(address<begin || address-begin>allocation.bytes || bytes>allocation.bytes-(address-begin)) continue;
+            return {GpuBackend::HIP,base,size_t(address-begin),DataType::Float32,allocation.metadata.get()};
+        }
+        throw std::invalid_argument("HIP arena view does not belong to a live native Tensor allocation");
+    }
+    Tensor HipBackendOps::import_external_memory(const LfsHipExternalMemory& descriptor,
+                                                std::shared_ptr<void> exporter) {
+        require(bool(exporter), "HIP external memory requires its exporter owner");
+        struct ImportOwner {
+            std::shared_ptr<Impl> impl;
+            std::shared_ptr<void> exporter;
+            LfsHipBuffer* handle = nullptr;
+            void* pointer = nullptr;
+            bool registered = false;
+            ~ImportOwner() {
+                if (!handle) return;
+                try {
+                    std::lock_guard lock(impl->mutex);
+                    LfsHipError error{};
+                    check(impl->lfs_hip_buffer_release(impl->context, handle, &error), error);
+                    if (registered) impl->allocations.erase(pointer);
+                } catch (const std::exception& error) {
+                    // A failed device drain cannot make freeing the exporter safe.
+                    // Retain both domains, as for the existing failed context teardown.
+                    (void)new std::pair<std::shared_ptr<Impl>, std::shared_ptr<void>>(impl, exporter);
+                    std::fprintf(stderr, "[error] HIP external allocation release failed; exporter and context retained: %s\n", error.what());
+                }
+            }
+        };
+        auto owner = std::make_shared<ImportOwner>();
+        owner->impl = impl_;
+        owner->exporter = std::move(exporter);
+        uint64_t address = 0;
+        {
+            std::lock_guard lock(impl_->mutex);
+            require(impl_->context != nullptr, "HIP external import requires a live context");
+            LfsHipError error{};
+            check(impl_->lfs_hip_buffer_import_external(impl_->context, &descriptor, &owner->handle, &error), error);
+            check(impl_->lfs_hip_buffer_address(impl_->context, owner->handle, &address, &error), error);
+            require(address && address <= UINTPTR_MAX, "HIP external import returned an invalid address");
+            owner->pointer = reinterpret_cast<void*>(static_cast<uintptr_t>(address));
+            require(!impl_->allocations.contains(owner->pointer), "HIP external address is already registered");
+            Impl::Allocation allocation{};
+            allocation.handle = owner->handle;
+            allocation.bytes = descriptor.mapped_bytes;
+            allocation.cacheable = false;
+            allocation.imported = true;
+            allocation.metadata = std::make_unique<StorageMeta>();
+            allocation.metadata->backend = GpuBackend::HIP;
+            allocation.metadata->gpu_descriptor.base_address = address;
+            allocation.metadata->gpu_descriptor.byte_size = descriptor.mapped_bytes;
+            allocation.metadata->gpu_descriptor.accounting_kind = StorageAccountingKind::VulkanExternal;
+            impl_->allocations.emplace(owner->pointer, std::move(allocation));
+            owner->registered = true;
+        }
+        // External bytes are owned/accounted by the Vulkan exporter, never by
+        // the HIP caching pool. Its map entry exists only for native validation.
+        GpuBackendScope scope(GpuBackend::HIP);
+        return Tensor::from_external_owner(owner->pointer, {size_t(descriptor.mapped_bytes)}, Device::GPU,
+                                            DataType::UInt8, owner, size_t(descriptor.mapped_bytes),
+                                            nullptr, "hip.external_memory");
+    }
+    void HipBackendOps::filter_points(StorageRef mask, const PointFilterProgram& p, ExecContext execution) {
+        queue(execution);
+        LfsHipPointFilter native{};
+        native.struct_bytes=sizeof(native); native.count=p.count;
+        native.transform_count=p.transform_count; native.allowed_count=p.allowed_count;
+        native.flags=p.flags; native.model=static_cast<uint32_t>(p.window.projection.model);
+        const auto& projection=p.window.projection;
+        std::copy(projection.rotation.begin(),projection.rotation.end(),native.window);
+        std::copy(projection.translation.begin(),projection.translation.end(),native.window+9);
+        const std::array<float,13> tail{projection.focal_x,projection.focal_y,projection.center_x,projection.center_y,
+            projection.ortho_scale,float(projection.width),float(projection.height),p.window.near_depth,p.window.far_depth,
+            p.window.scale_x,p.window.scale_y,p.window.offset_x,p.window.offset_y};
+        std::copy(tail.begin(),tail.end(),native.window+12);
+        std::lock_guard lock(impl_->mutex);
+        for(size_t i=0;i<p.inputs.size();++i)if(p.inputs[i])native.inputs[i]=impl_->view(*p.inputs[i],0);
+        LfsHipError error{};
+        check(impl_->lfs_hip_filter_points(impl_->context,impl_->view(mask,p.count),&native,&error),error);
+    }
+    void HipBackendOps::update_labels(StorageRef output,StorageRef selected,const LabelUpdateProgram& p,ExecContext execution) {
+        queue(execution);
+        require(p.count<=INT32_MAX&&p.output_count<=INT32_MAX&&p.allowed_count<=INT32_MAX,"HIP label count exceeds int32");
+        LfsHipLabelUpdate native{};native.struct_bytes=sizeof(native);native.count=uint32_t(p.count);
+        native.output_count=uint32_t(p.output_count);native.allowed_count=uint32_t(p.allowed_count);native.label=p.label;native.mode=p.mode;
+        std::lock_guard lock(impl_->mutex);
+        if(p.existing)native.existing=impl_->view(*p.existing,0);if(p.locked)native.locked=impl_->view(*p.locked,0);
+        if(p.indices)native.indices=impl_->view(*p.indices,0);if(p.categories)native.categories=impl_->view(*p.categories,0);
+        if(p.allowed)native.allowed=impl_->view(*p.allowed,0);
+        LfsHipError error{};check(impl_->lfs_hip_update_labels(impl_->context,impl_->view(output,p.output_count),
+            impl_->view(selected,p.count),&native,&error),error);
+    }
+    void HipBackendOps::and_live(StorageRef mask,StorageRef live,const MaskProgram& p,ExecContext execution) {
+        queue(execution);std::lock_guard lock(impl_->mutex);LfsHipError error{};
+        check(impl_->lfs_hip_and_live(impl_->context,impl_->view(mask,p.count),impl_->view(live,p.count),p.count,&error),error);
+    }
+    void HipBackendOps::histogram_u8(StorageRef values,StorageRef counts,size_t count,ExecContext execution) {
+        queue(execution);require((values.dtype==DataType::UInt8||values.dtype==DataType::Bool)&&counts.dtype==DataType::Int32,
+            "HIP label histogram requires byte input and Int32 bins");
+        std::lock_guard lock(impl_->mutex);LfsHipError error{};
+        check(impl_->lfs_hip_histogram_u8(impl_->context,impl_->view(values,count),impl_->view(counts,256*sizeof(int32_t)),count,&error),error);
+    }
+    void HipBackendOps::project_points(StorageRef points,StorageRef output,size_t count,const PointProjection& p,
+        const StorageRef* transforms,size_t transform_count,const StorageRef* indices,const StorageRef* visibility,
+        size_t visibility_count,ExecContext execution) {
+        queue(execution);require(points.dtype==DataType::Float32&&output.dtype==DataType::Float32&&count<=INT32_MAX&&
+            transform_count<=INT32_MAX&&visibility_count<=INT32_MAX,"Invalid HIP point projection storage or count");
+        require((!transforms||transforms->dtype==DataType::Float32)&&(!indices||indices->dtype==DataType::Int32)&&
+            (!visibility||visibility->dtype==DataType::Bool||visibility->dtype==DataType::UInt8),"Invalid HIP point projection auxiliary dtype");
+        LfsHipPointProject native{};native.struct_bytes=sizeof(native);native.count=uint32_t(count);native.model=uint32_t(p.model);
+        native.width=uint32_t(p.width);native.height=uint32_t(p.height);native.transform_count=uint32_t(transform_count);
+        native.visibility_count=uint32_t(visibility_count);
+        std::copy(p.rotation.begin(),p.rotation.end(),native.frame);std::copy(p.translation.begin(),p.translation.end(),native.frame+9);
+        const std::array tail{p.focal_x,p.focal_y,p.center_x,p.center_y,p.ortho_scale,p.invalid_value};
+        std::copy(tail.begin(),tail.end(),native.frame+12);
+        std::lock_guard lock(impl_->mutex);
+        if(transforms)native.transforms=impl_->view(*transforms,0);if(indices)native.indices=impl_->view(*indices,0);
+        if(visibility)native.visibility=impl_->view(*visibility,0);
+        LfsHipError error{};check(impl_->lfs_hip_project_points(impl_->context,impl_->view(points,checked_product(count,3*sizeof(float))),
+            impl_->view(output,checked_product(count,2*sizeof(float))),&native,&error),error);
+    }
+    void HipBackendOps::mark_points_2d(StorageRef mask,StorageRef points,size_t count,const PointRegion2D& p,
+        const StorageRef* geometry,size_t geometry_count,ExecContext execution) {
+        queue(execution);require((mask.dtype==DataType::UInt8||mask.dtype==DataType::Bool)&&points.dtype==DataType::Float32&&
+            (!geometry||geometry->dtype==DataType::Float32)&&count<=INT32_MAX&&geometry_count<=INT32_MAX,
+            "Invalid HIP point region storage or count");
+        const LfsHipPointRegion native{sizeof(LfsHipPointRegion),uint32_t(count),uint32_t(p.kind),uint32_t(geometry_count),
+            p.x0,p.y0,p.x1,p.y1,p.radius,p.minimum_coordinate};
+        std::lock_guard lock(impl_->mutex);LfsHipError error{};
+        check(impl_->lfs_hip_mark_points_2d(impl_->context,impl_->view(mask,count),impl_->view(points,checked_product(count,2*sizeof(float))),
+            geometry?impl_->view(*geometry,checked_product(geometry_count,2*sizeof(float))):LfsHipView{},&native,&error),error);
+    }
+    uint64_t HipBackendOps::storage_address(StorageRef storage, size_t bytes) {
+        std::lock_guard lock(impl_->mutex);
+        (void)impl_->view(storage, bytes);
+        return reinterpret_cast<uintptr_t>(storage.data) + storage.byte_offset;
+    }
+    bool HipBackendOps::queue_ready(ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        LfsHipError error{};
+        int32_t ready = 0;
+        check(impl_->lfs_hip_context_ready(impl_->context, &ready, &error), error);
+        return ready != 0;
+    }
+    void HipBackendOps::enqueue_host_callback(void (*callback)(void*), void* user, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        LfsHipError error{};
+        check(impl_->lfs_hip_host_callback(impl_->context, callback, user, &error), error);
+    }
+    HipQueueLease HipBackendOps::execution_lease(ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        HipQueueLease lease{impl_};
+        LfsHipError error{};
+        check(impl_->lfs_hip_context_queue(impl_->context, &lease.native_queue, &lease.device, &error), error);
+        return lease;
+    }
+    std::unique_ptr<HipFence> HipBackendOps::create_fence() {
+        class Fence final : public HipFence {
+            std::shared_ptr<Impl> owner_;
+            LfsHipReadback* marker_ = nullptr;
+            mutable bool recorded_ = false, complete_ = true;
+        public:
+            explicit Fence(std::shared_ptr<Impl> owner) : owner_(std::move(owner)) {
+                std::lock_guard lock(owner_->mutex);
+                LfsHipError error{};
+                check(owner_->lfs_hip_readback_create(owner_->context, &marker_, &error), error);
+            }
+            ~Fence() override {
+                std::lock_guard lock(owner_->mutex);
+                LfsHipError error{};
+                if (owner_->lfs_hip_readback_destroy(owner_->context, marker_, &error))
+                    std::fprintf(stderr, "[error] HIP fence teardown retained marker: %s\n", error.message);
+            }
+            void record(ExecContext execution) override {
+                queue(execution);
+                std::lock_guard lock(owner_->mutex);
+                recorded_ = true;
+                complete_ = false;
+                LfsHipError error{};
+                check(owner_->lfs_hip_marker_record(owner_->context, marker_, &error), error);
+            }
+            void wait_on(ExecContext execution) const override {
+                queue(execution);
+                // Only the same native queue is admitted: later submissions
+                // already follow this marker, including after re-recording.
+            }
+            void wait() const override {
+                std::lock_guard lock(owner_->mutex);
+                if (!recorded_ || complete_)
+                    return;
+                LfsHipError error{};
+                check(owner_->lfs_hip_readback_wait(owner_->context, marker_, &error), error);
+                int32_t ready = 0;
+                check(owner_->lfs_hip_readback_poll(owner_->context, marker_, nullptr, &ready, &error), error);
+                require(ready != 0, "HIP fence not ready after successful wait");
+                complete_ = true;
+            }
+            bool ready() const override {
+                std::lock_guard lock(owner_->mutex);
+                if (!recorded_ || complete_)
+                    return true;
+                LfsHipError error{};
+                int32_t ready = 0;
+                check(owner_->lfs_hip_readback_poll(owner_->context, marker_, nullptr, &ready, &error), error);
+                complete_ = ready != 0;
+                return complete_;
+            }
+        };
+        return std::make_unique<Fence>(impl_);
+    }
+    void HipBackendOps::wait_for(SyncToken token) {
+        // The adapter admits exactly one queue. A token is scoped to this
+        // context generation; native CUDA streams or foreign tokens are errors.
+        require(token.backend == GpuBackend::HIP && token.value == impl_->identity && token.native == 0,
+                "HIP synchronization received a foreign or expired context token");
+        synchronize_stream({});
+    }
+    SyncToken HipBackendOps::bridge(ExecContext producer, ExecContext consumer) {
+        queue(producer);
+        queue(consumer);
+        return {GpuBackend::HIP, impl_->identity, 0};
+    }
+    void HipBackendOps::release_stream(ExecContext execution) { synchronize_stream(execution); }
+    void HipBackendOps::synchronize_stream(ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        impl_->sync();
+    }
+    void HipBackendOps::synchronize_device() { synchronize_stream({}); }
+    void HipBackendOps::device_barrier() { synchronize_stream({}); }
+    void HipBackendOps::trim() {
+        std::lock_guard lock(impl_->mutex);
+        impl_->trim_cache();
+        if (impl_->context) {
+            LfsHipError error{};
+            check(impl_->lfs_hip_trim_workspace(impl_->context, &error), error);
+            impl_->workspace_bytes -= impl_->algorithm_workspace_bytes;
+            impl_->algorithm_workspace_bytes = 0;
+        }
+    }
+    void HipBackendOps::trim_if_reserved_unused_exceeds(size_t threshold) {
+        std::lock_guard lock(impl_->mutex);
+        if (impl_->cached_bytes > threshold || impl_->algorithm_workspace_bytes > threshold - impl_->cached_bytes) {
+            impl_->trim_cache();
+            if (impl_->context) {
+                LfsHipError error{};
+                check(impl_->lfs_hip_trim_workspace(impl_->context, &error), error);
+                impl_->workspace_bytes -= impl_->algorithm_workspace_bytes;
+                impl_->algorithm_workspace_bytes = 0;
+            }
+        }
+    }
+    void HipBackendOps::set_allocation_iteration(int) {}
+    void HipBackendOps::record_tensor_allocation(StorageRef storage, const StridedLayout&, size_t bytes) {
+        std::lock_guard lock(impl_->mutex);
+        (void)impl_->view(storage, bytes);
+    }
+    MemoryInfo HipBackendOps::stats() {
+        std::lock_guard lock(impl_->mutex);
+        MemoryInfo info;
+        info.device_id = impl_->ordinal;
+        if (!impl_->context)
+            return info;
+        LfsHipMemoryInfo memory{};
+        LfsHipError error{};
+        check(impl_->lfs_hip_memory_info(impl_->context, &memory, &error), error);
+        impl_->reserved_peak = std::max<size_t>(impl_->reserved_peak, memory.owned_bytes);
+        info.total_bytes = memory.total_bytes;
+        info.free_bytes = memory.free_bytes;
+        info.allocated_bytes = impl_->live + memory.workspace_bytes;
+        info.pool_used_current = info.allocated_bytes;
+        info.pool_reserved_current = memory.owned_bytes;
+        info.pool_reserved_high = impl_->reserved_peak;
+        info.pool_used_high = impl_->peak;
+        return info;
+    }
+    void HipBackendOps::shutdown() {
+        std::lock_guard lock(impl_->mutex);
+        if(!impl_->allocations.empty()&&std::getenv("LFS_HIP_VALIDATION_ALLOCATION_REPORT")) {
+            std::fprintf(stderr,"[diagnostic] HIP shutdown: %zu live allocations, %zu live bytes\n",impl_->allocations.size(),impl_->live);
+            unsigned shown=0;for(const auto& [address,allocation]:impl_->allocations){
+                if(shown++==32)break;
+                std::fprintf(stderr,"[diagnostic] HIP retained allocation: bytes=%zu kind=%s\n",allocation.bytes,allocation.metadata?allocation.metadata->external_kind.c_str():"unknown");
+                if(!allocation.diagnostic_origin.empty())std::fprintf(stderr,"%s\n",allocation.diagnostic_origin.c_str());
+            }
+        }
+        require(impl_->allocations.empty(), "Cannot shut down HIP Tensor context with live allocations");
+        require(impl_.use_count() == 1, "Cannot shut down HIP Tensor context with live queues, transfers or fences");
+        if (!impl_->context)
+            return;
+        LfsHipError error{};
+        check(impl_->lfs_hip_context_destroy(impl_->context, &error), error);
+        impl_->context = nullptr;
+        impl_->application_modules.reset();
+        impl_->cached.clear();
+        impl_->cached_bytes = 0;
+        if (impl_->counted) {
+            live_contexts.fetch_sub(1, std::memory_order_relaxed);
+            impl_->counted = false;
+        }
+    }
+    PointerClass HipBackendOps::classify_pointer(const void* pointer) {
+        std::lock_guard lock(impl_->mutex);
+        const auto address = reinterpret_cast<uintptr_t>(pointer);
+        for (const auto& [base, allocation] : impl_->allocations) {
+            const auto begin = reinterpret_cast<uintptr_t>(base);
+            if (address >= begin && address - begin < allocation.bytes)
+                return PointerClass::Device;
+        }
+        return PointerClass::Unknown;
+    }
+    bool HipBackendOps::stream_is_capturing(ExecContext execution) {
+        queue(execution);
+        return false;
+    }
+    float HipBackendOps::sum_scalar(StorageRef input, size_t count, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        return impl_->reduce(input, count, LFS_HIP_REDUCE_SUM);
+    }
+    float HipBackendOps::mean_scalar(StorageRef input, size_t count, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        return impl_->reduce(input, count, LFS_HIP_REDUCE_MEAN);
+    }
+    float HipBackendOps::min_scalar(StorageRef input, size_t count, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        return impl_->reduce(input, count, LFS_HIP_REDUCE_MIN);
+    }
+    float HipBackendOps::max_scalar(StorageRef input, size_t count, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        return impl_->reduce(input, count, LFS_HIP_REDUCE_MAX);
+    }
+    bool HipBackendOps::has_nan(StorageRef input, size_t count, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        return impl_->reduce(input, count, LFS_HIP_REDUCE_HAS_NAN);
+    }
+    bool HipBackendOps::has_inf(StorageRef input, size_t count, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        return impl_->reduce(input, count, LFS_HIP_REDUCE_HAS_INF);
+    }
+    void HipBackendOps::fused_pointwise_chain(StorageRef input, StorageRef output, size_t count,
+                                              const tensor_ops::FusedPointwiseOpChain& source,
+                                              std::span<const StorageRef> rhs_storages, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        require(input.dtype == DataType::Float32 && output.dtype == DataType::Float32 && source.num_ops > 0 && source.num_ops <= 16,
+                "Invalid HIP fused pointwise chain");
+        const auto src = impl_->view(input, byte_count(count)), dst = impl_->view(output, byte_count(count));
+        LfsHipChain chain{};
+        chain.count = source.num_ops;
+        for (unsigned i = 0; i < chain.count; ++i) {
+            chain.ops[i].op = source.ops[i].kind;
+            chain.ops[i].scalar = source.ops[i].scalar;
+            if (source.ops[i].rhs) {
+                const auto address = reinterpret_cast<uintptr_t>(source.ops[i].rhs);
+                bool found = false;
+                for (const auto& storage : rhs_storages) {
+                    if (storage.dtype == DataType::Float32 && reinterpret_cast<uintptr_t>(storage.data) + storage.byte_offset == address) {
+                        chain.ops[i].rhs = impl_->view(storage, byte_count(count));
+                        found = true;
+                        break;
+                    }
+                }
+                require(found, "HIP fused chain rhs is not backed by its storage lease");
+            }
+        }
+        LfsHipError error{};
+        check(impl_->lfs_hip_chain_f32(impl_->context, src, dst, count, &chain, &error), error);
+    }
+    void HipBackendOps::fused_transform_reduce(StorageRef input, StorageRef output, size_t count,
+                                              const tensor_ops::FusedPointwiseOpChain& chain, const ReduceProgram& program,
+                                              std::span<const StorageRef> rhs, ExecContext execution) {
+        fused_segmented_transform_reduce(input,output,1,count,chain,program,rhs,execution);
+    }
+    void HipBackendOps::fused_segmented_transform_reduce(StorageRef input,StorageRef output,size_t segments,size_t size,
+                                                        const tensor_ops::FusedPointwiseOpChain& source,const ReduceProgram& program,
+                                                        std::span<const StorageRef> rhs_storages,ExecContext execution) {
+        queue(execution);
+        require(!segments || size<=SIZE_MAX/segments,"HIP fused reduction extent overflow");
+        require(input.dtype==DataType::Float32 && output.dtype==DataType::Float32 && program.result_dtype==DataType::Float32 &&
+                source.num_ops>0 && source.num_ops<=16,"HIP fused reductions require Float32 and a valid chain");
+        uint32_t operation;
+        switch(program.op) {
+        case ReduceOp::Sum:operation=LFS_HIP_REDUCE_SUM;break;
+        case ReduceOp::Mean:operation=LFS_HIP_REDUCE_MEAN;break;
+        case ReduceOp::Min:operation=LFS_HIP_REDUCE_MIN;break;
+        case ReduceOp::Max:operation=LFS_HIP_REDUCE_MAX;break;
+        default:throw std::invalid_argument("Unsupported HIP fused reduction operation");
+        }
+        if(!segments || !size)return;
+        const size_t bytes=byte_count(segments*size);
+        std::lock_guard lock(impl_->mutex);
+        const auto src=impl_->view(input,bytes),dst=impl_->view(output,byte_count(segments));
+        LfsHipChain chain{};chain.count=source.num_ops;
+        for(unsigned i=0;i<chain.count;++i) {
+            chain.ops[i].op=source.ops[i].kind;chain.ops[i].scalar=source.ops[i].scalar;
+            if(source.ops[i].rhs) {
+                const auto address=reinterpret_cast<uintptr_t>(source.ops[i].rhs);bool found=false;
+                for(const auto& storage:rhs_storages) {
+                    if(storage.dtype==DataType::Float32 && reinterpret_cast<uintptr_t>(storage.data)+storage.byte_offset==address) {
+                        chain.ops[i].rhs=impl_->view(storage,bytes);found=true;break;
+                    }
+                }
+                require(found,"HIP fused reduction rhs is not backed by its storage lease");
+            }
+        }
+        LfsHipError error{};
+        check(impl_->lfs_hip_chain_reduce_f32(impl_->context,src,dst,segments,size,&chain,operation,&error),error);
+        if(segments<64 && size>4096)impl_->workspace_bytes=impl_->algorithm_workspace_bytes+LFS_HIP_REDUCTION_WORKSPACE_FLOATS*sizeof(float);
+        impl_->peak=std::max(impl_->peak,impl_->live+impl_->workspace_bytes);
+        impl_->reserved_peak=std::max(impl_->reserved_peak,impl_->live+impl_->cached_bytes+impl_->workspace_bytes);
+    }
+    void HipBackendOps::where(StorageRef condition,StorageRef x,StorageRef y,StorageRef output,
+                              const StridedLayout& condition_layout,const StridedLayout& x_layout,
+                              const StridedLayout& y_layout,const StridedLayout& output_layout,ExecContext execution) {
+        queue(execution);
+        require(condition.dtype==DataType::Bool && x.dtype==y.dtype && x.dtype==output.dtype,"HIP where dtype mismatch");
+        if(!output_layout.element_count)return;
+        LfsHipWhere p{};p.struct_bytes=sizeof(p);p.dtype=static_cast<uint32_t>(output.dtype);
+        p.condition=native_layout(condition_layout);p.x=native_layout(x_layout);p.y=native_layout(y_layout);p.output=native_layout(output_layout);
+        std::lock_guard lock(impl_->mutex);
+        const auto mask=impl_->view(condition),a=impl_->view(x),b=impl_->view(y),out=impl_->view(output);
+        LfsHipError error{};
+        check(impl_->lfs_hip_where_layout(impl_->context,mask,a,b,out,&p,&error),error);
+    }
+    void HipBackendOps::masked_fill(StorageRef output,StorageRef mask,const MaskProgram& program,ExecContext execution) {
+        queue(execution);require(mask.dtype==DataType::Bool,"HIP masked fill requires a Bool predicate");
+        if(!program.count)return;
+        const auto bytes=checked_product(program.count,dtype_size(output.dtype));std::lock_guard lock(impl_->mutex);
+        const auto m=impl_->view(mask,program.count),out=impl_->view(output,bytes);LfsHipError error{};
+        check(impl_->lfs_hip_masked_fill(impl_->context,m,out,program.count,static_cast<uint32_t>(output.dtype),scalar_value(program.value),&error),error);
+    }
+    void HipBackendOps::where_scalar(StorageRef mask,StorageRef source,StorageRef output,size_t count,float value,ExecContext execution) {
+        queue(execution);
+        require(mask.dtype==DataType::Bool && source.dtype==output.dtype &&
+                (source.dtype==DataType::Float32 || source.dtype==DataType::Float16),"Invalid HIP renderer selection operands");
+        const size_t width=source.dtype==DataType::Float32?4:2;
+        require(count<=SIZE_MAX/width,"HIP renderer selection extent overflow");
+        if(!count)return;
+        std::lock_guard lock(impl_->mutex);
+        const auto m=impl_->view(mask,count),src=impl_->view(source,count*width),dst=impl_->view(output,count*width);
+        LfsHipError error{};
+        check(impl_->lfs_hip_where_scalar(impl_->context,m,src,dst,count,
+              source.dtype==DataType::Float32?LFS_HIP_F32:LFS_HIP_F16,value,&error),error);
+    }
+    void HipBackendOps::launch_gemm(StorageRef lhs,StorageRef rhs,StorageRef bias,StorageRef output,const GemmProgram& p,bool transpose,bool relu,ExecContext execution) {
+        queue(execution);
+        require(lhs.dtype==DataType::Float32 && rhs.dtype==DataType::Float32 && output.dtype==DataType::Float32 &&
+                (!bias.data || bias.dtype==DataType::Float32),"HIP GEMM requires Float32 storage");
+        if(!p.batch || !p.m || !p.n)return;
+        const auto lhs_bytes=byte_count(checked_product(p.batch,checked_product(p.m,p.k)));
+        const auto rhs_bytes=byte_count(checked_product(p.batch,checked_product(p.k,p.n)));
+        const auto out_bytes=byte_count(checked_product(p.batch,checked_product(p.m,p.n)));
+        std::lock_guard lock(impl_->mutex);
+        const auto a=lhs_bytes?impl_->view(lhs,lhs_bytes):LfsHipView{};
+        const auto b=rhs_bytes?impl_->view(rhs,rhs_bytes):LfsHipView{};
+        const auto c=impl_->view(output,out_bytes);
+        const auto d=bias.data?impl_->view(bias,byte_count(p.n)):LfsHipView{};
+        LfsHipGemm descriptor{sizeof(LfsHipGemm),uint32_t(transpose),uint32_t(relu),p.batch,p.m,p.n,p.k};
+        LfsHipError error{};
+        check(impl_->lfs_hip_gemm_f32(impl_->context,a,b,d,c,&descriptor,&error),error);
+    }
+    void HipBackendOps::sgemm(StorageRef a,StorageRef b,StorageRef c,const GemmProgram& p,ExecContext execution){launch_gemm(a,b,{},c,p,false,false,execution);}
+    void HipBackendOps::sgemm_tn(StorageRef a,StorageRef b,StorageRef c,const GemmProgram& p,ExecContext execution){launch_gemm(a,b,{},c,p,true,false,execution);}
+    void HipBackendOps::sgemm_batched(StorageRef a,StorageRef b,StorageRef c,const GemmProgram& p,ExecContext execution){launch_gemm(a,b,{},c,p,false,false,execution);}
+    void HipBackendOps::sgemm_bias_relu(StorageRef a,StorageRef b,StorageRef bias,StorageRef c,const GemmProgram& p,ExecContext execution){launch_gemm(a,b,bias,c,p,false,true,execution);}
+    void HipBackendOps::inference(StorageRef input,StorageRef output,const InferenceProgram& program,ExecContext execution) {
+        queue(execution);
+        require((program.kernel==InferenceKernel::Grid || input.dtype==DataType::Float32) && output.dtype==DataType::Float32,"HIP inference requires Float32");
+        const auto& g=program.geometry;
+        if(!program.count)return;
+        if(program.kernel!=InferenceKernel::Pool) {
+            require(program.count<=INT_MAX,"HIP inference count exceeds int32");
+            if(!program.count)return;
+            LfsHipInference call{sizeof(LfsHipInference),uint32_t(program.kernel),
+                {0,0,uint32_t(program.count),0,g.channels,g.height,g.width,g.out_height,g.out_width,
+                 g.kernel_h,g.kernel_w,g.stride_h,g.stride_w,g.pad_h,g.pad_w,g.dilation_h,g.dilation_w,
+                 g.offset,g.columns,g.mode,g.coord,g.include_pad,g.u0,g.u1,g.v0,g.v1}};
+            std::lock_guard lock(impl_->mutex);
+            const auto src=program.kernel==InferenceKernel::Grid?LfsHipView{}:impl_->view(input);
+            const auto dst=impl_->view(output,program.count*4);
+            LfsHipError error{};
+            check(impl_->lfs_hip_inference_f32(impl_->context,src,dst,&call,&error),error);
+            return;
+        }
+        require(g.mode==0 || g.mode==1,"Invalid HIP inference pooling mode");
+        require(g.include_pad==0 || g.include_pad==1,"Invalid HIP inference pooling padding flag");
+        LfsHipPool p{program.count,g.height,g.width,g.out_height,g.out_width,g.kernel_h,g.kernel_w,
+                     g.stride_h,g.stride_w,g.pad_h,g.pad_w,uint32_t(g.mode),uint32_t(g.include_pad)};
+        require(program.count<=SIZE_MAX/sizeof(float),"HIP pooling output size overflows");
+        std::lock_guard lock(impl_->mutex);
+        const auto src=impl_->view(input),dst=impl_->view(output,program.count*sizeof(float));
+        LfsHipError error{};
+        check(impl_->lfs_hip_pool_f32(impl_->context,src,dst,&p,&error),error);
+    }
+    void HipBackendOps::max_pool2d(StorageRef input,StorageRef output,const PoolProgram& p,ExecContext execution) {
+        require(p.batch>=0&&p.channels>=0&&p.input_height>0&&p.input_width>0&&p.output_height>0&&p.output_width>0&&p.kernel_size>0&&p.stride>0&&p.padding>=0,"Invalid HIP max-pooling geometry");
+        const size_t count=checked_product(checked_product(size_t(p.batch),size_t(p.channels)),checked_product(size_t(p.output_height),size_t(p.output_width)));
+        InferenceGeometry g{};g.channels=p.channels;g.height=p.input_height;g.width=p.input_width;g.out_height=p.output_height;g.out_width=p.output_width;
+        g.kernel_h=g.kernel_w=p.kernel_size;g.stride_h=g.stride_w=p.stride;g.pad_h=g.pad_w=p.padding;g.mode=0;
+        inference(input,output,InferenceProgram{InferenceKernel::Pool,count,g},execution);
+    }
+    void HipBackendOps::adaptive_avg_pool2d(StorageRef input,StorageRef output,const PoolProgram& p,ExecContext execution) {
+        queue(execution);
+        require(p.batch>=0&&p.channels>=0&&p.input_height>0&&p.input_width>0&&p.output_height>0&&p.output_width>0&&input.dtype==DataType::Float32&&output.dtype==DataType::Float32,"Invalid HIP adaptive pooling geometry/dtype");
+        const size_t count=checked_product(checked_product(size_t(p.batch),size_t(p.channels)),checked_product(size_t(p.output_height),size_t(p.output_width)));
+        if(!count)return;require(count<=SIZE_MAX/sizeof(float),"HIP adaptive pooling output overflows");
+        LfsHipPool native{count,p.input_height,p.input_width,p.output_height,p.output_width,1,1,1,1,0,0,2,0};
+        std::lock_guard lock(impl_->mutex);const auto in=impl_->view(input),out=impl_->view(output,count*sizeof(float));LfsHipError error{};
+        check(impl_->lfs_hip_pool_f32(impl_->context,in,out,&native,&error),error);
+    }
+    void HipBackendOps::strided_copy(StorageRef input, StorageRef output, const StridedLayout& layout, ExecContext execution) {
+        queue(execution);
+        require(input.dtype == output.dtype, "HIP strided copy requires equal dtypes");
+        std::lock_guard lock(impl_->mutex);
+        const auto src = impl_->view(input), dst = impl_->view(output);
+        const auto descriptor = native_layout(layout);
+        LfsHipError error{};
+        check(impl_->lfs_hip_strided_copy(impl_->context, src, dst, &descriptor, dtype_size(input.dtype), &error), error);
+    }
+    void HipBackendOps::strided_copy_immediate(StorageRef input, StorageRef output, const StridedLayout& layout, ExecContext execution) {
+        strided_copy(input, output, layout, execution);
+        synchronize_stream(execution);
+    }
+    void HipBackendOps::fill_strided(StorageRef output, const StridedLayout& layout, ScalarOperand value, ExecContext execution) {
+        queue(execution);
+
+        std::lock_guard lock(impl_->mutex);
+        const auto dst = impl_->view(output);
+        const auto descriptor = native_layout(layout);
+        LfsHipError error{};
+        if(output.dtype==DataType::Float32)
+            check(impl_->lfs_hip_fill_strided_f32(impl_->context, dst, &descriptor, scalar_value(value), &error), error);
+        else
+            check(impl_->lfs_hip_fill_layout_bits(impl_->context,dst,&descriptor,static_cast<uint32_t>(dtype_size(output.dtype)),typed_scalar_bits(output.dtype,value),&error),error);
+    }
+    void HipBackendOps::clamp_fused(StorageRef input, StorageRef output, ScalarOperand minimum, ScalarOperand maximum, size_t count, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        if (input.dtype == DataType::Int32) {
+            require(output.dtype == DataType::Int32 && minimum.kind == ScalarKind::Int32 && maximum.kind == ScalarKind::Int32,
+                    "HIP integer clamp requires Int32 operands");
+            const auto src = impl_->view(input, byte_count(count)), dst = impl_->view(output, byte_count(count));
+            LfsHipError error{};
+            if (src.buffer != dst.buffer || src.offset != dst.offset)
+                check(impl_->lfs_hip_copy(impl_->context, src, dst, byte_count(count), &error), error);
+            check(impl_->lfs_hip_clamp_i32(impl_->context, dst, count, minimum.value.int32_value, maximum.value.int32_value, &error), error);
+            return;
+        }
+        PointwiseProgram program{};
+        program.in_dtype = program.out_dtype = DataType::Float32;
+        program.op = PointwiseOp::MaximumScalar;
+        program.scalar = minimum;
+        impl_->pointwise(program, input, {}, output, count, false);
+        program.op = PointwiseOp::MinimumScalar;
+        program.scalar = maximum;
+        impl_->pointwise(program, output, {}, output, count, false);
+    }
+    void HipBackendOps::clamp_scalar_int(StorageRef data, ScalarOperand minimum, ScalarOperand maximum, size_t count, ExecContext execution) {
+        queue(execution);
+        require(data.dtype==DataType::Int32 && minimum.kind==ScalarKind::Int32 && maximum.kind==ScalarKind::Int32,
+                "HIP integer clamp requires Int32 operands");
+        std::lock_guard lock(impl_->mutex);
+        const auto view=impl_->view(data,byte_count(count));
+        LfsHipError error{};
+        check(impl_->lfs_hip_clamp_i32(impl_->context,view,count,minimum.value.int32_value,maximum.value.int32_value,&error),error);
+    }
+    void HipBackendOps::clamp_scalar(StorageRef data, ScalarOperand minimum, ScalarOperand maximum, size_t count, ExecContext execution) {
+        clamp_fused(data, data, minimum, maximum, count, execution);
+    }
+    void HipBackendOps::launch_inverse_lens(StorageRef output, const UndistortParams& p, ExecContext execution) {
+        queue(execution);
+        LfsHipLens lens{p.src_fx, p.src_fy, p.src_cx, p.src_cy, p.dst_fx, p.dst_fy, p.dst_cx, p.dst_cy, p.src_width, p.src_height, p.dst_width, p.dst_height, static_cast<int32_t>(p.model_type), {}, p.num_distortion};
+        std::copy(std::begin(p.distortion), std::end(p.distortion), std::begin(lens.distortion));
+        std::lock_guard lock(impl_->mutex);
+        const auto dst = impl_->view(output, size_t(p.src_width) * p.src_height * 2 * sizeof(float));
+        LfsHipError error{};
+        check(impl_->lfs_hip_inverse_lens(impl_->context, dst, &lens, &error), error);
+    }
+    void HipBackendOps::sh_codec(StorageRef source,StorageRef destination,const ShCodecProgram& program,ExecContext execution) {
+        queue(execution);const auto& p=program.codec;
+        if(!p.count || !p.destination_rest)return;
+        require(source.dtype==(p.source_format==ShFormat::Float16 || p.source_format==ShFormat::Q16?DataType::Float16:DataType::Float32) &&
+                destination.dtype==(p.destination_format==ShFormat::Float16 || p.destination_format==ShFormat::Q16?DataType::Float16:DataType::Float32),"HIP SH codec dtype mismatch");
+        LfsHipShCodec descriptor{};descriptor.struct_bytes=sizeof(descriptor);
+        descriptor.source_format=uint32_t(p.source_format);descriptor.destination_format=uint32_t(p.destination_format);
+        if(program.indices){require(program.indices->dtype==DataType::Int32 || program.indices->dtype==DataType::Int64,"HIP SH codec requires integer indices");descriptor.index_type=program.indices->dtype==DataType::Int64?2:1;}
+        descriptor.scatter=p.scatter;descriptor.source_rest=p.source_rest;descriptor.destination_rest=p.destination_rest;
+        descriptor.match_cpu_rounding=p.match_cpu_rounding;descriptor.source_rows=p.source_rows;descriptor.destination_rows=p.destination_rows;
+        descriptor.count=p.count;descriptor.source_offset=p.source_offset;descriptor.destination_offset=p.destination_offset;
+        std::lock_guard lock(impl_->mutex);
+        const auto src=source.data ? impl_->view(source) : (impl_->empty_view(source),LfsHipView{});
+        const auto dst=impl_->view(destination);
+        auto optional=[&](const std::optional<StorageRef>& value){if(!value)return LfsHipView{};require(value->dtype==DataType::Float32,"HIP SH bounds must be Float32");return impl_->view(*value);};
+        const auto indices=program.indices?impl_->view(*program.indices):LfsHipView{};
+        LfsHipError error{};
+        check(impl_->lfs_hip_sh_codec(impl_->context,&descriptor,src,dst,indices,optional(program.source_bounds),optional(program.destination_bounds),&error),error);
+    }
+    void HipBackendOps::launch_shared_resize(const LfsHipSharedResize& descriptor, StorageRef source, StorageRef destination, StorageRef coefficients_x, StorageRef coefficients_y, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        const auto src=impl_->view(source),dst=impl_->view(destination);
+        const auto x=coefficients_x.data ? impl_->view(coefficients_x) : LfsHipView{};
+        const auto y=coefficients_y.data ? impl_->view(coefficients_y) : LfsHipView{};
+        LfsHipError error{};
+        check(impl_->lfs_hip_shared_resize(impl_->context,&descriptor,src,dst,x,y,&error),error);
+    }
+    void HipBackendOps::shared_image(const LfsHipSharedImage& descriptor, StorageRef source, StorageRef destination, StorageRef auxiliary, ExecContext execution) {
+        queue(execution);
+        std::lock_guard lock(impl_->mutex);
+        const auto src=source.data ? impl_->view(source) : LfsHipView{};
+        const auto dst=impl_->view(destination);
+        const auto aux=auxiliary.data ? impl_->view(auxiliary) : LfsHipView{};
+        LfsHipError error{};
+        check(impl_->lfs_hip_shared_image(impl_->context,&descriptor,src,dst,aux,&error),error);
+    }
+    void HipBackendOps::launch_inverse_warp(StorageRef input,StorageRef output,StorageRef validity,const UndistortParams& p,unsigned channels,unsigned mode,ExecContext execution) {
+        queue(execution);
+        LfsHipLens lens{p.src_fx,p.src_fy,p.src_cx,p.src_cy,p.dst_fx,p.dst_fy,p.dst_cx,p.dst_cy,p.src_width,p.src_height,p.dst_width,p.dst_height,static_cast<int32_t>(p.model_type),{},p.num_distortion};
+        std::copy(std::begin(p.distortion),std::end(p.distortion),std::begin(lens.distortion));
+        std::lock_guard lock(impl_->mutex);
+        const auto src=impl_->view(input,size_t(p.dst_width)*p.dst_height*channels*4);
+        const auto dst=impl_->view(output,size_t(p.src_width)*p.src_height*channels*4);
+        const auto valid=validity.data?impl_->view(validity,size_t(p.src_width)*p.src_height):LfsHipView{};
+        LfsHipError error{};
+        check(impl_->lfs_hip_inverse_warp(impl_->context,src,dst,valid,channels,mode,&lens,&error),error);
+    }
+    void HipBackendOps::launch_shared_warp(StorageRef input,StorageRef output,const UndistortParams& p,unsigned channels,unsigned mode,ExecContext execution) {
+        queue(execution);
+        LfsHipLens lens{p.src_fx,p.src_fy,p.src_cx,p.src_cy,p.dst_fx,p.dst_fy,p.dst_cx,p.dst_cy,p.src_width,p.src_height,p.dst_width,p.dst_height,static_cast<int32_t>(p.model_type),{},p.num_distortion};
+        std::copy(std::begin(p.distortion),std::end(p.distortion),std::begin(lens.distortion));
+        std::lock_guard lock(impl_->mutex);
+        const auto src=impl_->view(input,size_t(p.src_width)*p.src_height*channels*(input.dtype==DataType::UInt8?1:4));
+        const auto dst=impl_->view(output,size_t(p.dst_width)*p.dst_height*channels*4);
+        LfsHipError error{};
+        check(impl_->lfs_hip_shared_warp(impl_->context,src,static_cast<uint32_t>(input.dtype),channels,mode,dst,&lens,&error),error);
+    }
+    void HipBackendOps::launch_rgb_warp(StorageRef input, StorageRef output, const UndistortParams& p, ExecContext execution) {
+        queue(execution);
+        LfsHipLens lens{p.src_fx, p.src_fy, p.src_cx, p.src_cy, p.dst_fx, p.dst_fy, p.dst_cx, p.dst_cy, p.src_width, p.src_height, p.dst_width, p.dst_height, static_cast<int32_t>(p.model_type), {}, p.num_distortion};
+        std::copy(std::begin(p.distortion), std::end(p.distortion), std::begin(lens.distortion));
+        std::lock_guard lock(impl_->mutex);
+        const auto src = impl_->view(input, size_t(p.src_width) * p.src_height * 3 * (input.dtype == DataType::UInt8 ? 1 : 4));
+        const auto dst = impl_->view(output, size_t(p.dst_width) * p.dst_height * 3 * sizeof(float));
+        LfsHipError error{};
+        check(impl_->lfs_hip_warp_rgb(impl_->context, src, static_cast<uint32_t>(input.dtype), dst, &lens, &error), error);
+    }
+    void HipBackendOps::cumsum(StorageRef data, const StridedLayout& layout, int dim, ExecContext execution) {
+        queue(execution);
+        require(dim >= 0 && static_cast<unsigned>(dim) < layout.rank, "Invalid HIP scan axis");
+        const auto native = native_layout(layout);
+        std::lock_guard lock(impl_->mutex);
+        const auto view = impl_->view(data, 0);
+        LfsHipError error{};
+        check(impl_->lfs_hip_cumsum(impl_->context, view, static_cast<uint32_t>(data.dtype), &native, static_cast<uint32_t>(dim), &error), error);
+        impl_->refresh_algorithm_workspace();
+    }
+    void HipBackendOps::sort_1d(StorageRef values, StorageRef indices, size_t count, const SortProgram& program, ExecContext execution) {
+        SortProgram native = program;
+        native.outer_size = 1;
+        native.dim_size = count;
+        native.inner_size = 1;
+        sort_2d(values, indices, native, execution);
+    }
+    void HipBackendOps::sort_2d(StorageRef values, StorageRef indices, const SortProgram& program, ExecContext execution) {
+        queue(execution);
+        require(values.dtype == DataType::Float32 && indices.dtype == DataType::Int64, "HIP sort requires Float32 values and Int64 indices");
+        std::lock_guard lock(impl_->mutex);
+        const auto value_view = impl_->view(values), index_view = impl_->view(indices);
+        LfsHipError error{};
+        check(impl_->lfs_hip_sort_pairs(impl_->context, value_view, index_view, program.outer_size, program.dim_size, program.inner_size, program.descending ? 1u : 0u, &error), error);
+        impl_->refresh_algorithm_workspace();
+    }
+    size_t HipBackendOps::masked_select(StorageRef input, StorageRef mask, StorageRef output, const MaskProgram& program, ExecContext execution) {
+        queue(execution);
+        require(input.dtype == output.dtype && (mask.dtype == DataType::Bool || mask.dtype == DataType::UInt8), "HIP masked selection requires matching values and a byte mask");
+        std::lock_guard lock(impl_->mutex);
+        const auto source = impl_->view(input), flags = impl_->view(mask), destination = impl_->view(output);
+        uint64_t selected = 0;
+        LfsHipError error{};
+        const int status = impl_->lfs_hip_select(impl_->context, source, flags, destination, static_cast<uint32_t>(input.dtype), 0, program.count, program.selected_count, &selected, &error);
+        impl_->refresh_algorithm_workspace();
+        check(status, error);
+        return static_cast<size_t>(selected);
+    }
+    size_t HipBackendOps::nonzero(StorageRef input, StorageRef output, const MaskProgram& program, ExecContext execution) {
+        queue(execution);
+        require(output.dtype == DataType::Int64 && (input.dtype == DataType::Float32 || input.dtype == DataType::Bool || input.dtype == DataType::UInt8), "Unsupported HIP nonzero value/index types");
+        std::lock_guard lock(impl_->mutex);
+        const auto source = impl_->view(input), destination = impl_->view(output);
+        uint64_t selected = 0;
+        LfsHipError error{};
+        const int status = impl_->lfs_hip_select(impl_->context, source, {}, destination, static_cast<uint32_t>(input.dtype), 1, program.count, program.selected_count, &selected, &error);
+        impl_->refresh_algorithm_workspace();
+        check(status, error);
+        return static_cast<size_t>(selected);
+    }
+    size_t HipBackendOps::nonzero_bool(StorageRef input, StorageRef output, const MaskProgram& program, ExecContext execution) {
+        require(input.dtype == DataType::Bool || input.dtype == DataType::UInt8, "HIP boolean nonzero requires byte values");
+        return nonzero(input, output, program, execution);
+    }
+    void HipBackendOps::cat_last_dim(StorageRef output, std::span<const StorageRef> inputs, std::span<const StridedLayout> layouts, size_t rows, size_t row_size, size_t width, ExecContext execution) {
+        require(!layouts.empty() && inputs.size() == layouts.size() && layouts[0].rank > 0 && layouts[0].rank <= 8, "Invalid HIP concatenation inputs");
+        const unsigned axis = layouts[0].rank - 1;
+        size_t columns = 0;
+        for (const auto& layout : layouts) {
+            require(layout.rank == layouts[0].rank && layout.dims[axis] <= SIZE_MAX - columns, "Invalid HIP concatenation rank or extent");
+            columns += layout.dims[axis];
+        }
+        require(columns == row_size, "HIP concatenation row size differs");
+        cat_middle_dim(output, inputs, layouts, rows, 1, static_cast<int>(axis), width, execution);
+    }
+    void HipBackendOps::cat_middle_dim(StorageRef output, std::span<const StorageRef> inputs, std::span<const StridedLayout> layouts, size_t outer, size_t inner, int dim, size_t width, ExecContext execution) {
+        queue(execution);
+        require(!layouts.empty() && inputs.size() == layouts.size() && inputs.size() <= 4096 && dim >= 0 && size_t(dim) < layouts[0].rank && layouts[0].rank <= 8 && width == dtype_size(output.dtype), "Invalid HIP concatenation descriptor");
+        size_t actual_outer = 1, actual_inner = 1, total = 0;
+        for (int d = 0; d < dim; ++d)
+            actual_outer = checked_product(actual_outer, layouts[0].dims[d]);
+        for (size_t d = dim + 1; d < layouts[0].rank; ++d)
+            actual_inner = checked_product(actual_inner, layouts[0].dims[d]);
+        require(actual_outer == outer && actual_inner == inner, "HIP concatenation outer/inner sizes differ");
+        for (size_t i = 0; i < layouts.size(); ++i) {
+            const auto& layout = layouts[i];
+            require(layout.rank == layouts[0].rank && inputs[i].dtype == output.dtype, "HIP concatenation rank or value types differ");
+            for (size_t d = 0; d < layout.rank; ++d)
+                require(d == size_t(dim) || layout.dims[d] == layouts[0].dims[d], "HIP concatenation non-axis extents differ");
+            require(layout.dims[dim] <= SIZE_MAX - total, "HIP concatenation axis overflow");
+            total += layout.dims[dim];
+            require(layout.element_count == checked_product(checked_product(outer, layout.dims[dim]), inner), "HIP concatenation element count differs");
+        }
+        const size_t output_bytes = checked_product(checked_product(checked_product(outer, total), inner), width);
+        if (!output_bytes)
+            return;
+        std::lock_guard lock(impl_->mutex);
+        const auto destination = impl_->view(output, output_bytes);
+        std::vector<LfsHipLayoutCopy> copies;
+        copies.reserve(inputs.size());
+        size_t column = 0;
+        for (size_t i = 0; i < layouts.size(); ++i) {
+            const auto extent = layouts[i].dims[dim];
+            if (layouts[i].element_count) {
+                LfsHipLayout target{};
+                target.rank = 3;
+                target.dims[0] = outer;
+                target.dims[1] = extent;
+                target.dims[2] = inner;
+                target.strides[0] = checked_product(total, inner);
+                target.strides[1] = inner;
+                target.strides[2] = 1;
+                target.elements = layouts[i].element_count;
+                auto view = destination;
+                view.offset += checked_product(checked_product(column, inner), width);
+                copies.push_back({impl_->view(inputs[i]), view, native_layout(layouts[i]), target, static_cast<uint32_t>(width)});
+            }
+            column += extent;
+        }
+        LfsHipError error{};
+        check(impl_->lfs_hip_copy_layouts(impl_->context, copies.data(), copies.size(), &error), error);
+    }
+    void HipBackendOps::push_range(const char*) {
+        // Range annotations are optional instrumentation. The HIP runtime
+        // boundary intentionally does not link CUDA/NVTX or a profiler SDK.
+        static std::once_flag notice;
+        std::call_once(notice,[] {
+            std::fprintf(stderr,"[info] HIP GPU range annotations are unavailable in this runtime; profiling labels are disabled\n");
+        });
+    }
+    void HipBackendOps::pop_range() {}
+    bool HipBackendOps::nn_kernels() const { return false; }
+} // namespace lfs::core::internal

@@ -28,6 +28,12 @@ namespace lfs::core::nn::models {
         return 1536ULL * 1024ULL * 1024ULL;
     }
     namespace {
+        bool native_half_dispatch_backend(const std::optional<GpuBackend> backend) {
+#ifdef LFS_TENSOR_HIP
+            if(backend==GpuBackend::HIP)return true;
+#endif
+            return backend==GpuBackend::Vulkan;
+        }
         constexpr float kNormEps = 1.0e-10f;
         constexpr int kBlocks = 5;
         constexpr std::size_t kTileHalo = 112;
@@ -389,7 +395,7 @@ namespace lfs::core::nn::models {
             // Metal's family kernels are reference implementations; its nn
             // convolutions (below) are the fast path there.
             if (compute_ == DataType::Float16 && dispatch_ != nullptr &&
-                gpu_backend_of(weights_.begin()->second) == GpuBackend::Vulkan)
+                native_half_dispatch_backend(gpu_backend_of(weights_.begin()->second)))
                 return run_fast(pred, target, scaling, mask);
             if (tile_size_for(height, width) < static_cast<std::size_t>(std::max(height, width)))
                 return run_tiled(pred, target, scaling, mask);
@@ -449,11 +455,11 @@ namespace lfs::core::nn::models {
         y_in.sync_to_stream(stream);
         bind_weights_to_stream(stream);
 
-        if (dispatch_ && !cuda_backend && gpu_backend_of(pred) == GpuBackend::Vulkan &&
+        if (dispatch_ && !cuda_backend && native_half_dispatch_backend(gpu_backend_of(pred)) &&
             !fast_features_[0].is_valid()) {
             // Release completed transient storage at the phase boundary before
             // weight taps and activations pin additional allocator blocks.
-            gpu_trim_cached_memory(GpuBackend::Vulkan);
+            gpu_trim_cached_memory(*gpu_backend_of(pred));
         }
 
         std::size_t taps_bytes = 0;
@@ -530,7 +536,7 @@ namespace lfs::core::nn::models {
             tile_y = Tensor::empty(tile_x.shape(), Device::GPU);
         }
         const std::size_t max_feature_elems = 64ULL * crop_height * crop_width;
-        const bool share_rgb_features = dispatch_ && gpu_backend_of(pred) == GpuBackend::Vulkan;
+        const bool share_rgb_features = dispatch_ && native_half_dispatch_backend(gpu_backend_of(pred));
         if (share_rgb_features) {
             fast_features_[1] = Tensor{};
             for (std::size_t i = 0; i < fast_features_.size(); ++i) {

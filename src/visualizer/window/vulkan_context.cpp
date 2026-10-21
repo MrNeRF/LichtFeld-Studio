@@ -539,8 +539,8 @@ namespace lfs::vis {
     }
 
     bool VulkanContext::initHeadless() {
-        bool interop = lfs::core::tensor_backend_needs_vulkan_interop();
-        const bool cuda_tensor = interop;
+        const bool cuda_tensor = lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::CUDA;
+        bool interop = cuda_tensor && lfs::core::tensor_backend_needs_vulkan_interop();
         const auto cuda_device = interop ? interopCudaDevice() : std::nullopt;
         if (interop && !cuda_device)
             return fail("Cannot identify the selected CUDA GPU for off-screen Vulkan interop");
@@ -2277,7 +2277,7 @@ namespace lfs::vis {
             for (const auto& name : plugin_extensions)
                 appendUniqueExtension(extensions, name.c_str());
         }
-#if LFS_HAS_CUDA && (defined(_WIN32) || defined(__linux__))
+#if (LFS_HAS_CUDA || defined(LFS_TENSOR_HIP)) && (defined(_WIN32) || defined(__linux__))
         instance_external_memory_capabilities_enabled_ =
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME);
         if (instance_external_memory_capabilities_enabled_) {
@@ -2793,7 +2793,7 @@ namespace lfs::vis {
             for (const auto& name : plugin_extensions)
                 appendUniqueExtension(extensions, name.c_str());
         }
-#if LFS_HAS_CUDA && (defined(_WIN32) || defined(__linux__))
+#if (LFS_HAS_CUDA || defined(LFS_TENSOR_HIP)) && (defined(_WIN32) || defined(__linux__))
         const bool has_external_memory =
             instance_external_memory_capabilities_enabled_ &&
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);
@@ -2804,7 +2804,11 @@ namespace lfs::vis {
         const bool has_platform_external_memory =
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
 #endif
-        const bool enable_external_memory = has_external_memory && has_platform_external_memory && cuda_device_matches_;
+        bool memory_consumer_matches = cuda_device_matches_;
+#ifdef LFS_TENSOR_HIP
+        if(lfs::core::configured_gpu_backend()==lfs::core::GpuBackend::HIP)memory_consumer_matches=true;
+#endif
+        const bool enable_external_memory = has_external_memory && has_platform_external_memory && memory_consumer_matches;
         if (enable_external_memory) {
             appendUniqueExtension(extensions, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);
 #ifdef _WIN32
@@ -2824,7 +2828,7 @@ namespace lfs::vis {
         const bool has_platform_external_semaphore =
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
 #endif
-        const bool enable_external_semaphore = has_external_semaphore && has_platform_external_semaphore && cuda_device_matches_;
+        const bool enable_external_semaphore = LFS_HAS_CUDA && has_external_semaphore && has_platform_external_semaphore && cuda_device_matches_;
         if (enable_external_semaphore) {
             appendUniqueExtension(extensions, VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME);
 #ifdef _WIN32
@@ -3190,7 +3194,16 @@ namespace lfs::vis {
         vkGetPhysicalDeviceProperties(physical_device_, &device_properties);
         line_width_range_[0] = device_properties.limits.lineWidthRange[0];
         line_width_range_[1] = device_properties.limits.lineWidthRange[1];
-        if (lfs::core::tensor_backend_needs_vulkan_interop() && !directTensorInteropEnabled()) {
+        bool report_host_staging = lfs::core::tensor_backend_needs_vulkan_interop() && !directTensorInteropEnabled();
+#ifdef LFS_TENSOR_HIP
+        if (lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::HIP) {
+            // HIP shares memory with host-synchronized submissions. The interop
+            // factory verifies the physical device and reports the effective
+            // shared-memory or host-staging path after its import probe.
+            report_host_staging = false;
+        }
+#endif
+        if (report_host_staging) {
             LOG_INFO("GPU transfer fallback: role=rendering, effective=host-staged tensors, reason=training and viewport cannot share external GPU memory/semaphores");
         }
         return true;

@@ -85,3 +85,54 @@ def test_software_device_uses_system_memory_and_cpu_label():
     assert row["memory"] == "System memory · 32.0 GiB"
     assert row["details"] == "Software (CPU)"
     assert device_choices(devices, "", "tensor", tr)[1]["label"] == "llvmpipe · Software (CPU)"
+
+def test_hip_inventory_preserves_identity_and_shared_memory_without_name_matching():
+    rows = hardware_rows([gpu("a" * 32)], [], str,
+                         [gpu("b" * 32, memory_bytes=64 * 1024 ** 3, shared_memory=True)])
+    assert len(rows) == 2
+    assert rows[1]["backends"] == "ROCm / HIP"
+    assert rows[0]["name"] != rows[1]["name"]
+    assert rows[1]["memory"] == "preferences.gpu_memory_shared"
+
+
+def test_hip_inventory_only_merges_an_exact_shared_identity():
+    rows = hardware_rows([gpu("a" * 32)], [], str, [gpu("a" * 32)])
+    assert len(rows) == 1
+    assert rows[0]["backends"] == "Vulkan · ROCm / HIP"
+
+
+def test_verified_pci_identity_merges_api_specific_uuids_without_changing_choices():
+    physical = "pci:0000:c5:00.0"
+    vulkan = [gpu("a" * 32, physical_id=physical)]
+    hip = [gpu("b" * 32, physical_id=physical)]
+    rows = hardware_rows(vulkan, [], str, hip)
+    assert len(rows) == 1
+    assert rows[0]["backends"] == "Vulkan · ROCm / HIP"
+    assert device_choices(hip, "b" * 32, "tensor", str)[1]["value"] == "b" * 32
+
+
+def test_distinct_physical_cards_with_a_driver_uuid_collision_remain_separate():
+    rows = hardware_rows([gpu("a" * 32, physical_id="pci:0000:01:00.0")], [], str,
+                         [gpu("a" * 32, physical_id="pci:0000:02:00.0")])
+    assert len(rows) == 2
+
+
+def test_ambiguous_or_invalid_pci_identity_does_not_merge_different_api_uuids():
+    physical = "pci:0000:01:00.0"
+    for physical_ids in [(physical, physical), ("unverified", "unverified")]:
+        rows = hardware_rows([gpu("a" * 32, physical_id=physical)], [], str,
+                             [gpu("b" * 32, 0, physical_id=physical_ids[0]),
+                              gpu("c" * 32, 1, physical_id=physical_ids[1])])
+        assert len(rows) == 3
+
+
+def test_shared_hip_address_space_does_not_replace_the_vulkan_heap_size():
+    physical = "pci:0000:c5:00.0"
+    def tr(key):
+        return {"preferences.gpu_memory_shared": "Shared {size} GiB"}.get(key, key)
+    rows = hardware_rows([gpu("a" * 32, physical_id=physical, memory_bytes=4*1024**3,
+                              shared_memory=True)], [], tr,
+                         [gpu("b" * 32, physical_id=physical, memory_bytes=59*1024**3,
+                              shared_memory=True)])
+    assert rows[0]["memory"] == "Shared 4.0 GiB"
+    assert "ROCm / HIP: Shared 59.0 GiB" in rows[0]["details"]

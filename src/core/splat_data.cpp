@@ -14,6 +14,9 @@
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_completion.hpp"
+#ifdef LFS_TENSOR_HIP
+#include "core/tensor_execution.hpp"
+#endif
 #include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_serialization_sink.hpp"
 #include "core/tensor_sh.hpp"
@@ -653,7 +656,14 @@ namespace lfs::core {
           _scaling(std::move(scaling_)),
           _rotation(std::move(rotation_)),
           _opacity(std::move(opacity_)) {
-        const GpuBackendScope backend_scope(gpu_backend_of(_means).value_or(default_gpu_backend()));
+        auto storage_backend = gpu_backend_of(_means).value_or(default_gpu_backend());
+#ifdef LFS_TENSOR_HIP
+        // CPU-backed import/export models in an explicit HIP scope still need
+        // their empty SH storage to stay on HIP, not initialize another GPU.
+        if (!gpu_backend_of(_means) && TensorExecutionTarget::current().backend() == GpuBackend::HIP)
+            storage_backend = GpuBackend::HIP;
+#endif
+        const GpuBackendScope backend_scope(storage_backend);
         _means.set_name("splat.positions");
         _sh0.set_name("splat.sh0");
         _scaling.set_name("splat.scaling");

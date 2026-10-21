@@ -480,8 +480,13 @@ namespace lfs::io {
         if (params.undistort && host.bytes() > LARGE_PORTABLE_SOURCE_BYTES) {
             large_prepare_lock = std::unique_lock(portable_large_prepare_mutex_);
             if (!portable_large_prepare_logged_) {
+                const char* backend_name = config_.backend == lfs::core::GpuBackend::Vulkan ? "Vulkan" : "Metal";
+#ifdef LFS_TENSOR_HIP
+                if (config_.backend == lfs::core::GpuBackend::HIP)
+                    backend_name = "HIP";
+#endif
                 LOG_INFO("{} image preparation: limiting large full-resolution GPU sources to one at a time (source {:.1f} MiB); CPU decoding and compressed prepared-image caching remain in RAM",
-                         config_.backend == lfs::core::GpuBackend::Vulkan ? "Vulkan" : "Metal",
+                         backend_name,
                          host.bytes() / (1024.0 * 1024.0));
                 portable_large_prepare_logged_ = true;
             }

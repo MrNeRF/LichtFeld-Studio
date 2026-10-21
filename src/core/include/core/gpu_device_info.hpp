@@ -23,11 +23,22 @@ namespace lfs::core {
         bool shared_memory = false;
         uint32_t vendor_id = 0;
         bool software = false;
+
+        // Display grouping only; each API keeps its own stable selector UUID.
+        std::string physical_id;
     };
 
     // Discovery only: does not create or freeze a tensor device/context.
     LFS_CORE_API std::vector<VulkanHardwareDevice> enumerate_vulkan_hardware();
     LFS_CORE_API std::vector<VulkanHardwareDevice> enumerate_cuda_hardware();
+#ifdef LFS_TENSOR_HIP
+    struct HipHardwareDevice : VulkanHardwareDevice {
+        std::string architecture, pci_bus_id;
+        std::array<uint8_t,8> luid{};
+        uint32_t device_node_mask=0;
+    };
+    LFS_CORE_API std::vector<HipHardwareDevice> enumerate_hip_hardware();
+#endif
     struct GpuDeviceInfo {
         std::string name;
         size_t total_memory_bytes = 0;

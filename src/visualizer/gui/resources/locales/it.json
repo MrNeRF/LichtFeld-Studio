@@ -5451,5 +5451,6 @@
   "project.session.newer_settings.title": "Impostazioni del progetto da una versione più recente",
   "project.session.newer_settings.message": "Questo progetto contiene impostazioni non riconosciute da questa versione. Valori predefiniti usati per: {}",
   "preferences.drag_pause": "Metti in pausa l’addestramento prima di trascinare gli splat.",
-  "preferences.drag_failed": "Esportazione splat non riuscita. Consulta il registro dell’applicazione per i dettagli."
+  "preferences.drag_failed": "Esportazione splat non riuscita. Consulta il registro dell’applicazione per i dettagli.",
+  "ui.vram_native_unavailable_tooltip": "Utilizzo GPU e budget di memoria non disponibili per questo backend."
 }

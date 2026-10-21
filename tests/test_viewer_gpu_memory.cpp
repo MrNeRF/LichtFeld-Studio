@@ -9,6 +9,28 @@
 
 using namespace lfs::core;
 
+#ifdef LFS_TENSOR_HIP
+TEST(ViewerGpuMemory, HipStatusNeverUsesAnotherAdaptersCudaTelemetry) {
+    if(!gpu_backend_available(GpuBackend::HIP))GTEST_SKIP()<<"HIP unavailable";
+    const auto before=gpu_backend_live(GpuBackend::HIP);
+    const auto device=gpu_backend_device_info(GpuBackend::HIP);
+    ASSERT_TRUE(device);
+    const auto status=lfs::vis::gui::queryGpuMemory(GpuBackend::HIP);
+    EXPECT_FALSE(status.device_name.empty());
+    EXPECT_EQ(status.total,device->total_memory_bytes);
+    EXPECT_TRUE(status.uses_process_budget);
+    EXPECT_EQ(status.process_budget,0u);
+    EXPECT_EQ(status.process_budget_used,0u);
+    EXPECT_EQ(status.total_used,0u);
+    EXPECT_EQ(status.process_used,0u);
+    EXPECT_FALSE(status.process_valid);
+    EXPECT_FALSE(status.gpu_utilization_valid);
+    EXPECT_STREQ(lfs::vis::gui::gpuProcessMemoryTooltipKey(status),"ui.vram_native_unavailable_tooltip");
+    EXPECT_STREQ(lfs::vis::gui::gpuDeviceMemoryTooltipKey(status),"ui.vram_native_unavailable_tooltip");
+    EXPECT_EQ(gpu_backend_live(GpuBackend::HIP),before);
+}
+#endif
+
 TEST(ViewerGpuMemory, VulkanStatusDoesNotRequireCudaOrReportDeviceUsageAsProcessUsage) {
 #ifdef __APPLE__
     GTEST_SKIP() << "Apple GPUs report unified memory";

@@ -14,6 +14,9 @@ namespace lfs::vis {
         bool vulkan_renderer = true;
         std::string cuda_uuid, vulkan_uuid, rendering_uuid;
         std::string automatic_cuda_uuid, automatic_vulkan_uuid, automatic_rendering_uuid;
+#ifdef LFS_TENSOR_HIP
+        std::string hip_uuid, automatic_hip_uuid;
+#endif
     };
 
     inline std::string requestedGpuIdentity(const std::string& requested,
@@ -46,13 +49,18 @@ namespace lfs::vis {
                                              const TensorPreferenceState& startup,
                                              const GpuRuntimeSelection& running,
                                              std::span<const core::VulkanHardwareDevice> cuda,
-                                             std::span<const core::VulkanHardwareDevice> vulkan) {
+                                             std::span<const core::VulkanHardwareDevice> vulkan,
+                                             [[maybe_unused]] std::span<const core::VulkanHardwareDevice> hip = {}) {
         const auto backend = requested.backend.value_or(running.automatic_backend);
         const bool backend_changed = requested.backend != startup.backend;
         const auto device_changed = backend_changed || (backend == core::GpuBackend::CUDA
                                                             ? requested.options.cuda_device != startup.options.cuda_device
                                                         : backend == core::GpuBackend::Vulkan
                                                             ? requested.options.vulkan_device != startup.options.vulkan_device
+#ifdef LFS_TENSOR_HIP
+                                                        : backend == core::GpuBackend::HIP
+                                                            ? requested.options.hip_device != startup.options.hip_device
+#endif
                                                             : false);
         if ((backend_changed || device_changed) && backend != running.backend)
             return true;
@@ -62,6 +70,11 @@ namespace lfs::vis {
         if (device_changed && backend == core::GpuBackend::Vulkan &&
             requestedGpuIdentity(requested.options.vulkan_device, vulkan, running.automatic_vulkan_uuid) != core::normalize_gpu_identity(running.vulkan_uuid))
             return true;
+#ifdef LFS_TENSOR_HIP
+        if (device_changed && backend == core::GpuBackend::HIP &&
+            requestedGpuIdentity(requested.options.hip_device, hip, running.automatic_hip_uuid) != core::normalize_gpu_identity(running.hip_uuid))
+            return true;
+#endif
         if (running.vulkan_renderer && requested.options.rendering_vulkan_device != startup.options.rendering_vulkan_device &&
             requestedGpuIdentity(requested.options.rendering_vulkan_device, vulkan, running.automatic_rendering_uuid) != core::normalize_gpu_identity(running.rendering_uuid))
             return true;

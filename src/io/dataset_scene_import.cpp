@@ -225,6 +225,10 @@ namespace lfs::training {
                 return false;
             }
             const auto kind = tensor.external_storage_kind();
+#ifdef LFS_TENSOR_HIP
+            if(lfs::core::gpu_backend_of(tensor)==lfs::core::GpuBackend::HIP)
+                return kind=="hip.external_memory"||kind=="hip.host_staging";
+#endif
             return kind == "vulkan_external_buffer" || kind == "splat.exportable";
         }
 

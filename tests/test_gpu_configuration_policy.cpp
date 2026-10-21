@@ -24,7 +24,7 @@ namespace {
             .automatic_vulkan_uuid = gpu_a,
             .automatic_rendering_uuid = gpu_a};
         bool pending(const TensorPreferenceState& requested) {
-            return gpuPreferencesRequireRestart(requested, startup, running, devices, devices);
+            return gpuPreferencesRequireRestart(requested, startup, running, devices, devices, devices);
         }
     };
 
@@ -142,6 +142,35 @@ namespace {
         EXPECT_FALSE(pending(requested));
     }
 
+#ifdef LFS_TENSOR_HIP
+    TEST_F(GpuConfigurationPolicy, HipGpuChangeAndRestoringActiveClearRestart) {
+        startup.backend=running.backend=GpuBackend::HIP;
+        running.hip_uuid=running.automatic_hip_uuid=gpu_a;
+        auto requested=startup;
+        requested.options.hip_device=gpu_b;
+        EXPECT_TRUE(pending(requested));
+        requested.options.hip_device="0";
+        EXPECT_FALSE(pending(requested));
+        requested.options.hip_device=gpu_a;
+        EXPECT_FALSE(pending(requested));
+        requested.backend=GpuBackend::Vulkan;
+        EXPECT_TRUE(pending(requested));
+        requested.backend=GpuBackend::HIP;
+        EXPECT_FALSE(pending(requested));
+    }
+    TEST_F(GpuConfigurationPolicy, InactiveHipChoiceDoesNotChangeCudaRestartState) {
+        auto requested=startup;requested.options.hip_device=gpu_b;
+        EXPECT_FALSE(pending(requested));
+        requested.backend=GpuBackend::HIP;
+        EXPECT_TRUE(pending(requested));
+    }
+    TEST_F(GpuConfigurationPolicy, MissingHipStartupFallbackDoesNotCreateRestartLoop) {
+        startup.backend=GpuBackend::HIP;startup.options.hip_device="removed";
+        EXPECT_FALSE(pending(startup));
+        auto requested=startup;requested.backend=GpuBackend::CUDA;requested.options.cuda_device=gpu_a;
+        EXPECT_FALSE(pending(requested));
+    }
+#endif
     TEST_F(GpuConfigurationPolicy, DiagnosticsRestoreAndInactiveMetalOptionsAreHandled) {
         startup.backend = running.backend = GpuBackend::Vulkan;
         auto requested = startup;

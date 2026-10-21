@@ -19,6 +19,10 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#ifdef LFS_TENSOR_HIP
+#include <cstdlib>
+#include "core/detail/gpu_backend_ops.hpp"
+#endif
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -220,6 +224,21 @@ namespace lfs::training {
     }
 
     void PerfBenchCollector::record_phase_mark(const PhaseBoundary b) {
+#ifdef LFS_TENSOR_HIP
+        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::HIP) {
+            if (const char* path = std::getenv("LFS_HIP_VALIDATION_PHASE_TRACE")) {
+                if (std::getenv("LFS_HIP_VALIDATION_PHASE_SYNCHRONIZE"))
+                    lfs::core::internal::backend_ops(lfs::core::GpuBackend::HIP).synchronize_stream({});
+                // These are queued host-clock boundaries, not device times.
+                // HIP event timestamps were independently found unreliable.
+                const auto ticks = now_ns();
+                static std::ofstream trace(lfs::core::utf8_to_path(path));
+                trace << phase_active_iter_ << ',' << static_cast<int>(b) << ',' << ticks << '\n';
+                trace.flush();
+                return;
+            }
+        }
+#endif
         if (phase_current_index_ < 0 || !phase_pool_ready_ ||
             phase_current_index_ >= phase_sample_count_) {
             return;
@@ -357,6 +376,13 @@ namespace lfs::training {
 
         phase_active_iter_ = 0;
         phase_current_index_ = -1;
+#ifdef LFS_TENSOR_HIP
+        if (iter > warmup_ && lfs::core::default_gpu_backend() == lfs::core::GpuBackend::HIP &&
+            std::getenv("LFS_HIP_VALIDATION_PHASE_TRACE")) {
+            phase_active_iter_ = iter;
+            return;
+        }
+#endif
         if (iter <= warmup_ || !phase_pool_ready_ ||
             phase_sample_count_ >= kPhaseSampleCap) {
             return;
@@ -484,6 +510,20 @@ namespace lfs::training {
         std::size_t total = 0;
         const auto memory = lfs::core::gpu_backend_memory_info(lfs::core::default_gpu_backend(), true);
         sample_cuda_used(memory, used, total);
+#ifdef LFS_TENSOR_HIP
+        // Opt-in validation trace: retain individual CPU step samples so the
+        // native port can be compared on the exact historical sample window.
+        // No trace, stream, or environment lookup exists in non-HIP builds.
+        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::HIP) {
+            if (const char* path = std::getenv("LFS_HIP_VALIDATION_STEP_TRACE")) {
+                static std::ofstream trace(lfs::core::utf8_to_path(path));
+                trace << iter << ',' << std::setprecision(9) << ms << ',' << used << ','
+                      << total << ',' << live_splats << ',' << loss << ','
+                      << memory.pool_used_current << ',' << memory.pool_reserved_current << '\n';
+                trace.flush();
+            }
+        }
+#endif
         if (used > peak_cuda_used_) {
             capture_peak_snapshot(iter, used, total, memory);
         } else {
@@ -540,6 +580,15 @@ namespace lfs::training {
         if (!started_) {
             return;
         }
+#ifdef LFS_TENSOR_HIP
+        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::HIP) {
+            if (const char* path = std::getenv("LFS_HIP_VALIDATION_PHASE_TRACE")) {
+                static std::ofstream trace(lfs::core::utf8_to_path(std::string(path) + ".loader.csv"));
+                trace << iter << ',' << std::setprecision(9) << wait_ms << '\n';
+                trace.flush();
+            }
+        }
+#endif
         dataloader_wait_ms_sum_ += wait_ms;
         ++dataloader_wait_count_;
         // iter is 1-based in the trainer; mirror on_step_end warmup split.

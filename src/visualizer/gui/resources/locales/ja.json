@@ -5451,5 +5451,6 @@
   "preferences.drag_rejected_node": "エクスポートできません: {}。ファイルは転送されていません。詳細はログを確認してください。",
   "preferences.drag_title": "スプラットの転送",
   "preferences.drag_pause": "スプラットをドラッグする前にトレーニングを一時停止してください。",
-  "preferences.drag_failed": "スプラットのエクスポートに失敗しました。詳細はアプリケーションログを確認してください。"
+  "preferences.drag_failed": "スプラットのエクスポートに失敗しました。詳細はアプリケーションログを確認してください。",
+  "ui.vram_native_unavailable_tooltip": "このバックエンドでは GPU 使用率とメモリ予算を取得できません。"
 }

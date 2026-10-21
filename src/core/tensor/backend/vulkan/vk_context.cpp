@@ -750,19 +750,19 @@ namespace lfs::core::internal {
         if (extensions_available.contains(VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME)) {
             enabled_extensions.push_back(VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME);
         }
-#if LFS_HAS_CUDA && defined(_WIN32)
+#if (LFS_HAS_CUDA || defined(LFS_TENSOR_HIP)) && defined(_WIN32)
         constexpr const char* kExternalMemoryExtension =
-            VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME;
+            "VK_KHR_external_memory_win32";
         constexpr const char* kExternalSemaphoreExtension =
-            VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME;
-#elif LFS_HAS_CUDA && defined(__linux__)
+            "VK_KHR_external_semaphore_win32";
+#elif (LFS_HAS_CUDA || defined(LFS_TENSOR_HIP)) && defined(__linux__)
         constexpr const char* kExternalMemoryExtension = VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME;
         constexpr const char* kExternalSemaphoreExtension =
             VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME;
 #endif
-#if LFS_HAS_CUDA && (defined(_WIN32) || defined(__linux__))
+#if (LFS_HAS_CUDA || defined(LFS_TENSOR_HIP)) && (defined(_WIN32) || defined(__linux__))
         caps_.external_memory = extensions_available.contains(kExternalMemoryExtension);
-        caps_.external_semaphore = extensions_available.contains(kExternalSemaphoreExtension);
+        caps_.external_semaphore = LFS_HAS_CUDA && extensions_available.contains(kExternalSemaphoreExtension);
         if (caps_.external_memory) {
             enabled_extensions.push_back(kExternalMemoryExtension);
         }

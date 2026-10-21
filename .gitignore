@@ -40,6 +40,9 @@ tests/data/nn/*
 !tests/data/clamped_colour_regression.ply.fixture
 *.pt
 *.py
+!src/core/tensor/backend/hip/prepare_tensor_ops.py
+!src/training/hip/prepare_gsplat.py
+!src/training/hip/prepare_photometric.py
 !tests/data/heif/generate.py
 !tests/media/test_float_exr.py
 !scripts/lichtfeld_mcp_bridge.py

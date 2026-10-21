@@ -5451,5 +5451,6 @@
   "preferences.drag_rejected_node": "내보낼 수 없습니다: {}. 파일이 전송되지 않았습니다. 자세한 내용은 로그를 확인하세요.",
   "preferences.drag_title": "스플랫 전송",
   "preferences.drag_pause": "스플랫을 드래그하기 전에 학습을 일시 중지하세요.",
-  "preferences.drag_failed": "스플랫 내보내기에 실패했습니다. 자세한 내용은 애플리케이션 로그를 확인하세요."
+  "preferences.drag_failed": "스플랫 내보내기에 실패했습니다. 자세한 내용은 애플리케이션 로그를 확인하세요.",
+  "ui.vram_native_unavailable_tooltip": "이 백엔드에서는 GPU 사용률과 메모리 예산을 확인할 수 없습니다."
 }

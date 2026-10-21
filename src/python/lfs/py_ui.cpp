@@ -5748,6 +5748,7 @@ namespace lfs::python {
                 item["software"] = device.software;
                 item["tensor_reason"] = device.tensor_unavailable_reason;
                 item["rendering_reason"] = device.rendering_unavailable_reason;
+                item["physical_id"] = device.physical_id;
                 result.append(item);
             }
             return result; }, "Enumerate Vulkan GPU names and identities without initializing tensor contexts");
@@ -5765,6 +5766,22 @@ namespace lfs::python {
                 result.append(item);
             }
             return result; }, "Discover CUDA adapters without selecting a tensor backend");
+
+        m.def("get_hip_hardware", [] {
+            nb::list result;
+#ifdef LFS_TENSOR_HIP
+            for(const auto& device:core::enumerate_hip_hardware()) {
+                nb::dict item;
+                item["name"]=device.name;item["uuid"]=device.uuid;item["index"]=device.index;
+                item["memory_bytes"]=device.total_memory_bytes;item["shared_memory"]=device.shared_memory;
+                item["tensor_reason"]=device.tensor_unavailable_reason;item["architecture"]=device.architecture;
+                item["pci_bus_id"]=device.pci_bus_id;
+                item["physical_id"]=device.physical_id;
+                result.append(item);
+            }
+#endif
+            return result;
+        }, "Discover ROCm / HIP adapters without initializing a Tensor context");
 
         m.def("get_gpu_runtime_status", [] {
             const auto state = vis::gpuPreferenceRuntimeStatus();
@@ -5785,6 +5802,19 @@ namespace lfs::python {
             result["vulkan_device"] = state.options.vulkan_device;
             result["rendering_vulkan_device"] = state.options.rendering_vulkan_device;
             result["cuda_device"] = state.options.cuda_device;
+#ifdef LFS_TENSOR_HIP
+            result["hip_device"] = state.options.hip_device;
+            result["hip_compiled"] = true;
+            static const bool hip_compatible=[] {
+                const auto devices=core::enumerate_hip_hardware();
+                return std::any_of(devices.begin(),devices.end(),[](const auto& device){return device.tensor_unavailable_reason.empty();});
+            }();
+            result["hip_available"] = hip_compatible;
+#else
+            result["hip_device"] = "";
+            result["hip_compiled"] = false;
+            result["hip_available"] = false;
+#endif
             result["vulkan_validation"] = state.options.vulkan_validation;
             result["force_fp32_half"] = state.options.force_fp32_half;
             result["force_no_atomic_float"] = state.options.force_no_atomic_float;
@@ -5809,9 +5839,12 @@ namespace lfs::python {
 #endif
             return result; }, "Get saved tensor backend preferences; changes apply after restart");
 
-        m.def("set_tensor_backend_preferences", [](const std::string& backend, const std::string& device, int validation, bool fp32_half, bool no_atomic_float, const std::string& rendering_device, const std::string& cuda_device) {
-                  if (backend != "auto" && backend != "cuda" && backend != "vulkan" && backend != "metal")
-                      throw nb::value_error("Backend must be auto, cuda, vulkan or metal");
+        m.def("set_tensor_backend_preferences", [](const std::string& backend, const std::string& device, int validation, bool fp32_half, bool no_atomic_float, const std::string& rendering_device, const std::string& cuda_device, [[maybe_unused]] const std::string& hip_device) {
+                  if (backend != "auto" && backend != "cuda" && backend != "vulkan" && backend != "metal" && backend != "hip")
+                      throw nb::value_error("Backend must be auto, cuda, vulkan, metal or hip");
+#ifndef LFS_TENSOR_HIP
+                  if(backend=="hip")throw nb::value_error("ROCm / HIP is not compiled into this build");
+#endif
                   if constexpr (!LFS_HAS_CUDA) {
                     if (backend == "cuda")
                       throw nb::value_error("CUDA is not compiled into this build");
@@ -5828,8 +5861,15 @@ namespace lfs::python {
                       .backend = backend == "auto"     ? std::nullopt
                                  : backend == "vulkan" ? std::optional(core::GpuBackend::Vulkan)
                                  : backend == "metal"  ? std::optional(core::GpuBackend::Metal)
+#ifdef LFS_TENSOR_HIP
+                                 : backend == "hip"    ? std::optional(core::GpuBackend::HIP)
+#endif
                                                        : std::optional(core::GpuBackend::CUDA),
-                      .options = {.vulkan_device = device, .rendering_vulkan_device = rendering_device, .cuda_device = cuda_device, .vulkan_validation = validation,
+                      .options = {.vulkan_device = device, .rendering_vulkan_device = rendering_device, .cuda_device = cuda_device,
+#ifdef LFS_TENSOR_HIP
+                                  .hip_device = hip_device,
+#endif
+                                  .vulkan_validation = validation,
                                   .force_fp32_half = fp32_half, .force_no_atomic_float = no_atomic_float},
                   };
                   const auto previous = vis::UserPreferences::instance().tensorBackend();
@@ -5837,6 +5877,9 @@ namespace lfs::python {
                   if (previous.backend != state.backend ||
                       previous.options.vulkan_device != state.options.vulkan_device ||
                       previous.options.cuda_device != state.options.cuda_device ||
+#ifdef LFS_TENSOR_HIP
+                      previous.options.hip_device != state.options.hip_device ||
+#endif
                       previous.options.rendering_vulkan_device != state.options.rendering_vulkan_device ||
                       previous.options.vulkan_validation != state.options.vulkan_validation ||
                       previous.options.force_fp32_half != state.options.force_fp32_half ||
@@ -5844,7 +5887,7 @@ namespace lfs::python {
                       LOG_INFO("GPU preferences saved: requested tensor backend={}; active tensor backend={}; restart required={}",
                                backend, core::gpu_backend_name(core::configured_gpu_backend()),
                                vis::gpuPreferenceRuntimeStatus().restart_required);
-                  } }, nb::arg("backend") = "auto", nb::arg("vulkan_device") = "", nb::arg("vulkan_validation") = 0, nb::arg("force_fp32_half") = false, nb::arg("force_no_atomic_float") = false, nb::arg("rendering_vulkan_device") = "", nb::arg("cuda_device") = "", "Save tensor and rendering GPU preferences for the next application start");
+                  } }, nb::arg("backend") = "auto", nb::arg("vulkan_device") = "", nb::arg("vulkan_validation") = 0, nb::arg("force_fp32_half") = false, nb::arg("force_no_atomic_float") = false, nb::arg("rendering_vulkan_device") = "", nb::arg("cuda_device") = "", nb::arg("hip_device") = "", "Save tensor and rendering GPU preferences for the next application start");
 
         m.def(
             "get_mcp_preferences",

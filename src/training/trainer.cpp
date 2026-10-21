@@ -8966,6 +8966,21 @@ namespace lfs::training {
                               stats.cold_path_misses);
                     logged_epoch2_loader_cache = true;
                 }
+#ifdef LFS_TENSOR_HIP
+                if (core::default_gpu_backend() == core::GpuBackend::HIP && iter % 25 == 0) {
+                    if (const char* path = std::getenv("LFS_HIP_VALIDATION_LOADER_STATS")) {
+                        const auto stats = train_dataloader->get_stats();
+                        static std::ofstream trace(core::utf8_to_path(path));
+                        trace << iter << ',' << stats.total_images_loaded << ',' << stats.hot_path_hits << ','
+                              << stats.cold_path_misses << ',' << stats.jpeg_cache_entries << ','
+                              << stats.jpeg_cache_bytes << ',' << stats.cpu_decode_calls << ','
+                              << stats.cold_process_time_ms << ',' << stats.gpu_decode_time_ms << ','
+                              << stats.output_image_bytes << ',' << stats.pending_image_bytes << ','
+                              << gt_image.shape()[gt_image.ndim()-2] << ',' << gt_image.shape()[gt_image.ndim()-1] << '\n';
+                        trace.flush();
+                    }
+                }
+#endif
 
                 train_phase = StepPhase::Forward;
                 const auto training_step_begin =

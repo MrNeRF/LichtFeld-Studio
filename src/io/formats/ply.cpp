@@ -77,6 +77,12 @@
 #include <immintrin.h>
 #endif
 
+// CUDA headers also define this spelling on MSVC. PLY host extraction must
+// compile independently when the optional CUDA SDK is absent.
+#if defined(_MSC_VER) && !defined(__restrict__)
+#define __restrict__ __restrict
+#endif
+
 namespace lfs::io {
 
     // Import types from lfs::core for convenience

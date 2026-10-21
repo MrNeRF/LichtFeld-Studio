@@ -14,6 +14,9 @@
 #include "cuda/runtime/memory_pool.hpp"
 #endif
 #include "tensor_completion.hpp"
+#ifdef LFS_TENSOR_HIP
+#include "hip/hip_backend_ops.hpp"
+#endif
 #include "tensor_vulkan_interop.hpp"
 #ifdef LFS_TENSOR_VULKAN
 #include "vulkan/vk_context.hpp"
@@ -55,6 +58,9 @@ namespace lfs::core {
     } // namespace
     struct TensorUpload::Impl {
         Tensor source, destination, staging;
+#ifdef LFS_TENSOR_HIP
+        std::unique_ptr<internal::HipUploadBuffer> hip;
+#endif
         TensorCompletion completion;
 #ifdef LFS_TENSOR_VULKAN
         std::shared_ptr<internal::VulkanContext> vk;
@@ -206,6 +212,15 @@ namespace lfs::core {
         };
         try {
             const VulkanQueueBind queue_bind(*backend, execution_target);
+#ifdef LFS_TENSOR_HIP
+            if (backend == GpuBackend::HIP) {
+                if (!s.hip)
+                    s.hip = static_cast<internal::HipBackendOps&>(internal::backend_ops_for(s.destination)).create_upload_buffer();
+                s.hip->enqueue(internal::storage_ref(s.destination), s.source.data_ptr(), s.source.bytes(), {});
+                return;
+            }
+#endif
+
             internal::backend_ops_for(s.destination).copy_host_to_device({.src = internal::raw_storage_ref(const_cast<void*>(s.source.data_ptr()), s.source.dtype()), .dst = internal::storage_ref(s.destination), .bytes = s.source.bytes(), .synchronous = false, .context = internal::ExecContext{stream}});
             if (backend == GpuBackend::CUDA) {
 #if LFS_HAS_CUDA
@@ -237,6 +252,9 @@ namespace lfs::core {
             }
         } catch (...) {
             internal::backend_ops_for(s.destination).synchronize_stream(internal::ExecContext{stream});
+#ifdef LFS_TENSOR_HIP
+            s.hip.reset();
+#endif
             s.pending = false;
             throw;
         }
@@ -245,6 +263,16 @@ namespace lfs::core {
         if (!pending())
             return true;
         auto& s = *impl_;
+#ifdef LFS_TENSOR_HIP
+        if (gpu_backend_of(s.destination) == GpuBackend::HIP) {
+            if (!s.hip->poll())
+                return false;
+            s.pending = false;
+            s.source = {};
+            s.destination = {};
+            return true;
+        }
+#endif
 #ifdef LFS_TENSOR_VULKAN
         if (s.vk) {
             s.vk->recorders().flush_storage(internal::storage_ref(s.destination));
@@ -277,6 +305,13 @@ namespace lfs::core {
         if (!pending())
             return;
         auto& s = *impl_;
+#ifdef LFS_TENSOR_HIP
+        if (gpu_backend_of(s.destination) == GpuBackend::HIP) {
+            s.hip->wait();
+            (void)poll();
+            return;
+        }
+#endif
 #ifdef LFS_TENSOR_VULKAN
         if (s.vk || gpu_backend_of(s.destination) == GpuBackend::Metal) {
             if (s.vk)
@@ -295,6 +330,9 @@ namespace lfs::core {
     }
     struct TensorFence::Impl {
         GpuBackend backend = GpuBackend::CUDA;
+#ifdef LFS_TENSOR_HIP
+        std::unique_ptr<internal::HipFence> hip;
+#endif
 #ifdef LFS_TENSOR_VULKAN
         mutable std::shared_ptr<internal::VulkanContext> vulkan;
 #endif
@@ -309,6 +347,12 @@ namespace lfs::core {
     };
     TensorFence::TensorFence(GpuBackend backend) : impl_(std::make_unique<Impl>()) {
         impl_->backend = backend;
+#ifdef LFS_TENSOR_HIP
+        if (backend == GpuBackend::HIP) {
+            impl_->hip = static_cast<internal::HipBackendOps&>(internal::backend_ops(backend)).create_fence();
+            return;
+        }
+#endif
         if (backend == GpuBackend::Vulkan) {
 #ifdef LFS_TENSOR_VULKAN
             impl_->vulkan = internal::acquire_vulkan_context();
@@ -370,6 +414,12 @@ namespace lfs::core {
         wait_on(target.native_handle());
     }
     void TensorFence::record(void* target) {
+#ifdef LFS_TENSOR_HIP
+        if (impl_->backend == GpuBackend::HIP) {
+            impl_->hip->record(internal::ExecContext{static_cast<cudaStream_t>(target)});
+            return;
+        }
+#endif
         if (impl_->backend == GpuBackend::Vulkan) {
 #ifdef LFS_TENSOR_VULKAN
             const auto id = reinterpret_cast<uint64_t>(target);
@@ -391,6 +441,12 @@ namespace lfs::core {
 #endif
     }
     void TensorFence::wait_on(void* target) const {
+#ifdef LFS_TENSOR_HIP
+        if (impl_->backend == GpuBackend::HIP) {
+            impl_->hip->wait_on(internal::ExecContext{static_cast<cudaStream_t>(target)});
+            return;
+        }
+#endif
         if (impl_->backend == GpuBackend::Vulkan) {
 #ifdef LFS_TENSOR_VULKAN
             const auto id = reinterpret_cast<uint64_t>(target);
@@ -412,6 +468,12 @@ namespace lfs::core {
 #endif
     }
     void TensorFence::wait() const {
+#ifdef LFS_TENSOR_HIP
+        if (impl_->backend == GpuBackend::HIP) {
+            impl_->hip->wait();
+            return;
+        }
+#endif
         if (impl_->backend == GpuBackend::Vulkan) {
 #ifdef LFS_TENSOR_VULKAN
             if (impl_->timeline != 0)
@@ -430,6 +492,11 @@ namespace lfs::core {
 #endif
     }
     bool TensorFence::ready() const {
+#ifdef LFS_TENSOR_HIP
+        if (impl_->backend == GpuBackend::HIP) {
+            return impl_->hip->ready();
+        }
+#endif
         if (impl_->backend == GpuBackend::Vulkan) {
 #ifdef LFS_TENSOR_VULKAN
             return impl_->timeline == 0 ||
@@ -450,6 +517,9 @@ namespace lfs::core {
     }
     struct TensorWorkQueue::Impl {
         GpuBackend backend = GpuBackend::CUDA;
+#ifdef LFS_TENSOR_HIP
+        internal::HipQueueLease hip_queue;
+#endif
         cudaStream_t stream = nullptr;
         bool owns_stream = true;
         VulkanTimelinePoint consumer_point;
@@ -621,6 +691,16 @@ namespace lfs::core {
     TensorWorkQueue::TensorWorkQueue(GpuBackend backend, Mode mode) : impl_(std::make_unique<Impl>()) {
         auto& s = *impl_;
         s.backend = backend;
+#ifdef LFS_TENSOR_HIP
+        if (backend == GpuBackend::HIP) {
+            // Logical queues share the native HIP submission queue, as Metal
+            // work queues share submission ordering. No concurrency is implied.
+            s.hip_queue = static_cast<internal::HipBackendOps&>(internal::backend_ops(backend)).execution_lease({});
+            s.owns_stream = false;
+            return;
+        }
+#endif
+
         if (backend == GpuBackend::Vulkan) {
 #ifdef LFS_TENSOR_VULKAN
             s.queue_context = internal::acquire_vulkan_context();
@@ -648,6 +728,17 @@ namespace lfs::core {
 #endif
     }
     TensorWorkQueue::TensorWorkQueue(GpuBackend backend, void* target) : impl_(std::make_unique<Impl>()) {
+#ifdef LFS_TENSOR_HIP
+        if (backend == GpuBackend::HIP) {
+            if (target)
+                throw std::invalid_argument("HIP borrowed queues require the native default target");
+            impl_->backend = backend;
+            impl_->owns_stream = false;
+            impl_->hip_queue = static_cast<internal::HipBackendOps&>(internal::backend_ops(backend)).execution_lease({});
+            return;
+        }
+#endif
+
         if (backend == GpuBackend::Vulkan) {
 #ifdef LFS_TENSOR_VULKAN
             auto context = internal::acquire_vulkan_context();
@@ -724,6 +815,11 @@ namespace lfs::core {
     }
     GpuBackend TensorWorkQueue::backend() const { return impl_->backend; }
     bool TensorWorkQueue::ready() const {
+#ifdef LFS_TENSOR_HIP
+        if (impl_->backend == GpuBackend::HIP)
+            return static_cast<internal::HipBackendOps&>(internal::backend_ops(impl_->backend)).queue_ready({});
+#endif
+
         if (impl_->vulkan_queue) {
 #ifdef LFS_TENSOR_VULKAN
             if (impl_->callbacks_outstanding.load(std::memory_order_acquire) != 0)
@@ -747,6 +843,13 @@ namespace lfs::core {
         return true;
     }
     void TensorWorkQueue::wait() const {
+#ifdef LFS_TENSOR_HIP
+        if (impl_->backend == GpuBackend::HIP) {
+            internal::backend_ops(impl_->backend).synchronize_stream({});
+            return;
+        }
+#endif
+
         if (impl_->vulkan_queue || impl_->backend == GpuBackend::Metal) {
             if (impl_->vulkan_queue) {
 #ifdef LFS_TENSOR_VULKAN
@@ -769,6 +872,12 @@ namespace lfs::core {
 #endif
     }
     void TensorWorkQueue::record(TensorFence& fence) const {
+#ifdef LFS_TENSOR_HIP
+        if (backend() == GpuBackend::HIP) {
+            fence.record(TensorExecutionTarget(*this));
+            return;
+        }
+#endif
         if (impl_->vulkan_queue || impl_->backend == GpuBackend::Metal) {
             fence.record(TensorExecutionTarget(*this));
             return;
@@ -778,6 +887,12 @@ namespace lfs::core {
         fence.record(native_handle());
     }
     void TensorWorkQueue::wait_for(const TensorFence& fence) const {
+#ifdef LFS_TENSOR_HIP
+        if (backend() == GpuBackend::HIP) {
+            fence.wait_on(TensorExecutionTarget(*this));
+            return;
+        }
+#endif
         if (impl_->vulkan_queue || impl_->backend == GpuBackend::Metal) {
             fence.wait_on(TensorExecutionTarget(*this));
             return;
@@ -787,6 +902,13 @@ namespace lfs::core {
         fence.wait_on(native_handle());
     }
     void TensorWorkQueue::enqueue_host_callback(void (*callback)(void*), void* user) {
+#ifdef LFS_TENSOR_HIP
+        if (backend() == GpuBackend::HIP) {
+            static_cast<internal::HipBackendOps&>(internal::backend_ops(backend())).enqueue_host_callback(callback, user, {});
+            return;
+        }
+#endif
+
         if (impl_->vulkan_queue || impl_->backend == GpuBackend::Metal) {
             uint64_t timeline = 0;
             if (impl_->vulkan_queue) {
@@ -815,6 +937,25 @@ namespace lfs::core {
     }
     void TensorWorkQueue::set_consumer_timeline(void* device, VulkanTimelinePoint point) {
         auto& s = *impl_;
+#ifdef LFS_TENSOR_HIP
+        if (s.backend == GpuBackend::HIP) {
+#ifdef LFS_TENSOR_VULKAN
+            if (!device)
+                throw std::invalid_argument("HIP consumer timeline requires a Vulkan device");
+            if (s.consumer == point.semaphore && s.device == device)
+                return;
+            if (s.consumer || s.consumer_point.keep_alive)
+                s.retired_timelines.push_back(std::move(s.consumer_point));
+            s.host_consumer = true;
+            s.device = static_cast<VkDevice>(device);
+            s.consumer = static_cast<VkSemaphore>(point.semaphore);
+            s.consumer_point = std::move(point);
+            return;
+#else
+            throw std::runtime_error("HIP consumer timeline requires Vulkan support");
+#endif
+        }
+#endif
         if (s.vulkan_queue || s.backend == GpuBackend::Vulkan) {
 #ifdef LFS_TENSOR_VULKAN
             if (!s.vulkan_queue && device == nullptr)
@@ -938,6 +1079,21 @@ namespace lfs::core {
         s.device = device;
         s.consumer = consumer;
 #endif
+#ifdef LFS_TENSOR_HIP
+        if (backend == GpuBackend::HIP) {
+            if (consumer && !device)
+                throw std::runtime_error("HIP consumer timeline requires a Vulkan device");
+#ifndef LFS_TENSOR_VULKAN
+            if (device)
+                throw std::runtime_error("HIP/Vulkan consumer queues are unavailable in this build");
+#endif
+            s.hip_queue = static_cast<internal::HipBackendOps&>(internal::backend_ops(backend)).execution_lease({});
+            s.owns_stream = false;
+            s.host_consumer = true;
+            s.consumer_external_interop = false;
+            return;
+        }
+#endif
         if (backend == GpuBackend::Vulkan) {
 #ifdef LFS_TENSOR_VULKAN
             // The null device/consumer pair is the session storage timeline.
@@ -1012,6 +1168,10 @@ namespace lfs::core {
                 (impl_->ready_cuda || impl_->consumer_cuda || !impl_->retired_consumers.empty()))
                 wait();
 #endif
+#ifdef LFS_TENSOR_HIP
+            if (impl_->backend == GpuBackend::HIP)
+                wait();
+#endif
             impl_->last.wait();
         } catch (const std::exception& e) {
             LOG_ERROR("Tensor queue retained after incomplete work: {}", e.what());
@@ -1070,6 +1230,10 @@ namespace lfs::core {
 #else
                 throw std::runtime_error("CUDA tensor work queues are unavailable in this build");
 #endif
+#ifdef LFS_TENSOR_HIP
+            } else if (s.backend == GpuBackend::HIP) {
+                result = TensorCompletionAccess::hip();
+#endif
             } else if (s.metal) {
                 result = s.metal->signal();
             } else if (s.backend == GpuBackend::Metal) {
@@ -1086,6 +1250,10 @@ namespace lfs::core {
             if (s.backend == GpuBackend::CUDA) {
 #if LFS_HAS_CUDA
                 (void)cudaStreamSynchronize(s.stream);
+#endif
+#ifdef LFS_TENSOR_HIP
+            } else if (s.backend == GpuBackend::HIP) {
+                internal::backend_ops(s.backend).synchronize_stream({});
 #endif
             } else if (s.metal) {
                 s.metal->signal().wait();
@@ -1111,6 +1279,9 @@ namespace lfs::core {
     struct TensorReadbackRing::Impl {
         struct Slot {
             void* host = nullptr;
+#ifdef LFS_TENSOR_HIP
+            std::unique_ptr<internal::HipReadbackSlot> hip;
+#endif
 #ifdef LFS_TENSOR_VULKAN
             std::optional<internal::StorageRef> vulkan_host;
 #endif
@@ -1161,7 +1332,13 @@ namespace lfs::core {
 #else
             throw std::runtime_error("Vulkan tensor readback rings are unavailable in this build");
 #endif
-        } else if (backend != GpuBackend::CUDA && backend != GpuBackend::Metal) {
+        }
+#ifdef LFS_TENSOR_HIP
+        else if (backend == GpuBackend::HIP) {
+            // Host-pinned slots are owned by the HIP runtime, never CUDA.
+        }
+#endif
+        else if (backend != GpuBackend::CUDA && backend != GpuBackend::Metal) {
             throw std::runtime_error("Packed tensor readback rings are unsupported on this backend");
         }
         if (queue.backend() != backend)
@@ -1176,6 +1353,18 @@ namespace lfs::core {
         if (staging && staging->is_valid())
             require_readback_staging(*staging, backend, bytes);
         s.slots.resize(slots);
+#ifdef LFS_TENSOR_HIP
+        if (backend == GpuBackend::HIP) {
+            auto& ops = static_cast<internal::HipBackendOps&>(internal::backend_ops(backend));
+            for (auto& slot : s.slots) {
+                slot.hip = ops.create_readback_slot(bytes);
+                slot.host = slot.hip->data();
+                slot.fence = std::make_unique<TensorFence>(backend);
+            }
+            return;
+        }
+#endif
+
         if (backend == GpuBackend::Vulkan) {
 #ifdef LFS_TENSOR_VULKAN
             s.vulkan = internal::acquire_vulkan_context();
@@ -1230,6 +1419,28 @@ namespace lfs::core {
         slot.sources.push_back(source.contiguous());
         const auto& retained = slot.sources.back();
         pin_operands({&retained});
+#ifdef LFS_TENSOR_HIP
+        if (s.backend == GpuBackend::HIP) {
+            auto input = internal::storage_ref(retained);
+            input.byte_offset += offset;
+            if (stage) {
+                const bool borrowed = s.staging && s.staging->is_valid();
+                if (borrowed) {
+                    require_readback_staging(*s.staging, s.backend, s.bytes);
+                    slot.sources.push_back(*s.staging);
+                } else if (!s.scratch.is_valid()) {
+                    s.scratch = Tensor::empty({s.bytes}, Device::GPU, DataType::UInt8);
+                }
+                Tensor& scratch = borrowed ? slot.sources.back() : s.scratch;
+                const auto output = internal::storage_ref(scratch);
+                internal::backend_ops(s.backend).copy_device_to_device({.src=input, .dst=output, .bytes=bytes});
+                input = output;
+            }
+            slot.hip->append(input, bytes, destination);
+            return;
+        }
+#endif
+
         if (s.backend == GpuBackend::Vulkan || s.backend == GpuBackend::Metal) {
 #ifndef LFS_TENSOR_VULKAN
             if (s.backend == GpuBackend::Vulkan)
@@ -1324,6 +1535,10 @@ namespace lfs::core {
         if ((slot.sealed && !slot.fence->ready()) ||
             (!slot.sealed && !slot.sources.empty() && !impl_->queue->ready()))
             throw std::logic_error("Cannot release a pending readback slot");
+#ifdef LFS_TENSOR_HIP
+        if (slot.hip)
+            slot.hip->release();
+#endif
         slot.sources.clear();
         slot.sealed = false;
     }

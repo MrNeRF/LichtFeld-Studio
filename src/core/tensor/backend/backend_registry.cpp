@@ -14,6 +14,9 @@
 #endif
 
 #include <utility>
+#ifdef LFS_TENSOR_HIP
+#include "hip/hip_backend_ops.hpp"
+#endif
 
 namespace lfs::core::internal {
 
@@ -28,6 +31,15 @@ namespace lfs::core::internal {
     void GpuBackendOps::name_queue(ExecContext, const char*) {}
 
     GpuBackendOps& backend_ops(const GpuBackend backend) {
+#ifdef LFS_TENSOR_HIP
+        if (backend == GpuBackend::HIP) {
+            static HipBackendOps* const hip_ops = [] {
+                (void)tensor_backend_options(); // Freeze startup device selection before construction.
+                return new HipBackendOps(LFS_HIP_RUNTIME_DEFAULT_MODULE,selected_hip_device());
+            }();
+            return *hip_ops;
+        }
+#endif
         if (backend == GpuBackend::CUDA) {
 #if LFS_HAS_CUDA
             // Bind an arbitrary caller thread on its first CUDA operation.
