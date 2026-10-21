@@ -919,6 +919,18 @@ namespace lfs::core::internal {
         std::lock_guard lock(impl_->mutex);
         impl_->index_update(output, indices, source, layout, program, false);
     }
+    void HipBackendOps::index_put(StorageRef output, StorageRef indices, StorageRef values, const IndexProgram& program, ExecContext execution) {
+        queue(execution);
+        require(program.dim == 0 && program.boundary_mode == 0 &&
+                    output.dtype == DataType::Float32 && values.dtype == DataType::Float32,
+                "HIP index_put requires Float32 output and values");
+        StridedLayout layout{};
+        layout.rank = 1;
+        layout.dims[0] = layout.element_count = program.input_size;
+        layout.strides[0] = 1;
+        std::lock_guard lock(impl_->mutex);
+        impl_->index_update(output, indices, values, layout, program, false);
+    }
     void HipBackendOps::scatter(StorageRef output, StorageRef indices, StorageRef source,
                                 const StridedLayout& output_layout, const StridedLayout& source_layout,
                                 const IndexProgram& program, ExecContext execution) {
