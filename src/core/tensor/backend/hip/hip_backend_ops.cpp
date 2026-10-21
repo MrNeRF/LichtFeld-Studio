@@ -896,6 +896,30 @@ namespace lfs::core::internal {
         std::lock_guard lock(impl_->mutex);
         impl_->index_update(output, indices, source, layout, program, false);
     }
+    void HipBackendOps::scatter(StorageRef output, StorageRef indices, StorageRef source,
+                                const StridedLayout& output_layout, const StridedLayout& source_layout,
+                                const IndexProgram& program, ExecContext execution) {
+        queue(execution);
+        require(program.dim >= 0 && size_t(program.dim) < output_layout.rank &&
+                    program.scatter_mode == 0 && output.dtype == source.dtype &&
+                    source_layout.rank == output_layout.rank &&
+                    source_layout.element_count == program.total_elements,
+                "Invalid HIP scatter descriptor");
+        for (size_t axis = 0; axis < output_layout.rank; ++axis)
+            require(axis == size_t(program.dim) || source_layout.dims[axis] == output_layout.dims[axis],
+                    "HIP scatter source shape mismatch");
+        size_t stride = 1;
+        for (size_t axis = source_layout.rank; axis; --axis) {
+            require(source_layout.strides[axis - 1] == stride, "HIP scatter source must be contiguous");
+            require(source_layout.dims[axis - 1] == 0 || stride <= SIZE_MAX / source_layout.dims[axis - 1],
+                    "HIP scatter source shape overflow");
+            stride *= source_layout.dims[axis - 1];
+        }
+        IndexProgram update = program;
+        update.index_size = source_layout.dims[program.dim];
+        std::lock_guard lock(impl_->mutex);
+        impl_->index_update(output, indices, source, output_layout, update, false);
+    }
     void HipBackendOps::index_add(StorageRef output, StorageRef indices, StorageRef source, const StridedLayout& layout, const IndexProgram& program, ExecContext execution) {
         queue(execution);
         std::lock_guard lock(impl_->mutex);

@@ -400,6 +400,13 @@ int main() try {
         require(update.cpu().to_vector() == std::vector<float>({3, 4, 5, 0, 1, 2}), "HIP aliased index_copy did not snapshot source");
         update.index_add_(0, swap, update);
         require(update.cpu().to_vector() == std::vector<float>({3, 5, 7, 3, 5, 7}), "HIP aliased index_add did not snapshot source");
+        auto scatter_indices = Tensor::from_vector(std::vector<int>{2, 0}, {2}, Device::GPU).to(DataType::Int64);
+        auto scatter_values = Tensor::from_vector(std::vector<float>{1, 2, 3, 4}, {2, 2}, Device::GPU);
+        auto scattered = Tensor::full({2, 3}, 0.f, Device::GPU);
+        scattered.scatter_(1, scatter_indices, scatter_values);
+        require(scattered.cpu().to_vector() == std::vector<float>({2, 0, 1, 4, 0, 3}), "HIP Tensor scatter assignment failed");
+        scattered.index_fill_(1, scatter_indices, 7.f);
+        require(scattered.cpu().to_vector() == std::vector<float>({7, 0, 7, 7, 0, 7}), "HIP Tensor index_fill failed");
         auto repeated = Tensor::from_vector(std::vector<int>{0, 0, 1}, {3}, Device::GPU).to(DataType::Int64);
         auto contributions = Tensor::from_vector(std::vector<float>{1, 2, 3, 4, 5, 6, 7, 8, 9}, {3, 3}, Device::GPU);
         auto accumulate = Tensor::full({2, 3}, 0.f, Device::GPU);

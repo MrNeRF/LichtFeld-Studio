@@ -323,6 +323,18 @@ void test_index_updates(GpuBackendOps& gpu) {
                         std::vector<uint8_t> result(initial.size());
                         gpu.copy_device_to_host({base_out, host(result.data()), result.size()});
                         require(result == expected, "HIP indexed update differs from CPU or changed guards/padding");
+                        if (!add) {
+                            StridedLayout source_layout{};
+                            source_layout.rank = 3;
+                            source_layout.dims = source_dims;
+                            source_layout.strides = {source_dims[1] * source_dims[2], source_dims[2], 1};
+                            source_layout.element_count = elements;
+                            program.total_elements = elements;
+                            gpu.copy_host_to_device({host(initial.data()), base_out, initial.size()});
+                            gpu.scatter(out, idx, src, layout, source_layout, program, {});
+                            gpu.copy_device_to_host({base_out, host(result.data()), result.size()});
+                            require(result == expected, "HIP scatter differs from indexed update and CPU oracle");
+                        }
                         for (auto invalid : {int64_t(-1), int64_t(11)}) {
                             indices.back() = invalid;
                             upload_indices();
