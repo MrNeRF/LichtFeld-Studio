@@ -15,5 +15,6 @@ Development docs in this section are organized around execution workflows rather
 - [Preferences and user storage](preferences-and-user-storage)
 - [Scene reconstruction](scene-reconstruction)
 - [Offline video reconstruction contract](video-reconstruction-contract)
+- [Source metadata catalogs](media-source-metadata)
 - [Training ops parity](training-ops-parity)
 - [Metal training ops](metal-training-ops)

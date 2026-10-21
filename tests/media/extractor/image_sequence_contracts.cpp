@@ -124,6 +124,20 @@ int main() {
         require(!fs::exists(root / "reentrant-abort/render_0000.png"), "reentrant abort published a frame");
         options.cancelled = {};
 
+        options.files.output_directory = root / "writer-reentrant-abort";
+        bool abort_from_writer = false;
+        options.files.image_output.cancelled = [&] {
+            if (abort_from_writer)
+                sequence.abort();
+            return false;
+        };
+        good(sequence.open(options));
+        abort_from_writer = true;
+        require(!sequence.write(frame), "writer callback abort was ignored");
+        require(!sequence.close(), "writer callback abort reported completion");
+        require(!fs::exists(root / "writer-reentrant-abort/render_0000.png"), "writer callback abort published a frame");
+        options.files.image_output.cancelled = {};
+
         for (const auto pattern : {"../frame_%d", "folder/frame_%d", "C:frame_%d", "folder\\frame_%d"}) {
             options.files.filename_pattern = pattern;
             require(!sequence.open(options), "unsafe or unnumbered pattern accepted");

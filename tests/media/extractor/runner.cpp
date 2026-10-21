@@ -13,6 +13,7 @@
 
 int runProbeUnitContracts();
 int runSourceExifContracts();
+int runSourceMetadataContracts();
 int runFrameSinkUnitContracts();
 int runSharedCoreContracts();
 int runFloatExrUnitContracts();
@@ -32,6 +33,8 @@ int main(int argc, char** argv) {
             return runFrameSinkUnitContracts();
         if (std::string_view(argv[1]) == "--probe-unit")
             return runProbeUnitContracts();
+        if (std::string_view(argv[1]) == "--source-metadata-unit")
+            return runSourceMetadataContracts();
         if (std::string_view(argv[1]) == "--source-exif-unit")
             return runSourceExifContracts();
         if (std::string_view(argv[1]) == "--shared-core-unit")

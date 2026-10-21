@@ -66,6 +66,128 @@ def defined_symbols(path, exports=False):
 def ffmpeg_public(name):
     return re.match(r"^(av|avcodec|avformat|avutil|avfilter|avdevice|avio|swscale|swresample|sws|swr)_",name)
 class IngestCLI(unittest.TestCase):
+    def test_source_container_metadata_reuses_probe_without_writing(self):
+        path = self.source()
+        before = path.read_bytes()
+        before_stat = path.stat()
+        probe, probe_stderr = self.invoke("probe", path)
+        result, stderr = self.invoke("source-container-metadata", path)
+        self.assertEqual(probe_stderr, b"")
+        self.assertEqual(stderr, b"")
+        self.assertTrue(result["success"])
+        catalog = result["metadata"]
+        self.assertEqual(catalog["scope"], "container_stream")
+        self.assertEqual(catalog["index_status"], "complete")
+        self.assertEqual(catalog["description"], probe["media"])
+        self.assertNotIn("image_exif", catalog)
+        retained = catalog["source_metadata"]
+        self.assertFalse(retained["limited"])
+        self.assertEqual(catalog["source_locator"], str(path))
+        encoding = "utf-16-le" if os.name == "nt" else sys.getfilesystemencoding()
+        self.assertEqual(catalog["source_locator_encoding"], "utf16le" if os.name == "nt" else "posix_bytes")
+        self.assertEqual(bytes.fromhex(catalog["source_locator_bytes"]), str(path).encode(encoding, "surrogateescape"))
+        version, _ = self.invoke("version")
+        self.assertEqual(retained["provider"]["name"], "ffmpeg")
+        self.assertEqual(retained["provider"]["version"], version["ffmpeg"])
+        self.assertGreater(retained["provider"]["codec_api_version"], 0)
+
+        self.assertEqual(catalog["identity_scope"], "in_memory_observation")
+        self.assertFalse(result["summary"]["limited"])
+        facts = result["summary"]["facts"]
+        self.assertTrue(any(fact["semantic"] == "image.width" for fact in facts))
+        for fact in facts:
+            self.assertEqual(fact["temporal_scope"], "static")
+            self.assertEqual(fact["origin"], "demuxer_observation")
+            self.assertEqual(fact["source"]["kind"], "stream_description")
+            stream = probe["media"]["streams"][fact["source"]["stream"]]
+            if fact["semantic"] == "image.width":
+                self.assertEqual(fact["value"], stream["width"])
+                self.assertEqual(fact["unit"], "pixels")
+            if fact["semantic"] == "frame_rate.nominal":
+                self.assertEqual(fact["value"], {"numerator": stream["nominal_frame_rate"][0], "denominator": stream["nominal_frame_rate"][1]})
+                self.assertEqual(fact["unit"], "frames_per_second")
+        reference = json.loads(subprocess.check_output(
+            [FFPROBE, "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)]))
+        reference_streams = {stream["index"]: stream for stream in reference["streams"]}
+        for stream in retained["streams"]:
+            expected_tags = reference_streams[stream["stream_index"]].get("tags", {})
+            self.assertEqual({tag["key"]: tag["value"] for tag in stream["tags"]}, expected_tags)
+        self.assertEqual({tag["key"]: tag["value"] for tag in retained["tags"]}, reference["format"].get("tags", {}))
+        indices = {stream["index"] for stream in probe["media"]["streams"]}
+        for stream in retained["streams"]:
+            self.assertIn(stream["stream_index"], indices)
+            for tag in stream["tags"]:
+                self.assertEqual(bytes.fromhex(tag["key_bytes"]).decode("utf-8", "replace"), tag["key"])
+                self.assertEqual(bytes.fromhex(tag["value_bytes"]).decode("utf-8", "replace"), tag["value"])
+        for reference in catalog["records"]:
+            kind = reference["kind"]
+            if kind == "container_tag":
+                self.assertLess(reference["entry"], len(retained["tags"]))
+            elif kind == "stream_description":
+                self.assertLess(reference["stream"], len(probe["media"]["streams"]))
+            elif kind == "stream_tag":
+                self.assertLess(reference["entry"], len(retained["streams"][reference["stream"]]["tags"]))
+            elif kind == "stream_side_data":
+                self.assertLess(reference["block"], len(retained["streams"][reference["stream"]]["coded_side_data"]))
+            else:
+                self.fail(f"Unexpected container metadata reference: {kind}")
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(path.stat().st_mtime_ns, before_stat.st_mtime_ns)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux filesystem fixture with non-UTF8 filename bytes")
+    def test_source_container_metadata_preserves_non_utf8_filename_bytes(self):
+        native = os.fsencode(self.root) + b"/metadata-native-\xff.mp4"
+        shutil.copyfile(self.source(), native)
+        path = os.fsdecode(native)
+        result, stderr = self.invoke("source-container-metadata", path)
+        self.assertEqual(stderr, b"")
+        catalog = result["metadata"]
+        self.assertEqual(catalog["source_locator"], native.decode("utf-8", "replace"))
+        self.assertEqual(catalog["source_locator_encoding"], "posix_bytes")
+        self.assertEqual(bytes.fromhex(catalog["source_locator_bytes"]), native)
+        self.assertEqual(catalog["description"]["streams"][0]["width"], 64)
+
+    def test_source_container_metadata_failure_preserves_the_probe_error(self):
+        path = self.root / "missing metadata input.bin"
+        probe, _ = self.invoke("probe", path, code=3)
+        catalog, _ = self.invoke("source-container-metadata", path, code=3)
+        self.assertFalse(catalog["success"])
+        self.assertEqual(catalog["error"]["code"], probe["error"]["code"])
+        self.assertFalse(path.exists())
+
+    def test_source_metadata_catalog_preserves_existing_descriptions(self):
+        path = self.root / "Metadata catalog é 日本語.bin"
+        writers = [lambda: source_exif_fixture.write_png(path, duplicate=True)]
+        writers += [lambda big=big, little=little: source_exif_fixture.write_tiff(
+            path, big=big, little=little, pages=2)
+            for big in (False, True) for little in (False, True)]
+        for ordinal, write in enumerate(writers):
+            with self.subTest(fixture=ordinal):
+                write()
+                before = path.read_bytes()
+                before_stat = path.stat()
+                legacy, legacy_stderr = self.invoke("source-exif", path)
+                result, stderr = self.invoke("source-metadata", path)
+                self.assertEqual(legacy_stderr, b"")
+                self.assertEqual(stderr, b"")
+                self.assertTrue(result["success"])
+                catalog = result["metadata"]
+                self.assertEqual(catalog["scope"], "static_image_exif")
+                self.assertEqual(catalog["index_status"], "complete")
+                self.assertEqual(catalog["image_exif"], legacy["exif"])
+                expected = []
+                for block_index, block in enumerate(legacy["exif"]["blocks"]):
+                    for entry_index, _ in enumerate(block["interpretation"]["entries"]):
+                        expected.append({"kind": "exif_entry", "block": block_index, "entry": entry_index})
+                tiff = legacy["exif"].get("tiff")
+                if tiff:
+                    for directory_index, directory in enumerate(tiff["directories"]):
+                        for tag_index, _ in enumerate(directory["tags"]):
+                            expected.append({"kind": "tiff_tag", "directory": directory_index, "tag": tag_index})
+                self.assertEqual(catalog["records"], expected)
+                self.assertEqual(path.read_bytes(), before)
+                self.assertEqual(path.stat().st_mtime_ns, before_stat.st_mtime_ns)
+
     def test_tiff_decoded_tags_and_original_source_ranges(self):
         path = self.root / "TIFF metadata é 日本語.bin"
         for big in (False, True):
@@ -271,6 +393,8 @@ class IngestCLI(unittest.TestCase):
         self.assertEqual(media["streams"][0]["width"],64)
         headers,_=self.invoke("probe",self.source(),"--headers-only")
         self.assertFalse(headers["media"]["stream_info_probed"])
+        maximum_timeout,_=self.invoke("probe",self.source(),"--timeout-ms",str((1<<63)-1))
+        self.assertEqual(maximum_timeout["media"],media)
         self.assertEqual(before,{p.name:p.read_bytes() for p in self.corpus.iterdir()})
     def test_extract_matches_legacy_pixels_names_metadata(self):
         cases=[("cfr-asymmetric",[],{}),("vfr-asymmetric",[],{}),
