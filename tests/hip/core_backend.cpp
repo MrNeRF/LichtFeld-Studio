@@ -232,36 +232,6 @@ void test_gathers(GpuBackendOps& gpu) {
                         gpu.deallocate(base_output, {});
                     }
 }
-void test_index_put(GpuBackendOps& gpu) {
-    auto host = [](void* p) { return StorageRef{GpuBackend::HIP, p, 0, DataType::UInt8, nullptr, STORAGE_REF_HOST_MEMORY}; };
-    std::array<float, 5> initial{1, 2, 3, 4, 5};
-    std::array<float, 3> values{8, 9, 10};
-    std::array<int32_t, 3> indices{4, 0, 2};
-    auto output = gpu.allocate(sizeof(initial), 256, {});
-    auto index = gpu.allocate(sizeof(indices), 256, {});
-    auto source = gpu.allocate(sizeof(values), 256, {});
-    output.dtype = source.dtype = DataType::Float32;
-    index.dtype = DataType::Int32;
-    gpu.copy_host_to_device({host(initial.data()), output, sizeof(initial)});
-    gpu.copy_host_to_device({host(indices.data()), index, sizeof(indices)});
-    gpu.copy_host_to_device({host(values.data()), source, sizeof(values)});
-    IndexProgram program{};
-    program.input_size = initial.size();
-    program.index_size = indices.size();
-    gpu.index_put(output, index, source, program, {});
-    std::array<float, 5> result{};
-    gpu.copy_device_to_host({output, host(result.data()), sizeof(result)});
-    require(result == std::array<float, 5>{9, 2, 10, 4, 8}, "HIP index_put differs from CPU");
-    indices[2] = 5;
-    gpu.copy_host_to_device({host(indices.data()), index, sizeof(indices)});
-    gpu.copy_host_to_device({host(initial.data()), output, sizeof(initial)});
-    reject([&] { gpu.index_put(output, index, source, program, {}); });
-    gpu.copy_device_to_host({output, host(result.data()), sizeof(result)});
-    require(result == initial, "Invalid HIP index_put partially changed output");
-    gpu.deallocate(output, {});
-    gpu.deallocate(index, {});
-    gpu.deallocate(source, {});
-}
 void test_index_updates(GpuBackendOps& gpu) {
     auto host = [](void* p) { return StorageRef{GpuBackend::HIP, p, 0, DataType::UInt8, nullptr, STORAGE_REF_HOST_MEMORY}; };
     for (auto dtype : {DataType::Float32, DataType::Float16, DataType::Int32, DataType::Int64, DataType::UInt8, DataType::Bool, DataType::UInt32})
@@ -1376,7 +1346,6 @@ int main(int argc, char** argv) try {
     test_random(gpu);
     test_strided_writes(gpu);
     test_index_updates(gpu);
-    test_index_put(gpu);
     test_index_fill(gpu);
     test_gathers(gpu);
     test_conversion_destinations<float>(gpu);

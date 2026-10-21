@@ -630,6 +630,77 @@ namespace {
                 atomicOr(invalid, 1u);
         }
     }
+    template <class Index, unsigned Operation, bool Put>
+    __global__ void flat_index_kernel(const float* input, const Index* indices, float* output, size_t extent, size_t count) {
+        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += size_t(gridDim.x) * blockDim.x) {
+            int64_t selected = indices[i];
+            if (selected < 0)
+                selected += static_cast<int64_t>(extent);
+            const size_t position = selected < 0 ? 0 : size_t(selected) >= extent ? extent - 1 : size_t(selected);
+            if constexpr (Put) {
+                output[position] = input[i];
+            } else {
+                const float value = input[position];
+                if constexpr (Operation == LFS_HIP_OP_Abs)
+                    output[i] = fabsf(value);
+                else if constexpr (Operation == LFS_HIP_OP_Sqrt)
+                    output[i] = sqrtf(value);
+                else
+                    output[i] = -value;
+            }
+        }
+    }
+    template <class Index, unsigned Operation, bool Put>
+    void launch_flat_index(LfsHipContext* context, LfsHipView input, LfsHipView indices, LfsHipView output, size_t extent, size_t count) {
+        hipLaunchKernelGGL((flat_index_kernel<Index, Operation, Put>), dim3(blocks(count)), dim3(256), 0, context->stream,
+                           reinterpret_cast<const float*>(static_cast<const char*>(input.buffer->data) + input.offset),
+                           reinterpret_cast<const Index*>(static_cast<const char*>(indices.buffer->data) + indices.offset),
+                           reinterpret_cast<float*>(static_cast<char*>(output.buffer->data) + output.offset), extent, count);
+        check(hipGetLastError());
+    }
+    template <class Index, bool Put>
+    void dispatch_flat_index(LfsHipContext* context, LfsHipView input, LfsHipView indices, LfsHipView output,
+                             size_t extent, size_t count, unsigned operation) {
+        if constexpr (Put) {
+            launch_flat_index<Index, 0, true>(context, input, indices, output, extent, count);
+        } else {
+            switch (operation) {
+            case LFS_HIP_OP_Abs: launch_flat_index<Index, LFS_HIP_OP_Abs, false>(context, input, indices, output, extent, count); break;
+            case LFS_HIP_OP_Sqrt: launch_flat_index<Index, LFS_HIP_OP_Sqrt, false>(context, input, indices, output, extent, count); break;
+            case LFS_HIP_OP_Neg: launch_flat_index<Index, LFS_HIP_OP_Neg, false>(context, input, indices, output, extent, count); break;
+            }
+        }
+    }
+    template <bool Put>
+    void flat_index(LfsHipContext* context, LfsHipView input, LfsHipView indices, uint32_t index_dtype,
+                    LfsHipView output, size_t extent, size_t count, unsigned operation) {
+        require(index_dtype == LFS_HIP_I32 || index_dtype == LFS_HIP_I64, "HIP flat indices must be Int32 or Int64");
+        require(Put || operation == LFS_HIP_OP_Abs || operation == LFS_HIP_OP_Sqrt || operation == LFS_HIP_OP_Neg,
+                "Unsupported HIP fused gather unary operation");
+        require(extent <= uint64_t(INT64_MAX) && (!count || extent), "Invalid HIP flat index extent");
+        const size_t input_bytes = typed_bytes(LFS_HIP_F32, Put ? count : extent);
+        const size_t output_bytes = typed_bytes(LFS_HIP_F32, Put ? extent : count);
+        const size_t index_width = typed_bytes(index_dtype, 1), index_bytes = typed_bytes(index_dtype, count);
+        validate(context, input.buffer, input.offset, input_bytes);
+        validate(context, indices.buffer, indices.offset, index_bytes);
+        validate(context, output.buffer, output.offset, output_bytes);
+        require(input.offset % sizeof(float) == 0 && output.offset % sizeof(float) == 0 && indices.offset % index_width == 0,
+                "Unaligned HIP flat index views");
+        const auto disjoint = [&](LfsHipView source, size_t bytes) {
+            require(source.buffer != output.buffer || !bytes || !output_bytes ||
+                        source.offset >= output.offset + output_bytes || output.offset >= source.offset + bytes,
+                    "HIP flat index output overlaps an input");
+        };
+        disjoint(input, input_bytes);
+        disjoint(indices, index_bytes);
+        if (!count)
+            return;
+        DeviceScope device(context->device);
+        if (index_dtype == LFS_HIP_I32)
+            dispatch_flat_index<int32_t, Put>(context, input, indices, output, extent, count, operation);
+        else
+            dispatch_flat_index<int64_t, Put>(context, input, indices, output, extent, count, operation);
+    }
     template <class Value, class Index>
     __global__ void gather_kernel(const Value* input, const Index* indices, Value* output, LfsHipLayout source, LfsHipLayout index_layout, LfsHipLayout destination, unsigned dim, unsigned boundary, bool select) {
         for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < destination.elements; i += size_t(gridDim.x) * blockDim.x) {
@@ -2112,6 +2183,14 @@ int lfs_hip_environment_composite(LfsHipContext* context, LfsHipView rgb, LfsHip
             static_cast<uint8_t*>(output.buffer->data) + output.offset, *params, pixels);
         check(hipGetLastError());
     });
+}
+int lfs_hip_gather_unary_f32(LfsHipContext* context, LfsHipView input, LfsHipView indices, uint32_t index_dtype,
+                             LfsHipView output, size_t input_size, size_t index_count, uint32_t operation, LfsHipError* error) {
+    return boundary(error, [&] { flat_index<false>(context, input, indices, index_dtype, output, input_size, index_count, operation); });
+}
+int lfs_hip_index_put_f32(LfsHipContext* context, LfsHipView output, LfsHipView indices, uint32_t index_dtype,
+                          LfsHipView values, size_t output_size, size_t index_count, LfsHipError* error) {
+    return boundary(error, [&] { flat_index<true>(context, values, indices, index_dtype, output, output_size, index_count, 0); });
 }
 int lfs_hip_gather(LfsHipContext* context, LfsHipView input, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, LfsHipView output, const LfsHipLayout* input_layout, const LfsHipLayout* index_layout, uint32_t dim, uint32_t boundary_mode, uint32_t index_select, LfsHipError* error) {
     return boundary(error, [&] {

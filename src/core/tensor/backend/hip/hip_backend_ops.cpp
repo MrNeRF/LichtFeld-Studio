@@ -251,6 +251,8 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_convert);
         ENTRY(lfs_hip_index_cast);
         ENTRY(lfs_hip_gather);
+        ENTRY(lfs_hip_gather_unary_f32);
+        ENTRY(lfs_hip_index_put_f32);
         ENTRY(lfs_hip_index_update);
         ENTRY(lfs_hip_index_fill);
         ENTRY(lfs_hip_environment_composite);
@@ -364,6 +366,8 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_convert);
                 LOAD(lfs_hip_index_cast);
                 LOAD(lfs_hip_gather);
+                LOAD(lfs_hip_gather_unary_f32);
+                LOAD(lfs_hip_index_put_f32);
                 LOAD(lfs_hip_index_update);
                 LOAD(lfs_hip_index_fill);
                 LOAD(lfs_hip_environment_composite);
@@ -921,15 +925,24 @@ namespace lfs::core::internal {
     }
     void HipBackendOps::index_put(StorageRef output, StorageRef indices, StorageRef values, const IndexProgram& program, ExecContext execution) {
         queue(execution);
-        require(program.dim == 0 && program.boundary_mode == 0 &&
-                    output.dtype == DataType::Float32 && values.dtype == DataType::Float32,
+        require(output.dtype == DataType::Float32 && values.dtype == DataType::Float32,
                 "HIP index_put requires Float32 output and values");
-        StridedLayout layout{};
-        layout.rank = 1;
-        layout.dims[0] = layout.element_count = program.input_size;
-        layout.strides[0] = 1;
         std::lock_guard lock(impl_->mutex);
-        impl_->index_update(output, indices, values, layout, program, false);
+        const auto out = impl_->view(output), idx = impl_->view(indices), source = impl_->view(values);
+        LfsHipError error{};
+        check(impl_->lfs_hip_index_put_f32(impl_->context, out, idx, static_cast<uint32_t>(indices.dtype),
+                                          source, program.input_size, program.index_size, &error), error);
+    }
+    void HipBackendOps::gather_fused_unary(StorageRef input, StorageRef indices, StorageRef output,
+                                          PointwiseOp unary, const IndexProgram& program, ExecContext execution) {
+        queue(execution);
+        require(input.dtype == DataType::Float32 && output.dtype == DataType::Float32,
+                "HIP fused gather requires Float32 input and output");
+        std::lock_guard lock(impl_->mutex);
+        const auto in = impl_->view(input), idx = impl_->view(indices), out = impl_->view(output);
+        LfsHipError error{};
+        check(impl_->lfs_hip_gather_unary_f32(impl_->context, in, idx, static_cast<uint32_t>(indices.dtype), out,
+                                             program.input_size, program.index_size, static_cast<uint32_t>(unary), &error), error);
     }
     void HipBackendOps::scatter(StorageRef output, StorageRef indices, StorageRef source,
                                 const StridedLayout& output_layout, const StridedLayout& source_layout,

@@ -224,6 +224,12 @@ LFS_HIP_API int lfs_hip_index_cast(LfsHipContext*, LfsHipView input, LfsHipView 
 LFS_HIP_API int lfs_hip_index_update(LfsHipContext*, LfsHipView output, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, LfsHipView source, const LfsHipLayout* output_layout, uint32_t dim, size_t index_count, uint32_t add, LfsHipError*);
 LFS_HIP_API int lfs_hip_index_fill(LfsHipContext*, LfsHipView output, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, const LfsHipLayout* output_layout, uint32_t dim, size_t index_count, uint64_t value_bits, LfsHipError*);
 LFS_HIP_API int lfs_hip_gather(LfsHipContext*, LfsHipView input, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, LfsHipView output, const LfsHipLayout* input_layout, const LfsHipLayout* index_layout, uint32_t dim, uint32_t boundary_mode, uint32_t index_select, LfsHipError*);
+/* Flat indices count negative positions from the end, then clamp to the extent,
+ * matching the existing fused gather and flat index_put backend contracts. */
+LFS_HIP_API int lfs_hip_gather_unary_f32(LfsHipContext*, LfsHipView input, LfsHipView indices, uint32_t index_dtype,
+                                       LfsHipView output, size_t input_size, size_t index_count, uint32_t operation, LfsHipError*);
+LFS_HIP_API int lfs_hip_index_put_f32(LfsHipContext*, LfsHipView output, LfsHipView indices, uint32_t index_dtype,
+                                    LfsHipView values, size_t output_size, size_t index_count, LfsHipError*);
 typedef struct LfsHipEnvironment {
     float rotation[9];
     int32_t full_width, full_height, band_width, band_height, y_offset;
