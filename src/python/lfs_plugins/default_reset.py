@@ -160,7 +160,8 @@ class LabelDefaultReset:
             value = lf.ui.tr("common.yes" if value else "common.no")
         hint = lf.ui.tr("common.reset_default_hint").replace("{value}", str(value))
         description = row.get_attribute("data-tooltip", "")
-        label.set_attribute("data-tooltip", (lf.ui.tr(description) + "\n" if description else "") + hint)
+        # data-tooltip accepts localization keys; title accepts composed text.
+        label.set_attribute("title", (lf.ui.tr(description) + "\n" if description else "") + hint)
 
     @staticmethod
     def _flash(label, controls):

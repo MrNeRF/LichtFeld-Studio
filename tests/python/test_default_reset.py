@@ -94,7 +94,7 @@ def test_child_of_label_and_dynamic_default(setup_reset):
     s = setup_reset; child = Element(s.label); s.event.target = lambda: child
     s.current["default"] = 42
     s.doc.listeners["mouseover"](s.event)
-    assert s.label.attrs["data-tooltip"] == "Restore: 42"
+    assert s.label.attrs["title"] == "Restore: 42"
     s.current["default"] = 17
     s.doc.listeners["dblclick"](s.event)
     assert s.current["value"] == 17
@@ -228,3 +228,32 @@ def test_inferred_binding_does_not_survive_an_expression_or_unknown_property(set
         s.control.attrs["data-value"] = prop
         s.doc.listeners["dblclick"](s.event)
     assert not s.writes and not s.label.has_attribute("data-reset-prop")
+
+
+def test_hover_uses_literal_title_and_preserves_translated_row_help(setup_reset):
+    s = setup_reset
+    s.label.classes.add("setting-row__label-col")
+    s.row.attrs["data-tooltip"] = "common.yes"
+    child = Element(s.label)
+    s.event.target = lambda: child
+    for default in (2, 17):
+        s.current["default"] = default
+        s.doc.listeners["mouseover"](s.event)
+        assert "data-tooltip" not in s.label.attrs
+        assert s.row.attrs["data-tooltip"] == "common.yes"
+        assert s.label.attrs["title"] == f"Yes\nRestore: {default}"
+        # Native resolution checks translated data-tooltip keys, then the
+        # literal title on that element, before climbing to the row.
+        element = child
+        resolved = ""
+        while element is not None:
+            key = element.get_attribute("data-tooltip", "").strip()
+            translated = {"common.yes": "Yes"}.get(key, key)
+            if key and translated != key:
+                resolved = translated
+                break
+            if element.get_attribute("title", ""):
+                resolved = element.get_attribute("title")
+                break
+            element = element.parent()
+        assert resolved == f"Yes\nRestore: {default}"
