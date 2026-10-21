@@ -139,6 +139,8 @@ LFS_HIP_API int lfs_hip_boolean_pointwise(LfsHipContext*, uint32_t op, LfsHipVie
 LFS_HIP_API int lfs_hip_clamp_i32(LfsHipContext*, LfsHipView data, size_t count, int32_t minimum, int32_t maximum, LfsHipError*);
 LFS_HIP_API int lfs_hip_pointwise_f32(LfsHipContext*, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, size_t count, float scalar, LfsHipError*);
 LFS_HIP_API int lfs_hip_pointwise_f16(LfsHipContext*, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, size_t count, float scalar, LfsHipError*);
+LFS_HIP_API int lfs_hip_masked_scatter(LfsHipContext*, LfsHipView output, LfsHipView mask, LfsHipView source,
+                                       uint32_t dtype, size_t count, size_t selected_count, LfsHipError*);
 LFS_HIP_API int lfs_hip_arange_f32(LfsHipContext*, LfsHipView dst, size_t count, float start, float step, LfsHipError*);
 
 enum { LFS_HIP_REDUCTION_WORKSPACE_FLOATS = 4097 };

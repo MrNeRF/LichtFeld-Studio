@@ -263,6 +263,13 @@ int main() try {
                             "HIP masked selection changed order, dtype or value bits");
                 }
             }
+            auto destination = Tensor::from_vector(std::vector<float>{0, 1, 2, 3, 4, 5}, {6}, Device::GPU);
+            uint8_t mask_bytes[] = {0, 1, 0, 1, 1, 0};
+            auto mask = Tensor::from_blob(mask_bytes, {6}, Device::CPU, DataType::Bool).to(Device::GPU);
+            auto replacements = Tensor::from_vector(std::vector<float>{10, 20, 30}, {3}, Device::GPU);
+            destination[mask] = replacements;
+            require(destination.cpu().to_vector() == std::vector<float>({0, 10, 2, 20, 30, 5}),
+                    "HIP Tensor masked assignment changed values or order");
             std::vector<float> values{0, -0.0f, 1, std::bit_cast<float>(0x7fc01234u), -INFINITY, 0, 2,
                                       std::bit_cast<float>(1u), std::bit_cast<float>(0x80000001u)};
             auto input_values = Tensor::from_vector(values, {values.size()}, Device::GPU);

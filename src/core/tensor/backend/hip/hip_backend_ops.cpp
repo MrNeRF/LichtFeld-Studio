@@ -234,6 +234,7 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_fill_f32);
         ENTRY(lfs_hip_pointwise_f32);
         ENTRY(lfs_hip_pointwise_f16);
+        ENTRY(lfs_hip_masked_scatter);
         ENTRY(lfs_hip_boolean_pointwise);
         ENTRY(lfs_hip_clamp_i32);
         ENTRY(lfs_hip_arange_f32);
@@ -346,6 +347,7 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_fill_f32);
                 LOAD(lfs_hip_pointwise_f32);
                 LOAD(lfs_hip_pointwise_f16);
+                LOAD(lfs_hip_masked_scatter);
                 LOAD(lfs_hip_boolean_pointwise);
                 LOAD(lfs_hip_clamp_i32);
                 LOAD(lfs_hip_arange_f32);
@@ -2054,6 +2056,20 @@ namespace lfs::core::internal {
         impl_->refresh_algorithm_workspace();
         check(status, error);
         return static_cast<size_t>(selected);
+    }
+    void HipBackendOps::masked_scatter(StorageRef output, StorageRef mask, StorageRef source,
+                                       const MaskProgram& program, ExecContext execution) {
+        queue(execution);
+        require(output.dtype == source.dtype &&
+                    (mask.dtype == DataType::Bool || mask.dtype == DataType::UInt8),
+                "HIP masked scatter requires matching values and a byte mask");
+        std::lock_guard lock(impl_->mutex);
+        const auto destination = impl_->view(output), flags = impl_->view(mask), values = impl_->view(source);
+        LfsHipError error{};
+        check(impl_->lfs_hip_masked_scatter(impl_->context, destination, flags, values,
+                                            static_cast<uint32_t>(output.dtype), program.count,
+                                            program.selected_count, &error), error);
+        impl_->refresh_algorithm_workspace();
     }
     size_t HipBackendOps::nonzero(StorageRef input, StorageRef output, const MaskProgram& program, ExecContext execution) {
         queue(execution);

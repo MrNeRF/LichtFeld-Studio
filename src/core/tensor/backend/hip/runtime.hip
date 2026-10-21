@@ -935,6 +935,22 @@ namespace {
         hipcub::TransformInputIterator<uint8_t, NonzeroFlag<T>, const T*> flags(static_cast<const T*>(input), NonzeroFlag<T>{});
         select_stable(context, positions, flags, static_cast<int64_t*>(output), count, capacity, selected);
     }
+    template <class T>
+    __global__ void masked_scatter_kernel(T* output, const uint8_t* mask, const T* source,
+                                          const int* prefix, size_t count) {
+        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+             i < count; i += size_t(gridDim.x) * blockDim.x)
+            if (mask[i])
+                output[i] = source[prefix[i]];
+    }
+    template <class T>
+    void launch_masked_scatter(LfsHipContext* context, void* output, const uint8_t* mask,
+                               const void* source, const int* prefix, size_t count) {
+        hipLaunchKernelGGL((masked_scatter_kernel<T>), dim3(blocks(count)), dim3(256), 0,
+                           context->stream, static_cast<T*>(output), mask,
+                           static_cast<const T*>(source), prefix, count);
+        check(hipGetLastError());
+    }
 } // namespace
 
 namespace {
@@ -1610,6 +1626,76 @@ int lfs_hip_select(LfsHipContext* context, LfsHipView input, LfsHipView mask, Lf
             case 4: select_values<uint32_t>(context, source, flags, destination, count, capacity, selected); break;
             case 8: select_values<uint64_t>(context, source, flags, destination, count, capacity, selected); break;
             }
+        }
+    });
+}
+
+int lfs_hip_masked_scatter(LfsHipContext* context, LfsHipView output, LfsHipView mask,
+                           LfsHipView source, uint32_t dtype, size_t count,
+                           size_t selected_count, LfsHipError* error) {
+    return boundary(error, [&] {
+        require(count <= INT32_MAX && selected_count <= count, "Invalid HIP masked scatter extent");
+        const size_t width = typed_bytes(dtype, 1);
+        const size_t output_bytes = typed_bytes(dtype, count);
+        const size_t source_bytes = typed_bytes(dtype, selected_count);
+        validate(context, output.buffer, output.offset, output_bytes);
+        validate(context, mask.buffer, mask.offset, count);
+        validate(context, source.buffer, source.offset, source_bytes);
+        require(output.offset % width == 0 && source.offset % width == 0,
+                "Unaligned HIP masked scatter view");
+        const auto disjoint = [](LfsHipView a, size_t a_bytes, LfsHipView b, size_t b_bytes) {
+            return a.buffer != b.buffer || !a_bytes || !b_bytes ||
+                   a.offset + a_bytes <= b.offset || b.offset + b_bytes <= a.offset;
+        };
+        require(disjoint(output, output_bytes, source, source_bytes) &&
+                    disjoint(output, output_bytes, mask, count) &&
+                    disjoint(source, source_bytes, mask, count),
+                "HIP masked scatter operands overlap");
+        if (!count)
+            return;
+        DeviceScope device(context->device);
+        const auto* flags = reinterpret_cast<const uint8_t*>(static_cast<const char*>(mask.buffer->data) + mask.offset);
+        hipcub::TransformInputIterator<int, NonzeroFlag<uint8_t>, const uint8_t*> predicate(flags, NonzeroFlag<uint8_t>{});
+        size_t temporary_bytes = 0;
+        check(hipcub::DeviceScan::ExclusiveSum(nullptr, temporary_bytes, predicate,
+                                               static_cast<int*>(nullptr), static_cast<int>(count), context->stream));
+        const size_t prefix_bytes = (count * sizeof(int) + 255) / 256 * 256;
+        require(temporary_bytes <= SIZE_MAX - prefix_bytes, "HIP masked scatter workspace overflow");
+        const size_t required = prefix_bytes + temporary_bytes;
+        if (required > context->sort_workspace_bytes) {
+            check(hipStreamSynchronize(context->stream));
+            void* replacement = nullptr;
+            check(hipMalloc(&replacement, required));
+            if (context->sort_workspace) {
+                const auto status = hipFree(context->sort_workspace);
+                if (status != hipSuccess) {
+                    (void)hipFree(replacement);
+                    check(status);
+                }
+            }
+            context->sort_workspace = replacement;
+            context->sort_workspace_bytes = required;
+        }
+        auto* prefix = static_cast<int*>(context->sort_workspace);
+        auto* scratch = static_cast<char*>(context->sort_workspace) + prefix_bytes;
+        check(hipcub::DeviceScan::ExclusiveSum(scratch, temporary_bytes, predicate, prefix,
+                                               static_cast<int>(count), context->stream));
+        check(hipStreamSynchronize(context->stream));
+        int last_prefix = 0;
+        uint8_t last_flag = 0;
+        check(hipMemcpy(&last_prefix, prefix + count - 1, sizeof(last_prefix), hipMemcpyDeviceToHost));
+        check(hipMemcpy(&last_flag, flags + count - 1, sizeof(last_flag), hipMemcpyDeviceToHost));
+        require(size_t(last_prefix) + size_t(last_flag != 0) == selected_count,
+                "HIP masked scatter source count does not match mask");
+        if (!selected_count)
+            return;
+        auto* destination = static_cast<char*>(output.buffer->data) + output.offset;
+        const auto* values = static_cast<const char*>(source.buffer->data) + source.offset;
+        switch (width) {
+        case 1: launch_masked_scatter<uint8_t>(context, destination, flags, values, prefix, count); break;
+        case 2: launch_masked_scatter<uint16_t>(context, destination, flags, values, prefix, count); break;
+        case 4: launch_masked_scatter<uint32_t>(context, destination, flags, values, prefix, count); break;
+        case 8: launch_masked_scatter<uint64_t>(context, destination, flags, values, prefix, count); break;
         }
     });
 }

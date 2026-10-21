@@ -67,6 +67,7 @@ int main(int argc, char** argv) try {
     LOAD(lfs_hip_index_fill);
     LOAD(lfs_hip_environment_composite);
     LOAD(lfs_hip_pointwise_f16);
+    LOAD(lfs_hip_masked_scatter);
 #undef LOAD
     LfsHipError error{};
     const auto check = [&](int status) { require(status == 0, error.message); };
@@ -99,6 +100,31 @@ int main(int argc, char** argv) try {
     for (size_t i = 0; i < elements; ++i)
         source[i] = float(int(i % 131) - 65) * 0.125f;
     check(lfs_hip_upload(first, input, 0, source.data(), bytes, &error));
+    {
+        LfsHipBuffer* flags = nullptr;
+        check(lfs_hip_buffer_allocate(first, 6, &flags, &error));
+        const uint8_t mask[] = {0, 1, 0, 1, 1, 0};
+        const float replacements[] = {10.f, 20.f, 30.f};
+        const float original[] = {0.f, 1.f, 2.f, 3.f, 4.f, 5.f};
+        float observed[6]{};
+        check(lfs_hip_upload(first, flags, 0, mask, sizeof(mask), &error));
+        check(lfs_hip_upload(first, input, 0, replacements, sizeof(replacements), &error));
+        check(lfs_hip_upload(first, output, 0, original, sizeof(original), &error));
+        rejected(lfs_hip_masked_scatter(first, {output, 0}, {flags, 0}, {input, 0},
+                                        LFS_HIP_F32, 6, 2, &error));
+        check(lfs_hip_download(first, output, 0, observed, sizeof(observed), &error));
+        require(std::equal(std::begin(observed), std::end(observed), std::begin(original)),
+                "Invalid HIP masked scatter partially changed output");
+        check(lfs_hip_masked_scatter(first, {output, 0}, {flags, 0}, {input, 0},
+                                     LFS_HIP_F32, 6, 3, &error));
+        check(lfs_hip_download(first, output, 0, observed, sizeof(observed), &error));
+        const float expected[] = {0.f, 10.f, 2.f, 20.f, 30.f, 5.f};
+        require(std::equal(std::begin(observed), std::end(observed), std::begin(expected)),
+                "HIP masked scatter changed stable source order");
+        check(lfs_hip_buffer_release(first, flags, &error));
+        check(lfs_hip_upload(first, input, 0, source.data(), bytes, &error));
+        std::puts("PASS HIP masked scatter: stable order, source count guard, no partial write");
+    }
     {
         const uint16_t lhs[] = {0xbc00, 0x0000, 0x3c00, 0x4000}; // -1, 0, 1, 2
         const uint16_t rhs[] = {0x4000, 0x4200, 0x4400, 0x4500}; // 2, 3, 4, 5
