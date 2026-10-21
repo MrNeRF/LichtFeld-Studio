@@ -2428,6 +2428,7 @@ int lfs_hip_warp_rgb(LfsHipContext* context, LfsHipView input, uint32_t dtype,
 #include "gemm_runtime.hpp"
 #include "integer_reduce_runtime.hpp"
 #include "arg_extreme_runtime.hpp"
+#include "cdist_runtime.hpp"
 #include "bias_runtime.hpp"
 
 #include "sh_codec_runtime.hpp"

@@ -245,6 +245,8 @@ LFS_HIP_API int lfs_hip_reduce_layout_f32(LfsHipContext*, LfsHipView input, LfsH
 LFS_HIP_API int lfs_hip_arg_extreme_f32(LfsHipContext*, LfsHipView input, LfsHipView values, LfsHipView indices,
                                       size_t outer, size_t reduced, size_t inner, uint32_t maximum,
                                       size_t* workspace_growth_bytes, LfsHipError*);
+LFS_HIP_API int lfs_hip_cdist_f32(LfsHipContext*, LfsHipView lhs, LfsHipView rhs, LfsHipView output,
+                                size_t lhs_rows, size_t rhs_rows, size_t columns, float p, LfsHipError*);
 LFS_HIP_API int lfs_hip_broadcast_f32(LfsHipContext*, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, const LfsHipLayout* lhs_layout, const LfsHipLayout* rhs_layout, const LfsHipLayout* output_layout, uint32_t output_element_bytes, LfsHipError*);
 
 #ifdef __cplusplus

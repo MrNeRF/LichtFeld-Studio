@@ -249,6 +249,7 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_broadcast_f32);
         ENTRY(lfs_hip_reduce_layout_f32);
         ENTRY(lfs_hip_arg_extreme_f32);
+        ENTRY(lfs_hip_cdist_f32);
         ENTRY(lfs_hip_convert);
         ENTRY(lfs_hip_index_cast);
         ENTRY(lfs_hip_gather);
@@ -365,6 +366,7 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_broadcast_f32);
                 LOAD(lfs_hip_reduce_layout_f32);
                 LOAD(lfs_hip_arg_extreme_f32);
+                LOAD(lfs_hip_cdist_f32);
                 LOAD(lfs_hip_convert);
                 LOAD(lfs_hip_index_cast);
                 LOAD(lfs_hip_gather);
@@ -883,6 +885,30 @@ namespace lfs::core::internal {
         impl_->reserved_peak = std::max(impl_->reserved_peak, impl_->live + impl_->cached_bytes + impl_->workspace_bytes);
         check(status, error);
         return true;
+    }
+    void HipBackendOps::cdist(StorageRef lhs, StorageRef rhs, StorageRef output, size_t lhs_rows, size_t rhs_rows,
+                              size_t columns, float p, ExecContext execution) {
+        queue(execution);
+        require(lhs.dtype == DataType::Float32 && rhs.dtype == DataType::Float32 && output.dtype == DataType::Float32,
+                "HIP cdist requires Float32 inputs and output");
+        require(!std::isnan(p) && p >= 0.f, "HIP cdist p must be nonnegative");
+        const size_t count = checked_product(lhs_rows, rhs_rows);
+        (void)byte_count(checked_product(lhs_rows, columns));
+        (void)byte_count(checked_product(rhs_rows, columns));
+        (void)byte_count(count);
+        if (!count)
+            return;
+        if (!columns) {
+            (void)impl_->empty_view(lhs);
+            (void)impl_->empty_view(rhs);
+            ScalarOperand zero{};
+            load_fill(output, count, zero, execution);
+            return;
+        }
+        std::lock_guard lock(impl_->mutex);
+        const auto a = impl_->view(lhs), b = impl_->view(rhs), out = impl_->view(output);
+        LfsHipError error{};
+        check(impl_->lfs_hip_cdist_f32(impl_->context, a, b, out, lhs_rows, rhs_rows, columns, p, &error), error);
     }
     void HipBackendOps::column_reduce(StorageRef input, StorageRef output, size_t rows, size_t columns, const ReduceProgram& program, ExecContext execution) {
         strided_reduce(input, output, 1, rows, columns, program, execution);
