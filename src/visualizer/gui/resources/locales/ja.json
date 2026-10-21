@@ -1626,6 +1626,8 @@
     "status_label": "ステータス: %s"
   },
   "input_settings": {
+    "action.next_sidebar_category": "次のサイドバーカテゴリ",
+    "action.previous_sidebar_category": "前のサイドバーカテゴリ",
     "mouse_back": "マウス戻るボタン",
     "mouse_forward": "マウス進むボタン",
     "invalid_profile_name": "無効なプロファイル名です。パス区切り文字や予約文字を含まない名前を使用してください。",
@@ -2679,7 +2681,8 @@
     "gt_metrics_training_required": "カメラ指標には初期化済みのトレーニングセッションが必要です。",
     "gt_metrics_calculation_failed": "このビューの指標を計算できませんでした。",
     "perf_hud_tooltip": "パフォーマンス HUD の表示/非表示",
-    "all_panel_tabs": "すべてのパネル"
+    "scroll_panel_tabs_up": "パネルタブを上にスクロール",
+    "scroll_panel_tabs_down": "パネルタブを下にスクロール"
   },
   "runtime": {
     "environment_map_failed": "環境マップ「{}」を読み込めませんでした。前の環境を保持しました。",

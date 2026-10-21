@@ -1639,6 +1639,8 @@
     "status_label": "Stato: %s"
   },
   "input_settings": {
+    "action.next_sidebar_category": "Categoria successiva della barra laterale",
+    "action.previous_sidebar_category": "Categoria precedente della barra laterale",
     "mouse_back": "Pulsante Indietro del mouse",
     "mouse_forward": "Pulsante Avanti del mouse",
     "invalid_profile_name": "Nome del profilo non valido. Usa un nome semplice senza separatori di percorso o caratteri riservati.",
@@ -2692,7 +2694,8 @@
     "gt_metrics_training_required": "Le metriche della camera richiedono una sessione di addestramento inizializzata.",
     "gt_metrics_calculation_failed": "Impossibile calcolare le metriche di questa vista.",
     "perf_hud_tooltip": "Mostra o nascondi l'HUD delle prestazioni",
-    "all_panel_tabs": "Tutti i pannelli"
+    "scroll_panel_tabs_up": "Scorri le schede dei pannelli verso l'alto",
+    "scroll_panel_tabs_down": "Scorri le schede dei pannelli verso il basso"
   },
   "runtime": {
     "environment_map_failed": "Impossibile leggere la mappa ambiente «{}». È stato mantenuto l’ambiente precedente.",

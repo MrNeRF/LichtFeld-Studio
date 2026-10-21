@@ -366,6 +366,8 @@ def preferences_panel_module(monkeypatch):
             ASSET_GALLERY_PRIMARY=SimpleNamespace(
                 name="ASSET_GALLERY_PRIMARY", value=80
             ),
+            NEXT_SIDEBAR_CATEGORY=SimpleNamespace(name="NEXT_SIDEBAR_CATEGORY", value=92),
+            PREVIOUS_SIDEBAR_CATEGORY=SimpleNamespace(name="PREVIOUS_SIDEBAR_CATEGORY", value=93),
             ASSET_GALLERY_COPY_LINK=SimpleNamespace(
                 name="ASSET_GALLERY_COPY_LINK", value=81
             ),

@@ -1626,6 +1626,8 @@
     "status_label": "状态：%s"
   },
   "input_settings": {
+    "action.next_sidebar_category": "下一个侧边栏类别",
+    "action.previous_sidebar_category": "上一个侧边栏类别",
     "mouse_back": "鼠标后退键",
     "mouse_forward": "鼠标前进键",
     "invalid_profile_name": "配置文件名称无效。请使用不含路径分隔符或保留字符的简单名称。",
@@ -2679,7 +2681,8 @@
     "gt_metrics_training_required": "相机指标需要已初始化的训练会话。",
     "gt_metrics_calculation_failed": "无法计算此视图的指标。",
     "perf_hud_tooltip": "显示或隐藏性能 HUD",
-    "all_panel_tabs": "所有面板"
+    "scroll_panel_tabs_up": "向上滚动面板标签",
+    "scroll_panel_tabs_down": "向下滚动面板标签"
   },
   "runtime": {
     "environment_map_failed": "无法读取环境贴图“{}”。已保留之前的环境。",

@@ -156,7 +156,8 @@ namespace lfs::vis::input {
         ASSET_REFRESH,
         TOGGLE_PYTHON_CONSOLE,
         CAMERA_RESTORE_HOME,
-
+        NEXT_SIDEBAR_CATEGORY,
+        PREVIOUS_SIDEBAR_CATEGORY,
     };
 
     enum class ShortcutScope : uint8_t {

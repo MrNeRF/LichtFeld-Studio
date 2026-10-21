@@ -71,6 +71,7 @@ namespace lfs::vis::gui {
         void setTabStripScroll(float value);
 
         std::function<void(const std::string&)> on_tab_changed;
+        std::function<void(const std::string&)> on_tab_closed;
         std::function<void(float, float)> on_splitter_height;
         std::function<void()> on_splitter_end;
         std::function<void(float)> on_resize_width;
@@ -90,7 +91,7 @@ namespace lfs::vis::gui {
         bool syncTabScrollState();
         void syncTabNavigation();
         void scrollTabs(float delta);
-        void cycleTab(int direction, bool wrap);
+        void cycleTab(int direction);
         void selectTab(std::string id);
         bool layoutTabs();
 
@@ -115,6 +116,9 @@ namespace lfs::vis::gui {
         bool tab_scroll_pending_ = false;
         bool tab_layout_dirty_ = true;
         bool tab_navigation_dirty_ = true;
+        bool tabs_overflow_ = false;
+        bool can_scroll_tabs_up_ = false;
+        bool can_scroll_tabs_down_ = false;
         Rml::String active_tab_;
         float tab_scroll_top_ = 0.0f;
         bool reveal_active_tab_ = true;

@@ -109,6 +109,8 @@ class KeymapBindingsSection:
             lf.keymap.Action.PIE_MENU,
         ],
         "ui_global": [
+            lf.keymap.Action.NEXT_SIDEBAR_CATEGORY,
+            lf.keymap.Action.PREVIOUS_SIDEBAR_CATEGORY,
             lf.keymap.Action.TOGGLE_UI,
             lf.keymap.Action.TOGGLE_FULLSCREEN,
             lf.keymap.Action.OPEN_PREFERENCES,

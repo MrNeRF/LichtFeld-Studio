@@ -1637,6 +1637,8 @@
     "status_label": "Status: %s"
   },
   "input_settings": {
+    "action.next_sidebar_category": "Next Sidebar Category",
+    "action.previous_sidebar_category": "Previous Sidebar Category",
     "mouse_back": "Mouse Back",
     "mouse_forward": "Mouse Forward",
     "invalid_profile_name": "Invalid profile name. Use a simple name without path separators or reserved characters.",
@@ -2691,7 +2693,8 @@
     "gt_metrics_training_required": "Camera metrics need an initialized training session.",
     "gt_metrics_calculation_failed": "Could not calculate metrics for this view.",
     "perf_hud_tooltip": "Show or hide the performance HUD",
-    "all_panel_tabs": "All panels"
+    "scroll_panel_tabs_up": "Scroll panel tabs up",
+    "scroll_panel_tabs_down": "Scroll panel tabs down"
   },
   "runtime": {
     "environment_map_failed": "Could not read environment map \"{}\". The previous environment was kept.",

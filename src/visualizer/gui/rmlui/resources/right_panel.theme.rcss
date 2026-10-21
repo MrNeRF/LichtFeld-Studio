@@ -4,6 +4,29 @@
     background-color: transparent;
 }
 
+.tab-nav {
+    background-color: @{right_panel.tab_nav_bg};
+    color: @{text_dim};
+}
+
+.tab-nav:hover,
+.tab-nav:focus-visible {
+    background-color: @{right_panel.tab_nav_hover};
+    color: @{text};
+}
+
+.tab-nav:disabled {
+    background-color: transparent;
+    color: @{right_panel.tab_nav_disabled};
+}
+
+.tab-close { color: @{text_dim}; }
+.tab-close:hover,
+.tab-close:focus-visible {
+    background-color: @{right_panel.tab_hover};
+    color: @{text};
+}
+
 #splitter {
     background-color: transparent;
 }

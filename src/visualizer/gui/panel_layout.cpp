@@ -295,10 +295,6 @@ namespace lfs::vis::gui {
             return;
         }
 
-        // Ctrl+wheel belongs to category switching in the sidebar chrome.
-        if (masked_panel_input.key_ctrl && masked_panel_input.mouse_y >= tab_content_y)
-            masked_panel_input.mouse_wheel = 0.0f;
-
         const float clip_y_min = tab_content_y;
         const float clip_y_max = tab_content_y + tab_content_h;
         constexpr float kPreloadMaxHeight = 100000.0f;

@@ -133,7 +133,8 @@ namespace {
         data[1].label = "Training";
         data[2].label = "A plugin with a much longer translated label";
         RmlRightPanelTestAccess::sync(panel, data, data[0].id);
-        EXPECT_NEAR(button(0)->GetAbsoluteTop(), 6.0f * GetParam(), 0.5f);
+        EXPECT_NEAR(button(0)->GetAbsoluteTop(),
+                    doc->GetElementById("tab-strip-viewport")->GetAbsoluteTop(), 0.5f);
         float last_bottom = 0;
         for (int i = 0; i < 3; ++i) {
             auto* tab = button(i);
@@ -300,16 +301,32 @@ namespace {
         EXPECT_TRUE(picks.empty());
     }
 
-    TEST_P(RightPanelTabsTest, PluginTabsSelectTheirPanelWithoutCloseControls) {
+    TEST_P(RightPanelTabsTest, PluginCloseControlsDoNotActivateTheirTab) {
         auto data = tabs(2);
-        // Shared snapshots still support close controls in the bottom dock.
-        // Sidebar categories remain persistent regardless of that flag.
         data[1].closeable = true;
+        std::vector<std::string> closed;
+        panel.on_tab_closed = [&](const auto& id) { closed.push_back(id); };
         RmlRightPanelTestAccess::sync(panel, data, data[0].id);
+        ASSERT_EQ(button(0)->GetNumChildren(), 2);
+        EXPECT_FALSE(button(0)->GetChild(1)->IsVisible());
+        ASSERT_EQ(button(1)->GetNumChildren(), 2);
+        auto* close = button(1)->GetChild(1);
+        EXPECT_TRUE(close->IsClassSet("tab-close"));
+        EXPECT_TRUE(close->IsVisible());
+        const auto close_top = close->GetAbsoluteTop();
+        const auto label_top = button(1)->GetChild(0)->GetAbsoluteTop();
+        EXPECT_GT(close_top, label_top);
+        close->Click();
+        EXPECT_TRUE(picks.empty());
+        ASSERT_EQ(closed.size(), 1);
+        EXPECT_EQ(closed.front(), data[1].id);
+        ASSERT_TRUE(close->Focus());
+        context->ProcessKeyDown(Rml::Input::KI_RETURN, 0);
+        EXPECT_TRUE(picks.empty());
+        EXPECT_EQ(closed.size(), 2);
         button(1)->Click();
         ASSERT_EQ(picks.size(), 1);
         EXPECT_EQ(picks.back(), data[1].id);
-        EXPECT_EQ(button(1)->GetNumChildren(), 1);
     }
 
     TEST_P(RightPanelTabsTest, KeyboardActivatesFocusedCategories) {
@@ -324,43 +341,50 @@ namespace {
         EXPECT_EQ(picks.back(), data[1].id);
     }
 
-    TEST_P(RightPanelTabsTest, ControlWheelStopsAtEndsAndControlTabWraps) {
-        auto data = tabs(3);
-        RmlRightPanelTestAccess::sync(panel, data, data[2].id);
+    TEST_P(RightPanelTabsTest, ControlWheelScrollsOnlyTheStripWithoutChangingCategory) {
+        auto data = tabs(40);
+        RmlRightPanelTestAccess::sync(panel, data, data[0].id);
         auto input = inputOverRail();
         input.key_ctrl = true;
         input.mouse_wheel = -1;
         panel.processInput(layout(), input);
+        RmlRightPanelTestAccess::settle(panel);
         EXPECT_TRUE(picks.empty());
-        input.mouse_wheel = 1;
+        EXPECT_GT(panel.tabStripScroll(), 0);
+        const float before = panel.tabStripScroll();
+        input.mouse_x = 200;
         panel.processInput(layout(), input);
-        ASSERT_EQ(picks.size(), 1);
-        EXPECT_EQ(picks.back(), data[1].id);
-        input.mouse_wheel = 0;
-        input.input_events.push_back({.kind = lfs::vis::FrameInputEventKind::KeyDown, .scancode = SDL_SCANCODE_TAB});
-        panel.processInput(layout(), input);
-        ASSERT_EQ(picks.size(), 2);
-        EXPECT_EQ(picks.back(), data[2].id);
-        RmlRightPanelTestAccess::sync(panel, data, data[0].id);
-        input.key_shift = true;
-        panel.processInput(layout(), input);
-        EXPECT_EQ(picks.back(), data[2].id);
+        RmlRightPanelTestAccess::settle(panel);
+        EXPECT_EQ(panel.tabStripScroll(), before);
+        EXPECT_TRUE(picks.empty());
     }
 
-    TEST_P(RightPanelTabsTest, ConsecutiveCyclesAdvanceWithoutRendering) {
-        auto data = tabs(4);
+    TEST_P(RightPanelTabsTest, OverflowButtonsShowHiddenTabsAndTrackScrollLimits) {
+        auto data = tabs(40);
         RmlRightPanelTestAccess::sync(panel, data, data[0].id);
-        auto input = inputOverRail();
-        input.key_ctrl = true;
-        input.mouse_wheel = -1;
-        panel.processInput(layout(), input);
-        panel.processInput(layout(), input);
-        ASSERT_EQ(picks.size(), 2);
-        EXPECT_EQ(picks[0], data[1].id);
-        EXPECT_EQ(picks[1], data[2].id);
-        button(0)->Click();
-        panel.processInput(layout(), input);
-        EXPECT_EQ(picks.back(), data[1].id);
+        auto* up = doc->GetElementById("tab-scroll-up");
+        auto* down = doc->GetElementById("tab-scroll-down");
+        EXPECT_TRUE(up->IsVisible());
+        EXPECT_TRUE(down->IsVisible());
+        EXPECT_TRUE(up->HasAttribute("disabled"));
+        EXPECT_FALSE(down->HasAttribute("disabled"));
+        down->Click();
+        RmlRightPanelTestAccess::settle(panel);
+        EXPECT_GT(panel.tabStripScroll(), 0);
+        EXPECT_FALSE(up->HasAttribute("disabled"));
+        RmlRightPanelTestAccess::scroll(panel, 100000);
+        RmlRightPanelTestAccess::settle(panel);
+        EXPECT_TRUE(down->HasAttribute("disabled"));
+        EXPECT_FALSE(up->HasAttribute("disabled"));
+        up->Click();
+        RmlRightPanelTestAccess::settle(panel);
+        EXPECT_FALSE(down->HasAttribute("disabled"));
+        EXPECT_TRUE(picks.empty());
+        data.resize(1);
+        RmlRightPanelTestAccess::sync(panel, data, data[0].id);
+        EXPECT_FALSE(up->IsVisible());
+        EXPECT_FALSE(down->IsVisible());
+        EXPECT_FLOAT_EQ(panel.tabStripScroll(), 0);
     }
 
     TEST_P(RightPanelTabsTest, FocusScrollUpdatesRailAndTheNextWheelOffset) {

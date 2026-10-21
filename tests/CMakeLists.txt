@@ -153,6 +153,8 @@ if(BUILD_VISUALIZER_TESTS)
     endif()
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
+        test_keymap_upgrade.cpp
+        test_keymap_default_contract.cpp
         test_sidebar_input_dispatch.cpp
         test_point_cloud_vulkan_projection.cpp
         test_viewport_grid.cpp
@@ -215,6 +217,7 @@ if(BUILD_VISUALIZER_TESTS)
         GTest::gtest_main
         Zep::Zep
         SDL3::SDL3
+        ZLIB::ZLIB
     )
     # Exercise sidebar gestures through the SDL dispatcher without building the
     # full CUDA test suite or unrelated transform/LSP/project test helpers.

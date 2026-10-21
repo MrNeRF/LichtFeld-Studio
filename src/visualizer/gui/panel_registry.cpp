@@ -1510,7 +1510,7 @@ apply_registered_chrome:
         std::vector<PanelSummary> result;
         for (const auto& p : panels_) {
             if (p.space == space && p.enabled && !p.error_disabled && p.parent_id.empty())
-                result.push_back({p.label, p.id, p.space, p.order, p.enabled});
+                result.push_back({p.label, p.id, p.space, p.order, p.enabled, p.tab_closeable});
         }
         std::stable_sort(result.begin(), result.end(), [](const PanelSummary& a, const PanelSummary& b) {
             if (a.order != b.order)
@@ -1541,7 +1541,7 @@ apply_registered_chrome:
                 }
             }
             result.push_back({std::string(snap.label), std::string(snap.id), snap.space,
-                              snap.order, true});
+                              snap.order, true, false});
         }
         std::stable_sort(result.begin(), result.end(), [](const PanelSummary& a, const PanelSummary& b) {
             if (a.order != b.order)

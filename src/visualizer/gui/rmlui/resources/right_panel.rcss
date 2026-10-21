@@ -70,6 +70,33 @@ body {
     width: 0;
 }
 
+#tab-bar.with-scroll #tab-strip-viewport {
+    top: 26dp;
+    bottom: 20dp;
+}
+
+.tab-nav {
+    position: absolute;
+    left: 0;
+    width: 28dp;
+    height: 20dp;
+    padding: 0;
+    margin: 0;
+    border-width: 0;
+    border-radius: 4dp;
+    line-height: 20dp;
+    font-size: 10dp;
+    text-align: center;
+    cursor: pointer;
+    tab-index: auto;
+    nav: auto;
+}
+
+.tab-nav.hidden { display: none; }
+.tab-nav:disabled { cursor: default; }
+#tab-scroll-up { top: 6dp; }
+#tab-scroll-down { bottom: 0; }
+
 .tab {
     position: relative;
     display: block;
@@ -104,6 +131,26 @@ body {
     transform-origin: 0 0;
     transform: rotate(-90deg);
     pointer-events: none;
+}
+
+.tab-close {
+    position: absolute;
+    bottom: 2dp;
+    left: 50%;
+    margin: 0 0 0 -8dp;
+    width: 16dp;
+    height: 16dp;
+    padding: 0;
+    border-width: 0;
+    border-radius: 4dp;
+    background-color: transparent;
+    line-height: 16dp;
+    text-align: center;
+    font-size: 13dp;
+    font-weight: bold;
+    cursor: pointer;
+    tab-index: auto;
+    nav: auto;
 }
 
 .tab-edge {

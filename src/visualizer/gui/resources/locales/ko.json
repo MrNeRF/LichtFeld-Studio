@@ -1626,6 +1626,8 @@
     "status_label": "상태: %s"
   },
   "input_settings": {
+    "action.next_sidebar_category": "다음 사이드바 카테고리",
+    "action.previous_sidebar_category": "이전 사이드바 카테고리",
     "mouse_back": "마우스 뒤로 버튼",
     "mouse_forward": "마우스 앞으로 버튼",
     "invalid_profile_name": "잘못된 프로필 이름입니다. 경로 구분자나 예약 문자가 없는 이름을 사용하세요.",
@@ -2679,7 +2681,8 @@
     "gt_metrics_training_required": "카메라 지표를 사용하려면 학습 세션을 초기화해야 합니다.",
     "gt_metrics_calculation_failed": "이 보기의 지표를 계산할 수 없습니다.",
     "perf_hud_tooltip": "성능 HUD 표시 또는 숨기기",
-    "all_panel_tabs": "모든 패널"
+    "scroll_panel_tabs_up": "패널 탭 위로 스크롤",
+    "scroll_panel_tabs_down": "패널 탭 아래로 스크롤"
   },
   "runtime": {
     "environment_map_failed": "환경 맵 \"{}\"을(를) 읽을 수 없습니다. 이전 환경이 유지되었습니다.",

@@ -1626,6 +1626,8 @@
     "status_label": "Status: %s"
   },
   "input_settings": {
+    "action.next_sidebar_category": "Nächste Seitenleistenkategorie",
+    "action.previous_sidebar_category": "Vorherige Seitenleistenkategorie",
     "mouse_back": "Maustaste Zurück",
     "mouse_forward": "Maustaste Vorwärts",
     "invalid_profile_name": "Ungültiger Profilname. Verwenden Sie einen einfachen Namen ohne Pfadtrennzeichen oder reservierte Zeichen.",
@@ -2679,7 +2681,8 @@
     "gt_metrics_training_required": "Kamerametriken benötigen eine initialisierte Trainingssitzung.",
     "gt_metrics_calculation_failed": "Metriken für diese Ansicht konnten nicht berechnet werden.",
     "perf_hud_tooltip": "Leistungs-HUD ein- oder ausblenden",
-    "all_panel_tabs": "Alle Panels"
+    "scroll_panel_tabs_up": "Panel-Tabs nach oben scrollen",
+    "scroll_panel_tabs_down": "Panel-Tabs nach unten scrollen"
   },
   "runtime": {
     "environment_map_failed": "Die Umgebungskarte „{}“ konnte nicht gelesen werden. Die bisherige Umgebung wurde beibehalten.",

@@ -6,7 +6,12 @@
     <div id="resize-handle"></div>
     <div id="left-border"></div>
     <div id="splitter"><div id="splitter-grip"></div></div>
-    <div id="tab-bar">
+    <div id="tab-bar" data-class-with-scroll="tabs_overflow">
+        <button id="tab-scroll-up" class="tab-nav"
+                data-tooltip="ui.scroll_panel_tabs_up"
+                data-class-hidden="!tabs_overflow"
+                data-attrif-disabled="!can_scroll_tabs_up"
+                data-event-click="scroll_tabs_up()">&#9650;</button>
         <div id="tab-edge-before" class="tab-edge"></div>
         <div id="tab-edge-after" class="tab-edge"></div>
         <div id="tab-strip-viewport">
@@ -14,11 +19,20 @@
                  class="tab"
                  data-attr-id="tab.dom_id"
                  data-class-active="tab.id == active_tab"
+                 data-class-closeable="tab.closeable"
                  data-event-click="tab_click(tab.id)"
                  data-event-keydown="tab_keydown(tab.id)">
                 <span class="tab-label">{{ tab.label }}</span>
+                <button class="tab-close" data-if="tab.closeable"
+                        data-tooltip="common.close"
+                        data-event-click="tab_close(tab.id)">&#215;</button>
             </div>
         </div>
+        <button id="tab-scroll-down" class="tab-nav"
+                data-tooltip="ui.scroll_panel_tabs_down"
+                data-class-hidden="!tabs_overflow"
+                data-attrif-disabled="!can_scroll_tabs_down"
+                data-event-click="scroll_tabs_down()">&#9660;</button>
     </div>
 </body>
 </rml>

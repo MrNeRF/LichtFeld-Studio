@@ -48,6 +48,8 @@ namespace lfs::vis {
     class SidebarInputDispatchTest : public ::testing::Test {
     protected:
         void SetUp() override {
+            persistence_enabled_ = input::InputBindings::isPersistenceEnabled();
+            input::InputBindings::setPersistenceEnabled(false);
             ASSERT_TRUE(SDL_Init(SDL_INIT_VIDEO));
             ViewerOptions options;
             options.show_startup_overlay = false;
@@ -62,6 +64,7 @@ namespace lfs::vis {
                                                           std::make_unique<NullRenderInterface>(), nullptr));
             gui_->startup_overlay_.dismiss();
             controller_ = std::make_unique<InputController>(window_->window_, viewport_);
+            controller_->initialize();
             window_->setInputController(controller_.get());
             context_ = manager().createContext("dispatch-field", 400, 300);
             document_ = context_->LoadDocumentFromMemory(
@@ -104,6 +107,7 @@ namespace lfs::vis {
             Rml::SetRenderInterface(nullptr);
             services().clear();
             gui::guiFocusState().reset();
+            input::InputBindings::setPersistenceEnabled(persistence_enabled_);
         }
         gui::RmlUIManager& manager() { return gui_->rmlui_manager_; }
         void setKeyboardContext(Rml::Context* context, bool external_enabled) {
@@ -169,6 +173,16 @@ namespace lfs::vis {
             SDL_SetModState(SDL_KMOD_NONE);
             return result;
         }
+        gui::RmlUIManager::InputDispatchResult sidebarKey(SDL_Scancode code, SDL_Keymod mods = SDL_KMOD_NONE,
+                                                          bool repeat = false) {
+            SDL_Event event{};
+            event.type = SDL_EVENT_KEY_DOWN;
+            event.key.windowID = SDL_GetWindowID(window_->getWindow());
+            event.key.scancode = code;
+            event.key.mod = mods;
+            event.key.repeat = repeat;
+            return manager().dispatchInputEvent(event);
+        }
         std::vector<std::string> sidebar_picks_;
         void registerInputFloat(float x = 100.f) {
             class Panel final : public gui::IPanel {
@@ -222,23 +236,29 @@ namespace lfs::vis {
         Rml::ElementFormControlInput* field_ = nullptr;
         uint64_t timestamp_ = 0;
         gui::rml_input::TextInputEscapeRevertController revert_;
+        bool persistence_enabled_ = true;
     };
 } // namespace lfs::vis
 namespace lfs::vis {
-    TEST_F(SidebarInputDispatchTest, SidebarCtrlWheelReservesNativeWheelBeforeScrollableContent) {
+    TEST_F(SidebarInputDispatchTest, SidebarCtrlWheelRemainsAvailableToScrollableContent) {
         gui::RmlPanelHost host(&manager(), "sidebar-content", "");
         attachInputHost(host, 400, 300,
                         "<rml><head><style>body { width:400px; height:300px; }"
                         "#scroll { height:250px; overflow:auto; } #long { height:2000px; }</style></head>"
                         "<body><div id='scroll'><div id='long'>Content</div></div></body></rml>");
-        forwardHost(host, 0, 0);
+        forwardHost(host, 40, 0);
         setupSidebar();
         auto* scroll = host.getDocument()->GetElementById("scroll");
         ASSERT_EQ(scroll->GetScrollTop(), 0);
-        EXPECT_TRUE(sidebarWheel(120, 200, -1, SDL_KMOD_CTRL).consumed);
-        ASSERT_EQ(sidebar_picks_.size(), 1);
-        EXPECT_EQ(sidebar_picks_.back(), "test.sidebar.1");
-        EXPECT_EQ(scroll->GetScrollTop(), 0);
+        sidebarWheel(120, 200, -1, SDL_KMOD_CTRL);
+        EXPECT_TRUE(sidebar_picks_.empty());
+        EXPECT_GT(scroll->GetScrollTop(), 0);
+        const float before = scroll->GetScrollTop();
+        sidebarWheel(20, 200, -1, SDL_KMOD_CTRL);
+        settleSidebar();
+        EXPECT_GT(sidebar().tabStripScroll(), 0);
+        EXPECT_EQ(scroll->GetScrollTop(), before);
+        EXPECT_TRUE(sidebar_picks_.empty());
         sidebarWheel(120, 200, -1, SDL_KMOD_NONE);
         EXPECT_GT(scroll->GetScrollTop(), 0);
     }
@@ -265,10 +285,54 @@ namespace lfs::vis {
         EXPECT_EQ(sidebar_picks_.back(), "test.sidebar.2");
     }
 
+    TEST_F(SidebarInputDispatchTest, SidebarKeymapRebindingClearingAndCaptureAreRespected) {
+        setupSidebar();
+        auto& bindings = controller_->getBindings();
+        bindings.setBinding(input::ToolMode::GLOBAL, input::Action::NEXT_SIDEBAR_CATEGORY,
+                            input::KeyTrigger{input::KEY_F8, input::MODIFIER_ALT});
+        bindings.setBinding(input::ToolMode::GLOBAL, input::Action::PREVIOUS_SIDEBAR_CATEGORY,
+                            input::KeyTrigger{input::KEY_F9});
+        sidebarKey(SDL_SCANCODE_TAB, SDL_KMOD_CTRL);
+        EXPECT_TRUE(sidebar_picks_.empty());
+        ASSERT_TRUE(sidebarKey(SDL_SCANCODE_F8, SDL_KMOD_ALT).consumed);
+        ASSERT_EQ(sidebar_picks_.size(), 1);
+        EXPECT_EQ(sidebar_picks_.back(), "test.sidebar.1");
+        ASSERT_TRUE(sidebarKey(SDL_SCANCODE_F9).consumed);
+        ASSERT_EQ(sidebar_picks_.size(), 2);
+        EXPECT_EQ(sidebar_picks_.back(), "test.sidebar.0");
+        ASSERT_TRUE(sidebarKey(SDL_SCANCODE_F9).consumed);
+        ASSERT_EQ(sidebar_picks_.size(), 3);
+        EXPECT_EQ(sidebar_picks_.back(), "test.sidebar.13");
+        const auto before = sidebar_picks_.size();
+        sidebarKey(SDL_SCANCODE_F8, SDL_KMOD_NONE);
+        sidebarKey(SDL_SCANCODE_F8, SDL_KMOD_ALT, true);
+        EXPECT_EQ(sidebar_picks_.size(), before);
+        bindings.clearBinding(input::ToolMode::GLOBAL, input::Action::NEXT_SIDEBAR_CATEGORY);
+        sidebarKey(SDL_SCANCODE_F8, SDL_KMOD_ALT);
+        EXPECT_EQ(sidebar_picks_.size(), before);
+        bindings.startCapture(input::ToolMode::GLOBAL, input::Action::PREVIOUS_SIDEBAR_CATEGORY);
+        sidebarKey(SDL_SCANCODE_F9);
+        EXPECT_EQ(sidebar_picks_.size(), before);
+        bindings.cancelCapture();
+    }
+
+    TEST_F(SidebarInputDispatchTest, SidebarConsecutiveKeymapCyclesAdvanceWithoutRendering) {
+        setupSidebar();
+        EXPECT_TRUE(sidebarKey(SDL_SCANCODE_TAB, SDL_KMOD_CTRL).consumed);
+        EXPECT_TRUE(sidebarKey(SDL_SCANCODE_TAB, SDL_KMOD_CTRL).consumed);
+        ASSERT_EQ(sidebar_picks_.size(), 2);
+        EXPECT_EQ(sidebar_picks_[0], "test.sidebar.1");
+        EXPECT_EQ(sidebar_picks_[1], "test.sidebar.2");
+        EXPECT_TRUE(sidebarKey(SDL_SCANCODE_TAB, SDL_KMOD_CTRL | SDL_KMOD_SHIFT).consumed);
+        EXPECT_EQ(sidebar_picks_.back(), "test.sidebar.1");
+    }
+
     TEST_F(SidebarInputDispatchTest, SidebarFloatingOcclusionBlocksNewGesturesButKeepsOwnedDrag) {
         setupSidebar();
         registerInputFloat(0);
         sidebarWheel(20, 100, -1, SDL_KMOD_CTRL);
+        settleSidebar();
+        EXPECT_FLOAT_EQ(sidebar().tabStripScroll(), 0);
         EXPECT_TRUE(sidebar_picks_.empty());
         SDL_Event event{};
         event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;

@@ -538,11 +538,11 @@ TEST_F(PanelLayoutRenderDemandTest, VerticalTabsReserveWidthInLiveAndCachedConte
             input.mouse_wheel = -1;
             layout.renderRightPanel(ui, draw_ctx, true, false, windows, focus, input, s);
             EXPECT_EQ(layout.captureProjectState().tab_scroll_offset, 0);
-            // Ctrl+wheel in the content belongs to category switching as well.
+            // Ctrl+wheel in the content remains available to the panel.
             input.mouse_x = active->last_draw_x + 10;
             input.key_ctrl = true;
             layout.renderRightPanel(ui, draw_ctx, true, false, windows, focus, input, s);
-            EXPECT_EQ(layout.captureProjectState().tab_scroll_offset, 0);
+            EXPECT_GT(layout.captureProjectState().tab_scroll_offset, 0);
         }
     }
     lfs::python::set_shared_dpi_scale(previous_dpi);

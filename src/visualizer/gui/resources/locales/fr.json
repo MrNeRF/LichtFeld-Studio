@@ -1626,6 +1626,8 @@
     "status_label": "Statut : %s"
   },
   "input_settings": {
+    "action.next_sidebar_category": "Catégorie suivante de la barre latérale",
+    "action.previous_sidebar_category": "Catégorie précédente de la barre latérale",
     "mouse_back": "Bouton Retour de la souris",
     "mouse_forward": "Bouton Avancer de la souris",
     "invalid_profile_name": "Nom de profil invalide. Utilisez un nom simple sans séparateur de chemin ni caractère réservé.",
@@ -2679,7 +2681,8 @@
     "gt_metrics_training_required": "Les métriques de caméra nécessitent une session d’entraînement initialisée.",
     "gt_metrics_calculation_failed": "Impossible de calculer les métriques de cette vue.",
     "perf_hud_tooltip": "Afficher ou masquer le HUD de performances",
-    "all_panel_tabs": "Tous les panneaux"
+    "scroll_panel_tabs_up": "Faire défiler les onglets vers le haut",
+    "scroll_panel_tabs_down": "Faire défiler les onglets vers le bas"
   },
   "runtime": {
     "environment_map_failed": "Impossible de lire la carte d’environnement « {} ». L’environnement précédent a été conservé.",
