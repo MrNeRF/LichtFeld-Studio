@@ -783,7 +783,12 @@
     "button.stop": "Training stoppen",
     "button.reset": "Training resetten",
     "button.add": "Toevoegen",
-    "button.remove": "Verwijderen"
+    "button.remove": "Verwijderen",
+    "distorted_warning.title": "Vervormde beelden gedetecteerd",
+    "distorted_warning.message": "Vervormde beelden gedetecteerd. Schakel Vervorming corrigeren of GUT in om te trainen met camera’s met vervorming.",
+    "distorted_warning.btn_cancel": "Annuleren",
+    "distorted_warning.btn_undistort": "Vervorming corrigeren",
+    "distorted_warning.btn_gut": "GUT"
   },
   "rendering": "Renderen",
   "scene": {

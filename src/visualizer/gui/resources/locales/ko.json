@@ -783,7 +783,12 @@
     "button.stop": "학습 중지",
     "button.reset": "학습 재설정",
     "button.add": "추가",
-    "button.remove": "제거"
+    "button.remove": "제거",
+    "distorted_warning.title": "왜곡된 이미지 감지됨",
+    "distorted_warning.message": "왜곡된 이미지가 감지되었습니다. 왜곡이 있는 카메라로 학습하려면 왜곡 보정 또는 GUT를 활성화하세요.",
+    "distorted_warning.btn_cancel": "취소",
+    "distorted_warning.btn_undistort": "왜곡 보정",
+    "distorted_warning.btn_gut": "GUT"
   },
   "rendering": "렌더링",
   "scene": {

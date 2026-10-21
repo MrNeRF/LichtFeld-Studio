@@ -783,7 +783,12 @@
     "button.stop": "Arrêter l'Entraînement",
     "button.reset": "Réinitialiser l'Entraînement",
     "button.add": "Ajouter",
-    "button.remove": "Retirer"
+    "button.remove": "Retirer",
+    "distorted_warning.title": "Images distordues détectées",
+    "distorted_warning.message": "Images distordues détectées. Activez Corriger la distorsion ou GUT pour entraîner avec des caméras à distorsion.",
+    "distorted_warning.btn_cancel": "Annuler",
+    "distorted_warning.btn_undistort": "Corriger la distorsion",
+    "distorted_warning.btn_gut": "GUT"
   },
   "rendering": "Rendu",
   "scene": {

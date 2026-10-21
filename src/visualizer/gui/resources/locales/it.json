@@ -796,7 +796,12 @@
     "button.stop": "Interrompi Training",
     "button.reset": "Resetta Training",
     "button.add": "Aggiungi",
-    "button.remove": "Rimuovi"
+    "button.remove": "Rimuovi",
+    "distorted_warning.title": "Immagini distorte rilevate",
+    "distorted_warning.message": "Rilevate immagini distorte. Attiva Rimuovi distorsione o GUT per addestrare con fotocamere con distorsione.",
+    "distorted_warning.btn_cancel": "Annulla",
+    "distorted_warning.btn_undistort": "Rimuovi distorsione",
+    "distorted_warning.btn_gut": "GUT"
   },
   "rendering": "Rendering",
   "scene": {

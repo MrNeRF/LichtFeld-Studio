@@ -783,7 +783,12 @@
     "button.stop": "停止训练",
     "button.reset": "重置训练",
     "button.add": "添加",
-    "button.remove": "移除"
+    "button.remove": "移除",
+    "distorted_warning.title": "检测到畸变图像",
+    "distorted_warning.message": "检测到畸变图像。请启用去畸变或GUT以使用有畸变的相机进行训练。",
+    "distorted_warning.btn_cancel": "取消",
+    "distorted_warning.btn_undistort": "去畸变",
+    "distorted_warning.btn_gut": "GUT"
   },
   "rendering": "渲染",
   "scene": {

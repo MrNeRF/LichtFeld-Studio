@@ -783,7 +783,12 @@
     "button.stop": "Zatrzymaj Trening",
     "button.reset": "Resetuj Trening",
     "button.add": "Dodaj",
-    "button.remove": "Usuń"
+    "button.remove": "Usuń",
+    "distorted_warning.title": "Wykryto zniekształcone obrazy",
+    "distorted_warning.message": "Wykryto zniekształcone obrazy. Włącz korekcję zniekształceń lub GUT, aby trenować z kamerami ze zniekształceniami.",
+    "distorted_warning.btn_cancel": "Anuluj",
+    "distorted_warning.btn_undistort": "Korekcja zniekształceń",
+    "distorted_warning.btn_gut": "GUT"
   },
   "rendering": "Renderowanie",
   "scene": {

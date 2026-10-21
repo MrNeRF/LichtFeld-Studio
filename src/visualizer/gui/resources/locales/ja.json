@@ -783,7 +783,12 @@
     "button.stop": "トレーニングを停止",
     "button.reset": "トレーニングをリセット",
     "button.add": "追加",
-    "button.remove": "削除"
+    "button.remove": "削除",
+    "distorted_warning.title": "歪みのある画像が検出されました",
+    "distorted_warning.message": "歪みのある画像が検出されました。歪みのあるカメラで学習するには、歪み補正またはGUTを有効にしてください。",
+    "distorted_warning.btn_cancel": "キャンセル",
+    "distorted_warning.btn_undistort": "歪み補正",
+    "distorted_warning.btn_gut": "GUT"
   },
   "rendering": "レンダリング",
   "scene": {

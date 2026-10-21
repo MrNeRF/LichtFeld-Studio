@@ -792,7 +792,12 @@
     "button.stop": "Stop Training",
     "button.reset": "Reset Training",
     "button.add": "Add",
-    "button.remove": "Remove"
+    "button.remove": "Remove",
+    "distorted_warning.title": "Distorted Images Detected",
+    "distorted_warning.message": "Distorted images detected. Enable Undistort or GUT to train on cameras with distortion.",
+    "distorted_warning.btn_cancel": "Cancel",
+    "distorted_warning.btn_undistort": "Undistort",
+    "distorted_warning.btn_gut": "GUT"
   },
   "rendering": "Rendering",
   "scene": {
