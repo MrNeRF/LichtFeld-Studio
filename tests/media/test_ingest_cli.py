@@ -230,6 +230,14 @@ class IngestCLI(unittest.TestCase):
                     self.assertIn("tests/media/extractor/apple_hevc_fallback_runner.cpp",
                                   {source["path"] for source in target.get("sources",[])})
                     allowed_providers.add(target["name"])
+                if target["name"]=="media_av1_provider_runner":
+                    # This test host compiles the codec-open fault seam directly;
+                    # application consumers must still use the production provider.
+                    self.assertEqual(target["type"],"EXECUTABLE")
+                    self.assertTrue({"tests/media/extractor/av1_provider_contracts.cpp",
+                                     "tests/media/extractor/encode_session_contracts.cpp"}.issubset(
+                                         {source["path"] for source in target.get("sources",[])}))
+                    allowed_providers.add(target["name"])
                 self.assertIn(target["name"],allowed_providers,f"FFmpeg linked independently by {target['name']}: {ffmpeg}")
         self.assertIn("lfs_media",providers)
         filename="lfs_media.dll" if sys.platform=="win32" else ("liblfs_media.dylib" if sys.platform=="darwin" else "liblfs_media.so")
