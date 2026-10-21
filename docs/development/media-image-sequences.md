@@ -27,6 +27,9 @@ environment export post-processing. It rejects mesh/environment compositing,
 point-cloud mode and non-native reconstruction rather than silently quantizing
 or ignoring those features. These are different rendering contracts, not six
 interchangeable file extensions for the same processed image.
+Equirectangular output follows the existing raster backend capabilities and
+currently requires 3DGUT; an unsupported backend fails rather than exporting
+perspective pixels under an equirectangular request.
 
 The script defaults are EXR HALF/ZIP, TIFF16 sRGB, JXL Float32 lossless and AVIF
 8-bit lossless after the existing SDR conversion. C++ callers can select the
@@ -61,6 +64,9 @@ image is published through the existing atomic writer.
 Call session operations serially. Cancellation from another thread uses the
 thread-safe job token or caller-supplied cancellation callback; concurrent calls
 to `write`, `close` or `abort` on the same session are not supported.
+Callback reentry into `open`, `write` or `close` is rejected before the Tensor
+adapter can replace its options or readback storage. A callback may abort the
+sequence; it cannot reopen it within the active call or publish another frame.
 
 Automatic renderer resume is not provided. Existing image files are never
 adopted solely because their names match. The video extraction checkpoint does

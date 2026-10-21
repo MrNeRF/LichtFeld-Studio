@@ -144,6 +144,48 @@ int main(int argc, char** argv) {
         }
         options.input_color.transfer = media::ColorTransfer::Linear;
 
+        options.output.files.output_directory = root / "reentrant";
+        bool armed = true;
+        bool in_callback = false;
+        bool attempted = false;
+        options.output.cancelled = [&] {
+            if (armed && !in_callback) {
+                in_callback = true;
+                const auto nested = output.write(raw);
+                in_callback = false;
+                require(!nested && nested.error().code() == ErrorCode::FailedPrecondition,
+                        "Tensor callback reentry must be rejected before readback or publication");
+                const auto reopened = output.open(options);
+                const auto closed = output.close();
+                require(!reopened && reopened.error().code() == ErrorCode::FailedPrecondition &&
+                            !closed && closed.error().code() == ErrorCode::FailedPrecondition,
+                        "Tensor callback open/close reentry changed the active session");
+                attempted = true;
+            }
+            return false;
+        };
+        good(output.open(options));
+        armed = true;
+        good(output.write(raw));
+        good(output.close());
+        require(attempted, "Tensor callback reentry was not exercised");
+        options.output.files.output_directory = root / "callback-abort";
+        armed = false;
+        options.output.cancelled = [&] {
+            if (armed) {
+                output.abort();
+                require(!output.open(options), "Tensor callback reopened after abort during an active write");
+            }
+            return false;
+        };
+        good(output.open(options));
+        armed = true;
+        const auto aborted = output.write(raw);
+        require(!aborted && aborted.error().code() == ErrorCode::Cancelled,
+                "Tensor callback abort did not cancel before readback");
+        require(!fs::exists(root / "callback-abort/frame_0000.exr"), "Tensor callback abort published a frame");
+        options.output.cancelled = {};
+
         options.output.files.output_directory = root / "nan";
         good(output.open(options));
         samples[0] = std::numeric_limits<float>::quiet_NaN();

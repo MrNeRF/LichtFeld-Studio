@@ -11,7 +11,7 @@ namespace lfs::io {
     public:
         [[nodiscard]] media::SinkResult open(const TensorImageSequenceOptions&);
         [[nodiscard]] media::SinkResult write(const core::Tensor&);
-        [[nodiscard]] media::SinkResult close() { return sequence_.close(); }
+        [[nodiscard]] media::SinkResult close();
         void abort() noexcept { sequence_.abort(); }
         [[nodiscard]] bool isOpen() const noexcept { return sequence_.isOpen(); }
 
@@ -20,5 +20,6 @@ namespace lfs::io {
         media::ImageSequence sequence_;
         std::vector<float> linear_;
         std::vector<uint8_t> bytes_;
+        bool in_call_ = false;
     };
 } // namespace lfs::io

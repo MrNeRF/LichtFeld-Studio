@@ -12,6 +12,13 @@ from test_render_on_demand_idle import _call, _tool
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
 
 
+def test_original_float_capture_contract(camera_runtime):
+    # The shared renderer overload must preserve the existing analytic color,
+    # alpha and tiled-capture contract as well as the new timeline path.
+    from test_float_image_capture_runtime import test_real_float_color_capture
+    test_real_float_color_capture(camera_runtime)
+
+
 def test_timeline_image_sequence_formats_and_collision(camera_runtime, tmp_path):
     endpoint = camera_runtime
     _editor(endpoint, '''
@@ -63,6 +70,27 @@ lf.ui.reset_video_reconstruction_selection()
         job = _tool(endpoint, "runtime_job_wait", {"job_id": "export.video", "until": "inactive", "timeout_ms": 60000})
         assert job["outcome"] == "completed" and job["details"]["current_frame"] == 3, job
         assert len(list(directory.iterdir())) == 3
+
+    _editor(endpoint, "lf.get_render_settings().equirectangular = True")
+    try:
+        # The native equirectangular raster contract requires 3DGUT; do not
+        # accept an empty frame or silently substitute a perspective render.
+        directory = tmp_path / "unsupported-spherical"
+        _editor(endpoint, f"lf.ui.export_image_sequence(64, 32, 24, {str(directory)!r})")
+        failed = _call(endpoint, "tools/call", {"name": "runtime_job_wait", "arguments": {
+            "job_id": "export.video", "until": "inactive", "timeout_ms": 60000}})["structuredContent"]
+        assert failed["outcome"] == "failed" and not list(directory.glob("*.png")), failed
+        _editor(endpoint, "lf.get_render_settings().raster_backend = 3")
+        for format, extension in (("png", "png"), ("exr", "exr")):
+            directory = tmp_path / (format + "-spherical")
+            _editor(endpoint, f"lf.ui.export_image_sequence(64, 32, 24, {str(directory)!r}, format={format!r})")
+            job = _tool(endpoint, "runtime_job_wait", {"job_id": "export.video", "until": "inactive", "timeout_ms": 60000})
+            assert job["outcome"] == "completed" and job["details"]["current_frame"] == 3, job
+            assert len(list(directory.glob("*." + extension))) == 3
+            if format == "png":
+                assert struct.unpack(">II", (directory / "frame_000000.png").read_bytes()[16:24]) == (64, 32)
+    finally:
+        _editor(endpoint, "lf.get_render_settings().equirectangular = False; lf.get_render_settings().raster_backend = 2")
 
     path["duration"] = 60.0
     _editor(endpoint, f"assert lf.ui.set_camera_path({path!r})")

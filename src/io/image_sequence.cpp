@@ -9,13 +9,19 @@
 
 namespace lfs::io {
     namespace {
+        struct ActiveCall {
+            bool& active;
+            explicit ActiveCall(bool& value) : active(value) { active = true; }
+            ~ActiveCall() { active = false; }
+        };
         media::SinkResult fail(ErrorCode code, std::string detail) {
             return media::SinkResult::failure(make_error({.code = code, .domain = ErrorDomain::IO, .detail = std::move(detail), .detection = LFS_SOURCE_SITE_CURRENT()}));
         }
     } // namespace
     media::SinkResult TensorImageSequence::open(const TensorImageSequenceOptions& options) {
-        if (sequence_.isOpen())
+        if (in_call_ || sequence_.isOpen())
             return fail(ErrorCode::FailedPrecondition, "Tensor image sequence already open");
+        const ActiveCall call(in_call_);
         const auto& layout = options.output.layout;
         const auto& color = options.input_color;
         if ((color.transfer != media::ColorTransfer::Linear && color.transfer != media::ColorTransfer::Srgb) ||
@@ -43,6 +49,9 @@ namespace lfs::io {
         }
     }
     media::SinkResult TensorImageSequence::write(const core::Tensor& image) {
+        if (in_call_)
+            return fail(ErrorCode::FailedPrecondition, "Tensor image sequence callback is reentrant");
+        const ActiveCall call(in_call_);
         const auto write = [&]() -> media::SinkResult {
             if (!sequence_.isOpen())
                 return fail(ErrorCode::FailedPrecondition, "Tensor image sequence is not open");
@@ -53,7 +62,7 @@ namespace lfs::io {
                 (image.dtype() != core::DataType::Float32 && image.dtype() != core::DataType::Float16) ||
                 image.size(0) != static_cast<size_t>(layout.height) || image.size(1) != static_cast<size_t>(layout.width) || image.size(2) != channels)
                 return fail(ErrorCode::InvalidArgument, "Tensor sequence frame requires matching HWC Float16/Float32 RGB/RGBA");
-            if (output.cancelled && output.cancelled())
+            if ((output.cancelled && output.cancelled()) || !sequence_.isOpen())
                 return fail(ErrorCode::Cancelled, "Tensor image sequence cancelled before readback");
             const auto pixels = image.to(core::DataType::Float32).cpu().contiguous();
             const float* samples = pixels.ptr<float>();
@@ -102,5 +111,11 @@ namespace lfs::io {
         if (!result)
             sequence_.abort();
         return result;
+    }
+    media::SinkResult TensorImageSequence::close() {
+        if (in_call_)
+            return fail(ErrorCode::FailedPrecondition, "Tensor image sequence callback is reentrant");
+        const ActiveCall call(in_call_);
+        return sequence_.close();
     }
 } // namespace lfs::io
