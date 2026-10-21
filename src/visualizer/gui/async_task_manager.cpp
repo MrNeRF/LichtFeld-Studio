@@ -3276,7 +3276,7 @@ namespace lfs::vis::gui {
             video_export_state_.thread.reset();
         }
         if (options.image_sequence && path.empty()) {
-            fail_start("Image sequence requires an explicit output directory");
+            fail_start(LOC(lichtfeld::Strings::Runtime::IMAGE_SEQUENCE_DIRECTORY_REQUIRED));
             return;
         }
 
@@ -3312,7 +3312,7 @@ namespace lfs::vis::gui {
             if (validated_options->image_sequence)
                 images = std::make_unique<io::TensorImageSequence>();
         } catch (const std::bad_alloc&) {
-            fail_start("Image sequence setup allocation failed");
+            fail_start(LOC(lichtfeld::Strings::Runtime::IMAGE_SEQUENCE_ALLOCATION_FAILED));
             return;
         }
         auto encoder = validated_options->image_sequence ? nullptr : lfs::gui::createVideoEncoder();
@@ -3356,7 +3356,7 @@ namespace lfs::vis::gui {
         if (linear_images && (!snapshot_result->gaussianModel() || render_settings.point_cloud_mode ||
                               !snapshot_result->meshes.empty() || environmentBackgroundEnabled(render_settings) ||
                               reconstruction_plan->provenance().effective_backend_id != "native")) {
-            fail_start("Linear image sequences require Gaussian rendering without mesh/environment compositing or reconstruction post-processing");
+            fail_start(LOC(lichtfeld::Strings::Runtime::IMAGE_SEQUENCE_LINEAR_RENDER_REQUIRED));
             return;
         }
 
@@ -3370,7 +3370,7 @@ namespace lfs::vis::gui {
         const float duration = timeline.clipDuration();
         if (!std::isfinite(duration) || duration < 0 ||
             static_cast<double>(duration) * export_options.framerate > static_cast<double>(std::numeric_limits<int>::max()) - .5) {
-            fail_start("Timeline duration exceeds the supported export frame count");
+            fail_start(LOC(lichtfeld::Strings::Runtime::EXPORT_FRAME_COUNT_EXCEEDED));
             return;
         }
         const int total_frames = lfs::io::video::videoExportFrameCount(duration, export_options.framerate);
@@ -3564,7 +3564,7 @@ namespace lfs::vis::gui {
                                     window_manager != nullptr ? window_manager->getGraphicsContext() : nullptr;
                                 if (image_format && *image_format != media::FramePixelFormat::RGB8) {
                                     if (!snapshot_ptr->gaussianModel() || !snapshot_ptr->meshes.empty())
-                                        return std::unexpected("Linear image sequence content changed to an unsupported render path");
+                                        return std::unexpected(LOC(lichtfeld::Strings::Runtime::IMAGE_SEQUENCE_RENDER_PATH_CHANGED));
                                     const RenderingManager::ExportImageRequest request{
                                         .rotation = glm::mat3_cast(cam_state.rotation),
                                         .translation = cam_state.position,

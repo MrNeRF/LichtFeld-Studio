@@ -928,6 +928,11 @@ namespace lichtfeld::Strings {
         inline constexpr const char* EXPORT_EXTENSION_REQUIRED = "runtime.export_extension_required";
         inline constexpr const char* EXPORT_EXTENSION_WARNING = "runtime.export_extension_warning";
         inline constexpr const char* EXPORT_SH_DEGREE_CLAMPED = "runtime.export_sh_degree_clamped";
+        inline constexpr const char* IMAGE_SEQUENCE_DIRECTORY_REQUIRED = "runtime.image_sequence_directory_required";
+        inline constexpr const char* IMAGE_SEQUENCE_ALLOCATION_FAILED = "runtime.image_sequence_allocation_failed";
+        inline constexpr const char* IMAGE_SEQUENCE_LINEAR_RENDER_REQUIRED = "runtime.image_sequence_linear_render_required";
+        inline constexpr const char* EXPORT_FRAME_COUNT_EXCEEDED = "runtime.export_frame_count_exceeded";
+        inline constexpr const char* IMAGE_SEQUENCE_RENDER_PATH_CHANGED = "runtime.image_sequence_render_path_changed";
         inline constexpr const char* VIDEO_ENCODER_UNAVAILABLE = "runtime.video_encoder_unavailable";
         inline constexpr const char* VIDEO_ENCODER_PROBE_FAILED = "runtime.video_encoder_probe_failed";
         inline constexpr const char* SCENE_MANAGER_UNAVAILABLE = "runtime.scene_manager_unavailable";
