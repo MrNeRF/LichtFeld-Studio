@@ -8,14 +8,31 @@
 #include <cmath>
 #include <core/detail/fused_pointwise.hpp>
 #include <core/detail/tensor_dtype_dispatch.hpp>
+#include <core/failure_report.hpp>
 #include <core/tensor.hpp>
 #include <cstdio>
 #include <cstring>
 #include <limits>
 #include <numeric>
+#include <source_location>
 #include <stdexcept>
 #include <vector>
 // This isolated executable links the real adapter without the rest of lfs_core.
+// Tensor factory paths belong to integrated contracts and fail explicitly here.
+// Diagnostic assertions throw locally without pulling in the application logger.
+namespace lfs::core {
+    GpuBackendScope::GpuBackendScope(GpuBackend) { throw std::runtime_error("No Tensor factory scope linked in isolated storage test"); }
+    GpuBackendScope::~GpuBackendScope() = default;
+    Tensor Tensor::from_external_owner(void*, TensorShape, Device, DataType, std::shared_ptr<void>, size_t, cudaStream_t, std::string) {
+        throw std::runtime_error("No external Tensor factory linked in isolated storage test");
+    }
+    std::string capture_host_stacktrace(size_t) { return "isolated HIP storage test"; }
+    namespace detail {
+        [[noreturn]] void assertion_failed(std::string_view, std::string_view, std::string_view message, SourceSite) {
+            throw std::runtime_error(std::string(message));
+        }
+    }
+}
 namespace lfs::core::internal {
     GpuBackendOps::~GpuBackendOps() = default;
     void GpuBackendOps::push_range(const char*) { throw std::runtime_error("No ranges in isolated test"); }
@@ -35,12 +52,13 @@ void require(bool value, const char* message) {
         throw std::runtime_error(message);
 }
 template <class F>
-void reject(F&& f) {
+void reject(F&& f, std::source_location site = std::source_location::current()) {
     bool rejected = false;
     try {
         f();
     } catch (const std::exception&) { rejected = true; }
-    require(rejected, "Expected explicit HIP error");
+    if (!rejected)
+        throw std::runtime_error("Expected explicit HIP error at test line " + std::to_string(site.line()));
 }
 template <class T>
 constexpr DataType type_id() {
@@ -1173,7 +1191,12 @@ int main(int argc, char** argv) try {
     cuda.cuda_stream = reinterpret_cast<cudaStream_t>(uintptr_t(1));
     reject([&] { gpu.synchronize_stream(cuda); });
     reject([&] { gpu.shutdown(); });
-    reject([&] { gpu.sgemm(a, b, output, {}, {}); }); // Unported operations cannot silently run elsewhere.
+    // Empty matrix multiplication is a supported no-op.
+    std::vector<uint8_t> before_empty_gemm((count + 16) * 4), after_empty_gemm(before_empty_gemm.size());
+    gpu.copy_device_to_host({base_output, host(before_empty_gemm.data()), before_empty_gemm.size()});
+    gpu.sgemm(a, b, output, {}, {});
+    gpu.copy_device_to_host({base_output, host(after_empty_gemm.data()), after_empty_gemm.size()});
+    require(before_empty_gemm == after_empty_gemm, "Empty HIP GEMM changed output storage");
     gpu.copy_device_to_device({a, output, count * 4, true});
     gpu.copy_device_to_host({output, host(actual.data()), count * 4});
     require(actual == x, "HIP device copy failed");

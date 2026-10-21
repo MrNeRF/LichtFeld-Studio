@@ -233,11 +233,14 @@ if(LFS_HIP_PROBE_TRAINING_SESSION)
                 "${CMAKE_CURRENT_SOURCE_DIR}/core_backend.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/../../src/core/tensor/backend/hip/hip_backend_ops.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/../../src/core/tensor/backend/hip/hip_unsupported_ops.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../src/core/tensor/backend/hip/external_access.cpp"
                 "/Fe:${_core_test}" "/Fo:${CMAKE_CURRENT_BINARY_DIR}/"
             DEPENDS core_backend.cpp "../../src/core/tensor/backend/hip/hip_backend_ops.cpp"
                 "../../src/core/tensor/backend/hip/hip_backend_ops.hpp" "../../src/core/tensor/backend/hip/hip_unsupported_ops.cpp"
                 "../../src/core/tensor/backend/hip/runtime_api.h"
-                "../../src/core/tensor/backend/hip/movement_ops.hpp" VERBATIM)
+                "../../src/core/tensor/backend/hip/movement_ops.hpp"
+                "../../src/core/tensor/backend/hip/external_access.cpp"
+                "../../src/core/tensor/backend/hip/external_access.hpp" VERBATIM)
         add_custom_target(hip_core_backend_contract ALL DEPENDS "${_core_test}")
         add_dependencies(hip_core_backend_contract lfs_hip_runtime_build)
         add_test(NAME HipTensor.CoreBackendPointwiseAndOwnership COMMAND "${_core_test}" "${LFS_HIP_RUNTIME_LIBRARY}")
