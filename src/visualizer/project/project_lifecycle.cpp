@@ -6477,9 +6477,14 @@ namespace lfs::vis::project {
         const auto training_uuid =
             scene.getTrainingModelNodeUuid();
         std::vector<lfs::core::Uuid>
-            omit_unbound_training;
+            omitted_nodes;
         for (const auto* node : scene.getNodes()) {
             if (!node) {
+                continue;
+            }
+            if (node->transient) {
+                omitted_nodes.push_back(
+                    node->uuid);
                 continue;
             }
             const bool geometry =
@@ -6514,7 +6519,7 @@ namespace lfs::vis::project {
                         DocumentSyncMode::
                             LightTrainingAutosave &&
                     !keepStoredCheckpointChapters()) {
-                    omit_unbound_training.push_back(
+                    omitted_nodes.push_back(
                         node->uuid);
                     continue;
                 }
@@ -6554,7 +6559,7 @@ namespace lfs::vis::project {
         auto captured_scene =
             lfs::io::project::capture_scene_graph(
                 scene, bindings,
-                omit_unbound_training);
+                omitted_nodes);
         if (!captured_scene) {
             return lfs::Status::failure(
                 std::move(captured_scene).error());
@@ -6940,7 +6945,7 @@ namespace lfs::vis::project {
                 lfs::io::project::
                     capture_selection_chapter(
                         scene, live_selected_nodes,
-                        omit_unbound_training);
+                        omitted_nodes);
             if (!captured_selection) {
                 return lfs::Status::failure(
                     std::move(captured_selection)
@@ -7068,18 +7073,7 @@ namespace lfs::vis::project {
                 return lfs::Status::failure(
                     std::move(snapshot).error());
             }
-            std::filesystem::path dataset_path;
-            if (manager->hasDataset()) {
-                dataset_path =
-                    manager->getDatasetPath();
-                if (dataset_path.empty()) {
-                    if (const auto* trainer =
-                            viewer_.getTrainer()) {
-                        dataset_path = trainer->getParams()
-                                           .dataset.data_path;
-                    }
-                }
-            }
+            auto dataset_path = loadedDatasetPath();
             lfs::training::absolutize_dataset_path_for_snapshot(
                 dataset_path);
             if (!dataset_path.empty()) {
@@ -7158,7 +7152,7 @@ namespace lfs::vis::project {
             auto session =
                 viewer_.captureProjectSession(
                     &staged_references, project_root,
-                    omit_unbound_training);
+                    omitted_nodes);
             if (!session) {
                 return lfs::Status::failure(
                     std::move(session).error());
@@ -9720,6 +9714,60 @@ namespace lfs::vis::project {
         return poll;
     }
 
+    std::filesystem::path ProjectLifecycle::loadedDatasetPath() const {
+        const auto* manager = viewer_.getSceneManager();
+        if (!manager || !manager->hasDataset()) {
+            return {};
+        }
+        auto path = manager->getDatasetPath();
+        if (path.empty()) {
+            if (const auto* trainer = viewer_.getTrainer()) {
+                path = trainer->getParams().dataset.data_path;
+            }
+        }
+        return path;
+    }
+
+    lfs::Result<ProjectTrainingSource>
+    ProjectLifecycle::trainingSource() {
+        const auto* parameters = viewer_.getParameterManager();
+        auto dataset_path = loadedDatasetPath();
+        if (!parameters || dataset_path.empty()) {
+            return fail<ProjectTrainingSource>(
+                lfs::ErrorCode::FailedPrecondition,
+                "Load a dataset first.",
+                "a training project needs the loaded dataset's folder and its parameters",
+                "project.training_source");
+        }
+        auto snapshot = parameters->capturePendingProjectState();
+        if (!snapshot) {
+            return std::move(snapshot).error();
+        }
+        // Record the dataset and initialization as a project save does.
+        lfs::training::absolutize_dataset_path_for_snapshot(dataset_path);
+        snapshot->dataset.data_path = dataset_path;
+        std::optional<lfs::io::project::TrainingProjectInitialization> initialization;
+        if (const auto* trainer = viewer_.getTrainer()) {
+            if (const auto& init_path = trainer->getParams().init_path; init_path && !init_path->empty()) {
+                const auto& scene = viewer_.getScene();
+                const auto origin = scene.getTrainingDataOrigin();
+                auto& recorded = initialization.emplace();
+                recorded.init_path = lfs::core::utf8_to_path(*init_path);
+                recorded.data_origin = {origin.x, origin.y, origin.z};
+                if (const auto& center = scene.getSceneCenter(); center.is_valid() && center.numel() == 3) {
+                    const auto cpu = center.cpu();
+                    const auto* values = cpu.ptr<float>();
+                    recorded.scene_center = std::array{values[0], values[1], values[2]};
+                }
+            }
+        }
+        return ProjectTrainingSource{
+            .parameters = std::move(*snapshot),
+            .dataset_root = std::move(dataset_path),
+            .initialization = std::move(initialization),
+        };
+    }
+
     lfs::Result<ProjectInfo>
     ProjectLifecycle::info() {
         settleProjectWrite();
@@ -9804,16 +9852,7 @@ namespace lfs::vis::project {
         const auto* trainer_manager =
             viewer_.getTrainerManager();
         const bool live_dataset_available = [&] {
-            if (!manager || !manager->hasDataset()) {
-                return false;
-            }
-            auto dataset_path = manager->getDatasetPath();
-            if (dataset_path.empty()) {
-                if (const auto* trainer = viewer_.getTrainer()) {
-                    dataset_path = trainer->getParams()
-                                       .dataset.data_path;
-                }
-            }
+            const auto dataset_path = loadedDatasetPath();
             return !dataset_path.empty() &&
                    lfs::core::native_fs::is_directory(dataset_path);
         }();

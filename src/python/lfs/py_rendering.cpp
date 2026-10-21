@@ -9,6 +9,7 @@
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
+#include "core/property_defaults.hpp"
 #include "core/property_registry.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
@@ -24,6 +25,7 @@
 #include "rendering/rendering.hpp"
 #include "scene/scene_render_state.hpp"
 #include "visualizer/internal/viewport.hpp"
+#include "visualizer/ipc/render_settings_convert.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/post_work_utils.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
@@ -679,14 +681,14 @@ namespace lfs::python {
         };
 
         auto add_int_enum = [&](int Proxy::*member, const std::string& id, const std::string& name,
-                                const std::string& desc, std::vector<EnumItem> items, int default_idx) {
+                                const std::string& desc, std::vector<EnumItem> items, int default_value) {
             PropertyMeta meta;
             meta.id = id;
             meta.name = name;
             meta.description = desc;
             meta.type = PropType::Enum;
             meta.enum_items = items;
-            meta.default_value = static_cast<int64_t>(default_idx);
+            meta.default_value = static_cast<int64_t>(default_value);
             meta.getter = [member, items](const PropertyObjectRef& ref) -> std::any {
                 int val = static_cast<const Proxy*>(ref.ptr)->*member;
                 for (const auto& item : items) {
@@ -780,6 +782,13 @@ namespace lfs::python {
                    "Selection center marker color", {0.0, 0.604, 0.733});
 
         // Desaturation
+        add_color3(&Proxy::selection_outline_color, "selection_outline_color", "Outline color", "Selected object outline color", {0.0, 0.604, 0.733});
+        add_bool(&Proxy::selection_outline_holes, "selection_outline_holes", "Interior contours", "Include contours of fully enclosed holes", true);
+        add_float(&Proxy::selection_outline_opacity, "selection_outline_opacity", "Opacity", "Outline appearance", 1.0, 0, 1);
+        add_float(&Proxy::selection_outline_width, "selection_outline_width", "Width", "Outline appearance", 2.0, 1, 12);
+        add_float(&Proxy::selection_outline_threshold, "selection_outline_threshold", "Threshold", "Outline appearance", 0.5, 0.05, 0.95);
+        add_bool(&Proxy::selection_outline, "selection_outline", "Selection Outline",
+                 "Outline selected splat objects using precise per-pixel rendering", false);
         add_bool(&Proxy::desaturate_unselected, "desaturate_unselected", "Desaturate Unselected",
                  "Desaturate unselected PLYs when one is selected", false);
         add_bool(&Proxy::desaturate_cropping, "desaturate_cropping", "Desaturate Cropping",
@@ -927,7 +936,7 @@ namespace lfs::python {
                       {"1024", "1024", 1024},
                       {"2048", "2048", 2048},
                       {"4096", "4096", 4096}},
-                     2);
+                     2048);
 
         PropertyRegistry::instance().register_group(std::move(group));
     }
@@ -935,6 +944,26 @@ namespace lfs::python {
     PyRenderSettings::PyRenderSettings(vis::RenderSettingsProxy settings)
         : settings_(std::move(settings)),
           prop_(&settings_, "render_settings") {}
+
+    nb::dict PyRenderSettings::prop_info(const std::string& name) const {
+        auto info = prop_.prop_info(name);
+        const auto meta = core::prop::PropertyRegistry::instance().get_property("render_settings", name);
+        if (meta && meta->type == core::prop::PropType::Enum) {
+            // Descriptors and label resets share the value-based enum contract.
+            // Never offer a raw numeric default to a string-valued control.
+            const auto identifier = core::prop::enum_default_identifier(*meta);
+            info["builtin_default"] = identifier ? nb::cast(*identifier) : nb::none();
+            if (identifier)
+                info["default_identifier"] = *identifier;
+        } else if (meta && meta->getter) {
+            // Resolve scalar/color defaults through the same getter as the
+            // live value, preserving proxy conversions and canonical defaults.
+            auto defaults = vis::to_proxy(vis::RenderSettings{});
+            const auto ref = core::prop::PropertyObjectRef::cpp(&defaults);
+            info["builtin_default"] = any_to_python(meta->getter(ref), meta->type);
+        }
+        return info;
+    }
 
     void PyRenderSettings::set(const std::string& name, nb::object value) {
         set_impl(name, std::move(value), true);
@@ -1041,17 +1070,15 @@ namespace lfs::python {
             case core::prop::PropType::Enum: {
                 nb::object cls = props_module.attr("EnumProperty");
                 nb::list items;
-                std::string default_id;
-                for (size_t i = 0; i < meta.enum_items.size(); ++i) {
-                    const auto& item = meta.enum_items[i];
+                const auto default_id = core::prop::enum_default_identifier(meta);
+                if (!default_id)
+                    continue;
+                for (const auto& item : meta.enum_items) {
                     items.append(nb::make_tuple(item.identifier, item.name, ""));
-                    if (static_cast<int>(i) == std::get<int64_t>(meta.default_value.value())) {
-                        default_id = item.identifier;
-                    }
                 }
                 prop_obj = cls(
                     nb::arg("items") = items,
-                    nb::arg("default") = default_id,
+                    nb::arg("default") = *default_id,
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
                 break;

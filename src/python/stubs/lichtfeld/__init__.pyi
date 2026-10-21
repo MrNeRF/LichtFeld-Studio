@@ -331,6 +331,11 @@ def project_clean(destination: str = '', expected_commit: str = '') -> bool:
     Clean the active saved project in the background, preserving its current resume point
     """
 
+def project_write_training_copy(destination: str, progress: object | None = None, cancel: object | None = None) -> io.DatasetEmbedResult:
+    """
+    Write a new untrained project from the pending parameters with the loaded dataset embedded; it blocks, so call it off the UI thread
+    """
+
 def project_is_dirty() -> bool:
     """Return whether the active project has unsaved chapters"""
 
@@ -2066,6 +2071,9 @@ class OptimizationParams:
 
     def get(self, name: str) -> object:
         """Get property value by name"""
+
+    def builtin_default(self, name: str) -> object:
+        """Get the built-in default for the active method and step scaling"""
 
     def set(self, name: str, value: object) -> None:
         """Set property value by name"""

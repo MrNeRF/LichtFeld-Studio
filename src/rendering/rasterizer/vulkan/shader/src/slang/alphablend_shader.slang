@@ -32,6 +32,13 @@ import utils;
 #define LFS_SKIP_DENSE_TILES 0
 #endif
 
+#ifndef LFS_SELECTION_OUTLINE
+#define LFS_SELECTION_OUTLINE 0
+#endif
+
+// Outline variants are a separate, selected-tile-only mask dispatch.
+#define LFS_OUTLINE_ONLY LFS_SELECTION_OUTLINE
+
 #define SHARED_STRUCT 1
 
 #if SUBTILE_SIZE > 0
@@ -178,6 +185,23 @@ layout(binding=13) ByteAddressBuffer gaussian_overlay_flags;
 layout(binding=14) StructuredBuffer<float4> overlay_params;
 #endif
 
+#if LFS_SELECTION_OUTLINE
+#if LFS_3DGUT_RASTERIZE
+layout(binding=24) RWStructuredBuffer<uint> outline_ids;
+#define outline_lod_indices lod_indices
+#define outline_logical_indices lod_logical_indices
+layout(binding=25) RWStructuredBuffer<float4> outline_scene_depths;
+layout(binding=26) StructuredBuffer<uint> outline_tiles;
+#else
+layout(binding=15) RWStructuredBuffer<uint> outline_ids;
+layout(binding=16) ByteAddressBuffer transform_indices;
+layout(binding=17) StructuredBuffer<uint> outline_lod_indices;
+layout(binding=18) StructuredBuffer<uint> outline_logical_indices;
+layout(binding=19) RWStructuredBuffer<float4> outline_scene_depths;
+layout(binding=20) StructuredBuffer<uint> outline_tiles;
+#endif
+#endif
+
 #if LFS_3DGUT_RASTERIZE
 [ForceInline]
 bool inverse_3x3(float3x3 m, out float3x3 inv_m)
@@ -281,6 +305,9 @@ void main(
     uint2 pix_coord = dispatchThreadID.xy;
 
     uint tile_idx = groupID.y * grid_width + groupID.x;
+#if LFS_OUTLINE_ONLY
+    if (outline_tiles[tile_idx] == 0u) return;
+#endif
     uint32_t tile_idx_start = tile_ranges[tile_idx];
     uint32_t tile_idx_end = tile_ranges[tile_idx+1];
     #if LFS_SKIP_DENSE_TILES
@@ -314,7 +341,23 @@ void main(
             median_depth = final_pixel_depth[pix_id];
         }
     }
-    bool thread_active = is_inside && curr_pixel_state.a >= 0.0001f;
+#if LFS_SELECTION_OUTLINE
+    uint outline_id = uniforms.depth_wave > 0u && is_inside ? outline_ids[pix_id] & 0x3fffffffu : 0u;
+    const bool outline_has_indices = overlay_enabled(overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS].y);
+    // All lanes in this workgroup belong to the same render tile. The
+    // prepass stores its final selected rank in the canonical radial sort.
+    uint outline_tile_bound = outline_tiles[groupID.y * uniforms.grid_width + groupID.x];
+    uint outline_rank_offset = uniforms.grid_width * uniforms.grid_height;
+    bool outline_active = is_inside && outline_tile_bound != 0u;
+    float4 previous_outline_depths = uniforms.depth_wave > 0u && is_inside
+                                        ? outline_scene_depths[pix_id] : float4(FAR_DEPTH, FAR_DEPTH, 0.0f, 0.0f);
+    float outline_scene_depth = previous_outline_depths.x;
+    float outline_selected_depth = previous_outline_depths.y;
+    float outline_scene_coverage = previous_outline_depths.z;
+    float outline_selected_coverage = previous_outline_depths.w;
+    outline_active = outline_active && outline_selected_coverage < overlay_params[OVERLAY_PARAM_MARKER_FLAGS].w;
+#endif
+    bool thread_active = LFS_OUTLINE_ONLY == 0 && is_inside && curr_pixel_state.a >= 0.0001f;
 
     const uint2 projection_origin = full_frame_binning(uniforms)
         ? uint2(uniforms.render_origin_x, uniforms.render_origin_y) : uint2(0u);
@@ -342,6 +385,9 @@ void main(
     ray_origin = ray.origin;
     ray_direction = ray.direction;
     thread_active = thread_active && ray.valid;
+  #if LFS_SELECTION_OUTLINE
+    outline_active = outline_active && ray.valid;
+  #endif
 #endif
 
     const int shared_memory_rounds = ((tile_idx_end - tile_idx_start + TILE_SIZE - 1) / TILE_SIZE);
@@ -356,11 +402,23 @@ void main(
     int splats_left_to_process = tile_idx_end - tile_idx_start;
     for (int i = 0; i < shared_memory_rounds; i++)
     {
+      #if LFS_OUTLINE_ONLY
+        // Uniform exit before loading another batch. Once its first rank
+        // exceeds the final selected rank, selected coverage cannot increase.
+        // This remains safe for hidden selections and spans all depth waves.
+        uint first_slot = uint(sorted_gauss_idx[tile_idx_start + i * TILE_SIZE]);
+        if (outline_tiles[outline_rank_offset + first_slot] > outline_tile_bound)
+            break;
+      #endif
         // break if thread_active is false for all, doesn't seem to speed up
         // equivalent to CUDA `if (__syncthreads_count(thread_active) == 0) break;`
         const uint subgroup_idx = thread_rank / SUBGROUP_SIZE;
         const uint32_t subgroup_has_active_thread =
-            uint32_t(WaveActiveAnyTrue(thread_active));
+            uint32_t(WaveActiveAnyTrue(thread_active
+              #if LFS_SELECTION_OUTLINE
+                || outline_active
+              #endif
+            ));
         if (WaveIsFirstLane())
             active_subgroups[subgroup_idx] = subgroup_has_active_thread;
         GroupMemoryBarrierWithGroupSync();
@@ -419,9 +477,14 @@ void main(
         GroupMemoryBarrierWithGroupSync();
         #endif
 
-        if (thread_active) {
+        if (thread_active
+          #if LFS_SELECTION_OUTLINE
+            || outline_active
+          #endif
+        ) {
             for (int j = 0; j < min(TILE_SIZE, splats_left_to_process); j++) {
-                local_n_contrib++;
+                if (thread_active)
+                    local_n_contrib++;
 
                 // subtile culling
             #if SUBTILE_SIZE > 0
@@ -465,6 +528,44 @@ void main(
               #endif
                 if (gauss_rgba.a < ALPHA_THRESHOLD)
                     continue;
+#if LFS_SELECTION_OUTLINE
+                // Blender's outline prepass contains selected objects only. An
+                // unselected foreground footprint dims the selected silhouette;
+                // it must neither clip it nor terminate the outline search.
+                if (outline_active) {
+                    // Match alpha compositing, including individually faint splats.
+                    // Persist both accumulators across depth waves.
+                    if (outline_scene_coverage < overlay_params[OVERLAY_PARAM_MARKER_FLAGS].w) {
+                        outline_scene_coverage += (1.0f - outline_scene_coverage) * gauss_rgba.a;
+                        if (outline_scene_coverage >= overlay_params[OVERLAY_PARAM_MARKER_FLAGS].w)
+                            outline_scene_depth = splat_depth;
+                    }
+                    // Outline-only variants avoid the unrelated point-selection and ring work.
+                    #if LFS_RASTER_OVERLAYS
+                    uint outline_flags = flags;
+                    #else
+                    uint outline_flags = read_byte(gaussian_overlay_flags, splat_id);
+                    #endif
+                    if ((outline_flags & OVERLAY_FLAG_OUTLINE_SELECTED) != 0u && outline_selected_coverage < overlay_params[OVERLAY_PARAM_MARKER_FLAGS].w) {
+                        outline_selected_coverage += (1.0f - outline_selected_coverage) * gauss_rgba.a;
+                        if (outline_selected_coverage >= overlay_params[OVERLAY_PARAM_MARKER_FLAGS].w) {
+                            uint logical_id = splat_id;
+                            if ((uniforms.lod_enabled & 1u) != 0u)
+                                logical_id = (uniforms.lod_enabled & 8u) != 0u
+                                    ? outline_logical_indices[splat_id] : outline_lod_indices[splat_id];
+                            uint node = outline_has_indices ? uint(max(read_int32(transform_indices, logical_id), 0)) : 0u;
+                            outline_id = node + 2u;
+                            outline_selected_depth = splat_depth;
+                        }
+                    }
+                    outline_active = outline_selected_coverage < overlay_params[OVERLAY_PARAM_MARKER_FLAGS].w || outline_scene_coverage < overlay_params[OVERLAY_PARAM_MARKER_FLAGS].w;
+                }
+                if (!thread_active) {
+                    if (!outline_active)
+                        break;
+                    continue;
+                }
+#endif
 
               #if LFS_3DGUT_RASTERIZE
                 splat_depth = gut_splat_view_depth(g, ray_origin, ray_direction, cam);
@@ -540,6 +641,10 @@ void main(
                     }
                     curr_pixel_state = float4(marker_color, 0.0f);
                     thread_active = false;
+                  #if LFS_SELECTION_OUTLINE
+                    if (outline_active)
+                        continue;
+                  #endif
                     break;
                 }
 
@@ -559,6 +664,10 @@ void main(
                     // This Splat never registred so we subtract it before we break.
                     local_n_contrib--;
                     thread_active = false;
+                  #if LFS_SELECTION_OUTLINE
+                    if (outline_active)
+                        continue;
+                  #endif
                     break;
                 }
                 curr_pixel_state = new_pixel_state;
@@ -569,6 +678,17 @@ void main(
     }
 
     if (is_inside) {
+#if LFS_SELECTION_OUTLINE
+        float epsilon = 1.0e-4f * max(1.0f, abs(outline_scene_depth));
+        if (outline_id > 1u && outline_selected_depth > outline_scene_depth + epsilon)
+            outline_id |= 0x80000000u;
+        // Coverage is retained across waves; only the crossing splat supplies an ID.
+        if (outline_selected_coverage < overlay_params[OVERLAY_PARAM_MARKER_FLAGS].w)
+            outline_id |= 0x40000000u;
+        outline_ids[pix_id] = outline_id;
+        outline_scene_depths[pix_id] = float4(outline_scene_depth, outline_selected_depth, outline_scene_coverage, outline_selected_coverage);
+#endif
+#if !LFS_OUTLINE_ONLY
         n_contributors[pix_id] = local_n_contrib;
         final_pixel_state[pix_id] = curr_pixel_state;
         if (uniforms.expected_far > 0.0f) {
@@ -582,6 +702,7 @@ void main(
         } else {
             final_pixel_depth[pix_id] = median_depth;
         }
+#endif
     }
 }
 

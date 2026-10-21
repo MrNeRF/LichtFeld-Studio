@@ -3314,6 +3314,115 @@ TEST_F(UndoHistoryTest, DeleteResultHonorsTrainingRemovalPolicy) {
     EXPECT_EQ(scene.getNodeById(unrelated_id), nullptr);
 }
 
+TEST_F(UndoHistoryTest, TransientTrainingModelRemovalLeavesTrainerAndHistoryAlone) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+    lfs::vis::services().set(trainer_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto model_id = scene.addSplat("Model", make_test_splat({0.0f, 0.0f, 0.0f}));
+    const auto preview_id = scene.addSplat("Preview", make_test_splat({1.0f, 0.0f, 0.0f}));
+    scene.getMutableNode("Preview")->transient = true;
+    const auto cameras_id = scene.addGroup("Cameras");
+    const auto train_group_id = scene.addCameraGroup("Training", cameras_id, 1);
+    scene.addCamera("train.png", train_group_id, make_test_camera("train.png", 1));
+    scene.setTrainingModelNode("Preview");
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+
+    trainer_manager->setScene(&scene);
+    trainer_manager->setTrainerFromCheckpoint(std::make_unique<lfs::training::Trainer>(scene), 0);
+    ASSERT_FALSE(trainer_manager->canPerform(lfs::vis::TrainingAction::DeleteTrainingNode));
+
+    // A transient preview bound as the training model is not the trainer's
+    // model: removing it keeps the trainer, clears the binding, and leaves
+    // nothing to undo.
+    ASSERT_TRUE(scene_manager->removePLYWithResult("Preview"));
+    EXPECT_EQ(scene.getNodeById(preview_id), nullptr);
+    EXPECT_TRUE(scene.getTrainingModelNodeUuid().is_nil());
+    EXPECT_TRUE(trainer_manager->hasTrainer());
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+
+    // Nor does removing a node above it.
+    const auto group_id = scene.addGroup("Previews");
+    scene.addSplat("Nested preview", make_test_splat({2.0f, 0.0f, 0.0f}), group_id);
+    scene.getMutableNode("Nested preview")->transient = true;
+    scene.setTrainingModelNode("Nested preview");
+    ASSERT_TRUE(scene_manager->removePLYWithResult("Previews"));
+    EXPECT_EQ(scene.getNodeById(group_id), nullptr);
+    EXPECT_TRUE(trainer_manager->hasTrainer());
+
+    scene.setTrainingModelNode("Model");
+    EXPECT_FALSE(scene_manager->removePLYWithResult("Model"));
+    EXPECT_NE(scene.getNodeById(model_id), nullptr);
+}
+
+TEST_F(UndoHistoryTest, TransientNodeKeepsItsFlagThroughUndoOfItsParentsRemoval) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto group_id = scene.addGroup("previews");
+    scene.addSplat("preview", make_test_splat({0.0f, 0.0f, 0.0f}), group_id);
+    scene.getMutableNode("preview")->transient = true;
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    // The group is part of the document, so removing it is recorded together
+    // with its transient child, which comes back still transient.
+    scene_manager->removePLY("previews");
+    EXPECT_EQ(scene.getNode("preview"), nullptr);
+    ASSERT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
+    lfs::vis::op::undoHistory().undo();
+    const auto* restored = scene.getNode("preview");
+    ASSERT_NE(restored, nullptr);
+    EXPECT_TRUE(restored->transient);
+
+    // Removing the transient leaf on its own records nothing.
+    scene_manager->removePLY("preview");
+    EXPECT_EQ(scene.getNode("preview"), nullptr);
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+}
+
+TEST_F(UndoHistoryTest, TransientNodesStayOutOfOtherHistory) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    scene.addSplat("kept", make_test_splat({0.0f, 0.0f, 0.0f}));
+    scene.addSplat("removed", make_test_splat({1.0f, 0.0f, 0.0f}));
+    scene.addSplat("deleted", make_test_splat({2.0f, 0.0f, 0.0f}));
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    // A single removal checks the whole scene before it is undone, and a
+    // batch removal restores the whole root list.
+    scene_manager->removePLY("removed");
+    ASSERT_TRUE(scene_manager->removeNodesWithResult({"deleted"}, false));
+    ASSERT_EQ(lfs::vis::op::undoHistory().undoCount(), 2u);
+
+    // Previews come, get renamed and go (here through the scene panel's batch
+    // removal) without history, and the earlier entries still replay.
+    scene.addSplat("preview", make_test_splat({3.0f, 0.0f, 0.0f}));
+    scene.getMutableNode("preview")->transient = true;
+    ASSERT_TRUE(scene_manager->renamePLY("preview", "renamed preview"));
+    scene.addSplat("old preview", make_test_splat({4.0f, 0.0f, 0.0f}));
+    scene.getMutableNode("old preview")->transient = true;
+    ASSERT_TRUE(scene_manager->removeNodesWithResult({"old preview"}, false));
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 2u);
+
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_NE(scene.getNode("deleted"), nullptr);
+    EXPECT_NE(scene.getNode("renamed preview"), nullptr);
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_NE(scene.getNode("removed"), nullptr);
+    EXPECT_NE(scene.getNode("renamed preview"), nullptr);
+}
+
 TEST_F(UndoHistoryTest, RemoveNodesWithResultValidatesAllBeforeDeletingAny) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();

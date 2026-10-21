@@ -1284,6 +1284,7 @@ uint higs_replay_mask_base(Uniforms uniforms) {
 
 static const uint OVERLAY_FLAG_DIM = 1;
 static const uint OVERLAY_FLAG_NONSELECTABLE = 2;
+static const uint OVERLAY_FLAG_OUTLINE_SELECTED = 4;
 
 static const uint SELECTION_PREVIEW_FLAG = 0x80;
 static const uint SELECTION_GROUP_MASK = 0x7F;
@@ -1401,7 +1402,7 @@ OverlayUniformState load_overlay_uniform_state(StructuredBuffer<float4> overlay_
 }
 
 // Pack per-splat overlay payload for groupshared staging: flags | sel | preview.
-// Flags currently use 2 bits; 16 bits leave headroom without a second shared slot.
+// Flags currently use 3 bits; 16 bits leave headroom without a second shared slot.
 [ForceInline]
 uint pack_overlay_per_splat(uint flags, uint selection_byte, uint preview_byte)
 {

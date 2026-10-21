@@ -1,4 +1,17 @@
 {
+  "common.reset_default_hint": "Dubbelklik om de standaardwaarde te herstellen: {value}",
+  "main_panel.selection_outline_color": "Contourkleur",
+  "main_panel.selection_outline_opacity": "Dekking",
+  "main_panel.selection_outline_width": "Dikte",
+  "main_panel.selection_outline_threshold": "Dekkingsdrempel",
+  "main_panel.selection_outline_holes": "Binnencontouren",
+  "tooltip.selection_outline_color": "Kleur van geselecteerde objectcontouren, onafhankelijk van selectiemarkeringen.",
+  "tooltip.selection_outline_opacity": "Contourdekking van transparant tot ondoorzichtig.",
+  "tooltip.selection_outline_width": "Lijnbreedte met anti-aliasing van 1 tot 12 renderpixels. Boven 2 zijn extra GPU-passes en tijdelijk geheugen nodig.",
+  "tooltip.selection_outline_threshold": "Vereiste opgebouwde alfa voor het silhouet. Hogere waarden sluiten transparantere gebieden uit.",
+  "tooltip.selection_outline_holes": "Toon volledig omsloten gaten. Uitschakelen kost extra GPU-werk en tijdelijk geheugen. Holtes die naar buiten open zijn blijven omlijnd.",
+  "main_panel.selection_outline": "Selectiecontour",
+  "tooltip.selection_outline": "Omlijn geselecteerde splatobjecten. Verborgen delen worden gedimd. Niet beschikbaar tijdens training of in puntenwolk- en diepteweergaven.",
   "preferences.drag_sh_hint": "Beperkt kleurdetails die afhangen van de kijkrichting. De export gebruikt de laagste waarde van deze limiet en de beschikbare SH-graad.",
   "preferences.drag_format_hint": "Bestandsformaat bij het slepen van splats uit LichtFeld.",
   "preferences.drag_sh_limit": "Maximale SH-graad",
@@ -771,7 +784,11 @@
     "button.stop": "Training stoppen",
     "button.reset": "Training resetten",
     "button.add": "Toevoegen",
-    "button.remove": "Verwijderen"
+    "button.remove": "Verwijderen",
+    "distorted_warning.title": "Vervormde beelden gedetecteerd",
+    "distorted_warning.message": "Vervormde beelden gedetecteerd. Schakel Vervorming corrigeren of GUT in om te trainen met camera’s met vervorming.",
+    "distorted_warning.btn_undistort": "Vervorming corrigeren",
+    "distorted_warning.btn_gut": "GUT"
   },
   "rendering": "Renderen",
   "scene": {
@@ -2288,6 +2305,7 @@
     "status_loading": "bezig met laden",
     "status_error": "fout",
     "status_disabled": "uitgeschakeld",
+    "status_restart_required": "herstart vereist",
     "error.enter_github_url": "Voer een GitHub-URL in",
     "status.installed": "Geïnstalleerd: {}",
     "status.install_failed": "Installatie mislukt",

@@ -392,6 +392,7 @@ class PreferencesPanel(Panel):
             self._scrub_fields.mount(doc)
 
     def on_unmount(self, doc):
+        self._rendering_defaults.unmount()
         self._portal_state_binding.close()
         self._scrub_fields.unmount()
         self._keymap.on_unmount()

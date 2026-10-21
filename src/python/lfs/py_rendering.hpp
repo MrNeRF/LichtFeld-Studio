@@ -93,9 +93,7 @@ namespace lfs::python {
         [[nodiscard]] nb::object get(const std::string& name) const { return prop_.getattr(name); }
         void set(const std::string& name, nb::object value);
         void _set_without_session_dirty(const std::string& name, nb::object value);
-        [[nodiscard]] nb::dict prop_info(const std::string& name) const {
-            return prop_.prop_info(name);
-        }
+        [[nodiscard]] nb::dict prop_info(const std::string& name) const;
         [[nodiscard]] nb::object prop_getattr(const std::string& name) const {
             return prop_.getattr(name);
         }

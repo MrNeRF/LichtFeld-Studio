@@ -837,6 +837,35 @@ namespace lfs::vis::op {
                    type == lfs::core::NodeType::KEYFRAME_GROUP;
         }
 
+        // Transient nodes and everything under them are not part of the
+        // document. They come and go without history, so history neither
+        // checks nor removes them, and whole-scene captures leave them out.
+        [[nodiscard]] bool isTransientSubtree(const lfs::core::Scene& scene,
+                                              const lfs::core::SceneNode& node) {
+            for (const auto* current = &node; current; current = scene.getNodeById(current->parent_id)) {
+                if (current->transient) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        [[nodiscard]] bool isTransientOnly(const lfs::core::Scene& scene,
+                                           const lfs::core::SceneNode& node) {
+            return node.transient && std::ranges::all_of(node.children, [&](const lfs::core::NodeId child_id) {
+                       const auto* child = scene.getNodeById(child_id);
+                       return !child || isTransientOnly(scene, *child);
+                   });
+        }
+
+        // The training model as the document knows it: none while a transient
+        // preview is bound.
+        [[nodiscard]] lfs::core::Uuid documentTrainingModelUuid(const lfs::core::Scene& scene) {
+            const auto* const bound = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
+            return bound && isTransientSubtree(scene, *bound) ? lfs::core::Uuid{}
+                                                              : scene.getTrainingModelNodeUuid();
+        }
+
         SceneGraphNodeSnapshot captureNodeSnapshot(const SceneManager& scene_manager,
                                                    const lfs::core::SceneNode& node,
                                                    const SceneGraphCaptureMode mode,
@@ -855,6 +884,7 @@ namespace lfs::vis::op {
             snapshot.training_enabled = node.training_enabled;
             snapshot.payload_diverged = node.payload_diverged;
             snapshot.point_cloud_source = node.point_cloud_source;
+            snapshot.transient = node.transient;
             snapshot.gaussian_count = node.gaussian_count.load(std::memory_order_acquire);
             snapshot.centroid = node.centroid;
 
@@ -1643,6 +1673,7 @@ namespace lfs::vis::op {
                 existing->training_enabled = snapshot.training_enabled;
                 existing->payload_diverged = snapshot.payload_diverged;
                 existing->point_cloud_source = snapshot.point_cloud_source;
+                existing->transient = snapshot.transient;
                 existing->gaussian_count.store(snapshot.gaussian_count, std::memory_order_release);
                 existing->centroid = snapshot.centroid;
                 existing->transform_dirty = true;
@@ -1669,6 +1700,7 @@ namespace lfs::vis::op {
             restored->training_enabled = snapshot.training_enabled;
             restored->payload_diverged = snapshot.payload_diverged;
             restored->point_cloud_source = snapshot.point_cloud_source;
+            restored->transient = snapshot.transient;
             restored->gaussian_count.store(snapshot.gaussian_count, std::memory_order_release);
             restored->centroid = snapshot.centroid;
             restored->transform_dirty = true;
@@ -1789,7 +1821,7 @@ namespace lfs::vis::op {
             SceneTopologyProof proof;
             proof.scoped = scope && scope->scoped_topology;
             proof.training_model_uuid =
-                scene.getTrainingModelNodeUuid();
+                documentTrainingModelUuid(scene);
             proof.consolidated =
                 scene.isConsolidated();
             proof.consolidated_extent =
@@ -1806,13 +1838,21 @@ namespace lfs::vis::op {
                 proof.roots.reserve(scene.getRootNodes().size());
                 for (const auto root_id : scene.getRootNodes()) {
                     if (const auto* root = scene.getNodeById(root_id);
-                        root && !isSequencerProjectionNode(root->type)) {
+                        root && !root->transient && !isSequencerProjectionNode(root->type)) {
                         proof.roots.push_back(root->uuid);
                     }
                 }
             }
             proof.nodes.reserve(proof.scoped ? scoped_uuids.size() : nodes.size());
             for (const auto* node : nodes) {
+                if (node && isTransientSubtree(scene, *node)) {
+                    if (node->type == lfs::core::NodeType::SPLAT && scene.isNodeEffectivelyVisible(node->id)) {
+                        proof.consolidated_extent -= std::min(
+                            proof.consolidated_extent,
+                            node->gaussian_count.load(std::memory_order_acquire));
+                    }
+                    continue;
+                }
                 if (!node || (proof.scoped ? !scoped_uuids.contains(node->uuid)
                                            : isSequencerProjectionNode(node->type))) {
                     continue;
@@ -1871,7 +1911,8 @@ namespace lfs::vis::op {
                      node->children) {
                     if (const auto* child =
                             scene.getNodeById(
-                                child_id)) {
+                                child_id);
+                        child && !child->transient) {
                         if (proof.scoped ? scoped_uuids.contains(child->uuid)
                                          : !isSequencerProjectionNode(child->type)) {
                             item.children.push_back(child->uuid);
@@ -2189,6 +2230,8 @@ namespace lfs::vis::op {
           locked(other.locked),
           training_enabled(other.training_enabled),
           payload_diverged(other.payload_diverged),
+          point_cloud_source(other.point_cloud_source),
+          transient(other.transient),
           payload_hydration(other.payload_hydration),
           gaussian_count(other.gaussian_count),
           centroid(other.centroid),
@@ -3525,12 +3568,13 @@ namespace lfs::vis::op {
             snapshot.selected_node_uuids = std::move(selected_node_uuids);
         }
         if (options.include_scene_context) {
+            const auto training_model_uuid = documentTrainingModelUuid(scene_manager.getScene());
             const std::string training_model_node_name =
-                scene_manager.getScene().getTrainingModelNodeName();
+                training_model_uuid.is_nil() ? std::string{} : scene_manager.getScene().getTrainingModelNodeName();
             snapshot.context = SceneGraphContextSnapshot{
                 .content_type = static_cast<int>(scene_manager.getContentType()),
                 .dataset_path = scene_manager.getDatasetPath(),
-                .training_model_uuid = scene_manager.getScene().getTrainingModelNodeUuid(),
+                .training_model_uuid = training_model_uuid,
                 .training_model_node_name = training_model_node_name,
             };
         }
@@ -3558,7 +3602,8 @@ namespace lfs::vis::op {
             const auto* node = scene.getNodeById(id);
             // Sequencer projection nodes are rebuilt by camera-key history.
             // Scoped scene edits must neither restore nor require their old UUIDs.
-            if (!node || (options.scoped_topology && isSequencerProjectionNode(node->type))) {
+            if (!node || (options.scoped_topology && isSequencerProjectionNode(node->type)) ||
+                (snapshot.complete_root_order && isTransientOnly(scene, *node))) {
                 continue;
             }
 
@@ -3641,7 +3686,7 @@ namespace lfs::vis::op {
                 collectSnapshotUuids(root, desired_uuids);
             }
             for (const auto* node : scene_.getScene().getNodes()) {
-                if (node && !desired_uuids.contains(node->uuid) &&
+                if (node && !desired_uuids.contains(node->uuid) && !isTransientSubtree(scene_.getScene(), *node) &&
                     (!current.scoped_topology || !isSequencerProjectionNode(node->type))) {
                     uuids_to_remove.insert(node->uuid);
                 }
@@ -3754,7 +3799,7 @@ namespace lfs::vis::op {
                 assert(scene.getNodeByUuid(desired.context->training_model_uuid) &&
                        "prevalidated training-model UUID disappeared during restore");
                 scene.setTrainingModelNode(desired.context->training_model_uuid);
-            } else {
+            } else if (!documentTrainingModelUuid(scene).is_nil()) {
                 scene.setTrainingModelNode(lfs::core::Uuid{});
             }
             scene_.setDatasetPath(desired.context->dataset_path);

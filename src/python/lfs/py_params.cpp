@@ -10,6 +10,7 @@
 #include "core/logger.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/path_utils.hpp"
+#include "core/property_defaults.hpp"
 #include "python/python_runtime.hpp"
 #include "training/trainer.hpp"
 #include "visualizer/core/parameter_manager.hpp"
@@ -52,6 +53,18 @@ namespace lfs::python {
         resolved_source.resolve_mrnf_capacity_defaults();
         auto ref = PropertyObjectRef::cpp(&resolved_source);
         return meta.getter(ref);
+    }
+
+    std::any resolve_optimization_builtin_default(const PropertyMeta& meta, const OptimizationParameters& active) {
+        auto source = OptimizationParameters::defaults_for_strategy(active.strategy);
+        // Capacity-dependent defaults follow the current capacity, not edited rates.
+        if (meta.id != "max_cap")
+            source.max_cap = active.max_cap;
+        // Resetting iterations removes a manual override but retains dataset scaling.
+        const float scale = meta.id == "iterations" ? active.image_count_scaler : active.steps_scaler;
+        if (std::isfinite(scale) && scale > 0.0f && scale != 1.0f)
+            source.scale_steps(scale);
+        return resolve_optimization_default(meta, source);
     }
 
     void register_dataset_properties() {
@@ -317,6 +330,36 @@ namespace lfs::python {
         }
     }
 
+    nb::object PyOptimizationParams::builtin_default(const std::string& prop_id) const {
+        if (prop_id == "bg_color") {
+            const auto source = OptimizationParameters::defaults_for_strategy(params().strategy);
+            return nb::make_tuple(source.bg_color[0], source.bg_color[1], source.bg_color[2]);
+        }
+        auto meta = PropertyRegistry::instance().get_property("optimization", prop_id);
+        if (!meta) {
+            throw std::runtime_error("Unknown property: " + prop_id);
+        }
+
+        const std::any value = resolve_optimization_builtin_default(*meta, params());
+
+        switch (meta->type) {
+        case PropType::Bool:
+            return nb::cast(std::any_cast<bool>(value));
+        case PropType::Int:
+            return nb::cast(std::any_cast<int>(value));
+        case PropType::Float:
+            return nb::cast(std::any_cast<float>(value));
+        case PropType::String:
+            return nb::cast(std::any_cast<std::string>(value));
+        case PropType::SizeT:
+            return nb::cast(std::any_cast<size_t>(value));
+        case PropType::Enum:
+            return nb::cast(std::any_cast<int>(value));
+        default:
+            throw std::runtime_error("Unsupported property type");
+        }
+    }
+
     void PyOptimizationParams::set(const std::string& prop_id, nb::object value) {
         auto meta = PropertyRegistry::instance().get_property("optimization", prop_id);
         if (!meta) {
@@ -436,6 +479,7 @@ namespace lfs::python {
         case PropType::Enum:
             info["type"] = "enum";
             info["default"] = std::any_cast<int>(default_value);
+            info["default_identifier"] = enum_identifier(*meta, std::any_cast<int>(default_value));
             {
                 nb::list items;
                 for (const auto& ei : meta->enum_items) {
@@ -566,13 +610,10 @@ namespace lfs::python {
             case PropType::Enum: {
                 nb::object cls = props_module.attr("EnumProperty");
                 nb::list items;
-                std::string default_id;
                 const int default_enum = std::any_cast<int>(default_value);
+                const auto default_id = enum_identifier(meta, default_enum);
                 for (const auto& item : meta.enum_items) {
                     items.append(nb::make_tuple(item.identifier, item.name, ""));
-                    if (item.value == default_enum) {
-                        default_id = item.identifier;
-                    }
                 }
                 prop_obj = cls(
                     nb::arg("items") = items,
@@ -883,6 +924,8 @@ namespace lfs::python {
             .def_prop_ro(
                 "__property_group__", [](PyOptimizationParams&) { return "optimization"; }, "Property group identifier")
             .def("get", &PyOptimizationParams::get, nb::arg("name"), "Get property value by name")
+            .def("builtin_default", &PyOptimizationParams::builtin_default, nb::arg("name"),
+                 "Get the built-in default for the active method and step scaling")
             .def("set", &PyOptimizationParams::set, nb::arg("name"), nb::arg("value"), "Set property value by name")
             .def("__getattr__", &PyOptimizationParams::get, nb::arg("name"), "Get property value by attribute name")
             .def("prop_info", &PyOptimizationParams::prop_info, nb::arg("prop_id"),

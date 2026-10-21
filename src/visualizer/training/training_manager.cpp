@@ -394,7 +394,11 @@ namespace lfs::vis {
                   run_on_owner(std::move(run_on_owner)) {
                 const auto* const model_node =
                     scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
-                if (model_node && model_node->model) {
+                // Training starts from the dataset over a transient preview
+                // (see prepareTrainingModel); a rollback binds the preview again.
+                if (model_node && model_node->transient) {
+                    transient_model_uuid = model_node->uuid;
+                } else if (model_node && model_node->model) {
                     had_model = true;
                     model_name = model_node->name;
                     original_model = std::make_unique<lfs::core::SplatData>(
@@ -481,7 +485,8 @@ namespace lfs::vis {
                         scene->replaceNodeModel(model_name, std::move(original_model));
                     } else if (graph_mutated) {
                         const auto model_id = scene->getTrainingModelNodeId();
-                        if (model_id != lfs::core::NULL_NODE) {
+                        if (model_id != lfs::core::NULL_NODE &&
+                            scene->getTrainingModelNodeUuid() != transient_model_uuid) {
                             scene->removeNodeById(model_id, false);
                         }
                         if (point_cloud) {
@@ -494,7 +499,9 @@ namespace lfs::vis {
                                 static_cast<void>(scene->restoreNodeWithUuid(std::move(restored_cropbox)));
                             }
                         }
-                        scene->setTrainingModelNode(lfs::core::Uuid{});
+                        scene->setTrainingModelNode(scene->getNodeByUuid(transient_model_uuid)
+                                                        ? transient_model_uuid
+                                                        : lfs::core::Uuid{});
                     }
                     scene->setInitialPointCloud(initial_point_cloud);
                     scene->setPointCloudModified(point_cloud_modified);
@@ -508,6 +515,7 @@ namespace lfs::vis {
 
             lfs::core::Scene* scene = nullptr;
             bool had_model = false;
+            lfs::core::Uuid transient_model_uuid;
             std::string model_name;
             std::unique_ptr<lfs::core::SplatData> original_model;
             std::optional<lfs::core::Scene::RestoreNodeDesc> point_cloud;

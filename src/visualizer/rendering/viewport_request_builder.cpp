@@ -446,6 +446,10 @@ namespace lfs::vis {
         const bool overlay_visible =
             selection_overlay_enabled && panelMatches(ctx.cursor_preview.panel, render_panel);
         const bool ring_selection_mode = ctx.cursor_preview.selection_mode == SelectionPreviewMode::Rings;
+        const bool outline = selection_overlay_enabled && ctx.settings.selection_outline &&
+                             !ctx.settings.point_cloud_mode && !ctx.settings.depth_view &&
+                             std::any_of(ctx.scene_state.selected_node_mask.begin(), ctx.scene_state.selected_node_mask.end(),
+                                         [](bool selected) { return selected; });
 
         lfs::rendering::ViewportRenderRequest request{
             .frame_view = frame_view,
@@ -468,7 +472,14 @@ namespace lfs::vis {
             .filters = {},
             .overlay =
                 {.markers =
-                     {.show_rings = ctx.settings.show_rings || ring_selection_mode,
+                     {.show_object_outline = outline,
+                      .outline_color = ctx.settings.selection_outline_color,
+                      .outline_opacity = ctx.settings.selection_outline_opacity,
+                      .outline_width = ctx.settings.selection_outline_width,
+                      .outline_threshold = ctx.settings.selection_outline_threshold,
+                      .outline_holes = ctx.settings.selection_outline_holes,
+
+                      .show_rings = ctx.settings.show_rings || ring_selection_mode,
                       .ring_width = ctx.settings.ring_width,
                       .show_center_markers = ctx.settings.show_center_markers},
                  .cursor =
@@ -487,7 +498,7 @@ namespace lfs::vis {
                                        : nullptr,
                            .additive = selection_overlay_enabled && ctx.cursor_preview.add_mode},
                       .emphasized_node_mask = (selection_overlay_enabled &&
-                                                       ctx.settings.desaturate_unselected
+                                                       (ctx.settings.desaturate_unselected || outline)
                                                    ? ctx.scene_state.selected_node_mask
                                                    : std::vector<bool>{}),
                       .dim_non_emphasized = selection_overlay_enabled && ctx.settings.desaturate_unselected,

@@ -119,6 +119,16 @@ namespace lfs::vis {
         std::optional<lfs::ErrorCode> error_code;
     };
 
+    // The Training panel's pending parameters and the loaded dataset's
+    // folder: This is what lfs::io::project::write_training_project needs to write
+    // an untrained copy of the session as .licht
+    struct LFS_VIS_API ProjectTrainingSource {
+        lfs::io::project::ParameterManagerSnapshot parameters;
+        std::filesystem::path dataset_root;
+        // Set when the trainer starts from an init file, as a save records it.
+        std::optional<lfs::io::project::TrainingProjectInitialization> initialization;
+    };
+
     // Lightweight snapshot for persistent application chrome. Unlike
     // ProjectInfo, this deliberately avoids payload and storage inspection so
     // it is safe to refresh while the window is interactive.
@@ -279,6 +289,15 @@ namespace lfs::vis {
         virtual lfs::Result<ProjectWritePoll>
         projectPollWrite() {
             return ProjectWritePoll{};
+        }
+        virtual lfs::Result<ProjectTrainingSource>
+        projectTrainingSource() {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Unsupported,
+                .domain = lfs::ErrorDomain::App,
+                .user_message = "This viewer cannot write training projects.",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
         }
         // True when the last ProjectSave or ProjectSaveAs command
         // started a write. A cancelled save dialog returns false.

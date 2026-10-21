@@ -4657,6 +4657,18 @@ namespace lfs::vis {
         return project_lifecycle_->pollWrite();
     }
 
+    lfs::Result<ProjectTrainingSource>
+    VisualizerImpl::projectTrainingSource() {
+        if (!project_lifecycle_) {
+            return visualizerFailure<ProjectTrainingSource>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->trainingSource();
+    }
+
     bool VisualizerImpl::consumeProjectSaveStarted() {
         return project_save_started_.exchange(false);
     }

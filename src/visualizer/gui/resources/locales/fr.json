@@ -1,4 +1,17 @@
 {
+  "common.reset_default_hint": "Double-cliquez pour rétablir la valeur par défaut : {value}",
+  "main_panel.selection_outline_color": "Couleur du contour",
+  "main_panel.selection_outline_opacity": "Opacité",
+  "main_panel.selection_outline_width": "Épaisseur",
+  "main_panel.selection_outline_threshold": "Seuil de couverture",
+  "main_panel.selection_outline_holes": "Contours intérieurs",
+  "tooltip.selection_outline_color": "Couleur des contours sélectionnés, indépendante des marqueurs.",
+  "tooltip.selection_outline_opacity": "Opacité du contour, de transparent à opaque.",
+  "tooltip.selection_outline_width": "Épaisseur anticrénelée de 1 à 12 pixels de rendu. Au-delà de 2, des passes GPU et de la mémoire temporaire supplémentaires sont nécessaires.",
+  "tooltip.selection_outline_threshold": "Alpha cumulé requis pour la silhouette. Les valeurs élevées excluent les régions plus transparentes.",
+  "tooltip.selection_outline_holes": "Inclut les trous entièrement fermés. Désactiver ajoute du travail GPU et de la mémoire temporaire. Les cavités ouvertes vers l’extérieur restent délimitées.",
+  "main_panel.selection_outline": "Contour de sélection",
+  "tooltip.selection_outline": "Trace les objets splat sélectionnés. Les parties masquées sont atténuées. Indisponible pendant l’entraînement et dans les vues de points ou de profondeur.",
   "preferences.drag_sh_hint": "Limite les détails de couleur dépendant du point de vue. Le degré exporté est le plus petit entre cette limite et le degré SH disponible.",
   "preferences.drag_format_hint": "Format des fichiers créés en faisant glisser des splats hors de LichtFeld.",
   "preferences.drag_sh_limit": "Degré SH maximal",
@@ -771,7 +784,11 @@
     "button.stop": "Arrêter l'Entraînement",
     "button.reset": "Réinitialiser l'Entraînement",
     "button.add": "Ajouter",
-    "button.remove": "Retirer"
+    "button.remove": "Retirer",
+    "distorted_warning.title": "Images distordues détectées",
+    "distorted_warning.message": "Images distordues détectées. Activez Corriger la distorsion ou GUT pour entraîner avec des caméras à distorsion.",
+    "distorted_warning.btn_undistort": "Corriger la distorsion",
+    "distorted_warning.btn_gut": "GUT"
   },
   "rendering": "Rendu",
   "scene": {
@@ -2288,6 +2305,7 @@
     "status_loading": "chargement en cours",
     "status_error": "erreur",
     "status_disabled": "désactivé",
+    "status_restart_required": "redémarrage requis",
     "error.enter_github_url": "Veuillez entrer une URL GitHub",
     "status.installed": "Installé : {}",
     "status.install_failed": "Échec de l'installation",

@@ -455,6 +455,17 @@ namespace lfs::vis {
             }
         }
 
+        // Transient nodes are not part of the document, so removing a subtree
+        // of nothing but transient nodes leaves nothing to undo.
+        [[nodiscard]] bool isTransientSubtree(const core::Scene& scene, const core::NodeId root_id) {
+            std::vector<core::Uuid> uuids;
+            collectSubtreeUuids(scene, root_id, uuids);
+            return !uuids.empty() && std::ranges::all_of(uuids, [&](const core::Uuid& uuid) {
+                const auto* node = scene.getNodeByUuid(uuid);
+                return node && node->transient;
+            });
+        }
+
         [[nodiscard]] SelectionMode selectionModeFromString(const std::string& mode) {
             if (mode == "add") {
                 return SelectionMode::Add;
@@ -477,6 +488,11 @@ namespace lfs::vis {
             const size_t count = std::min(before.size(), after.size());
             diffs.reserve(count);
             for (size_t i = 0; i < count; ++i) {
+                // Transient nodes are not part of the document: editing one leaves nothing to undo.
+                if (const auto* node = scene_manager.getScene().getNodeByUuid(after[i].uuid);
+                    node && node->transient) {
+                    continue;
+                }
                 diffs.push_back(op::SceneGraphNodeMetadataDiff{
                     .before = before[i],
                     .after = after[i],
@@ -1608,7 +1624,11 @@ namespace lfs::vis {
             return TrainingRemovalImpact::None;
         }
 
-        for (const auto* training_node = scene_.getNodeByUuid(scene_.getTrainingModelNodeUuid()); training_node;) {
+        // A transient training model is a preview the trainer never trained
+        // (e.g. a model trained elsewhere); removing it, or a node above it,
+        // leaves the trainer alone, and the scene clears the binding.
+        const auto* const bound = scene_.getNodeByUuid(scene_.getTrainingModelNodeUuid());
+        for (const auto* training_node = bound && !bound->transient ? bound : nullptr; training_node;) {
             if (training_node->id == root->id) {
                 return TrainingRemovalImpact::TrainingModel;
             }
@@ -1697,7 +1717,7 @@ namespace lfs::vis {
         const bool removes_training_model = training_removal_impact == TrainingRemovalImpact::TrainingModel;
 
         bool trainer_cleared = false;
-        const bool record_history = history_mode != HistoryMode::Skip;
+        const bool record_history = history_mode != HistoryMode::Skip && !isTransientSubtree(scene_, id);
         const bool capture_full_scene = history_mode != HistoryMode::Record;
         const bool preserve_node_ids = history_mode == HistoryMode::RecordPreserveIds;
         auto history_options = sceneGraphCaptureOptions(true, true);
@@ -1935,6 +1955,17 @@ namespace lfs::vis {
                 return result;
             }
             planned_removals.emplace_back(id, impact);
+        }
+
+        if (std::ranges::all_of(planned_removals, [&](const auto& planned) {
+                return isTransientSubtree(scene_, planned.first);
+            })) {
+            for (const auto& [id, impact] : planned_removals) {
+                if (const auto result = removeNodeImpl(id, keep_children, HistoryMode::Skip, impact); !result) {
+                    return result;
+                }
+            }
+            return {};
         }
 
         auto history_options = sceneGraphCaptureOptions(true, true);

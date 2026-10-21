@@ -1,4 +1,17 @@
 {
+  "common.reset_default_hint": "Kliknij dwukrotnie, aby przywrócić wartość domyślną: {value}",
+  "main_panel.selection_outline_color": "Kolor obrysu",
+  "main_panel.selection_outline_opacity": "Krycie",
+  "main_panel.selection_outline_width": "Grubość",
+  "main_panel.selection_outline_threshold": "Próg pokrycia",
+  "main_panel.selection_outline_holes": "Kontury wewnętrzne",
+  "tooltip.selection_outline_color": "Kolor obrysów zaznaczonych obiektów, niezależny od znaczników.",
+  "tooltip.selection_outline_opacity": "Krycie obrysu od przezroczystego do nieprzezroczystego.",
+  "tooltip.selection_outline_width": "Wygładzona grubość linii od 1 do 12 pikseli renderowania. Powyżej 2 wymaga dodatkowych przebiegów GPU i pamięci tymczasowej.",
+  "tooltip.selection_outline_threshold": "Skumulowana alfa wymagana dla sylwetki. Wyższe wartości wykluczają bardziej przezroczyste obszary.",
+  "tooltip.selection_outline_holes": "Uwzględnia całkowicie zamknięte otwory. Wyłączenie wymaga dodatkowej pracy GPU i pamięci tymczasowej. Zagłębienia otwarte na zewnątrz pozostają obrysowane.",
+  "main_panel.selection_outline": "Kontur zaznaczenia",
+  "tooltip.selection_outline": "Obrysowuje zaznaczone obiekty splat. Zasłonięte części są przyciemnione. Niedostępne podczas treningu oraz w widokach punktów i głębi.",
   "preferences.drag_sh_hint": "Ogranicza szczegóły koloru zależne od kierunku patrzenia. Eksport używa mniejszej wartości z tego limitu i dostępnego stopnia SH.",
   "preferences.drag_format_hint": "Format plików tworzonych przy przeciąganiu splatów poza LichtFeld.",
   "preferences.drag_sh_limit": "Maksymalny stopień SH",
@@ -771,7 +784,11 @@
     "button.stop": "Zatrzymaj Trening",
     "button.reset": "Resetuj Trening",
     "button.add": "Dodaj",
-    "button.remove": "Usuń"
+    "button.remove": "Usuń",
+    "distorted_warning.title": "Wykryto zniekształcone obrazy",
+    "distorted_warning.message": "Wykryto zniekształcone obrazy. Włącz korekcję zniekształceń lub GUT, aby trenować z kamerami ze zniekształceniami.",
+    "distorted_warning.btn_undistort": "Korekcja zniekształceń",
+    "distorted_warning.btn_gut": "GUT"
   },
   "rendering": "Renderowanie",
   "scene": {
@@ -2288,6 +2305,7 @@
     "status_loading": "ładowanie",
     "status_error": "błąd",
     "status_disabled": "wyłączony",
+    "status_restart_required": "wymagany restart",
     "error.enter_github_url": "Wpisz URL GitHub",
     "status.installed": "Zainstalowano: {}",
     "status.install_failed": "Instalacja nie powiodła się",

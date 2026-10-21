@@ -430,6 +430,7 @@ class PluginManager:
 
         if "hot_reload" not in lf:
             raise ValueError("Missing tool.lichtfeld.hot_reload")
+
         compatibility_errors_in_manifest = validate_manifest_compatibility_fields(lf)
         if compatibility_errors_in_manifest:
             raise ValueError(compatibility_errors_in_manifest[0].removeprefix("pyproject.toml: "))
@@ -446,7 +447,7 @@ class PluginManager:
             entry_point=lf.get("entry_point", "__init__"),
             dependencies=project.get("dependencies", []),
             auto_start=lf.get("auto_start", False),
-            hot_reload=lf["hot_reload"],
+            hot_reload=bool(lf["hot_reload"]),
             plugin_api=lf["plugin_api"].strip(),
             lichtfeld_version=lf["lichtfeld_version"].strip(),
             required_features=list(lf["required_features"]),
@@ -808,6 +809,11 @@ class PluginManager:
         if not plugin or plugin.state != PluginState.ACTIVE:
             return self.load(name)
 
+        if not plugin.info.hot_reload:
+            plugin.needs_restart = True
+            _log.warning("Plugin '%s' hot_reload is disabled; restart required to apply changes", name)
+            return False
+
         mem_before = get_gpu_memory()
 
         module_prefix = f"{MODULE_PREFIX}.{plugin.info.name}"
@@ -861,6 +867,7 @@ class PluginManager:
                     "(PyTorch models leak on reload - restart app to reclaim)"
                 )
 
+            plugin.needs_restart = False
             return True
 
         except Exception as e:
@@ -901,6 +908,11 @@ class PluginManager:
     def get_state(self, name: str) -> Optional[PluginState]:
         plugin = self._plugins.get(name)
         return plugin.state if plugin else None
+
+    def is_restart_required(self, name: str) -> bool:
+        """Return True if the plugin requires an application restart to apply changes."""
+        plugin = self._plugins.get(name)
+        return bool(plugin and plugin.needs_restart)
 
     def get_error(self, name: str) -> Optional[str]:
         plugin = self._plugins.get(name)

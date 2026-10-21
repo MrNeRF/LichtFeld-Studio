@@ -1613,6 +1613,14 @@ namespace {
 
 namespace lfs::vis {
 
+    // Without a loaded dataset there is nothing to write a training project from.
+    TEST_F(VisualizerImplResetTest, ProjectTrainingSourceNeedsALoadedDataset) {
+        VisualizerImpl viewer(projectOptions());
+        const auto source = viewer.projectTrainingSource();
+        ASSERT_FALSE(source);
+        EXPECT_EQ(source.error().code(), lfs::ErrorCode::FailedPrecondition);
+    }
+
     class SceneGenerationRenderPublicationTest : public VisualizerImplResetTest {};
 
     TEST_F(SceneGenerationRenderPublicationTest, ContentMutationsScheduleSplatsButMatrixEditsStayResident) {
@@ -4239,6 +4247,32 @@ contract["check_selection_submode_follows_native_mode"](lf)
                 EXPECT_FALSE(viewer.jobs().anyRunning(JobType::ProjectWrite));
             }
         }
+    }
+
+    TEST_F(VisualizerImplResetTest, ProjectSaveLeavesTransientNodesOut) {
+        const auto project_path = temporary_.path / "transient.licht";
+        write_empty_project(project_path);
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.projectOpen(project_path, ProjectSwitchDisposition::DiscardChanges));
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            const auto info = viewer.projectGetInfo();
+            return info && info->hydration_state == "complete";
+        }));
+        auto& scene = viewer.getScene();
+        ASSERT_NE(scene.addGroup("kept"), lfs::core::NULL_NODE);
+        ASSERT_NE(scene.addSplat("preview", lfs::test::licht::make_splat(2)), lfs::core::NULL_NODE);
+        scene.getMutableNode("preview")->transient = true;
+
+        ASSERT_TRUE(viewer.projectSave(false));
+        viewer.projectWaitWrite();
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+        }));
+        auto saved = lfs::test::licht::require_result(lfs::io::project::ProjectDocument::open(project_path));
+        const auto nodes = lfs::test::licht::require_result(saved.scene_graph().nodes());
+        EXPECT_TRUE(std::ranges::any_of(nodes, [](const auto& node) { return node.name == "kept"; }));
+        EXPECT_TRUE(std::ranges::none_of(nodes, [](const auto& node) { return node.name == "preview"; }));
+        EXPECT_NE(scene.getNode("preview"), nullptr);
     }
 
     TEST_F(VisualizerImplResetTest,
