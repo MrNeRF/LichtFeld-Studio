@@ -15,6 +15,8 @@ namespace lfs::media {
                                  TIFF16,
                                  JXL,
                                  AVIF };
+    enum class FrameFileNumbering { SourceFrame,
+                                    DeliveryIndex };
     struct FileFrameSinkOptions {
         std::filesystem::path output_directory;
         std::string filename_pattern = "frame_%d";
@@ -31,6 +33,9 @@ namespace lfs::media {
         Tiff16OutputOptions tiff16;
         JxlOutputOptions jxl;
         AvifOutputOptions avif;
+        // Extraction retains its source-frame numbering. Rendered output uses
+        // the zero-based delivery ordinal without inventing a source frame.
+        FrameFileNumbering numbering = FrameFileNumbering::SourceFrame;
     };
     class LFS_MEDIA_API FileFrameSink final : public FrameSink {
     public:

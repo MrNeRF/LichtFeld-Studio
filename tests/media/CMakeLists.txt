@@ -24,6 +24,7 @@ add_subdirectory(studio)
 add_custom_target(media_contracts DEPENDS media_linear_video_contracts
     media_extraction_runner media_shared_core_bridge media_test_bindings
     media_public_image_output media_tiff_roundtrip media_jxl_roundtrip media_av1_provider_runner
+    media_image_sequence media_tensor_image_sequence
     media-ingest media_mcp_runner LichtFeld-Studio lfs_visualizer lfs_py)
 if(TARGET media_studio_runner)
     add_dependencies(media_contracts media_studio_runner)

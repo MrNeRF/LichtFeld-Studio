@@ -34,7 +34,9 @@
 #include "io/dataset_scene_import.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
+#include "io/image_sequence.hpp"
 #include "io/video/video_export_schedule.hpp"
+#include "media/media_options.hpp"
 #include "project/session_state.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
@@ -1716,10 +1718,10 @@ namespace lfs::vis::gui {
         });
 
         cmd::SequencerExportVideo::when([this](const auto& evt) {
-            const auto path = evt.path.empty()
+            const auto path = evt.path.empty() && evt.image_sequence_format.empty()
                                   ? SaveMp4FileDialog("camera_path")
                                   : lfs::core::utf8_to_path(evt.path);
-            if (path.empty())
+            if (path.empty() && evt.image_sequence_format.empty())
                 return;
 
             io::video::VideoExportOptions options;
@@ -1730,6 +1732,28 @@ namespace lfs::vis::gui {
                 options.spherical_video = rendering->getSettings().equirectangular;
             options.crf = evt.crf;
             options.codec = media::videoEncodeCodecFromId(evt.codec).value_or(static_cast<media::VideoEncodeCodec>(-1));
+            if (!evt.image_sequence_format.empty()) {
+                auto format = media::parseOutputOption<media::FrameFileFormat>(evt.image_sequence_format);
+                // Invalid requests still use the shared job failure path.
+                options.image_sequence.emplace();
+                auto& sequence = *options.image_sequence;
+                sequence.output.files.format = format ? *format : static_cast<media::FrameFileFormat>(-1);
+                sequence.output.files.filename_pattern = evt.filename_pattern;
+                sequence.output.files.first_source_frame_number = evt.first_frame_number;
+                sequence.output.files.image_output.overwrite = evt.overwrite_images;
+                sequence.output.files.exr.overwrite = evt.overwrite_images;
+                sequence.output.files.tiff16.overwrite = evt.overwrite_images;
+                sequence.output.files.jxl.overwrite = evt.overwrite_images;
+                sequence.output.files.avif.overwrite = evt.overwrite_images;
+                const bool bytes = format && (*format == media::FrameFileFormat::PNG || *format == media::FrameFileFormat::JPEG);
+                const bool alpha = evt.transparent_images;
+                sequence.input_color = {bytes ? media::ColorTransfer::Srgb : media::ColorTransfer::Linear, media::ColorPrimaries::Bt709, alpha ? media::AlphaMode::Independent : media::AlphaMode::None};
+                sequence.output.layout = {evt.width, evt.height,
+                                          static_cast<size_t>(std::max(evt.width, 0)) * (bytes ? 3 : (alpha ? 4 : 3) * sizeof(float)),
+                                          bytes ? media::FramePixelFormat::RGB8 : alpha ? media::FramePixelFormat::RGBAFloat32
+                                                                                        : media::FramePixelFormat::RGBFloat32,
+                                          sequence.input_color};
+            }
             const auto reconstruction_fallback =
                 io::video::videoReconstructionFallbackFromId(evt.reconstruction_fallback);
             options.reconstruction = {
@@ -3251,6 +3275,10 @@ namespace lfs::vis::gui {
             video_export_state_.thread->join();
             video_export_state_.thread.reset();
         }
+        if (options.image_sequence && path.empty()) {
+            fail_start("Image sequence requires an explicit output directory");
+            return;
+        }
 
         auto* const scene_manager = viewer_->getSceneManager();
         auto* const rendering_manager = viewer_->getRenderingManager();
@@ -3279,8 +3307,16 @@ namespace lfs::vis::gui {
             return;
         }
 
-        auto encoder = lfs::gui::createVideoEncoder();
-        if (!encoder) {
+        std::unique_ptr<io::TensorImageSequence> images;
+        try {
+            if (validated_options->image_sequence)
+                images = std::make_unique<io::TensorImageSequence>();
+        } catch (const std::bad_alloc&) {
+            fail_start("Image sequence setup allocation failed");
+            return;
+        }
+        auto encoder = validated_options->image_sequence ? nullptr : lfs::gui::createVideoEncoder();
+        if (!encoder && !validated_options->image_sequence) {
             fail_start(LOC(lichtfeld::Strings::Runtime::VIDEO_ENCODER_UNAVAILABLE));
             return;
         }
@@ -3293,6 +3329,7 @@ namespace lfs::vis::gui {
             .projection = render_settings.equirectangular
                               ? io::video::VideoReconstructionProjection::Equirectangular
                               : io::video::VideoReconstructionProjection::Perspective,
+            .require_even_extent = !validated_options->image_sequence,
         });
         if (!reconstruction_plan) {
             LOG_ERROR(
@@ -3308,9 +3345,18 @@ namespace lfs::vis::gui {
         }
 
         const auto snapshot_result = captureVideoExportSceneSnapshot(
-            *scene_manager, sequence ? VideoExportCapture::ImmediateRender : VideoExportCapture::Owned);
+            *scene_manager, sequence || validated_options->image_sequence ? VideoExportCapture::ImmediateRender : VideoExportCapture::Owned);
         if (!snapshot_result) {
             fail_start(snapshot_result.error());
+            return;
+        }
+
+        const bool linear_images = validated_options->image_sequence &&
+                                   validated_options->image_sequence->output.layout.format != media::FramePixelFormat::RGB8;
+        if (linear_images && (!snapshot_result->gaussianModel() || render_settings.point_cloud_mode ||
+                              !snapshot_result->meshes.empty() || environmentBackgroundEnabled(render_settings) ||
+                              reconstruction_plan->provenance().effective_backend_id != "native")) {
+            fail_start("Linear image sequences require Gaussian rendering without mesh/environment compositing or reconstruction post-processing");
             return;
         }
 
@@ -3320,9 +3366,22 @@ namespace lfs::vis::gui {
             return;
         }
 
-        const auto export_options = *validated_options;
+        auto export_options = *validated_options;
         const float duration = timeline.clipDuration();
+        if (!std::isfinite(duration) || duration < 0 ||
+            static_cast<double>(duration) * export_options.framerate > static_cast<double>(std::numeric_limits<int>::max()) - .5) {
+            fail_start("Timeline duration exceeds the supported export frame count");
+            return;
+        }
         const int total_frames = lfs::io::video::videoExportFrameCount(duration, export_options.framerate);
+        if (export_options.image_sequence) {
+            export_options.image_sequence->output.files.output_directory = path;
+            export_options.image_sequence->output.framerate = export_options.framerate;
+            export_options.image_sequence->output.frame_count = total_frames;
+            export_options.image_sequence->output.files.exr.provenance = core::provenance_to_json(
+                export_options.provenance ? *export_options.provenance : core::make_minimal_provenance_stamp());
+            export_options.image_sequence->output.files.tiff16.provenance = export_options.image_sequence->output.files.exr.provenance;
+        }
         const int width = export_options.width;
         const int height = export_options.height;
 
@@ -3374,9 +3433,10 @@ namespace lfs::vis::gui {
              engine, scene_manager, rendering_manager, render_settings,
              sequence_uuid, sequence_frames = std::move(sequence_frames),
              encoder = std::move(encoder),
+             images = std::move(images),
              environment_state = video_export_environment_state_.get(),
              mesh_renderer_state = video_export_mesh_renderer_state_.get(),
-             snapshot = sequence_uuid ? VideoExportSceneSnapshot{} : *snapshot_result,
+             snapshot = sequence_uuid || export_options.image_sequence ? VideoExportSceneSnapshot{} : *snapshot_result,
              frame_states = std::move(frame_states)](std::stop_token stop_token) mutable {
                 jobs_.work(job);
                 bool cancelled = false;
@@ -3422,9 +3482,38 @@ namespace lfs::vis::gui {
                     LOC(lichtfeld::Strings::Runtime::TASK_OPENING_ENCODER));
                 publishVideoExportOverlayState();
 
-                auto result = encoder->open(path, export_options);
+                const auto legacy_output = [](auto&& operation) -> Status {
+                    auto value = operation();
+                    if (value)
+                        return {};
+                    return Status::failure(make_error({.code = ErrorCode::Unavailable, .domain = ErrorDomain::IO, .detail = value.error(), .detection = LFS_SOURCE_SITE_CURRENT()}));
+                };
+                const auto result = [&]() -> Status {
+                    try {
+                        if (images) {
+                            export_options.image_sequence->output.cancelled = [this, job, stop_token] {
+                                return stop_token.stop_requested() || jobs_.cancelRequested(job);
+                            };
+                            return images->open(*export_options.image_sequence);
+                        }
+                        return legacy_output([&] { return encoder->open(path, export_options); });
+                    } catch (const std::bad_alloc&) {
+                        return Status::failure(make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "Export output setup allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()}));
+                    } catch (const std::exception& error) {
+                        // LFS-CENSUS-OK(empty-catch): Output setup exceptions fail the owning job below, preserving their detail.
+                        return Status::failure(make_error({.code = ErrorCode::Internal, .domain = ErrorDomain::IO, .detail = error.what(), .detection = LFS_SOURCE_SITE_CURRENT()}));
+                    }
+                }();
                 if (!result) {
-                    fail_encoder(result.error());
+                    if (images && result.error().code() == ErrorCode::Cancelled) {
+                        jobs_.report(job, std::nullopt, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLED));
+                        cleanup_video_export_state();
+                        jobs_.finishWork(job, true, {});
+                        publishVideoExportOverlayState();
+                        wakeMainThreadForAsyncWork();
+                        return;
+                    }
+                    fail_encoder(std::string(result.error().detail()));
                     return;
                 }
 
@@ -3441,6 +3530,7 @@ namespace lfs::vis::gui {
                             [viewer, engine, scene_manager, rendering_manager, environment_state,
                              mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, width, height, sequence_uuid, sequence_frame = sequence_uuid ? sequence_frames[frame] : 0,
                              fps = static_cast<float>(export_options.framerate),
+                             image_format = export_options.image_sequence ? std::optional(export_options.image_sequence->output.layout.format) : std::nullopt,
                              cam_state = frame_states[frame],
                              clip_time = lfs::io::video::videoExportSampleTime(frame, export_options.framerate)]() mutable
                             -> std::expected<lfs::core::Tensor, std::string> {
@@ -3472,6 +3562,30 @@ namespace lfs::vis::gui {
                                 auto* const window_manager = viewer->getWindowManager();
                                 auto* const graphics_context =
                                     window_manager != nullptr ? window_manager->getGraphicsContext() : nullptr;
+                                if (image_format && *image_format != media::FramePixelFormat::RGB8) {
+                                    if (!snapshot_ptr->gaussianModel() || !snapshot_ptr->meshes.empty())
+                                        return std::unexpected("Linear image sequence content changed to an unsupported render path");
+                                    const RenderingManager::ExportImageRequest request{
+                                        .rotation = glm::mat3_cast(cam_state.rotation),
+                                        .translation = cam_state.position,
+                                        .focal_length_mm = cam_state.focal_length_mm,
+                                        .width = width,
+                                        .height = height,
+                                        .orthographic_override = render_settings.orthographic,
+                                        .ortho_scale_override = render_settings.ortho_scale,
+                                        .mode = *image_format == media::FramePixelFormat::RGBAFloat32
+                                                    ? ExportPostProcessMode::Transparent
+                                                    : ExportPostProcessMode::Opaque,
+                                        .equirectangular = render_settings.equirectangular};
+                                    auto image = rendering_manager->renderLinearImage(*snapshot_ptr->gaussianModel(),
+                                                                                      makeVideoExportGaussianSceneState(*snapshot_ptr), request);
+                                    if (!image)
+                                        return std::unexpected(std::string(image.error().detail()));
+                                    auto rgb = *image_format == media::FramePixelFormat::RGBAFloat32
+                                                   ? *image
+                                                   : image->slice(2, 0, 3);
+                                    return rgb.permute({2, 0, 1});
+                                }
                                 return renderVideoExportFrame(
                                     *rendering_manager,
                                     *engine,
@@ -3523,16 +3637,21 @@ namespace lfs::vis::gui {
                                  image_hwc.shape()[0], image_hwc.shape()[1], image_hwc.shape()[2]);
                     }
 
-                    auto write_result = encoder->writeFrame(image_hwc);
+                    auto write_result = images ? images->write(image_hwc)
+                                               : legacy_output([&] { return encoder->writeFrame(image_hwc); });
                     if (!write_result) {
+                        if (images && write_result.error().code() == ErrorCode::Cancelled) {
+                            cancelled = true;
+                            break;
+                        }
                         error_msg =
-                            write_result.error();
+                            std::string(write_result.error().detail());
                         jobs_.report(
                             job, std::nullopt,
                             LOC(lichtfeld::Strings::Runtime::TASK_ENCODE_ERROR),
                             error_msg);
                         publishVideoExportOverlayState();
-                        LOG_ERROR("Failed to encode frame {}: {}", frame, write_result.error());
+                        LOG_ERROR("Failed to encode frame {}: {}", frame, write_result.error().detail());
                         break;
                     }
 
@@ -3546,6 +3665,7 @@ namespace lfs::vis::gui {
                     publishVideoExportOverlayState();
                 }
 
+                cancelled = cancelled || stop_token.stop_requested() || jobs_.cancelRequested(job);
                 if (cancelled) {
                     jobs_.report(
                         job, std::nullopt,
@@ -3557,13 +3677,20 @@ namespace lfs::vis::gui {
                 }
                 publishVideoExportOverlayState();
 
-                if (auto close_result = encoder->close(); !close_result) {
-                    error_msg = close_result.error();
+                const bool abort_images = images && (cancelled || !error_msg.empty());
+                if (abort_images)
+                    images->abort();
+                const auto close_result = images ? abort_images ? Status{} : images->close()
+                                                 : legacy_output([&] { return encoder->close(); });
+                cancelled = cancelled || stop_token.stop_requested() || jobs_.cancelRequested(job) ||
+                            (!close_result && close_result.error().code() == ErrorCode::Cancelled);
+                if (!close_result && !cancelled) {
+                    error_msg = std::string(close_result.error().detail());
                     jobs_.report(
                         job, std::nullopt, LOC(lichtfeld::Strings::Runtime::TASK_FAILED),
                         error_msg);
                     publishVideoExportOverlayState();
-                    LOG_ERROR("Failed to close encoder: {}", close_result.error());
+                    LOG_ERROR("Failed to close encoder: {}", close_result.error().detail());
                 } else {
                     bool emit_completed = false;
                     if (cancelled) {

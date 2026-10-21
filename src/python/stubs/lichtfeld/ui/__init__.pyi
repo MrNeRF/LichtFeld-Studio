@@ -2633,6 +2633,11 @@ def export_video(width: int, height: int, framerate: int, crf: int, path: str = 
     Export video with specified settings. Without a path a save dialog opens, which a script cannot answer; pass one to export directly. Uses the saved video reconstruction selection, as does the Sequencer button. codec selects 'h264' (default), 'hevc' or 'av1'; AV1 uses NVENC where available or the built-in libaom CPU fallback, without changing codec. include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded.
     """
 
+def export_image_sequence(width: int, height: int, framerate: int, path: str, format: str = 'png', filename_pattern: str = 'frame_%06d', first_frame_number: int = 0, overwrite: bool = False, transparent: bool = False, include_provenance: bool = True) -> None:
+    """
+    Export timeline frames through the shared image sinks. PNG/JPEG use the existing SDR video render; EXR/TIFF16/JXL/AVIF use the Gaussian linear float capture before PPISP/environment post-processing. Linear capture rejects mesh/environment compositing and non-native reconstruction. Uses the saved reconstruction selection and existing export progress/cancellation job. Full provenance selection currently applies to EXR/TIFF16; other formats retain their existing writer metadata. Completed images survive interruption; automatic resume and a new GUI selector are not provided.
+    """
+
 def add_keyframe() -> None:
     """Add a keyframe at current camera position"""
 

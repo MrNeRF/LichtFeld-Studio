@@ -28,6 +28,7 @@
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
 #include "mcp/mcp_http_server.hpp"
+#include "media/media_options.hpp"
 #include "preferences.hpp"
 #include "py_command.hpp"
 #include "py_gizmo.hpp"
@@ -5219,6 +5220,66 @@ namespace lfs::python {
             "Uses the saved video reconstruction selection, as does the Sequencer button. "
             "codec selects 'h264' (default), 'hevc' or 'av1'; AV1 uses NVENC where available or the built-in libaom CPU fallback, without changing codec. "
             "include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded.");
+
+        m.def(
+            "export_image_sequence",
+            [](int width, int height, int framerate, const std::string& path,
+               const std::string& format, const std::string& filename_pattern,
+               int first_frame_number, bool overwrite, bool transparent, bool include_provenance) {
+                const auto parsed = media::parseOutputOption<media::FrameFileFormat>(format);
+                if (!parsed)
+                    throw nb::value_error("Image sequence format must be png, jpeg, exr, tiff16, jxl or avif");
+                if (path.empty() || path.find('\0') != std::string::npos)
+                    throw nb::value_error("Image sequence requires an explicit output directory without NUL");
+                if (width <= 0 || height <= 0 || framerate < 1 || framerate > 1000 || first_frame_number < 0)
+                    throw nb::value_error("Invalid image sequence dimensions, framerate or first frame number");
+                if (transparent && (*parsed == media::FrameFileFormat::PNG || *parsed == media::FrameFileFormat::JPEG))
+                    throw nb::value_error("Transparent sequences require exr, tiff16, jxl or avif");
+                media::ImageSequenceOptions preflight;
+                preflight.files.output_directory = core::utf8_to_path(path);
+                preflight.files.format = *parsed;
+                preflight.files.filename_pattern = filename_pattern;
+                preflight.files.first_source_frame_number = first_frame_number;
+                preflight.frame_count = 1;
+                preflight.framerate = framerate;
+                const bool bytes = *parsed == media::FrameFileFormat::PNG || *parsed == media::FrameFileFormat::JPEG;
+                preflight.layout = {width, height, static_cast<size_t>(width) * (bytes ? 3 : (transparent ? 4 : 3) * sizeof(float)), bytes ? media::FramePixelFormat::RGB8 : transparent ? media::FramePixelFormat::RGBAFloat32
+                                                                                                                                                                                         : media::FramePixelFormat::RGBFloat32,
+                                    {bytes ? media::ColorTransfer::Srgb : media::ColorTransfer::Linear, media::ColorPrimaries::Bt709, transparent ? media::AlphaMode::Independent : media::AlphaMode::None}};
+                if (const auto valid = media::validateImageSequenceOptions(preflight); !valid) {
+                    if (valid.error().code() == ErrorCode::InvalidArgument || valid.error().code() == ErrorCode::Unsupported)
+                        throw nb::value_error(std::string(valid.error().detail()).c_str());
+                    throw Exception(valid.error());
+                }
+                const bool dispatched = invoke_on_viewer(
+                    [=] {
+                        auto* const viewer = get_visualizer();
+                        auto* const gui = get_gui_manager();
+                        if (!viewer || !viewer->acceptsPostedWork() || !gui)
+                            return false;
+                        auto request = gui->getSequencerUIState().videoExportRequest(width, height, framerate, 18, path, include_provenance);
+                        request.image_sequence_format = std::string(media::outputOptionName(*parsed));
+                        request.filename_pattern = filename_pattern;
+                        request.first_frame_number = first_frame_number;
+                        request.overwrite_images = overwrite;
+                        request.transparent_images = transparent;
+                        request.emit();
+                        return true;
+                    },
+                    false);
+                if (!dispatched)
+                    throw std::runtime_error("Viewer is unavailable");
+            },
+            nb::arg("width"), nb::arg("height"), nb::arg("framerate"), nb::arg("path"),
+            nb::arg("format") = "png", nb::arg("filename_pattern") = "frame_%06d",
+            nb::arg("first_frame_number") = 0, nb::arg("overwrite") = false,
+            nb::arg("transparent") = false, nb::arg("include_provenance") = true,
+            "Export timeline frames through the shared image sinks. PNG/JPEG use the existing SDR video render; "
+            "EXR/TIFF16/JXL/AVIF use the Gaussian linear float capture before PPISP/environment post-processing. "
+            "Linear capture rejects mesh/environment compositing and non-native reconstruction. "
+            "Uses the saved reconstruction selection and existing export progress/cancellation job. "
+            "Full provenance selection currently applies to EXR/TIFF16; other formats retain their existing writer metadata. "
+            "Completed images survive interruption; automatic resume and a new GUI selector are not provided.");
 
         m.def(
             "add_keyframe",
