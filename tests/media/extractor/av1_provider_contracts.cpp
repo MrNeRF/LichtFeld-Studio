@@ -58,6 +58,15 @@ int main() {
         }
     } cleanup{root};
     try {
+        if (lfs::media::nvencAv1Qp(0) != 0)
+            throw std::runtime_error("AV1 quality zero must preserve the native lossless request/fallback");
+        int previous_qp = -1;
+        for (int quality = 0; quality <= 51; ++quality) {
+            const int qp = lfs::media::nvencAv1Qp(quality);
+            if (qp < previous_qp || qp > 255)
+                throw std::runtime_error("AV1 NVENC calibration must be monotonic and within the native QP range");
+            previous_qp = qp;
+        }
         std::filesystem::create_directory(root);
         const auto output = root / "fallback.mp4";
         const auto report = runEncodeSessionContracts({{"output", lfs::core::path_to_utf8(output)}, {"av1", true}, {"cuda", true}});

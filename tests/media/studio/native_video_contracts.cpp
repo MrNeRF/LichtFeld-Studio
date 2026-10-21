@@ -12,7 +12,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <cuda_runtime.h>
+#include <fstream>
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
@@ -277,6 +279,66 @@ namespace {
 
 nlohmann::json runNativeVideoContracts(const nlohmann::json& request) {
     using namespace lfs;
+    if (request.at("operation") == "native-quality") {
+        media::VideoEncodeOptions options{.width = 640, .height = 360, .framerate = 30};
+        options.crf = request.at("crf").get<int>();
+        options.codec = media::VideoEncodeCodec::AV1;
+        options.matrix = media::ColorMatrix::Bt709;
+        options.range = media::ColorRange::Limited;
+        const bool software = request.value("software", false);
+        options.preferred_backend = software ? media::VideoEncodeBackend::Software : media::VideoEncodeBackend::Cuda;
+        media::VideoEncodeSession session;
+        auto opened = session.open(core::utf8_to_path(request.at("output").get<std::string>()), options);
+        if (!opened)
+            throw std::runtime_error(std::string(opened.error().detail()));
+        require(session.backend() == options.preferred_backend, "quality comparison requires the requested provider, without fallback");
+        struct QualityWriter final : media::VideoEncodeWriter {
+            std::ifstream input;
+            std::vector<uint8_t> planar = std::vector<uint8_t>(640 * 360 * 3 / 2);
+            std::vector<uint8_t> uv = std::vector<uint8_t>(640 * 360 / 2);
+            Result<void> write(const media::VideoEncodeTarget& target) override {
+                require(bool(input.read(reinterpret_cast<char*>(planar.data()), planar.size())), "quality source frame missing");
+                if (target.backend == media::VideoEncodeBackend::Cuda) {
+                    require(target.layout == media::VideoEncodeLayout::NV12, "quality CUDA layout");
+                    for (int i = 0; i < 640 * 360 / 4; ++i) {
+                        uv[2 * i] = planar[640 * 360 + i];
+                        uv[2 * i + 1] = planar[640 * 360 * 5 / 4 + i];
+                    }
+                    for (int p = 0; p < 2; ++p) {
+                        const auto& plane = target.planes[p];
+                        require(cudaMemcpy2D(plane.data, plane.row_stride, p ? uv.data() : planar.data(),
+                                             640, 640, p ? 180 : 360, cudaMemcpyHostToDevice) == cudaSuccess,
+                                "quality CUDA upload");
+                    }
+                    require(cudaDeviceSynchronize() == cudaSuccess, "quality CUDA completion");
+                } else {
+                    require(target.backend == media::VideoEncodeBackend::Software && target.layout == media::VideoEncodeLayout::YUV420P,
+                            "quality software layout");
+                    size_t offset = 0;
+                    for (int p = 0; p < 3; ++p) {
+                        const auto& plane = target.planes[p];
+                        for (int y = 0; y < plane.height; ++y)
+                            std::memcpy(plane.data + y * plane.row_stride, planar.data() + offset + y * plane.width, plane.width);
+                        offset += plane.width * plane.height;
+                    }
+                }
+                return {};
+            }
+        } writer;
+        writer.input.open(core::utf8_to_path(request.at("input").get<std::string>()), std::ios::binary);
+        require(writer.input.is_open(), "quality source open");
+        constexpr int frames = 48;
+        for (int i = 0; i < frames; ++i) {
+            auto result = session.writeFrame(writer);
+            if (!result)
+                throw std::runtime_error(std::string(result.error().detail()));
+        }
+        require(writer.input.peek() == std::ifstream::traits_type::eof(), "quality source frame count");
+        auto closed = session.close();
+        if (!closed)
+            throw std::runtime_error(std::string(closed.error().detail()));
+        return {{"success", true}, {"backend", software ? "software" : "nvenc"}, {"frames", frames}};
+    }
     if (request.at("operation") == "native-yuv-color")
         return semiplanarColorContracts();
     if (request.at("operation") == "native-conversion")

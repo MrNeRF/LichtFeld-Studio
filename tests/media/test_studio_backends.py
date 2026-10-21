@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -18,6 +19,50 @@ RUNNER = None
 
 
 class StudioBackends(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("LFS_MEDIA_TEST_NVENC_AV1") == "1",
+                         "requires explicit qualification on an AV1-capable NVENC GPU")
+    def test_av1_provider_quality_on_textured_motion(self):
+        # Compare the actual session providers on identical YUV samples. A
+        # color-conversion error or silent software fallback invalidates PSNR.
+        for name, pattern in (("charts", "testsrc2=size=640x360:rate=30"),
+                              ("fractal", "mandelbrot=size=640x360:rate=30:maxiter=100")):
+            source = self.root / (name + ".yuv")
+            subprocess.run([FFMPEG, "-v", "error", "-f", "lavfi", "-i", pattern,
+                            "-frames:v", "48", "-pix_fmt", "yuv420p", "-f", "rawvideo", str(source)],
+                           check=True, timeout=30)
+            self.assertEqual(source.stat().st_size, 48 * 640 * 360 * 3 // 2)
+            for quality in (18, 30, 40):
+                scores = {}
+                for software in (True, False):
+                    with self.subTest(clip=name, quality=quality, software=software):
+                        video = self.root / f"quality-{name}-{quality}-{software}.mp4"
+                        actual, _ = self.invoke(operation="native-quality", input=str(source), output=str(video),
+                                                crf=quality, software=software)
+                        self.assertEqual(actual["backend"], "software" if software else "nvenc")
+                        self.assertEqual(actual["frames"], 48)
+                        info = json.loads(subprocess.check_output(
+                            [FFPROBE, "-v", "error", "-count_frames", "-show_streams", "-of", "json", str(video)], timeout=30))["streams"][0]
+                        self.assertEqual((info["codec_name"], info["pix_fmt"], info["width"], info["height"],
+                                          info["color_space"], info["color_range"], int(info["nb_read_frames"])),
+                                         ("av1", "yuv420p", 640, 360, "bt709", "tv", 48))
+                        compared = subprocess.run(
+                            [FFMPEG, "-hide_banner", "-nostdin", "-f", "rawvideo", "-pixel_format", "yuv420p",
+                             "-video_size", "640x360", "-framerate", "30", "-colorspace", "bt709", "-color_range", "tv",
+                             "-i", str(source), "-i", str(video), "-lavfi",
+                             "[0:v]settb=AVTB,setpts=PTS-STARTPTS[a];[1:v]settb=AVTB,setpts=PTS-STARTPTS[b];[a][b]psnr",
+                             "-f", "null", "-"], capture_output=True, text=True, timeout=30)
+                        self.assertEqual(compared.returncode, 0, compared.stderr)
+                        match = re.search(r"PSNR y:[\d.]+ u:[\d.]+ v:[\d.]+ average:([\d.]+)", compared.stderr)
+                        self.assertIsNotNone(match, compared.stderr)
+                        scores[software] = float(match[1])
+                        self.assertGreater(scores[software], 30)
+                self.assertEqual(len(scores), 2, "both actual providers must be measured")
+                # CQP and adaptive CRF are content-dependent, not bit-identical.
+                # This catches the old 5-7 dB gap without asserting exact PSNR
+                # or file sizes across GPU generations and encoder releases.
+                self.assertLessEqual(abs(scores[False] - scores[True]), 3.5,
+                                     f"{name}, quality {quality}: NVENC={scores[False]}, libaom={scores[True]}")
+
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory(prefix="lfs-studio-media-")
@@ -42,7 +87,7 @@ class StudioBackends(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stderr.decode("utf-8",errors="replace") + result.stdout.decode("utf-8",errors="replace"))
         actual = json.loads(result.stdout)
         self.assertTrue(actual["success"],actual)
-        if options.get("operation") in ("native-preview", "native-encode", "native-encode-session", "native-conversion", "native-yuv-color"):
+        if options.get("operation") in ("native-preview", "native-encode", "native-encode-session", "native-conversion", "native-yuv-color", "native-quality"):
             return actual, output
         self.assertTrue(actual["hardware"])
         self.assertTrue(actual["hdr"])

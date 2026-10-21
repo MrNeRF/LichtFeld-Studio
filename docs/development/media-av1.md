@@ -46,9 +46,13 @@ output, audio, WebM or Matroska contract is introduced.
 The public quality range remains 0..51, with lower values requesting higher
 quality. libaom receives that value as CRF, with constant-quality mode
 (`bit_rate = 0`), `cpu-used = 8`, row multithreading and eight lookahead frames.
-Its worker count is clamped to 1..8 per session. NVENC AV1 maps the public range
-to its native QP range 0..255; H.264/HEVC retain their previous mapping. Matching
-numbers across encoders do not imply matching size, speed or distortion.
+Its worker count is clamped to 1..8 per session. NVENC AV1 uses a monotonic,
+piecewise-linear calibration in its native QP units rather than stretching
+0..51 across 0..255. Calibration points are `(quality, QP)`:
+`(0, 0), (10, 18), (18, 40), (30, 85), (40, 135), (51, 205)`.
+H.264/HEVC retain their previous mapping. Constant QP and adaptive CRF respond
+differently to content: this is an approximate distortion alignment, not a
+promise of matching PSNR, bitrate, file size or perceptual quality on every clip.
 
 Quality zero can be rejected by native hardware. That failure uses the same AV1
 CPU fallback; lossless YUV planes do not imply preservation of an original RGB
@@ -75,6 +79,15 @@ opted into with `LFS_MEDIA_TEST_NVENC_AV1=1`; they fail rather than silently
 accepting CPU output. A separate quality-zero test accepts either actual AV1
 backend and verifies the produced file. The 8K test establishes correctness on
 the tested hardware, not photographic quality or throughput.
+
+The opt-in provider quality regression feeds the same 48-frame 640x360 YUV420P
+samples to real NVENC and libaom sessions at qualities 18, 30 and 40. It uses
+moving test charts and a textured fractal, verifies the actual providers,
+decoded frame counts and declared BT.709 limited range, and measures aggregate
+YUV PSNR against the source with matching timestamps/color interpretation.
+The permitted difference is 3.5 dB on this corpus, allowing encoder/GPU variation
+while detecting the previous 5-7 dB mismatch. Passing this small corpus is not
+a guarantee for arbitrary footage or untested GPU generations.
 
 The existing portable Tensor video contract also exercises AV1 with CPU/GPU
 producers and noncontiguous views, reopening at two extents, 12 distinct decoded

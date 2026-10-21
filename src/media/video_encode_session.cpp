@@ -5,6 +5,7 @@
 #include "core/path_utils.hpp"
 #include "media/video_output_extent.hpp"
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstring>
 #include <exception>
@@ -26,6 +27,19 @@ namespace lfs::media {
         constexpr int DEFAULT_FRAMERATE = 30;
         constexpr int NVENC_FRAME_POOL_SIZE = 4;
         constexpr int NVENC_QP_OFFSET = 3;
+        constexpr int nvencAv1Qp(int quality) {
+            // Empirical constant-QP alignment with libaom's adaptive CRF on
+            // rendered/detail clips. Their scales are not linearly equivalent;
+            // content still affects the quality difference between providers.
+            constexpr std::array<std::pair<int, int>, 6> points{{{0, 0}, {10, 18}, {18, 40}, {30, 85}, {40, 135}, {51, 205}}};
+            for (size_t i = 1; i < points.size(); ++i) {
+                const auto [x, y] = points[i - 1];
+                const auto [next_x, next_y] = points[i];
+                if (quality <= next_x)
+                    return y + ((quality - x) * (next_y - y) + (next_x - x) / 2) / (next_x - x);
+            }
+            return points.back().second;
+        }
         Result<void> encodeError(ErrorCode code, std::string text) {
             return Result<void>::failure(make_error({.code = code, .domain = ErrorDomain::IO, .detail = std::move(text), .detection = LFS_SOURCE_SITE_CURRENT()}));
         }
@@ -250,9 +264,8 @@ namespace lfs::media {
                 cleanupHwContexts();
                 return false;
             };
-            // Preserve the legacy H264/HEVC mapping. AV1 has native QP 0..255,
-            // so map the shared public 0..51 range across that interval explicitly.
-            const int qp = opts.codec == VideoEncodeCodec::AV1 ? opts.crf * 255 / 51 : std::min(opts.crf + NVENC_QP_OFFSET, 51);
+            // Preserve the legacy H264/HEVC mapping.
+            const int qp = opts.codec == VideoEncodeCodec::AV1 ? nvencAv1Qp(opts.crf) : std::min(opts.crf + NVENC_QP_OFFSET, 51);
             if (!checked_option(av_opt_set(codec_ctx_->priv_data, "preset", "p4", 0), "preset") ||
                 !checked_option(av_opt_set(codec_ctx_->priv_data, "tune", "hq", 0), "tune") ||
                 !checked_option(av_opt_set(codec_ctx_->priv_data, "rc", "constqp", 0), "rc") ||
