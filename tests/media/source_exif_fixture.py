@@ -24,7 +24,7 @@ def write_png(path, *, post_idat=False, duplicate=False, idat_chunks=1, damaged_
     return tiff
 
 
-def write_camera_metadata(path, *, carrier="png", little=True, big=False):
+def write_camera_metadata(path, *, carrier="png", little=True, big=False, padded=False, nul_padding=None):
     """Independent byte-level camera/GPS fixture, including nested IFDs."""
     if big and carrier != "tiff":
         raise ValueError("EXIF envelopes use classic TIFF")
@@ -61,6 +61,16 @@ def write_camera_metadata(path, *, carrier="png", little=True, big=False):
          (5, 1, 1, b"\x01"), (6, 5, 1, rational(125, 10)),
          (7, 5, 3, rational(10, 1) + rational(4, 1) + rational(1, 2)),
          (18, 2, 7, b"WGS-84\0"), (29, 2, 11, b"2024:02:29\0")]]
+    if padded:
+        for index, tags in enumerate(directories):
+            for ordinal, (id_, type_, count, value) in enumerate(tags):
+                if id_ in (271, 272, 0xa434) and (nul_padding if nul_padding is not None else carrier != "tiff"):
+                    value += b"\0" * 8
+                elif id_ == 0x9291:
+                    value = value[:-1] + b"   \0"
+                else:
+                    continue
+                directories[index][ordinal] = (id_, type_, len(value), value)
     offsets = []
     next_offset = header_size
     for tags in directories:

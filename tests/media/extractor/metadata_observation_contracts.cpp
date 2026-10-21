@@ -103,7 +103,7 @@ namespace {
         const auto original = catalogSourceMetadata(image);
         require(bool(original), "camera catalog fixture");
         const auto normalized = summarizeImageMetadata(*original);
-        require(bool(normalized) && !normalized->limited && normalized->scope == "static_image_properties", "complete image summary");
+        require(bool(normalized) && !normalized->limited && normalized->scope == MetadataSummaryScope::ImageProperties, "complete image summary");
         require(std::get<std::string>(fact(*normalized, "camera.make").value) == "Test Camera", "camera ASCII preserved");
         require(std::get<ExifRational>(fact(*normalized, "lens.focal_length").value).denominator == 10 &&
                     fact(*normalized, "lens.focal_length").unit == MetadataUnit::Millimetres,
@@ -135,6 +135,56 @@ namespace {
             return *found;
         };
         auto changed = image;
+        auto& padded_make = edit(changed, 0x010f);
+        padded_make.bytes.resize(32, 0);
+        padded_make.count = 32;
+        const auto padded = summarize(changed);
+        require(fact(padded, "camera.make").state == MetadataValueState::Present &&
+                    std::get<std::string>(fact(padded, "camera.make").value) == "Test Camera",
+                "trailing NUL padding can be projected without changing original bytes");
+        changed = image;
+        auto& padded_fraction = edit(changed, 0x9291);
+        padded_fraction.bytes.pop_back();
+        padded_fraction.bytes.insert(padded_fraction.bytes.end(), 5, ' ');
+        padded_fraction.bytes.push_back(0);
+        padded_fraction.count = static_cast<uint32_t>(padded_fraction.bytes.size());
+        require(std::get<std::string>(fact(summarize(changed), "time.original").value) == std::get<std::string>(time.value),
+                "standard blank-padded subseconds retain the declared significant digits");
+        changed = image;
+        const std::string unknown_civil = "    :  :     :  :  ";
+        edit(changed, 0x9003).bytes.assign(unknown_civil.begin(), unknown_civil.end());
+        edit(changed, 0x9003).bytes.push_back(0);
+        require(fact(summarize(changed), "time.original").state == MetadataValueState::Absent &&
+                    fact(summarize(changed), "time.original.civil").state == MetadataValueState::Absent,
+                "standard colon-preserving unknown date is not corruption");
+        changed = image;
+        edit(changed, 0x9011).bytes = {' ', ' ', ' ', ':', ' ', ' ', 0};
+        require(fact(summarize(changed), "time.original").diagnostic == "Timezone unspecified" &&
+                    fact(summarize(changed), "time.original.offset").state == MetadataValueState::Absent,
+                "standard colon-preserving unknown UTC offset remains unknown");
+        changed = image;
+        edit(changed, 0x010f).bytes = {'A', 0, 'B', 0};
+        edit(changed, 0x010f).count = 4;
+        require(fact(summarize(changed), "camera.make").state == MetadataValueState::Invalid, "nonzero bytes after a terminator are not hidden by NUL-padding handling");
+        changed = image;
+        edit(changed, 0x010f).bytes = {'A', '\n', 'B', 0};
+        edit(changed, 0x010f).count = 4;
+        require(fact(summarize(changed), "camera.make").state == MetadataValueState::Present, "ASCII text is not restricted to printable characters");
+        changed = image;
+        edit(changed, 0x010f).bytes = {0};
+        edit(changed, 0x010f).count = 1;
+        require(fact(summarize(changed), "camera.make").state == MetadataValueState::Absent, "empty but valid ASCII camera field is absent rather than corrupt");
+        changed = image;
+        const auto partial_time = summarize(changed, 4);
+        require(partial_time.limited && fact(partial_time, "time.original").state == MetadataValueState::Unsupported,
+                "index truncation does not imply missing timezone or subseconds in the source");
+        const auto partial_coordinate = summarize(changed, 9);
+        require(partial_coordinate.limited && fact(partial_coordinate, "gps.latitude").state == MetadataValueState::Unsupported,
+                "retained DMS and hemisphere cannot establish uniqueness outside a limited index");
+        changed.original.status = lfs::core::image_codecs::MetadataStatus::Limited;
+        require(fact(summarize(changed), "time.original").state == MetadataValueState::Present,
+                "a fully parsed EXIF block remains complete when other envelopes were not collected");
+        changed = image;
         auto& reference = edit(changed, 1);
         reference.bytes = {'N', 0};
         require(std::get<double>(fact(summarize(changed), "gps.latitude").value) == 45.5, "north sign");
@@ -170,8 +220,28 @@ namespace {
             require(fact(summarize(changed), "time.original").state == MetadataValueState::Invalid, "invalid civil date/time");
         }
         changed = image;
-        edit(changed, 0x9011).bytes = {'+', '1', '4', ':', '0', '1', 0};
+        edit(changed, 0x9011).bytes = {'+', '2', '4', ':', '0', '1', 0};
         require(fact(summarize(changed), "time.original").state == MetadataValueState::Invalid, "offset range");
+        edit(changed, 0x9011).bytes = {'+', '1', '4', ':', '0', '1', 0};
+        require(fact(summarize(changed), "time.original").state == MetadataValueState::Present, "offset validation does not invent a geographic timezone bound");
+        changed = image;
+        const std::string leap_civil = "2016:12:31 23:59:60";
+        edit(changed, 0x9003).bytes.assign(leap_civil.begin(), leap_civil.end());
+        edit(changed, 0x9003).bytes.push_back(0);
+        require(fact(summarize(changed), "time.original").state == MetadataValueState::Unsupported &&
+                    fact(summarize(changed), "time.original.civil").state == MetadataValueState::Unsupported,
+                "leap-second representation is unsupported rather than necessarily corrupt");
+        changed = image;
+        auto& gps_clock = edit(changed, 0x920a);
+        gps_clock.id = 7;
+        gps_clock.directory_path = {0, 2};
+        gps_clock.count = 3;
+        gps_clock.rational_values = {{23, 1}, {59, 1}, {60, 1}};
+        require(fact(summarize(changed), "gps.utc_seconds_of_day").state == MetadataValueState::Unsupported, "GPS leap second is not rolled into the next day");
+        gps_clock.rational_values[2] = {61, 1};
+        require(fact(summarize(changed), "gps.utc_seconds_of_day").state == MetadataValueState::Invalid, "out-of-range GPS second is invalid");
+        gps_clock.rational_values[2] = {119, 2};
+        require(std::get<double>(fact(summarize(changed), "gps.utc_seconds_of_day").value) == 86399.5, "last fractional GPS second stays within its day");
         changed = image;
         edit(changed, 0x9011).bytes = {' ', ' ', ' ', ' ', ' ', ' ', 0};
         const auto blank_zone = summarize(changed);
@@ -249,6 +319,13 @@ namespace {
                     std::get<double>(fact(decoded_tiff, "gps.latitude").value) == -45.5 &&
                     std::get<std::string>(fact(decoded_tiff, "time.original").value) == std::get<std::string>(time.value),
                 "TIFF decoded values agree without fabricated rational precision");
+        tiff.original.status = lfs::core::image_codecs::MetadataStatus::Limited;
+        const auto partial_tiff = summarize(tiff);
+        require(partial_tiff.limited && fact(partial_tiff, "gps.latitude").state == MetadataValueState::Unsupported &&
+                    fact(partial_tiff, "gps.altitude_sea_level").state == MetadataValueState::Unsupported &&
+                    fact(partial_tiff, "time.original").state == MetadataValueState::Unsupported,
+                "partial TIFF observations cannot establish uniqueness of compound operands");
+        tiff.original.status = lfs::core::image_codecs::MetadataStatus::Collected;
         tiff.original.tiff->directories[2].tags[1].floating_values[0] = std::numeric_limits<double>::infinity();
         require(fact(summarize(tiff), "gps.latitude").state == MetadataValueState::Invalid, "non-finite TIFF coordinates rejected");
         auto saved = summarize(image);

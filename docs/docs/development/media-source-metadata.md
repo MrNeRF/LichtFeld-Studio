@@ -221,6 +221,15 @@ occurrences remain separate and carry `ambiguous: true`; duplicate hemisphere,
 altitude or time-component references prevent arbitrary selection. Callers must
 not resolve different image directories or duplicate facts by taking the first
 semantic match. The source references identify their original groups.
+Uniqueness refers to occurrences retained by the collector: the observed TIFF
+inventory is not an additional validator of duplicate tags in the original file.
+
+An incomplete reference index cannot establish uniqueness of compound operands,
+and an interrupted TIFF collection may omit fields within an observed directory.
+Coordinate, altitude and assembled capture-time facts then report `unsupported`
+with `Directory metadata is incomplete`, rather than declaring operands absent
+or selecting an apparently unique retained reference. A fully parsed EXIF block
+remains self-contained if collection stopped before another envelope.
 
 Exact EXIF rationals remain rational values for scalar fields. TIFF rationals
 are already floating-point values from libtiff and are not reconstructed into
@@ -245,3 +254,17 @@ catalog index and directory paths; it is not a provider-wide memory ceiling.
 Allocation failure returns `ResourceExhausted`. Newer altitude-reference modes,
 MakerNotes, XMP, vendor telemetry, calibration, metadata writing and automatic
 pose or exposure changes are outside this interpretation table.
+
+The ASCII projection accepts trailing NUL padding only when all bytes after the
+first terminator are zero; it does not hide another string or payload. This
+tolerance does not suppress provider warnings: TIFF diagnosed as malformed
+remains malformed, and its compound summary values remain unsupported.
+Seven-bit ASCII text is transported with JSON string escaping. Subsecond trailing spaces
+are formatting padding and are omitted from the significant fractional digits.
+Unknown dates accept all-space and colon-preserving blank forms; subsecond
+padding follows [CIPA Exif](https://www.cipa.jp/std/documents/e/DC-008-2012_E.pdf).
+Unknown offsets are retained as unknown, including colon-preserving blanks.
+Offset validation checks numeric hour/minute syntax, not membership in a
+geographic timezone registry. Leap-second representations are retained as
+unsupported interpretations, not asserted to be corrupt. The internal summary
+scope is a closed enum; JSON identifiers remain unchanged.

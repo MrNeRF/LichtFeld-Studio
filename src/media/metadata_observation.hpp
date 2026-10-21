@@ -38,10 +38,12 @@ namespace lfs::media {
         // Duplicate semantic occurrences in one directory are not resolved here.
         bool ambiguous = false;
     };
+    enum class MetadataSummaryScope { StreamProperties,
+                                      ImageProperties };
     struct MetadataSummary {
         bool limited = false;
         std::vector<MetadataFact> facts;
-        std::string_view scope = "static_stream_properties";
+        MetadataSummaryScope scope = MetadataSummaryScope::StreamProperties;
     };
     // Projects existing stream properties to typed, static facts with provenance.
     // Raw entries stay available; absence never becomes a fabricated zero value.

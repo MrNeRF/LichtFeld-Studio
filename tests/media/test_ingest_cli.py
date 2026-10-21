@@ -186,11 +186,11 @@ class IngestCLI(unittest.TestCase):
 
     def test_camera_metadata_summary_real_carriers(self):
         path = self.root / "Camera metadata é 日本語.bin"
-        cases = [(carrier, little, False) for carrier in ("jpeg", "png", "tiff") for little in (True, False)]
-        cases += [("tiff", little, True) for little in (True, False)]
-        for carrier, little, big in cases:
-            with self.subTest(carrier=carrier, little=little, big=big):
-                source_exif_fixture.write_camera_metadata(path, carrier=carrier, little=little, big=big)
+        carriers = [(carrier, little, False) for carrier in ("jpeg", "png", "tiff") for little in (True, False)]
+        carriers += [("tiff", little, True) for little in (True, False)]
+        for carrier, little, big, padded in [(*case, padding) for case in carriers for padding in (False, True)]:
+            with self.subTest(carrier=carrier, little=little, big=big, padded=padded):
+                source_exif_fixture.write_camera_metadata(path, carrier=carrier, little=little, big=big, padded=padded)
                 before, modified = path.read_bytes(), path.stat().st_mtime_ns
                 result, stderr = self.invoke("source-metadata", path)
                 self.assertEqual(stderr, b"")
@@ -220,6 +220,26 @@ class IngestCLI(unittest.TestCase):
                         self.assertIn(operand, references)
                 self.assertEqual(path.read_bytes(), before)
                 self.assertEqual(path.stat().st_mtime_ns, modified)
+
+    def test_camera_metadata_summary_retains_tiff_provider_warnings(self):
+        path = self.root / "TIFF padded warning é 日本語.bin"
+        for big in (False, True):
+            for little in (False, True):
+                with self.subTest(big=big, little=little):
+                    # libtiff diagnoses NULs inside the declared ASCII count.
+                    # The projection must not turn that warning into success.
+                    source_exif_fixture.write_camera_metadata(path, carrier="tiff", big=big, little=little, padded=True, nul_padding=True)
+                    original, modified = path.read_bytes(), path.stat().st_mtime_ns
+                    result, stderr = self.invoke("source-metadata", path)
+                    self.assertEqual(stderr, b"")
+                    self.assertEqual(result["metadata"]["image_exif"]["status"], "malformed")
+                    self.assertTrue(result["metadata"]["image_exif"]["diagnostic"])
+                    facts = {item["semantic"]: item for item in result["summary"]["facts"]}
+                    for key in ("gps.latitude", "gps.longitude", "gps.altitude_sea_level", "time.original"):
+                        self.assertEqual(facts[key]["state"], "unsupported")
+                        self.assertEqual(facts[key]["diagnostic"], "Directory metadata is incomplete")
+                    self.assertEqual(path.read_bytes(), original)
+                    self.assertEqual(path.stat().st_mtime_ns, modified)
 
     def test_source_metadata_catalog_preserves_existing_descriptions(self):
         path = self.root / "Metadata catalog é 日本語.bin"
