@@ -6,6 +6,7 @@
 #include <cmath>
 #include <core/tensor.hpp>
 #include <core/tensor_backend.hpp>
+#include <core/tensor_environment.hpp>
 #include <core/tensor_readback.hpp>
 #include <core/tensor_completion.hpp>
 #include <core/tensor_upload.hpp>
@@ -407,6 +408,43 @@ int main() try {
         require(scattered.cpu().to_vector() == std::vector<float>({2, 0, 1, 4, 0, 3}), "HIP Tensor scatter assignment failed");
         scattered.index_fill_(1, scatter_indices, 7.f);
         require(scattered.cpu().to_vector() == std::vector<float>({7, 0, 7, 7, 0, 7}), "HIP Tensor index_fill failed");
+        {
+            constexpr int width = 19, height = 7, env_width = 9, env_height = 3;
+            std::vector<float> rgb(3 * width * height), alpha(width * height), environment(env_width * env_height * 3);
+            for (size_t i = 0; i < rgb.size(); ++i)
+                rgb[i] = float((i * 17) % 97) / 96.f;
+            for (size_t i = 0; i < alpha.size(); ++i)
+                alpha[i] = float((i * 13) % 31) / 30.f;
+            for (size_t i = 0; i < environment.size(); ++i)
+                environment[i] = float((i * 11) % 47) / 23.f;
+            const auto host_rgb = Tensor::from_vector(rgb, {3, height, width}, Device::CPU);
+            const auto host_alpha = Tensor::from_vector(alpha, {height, width}, Device::CPU);
+            const auto host_env = Tensor::from_vector(environment, {env_height, env_width, 3}, Device::CPU);
+            for (int panorama = 0; panorama < 2; ++panorama) {
+                EnvironmentCompositeParams params{};
+                params.rotation[0] = params.rotation[4] = params.rotation[8] = 1.f;
+                params.full_width = params.band_width = width;
+                params.full_height = height + 4;
+                params.band_height = height;
+                params.y_offset = 2;
+                params.focal_x = 13.f;
+                params.focal_y = 17.f;
+                params.center_x = width * 0.5f;
+                params.center_y = params.full_height * 0.5f;
+                params.equirect_view = panorama;
+                params.exposure_factor = 1.3f;
+                params.env_rotation_radians = 0.9f;
+                params.env_width = env_width;
+                params.env_height = env_height;
+                const auto expected = environment_composite(host_rgb, host_alpha, host_env, params).to_vector_uint8();
+                const auto actual = environment_composite(host_rgb.to(Device::GPU), host_alpha.to(Device::GPU),
+                                                          host_env.to(Device::GPU), params).to_vector_uint8();
+                require(actual.size() == expected.size(), "HIP environment composite output shape changed");
+                for (size_t i = 0; i < actual.size(); ++i)
+                    require(std::abs(int(actual[i]) - int(expected[i])) <= 1,
+                            "HIP environment composite differs from CPU reference");
+            }
+        }
         auto repeated = Tensor::from_vector(std::vector<int>{0, 0, 1}, {3}, Device::GPU).to(DataType::Int64);
         auto contributions = Tensor::from_vector(std::vector<float>{1, 2, 3, 4, 5, 6, 7, 8, 9}, {3, 3}, Device::GPU);
         auto accumulate = Tensor::full({2, 3}, 0.f, Device::GPU);

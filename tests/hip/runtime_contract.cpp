@@ -65,6 +65,7 @@ int main(int argc, char** argv) try {
     LOAD(lfs_hip_memory_info);
     LOAD(lfs_hip_trim_workspace);
     LOAD(lfs_hip_index_fill);
+    LOAD(lfs_hip_environment_composite);
 #undef LOAD
     LfsHipError error{};
     const auto check = [&](int status) { require(status == 0, error.message); };
@@ -564,6 +565,43 @@ int main(int argc, char** argv) try {
         check(lfs_hip_download(first, output, 0, observed.data(), observed.size(), &error));
         require(observed == expected, "Invalid HIP index fill partially changed output");
         check(lfs_hip_buffer_release(first, fill_indices, &error));
+    }
+
+    {
+        LfsHipBuffer *opacity = nullptr, *environment = nullptr;
+        check(lfs_hip_buffer_allocate(first, 4 * sizeof(float), &opacity, &error));
+        check(lfs_hip_buffer_allocate(first, 3 * sizeof(float), &environment, &error));
+        const float rgb[] = {0.f, 0.5f, 1.f, 0.25f, 0.75f, 0.f,
+                             0.f, 0.5f, 1.f, 0.25f, 0.75f, 0.f};
+        const float alpha[] = {1.f, 1.f, 1.f, 1.f};
+        const float env[] = {0.2f, 0.3f, 0.4f};
+        std::vector<uint8_t> guard(64, 0x4b), observed(guard.size());
+        check(lfs_hip_upload(first, input, 0, rgb, sizeof(rgb), &error));
+        check(lfs_hip_upload(first, opacity, 0, alpha, sizeof(alpha), &error));
+        check(lfs_hip_upload(first, environment, 0, env, sizeof(env), &error));
+        check(lfs_hip_upload(first, output, 0, guard.data(), guard.size(), &error));
+        LfsHipEnvironment params{};
+        params.rotation[0] = params.rotation[4] = params.rotation[8] = 1.f;
+        params.full_width = params.band_width = 2;
+        params.full_height = params.band_height = 2;
+        params.env_width = params.env_height = 1;
+        params.focal_x = params.focal_y = 2.f;
+        check(lfs_hip_environment_composite(first, {input, 0}, {opacity, 0}, {environment, 0},
+                                             {output, 8}, &params, &error));
+        check(lfs_hip_download(first, output, 0, observed.data(), observed.size(), &error));
+        for (size_t i = 0; i < 12; ++i)
+            require(observed[8 + i] == uint8_t(rgb[(i % 3) * 4 + i / 3] * 255.f + 0.5f),
+                    "HIP environment alpha-one output differs from RGB");
+        require(std::all_of(observed.begin(), observed.begin() + 8, [](uint8_t value) { return value == 0x4b; }),
+                "HIP environment composite changed preceding guard bytes");
+        const auto valid_output = observed;
+        params.env_width = 0;
+        rejected(lfs_hip_environment_composite(first, {input, 0}, {opacity, 0}, {environment, 0},
+                                                {output, 8}, &params, &error));
+        check(lfs_hip_download(first, output, 0, observed.data(), observed.size(), &error));
+        require(observed == valid_output, "Invalid HIP environment dimensions partially changed output");
+        check(lfs_hip_buffer_release(first, opacity, &error));
+        check(lfs_hip_buffer_release(first, environment, &error));
     }
 
     check(lfs_hip_buffer_release(first, input, &error));

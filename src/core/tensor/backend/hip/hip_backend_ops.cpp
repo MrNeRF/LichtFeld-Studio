@@ -18,6 +18,7 @@
 #include <core/detail/fused_pointwise.hpp>
 #include <core/detail/tensor_half.hpp>
 #include <core/tensor.hpp>
+#include <core/tensor_environment.hpp>
 #include <core/tensor_image.hpp>
 #include <core/failure_report.hpp>
 #include <cstdio>
@@ -250,6 +251,7 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_gather);
         ENTRY(lfs_hip_index_update);
         ENTRY(lfs_hip_index_fill);
+        ENTRY(lfs_hip_environment_composite);
         ENTRY(lfs_hip_count_nonzero);
         ENTRY(lfs_hip_reduce_typed_layout);
         ENTRY(lfs_hip_bias_f32);
@@ -360,6 +362,7 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_gather);
                 LOAD(lfs_hip_index_update);
                 LOAD(lfs_hip_index_fill);
+                LOAD(lfs_hip_environment_composite);
                 LOAD(lfs_hip_count_nonzero);
                 LOAD(lfs_hip_reduce_typed_layout);
                 LOAD(lfs_hip_bias_f32);
@@ -939,6 +942,34 @@ namespace lfs::core::internal {
         check(impl_->lfs_hip_index_fill(impl_->context, out, static_cast<uint32_t>(output.dtype), idx,
               static_cast<uint32_t>(indices.dtype), &destination, static_cast<uint32_t>(program.dim),
               program.index_size, bits, &error), error);
+    }
+    void HipBackendOps::environment_composite(StorageRef rgb, StorageRef alpha, StorageRef environment,
+                                              StorageRef output, const EnvironmentCompositeParams& params,
+                                              ExecContext execution) {
+        queue(execution);
+        require(rgb.dtype == DataType::Float32 && alpha.dtype == DataType::Float32 &&
+                    environment.dtype == DataType::Float32 && output.dtype == DataType::UInt8,
+                "HIP environment composite storage dtype mismatch");
+        LfsHipEnvironment native{};
+        std::copy_n(params.rotation, 9, native.rotation);
+        native.full_width = params.full_width;
+        native.full_height = params.full_height;
+        native.band_width = params.band_width;
+        native.band_height = params.band_height;
+        native.y_offset = params.y_offset;
+        native.focal_x = params.focal_x;
+        native.focal_y = params.focal_y;
+        native.center_x = params.center_x;
+        native.center_y = params.center_y;
+        native.equirect_view = params.equirect_view;
+        native.exposure_factor = params.exposure_factor;
+        native.env_rotation_radians = params.env_rotation_radians;
+        native.env_width = params.env_width;
+        native.env_height = params.env_height;
+        std::lock_guard lock(impl_->mutex);
+        LfsHipError error{};
+        check(impl_->lfs_hip_environment_composite(impl_->context, impl_->view(rgb), impl_->view(alpha),
+              impl_->view(environment), impl_->view(output), &native, &error), error);
     }
     void HipBackendOps::strided_scatter(StorageRef input, StorageRef output, const StridedLayout& layout, ExecContext execution) {
         queue(execution);

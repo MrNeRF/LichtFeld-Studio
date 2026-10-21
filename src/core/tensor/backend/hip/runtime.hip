@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "hip_lens.hpp"
+#include <core/environment_math.hpp>
 
 struct LfsHipBuffer {
     void* data = nullptr;
@@ -821,6 +822,36 @@ namespace {
                            reinterpret_cast<const T*>(static_cast<const char*>(input.buffer->data) + input.offset),
                            reinterpret_cast<T*>(static_cast<char*>(output.buffer->data) + output.offset), layout, T{});
         check(hipGetLastError());
+    }
+    __global__ void environment_composite_kernel(const float* rgb, const float* alpha,
+                                                  const float* environment, uint8_t* output,
+                                                  LfsHipEnvironment p, size_t pixels) {
+        namespace em = lfs::core::envmath;
+        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < pixels; i += size_t(gridDim.x) * blockDim.x) {
+            const int x = int(i % size_t(p.band_width));
+            const int y = int(i / size_t(p.band_width));
+            auto direction = em::environmentWorldDirection(float(x), float(p.y_offset + y),
+                float(p.full_width), float(p.full_height), p.equirect_view != 0,
+                p.focal_x, p.focal_y, p.center_x, p.center_y, p.rotation);
+            direction = em::normalized(em::rotateAroundY(direction, p.env_rotation_radians));
+            const auto uv = em::equirectUvForDirection(direction);
+            const auto tap = em::environmentBilinearTap(uv.u, uv.v, p.env_width, p.env_height);
+            const auto fetch = [&](int px, int py) {
+                const size_t offset = (size_t(py) * size_t(p.env_width) + size_t(px)) * 3;
+                return em::Vec3{environment[offset], environment[offset + 1], environment[offset + 2]};
+            };
+            const auto top = em::mix(fetch(tap.x0, tap.y0), fetch(tap.x1, tap.y0), tap.tx);
+            const auto bottom = em::mix(fetch(tap.x0, tap.y1), fetch(tap.x1, tap.y1), tap.tx);
+            const auto background = em::shadeEnvironmentRadiance(em::mix(top, bottom, tap.ty), p.exposure_factor);
+            const em::Vec3 color{rgb[i], rgb[pixels + i], rgb[2 * pixels + i]};
+            const auto mixed = em::mix(background, color, alpha[i]);
+            const auto to_byte = [](float value) {
+                return static_cast<uint8_t>(fminf(fmaxf(value, 0.f), 1.f) * 255.f + 0.5f);
+            };
+            output[3 * i] = to_byte(mixed.x);
+            output[3 * i + 1] = to_byte(mixed.y);
+            output[3 * i + 2] = to_byte(mixed.z);
+        }
     }
 } // namespace
 
@@ -1945,6 +1976,36 @@ int lfs_hip_index_fill(LfsHipContext* context, LfsHipView output, uint32_t dtype
             dispatch_index_fill<int32_t>(context, output, indices, width, destination, source_layout, dim, index_count, value_bits);
         else
             dispatch_index_fill<int64_t>(context, output, indices, width, destination, source_layout, dim, index_count, value_bits);
+    });
+}
+int lfs_hip_environment_composite(LfsHipContext* context, LfsHipView rgb, LfsHipView alpha,
+                                  LfsHipView environment, LfsHipView output,
+                                  const LfsHipEnvironment* params, LfsHipError* error) {
+    return boundary(error, [&] {
+        require(params && params->band_width > 0 && params->band_height > 0 &&
+                    params->full_width == params->band_width && params->full_height >= params->band_height &&
+                    params->y_offset >= 0 && params->y_offset <= params->full_height - params->band_height &&
+                    params->env_width > 0 && params->env_height > 0,
+                "Invalid HIP environment composite dimensions");
+        const size_t pixels = size_t(params->band_width) * size_t(params->band_height);
+        const size_t env_pixels = size_t(params->env_width) * size_t(params->env_height);
+        require(pixels <= INT32_MAX && env_pixels <= INT32_MAX && pixels <= SIZE_MAX / 3 && env_pixels <= SIZE_MAX / 3,
+                "HIP environment composite extent overflow");
+        validate(context, rgb.buffer, rgb.offset, float_bytes(pixels * 3));
+        validate(context, alpha.buffer, alpha.offset, float_bytes(pixels));
+        validate(context, environment.buffer, environment.offset, float_bytes(env_pixels * 3));
+        validate(context, output.buffer, output.offset, pixels * 3);
+        require(rgb.offset % 4 == 0 && alpha.offset % 4 == 0 && environment.offset % 4 == 0,
+                "Unaligned HIP environment composite input");
+        require(output.buffer != rgb.buffer && output.buffer != alpha.buffer &&
+                    output.buffer != environment.buffer, "HIP environment output overlaps an input");
+        DeviceScope device(context->device);
+        hipLaunchKernelGGL(environment_composite_kernel, dim3(blocks(pixels)), dim3(256), 0, context->stream,
+            reinterpret_cast<const float*>(static_cast<const char*>(rgb.buffer->data) + rgb.offset),
+            reinterpret_cast<const float*>(static_cast<const char*>(alpha.buffer->data) + alpha.offset),
+            reinterpret_cast<const float*>(static_cast<const char*>(environment.buffer->data) + environment.offset),
+            static_cast<uint8_t*>(output.buffer->data) + output.offset, *params, pixels);
+        check(hipGetLastError());
     });
 }
 int lfs_hip_gather(LfsHipContext* context, LfsHipView input, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, LfsHipView output, const LfsHipLayout* input_layout, const LfsHipLayout* index_layout, uint32_t dim, uint32_t boundary_mode, uint32_t index_select, LfsHipError* error) {

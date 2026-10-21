@@ -6,7 +6,7 @@
 
 #include <cmath>
 
-#if defined(__CUDACC__)
+#if defined(__CUDACC__) || defined(__HIPCC__)
 #define LFS_ENV_HD __host__ __device__ __forceinline__
 #else
 #define LFS_ENV_HD inline

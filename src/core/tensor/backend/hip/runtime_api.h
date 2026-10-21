@@ -221,6 +221,17 @@ LFS_HIP_API int lfs_hip_index_cast(LfsHipContext*, LfsHipView input, LfsHipView 
 LFS_HIP_API int lfs_hip_index_update(LfsHipContext*, LfsHipView output, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, LfsHipView source, const LfsHipLayout* output_layout, uint32_t dim, size_t index_count, uint32_t add, LfsHipError*);
 LFS_HIP_API int lfs_hip_index_fill(LfsHipContext*, LfsHipView output, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, const LfsHipLayout* output_layout, uint32_t dim, size_t index_count, uint64_t value_bits, LfsHipError*);
 LFS_HIP_API int lfs_hip_gather(LfsHipContext*, LfsHipView input, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, LfsHipView output, const LfsHipLayout* input_layout, const LfsHipLayout* index_layout, uint32_t dim, uint32_t boundary_mode, uint32_t index_select, LfsHipError*);
+typedef struct LfsHipEnvironment {
+    float rotation[9];
+    int32_t full_width, full_height, band_width, band_height, y_offset;
+    float focal_x, focal_y, center_x, center_y;
+    int32_t equirect_view;
+    float exposure_factor, env_rotation_radians;
+    int32_t env_width, env_height;
+} LfsHipEnvironment;
+LFS_HIP_API int lfs_hip_environment_composite(LfsHipContext*, LfsHipView rgb, LfsHipView alpha,
+                                               LfsHipView environment, LfsHipView output,
+                                               const LfsHipEnvironment*, LfsHipError*);
 LFS_HIP_API int lfs_hip_reduce_layout_f32(LfsHipContext*, LfsHipView input, LfsHipView output, const LfsHipLayout*, uint32_t axes_mask, uint32_t operation, LfsHipError*);
 LFS_HIP_API int lfs_hip_broadcast_f32(LfsHipContext*, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, const LfsHipLayout* lhs_layout, const LfsHipLayout* rhs_layout, const LfsHipLayout* output_layout, uint32_t output_element_bytes, LfsHipError*);
 
