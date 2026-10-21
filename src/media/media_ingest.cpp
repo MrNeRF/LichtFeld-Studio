@@ -84,6 +84,8 @@ namespace lfs::media {
         Result<IngestReport> execute(const IngestRequest& request, FrameSink* sink, const FileExtraction* files) {
             std::size_t accepted = 0;
             try {
+                if (files && files->files.numbering != FrameFileNumbering::SourceFrame)
+                    return failure(ErrorCode::InvalidArgument, "Video extraction requires source-frame file numbering", 0);
                 if (files && (files->files.format == FrameFileFormat::JXL || files->files.format == FrameFileFormat::AVIF) && request.convert_hdr_to_sdr)
                     return failure(ErrorCode::InvalidArgument, "JXL/AVIF video extraction uses the declared linear SDR path; HDR tone mapping requires a separate conversion", 0);
                 if (request.convert_hdr_to_sdr && !detail::hasHdrBackend())

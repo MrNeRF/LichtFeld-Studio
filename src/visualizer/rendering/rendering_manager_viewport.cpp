@@ -1015,6 +1015,15 @@ namespace lfs::vis {
     }
 
     Result<core::Tensor> RenderingManager::renderLinearImage(SceneManager* scene_manager, const ExportImageRequest& request) {
+        return renderLinearImageImpl(scene_manager, nullptr, {}, request);
+    }
+
+    Result<core::Tensor> RenderingManager::renderLinearImage(const core::SplatData& model, SceneRenderState state, const ExportImageRequest& request) {
+        return renderLinearImageImpl(nullptr, &model, std::move(state), request);
+    }
+
+    Result<core::Tensor> RenderingManager::renderLinearImageImpl(SceneManager* scene_manager, const core::SplatData* snapshot,
+                                                                 SceneRenderState snapshot_state, const ExportImageRequest& request) {
         if (request.width <= 0 || request.height <= 0)
             return previewImageFailure(ErrorCode::InvalidArgument, "Invalid float render dimensions");
         if (request.mode != ExportPostProcessMode::Transparent && request.mode != ExportPostProcessMode::Opaque)
@@ -1025,8 +1034,9 @@ namespace lfs::vis {
         } guard{*this};
         try {
             auto render_lock = acquireLiveModelRenderLock(scene_manager);
-            auto state = scene_manager ? scene_manager->buildRenderState({.current_geometry = true}) : SceneRenderState{};
-            const auto* model = state.combined_model;
+            auto state = snapshot ? std::move(snapshot_state) : scene_manager ? scene_manager->buildRenderState({.current_geometry = true})
+                                                                              : SceneRenderState{};
+            const auto* model = snapshot ? snapshot : state.combined_model;
             if (!hasRenderableGaussians(model))
                 return previewImageFailure(ErrorCode::FailedPrecondition, "No renderable Gaussian model is available");
             const auto readback = request.mode == ExportPostProcessMode::Transparent ? PreviewImageReadback::LinearRgba : PreviewImageReadback::LinearOpaqueRgba;
@@ -1035,10 +1045,10 @@ namespace lfs::vis {
             auto image = previewRenderNeedsTiling(request.width, request.height)
                              ? renderPreviewImageTiledWithState(scene_manager, *model, std::move(state), request.rotation, request.translation,
                                                                 request.focal_length_mm, request.width, request.height, render_lock.has_value(), std::nullopt,
-                                                                request.orthographic_override, ortho_scale, readback, scale)
+                                                                request.orthographic_override, ortho_scale, readback, scale, request.equirectangular)
                              : renderPreviewImageWithState(scene_manager, *model, std::move(state), request.rotation, request.translation,
                                                            request.focal_length_mm, request.width, request.height, render_lock.has_value(), std::nullopt,
-                                                           request.orthographic_override, ortho_scale, std::nullopt, readback, scale);
+                                                           request.orthographic_override, ortho_scale, std::nullopt, readback, scale, request.equirectangular);
             // The captured CPU tensor owns its samples; renderer resources can retire.
             if (!image)
                 return std::move(image).error();

@@ -1798,7 +1798,7 @@ namespace lfs::io {
                                                                                  : params.format == ImageFormat::PNG    ? ".png"
                                                                                  : params.format == ImageFormat::EXR    ? ".exr"
                                                                                                                         : ".jpg";
-                    return params.output_dir / (formatFrameFilenameStem(params.filename_pattern, output_number) + ext);
+                    return params.output_dir / lfs::core::utf8_to_path(formatFrameFilenameStem(params.filename_pattern, output_number) + ext);
                 };
 
                 const auto source_frame_for_time = [&](const double frame_time) {

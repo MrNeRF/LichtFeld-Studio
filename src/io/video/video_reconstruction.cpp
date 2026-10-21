@@ -171,7 +171,13 @@ namespace lfs::io::video {
                 .message = valid.error().message,
             });
         }
-        if (const auto error = videoOutputExtentError(request.output_width, request.output_height)) {
+        const auto extent_error = request.require_even_extent
+                                      ? videoOutputExtentError(request.output_width, request.output_height)
+                                  : request.output_width <= 0 || request.output_height <= 0 ||
+                                          static_cast<uint64_t>(request.output_width) * static_cast<uint64_t>(request.output_height) > static_cast<uint64_t>(INT_MAX / 4)
+                                      ? std::optional<std::string>("Invalid image reconstruction output extent")
+                                      : std::nullopt;
+        if (const auto& error = extent_error) {
             return std::unexpected(VideoReconstructionResolutionError{
                 .issue = VideoReconstructionResolutionIssue::InvalidOutputExtent,
                 .message = std::string(*error),

@@ -94,6 +94,8 @@ namespace lfs::io::video {
         std::expected<void, std::string> open(const std::filesystem::path& path, const VideoExportOptions& options) {
             if (session_.isOpen())
                 return std::unexpected("Encoder is already open");
+            if (options.image_sequence)
+                return std::unexpected("Image output requires the image sequence sink");
             if (auto result = validateVideoEncodingOptions(options); !result)
                 return result;
             auto stamp = options.provenance ? *options.provenance : core::make_minimal_provenance_stamp();

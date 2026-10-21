@@ -1,5 +1,37 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
+add_executable(media_tensor_image_sequence image_sequence_contracts.cpp)
+target_compile_features(media_tensor_image_sequence PRIVATE cxx_std_23)
+target_include_directories(media_tensor_image_sequence PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(media_tensor_image_sequence PRIVATE lfs_video lfs_core lfs_media lfs_image_codecs)
+set_target_properties(media_tensor_image_sequence PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+if(APPLE)
+    find_package(Python REQUIRED COMPONENTS Development.Embed)
+    target_link_options(media_tensor_image_sequence PRIVATE "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
+    target_link_libraries(media_tensor_image_sequence PRIVATE lfs_python_embed)
+endif()
+if(MSVC)
+    target_link_options(media_tensor_image_sequence PRIVATE "/DELAYLOAD:nvcuda.dll")
+    target_link_libraries(media_tensor_image_sequence PRIVATE delayimp)
+endif()
+add_test(NAME MediaTensorImageSequenceCpuContracts COMMAND media_tensor_image_sequence cpu)
+set_tests_properties(MediaTensorImageSequenceCpuContracts PROPERTIES LABELS "media;cpu;offline" TIMEOUT 120)
+if(WIN32)
+    set_tests_properties(MediaTensorImageSequenceCpuContracts PROPERTIES ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")
+endif()
+foreach(_sequence_backend IN ITEMS cuda vulkan metal)
+    if((_sequence_backend STREQUAL "cuda" AND LFS_HAS_CUDA) OR
+       (_sequence_backend STREQUAL "vulkan" AND LFS_TENSOR_VULKAN) OR
+       (_sequence_backend STREQUAL "metal" AND LFS_TENSOR_METAL))
+        add_test(NAME MediaTensorImageSequence_${_sequence_backend} COMMAND media_tensor_image_sequence ${_sequence_backend})
+        set_tests_properties(MediaTensorImageSequence_${_sequence_backend} PROPERTIES LABELS "media;gpu" TIMEOUT 120 SKIP_RETURN_CODE 77)
+        if(WIN32)
+            set_tests_properties(MediaTensorImageSequence_${_sequence_backend} PROPERTIES ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR};PATH=path_list_prepend:${CUDAToolkit_BIN_DIR};PATH=path_list_prepend:${CUDAToolkit_BIN_DIR}/x64")
+        endif()
+    endif()
+endforeach()
 add_executable(media_linear_video_contracts linear_video_contracts.cpp)
 target_compile_definitions(media_linear_video_contracts PRIVATE LFS_HEIF_FIXTURES="${CMAKE_SOURCE_DIR}/tests/data/heif")
 set_target_properties(media_linear_video_contracts PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
