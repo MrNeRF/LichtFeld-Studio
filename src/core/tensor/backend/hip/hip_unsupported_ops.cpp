@@ -8,7 +8,6 @@
 #include <stdexcept>
 namespace lfs::core::internal {
     void HipBackendOps::compiled_expression(const ExpressionLaunch& launch, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: compiled_expression"); }
-    bool HipBackendOps::arg_extreme(StorageRef input, StorageRef values, StorageRef indices, const ArgExtremeProgram& program, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: arg_extreme"); }
     void HipBackendOps::cdist(StorageRef lhs, StorageRef rhs, StorageRef output, size_t lhs_rows, size_t rhs_rows, size_t columns, float p, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: cdist"); }
     void HipBackendOps::nearest_point_indices(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, size_t, size_t, size_t, float, ExecContext) { throw std::runtime_error("HIP Tensor operation not implemented: nearest_point_indices"); }
     void HipBackendOps::camera_frustum_counts(StorageRef, StorageRef, StorageRef, size_t, size_t, float, ExecContext) { throw std::runtime_error("HIP Tensor operation not implemented: camera_frustum_counts"); }

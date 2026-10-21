@@ -248,6 +248,7 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_fill_layout_bits);
         ENTRY(lfs_hip_broadcast_f32);
         ENTRY(lfs_hip_reduce_layout_f32);
+        ENTRY(lfs_hip_arg_extreme_f32);
         ENTRY(lfs_hip_convert);
         ENTRY(lfs_hip_index_cast);
         ENTRY(lfs_hip_gather);
@@ -363,6 +364,7 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_fill_layout_bits);
                 LOAD(lfs_hip_broadcast_f32);
                 LOAD(lfs_hip_reduce_layout_f32);
+                LOAD(lfs_hip_arg_extreme_f32);
                 LOAD(lfs_hip_convert);
                 LOAD(lfs_hip_index_cast);
                 LOAD(lfs_hip_gather);
@@ -864,6 +866,23 @@ namespace lfs::core::internal {
         axis.axis_count = 1;
         axis.axes[0] = 1;
         reduce(input, output, layout, axis, execution);
+    }
+    bool HipBackendOps::arg_extreme(StorageRef input, StorageRef values, StorageRef indices, const ArgExtremeProgram& program, ExecContext execution) {
+        queue(execution);
+        require(input.dtype == DataType::Float32 && values.dtype == DataType::Float32 && indices.dtype == DataType::Int64,
+                "HIP indexed extrema require Float32 input/values and Int64 indices");
+        std::lock_guard lock(impl_->mutex);
+        const auto in = impl_->view(input), val = impl_->view(values), idx = impl_->view(indices);
+        size_t growth = 0;
+        LfsHipError error{};
+        const int status = impl_->lfs_hip_arg_extreme_f32(impl_->context, in, val, idx, program.outer, program.reduce,
+                                                        program.inner, program.maximum ? 1u : 0u, &growth, &error);
+        impl_->algorithm_workspace_bytes += growth;
+        impl_->workspace_bytes += growth;
+        impl_->peak = std::max(impl_->peak, impl_->live + impl_->workspace_bytes);
+        impl_->reserved_peak = std::max(impl_->reserved_peak, impl_->live + impl_->cached_bytes + impl_->workspace_bytes);
+        check(status, error);
+        return true;
     }
     void HipBackendOps::column_reduce(StorageRef input, StorageRef output, size_t rows, size_t columns, const ReduceProgram& program, ExecContext execution) {
         strided_reduce(input, output, 1, rows, columns, program, execution);
