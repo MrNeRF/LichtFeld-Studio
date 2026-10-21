@@ -66,6 +66,7 @@ int main(int argc, char** argv) try {
     LOAD(lfs_hip_trim_workspace);
     LOAD(lfs_hip_index_fill);
     LOAD(lfs_hip_environment_composite);
+    LOAD(lfs_hip_pointwise_f16);
 #undef LOAD
     LfsHipError error{};
     const auto check = [&](int status) { require(status == 0, error.message); };
@@ -98,6 +99,33 @@ int main(int argc, char** argv) try {
     for (size_t i = 0; i < elements; ++i)
         source[i] = float(int(i % 131) - 65) * 0.125f;
     check(lfs_hip_upload(first, input, 0, source.data(), bytes, &error));
+    {
+        const uint16_t lhs[] = {0xbc00, 0x0000, 0x3c00, 0x4000}; // -1, 0, 1, 2
+        const uint16_t rhs[] = {0x4000, 0x4200, 0x4400, 0x4500}; // 2, 3, 4, 5
+        uint16_t observed[4]{};
+        check(lfs_hip_upload(first, input, 0, lhs, sizeof(lhs), &error));
+        check(lfs_hip_upload(first, input, 16, rhs, sizeof(rhs), &error));
+        check(lfs_hip_pointwise_f16(first, LFS_HIP_OP_AddTensor, {input, 0}, {input, 16},
+                                    {output, 0}, 4, 0.f, &error));
+        check(lfs_hip_download(first, output, 0, observed, sizeof(observed), &error));
+        require(observed[0] == 0x3c00 && observed[1] == 0x4200 && observed[2] == 0x4500 && observed[3] == 0x4700,
+                "HIP half tensor pointwise result differs");
+        check(lfs_hip_pointwise_f16(first, LFS_HIP_OP_AddScalar, {input, 0}, {},
+                                    {output, 0}, 4, 2.f, &error));
+        check(lfs_hip_download(first, output, 0, observed, sizeof(observed), &error));
+        require(observed[0] == 0x3c00 && observed[1] == 0x4000 && observed[2] == 0x4200 && observed[3] == 0x4400,
+                "HIP half scalar pointwise result differs");
+        uint8_t mask[4]{};
+        check(lfs_hip_pointwise_f16(first, LFS_HIP_OP_LessScalar, {input, 0}, {},
+                                    {output, 0}, 4, 0.f, &error));
+        check(lfs_hip_download(first, output, 0, mask, sizeof(mask), &error));
+        require(mask[0] == 1 && mask[1] == 0 && mask[2] == 0 && mask[3] == 0,
+                "HIP half pointwise predicate differs");
+        rejected(lfs_hip_pointwise_f16(first, LFS_HIP_OP_AddTensor, {input, bytes - 2}, {input, 16},
+                                       {output, 0}, 4, 0.f, &error));
+        check(lfs_hip_upload(first, input, 0, source.data(), bytes, &error));
+        std::puts("PASS HIP half pointwise: tensor/scalar arithmetic, predicate, range rejection");
+    }
 
     {
         constexpr size_t h=17,w=19,pixels=h*w;

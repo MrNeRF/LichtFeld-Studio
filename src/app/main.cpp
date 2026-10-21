@@ -228,6 +228,14 @@ namespace {
                 preflightGpuOrExit(false);
                 return lfs::app::run_mesh2splat(mode.params);
             } else if constexpr (std::is_same_v<T, lfs::io::args::PreprocessMode>) {
+                if (mode.tensor_backend) {
+                    const auto status = lfs::core::set_default_gpu_backend(*mode.tensor_backend);
+                    if (!status) {
+                        std::println(stderr, "preprocess: tensor backend unavailable: {}",
+                                     lfs::format_for_developer(status.error()));
+                        return 1;
+                    }
+                }
                 // Native inference validates the selected tensor backend. Only
                 // CUDA execution needs the CUDA driver/SM gate; weight downloads
                 // and Vulkan inference must also work without a CUDA device.
@@ -235,7 +243,7 @@ namespace {
                     lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA) {
                     preflightGpuOrExit(false);
                 }
-                return lfs::preprocessing::run_preprocess(mode.params);
+                return lfs::preprocessing::run_preprocess(mode.params, mode.compute_fp32);
             } else if constexpr (std::is_same_v<T, lfs::io::args::CompareMode>) {
                 if constexpr (!LFS_BUILD_TRAINER) {
                     std::println(stderr, "Image comparison is not included in this build.");

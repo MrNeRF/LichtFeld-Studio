@@ -801,8 +801,10 @@ namespace {
 
     class NativeMogeSession {
     public:
-        explicit NativeMogeSession(const fs::path& lfw_path) {
-            auto loaded = lfs::core::nn::models::Moge2::load(lfw_path, lfs::core::Device::GPU);
+        explicit NativeMogeSession(const fs::path& lfw_path, bool compute_fp32) {
+            auto loaded = lfs::core::nn::models::Moge2::load(
+                lfw_path, lfs::core::Device::GPU,
+                compute_fp32 ? std::optional(lfs::core::DataType::Float32) : std::nullopt);
             if (!loaded)
                 throw std::runtime_error("Failed to load native MoGe-2 weights from " +
                                          path_to_string(lfw_path) + ": " +
@@ -1264,7 +1266,8 @@ namespace {
     void process_dataset(const lfs::core::param::PreprocessParameters& params,
                          const fs::path& model_path,
                          const PreprocessPlan& plan,
-                         const lfs::preprocessing::PreprocessProgressCallback& progress) {
+                         const lfs::preprocessing::PreprocessProgressCallback& progress,
+                         bool compute_fp32) {
         if (!progress)
             print_plan_summary(params, plan, &model_path);
 
@@ -1274,7 +1277,7 @@ namespace {
 
         const fs::path lfw_path = lfw_path_for_onnx(model_path);
         ensure_native_weights(lfw_path, model_path);
-        NativeMogeSession native_session(lfw_path);
+        NativeMogeSession native_session(lfw_path, compute_fp32);
         if (!progress)
             std::cout << "Weights: " << path_to_string(lfw_path) << "\n";
 
@@ -1404,7 +1407,8 @@ namespace {
 
     lfs::preprocessing::PreprocessRunResult execute_preprocess(
         const lfs::core::param::PreprocessParameters& params,
-        const lfs::preprocessing::PreprocessProgressCallback& progress) {
+        const lfs::preprocessing::PreprocessProgressCallback& progress,
+        bool compute_fp32) {
         lfs::preprocessing::PreprocessRunResult result;
         try {
             if (params.download_only) {
@@ -1438,7 +1442,7 @@ namespace {
             if (!fs::is_regular_file(model_path))
                 throw std::runtime_error("Model file does not exist: " + path_to_string(model_path));
 
-            process_dataset(params, model_path, plan, progress);
+            process_dataset(params, model_path, plan, progress, compute_fp32);
             result.processed = plan.jobs.size();
 #if LFS_BUILD_TRAINER
             precompute_depth_anchors(params);
@@ -1462,14 +1466,18 @@ namespace lfs::preprocessing {
 
     PreprocessRunResult run_preprocess_ex(const lfs::core::param::PreprocessParameters& params,
                                           const PreprocessProgressCallback& progress) {
-        return execute_preprocess(params, progress);
+        return execute_preprocess(params, progress, false);
     }
 
     int run_preprocess(const lfs::core::param::PreprocessParameters& params) {
+        return run_preprocess(params, false);
+    }
+
+    int run_preprocess(const lfs::core::param::PreprocessParameters& params, bool compute_fp32) {
         // The standalone CLI bypasses training's logger setup.
         if (!lfs::core::Logger::get().is_ready())
             lfs::core::Logger::get().init();
-        const auto result = run_preprocess_ex(params, {});
+        const auto result = execute_preprocess(params, {}, compute_fp32);
         if (!result.ok) {
             std::cerr << "preprocess: " << result.error << "\n";
             return 1;

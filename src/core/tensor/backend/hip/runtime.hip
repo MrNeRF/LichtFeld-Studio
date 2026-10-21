@@ -166,45 +166,53 @@ namespace {
             output[i] = input[i] * scale + bias;
     }
 
-    template <unsigned Mode, class Out, class Op>
-    __global__ void pointwise_kernel(const float* a, const float* b, Out* out, size_t count, float scalar, Op op) {
+    template <unsigned Mode, class In, class Out, class Op>
+    __global__ void pointwise_kernel(const In* a, const In* b, Out* out, size_t count, float scalar, Op op) {
         for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += size_t(gridDim.x) * blockDim.x) {
+            const float x = static_cast<float>(a[i]);
+            float value;
             if constexpr (Mode == 0)
-                out[i] = op(a[i]);
+                value = op(x);
             else if constexpr (Mode == 1)
-                out[i] = op(a[i], scalar);
+                value = op(x, scalar);
             else
-                out[i] = op(a[i], b[i]);
+                value = op(x, static_cast<float>(b[i]));
+            if constexpr (std::is_same_v<Out, __half>)
+                out[i] = __float2half_rn(value);
+            else
+                out[i] = static_cast<Out>(value);
         }
     }
-    template <unsigned Mode, class Out, class Op>
+    template <unsigned Mode, class Out, class In = float, class Op>
     void launch_pointwise(LfsHipContext* context, LfsHipView a, LfsHipView b, LfsHipView out, size_t count, float scalar, Op op) {
-        validate(context, a.buffer, a.offset, float_bytes(count));
+        require(count <= SIZE_MAX / sizeof(In) && count <= SIZE_MAX / sizeof(Out), "Pointwise element count overflows");
+        const size_t input_bytes = count * sizeof(In);
+        validate(context, a.buffer, a.offset, input_bytes);
         validate(context, out.buffer, out.offset, count * sizeof(Out));
-        require(a.offset % 4 == 0 && out.offset % alignof(Out) == 0, "Unaligned pointwise view");
+        require(a.offset % alignof(In) == 0 && out.offset % alignof(Out) == 0, "Unaligned pointwise view");
         if constexpr (Mode == 2) {
-            validate(context, b.buffer, b.offset, float_bytes(count));
-            require(b.offset % 4 == 0, "Unaligned pointwise rhs");
+            validate(context, b.buffer, b.offset, input_bytes);
+            require(b.offset % alignof(In) == 0, "Unaligned pointwise rhs");
         }
         auto overlap = [&](LfsHipView input, size_t bytes) {
             if (input.buffer != out.buffer || !bytes)
                 return;
             const size_t end = input.offset + bytes, output_end = out.offset + count * sizeof(Out);
             require(input.offset >= output_end || out.offset >= end ||
-                        (sizeof(Out) == sizeof(float) && input.offset == out.offset),
-                    "Overlapping pointwise views require identical float32 ranges");
+                        (sizeof(Out) == sizeof(In) && input.offset == out.offset),
+                    "Overlapping pointwise views require identical typed ranges");
         };
-        overlap(a, float_bytes(count));
+        overlap(a, input_bytes);
         if constexpr (Mode == 2)
-            overlap(b, float_bytes(count));
+            overlap(b, input_bytes);
         if (!count)
             return;
-        auto* lhs = reinterpret_cast<const float*>(static_cast<const char*>(a.buffer->data) + a.offset);
-        const float* rhs = nullptr;
+        auto* lhs = reinterpret_cast<const In*>(static_cast<const char*>(a.buffer->data) + a.offset);
+        const In* rhs = nullptr;
         if constexpr (Mode == 2)
-            rhs = reinterpret_cast<const float*>(static_cast<const char*>(b.buffer->data) + b.offset);
+            rhs = reinterpret_cast<const In*>(static_cast<const char*>(b.buffer->data) + b.offset);
         auto* output = reinterpret_cast<Out*>(static_cast<char*>(out.buffer->data) + out.offset);
-        hipLaunchKernelGGL((pointwise_kernel<Mode, Out, Op>), dim3(blocks(count)), dim3(256), 0, context->stream, lhs, rhs, output, count, scalar, op);
+        hipLaunchKernelGGL((pointwise_kernel<Mode, In, Out, Op>), dim3(blocks(count)), dim3(256), 0, context->stream, lhs, rhs, output, count, scalar, op);
         check(hipGetLastError());
     }
     __global__ void arange_kernel(float* out, size_t n, float start, float step) {
@@ -1418,6 +1426,17 @@ int lfs_hip_pointwise_f32(LfsHipContext* context, uint32_t op, LfsHipView lhs, L
         using namespace lfs::core;
         switch (op) {
 #include "hip_tensor_dispatch.inc"
+        default: throw std::invalid_argument("Unknown HIP pointwise operation");
+        }
+    });
+}
+int lfs_hip_pointwise_f16(LfsHipContext* context, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, size_t count, float scalar, LfsHipError* error) {
+    return boundary(error, [&] {
+        require(context && op < LFS_HIP_OP_COUNT, "Unknown HIP pointwise operation");
+        DeviceScope device(context->device);
+        using namespace lfs::core;
+        switch (op) {
+#include "hip_tensor_half_dispatch.inc"
         default: throw std::invalid_argument("Unknown HIP pointwise operation");
         }
     });

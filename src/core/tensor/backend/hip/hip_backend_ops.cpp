@@ -233,6 +233,7 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_memset);
         ENTRY(lfs_hip_fill_f32);
         ENTRY(lfs_hip_pointwise_f32);
+        ENTRY(lfs_hip_pointwise_f16);
         ENTRY(lfs_hip_boolean_pointwise);
         ENTRY(lfs_hip_clamp_i32);
         ENTRY(lfs_hip_arange_f32);
@@ -344,6 +345,7 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_memset);
                 LOAD(lfs_hip_fill_f32);
                 LOAD(lfs_hip_pointwise_f32);
+                LOAD(lfs_hip_pointwise_f16);
                 LOAD(lfs_hip_boolean_pointwise);
                 LOAD(lfs_hip_clamp_i32);
                 LOAD(lfs_hip_arange_f32);
@@ -578,6 +580,22 @@ namespace lfs::core::internal {
                 const auto rhs=binary ? view(b,count) : LfsHipView{};
                 LfsHipError error{};
                 check(lfs_hip_boolean_pointwise(context,static_cast<uint32_t>(program.op),lhs,rhs,output,count,scalar_value(program.scalar),&error),error);
+                return;
+            }
+
+            if (a.dtype == DataType::Float16) {
+                const bool predicate = (program.op >= PointwiseOp::EqualTensor && program.op <= PointwiseOp::LogicalXorTensor) ||
+                                       (program.op >= PointwiseOp::IsNan && program.op <= PointwiseOp::LogicalNot) ||
+                                       (program.op >= PointwiseOp::EqualScalar && program.op <= PointwiseOp::GreaterEqualScalar);
+                require(program.in_dtype == DataType::Float16 && out.dtype == program.out_dtype &&
+                            out.dtype == (predicate ? DataType::Bool : DataType::Float16) &&
+                            (!binary || b.dtype == DataType::Float16), "HIP half pointwise dtype mismatch");
+                const auto bytes = checked_product(count, dtype_size(DataType::Float16));
+                const auto lhs = view(a, bytes), rhs = binary ? view(b, bytes) : LfsHipView{};
+                const auto output = view(out, predicate ? count : bytes);
+                LfsHipError error{};
+                check(lfs_hip_pointwise_f16(context, static_cast<uint32_t>(program.op), lhs, rhs, output,
+                                            count, scalar_value(program.scalar), &error), error);
                 return;
             }
 

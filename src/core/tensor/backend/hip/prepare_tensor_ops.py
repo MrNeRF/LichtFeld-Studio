@@ -19,6 +19,7 @@ source = source.replace('isnan(static_cast<float>(x)) ? x : fmaxf(x, T(0))',
 rows = re.findall(r'LFS_POINTWISE_OP\((\w+),\s*([^,]+),\s*"([^"]+)"\)', (args.source / 'pointwise_ops.def').read_text(encoding='utf-8'))
 scalar_ops = {'Add': 'add', 'Sub': 'sub', 'Mul': 'mul', 'Div': 'div', 'Pow': 'pow', 'Mod': 'mod', 'Maximum': 'maximum', 'Minimum': 'minimum', 'Equal': 'equal', 'NotEqual': 'not_equal', 'Less': 'less', 'LessEqual': 'less_equal', 'Greater': 'greater', 'GreaterEqual': 'greater_equal'}
 output = []
+half_output = []
 for ident, functor, _ in rows:
     mode = 0
     if ident.endswith('Tensor'):
@@ -33,7 +34,10 @@ for ident, functor, _ in rows:
         output.append(f'case LFS_HIP_OP_{ident}: launch_pointwise<0, float>(context, lhs, rhs, output, count, scalar, [=] __device__ (float x) {{ return {expression}; }}); break;')
     else:
         output.append(f'case LFS_HIP_OP_{ident}: launch_pointwise<{mode}, {"uint8_t" if predicate else "float"}>(context, lhs, rhs, output, count, scalar, {functor}{{}}); break;')
+    half_output.append(output[-1].replace(f'launch_pointwise<{mode}, float>', f'launch_pointwise<{mode}, __half, __half>')
+                       .replace(f'launch_pointwise<{mode}, uint8_t>', f'launch_pointwise<{mode}, uint8_t, __half>'))
 (args.output / 'hip_tensor_dispatch.inc').write_text('\n'.join(output) + '\n', encoding='utf-8')
+(args.output / 'hip_tensor_half_dispatch.inc').write_text('\n'.join(half_output) + '\n', encoding='utf-8')
 
 evaluation = []
 flags = []

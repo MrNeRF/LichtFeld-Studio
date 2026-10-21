@@ -52,6 +52,8 @@ namespace lfs::io::args {
     };
     struct PreprocessMode {
         core::param::PreprocessParameters params;
+        std::optional<core::GpuBackend> tensor_backend;
+        bool compute_fp32 = false;
     };
     struct CompareMode {
         core::param::CompareParameters params;

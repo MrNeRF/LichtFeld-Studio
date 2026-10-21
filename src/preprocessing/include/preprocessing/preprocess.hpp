@@ -27,6 +27,7 @@ namespace lfs::preprocessing {
     };
 
     int run_preprocess(const lfs::core::param::PreprocessParameters& params);
+    int run_preprocess(const lfs::core::param::PreprocessParameters& params, bool compute_fp32);
 
     PreprocessRunResult run_preprocess_ex(
         const lfs::core::param::PreprocessParameters& params,

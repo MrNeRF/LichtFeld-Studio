@@ -2671,6 +2671,17 @@ dataset options work as in training; see the Evaluation page of the docs.
             std::unordered_map<std::string, param::InferenceBackend>{
                 {"auto", param::InferenceBackend::Native},
                 {"native", param::InferenceBackend::Native}});
+        ::args::MapFlag<std::string, lfs::core::GpuBackend> tensor_backend(
+            parser, "backend", "Tensor GPU for this run: cuda, vulkan, metal, hip when compiled (default: saved preference)",
+            {"tensor-backend"},
+            std::unordered_map<std::string, lfs::core::GpuBackend>{
+                {"cuda", lfs::core::GpuBackend::CUDA},
+                {"vulkan", lfs::core::GpuBackend::Vulkan},
+                {"metal", lfs::core::GpuBackend::Metal},
+#ifdef LFS_TENSOR_HIP
+                {"hip", lfs::core::GpuBackend::HIP},
+#endif
+            });
         ::args::ValueFlag<int> max_side(parser, "pixels", "Inference longest side, rounded to /14 (default: 518; 0 disables resize)", {"max-side"});
         ::args::ValueFlag<std::int64_t> num_tokens(parser, "tokens", "MoGe dynamic-token input when present (default: 1800)", {"num-tokens"});
         ::args::ValueFlag<int> threads(parser, "count", "Host worker threads for image load/encode (default: all available cores)", {"threads"});
@@ -2679,6 +2690,7 @@ dataset options work as in training; see the Evaluation page of the docs.
         ::args::Flag overwrite(parser, "overwrite", "Overwrite existing depth/normal files", {'y', "overwrite"});
         ::args::Flag no_download(parser, "no-download", "Fail if the default model is not already cached", {"no-download"});
         ::args::Flag download_only(parser, "download-only", "Download/verify the default model and exit", {"download-only"});
+        ::args::Flag compute_fp32(parser, "compute-fp32", "Use float32 MoGe weights and compute (default: model precision)", {"compute-fp32"});
 
         std::vector<std::string> args_vec(argv + 1, argv + argc);
         args_vec[0] = std::string(argv[0]) + " preprocess";
@@ -2758,7 +2770,8 @@ dataset options work as in training; see the Evaluation page of the docs.
             return std::unexpected(std::format("Model not found: {}", lfs::core::path_to_utf8(params.model_path)));
         }
 
-        return io_args::PreprocessMode{params};
+        return io_args::PreprocessMode{params, tensor_backend ? std::optional(::args::get(tensor_backend)) : std::nullopt,
+                                      static_cast<bool>(compute_fp32)};
     }
 
     std::optional<lfs::io::args::ParsedArgs> parseLichtArgs(
