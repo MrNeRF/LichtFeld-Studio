@@ -428,21 +428,8 @@ class PluginManager:
 
         validate_plugin_name(project["name"])
 
-        req_features = list(lf.get("required_features", []))
-        deps = project.get("dependencies", [])
-        is_gpu_plugin = any(
-            any(k in str(d).lower() for k in ("torch", "cuda"))
-            for d in deps
-        ) or any(
-            any(k in str(f).lower() for k in ("gpu", "cuda"))
-            for f in req_features
-        )
-
-        hot_reload_setting = lf.get("hot_reload")
-        if hot_reload_setting is None:
-            hot_reload = False if is_gpu_plugin else True
-        else:
-            hot_reload = bool(hot_reload_setting)
+        if "hot_reload" not in lf:
+            raise ValueError("Missing tool.lichtfeld.hot_reload")
 
         compatibility_errors_in_manifest = validate_manifest_compatibility_fields(lf)
         if compatibility_errors_in_manifest:
@@ -460,7 +447,7 @@ class PluginManager:
             entry_point=lf.get("entry_point", "__init__"),
             dependencies=project.get("dependencies", []),
             auto_start=lf.get("auto_start", False),
-            hot_reload=hot_reload,
+            hot_reload=bool(lf["hot_reload"]),
             plugin_api=lf["plugin_api"].strip(),
             lichtfeld_version=lf["lichtfeld_version"].strip(),
             required_features=list(lf["required_features"]),

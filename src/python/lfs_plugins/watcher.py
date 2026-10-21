@@ -82,10 +82,8 @@ class PluginWatcher:
         """Log and request UI refresh to notify that a restart is required."""
         try:
             import lichtfeld as lf
-            if hasattr(lf, "LOG") and hasattr(lf.LOG, "warning"):
-                lf.LOG.warning(f"Plugin '{plugin_name}' changed: restart required")
-            elif hasattr(lf, "log") and hasattr(lf.log, "warning"):
-                lf.log.warning(f"Plugin '{plugin_name}' changed: restart required")
+            if hasattr(lf, "log") and hasattr(lf.log, "warn"):
+                lf.log.warn(f"Plugin '{plugin_name}' changed: restart required")
             self._request_redraw()
         except Exception:
             pass
