@@ -250,6 +250,8 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_reduce_layout_f32);
         ENTRY(lfs_hip_arg_extreme_f32);
         ENTRY(lfs_hip_cdist_f32);
+        ENTRY(lfs_hip_radius_query);
+        ENTRY(lfs_hip_proximity);
         ENTRY(lfs_hip_convert);
         ENTRY(lfs_hip_index_cast);
         ENTRY(lfs_hip_gather);
@@ -367,6 +369,8 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_reduce_layout_f32);
                 LOAD(lfs_hip_arg_extreme_f32);
                 LOAD(lfs_hip_cdist_f32);
+                LOAD(lfs_hip_radius_query);
+                LOAD(lfs_hip_proximity);
                 LOAD(lfs_hip_convert);
                 LOAD(lfs_hip_index_cast);
                 LOAD(lfs_hip_gather);
@@ -2226,3 +2230,77 @@ namespace lfs::core::internal {
     void HipBackendOps::pop_range() {}
     bool HipBackendOps::nn_kernels() const { return false; }
 } // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+void HipBackendOps::launch_radius(StorageRef points, StorageRef references, StorageRef heads, StorageRef next,
+                                  StorageRef output, size_t count, size_t buckets, float radius, unsigned mode,
+                                  int32_t maximum, bool exclude_self, std::optional<StorageRef> queries,
+                                  std::optional<StorageRef> values, std::optional<StorageRef> radii, ExecContext execution) {
+    queue(execution);
+    require(count <= INT32_MAX && buckets && !(buckets & (buckets - 1)) && buckets <= uint64_t(UINT32_MAX)+1,
+            "Invalid HIP radius query extent");
+    require(std::isfinite(radius) && radius > 0 && mode <= 4 && (mode != 1 || maximum > 0),
+            "Invalid HIP radius query parameters");
+    require(points.dtype == DataType::Float32 && heads.dtype == DataType::Int32 && next.dtype == DataType::Int32,
+            "Invalid HIP radius query input types");
+    require(references.dtype == DataType::Bool || references.dtype == DataType::UInt8, "Invalid HIP radius reference mask");
+    require(output.dtype == (mode == 0 ? DataType::Bool : mode == 1 || mode == 3 ? DataType::Int32 : DataType::Float32),
+            "Invalid HIP radius query output type");
+    if (queries) require(queries->dtype == DataType::Bool || queries->dtype == DataType::UInt8, "Invalid HIP query mask");
+    if (values) require(values->dtype == output.dtype, "Invalid HIP neighbor minimum type");
+    if (radii) require(radii->dtype == DataType::Float32, "Invalid HIP neighbor radii type");
+    if (!count) return;
+    std::lock_guard lock(impl_->mutex);
+    const LfsHipView inputs[]{impl_->view(points), impl_->view(references), impl_->view(heads), impl_->view(next),
+        queries ? impl_->view(*queries) : LfsHipView{}, values ? impl_->view(*values) : LfsHipView{},
+        radii ? impl_->view(*radii) : LfsHipView{}};
+    LfsHipError error{};
+    check(impl_->lfs_hip_radius_query(impl_->context, inputs, impl_->view(output), count, buckets,
+                                     radius, mode, maximum, exclude_self, &error), error);
+}
+void HipBackendOps::radius_neighbors(StorageRef p, StorageRef r, StorageRef h, StorageRef n, StorageRef o,
+    size_t count, size_t buckets, float radius, bool exclude, std::optional<StorageRef> q, ExecContext c) {
+    launch_radius(p,r,h,n,o,count,buckets,radius,0,0,exclude,q,{}, {},c);
+}
+void HipBackendOps::radius_neighbor_counts(StorageRef p, StorageRef r, StorageRef h, StorageRef n, StorageRef o,
+    size_t count, size_t buckets, float radius, int32_t maximum, std::optional<StorageRef> q, ExecContext c) {
+    launch_radius(p,r,h,n,o,count,buckets,radius,1,maximum,true,q,{}, {},c);
+}
+void HipBackendOps::point_neighbor_spacing(StorageRef p, StorageRef r, StorageRef h, StorageRef n, StorageRef o,
+    size_t count, size_t buckets, float radius, ExecContext c) {
+    launch_radius(p,r,h,n,o,count,buckets,radius,2,0,false,{}, {}, {},c);
+}
+void HipBackendOps::radius_neighbor_min(StorageRef p, StorageRef v, StorageRef r, StorageRef h, StorageRef n,
+    StorageRef o, size_t count, size_t buckets, float radius, std::optional<StorageRef> radii, ExecContext c) {
+    launch_radius(p,r,h,n,o,count,buckets,radius,v.dtype == DataType::Int32 ? 3 : 4,0,false,{},v,radii,c);
+}
+}
+
+namespace lfs::core::internal {
+void HipBackendOps::nearest_point_indices(StorageRef q, StorageRef t, StorageRef h, StorageRef n, StorageRef o,
+    size_t nq, size_t nt, size_t buckets, float width, ExecContext execution) {
+    queue(execution);
+    require(q.dtype == DataType::Float32 && t.dtype == DataType::Float32 && h.dtype == DataType::Int32 &&
+            n.dtype == DataType::Int32 && o.dtype == DataType::Int32,"Invalid HIP nearest point types");
+    require(nq <= INT32_MAX && nt <= INT32_MAX && std::isfinite(width) && width > 0 && buckets &&
+            !(buckets & (buckets-1)) && buckets <= uint64_t(UINT32_MAX)+1,"Invalid HIP nearest point extent");
+    if(!nq) return;
+    std::lock_guard lock(impl_->mutex);
+    const LfsHipView inputs[]{impl_->view(q), nt ? impl_->view(t) : (impl_->empty_view(t),LfsHipView{}),impl_->view(h),
+                             nt ? impl_->view(n) : (impl_->empty_view(n),LfsHipView{})};
+    LfsHipError error{};
+    check(impl_->lfs_hip_proximity(impl_->context,inputs,impl_->view(o),nq,nt,buckets,width,0,&error),error);
+}
+void HipBackendOps::camera_frustum_counts(StorageRef p, StorageRef c, StorageRef o, size_t count,
+    size_t cameras, float maximum, ExecContext execution) {
+    queue(execution);
+    require(p.dtype == DataType::Float32 && c.dtype == DataType::Float32 && o.dtype == DataType::Int32,
+            "Invalid HIP frustum types");
+    require(count <= INT32_MAX && cameras <= INT32_MAX && std::isfinite(maximum),"Invalid HIP frustum extent");
+    if(!count) return;
+    std::lock_guard lock(impl_->mutex);
+    const LfsHipView inputs[]{impl_->view(p),cameras ? impl_->view(c) : (impl_->empty_view(c),LfsHipView{}),{}, {}};
+    LfsHipError error{};
+    check(impl_->lfs_hip_proximity(impl_->context,inputs,impl_->view(o),count,cameras,1,maximum,1,&error),error);
+}
+}

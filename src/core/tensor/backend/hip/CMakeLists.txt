@@ -26,7 +26,7 @@ add_custom_command(OUTPUT "${_tensor_generated}/hip_point_filter.hpp"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/prepare_point_filter.py"
         --source "${_point_source}" --output "${_tensor_generated}/hip_point_filter.hpp"
     DEPENDS prepare_point_filter.py "${_point_source}/tensor/internal/point_filter.hpp"
-        "${_point_source}/tensor/internal/point_math.hpp" "${_point_source}/include/core/tensor_spatial.hpp"
+        "${_point_source}/tensor/internal/point_math.hpp" "${_point_source}/tensor/internal/point_spatial.hpp" "${_point_source}/tensor/internal/nearest_point.hpp" "${_point_source}/include/core/tensor_spatial.hpp"
         "${_point_source}/tensor/internal/point_labels.hpp"
         "${_point_source}/tensor/internal/point_projection.hpp" "${_point_source}/tensor/internal/point_region.hpp"
     VERBATIM)
@@ -72,7 +72,7 @@ add_custom_command(OUTPUT "${_library}"
         "${CMAKE_CURRENT_SOURCE_DIR}/runtime.hip" -o "${_library}"
     DEPENDS runtime.hip runtime_api.h bias_api.h bias_runtime.hpp integer_reduce_api.h integer_reduce_runtime.hpp inference_api.h inference_runtime.hpp gemm_api.h gemm_runtime.hpp "${_tensor_generated}/hip_inference.hpp" inverse_warp_api.h inverse_warp_runtime.hpp pool_runtime.hpp where_runtime.hpp where_api.h external_memory_api.h external_memory_runtime.hpp device_identity_api.h device_identity_runtime.hpp chain_reduce_runtime.hpp sh_codec_api.h sh_codec_runtime.hpp shared_warp_runtime.hpp shared_image_runtime.hpp shared_resize_runtime.hpp "${_tensor_generated}/hip_shared_resize.hpp" "${_tensor_generated}/hip_shared_image.hpp" "${_tensor_generated}/hip_lens.hpp" "${_lens_model}" "${_tensor_generated}/hip_tensor_functors.hpp" "${_tensor_generated}/hip_tensor_dispatch.inc" "${_tensor_generated}/hip_tensor_half_dispatch.inc" "${_tensor_generated}/hip_tensor_eval.inc" "${_tensor_generated}/hip_tensor_flags.inc" "${_tensor_generated}/hip_tensor_broadcast.inc" "${_compiler}"
         point_filter_api.h point_filter_runtime.hpp "${_tensor_generated}/hip_point_filter.hpp"
-        predicate_api.h predicate_runtime.hpp arg_extreme_runtime.hpp cdist_runtime.hpp
+        predicate_api.h predicate_runtime.hpp arg_extreme_runtime.hpp cdist_runtime.hpp spatial_runtime.hpp
         timing_api.h timing_runtime.hpp
         "${LFS_HIP_ROOT}/include/hip/hip_runtime.h"
     VERBATIM)

@@ -208,6 +208,9 @@ namespace lfs::core::internal {
         void launch_inverse_warp(StorageRef, StorageRef, StorageRef, const UndistortParams&, unsigned channels, unsigned mode, ExecContext);
         void launch_gemm(StorageRef, StorageRef, StorageRef, StorageRef, const GemmProgram&, bool transpose, bool relu, ExecContext);
         void launch_rgb_warp(StorageRef, StorageRef, const UndistortParams&, ExecContext);
+        void launch_radius(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, size_t, size_t,
+                           float, unsigned, int32_t, bool, std::optional<StorageRef>,
+                           std::optional<StorageRef>, std::optional<StorageRef>, ExecContext);
         struct Impl;
         std::shared_ptr<Impl> impl_;
     };
