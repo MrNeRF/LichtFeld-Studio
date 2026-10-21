@@ -908,6 +908,8 @@ namespace lfs::core::internal {
         for (size_t axis = 0; axis < output_layout.rank; ++axis)
             require(axis == size_t(program.dim) || source_layout.dims[axis] == output_layout.dims[axis],
                     "HIP scatter source shape mismatch");
+        if (!program.total_elements)
+            return;
         size_t stride = 1;
         for (size_t axis = source_layout.rank; axis; --axis) {
             require(source_layout.strides[axis - 1] == stride, "HIP scatter source must be contiguous");

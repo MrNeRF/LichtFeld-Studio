@@ -809,13 +809,18 @@ namespace {
                                          std::string(loaded.error().detail()));
             model_ = std::move(*loaded);
 #if LFS_HAS_CUDA
-            int device = 0;
-            cudaDeviceProp properties{};
-            if (cudaGetDevice(&device) != cudaSuccess ||
-                cudaGetDeviceProperties(&properties, device) != cudaSuccess) {
-                throw std::runtime_error("Failed to query native MoGe CUDA device");
+            if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA) {
+                int device = 0;
+                cudaDeviceProp properties{};
+                if (cudaGetDevice(&device) != cudaSuccess ||
+                    cudaGetDeviceProperties(&properties, device) != cudaSuccess) {
+                    throw std::runtime_error("Failed to query native MoGe CUDA device");
+                }
+                LOG_INFO("Normal estimation: native engine on CUDA device {} ({})", device, properties.name);
+            } else {
+                LOG_INFO("Normal estimation: native engine on {}",
+                         lfs::core::gpu_backend_name(lfs::core::default_gpu_backend()));
             }
-            LOG_INFO("Normal estimation: native engine on CUDA device {} ({})", device, properties.name);
 #else
             LOG_INFO("Normal estimation: native engine on {}",
                      lfs::core::gpu_backend_name(lfs::core::default_gpu_backend()));
