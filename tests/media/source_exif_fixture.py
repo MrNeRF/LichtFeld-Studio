@@ -319,7 +319,7 @@ def check_tiff(test, result, path, payload, *, big=False, little=True, pages=1):
 
 
 
-def write_tiff_graph(path, *, little=True, big=False, cycle=False, blobs=(), subimages=1, alpha=False, subimage_blobs=()):
+def write_tiff_graph(path, *, little=True, big=False, cycle=False, blobs=(), subimages=1, alpha=False, subimage_blobs=(), directory_tags=None):
     """Image -> EXIF/GPS/SubIFD, plus EXIF -> interoperability, all independent."""
     order = "<" if little else ">"
     byte_order = "little" if little else "big"
@@ -352,6 +352,9 @@ def write_tiff_graph(path, *, little=True, big=False, cycle=False, blobs=(), sub
     nodes[0] = [(id_, type_, subimages if id_ == 330 else count, value)
                 for id_, type_, count, value in nodes[0]]
     names = ["image", "exif", "gps", "subimage", "interoperability"]
+    for kind, tags in (directory_tags or {}).items():
+        index = names.index(kind)
+        nodes[index] = nodes[index] + list(tags)
     header = (b"II" if little else b"MM") + scalar(43 if big else 42, 2)
     header += scalar(8, 2) + scalar(0, 2) + scalar(16, 8) if big else scalar(8, 4)
     data = bytearray(header)

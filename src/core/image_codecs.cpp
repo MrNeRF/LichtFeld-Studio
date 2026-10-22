@@ -2008,6 +2008,7 @@ namespace lfs::core::image_codecs {
             size_t retained = 0;
             std::optional<MetadataStatus> scan_status;
             std::string scan_diagnostic;
+            bool supported_carrier = false;
             bool canRetain(size_t size) {
                 if (result.blocks.size() >= limits.blocks || size > limits.block_bytes || size > limits.total_bytes - retained) {
                     result.status = MetadataStatus::Limited;
@@ -2031,14 +2032,23 @@ namespace lfs::core::image_codecs {
                             block.tiff_tag = TiffXmpReference{directory, tag};
                             const auto bytes = source_xmp_bytes(exif, block);
                             if (!bytes) {
-                                if (result.status != MetadataStatus::Limited)
+                                if (result.status != MetadataStatus::Limited) {
                                     result.status = MetadataStatus::Unsupported;
-                                result.diagnostic = "TIFF XMP tag has no byte-preserving representation";
+                                    result.diagnostic = "TIFF XMP tag has no byte-preserving representation";
+                                }
                                 continue;
                             }
                             if (!canRetain(bytes->size()))
                                 continue;
                             retained += bytes->size();
+                            if (bytes->empty()) {
+                                block.status = MetadataStatus::Malformed;
+                                block.diagnostic = "TIFF XMP tag has zero byte count";
+                                if (result.status != MetadataStatus::Limited)
+                                    result.status = MetadataStatus::Malformed;
+                                if (result.diagnostic.empty())
+                                    result.diagnostic = block.diagnostic;
+                            }
                             result.blocks.push_back(std::move(block));
                             if (result.status == MetadataStatus::Absent)
                                 result.status = MetadataStatus::Collected;
@@ -2867,6 +2877,7 @@ namespace lfs::core::image_codecs {
                                      (signature[0] == 'M' && signature[1] == 'M' && signature[2] == 0 && (signature[3] == 42 || signature[3] == 43)));
         if (tiff_signature) {
             if (xmp) {
+                xmp->supported_carrier = true;
                 xmp->result.status = MetadataStatus::Absent;
                 xmp->result.scope = "tiff-libtiff-observed-tag700";
             }
@@ -2899,6 +2910,7 @@ namespace lfs::core::image_codecs {
                 return result;
             }
             if (xmp) {
+                xmp->supported_carrier = true;
                 xmp->result.status = MetadataStatus::Absent;
                 xmp->result.scope = "png-itxt-through-iend";
             }
@@ -2911,6 +2923,7 @@ namespace lfs::core::image_codecs {
         }
         result.scope = "jpeg-before-sos";
         if (xmp) {
+            xmp->supported_carrier = true;
             xmp->result.status = MetadataStatus::Absent;
             xmp->result.scope = "jpeg-app1-before-sos";
         }
@@ -3022,7 +3035,7 @@ namespace lfs::core::image_codecs {
         if (reference.directory >= directories.size() || reference.tag >= directories[reference.directory].tags.size())
             return std::nullopt;
         const auto& tag = directories[reference.directory].tags[reference.tag];
-        if (tag.id != TIFFTAG_XMLPACKET || tag.type != TIFF_BYTE || tag.count != tag.bytes.size() ||
+        if (tag.id != TIFFTAG_XMLPACKET || (tag.type != TIFF_BYTE && tag.type != TIFF_UNDEFINED) || tag.count != tag.bytes.size() ||
             !tag.unsigned_values.empty() || !tag.signed_values.empty() || !tag.floating_values.empty())
             return std::nullopt;
         return std::span<const uint8_t>(tag.bytes);
@@ -3048,7 +3061,7 @@ namespace lfs::core::image_codecs {
         if (result.xmp.status == MetadataStatus::NotExamined) {
             result.xmp.status = (scan_status == MetadataStatus::IoError || scan_status == MetadataStatus::Limited) ? scan_status : MetadataStatus::Unsupported;
             result.xmp.diagnostic = (scan_status == MetadataStatus::IoError || scan_status == MetadataStatus::Limited) ? scan_diagnostic : "XMP collection supports JPEG APP1, PNG iTXt and observed TIFF tag 700";
-        } else if (result.xmp.status != MetadataStatus::Unsupported &&
+        } else if ((collector.supported_carrier || result.xmp.status != MetadataStatus::Unsupported) &&
                    (scan_status == MetadataStatus::Limited || scan_status == MetadataStatus::Malformed || scan_status == MetadataStatus::IoError)) {
             // Conservatively retain the enclosing scan's incomplete/invalid status.
             // Individual blocks report carrier framing, never XML validity.

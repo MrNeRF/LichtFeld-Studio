@@ -432,16 +432,91 @@ class IngestCLI(unittest.TestCase):
                     for span in result["metadata"]["image_exif"]["tiff"]["source_ranges"]:
                         raw = bytes.fromhex(span["bytes"])
                         self.assertEqual(path.read_bytes()[span["offset"]:span["offset"] + len(raw)], raw)
-        source_exif_fixture.write_tiff(path, xmp_packets=[b""])
+        source_exif_fixture.write_tiff(path, pages=2, xmp_packets=[b"", b"<last/>"])
         result, _ = self.invoke("source-metadata", path)
         self.assertEqual(result["metadata"]["image_xmp"]["status"], "malformed")
         self.assertTrue(result["metadata"]["image_xmp"]["diagnostic"])
+        block = result["metadata"]["image_xmp"]["blocks"][0]
+        self.assertEqual(block["bytes"], "")
+        self.assertEqual(block["status"], "malformed")
+        self.assertTrue(block["diagnostic"])
+        self.assertIsNone(block["payload_bytes"])
+        self.assertEqual(bytes.fromhex(result["metadata"]["image_xmp"]["blocks"][1]["payload_bytes"]), b"<last/>")
         source_exif_fixture.write_tiff_graph(path, blobs=[(700, b"first"), (700, b"second")])
         result, _ = self.invoke("source-metadata", path)
         metadata = result["metadata"]
         observed = [tag["bytes"] for directory in metadata["image_exif"]["tiff"]["directories"]
                     for tag in directory["tags"] if tag["id"] == 700]
         self.assertEqual([block["bytes"] for block in metadata["image_xmp"]["blocks"]], observed)
+
+    def test_source_metadata_xmp_tiff_child_byte_representations(self):
+        path = self.root / "xmp-child.tif"
+        packet = b"<child/>\0\xff"
+        for little in [True, False]:
+            for big in [False, True]:
+                for kind in ["exif", "gps", "interoperability"]:
+                    for type_ in [1, 7]:
+                        with self.subTest(little=little, big=big, kind=kind, type=type_):
+                            source_exif_fixture.write_tiff_graph(path, little=little, big=big,
+                                directory_tags={kind: [(700, type_, len(packet), packet)]})
+                            legacy, _ = self.invoke("source-exif", path)
+                            result, _ = self.invoke("source-metadata", path)
+                            metadata = result["metadata"]
+                            self.assertEqual(metadata["image_exif"], legacy["exif"])
+                            xmp = metadata["image_xmp"]
+                            self.assertEqual(xmp["status"], "collected", xmp)
+                            self.assertEqual(len(xmp["blocks"]), 1)
+                            block = xmp["blocks"][0]
+                            self.assertEqual(bytes.fromhex(block["payload_bytes"]), packet)
+                            ref = block["tiff_tag"]
+                            directory = metadata["image_exif"]["tiff"]["directories"][ref["directory"]]
+                            self.assertEqual(directory["kind"], kind)
+                            self.assertEqual(directory["tags"][ref["tag"]]["type"], type_)
+
+    def test_source_metadata_xmp_tiff_scan_failure_overrides_packet_support(self):
+        path = self.root / "xmp-incomplete.tif"
+        packet = b"<child/>"
+        for type_, encoded in [(3, struct.pack("<4H", 60, 120, 47, 62)), (7, packet)]:
+            source_exif_fixture.write_tiff_graph(path,
+                directory_tags={"gps": [(700, type_, len(encoded) // (2 if type_ == 3 else 1), encoded)]})
+            full = self._xmp_limited(path)
+            self.assertEqual(full["image_xmp"]["status"], "collected" if type_ == 7 else "unsupported")
+            limited = self._xmp_limited(path, collection_limits={"tiff_directories": 4})
+            self.assertEqual(limited["image_exif"], limited["legacy_exif"])
+            self.assertEqual(limited["image_exif"]["status"], "limited")
+            self.assertEqual(limited["image_xmp"]["status"], "limited")
+            self.assertIn("TIFF directory budget exhausted", limited["image_xmp"]["diagnostic"])
+            if type_ == 7:
+                self.assertEqual(bytes.fromhex(limited["image_xmp"]["blocks"][0]["payload_bytes"]), packet)
+            else:
+                self.assertIn("no byte-preserving representation", limited["image_xmp"]["diagnostic"])
+            # An invalid later pointer leaves the earlier GPS packet intact.
+            data = bytearray(path.read_bytes())
+            directory = next(d for d in full["image_exif"]["tiff"]["directories"] if d["kind"] == "exif")
+            offset = directory["offset"]
+            for index in range(struct.unpack_from("<H", data, offset)[0]):
+                entry = offset + 2 + index * 12
+                if struct.unpack_from("<H", data, entry)[0] == 40965:
+                    struct.pack_into("<I", data, entry + 8, len(data) + 1024)
+                    break
+            else:
+                self.fail("Fixture must contain an interoperability pointer")
+            path.write_bytes(data)
+            damaged = self._xmp_limited(path)
+            self.assertEqual(damaged["image_exif"]["status"], "malformed")
+            self.assertEqual(damaged["image_xmp"]["status"], "malformed")
+            if type_ == 3:
+                self.assertIn("no byte-preserving representation", damaged["image_xmp"]["diagnostic"])
+            else:
+                self.assertEqual(bytes.fromhex(damaged["image_xmp"]["blocks"][0]["payload_bytes"]), packet)
+
+    def test_source_metadata_xmp_unsupported_carrier_retains_its_status(self):
+        path = self.root / "header-only.heic"
+        path.write_bytes(struct.pack(">I", 20) + b"ftypheic" + bytes(4) + b"heic")
+        result = self._xmp_limited(path)
+        self.assertEqual(result["image_exif"]["status"], "malformed")
+        self.assertEqual(result["image_xmp"]["status"], "unsupported")
+        self.assertEqual(result["image_xmp"]["blocks"], [])
 
     def test_source_container_metadata_reuses_probe_without_writing(self):
         path = self.source()
