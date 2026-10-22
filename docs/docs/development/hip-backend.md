@@ -262,3 +262,10 @@ When testing a development build containing a staged `hip/` directory, verify
 the module actually selected beside the executable. Rebuilding the native module
 in its intermediate target directory does not refresh an older staged copy.
 The isolated adapter contract takes the runtime DLL path explicitly.
+
+The adapter contract enumerates every binary16 encoding for conversions to all
+supported dtypes and for `pow`/`mod` with finite and nonfinite right operands.
+It checks signed zero, NaN/infinity classification and offset guards. The CPU
+math oracle quiets signaling half NaNs before libm evaluation, matching HIP's
+half-to-float conversion; NaN payload equality is not required. `mod` must match
+exactly, while `pow` permits at most one binary16 ULP after rounding.

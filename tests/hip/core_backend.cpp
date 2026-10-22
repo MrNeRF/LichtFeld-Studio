@@ -103,11 +103,14 @@ To conversion_oracle(From value) {
 }
 template <class From, class To>
 void test_conversion(GpuBackendOps& gpu) {
-    constexpr size_t count = 263;
+    constexpr size_t count = std::is_same_v<From, detail::tensor_half_t> ? 65536 : 263;
     std::array<From, count> input{};
     const float values[] = {NAN, INFINITY, -INFINITY, -0.f, 0.f, -257.9f, -256.f, -255.9f, 255.9f, 256.f, 257.9f, 65504.f, 65520.f, 0x1p-24f, 0x1p-25f, 1.00048828125f, 0x1p31f, -0x1p31f, 0x1p32f, 0x1p63f, -0x1p63f, 0x1.fffffep30f};
     for (size_t i = 0; i < count; ++i) {
-        if constexpr (std::is_same_v<From, float> || std::is_same_v<From, detail::tensor_half_t>)
+        if constexpr (std::is_same_v<From, detail::tensor_half_t>) {
+            const uint16_t bits=static_cast<uint16_t>(i);
+            std::memcpy(&input[i],&bits,sizeof(bits));
+        } else if constexpr (std::is_same_v<From, float>)
             input[i] = conversion_oracle<From>(values[i % std::size(values)]);
         else if constexpr (std::is_same_v<From, bool>)
             input[i] = bool(i % 2);
@@ -793,10 +796,63 @@ void test_integral_broadcast(GpuBackendOps& gpu) {
     std::puts("PASS exact Bool/integer strided broadcasts and padding guards");
 }
 
+void test_half_math_exhaustive(GpuBackendOps& gpu) {
+    using Half=detail::tensor_half_t;
+    constexpr size_t count=65536, bytes=count*sizeof(Half);
+    std::vector<Half> input(count),rhs(count),actual(count);
+    for(size_t i=0;i<count;++i) {
+        const auto bits=static_cast<uint16_t>(i);
+        std::memcpy(&input[i],&bits,sizeof(bits));
+    }
+    const auto host=[](void* p){return StorageRef{GpuBackend::HIP,p,0,DataType::UInt8,nullptr,STORAGE_REF_HOST_MEMORY};};
+    auto a=gpu.allocate(bytes+32,16,{}),b=gpu.allocate(bytes+32,16,{}),out=gpu.allocate(bytes+32,16,{});
+    const auto base_a=a,base_b=b,base_out=out;
+    a.byte_offset=b.byte_offset=out.byte_offset=16;
+    a.dtype=b.dtype=out.dtype=DataType::Float16;
+    gpu.copy_host_to_device({host(input.data()),a,bytes});
+    unsigned largest_ulp=0;
+    for(auto op:{PointwiseOp::PowTensor,PointwiseOp::ModTensor})
+        for(float argument:{-2.f,-0.5f,-0.f,0.5f,1.25f,1.5f,2.f,INFINITY,NAN}) {
+            std::fill(rhs.begin(),rhs.end(),detail::tensor_float_to_half(argument));
+            gpu.copy_host_to_device({host(rhs.data()),b,bytes});
+            gpu.memset({base_out,bytes+32,0xa5,true});
+            PointwiseProgram program{};program.op=op;program.in_dtype=program.out_dtype=DataType::Float16;
+            gpu.binary(program,a,b,out,count,{});
+            gpu.copy_device_to_host({out,host(actual.data()),bytes});
+            for(size_t i=0;i<count;++i) {
+                const float decoded=detail::tensor_half_to_float(input[i]);
+                // HIP's half-to-float conversion quiets signaling NaNs. Match
+                // that conversion before invoking the CPU libm oracle (whose
+                // signaling-NaN pow(x, 0) handling can otherwise differ).
+                const float x=std::isnan(decoded)?std::numeric_limits<float>::quiet_NaN():decoded;
+                const float expected_float=op==PointwiseOp::PowTensor?float(ops::pow_op{}(x,argument)):std::fmod(x,argument);
+                const auto expected=detail::tensor_float_to_half(expected_float);
+                const float value=detail::tensor_half_to_float(actual[i]);
+                if(std::isnan(expected_float)) {
+                    if(!std::isnan(value))std::printf("half math op=%u bits=%04x x=%g rhs=%g actual=%g expected=NaN\n",unsigned(op),unsigned(i),x,argument,value);
+                    require(std::isnan(value),"Exhaustive half math lost NaN");continue;
+                }
+                const auto wanted=std::bit_cast<uint16_t>(expected),got=std::bit_cast<uint16_t>(actual[i]);
+                if(!std::isfinite(detail::tensor_half_to_float(expected)) || expected_float==0.f)
+                    require(got==wanted,"Exhaustive half math lost infinity or signed zero");
+                const unsigned distance=unsigned(std::abs(int(wanted)-int(got)));
+                largest_ulp=std::max(largest_ulp,distance);
+                require(distance<=(op==PointwiseOp::PowTensor?1u:0u),"Exhaustive half math exceeds rounding contract");
+            }
+            std::vector<uint8_t> guards(bytes+32);
+            gpu.copy_device_to_host({base_out,host(guards.data()),guards.size()});
+            for(size_t i=0;i<guards.size();++i)if(i<16 || i>=bytes+16)
+                require(guards[i]==0xa5,"Exhaustive half math overwrote output guards");
+        }
+    gpu.deallocate(base_a,{});gpu.deallocate(base_b,{});gpu.deallocate(base_out,{});
+    std::printf("PASS exhaustive FP16 pow/mod: 65536 encodings, 9 RHS cases, signed-zero/NaN/inf and guards; max half ULP %u\n",largest_ulp);
+}
+
 int main(int argc, char** argv) try {
     require(argc == 2, "Expected HIP runtime module");
     HipBackendOps native(std::filesystem::absolute(argv[1]), 0);
     GpuBackendOps& gpu = native;
+    test_half_math_exhaustive(gpu);
     test_integral_broadcast(gpu);
     constexpr size_t count = 263;
     auto a = gpu.allocate((count + 16) * 4, 256, {});
