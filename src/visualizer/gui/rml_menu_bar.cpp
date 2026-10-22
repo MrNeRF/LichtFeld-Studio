@@ -1994,6 +1994,7 @@ namespace lfs::vis::gui {
                 localization.get("toolbar.free_orbit_camera"),
                 localization.get("toolbar.fly_camera"),
                 localization.get("toolbar.drone_camera"),
+                localization.get("toolbar.walk_camera"),
             };
             navigation_tooltip_language_generation_ = language_generation;
             has_navigation_tooltip_language_generation_ = true;
@@ -2011,6 +2012,7 @@ namespace lfs::vis::gui {
                 {NavMode::Trackball, "world", 1},
                 {NavMode::FPV, "camera-fpv", 2},
                 {NavMode::Drone, "drone", 3},
+                {NavMode::Walk, "camera-fpv", 4},
             };
             const auto mode = ic->cameraNavigationMode();
             for (const auto& spec : kNavButtons) {

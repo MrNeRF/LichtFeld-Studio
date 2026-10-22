@@ -641,11 +641,11 @@ def reset_home() -> None:
 
 def get_camera_navigation_mode() -> str:
     """
-    Get the active camera navigation mode ('orbit', 'trackball', 'fpv', or 'drone')
+    Get the active camera navigation mode ('orbit', 'trackball', 'fpv', 'drone', or 'walk')
     """
 
 def set_camera_navigation_mode(mode: str) -> None:
-    """Set the active camera navigation mode"""
+    """Set the camera mode. Walk requires visible collision geometry and a free capsule; raises RuntimeError otherwise."""
 
 def get_new_project_navigation_up_axis() -> str:
     """Get the navigation vertical used only for new projects"""

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/collision.hpp"
 #include "core/events.hpp"
 #include "core/export.hpp"
 #include "core/services.hpp"
@@ -44,7 +45,8 @@ namespace lfs::vis {
             Orbit,
             Trackball,
             FPV,
-            Drone
+            Drone,
+            Walk
         };
 
         // Single source of truth for the mode <-> name mapping used by the
@@ -115,6 +117,13 @@ namespace lfs::vis {
         void loadInputProfile(const std::string& name) { bindings_.loadProfile(name); }
         [[nodiscard]] CameraNavigationMode cameraNavigationMode() const { return camera_navigation_mode_; }
         void setCameraNavigationMode(CameraNavigationMode mode);
+        [[nodiscard]] glm::vec3 cameraPosition() const { return activeKeyboardViewport().camera.t; }
+        [[nodiscard]] const core::WalkSettings& walkSettings() const { return walk_settings_; }
+        void setWalkSettings(core::WalkSettings settings) {
+            settings.validate();
+            walk_settings_ = settings;
+        }
+        [[nodiscard]] const std::string& walkError() const { return walk_error_; }
         void applyNavigationSpeedPreferences(float zoom_speed, float navigation_speed);
         NavigationUpAxis navigationUpAxis() const { return viewport_.camera.navigationUpAxis(); }
         void setNavigationUpAxis(NavigationUpAxis axis, bool align_grid = false);
@@ -165,7 +174,8 @@ namespace lfs::vis {
             const bool drone_settling =
                 (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasDroneMotion()) ||
                 keyboard_camera.hasDroneMotion();
-            return camera_browse_repeat_.active() || movement_active || orbit_coasting || pan_coasting ||
+            return (camera_navigation_mode_ == CameraNavigationMode::Walk && !walk_state_.grounded) ||
+                   camera_browse_repeat_.active() || movement_active || orbit_coasting || pan_coasting ||
                    keyboard_camera.isGliding() || wasd_coasting || drone_settling;
         }
         [[nodiscard]] bool isCameraNavigating() const {
@@ -202,6 +212,10 @@ namespace lfs::vis {
         void resetHome();
 
     private:
+        core::WalkSettings walk_settings_;
+        core::WalkState walk_state_;
+        std::string walk_error_;
+        [[nodiscard]] core::CapsuleQuery walkCollisionQuery() const;
         struct PanelInteractionState {
             SplitViewPanelId panel = SplitViewPanelId::Left;
             Viewport* viewport = nullptr;

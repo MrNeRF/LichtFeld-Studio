@@ -61,6 +61,7 @@ class PreferencesPanel(Panel):
         ("trackball", "preferences.navigation_trackball"),
         ("fpv", "preferences.navigation_fpv"),
         ("drone", "preferences.navigation_drone"),
+        ("walk", "toolbar.walk_camera"),
     )
 
     PROGRESS_BAR_OPTIONS = (

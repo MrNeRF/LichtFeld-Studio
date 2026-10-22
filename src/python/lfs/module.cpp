@@ -3016,7 +3016,7 @@ NB_MODULE(lichtfeld, m) {
             return lfs::vis::InputController::cameraNavigationModeName(
                 controller->cameraNavigationMode());
         },
-        "Get the active camera navigation mode ('orbit', 'trackball', 'fpv', or 'drone')");
+        "Get the active camera navigation mode ('orbit', 'trackball', 'fpv', 'drone', or 'walk')");
     m.def(
         "set_camera_navigation_mode", [](const std::string& mode) {
             auto* controller = lfs::vis::InputController::instance();
@@ -3026,16 +3026,19 @@ NB_MODULE(lichtfeld, m) {
             const auto parsed = lfs::vis::InputController::cameraNavigationModeFromName(mode);
             if (!parsed) {
                 throw std::invalid_argument(
-                    "camera navigation mode must be 'orbit', 'trackball', 'turntable', 'fpv', 'fly', or 'drone'");
+                    "camera navigation mode must be 'orbit', 'trackball', 'turntable', 'fpv', 'fly', 'drone', or 'walk'");
             }
             const auto before = controller->cameraNavigationMode();
             controller->setCameraNavigationMode(*parsed);
+            if (*parsed == lfs::vis::InputController::CameraNavigationMode::Walk &&
+                controller->cameraNavigationMode() != *parsed)
+                throw std::runtime_error(controller->walkError());
             if (markViewSettingIfChanged(before, controller->cameraNavigationMode())) {
                 lfs::vis::saveCameraNavigationPreference(
                     lfs::vis::InputController::cameraNavigationModeName(*parsed));
             }
         },
-        nb::arg("mode"), "Set the active camera navigation mode");
+        nb::arg("mode"), "Set the active camera navigation mode. Walk requires a visible collision node and a free capsule at the camera; otherwise raises RuntimeError.");
     m.def("get_new_project_navigation_up_axis", [] { return lfs::vis::UserPreferences::instance().newProjectNavigationUpAxis(); }, "Get the navigation vertical used only for new projects");
     m.def("get_new_project_align_grid", [] { return lfs::vis::UserPreferences::instance().alignNewProjectGrid(); }, "Get whether new projects start with a grid perpendicular to their navigation vertical");
     m.def("set_new_project_navigation_defaults", [](const std::string& axis, bool align_grid) { lfs::vis::UserPreferences::instance().setNewProjectNavigation(axis, align_grid); }, nb::arg("axis"), nb::arg("align_grid"), "Set new-project defaults without modifying the current project");
