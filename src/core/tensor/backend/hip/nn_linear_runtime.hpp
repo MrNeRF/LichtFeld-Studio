@@ -15,28 +15,28 @@ __device__ inline float activate(float x,uint32_t mode) {
     if(mode==4)return x/(1.f+expf(-x));
     return x;
 }
-template<class T> __device__ void linear_store(T* output,size_t index,size_t column,float value,const T* bias,const T* scale,const T* residual,uint32_t activation) {
+template<class Out,class In> __device__ void linear_store(Out* output,size_t index,size_t column,float value,const In* bias,const In* scale,const Out* residual,uint32_t activation) {
 #pragma clang fp contract(off)
     if(bias)value+=float(bias[column]);
     value=activate(value,activation);
     if(scale)value*=float(scale[column]);
     if(residual)value+=float(residual[index]);
-    if constexpr(std::is_same_v<T,__half>)output[index]=__float2half_rn(value);else output[index]=value;
+    if constexpr(std::is_same_v<Out,__half>)output[index]=__float2half_rn(value);else output[index]=value;
 }
-template<class T,bool Transpose> __global__ void linear_skinny(const T* a,const T* w,const T* bias,const T* scale,const T* residual,T* output,
-    size_t m,size_t n,size_t k,size_t weight_stride,uint32_t activation) {
+template<class T,bool Transpose,class Weight=T,class Out=T> __global__ void linear_skinny(const T* a,const Weight* w,const T* bias,const T* scale,const Out* residual,Out* output,
+    size_t m,size_t n,size_t k,size_t weight_stride,uint32_t activation,size_t output_pitch,bool row_affine,size_t a_stride,size_t output_stride) {
     const size_t column=size_t(blockIdx.x)*256+threadIdx.x,row=blockIdx.y,batch=blockIdx.z;
     if(column>=n)return;
-    float value=0;const size_t ai=(batch*m+row)*k,wi=batch*weight_stride;
+    float value=0;const size_t ai=batch*a_stride+row*k,wi=batch*weight_stride;
     for(size_t t=0;t<k;++t)value=fmaf(float(a[ai+t]),float(w[wi+(Transpose?column*k+t:t*n+column)]),value);
-    linear_store(output,(batch*m+row)*n+column,column,value,bias,scale,residual,activation);
+    linear_store(output,batch*output_stride+row*output_pitch+column,row_affine?row:column,value,bias,scale,residual,activation);
 }
-template<class T,bool Transpose> __global__ void linear_tiled(const T* a,const T* w,const T* bias,const T* scale,const T* residual,T* output,
-    size_t m,size_t n,size_t k,size_t weight_stride,uint32_t activation) {
+template<class T,bool Transpose,class Weight=T,class Out=T> __global__ void linear_tiled(const T* a,const Weight* w,const T* bias,const T* scale,const Out* residual,Out* output,
+    size_t m,size_t n,size_t k,size_t weight_stride,uint32_t activation,size_t output_pitch,bool row_affine,size_t a_stride,size_t output_stride) {
     __shared__ float aa[16][64],bb[16][64];
     const unsigned tx=threadIdx.x,ty=threadIdx.y,lane=ty*16+tx;
     const size_t row=size_t(blockIdx.y)*64,col=size_t(blockIdx.x)*64,batch=blockIdx.z;
-    if(k){a+=batch*m*k;w+=batch*weight_stride;}
+    if(k){a+=batch*a_stride;w+=batch*weight_stride;}
     float sums[4][4]{};
     for(size_t first=0;first<k;first+=16) {
         for(unsigned i=lane;i<1024;i+=256) {
@@ -54,7 +54,7 @@ template<class T,bool Transpose> __global__ void linear_tiled(const T* a,const T
     }
     for(unsigned i=0;i<4;++i)for(unsigned j=0;j<4;++j) {
         const size_t r=row+ty+i*16,c=col+tx+j*16;
-        if(r<m && c<n)linear_store(output,(batch*m+r)*n+c,c,sums[i][j],bias,scale,residual,activation);
+        if(r<m && c<n)linear_store(output,batch*output_stride+r*output_pitch+c,row_affine?r:c,sums[i][j],bias,scale,residual,activation);
     }
 }
 }
@@ -86,8 +86,8 @@ int lfs_hip_nn_linear(LfsHipContext* context,const LfsHipView* inputs,LfsHipView
                 const auto* bias=static_cast<const T*>(ptr(inputs[2]));const auto* scale=static_cast<const T*>(ptr(inputs[3]));
                 const auto* residual=inputs[4].buffer?static_cast<const T*>(ptr(inputs[4]))+batch*p->m*p->n:nullptr;
                 auto* out=static_cast<T*>(ptr(output))+batch*p->m*p->n;
-                if(p->m<=4)hip_nn::linear_skinny<T,Transpose><<<dim3((p->n+255)/256,p->m,chunk),256,0,context->stream>>>(a,w,bias,scale,residual,out,p->m,p->n,p->k,stride,p->activation);
-                else hip_nn::linear_tiled<T,Transpose><<<dim3((p->n+63)/64,(p->m+63)/64,chunk),dim3(16,16),0,context->stream>>>(a,w,bias,scale,residual,out,p->m,p->n,p->k,stride,p->activation);
+                if(p->m<=4)hip_nn::linear_skinny<T,Transpose><<<dim3((p->n+255)/256,p->m,chunk),256,0,context->stream>>>(a,w,bias,scale,residual,out,p->m,p->n,p->k,stride,p->activation,p->n,false,p->m*p->k,p->m*p->n);
+                else hip_nn::linear_tiled<T,Transpose><<<dim3((p->n+63)/64,(p->m+63)/64,chunk),dim3(16,16),0,context->stream>>>(a,w,bias,scale,residual,out,p->m,p->n,p->k,stride,p->activation,p->n,false,p->m*p->k,p->m*p->n);
                 check(hipGetLastError());
             }
         };

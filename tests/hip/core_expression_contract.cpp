@@ -339,9 +339,81 @@ void native_linear() {
         }
     }
 }
+void native_attention() {
+    auto& gpu=backend_ops(GpuBackend::HIP);
+    for(auto dtype : {DataType::Float32,DataType::Float16})for(size_t dim : {size_t(17),size_t(65)})for(int mode=0;mode<3;++mode) {
+        constexpr size_t groups=4,heads=2,queries=67,keys=65;const size_t count=groups*queries*dim;
+        std::vector<float> qv(count),kv(groups*keys*dim),vv(kv.size());
+        for(size_t i=0;i<qv.size();++i)qv[i]=.2f*std::sin(float(i)*.17f);
+        for(size_t i=0;i<kv.size();++i){kv[i]=.3f*std::cos(float(i)*.13f);vv[i]=.7f*std::sin(float(i)*.19f);}
+        auto q=Tensor::from_vector(qv,{qv.size()},Device::GPU).to(dtype),k=Tensor::from_vector(kv,{kv.size()},Device::GPU).to(dtype),v=Tensor::from_vector(vv,{vv.size()},Device::GPU).to(dtype);
+        AttentionProgram program{groups,heads,queries,keys,dim,.37f,{}};
+        Tensor mask;
+        if(mode) {
+            std::vector<float> mv(mode==1?groups*queries*keys:keys);
+            for(size_t i=0;i<mv.size();++i)mv[i]=i%7==0?-INFINITY:.05f*float(int(i%5)-2);
+            if(mode==1){for(size_t key=0;key<keys;++key)mv[key]=-INFINITY;mv[keys]=NAN;mv[keys*2]=INFINITY;program.mask_strides={heads*queries*keys,queries*keys,keys,1};}
+            else program.mask_strides={0,0,0,1};
+            mask=Tensor::from_vector(mv,{mv.size()},Device::GPU).to(dtype);
+        }
+        auto output=Tensor::from_vector(std::vector<float>(count+2,-77),{count+2},Device::GPU).to(dtype);auto out=storage_ref(output);out.byte_offset=dtype==DataType::Float32?4:2;
+        gpu.nn_attention(storage_ref(q),storage_ref(k),storage_ref(v),mode?std::optional(storage_ref(mask)):std::nullopt,out,program,{});
+        auto observed=output.to(DataType::Float32).cpu(),qh=q.to(DataType::Float32).cpu(),kh=k.to(DataType::Float32).cpu(),vh=v.to(DataType::Float32).cpu();
+        Tensor mh;if(mode)mh=mask.to(DataType::Float32).cpu();
+        require(observed.ptr<float>()[0]==-77 && observed.ptr<float>()[count+1]==-77,"HIP attention overwrote guards");
+        for(size_t g=0;g<groups;++g)for(size_t row=0;row<queries;++row) {
+            std::vector<float> scores(keys);float maximum=-std::numeric_limits<float>::max();bool bad=false;
+            for(size_t key=0;key<keys;++key) {
+                float value=0;for(size_t d=0;d<dim;++d)value=std::fma(qh.ptr<float>()[(g*queries+row)*dim+d],kh.ptr<float>()[(g*keys+key)*dim+d],value);
+                value*=program.scale;if(mode)value+=mh.ptr<float>()[mode==1?(g*queries+row)*keys+key:key];
+                scores[key]=value;bad|=std::isnan(value) || value==INFINITY;maximum=std::fmax(maximum,value);
+            }
+            float sum=0;for(auto& value:scores){value=std::exp(value-maximum);sum+=value;}sum=std::fmax(sum,1.f);
+            for(size_t d=0;d<dim;++d) {
+                float wanted=0;for(size_t key=0;key<keys;++key)wanted=std::fma(scores[key]/sum,vh.ptr<float>()[(g*keys+key)*dim+d],wanted);
+                const float actual=observed.ptr<float>()[1+(g*queries+row)*dim+d];
+                if(bad)require(std::isnan(actual),"HIP attention lost nonfinite-logit semantics");
+                else require(std::isfinite(actual) && std::abs(actual-wanted)<(dtype==DataType::Float16?1e-3f:3e-5f),"HIP attention differs from scalar softmax reference");
+            }
+        }
+    }
+}
+void native_conv() {
+    auto& gpu=backend_ops(GpuBackend::HIP);
+    for(auto dtype : {DataType::Float32,DataType::Float16})for(bool transpose:{false,true})for(bool replicate:{false,true})for(size_t groups:{size_t(1),size_t(2)}) {
+        constexpr size_t batches=2,cin=2,cout=5;const int h=7,w=9,kh=3,kw=2,stride=2,dilation=replicate?2:1,pad=1;
+        const int oh=transpose?(h-1)*stride-2*pad+dilation*(kh-1)+2:(h+2*pad-dilation*(kh-1)-1)/stride+1;
+        const int ow=transpose?(w-1)*stride-2*pad+dilation*(kw-1)+2:(w+2*pad-dilation*(kw-1)-1)/stride+1;
+        const size_t output_count=batches*groups*cout*oh*ow,taps=cin*kh*kw;
+        std::vector<float> iv(batches*groups*cin*h*w),wv(groups*cout*taps),bv(groups*cout);
+        for(size_t i=0;i<iv.size();++i)iv[i]=.3f*std::sin(float(i)*.17f);
+        for(size_t i=0;i<wv.size();++i)wv[i]=.2f*std::cos(float(i)*.13f);
+        for(size_t i=0;i<bv.size();++i)bv[i]=.02f*float(int(i%7)-3);
+        auto input=Tensor::from_vector(iv,{iv.size()},Device::GPU).to(dtype),weight=Tensor::from_vector(wv,{wv.size()},Device::GPU).to(dtype),bias=Tensor::from_vector(bv,{bv.size()},Device::GPU).to(dtype);
+        auto output=Tensor::from_vector(std::vector<float>(output_count+2,-77),{output_count+2},Device::GPU).to(dtype);
+        auto out=storage_ref(output);out.byte_offset=dtype==DataType::Float32?4:2;
+        ConvProgram program{};program.batch=batches;program.out_channels=groups*cout;program.groups=groups;program.transpose=transpose;program.activation=replicate?4:2;
+        program.geometry={.channels=cin,.height=h,.width=w,.out_height=oh,.out_width=ow,.kernel_h=kh,.kernel_w=kw,.stride_h=stride,.stride_w=stride,.pad_h=pad,.pad_w=pad,.dilation_h=dilation,.dilation_w=dilation,.mode=(!transpose && replicate)?1:0};
+        gpu.nn_conv2d(storage_ref(input),storage_ref(weight),storage_ref(bias),out,program,{});
+        auto observed=output.to(DataType::Float32).cpu(),ih=input.to(DataType::Float32).cpu(),wh=weight.to(DataType::Float32).cpu(),bh=bias.to(DataType::Float32).cpu();
+        require(observed.ptr<float>()[0]==-77 && observed.ptr<float>()[output_count+1]==-77,"HIP convolution overwrote guards");
+        for(size_t batch=0;batch<batches;++batch)for(size_t group=0;group<groups;++group)for(size_t channel=0;channel<cout;++channel)for(int y=0;y<oh;++y)for(int x=0;x<ow;++x) {
+            float wanted=0;
+            for(size_t tap=0;tap<taps;++tap) {
+                int c,ky,kx,iy,ix;
+                if(transpose){c=int(tap%cin);ky=int(tap/cin)/kw;kx=int(tap/cin)%kw;iy=y+pad-ky*dilation;ix=x+pad-kx*dilation;if(iy<0 || ix<0 || iy%stride || ix%stride)continue;iy/=stride;ix/=stride;}
+                else {c=int(tap)/(kh*kw);ky=(int(tap)/kw)%kh;kx=int(tap)%kw;iy=y*stride-pad+ky*dilation;ix=x*stride-pad+kx*dilation;if(replicate){iy=std::clamp(iy,0,h-1);ix=std::clamp(ix,0,w-1);}}
+                if(iy>=0 && iy<h && ix>=0 && ix<w)wanted=std::fma(ih.ptr<float>()[((batch*groups+group)*cin+c)*h*w+iy*w+ix],wh.ptr<float>()[(group*cout+channel)*taps+tap],wanted);
+            }
+            wanted=nn_activation(wanted+bh.ptr<float>()[group*cout+channel],program.activation);
+            const size_t index=((batch*groups+group)*cout+channel)*oh*ow+y*ow+x;
+            require(std::isfinite(observed.ptr<float>()[index+1]) && std::abs(observed.ptr<float>()[index+1]-wanted)<(dtype==DataType::Float16?1e-3f:3e-5f),"HIP grouped/transpose convolution differs from scalar reference");
+        }
+    }
+}
 int main() try {
     GpuBackendScope scope(GpuBackend::HIP);
-    unary();integer_arithmetic();native_norm();native_linear();precise_bits();gathered_and_packed();fold_and_host();cache_and_threads();
-    std::puts("PASS HIP expressions: native fused linear and layer/RMS norms FP16/FP32 with guards and inplace, native math, exact Int32/Int64/UInt32/UInt8 arithmetic and empty operations, IEEE values, gather bounds, Float16/Bool/UInt8 packed tails, host constants, short/runtime folds, prepare, shape cache and concurrent launches");
+    unary();integer_arithmetic();native_norm();native_linear();native_attention();native_conv();precise_bits();gathered_and_packed();fold_and_host();cache_and_threads();
+    std::puts("PASS HIP expressions: native attention/convolution/fused linear/layer/RMS norms FP16/FP32 with guards and inplace, native math, exact Int32/Int64/UInt32/UInt8 arithmetic and empty operations, IEEE values, gather bounds, Float16/Bool/UInt8 packed tails, host constants, short/runtime folds, prepare, shape cache and concurrent launches");
     return 0;
 } catch(const std::exception& e) {std::fprintf(stderr,"HIP expression failed: %s\n",e.what());return 1;}

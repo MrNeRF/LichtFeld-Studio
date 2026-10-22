@@ -275,6 +275,8 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_export);
         ENTRY(lfs_hip_nn_norm);
         ENTRY(lfs_hip_nn_linear);
+        ENTRY(lfs_hip_nn_attention);
+        ENTRY(lfs_hip_nn_conv);
         ENTRY(lfs_hip_point_tree_components);
         ENTRY(lfs_hip_proximity);
         ENTRY(lfs_hip_convert);
@@ -424,6 +426,8 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_export);
                 LOAD(lfs_hip_nn_norm);
                 LOAD(lfs_hip_nn_linear);
+                LOAD(lfs_hip_nn_attention);
+                LOAD(lfs_hip_nn_conv);
                 LOAD(lfs_hip_point_tree_components);
                 LOAD(lfs_hip_proximity);
                 LOAD(lfs_hip_convert);
@@ -2675,5 +2679,38 @@ void HipBackendOps::nn_linear(StorageRef a,StorageRef w,std::optional<StorageRef
     const LfsHipView inputs[]{view(a),view(w),bias?view(*bias):LfsHipView{},scale?view(*scale):LfsHipView{},residual?view(*residual):LfsHipView{}};
     const LfsHipLinear native{p.batch,p.m,p.n,p.k,uint32_t(a.dtype),uint32_t(p.trans_b),uint32_t(p.batched_b),uint32_t(p.activation)};LfsHipError error{};
     check(impl_->lfs_hip_nn_linear(impl_->context,inputs,view(output),&native,&error),error);
+}
+}
+
+namespace lfs::core::internal {
+void HipBackendOps::nn_attention(StorageRef q,StorageRef k,StorageRef v,std::optional<StorageRef> mask,StorageRef output,const AttentionProgram& p,ExecContext execution) {
+    queue(execution);
+    require((q.dtype==DataType::Float32 || q.dtype==DataType::Float16) && k.dtype==q.dtype && v.dtype==q.dtype && output.dtype==q.dtype &&
+            (!mask || mask->dtype==q.dtype),"HIP NN attention requires matching Float32 or Float16 types");
+    std::lock_guard lock(impl_->mutex);
+    const auto view=[&](StorageRef storage){return storage.data?impl_->view(storage):(impl_->empty_view(storage),LfsHipView{});};
+    const LfsHipView inputs[]{view(q),view(k),view(v),mask?view(*mask):LfsHipView{}};
+    LfsHipAttention native{};native.groups=p.groups;native.heads=p.heads;native.queries=p.queries;native.keys=p.keys;native.dim=p.dim;
+    std::copy_n(p.mask_strides.begin(),4,native.strides);native.scale=p.scale;native.dtype=uint32_t(q.dtype);LfsHipError error{};
+    const auto status=impl_->lfs_hip_nn_attention(impl_->context,inputs,view(output),&native,&error);
+    impl_->refresh_algorithm_workspace();check(status,error);
+}
+}
+
+namespace lfs::core::internal {
+void HipBackendOps::nn_conv2d(StorageRef input,StorageRef weight,std::optional<StorageRef> bias,StorageRef output,const ConvProgram& p,ExecContext execution) {
+    queue(execution);
+    require((input.dtype==DataType::Float32 || input.dtype==DataType::Float16) && weight.dtype==input.dtype && output.dtype==input.dtype &&
+            (!bias || bias->dtype==input.dtype),"HIP NN convolution requires matching Float32 or Float16 types");
+    const auto& g=p.geometry;LfsHipConv native{};native.batch=p.batch;native.out_channels=p.out_channels;native.groups=p.groups;
+    native.dtype=uint32_t(input.dtype);native.transpose=p.transpose;native.activation=p.activation;
+    auto& n=native.geometry;n.channels=g.channels;n.height=g.height;n.width=g.width;n.out_height=g.out_height;n.out_width=g.out_width;
+    n.kernel_h=g.kernel_h;n.kernel_w=g.kernel_w;n.stride_h=g.stride_h;n.stride_w=g.stride_w;n.pad_h=g.pad_h;n.pad_w=g.pad_w;
+    n.dilation_h=g.dilation_h;n.dilation_w=g.dilation_w;n.mode=g.mode;
+    std::lock_guard lock(impl_->mutex);
+    const auto view=[&](StorageRef storage){return storage.data?impl_->view(storage):(impl_->empty_view(storage),LfsHipView{});};
+    const LfsHipView inputs[]{view(input),view(weight),bias?view(*bias):LfsHipView{}};LfsHipError error{};
+    const auto status=impl_->lfs_hip_nn_conv(impl_->context,inputs,view(output),&native,&error);
+    impl_->refresh_algorithm_workspace();check(status,error);
 }
 }
