@@ -148,14 +148,22 @@ namespace lfs::media::json_detail {
             result["image_exif"] = sourceExif(catalog.imageExif());
             const auto& xmp = catalog.imageXmp();
             json retained{{"status", metadataStatus(xmp.status)}, {"scope", xmp.scope}, {"diagnostic", xmp.diagnostic}, {"binary_encoding", "hex"}, {"xml_validation", "not_examined"}, {"extended_assembly", "not_performed"}, {"blocks", json::array()}};
-            for (const auto& block : xmp.blocks) {
+            for (std::size_t index = 0; index < xmp.blocks.size(); ++index) {
+                const auto& block = xmp.blocks[index];
+                const auto original = catalog.xmpBytes({index});
                 using core::image_codecs::XmpEnvelope;
-                const char* envelope = block.envelope == XmpEnvelope::JpegApp1 ? "jpeg_app1" : block.envelope == XmpEnvelope::JpegExtendedApp1 ? "jpeg_extended_app1"
-                                                                                                                                               : "png_itxt";
+                const char* envelope = block.envelope == XmpEnvelope::JpegApp1 ? "jpeg_app1" : block.envelope == XmpEnvelope::JpegExtendedApp1   ? "jpeg_extended_app1"
+                                                                                           : block.envelope == XmpEnvelope::PngInternationalText ? "png_itxt"
+                                                                                                                                                 : "tiff_tag700";
                 json payload = nullptr;
-                if (block.status == core::image_codecs::MetadataStatus::Collected && block.payload_offset <= block.bytes.size())
-                    payload = block.inflated ? hexBytes(*block.inflated) : hexBytes(std::span(block.bytes).subspan(block.payload_offset));
-                retained["blocks"].push_back({{"envelope", envelope}, {"bytes", hexBytes(block.bytes)}, {"status", metadataStatus(block.status)}, {"diagnostic", block.diagnostic}, {"crc_valid", optional(block.crc_valid)}, {"payload_offset", block.payload_offset}, {"payload_kind", block.envelope == XmpEnvelope::JpegExtendedApp1 ? "extended_segment" : "packet"}, {"compressed", block.compressed}, {"payload_bytes", std::move(payload)}});
+                if (block.status == core::image_codecs::MetadataStatus::Collected && original && block.payload_offset <= original->size())
+                    payload = block.inflated ? hexBytes(*block.inflated) : hexBytes(original->subspan(block.payload_offset));
+                retained["blocks"].push_back({{"envelope", envelope}, {"bytes", original ? json(hexBytes(*original)) : json(nullptr)}, {"status", metadataStatus(block.status)}, {"diagnostic", block.diagnostic}, {"crc_valid", optional(block.crc_valid)}, {"payload_offset", block.payload_offset}, {"payload_kind", block.envelope == XmpEnvelope::JpegExtendedApp1 ? "extended_segment" : "packet"}, {"compressed", block.compressed}, {"payload_bytes", std::move(payload)}});
+                if (block.tiff_tag) {
+                    retained["blocks"].back()["representation"] = "libtiff_decoded_bytes";
+                    const auto reference = *block.tiff_tag;
+                    retained["blocks"].back()["tiff_tag"] = {{"directory", reference.directory}, {"tag", reference.tag}, {"directory_offset", catalog.imageExif().original.tiff->directories[reference.directory].offset}};
+                }
             }
             result["image_xmp"] = std::move(retained);
         }

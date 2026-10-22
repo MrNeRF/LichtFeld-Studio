@@ -286,6 +286,10 @@ class IngestCLI(unittest.TestCase):
                 self.assertEqual(len(result["image_exif"]["blocks"]), 2)
         exact = self._xmp_limited(path, block_bytes=len(envelope), total_bytes=2 * len(envelope), blocks=2)
         self.assertEqual(exact["image_xmp"]["status"], "collected")
+        tiff_records = sum(record["kind"] != "xmp_block" for record in exact["records"])
+        omitted = self._xmp_limited(path, records=tiff_records)
+        self.assertEqual(omitted["index_status"], "limited")
+        self.assertEqual(omitted["test_summary"]["facts"], exact["test_summary"]["facts"])
         no_index = self._xmp_limited(path, records=0)
         self.assertEqual(no_index["index_status"], "limited")
         self.assertEqual(len(no_index["image_xmp"]["blocks"]), 2)
@@ -329,9 +333,115 @@ class IngestCLI(unittest.TestCase):
         self.assertEqual(len(result["blocks"]), 1)
         source_exif_fixture.write_tiff(path)
         result, _ = self.invoke("source-metadata", path)
-        self.assertEqual(result["metadata"]["image_xmp"]["status"], "unsupported")
+        self.assertEqual(result["metadata"]["image_xmp"]["status"], "absent")
         result, _ = self.invoke("source-metadata", self.root / "missing-xmp.png")
         self.assertEqual(result["metadata"]["image_xmp"]["status"], "io_error")
+
+    def test_source_metadata_xmp_tiff_byte_packets_and_directory_identity(self):
+        path = self.root / "XMP TIFF é 日本語.tiff"
+        for little in [True, False]:
+            for big in [False, True]:
+                for packet in [b"a", b"<x/>", b"abcdefgh", b'<x xmlns="urn:vendor">\0\xffopaque</x>' + b" " * 37]:
+                    with self.subTest(little=little, big=big, size=len(packet)):
+                        packets = [packet, None, packet]
+                        source_exif_fixture.write_tiff(path, little=little, big=big, pages=3, xmp_packets=packets)
+                        before, stamp = path.read_bytes(), path.stat().st_mtime_ns
+                        legacy, _ = self.invoke("source-exif", path)
+                        result, stderr = self.invoke("source-metadata", path)
+                        self.assertEqual(stderr, b"")
+                        metadata = result["metadata"]
+                        self.assertEqual(metadata["image_exif"], legacy["exif"])
+                        xmp = metadata["image_xmp"]
+                        self.assertEqual(xmp["status"], "collected", xmp)
+                        self.assertEqual(xmp["scope"], "tiff-libtiff-observed-tag700")
+                        blocks = xmp["blocks"]
+                        self.assertEqual(len(blocks), 2)
+                        self.assertEqual([bytes.fromhex(b["bytes"]) for b in blocks], [packet, packet])
+                        for block, directory_index in zip(blocks, [0, 2]):
+                            self.assertEqual(block["envelope"], "tiff_tag700")
+                            self.assertEqual(block["representation"], "libtiff_decoded_bytes")
+                            self.assertEqual(bytes.fromhex(block["payload_bytes"]), packet)
+                            self.assertEqual(block["payload_offset"], 0)
+                            self.assertIsNone(block["crc_valid"])
+                            ref = block["tiff_tag"]
+                            self.assertEqual(ref["directory"], directory_index)
+                            directory = metadata["image_exif"]["tiff"]["directories"][directory_index]
+                            self.assertEqual(ref["directory_offset"], directory["offset"])
+                            self.assertEqual(directory["tags"][ref["tag"]]["id"], 700)
+                            self.assertEqual(bytes.fromhex(directory["tags"][ref["tag"]]["bytes"]), packet)
+                        self.assertEqual(path.read_bytes(), before)
+                        self.assertEqual(path.stat().st_mtime_ns, stamp)
+        packet = b"<subimage/>"
+        source_exif_fixture.write_tiff_graph(path, blobs=[(700, packet)], subimage_blobs=[(700, b"<child/>")])
+        result, _ = self.invoke("source-metadata", path)
+        metadata = result["metadata"]
+        directories = metadata["image_exif"]["tiff"]["directories"]
+        packets = {directories[b["tiff_tag"]["directory"]]["kind"]: bytes.fromhex(b["bytes"])
+                   for b in metadata["image_xmp"]["blocks"]}
+        self.assertEqual(packets, {"image": packet, "subimage": b"<child/>"})
+
+    def test_source_metadata_xmp_tiff_limits_and_observation_failures(self):
+        path = self.root / "xmp-budget.tif"
+        packet = b"<x/>" + b" " * 4096
+        source_exif_fixture.write_tiff(path, pages=2, xmp_packets=[packet, packet])
+        for limits, count in [({"blocks": 1}, 1), ({"block_bytes": len(packet) - 1}, 0),
+                              ({"total_bytes": 2 * len(packet) - 1}, 1)]:
+            observed = self._xmp_limited(path, **limits)
+            self.assertEqual(observed["image_xmp"]["status"], "limited")
+            self.assertEqual(len(observed["image_xmp"]["blocks"]), count)
+            self.assertEqual(sum(tag["id"] == 700 for d in observed["image_exif"]["tiff"]["directories"] for tag in d["tags"]), 2)
+        exact = self._xmp_limited(path, blocks=2, block_bytes=len(packet), total_bytes=2 * len(packet), inflated_bytes=0)
+        self.assertEqual(exact["image_xmp"]["status"], "collected")
+        tiff_records = sum(record["kind"] != "xmp_block" for record in exact["records"])
+        omitted = self._xmp_limited(path, records=tiff_records)
+        self.assertEqual(omitted["index_status"], "limited")
+        self.assertEqual(omitted["test_summary"]["facts"], exact["test_summary"]["facts"])
+        no_index = self._xmp_limited(path, records=0)
+        self.assertEqual(no_index["records"], [])
+        self.assertEqual(len(no_index["image_xmp"]["blocks"]), 2)
+        for limits in [{"tiff_directories": 1}, {"tiff_entries": 1}, {"tiff_value_bytes": 1},
+                       {"tiff_read_bytes": 16}, {"tiff_reads": 1}, {"tiff_reads": 0}]:
+            observed = self._xmp_limited(path, collection_limits=limits)
+            self.assertEqual(observed["image_exif"], observed["legacy_exif"])
+            self.assertEqual(observed["image_xmp"]["status"], "limited", limits)
+        source_exif_fixture.write_tiff(path)
+        result, _ = self.invoke("source-metadata", path)
+        self.assertEqual(result["metadata"]["image_xmp"]["status"], "absent")
+        source_exif_fixture.write_tiff(path, xmp_packets=[packet])
+        path.write_bytes(path.read_bytes()[:32])
+        result, _ = self.invoke("source-metadata", path)
+        self.assertEqual(result["metadata"]["image_xmp"]["status"], "malformed")
+        self.assertEqual(result["metadata"]["image_xmp"]["blocks"], [])
+        source_exif_fixture.write_tiff(path, cycle=True, xmp_packets=[b"<x/>"])
+        result, _ = self.invoke("source-metadata", path)
+        self.assertNotEqual(result["metadata"]["image_xmp"]["status"], "absent")
+
+    def test_source_metadata_xmp_tiff_provider_representation(self):
+        path = self.root / "xmp-provider.tif"
+        for little in [True, False]:
+            order = "<" if little else ">"
+            for type_, encoded, decoded in [(2, b"<x/>\0\xff", b"<x/>\0\xff"),
+                                            (7, b"<x/>\0\xff", b"<x/>\0\xff"),
+                                            (3, struct.pack(order + "4H", 60, 120, 47, 62), b"<x/>")]:
+                with self.subTest(little=little, type=type_):
+                    source_exif_fixture.write_tiff(path, little=little, xmp_packets=[encoded], xmp_type=type_)
+                    result, _ = self.invoke("source-metadata", path)
+                    block = result["metadata"]["image_xmp"]["blocks"][0]
+                    self.assertEqual(bytes.fromhex(block["bytes"]), decoded)
+                    self.assertEqual(block["representation"], "libtiff_decoded_bytes")
+                    for span in result["metadata"]["image_exif"]["tiff"]["source_ranges"]:
+                        raw = bytes.fromhex(span["bytes"])
+                        self.assertEqual(path.read_bytes()[span["offset"]:span["offset"] + len(raw)], raw)
+        source_exif_fixture.write_tiff(path, xmp_packets=[b""])
+        result, _ = self.invoke("source-metadata", path)
+        self.assertEqual(result["metadata"]["image_xmp"]["status"], "malformed")
+        self.assertTrue(result["metadata"]["image_xmp"]["diagnostic"])
+        source_exif_fixture.write_tiff_graph(path, blobs=[(700, b"first"), (700, b"second")])
+        result, _ = self.invoke("source-metadata", path)
+        metadata = result["metadata"]
+        observed = [tag["bytes"] for directory in metadata["image_exif"]["tiff"]["directories"]
+                    for tag in directory["tags"] if tag["id"] == 700]
+        self.assertEqual([block["bytes"] for block in metadata["image_xmp"]["blocks"]], observed)
 
     def test_source_container_metadata_reuses_probe_without_writing(self):
         path = self.source()

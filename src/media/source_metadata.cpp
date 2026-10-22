@@ -34,6 +34,10 @@ namespace lfs::media {
     const core::image_codecs::XmpBlock* SourceMetadataCatalog::xmpBlock(XmpBlockReference reference) const noexcept {
         return storage_ && reference.block < storage_->image_xmp.blocks.size() ? &storage_->image_xmp.blocks[reference.block] : nullptr;
     }
+    std::optional<std::span<const std::uint8_t>> SourceMetadataCatalog::xmpBytes(XmpBlockReference reference) const noexcept {
+        const auto* block = xmpBlock(reference);
+        return block ? core::image_codecs::source_xmp_bytes(imageExif().original, *block) : std::nullopt;
+    }
     const std::optional<MediaDescription>& SourceMetadataCatalog::container() const noexcept {
         static const std::optional<MediaDescription> empty;
         return storage_ ? storage_->container : empty;
@@ -222,6 +226,9 @@ namespace lfs::media {
         // occupy their original ordinal, as in MediaIngest::sourceExif.
         if (description.original.blocks.size() != description.interpretations.size())
             return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "EXIF interpretation count must match the original block count", .detection = LFS_SOURCE_SITE_CURRENT()});
+        for (const auto& block : xmp.blocks)
+            if (!core::image_codecs::source_xmp_bytes(description.original, block))
+                return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "XMP byte reference does not match its source observation", .detection = LFS_SOURCE_SITE_CURRENT()});
         try {
             auto staged = std::make_shared<SourceMetadataStorage>();
             auto& result = *staged;

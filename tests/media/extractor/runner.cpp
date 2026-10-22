@@ -63,6 +63,11 @@ int main(int argc, char** argv) {
                 exif_limits.png_chunks = collection.value("png_chunks", exif_limits.png_chunks);
                 exif_limits.png_scan_bytes = collection.value("png_scan_bytes", exif_limits.png_scan_bytes);
                 exif_limits.jpeg_header_bytes = collection.value("jpeg_header_bytes", exif_limits.jpeg_header_bytes);
+                exif_limits.tiff_reads = collection.value("tiff_reads", exif_limits.tiff_reads);
+                exif_limits.tiff_read_bytes = collection.value("tiff_read_bytes", exif_limits.tiff_read_bytes);
+                exif_limits.tiff_directories = collection.value("tiff_directories", exif_limits.tiff_directories);
+                exif_limits.tiff_entries = collection.value("tiff_entries", exif_limits.tiff_entries);
+                exif_limits.tiff_value_bytes = collection.value("tiff_value_bytes", exif_limits.tiff_value_bytes);
                 const auto path = lfs::core::utf8_to_path(request.at("input").get<std::string>());
                 auto collected = lfs::core::image_codecs::read_source_metadata(path, exif_limits, limits);
                 lfs::media::ImageExifDescription description;

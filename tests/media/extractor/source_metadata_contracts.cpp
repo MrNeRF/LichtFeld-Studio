@@ -173,6 +173,34 @@ int runSourceMetadataContracts() {
     auto kept_xmp = *with_xmp;
     with_xmp = SourceMetadataCatalog{};
     require(kept_xmp.resolve(*handle).has_value(), "XMP handles survive catalog reassignment");
+    auto tiff_description = description();
+    auto& tiff_tag = tiff_description.original.tiff->directories[0].tags[0];
+    tiff_tag.id = 700;
+    tiff_tag.type = 1;
+    tiff_tag.count = tiff_tag.bytes.size();
+    const auto* tiff_bytes = tiff_tag.bytes.data();
+    SourceXmp tiff_xmp;
+    tiff_xmp.status = MetadataStatus::Collected;
+    XmpBlock tiff_block;
+    tiff_block.envelope = XmpEnvelope::TiffTag;
+    tiff_block.tiff_tag = TiffXmpReference{0, 0};
+    tiff_xmp.blocks.push_back(tiff_block);
+    auto tiff_catalog = catalogSourceMetadata(std::move(tiff_description), {}, {}, tiff_xmp);
+    require(bool(tiff_catalog) && tiff_catalog->imageXmp().blocks[0].bytes.empty() &&
+                tiff_catalog->xmpBytes({0})->data() == tiff_bytes,
+            "TIFF XMP references the existing tag bytes without another payload allocation");
+    const auto tiff_handle = tiff_catalog->bind(XmpBlockReference{0});
+    auto tiff_copy = *tiff_catalog;
+    tiff_catalog = SourceMetadataCatalog{};
+    auto tiff_moved = std::move(tiff_copy);
+    require(tiff_handle && tiff_moved.resolve(*tiff_handle) && tiff_moved.xmpBytes({0})->data() == tiff_bytes,
+            "TIFF XMP reference and borrowed bytes survive catalog copy/move and original destruction");
+    require(!tiff_moved.xmpBytes({1}) && !tiff_moved.xmpBytes({std::numeric_limits<size_t>::max()}),
+            "XMP byte lookup rejects invalid ordinals");
+    auto invalid_tiff = description();
+    require(!catalogSourceMetadata(invalid_tiff, {}, {}, tiff_xmp), "TIFF XMP cannot reference a different tag ID");
+    tiff_xmp.blocks[0].tiff_tag->directory = std::numeric_limits<size_t>::max();
+    require(!catalogSourceMetadata(invalid_tiff, {}, {}, tiff_xmp), "TIFF XMP rejects invalid directory ordinals");
     auto original = description();
     const auto* payload = original.original.blocks[0].bytes.data();
     auto catalog = catalogSourceMetadata(std::move(original));

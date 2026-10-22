@@ -2016,6 +2016,43 @@ namespace lfs::core::image_codecs {
                 }
                 return true;
             }
+            void collectTiff(const SourceExif& exif) {
+                result.status = MetadataStatus::Absent;
+                result.scope = "tiff-libtiff-observed-tag700";
+                if (exif.tiff) {
+                    const auto& directories = exif.tiff->directories;
+                    for (size_t directory = 0; directory < directories.size(); ++directory) {
+                        const auto& tags = directories[directory].tags;
+                        for (size_t tag = 0; tag < tags.size(); ++tag) {
+                            if (tags[tag].id != TIFFTAG_XMLPACKET)
+                                continue;
+                            XmpBlock block;
+                            block.envelope = XmpEnvelope::TiffTag;
+                            block.tiff_tag = TiffXmpReference{directory, tag};
+                            const auto bytes = source_xmp_bytes(exif, block);
+                            if (!bytes) {
+                                if (result.status != MetadataStatus::Limited)
+                                    result.status = MetadataStatus::Unsupported;
+                                result.diagnostic = "TIFF XMP tag has no byte-preserving representation";
+                                continue;
+                            }
+                            if (!canRetain(bytes->size()))
+                                continue;
+                            retained += bytes->size();
+                            result.blocks.push_back(std::move(block));
+                            if (result.status == MetadataStatus::Absent)
+                                result.status = MetadataStatus::Collected;
+                        }
+                    }
+                }
+                if (exif.status == MetadataStatus::Unsupported) {
+                    if (result.status != MetadataStatus::Limited)
+                        result.status = MetadataStatus::Unsupported;
+                    if (!result.diagnostic.empty() && !exif.diagnostic.empty())
+                        result.diagnostic += "; ";
+                    result.diagnostic += exif.diagnostic;
+                }
+            }
             void append(std::vector<uint8_t> bytes, XmpEnvelope envelope, std::optional<bool> crc = std::nullopt) {
                 retained += bytes.size();
                 XmpBlock block;
@@ -2829,15 +2866,20 @@ namespace lfs::core::image_codecs {
                                     ((signature[0] == 'I' && signature[1] == 'I' && (signature[2] == 42 || signature[2] == 43) && signature[3] == 0) ||
                                      (signature[0] == 'M' && signature[1] == 'M' && signature[2] == 0 && (signature[3] == 42 || signature[3] == 43)));
         if (tiff_signature) {
-            if (xmp)
-                xmp->result.status = MetadataStatus::Unsupported;
+            if (xmp) {
+                xmp->result.status = MetadataStatus::Absent;
+                xmp->result.scope = "tiff-libtiff-observed-tag700";
+            }
             if (!limits.tiff_reads || limits.tiff_reads > 65536 || !limits.tiff_read_bytes || limits.tiff_read_bytes > 1024 * 1024 * 1024 ||
                 !limits.tiff_directories || limits.tiff_directories > 256 || !limits.tiff_entries || limits.tiff_entries > 65536 || !limits.tiff_value_bytes || limits.tiff_value_bytes > 64 * 1024 * 1024) {
                 result.status = MetadataStatus::Limited;
                 result.diagnostic = "Invalid TIFF collection limits";
                 return result;
             }
-            return read_tiff_source_metadata(input, limits);
+            auto observed = read_tiff_source_metadata(input, limits);
+            if (xmp)
+                xmp->collectTiff(observed);
+            return observed;
         }
         if (!limits.blocks || limits.blocks > 4096) {
             result.status = MetadataStatus::Limited;
@@ -2970,6 +3012,22 @@ namespace lfs::core::image_codecs {
         return result;
     }
 
+    std::optional<std::span<const uint8_t>> source_xmp_bytes(const SourceExif& exif, const XmpBlock& block) noexcept {
+        if (block.envelope != XmpEnvelope::TiffTag)
+            return block.tiff_tag ? std::nullopt : std::optional(std::span<const uint8_t>(block.bytes));
+        if (!block.tiff_tag || !exif.tiff || !block.bytes.empty() || block.inflated || block.compressed || block.payload_offset || block.crc_valid)
+            return std::nullopt;
+        const auto reference = *block.tiff_tag;
+        const auto& directories = exif.tiff->directories;
+        if (reference.directory >= directories.size() || reference.tag >= directories[reference.directory].tags.size())
+            return std::nullopt;
+        const auto& tag = directories[reference.directory].tags[reference.tag];
+        if (tag.id != TIFFTAG_XMLPACKET || tag.type != TIFF_BYTE || tag.count != tag.bytes.size() ||
+            !tag.unsigned_values.empty() || !tag.signed_values.empty() || !tag.floating_values.empty())
+            return std::nullopt;
+        return std::span<const uint8_t>(tag.bytes);
+    }
+
     SourceExif read_source_exif(const std::filesystem::path& path, const MetadataLimits& limits) {
         return collect_source_exif(path, limits, nullptr);
     }
@@ -2989,7 +3047,7 @@ namespace lfs::core::image_codecs {
         const auto& scan_diagnostic = collector.scan_status ? collector.scan_diagnostic : result.exif.diagnostic;
         if (result.xmp.status == MetadataStatus::NotExamined) {
             result.xmp.status = (scan_status == MetadataStatus::IoError || scan_status == MetadataStatus::Limited) ? scan_status : MetadataStatus::Unsupported;
-            result.xmp.diagnostic = (scan_status == MetadataStatus::IoError || scan_status == MetadataStatus::Limited) ? scan_diagnostic : "XMP collection supports JPEG APP1 and PNG iTXt";
+            result.xmp.diagnostic = (scan_status == MetadataStatus::IoError || scan_status == MetadataStatus::Limited) ? scan_diagnostic : "XMP collection supports JPEG APP1, PNG iTXt and observed TIFF tag 700";
         } else if (result.xmp.status != MetadataStatus::Unsupported &&
                    (scan_status == MetadataStatus::Limited || scan_status == MetadataStatus::Malformed || scan_status == MetadataStatus::IoError)) {
             // Conservatively retain the enclosing scan's incomplete/invalid status.
