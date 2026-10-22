@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vksplat_viewport_renderer.hpp"
+#include <algorithm>
 #include <cstring>
 #include <glm/gtc/type_ptr.hpp>
 
@@ -102,7 +103,25 @@ namespace lfs::vis {
             ++stochastic_sample_serial_;
     }
 
+    bool VksplatViewportRenderer::canReuseStochasticProjection(
+        const StochasticFrame& frame, const OutputSlot slot, const StochasticProjectionCache& cache) {
+        return frame.enabled && frame.history_valid && frame.samples > 0u &&
+               cache.first_submission != 0u && cache.slot == slot &&
+               cache.frame.model == frame.model && cache.frame.generation == frame.generation &&
+               std::memcmp(&cache.frame.camera, &frame.camera, sizeof(frame.camera)) == 0;
+    }
+
+    void VksplatViewportRenderer::updateStochasticProjectionStats(
+        StochasticProjectionCache& cache, const VulkanGSRenderer::TileInstanceStats& stats) {
+        // A deferred result can describe an older view. Only submissions from
+        // this unchanged projection may bound its wave commands.
+        if (!stats.count_overflow && cache.first_submission != 0u &&
+            stats.submission_value >= cache.first_submission && stats.submission_value <= cache.last_submission)
+            cache.wave_count = std::max(std::size_t{1}, stats.waves_needed);
+    }
+
     void VksplatViewportRenderer::releaseStochasticBuffers() {
+        stochastic_projection_cache_ = {};
         for (auto& history : stochastic_histories_) {
             renderer_.destroyBuffer(history.buffers.ids_depths.deviceBuffer);
             renderer_.destroyBuffer(history.buffers.occlusion.deviceBuffer);

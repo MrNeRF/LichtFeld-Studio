@@ -287,6 +287,12 @@ namespace lfs::vis {
             return plan;
         }
 
+        [[nodiscard]] bool hasPendingRequest(const FrameReason reason) const {
+            std::lock_guard lock(mutex_);
+            return std::any_of(one_shots_.begin(), one_shots_.end(),
+                               [reason](const FrameRequest& request) { return request.reason == reason; });
+        }
+
         // Earliest time anything needs the loop awake; empty means block forever.
         [[nodiscard]] std::optional<FrameClock::time_point> nextDeadline(const FrameClock::time_point now) const {
             std::lock_guard lock(mutex_);

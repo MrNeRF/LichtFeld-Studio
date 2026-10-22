@@ -2672,7 +2672,12 @@ namespace lfs::vis {
         // above the display rate when presenting does not block. Wakes without input start at most
         // one display interval after the last presented frame started; requests stay queued for this
         // frame, and work posted meanwhile is picked up by the next wait.
-        if (last_presented_frame_start_) {
+        // Stochastic refinement is finite work, not a periodic animation. Keep
+        // polling input between samples, but let available GPU slots advance it.
+        const bool refinement_pending = rendering_manager_ &&
+                                        rendering_manager_->frameDemandLedger().hasPendingRequest(
+                                            FrameReason::StochasticAccumulation);
+        if (last_presented_frame_start_ && !refinement_pending) {
             const auto ready_at = *last_presented_frame_start_ +
                                   std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                       std::chrono::duration<double>(displayFrameInterval()));

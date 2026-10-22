@@ -13,6 +13,8 @@ Each new sample is displayed immediately. **Refinement frames** limits the new
 samples rendered after the camera or scene changes (32 by default). New input
 starts a new refinement window. The viewer stops requesting extra frames at the
 limit; it does not wait for a batch of samples before responding to navigation.
+These finite refinement requests can advance as GPU frame slots become available,
+with input processed between samples. Periodic GUI animations keep display pacing.
 SteadySplats uses an exponential temporal filter, so this limit is a work budget,
 not a guarantee of convergence to the alpha-blended image.
 
@@ -56,6 +58,12 @@ It is separate from the rotating presentation images. Scene changes, mode change
 model replacement, live training updates, and resize invalidate history. Basic
 stochastic accumulation also resets on camera changes; SteadySplats retains history
 for reprojection. Unsupported temporal projections use the current spatial result.
+
+With private rendering scratch, an unchanged camera and scene reuse the last
+submitted projection and tile-count prefix. Deferred GPU wave counts are reused
+only when their submission belongs to that same projection. Other views, content
+changes, input uploads, scratch release, and failed renders invalidate this cache.
+Visibility samples, resampling, and the refinement limit remain unchanged.
 
 Color history stores floating-point premultiplied color and transmittance before
 final composition and display conversion. It does not average 8-bit screenshots.

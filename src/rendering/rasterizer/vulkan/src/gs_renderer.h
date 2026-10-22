@@ -225,6 +225,7 @@ public:
         size_t waves_needed = 0;
         size_t waves_armed = 0;
         bool count_overflow = false;
+        std::uint64_t submission_value = 0;
     };
     struct TileInstanceGate {
         size_t raw_count = 0;

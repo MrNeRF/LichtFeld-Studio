@@ -202,7 +202,10 @@ namespace lfs::vis {
         // While the camera moves during training, the viewer and training take
         // turns on the shared scratch (see kTrainingFramesPerNavigationRender).
         void setCameraNavigating(bool navigating);
-        void invalidateStochasticHistory() { ++stochastic_history_generation_; }
+        void invalidateStochasticHistory() {
+            ++stochastic_history_generation_;
+            stochastic_projection_cache_ = {};
+        }
 
         // Invoked with the completion value immediately after each live-model
         // submit, BEFORE the shared arena frame is released — the trainer's
@@ -416,6 +419,19 @@ namespace lfs::vis {
             bool history_valid = false;
             bool enabled = false;
         };
+        // Projection scratch is shared by all views. Only the last submitted
+        // projection can be reused, even when another view still has color history.
+        struct StochasticProjectionCache {
+            StochasticFrame frame;
+            OutputSlot slot = OutputSlot::Main;
+            std::uint64_t first_submission = 0;
+            std::uint64_t last_submission = 0;
+            std::size_t wave_count = 0;
+        };
+        [[nodiscard]] static bool canReuseStochasticProjection(
+            const StochasticFrame& frame, OutputSlot slot, const StochasticProjectionCache& cache);
+        static void updateStochasticProjectionStats(
+            StochasticProjectionCache& cache, const VulkanGSRenderer::TileInstanceStats& stats);
         [[nodiscard]] StochasticFrame prepareStochasticFrame(
             VulkanGSRendererUniforms& uniforms, const lfs::core::SplatData& model,
             OutputSlot slot, bool content_changed) const;
@@ -711,6 +727,7 @@ namespace lfs::vis {
         std::array<StochasticHistory, kOutputSlotCount> stochastic_histories_;
         std::uint64_t stochastic_history_generation_ = 1;
         std::uint32_t stochastic_sample_serial_ = 0;
+        StochasticProjectionCache stochastic_projection_cache_;
         OutputSlotRing ring_{};
         OutputImagePool output_pool_{};
         struct PublishedOutput {

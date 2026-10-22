@@ -18,6 +18,23 @@ namespace lfs::vis {
                            const VksplatViewportRenderer::OutputSlot slot) {
             renderer.commitStochasticFrame(frame, slot);
         }
+        static auto projection(const VksplatViewportRenderer::StochasticFrame& frame,
+                               const VksplatViewportRenderer::OutputSlot slot) {
+            return VksplatViewportRenderer::StochasticProjectionCache{
+                .frame = frame,
+                .slot = slot,
+                .first_submission = 10,
+                .last_submission = 12};
+        }
+        static bool reuseProjection(const VksplatViewportRenderer::StochasticFrame& frame,
+                                    const VksplatViewportRenderer::OutputSlot slot,
+                                    const VksplatViewportRenderer::StochasticProjectionCache& cache) {
+            return VksplatViewportRenderer::canReuseStochasticProjection(frame, slot, cache);
+        }
+        static void projectionStats(VksplatViewportRenderer::StochasticProjectionCache& cache,
+                                    const VulkanGSRenderer::TileInstanceStats& stats) {
+            VksplatViewportRenderer::updateStochasticProjectionStats(cache, stats);
+        }
         static bool allocated(const VksplatViewportRenderer& renderer) {
             for (const auto& history : renderer.stochastic_histories_)
                 if (history.buffers.color[0].deviceBuffer.buffer != VK_NULL_HANDLE ||
@@ -133,5 +150,61 @@ namespace {
         lfs::vis::apply_proxy(restored, proxy);
         EXPECT_EQ(restored.transparency_mode, lfs::rendering::GaussianTransparencyMode::AlphaBlend);
         EXPECT_EQ(restored.stochastic_max_frames, 1024);
+    }
+
+    TEST(StochasticViewport, ProjectionReuseRequiresIdenticalInputsAndTheResidentView) {
+        Renderer renderer;
+        lfs::core::SplatData model, other;
+        auto u = camera(2);
+        auto frame = Access::prepare(renderer, u, model, Slot::Main);
+        auto cache = Access::projection(frame, Slot::Main);
+        EXPECT_FALSE(Access::reuseProjection(frame, Slot::Main, cache));
+        Access::commit(renderer, frame, Slot::Main);
+        frame = Access::prepare(renderer, u, model, Slot::Main);
+        EXPECT_TRUE(Access::reuseProjection(frame, Slot::Main, cache));
+        EXPECT_FALSE(Access::reuseProjection(frame, Slot::SplitLeft, cache));
+        EXPECT_FALSE(Access::reuseProjection(frame, Slot::Preview, cache));
+        auto changed = frame;
+        changed.model = &other;
+        EXPECT_FALSE(Access::reuseProjection(changed, Slot::Main, cache));
+        changed = frame;
+        ++changed.generation;
+        EXPECT_FALSE(Access::reuseProjection(changed, Slot::Main, cache));
+        changed = frame;
+        changed.camera.fx += 1;
+        EXPECT_FALSE(Access::reuseProjection(changed, Slot::Main, cache));
+        changed = frame;
+        changed.history_valid = false;
+        EXPECT_FALSE(Access::reuseProjection(changed, Slot::Main, cache));
+        u.world_view_transform[12] = 1;
+        changed = Access::prepare(renderer, u, model, Slot::Main);
+        EXPECT_TRUE(changed.history_valid); // Temporal reuse still handles motion.
+        EXPECT_FALSE(Access::reuseProjection(changed, Slot::Main, cache));
+        cache.first_submission = 0;
+        EXPECT_FALSE(Access::reuseProjection(frame, Slot::Main, cache));
+    }
+
+    TEST(StochasticViewport, WaveBoundsOnlyUseResultsFromTheUnchangedProjection) {
+        Renderer renderer;
+        lfs::core::SplatData model;
+        auto u = camera(2);
+        auto cache = Access::projection(Access::prepare(renderer, u, model, Slot::Main), Slot::Main);
+        VulkanGSRenderer::TileInstanceStats stats{.waves_needed = 3, .submission_value = 9};
+        Access::projectionStats(cache, stats);
+        EXPECT_EQ(cache.wave_count, 0u);
+        stats.submission_value = 13;
+        Access::projectionStats(cache, stats);
+        EXPECT_EQ(cache.wave_count, 0u);
+        stats.submission_value = 11;
+        Access::projectionStats(cache, stats);
+        EXPECT_EQ(cache.wave_count, 3u);
+        stats.count_overflow = true;
+        stats.waves_needed = 1;
+        Access::projectionStats(cache, stats);
+        EXPECT_EQ(cache.wave_count, 3u);
+        stats.count_overflow = false;
+        stats.waves_needed = 0;
+        Access::projectionStats(cache, stats);
+        EXPECT_EQ(cache.wave_count, 1u); // Empty scenes still initialize background.
     }
 } // namespace

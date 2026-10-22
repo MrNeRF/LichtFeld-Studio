@@ -430,6 +430,7 @@ VulkanGSRenderer::pollDeferredTileInstanceStats() {
     stats.raw_count = stats.count_overflow ? 0u : instance_count_readback_mapped_[0];
     stats.waves_needed = instance_count_readback_mapped_[1];
     stats.waves_armed = instance_count_readback_mapped_[2];
+    stats.submission_value = instance_count_readback_value_;
     instance_count_readback_pending_ = false;
     instance_count_readback_signal_ = VK_NULL_HANDLE;
     instance_count_readback_value_ = 0;
