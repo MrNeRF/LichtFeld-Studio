@@ -42,7 +42,10 @@ void split(const RefineOutputs& parents,const RefineOutputs& children,In indices
 void fill_slots(In indices,const RefineInputs& source,const RefineOutputs& destination,Out free_mask) {
     const auto count=indices.numel(); if(!count) return;
     require(destination.means.ndim()==2 && destination.means.shape()[1]==3,"HIP slot destination needs N x 3 means");
-    const auto n=destination.means.shape()[0]; size(free_mask,n);
+    const auto n=destination.means.shape()[0];
+    // IGS keeps the free mask at reserved capacity while model views expose
+    // only live rows. The kernel indexes the mask within the live row count.
+    require(free_mask.is_valid() && free_mask.numel()>=n,"HIP slot free mask is shorter than the model");
     hip::ApplicationCall owner; auto call=call_for(owner,LFS_HIP_REFINE_FILL,count); call.rows=n;
     call.bindings[0]=owner.bind(indices,DataType::Int64);
     bind_rows(owner,call,1,source.means,source.rotations,source.scales,source.sh0,source.opacity,count);

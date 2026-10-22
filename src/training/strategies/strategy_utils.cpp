@@ -9,6 +9,10 @@
 #include "core/tensor_execution.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_storage.hpp"
+#ifdef LFS_TENSOR_HIP
+#include "core/crash_handler.hpp"
+#include "core/tensor_backend.hpp"
+#endif
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -206,6 +210,18 @@ namespace lfs::training {
             lfs::core::TensorShape({n}),
             device);
         tensor.set_name("splat.frozen_mask");
+#ifdef LFS_TENSOR_HIP
+        if (core::gpu_backend_of(tensor) == core::GpuBackend::HIP) {
+            static const bool registered = [] {
+                core::register_gpu_pre_shutdown_hook([]() noexcept {
+                    if (core::gpu_backend_of(g_frozen_mask_cache.mask) == core::GpuBackend::HIP)
+                        g_frozen_mask_cache = {};
+                });
+                return true;
+            }();
+            (void)registered;
+        }
+#endif
         g_frozen_mask_cache.key = key;
         g_frozen_mask_cache.n = n;
         g_frozen_mask_cache.ranges_fp = ranges_fp;

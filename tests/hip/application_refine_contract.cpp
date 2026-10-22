@@ -96,6 +96,16 @@ int main(int argc,char** argv) try {
         ops.fill_slots(target,source,parents,free);
         near(means.cpu().to_vector()[6],-.5f,"Slot fill means incorrect");
         require(free.cpu().to_vector_bool()==std::vector<bool>({true,true,false}),"Slot fill changed wrong free-mask rows");
+        // IGS reserves its free mask to max_cap while model tensors expose
+        // only live rows. The unused mask suffix must remain untouched.
+        auto capacity_mask=Tensor::ones({7},Device::GPU,DataType::Bool);
+        ops.fill_slots(target,source,parents,capacity_mask);
+        require(capacity_mask.cpu().to_vector_bool()==std::vector<bool>({true,true,false,true,true,true,true}),
+                "Slot fill modified the reserved free-mask suffix");
+        auto short_mask=Tensor::ones({2},Device::GPU,DataType::Bool);
+        bool rejected=false;
+        try {ops.fill_slots(target,source,parents,short_mask);}catch(const std::invalid_argument&){rejected=true;}
+        require(rejected,"Slot fill accepted a free mask shorter than the model");
     }
     require(configured_gpu_backend()==configured,"Refinement changed default backend");
     require(bool(shutdown_gpu_backend(GpuBackend::HIP)),"Refinement leaked resources");

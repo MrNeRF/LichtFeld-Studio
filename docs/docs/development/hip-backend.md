@@ -68,6 +68,38 @@ The tested device profile is `gfx1150`; other targets use conservative kernels.
 
 ## Completion status and remaining work
 
+### Execution sequence
+
+Complete the following gates locally before replacing the portable package.
+Keep experiment reports and measurements outside source commits.
+
+1. **Strategy correctness:** reproduce the known MRNF failure configuration past
+   its failure boundary, preserving the configured optimization schedule when
+   stopping the test early. Exercise IGS pruning, released-slot reuse, frozen
+   parameters, opacity reset, SH transitions, checkpoint and resume. Retain the
+   exhaustive half and typed broadcast contracts informed by the AMD port.
+2. **AMD-port candidates:** compare group32 reductions on the complete generic
+   backward, including gradients and timing, before adopting a microbenchmark
+   gain. Preserve the validated OCKL profile when it wins. Audit subgroup masks,
+   ballots and shuffles as a separate wave64 portability task; compiling a target
+   is not hardware validation and must not silently enable unsupported kernels.
+   Preserve the half conversion and complete stream-dependency regression tests.
+3. **Viewer independence:** reduce redundant HIP-to-other-device publication,
+   with explicit mutation invalidation and immutable in-flight snapshots. Verify
+   unchanged views, native training writes, topology changes, same-device shared
+   memory and cross-device staging, both idle and during training.
+4. **Startup throughput:** separate cold/warm HIPRTC, ingest, prepared CPU cache,
+   transfers and training work. Optimize measured bottlenecks while preserving
+   cache budgets, memory bounds and correct stream ordering.
+5. **Telemetry:** expose device-matched utilization and meaningful process/device
+   memory budgets, including validity and shared-memory semantics on integrated
+   GPUs. Keep these independent of CUDA device availability.
+6. **Distribution:** validate offload compression, remove actual duplication,
+   repair repeatable DLL/license packaging and preserve the supported target list.
+7. **Final release gate:** run the build matrix and the established comparable
+   2000-step protocol once the changes stabilize; verify quality, memory, speed,
+   UI restart/device selection and the new complete portable package.
+
 The backend is integrated, but it is **not yet validated as a complete training
 replacement**. A successful build, populated operation tables, isolated kernel
 contracts, or a short MCMC run do not establish complete strategy coverage.
@@ -75,8 +107,8 @@ contracts, or a short MCMC run do not establish complete strategy coverage.
 | Area | Current boundary | Required completion evidence |
 |---|---|---|
 | MCMC | Application training and mutation paths have dedicated tests; portable smoke tests cover only a short run. | Retain existing checks and exercise the final packaged modules through mutation, save and resume. |
-| MRNF | The real application trainer has a dedicated short mutation/refinement contract with optional bilateral grid and PPISP. The original reported configuration still needs a matching reproduction. | Preserve the composed Tensor regression coverage and pass the original failing phase plus subsequent refinement transitions. Native callback contracts alone are insufficient. |
-| IGS / ImprovedGSPlus | Registered through the normal strategy factory; consumes HIP MCMC, MRNF and refinement operations. A short application-level mutation contract exercises the strategy; this is not complete lifecycle/quality validation. | Exercise initialization, edge/error scoring, split, prune, slot reuse, frozen masks, opacity reset, SH changes, save and resume. Do not infer full strategy correctness from callback contracts or MCMC tests. |
+| MRNF | The known reported configuration passes beyond its failure boundary with the original schedule and an early stop. Application contracts also cover SH transitions, repeated refinement/Morton, checkpoint and resume. | Retain the composed Tensor regressions and complete the final comparable quality/performance run. Native callback contracts alone are insufficient. |
+| IGS / ImprovedGSPlus | Application lifecycle coverage includes frozen parameters, explicit pruning and slot reuse, SH transitions, opacity resets, appearance, checkpoint/resume and process shutdown. | Retain lifecycle coverage and complete the final comparable quality/performance run. Short accelerated contracts do not establish long-run convergence or validation on other GPUs. |
 | Tensor dtype/layout coverage | Binary broadcast supports matching Float32/Float16 operands, native integer arithmetic/comparisons, and Bool predicates. Bool arithmetic is rejected. | Audit actual strategy call sites and shared Tensor contracts, including unequal shapes, strided/expanded views, empty inputs and integer/Bool predicates. Preserve exact integer/Bool semantics; do not cast indices through Float32. |
 | GPU utilization | The HIP UI path explicitly returns an unavailable sample. | Add device-matched sampling independently of CUDA availability; distinguish a real 0% sample from unavailable data. |
 | GPU memory budget | HIP allocator statistics and `hipMemGetInfo` exist, but the UI does not expose a complete native process-budget path. | Connect meaningful process/device/budget measurements and their validity to the UI; distinguish allocated, reserved and driver-budget values. |
@@ -84,13 +116,14 @@ contracts, or a short MCMC run do not establish complete strategy coverage.
 | Viewer/Tensor independence | Slow 3D viewing reported with Vulkan rendering on a GeForce and HIP Tensor processing on the 890M, even with a relatively low-detail scene. Whether training was active in this specific observation is not established. | Verify the effective devices and profile idle viewing separately from active training, including transfers, synchronization and unchanged-frame reuse. |
 | Hardware/platform validation | Runtime evidence is limited to the available GPU; Windows cross-target compilation is not execution on those targets. | Run the manual build matrix and preserve a conservative path for untested hardware. Wave64 remains outside the implemented scope. |
 
-The reported application broadcast rejection still requires an integrated
-reproduction; adding typed storage-level kernels alone does not establish that
-the composed MRNF path is complete. Other dtype restrictions in
+The known configuration behind the reported broadcast rejection is covered by
+an integrated early-stop test; typed storage-level kernels alone would not
+establish that the composed MRNF path is complete. Other dtype restrictions in
 `HipBackendOps` must be compared with the shared API and real callers before
 being classified as missing functionality. Do not turn every shape/type guard
 into an unconditional promise of support or remove validation to silence a
-failure. IGS uses Bool masks, but an identical IGS failure has not been reproduced.
+failure. IGS reserves its free mask to model capacity: HIP slot fill accepts
+that reserved suffix, validates that live rows fit, and must not modify the suffix.
 
 ### Correctness completion order
 
@@ -257,6 +290,17 @@ or `--strategy=igs+`. Its `--appearance` option enables both bilateral grid and
 PPISP. Combine these with `--exercise-mutations` for an explicitly accelerated
 correctness run, and pass the resulting project as `resume_project` to exercise
 checkpoint restoration. Accelerated runs are not performance or quality baselines.
+
+`--stop-after=N` stops after committed progress reaches N while retaining the
+configured total iteration schedule. The checkpoint is checked against the
+actual completed iteration. `--exercise-lifecycle` requires a fresh IGS run
+with `--exercise-mutations`: it freezes a prefix, prunes both frozen and
+trainable rows, verifies frozen exclusion and slot reuse, accelerates opacity
+reset and checks all frozen parameters. Morton is disabled only in this mode
+to keep row identity stable; the mutation contract tests it separately.
+Use `--require-frozen` on resume to require the frozen prefix and check its
+parameters again. Tests use the normal process-exit hooks before asserting HIP
+shutdown, so Q16 run scratch and cached HIP frozen masks release in order.
 
 When testing a development build containing a staged `hip/` directory, verify
 the module actually selected beside the executable. Rebuilding the native module
