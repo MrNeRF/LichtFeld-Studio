@@ -12,6 +12,7 @@
 #include "io/scene_chapter_adapter.hpp"
 #include "operation/undo_entry.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/viewport_request_builder.hpp"
 #include "scene/scene_manager.hpp"
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
@@ -29,6 +30,9 @@ namespace {
         for (int z = 0; z < 30; ++z)
             for (int x = 0; x < 30; ++x)
                 g->solid[g->index({x, 0, z})] = 1;
+        g->tree = g->octreeOccupancy();
+        g->tree_size = 32;
+        g->solid.clear();
         return g;
     }
     std::shared_ptr<MeshData> mesh(const CollisionVolume& v) {
@@ -42,7 +46,9 @@ namespace {
 } // namespace
 TEST(CollisionScene, ArchiveRestoresGeneratedMeshAndVolumeWithDeferredHydration) {
     Scene scene;
-    auto g = volume();
+    auto boxes = std::make_shared<CollisionVolume>(*volume());
+    boxes->show_voxels = true;
+    std::shared_ptr<const CollisionVolume> g = boxes;
     auto geometry = mesh(*g);
     const auto group = scene.addGroup("collision group");
     auto id = scene.addMesh("Collision", geometry, group);
@@ -117,6 +123,18 @@ TEST(CollisionScene, ArchiveRestoresGeneratedMeshAndVolumeWithDeferredHydration)
     EXPECT_TRUE(loaded->payload_diverged);
     EXPECT_EQ(restored.getWorldTransform(loaded->id), world);
     EXPECT_GT(report.hydrated_payload_units, 0u);
+    EXPECT_TRUE(restored.getVisibleMeshes().empty());
+    loaded->visible = true;
+    lfs::vis::SceneRenderState state;
+    state.meshes = restored.getVisibleMeshes();
+    ASSERT_EQ(state.meshes.size(), 1u);
+    auto draws = lfs::vis::buildViewportMeshDrawItems(state, {}, {0, 0, 1});
+    ASSERT_EQ(draws.size(), 1u);
+    EXPECT_TRUE(draws[0].collision_voxel_boxes);
+    EXPECT_EQ(draws[0].collision_volume, loaded->collision.get());
+    EXPECT_EQ(draws[0].collision_volume->gpuOccupancy(), g->gpuOccupancy());
+    EXPECT_FALSE(draws[0].shadow_enabled);
+    EXPECT_EQ(draws[0].model, world);
 }
 TEST(CollisionScene, DuplicateAndDeleteUndoPreserveCollisionPayload) {
     lfs::vis::SceneManager manager;

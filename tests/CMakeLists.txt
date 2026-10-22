@@ -35,7 +35,7 @@ endif()
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
-add_executable(lichtfeld_collision_tests test_collision.cpp ../src/core/collision.cpp)
+add_executable(lichtfeld_collision_tests test_collision.cpp ../src/core/collision.cpp ../src/core/collision_sparse.cpp)
 target_compile_features(lichtfeld_collision_tests PRIVATE cxx_std_23)
 target_compile_definitions(lichtfeld_collision_tests PRIVATE LFS_STATIC_BUILD)
 target_include_directories(lichtfeld_collision_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/core/include)
@@ -369,6 +369,7 @@ endif()
 # chapter coverage in the non-Windows composition.
 set(LICHT_FORMAT_WINDOWS_FILES
     ${CMAKE_SOURCE_DIR}/src/core/collision.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/collision_sparse.cpp
     test_property_defaults.cpp
     test_atomic_output.cpp
     test_project_save_as_paths.cpp

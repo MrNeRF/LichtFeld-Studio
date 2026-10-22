@@ -26,7 +26,24 @@ namespace {
                     if (!shell || x == lo.x || y == lo.y || z == lo.z || x == hi.x || y == hi.y || z == hi.z)
                         g.solid[g.index({x, y, z})] = 1;
     }
-    size_t count(const CollisionVolume& g) { return std::count(g.solid.begin(), g.solid.end(), uint8_t(1)); }
+    size_t count(const CollisionVolume& g) { return g.occupiedCount(); }
+    CollisionVolume sparse(CollisionVolume g) {
+        g.tree = g.octreeOccupancy();
+        g.tree_size = 1;
+        while (g.tree_size < std::max({g.dimensions.x, g.dimensions.y, g.dimensions.z}))
+            g.tree_size *= 2;
+        g.solid.clear();
+        g.validate();
+        return g;
+    }
+    void sameOccupancy(const CollisionVolume& a, const CollisionVolume& b) {
+        ASSERT_EQ(a.dimensions, b.dimensions);
+        ASSERT_EQ(a.occupiedCount(), b.occupiedCount());
+        for (int z = 0; z < a.dimensions.z; ++z)
+            for (int y = 0; y < a.dimensions.y; ++y)
+                for (int x = 0; x < a.dimensions.x; ++x)
+                    ASSERT_EQ(a.occupied({x, y, z}), b.occupied({x, y, z})) << x << "," << y << "," << z;
+    }
     void watertight(const CollisionMesh& mesh) {
         ASSERT_FALSE(mesh.indices.empty());
         std::map<std::pair<int, int>, std::pair<int, int>> edges;
@@ -74,6 +91,20 @@ TEST(CollisionSettings, PresetsDomainsAndBounds) {
     auto g = grid();
     g.dimensions = {16'000'000, 2, 1};
     EXPECT_THROW(g.validate(), std::runtime_error);
+}
+TEST(CollisionVolume, PreviewPackingPreservesEveryCellAndClearsPadding) {
+    auto g = grid({7, 5, 3});
+    for (size_t i = 0; i < g.solid.size(); ++i)
+        g.solid[i] = i % 3 == 0;
+    g.solid[31] = g.solid[32] = g.solid.back() = 1;
+    const auto packed = g.packedOccupancy();
+    ASSERT_EQ(packed.size(), 4u);
+    for (size_t i = 0; i < packed.size() * 32; ++i)
+        EXPECT_EQ(bool(packed[i / 32] & (uint32_t(1) << (i % 32))),
+                  i < g.solid.size() && bool(g.solid[i]))
+            << i;
+    g.solid.pop_back();
+    EXPECT_THROW((void)g.packedOccupancy(), std::invalid_argument);
 }
 TEST(CollisionVoxelization, RotationScaleAndCombinedOpacity) {
     CollisionSettings s;
@@ -161,6 +192,163 @@ TEST(CollisionPipeline, CancellationIsExplicit) {
     source.request_stop();
     EXPECT_THROW((void)processCollisionVolume(g, source.get_token()), std::runtime_error);
     EXPECT_THROW((void)g.mesh(CollisionShape::Faces, source.get_token()), std::runtime_error);
+}
+TEST(CollisionSparse, DistantGaussianComponentsDoNotAllocateEmptyWorldBounds) {
+    CollisionSettings s;
+    s.applyPreset(CollisionPreset::Object);
+    s.voxel_size = 0.05f;
+    const std::array source{CollisionGaussian{{0, 0, 0}, glm::mat3(0.1f), 1},
+                            CollisionGaussian{{40'000, 40'000, 40'000}, glm::mat3(0.1f), 1}};
+    auto g = generateCollision(source, s);
+    EXPECT_TRUE(g.solid.empty());
+    EXPECT_GT(uint64_t(g.dimensions.x) * g.dimensions.y * g.dimensions.z, 1'000'000'000'000ULL);
+    EXPECT_LT(g.tree.size(), 5'000u);
+    EXPECT_TRUE(g.occupied(g.cell(source.front().center)));
+    EXPECT_TRUE(g.occupied(g.cell(source.back().center)));
+    EXPECT_FALSE(g.occupied(g.cell({20'000, 20'000, 20'000})));
+    EXPECT_TRUE(g.capsuleIntersects({39'999.9f, 39'999.9f, 40'000}, {0, 1, 0}, 0.2f, 0.05f));
+    watertight(g.mesh(CollisionShape::Faces));
+    watertight(g.mesh(CollisionShape::Smooth));
+    const auto restored = nlohmann::json(g).get<CollisionVolume>();
+    EXPECT_EQ(restored, g);
+    EXPECT_LT(nlohmann::json(g).dump().size(), 10'000u);
+}
+TEST(CollisionSparse, AccumulatedOpacityMatchesDirectCellEvaluation) {
+    CollisionSettings s;
+    s.applyPreset(CollisionPreset::Object);
+    s.voxel_size = 0.1f;
+    s.opacity = 0.3f;
+    std::mt19937 rng(19);
+    std::uniform_real_distribution<float> position(-1, 1), scale(0.02f, 0.5f), alpha(0.005f, 0.8f);
+    std::vector<CollisionGaussian> source;
+    for (int i = 0; i < 50; ++i) {
+        auto axes = glm::mat3(glm::rotate(glm::mat4(1), position(rng) * 3, glm::normalize(glm::vec3(1, 2, 3))));
+        for (int a = 0; a < 3; ++a)
+            axes[a] *= scale(rng);
+        source.push_back({{position(rng), position(rng), position(rng)}, axes, alpha(rng)});
+    }
+    auto g = generateCollision(source, s);
+    for (int z = 0; z < g.dimensions.z; ++z)
+        for (int y = 0; y < g.dimensions.y; ++y)
+            for (int x = 0; x < g.dimensions.x; ++x) {
+                glm::ivec3 p(x, y, z);
+                float a = 0;
+                for (const auto& gaussian : source) {
+                    auto q = glm::inverse(gaussian.axes) * (g.origin + (glm::vec3(p) + 0.5f) * s.voxel_size - gaussian.center);
+                    float d = glm::dot(q, q);
+                    if (d <= 9)
+                        a += (1 - a) * gaussian.opacity * std::exp(-0.5f * d);
+                }
+                ASSERT_EQ(g.occupied(p), a > 0 && a >= s.opacity) << x << "," << y << "," << z;
+            }
+}
+TEST(CollisionSparse, WeakIsolatedAndDegenerateFarSupportsDoNotExpandBounds) {
+    CollisionSettings s;
+    s.applyPreset(CollisionPreset::Object);
+    const std::array source{
+        CollisionGaussian{{0, 0, 0}, glm::mat3(0.1f), 1},
+        CollisionGaussian{{1e9f, 1e9f, 1e9f}, glm::mat3(1), 0.01f},
+        CollisionGaussian{{-1e9f, -1e9f, -1e9f}, glm::mat3(0), 1}};
+    const auto full = generateCollision(source, s);
+    const auto foreground = generateCollision(std::span(source.data(), 1), s);
+    sameOccupancy(full, foreground);
+    EXPECT_EQ(full.origin, foreground.origin);
+    // The proof must not discard sub-threshold supports which combine.
+    const std::array combined{
+        CollisionGaussian{{0, 0, 0}, glm::mat3(0.1f), 0.06f},
+        CollisionGaussian{{0, 0, 0}, glm::mat3(0.1f), 0.06f}};
+    EXPECT_GT(generateCollision(combined, s).occupiedCount(), 0u);
+}
+TEST(CollisionSparse, PostprocessingMatchesDenseFloorExteriorAndCapsuleSemantics) {
+    auto floor = grid({40, 20, 40});
+    box(floor, {3, 8, 3}, {36, 8, 36});
+    floor.solid[floor.index({31, 8, 31})] = 0;
+    floor.settings.floor_fill = true;
+    floor.settings.floor_size = 0.2f;
+    sameOccupancy(processCollisionVolume(floor), processCollisionVolume(sparse(floor)));
+    auto room = grid({40, 40, 40});
+    box(room, {2, 2, 2}, {37, 37, 37}, true);
+    room.settings.seed = {2, 2, 2};
+    room.settings.external_fill = true;
+    room.settings.external_size = 0.2f;
+    sameOccupancy(processCollisionVolume(room), processCollisionVolume(sparse(room)));
+    room.settings.external_fill = false;
+    room.settings.carve_height = 1.6f;
+    room.settings.carve_radius = 0.2f;
+    sameOccupancy(processCollisionVolume(room), processCollisionVolume(sparse(room)));
+    room.settings.seed = {0.25f, 0.25f, 0.25f};
+    EXPECT_THROW((void)processCollisionVolume(sparse(room)), std::runtime_error);
+}
+TEST(CollisionSparse, ExternalLeakAndCancelledProcessingNeverProduceSuccess) {
+    auto room = grid({40, 40, 40});
+    box(room, {2, 2, 2}, {37, 37, 37}, true);
+    room.solid[room.index({2, 20, 20})] = 0;
+    room.settings.seed = {2, 2, 2};
+    room.settings.external_fill = true;
+    room.settings.external_size = 0;
+    auto input = sparse(room);
+    auto result = processCollisionVolume(input);
+    sameOccupancy(input, result);
+    EXPECT_FALSE(result.warning.empty());
+    std::stop_source stop;
+    EXPECT_THROW((void)processCollisionVolume(input, stop.get_token(), [&](auto) { stop.request_stop(); }), std::runtime_error);
+}
+TEST(CollisionSparse, BatchedFloorPreservesUnevenHeightsHolesAndPadding) {
+    auto input = grid({67, 43, 73});
+    for (int z = 1; z < input.dimensions.z - 1; ++z)
+        for (int x = 1; x < input.dimensions.x - 1; ++x) {
+            if ((x / 4 + z / 5) % 3 == 0)
+                continue;
+            const int y = (x * 7 + z * 11) % input.dimensions.y;
+            input.solid[input.index({x, y, z})] = 1;
+        }
+    input.settings.floor_fill = true;
+    input.settings.floor_size = 0.3f;
+    auto result = processCollisionVolume(sparse(input));
+    result.validate();
+    sameOccupancy(processCollisionVolume(input), result);
+    sameOccupancy(result, nlohmann::json(result).get<CollisionVolume>());
+    std::stop_source stop;
+    EXPECT_THROW((void)processCollisionVolume(sparse(input), stop.get_token(), [&](auto stage) {
+                     if (stage == "Filling sparse ground columns")
+                         stop.request_stop();
+                 }),
+                 std::runtime_error);
+}
+TEST(CollisionSparse, FacesAndSmoothRemainWatertightAcrossChunkAndBrickSeams) {
+    auto g = grid({70, 12, 70});
+    box(g, {1, 1, 1}, {68, 10, 68}, true);
+    g = sparse(std::move(g));
+    EXPECT_TRUE(g.occupied({31, 1, 31}));
+    EXPECT_FALSE(g.occupied({32, 2, 32}));
+    watertight(g.mesh(CollisionShape::Faces));
+    watertight(g.mesh(CollisionShape::Smooth));
+    uint64_t faces = 0;
+    g.forEachBoundaryFace([&](auto p, auto n) {
+        ASSERT_TRUE(g.occupied(p));
+        ASSERT_FALSE(g.occupied(p + n));
+        ++faces;
+    });
+    EXPECT_EQ(faces * 6, g.mesh(CollisionShape::Faces).indices.size());
+}
+TEST(CollisionSparse, PersistenceRejectsMalformedTopologyAndCoordinateOverflow) {
+    auto g = grid();
+    box(g, {3, 3, 3}, {8, 8, 8});
+    auto v = sparse(g);
+    auto j = nlohmann::json(v);
+    EXPECT_EQ(j.at("version"), 2);
+    EXPECT_EQ(j.get<CollisionVolume>(), v);
+    j["occupancy_tree"] = "3";
+    EXPECT_THROW((void)j.get<CollisionVolume>(), std::invalid_argument);
+    j = nlohmann::json(v);
+    j["tree_nodes"] = 128'000'002;
+    EXPECT_THROW((void)j.get<CollisionVolume>(), std::invalid_argument);
+    j = nlohmann::json(v);
+    j["tree_size"] = 3;
+    EXPECT_THROW((void)j.get<CollisionVolume>(), std::invalid_argument);
+    j = nlohmann::json(v);
+    j["dimensions"] = {1 << 22, 1, 1};
+    EXPECT_THROW((void)j.get<CollisionVolume>(), std::invalid_argument);
 }
 TEST(CollisionMesh, WatertightFacesAndSmoothWithCoplanarReduction) {
     auto g = grid({16, 16, 16});
