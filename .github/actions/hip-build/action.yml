@@ -1,0 +1,94 @@
+name: Opt-in HIP build
+description: Shared setup for manually dispatched HIP-only and CUDA plus HIP builds
+inputs:
+  cuda:
+    description: Also compile the existing CUDA backend
+    required: true
+  build_type:
+    description: Application build type
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.13'
+    - name: Linux build dependencies
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-14 g++-14 pkg-config zip unzip tar curl nasm autoconf autoconf-archive automake libtool python3-dev libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev libwayland-dev libxkbcommon-dev libegl-dev libdecor-0-dev libibus-1.0-dev libdbus-1-dev libsystemd-dev libgtk-3-dev libdrm-dev
+        echo 'CC=gcc-14' >> "$GITHUB_ENV"
+        echo 'CXX=g++-14' >> "$GITHUB_ENV"
+    - name: Install build tools
+      shell: bash
+      run: python -m pip install cmake==4.4.0 ninja
+    - name: Cache ROCm development SDK
+      id: sdk
+      uses: actions/cache@v6
+      with:
+        path: ${{ runner.temp }}/hip-sdk
+        key: hip-sdk-${{ runner.os }}-py313-10.1.0-v1
+    - name: Install ROCm SDK without Torch
+      if: steps.sdk.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        python -m venv "$RUNNER_TEMP/hip-sdk"
+        if [ "$RUNNER_OS" = Windows ]; then sdkbin="$RUNNER_TEMP/hip-sdk/Scripts"; else sdkbin="$RUNNER_TEMP/hip-sdk/bin"; fi
+        "$sdkbin/python" -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ 'rocm[devel]==10.1.0'
+        "$sdkbin/rocm-sdk" init
+    - name: Locate SDK
+      shell: bash
+      run: |
+        if [ "$RUNNER_OS" = Windows ]; then sdkpython="$RUNNER_TEMP/hip-sdk/Scripts/python"; else sdkpython="$RUNNER_TEMP/hip-sdk/bin/python"; fi
+        "$sdkpython" -c 'import os,sysconfig; from pathlib import Path; sdk=Path(sysconfig.get_paths()["purelib"])/"_rocm_sdk_devel"; assert (sdk/"include/hip/hip_runtime.h").is_file(); print("LFS_HIP_ROOT="+str(sdk))' >> "$GITHUB_ENV"
+    - name: Install CUDA on Windows
+      if: runner.os == 'Windows' && inputs.cuda == 'ON'
+      shell: pwsh
+      run: |
+        $installer = Join-Path $env:RUNNER_TEMP 'cuda.exe'
+        curl.exe --fail --location --retry 3 --output $installer https://developer.download.nvidia.com/compute/cuda/12.8.0/local_installers/cuda_12.8.0_571.96_windows.exe
+        if ($LASTEXITCODE -ne 0) { throw 'CUDA download failed' }
+        $process = Start-Process -FilePath $installer -ArgumentList '-y -s -accepteula -toolkit -override -noDisplayDriver' -Wait -PassThru -WindowStyle Hidden
+        if ($process.ExitCode -ne 0) { throw "CUDA installation failed: $($process.ExitCode)" }
+        'CUDA_PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8' >> $env:GITHUB_ENV
+        'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\bin' >> $env:GITHUB_PATH
+    - name: Install CUDA on Linux
+      if: runner.os == 'Linux' && inputs.cuda == 'ON'
+      shell: bash
+      run: |
+        curl --fail --location --retry 3 --output "$RUNNER_TEMP/cuda-keyring.deb" https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+        sudo dpkg -i "$RUNNER_TEMP/cuda-keyring.deb"
+        sudo apt-get update
+        sudo apt-get install -y cuda-toolkit-12-8
+        echo 'CUDA_PATH=/usr/local/cuda-12.8' >> "$GITHUB_ENV"
+        echo '/usr/local/cuda-12.8/bin' >> "$GITHUB_PATH"
+    - name: Cache vcpkg
+      uses: actions/cache@v6
+      with:
+        path: |
+          ${{ github.workspace }}/../vcpkg
+          ${{ github.workspace }}/build-hip-ci/vcpkg_installed
+        key: hip-vcpkg-${{ runner.os }}-cuda${{ inputs.cuda }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/overlays/**') }}
+    - name: Prepare vcpkg
+      shell: bash
+      run: |
+        export VCPKG_ROOT="$(cd .. && pwd)/vcpkg"
+        if [ ! -d "$VCPKG_ROOT/.git" ]; then git clone https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"; fi
+        if [ "$RUNNER_OS" = Windows ]; then "$VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics; else "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics; fi
+        if [ "$RUNNER_OS" = Windows ]; then VCPKG_ROOT="$(cygpath -m "$VCPKG_ROOT")"; fi
+        echo "VCPKG_ROOT=$VCPKG_ROOT" >> "$GITHUB_ENV"
+        echo 'VCPKG_BUILD_TYPE=release' >> "$GITHUB_ENV"
+        echo 'VCPKG_MAX_CONCURRENCY=2' >> "$GITHUB_ENV"
+    - name: Build Windows
+      if: runner.os == 'Windows'
+      shell: cmd
+      run: |
+        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+        if errorlevel 1 exit /b 1
+        python tools/hip_ci_build.py --build-type ${{ inputs.build_type }} --cuda ${{ inputs.cuda }}
+    - name: Build Linux
+      if: runner.os == 'Linux'
+      shell: bash
+      run: python tools/hip_ci_build.py --build-type '${{ inputs.build_type }}' --cuda '${{ inputs.cuda }}'

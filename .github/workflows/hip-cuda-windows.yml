@@ -1,0 +1,25 @@
+name: Windows CUDA and HIP Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Release, Debug]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - uses: ./.github/actions/hip-build
+        with:
+          cuda: 'ON'
+          build_type: ${{ matrix.build_type }}
