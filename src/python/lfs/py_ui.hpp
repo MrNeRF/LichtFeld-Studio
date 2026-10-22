@@ -699,6 +699,7 @@ namespace lfs::python {
         void unregister_panel(nb::object panel_class);
         void unregister_for_module(const std::string& prefix);
         void unregister_all();
+        [[nodiscard]] std::string module_for_panel(const std::string& panel_id) const;
 
     private:
         PyPanelRegistry() = default;
@@ -976,6 +977,7 @@ namespace lfs::python {
     void register_ui_menus(nb::module_& m);
     void register_ui_context_menu(nb::module_& m);
     void register_ui_panels(nb::module_& m);
+    bool unload_panel_plugin(const std::string& panel_id);
     void register_rml_im_mode_layout(nb::module_& m);
     void register_keymap(nb::module_& m);
 

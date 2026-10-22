@@ -285,6 +285,29 @@ namespace lfs::vis {
         EXPECT_EQ(sidebar_picks_.back(), "test.sidebar.2");
     }
 
+    TEST_F(SidebarInputDispatchTest, SidebarTypingKeysStayWithAFocusedTextField) {
+        setupSidebar();
+        auto& bindings = controller_->getBindings();
+        bindings.setBinding(input::ToolMode::GLOBAL, input::Action::NEXT_SIDEBAR_CATEGORY,
+                            input::KeyTrigger{input::KEY_N});
+        ASSERT_TRUE(field_->Focus());
+        setKeyboardContext(context_, false);
+        sidebarKey(SDL_SCANCODE_N);
+        EXPECT_TRUE(sidebar_picks_.empty());
+        bindings.setBinding(input::ToolMode::GLOBAL, input::Action::NEXT_SIDEBAR_CATEGORY,
+                            input::KeyTrigger{input::KEY_N, input::MODIFIER_CTRL | input::MODIFIER_ALT});
+        sidebarKey(SDL_SCANCODE_N, static_cast<SDL_Keymod>(SDL_KMOD_CTRL | SDL_KMOD_ALT));
+        EXPECT_TRUE(sidebar_picks_.empty());
+        field_->Blur();
+        setKeyboardContext(nullptr, false);
+        gui::guiFocusState().reset(); // the next frame starts without text focus
+        bindings.setBinding(input::ToolMode::GLOBAL, input::Action::NEXT_SIDEBAR_CATEGORY,
+                            input::KeyTrigger{input::KEY_N});
+        EXPECT_TRUE(sidebarKey(SDL_SCANCODE_N).consumed);
+        ASSERT_EQ(sidebar_picks_.size(), 1);
+        EXPECT_EQ(sidebar_picks_.back(), "test.sidebar.1");
+    }
+
     TEST_F(SidebarInputDispatchTest, SidebarKeymapRebindingClearingAndCaptureAreRespected) {
         setupSidebar();
         auto& bindings = controller_->getBindings();

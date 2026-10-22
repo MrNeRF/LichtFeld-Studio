@@ -150,18 +150,19 @@ the measured text length, including glyph clearance and compact padding. Labels
 are centered along the tab. Rotated labels use pixel-aligned origins and line
 boxes at fractional scales. The Rendering label aligns with its first panel
 heading. Plugin authors do not need special dimensions or markup. Top-level
-plugin tabs retain a close button below the label; built-in tabs cannot be closed.
-Closing a plugin tab disables its panel, clears its active/focus state, and
-commits the GUIL session chapter. This does not unload the plugin. There is no
-GUI command to reopen a closed plugin tab. Plugin Marketplace enablement is
-plugin-wide and is not a panel visibility control.
+plugin tabs have a close button below the label; built-in tabs cannot be closed.
+Closing a plugin tab unloads its plugin, the same as Unload in the Plugin
+Marketplace, so all of the plugin's panels go away. Loading the plugin again
+from the Marketplace brings its tabs back.
 
 - Click a tab to select its panel.
 - Scroll the wheel over the strip, or drag it with the middle mouse button, to
   reach overflowing tabs. Visible up/down buttons appear when tabs overflow.
 - Next/Previous Sidebar Category are keymap actions under Preferences > Input.
   Their defaults are Ctrl+Tab and Ctrl+Shift+Tab; both wrap. They apply while the
-  pointer is over the lower sidebar, including when its content has focus.
+  pointer is over the lower sidebar, including when its content has focus. While
+  a text field has focus, only bindings with Ctrl or Cmd and no Alt switch
+  categories; other keys type into the field.
 - Ctrl+wheel no longer changes categories. Over the strip it scrolls the tabs;
   over content it remains available to the panel's controls and keymap bindings.
 - Up/Down navigate tab focus and reveal overflowing tabs; Enter/Space activate

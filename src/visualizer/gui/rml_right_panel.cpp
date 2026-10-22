@@ -536,10 +536,15 @@ namespace lfs::vis::gui {
         if (!controller || controller->getBindings().isCapturing())
             return false;
         const auto& bindings = controller->getBindings();
+        // A focused text field keeps keys that type into it; Ctrl or Cmd chords still switch.
+        // Ctrl+Alt stays with the field because it is AltGr on Windows.
+        const bool typing = guiFocusState().want_text_input || (rml_manager_ && rml_manager_->wantsTextInput());
         bool handled = false;
         for (const auto& event : input.input_events) {
             if (event.kind != FrameInputEventKind::KeyDown ||
                 (event.dispatch && event.dispatch->consumed) || (event.modifiers & SDL_KMOD_MODE))
+                continue;
+            if (typing && (!(event.modifiers & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) || (event.modifiers & SDL_KMOD_ALT)))
                 continue;
             bool repeats = false;
             const auto printed = SDL_GetKeyFromScancode(event.scancode, event.modifiers & SDL_KMOD_SHIFT, false);

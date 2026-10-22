@@ -4538,15 +4538,7 @@ namespace lfs::vis::gui {
             panel_layout_.setActiveTab(id);
         };
         rml_right_panel_.on_tab_closed = [this](const std::string& id) {
-            if (id.empty())
-                return;
-            if (viewer_)
-                viewer_->projectMarkSessionChapterCommitted("GUIL");
-            PanelRegistry::instance().set_panel_enabled(id, false);
-            if (panel_layout_.getActiveTab() == id)
-                panel_layout_.setActiveTab({});
-            if (focus_panel_name_ == id)
-                focus_panel_name_.clear();
+            closed_plugin_tab_ = id;
         };
         rml_right_panel_.on_splitter_height = [this](float height, float panel_height) {
             viewer_->getRenderingManager()->setViewportResizeActive(true);
@@ -6401,6 +6393,19 @@ namespace lfs::vis::gui {
                 rml_right_panel_.processInput(rp_layout, masked_input);
             } else {
                 rml_right_panel_.processInput(rp_layout, panel_input);
+            }
+
+            // Unload after the click dispatch returns: unloading unregisters the plugin's panels.
+            if (const auto id = std::exchange(closed_plugin_tab_, {}); !id.empty()) {
+                if (viewer_)
+                    viewer_->projectMarkSessionChapterCommitted("GUIL");
+                if (panel_layout_.getActiveTab() == id)
+                    panel_layout_.setActiveTab({});
+                if (focus_panel_name_ == id)
+                    focus_panel_name_.clear();
+                const auto unload = python::bridge().unload_panel_plugin;
+                if (!unload || !unload(id.c_str()))
+                    LOG_WARN("Closing sidebar tab '{}' did not unload its plugin", id);
             }
 
             if (rml_right_panel_.wantsInput() && !float_blocks_rp && !viewport_pointer_captured)

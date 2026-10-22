@@ -451,6 +451,7 @@ namespace lfs::vis {
             GizmoManager gizmo_manager_;
 
             std::string focus_panel_name_;
+            std::string closed_plugin_tab_;
             bool ui_hidden_ = false;
 
             // Font storage

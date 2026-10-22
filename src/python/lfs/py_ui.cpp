@@ -5856,6 +5856,9 @@ namespace lfs::python {
         };
         bridge.draw_modals = []() { PyModalRegistry::instance().draw_modals(); };
         bridge.has_modals = []() { return PyModalRegistry::instance().has_open_modals(); };
+        bridge.unload_panel_plugin = [](const char* panel_id) {
+            return panel_id && unload_panel_plugin(panel_id);
+        };
 
         if (const auto& enqueue_cb = get_modal_enqueue_callback())
             PyModalRegistry::instance().set_enqueue_callback(enqueue_cb);
