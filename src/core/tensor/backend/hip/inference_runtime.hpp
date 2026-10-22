@@ -3,9 +3,9 @@
 #pragma once
 #include "inference_api.h"
 #include "hip_inference.hpp"
-int lfs_hip_inference_f32(LfsHipContext* context,LfsHipView input,LfsHipView output,const LfsHipInference* call,LfsHipError* error) {
+int lfs_hip_inference_typed(LfsHipContext* context,LfsHipView input,LfsHipView output,const LfsHipInference* call,uint32_t dtype,LfsHipError* error) {
     return boundary(error,[&] {
-        require(context && call && call->struct_bytes==sizeof(*call) && call->operation<=5 && call->operation!=3,"Invalid HIP inference descriptor");
+        require((dtype==LFS_HIP_F32 || dtype==LFS_HIP_F16) && context && call && call->struct_bytes==sizeof(*call) && call->operation<=5 && call->operation!=3,"Invalid HIP inference descriptor");
         auto p=call->parameters;
         require(p.total<=INT_MAX,"HIP inference output exceeds int32 indexing");
         if(!p.total)return;
@@ -50,10 +50,10 @@ int lfs_hip_inference_f32(LfsHipContext* context,LfsHipView input,LfsHipView out
             require(pixels<=size_t(INT_MAX)/2 && p.total==pixels*2 && std::isfinite(p.u0) && std::isfinite(p.u1) &&
                     std::isfinite(p.v0) && std::isfinite(p.v1),"Invalid HIP normalized grid geometry");
         }
-        const size_t source_bytes=source_count*4,output_bytes=size_t(p.total)*4;
+        const size_t width=dtype==LFS_HIP_F32?4:2,source_bytes=source_count*width,output_bytes=size_t(p.total)*width;
         if(source_bytes)validate(context,input.buffer,input.offset,source_bytes);
         validate(context,output.buffer,output.offset,output_bytes);
-        require(output.offset%4==0 && (!source_bytes || input.offset%4==0),"Misaligned HIP inference storage");
+        require(output.offset%width==0 && (!source_bytes || input.offset%width==0),"Misaligned HIP inference storage");
         const bool overlap=source_bytes && input.buffer==output.buffer && input.offset<output.offset+output_bytes && output.offset<input.offset+source_bytes;
         require(!overlap || (op==4 && input.offset==output.offset),"HIP inference input/output overlap");
         DeviceScope device(context->device);
@@ -65,9 +65,16 @@ int lfs_hip_inference_f32(LfsHipContext* context,LfsHipView input,LfsHipView out
         static_assert(sizeof(native)==sizeof(p));
         static_assert(offsetof(hip_inference::Parameters_0,u0_0)==offsetof(LfsHipInferencePush,u0));
         std::memcpy(&native,&p,sizeof(p));
-#define LFS_INFERENCE_CASE(N) case N: hipLaunchKernelGGL((hip_inference::inference_kernel<N>),dim3(groups),dim3(256),0,context->stream,native);break
+const auto launch=[&]<class Storage>() {
+#define LFS_INFERENCE_CASE(N) case N: hipLaunchKernelGGL((hip_inference::inference_kernel<N,Storage>),dim3(groups),dim3(256),0,context->stream,native);break
         switch(op){LFS_INFERENCE_CASE(0);LFS_INFERENCE_CASE(1);LFS_INFERENCE_CASE(2);LFS_INFERENCE_CASE(4);LFS_INFERENCE_CASE(5);}
 #undef LFS_INFERENCE_CASE
+        };
+        if(dtype==LFS_HIP_F32)launch.template operator()<float>();else launch.template operator()<__half>();
         check(hipGetLastError());
     });
+}
+
+int lfs_hip_inference_f32(LfsHipContext* context,LfsHipView input,LfsHipView output,const LfsHipInference* call,LfsHipError* error) {
+    return lfs_hip_inference_typed(context,input,output,call,LFS_HIP_F32,error);
 }

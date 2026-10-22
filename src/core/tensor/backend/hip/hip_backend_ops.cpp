@@ -206,6 +206,7 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_runtime_abi);
         ENTRY(lfs_hip_chain_reduce_f32);
         ENTRY(lfs_hip_pool_f32);
+        ENTRY(lfs_hip_pool_typed);
         ENTRY(lfs_hip_where_scalar);
         ENTRY(lfs_hip_where_layout);
         ENTRY(lfs_hip_masked_fill);
@@ -298,6 +299,7 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_shared_warp);
         ENTRY(lfs_hip_inverse_warp);
         ENTRY(lfs_hip_inference_f32);
+        ENTRY(lfs_hip_inference_typed);
         ENTRY(lfs_hip_gemm_f32);
         ENTRY(lfs_hip_sh_codec);
         ENTRY(lfs_hip_cumsum);
@@ -357,6 +359,7 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_runtime_abi);
                 LOAD(lfs_hip_chain_reduce_f32);
                 LOAD(lfs_hip_pool_f32);
+                LOAD(lfs_hip_pool_typed);
                 LOAD(lfs_hip_where_scalar);
                 LOAD(lfs_hip_where_layout);
                 LOAD(lfs_hip_masked_fill);
@@ -449,6 +452,7 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_shared_warp);
                 LOAD(lfs_hip_inverse_warp);
                 LOAD(lfs_hip_inference_f32);
+                LOAD(lfs_hip_inference_typed);
                 LOAD(lfs_hip_gemm_f32);
                 LOAD(lfs_hip_sh_codec);
                 LOAD(lfs_hip_cumsum);
@@ -2001,7 +2005,8 @@ namespace lfs::core::internal {
     void HipBackendOps::sgemm_bias_relu(StorageRef a,StorageRef b,StorageRef bias,StorageRef c,const GemmProgram& p,ExecContext execution){launch_gemm(a,b,bias,c,p,false,true,execution);}
     void HipBackendOps::inference(StorageRef input,StorageRef output,const InferenceProgram& program,ExecContext execution) {
         queue(execution);
-        require((program.kernel==InferenceKernel::Grid || input.dtype==DataType::Float32) && output.dtype==DataType::Float32,"HIP inference requires Float32");
+        require((output.dtype==DataType::Float32 || output.dtype==DataType::Float16) && (program.kernel==InferenceKernel::Grid || input.dtype==output.dtype),"HIP inference requires matching Float32 or Float16");
+        const size_t width=output.dtype==DataType::Float32?4:2;
         const auto& g=program.geometry;
         if(!program.count)return;
         if(program.kernel!=InferenceKernel::Pool) {
@@ -2013,9 +2018,9 @@ namespace lfs::core::internal {
                  g.offset,g.columns,g.mode,g.coord,g.include_pad,g.u0,g.u1,g.v0,g.v1}};
             std::lock_guard lock(impl_->mutex);
             const auto src=program.kernel==InferenceKernel::Grid?LfsHipView{}:impl_->view(input);
-            const auto dst=impl_->view(output,program.count*4);
+            const auto dst=impl_->view(output,program.count*width);
             LfsHipError error{};
-            check(impl_->lfs_hip_inference_f32(impl_->context,src,dst,&call,&error),error);
+            check(impl_->lfs_hip_inference_typed(impl_->context,src,dst,&call,uint32_t(output.dtype),&error),error);
             return;
         }
         require(g.mode==0 || g.mode==1,"Invalid HIP inference pooling mode");
@@ -2024,9 +2029,9 @@ namespace lfs::core::internal {
                      g.stride_h,g.stride_w,g.pad_h,g.pad_w,uint32_t(g.mode),uint32_t(g.include_pad)};
         require(program.count<=SIZE_MAX/sizeof(float),"HIP pooling output size overflows");
         std::lock_guard lock(impl_->mutex);
-        const auto src=impl_->view(input),dst=impl_->view(output,program.count*sizeof(float));
+        const auto src=impl_->view(input),dst=impl_->view(output,program.count*width);
         LfsHipError error{};
-        check(impl_->lfs_hip_pool_f32(impl_->context,src,dst,&p,&error),error);
+        check(impl_->lfs_hip_pool_typed(impl_->context,src,dst,&p,uint32_t(output.dtype),&error),error);
     }
     void HipBackendOps::max_pool2d(StorageRef input,StorageRef output,const PoolProgram& p,ExecContext execution) {
         require(p.batch>=0&&p.channels>=0&&p.input_height>0&&p.input_width>0&&p.output_height>0&&p.output_width>0&&p.kernel_size>0&&p.stride>0&&p.padding>=0,"Invalid HIP max-pooling geometry");
@@ -2037,12 +2042,13 @@ namespace lfs::core::internal {
     }
     void HipBackendOps::adaptive_avg_pool2d(StorageRef input,StorageRef output,const PoolProgram& p,ExecContext execution) {
         queue(execution);
-        require(p.batch>=0&&p.channels>=0&&p.input_height>0&&p.input_width>0&&p.output_height>0&&p.output_width>0&&input.dtype==DataType::Float32&&output.dtype==DataType::Float32,"Invalid HIP adaptive pooling geometry/dtype");
+        require(p.batch>=0&&p.channels>=0&&p.input_height>0&&p.input_width>0&&p.output_height>0&&p.output_width>0&&(input.dtype==DataType::Float32 || input.dtype==DataType::Float16)&&output.dtype==input.dtype,"Invalid HIP adaptive pooling geometry/dtype");
         const size_t count=checked_product(checked_product(size_t(p.batch),size_t(p.channels)),checked_product(size_t(p.output_height),size_t(p.output_width)));
-        if(!count)return;require(count<=SIZE_MAX/sizeof(float),"HIP adaptive pooling output overflows");
+        const size_t width=input.dtype==DataType::Float32?4:2;
+        if(!count)return;require(count<=SIZE_MAX/width,"HIP adaptive pooling output overflows");
         LfsHipPool native{count,p.input_height,p.input_width,p.output_height,p.output_width,1,1,1,1,0,0,2,0};
-        std::lock_guard lock(impl_->mutex);const auto in=impl_->view(input),out=impl_->view(output,count*sizeof(float));LfsHipError error{};
-        check(impl_->lfs_hip_pool_f32(impl_->context,in,out,&native,&error),error);
+        std::lock_guard lock(impl_->mutex);const auto in=impl_->view(input),out=impl_->view(output,count*width);LfsHipError error{};
+        check(impl_->lfs_hip_pool_typed(impl_->context,in,out,&native,uint32_t(output.dtype),&error),error);
     }
     void HipBackendOps::strided_copy(StorageRef input, StorageRef output, const StridedLayout& layout, ExecContext execution) {
         queue(execution);

@@ -411,9 +411,42 @@ void native_conv() {
         }
     }
 }
+void half_inference() {
+    auto& gpu=backend_ops(GpuBackend::HIP);
+    const auto run=[&](InferenceProgram p,size_t input_count) {
+        std::vector<float> values(input_count);for(size_t i=0;i<input_count;++i)values[i]=std::sin(float(i)*.17f)*1.7f;
+        auto half=Tensor::from_vector(values,{values.size()},Device::GPU).to(DataType::Float16);
+        auto source=half.to(DataType::Float32);
+        auto reference=Tensor::zeros({p.count},Device::GPU);
+        gpu.inference(storage_ref(source),storage_ref(reference),p,{});
+        auto expected=reference.to(DataType::Float16).to(DataType::Float32).cpu();
+        auto output=Tensor::from_vector(std::vector<float>(p.count+2,-77),{p.count+2},Device::GPU).to(DataType::Float16);
+        auto out=storage_ref(output);out.byte_offset=2;
+        gpu.inference(storage_ref(half),out,p,{});
+        auto actual=output.to(DataType::Float32).cpu();
+        require(actual.ptr<float>()[0]==-77 && actual.ptr<float>()[p.count+1]==-77,"HIP FP16 inference overwrote guards");
+        for(size_t i=0;i<p.count;++i)require(actual.ptr<float>()[i+1]==expected.ptr<float>()[i] ||
+            (std::isnan(actual.ptr<float>()[i+1]) && std::isnan(expected.ptr<float>()[i])),"HIP FP16 inference changed FP32 intermediate arithmetic");
+    };
+    for(int mode=0;mode<=4;++mode)run({InferenceKernel::Activation,37,{.mode=mode}},37);
+    for(int mode=0;mode<=2;++mode)for(int coord=0;coord<=2;++coord)
+        run({InferenceKernel::Resize,2*7*9,{.height=3,.width=5,.out_height=7,.out_width=9,.mode=mode,.coord=coord}},2*3*5);
+    for(int mode=0;mode<=1;++mode)for(int pad=0;pad<=1;++pad)
+        run({InferenceKernel::Pool,2*3*4,{.height=5,.width=7,.out_height=3,.out_width=4,.kernel_h=3,.kernel_w=3,.stride_h=2,.stride_w=2,.pad_h=1,.pad_w=1,.mode=mode,.include_pad=pad}},2*5*7);
+    for(int mode=0;mode<=1;++mode)
+        run({InferenceKernel::Im2col,2*2*3*17,{.channels=2,.height=5,.width=7,.out_height=6,.out_width=7,.kernel_h=2,.kernel_w=3,.stride_h=1,.stride_w=1,.pad_h=1,.pad_w=1,.dilation_h=1,.dilation_w=1,.offset=3,.columns=17,.mode=mode}},2*5*7);
+    run({InferenceKernel::Col2im,3*10*14,{.channels=2,.height=5,.width=7,.out_height=10,.out_width=14,.kernel_h=2,.kernel_w=2,.stride_h=2,.stride_w=2,.dilation_h=1,.dilation_w=1}},3*2*2*5*7);
+    run({InferenceKernel::Grid,2*5*7,{.height=5,.width=7,.u0=-1,.u1=1,.v0=-1,.v1=1}},0);
+    auto input=Tensor::from_vector(std::vector<float>(2*5*7,.37f),{2*5*7},Device::GPU).to(DataType::Float16);
+    auto output=Tensor::zeros({2*3*4},Device::GPU).to(DataType::Float16);
+    PoolProgram pool{};pool.batch=1;pool.channels=2;pool.input_height=5;pool.input_width=7;pool.output_height=3;pool.output_width=4;
+    gpu.adaptive_avg_pool2d(storage_ref(input),storage_ref(output),pool,{});
+    auto observed=output.to(DataType::Float32).cpu();const float value=input.to(DataType::Float32).cpu().ptr<float>()[0];
+    for(size_t i=0;i<2*3*4;++i)require(observed.ptr<float>()[i]==value,"HIP FP16 adaptive pool changed constant input");
+}
 int main() try {
     GpuBackendScope scope(GpuBackend::HIP);
-    unary();integer_arithmetic();native_norm();native_linear();native_attention();native_conv();precise_bits();gathered_and_packed();fold_and_host();cache_and_threads();
-    std::puts("PASS HIP expressions: native attention/convolution/fused linear/layer/RMS norms FP16/FP32 with guards and inplace, native math, exact Int32/Int64/UInt32/UInt8 arithmetic and empty operations, IEEE values, gather bounds, Float16/Bool/UInt8 packed tails, host constants, short/runtime folds, prepare, shape cache and concurrent launches");
+    unary();integer_arithmetic();native_norm();native_linear();native_attention();native_conv();half_inference();precise_bits();gathered_and_packed();fold_and_host();cache_and_threads();
+    std::puts("PASS HIP expressions: native FP16 inference and attention/convolution/fused linear/layer/RMS norms FP16/FP32 with guards and inplace, native math, exact Int32/Int64/UInt32/UInt8 arithmetic and empty operations, IEEE values, gather bounds, Float16/Bool/UInt8 packed tails, host constants, short/runtime folds, prepare, shape cache and concurrent launches");
     return 0;
 } catch(const std::exception& e) {std::fprintf(stderr,"HIP expression failed: %s\n",e.what());return 1;}

@@ -173,6 +173,7 @@ typedef struct LfsHipPool {
     int32_t height,width,out_height,out_width,kernel_h,kernel_w,stride_h,stride_w,pad_h,pad_w;
     uint32_t average,include_pad;
 } LfsHipPool;
+LFS_HIP_API int lfs_hip_pool_typed(LfsHipContext*,LfsHipView input,LfsHipView output,const LfsHipPool*,uint32_t dtype,LfsHipError*);
 LFS_HIP_API int lfs_hip_pool_f32(LfsHipContext*,LfsHipView input,LfsHipView output,const LfsHipPool*,LfsHipError*);
 LFS_HIP_API int lfs_hip_where_scalar(LfsHipContext*,LfsHipView mask,LfsHipView source,LfsHipView output,size_t count,uint32_t dtype,float value,LfsHipError*);
 

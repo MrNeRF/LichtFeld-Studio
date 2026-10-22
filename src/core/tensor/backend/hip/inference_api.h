@@ -16,6 +16,7 @@ typedef struct LfsHipInference {
 #ifdef __cplusplus
 extern "C" {
 #endif
+LFS_HIP_API int lfs_hip_inference_typed(LfsHipContext*,LfsHipView input,LfsHipView output,const LfsHipInference*,uint32_t dtype,LfsHipError*);
 LFS_HIP_API int lfs_hip_inference_f32(LfsHipContext*,LfsHipView input,LfsHipView output,const LfsHipInference*,LfsHipError*);
 #ifdef __cplusplus
 }
