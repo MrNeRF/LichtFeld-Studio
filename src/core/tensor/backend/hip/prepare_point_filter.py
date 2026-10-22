@@ -63,3 +63,28 @@ code = '\n'.join([
 ])
 args.output.parent.mkdir(parents=True, exist_ok=True)
 args.output.write_text(code, encoding='utf-8')
+
+# Native HIP owns the atomic parent accesses; the shared traversal kernels keep
+# the canonical edge ordering and batched walk without depending on CUDA.
+kernels = (source / 'tensor/backend/cuda/kernels/tensor_spatial.cu').read_text(encoding='utf-8')
+components = '\n'.join(definition(kernels, '__global__ void ' + name + '(')
+                        for name in ('union_components', 'flatten_components', 'point_tree_union'))
+components = components.replace('ups[k] = base + k < count ? parent[nodes[k]] : mine;',
+                                'ups[k] = base + k < count ? __hip_atomic_load(parent + nodes[k], __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT) : mine;')
+components = components.replace('parent[i] = finalComponentRoot(parent, static_cast<int32_t>(i));',
+                                'atomicExch(parent + i, finalComponentRoot(parent, static_cast<int32_t>(i)));')
+atomic_helpers = r"""
+__device__ inline int32_t componentRoot(int32_t* parent, int32_t node) {
+    int32_t current=__hip_atomic_load(parent+node,__ATOMIC_RELAXED,__HIP_MEMORY_SCOPE_AGENT),previous=node;
+    for (;;) {
+        const int32_t ancestor=__hip_atomic_load(parent+current,__ATOMIC_RELAXED,__HIP_MEMORY_SCOPE_AGENT);
+        if(current==ancestor) return current;
+        atomicMin(parent+previous,ancestor);previous=current;current=ancestor;
+    }
+}
+__device__ inline int32_t finalComponentRoot(const int32_t* parent,int32_t node) {
+    for (;;) {const int32_t ancestor=__hip_atomic_load(parent+node,__ATOMIC_RELAXED,__HIP_MEMORY_SCOPE_AGENT);if(ancestor==node)return node;node=ancestor;}
+}
+"""
+components = '/* Generated native HIP spatial components; do not edit. */\n#pragma once\nnamespace hip_spatial_components {\nusing namespace lfs::core::internal;\n'+atomic_helpers+components+'\n}\n'
+args.output.with_name('hip_spatial_components.hpp').write_text(components,encoding='utf-8')

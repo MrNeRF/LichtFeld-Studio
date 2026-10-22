@@ -224,6 +224,7 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_and_live);
         ENTRY(lfs_hip_histogram_u8);
         ENTRY(lfs_hip_predicate_typed);
+        ENTRY(lfs_hip_integer_pointwise);
         ENTRY(lfs_hip_project_points);
         ENTRY(lfs_hip_mark_points_2d);
         ENTRY(lfs_hip_buffer_release);
@@ -262,6 +263,7 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_cdist_f32);
         ENTRY(lfs_hip_radius_query);
         ENTRY(lfs_hip_point_tree_query);
+        ENTRY(lfs_hip_point_tree_components);
         ENTRY(lfs_hip_proximity);
         ENTRY(lfs_hip_convert);
         ENTRY(lfs_hip_index_cast);
@@ -364,6 +366,7 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_and_live);
                 LOAD(lfs_hip_histogram_u8);
                 LOAD(lfs_hip_predicate_typed);
+                LOAD(lfs_hip_integer_pointwise);
                 LOAD(lfs_hip_project_points);
                 LOAD(lfs_hip_mark_points_2d);
                 LOAD(lfs_hip_buffer_release);
@@ -402,6 +405,7 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_cdist_f32);
                 LOAD(lfs_hip_radius_query);
                 LOAD(lfs_hip_point_tree_query);
+                LOAD(lfs_hip_point_tree_components);
                 LOAD(lfs_hip_proximity);
                 LOAD(lfs_hip_convert);
                 LOAD(lfs_hip_index_cast);
@@ -590,6 +594,28 @@ namespace lfs::core::internal {
             }
         }
         void pointwise(const PointwiseProgram& program, StorageRef a, StorageRef b, StorageRef out, size_t count, bool binary) {
+            if(!count) {
+                require(program.op<PointwiseOp::Count && program.in_dtype==a.dtype && program.out_dtype==out.dtype && (!binary || b.dtype==a.dtype),
+                        "Invalid HIP empty pointwise descriptor");
+                for(const auto storage : {a,out}) {if(storage.data)(void)view(storage);else (void)empty_view(storage);}
+                if(binary) {if(b.data)(void)view(b);else (void)empty_view(b);}
+                return;
+            }
+            if((a.dtype==DataType::Int32 || a.dtype==DataType::Int64 || a.dtype==DataType::UInt32 || a.dtype==DataType::UInt8) && out.dtype==a.dtype) {
+                require(program.in_dtype==a.dtype && program.out_dtype==out.dtype && (!binary || b.dtype==a.dtype),"HIP integer arithmetic dtype mismatch");
+                LfsHipPredicate native{};native.struct_bytes=sizeof(native);native.op=uint32_t(program.op);native.dtype=uint32_t(a.dtype);
+                native.count=count;native.scalar_kind=uint32_t(program.scalar.kind);native.reserved=program.scalar.scalar_on_right?0:1;
+                switch(program.scalar.kind) {
+                case ScalarKind::Float:native.float_scalar=program.scalar.value.float_value;break;
+                case ScalarKind::Int32:native.integer_scalar=program.scalar.value.int32_value;break;
+                case ScalarKind::Int64:native.integer_scalar=program.scalar.value.int64_value;break;
+                case ScalarKind::Bool:native.integer_scalar=program.scalar.value.bool_value;break;
+                }
+                const auto bytes=checked_product(count,dtype_size(a.dtype));
+                const auto lhs=view(a,bytes),rhs=binary?view(b,bytes):LfsHipView{};
+                const auto result=view(out,bytes);LfsHipError error{};
+                check(lfs_hip_integer_pointwise(context,lhs,rhs,result,&native,&error),error);return;
+            }
             if(out.dtype==DataType::Bool&&(a.dtype==DataType::Int32||a.dtype==DataType::Int64||a.dtype==DataType::UInt32||a.dtype==DataType::Float16)) {
                 require(program.in_dtype==a.dtype&&program.out_dtype==DataType::Bool&&(!binary||b.dtype==a.dtype),
                         "HIP typed predicate dtype mismatch");
@@ -2135,7 +2161,16 @@ namespace lfs::core::internal {
         queue(execution);
         require(dim >= 0 && static_cast<unsigned>(dim) < layout.rank, "Invalid HIP scan axis");
         const auto native = native_layout(layout);
+        require(data.dtype==DataType::Float32 || data.dtype==DataType::Int32 || data.dtype==DataType::Int64 || data.dtype==DataType::UInt32,
+                "Unsupported HIP scan dtype");
         std::lock_guard lock(impl_->mutex);
+        if(!layout.element_count) {
+            bool empty=false;
+            for(size_t d=0;d<layout.rank;++d) empty |= layout.dims[d]==0;
+            require(empty && data.byte_offset%dtype_size(data.dtype)==0,"Invalid HIP empty scan layout");
+            if(data.data) (void)impl_->view(data);else (void)impl_->empty_view(data);
+            return;
+        }
         const auto view = impl_->view(data, 0);
         LfsHipError error{};
         check(impl_->lfs_hip_cumsum(impl_->context, view, static_cast<uint32_t>(data.dtype), &native, static_cast<uint32_t>(dim), &error), error);
@@ -2277,12 +2312,12 @@ void HipBackendOps::launch_radius(StorageRef points, StorageRef references, Stor
     queue(execution);
     require(count <= INT32_MAX && buckets && !(buckets & (buckets - 1)) && buckets <= uint64_t(UINT32_MAX)+1,
             "Invalid HIP radius query extent");
-    require(std::isfinite(radius) && radius > 0 && mode <= 4 && (mode != 1 || maximum > 0),
+    require(std::isfinite(radius) && radius > 0 && mode <= 5 && (mode != 1 || maximum > 0),
             "Invalid HIP radius query parameters");
     require(points.dtype == DataType::Float32 && heads.dtype == DataType::Int32 && next.dtype == DataType::Int32,
             "Invalid HIP radius query input types");
     require(references.dtype == DataType::Bool || references.dtype == DataType::UInt8, "Invalid HIP radius reference mask");
-    require(output.dtype == (mode == 0 ? DataType::Bool : mode == 1 || mode == 3 ? DataType::Int32 : DataType::Float32),
+    require(output.dtype == (mode == 0 ? DataType::Bool : mode == 1 || mode == 3 || mode == 5 ? DataType::Int32 : DataType::Float32),
             "Invalid HIP radius query output type");
     if (queries) require(queries->dtype == DataType::Bool || queries->dtype == DataType::UInt8, "Invalid HIP query mask");
     if (values) require(values->dtype == output.dtype, "Invalid HIP neighbor minimum type");
@@ -2416,5 +2451,31 @@ bool HipBackendOps::point_tree_counts(StorageRef p,StorageRef sorted,StorageRef 
 bool HipBackendOps::point_tree_spacing(StorageRef p,StorageRef sorted,StorageRef boxes,StorageRef visit,StorageRef output,
     const PointTreeProgram& program,ExecContext execution) {
     launch_point_tree(p,sorted,boxes,visit,{}, {},output,program,true,execution);return true;
+}
+}
+
+namespace lfs::core::internal {
+bool HipBackendOps::radius_connected_components(StorageRef p,StorageRef r,StorageRef h,StorageRef n,StorageRef labels,
+    size_t count,size_t buckets,float radius,ExecContext execution) {
+    launch_radius(p,r,h,n,labels,count,buckets,radius,5,0,false,{}, {}, {},execution);return true;
+}
+}
+
+namespace lfs::core::internal {
+bool HipBackendOps::point_tree_components(StorageRef p,StorageRef sorted,StorageRef boxes,StorageRef box_radii,
+    StorageRef visit,StorageRef sorted_radii,StorageRef radii,StorageRef labels,const PointTreeProgram& program,ExecContext execution) {
+    queue(execution);
+    require(visit.dtype==DataType::Int32 && labels.dtype==DataType::Int32,"Invalid HIP component index types");
+    for(const auto input : {p,sorted,boxes,box_radii,sorted_radii,radii})
+        require(input.dtype==DataType::Float32,"HIP point-tree components require Float32 geometry/radii");
+    std::lock_guard lock(impl_->mutex);
+    LfsHipPointTree native{};
+    native.points=program.points;native.references=program.references;native.levels=program.levels;
+    std::copy_n(program.level_offset,8,native.level_offset);std::copy_n(program.level_count,8,native.level_count);
+    native.radius=program.radius;native.max_count=program.max_count;
+    const auto view=[&](StorageRef storage) {return storage.data ? impl_->view(storage) : (impl_->empty_view(storage),LfsHipView{});};
+    const LfsHipView inputs[]{view(p),view(sorted),view(boxes),view(box_radii),view(visit),view(sorted_radii),view(radii)};
+    LfsHipError error{};
+    check(impl_->lfs_hip_point_tree_components(impl_->context,inputs,view(labels),&native,&error),error);return true;
 }
 }

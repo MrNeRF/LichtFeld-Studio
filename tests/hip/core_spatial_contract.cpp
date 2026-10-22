@@ -90,6 +90,17 @@ void low_level_contract() {
     if(observed[1]!=2 || observed[2]!=2 || observed[3]!=0 || observed[4]!=0) throw std::runtime_error("HIP native tree counts differ");
     auto bad_tree=tree;bad_tree.level_count[0]=2;
     reject([&]{gpu.point_tree_counts(p.storage,p.storage,boxes.storage,visit.storage,rad.storage,{},out,bad_tree,{});});
+    std::vector<int32_t> initial_labels{-77,0,1,2,3,-77};
+    gpu.copy_host_to_device({host(initial_labels.data()),o.storage,24});
+    require(gpu.radius_connected_components(p.storage,r.storage,h.storage,n.storage,out,4,1,.75f,{}),"HIP radius components declined native dispatch");
+    gpu.copy_device_to_host({o.storage,host(observed.data()),24});
+    if(observed!=std::vector<int32_t>{-77,0,0,2,3,-77}) throw std::runtime_error("HIP native radius components differ");
+    Buffer reach(gpu,4,DataType::Float32);float reach_value=1.f;
+    gpu.copy_host_to_device({host(&reach_value),reach.storage,4});
+    gpu.copy_host_to_device({host(initial_labels.data()),o.storage,24});
+    require(gpu.point_tree_components(p.storage,p.storage,boxes.storage,reach.storage,visit.storage,rad.storage,rad.storage,out,tree,{}),"HIP tree components declined native dispatch");
+    gpu.copy_device_to_host({o.storage,host(observed.data()),24});
+    if(observed!=std::vector<int32_t>{-77,0,0,2,3,-77}) throw std::runtime_error("HIP native mutual components differ");
     xyz={-.5f,0,0, .5f,0,0, -.5f,0,0, 10000,0,0};
     gpu.copy_host_to_device({host(xyz.data()),p.storage,48});
     Buffer query(gpu,48,DataType::Float32);
@@ -144,13 +155,26 @@ int main() try {
             equal(point_neighbor_spacing(pg,radius),point_neighbor_spacing(p,radius),true);
             equal(radius_neighbor_counts(pg,rg,radg,9999),radius_neighbor_counts(p,r,rad,9999));
             equal(radius_neighbor_counts(pg,rg,radg,3,&qg),radius_neighbor_counts(p,r,rad,3,&q));
+            if(n<=257) {
+                equal(radius_connected_components(pg,radius,rg),radius_connected_components(p,radius,r));
+                equal(mutual_radius_components(pg,radg),mutual_radius_components(p,rad));
+            }
 
 
         }
     }
     low_level_contract();
+    std::vector<float> chain(1025*3,0.f);
+    for(size_t i=0;i<1025;++i) chain[3*i]=.5f*float(i);
+    auto chain_gpu=Tensor::from_vector(chain,{1025,3},Device::GPU);
+    auto chain_radii=Tensor::from_vector(std::vector<float>(1025,.6f),{1025},Device::GPU);
+    for(unsigned repeat=0;repeat<8;++repeat) {
+        auto a=radius_connected_components(chain_gpu,.6f).cpu();
+        auto b=mutual_radius_components(chain_gpu,chain_radii).cpu();
+        for(size_t i=0;i<1025;++i) require(a.ptr<int32_t>()[i]==0 && b.ptr<int32_t>()[i]==0,"HIP concurrent union chain did not reach minimum root");
+    }
 
-    std::puts("PASS HIP spatial: hash collisions, masks, self exclusion, saturation, Int32/Float32 minima, direct grid spacing/nearest ties, public mutual radii/spacing/nearest/camera coverage, nonfinite and empty points");
+    std::puts("PASS HIP spatial: hash collisions, masks, self exclusion, saturation, Int32/Float32 minima, direct grid spacing/nearest ties, public mutual radii/spacing/nearest/camera coverage, atomic radius/mutual components, eight concurrent 1025-point chains, nonfinite and empty points");
     return 0;
 } catch(const std::exception& e) {std::fprintf(stderr,"HIP spatial failed: %s\n",e.what());return 1;}
 

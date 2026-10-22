@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "hip_spatial_components.hpp"
 namespace {
 namespace hs = lfs::core::internal;
 __global__ void radius_build_native(const float* points, const uint8_t* references,
@@ -35,7 +36,7 @@ __global__ void radius_query_native(const float* points, const uint8_t* referenc
 int lfs_hip_radius_query(LfsHipContext* context, const LfsHipView* inputs, LfsHipView output,
     size_t count, size_t buckets, float radius, uint32_t mode, int32_t maximum, uint32_t exclude_self, LfsHipError* error) {
     return boundary(error,[&] {
-        require(context && inputs && mode <= 4 && count <= INT32_MAX && buckets &&
+        require(context && inputs && mode <= 5 && count <= INT32_MAX && buckets &&
                 !(buckets & (buckets-1)) && buckets <= uint64_t(UINT32_MAX)+1 &&
                 std::isfinite(radius) && radius > 0 && (mode != 1 || maximum > 0) && exclude_self <= 1,
                 "Invalid HIP radius query descriptor");
@@ -49,7 +50,7 @@ int lfs_hip_radius_query(LfsHipContext* context, const LfsHipView* inputs, LfsHi
             return a.buffer == b.buffer && a.offset < b.offset+nb && b.offset < a.offset+na;
         };
         for (unsigned i=0;i<7;++i) {
-            const bool required = i<4 || (i==5 && mode>=3);
+            const bool required = i<4 || (i==5 && (mode==3 || mode==4));
             require(!required || inputs[i].buffer,"Missing HIP spatial input");
             if (!inputs[i].buffer) continue;
             validate(context,inputs[i].buffer,inputs[i].offset,sizes[i]);
@@ -79,6 +80,12 @@ int lfs_hip_radius_query(LfsHipContext* context, const LfsHipView* inputs, LfsHi
             case 2: launch.template operator()<2>();break;
             case 3: launch.template operator()<3>();break;
             case 4: launch.template operator()<4>();break;
+            case 5:
+                hipLaunchKernelGGL(hip_spatial_components::union_components,dim3(unsigned((count+255)/256)),dim3(256),0,context->stream,
+                    points,refs,heads,next,static_cast<int32_t*>(pointer(output)),count,uint32_t(buckets-1),radius);
+                check(hipGetLastError());
+                hipLaunchKernelGGL(hip_spatial_components::flatten_components,dim3(unsigned((count+255)/256)),dim3(256),0,context->stream,
+                    static_cast<int32_t*>(pointer(output)),count);break;
         }
         check(hipGetLastError());
     });

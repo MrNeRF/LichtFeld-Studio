@@ -250,7 +250,7 @@ LFS_HIP_API int lfs_hip_cdist_f32(LfsHipContext*, LfsHipView lhs, LfsHipView rhs
 LFS_HIP_API int lfs_hip_proximity(LfsHipContext*, const LfsHipView* inputs, LfsHipView output,
                                 size_t queries, size_t targets, size_t buckets, float parameter,
                                 uint32_t coverage, LfsHipError*);
-/* mode: 0 has-neighbor, 1 count, 2 spacing, 3 Int32 min, 4 Float32 min. */
+/* mode: 0 has-neighbor, 1 count, 2 spacing, 3 Int32 min, 4 Float32 min, 5 components (labels initialized to row indices). */
 LFS_HIP_API int lfs_hip_radius_query(LfsHipContext*, const LfsHipView* inputs, LfsHipView output,
                                     size_t count, size_t buckets, float radius, uint32_t mode,
                                     int32_t maximum, uint32_t exclude_self, LfsHipError*);

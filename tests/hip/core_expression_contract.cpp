@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include <core/tensor.hpp>
+#include <core/detail/gpu_backend_ops.hpp>
 #include <core/tensor_backend.hpp>
 #include <core/tensor_fused.hpp>
 #include <core/detail/tensor_half.hpp>
@@ -55,6 +56,97 @@ void unary() {
         run_expression(builder.build(),in,out,{{uint32_t(values.size()),1,1,1},1});
         const auto observed=output.cpu();
         for(size_t i=0;i<values.size();++i) near(observed.ptr<float>()[i],reference(values[i]));
+    }
+}
+template<class T> void integer_arithmetic_type(DataType dtype,std::vector<T> values) {
+    using U=std::make_unsigned_t<T>;
+    const auto wrap=[](U value){return std::bit_cast<T>(value);};
+    auto host=Tensor::empty_pageable_host({values.size()},dtype);
+    std::copy(values.begin(),values.end(),static_cast<T*>(host.data_ptr()));
+    auto input=host.to(Device::GPU);
+    auto guards=Tensor::empty_pageable_host({values.size()+2},dtype);
+    std::fill_n(static_cast<T*>(guards.data_ptr()),values.size()+2,T(77));
+    auto output=guards.to(Device::GPU);
+    auto destination=storage_ref(output);destination.byte_offset=sizeof(T);
+    auto& gpu=backend_ops(GpuBackend::HIP);
+    PointwiseProgram program{};program.in_dtype=dtype;program.out_dtype=dtype;
+    const auto check=[&](const std::vector<T>& wanted) {
+        auto actual=output.cpu();const auto* data=static_cast<const T*>(actual.data_ptr());
+        require(data[0]==T(77) && data[values.size()+1]==T(77),"HIP integer arithmetic overwrote guards");
+        for(size_t i=0;i<wanted.size();++i) require(data[i+1]==wanted[i],"HIP integer arithmetic lost exact integer values");
+    };
+    for(auto op : {PointwiseOp::AddTensor,PointwiseOp::SubTensor,PointwiseOp::MulTensor,PointwiseOp::MinimumTensor,PointwiseOp::MaximumTensor}) {
+        program.op=op;
+        gpu.binary(program,storage_ref(input),storage_ref(input),destination,values.size(),{});
+        std::vector<T> wanted(values.size());
+        for(size_t i=0;i<values.size();++i) {
+            const U x=U(values[i]);
+            wanted[i]=op==PointwiseOp::AddTensor?wrap(U(x+x)):op==PointwiseOp::SubTensor?T(0):op==PointwiseOp::MulTensor?wrap(U(x*x)):values[i];
+        }
+        check(wanted);
+    }
+    std::vector<T> divisors(values.size());
+    for(size_t i=0;i<divisors.size();++i) divisors[i]=i%4==0?T(-1):i%4==1?T(0):i%4==2?T(2):T(3);
+    auto divisor_host=Tensor::empty_pageable_host({values.size()},dtype);
+    std::copy(divisors.begin(),divisors.end(),static_cast<T*>(divisor_host.data_ptr()));
+    const auto divisor=divisor_host.to(Device::GPU);
+    for(auto op : {PointwiseOp::DivTensor,PointwiseOp::ModTensor,PointwiseOp::PowTensor}) {
+        program.op=op;
+        program.scalar.kind=ScalarKind::Float;program.scalar.value.float_value=NAN;program.scalar.scalar_on_right=false;
+        gpu.binary(program,storage_ref(input),storage_ref(divisor),destination,values.size(),{});
+        std::vector<T> wanted(values.size());
+        for(size_t i=0;i<values.size();++i) {
+            const T a=values[i],b=divisors[i];
+            if(op==PointwiseOp::PowTensor) {
+                if constexpr(std::is_signed_v<T>) if(b<0) {wanted[i]=a==T(1)?T(1):a==T(-1)?(b%2?T(-1):T(1)):T(0);continue;}
+                U result=1,factor=U(a),exponent=U(b);
+                while(exponent) {if(exponent&1)result=U(result*factor);factor=U(factor*factor);exponent>>=1;}
+                wanted[i]=wrap(result);
+            } else if(!b) wanted[i]=0;
+            else {
+                if constexpr(std::is_signed_v<T>) if(a==std::numeric_limits<T>::min() && b==T(-1)) {wanted[i]=op==PointwiseOp::DivTensor?a:T(0);continue;}
+                wanted[i]=op==PointwiseOp::DivTensor?T(a/b):T(a%b);
+            }
+        }
+        check(wanted);
+    }
+    program.op=PointwiseOp::SubScalar;program.scalar.kind=ScalarKind::Int64;program.scalar.value.int64_value=16777217;
+    for(bool right : {true,false}) {
+        program.scalar.scalar_on_right=right;
+        gpu.unary(program,storage_ref(input),destination,values.size(),{});
+        std::vector<T> wanted(values.size());
+        for(size_t i=0;i<values.size();++i) wanted[i]=wrap(right?U(U(values[i])-U(T(16777217))):U(U(T(16777217))-U(values[i])));
+        check(wanted);
+    }
+    program.scalar.scalar_on_right=true;
+    for(auto op : {PointwiseOp::Abs,PointwiseOp::Neg,PointwiseOp::Square,PointwiseOp::Sign,PointwiseOp::Relu}) {
+        program.op=op;
+        gpu.unary(program,storage_ref(input),destination,values.size(),{});
+        std::vector<T> wanted(values.size());
+        for(size_t i=0;i<values.size();++i) {
+            const T x=values[i];const U u=U(x);
+            wanted[i]=op==PointwiseOp::Neg?wrap(U(U(0)-u)):op==PointwiseOp::Square?wrap(U(u*u)):
+                op==PointwiseOp::Abs?(x<T(0)?wrap(U(U(0)-u)):x):op==PointwiseOp::Relu?std::max(T(0),x):T((x>T(0))-(x<T(0)));
+        }
+        check(wanted);
+    }
+    program.op=PointwiseOp::AddScalar;program.scalar.kind=ScalarKind::Float;program.scalar.value.float_value=1.75f;
+    gpu.unary(program,storage_ref(input),destination,values.size(),{});
+    std::vector<T> wanted(values.size());for(size_t i=0;i<values.size();++i) wanted[i]=wrap(U(U(values[i])+U(1)));
+    check(wanted);
+    program.scalar.value.float_value=NAN;
+    bool rejected=false;try{gpu.unary(program,storage_ref(input),destination,values.size(),{});}catch(const std::exception&){rejected=true;}
+    require(rejected,"HIP integer arithmetic accepted nonfinite scalar");check(wanted);
+}
+void integer_arithmetic() {
+    integer_arithmetic_type<int32_t>(DataType::Int32,{INT32_MIN,-16777217,-1,0,1,16777217,INT32_MAX});
+    integer_arithmetic_type<int64_t>(DataType::Int64,{INT64_MIN,-9007199254740993ll,-1,0,1,9007199254740993ll,INT64_MAX});
+    integer_arithmetic_type<uint32_t>(DataType::UInt32,{0,1,16777217u,2147483649u,UINT32_MAX});
+    integer_arithmetic_type<uint8_t>(DataType::UInt8,{0,1,17,127,254,255});
+    for(auto dtype : {DataType::Float32,DataType::Int32}) {
+        auto empty=Tensor::empty({0},Device::GPU,dtype);
+        require(empty.cumsum(0).numel()==0,"HIP empty scan failed");
+        require((empty-1).numel()==0,"HIP empty pointwise failed");
     }
 }
 void precise_bits() {
@@ -173,7 +265,7 @@ void cache_and_threads() {
 }
 int main() try {
     GpuBackendScope scope(GpuBackend::HIP);
-    unary();precise_bits();gathered_and_packed();fold_and_host();cache_and_threads();
-    std::puts("PASS HIP expressions: native math, IEEE values, gather bounds, Float16/Bool/UInt8 packed tails, host constants, short/runtime folds, prepare, shape cache and concurrent launches");
+    unary();integer_arithmetic();precise_bits();gathered_and_packed();fold_and_host();cache_and_threads();
+    std::puts("PASS HIP expressions: native math, exact Int32/Int64/UInt32/UInt8 arithmetic and empty operations, IEEE values, gather bounds, Float16/Bool/UInt8 packed tails, host constants, short/runtime folds, prepare, shape cache and concurrent launches");
     return 0;
 } catch(const std::exception& e) {std::fprintf(stderr,"HIP expression failed: %s\n",e.what());return 1;}

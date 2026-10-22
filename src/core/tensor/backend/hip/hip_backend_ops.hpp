@@ -203,7 +203,9 @@ namespace lfs::core::internal {
         bool stream_is_capturing(ExecContext context) override;
 
         void where_scalar(StorageRef mask,StorageRef source,StorageRef output,size_t count,float value,ExecContext);
+        bool radius_connected_components(StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,size_t,size_t,float,ExecContext) override;
         bool point_tree_counts(StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,std::optional<StorageRef>,StorageRef,const PointTreeProgram&,ExecContext) override;
+        bool point_tree_components(StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,const PointTreeProgram&,ExecContext) override;
         bool point_tree_spacing(StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,const PointTreeProgram&,ExecContext) override;
     private:
         void launch_point_tree(StorageRef,StorageRef,StorageRef,StorageRef,std::optional<StorageRef>,std::optional<StorageRef>,StorageRef,const PointTreeProgram&,bool,ExecContext);
