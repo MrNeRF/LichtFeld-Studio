@@ -1542,6 +1542,21 @@ def render_view_u8(rotation: Tensor, translation: Tensor, width: int, height: in
         CPU uint8 Tensor [H, W, 3] RGB image, or None if no active visualizer scene is available
     """
 
+def render_lightfield_view_u8(rotation: Tensor, translation: Tensor, width: int, height: int, fov: float = 14.0, shift_x: float = 0.0, near_distance: float = 0.0, far_distance: float = 100000.0) -> Tensor | None:
+    """Render an off-axis light-field view as CPU RGB uint8 [H, W, 3].
+
+    rotation and translation use the visualizer camera convention. fov is
+    vertical degrees. shift_x is a horizontal principal-point offset in pixels.
+    Clipping distances test camera-forward Gaussian centers, not splat tails.
+    Projection/clipping/editor overrides do not modify the viewport or model.
+    Other current appearance settings are retained. Calls dispatch to the viewer
+    thread when needed.
+
+    Width/height must be 1-2048, fov 1-120, shift_x finite, and finite clipping
+    distances must satisfy 0 <= near_distance < far_distance. Returns None for
+    invalid arguments, unavailable renderable scenes or rendering failures.
+    """
+
 def compute_screen_positions(rotation: Tensor, translation: Tensor, width: int, height: int, fov: float = 60.0) -> Tensor | None:
     """
     Compute screen positions of all Gaussians for a given camera view.
