@@ -61,6 +61,10 @@ class ToolsMenu:
                 tr("rendering_panel.section_simplify"),
                 lambda: lf.ui.set_panel_enabled("lfs.splat_simplify", True),
             ),
+            menu_action(
+                tr("collision.title"),
+                lambda: lf.ui.set_panel_enabled("native.collision", True),
+            ),
             menu_separator(),
             menu_submenu(tr("menu.tools.developer"), developer_items),
             menu_action(

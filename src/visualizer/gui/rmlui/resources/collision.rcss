@@ -1,0 +1,46 @@
+/* Collision authoring panel. RmlPanelHost loads this sibling stylesheet. */
+.collision-row {
+    display: flex;
+    align-items: center;
+    margin: 5dp 0;
+}
+
+.collision-row span {
+    width: 58%;
+    flex-shrink: 0;
+}
+
+.collision-row input, .collision-row select {
+    width: 40%;
+}
+
+.collision-row input[type="checkbox"] {
+    width: 16dp;
+    height: 16dp;
+}
+
+.collision-actions {
+    display: flex;
+    flex-wrap: wrap;
+    margin: 8dp 0;
+}
+
+.collision-actions button {
+    margin: 3dp;
+    padding: 5dp;
+}
+
+#collision-status {
+    margin: 8dp 0;
+}
+
+h3 {
+    display: block;
+    margin: 10dp 0 5dp;
+    font-weight: bold;
+}
+
+p {
+    display: block;
+    margin: 5dp 0;
+}

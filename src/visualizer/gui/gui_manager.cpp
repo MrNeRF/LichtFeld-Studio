@@ -34,6 +34,7 @@
 #include "core/user_paths.hpp"
 #include "gui/bounds_gizmo.hpp"
 #include "gui/camera_thumbnail_batch.hpp"
+#include "gui/collision_panel.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/error_event_bridge.hpp"
 #include "gui/layout_state.hpp"
@@ -5166,6 +5167,13 @@ namespace lfs::vis::gui {
                   1082.0f, 920.0f);
 
         // Viewport overlays (ordered by draw priority)
+        {
+            auto panel = std::make_shared<CollisionPanel>(&rmlui_manager_);
+            native_panel_storage_.push_back(panel);
+            reg_panel("native.collision", "Collision", panel, PanelSpace::Floating, 12,
+                      static_cast<uint32_t>(PanelOption::DEFAULT_CLOSED), 480.0f, 760.0f);
+        }
+
         reg_panel("native.selection_overlay", "Selection Overlay",
                   make_panel(SelectionOverlayPanel(this)),
                   PanelSpace::ViewportOverlay, 200);
