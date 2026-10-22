@@ -655,9 +655,14 @@ namespace lfs::vis {
             item.is_emphasized = mesh.is_selected;
             item.dim_non_emphasized = dim_non_emphasized;
             item.wireframe_overlay = settings.mesh_wireframe;
+            item.collision_voxel_boxes = mesh.collision_voxel_boxes;
+            item.collision_volume = mesh.collision_volume;
             item.wireframe_color = settings.mesh_wireframe_color;
             item.wireframe_width = settings.mesh_wireframe_width;
             item.shadow_enabled = settings.mesh_shadow_enabled;
+            if (item.collision_voxel_boxes) {
+                item.shadow_enabled = false;
+            }
             item.shadow_map_resolution = settings.mesh_shadow_resolution;
             items.push_back(item);
         }

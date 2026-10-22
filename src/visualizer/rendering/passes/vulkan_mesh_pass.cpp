@@ -5,6 +5,7 @@
 #include "vulkan_mesh_pass.hpp"
 #include <algorithm>
 
+#include "core/collision.hpp"
 #include "core/logger.hpp"
 #include "core/material.hpp"
 #include "core/mesh_data.hpp"
@@ -27,6 +28,8 @@
 #include <vector>
 #include <vk_mem_alloc.h>
 
+#include "viewport/collision_overlay.frag.spv.h"
+#include "viewport/collision_overlay.vert.spv.h"
 #include "viewport/mesh.frag.spv.h"
 #include "viewport/mesh.geom.spv.h"
 #include "viewport/mesh.vert.spv.h"
@@ -119,6 +122,15 @@ namespace lfs::vis {
         };
         static_assert(sizeof(WireframePush) == 80);
 
+        struct CollisionPush {
+            glm::mat4 inverse_mvp;
+            glm::vec4 origin_size;
+            glm::uvec4 dimensions_flags;
+            glm::vec4 viewport;
+            glm::vec4 camera;
+        };
+        static_assert(sizeof(CollisionPush) == 128);
+
     } // namespace
 
     struct VulkanMeshPass::Impl {
@@ -141,6 +153,9 @@ namespace lfs::vis {
 
         VkPipelineLayout wireframe_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline wireframe_pipeline = VK_NULL_HANDLE;
+        VkPipelineLayout voxel_box_pipeline_layout = VK_NULL_HANDLE;
+        VkPipeline voxel_box_pipeline = VK_NULL_HANDLE;
+        VkDescriptorSetLayout voxel_box_layout = VK_NULL_HANDLE;
         VkFormat color_format_cached = VK_FORMAT_UNDEFINED;
         VkFormat depth_format_cached = VK_FORMAT_UNDEFINED;
 
@@ -225,6 +240,12 @@ namespace lfs::vis {
             VkBuffer index_buffer = VK_NULL_HANDLE;
             VmaAllocation index_alloc = VK_NULL_HANDLE;
             std::uint32_t total_index_count = 0;
+            bool collision_voxel_boxes = false;
+            const core::CollisionVolume* collision_volume = nullptr;
+            VkBuffer occupancy_buffer = VK_NULL_HANDLE;
+            VmaAllocation occupancy_alloc = VK_NULL_HANDLE;
+            VkDescriptorPool occupancy_pool = VK_NULL_HANDLE;
+            VkDescriptorSet occupancy_descriptor = VK_NULL_HANDLE;
             std::uint32_t generation = 0;
             std::uint64_t last_used_frame = 0;
             std::size_t blend_submesh_count = 0;
@@ -296,7 +317,8 @@ namespace lfs::vis {
                    createDummyShadow() &&
                    createMainPipelines(color_format, depth_format) &&
                    createShadowPipeline(depth_format) &&
-                   createWireframePipeline(color_format, depth_format);
+                   createWireframePipeline(color_format, depth_format) &&
+                   createWireframePipeline(color_format, depth_format, true);
         }
 
         VkCommandBuffer beginSingleTimeCommands() const {
@@ -485,13 +507,15 @@ namespace lfs::vis {
                                   &pipeline_cull_blend,
                                   &pipeline_no_cull_blend,
                                   &shadow_pipeline,
-                                  &wireframe_pipeline}) {
+                                  &wireframe_pipeline,
+                                  &voxel_box_pipeline}) {
                 if (*p != VK_NULL_HANDLE) {
                     vkDestroyPipeline(device, *p, nullptr);
                     *p = VK_NULL_HANDLE;
                 }
             }
-            for (VkPipelineLayout* l : {&pipeline_layout, &shadow_pipeline_layout, &wireframe_pipeline_layout}) {
+            for (VkPipelineLayout* l : {&pipeline_layout, &shadow_pipeline_layout, &wireframe_pipeline_layout,
+                                        &voxel_box_pipeline_layout}) {
                 if (*l != VK_NULL_HANDLE) {
                     vkDestroyPipelineLayout(device, *l, nullptr);
                     *l = VK_NULL_HANDLE;
@@ -500,6 +524,10 @@ namespace lfs::vis {
             if (material_layout != VK_NULL_HANDLE) {
                 vkDestroyDescriptorSetLayout(device, material_layout, nullptr);
                 material_layout = VK_NULL_HANDLE;
+            }
+            if (voxel_box_layout != VK_NULL_HANDLE) {
+                vkDestroyDescriptorSetLayout(device, voxel_box_layout, nullptr);
+                voxel_box_layout = VK_NULL_HANDLE;
             }
             if (light_layout != VK_NULL_HANDLE) {
                 vkDestroyDescriptorSetLayout(device, light_layout, nullptr);
@@ -1324,6 +1352,10 @@ namespace lfs::vis {
         }
 
         void destroyMesh(GpuMesh& m) const {
+            if (m.occupancy_pool != VK_NULL_HANDLE)
+                vkDestroyDescriptorPool(device, m.occupancy_pool, nullptr);
+            if (m.occupancy_buffer != VK_NULL_HANDLE)
+                vmaDestroyBuffer(allocator, m.occupancy_buffer, m.occupancy_alloc);
             if (m.vertex_buffer != VK_NULL_HANDLE) {
                 vmaDestroyBuffer(allocator, m.vertex_buffer, m.vertex_alloc);
             }
@@ -1703,16 +1735,20 @@ namespace lfs::vis {
             return true;
         }
 
-        bool createWireframePipeline(VkFormat color_format, VkFormat depth_format) {
-            if (context == nullptr || !context->hasFillModeNonSolid()) {
+        bool createWireframePipeline(VkFormat color_format, VkFormat depth_format, bool boxes = false) {
+            if (!boxes && (context == nullptr || !context->hasFillModeNonSolid())) {
                 // VK_POLYGON_MODE_LINE is optional. Keep the pass usable on
                 // conformant devices that do not expose fillModeNonSolid; the UI
                 // reports the same capability and does not offer the overlay.
                 return true;
             }
+            auto& wireframe_pipeline = boxes ? voxel_box_pipeline : this->wireframe_pipeline;
+            auto& wireframe_pipeline_layout = boxes ? voxel_box_pipeline_layout : this->wireframe_pipeline_layout;
             using namespace viewport_shaders;
-            VkShaderModule vert = createShaderModule(device, kMeshWireframeVertSpv, "Mesh");
-            VkShaderModule frag = createShaderModule(device, kMeshWireframeFragSpv, "Mesh");
+            VkShaderModule vert = boxes ? createShaderModule(device, kCollisionOverlayVertSpv, "Collision")
+                                        : createShaderModule(device, kMeshWireframeVertSpv, "Mesh");
+            VkShaderModule frag = boxes ? createShaderModule(device, kCollisionOverlayFragSpv, "Collision")
+                                        : createShaderModule(device, kMeshWireframeFragSpv, "Mesh");
             if (vert == VK_NULL_HANDLE || frag == VK_NULL_HANDLE) {
                 if (vert)
                     vkDestroyShaderModule(device, vert, nullptr);
@@ -1747,6 +1783,10 @@ namespace lfs::vis {
             vertex_input.pVertexBindingDescriptions = &binding;
             vertex_input.vertexAttributeDescriptionCount = 1;
             vertex_input.pVertexAttributeDescriptions = &attr;
+            if (boxes) {
+                vertex_input.vertexBindingDescriptionCount = 0;
+                vertex_input.vertexAttributeDescriptionCount = 0;
+            }
 
             VkPipelineInputAssemblyStateCreateInfo input_assembly{};
             input_assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -1759,7 +1799,7 @@ namespace lfs::vis {
 
             VkPipelineRasterizationStateCreateInfo raster{};
             raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-            raster.polygonMode = VK_POLYGON_MODE_LINE;
+            raster.polygonMode = boxes ? VK_POLYGON_MODE_FILL : VK_POLYGON_MODE_LINE;
             raster.cullMode = VK_CULL_MODE_NONE;
             raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
             raster.lineWidth = 1.0f;
@@ -1772,7 +1812,7 @@ namespace lfs::vis {
             // OP_LESS_OR_EQUAL but write disabled so the underlying mesh's depth wins.
             VkPipelineDepthStencilStateCreateInfo depth{};
             depth.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-            depth.depthTestEnable = VK_TRUE;
+            depth.depthTestEnable = boxes ? VK_FALSE : VK_TRUE;
             depth.depthWriteEnable = VK_FALSE;
             depth.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
 
@@ -1780,7 +1820,13 @@ namespace lfs::vis {
             blend_attachment.colorWriteMask =
                 VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                 VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-            blend_attachment.blendEnable = VK_FALSE;
+            blend_attachment.blendEnable = boxes ? VK_TRUE : VK_FALSE;
+            blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
+            blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
 
             VkPipelineColorBlendStateCreateInfo blend{};
             blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
@@ -1797,12 +1843,32 @@ namespace lfs::vis {
             VkPushConstantRange push{};
             push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             push.offset = 0;
-            push.size = sizeof(WireframePush);
+            push.size = boxes ? sizeof(CollisionPush) : sizeof(WireframePush);
 
             VkPipelineLayoutCreateInfo layout_info{};
             layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
             layout_info.pushConstantRangeCount = 1;
             layout_info.pPushConstantRanges = &push;
+            if (boxes) {
+                VkDescriptorSetLayoutBinding occupancy_binding{};
+                occupancy_binding.binding = 0;
+                occupancy_binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                occupancy_binding.descriptorCount = 1;
+                occupancy_binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+                VkDescriptorSetLayoutCreateInfo descriptor_info{};
+                descriptor_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+                descriptor_info.bindingCount = 1;
+                descriptor_info.pBindings = &occupancy_binding;
+                const auto result = vkCreateDescriptorSetLayout(device, &descriptor_info, nullptr, &voxel_box_layout);
+                if (result != VK_SUCCESS) {
+                    vkDestroyShaderModule(device, vert, nullptr);
+                    vkDestroyShaderModule(device, frag, nullptr);
+                    return reportVkFailure("vkCreateDescriptorSetLayout(collision)", result,
+                                           "Collision occupancy descriptor layout creation failed");
+                }
+                layout_info.setLayoutCount = 1;
+                layout_info.pSetLayouts = &voxel_box_layout;
+            }
             const VkResult layout_result =
                 vkCreatePipelineLayout(device, &layout_info, nullptr, &wireframe_pipeline_layout);
             if (layout_result != VK_SUCCESS) {
@@ -2063,7 +2129,73 @@ namespace lfs::vis {
             return true;
         }
 
-        bool uploadMesh(const lfs::core::MeshData& mesh, GpuMesh& destination) {
+        bool uploadOccupancy(const core::CollisionVolume& volume, GpuMesh& gpu) {
+            const auto packed = volume.gpuOccupancy();
+            VkBufferCreateInfo buffer_info{};
+            buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            buffer_info.size = packed.size() * sizeof(uint32_t);
+            VkPhysicalDeviceProperties properties{};
+            vkGetPhysicalDeviceProperties(context->physicalDevice(), &properties);
+            if (buffer_info.size > properties.limits.maxStorageBufferRange)
+                return logVkFailure(std::format("Collision occupancy buffer exceeds device storage-buffer limit ({} > {})",
+                                                buffer_info.size, properties.limits.maxStorageBufferRange));
+            buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+            buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            VmaAllocationCreateInfo allocation_info{};
+            allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+            allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+            auto result = vmaCreateBuffer(allocator, &buffer_info, &allocation_info,
+                                          &gpu.occupancy_buffer, &gpu.occupancy_alloc, nullptr);
+            if (result != VK_SUCCESS)
+                return reportVkFailure("vmaCreateBuffer(collision)", result, "Collision occupancy upload allocation failed");
+            if (!writeBuffer(gpu.occupancy_alloc, packed.data(), buffer_info.size))
+                return false;
+            VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
+            VkDescriptorPoolCreateInfo pool_info{};
+            pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            pool_info.maxSets = 1;
+            pool_info.poolSizeCount = 1;
+            pool_info.pPoolSizes = &pool_size;
+            result = vkCreateDescriptorPool(device, &pool_info, nullptr, &gpu.occupancy_pool);
+            if (result != VK_SUCCESS)
+                return reportVkFailure("vkCreateDescriptorPool(collision)", result, "Collision descriptor pool creation failed");
+            VkDescriptorSetAllocateInfo descriptor_info{};
+            descriptor_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            descriptor_info.descriptorPool = gpu.occupancy_pool;
+            descriptor_info.descriptorSetCount = 1;
+            descriptor_info.pSetLayouts = &voxel_box_layout;
+            result = vkAllocateDescriptorSets(device, &descriptor_info, &gpu.occupancy_descriptor);
+            if (result != VK_SUCCESS)
+                return reportVkFailure("vkAllocateDescriptorSets(collision)", result, "Collision descriptor allocation failed");
+            VkDescriptorBufferInfo buffer{gpu.occupancy_buffer, 0, buffer_info.size};
+            VkWriteDescriptorSet write{};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = gpu.occupancy_descriptor;
+            write.dstBinding = 0;
+            write.descriptorCount = 1;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            write.pBufferInfo = &buffer;
+            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+            gpu.collision_volume = &volume;
+            return true;
+        }
+
+        bool uploadMesh(const lfs::core::MeshData& mesh, GpuMesh& destination, bool voxel_boxes,
+                        const core::CollisionVolume* volume) {
+            if (voxel_boxes) {
+                GpuMesh gpu{};
+                gpu.collision_voxel_boxes = true;
+                if (!volume || !uploadOccupancy(*volume, gpu)) {
+                    if (!volume)
+                        LOG_ERROR("Collision preview is missing its occupancy volume");
+                    destroyMesh(gpu);
+                    return false;
+                }
+                gpu.generation = mesh.generation();
+                destroyMesh(destination);
+                destination = std::move(gpu);
+                return true;
+            }
             const std::int64_t vcount = mesh.vertex_count();
             const std::int64_t fcount = mesh.face_count();
             if (vcount <= 0 || fcount <= 0) {
@@ -2162,7 +2294,6 @@ namespace lfs::vis {
             for (std::size_t i = 0; i < total_indices; ++i) {
                 indices[i] = static_cast<std::uint32_t>(idx[i]);
             }
-
             GpuMesh gpu{};
 
             const std::size_t vbytes = vertices.size() * sizeof(MeshVertex);
@@ -2521,13 +2652,15 @@ namespace lfs::vis {
                 GpuMesh* prepared_mesh = nullptr;
                 if (it == mesh_cache.end()) {
                     GpuMesh gpu{};
-                    if (uploadMesh(*item.mesh, gpu)) {
+                    if (uploadMesh(*item.mesh, gpu, item.collision_voxel_boxes, item.collision_volume)) {
                         gpu.last_used_frame = frame_counter;
                         const auto inserted = mesh_cache.emplace(item.mesh->id(), std::move(gpu)).first;
                         prepared_mesh = &inserted->second;
                     }
-                } else if (it->second.generation != item.mesh->generation()) {
-                    if (uploadMesh(*item.mesh, it->second)) {
+                } else if (it->second.generation != item.mesh->generation() ||
+                           it->second.collision_voxel_boxes != item.collision_voxel_boxes ||
+                           (item.collision_voxel_boxes && it->second.collision_volume != item.collision_volume)) {
+                    if (uploadMesh(*item.mesh, it->second, item.collision_voxel_boxes, item.collision_volume)) {
                         it->second.last_used_frame = frame_counter;
                     }
                     prepared_mesh = &it->second;
@@ -2550,7 +2683,7 @@ namespace lfs::vis {
 
             VkCommandBuffer shadow_cb = VK_NULL_HANDLE;
             for (const auto& item : params.items) {
-                if (!item.mesh || !item.shadow_enabled || item.shadow_map_resolution <= 0) {
+                if (!item.mesh || item.collision_voxel_boxes || !item.shadow_enabled || item.shadow_map_resolution <= 0) {
                     continue;
                 }
                 auto it = mesh_cache.find(item.mesh->id());
@@ -2700,6 +2833,9 @@ namespace lfs::vis {
                 const ShadowState* shadow = params.draw_group < gpu.shadows.size()
                                                 ? &gpu.shadows[params.draw_group]
                                                 : nullptr;
+                if (item.collision_voxel_boxes) {
+                    continue;
+                }
                 const bool shadow_active = item.shadow_enabled && shadow &&
                                            shadow->target.image != VK_NULL_HANDLE &&
                                            shadow->target.resolution == item.shadow_map_resolution &&
@@ -2868,6 +3004,36 @@ namespace lfs::vis {
                 vkCmdBindVertexBuffers(cb, 0, 1, &vbuf, &voff);
                 vkCmdBindIndexBuffer(cb, gpu.index_buffer, 0, VK_INDEX_TYPE_UINT32);
                 vkCmdDrawIndexed(cb, sm.index_count, 1, sm.start_index, 0, 0);
+            }
+            if (params.depth_view)
+                return;
+            for (const auto& item : params.items) {
+                if (!item.mesh || !item.collision_voxel_boxes || !item.collision_volume ||
+                    params.draw_group >= 32 || !((item.panel_mask >> params.draw_group) & 1u))
+                    continue;
+                auto it = mesh_cache.find(item.mesh->id());
+                if (it == mesh_cache.end() || it->second.occupancy_descriptor == VK_NULL_HANDLE ||
+                    it->second.collision_volume != item.collision_volume)
+                    continue;
+                const auto& volume = *item.collision_volume;
+                const auto mvp = view_projection * item.model;
+                if (std::abs(glm::determinant(mvp)) < 1e-12f) {
+                    LOG_ERROR("Cannot render collision overlay with a singular transform");
+                    continue;
+                }
+                CollisionPush push{};
+                push.inverse_mvp = glm::inverse(mvp);
+                push.origin_size = {volume.origin, volume.settings.voxel_size};
+                push.dimensions_flags = glm::uvec4(volume.dimensions, item.is_emphasized ? 1u : 0u);
+                push.viewport = {viewport.x, viewport.y, viewport.width, viewport.height};
+                push.camera = glm::inverse(item.model) * glm::vec4(params.camera_position, 1);
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, voxel_box_pipeline);
+                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, voxel_box_pipeline_layout,
+                                        0, 1, &it->second.occupancy_descriptor, 0, nullptr);
+                vkCmdPushConstants(cb, voxel_box_pipeline_layout,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0, sizeof(push), &push);
+                vkCmdDraw(cb, 3, 1, 0, 0);
             }
         }
     };

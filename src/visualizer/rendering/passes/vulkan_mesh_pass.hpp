@@ -17,7 +17,8 @@
 
 namespace lfs::core {
     struct MeshData;
-}
+    struct CollisionVolume;
+} // namespace lfs::core
 
 namespace lfs::vis {
 
@@ -40,6 +41,8 @@ namespace lfs::vis {
         bool dim_non_emphasized = false;
         // Wireframe overlay drawn after the main mesh pass.
         bool wireframe_overlay = false;
+        bool collision_voxel_boxes = false;
+        const lfs::core::CollisionVolume* collision_volume = nullptr;
         glm::vec3 wireframe_color{0.2f, 0.2f, 0.2f};
         float wireframe_width = 1.0f;
         // Shadow map: depth-only pre-pass per mesh, then sampler2DShadow read in main shader.
