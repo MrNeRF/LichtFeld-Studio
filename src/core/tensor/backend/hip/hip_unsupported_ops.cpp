@@ -19,5 +19,4 @@ namespace lfs::core::internal {
     void HipBackendOps::nn_attention(StorageRef q, StorageRef k, StorageRef v, std::optional<StorageRef> mask, StorageRef output, const AttentionProgram& program, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: nn_attention"); }
     void HipBackendOps::nn_norm(StorageRef input, StorageRef weight, std::optional<StorageRef> bias, StorageRef output, const NormProgram& program, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: nn_norm"); }
     void HipBackendOps::nn_conv2d(StorageRef input, StorageRef weight, std::optional<StorageRef> bias, StorageRef output, const ConvProgram& program, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: nn_conv2d"); }
-    void HipBackendOps::multinomial(StorageRef weights, StorageRef output, const RandomProgram& program, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: multinomial"); }
 } // namespace lfs::core::internal

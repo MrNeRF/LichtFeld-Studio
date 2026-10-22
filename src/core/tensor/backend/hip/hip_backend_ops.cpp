@@ -269,6 +269,7 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_ppisp);
         ENTRY(lfs_hip_affine);
         ENTRY(lfs_hip_morton);
+        ENTRY(lfs_hip_multinomial);
         ENTRY(lfs_hip_point_tree_components);
         ENTRY(lfs_hip_proximity);
         ENTRY(lfs_hip_convert);
@@ -414,6 +415,7 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_ppisp);
                 LOAD(lfs_hip_affine);
                 LOAD(lfs_hip_morton);
+                LOAD(lfs_hip_multinomial);
                 LOAD(lfs_hip_point_tree_components);
                 LOAD(lfs_hip_proximity);
                 LOAD(lfs_hip_convert);
@@ -2534,5 +2536,16 @@ Tensor HipBackendOps::morton_sort(const Tensor& positions,Tensor* sorted_keys,Ex
     }
     if(sorted_keys)*sorted_keys=std::move(keys);
     return indices;
+}
+}
+
+namespace lfs::core::internal {
+void HipBackendOps::multinomial(StorageRef weights,StorageRef output,const RandomProgram& program,ExecContext execution) {
+    queue(execution);
+    require(weights.dtype==DataType::Float32 && output.dtype==DataType::Int64,"HIP multinomial requires Float32 weights and Int64 output");
+    std::lock_guard lock(impl_->mutex);LfsHipError error{};
+    const auto status=impl_->lfs_hip_multinomial(impl_->context,impl_->view(weights),impl_->view(output),program.count,
+        program.sample_count,program.seed,program.replacement,&error);
+    impl_->refresh_algorithm_workspace();check(status,error);
 }
 }

@@ -256,6 +256,35 @@ int main() try {
                     "HIP Morton keys/order differ from stable CPU order");
         }
     }
+    {
+        auto weights=Tensor::from_vector(std::vector<float>{0,1,2,7,0},{5},Device::GPU);
+        auto first=Tensor::multinomial(weights,40000,true,913).cpu();
+        auto repeated=Tensor::multinomial(weights,40000,true,913).cpu();
+        auto different=Tensor::multinomial(weights,40000,true,914).cpu();
+        require(!std::memcmp(first.data_ptr(),repeated.data_ptr(),40000*8),"HIP multinomial seed is not reproducible");
+        require(std::memcmp(first.data_ptr(),different.data_ptr(),40000*8)!=0,"HIP multinomial ignores seed");
+        size_t frequencies[5]{};
+        for(size_t i=0;i<40000;++i) {const auto v=first.ptr<int64_t>()[i];require(v>=0 && v<5,"HIP multinomial index out of range");++frequencies[v];}
+        require(!frequencies[0] && !frequencies[4],"HIP multinomial selected zero probability");
+        for(int i=1;i<=3;++i)require(std::abs(double(frequencies[i])/40000.-(i==1?.1:i==2?.2:.7))<.012,"HIP multinomial probability distribution differs");
+        auto unique=Tensor::multinomial(weights,3,false,913).cpu();bool seen[5]{};
+        for(size_t i=0;i<3;++i){auto v=unique.ptr<int64_t>()[i];require(v>=1 && v<=3 && !seen[v],"HIP multinomial without replacement repeated/zero entry");seen[v]=true;}
+        const float tiny=std::numeric_limits<float>::denorm_min(),huge=std::numeric_limits<float>::max();
+        for(float value : {tiny,huge}) {
+            auto extreme=Tensor::from_vector(std::vector<float>{0,value,value,0},{4},Device::GPU);
+            auto draws=Tensor::multinomial(extreme,4099,true,17).cpu();size_t left=0;
+            for(size_t i=0;i<4099;++i){const auto v=draws.ptr<int64_t>()[i];require(v==1 || v==2,"HIP multinomial extreme weights lost support");left+=v==1;}
+            require(left>1800 && left<2300,"HIP multinomial extreme weights biased");
+        }
+        for(auto values : {std::vector<float>{0,0},std::vector<float>{1,-1},std::vector<float>{1,INFINITY},std::vector<float>{1,NAN}}) {
+            bool rejected=false;
+            try {auto invalid=Tensor::from_vector(values,{2},Device::GPU);(void)Tensor::multinomial(invalid,3,true,17);}
+            catch(const std::exception&){rejected=true;}
+            require(rejected,"HIP multinomial accepted invalid probability weights");
+            auto recovered=Tensor::multinomial(weights,7,true,17).cpu();
+            for(size_t i=0;i<7;++i)require(recovered.ptr<int64_t>()[i]>=1 && recovered.ptr<int64_t>()[i]<=3,"HIP multinomial failed to recover after invalid weights");
+        }
+    }
     affine_contract();
     low_level_contract();
     std::vector<float> chain(1025*3,0.f);
@@ -268,7 +297,7 @@ int main() try {
         for(size_t i=0;i<1025;++i) require(a.ptr<int32_t>()[i]==0 && b.ptr<int32_t>()[i]==0,"HIP concurrent union chain did not reach minimum root");
     }
 
-    std::puts("PASS HIP spatial, PPISP, stable Morton63 and affine covariance/volume/inplace/batched: hash collisions, masks, self exclusion, saturation, Int32/Float32 minima, direct grid spacing/nearest ties, public mutual radii/spacing/nearest/camera coverage, atomic radius/mutual components, eight concurrent 1025-point chains, nonfinite and empty points");
+    std::puts("PASS HIP spatial, PPISP, stable Morton63, multinomial and affine covariance/volume/inplace/batched: hash collisions, masks, self exclusion, saturation, Int32/Float32 minima, direct grid spacing/nearest ties, public mutual radii/spacing/nearest/camera coverage, atomic radius/mutual components, eight concurrent 1025-point chains, nonfinite and empty points");
     return 0;
 } catch(const std::exception& e) {std::fprintf(stderr,"HIP spatial failed: %s\n",e.what());return 1;}
 

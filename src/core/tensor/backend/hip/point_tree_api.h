@@ -15,6 +15,8 @@ typedef struct LfsHipPpisp {
 #ifdef __cplusplus
 extern "C" {
 #endif
+LFS_HIP_API int lfs_hip_multinomial(LfsHipContext*,LfsHipView weights,LfsHipView output,size_t categories,
+                                    size_t samples,uint64_t seed,uint32_t replacement,LfsHipError*);
 LFS_HIP_API int lfs_hip_morton(LfsHipContext*,LfsHipView positions,LfsHipView keys,LfsHipView indices,
                                size_t count,LfsHipError*);
 LFS_HIP_API int lfs_hip_affine(LfsHipContext*,const LfsHipView* inputs,const LfsHipView* outputs,
