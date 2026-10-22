@@ -4,6 +4,7 @@
  */
 
 #include "io/project_chapters.hpp"
+#include "core/collision_serialization.hpp"
 #include "core/native_fs.hpp"
 
 #include "core/path_utils.hpp"
@@ -2740,6 +2741,17 @@ namespace lfs::io::project {
                 }
                 result.camera = std::move(*parsed);
             }
+            if (const Json* collision = JsonChapterDom::read_json_ref(element, "collision")) {
+                try {
+                    if (result.type != "mesh")
+                        throw std::invalid_argument("Collision payload requires a mesh node");
+                    result.collision = collision->get<lfs::core::CollisionVolume>();
+                } catch (const std::exception& error) {
+                    return fail<SceneNodeRecord>(
+                        lfs::ErrorCode::DataLoss, "Invalid collision node payload.",
+                        error.what(), "SCNG", "nodes.collision");
+                }
+            }
             return result;
         }
 
@@ -2943,6 +2955,18 @@ namespace lfs::io::project {
             element["camera"] = camera_json(*value.camera);
         } else {
             element.erase("camera");
+        }
+        if (value.collision) {
+            try {
+                if (value.type != "mesh")
+                    throw std::invalid_argument("Collision payload requires a mesh node");
+                element["collision"] = nlohmann::json(*value.collision);
+            } catch (const std::exception& error) {
+                return fail<void>(lfs::ErrorCode::InvalidArgument,
+                                  "Invalid collision node payload.", error.what(), "SCNG", "nodes.collision");
+            }
+        } else {
+            element.erase("collision");
         }
         return dom_.array_put("nodes", uuid, std::move(element));
     }

@@ -6,6 +6,7 @@
 
 #include "core/animatable_property.hpp"
 #include "core/camera.hpp"
+#include "core/collision.hpp"
 #include "core/export.hpp"
 #include "core/mesh_data.hpp"
 #include "core/splat_data.hpp"
@@ -166,6 +167,7 @@ namespace lfs::core {
         std::unique_ptr<lfs::core::SplatData> model;
         std::shared_ptr<lfs::core::PointCloud> point_cloud;
         std::shared_ptr<lfs::core::MeshData> mesh;
+        std::shared_ptr<const CollisionVolume> collision;
         std::unique_ptr<CropBoxData> cropbox;
         std::unique_ptr<EllipsoidData> ellipsoid;
         std::unique_ptr<KeyframeData> keyframe;
@@ -258,6 +260,7 @@ namespace lfs::core {
             std::unique_ptr<lfs::core::SplatData> model;
             std::shared_ptr<lfs::core::PointCloud> point_cloud;
             std::shared_ptr<lfs::core::MeshData> mesh;
+            std::shared_ptr<const CollisionVolume> collision;
             std::unique_ptr<CropBoxData> cropbox;
             std::unique_ptr<EllipsoidData> ellipsoid;
             std::shared_ptr<lfs::core::Camera> camera;
@@ -560,6 +563,7 @@ namespace lfs::core {
         [[nodiscard]] uint64_t renderGeneration() const noexcept {
             return render_generation_.load(std::memory_order_acquire);
         }
+        [[nodiscard]] uint64_t graphEpoch() const noexcept { return graph_epoch_; }
         [[nodiscard]] uint64_t selectionGeneration() const noexcept { return selection_generation_; }
 
         // Install before publishing a live scene to workers. Detached and restore
@@ -857,6 +861,7 @@ namespace lfs::core {
         mutable uint64_t consolidated_generation_ = 0;
         bool preserve_source_models_ = false;
         mutable std::atomic<uint64_t> render_generation_{0};
+        uint64_t graph_epoch_ = 0;
         RenderInvalidationCallback render_invalidation_callback_ = nullptr;
         RenderInvalidationCallback transform_invalidation_callback_ = nullptr;
         std::atomic<uint64_t> bounds_generation_{1};

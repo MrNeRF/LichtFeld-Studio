@@ -359,6 +359,7 @@ endif()
 # unreferenced function sections before resolution. Keep the dependency-heavy
 # chapter coverage in the non-Windows composition.
 set(LICHT_FORMAT_WINDOWS_FILES
+    ${CMAKE_SOURCE_DIR}/src/core/collision.cpp
     test_property_defaults.cpp
     test_atomic_output.cpp
     test_project_save_as_paths.cpp
@@ -453,6 +454,7 @@ target_link_libraries(lichtfeld_format_tests PRIVATE
     xxHash::xxhash
     zstd::libzstd
     Threads::Threads
+    glm::glm
 )
 if(NOT WIN32)
     target_link_libraries(lichtfeld_format_tests PRIVATE OpenSSL::Crypto)

@@ -265,6 +265,8 @@ namespace lfs::core {
         if (restore_staging_) {
             return;
         }
+        if (type == MutationType::CLEARED)
+            ++graph_epoch_;
         pending_mutations_ |= static_cast<uint32_t>(type);
 
         if (type == MutationType::NODE_ADDED ||
@@ -4492,6 +4494,7 @@ namespace lfs::core {
                 return NULL_NODE;
             }
             node->mesh = std::move(desc.mesh);
+            node->collision = std::move(desc.collision);
             break;
         case NodeType::CROPBOX:
             if (!desc.cropbox) {
@@ -4667,6 +4670,7 @@ namespace lfs::core {
         pending_mutations_ = 0;
         transaction_depth_ = 0;
         ++camera_list_generation_;
+        ++graph_epoch_;
         return staged;
     }
 
@@ -4737,6 +4741,7 @@ namespace lfs::core {
                 if (has_payload) {
                     live->mesh =
                         std::move(staged_node->mesh);
+                    live->collision = std::move(staged_node->collision);
                     live->gaussian_count.store(
                         static_cast<std::size_t>(
                             live->mesh->vertex_count()),
@@ -5022,6 +5027,7 @@ namespace lfs::core {
                 new_node->visible.setQuiet(src_visible);
                 new_node->locked.setQuiet(src_locked);
                 new_node->point_cloud_source = getNodeById(src_id)->point_cloud_source;
+                new_node->collision = getNodeById(src_id)->collision;
                 new_node->transform_dirty = true;
             }
 

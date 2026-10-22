@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "core/collision.hpp"
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
@@ -439,6 +440,7 @@ namespace lfs::io::project {
         std::optional<CropBoxRecord> cropbox = std::nullopt;
         std::optional<EllipsoidRecord> ellipsoid = std::nullopt;
         std::optional<CameraRecord> camera = std::nullopt;
+        std::optional<lfs::core::CollisionVolume> collision = std::nullopt;
 
         friend bool operator==(const SceneNodeRecord&, const SceneNodeRecord&) = default;
     };
