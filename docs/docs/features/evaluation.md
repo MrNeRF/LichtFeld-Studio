@@ -86,6 +86,16 @@ With `--eval-mask-report`, every listed pixel set has its own object in the eval
 - **LPIPS** compares deep features and follows perceived similarity more closely. Lower is better. The weights are downloaded on first use; `--no-download` disables that.
 - **FLIP** estimates how different the two images look when flipped between on a display, per pixel, in [0, 1]. Lower is better. It uses the published LDR-FLIP model for a 0.7 m wide 3840 pixel display viewed from 0.7 m (67 pixels per degree) and treats pixel values as sRGB. The error map uses the magma colour scale: black is no visible difference.
 
+### Color variance training
+
+MCMC, MRNF and IGS+ support the optional SteadySplats color variance loss through the FastGS training renderer. Set **Color Variance Weight** and **Color Variance Warm-up** in the training panel's loss controls, or use `color_variance_weight` and `color_variance_warmup_iters` in an optimization config. Weight `0` disables it by default. The warm-up is the number of completed training iterations before the loss starts, and follows training step scaling. Both settings are saved in checkpoints.
+
+This implements the ground-truth color objective in [SteadySplats, Appendix 13](https://arxiv.org/html/2610.05576v2#A13): sum the RGB squared error of each visible splat, weighted by its alpha-compositing contribution, then average over image pixels. It uses evaluated fragment colors, including the renderer's color clamps. It does not normalize by accumulated opacity or add a background penalty; the paper's variance interpretation assumes full coverage.
+
+The first version requires unmasked FastGS training with appearance correction and mip filtering off, and no crop box loss weighting or POPSpa phase. MRNF enables exposure correction by default; turn it off to use this loss. A weight of `1` after `15000` warm-up iterations in a `30000`-iteration run is a starting experiment based on the paper, not a replacement for a strategy's own settings.
+
+Compare runs from the same warm-up checkpoint with the same image-exposure budget. Check sorted PSNR, SSIM and LPIPS as well as noise in a stochastic renderer: reducing color variance can reduce detail and peak reconstruction quality. LFS's existing 3DGS and 3DGUT viewport choices do not show the stochastic sampling noise this loss targets.
+
 ## Evaluation masks
 
 A mask restricts all metrics to a part of each image, for example the object without its background. Pixels outside it are left out of PSNR, FLIP and the colour bias; SSIM uses only windows that lie fully inside the mask; LPIPS averages each feature layer's distances over the mask, with the outside black in both images.

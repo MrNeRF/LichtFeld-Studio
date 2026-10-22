@@ -567,6 +567,7 @@ namespace lfs::core {
             morton_reorder_interval = apply(morton_reorder_interval);
             sh_degree_interval = apply(sh_degree_interval);
             grow_until_iter = apply(grow_until_iter);
+            color_variance_warmup_iters = apply(color_variance_warmup_iters);
 
             for (auto* steps : {&eval_steps, &save_steps}) {
                 std::set<size_t> unique;
@@ -576,6 +577,12 @@ namespace lfs::core {
                 }
                 steps->assign(unique.begin(), unique.end());
             }
+        }
+
+        float OptimizationParameters::color_variance_weight_at(const int iteration) const {
+            return iteration > 0 && static_cast<size_t>(iteration) > color_variance_warmup_iters
+                       ? color_variance_weight
+                       : 0.0f;
         }
 
         void OptimizationParameters::apply_step_scaling() {
@@ -948,6 +955,24 @@ namespace lfs::core {
                 return std::format("densify_structure_weight must be finite and within [0, 4] (got {})", densify_structure_weight);
             if (!std::isfinite(gradient_loss_weight) || gradient_loss_weight < 0.0f || gradient_loss_weight > 8.0f)
                 return std::format("gradient_loss_weight must be finite and within [0, 8] (got {})", gradient_loss_weight);
+            if (!std::isfinite(color_variance_weight) || color_variance_weight < 0.0f || color_variance_weight > 8.0f)
+                return "color_variance_weight must be finite and within [0, 8]";
+            if (color_variance_warmup_iters > MAX_ITERATION_VALUE)
+                return "color_variance_warmup_iters must fit in a signed int";
+            if (color_variance_weight > 0.0f) {
+                if (color_variance_warmup_iters >= iterations)
+                    return "color_variance_warmup_iters must be less than iterations when color variance is enabled";
+                if (gut)
+                    return "Color variance requires the FastGS training renderer (GUT is not supported)";
+                if (mip_filter)
+                    return "Color variance does not yet support mip filtering";
+                if (bilateral_grid_active() || ppisp_active())
+                    return "Color variance does not yet support appearance correction";
+                if (mask_mode != MaskMode::None)
+                    return "Color variance does not yet support masked training";
+                if (enable_sparsity)
+                    return "Color variance does not yet support POPSpa";
+            }
             if (!std::isfinite(thin_structure_weight) || thin_structure_weight < 0.0f || thin_structure_weight > 4.0f)
                 return std::format("thin_structure_weight must be finite and within [0, 4] (got {})", thin_structure_weight);
             if (!std::isfinite(late_lr_anneal) || late_lr_anneal <= 0.0f || late_lr_anneal > 1.0f)

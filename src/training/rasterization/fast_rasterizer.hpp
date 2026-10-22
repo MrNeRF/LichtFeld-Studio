@@ -159,6 +159,12 @@ namespace lfs::training {
         float* impact_peak_out = nullptr;
     };
 
+    struct FastGSColorVarianceLoss {
+        core::Tensor target;
+        core::Tensor loss; // Optional caller-zeroed CUDA float32 scalar.
+        float weight = 0.0f;
+    };
+
     // Accumulates FP64 removal energy into aligned CUDA UInt8 [N, sizeof(double)] storage.
     // The caller zeros these bytes once; each call adds a view without clearing them.
     lfs::Status fast_accumulate_pop_scores(const FastRasterizeContext& ctx, lfs::core::Tensor& scores);
@@ -198,7 +204,8 @@ namespace lfs::training {
         const FastGSFusedExtraGradients& fused_extra_gradients = {},
         const lfs::core::Tensor& grad_depth = {},
         const lfs::core::Tensor& grad_normal = {},
-        bool defer_optimizer_step = false);
+        bool defer_optimizer_step = false,
+        const FastGSColorVarianceLoss& color_variance = {});
 
     // Release per-thread renderer caches before the owning CUDA stream is torn down.
     bool release_fast_rasterizer_thread_local_caches() noexcept;

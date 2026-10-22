@@ -5,6 +5,7 @@
 #pragma once
 
 #include "helper_math.h"
+#include <cstdint>
 
 #define DEF inline constexpr
 
@@ -22,6 +23,16 @@ namespace fast_lfs::rasterization {
         const float* bg_color = nullptr;
         const float* bg_image = nullptr;
         const float* grad_alpha_extra = nullptr;
+    };
+
+    // Per-view SteadySplats Eq. 30 loss. Targets are normalized float32 or
+    // UInt8 CHW RGB. The caller zeros loss_out; the blend adds weighted loss.
+    // Background contributes to the photometric adjoint only, not this loss.
+    struct ColorVarianceLoss {
+        const float* target = nullptr;
+        const std::uint8_t* target_u8 = nullptr;
+        float weight_per_pixel = 0.0f;
+        float* loss_out = nullptr;
     };
 } // namespace fast_lfs::rasterization
 

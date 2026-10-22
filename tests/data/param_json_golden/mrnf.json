@@ -11,6 +11,8 @@
   "bilateral_grid_Y": 16,
   "bilateral_grid_lr": 0.0020000000949949026,
   "bounds_percentile": 0.800000011920929,
+  "color_variance_warmup_iters": 0,
+  "color_variance_weight": 0.0,
   "cropbox_growth_inside": 0.0,
   "cropbox_loss_weight": 0.10000000149011612,
   "cropbox_lr_scale": 0.10000000149011612,

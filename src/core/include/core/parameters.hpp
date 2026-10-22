@@ -262,6 +262,9 @@ namespace lfs::core {
             // follows the ROI-weighted error with no fixed split.
             float cropbox_growth_inside = 0.0f;
             float lambda_dssim = 0.2f;
+            // SteadySplats Eq. 30: weighted RGB squared distance to the training target.
+            float color_variance_weight = 0.0f;
+            size_t color_variance_warmup_iters = 0;
             float min_opacity = 0.005f;
             size_t refine_every = 100;
             size_t start_refine = 500;
@@ -433,6 +436,7 @@ namespace lfs::core {
             void apply_step_scaling();
             void remove_step_scaling();
             [[nodiscard]] int resolved_total_iterations() const;
+            [[nodiscard]] float color_variance_weight_at(int iteration) const;
             [[nodiscard]] bool normal_supervision_active(int iter) const;
             [[nodiscard]] float scale_reg_at(int iter) const;
             void resolve_mrnf_capacity_defaults();

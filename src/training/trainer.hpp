@@ -947,6 +947,7 @@ namespace lfs::training {
         core::Tensor fused_erank_reg_loss_;
         core::Tensor fused_dc_reg_loss_;
         core::Tensor fused_sh_rest_reg_loss_;
+        core::Tensor color_variance_loss_;
         float train_frame_scale_ = 1.0f;
         // Crop box (ROI) state: the snapshot for this step, the published one, and per-step masks.
         std::optional<TrainingCropBoxGeometry> cropbox_;

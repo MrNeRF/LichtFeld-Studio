@@ -2186,6 +2186,22 @@ class OptimizationParams:
     def lambda_dssim(self, arg: float, /) -> None: ...
 
     @property
+    def color_variance_weight(self) -> float:
+        """
+        Reduces noise in stochastic rendering by aligning visible splat colors; 0 disables
+        """
+
+    @color_variance_weight.setter
+    def color_variance_weight(self, arg: float, /) -> None: ...
+
+    @property
+    def color_variance_warmup_iters(self) -> int:
+        """Completed training iterations before color variance starts"""
+
+    @color_variance_warmup_iters.setter
+    def color_variance_warmup_iters(self, arg: int, /) -> None: ...
+
+    @property
     def sh_degree(self) -> int:
         """Spherical harmonics degree (0-3)"""
 

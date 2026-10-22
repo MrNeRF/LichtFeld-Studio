@@ -1002,6 +1002,16 @@ namespace lfs::python {
                 [](PyOptimizationParams& self, float v) { self.set("lambda_dssim", nb::cast(v)); },
                 "Weight for structural similarity loss")
             .def_prop_rw(
+                "color_variance_weight",
+                [](PyOptimizationParams& self) { return self.params().color_variance_weight; },
+                [](PyOptimizationParams& self, float v) { self.set("color_variance_weight", nb::cast(v)); },
+                "Reduces noise in stochastic rendering by aligning visible splat colors; 0 disables")
+            .def_prop_rw(
+                "color_variance_warmup_iters",
+                [](PyOptimizationParams& self) { return self.params().color_variance_warmup_iters; },
+                [](PyOptimizationParams& self, size_t v) { self.set("color_variance_warmup_iters", nb::cast(v)); },
+                "Completed training iterations before color variance starts")
+            .def_prop_rw(
                 "sh_degree",
                 [](PyOptimizationParams& self) { return self.params().sh_degree; },
                 [](PyOptimizationParams& self, int v) { self.set("sh_degree", nb::cast(v)); },
