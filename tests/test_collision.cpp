@@ -81,7 +81,7 @@ TEST(CollisionSettings, PresetsDomainsAndBounds) {
     EXPECT_EQ(s.carve_height, 1.6f);
     s.applyPreset(CollisionPreset::Outdoor);
     EXPECT_FALSE(s.external_fill);
-    EXPECT_TRUE(s.floor_fill);
+    EXPECT_FALSE(s.floor_fill);
     EXPECT_EQ(s.carve_height, 0);
     s.opacity = 0;
     s.cluster_opacity = 1;
@@ -111,10 +111,10 @@ TEST(CollisionVoxelization, RotationScaleAndCombinedOpacity) {
     CollisionSettings s;
     s.applyPreset(CollisionPreset::Object);
     s.voxel_size = 0.05f;
-    s.opacity = 0.6f;
+    s.opacity = 0.5f;
     CollisionGaussian a{{0, 0, 0}, glm::mat3(0.2f), 0.4f};
     EXPECT_THROW((void)generateCollision(std::span(&a, 1), s), std::runtime_error);
-    // Two individually sub-threshold splats combine as 1-(1-a)^2.
+    // Density adds: two 0.4 contributions yield 1-exp(-0.8), above 0.5.
     std::array both{a, a};
     auto combined = generateCollision(both, s);
     EXPECT_GT(count(combined), 0u);
@@ -235,12 +235,17 @@ TEST(CollisionSparse, AccumulatedOpacityMatchesDirectCellEvaluation) {
                 glm::ivec3 p(x, y, z);
                 float a = 0;
                 for (const auto& gaussian : source) {
-                    auto q = glm::inverse(gaussian.axes) * (g.origin + (glm::vec3(p) + 0.5f) * s.voxel_size - gaussian.center);
-                    float d = glm::dot(q, q);
-                    if (d <= 9)
-                        a += (1 - a) * gaussian.opacity * std::exp(-0.5f * d);
+                    const auto center = g.origin + (glm::vec3(p) + 0.5f) * s.voxel_size;
+                    glm::vec3 extent;
+                    for (int axis = 0; axis < 3; ++axis)
+                        extent[axis] = 3 * glm::length(glm::vec3(gaussian.axes[0][axis], gaussian.axes[1][axis], gaussian.axes[2][axis]));
+                    if (glm::any(glm::greaterThan(glm::abs(center - gaussian.center), extent + s.voxel_size * 0.5f)))
+                        continue;
+                    const auto closest = glm::clamp(gaussian.center, center - s.voxel_size * 0.5f, center + s.voxel_size * 0.5f);
+                    const auto q = glm::inverse(gaussian.axes) * (closest - gaussian.center);
+                    a += gaussian.opacity * std::exp(-0.5f * glm::dot(q, q));
                 }
-                ASSERT_EQ(g.occupied(p), a > 0 && a >= s.opacity) << x << "," << y << "," << z;
+                ASSERT_EQ(g.occupied(p), a > 0 && -std::expm1(-a) >= s.opacity) << x << "," << y << "," << z;
             }
 }
 TEST(CollisionSparse, WeakIsolatedAndDegenerateFarSupportsDoNotExpandBounds) {
@@ -608,4 +613,45 @@ TEST(CollisionVoxelization, ParallelBricksMatchSerialIncludingPartialBoundaryCel
         for (int y = 0; y < serial.dimensions.y; ++y)
             for (int x = 0; x < serial.dimensions.x; ++x)
                 ASSERT_EQ(serial.occupied({x, y, z}), parallel.occupied({x, y, z}));
+}
+
+TEST(CollisionVoxelization, ThinSurfaceBetweenVoxelCentersRemainsCollidable) {
+    CollisionSettings s;
+    s.voxel_size = 0.1f;
+    const CollisionGaussian sheet{{0, 0.001f, 0}, glm::mat3(0.2f, 0, 0, 0, 0.0002f, 0, 0, 0, 0.2f), 1};
+    const auto v = generateCollision(std::span(&sheet, 1), s);
+    EXPECT_TRUE(v.occupied(v.cell(sheet.center)));
+    EXPECT_FALSE(v.occupied(v.cell({0, 0.15f, 0})));
+    EXPECT_FALSE(v.occupied(v.cell({0, -0.15f, 0})));
+    EXPECT_FALSE(v.settings.floor_fill);
+    s.floor_fill = true;
+    s.floor_size = 0;
+    const auto filled = generateCollision(std::span(&sheet, 1), s);
+    EXPECT_GT(filled.occupiedCount(), v.occupiedCount());
+}
+TEST(CollisionVoxelization, OpacityUsesExtinctionRatherThanOverComposition) {
+    CollisionSettings s;
+    s.opacity = 0.5f;
+    const CollisionGaussian source{{0, 0, 0}, glm::mat3(.2f), .6f};
+    EXPECT_THROW((void)generateCollision(std::span(&source, 1), s), std::runtime_error);
+    const std::array both{source, source};
+    EXPECT_GT(generateCollision(both, s).occupiedCount(), 0u);
+}
+
+TEST(CollisionVoxelization, SurfaceDefaultDoesNotExtrudeLowCanopyIntoGround) {
+    CollisionSettings s;
+    s.voxel_size = 0.1f;
+    s.seed = {0, 3, 0};
+    s.floor_below_seed = true;
+    s.floor_size = 0;
+    const auto axes = glm::mat3(0.2f, 0, 0, 0, 0.005f, 0, 0, 0, 0.2f);
+    const std::array source{CollisionGaussian{{-1, -2, 0}, axes, 1},
+                            CollisionGaussian{{1, 1, 0}, axes, 1}};
+    const auto surface = generateCollision(source, s);
+    EXPECT_TRUE(surface.occupied(surface.cell(source.back().center)));
+    EXPECT_FALSE(surface.occupied(surface.cell({1, 0, 0})));
+    s.floor_fill = true;
+    const auto filled = generateCollision(source, s);
+    // Even the seed-height guard cannot recognize a low canopy as non-ground.
+    EXPECT_TRUE(filled.occupied(filled.cell({1, 0, 0})));
 }

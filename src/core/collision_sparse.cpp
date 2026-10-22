@@ -228,6 +228,10 @@ namespace lfs::core::collision_detail {
 
     CollisionVolume voxelizeSparse(std::span<const CollisionGaussian> source, CollisionSettings settings,
                                    std::stop_token stop, CollisionProgress progress, unsigned parallelism) {
+        // Match voxel-volume sampling used by splat-transform: contributions
+        // add as extinction density, with opacity = 1-exp(-density).
+        // A voxel intersects thin splats even when its center misses them.
+        const double cutoff = -std::log1p(-double(settings.opacity));
         struct Bounds {
             glm::vec3 min, max;
             float opacity;
@@ -243,7 +247,7 @@ namespace lfs::core::collision_detail {
                 throw std::invalid_argument("Non-finite or invalid Gaussian in collision source");
             if (g.opacity == 0 || std::abs(glm::determinant(g.axes)) < 1e-20f)
                 continue;
-            auto e = extent(g);
+            auto e = extent(g) + settings.voxel_size * 0.5f;
             if (!finite(e) || !finite(g.center - e) || !finite(g.center + e))
                 throw std::invalid_argument("Gaussian collision support exceeds finite coordinate range");
             bounds.push_back({g.center - e, g.center + e, g.opacity});
@@ -287,7 +291,7 @@ namespace lfs::core::collision_detail {
             check(stop);
             double upper = 0;
             std::function<void(uint32_t)> accumulate = [&](uint32_t i) {
-                if (upper >= settings.opacity)
+                if (upper >= cutoff)
                     return;
                 if ((++bound_work & 4095) == 0)
                     check(stop);
@@ -300,19 +304,19 @@ namespace lfs::core::collision_detail {
                     accumulate(node.left);
                     accumulate(node.right);
                 } else {
-                    for (size_t j = node.begin; j < node.end && upper < settings.opacity; ++j) {
+                    for (size_t j = node.begin; j < node.end && upper < cutoff; ++j) {
                         const auto& other = bounds[order[j]];
                         if (glm::all(glm::lessThanEqual(bound.min, other.max)) &&
                             glm::all(glm::greaterThanEqual(bound.max, other.min)))
-                            upper += (1 - upper) * other.opacity + 8 * std::numeric_limits<float>::epsilon();
+                            upper += other.opacity + 8 * std::numeric_limits<float>::epsilon();
                     }
                 }
             };
             // A weak isolated support cannot change occupancy, but remains in
             // the evaluator wherever another support can produce a solid cell.
-            if (bound.opacity < settings.opacity)
+            if (bound.opacity < cutoff)
                 accumulate(0);
-            if (bound.opacity >= settings.opacity || upper >= settings.opacity) {
+            if (bound.opacity >= cutoff || upper >= cutoff) {
                 lo = glm::min(lo, bound.min);
                 hi = glm::max(hi, bound.max);
             }
@@ -333,6 +337,7 @@ namespace lfs::core::collision_detail {
         struct Prepared {
             glm::vec3 center;
             glm::mat3 inverse;
+            glm::vec3 extent;
             float opacity;
             glm::ivec3 min, max;
         };
@@ -358,7 +363,7 @@ namespace lfs::core::collision_detail {
                                              glm::ivec3(0), volume.dimensions);
             const auto cell_max = glm::clamp(glm::ivec3(glm::floor((clipped_max - glm::dvec3(volume.origin)) / double(size))) + 1,
                                              glm::ivec3(0), volume.dimensions);
-            prepared.push_back({g.center, glm::inverse(g.axes), g.opacity, cell_min, cell_max});
+            prepared.push_back({g.center, glm::inverse(g.axes), extent(g), g.opacity, cell_min, cell_max});
         }
         std::vector<uint32_t> all(prepared.size());
         std::iota(all.begin(), all.end(), 0);
@@ -397,8 +402,8 @@ namespace lfs::core::collision_detail {
                     return;
                 const auto middle = glm::dvec3(volume.origin) +
                                     (glm::dvec3(lo) + glm::dvec3(hi)) * (double(size) / 2);
-                const auto half = glm::dvec3(hi - lo - 1) * (double(size) / 2);
-                // Bound float evaluation error as well as the whole cell-center box.
+                const auto half = glm::dvec3(hi - lo) * (double(size) / 2);
+                // Bound float evaluation error as well as the whole voxel-volume box.
                 const auto error = (glm::abs(middle) + glm::abs(glm::dvec3(volume.origin)) + 1.0) *
                                    (8 * double(std::numeric_limits<float>::epsilon()));
                 std::vector<uint32_t> relevant;
@@ -413,25 +418,25 @@ namespace lfs::core::collision_detail {
                     if (work > 4'000'000'000ULL)
                         throw std::runtime_error("Sparse Gaussian active-work budget exceeded");
                     const auto& g = prepared[index];
+                    if (glm::any(glm::greaterThanEqual(lo, g.max)) || glm::any(glm::lessThanEqual(hi, g.min)))
+                        continue;
                     auto inv = glm::dmat3(g.inverse);
                     auto q = inv * (middle - glm::dvec3(g.center));
                     auto h = half + error + glm::abs(glm::dvec3(g.center)) * (8 * double(std::numeric_limits<float>::epsilon()));
                     auto qr = glm::abs(inv[0]) * h.x + glm::abs(inv[1]) * h.y + glm::abs(inv[2]) * h.z;
                     auto near = glm::max(glm::abs(q) - qr, glm::dvec3(0));
                     double min_distance = glm::dot(near, near);
-                    if (min_distance > 9.0001)
-                        continue;
                     relevant.push_back(index);
-                    upper += (1 - upper) * g.opacity * std::exp(-0.5 * min_distance);
+                    upper += g.opacity * std::exp(-0.5 * min_distance);
                     auto far = glm::abs(q) + qr;
                     double max_distance = glm::dot(far, far);
                     if (max_distance <= 9)
-                        lower += (1 - lower) * g.opacity * std::exp(-0.5 * max_distance);
+                        lower += g.opacity * std::exp(-0.5 * max_distance);
                 }
                 const double rounding = relevant.size() * (8 * double(std::numeric_limits<float>::epsilon()));
-                if (relevant.empty() || upper + rounding < settings.opacity)
+                if (relevant.empty() || upper + rounding < cutoff)
                     return;
-                if (lower > 0 && lower - rounding >= settings.opacity &&
+                if (lower > 0 && lower - rounding >= cutoff &&
                     glm::all(glm::equal(hi, lo + n))) {
                     tree.nodes[node] = 1;
                     return;
@@ -443,7 +448,7 @@ namespace lfs::core::collision_detail {
                     });
                     return;
                 }
-                std::array<float, 512> alpha{};
+                std::array<float, 512> density{};
                 const auto total = uint32_t((hi.x - lo.x) * (hi.y - lo.y) * (hi.z - lo.z));
                 auto remaining = total;
                 for (auto index : relevant) {
@@ -459,16 +464,17 @@ namespace lfs::core::collision_detail {
                                     if (shared_work.fetch_add(4096, std::memory_order_relaxed) > 4'000'000'000ULL)
                                         throw std::runtime_error("Sparse Gaussian active-work budget exceeded");
                                 }
-                                auto& value = alpha[(z - lo.z) * 64 + (y - lo.y) * 8 + x - lo.x];
-                                if (value > 0 && value >= settings.opacity)
+                                auto& value = density[(z - lo.z) * 64 + (y - lo.y) * 8 + x - lo.x];
+                                if (value > 0 && double(value) >= cutoff)
                                     continue;
-                                auto q = g.inverse * (volume.origin + (glm::vec3(x, y, z) + 0.5f) * size - g.center);
-                                float distance = glm::dot(q, q);
-                                if (distance <= 9) {
-                                    value += (1 - value) * g.opacity * std::exp(-0.5f * distance);
-                                    if (value > 0 && value >= settings.opacity)
-                                        --remaining;
-                                }
+                                const auto center = volume.origin + (glm::vec3(x, y, z) + 0.5f) * size;
+                                if (glm::any(glm::greaterThan(glm::abs(center - g.center), g.extent + size * 0.5f)))
+                                    continue;
+                                const auto closest = glm::clamp(g.center, center - size * 0.5f, center + size * 0.5f);
+                                const auto q = g.inverse * (closest - g.center);
+                                value += g.opacity * std::exp(-0.5f * glm::dot(q, q));
+                                if (value > 0 && double(value) >= cutoff)
+                                    --remaining;
                             }
                 }
                 if (remaining == total)
@@ -482,8 +488,8 @@ namespace lfs::core::collision_detail {
                         if (glm::any(glm::greaterThanEqual(p, hi)))
                             return;
                         const auto q = p - lo;
-                        const auto value = alpha[q.z * 64 + q.y * 8 + q.x];
-                        tree.nodes[index] = value > 0 && value >= settings.opacity;
+                        const auto value = density[q.z * 64 + q.y * 8 + q.x];
+                        tree.nodes[index] = value > 0 && double(value) >= cutoff;
                         return;
                     }
                     children(index, [&](uint32_t child_index, int child) {

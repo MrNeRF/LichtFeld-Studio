@@ -343,7 +343,9 @@ namespace lfs::core {
     void CollisionSettings::applyPreset(CollisionPreset value) {
         preset = value;
         external_fill = value == CollisionPreset::Indoor;
-        floor_fill = value == CollisionPreset::Outdoor;
+        // Surface collision is the safe default. Ground-volume extrusion is an
+        // explicit authoring option, since vegetation is not a ground estimator.
+        floor_fill = false;
         carve_height = value == CollisionPreset::Indoor ? 1.6f * units_per_meter : 0;
         carve_radius = 0.2f * units_per_meter;
         external_size = floor_size = 1.6f * units_per_meter;

@@ -9,6 +9,7 @@
   <div class="collision-row" data-tooltip="collision.tip_units"><span>@tr:collision.units</span><input id="units-per-meter" type="text" value="1"/></div>
   <div class="collision-row" data-tooltip="collision.tip_detail"><span>@tr:collision.detail</span><input id="detail" type="range" min="0.01" max="0.25" step="0.005" value="0.05"/></div>
   <p id="scale-summary"></p>
+  <div class="collision-row" data-tooltip="collision.tip_floor"><span>@tr:collision.floor</span><input id="floor-fill" type="checkbox"/></div>
   <div class="collision-actions">
     <button id="camera-seed" class="btn btn--secondary" data-tooltip="collision.tip_seed">@tr:collision.camera_seed</button>
     <button id="generate" class="btn btn--primary">@tr:collision.generate</button>
@@ -40,7 +41,6 @@
   <h3>@tr:collision.fill_carve</h3>
   <div class="collision-row" data-tooltip="collision.tip_external"><span>@tr:collision.external</span><input id="external-fill" type="checkbox"/></div>
   <div class="collision-row" data-tooltip="collision.tip_external"><span>@tr:collision.external_size</span><input id="external-size" type="text" value="1.6"/></div>
-  <div class="collision-row" data-tooltip="collision.tip_floor"><span>@tr:collision.floor</span><input id="floor-fill" type="checkbox" checked="checked"/></div>
   <div class="collision-row" data-tooltip="collision.tip_ground_guard"><span>@tr:collision.ground_guard</span><input id="floor-below-seed" type="checkbox" checked="checked"/></div>
   <div class="collision-row" data-tooltip="collision.tip_floor"><span>@tr:collision.floor_size</span><input id="floor-size" type="text" value="1.6"/></div>
   <div class="collision-row" data-tooltip="collision.tip_carve"><span>@tr:collision.carve_height</span><input id="carve-height" type="text" value="0"/></div>

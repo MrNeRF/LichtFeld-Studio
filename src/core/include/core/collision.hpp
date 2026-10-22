@@ -29,7 +29,7 @@ namespace lfs::core {
         float opacity = 0.1f;
         bool external_fill = false;
         float external_size = 1.6f;
-        bool floor_fill = true;
+        bool floor_fill = false;
         bool floor_below_seed = false; // LFS guard: do not extrude overhead-only supports.
         float floor_size = 1.6f;
         float carve_height = 0.0f;
