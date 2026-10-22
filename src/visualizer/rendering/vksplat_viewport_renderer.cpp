@@ -9207,6 +9207,7 @@ namespace lfs::vis {
         const bool stochastic_active = (requested_mode == 1 || requested_mode == 2) &&
                                        !request.gut && !lod_request_active &&
                                        !depth_capture_mode_ && !deterministic_export &&
+                                       !request.depth_view && !request.require_exact_depth &&
                                        output_slot != OutputSlot::Preview &&
                                        !guides.show_rings && !guides.show_center_markers &&
                                        !guides.show_object_outline;
@@ -9409,7 +9410,7 @@ namespace lfs::vis {
                                                  canReuseStochasticProjection(stochastic_frame, output_slot, projection_cache);
         if (reuse_stochastic_projection && instance_stats)
             updateStochasticProjectionStats(projection_cache, *instance_stats);
-        const bool reuse_stochastic_tiles = reuse_stochastic_projection && projection_cache.tile_groups_valid;
+        const bool reuse_stochastic_tiles = reuse_stochastic_projection && projection_cache.tiles.has_value();
         LOG_PERF("vksplat.stochastic.projection_reuse={} samples={} wave_count={}",
                  reuse_stochastic_projection, stochastic_frame.samples, projection_cache.wave_count);
         try {
@@ -9725,7 +9726,7 @@ namespace lfs::vis {
                         /*predicate_waves=*/!export_wave_batch,
                         request.overlay.markers.show_object_outline,
                         single_node_outline, outline_style,
-                        reuse_stochastic_tiles ? std::optional{projection_cache.tile_sort_state} : std::nullopt);
+                        reuse_stochastic_tiles ? projection_cache.tiles : std::nullopt);
                 }
                 LOG_TIMER("vksplat.render.record.composePixelState");
                 // Record compose into the rasterizer's batch so the entire frame
@@ -9802,8 +9803,9 @@ namespace lfs::vis {
             projection_cache.last_submission = completion_value;
             // Multiple waves overwrite the same tile scratch. Only a complete
             // one-wave dispatch leaves all groups resident for the next sample.
-            projection_cache.tile_groups_valid = armed_depth_waves == 1u;
-            projection_cache.tile_sort_state = buffers_.is_unsorted_1;
+            projection_cache.tiles = armed_depth_waves == 1u
+                                         ? std::optional{VulkanGSRenderer::StochasticTileState{.is_unsorted_1 = buffers_.is_unsorted_1}}
+                                         : std::nullopt;
             stochastic_projection_cache_ = projection_cache;
         }
         stochastic_committed = true;

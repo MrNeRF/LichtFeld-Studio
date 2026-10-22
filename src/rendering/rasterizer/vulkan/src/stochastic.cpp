@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gs_renderer.h"
-#include <stdexcept>
 
 namespace {
     alignas(4) constexpr std::uint8_t stbn_data[] = {
@@ -16,7 +15,8 @@ const _VulkanBuffer& VulkanGSRenderer::prepareStochasticNoise() {
     if (stochastic_noise_.buffer != VK_NULL_HANDLE)
         return stochastic_noise_;
     if (isCommandBatchInProgress())
-        throw std::logic_error("Prepare STBN before recording the viewport batch");
+        lfs::rendering::throw_renderer_contract(
+            "Prepare STBN before recording the viewport batch", LFS_SOURCE_SITE_CURRENT());
     try {
         stochastic_noise_.label = "stochastic.stbn";
         createBuffer(sizeof(stbn_data), stochastic_noise_);

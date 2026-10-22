@@ -231,6 +231,11 @@ public:
         size_t raw_count = 0;
         bool count_overflow = false;
     };
+    // A complete single wave leaves its groups resident in one sort stream.
+    // The caller must prove that projection and scratch are unchanged.
+    struct StochasticTileState {
+        bool is_unsorted_1 = true;
+    };
     struct LodSelectionStats {
         float threshold_scale = 1.0f;
         size_t candidate_count = 0;
@@ -383,7 +388,7 @@ public:
                                  bool selection_outline = false,
                                  bool single_node_outline = false,
                                  const VulkanGSOutlineStyle& outline_style = {},
-                                 std::optional<bool> cached_tile_sort_state = std::nullopt);
+                                 std::optional<StochasticTileState> cached_tiles = std::nullopt);
     // One immutable volume per renderer/device, uploaded before recording a
     // SteadySplats frame. Basic stochastic sampling retains white noise.
     const _VulkanBuffer& prepareStochasticNoise();

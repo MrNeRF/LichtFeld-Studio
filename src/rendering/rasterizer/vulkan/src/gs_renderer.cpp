@@ -1527,20 +1527,22 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
     const bool selection_outline,
     const bool single_node_outline,
     const VulkanGSOutlineStyle& outline_style,
-    const std::optional<bool> cached_tile_sort_state) {
+    const std::optional<StochasticTileState> cached_tiles) {
     PerfTimer::Timer<PerfTimer::RasterizeForward> timer(this);
     DEVICE_GUARD;
     const bool raster_outline = selection_outline && !single_node_outline;
-    const bool reuse_tile_groups = cached_tile_sort_state.has_value();
+    const bool reuse_tile_groups = cached_tiles.has_value();
 
     if (reuse_tile_groups && (uniforms.stochastic_mode == 0u || armed != 1u || use_gut_rasterization || selection_outline))
-        throw std::invalid_argument("Tile reuse requires one resident stochastic 3DGS wave");
+        lfs::rendering::throw_renderer_contract(
+            "Tile reuse requires one resident stochastic 3DGS wave", LFS_SOURCE_SITE_CURRENT());
     if (uniforms.stochastic_mode == 2u && stochastic_noise_.buffer == VK_NULL_HANDLE)
-        throw std::logic_error("STBN must be prepared before recording a SteadySplats frame");
+        lfs::rendering::throw_renderer_contract(
+            "STBN must be prepared before recording a SteadySplats frame", LFS_SOURCE_SITE_CURRENT());
     // Input packing may reset the host ping-pong selector without changing
     // resident device data. The selector is part of the cached tile state.
     if (reuse_tile_groups)
-        buffers.is_unsorted_1 = *cached_tile_sort_state;
+        buffers.is_unsorted_1 = cached_tiles->is_unsorted_1;
 
     if (armed == 0 || uniforms.sort_capacity != HIGS_DEPTH_WAVE_INSTANCES ||
         sort_bits <= 0 || sort_bits > 32) {

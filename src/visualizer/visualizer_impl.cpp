@@ -2810,11 +2810,15 @@ namespace lfs::vis {
         if (scene_capture_jobs_.hasPending()) {
             const bool has_mesh = scene_manager_ &&
                                   !scene_manager_->getScene().getVisibleMeshes().empty();
-            // A capture requests a fresh frame, not a content edit. Preserve
-            // stochastic history; any actual edits already carry their own flags.
-            if (scene_capture_jobs_.beginFrame(has_mesh))
-                rendering_manager_->markDirty(DirtyFlag::CAMERA, FrameReason::AsyncCompletion,
+            if (scene_capture_jobs_.beginFrame(has_mesh)) {
+                // Preserve stochastic history on capture. Alpha blending keeps
+                // its existing full invalidation; edits carry their own flags.
+                const bool stochastic_capture = context.settings.transparency_mode !=
+                                                lfs::rendering::GaussianTransparencyMode::AlphaBlend;
+                const auto capture_dirty = stochastic_capture ? DirtyFlag::CAMERA : DirtyFlag::ALL;
+                rendering_manager_->markDirty(capture_dirty, FrameReason::AsyncCompletion,
                                               "viewport_capture");
+            }
         }
 
         const bool is_training = trainer_manager_ && trainer_manager_->isTrainingActive();

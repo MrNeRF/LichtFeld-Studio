@@ -31,7 +31,6 @@ namespace lfs::vis {
         Input,
         CameraMotion,
         CameraSettle,
-        StochasticAccumulation,
         SceneChange,
         SettingsChange,
         Selection,
@@ -56,6 +55,7 @@ namespace lfs::vis {
         PythonRedraw,
         PythonFrameCallback,
         Mcp,
+        StochasticAccumulation,
         Count
     };
 
@@ -65,7 +65,6 @@ namespace lfs::vis {
         case FrameReason::Input: return "Input";
         case FrameReason::CameraMotion: return "CameraMotion";
         case FrameReason::CameraSettle: return "CameraSettle";
-        case FrameReason::StochasticAccumulation: return "StochasticAccumulation";
         case FrameReason::SceneChange: return "SceneChange";
         case FrameReason::SettingsChange: return "SettingsChange";
         case FrameReason::Selection: return "Selection";
@@ -90,6 +89,7 @@ namespace lfs::vis {
         case FrameReason::PythonRedraw: return "PythonRedraw";
         case FrameReason::PythonFrameCallback: return "PythonFrameCallback";
         case FrameReason::Mcp: return "Mcp";
+        case FrameReason::StochasticAccumulation: return "StochasticAccumulation";
         case FrameReason::Count: break;
         }
         return "?";

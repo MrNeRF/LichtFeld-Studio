@@ -19,7 +19,9 @@ SteadySplats uses an exponential temporal filter, so this limit is a work budget
 not a guarantee of convergence to the alpha-blended image.
 
 Stochastic modes currently apply to 3DGS without LOD. Outlines, rings, center
-markers, 3DGUT, offscreen previews, and exports retain alpha blending.
+markers, 3DGUT, offscreen previews, and exports retain alpha blending. Depth
+views and exact-depth requests (including surface picking and camera-frustum
+occlusion) also use native alpha blending to preserve LFS's median-depth behavior.
 Ordinary selection colors remain supported. The setting does not change training,
 Gaussian parameters, saved models, or the default renderer.
 Live viewport captures preserve the accumulated history.

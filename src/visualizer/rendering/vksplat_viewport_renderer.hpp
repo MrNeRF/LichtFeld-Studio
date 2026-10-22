@@ -427,8 +427,7 @@ namespace lfs::vis {
             std::uint64_t first_submission = 0;
             std::uint64_t last_submission = 0;
             std::size_t wave_count = 0;
-            bool tile_groups_valid = false;
-            bool tile_sort_state = true;
+            std::optional<VulkanGSRenderer::StochasticTileState> tiles;
         };
         [[nodiscard]] static bool canReuseStochasticProjection(
             const StochasticFrame& frame, OutputSlot slot, const StochasticProjectionCache& cache);
