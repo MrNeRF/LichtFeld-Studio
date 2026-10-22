@@ -19,6 +19,7 @@
 #include "predicate_api.h"
 #include "timing_api.h"
 #include "../readback_buffer.hpp"
+#include "../export_pipeline.hpp"
 #include <atomic>
 #include <core/detail/fused_pointwise.hpp>
 #include <core/detail/tensor_half.hpp>
@@ -270,6 +271,7 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_affine);
         ENTRY(lfs_hip_morton);
         ENTRY(lfs_hip_multinomial);
+        ENTRY(lfs_hip_export);
         ENTRY(lfs_hip_point_tree_components);
         ENTRY(lfs_hip_proximity);
         ENTRY(lfs_hip_convert);
@@ -416,6 +418,7 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_affine);
                 LOAD(lfs_hip_morton);
                 LOAD(lfs_hip_multinomial);
+                LOAD(lfs_hip_export);
                 LOAD(lfs_hip_point_tree_components);
                 LOAD(lfs_hip_proximity);
                 LOAD(lfs_hip_convert);
@@ -2547,5 +2550,43 @@ void HipBackendOps::multinomial(StorageRef weights,StorageRef output,const Rando
     const auto status=impl_->lfs_hip_multinomial(impl_->context,impl_->view(weights),impl_->view(output),program.count,
         program.sample_count,program.seed,program.replacement,&error);
     impl_->refresh_algorithm_workspace();check(status,error);
+}
+}
+
+namespace lfs::core::internal {
+class HipExportKernels final : public ExportKernels {
+    HipBackendOps& owner_;
+public:
+    explicit HipExportKernels(HipBackendOps& owner):owner_(owner){}
+    GpuBackend backend() const override{return GpuBackend::HIP;}
+    bool float_atomics() const override{return true;}
+    bool screened_assignment() const override{return false;}
+    uint64_t address(const Tensor& tensor) const override {
+        auto storage=storage_ref(tensor);require(storage.backend==GpuBackend::HIP,"Foreign HIP export tensor");
+        std::lock_guard lock(owner_.impl_->mutex);const auto view=owner_.impl_->view(storage);
+        LfsHipError error{};uint64_t address=0;
+        check(owner_.impl_->lfs_hip_buffer_address(owner_.impl_->context,view.buffer,&address,&error),error);
+        return address+view.offset;
+    }
+    void launch(const char* module,uint32_t phase,std::span<const std::byte> params,std::span<const StorageRef> reads,
+                std::span<const StorageRef> writes,size_t work) override{owner_.launch_export(module,phase,params,reads,writes,work);}
+    void submit() override{} // Native kernels already enqueue on the owning stream.
+};
+void HipBackendOps::launch_export(const char* module,uint32_t phase,std::span<const std::byte> params,
+    std::span<const StorageRef> reads,std::span<const StorageRef> writes,size_t work) {
+    uint32_t id=4;
+    const char* names[]{"export_kmeans","export_kmeans_accumulate","export_kmeans_group","export_radix"};
+    for(uint32_t i=0;i<4;++i)if(!std::strcmp(module,names[i]))id=i;
+    require(id<4,"Unknown HIP export module");
+    std::lock_guard lock(impl_->mutex);
+    for(auto storage:reads)(void)impl_->view(storage);
+    for(auto storage:writes)(void)impl_->view(storage);
+    LfsHipError error{};check(impl_->lfs_hip_export(impl_->context,id,phase,params.data(),params.size(),work,&error),error);
+}
+std::tuple<Tensor,Tensor> HipBackendOps::kmeans_sh(const Tensor& sh,int points,int coeffs,int k,int iterations,bool,ExecContext execution) {
+    queue(execution);HipExportKernels kernels(*this);return export_kmeans_sh(kernels,sh,points,coeffs,k,iterations);
+}
+void HipBackendOps::assign_sh3(const Tensor& sh,const Tensor& centroids,const Tensor& norms,Tensor& labels,bool fast,bool have_labels,ExecContext execution) {
+    queue(execution);HipExportKernels kernels(*this);export_assign_sh3(kernels,sh,centroids,norms,labels,fast,have_labels);
 }
 }

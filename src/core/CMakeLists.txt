@@ -178,9 +178,9 @@ if(LFS_TENSOR_VULKAN)
     endif()
 endif()
 
-# The GPU export driver, shared by the Vulkan and Metal backends. Its host edge
+# The GPU export driver, shared by Vulkan, Metal and opt-in HIP. Its host edge
 # refinement uses the same independent double rounding as decimation.
-if(LFS_TENSOR_VULKAN OR LFS_TENSOR_METAL)
+if(LFS_TENSOR_VULKAN OR LFS_TENSOR_METAL OR LFS_TENSOR_HIP)
     list(APPEND TENSOR_SOURCES tensor/backend/export_pipeline.cpp)
     set_source_files_properties(tensor/backend/export_pipeline.cpp PROPERTIES
         COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-ffp-contract=off>")

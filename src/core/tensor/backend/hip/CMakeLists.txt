@@ -77,6 +77,13 @@ add_custom_command(OUTPUT "${_tensor_generated}/hip_shared_resize.hpp"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/prepare_shared_resize.py"
         --source "${_shared_resize_source}" --output "${_tensor_generated}/hip_shared_resize.hpp"
     DEPENDS prepare_shared_resize.py "${_shared_resize_source}" VERBATIM)
+set(_export_shaders "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/shaders")
+add_custom_command(OUTPUT "${_tensor_generated}/hip_export.hpp"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/prepare_export.py"
+        --source "${_export_shaders}" --slang "${LFS_HIP_CORE_SLANGC}" --output "${_tensor_generated}/hip_export.hpp"
+    DEPENDS prepare_export.py "${_export_shaders}/export_kmeans.slang" "${_export_shaders}/export_kmeans_common.slangh"
+        "${_export_shaders}/export_kmeans_accumulate.slang" "${_export_shaders}/export_kmeans_group.slang"
+        "${_export_shaders}/export_radix.slang" "${LFS_HIP_CORE_SLANGC}" VERBATIM)
 add_custom_command(OUTPUT "${_library}"
     COMMAND "${_compiler}" -x hip -std=c++20 -O3 -shared
         ${_platform_flags}
@@ -86,7 +93,7 @@ add_custom_command(OUTPUT "${_library}"
         "${CMAKE_CURRENT_SOURCE_DIR}/runtime.hip" -x none "${_rtc_library}" -o "${_library}"
     DEPENDS runtime.hip runtime_api.h expression_api.h expression_runtime.hpp "${_rtc_library}" bias_api.h bias_runtime.hpp integer_reduce_api.h integer_reduce_runtime.hpp inference_api.h inference_runtime.hpp gemm_api.h gemm_runtime.hpp "${_tensor_generated}/hip_inference.hpp" inverse_warp_api.h inverse_warp_runtime.hpp pool_runtime.hpp where_runtime.hpp where_api.h external_memory_api.h external_memory_runtime.hpp device_identity_api.h device_identity_runtime.hpp chain_reduce_runtime.hpp sh_codec_api.h sh_codec_runtime.hpp shared_warp_runtime.hpp shared_image_runtime.hpp shared_resize_runtime.hpp "${_tensor_generated}/hip_shared_resize.hpp" "${_tensor_generated}/hip_shared_image.hpp" "${_tensor_generated}/hip_lens.hpp" "${_lens_model}" "${_tensor_generated}/hip_tensor_functors.hpp" "${_tensor_generated}/hip_tensor_dispatch.inc" "${_tensor_generated}/hip_tensor_half_dispatch.inc" "${_tensor_generated}/hip_tensor_eval.inc" "${_tensor_generated}/hip_tensor_flags.inc" "${_tensor_generated}/hip_tensor_broadcast.inc" "${_compiler}"
         point_filter_api.h point_filter_runtime.hpp "${_tensor_generated}/hip_point_filter.hpp" "${_tensor_generated}/hip_spatial_components.hpp"
-        point_tree_api.h point_tree_runtime.hpp ppisp_runtime.hpp affine_runtime.hpp morton_runtime.hpp multinomial_runtime.hpp predicate_api.h predicate_runtime.hpp integer_pointwise_runtime.hpp arg_extreme_runtime.hpp cdist_runtime.hpp spatial_runtime.hpp
+        point_tree_api.h point_tree_runtime.hpp ppisp_runtime.hpp affine_runtime.hpp morton_runtime.hpp multinomial_runtime.hpp export_runtime.hpp "${_tensor_generated}/hip_export.hpp" predicate_api.h predicate_runtime.hpp integer_pointwise_runtime.hpp arg_extreme_runtime.hpp cdist_runtime.hpp spatial_runtime.hpp
         timing_api.h timing_runtime.hpp
         "${LFS_HIP_ROOT}/include/hip/hip_runtime.h"
     VERBATIM)

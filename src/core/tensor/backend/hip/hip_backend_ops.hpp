@@ -208,6 +208,8 @@ namespace lfs::core::internal {
         bool point_tree_components(StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,const PointTreeProgram&,ExecContext) override;
         bool point_tree_spacing(StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,const PointTreeProgram&,ExecContext) override;
     private:
+        friend class HipExportKernels;
+        void launch_export(const char*,uint32_t,std::span<const std::byte>,std::span<const StorageRef>,std::span<const StorageRef>,size_t);
         void launch_point_tree(StorageRef,StorageRef,StorageRef,StorageRef,std::optional<StorageRef>,std::optional<StorageRef>,StorageRef,const PointTreeProgram&,bool,ExecContext);
         friend ExpressionCacheStats hip_expression_cache_stats();
         void launch_shared_resize(const LfsHipSharedResize&, StorageRef source, StorageRef destination, StorageRef coefficients_x, StorageRef coefficients_y, ExecContext);

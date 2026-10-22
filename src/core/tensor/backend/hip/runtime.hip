@@ -2461,3 +2461,5 @@ int lfs_hip_warp_rgb(LfsHipContext* context, LfsHipView input, uint32_t dtype,
 #include "morton_runtime.hpp"
 
 #include "multinomial_runtime.hpp"
+
+#include "export_runtime.hpp"

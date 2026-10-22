@@ -7,6 +7,8 @@
 #include <core/tensor_ppisp.hpp>
 #include <core/tensor_splat.hpp>
 #include <core/tensor_export.hpp>
+#include <core/tensor_sh.hpp>
+#include <core/sh_layout.hpp>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -285,6 +287,45 @@ int main() try {
             for(size_t i=0;i<7;++i)require(recovered.ptr<int64_t>()[i]>=1 && recovered.ptr<int64_t>()[i]<=3,"HIP multinomial failed to recover after invalid weights");
         }
     }
+    for(uint32_t rest : {3u,8u,15u}) {
+        const size_t n=65,dims=rest*3;
+        std::vector<float> canonical(n*dims);
+        for(size_t i=0;i<n;++i)for(size_t d=0;d<dims;++d)canonical[i*dims+d]=float(int((i*37+d*19)%113)-56)*.01f;
+        auto source=Tensor::from_vector(canonical,{n,rest,3},Device::GPU);
+        auto resident=Tensor::empty({sh_swizzled_float_count(n,rest)},Device::GPU,DataType::Float32);
+        sh_codec(source,resident,{.source_format=ShFormat::Canonical,.destination_format=ShFormat::Float32,
+            .source_rows=n,.destination_rows=n,.count=n,.source_rest=rest,.destination_rest=rest});
+        auto [centroids,labels]=kmeans_sh(resident,int(n),int(rest),1,2,false);
+        auto c=centroids.cpu(),l=labels.cpu();
+        require(c.size(0)==1 && c.size(1)==dims && l.numel()==n,"HIP kmeans output shape differs");
+        for(size_t i=0;i<n;++i)require(l.ptr<int32_t>()[i]==0,"HIP one-cluster kmeans labels differ");
+        for(size_t d=0;d<dims;++d) {
+            double mean=0;for(size_t i=0;i<n;++i)mean+=canonical[i*dims+d];mean/=n;
+            require(std::abs(c.ptr<float>()[d]-mean)<2e-6,"HIP kmeans centroid differs from mean");
+        }
+        auto [exact,identity]=kmeans_sh(resident,int(n),int(rest),int(n+1),1,true);
+        auto e=exact.cpu(),id=identity.cpu();
+        for(size_t i=0;i<n;++i) {
+            require(id.ptr<int32_t>()[i]==int32_t(i),"HIP kmeans identity labels differ");
+            for(size_t d=0;d<dims;++d)require(e.ptr<float>()[i*dims+d]==canonical[i*dims+d],"HIP kmeans palette copy lost SH coefficient");
+        }
+        if(rest==15) {
+            constexpr size_t k=4;
+            std::vector<float> palette(k*dims),norms(k);
+            for(size_t j=0;j<k;++j)for(size_t d=0;d<dims;++d) {palette[j*dims+d]=float(j==1?0:j)*.3f+float(d%7)*.01f;norms[j]=std::fma(palette[j*dims+d],palette[j*dims+d],norms[j]);}
+            auto pc=Tensor::from_vector(palette,{k,dims},Device::GPU),pn=Tensor::from_vector(norms,{k},Device::GPU);
+            auto output=Tensor::zeros({n},Device::GPU,DataType::Int32);
+            for(bool fast : {false,true})for(bool hints : {false,true}) {
+                assign_sh3(resident,pc,pn,output,fast,hints);auto observed=output.cpu();
+                for(size_t i=0;i<n;++i) {
+                    double best=INFINITY;int32_t winner=0;
+                    for(size_t j=0;j<k;++j) {double distance=0;for(size_t d=0;d<dims;++d){double delta=canonical[i*dims+d]-palette[j*dims+d];distance+=delta*delta;}
+                        if(distance<best){best=distance;winner=int32_t(j);}}
+                    require(observed.ptr<int32_t>()[i]==winner,"HIP SH3 assignment differs from scalar argmin/first tie");
+                }
+            }
+        }
+    }
     affine_contract();
     low_level_contract();
     std::vector<float> chain(1025*3,0.f);
@@ -297,7 +338,7 @@ int main() try {
         for(size_t i=0;i<1025;++i) require(a.ptr<int32_t>()[i]==0 && b.ptr<int32_t>()[i]==0,"HIP concurrent union chain did not reach minimum root");
     }
 
-    std::puts("PASS HIP spatial, PPISP, stable Morton63, multinomial and affine covariance/volume/inplace/batched: hash collisions, masks, self exclusion, saturation, Int32/Float32 minima, direct grid spacing/nearest ties, public mutual radii/spacing/nearest/camera coverage, atomic radius/mutual components, eight concurrent 1025-point chains, nonfinite and empty points");
+    std::puts("PASS HIP spatial, PPISP, stable Morton63, multinomial, SH palette/assignment and affine covariance/volume/inplace/batched: hash collisions, masks, self exclusion, saturation, Int32/Float32 minima, direct grid spacing/nearest ties, public mutual radii/spacing/nearest/camera coverage, atomic radius/mutual components, eight concurrent 1025-point chains, nonfinite and empty points");
     return 0;
 } catch(const std::exception& e) {std::fprintf(stderr,"HIP spatial failed: %s\n",e.what());return 1;}
 
