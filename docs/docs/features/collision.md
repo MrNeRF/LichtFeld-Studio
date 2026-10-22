@@ -14,9 +14,11 @@ No external `splat-transform` executable is required.
    This calibrates collision and player dimensions without resizing the splats.
 3. Drag **Cell size (metres)**. Start at `0.05` (5 cm); larger cells are faster and
    less detailed. The readout also shows the actual cell size in scene units.
-4. Place the camera where walking should start, press **Use camera position**,
+4. Leave **Fill solid ground (optional)** off for surface-shaped collision. Enable
+   it only when solid volume beneath the supports is needed.
+5. Place the camera where walking should start, press **Use camera position**,
    then **Generate / Regenerate**.
-5. Inspect the boxes, then **Enter walk**. Use **Overlay strength** and
+6. Inspect the boxes, then **Enter walk**. Use **Overlay strength** and
    **Cutaway height** to reveal surfaces inside the scene.
 
 The normal generation path builds full-resolution voxel collision and its preview.
@@ -40,7 +42,7 @@ Advanced settings retain independent access to the pipeline parameters:
 | Cluster filter (optional) | Resolution `1`, opacity `0.999`, minimum contribution `0.1` |
 | Voxelization | Cell size `0.05`, accumulated opacity `0.1` |
 | Indoor | Exterior fill size `1.6`, capsule carve height `1.6`, radius `0.2` |
-| Outdoor | Floor fill size `1.6`; exterior fill and carving off |
+| Outdoor | Surface shell; floor fill, exterior fill and carving off |
 | Object | Exterior fill, floor fill and carving off |
 | Surface | Smooth or exposed voxel faces; separate surface resolution multiplier |
 
@@ -48,18 +50,31 @@ Dimensional preset values and the Walk capsule scale with **Scene units / metre*
 Changing it rescales these settings, not existing generated nodes. Regenerate to
 apply changes. The exact voxel size remains editable in scene units under Advanced.
 
-New Outdoor authoring enables **Avoid overhead floor columns**. Only supports at
-least 1.6 metres below the seed can start downward floor extrusion. Overhead
-foliage stays occupied but no longer automatically becomes a tall floor column.
-This is an LFS addition, not an upstream parameter. Disable it for unrestricted
-floor fill. Existing projects retain their original setting. The guard depends on
-placing the seed at an appropriate standing height; it is not ground recognition.
-Floor patches are limited to surrounded columns within the configured reach.
+New Outdoor authoring leaves ground fill **off**. Voxelization follows Gaussian
+surface support; filling below the first occupied support in each XZ column can
+turn foliage and other elevated surfaces into solid pillars. This is the main
+cause of a dense, enclosing result, not the sparse tree's compression. Enable
+**Fill solid ground (optional)** explicitly when that volume is wanted. Its
+Advanced size starts at `1.6` metres; patches are limited to surrounded columns.
+**Avoid overhead floor columns** limits eligible supports to at least 1.6 metres
+below the seed, but cannot distinguish low vegetation from actual ground.
+Existing saved settings and occupancy are unchanged; uncheck ground fill and
+regenerate an older Outdoor collider to get the surface shell.
 
-The defaults and scene types follow the
+Voxelization samples the closest point in each voxel box to the Gaussian center,
+transforms that point into the rotated/scaled Gaussian frame, and sums extinction
+density before converting it to opacity (`1 - exp(-density)`). This follows the
+[upstream voxel sampler](https://github.com/playcanvas/splat-transform/blob/4f90012be983078010d631fa0572baa99d5c1965/src/lib/gpu/gpu-voxelization.ts).
+Center-only sampling could miss sub-voxel sheets; the previous over-alpha
+accumulation also differed from upstream. Native sparse bounds and early exits
+use the same density threshold as the cell evaluator.
+
+Preset dimensions and fill options are based on the
 [SuperSplat collision guide](https://developer.playcanvas.com/user-manual/supersplat/studio/collision/)
 and [splat-transform parameters](https://developer.playcanvas.com/user-manual/splat-transform/collision/).
 Their metre-based dimensions require calibration for an arbitrarily scaled scene.
+LFS deliberately starts Outdoor without ground extrusion to preserve visible
+surface shape; this differs from the upstream Outdoor ground-fill recipe.
 The native algorithms are independently implemented and do not promise
 byte-identical upstream output.
 
@@ -68,7 +83,8 @@ byte-identical upstream output.
 The box preview ray-marches occupancy to the first surface per pixel, with
 axis-shaded gray translucent faces and dark screen-space edges. It follows the
 [SuperSplat viewer overlay](https://github.com/playcanvas/supersplat-viewer/blob/ece8201c6a0dbea2dcccc418ec63c4217c7b2956/src/voxel-debug-overlay.ts).
-Hidden/internal edges do not accumulate. Inside solid occupancy the exit surface
+Hidden/internal edges do not accumulate. Edges use the actual hit voxel, including
+after a traversal skip through a uniform solid region. Inside solid occupancy the exit surface
 is orange; selected nodes have a blue tint. Splat colors are unchanged. Like the
 reference, the overlay ignores splat depth.
 
@@ -108,28 +124,29 @@ ownership of its input tree instead of copying it. Archive snapshots share the
 immutable payload. Optional surface normals use a direct indexed pass without
 constructing OpenMesh adjacency or per-vertex uniform colors.
 
-On the same full 1,000,000-Gaussian Bicycle source dump, with 5 cm cells, opacity
-`0.1` and unrestricted Outdoor floor fill `1.6`, the optimized standalone run
-produced the same **2,031,785,065 occupied cells** in **10.45 s**, versus the
-previous **22.30 s** standalone generation. The new default path also skips the
-previous **97.25 s** standalone surface extraction. This comparison preserves
-source coverage and voxel resolution; it is not a cropped preview.
+A full 1,000,000-Gaussian Bicycle source dump, with 5 cm cells and opacity `0.1`,
+now produces **122,325,185 occupied cells** in **12.25 s**, using **147.4 MiB** CPU
+occupancy (standalone peak RSS **578 MiB**). With the same revised sampler and
+optional guarded ground fill, it produces **850,702,239 cells**, uses **299.4 MiB**
+occupancy, and takes **13.84 s**. Ground fill changes collision semantics; these
+are not identical-output speed comparisons. Both include all source Gaussians
+without cropping, clustering or coarsening occupancy. Timings are machine-specific
+and exclude GUI upload/save costs.
 
-With the optional overhead guard and seed `(0,3,-3)`, the same full source took
-**9.55 s** and **298 MiB** CPU occupancy. An explicitly requested `4×` smooth
-surface took another **2.76 s**, producing **4.76 million triangles**. This result
-uses different floor behavior, so it is not an identical-occupancy speed comparison.
-A coarse surface can still be large; these timings are machine-specific CPU
-measurements and exclude GUI upload/save costs.
+The native GUI surface-only run took **10.35 s**, with **122,325,186 cells** and
+**147.4 MiB** CPU occupancy. The separate full-scene validation project is
+`bicycle-collision-surface-aligned.licht`; the complete 1M Model remains visible.
+Save/reload preserves the collider identity and surface-only settings; rehydrated
+Walk grounds stably at eye Y approximately `0.868` from `(0,3,-3)`. The pristine
+training project and PLY are unchanged. Matched-camera before/after captures show
+the removed floor-fill curtains beneath vegetation. Raw source floaters and
+axis-aligned voxel stair steps remain represented.
 
-The native GUI full-source run with the guard completed generation in **8.88 s**
-with **298.2 MiB** occupancy, and its optional `4×` surface in **2.88 s**
-(4,952,794 triangles). Separate `bicycle-collision-fast-preview.licht` and
-`bicycle-collision-fast-surface.licht` validation files retain the complete Model;
-the pristine training project and PLY are unchanged. Regeneration, cancellation,
-live display scrubs, project replacement and rehydrated Walk were exercised.
-Render snapshots retain payload ownership until consumed, including when the
-collider is replaced or deleted during a frame.
+The default preview path skips optional triangle extraction entirely. Earlier
+unrestricted Outdoor generation required another 97.25 s for a 118.6-million-
+triangle surface. Coarsened optional surfaces can still be large. Render snapshots
+retain payload ownership until consumed, including when the collider is replaced
+or deleted during a frame.
 
 Storage uses an adaptive occupancy tree and 8-cubed evaluation bricks, not a dense
 world allocation. GPU traversal uses uniform regions and packed 4-cubed leaf

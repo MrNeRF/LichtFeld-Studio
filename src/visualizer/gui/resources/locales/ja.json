@@ -45,7 +45,7 @@
   "collision.enter_walk": "Enter walk",
   "collision.exit_walk": "Exit walk (fly)",
   "collision.initial_status": "Select a collision node to load its settings, or generate from visible splats.",
-  "collision.tip_preset": "Indoor: external fill and capsule carve. Outdoor: floor fill. Object: no fill or carve. Apply changes these options; all remain editable.",
+  "collision.tip_preset": "Indoor: external fill and capsule carve. Outdoor and Object: surface collision without fill or carve. Solid ground fill is optional. All options remain editable.",
   "collision.tip_cluster": "Keep Gaussians contributing to the occupied connected component nearest the shared seed, removing disconnected geometry.",
   "collision.tip_resolution": "Coarse cluster voxel edge length. Larger values connect larger gaps and require less memory.",
   "collision.tip_opacity": "Accumulated Gaussian opacity required for a solid voxel, from 0 to 1.",
