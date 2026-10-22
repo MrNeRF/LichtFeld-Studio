@@ -211,7 +211,7 @@ namespace lfs::core::internal {
         friend class HipExportKernels;
         void launch_export(const char*,uint32_t,std::span<const std::byte>,std::span<const StorageRef>,std::span<const StorageRef>,size_t);
         void launch_point_tree(StorageRef,StorageRef,StorageRef,StorageRef,std::optional<StorageRef>,std::optional<StorageRef>,StorageRef,const PointTreeProgram&,bool,ExecContext);
-        friend ExpressionCacheStats hip_expression_cache_stats();
+        friend LFS_CORE_API ExpressionCacheStats hip_expression_cache_stats();
         void launch_shared_resize(const LfsHipSharedResize&, StorageRef source, StorageRef destination, StorageRef coefficients_x, StorageRef coefficients_y, ExecContext);
         void launch_inverse_lens(StorageRef, const UndistortParams&, ExecContext);
         void launch_shared_warp(StorageRef, StorageRef, const UndistortParams&, unsigned channels, unsigned mode, ExecContext);

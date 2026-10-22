@@ -2367,7 +2367,7 @@ namespace lfs::core::internal {
         });
     }
     void HipBackendOps::pop_range() {}
-    bool HipBackendOps::nn_kernels() const { return false; }
+    bool HipBackendOps::nn_kernels() const { return true; }
 } // namespace lfs::core::internal
 
 namespace lfs::core::internal {

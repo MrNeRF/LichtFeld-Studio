@@ -4,6 +4,7 @@
 #include <core/detail/gpu_backend_ops.hpp>
 #include <core/tensor_backend.hpp>
 #include <core/tensor_fused.hpp>
+#include <core/nn/ops.hpp>
 #include <core/detail/tensor_half.hpp>
 #include <core/tensor/internal/expression_runtime.hpp>
 #include <algorithm>
@@ -540,9 +541,32 @@ void half_reductions() {
         }
     }
 }
+void public_nn() {
+    require(backend_ops(GpuBackend::HIP).nn_kernels(),"HIP dedicated NN dispatch is disabled");
+    const auto half=[](std::initializer_list<size_t> shape,float value){return Tensor::full(TensorShape(shape),value,Device::GPU).to(DataType::Float16);};
+    const auto constant=[](const Tensor& tensor,float value) {
+        require(tensor.dtype()==DataType::Float16,"HIP public NN lost Half dtype");
+        auto result=tensor.to(DataType::Float32).cpu();
+        for(size_t i=0;i<result.numel();++i)require(result.ptr<float>()[i]==value,"HIP public NN dispatch changed constant reference");
+    };
+    auto x=half({2,3},.25f),w=half({4,3},.5f),b=half({4},.125f);
+    constant(nn::linear(x,w,&b),.5f);
+    auto nw=half({3},1),nb=half({3},.125f);
+    constant(nn::layer_norm(x,nw,nb),.125f);
+    auto q=half({1,1,2,3},0),k=half({1,1,4,3},0),v=half({1,1,4,3},.25f);
+    constant(nn::attention(q,k,v),.25f);
+    auto image=half({1,2,3,5},.25f),kernel=half({3,2,1,1},.5f);
+    constant(nn::conv2d(image,kernel,nullptr,{}),.25f);
+    auto transposed=Tensor::from_vector(std::vector<float>{.5f,.25f,.75f,1.f,.5f,1.5f},{2,3,1,1},Device::GPU).to(DataType::Float16);
+    auto result=nn::conv_transpose2d(image,transposed,nullptr,{.stride_h=2,.stride_w=2,.output_pad_h=1,.output_pad_w=1});
+    require(result.dtype()==DataType::Float16 && result.shape()==TensorShape({1,3,6,10}),"HIP public transpose convolution shape/dtype changed");
+    auto observed=result.to(DataType::Float32).cpu();const float values[]{.375f,.1875f,.5625f};
+    for(size_t c=0;c<3;++c)for(size_t y=0;y<6;++y)for(size_t xx=0;xx<10;++xx)
+        require(observed.ptr<float>()[(c*6+y)*10+xx]==((y%2 || xx%2)?0:values[c]),"HIP public transpose convolution reordered grouped weights incorrectly");
+}
 int main() try {
     GpuBackendScope scope(GpuBackend::HIP);
-    unary();integer_arithmetic();native_norm();native_linear();native_attention();native_conv();transpose_nonfinite();half_inference();half_broadcast();scalar_left();half_reductions();precise_bits();gathered_and_packed();fold_and_host();cache_and_threads();
+    unary();integer_arithmetic();native_norm();native_linear();native_attention();native_conv();transpose_nonfinite();half_inference();half_broadcast();scalar_left();half_reductions();public_nn();precise_bits();gathered_and_packed();fold_and_host();cache_and_threads();
     std::puts("PASS HIP expressions: native FP16 inference and attention/convolution/fused linear/layer/RMS norms FP16/FP32 with guards and inplace, native math, exact Int32/Int64/UInt32/UInt8 arithmetic and empty operations, IEEE values, gather bounds, Float16/Bool/UInt8 packed tails, host constants, short/runtime folds, prepare, shape cache and concurrent launches");
     return 0;
 } catch(const std::exception& e) {std::fprintf(stderr,"HIP expression failed: %s\n",e.what());return 1;}
