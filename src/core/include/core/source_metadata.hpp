@@ -89,6 +89,43 @@ namespace lfs::core::image_codecs {
         // and observed original ranges are represented separately.
         std::optional<TiffSourceMetadata> tiff;
     };
+    enum class XmpEnvelope { JpegApp1,
+                             JpegExtendedApp1,
+                             PngInternationalText };
+    struct XmpLimits {
+        std::size_t blocks = 64;
+        std::size_t block_bytes = 1024 * 1024;
+        // Aggregate original envelopes plus any inflated PNG text.
+        std::size_t total_bytes = 4 * 1024 * 1024;
+        std::size_t inflated_bytes = 1024 * 1024;
+    };
+    struct XmpBlock {
+        XmpEnvelope envelope = XmpEnvelope::JpegApp1;
+        // Exact APP1 or iTXt chunk data, including its carrier header.
+        std::vector<std::uint8_t> bytes;
+        // Used only for compressed PNG text; originals remain unchanged.
+        std::optional<std::vector<std::uint8_t>> inflated;
+        std::size_t payload_offset = 0;
+        bool compressed = false;
+        MetadataStatus status = MetadataStatus::Collected;
+        std::string diagnostic;
+        // PNG chunk CRC; JPEG has no corresponding checksum.
+        std::optional<bool> crc_valid;
+    };
+    struct SourceXmp {
+        MetadataStatus status = MetadataStatus::NotExamined;
+        std::string scope;
+        std::string diagnostic;
+        std::vector<XmpBlock> blocks;
+    };
+    struct SourceImageMetadata {
+        SourceExif exif;
+        SourceXmp xmp;
+    };
+    // Shares the EXIF carrier scan. XMP remains opaque: no XML parsing, entity
+    // resolution, property interpretation or extended-JPEG reassembly.
+    [[nodiscard]] LFS_IMAGE_CODECS_API SourceImageMetadata read_source_metadata(
+        const std::filesystem::path&, const MetadataLimits& = {}, const XmpLimits& = {});
     // Explicit metadata-only operation. Does not validate or decode image pixels,
     // scan auxiliary HEIF images, change training EV, or normalize orientation.
     // Limits bound retained blocks/ranges and decoded TIFF values. TIFF library

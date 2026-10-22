@@ -3,6 +3,8 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "media/file_frame_sink.hpp"
+#include "media/media_ingest.hpp"
+#include "media/media_json.hpp"
 #include "media/media_probe.hpp"
 #include "media/video_frame_extractor.hpp"
 #include "media/video_player.hpp"
@@ -45,6 +47,42 @@ int main(int argc, char** argv) {
             return runAtomicFileContracts();
         std::ifstream input(lfs::core::utf8_to_path(argv[1]));
         const auto request = json::parse(input);
+        if (request.value("operation", "extract") == "source-metadata") {
+            lfs::core::image_codecs::XmpLimits limits;
+            limits.blocks = request.value("blocks", limits.blocks);
+            limits.block_bytes = request.value("block_bytes", limits.block_bytes);
+            limits.total_bytes = request.value("total_bytes", limits.total_bytes);
+            limits.inflated_bytes = request.value("inflated_bytes", limits.inflated_bytes);
+            if (request.contains("exif_block_bytes")) {
+                lfs::core::image_codecs::MetadataLimits exif_limits;
+                exif_limits.block_bytes = request.at("exif_block_bytes").get<std::size_t>();
+                const auto path = lfs::core::utf8_to_path(request.at("input").get<std::string>());
+                auto collected = lfs::core::image_codecs::read_source_metadata(path, exif_limits, limits);
+                lfs::media::ImageExifDescription description;
+                description.original = std::move(collected.exif);
+                description.interpretations.resize(description.original.blocks.size());
+                const auto catalog = lfs::media::catalogSourceMetadata(std::move(description), {}, std::nullopt, std::move(collected.xmp));
+                if (!catalog)
+                    throw std::runtime_error(std::string(catalog.error().detail()));
+                auto output = lfs::media::json_detail::sourceMetadata(*catalog);
+                lfs::media::ImageExifDescription legacy;
+                legacy.original = lfs::core::image_codecs::read_source_exif(path, exif_limits);
+                output["legacy_exif"] = lfs::media::json_detail::sourceExif(legacy);
+                std::cout << lfs::media::json_detail::dump(output) << '\n';
+                return 0;
+            }
+            const auto result = lfs::media::MediaIngest::sourceMetadata(lfs::core::utf8_to_path(request.at("input").get<std::string>()),
+                                                                        {.records = request.value("records", std::size_t{4096})}, limits);
+            if (!result)
+                throw std::runtime_error(std::string(result.error().detail()));
+            auto output = lfs::media::json_detail::sourceMetadata(*result);
+            const auto summary = lfs::media::summarizeImageMetadata(*result);
+            if (!summary)
+                throw std::runtime_error(std::string(summary.error().detail()));
+            output["test_summary"] = lfs::media::json_detail::metadataSummary(*summary);
+            std::cout << lfs::media::json_detail::dump(output) << '\n';
+            return 0;
+        }
         if (request.value("operation", "extract") == "encode-session") {
             std::cout << runEncodeSessionContracts(request).dump() << '\n';
             return 0;

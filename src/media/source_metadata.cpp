@@ -3,6 +3,7 @@
 #include "media/source_metadata.hpp"
 #include "core/path_utils.hpp"
 #include "media/media_ingest.hpp"
+#include "media/source_exif_internal.hpp"
 #include <algorithm>
 #include <new>
 #include <type_traits>
@@ -12,6 +13,7 @@ namespace lfs::media {
     struct SourceMetadataStorage : MetadataObservationIdentity {
         std::optional<MetadataSourceLocator> locator;
         ImageExifDescription image_exif;
+        core::image_codecs::SourceXmp image_xmp;
         std::optional<MediaDescription> container;
         MetadataIndexStatus index_status = MetadataIndexStatus::Complete;
         std::vector<SourceMetadataReference> records;
@@ -23,6 +25,13 @@ namespace lfs::media {
     const ImageExifDescription& SourceMetadataCatalog::imageExif() const noexcept {
         static const ImageExifDescription empty;
         return storage_ ? storage_->image_exif : empty;
+    }
+    const core::image_codecs::SourceXmp& SourceMetadataCatalog::imageXmp() const noexcept {
+        static const core::image_codecs::SourceXmp empty;
+        return storage_ ? storage_->image_xmp : empty;
+    }
+    const core::image_codecs::XmpBlock* SourceMetadataCatalog::xmpBlock(XmpBlockReference reference) const noexcept {
+        return storage_ && reference.block < storage_->image_xmp.blocks.size() ? &storage_->image_xmp.blocks[reference.block] : nullptr;
     }
     const std::optional<MediaDescription>& SourceMetadataCatalog::container() const noexcept {
         static const std::optional<MediaDescription> empty;
@@ -101,6 +110,9 @@ namespace lfs::media {
                     return MetadataRecordView(value);
             } else if constexpr (std::is_same_v<T, StreamSideDataReference>) {
                 if (const auto* value = streamSideData(reference))
+                    return MetadataRecordView(value);
+            } else if constexpr (std::is_same_v<T, XmpBlockReference>) {
+                if (const auto* value = xmpBlock(reference))
                     return MetadataRecordView(value);
             }
             return std::nullopt;
@@ -198,7 +210,7 @@ namespace lfs::media {
         }
     }
 
-    Result<SourceMetadataCatalog> catalogSourceMetadata(ImageExifDescription description, const SourceMetadataIndexLimits& limits, std::optional<MetadataSourceLocator> locator) {
+    Result<SourceMetadataCatalog> catalogSourceMetadata(ImageExifDescription description, const SourceMetadataIndexLimits& limits, std::optional<MetadataSourceLocator> locator, core::image_codecs::SourceXmp xmp) {
         if (!validLocator(locator))
             return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Metadata source locator has an invalid native encoding or filename", .detection = LFS_SOURCE_SITE_CURRENT()});
         // A caller-built description must not silently associate an interpretation
@@ -211,6 +223,7 @@ namespace lfs::media {
             auto& result = *staged;
             result.locator = std::move(locator);
             result.image_exif = std::move(description);
+            result.image_xmp = std::move(xmp);
             const auto append = [&](SourceMetadataReference reference) {
                 if (result.records.size() >= limits.records) {
                     result.index_status = MetadataIndexStatus::Limited;
@@ -235,20 +248,22 @@ namespace lfs::media {
                     }
                 }
             }
+            for (std::size_t block = 0; block < result.image_xmp.blocks.size(); ++block)
+                if (!append(XmpBlockReference{block}))
+                    return SourceMetadataCatalog(std::move(staged));
             return SourceMetadataCatalog(std::move(staged));
         } catch (const std::bad_alloc&) {
             return make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "Source metadata index allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()});
         }
     }
 
-    Result<SourceMetadataCatalog> MediaIngest::sourceMetadata(const std::filesystem::path& path, const SourceMetadataIndexLimits& limits) {
+    Result<SourceMetadataCatalog> MediaIngest::sourceMetadata(const std::filesystem::path& path, const SourceMetadataIndexLimits& limits, const core::image_codecs::XmpLimits& xmp_limits) {
         if (path.empty() || path.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos)
             return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Metadata source path must not be empty or contain a null byte", .detection = LFS_SOURCE_SITE_CURRENT()});
         try {
-            auto description = sourceExif(path);
-            if (!description)
-                return description.error();
-            return catalogSourceMetadata(std::move(*description), limits, sourceLocator(path));
+            auto collected = core::image_codecs::read_source_metadata(path, {}, xmp_limits);
+            auto description = detail::describeSourceExif(std::move(collected.exif));
+            return catalogSourceMetadata(std::move(description), limits, sourceLocator(path), std::move(collected.xmp));
         } catch (const std::bad_alloc&) {
             return make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "Source metadata collection allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()});
         }

@@ -14,6 +14,9 @@ namespace lfs::media {
         std::size_t block = 0;
         std::size_t entry = 0;
     };
+    struct XmpBlockReference {
+        std::size_t block = 0;
+    };
     struct TiffTagReference {
         std::size_t directory = 0;
         std::size_t tag = 0;
@@ -34,7 +37,7 @@ namespace lfs::media {
     };
     // References identify occurrences, not tag IDs: duplicates stay distinct.
     // These are static source observations, never timed video samples.
-    using SourceMetadataReference = std::variant<ExifEntryReference, TiffTagReference, ContainerTagReference, StreamDescriptionReference, StreamTagReference, StreamSideDataReference>;
+    using SourceMetadataReference = std::variant<ExifEntryReference, TiffTagReference, ContainerTagReference, StreamDescriptionReference, StreamTagReference, StreamSideDataReference, XmpBlockReference>;
     // Observation identity is deliberately independent of file names and hashes.
     // It prevents mixing catalog-local ordinals, not detection of file changes.
     struct MetadataObservationIdentity {};
@@ -43,7 +46,7 @@ namespace lfs::media {
         SourceMetadataReference reference;
     };
     using MetadataRecordView = std::variant<const ExifEntry*, const core::image_codecs::TiffSourceTag*,
-                                            const MetadataTextEntry*, const StreamDescription*, const MetadataSideData*>;
+                                            const MetadataTextEntry*, const StreamDescription*, const MetadataSideData*, const core::image_codecs::XmpBlock*>;
     enum class MetadataIndexStatus { Complete,
                                      Limited };
     struct SourceMetadataIndexLimits {
@@ -63,6 +66,7 @@ namespace lfs::media {
         SourceMetadataCatalog() = default;
         [[nodiscard]] LFS_MEDIA_API const std::optional<MetadataSourceLocator>& sourceLocator() const noexcept;
         [[nodiscard]] LFS_MEDIA_API const ImageExifDescription& imageExif() const noexcept;
+        [[nodiscard]] LFS_MEDIA_API const core::image_codecs::SourceXmp& imageXmp() const noexcept;
         [[nodiscard]] LFS_MEDIA_API const std::optional<MediaDescription>& container() const noexcept;
         [[nodiscard]] LFS_MEDIA_API MetadataIndexStatus indexStatus() const noexcept;
         [[nodiscard]] LFS_MEDIA_API const std::vector<SourceMetadataReference>& records() const noexcept;
@@ -77,12 +81,13 @@ namespace lfs::media {
         [[nodiscard]] LFS_MEDIA_API const MetadataSideData* streamSideData(StreamSideDataReference) const noexcept;
         [[nodiscard]] LFS_MEDIA_API const ExifEntry* exifEntry(ExifEntryReference) const noexcept;
         [[nodiscard]] LFS_MEDIA_API const core::image_codecs::TiffSourceTag* tiffTag(TiffTagReference) const noexcept;
+        [[nodiscard]] LFS_MEDIA_API const core::image_codecs::XmpBlock* xmpBlock(XmpBlockReference) const noexcept;
 
     private:
         // Payload and identity form one immutable shared observation.
         explicit SourceMetadataCatalog(std::shared_ptr<const SourceMetadataStorage> storage) : storage_(std::move(storage)) {}
         std::shared_ptr<const SourceMetadataStorage> storage_;
-        friend LFS_MEDIA_API Result<SourceMetadataCatalog> catalogSourceMetadata(ImageExifDescription, const SourceMetadataIndexLimits&, std::optional<MetadataSourceLocator>);
+        friend LFS_MEDIA_API Result<SourceMetadataCatalog> catalogSourceMetadata(ImageExifDescription, const SourceMetadataIndexLimits&, std::optional<MetadataSourceLocator>, core::image_codecs::SourceXmp);
         friend LFS_MEDIA_API Result<SourceMetadataCatalog> catalogContainerMetadata(MediaDescription, const SourceMetadataIndexLimits&, std::optional<MetadataSourceLocator>);
     };
     // Consumes an already collected description without rereading/reparsing it.
@@ -90,7 +95,7 @@ namespace lfs::media {
     // A limited index still retains all already collected originals and values.
     // Transfer ownership without retaining mutable aliases to moved source vectors.
     [[nodiscard]] LFS_MEDIA_API Result<SourceMetadataCatalog> catalogSourceMetadata(
-        ImageExifDescription, const SourceMetadataIndexLimits& = {}, std::optional<MetadataSourceLocator> = std::nullopt);
+        ImageExifDescription, const SourceMetadataIndexLimits& = {}, std::optional<MetadataSourceLocator> = std::nullopt, core::image_codecs::SourceXmp = {});
     // Requires a probe description explicitly collected with source metadata.
     [[nodiscard]] LFS_MEDIA_API Result<SourceMetadataCatalog> catalogContainerMetadata(
         MediaDescription, const SourceMetadataIndexLimits& = {}, std::optional<MetadataSourceLocator> = std::nullopt);

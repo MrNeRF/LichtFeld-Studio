@@ -102,7 +102,7 @@ namespace lfs::media {
         [[nodiscard]] static Result<ImageExifDescription> sourceExif(const std::filesystem::path&);
         // Explicit metadata-only collection; never called implicitly by training or probe.
         [[nodiscard]] static Result<SourceMetadataCatalog> sourceMetadata(
-            const std::filesystem::path&, const SourceMetadataIndexLimits& = {});
+            const std::filesystem::path&, const SourceMetadataIndexLimits& = {}, const core::image_codecs::XmpLimits& = {});
         [[nodiscard]] static Result<SourceMetadataCatalog> sourceContainerMetadata(
             const std::filesystem::path&, const ProbeOptions& = {}, const SourceMetadataIndexLimits& = {});
         [[nodiscard]] static Result<IngestReport> extract(const IngestRequest&, FrameSink&);
