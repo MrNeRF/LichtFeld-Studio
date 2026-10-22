@@ -89,9 +89,14 @@ namespace lfs::core::internal {
                 std::memcpy(&bits, &value.value.float_value, sizeof(bits));
                 return bits;
             }
-            case DataType::Float16:
+            case DataType::Float16: {
                 require(value.kind==ScalarKind::Float,"HIP half fill requires a floating scalar");
-                return detail::tensor_float_to_half_bits(value.value.float_value);
+                const auto half = detail::tensor_float_to_half(value.value.float_value);
+                static_assert(sizeof(half) == sizeof(uint16_t));
+                uint16_t bits = 0;
+                std::memcpy(&bits, &half, sizeof(bits));
+                return bits;
+            }
             case DataType::Int32:
                 require(value.kind==ScalarKind::Int32,"HIP Int32 fill requires Int32 scalar");
                 return static_cast<uint32_t>(value.value.int32_value);
