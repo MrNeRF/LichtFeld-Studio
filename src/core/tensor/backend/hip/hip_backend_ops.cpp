@@ -942,6 +942,11 @@ namespace lfs::core::internal {
             std::lock_guard lock(impl_->mutex);
             const auto in=impl_->view(input),out=impl_->view(output);LfsHipError error{};
             check(impl_->lfs_hip_reduce_typed_layout(impl_->context,in,out,&native,mask,static_cast<uint32_t>(program.op),static_cast<uint32_t>(input.dtype),static_cast<uint32_t>(output.dtype),&error),error);
+            if(input.dtype==DataType::Float16 && program.op!=ReduceOp::Any && program.op!=ReduceOp::All) {
+                impl_->workspace_bytes=impl_->algorithm_workspace_bytes+LFS_HIP_REDUCTION_WORKSPACE_FLOATS*sizeof(float);
+                impl_->peak=std::max(impl_->peak,impl_->live+impl_->workspace_bytes);
+                impl_->reserved_peak=std::max(impl_->reserved_peak,impl_->live+impl_->cached_bytes+impl_->workspace_bytes);
+            }
             return;
         }
         require(input.dtype == DataType::Float32 && output.dtype == DataType::Float32 && program.result_dtype == DataType::Float32,

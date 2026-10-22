@@ -38,9 +38,11 @@ template<class In,class Out,unsigned Op> __global__ void typed_axis_reduce(const
 }
 extern "C" int lfs_hip_reduce_typed_layout(LfsHipContext* context,LfsHipView input,LfsHipView output,const LfsHipLayout* source,uint32_t axes,uint32_t operation,uint32_t input_dtype,uint32_t output_dtype,LfsHipError* error) {
     return boundary(error,[&] {
-        require(context&&source&&(operation==0||operation==2||operation==3||operation==5||operation==6),"Invalid HIP typed axis reduction");
+        require(context&&source&&(operation==0||operation==1||operation==2||operation==3||operation==5||operation==6),"Invalid HIP typed axis reduction");
         const bool logical=operation==5||operation==6;
-        require(logical?output_dtype==LFS_HIP_BOOL:
+        const bool half_numeric=!logical && input_dtype==LFS_HIP_F16;
+        require(operation!=1 || half_numeric,"HIP integer mean is unsupported");
+        require(logical?output_dtype==LFS_HIP_BOOL:half_numeric?(output_dtype==LFS_HIP_F16 || output_dtype==LFS_HIP_F32):
             ((input_dtype==LFS_HIP_I32&&(output_dtype==LFS_HIP_I32||output_dtype==LFS_HIP_I64))||
              (input_dtype==LFS_HIP_I64&&output_dtype==LFS_HIP_I64)||
              (input_dtype==LFS_HIP_BOOL&&((operation==0&&output_dtype==LFS_HIP_I64)||(operation!=0&&output_dtype==LFS_HIP_BOOL)))),"Unsupported HIP typed reduction dtypes");
@@ -65,6 +67,19 @@ extern "C" int lfs_hip_reduce_typed_layout(LfsHipContext* context,LfsHipView inp
         if(!kept.elements)return;
         DeviceScope selected(context->device);
         const void* in=static_cast<char*>(input.buffer->data)+input.offset;void* out=static_cast<char*>(output.buffer->data)+output.offset;
+        if(half_numeric) {
+            if(!context->reduction_workspace)check(hipMalloc(&context->reduction_workspace,reduction_workspace_floats*sizeof(float)));
+            const auto dispatch=[&]<class O>() {
+                switch(operation) {
+                case 0:launch_axis<LFS_HIP_REDUCE_SUM>(context,static_cast<const __half*>(in),static_cast<O*>(out),kept,reduced,false);break;
+                case 1:launch_axis<LFS_HIP_REDUCE_SUM>(context,static_cast<const __half*>(in),static_cast<O*>(out),kept,reduced,true);break;
+                case 2:launch_axis<LFS_HIP_REDUCE_MAX>(context,static_cast<const __half*>(in),static_cast<O*>(out),kept,reduced,false);break;
+                case 3:launch_axis<LFS_HIP_REDUCE_MIN>(context,static_cast<const __half*>(in),static_cast<O*>(out),kept,reduced,false);break;
+                }
+            };
+            if(output_dtype==LFS_HIP_F16)dispatch.template operator()<__half>();else dispatch.template operator()<float>();
+            return;
+        }
         auto launch=[&]<class I,class O,unsigned Op>() {
             hipLaunchKernelGGL((typed_axis_reduce<I,O,Op>),dim3(unsigned(std::min<size_t>(kept.elements,65535))),dim3(256),0,context->stream,static_cast<const I*>(in),static_cast<O*>(out),kept,reduced);
         };

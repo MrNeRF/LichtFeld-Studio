@@ -565,25 +565,32 @@ namespace {
     }
     // Short attribute reductions use one lane per output, avoiding a whole
     // workgroup for each three/four-component Gaussian attribute.
-    template <unsigned Mode>
-    __global__ void short_axis_kernel(const float* input, float* output, LfsHipLayout kept, LfsHipLayout reduced, float scale) {
+    template <unsigned Mode, class In = float, class Out = float>
+    __global__ void short_axis_kernel(const In* input, Out* output, LfsHipLayout kept, LfsHipLayout reduced, float scale) {
+#pragma clang fp contract(off)
         for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < kept.elements; i += size_t(gridDim.x) * blockDim.x) {
             float value = reduce_identity<Mode>();
             const size_t base = layout_index(i, kept);
             for (size_t r = 0; r < reduced.elements; ++r)
-                value = combine_reduce<Mode>(value, input[base + layout_index(r, reduced)]);
-            output[i] = value * scale;
+                value = combine_reduce<Mode>(value, float(input[base + layout_index(r, reduced)]));
+            if constexpr(std::is_same_v<Out, __half>) {
+                // Materialize FP32 before rounding to Half: combining the
+                // multiply and cast can change midpoint tie-breaking.
+                volatile float scaled = value * scale;
+                output[i] = __float2half_rn(scaled);
+            } else output[i] = value * scale;
         }
     }
-    template <unsigned Mode>
-    __global__ void axis_kernel(const float* input, float* output, LfsHipLayout kept, LfsHipLayout reduced, uint32_t parts, float scale) {
+    template <unsigned Mode, class In = float, class Out = float>
+    __global__ void axis_kernel(const In* input, Out* output, LfsHipLayout kept, LfsHipLayout reduced, uint32_t parts, float scale) {
+#pragma clang fp contract(off)
         __shared__ float values[256];
         for (size_t group = blockIdx.x; group < kept.elements * parts; group += gridDim.x) {
             const size_t item = group / parts, part = group % parts;
             const size_t base = layout_index(item, kept);
             float value = reduce_identity<Mode>();
             for (size_t r = part * 256 + threadIdx.x; r < reduced.elements; r += size_t(parts) * 256)
-                value = combine_reduce<Mode>(value, input[base + layout_index(r, reduced)]);
+                value = combine_reduce<Mode>(value, float(input[base + layout_index(r, reduced)]));
             values[threadIdx.x] = value;
             __syncthreads();
             for (unsigned width = 128; width; width >>= 1) {
@@ -591,16 +598,20 @@ namespace {
                     values[threadIdx.x] = combine_reduce<Mode>(values[threadIdx.x], values[threadIdx.x + width]);
                 __syncthreads();
             }
-            if (!threadIdx.x)
-                output[group] = values[0] * scale;
+            if (!threadIdx.x) {
+                if constexpr(std::is_same_v<Out, __half>) {
+                    volatile float scaled = values[0] * scale;
+                    output[group] = __float2half_rn(scaled);
+                } else output[group] = values[0] * scale;
+            }
             __syncthreads();
         }
     }
-    template <unsigned Mode>
-    void launch_axis(LfsHipContext* context, const float* input, float* output, LfsHipLayout kept, LfsHipLayout reduced, bool mean) {
+    template <unsigned Mode, class In = float, class Out = float>
+    void launch_axis(LfsHipContext* context, const In* input, Out* output, LfsHipLayout kept, LfsHipLayout reduced, bool mean) {
         const float scale = mean ? (reduced.elements ? 1.f / float(reduced.elements) : NAN) : 1.f;
         if (reduced.elements <= 32) {
-            hipLaunchKernelGGL((short_axis_kernel<Mode>), dim3(blocks(kept.elements)), dim3(256), 0, context->stream, input, output, kept, reduced, scale);
+            hipLaunchKernelGGL((short_axis_kernel<Mode, In, Out>), dim3(blocks(kept.elements)), dim3(256), 0, context->stream, input, output, kept, reduced, scale);
             check(hipGetLastError());
             return;
         }
@@ -609,9 +620,12 @@ namespace {
         const uint32_t parts = kept.elements < 64 && reduced.elements > 4096
                                    ? static_cast<uint32_t>(std::min<size_t>(4096 / kept.elements, (reduced.elements - 1) / 1024 + 1))
                                    : 1;
-        float* destination = parts > 1 ? context->reduction_workspace : output;
+        float* destination = context->reduction_workspace;
         const unsigned groups = static_cast<unsigned>(std::min<size_t>(4096, kept.elements * parts));
-        hipLaunchKernelGGL((axis_kernel<Mode>), dim3(groups), dim3(256), 0, context->stream, input, destination, kept, reduced, parts, parts > 1 ? 1.f : scale);
+        if(parts > 1)
+            hipLaunchKernelGGL((axis_kernel<Mode, In, float>), dim3(groups), dim3(256), 0, context->stream, input, destination, kept, reduced, parts, 1.f);
+        else
+            hipLaunchKernelGGL((axis_kernel<Mode, In, Out>), dim3(groups), dim3(256), 0, context->stream, input, output, kept, reduced, parts, scale);
         check(hipGetLastError());
         if (parts > 1) {
             LfsHipLayout partial_kept{}, partial_reduced{};
@@ -620,7 +634,7 @@ namespace {
             partial_kept.strides[0] = parts;
             partial_reduced.dims[0] = partial_reduced.elements = parts;
             partial_reduced.strides[0] = 1;
-            hipLaunchKernelGGL((axis_kernel<Mode>), dim3(static_cast<unsigned>(kept.elements)), dim3(256), 0, context->stream,
+            hipLaunchKernelGGL((axis_kernel<Mode, float, Out>), dim3(static_cast<unsigned>(kept.elements)), dim3(256), 0, context->stream,
                                destination, output, partial_kept, partial_reduced, 1, scale);
             check(hipGetLastError());
         }

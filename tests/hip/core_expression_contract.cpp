@@ -508,9 +508,41 @@ void scalar_left() {
         }
     }
 }
+void half_reductions() {
+    auto& gpu=backend_ops(GpuBackend::HIP);
+    for(size_t n:{size_t(0),size_t(3),size_t(257),size_t(8193)})for(bool exceptional:{false,true}) {
+        std::vector<float> values(std::max<size_t>(1,n*5));
+        for(size_t i=0;i<values.size();++i)values[i]=.19f*std::sin(float(i)*.11f);
+        if(exceptional && n){values[0]=NAN;values[1]=INFINITY;values[2]=-INFINITY;}
+        auto half=Tensor::from_vector(values,{values.size()},Device::GPU).to(DataType::Float16),fp32=half.to(DataType::Float32);
+        StridedLayout layout{};layout.rank=2;layout.dims={n,5};layout.strides={5,1};layout.element_count=n*5;
+        for(auto op:{ReduceOp::Sum,ReduceOp::Mean,ReduceOp::Min,ReduceOp::Max}) {
+            if(!n && (op==ReduceOp::Min || op==ReduceOp::Max))continue;
+            ReduceProgram program{};program.op=op;program.axes[0]=0;program.axis_count=1;program.result_dtype=DataType::Float32;
+            auto reference=Tensor::zeros({5},Device::GPU);
+            gpu.reduce(storage_ref(fp32),storage_ref(reference),layout,program,{});
+            for(auto dtype:{DataType::Float32,DataType::Float16}) {
+                auto expected=reference.to(dtype).to(DataType::Float32).cpu();
+                auto output=Tensor::from_vector(std::vector<float>(7,-77),{7},Device::GPU).to(dtype);
+                auto out=storage_ref(output);out.byte_offset=dtype==DataType::Float16?2:4;program.result_dtype=dtype;
+                gpu.reduce(storage_ref(half),out,layout,program,{});
+                auto observed=output.to(DataType::Float32).cpu();
+                require(observed.ptr<float>()[0]==-77 && observed.ptr<float>()[6]==-77,"HIP half reduction overwrote guards");
+                for(size_t i=0;i<5;++i) {
+                    const float actual=observed.ptr<float>()[i+1],wanted=expected.ptr<float>()[i];
+                    if(!(actual==wanted || (std::isnan(actual) && std::isnan(wanted)))) {
+                        std::fprintf(stderr,"half reduction n=%zu exceptional=%d op=%d dtype=%d index=%zu actual=%.9g expected=%.9g\n",n,int(exceptional),int(op),int(dtype),i,actual,wanted);
+                        auto r=reference.cpu();std::fprintf(stderr,"reference FP32 %.12g\n",r.ptr<float>()[i]);
+                        require(false,"HIP half reduction changed FP32 accumulation or IEEE semantics");
+                    }
+                }
+            }
+        }
+    }
+}
 int main() try {
     GpuBackendScope scope(GpuBackend::HIP);
-    unary();integer_arithmetic();native_norm();native_linear();native_attention();native_conv();transpose_nonfinite();half_inference();half_broadcast();scalar_left();precise_bits();gathered_and_packed();fold_and_host();cache_and_threads();
+    unary();integer_arithmetic();native_norm();native_linear();native_attention();native_conv();transpose_nonfinite();half_inference();half_broadcast();scalar_left();half_reductions();precise_bits();gathered_and_packed();fold_and_host();cache_and_threads();
     std::puts("PASS HIP expressions: native FP16 inference and attention/convolution/fused linear/layer/RMS norms FP16/FP32 with guards and inplace, native math, exact Int32/Int64/UInt32/UInt8 arithmetic and empty operations, IEEE values, gather bounds, Float16/Bool/UInt8 packed tails, host constants, short/runtime folds, prepare, shape cache and concurrent launches");
     return 0;
 } catch(const std::exception& e) {std::fprintf(stderr,"HIP expression failed: %s\n",e.what());return 1;}
