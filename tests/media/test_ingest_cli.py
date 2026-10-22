@@ -146,6 +146,29 @@ class IngestCLI(unittest.TestCase):
         self.assertEqual(catalog["source_locator_encoding"], "posix_bytes")
         self.assertEqual(bytes.fromhex(catalog["source_locator_bytes"]), native)
         self.assertEqual(catalog["description"]["streams"][0]["width"], 64)
+        probe, _ = self.invoke("probe", path)
+        self.assertEqual(probe["media"]["streams"][0]["width"], 64)
+        expected = self.root / "native-reference-frames"
+        actual = self.root / "native-byte-frames"
+        baseline, _ = self.invoke("extract", self.source(), "--output", expected,
+                                  "--interval", "1", "--end", "0.35")
+        result, _ = self.invoke("extract", path, "--output", actual,
+                                "--interval", "1", "--end", "0.35")
+        self.assertGreater(result["frames_accepted"], 0)
+        self.assertEqual(result["frames_accepted"], baseline["frames_accepted"])
+        expected_frames = {p.name: p.read_bytes() for p in expected.glob("*.png")}
+        self.assertTrue(expected_frames)
+        self.assertEqual({p.name: p.read_bytes() for p in actual.glob("*.png")}, expected_frames)
+
+        request = self.root / "native-encode-request.json"
+        request.write_text(json.dumps({"operation": "encode-session", "output": str(self.root / "unused.mp4"),
+                                       "non_utf8_filename": True}), encoding="utf-8")
+        encoded = subprocess.run([str(RUNNER), str(request)], capture_output=True, timeout=60)
+        self.assertEqual(encoded.returncode, 0, encoded.stderr)
+        self.assertTrue(json.loads(encoded.stdout)["success"])
+        encoded_path = os.fsdecode(os.fsencode(self.root) + b"/encoded-\xff.mp4")
+        encoded_probe, _ = self.invoke("probe", encoded_path)
+        self.assertEqual(encoded_probe["media"]["streams"][0]["width"], 64)
 
     def test_source_container_metadata_failure_preserves_the_probe_error(self):
         path = self.root / "missing metadata input.bin"

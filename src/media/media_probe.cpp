@@ -249,12 +249,7 @@ namespace lfs::media {
         // The native-path NUL check above also covers the display representation.
         std::string native;
         try {
-#ifdef _WIN32
             native = core::path_to_native_utf8(path);
-#else
-            // POSIX filenames are bytes; the UI UTF-8 helper would sanitize them.
-            native = path.native();
-#endif
         } catch (const std::bad_alloc&) {
             return failure(AVERROR(ENOMEM), "Prepare input path", false);
         }

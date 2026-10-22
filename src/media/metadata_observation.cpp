@@ -1,12 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "media/metadata_observation.hpp"
-extern "C" {
-#include <libavutil/mathematics.h>
-}
-#include <algorithm>
 #include <cmath>
-#include <limits>
 #include <new>
 #include <type_traits>
 
@@ -14,26 +9,6 @@ namespace lfs::media {
     namespace {
         Error invalid(const char* message) {
             return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = message, .detection = LFS_SOURCE_SITE_CURRENT()});
-        }
-        Status rejected(const char* message) { return Status::failure(invalid(message)); }
-        Status exhausted(const char* message) {
-            return Status::failure(make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = message, .detection = LFS_SOURCE_SITE_CURRENT()}));
-        }
-        bool validTime(const Timestamp& value) {
-            return value.ticks != std::numeric_limits<int64_t>::min() && value.time_base.numerator > 0 && value.time_base.denominator > 0;
-        }
-        int compare(const Timestamp& a, const Timestamp& b) {
-            return av_compare_ts(a.ticks, {a.time_base.numerator, a.time_base.denominator},
-                                 b.ticks, {b.time_base.numerator, b.time_base.denominator});
-        }
-        bool validState(MetadataValueState value) {
-            switch (value) {
-            case MetadataValueState::Present:
-            case MetadataValueState::Absent:
-            case MetadataValueState::Invalid:
-            case MetadataValueState::Unsupported: return true;
-            }
-            return false;
         }
     } // namespace
 
@@ -45,128 +20,9 @@ namespace lfs::media {
         case MetadataUnit::FramesPerSecond: return "frames_per_second";
         case MetadataUnit::Seconds: return "seconds";
         case MetadataUnit::Degrees: return "degrees";
-        case MetadataUnit::Radians: return "radians";
         case MetadataUnit::Metres: return "metres";
-        case MetadataUnit::MetresPerSecond: return "metres_per_second";
-        case MetadataUnit::MetresPerSecondSquared: return "metres_per_second_squared";
-        case MetadataUnit::DegreesPerSecond: return "degrees_per_second";
-        case MetadataUnit::RadiansPerSecond: return "radians_per_second";
         }
         return "unknown";
-    }
-
-    Status validateMetadataSeries(const SourceMetadataCatalog& catalog, const MetadataNumericSeries& series, const MetadataSeriesLimits& limits) {
-        if (!catalog.resolve(series.source))
-            return rejected("Metadata series belongs to another observation or an invalid record");
-        if (series.scope != MetadataTemporalScope::PerFrame && series.scope != MetadataTemporalScope::SampleSeries)
-            return rejected("Numeric series requires per-frame or sample-series timing");
-        if (series.clock.domain.empty() || (series.clock.stream_index && *series.clock.stream_index < 0))
-            return rejected("Metadata series requires an explicit clock and valid stream identity");
-        if (series.clock.stream_index) {
-            if (!catalog.container() || std::none_of(catalog.container()->streams.begin(), catalog.container()->streams.end(),
-                                                     [&](const auto& stream) { return stream.index == *series.clock.stream_index; }))
-                return rejected("Metadata clock references a stream absent from its source observation");
-            const auto source_stream = std::visit([&](const auto& reference) -> std::optional<int> {
-                using T = std::decay_t<decltype(reference)>;
-                if constexpr (std::is_same_v<T, StreamDescriptionReference>)
-                    return catalog.streamDescription(reference)->index;
-                else if constexpr (std::is_same_v<T, StreamTagReference> || std::is_same_v<T, StreamSideDataReference>)
-                    return catalog.container()->source_metadata->streams[reference.stream].stream_index;
-                else
-                    return std::nullopt;
-            },
-                                                  series.source.reference);
-            if (source_stream && *source_stream != *series.clock.stream_index)
-                return rejected("Metadata clock stream differs from the source record stream");
-        }
-        if (series.origin != MetadataValueOrigin::InterpretedSource && series.origin != MetadataValueOrigin::DemuxerObservation && series.origin != MetadataValueOrigin::Derived)
-            return rejected("Unknown metadata value origin");
-        if (series.origin == MetadataValueOrigin::Derived ? series.derivation.empty() : !series.derivation.empty())
-            return rejected("Metadata derivation must be explicit and reserved for derived values");
-        if (series.channels.empty())
-            return rejected("Metadata series requires at least one channel");
-        if (series.channels.size() > limits.channels || series.timing.size() > limits.samples ||
-            series.values.size() > limits.value_bytes / sizeof(double))
-            return Status::failure(make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "Metadata series exceeds the channel, sample or value budget", .detection = LFS_SOURCE_SITE_CURRENT()}));
-        if (series.timing.size() > std::numeric_limits<std::size_t>::max() / series.channels.size() ||
-            series.values.size() != series.timing.size() * series.channels.size() || series.states.size() != series.timing.size())
-            return rejected("Metadata series timing, states and channel layout do not match");
-        std::size_t text_bytes = 0;
-        const auto charge = [&](const std::string& value) {
-            if (value.size() > limits.text_bytes - text_bytes)
-                return false;
-            text_bytes += value.size();
-            return true;
-        };
-        if (!charge(series.clock.domain) || !charge(series.coordinates.axes) || !charge(series.coordinates.datum) || !charge(series.derivation))
-            return exhausted("Metadata series text exceeds its budget");
-        for (const auto& channel : series.channels) {
-            if (channel.semantic.empty() || metadataUnitId(channel.unit) == "unknown" ||
-                (channel.resolution && (!std::isfinite(*channel.resolution) || *channel.resolution <= 0)))
-                return rejected("Metadata channel requires a valid semantic, unit and optional positive resolution");
-            if (!charge(channel.semantic))
-                return exhausted("Metadata series text exceeds its budget");
-        }
-        for (std::size_t i = 0; i < series.timing.size(); ++i) {
-            const auto& time = series.timing[i];
-            if (!validTime(time.position) || !validState(series.states[i]) ||
-                (series.scope == MetadataTemporalScope::PerFrame && !time.frame_index))
-                return rejected("Invalid metadata sample time, state or frame association");
-            if (i) {
-                const auto& previous = series.timing[i - 1];
-                if (time.segment < previous.segment || (time.segment == previous.segment && compare(time.position, previous.position) < 0) ||
-                    (series.scope == MetadataTemporalScope::PerFrame && time.segment == previous.segment && *time.frame_index <= *previous.frame_index))
-                    return rejected("Metadata samples must preserve ordered clock segments and frame identities");
-            }
-            if (series.states[i] == MetadataValueState::Present) {
-                for (std::size_t channel = 0; channel < series.channels.size(); ++channel)
-                    if (!std::isfinite(series.values[i * series.channels.size() + channel]))
-                        return rejected("Present metadata samples must be finite; invalid samples require an explicit state");
-            }
-        }
-        return {};
-    }
-
-    namespace {
-        Result<MetadataSampleRange> selectRange(const MetadataNumericSeries& series, const MetadataSampleWindow& window) {
-            if (window.clock != series.clock || !validTime(window.begin) || !validTime(window.end) || compare(window.begin, window.end) > 0)
-                return invalid("Metadata window requires the same explicit clock and a valid ordered interval");
-            const auto first = std::lower_bound(series.timing.begin(), series.timing.end(), window.segment,
-                                                [](const auto& time, auto segment) { return time.segment < segment; });
-            const auto last = std::upper_bound(first, series.timing.end(), window.segment,
-                                               [](auto segment, const auto& time) { return segment < time.segment; });
-            const auto begin = std::lower_bound(first, last, window.begin,
-                                                [](const auto& time, const auto& value) { return compare(time.position, value) < 0; });
-            const auto end = std::lower_bound(begin, last, window.end,
-                                              [](const auto& time, const auto& value) { return compare(time.position, value) < 0; });
-            return MetadataSampleRange{static_cast<std::size_t>(begin - series.timing.begin()), static_cast<std::size_t>(end - begin)};
-        }
-
-    } // namespace
-    const MetadataNumericSeries& ValidatedMetadataSeries::data() const noexcept {
-        static const MetadataNumericSeries empty;
-        return series_ ? *series_ : empty;
-    }
-    Result<MetadataSampleRange> ValidatedMetadataSeries::range(const MetadataSampleWindow& window) const {
-        if (!series_)
-            return invalid("Metadata series view has been moved from");
-        return selectRange(*series_, window);
-    }
-    Result<ValidatedMetadataSeries> prepareMetadataSeries(const SourceMetadataCatalog& catalog, MetadataNumericSeries series, const MetadataSeriesLimits& limits) {
-        const auto valid = validateMetadataSeries(catalog, series, limits);
-        if (!valid)
-            return valid.error();
-        try {
-            return ValidatedMetadataSeries(std::make_shared<const MetadataNumericSeries>(std::move(series)));
-        } catch (const std::bad_alloc&) {
-            return make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "Metadata series view allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()});
-        }
-    }
-    Result<MetadataSampleRange> metadataSampleRange(const SourceMetadataCatalog& catalog, const MetadataNumericSeries& series, const MetadataSampleWindow& window, const MetadataSeriesLimits& limits) {
-        const auto valid = validateMetadataSeries(catalog, series, limits);
-        if (!valid)
-            return valid.error();
-        return selectRange(series, window);
     }
 
     Result<MetadataSummary> summarizeSourceMetadata(const SourceMetadataCatalog& catalog, std::size_t max_facts, std::size_t max_text_bytes) {

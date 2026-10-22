@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "core/path_utils.hpp"
 #include "media/media_ingest.hpp"
 #include "media/media_json.hpp"
 #include "media/metadata_observation.hpp"
@@ -30,20 +31,6 @@ namespace {
         require(bool(catalog), "create observation fixture");
         return std::move(*catalog);
     }
-    MetadataNumericSeries series(const SourceMetadataCatalog& catalog) {
-        MetadataNumericSeries result;
-        result.source = *catalog.bind(StreamTagReference{0, 0});
-        result.clock = {"sensor-clock", 7};
-        result.channels = {{"gyro.x", MetadataUnit::RadiansPerSecond, std::nullopt},
-                           {"gyro.y", MetadataUnit::RadiansPerSecond, 0.001}};
-        result.timing = {{{-10, {1, 1000}}, 0, std::nullopt},
-                         {{0, {1, 1000}}, 0, std::nullopt},
-                         {{0, {1, 1000}}, 0, std::nullopt},
-                         {{-100, {1, 1000}}, 1, std::nullopt}};
-        result.values = {1, 2, 3, 4, 5, 6, 7, 8};
-        result.states.assign(4, MetadataValueState::Present);
-        return result;
-    }
 } // namespace
 
 int runMetadataObservationContracts() {
@@ -62,6 +49,8 @@ int runMetadataObservationContracts() {
     // The locator contract does not assume the host filesystem accepts every
     // byte sequence (the real non-UTF8 file-open integration runs on Linux).
     const auto native_name = std::filesystem::path(std::string("missing-metadata-source-\xff.bin"));
+    require(lfs::core::path_to_native_utf8(native_name) == native_name.native(), "I/O filename helper preserves non-UTF8 POSIX bytes");
+    require(lfs::core::path_to_utf8(native_name) != native_name.native(), "display filename remains sanitized independently of I/O");
     const auto located = MediaIngest::sourceMetadata(native_name);
     require(bool(located) && located->sourceLocator() && located->sourceLocator()->encoding == MetadataPathEncoding::PosixBytes &&
                 located->sourceLocator()->native_bytes == native_name.native() && located->sourceLocator()->display != native_name.native(),
@@ -120,156 +109,6 @@ int runMetadataObservationContracts() {
             "invalid angle is flagged, never silently zeroed");
     require(json_detail::metadataSummary(*invalid_summary)["facts"][3]["value"] == "nan", "invalid numeric class survives JSON transport instead of becoming an absent value");
 
-    auto samples = series(catalog);
-    require(bool(validateMetadataSeries(catalog, samples)), "negative timestamps, duplicate sample times and explicit clock resets are valid");
-    require(!validateMetadataSeries(different, samples), "sample provenance cannot be rebound to a different catalog");
-    MetadataSampleWindow window{{"sensor-clock", 7}, 0, {-1, {1, 1000}}, {1, {1, 1000}}};
-    auto range = metadataSampleRange(catalog, samples, window);
-    require(bool(range) && range->first == 1 && range->count == 2, "window keeps both high-frequency samples with equal timestamps");
-    auto prepared_input = series(catalog);
-    const auto* input_values = prepared_input.values.data();
-    auto prepared = prepareMetadataSeries(catalog, std::move(prepared_input));
-    require(bool(prepared) && prepared->data().values.data() == input_values, "prepare validates once and moves sample storage without copying");
-    static_assert(std::is_const_v<std::remove_reference_t<decltype(std::declval<ValidatedMetadataSeries&>().data())>>);
-    for (int i = 0; i < 100; ++i) {
-        const auto repeated = prepared->range(window);
-        require(bool(repeated) && repeated->first == 1 && repeated->count == 2, "immutable prepared view supports repeated logarithmic window queries");
-    }
-    const auto orphaned = [&] {
-        auto local = fixture();
-        return prepareMetadataSeries(local, series(local));
-    }();
-    require(bool(orphaned) && bool(orphaned->range(window)), "prepared view remains valid after the source catalog owner is destroyed");
-    auto preserved = std::move(*prepared);
-    require(!prepared->range(window) && prepared->data().values.empty() && bool(preserved.range(window)), "moved-from prepared view is rejected safely");
-    window.segment = 1;
-    window.begin = {-1, {1, 10}};
-    window.end = {0, {1, 1}};
-    range = metadataSampleRange(catalog, samples, window);
-    require(bool(range) && range->first == 3 && range->count == 1, "equivalent rational timebases are compared by FFmpeg without clock conversion");
-    window.segment = 99;
-    range = metadataSampleRange(catalog, samples, window);
-    require(bool(range) && range->count == 0, "missing segment yields no manufactured samples");
-    window.clock.domain = "another-clock";
-    require(!metadataSampleRange(catalog, samples, window), "different clock requires an explicit mapping outside this API");
-    window.clock = samples.clock;
-    window.begin = {1, {1, 1}};
-    window.end = {0, {1, 1}};
-    require(!metadataSampleRange(catalog, samples, window), "reversed window rejected");
-
-    auto extremes = series(catalog);
-    extremes.timing = {{{std::numeric_limits<int64_t>::min() + 1, {1, 1000000000}}, 0, std::nullopt},
-                       {{std::numeric_limits<int64_t>::max() - 1, {1, 1000000000}}, 0, std::nullopt}};
-    extremes.values.resize(4);
-    extremes.states.resize(2);
-    auto extreme_range = metadataSampleRange(catalog, extremes,
-                                             {extremes.clock, 0, {std::numeric_limits<int64_t>::max() - 1, {1, 1000000000}}, {std::numeric_limits<int64_t>::max(), {1, 1000000000}}});
-    require(bool(extreme_range) && extreme_range->first == 1 && extreme_range->count == 1,
-            "large timestamp comparisons do not subtract or overflow ticks");
-    const auto rejected = [&](auto change) {
-        auto altered = series(catalog);
-        change(altered);
-        require(!validateMetadataSeries(catalog, altered), "malformed series must be rejected");
-    };
-    rejected([](auto& s) { s.timing[0].position.ticks = std::numeric_limits<int64_t>::min(); });
-    rejected([](auto& s) { s.clock.domain.clear(); });
-    rejected([](auto& s) { s.clock.stream_index = 42; });
-    rejected([](auto& s) { s.clock.stream_index = -1; });
-    rejected([](auto& s) { s.channels.clear(); });
-    rejected([](auto& s) { s.channels[0].semantic.clear(); });
-    rejected([](auto& s) { s.channels[0].unit = static_cast<MetadataUnit>(-1); });
-    rejected([](auto& s) { s.channels[0].resolution = 0; });
-    rejected([](auto& s) { s.channels[0].resolution = std::numeric_limits<double>::infinity(); });
-    rejected([](auto& s) { s.timing[0].position.time_base.denominator = 0; });
-    rejected([](auto& s) { s.timing[0].position.time_base.numerator = -1; });
-    rejected([](auto& s) { s.timing[1].position.ticks = -11; });
-    rejected([](auto& s) { s.timing[3].segment = 0; });
-    rejected([](auto& s) { s.values.pop_back(); });
-    rejected([](auto& s) { s.states.pop_back(); });
-    rejected([](auto& s) { s.states[0] = static_cast<MetadataValueState>(-1); });
-    rejected([](auto& s) { s.values[0] = std::numeric_limits<double>::quiet_NaN(); });
-    rejected([](auto& s) { s.scope = MetadataTemporalScope::Static; });
-    rejected([](auto& s) { s.scope = static_cast<MetadataTemporalScope>(-1); });
-    auto associated = series(catalog);
-    for (auto& time : associated.timing)
-        time.frame_index = 12;
-    require(bool(validateMetadataSeries(catalog, associated)), "multiple high-frequency samples may retain the same explicitly supplied video frame association");
-    rejected([](auto& s) { s.origin = MetadataValueOrigin::Derived; });
-    rejected([](auto& s) { s.origin = static_cast<MetadataValueOrigin>(-1); });
-    rejected([](auto& s) { s.derivation = "unmarked-derived"; });
-    samples.values[0] = std::numeric_limits<double>::quiet_NaN();
-    samples.states[0] = MetadataValueState::Invalid;
-    require(bool(validateMetadataSeries(catalog, samples)), "explicitly invalid sample retains its original nonfinite value");
-    samples.origin = MetadataValueOrigin::Derived;
-    samples.derivation = "test scale conversion";
-    require(bool(validateMetadataSeries(catalog, samples)), "derived values must declare their transformation");
-    samples = series(catalog);
-    samples.scope = MetadataTemporalScope::PerFrame;
-    for (std::size_t i = 0; i < samples.timing.size(); ++i)
-        samples.timing[i].frame_index = i;
-    require(bool(validateMetadataSeries(catalog, samples)), "per-frame associations require explicit frame indices");
-    samples.timing[1].frame_index = 0;
-    require(!validateMetadataSeries(catalog, samples), "duplicate per-frame identities rejected within a segment");
-    auto extra_description = *catalog.container();
-    auto another_stream = extra_description.streams.front();
-    another_stream.index = 42;
-    extra_description.streams.push_back(another_stream);
-    extra_description.source_metadata->limited = true;
-    auto extra_catalog = catalogContainerMetadata(std::move(extra_description));
-    require(bool(extra_catalog), "create independent extra-stream observation");
-    auto wrong_clock = series(*extra_catalog);
-    wrong_clock.clock.stream_index = 42;
-    require(!validateMetadataSeries(*extra_catalog, wrong_clock), "clock cannot silently refer to another existing source stream");
-    samples = series(catalog);
-    require(!validateMetadataSeries(catalog, samples, {.channels = 1}), "channel budget enforced");
-    require(!validateMetadataSeries(catalog, samples, {.channels = 2, .samples = 3}), "sample budget enforced");
-    require(!validateMetadataSeries(catalog, samples, {.channels = 2, .samples = 4, .value_bytes = 63}), "value byte budget enforced");
-    require(bool(validateMetadataSeries(catalog, samples, {.channels = 2, .samples = 4, .value_bytes = 64})), "exact value byte boundary accepted");
-    require(!validateMetadataSeries(catalog, samples, {.text_bytes = 0}), "aggregate text budget enforced");
-    samples.timing.clear();
-    samples.states.clear();
-    samples.values.clear();
-    require(bool(validateMetadataSeries(catalog, samples)), "empty series with declared channels and clock is valid");
-    const auto prepared_empty = prepareMetadataSeries(catalog, samples);
-    require(bool(prepared_empty), "prepare empty declared series");
-    const auto empty_range = prepared_empty->range({samples.clock, 0, {0, {1, 1}}, {1, {1, 1}}});
-    require(bool(empty_range) && empty_range->count == 0, "valid empty prepared series returns an empty window");
-    // Independent linear oracle in millisecond units for mixed rational bases,
-    // repeated timestamps and clock-reset segments; queries must remain half-open.
-    auto many = series(catalog);
-    many.timing.clear();
-    many.values.clear();
-    many.states.clear();
-    for (std::uint64_t segment = 0; segment < 4; ++segment) {
-        for (int i = 0; i < 32; ++i) {
-            const int scale = i % 2 + 1;
-            many.timing.push_back({{(i / 3 - 4) * scale, {1, 1000 * scale}}, segment, std::nullopt});
-            many.values.insert(many.values.end(), {double(i), double(segment)});
-            many.states.push_back(MetadataValueState::Present);
-        }
-    }
-    const auto prepared_many = prepareMetadataSeries(catalog, std::move(many));
-    require(bool(prepared_many), "prepare mixed-timebase series for independent window oracle");
-    for (std::uint64_t segment = 0; segment < 5; ++segment) {
-        for (int begin = -6; begin <= 8; ++begin) {
-            for (int end = begin; end <= 9; ++end) {
-                std::size_t expected_first = segment < 4 ? static_cast<std::size_t>(segment) * 32 : 128;
-                std::size_t expected_count = 0;
-                if (segment < 4) {
-                    for (int i = 0; i < 32; ++i) {
-                        const int millis = i / 3 - 4;
-                        if (millis < begin)
-                            ++expected_first;
-                        else if (millis < end)
-                            ++expected_count;
-                    }
-                }
-                const auto selected = prepared_many->range({samples.clock, segment, {begin, {1, 1000}}, {end, {1, 1000}}});
-                require(bool(selected) && selected->first == expected_first && selected->count == expected_count,
-                        "prepared binary windows agree with independent linear oracle");
-            }
-        }
-    }
     auto first = std::async(std::launch::async, [&] { return summarizeSourceMetadata(catalog); });
     auto second = std::async(std::launch::async, [&] { return summarizeSourceMetadata(different); });
     require(bool(first.get()) && bool(second.get()), "independent observations support parallel read-only summaries");

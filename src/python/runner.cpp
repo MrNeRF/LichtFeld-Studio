@@ -190,7 +190,7 @@ sys.stderr = OutputCapture(True)
         // Python 3.8+ on Windows requires os.add_dll_directory() for DLL loading
         // First add the executable directory using C++ (more reliable)
         const auto exe_dir = lfs::core::getExecutableDir();
-        const auto exe_dir_str = lfs::core::path_to_native_utf8(exe_dir);
+        const auto exe_dir_str = lfs::core::path_to_utf8(lfs::core::native_fs::native_path(exe_dir));
 
         std::string add_dll_code = std::format(R"(
 import os
@@ -354,7 +354,7 @@ _add_dll_dirs()
                 return false;
             }
 
-            const auto path_utf8 = lfs::core::path_to_native_utf8(path);
+            const auto path_utf8 = lfs::core::path_to_utf8(lfs::core::native_fs::native_path(path));
             PyObject* const py_path = PyUnicode_FromString(path_utf8.c_str());
             if (!py_path) {
                 LOG_WARN("Failed to create Python path string for {}: {}", label, path_utf8);
@@ -1755,7 +1755,7 @@ _repl_out.close()
 
         PyObject* const sys_path = PySys_GetObject("path");
         if (sys_path) {
-            const auto path_str = lfs::core::path_to_native_utf8(packages);
+            const auto path_str = lfs::core::path_to_utf8(lfs::core::native_fs::native_path(packages));
             PyObject* const py_path = PyUnicode_FromString(path_str.c_str());
             if (PySequence_Contains(sys_path, py_path) == 0) {
                 PyList_Insert(sys_path, 0, py_path);
@@ -1790,7 +1790,7 @@ _repl_out.close()
         {
             const auto python_module_dir = lfs::core::getPythonModuleDir();
             if (!python_module_dir.empty()) {
-                const auto python_module_dir_utf8 = lfs::core::path_to_native_utf8(python_module_dir);
+                const auto python_module_dir_utf8 = lfs::core::path_to_utf8(lfs::core::native_fs::native_path(python_module_dir));
                 PyObject* sys_path = PySys_GetObject("path"); // borrowed
                 PyObject* py_path = PyUnicode_FromString(python_module_dir_utf8.c_str());
                 PyList_Append(sys_path, py_path);
@@ -1828,7 +1828,7 @@ _repl_out.close()
             }
 
             // Ensure script directory is on sys.path
-            const auto parent_utf8 = lfs::core::path_to_native_utf8(script.parent_path());
+            const auto parent_utf8 = lfs::core::path_to_utf8(lfs::core::native_fs::native_path(script.parent_path()));
             if (!parent_utf8.empty()) {
                 PyObject* sys_path = PySys_GetObject("path"); // borrowed ref
                 PyObject* py_parent = PyUnicode_FromString(parent_utf8.c_str());

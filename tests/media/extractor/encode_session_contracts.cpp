@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/path_utils.hpp"
 #include "media/video_encode_session.hpp"
+#include "media/video_player.hpp"
 #include <algorithm>
 #include <fstream>
 #include <iterator>
@@ -83,7 +84,11 @@ namespace {
 
 nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
     using namespace lfs::media;
-    const auto path = lfs::core::utf8_to_path(request.at("output").get<std::string>());
+    auto path = lfs::core::utf8_to_path(request.at("output").get<std::string>());
+#ifdef __linux__
+    if (request.value("non_utf8_filename", false))
+        path = path.parent_path() / std::filesystem::path(std::string("encoded-\xff.mp4"));
+#endif
     VideoEncodeSession session;
     VideoEncodeOptions options{.width = 64, .height = 48, .framerate = 10, .crf = 18, .comment = "media session é 日本語"};
     options.width = request.value("width", options.width);
@@ -224,6 +229,15 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
     require(destination.close().has_value() && !destination.isOpen() && destination.close().has_value(), "flush and repeat close");
     require(destination.writeFrame(writer).error().code() == lfs::ErrorCode::FailedPrecondition, "write after close rejected");
     nlohmann::json report{{"success", true}, {"frames", frames}, {"writer_calls", writer.calls}, {"comment", options.comment}, {"backend", static_cast<int>(backend)}};
+#ifdef __linux__
+    if (request.value("non_utf8_filename", false)) {
+        require(std::filesystem::is_regular_file(path), "encoder writes the exact native filename");
+        lfs::io::VideoPlayer player;
+        require(player.open(path), "player reopens the native non-UTF8 output filename");
+        require(player.width() == options.width && player.height() == options.height && player.currentFrameData(),
+                "player decodes the native non-UTF8 output");
+    }
+#endif
     if (request.value("verify_apple_recovery", false)) {
         require(backend == VideoEncodeBackend::VideoToolboxSoftware, "8K must use Apple's software encoder");
         auto small = options;

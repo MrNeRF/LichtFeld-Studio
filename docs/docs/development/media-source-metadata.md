@@ -119,7 +119,7 @@ early. Ordinals are catalog-local, not interchangeable stream IDs.
 `resolve(handle)` rejects a handle from a different observation even when file
 names and ordinals are identical. Copies share the exact same snapshot; moves
 transfer it. Handles retain the snapshot so its payload cannot disappear while
-a fact or prepared series refers to it. A default/moved-from catalog has no
+a fact refers to it. A default/moved-from catalog has no
 snapshot and cannot resolve old handles. No separate identity token allocation
 or second copy of the payload is needed.
 
@@ -139,11 +139,9 @@ across changed/reopened sources.
 
 Original payloads, library-interpreted EXIF/TIFF values, demuxer observations and
 explicitly derived numeric values remain distinct. No exact on-disk byte claim is
-made for a demuxer dictionary or decoded field. Every projected fact and numeric
-series has a source handle. Derived numeric series require a derivation label;
-non-derived series cannot silently carry one. That label is a declaration by the
-producer, not an automatically verified transformation or a multi-source lineage
-graph.
+made for a demuxer dictionary or decoded field. Every projected fact has a source
+handle. The static stream projection does not claim sensor measurements or an
+automatically verified transformation graph.
 
 ## Typed facts and concrete consumer
 
@@ -164,61 +162,27 @@ static demuxer observation, because FFmpeg may derive properties while probing.
 It has no invented frame timestamp, GPS datum or camera calibration. Original
 storage retains data outside this deliberately small standardized projection.
 
-## Per-frame values and high-frequency numeric series
-
-`MetadataNumericSeries` stores an interleaved numeric array, channel definitions,
-original sample times, explicit discontinuity segments and sample-wide states.
-It does not allocate a vector for every sample. Units, optional declared
-resolution, coordinate axes and datum are supplied by the producer; unknown
-values stay unspecified. Resolution is not inferred sensor accuracy. This numeric
-view is an interpretation; arbitrary-width integers, original rationals and
-vendor binary representations remain in source storage rather than being
-advertised as losslessly converted to double.
-
-`validateMetadataSeries` checks source handles, clock/stream association, valid
-timebases, array shape with overflow protection, channel/sample/value/text limits,
-known enum values, explicit derived state and finite Present samples. Invalid,
-Absent and Unsupported samples can retain their supplied placeholder/invalid
-values without presenting them as measurements. The state applies to the entire
-sample; channels with different validity or clocks require separate series.
-Default limits are 64 channels, one million samples, 64 MiB of numeric values and
-64 KiB of text. Timing/state storage is separately bounded by sample count;
-allocator capacity, input buffers and provider RAM are not included in the value
-byte budget. Validation does not undo allocations a caller already made.
-
-Negative timestamps and duplicate sample times are allowed. Missing FFmpeg
-sentinel timestamps and invalid timebases are rejected. Segment ordinals must
-increase across clock discontinuities; times are nondecreasing only within each
-segment. PerFrame values additionally require strictly increasing explicit frame
-indices within each segment. SampleSeries values may preserve explicitly supplied frame associations, including
-multiple sensor samples for the same frame; no association is inferred from FPS. Untimed/undecoded observations remain in source storage instead of being
-promoted to a timed series with fabricated timestamps.
-
-The timing/series and typed-summary declarations live in the internal
+The typed-summary declarations live in the internal
 `src/media/metadata_observation.hpp` header. They are not installed as a public SDK
-contract. The CLI consumes the static summary. Numeric series are internal
-contracts; no production telemetry reader is supplied by this module.
+contract. The CLI consumes the static summary.
 
-`prepareMetadataSeries` validates once and takes ownership of the numeric arrays
-in an immutable snapshot. Its view retains source ownership, exposes const data
-and supports repeated half-open window searches in O(log samples), apart from
-bounded clock-label comparison. It neither copies sample arrays on each query
-nor revalidates their contents. Moved-from views reject queries and expose empty data; a valid
-zero-sample prepared series returns an empty range. Pass an rvalue to avoid caller-side argument
-copies; mutable aliases must not be retained into the transferred vectors.
+## Application use and I/O boundaries
 
-Window lookup returns original samples from one explicit clock and segment,
-including equal-time samples. It uses existing FFmpeg rational timestamp
-comparison, avoiding double conversion and tick subtraction overflow. It does not
-map clocks, infer drift/offset, interpolate, sort source data, extrapolate or bridge
-segments. An absent segment yields an empty range. The internal one-off
-`metadataSampleRange` helper remains available but validates once per call in
-O(samples × channels); repeated queries should use the prepared view.
+The first planned application consumer is image-dataset preparation: camera and
+lens metadata can supply explicit initial-intrinsics candidates, and GPS can
+supply georeferencing observations. The camera-field interpretation is supplied
+by the follow-up; catalog collection and the CLI are the implemented consumers
+here. No dataset, training, intrinsics or georeferencing integration is enabled
+by this catalog API. A focal length alone is not a calibrated camera model.
 
 The probe prepares its native filename before allocating the FFmpeg input
 context. A path-allocation failure returns the existing `ResourceExhausted` error
 without leaving an unowned input context. This also removes an unnecessary display
-path conversion at the I/O boundary; native filename handling is unchanged.
+path conversion at the I/O boundary. The shared `path_to_native_utf8` helper
+preserves native POSIX filename bytes for probe, extraction, playback and encoding;
+it no longer sanitizes these I/O filenames as display text. Windows keeps its
+native-path and UTF-8 conversion. UI and JSON display paths still use their
+separate sanitized representation.
 The cooperative deadline compares elapsed whole milliseconds with the positive
 millisecond timeout, avoiding overflow from widening an extreme timeout to
 nanoseconds. The maximum signed 64-bit timeout is covered by the CLI regression.
