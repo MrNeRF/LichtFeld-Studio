@@ -21,7 +21,8 @@ namespace lfs::media {
                               FramesPerSecond,
                               Seconds,
                               Degrees,
-                              Metres };
+                              Metres,
+                              Millimetres };
     using MetadataScalar = std::variant<std::int64_t, double, ExifRational, std::string>;
     struct MetadataFact {
         MetadataRecordHandle source;
@@ -30,14 +31,27 @@ namespace lfs::media {
         MetadataUnit unit = MetadataUnit::Unspecified;
         MetadataValueState state = MetadataValueState::Present;
         MetadataValueOrigin origin = MetadataValueOrigin::DemuxerObservation;
+        // Additional operands in the same source observation, for derived facts.
+        std::vector<MetadataRecordHandle> inputs;
+        std::string derivation;
+        std::string diagnostic;
+        // Duplicate semantic occurrences in one directory are not resolved here.
+        bool ambiguous = false;
     };
+    enum class MetadataSummaryScope { StreamProperties,
+                                      ImageProperties };
     struct MetadataSummary {
         bool limited = false;
         std::vector<MetadataFact> facts;
+        MetadataSummaryScope scope = MetadataSummaryScope::StreamProperties;
     };
     // Projects existing stream properties to typed, static facts with provenance.
     // Raw entries stay available; absence never becomes a fabricated zero value.
     [[nodiscard]] LFS_MEDIA_API Result<MetadataSummary> summarizeSourceMetadata(
+        const SourceMetadataCatalog&, std::size_t max_facts = 4096, std::size_t max_text_bytes = 64 * 1024);
+    // Interprets standard camera/optics/GPS/civil-time fields already collected.
+    // No file reads, timezone inference, datum conversion or image transforms.
+    [[nodiscard]] LFS_MEDIA_API Result<MetadataSummary> summarizeImageMetadata(
         const SourceMetadataCatalog&, std::size_t max_facts = 4096, std::size_t max_text_bytes = 64 * 1024);
     [[nodiscard]] LFS_MEDIA_API std::string_view metadataUnitId(MetadataUnit) noexcept;
 } // namespace lfs::media

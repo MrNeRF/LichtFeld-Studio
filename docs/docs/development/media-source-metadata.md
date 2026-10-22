@@ -186,3 +186,97 @@ separate sanitized representation.
 The cooperative deadline compares elapsed whole milliseconds with the positive
 millisecond timeout, avoiding overflow from widening an extreme timeout to
 nanoseconds. The maximum signed 64-bit timeout is covered by the CLI regression.
+
+## Image camera and location summary
+
+`source-metadata INPUT` adds a `summary` with scope `static_image_properties`.
+The original `metadata` object and the `source-exif` command remain unchanged.
+Internally, `summarizeImageMetadata` consumes the existing immutable catalog;
+it does not reopen the source, decode pixels, apply image transforms or affect
+the training exposure reader. This interface remains internal alongside the
+stream summary until the metadata contracts stabilize.
+
+| Directory | Interpreted fields |
+|---|---|
+| Primary image IFD | Camera make/model, EXIF orientation code, modification civil time |
+| Exif IFD | Exposure duration, f-number, photographic sensitivity and explicit extended sensitivity fields, focal length, 35 mm equivalent focal length, lens make/model, original/digitized civil time, subseconds and UTC offsets |
+| GPS IFD | Signed latitude/longitude, altitude with reference 0/1, map datum, UTC date and seconds of day |
+
+Orientation is an EXIF code, including mirror cases, not a clockwise angle.
+Focal lengths are in millimetres, exposure in seconds, coordinates in degrees
+and altitude in metres. Photographic sensitivity is not automatically relabelled
+ISO: its extended marker is unsupported in that fact, while separately present
+standard-output, recommended-exposure and ISO-speed fields retain their own
+semantics. Zero equivalent focal length is unknown, not a zero-length lens.
+
+EXIF groups use the envelope ordinal and full directory path; only IFD0 and its
+direct Exif/GPS children supply the image summary. TIFF uses the first main image
+directory and its own direct Exif/GPS children, identified by the reader-supplied
+kind and parent offset. Thumbnails, later pages, SubIFDs and their metadata remain
+in the raw catalog and do not produce primary-image facts. Numeric tag IDs in
+unrelated directories are not
+interpreted as GPS or Exif fields. A limited catalog cannot borrow missing
+operands from retained originals outside its reference index.
+
+Each fact owns its value and a source-bound handle. Compound facts additionally
+retain handles to their operands and name their derivation. Duplicate tag
+occurrences remain separate and carry `ambiguous: true`; duplicate hemisphere,
+altitude or time-component references prevent arbitrary selection. Callers must
+not resolve different image directories or duplicate facts by taking the first
+semantic match. The source references identify their original groups.
+Uniqueness refers to occurrences retained by the collector: the observed TIFF
+inventory is not an additional validator of duplicate tags in the original file.
+
+An incomplete reference index cannot establish uniqueness of compound operands,
+and an interrupted TIFF collection may omit fields within an observed directory.
+Coordinate, altitude and assembled capture-time facts then report `unsupported`
+with `Directory metadata is incomplete`, rather than declaring operands absent
+or selecting an apparently unique retained reference. A fully parsed EXIF block
+remains self-contained if collection stopped before another envelope.
+
+Exact EXIF rationals remain rational values for scalar fields. TIFF rationals
+are already floating-point values from libtiff and are not reconstructed into
+invented exact fractions. DMS coordinates and GPS seconds of day explicitly
+derive double values; original components remain in the catalog. GPS dates and
+times are separate observations from the same GPS directory, not a clock mapping
+to the video. No datum, geoid, accuracy, timezone or UTC timestamp is inferred.
+
+Original and digitized dates are validated as civil dates and assembled with
+subseconds and an offset only from the same Exif directory. Fractional digits
+are retained without conversion through floating point. An absent or explicitly
+unknown offset yields a local civil timestamp with `Timezone unspecified`, not
+UTC. A malformed offset also leaves a valid civil date and subseconds usable as
+local time; its separate offset fact remains Invalid and its original record is
+retained among the compound inputs. Duplicate offsets, incomplete directories,
+invalid dates and invalid subseconds do not acquire this fallback. Modification
+time remains a civil field; it is not joined across IFDs.
+Partial dates, leap-second values and non-ASCII text are not normalized into
+valid timestamps. Unknown, invalid, ambiguous and unsupported observations are
+explicit; unrecognized tags remain available in the original catalog.
+
+The image summary has independent fact and aggregate text limits, defaulting to
+4096 facts and 64 KiB. Text accounting includes semantic names, stored strings,
+diagnostics and derivations. Grouping scratch storage scales with the retained
+catalog index and directory paths; it is not a provider-wide memory ceiling.
+Allocation failure returns `ResourceExhausted`. Newer altitude-reference modes,
+MakerNotes, XMP, vendor telemetry, calibration, metadata writing and automatic
+pose or exposure changes are outside this interpretation table.
+
+The ASCII projection accepts trailing NUL padding only when all bytes after the
+first terminator are zero; it does not hide another string or payload. This
+tolerance does not suppress provider warnings: TIFF diagnosed as malformed
+remains malformed, and its compound summary values remain unsupported.
+Seven-bit ASCII text is transported with JSON string escaping. Subsecond trailing spaces
+are formatting padding and are omitted from the significant fractional digits.
+Unknown dates accept all-space and colon-preserving blank forms; subsecond
+padding follows [CIPA Exif](https://www.cipa.jp/std/documents/e/DC-008-2012_E.pdf).
+Unknown offsets are retained as unknown, including colon-preserving blanks.
+Zero f-number and focal length mean an unknown manual-lens value, with the
+original rational retained; a zero denominator remains Invalid. The GPS
+hemisphere projection accepts exactly one ASCII N/S or E/W byte without a NUL
+terminator. This narrow compatibility case does not relax other ASCII fields
+or override provider diagnostics.
+Offset validation checks numeric hour/minute syntax, not membership in a
+geographic timezone registry. Leap-second representations are retained as
+unsupported interpretations, not asserted to be corrupt. The internal summary
+scope is a closed enum; JSON identifiers remain unchanged.

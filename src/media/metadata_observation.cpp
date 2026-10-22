@@ -21,6 +21,7 @@ namespace lfs::media {
         case MetadataUnit::Seconds: return "seconds";
         case MetadataUnit::Degrees: return "degrees";
         case MetadataUnit::Metres: return "metres";
+        case MetadataUnit::Millimetres: return "millimetres";
         }
         return "unknown";
     }

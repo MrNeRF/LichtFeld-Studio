@@ -107,7 +107,10 @@ namespace {
                 const auto result = MediaIngest::sourceMetadata(lfs::core::utf8_to_path(args[2]));
                 if (!result)
                     return failed(result.error());
-                std::cout << json_detail::dump(json{{"schema_version", 1}, {"success", true}, {"metadata", json_detail::sourceMetadata(*result)}}) << '\n';
+                const auto summary = summarizeImageMetadata(*result);
+                if (!summary)
+                    return failed(summary.error());
+                std::cout << json_detail::dump(json{{"schema_version", 1}, {"success", true}, {"metadata", json_detail::sourceMetadata(*result)}, {"summary", json_detail::metadataSummary(*summary)}}) << '\n';
                 return 0;
             }
             if (args.size() == 3 && args[1] == "source-exif") {

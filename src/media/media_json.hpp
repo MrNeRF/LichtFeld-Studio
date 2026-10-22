@@ -180,7 +180,9 @@ namespace lfs::media::json_detail {
         return result;
     }
     inline json metadataSummary(const MetadataSummary& summary) {
-        json result{{"scope", "static_stream_properties"}, {"limited", summary.limited}, {"facts", json::array()}};
+        const auto scope = summary.scope == MetadataSummaryScope::StreamProperties ? "static_stream_properties" : summary.scope == MetadataSummaryScope::ImageProperties ? "static_image_properties"
+                                                                                                                                                                         : "unknown";
+        json result{{"scope", scope}, {"limited", summary.limited}, {"facts", json::array()}};
         for (const auto& fact : summary.facts) {
             json value;
             std::visit([&](const auto& scalar) {
@@ -208,6 +210,15 @@ namespace lfs::media::json_detail {
             case MetadataValueOrigin::Derived: origin = "derived"; break;
             }
             result["facts"].push_back({{"semantic", fact.semantic}, {"value", std::move(value)}, {"unit", metadataUnitId(fact.unit)}, {"state", state}, {"origin", origin}, {"temporal_scope", "static"}, {"source", metadataReference(fact.source.reference)}});
+            if (summary.scope == MetadataSummaryScope::ImageProperties) {
+                auto& item = result["facts"].back();
+                item["inputs"] = json::array();
+                for (const auto& input : fact.inputs)
+                    item["inputs"].push_back(metadataReference(input.reference));
+                item["derivation"] = fact.derivation;
+                item["diagnostic"] = fact.diagnostic;
+                item["ambiguous"] = fact.ambiguous;
+            }
         }
         return result;
     }
