@@ -3,6 +3,40 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gs_renderer.h"
+#include <stdexcept>
+
+namespace {
+    alignas(4) constexpr std::uint8_t stbn_data[] = {
+#include "stbn_data.inc"
+    };
+    static_assert(sizeof(stbn_data) == 128u * 128u * 64u);
+} // namespace
+
+const _VulkanBuffer& VulkanGSRenderer::prepareStochasticNoise() {
+    if (stochastic_noise_.buffer != VK_NULL_HANDLE)
+        return stochastic_noise_;
+    if (isCommandBatchInProgress())
+        throw std::logic_error("Prepare STBN before recording the viewport batch");
+    try {
+        stochastic_noise_.label = "stochastic.stbn";
+        createBuffer(sizeof(stbn_data), stochastic_noise_);
+        {
+            DEVICE_GUARD;
+            const lfs::rendering::vulkan::DeclaredAccess access{
+                .buffer = &stochastic_noise_,
+                .use = lfs::rendering::vulkan::BufferUse::TransferWrite};
+            planTransfer(std::span{&access, 1});
+            constexpr VkDeviceSize chunk_size = 65536;
+            for (VkDeviceSize offset = 0; offset < sizeof(stbn_data); offset += chunk_size)
+                vkCmdUpdateBuffer(activeCommandBuffer(), stochastic_noise_.buffer, offset,
+                                  chunk_size, stbn_data + offset);
+        }
+    } catch (...) {
+        destroyBuffer(stochastic_noise_);
+        throw;
+    }
+    return stochastic_noise_;
+}
 
 void VulkanGSRenderer::executeStochasticReuse(const VulkanGSRendererUniforms& uniforms,
                                               VulkanGSPipelineBuffers& buffers,

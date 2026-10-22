@@ -47,7 +47,9 @@ namespace lfs::vis {
         frame.samples = same_camera ? history.samples : 0u;
         frame.history_valid = compatible && (same_camera || uniforms.stochastic_mode == 2u);
         frame.output_color = frame.history_valid ? history.last_color ^ 1u : 0u;
-        uniforms.stochastic_frame = stochastic_sample_serial_ + 1u;
+        // Each logical view consumes consecutive STBN slices, even when split
+        // views are interleaved. History resets must not restart the sequence.
+        uniforms.stochastic_frame = stochastic_sample_serials_[static_cast<std::size_t>(slot)] + 1u;
         uniforms.stochastic_history_valid = frame.history_valid ? 1u : 0u;
         return frame;
     }
@@ -100,7 +102,7 @@ namespace lfs::vis {
         history.last_color = frame.output_color;
         history.valid = frame.enabled;
         if (frame.enabled)
-            ++stochastic_sample_serial_;
+            ++stochastic_sample_serials_[static_cast<std::size_t>(slot)];
     }
 
     bool VksplatViewportRenderer::canReuseStochasticProjection(

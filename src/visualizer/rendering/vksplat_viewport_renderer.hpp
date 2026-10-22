@@ -427,6 +427,8 @@ namespace lfs::vis {
             std::uint64_t first_submission = 0;
             std::uint64_t last_submission = 0;
             std::size_t wave_count = 0;
+            bool tile_groups_valid = false;
+            bool tile_sort_state = true;
         };
         [[nodiscard]] static bool canReuseStochasticProjection(
             const StochasticFrame& frame, OutputSlot slot, const StochasticProjectionCache& cache);
@@ -726,7 +728,7 @@ namespace lfs::vis {
         static constexpr std::size_t kFrameRingSize = OutputSlotRing::kFrameRingSize;
         std::array<StochasticHistory, kOutputSlotCount> stochastic_histories_;
         std::uint64_t stochastic_history_generation_ = 1;
-        std::uint32_t stochastic_sample_serial_ = 0;
+        std::array<std::uint32_t, kOutputSlotCount> stochastic_sample_serials_{};
         StochasticProjectionCache stochastic_projection_cache_;
         OutputSlotRing ring_{};
         OutputImagePool output_pool_{};

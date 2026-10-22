@@ -62,6 +62,27 @@ namespace {
         return u;
     }
 
+    TEST(StochasticViewport, NoiseSequenceIsConsecutivePerViewAndSurvivesHistoryResets) {
+        Renderer renderer;
+        lfs::core::SplatData model;
+        auto left = camera(2), right = camera(2);
+        auto frame = Access::prepare(renderer, left, model, Slot::SplitLeft);
+        EXPECT_EQ(left.stochastic_frame, 1u);
+        Access::commit(renderer, frame, Slot::SplitLeft);
+        frame = Access::prepare(renderer, right, model, Slot::SplitRight);
+        EXPECT_EQ(right.stochastic_frame, 1u);
+        Access::commit(renderer, frame, Slot::SplitRight);
+        // Merely preparing a frame does not consume a slice.
+        Access::prepare(renderer, right, model, Slot::SplitRight);
+        renderer.invalidateStochasticHistory();
+        frame = Access::prepare(renderer, left, model, Slot::SplitLeft);
+        EXPECT_EQ(left.stochastic_frame, 2u);
+        EXPECT_FALSE(frame.history_valid);
+        Access::commit(renderer, frame, Slot::SplitLeft);
+        Access::prepare(renderer, right, model, Slot::SplitRight);
+        EXPECT_EQ(right.stochastic_frame, 2u);
+    }
+
     TEST(StochasticViewport, BasicAccumulationResetsForCameraAndContentChanges) {
         Renderer renderer;
         lfs::core::SplatData model;

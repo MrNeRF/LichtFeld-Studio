@@ -42,6 +42,21 @@ target_compile_definitions(lfs_vulkan_rasterizer PRIVATE
         $<$<PLATFORM_ID:Windows>:NOMINMAX>
 )
 
+# Keep the optional sampler self-contained in installed/portable builds too.
+# Generate the initializer at configure time; the offline generator is not a
+# build dependency and no runtime texture loading or Python is required.
+set(_VULKAN_STBN_DATA "${CMAKE_CURRENT_SOURCE_DIR}/assets/stbn_128x128x64.bin")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_VULKAN_STBN_DATA}")
+file(SIZE "${_VULKAN_STBN_DATA}" _VULKAN_STBN_BYTES)
+if(NOT _VULKAN_STBN_BYTES EQUAL 1048576)
+        message(FATAL_ERROR "The scalar STBN volume must contain 128*128*64 bytes")
+endif()
+file(READ "${_VULKAN_STBN_DATA}" _VULKAN_STBN_HEX HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _VULKAN_STBN_INITIALIZER "${_VULKAN_STBN_HEX}")
+file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/stbn_data.inc"
+        CONTENT "@_VULKAN_STBN_INITIALIZER@" @ONLY)
+target_include_directories(lfs_vulkan_rasterizer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+
 set(LFS_VULKAN_RASTERIZER_SPV_DIR "${CMAKE_CURRENT_BINARY_DIR}/shader")
 set_property(TARGET lfs_vulkan_rasterizer PROPERTY
         LFS_VULKAN_RASTERIZER_SPV_DIR "${LFS_VULKAN_RASTERIZER_SPV_DIR}")

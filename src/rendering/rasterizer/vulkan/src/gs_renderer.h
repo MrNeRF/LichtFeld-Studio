@@ -382,7 +382,11 @@ public:
                                  bool predicate_waves = true,
                                  bool selection_outline = false,
                                  bool single_node_outline = false,
-                                 const VulkanGSOutlineStyle& outline_style = {});
+                                 const VulkanGSOutlineStyle& outline_style = {},
+                                 std::optional<bool> cached_tile_sort_state = std::nullopt);
+    // One immutable volume per renderer/device, uploaded before recording a
+    // SteadySplats frame. Basic stochastic sampling retains white noise.
+    const _VulkanBuffer& prepareStochasticNoise();
     // When set, forward forces the non-batched per-pixel rasterizer: the
     // load-balanced batched compose only covers a subset of pixels, leaving the
     // rest with shared-buffer residue, which corrupts a one-shot depth readback.
@@ -545,8 +549,9 @@ protected:
     _ComputePipelinePair pipeline_rasterize_forward = _ComputePipelinePair(15);
     _ComputePipelinePair pipeline_rasterize_forward_3dgut = _ComputePipelinePair(24);
     _ComputePipelinePair pipeline_rasterize_forward_plain = _ComputePipelinePair(15);
-    _ComputePipelinePair pipeline_rasterize_stochastic = _ComputePipelinePair(16);
-    _ComputePipelinePair pipeline_rasterize_stochastic_plain = _ComputePipelinePair(16);
+    _ComputePipelinePair pipeline_rasterize_stochastic = _ComputePipelinePair(17);
+    _ComputePipelinePair pipeline_rasterize_stochastic_plain = _ComputePipelinePair(17);
+    _VulkanBuffer stochastic_noise_;
     _ComputePipeline pipeline_stochastic_reuse = _ComputePipeline(7);
     _ComputePipeline pipeline_stochastic_resolve = _ComputePipeline(5);
     _ComputePipelinePair pipeline_rasterize_forward_3dgut_plain = _ComputePipelinePair(24);

@@ -9409,9 +9409,12 @@ namespace lfs::vis {
                                                  canReuseStochasticProjection(stochastic_frame, output_slot, projection_cache);
         if (reuse_stochastic_projection && instance_stats)
             updateStochasticProjectionStats(projection_cache, *instance_stats);
+        const bool reuse_stochastic_tiles = reuse_stochastic_projection && projection_cache.tile_groups_valid;
         LOG_PERF("vksplat.stochastic.projection_reuse={} samples={} wave_count={}",
                  reuse_stochastic_projection, stochastic_frame.samples, projection_cache.wave_count);
         try {
+            if (uniforms.stochastic_mode == 2u)
+                renderer_.prepareStochasticNoise();
             // Timer/guard ordering trick: the LOG_TIMER for batch_total is
             // declared FIRST so it destructs LAST. The DeviceGuard `batch`
             // destructs first at try-block exit, triggering endCommandBatch().
@@ -9665,8 +9668,9 @@ namespace lfs::vis {
                                                    : HIGS_DEPTH_MAX_WAVES_FALLBACK);
                 }
 
-                renderer_.executeWavePartition(
-                    uniforms, buffers_, armed_depth_waves, higs_active);
+                if (!reuse_stochastic_tiles)
+                    renderer_.executeWavePartition(
+                        uniforms, buffers_, armed_depth_waves, higs_active);
                 const auto& marker = request.overlay.markers;
                 const auto bounded = [](const float value, const float low, const float high, const float fallback) {
                     return std::isfinite(value) ? std::clamp(value, low, high) : fallback;
@@ -9720,7 +9724,8 @@ namespace lfs::vis {
                         overlay_bindings->raster_overlays_active,
                         /*predicate_waves=*/!export_wave_batch,
                         request.overlay.markers.show_object_outline,
-                        single_node_outline, outline_style);
+                        single_node_outline, outline_style,
+                        reuse_stochastic_tiles ? std::optional{projection_cache.tile_sort_state} : std::nullopt);
                 }
                 LOG_TIMER("vksplat.render.record.composePixelState");
                 // Record compose into the rasterizer's batch so the entire frame
@@ -9795,6 +9800,10 @@ namespace lfs::vis {
                                     .first_submission = completion_value};
             }
             projection_cache.last_submission = completion_value;
+            // Multiple waves overwrite the same tile scratch. Only a complete
+            // one-wave dispatch leaves all groups resident for the next sample.
+            projection_cache.tile_groups_valid = armed_depth_waves == 1u;
+            projection_cache.tile_sort_state = buffers_.is_unsorted_1;
             stochastic_projection_cache_ = projection_cache;
         }
         stochastic_committed = true;

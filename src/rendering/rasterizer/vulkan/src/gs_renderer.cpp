@@ -177,6 +177,7 @@ VulkanGSRenderer::~VulkanGSRenderer() noexcept {
 }
 
 void VulkanGSRenderer::cleanup() {
+    destroyBuffer(stochastic_noise_);
     destroyVisibleCountReadback();
     destroyLodSelectionReadback();
     destroyInstanceCountReadback();
@@ -1525,10 +1526,21 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
     const bool predicate_waves,
     const bool selection_outline,
     const bool single_node_outline,
-    const VulkanGSOutlineStyle& outline_style) {
+    const VulkanGSOutlineStyle& outline_style,
+    const std::optional<bool> cached_tile_sort_state) {
     PerfTimer::Timer<PerfTimer::RasterizeForward> timer(this);
     DEVICE_GUARD;
     const bool raster_outline = selection_outline && !single_node_outline;
+    const bool reuse_tile_groups = cached_tile_sort_state.has_value();
+
+    if (reuse_tile_groups && (uniforms.stochastic_mode == 0u || armed != 1u || use_gut_rasterization || selection_outline))
+        throw std::invalid_argument("Tile reuse requires one resident stochastic 3DGS wave");
+    if (uniforms.stochastic_mode == 2u && stochastic_noise_.buffer == VK_NULL_HANDLE)
+        throw std::logic_error("STBN must be prepared before recording a SteadySplats frame");
+    // Input packing may reset the host ping-pong selector without changing
+    // resident device data. The selector is part of the cached tile state.
+    if (reuse_tile_groups)
+        buffers.is_unsorted_1 = *cached_tile_sort_state;
 
     if (armed == 0 || uniforms.sort_capacity != HIGS_DEPTH_WAVE_INSTANCES ||
         sort_bits <= 0 || sort_bits > 32) {
@@ -1717,35 +1729,37 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
             indirect::byteOffset(indirect::DepthWave::countWordOffset(wave)),
             2u * sizeof(uint32_t));
 
-        auto& unsorted_keys = buffers.unsorted_keys().deviceBuffer;
-        auto& unsorted_indices = buffers.unsorted_gauss_idx().deviceBuffer;
-        // pipeline_generate_keys_wave: 8 bindings (catalog).
-        executeComputeIndirect(
-            record,
-            indirect::byteOffset(indirect::DepthWave::kKeygenWordOffset),
-            &wave_uniforms,
-            sizeof(wave_uniforms),
-            pipeline_generate_keys_wave,
-            std::vector<TaggedBinding>{
-                {buffers.xy_vs.deviceBuffer, BufferUse::ComputeRead},
-                {buffers.inv_cov_vs_opacity.deviceBuffer, BufferUse::ComputeRead},
-                {buffers.rect_tile_space.deviceBuffer, BufferUse::ComputeRead},
-                {buffers.index_buffer_offset.deviceBuffer, BufferUse::ComputeRead},
-                {buffers.primitive_sort_indices.deviceBuffer, BufferUse::ComputeRead},
-                {unsorted_keys, BufferUse::ComputeWrite},
-                {unsorted_indices, BufferUse::ComputeWrite},
-                {wave_buffer, BufferUse::ComputeRead},
-            });
-        executeSortIndirectCountImpl(wave_uniforms,
-                                     buffers,
-                                     sort_bits,
-                                     count,
-                                     record,
-                                     capacity,
-                                     indirect::DepthWave::kRecordLayout,
-                                     indirect::DepthWave::kRadixWordOffset,
-                                     "vksplat.render.record.sort_legacy_depth_wave",
-                                     true);
+        if (!reuse_tile_groups) {
+            auto& unsorted_keys = buffers.unsorted_keys().deviceBuffer;
+            auto& unsorted_indices = buffers.unsorted_gauss_idx().deviceBuffer;
+            // pipeline_generate_keys_wave: 8 bindings (catalog).
+            executeComputeIndirect(
+                record,
+                indirect::byteOffset(indirect::DepthWave::kKeygenWordOffset),
+                &wave_uniforms,
+                sizeof(wave_uniforms),
+                pipeline_generate_keys_wave,
+                std::vector<TaggedBinding>{
+                    {buffers.xy_vs.deviceBuffer, BufferUse::ComputeRead},
+                    {buffers.inv_cov_vs_opacity.deviceBuffer, BufferUse::ComputeRead},
+                    {buffers.rect_tile_space.deviceBuffer, BufferUse::ComputeRead},
+                    {buffers.index_buffer_offset.deviceBuffer, BufferUse::ComputeRead},
+                    {buffers.primitive_sort_indices.deviceBuffer, BufferUse::ComputeRead},
+                    {unsorted_keys, BufferUse::ComputeWrite},
+                    {unsorted_indices, BufferUse::ComputeWrite},
+                    {wave_buffer, BufferUse::ComputeRead},
+                });
+            executeSortIndirectCountImpl(wave_uniforms,
+                                         buffers,
+                                         sort_bits,
+                                         count,
+                                         record,
+                                         capacity,
+                                         indirect::DepthWave::kRecordLayout,
+                                         indirect::DepthWave::kRadixWordOffset,
+                                         "vksplat.render.record.sort_legacy_depth_wave",
+                                         true);
+        }
 
         if (use_batched_raster) {
             executeComputeIndirect(
@@ -1862,7 +1876,7 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                 overlays_active ? pipeline_compose_tile_batches
                                 : pipeline_compose_tile_batches_plain,
                 compose_bindings);
-        } else {
+        } else if (!reuse_tile_groups) {
             executeComputeIndirect(
                 record,
                 indirect::byteOffset(indirect::DepthWave::kRangeWordOffset),
@@ -1913,8 +1927,12 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                 raster_bindings.push_back({lod_logical_indices, BufferUse::ComputeRead});
                 raster_bindings.push_back({lod_weights, BufferUse::ComputeRead});
             }
-            if (uniforms.stochastic_mode != 0u)
+            if (uniforms.stochastic_mode != 0u) {
                 raster_bindings.push_back({buffers.primitive_depth_keys.deviceBuffer, BufferUse::ComputeRead});
+                raster_bindings.push_back({uniforms.stochastic_mode == 2u ? stochastic_noise_
+                                                                          : buffers.primitive_depth_keys.deviceBuffer,
+                                           BufferUse::ComputeRead});
+            }
             if (raster_outline) {
                 // Keep the normal color raster's register pressure and early
                 // termination unchanged. Only selected tiles run the mask shader.

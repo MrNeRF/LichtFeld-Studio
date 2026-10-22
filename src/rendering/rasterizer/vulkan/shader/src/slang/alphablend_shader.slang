@@ -142,6 +142,7 @@ groupshared uint32_t collected_gauss_idx[TILE_SIZE];
 #if LFS_STOCHASTIC_RASTER
 groupshared float collected_depth[TILE_SIZE];
 groupshared float collected_depth_metric[TILE_SIZE];
+groupshared uint2 collected_noise[TILE_SIZE];
 #endif
 #if LFS_RASTER_OVERLAYS
 // Packed flags | selection_byte | preview_byte — one global load set per splat
@@ -389,6 +390,13 @@ void main(
     const uint2 projection_origin = full_frame_binning(uniforms)
         ? uint2(uniforms.render_origin_x, uniforms.render_origin_y) : uint2(0u);
     float2 center_pix_coord = pix_coord + projection_origin;
+#if LFS_STOCHASTIC_RASTER
+    // The reference sampler retains exactly the same bits, with pixel/frame
+    // hashes hoisted out of the fragment loop and primitive hashes shared.
+    const uint2 noise_pixel = pix_coord + projection_origin;
+    const uint noise_pixel_seed = stochastic_hash(noise_pixel.x ^ stochastic_hash(noise_pixel.y));
+    const uint noise_frame_seed = stochastic_hash(uniforms.stochastic_frame + 0x85ebca6bu);
+#endif
   #if SUBTILE_SIZE > 0
     pix_coord_base += projection_origin;
   #endif
@@ -466,6 +474,7 @@ void main(
 #if LFS_STOCHASTIC_RASTER
             collected_depth[thread_rank] = read_t1_float(coll_id, depths);
             collected_depth_metric[thread_rank] = asfloat(stochastic_depth_keys[coll_id]);
+            collected_noise[thread_rank] = stochastic_primitive_noise(coll_id);
 #endif
             #if SHARED_STRUCT
               #if LFS_3DGUT_RASTERIZE
@@ -692,8 +701,11 @@ void main(
             #endif
 
 #if LFS_STOCHASTIC_RASTER
+                const float threshold = uniforms.stochastic_mode == 2u
+                    ? stochastic_blue_threshold(pix_coord + projection_origin, collected_noise[j], uniforms.stochastic_frame)
+                    : stochastic_threshold(noise_pixel_seed, collected_noise[j].y, noise_frame_seed);
                 if ((depth_metric < nearest_metric || (depth_metric == nearest_metric && splat_id < selected_id)) &&
-                    stochastic_threshold(pix_coord + projection_origin, splat_id, uniforms.stochastic_frame) < gauss_rgba.a) {
+                    threshold < gauss_rgba.a) {
                     curr_pixel_state = float4(gauss_rgba.rgb / gauss_rgba.a, 0.0f);
                     median_depth = splat_depth;
                     nearest_metric = depth_metric;
