@@ -17,6 +17,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -333,6 +334,35 @@ namespace lfs::io {
         }
     }
 
+#ifdef LFS_TENSOR_HIP
+    void PipelinedImageLoader::cache_hip_prepared_interleaved_image(
+        const std::string& key, const Tensor& image, size_t max_output_bytes) {
+        try {
+            if (!running_.load(std::memory_order_acquire)) return;
+            if (image.device() != lfs::core::Device::CPU || image.dtype() != DataType::UInt8 ||
+                image.ndim() != 3 || image.size(2) != 3 || !image.is_contiguous())
+                throw std::invalid_argument("HIP prepared JPEG cache expects CPU interleaved RGB bytes");
+            const size_t width = image.size(1), height = image.size(0);
+            lfs::core::image_codecs::JpegEncodeOptions options;
+            options.quality = config_.cache_jpeg_quality;
+            options.full_chroma = true;
+            options.max_output_bytes = max_output_bytes;
+            std::vector<uint8_t> bytes;
+            const auto status = lfs::core::image_codecs::encode_jpeg_memory(
+                {image.ptr<uint8_t>(), image.numel()}, int(width), int(height), 3, width * 3, bytes, options);
+            if (!status) {
+                warn_portable_cache_failure(status.error().detail());
+                return;
+            }
+            if (!running_.load(std::memory_order_acquire)) return;
+            bytes.shrink_to_fit();
+            put_in_jpeg_cache(key, std::make_shared<std::vector<uint8_t>>(std::move(bytes)));
+        } catch (const std::exception& error) {
+            warn_portable_cache_failure(error.what());
+        }
+    }
+#endif
+
     lfs::core::Tensor PipelinedImageLoader::decode_portable_rgb(
         const std::filesystem::path& path,
         const LoadParams& params,
@@ -436,6 +466,9 @@ namespace lfs::io {
         if (!params.undistort && !float_decode && !encoded)
             return load_rgb_decoded_ahead(path, params, decodes_16bit(params));
         Tensor host;
+#ifdef LFS_TENSOR_HIP
+        bool hip_interleaved_source = false;
+#endif
         if (float_decode || (params.undistort && decodes_16bit(params))) {
             auto ahead = take_decoded_ahead(path, HostDecodeKind::Float32);
             auto [data, width, height, channels] = ahead
@@ -472,9 +505,60 @@ namespace lfs::io {
                     : lfs::core::load_image(path, resize_factor, max_width);
             if (!data)
                 throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
-            // Planar bytes avoid a second device image and a per-step GPU transpose.
-            host = host_uint8_planar(data, height, width, channels, lfs::core::free_image);
+#ifdef LFS_TENSOR_HIP
+            if (config_.backend == lfs::core::GpuBackend::HIP && channels == 3 && !prepared_key.empty() &&
+                params.undistort && params.output_uint8 && !params.masked_fill &&
+                !hip_image_preparer_disabled_.load(std::memory_order_acquire)) {
+                const char* independent = std::getenv("LFS_HIP_INDEPENDENT_IMAGE_PREPARE");
+                hip_interleaved_source = independent ? std::string_view(independent) == "1"
+                                                    : lfs::core::hip_image_preparation_default_enabled();
+            }
+            if (hip_interleaved_source)
+                host = host_uint8(data, image_shape(height, width, channels), lfs::core::free_image);
+            else
+#endif
+                // Planar bytes avoid a second device image and a per-step GPU transpose.
+                host = host_uint8_planar(data, height, width, channels, lfs::core::free_image);
         }
+#ifdef LFS_TENSOR_HIP
+        if (hip_interleaved_source) {
+            std::shared_ptr<lfs::core::HipImagePreparer> producer;
+            try {
+                {
+                    std::lock_guard lock(hip_image_preparer_mutex_);
+                    if (!hip_image_preparer_disabled_.load(std::memory_order_acquire)) {
+                        if (!hip_image_preparer_) {
+                            hip_image_preparer_ = lfs::core::create_hip_image_preparer();
+                            LOG_INFO("HIP image preparation: independent native queue active; complete CPU RGB bytes are published before upload to the training queue");
+                        }
+                        producer = hip_image_preparer_;
+                    }
+                }
+                if (producer) {
+                    const auto metadata = host.permute({2, 0, 1});
+                    auto prepared = producer->prepare(host, undistort_for(*params.undistort, metadata, params.resize_factor, params.max_width), true);
+                    cache_hip_prepared_interleaved_image(prepared_key, prepared, PORTABLE_CACHE_MAX_BYTES);
+                    auto raw = to_device(upload, prepared);
+                    auto output = Tensor::empty({3, prepared.size(0), prepared.size(1)}, lfs::core::Device::GPU, DataType::UInt8);
+                    lfs::core::shared_image_ops(config_.backend)->convert(raw, output, lfs::gpu_ops::ImageConversion::U8HWCToU8CHW,
+                                                                        prepared.size(0), prepared.size(1), 3, {});
+                    return output;
+                }
+            } catch (const std::exception& error) {
+                const bool first_failure = !hip_image_preparer_disabled_.exchange(true, std::memory_order_acq_rel);
+                {
+                    std::lock_guard lock(hip_image_preparer_mutex_);
+                    hip_image_preparer_.reset();
+                }
+                producer.reset();
+                if (first_failure)
+                    LOG_WARN("GPU transfer fallback: role=HIP image preparation, requested=independent native queue, effective=training queue, reason={}", error.what());
+            }
+            // Preserve the decoded source for a failed or concurrently disabled
+            // optional producer. The original path consumes planar RGB bytes.
+            host = host.permute({2, 0, 1}).contiguous();
+        }
+#endif
         std::unique_lock<std::mutex> large_prepare_lock;
         constexpr size_t LARGE_PORTABLE_SOURCE_BYTES = size_t{128} * 1024 * 1024;
         if (params.undistort && host.bytes() > LARGE_PORTABLE_SOURCE_BYTES) {

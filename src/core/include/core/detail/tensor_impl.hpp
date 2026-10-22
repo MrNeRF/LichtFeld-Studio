@@ -575,6 +575,9 @@ namespace lfs::core {
     private:
         friend struct internal::LazyIrTensorAccess;
         friend class TensorLeaf;
+#ifdef LFS_TENSOR_HIP
+        friend class HipImagePreparationAccounting;
+#endif
         friend void pin_operands(std::initializer_list<const Tensor*> tensors);
         friend bool internal::shares_storage(const Tensor& left, const Tensor& right);
         friend std::shared_ptr<Tensor> internal::lazy_executor_snapshot_operand(

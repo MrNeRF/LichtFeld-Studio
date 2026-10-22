@@ -7,6 +7,11 @@
 #include <core/tensor.hpp>
 #include <core/tensor_backend.hpp>
 #include <core/tensor_execution.hpp>
+#include <core/hip_image_preparation.hpp>
+#include <core/shared_image_ops.hpp>
+#include <core/tensor_image.hpp>
+#include <core/image_io.hpp>
+#include <core/path_utils.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -14,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <future>
 #include <limits>
 #include <stdexcept>
 using namespace lfs;
@@ -27,7 +33,7 @@ const TrainingOps& vulkan_training_ops_table() { ++other_tables; static const Tr
 void require(bool value,const char* message) { if(!value) throw std::runtime_error(message); }
 uint32_t hash32(uint32_t v) { uint32_t s=v*747796405u+2891336453u; uint32_t w=((s>>((s>>28)+4))^s)*277803737u;return (w>>22)^w; }
 int main(int argc,char** argv) try {
-    require(argc==2,"Pass absolute HIP module");
+    require(argc==2 || argc==3,"Pass absolute HIP module and optional RGB image");
 #ifdef _WIN32
     require(_putenv_s("LFS_HIP_TRAINING_MODULE",argv[1])==0,"Cannot set module");
 #else
@@ -144,6 +150,98 @@ int main(int argc,char** argv) try {
         std::printf("Image extended contract: Canny max error %.9g; byte/float agreement and translated/inverted ROI pass\n",canny_error);
         bool rejected=false;try{ops.resize_background(src.cpu(),dst);}catch(const std::invalid_argument&){rejected=true;}require(rejected,"CPU image accepted by native path");
         std::printf("Image contract: bilinear max error %.9g; hash/EMA/quantization exact\n",max_delta);
+        {
+            const auto live_accounting = [] {
+                const auto summary = Tensor::storage_memory_summary();
+                const auto begin = summary.find("hip_owned: live=");
+                require(begin != std::string::npos, "HIP storage accounting missing");
+                return summary.substr(begin, summary.find(", total=", begin) - begin);
+            };
+            const auto before_producer = live_accounting();
+            auto producer = create_hip_image_preparer();
+            for (const auto dims : {std::array<size_t, 4>{37, 29, 23, 19}, {513, 385, 192, 144}, {17, 13, 11, 9}}) {
+                const auto [w, h, dw, dh] = dims;
+                std::vector<uint8_t> samples(w * h * 3);
+                for (size_t i = 0; i < samples.size(); ++i) samples[i] = uint8_t(hash32(uint32_t(i + w)));
+                const auto host = Tensor::from_blob(samples.data(), {3, h, w}, Device::CPU, DataType::UInt8).clone();
+                for (int model = 0; model < 5; ++model) {
+                    UndistortParams lens{};
+                    lens.src_width = int(w); lens.src_height = int(h); lens.dst_width = int(dw); lens.dst_height = int(dh);
+                    lens.src_fx = float(w); lens.src_fy = float(h); lens.src_cx = float(w) * .5f; lens.src_cy = float(h) * .5f;
+                    lens.dst_fx = float(dw); lens.dst_fy = float(dh); lens.dst_cx = float(dw) * .5f; lens.dst_cy = float(dh) * .5f;
+                    lens.model_type = static_cast<CameraModelType>(model); lens.num_distortion = 4;
+                    lens.distortion[0] = .03f; lens.distortion[1] = -.002f;
+                    const auto input = host.to(GpuBackend::HIP);
+                    const auto expected = shared_image_ops(GpuBackend::HIP)->undistort(input, lens, false)
+                                              .clamp(0.f, 1.f).mul(255.f).add(.5f).to(DataType::UInt8).cpu();
+                    const auto actual = producer->prepare(host, lens);
+                    require(actual.device() == Device::CPU && actual.dtype() == DataType::UInt8 && actual.shape() == expected.shape(),
+                            "Independent producer changed image layout/dtype");
+                    require(std::memcmp(actual.data_ptr(), expected.data_ptr(), actual.bytes()) == 0,
+                            "Independent image queue differs from the original warp/quantization");
+                    const auto hwc = host.permute({1, 2, 0}).contiguous();
+                    const auto prepared_hwc = producer->prepare(hwc, lens, true);
+                    const auto planar = prepared_hwc.permute({2, 0, 1}).contiguous();
+                    require(planar.shape() == expected.shape() && std::memcmp(planar.data_ptr(), expected.data_ptr(), planar.bytes()) == 0,
+                            "Interleaved private preparation differs from the original warp");
+                    auto raw = prepared_hwc.to(GpuBackend::HIP);
+                    auto converted = Tensor::empty(expected.shape(), Device::GPU, DataType::UInt8);
+                    shared_image_ops(GpuBackend::HIP)->convert(raw, converted, gpu_ops::ImageConversion::U8HWCToU8CHW, dh, dw, 3, {});
+                    const auto uploaded = converted.cpu();
+                    require(std::memcmp(uploaded.data_ptr(), expected.data_ptr(), uploaded.bytes()) == 0,
+                            "Main-queue prepared HWC upload changed RGB bytes");
+                    require(std::memcmp(host.data_ptr(), samples.data(), samples.size()) == 0,
+                            "Independent preparation modified the retained source bytes");
+                    if (model == 0 && w == 513) {
+                        auto first = std::async(std::launch::async, [&] { return producer->prepare(host, lens); });
+                        auto second = std::async(std::launch::async, [&] { return producer->prepare(hwc, lens, true); });
+                        const auto a = first.get(), b = second.get().permute({2, 0, 1}).contiguous();
+                        require(std::memcmp(a.data_ptr(), expected.data_ptr(), a.bytes()) == 0 &&
+                                    std::memcmp(b.data_ptr(), expected.data_ptr(), b.bytes()) == 0,
+                                "Concurrent image requests crossed producer generations");
+                        auto oversized = lens; oversized.dst_width = 1000000; oversized.dst_height = 100;
+                        bool bounded = false;
+                        try { (void)producer->prepare(host, oversized); } catch (const std::invalid_argument&) { bounded = true; }
+                        require(bounded, "Independent image producer ignored its workspace budget");
+                        const auto recovered = producer->prepare(host, lens);
+                        require(std::memcmp(recovered.data_ptr(), expected.data_ptr(), recovered.bytes()) == 0,
+                                "Rejected image preparation poisoned the producer");
+                    }
+                }
+            }
+            std::puts("PASS independent HIP image producer: 5 lens models, buffer growth/reuse/shrink, byte-exact original RGB preparation");
+            if (argc == 3) {
+                auto [data, width, height, channels] = load_image(utf8_to_path(argv[2]), 1, 0);
+                const std::unique_ptr<void, decltype(&free_image)> owner(data, free_image);
+                require(data && width > 0 && height > 0 && channels == 3, "Real-image fixture requires decoded RGB bytes");
+                const size_t pixels = size_t(width) * height;
+                auto host = Tensor::empty_pageable_host({3, size_t(height), size_t(width)}, DataType::UInt8);
+                auto* dst = host.ptr<uint8_t>();
+                for (size_t channel = 0; channel < 3; ++channel)
+                    for (size_t i = 0; i < pixels; ++i) dst[channel * pixels + i] = data[3 * i + channel];
+                UndistortParams lens{};
+                lens.src_width = width; lens.src_height = height;
+                const auto [prepared_width, prepared_height] = resized_image_dimensions(width, height, 1, 1920);
+                lens.dst_width = prepared_width; lens.dst_height = prepared_height;
+                lens.src_fx = float(width); lens.src_fy = float(height); lens.src_cx = width * .5f; lens.src_cy = height * .5f;
+                lens.dst_fx = float(lens.dst_width); lens.dst_fy = float(lens.dst_height);
+                lens.dst_cx = lens.dst_width * .5f; lens.dst_cy = lens.dst_height * .5f; lens.model_type = CameraModelType::PINHOLE;
+                const auto input = host.to(GpuBackend::HIP);
+                const auto expected = shared_image_ops(GpuBackend::HIP)->undistort(input, lens, false)
+                                          .clamp(0.f, 1.f).mul(255.f).add(.5f).to(DataType::UInt8).cpu();
+                const auto actual = producer->prepare(host, lens);
+                require(actual.shape() == expected.shape() && std::memcmp(actual.data_ptr(), expected.data_ptr(), actual.bytes()) == 0,
+                        "Real-image independent preparation differs from the original path");
+                const auto hwc = Tensor::from_blob(data, {size_t(height), size_t(width), 3}, Device::CPU, DataType::UInt8);
+                const auto interleaved = producer->prepare(hwc, lens, true).permute({2, 0, 1}).contiguous();
+                require(interleaved.shape() == expected.shape() && std::memcmp(interleaved.data_ptr(), expected.data_ptr(), interleaved.bytes()) == 0,
+                        "Real-image interleaved preparation differs from the original path");
+                std::printf("PASS real-image independent HIP preparation: %dx%d -> %dx%d, %zu bytes exactly equal\n",
+                            width, height, lens.dst_width, lens.dst_height, actual.bytes());
+            }
+            producer.reset();
+            require(live_accounting() == before_producer, "Independent image producer leaked owned bytes or allocation counts");
+        }
     }
     require(configured_gpu_backend()==configured && bool(shutdown_gpu_backend(GpuBackend::HIP)),"Image changed default or leaked resources");
     std::puts("PASS HIP application image: independent CPU references, Canny tile boundaries, ROI, native input rejection and teardown");return 0;

@@ -357,6 +357,7 @@ namespace lfs::core::internal {
         };
 #endif
         size_t live = 0, peak = 0;
+        std::atomic<size_t> image_preparation_bytes{0};
         size_t workspace_bytes = 0;
         size_t algorithm_workspace_bytes = 0;
         explicit Impl(std::filesystem::path path, int ordinal, size_t cache_limit) : ordinal(ordinal), cache_limit(cache_limit) {
@@ -791,6 +792,109 @@ namespace lfs::core::internal {
         return hip_profile_module(generic,impl_->device.architecture);
     }
     HipBackendOps::~HipBackendOps() = default;
+    std::unique_ptr<HipImagePreparationContext> HipBackendOps::create_image_preparation(void (*accounting)(size_t, bool)) {
+        struct Preparation final : HipImagePreparationContext {
+            std::shared_ptr<Impl> runtime;
+            std::mutex mutex;
+            LfsHipContext* context = nullptr;
+            LfsHipBuffer *source = nullptr, *planar = nullptr, *warped = nullptr, *converted = nullptr, *interleaved_output = nullptr;
+            size_t source_capacity = 0, planar_capacity = 0, warped_capacity = 0, converted_capacity = 0, interleaved_capacity = 0, resident = 0;
+            void (*accounting)(size_t, bool);
+            Preparation(std::shared_ptr<Impl> runtime, void (*accounting)(size_t, bool))
+                : runtime(std::move(runtime)), accounting(accounting) {}
+            ~Preparation() override {
+                if (!context) return;
+                LfsHipError error{};
+                if (runtime->lfs_hip_context_destroy(context, &error)) {
+                    std::fprintf(stderr, "[error] HIP image preparation context retained after teardown failure: %s\n", error.message);
+                    return;
+                }
+                runtime->image_preparation_bytes.fetch_sub(resident, std::memory_order_relaxed);
+                if (accounting)
+                    for (const auto bytes : {source_capacity, planar_capacity, warped_capacity, converted_capacity, interleaved_capacity})
+                        if (bytes) accounting(bytes, false);
+            }
+            void initialize() {
+                require(runtime->context, "HIP image preparation needs a live Tensor runtime");
+                LfsHipError error{};
+                check(runtime->lfs_hip_context_create(runtime->ordinal, &context, &error), error);
+                uint64_t producer = 0, training = 0;
+                int32_t producer_device = -1, training_device = -1;
+                check(runtime->lfs_hip_context_queue(context, &producer, &producer_device, &error), error);
+                check(runtime->lfs_hip_context_queue(runtime->context, &training, &training_device, &error), error);
+                require(producer && producer != training && producer_device == training_device,
+                        "HIP image producer must have a distinct native queue on the training device");
+            }
+            void reserve(LfsHipBuffer*& buffer, size_t& capacity, size_t bytes) {
+                if (capacity >= bytes) return;
+                LfsHipError error{};
+                // Previous prepare completed its download. No producer-owned
+                // GPU storage escapes, so only this private queue must drain.
+                if (buffer) {
+                    check(runtime->lfs_hip_buffer_release(context, buffer, &error), error);
+                    buffer = nullptr;
+                    resident -= capacity;
+                    runtime->image_preparation_bytes.fetch_sub(capacity, std::memory_order_relaxed);
+                    if (accounting) accounting(capacity, false);
+                    capacity = 0;
+                }
+                constexpr size_t budget = 512ull << 20;
+                require(bytes <= budget - resident, "HIP private image preparation exceeds its workspace budget");
+                check(runtime->lfs_hip_buffer_allocate(context, bytes, &buffer, &error), error);
+                capacity = bytes; resident += bytes;
+                runtime->image_preparation_bytes.fetch_add(bytes, std::memory_order_relaxed);
+                if (accounting) accounting(bytes, true);
+            }
+            std::vector<uint8_t> prepare(std::span<const uint8_t> input, const LfsHipLens& lens, bool interleaved) override {
+                std::lock_guard lock(mutex);
+                require(lens.src_width > 0 && lens.src_height > 0 && lens.dst_width > 0 && lens.dst_height > 0,
+                        "HIP private image preparation requires positive extents");
+                const uint64_t source_pixels = uint64_t(lens.src_width) * lens.src_height;
+                const uint64_t output_pixels = uint64_t(lens.dst_width) * lens.dst_height;
+                require(source_pixels <= INT32_MAX / 3 && output_pixels <= INT32_MAX / 3 && input.size() == source_pixels * 3,
+                        "HIP private image preparation requires matching RGB CHW bytes");
+                const size_t count = size_t(output_pixels) * 3;
+                constexpr size_t budget = 512ull << 20;
+                const size_t output_factor = interleaved ? 6 : 5, input_factor = interleaved ? 2 : 1;
+                require(count <= budget / output_factor && input.size() <= (budget - count * output_factor) / input_factor,
+                        "HIP private image preparation exceeds its workspace budget");
+                reserve(source, source_capacity, input.size());
+                if (interleaved) reserve(planar, planar_capacity, input.size());
+                reserve(warped, warped_capacity, count * sizeof(float));
+                reserve(converted, converted_capacity, count);
+                if (interleaved) reserve(interleaved_output, interleaved_capacity, count);
+                std::vector<uint8_t> output(count);
+                LfsHipError error{};
+                check(runtime->lfs_hip_upload(context, source, 0, input.data(), input.size(), &error), error);
+                if (interleaved) {
+                    LfsHipSharedImage input_layout{};
+                    input_layout.struct_bytes = sizeof(input_layout); input_layout.operation = 8;
+                    input_layout.height = size_t(lens.src_height); input_layout.width = size_t(lens.src_width); input_layout.channels = 3;
+                    check(runtime->lfs_hip_shared_image(context, &input_layout, {source, 0}, {planar, 0}, {}, &error), error);
+                }
+                check(runtime->lfs_hip_shared_warp(context, {interleaved ? planar : source, 0}, static_cast<uint32_t>(DataType::UInt8),
+                                                   3, 0, {warped, 0}, &lens, &error), error);
+                LfsHipSharedImage conversion{};
+                conversion.struct_bytes = sizeof(conversion);
+                conversion.operation = 10; // Existing F32CHWToU8CHW kernel.
+                conversion.height = size_t(lens.dst_height); conversion.width = size_t(lens.dst_width); conversion.channels = 3;
+                check(runtime->lfs_hip_shared_image(context, &conversion, {warped, 0}, {converted, 0}, {}, &error), error);
+                if (interleaved) {
+                    LfsHipLayout layout{};
+                    layout.rank = 2; layout.elements = count;
+                    layout.dims[0] = output_pixels; layout.dims[1] = 3;
+                    layout.strides[0] = 1; layout.strides[1] = output_pixels;
+                    check(runtime->lfs_hip_strided_copy(context, {converted, 0}, {interleaved_output, 0}, &layout, 1, &error), error);
+                }
+                check(runtime->lfs_hip_download(context, interleaved ? interleaved_output : converted, 0, output.data(), output.size(), &error), error);
+                return output;
+            }
+        };
+        std::lock_guard lock(impl_->mutex);
+        auto result = std::make_unique<Preparation>(impl_, accounting);
+        result->initialize();
+        return result;
+    }
     StorageRef HipBackendOps::allocate(size_t bytes, size_t alignment, ExecContext execution) {
         queue(execution);
         require(bytes > 0 && alignment && alignment <= 256 && (alignment & (alignment - 1)) == 0, "Invalid HIP allocation size/alignment");
@@ -1869,13 +1973,15 @@ namespace lfs::core::internal {
         LfsHipMemoryInfo memory{};
         LfsHipError error{};
         check(impl_->lfs_hip_memory_info(impl_->context, &memory, &error), error);
-        impl_->reserved_peak = std::max<size_t>(impl_->reserved_peak, memory.owned_bytes);
+        const auto image_bytes = impl_->image_preparation_bytes.load(std::memory_order_relaxed);
+        impl_->reserved_peak = std::max<size_t>(impl_->reserved_peak, memory.owned_bytes + image_bytes);
         info.total_bytes = memory.total_bytes;
         info.free_bytes = memory.free_bytes;
-        info.allocated_bytes = impl_->live + memory.workspace_bytes;
+        info.allocated_bytes = impl_->live + memory.workspace_bytes + image_bytes;
         info.pool_used_current = info.allocated_bytes;
-        info.pool_reserved_current = memory.owned_bytes;
+        info.pool_reserved_current = memory.owned_bytes + image_bytes;
         info.pool_reserved_high = impl_->reserved_peak;
+        impl_->peak = std::max(impl_->peak, info.allocated_bytes);
         info.pool_used_high = impl_->peak;
         return info;
     }
@@ -1890,6 +1996,8 @@ namespace lfs::core::internal {
             }
         }
         require(impl_->allocations.empty(), "Cannot shut down HIP Tensor context with live allocations");
+        require(impl_->image_preparation_bytes.load(std::memory_order_relaxed) == 0,
+                "Cannot shut down HIP Tensor context with live image preparation storage");
         require(impl_.use_count() == 1, "Cannot shut down HIP Tensor context with live queues, transfers or fences");
         if (!impl_->context)
             return;

@@ -4,6 +4,8 @@
 #include <core/detail/gpu_backend_ops.hpp>
 #include <filesystem>
 #include <string_view>
+#include <span>
+#include <vector>
 #include "runtime_api.h"
 #include "device_identity_api.h"
 #include "external_memory_api.h"
@@ -53,11 +55,17 @@ namespace lfs::core::internal {
         virtual bool wait_queue(void* queue) = 0;
         virtual std::optional<float> milliseconds(size_t, size_t) const = 0;
     };
+    class HipImagePreparationContext {
+    public:
+        virtual ~HipImagePreparationContext() = default;
+        virtual std::vector<uint8_t> prepare(std::span<const uint8_t>, const LfsHipLens&, bool interleaved) = 0;
+    };
     class HipBackendOps final : public GpuBackendOps {
     public:
         HipBackendOps(const std::filesystem::path& module, int device, size_t max_cached_bytes = 64 * 1024 * 1024);
         ~HipBackendOps() override;
         std::unique_ptr<HipUploadBuffer> create_upload_buffer();
+        std::unique_ptr<HipImagePreparationContext> create_image_preparation(void (*accounting)(size_t, bool) = nullptr);
         std::unique_ptr<HipFence> create_fence();
         std::unique_ptr<HipTimestamps> create_timestamps(size_t count);
         std::unique_ptr<HipReadbackSlot> create_readback_slot(size_t bytes);

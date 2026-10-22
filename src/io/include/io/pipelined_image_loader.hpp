@@ -7,6 +7,9 @@
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_upload.hpp"
+#ifdef LFS_TENSOR_HIP
+#include "core/hip_image_preparation.hpp"
+#endif
 #include "io/cache_image_loader.hpp"
 
 #include <algorithm>
@@ -466,6 +469,9 @@ namespace lfs::io {
                                               const std::vector<uint8_t>* encoded = nullptr);
         static constexpr size_t PORTABLE_CACHE_MAX_BYTES = 64u << 20;
         static constexpr size_t PORTABLE_PNG_CACHE_MAX_BYTES = PORTABLE_CACHE_MAX_BYTES + PORTABLE_CACHE_MAX_BYTES / 4;
+#ifdef LFS_TENSOR_HIP
+        void cache_hip_prepared_interleaved_image(const std::string& key, const lfs::core::Tensor& image, size_t max_output_bytes);
+#endif
         void cache_portable_prepared_image(const std::string& key, const lfs::core::Tensor& image,
                                            size_t max_output_bytes = PORTABLE_CACHE_MAX_BYTES, bool lossless = false);
         void warn_portable_cache_failure(std::string_view message);
@@ -639,6 +645,11 @@ namespace lfs::io {
         mutable std::mutex portable_large_prepare_mutex_;
         mutable bool portable_large_prepare_logged_ = false;
         std::atomic<bool> portable_cache_warning_logged_{false};
+#ifdef LFS_TENSOR_HIP
+        std::shared_ptr<lfs::core::HipImagePreparer> hip_image_preparer_;
+        std::mutex hip_image_preparer_mutex_;
+        std::atomic<bool> hip_image_preparer_disabled_{false};
+#endif
 
         mutable std::mutex stats_mutex_;
         mutable CacheStats stats_;

@@ -331,6 +331,9 @@ namespace lfs::io {
             queue->wait();
         decode_queue_.reset();
         sidecar_queues_.clear();
+#ifdef LFS_TENSOR_HIP
+        hip_image_preparer_.reset();
+#endif
         release_cuda_decode_stage();
 
         cleanup_run_spill_directory();

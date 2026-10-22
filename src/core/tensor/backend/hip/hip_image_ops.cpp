@@ -6,6 +6,10 @@
 #include <stdexcept>
 #include <format>
 #include <core/tensor_execution.hpp>
+#include <core/hip_image_preparation.hpp>
+#include <cstring>
+#include <cstdlib>
+#include <new>
 namespace lfs::core::internal {
     Tensor HipBackendOps::shared_image_resize(const Tensor& input, int height, int width, unsigned mode, int kernel_size, ExecContext execution) {
         if(execution.cuda_stream || mode>4 || !input.is_valid() || input.device()!=Device::GPU ||
@@ -99,3 +103,47 @@ namespace lfs::core::internal {
         return output;
     }
 } // namespace lfs::core::internal
+
+namespace lfs::core {
+    class HipImagePreparationAccounting {
+    public:
+        static void record(size_t bytes, bool allocation) {
+            if (allocation) Tensor::record_storage_allocation(StorageAccountingKind::HipOwned, bytes);
+            else Tensor::record_storage_deallocation(StorageAccountingKind::HipOwned, bytes);
+        }
+    };
+    bool hip_image_preparation_default_enabled() {
+        const GpuBackendScope scope(GpuBackend::HIP);
+        auto& backend = static_cast<internal::HipBackendOps&>(internal::backend_ops(GpuBackend::HIP));
+        return backend.architecture_profile_enabled("gfx1150");
+    }
+    std::unique_ptr<HipImagePreparer> create_hip_image_preparer() {
+        struct Producer final : HipImagePreparer {
+            std::unique_ptr<internal::HipImagePreparationContext> context;
+            explicit Producer(std::unique_ptr<internal::HipImagePreparationContext> context)
+                : context(std::move(context)) {}
+            Tensor prepare(const Tensor& input, const UndistortParams& p, bool interleaved) override {
+                if (!input.is_valid() || input.device() != Device::CPU || input.dtype() != DataType::UInt8 ||
+                    !input.is_contiguous() || input.ndim() != 3 || input.size(interleaved ? 2 : 0) != 3 ||
+                    p.src_width <= 0 || p.src_height <= 0 || p.dst_width <= 0 || p.dst_height <= 0 ||
+                    input.size(interleaved ? 0 : 1) != size_t(p.src_height) || input.size(interleaved ? 1 : 2) != size_t(p.src_width))
+                    throw std::invalid_argument("HIP private image producer requires matching CPU RGB CHW bytes");
+                LfsHipLens lens{p.src_fx, p.src_fy, p.src_cx, p.src_cy, p.dst_fx, p.dst_fy, p.dst_cx, p.dst_cy,
+                                p.src_width, p.src_height, p.dst_width, p.dst_height, int32_t(p.model_type), {}, p.num_distortion};
+                std::copy(std::begin(p.distortion), std::end(p.distortion), std::begin(lens.distortion));
+                auto bytes = context->prepare({input.ptr<uint8_t>(), input.numel()}, lens, interleaved);
+                if (const char* injected = std::getenv("LFS_HIP_VALIDATION_IMAGE_PREPARE_OOM");
+                    injected && std::string_view(injected) != "0")
+                    throw std::bad_alloc();
+                auto output = Tensor::empty_pageable_host(interleaved
+                    ? TensorShape({size_t(p.dst_height), size_t(p.dst_width), 3})
+                    : TensorShape({3, size_t(p.dst_height), size_t(p.dst_width)}), DataType::UInt8);
+                std::memcpy(output.data_ptr(), bytes.data(), bytes.size());
+                return output;
+            }
+        };
+        const GpuBackendScope scope(GpuBackend::HIP);
+        auto& backend = static_cast<internal::HipBackendOps&>(internal::backend_ops(GpuBackend::HIP));
+        return std::make_unique<Producer>(backend.create_image_preparation(HipImagePreparationAccounting::record));
+    }
+}

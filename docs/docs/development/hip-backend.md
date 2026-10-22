@@ -478,3 +478,42 @@ It checks signed zero, NaN/infinity classification and offset guards. The CPU
 math oracle quiets signaling half NaNs before libm evaluation, matching HIP's
 half-to-float conversion; NaN payload equality is not required. `mod` must match
 exactly, while `pow` permits at most one binary16 ULP after rounding.
+
+
+### Independent image preparation
+
+HIP Tensor work queues retain their existing shared native submission stream.
+The loader can instead own a bounded private native image producer on the same
+physical HIP device. Its stream identity is checked against the training stream;
+its GPU buffers never escape to ordinary Tensor storage. Completed CPU RGB bytes
+are published for the existing optional JPEG blob cache, followed by a reduced
+image upload and byte-preserving layout conversion on the training queue.
+This does not imply concurrent hardware execution or independent memory bandwidth.
+
+The producer handles cached UInt8 RGB forward undistortion only. Full-resolution
+interleaved decoder ownership is retained without a CPU planar copy; the producer
+uses existing image conversion, warp and strided-copy kernels. JPEG quality,
+chroma, invalidation keys, cache budget and warp/quantization semantics are unchanged.
+Float/16-bit inputs, alpha/masked preparation and requests without prepared-cache
+eligibility retain the original path. The generic Tensor queue contract and the
+CUDA, Metal and Vulkan implementations are unchanged.
+
+Automatic enablement is limited to the validated gfx1150 architecture profile.
+`LFS_HIP_INDEPENDENT_IMAGE_PREPARE=0` forces the original path; `=1` explicitly
+exercises the generic producer on another supported HIP device.
+`LFS_HIP_DISABLE_ARCH_PROFILES=1` disables automatic architecture selection.
+A producer has a 512 MiB total GPU-buffer budget, reuses its scratch allocations,
+and reports its owned storage to Core accounting. Producer work is serialized;
+CPU JPEG encoding can overlap the next producer request. Shutdown joins loader
+workers before releasing the producer and its native stream.
+
+On producer failure, the loader disables it for that loader lifetime, emits one
+CLI transfer-fallback warning and prepares the retained source on the original
+training queue. Concurrent requests retain shared producer ownership until their
+work finishes. Cache encoding remains optional: its failure preserves the already
+prepared image. `LFS_HIP_VALIDATION_IMAGE_PREPARE_OOM=1` injects a failure after
+private GPU preparation, before CPU publication, for fallback validation only.
+The image contract covers both CHW/HWC publication, all supported forward lens
+models, exact bytes against the original path, reuse, concurrent requests,
+budget rejection, recovery and owned-storage release. Its optional JPEG argument
+also exercises a full-resolution source with max-side 1920 preparation.
