@@ -42,8 +42,10 @@ function(lfs_hip_raster_objects include_output objects_output)
             set(_extension o)
             set(_platform_flags -fPIC)
         endif()
-        if(NOT EXISTS "${_compiler}" OR NOT LFS_HIP_ARCHITECTURE MATCHES "^gfx[0-9a-f]+$")
-            message(FATAL_ERROR "HIP raster kernels need LFS_HIP_ROOT and one explicit LFS_HIP_ARCHITECTURE")
+        include("${CMAKE_CURRENT_FUNCTION_LIST_DIR}/HipArchitectures.cmake")
+        lfs_hip_architectures()
+        if(NOT EXISTS "${_compiler}")
+            message(FATAL_ERROR "HIP raster kernels need LFS_HIP_ROOT")
         endif()
         set(_headers ${_names})
         list(FILTER _headers INCLUDE REGEX "\\.(h|cuh)$")
@@ -61,7 +63,7 @@ function(lfs_hip_raster_objects include_output objects_output)
             list(TRANSFORM _unit_inputs PREPEND "${_generated}/")
             add_custom_command(OUTPUT "${_object}"
                 COMMAND "${_compiler}" -x hip -std=c++20 -O3 ${_platform_flags}
-                    "--offload-arch=${LFS_HIP_ARCHITECTURE}" "--hip-path=${LFS_HIP_ROOT}"
+                    ${LFS_HIP_OFFLOAD_FLAGS} "--hip-path=${LFS_HIP_ROOT}"
                     "-I${_generated}" "-I${LFS_HIP_GLM_INCLUDE_DIR}"
                     -c "${_generated}/${_unit}.hip" -o "${_object}"
                 DEPENDS ${_unit_inputs} ${_headers} "${_generated}/${_unit}.hip" "${_compiler}"

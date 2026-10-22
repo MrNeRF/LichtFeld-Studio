@@ -16,7 +16,10 @@ extern "C" int lfs_hip_device_identity(int32_t ordinal,LfsHipDeviceIdentity* out
         result.device_node_mask=properties.luidDeviceNodeMask;
 #endif
         result.integrated=properties.integrated?1u:0u;
-        std::snprintf(result.compiled_architecture,sizeof(result.compiled_architecture),"%s",LFS_HIP_COMPILED_ARCH);
+        const auto architecture=lfs_hip_base_architecture(properties.gcnArchName);
+        const auto supported=lfs_hip_has_architecture(LFS_HIP_COMPILED_ARCH,architecture);
+        std::snprintf(result.compiled_architecture,sizeof(result.compiled_architecture),"%.*s",
+            int(supported?architecture.size():sizeof("unsupported")-1),supported?architecture.data():"unsupported");
         *output=result;
     });
 }

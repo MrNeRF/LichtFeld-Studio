@@ -63,6 +63,8 @@ namespace lfs::core::internal {
         LFS_CORE_API HipQueueLease execution_lease(ExecContext);
         LFS_CORE_API uint64_t storage_address(StorageRef, size_t required_bytes);
         LFS_CORE_API void retain_application_module(std::shared_ptr<void> module);
+        LFS_CORE_API std::filesystem::path training_module_path(const std::filesystem::path& fallback,
+                                                               bool generic_only=false) const;
         // Non-owning view of a live Tensor allocation. The arena owner must
         // outlive the returned view, as for the existing raw-view APIs.
         LFS_CORE_API StorageRef borrow_native_range(void* pointer, size_t bytes);

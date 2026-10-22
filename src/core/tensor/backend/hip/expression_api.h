@@ -6,6 +6,9 @@
 extern "C" {
 #endif
 typedef struct LfsHipExpression LfsHipExpression;
+LFS_HIP_API int lfs_hip_expression_identity_for_device(int32_t device, char* output, size_t capacity, LfsHipError*);
+LFS_HIP_API int lfs_hip_expression_compile_for_device(int32_t device, const char* source, char* artifact, size_t capacity,
+                                         size_t* bytes, char* diagnostics, size_t diagnostic_capacity, LfsHipError*);
 LFS_HIP_API int lfs_hip_expression_identity(char* output, size_t capacity, LfsHipError*);
 LFS_HIP_API int lfs_hip_expression_compile(const char* source, char* artifact, size_t capacity,
                                          size_t* bytes, char* diagnostics, size_t diagnostic_capacity, LfsHipError*);

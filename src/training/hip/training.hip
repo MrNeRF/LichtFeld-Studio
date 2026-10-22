@@ -7,6 +7,7 @@
 #include "hip_check.hpp"
 #include "photometric.hpp"
 #include "training_api.h"
+#include "../../core/tensor/backend/hip/architecture_runtime.hpp"
 #include "application_dispatch_api.h"
 #ifdef LFS_HIP_FAST_RUNTIME
 #include "backward.h"
@@ -1107,6 +1108,11 @@ int lfs_hip_train_host_free(int device, void* pointer, LfsHipError* error) {
     });
 }
 uint32_t lfs_hip_train_abi(void) { return 1; }
+const char* lfs_hip_train_targets(void) { return LFS_HIP_COMPILED_ARCH; }
+#ifndef LFS_HIP_MODULE_SET_ID
+#define LFS_HIP_MODULE_SET_ID "standalone-unversioned"
+#endif
+const char* lfs_hip_train_set_id(void) { return LFS_HIP_MODULE_SET_ID; }
 
 static int create_session(const LfsHipTrainConfig* config, const LfsHipTrainModel* model,
                           const LfsHipTrainSharedModel* shared, LfsHipTraining** output, LfsHipError* error, const LfsHipTrainModelLayout* external = nullptr, bool attach = false, const LfsHipTrainDeviceModel* borrowed = nullptr) {
@@ -1124,7 +1130,7 @@ static int create_session(const LfsHipTrainConfig* config, const LfsHipTrainMode
         hip_check(hipGetDeviceProperties(&properties, config->device_ordinal), "HIP training properties");
         require(properties.warpSize == 32, "HIP training currently requires wave32 hardware");
         const std::string_view architecture(properties.gcnArchName);
-        require(architecture.substr(0, architecture.find(':')) == LFS_HIP_COMPILED_ARCH,
+        require(lfs_hip_has_architecture(LFS_HIP_COMPILED_ARCH, architecture),
                 "HIP training module was compiled for a different GPU architecture");
         const float* arrays[5]{};
         if (model) {

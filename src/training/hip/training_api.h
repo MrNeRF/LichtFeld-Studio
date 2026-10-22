@@ -142,6 +142,8 @@ typedef struct LfsHipTrainInfo {
  * poison a session; they do not silently switch backend. Invalid/budget/cancel
  * failures before Adam preserve parameters and optimizer step. */
 LFS_HIP_TRAIN_API uint32_t lfs_hip_train_abi(void);
+LFS_HIP_TRAIN_API const char* lfs_hip_train_targets(void);
+LFS_HIP_TRAIN_API const char* lfs_hip_train_set_id(void);
 LFS_HIP_TRAIN_API int lfs_hip_train_create(const LfsHipTrainConfig*, const LfsHipTrainModel*, LfsHipTraining**, LfsHipError*);
 LFS_HIP_TRAIN_API int lfs_hip_train_model_layout(uint64_t gaussian_count, LfsHipTrainModelLayout*, LfsHipError*);
 LFS_HIP_TRAIN_API int lfs_hip_train_create_shared(const LfsHipTrainConfig*, const LfsHipTrainModel*, const LfsHipTrainSharedModel*, LfsHipTraining**, LfsHipError*);

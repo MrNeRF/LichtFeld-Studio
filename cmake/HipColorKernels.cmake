@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 function(lfs_hip_color_objects include_output objects_output)
+    include("${CMAKE_CURRENT_FUNCTION_LIST_DIR}/HipArchitectures.cmake")
+    lfs_hip_architectures()
     get_filename_component(_root "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/.." ABSOLUTE)
     set(_generated "${CMAKE_CURRENT_BINARY_DIR}/hip-color-generated")
     set(_names bilateral_grid.cuh bilateral_grid_forward.cu bilateral_grid_backward.cu bilateral_grid_tv.cu
@@ -33,7 +35,7 @@ function(lfs_hip_color_objects include_output objects_output)
         set(_object "${_generated}/${_unit}.${_extension}")
         add_custom_command(OUTPUT "${_object}"
             COMMAND "${_compiler}" -x hip -std=c++20 -O3 -DNDEBUG ${_platform_flags}
-                "--offload-arch=${LFS_HIP_ARCHITECTURE}" "--hip-path=${LFS_HIP_ROOT}"
+                ${LFS_HIP_OFFLOAD_FLAGS} "--hip-path=${LFS_HIP_ROOT}"
                 "-I${_generated}" "-I${_raster_include}" "-I${LFS_HIP_GLM_INCLUDE_DIR}"
                 -c "${_generated}/${_unit}.cu" -o "${_object}"
             DEPENDS ${_outputs} lfs_hip_raster_kernels "${_compiler}" VERBATIM)

@@ -50,7 +50,9 @@ struct Implementation {
     bool live = false;
     Implementation() {
         const char* path = std::getenv("LFS_HIP_TRAINING_MODULE");
-        module = hip::cached_application_module(path ? path : LFS_HIP_TRAINING_DEFAULT_MODULE);
+        module = path ? hip::cached_application_module(path) : hip::cached_profile_module(
+            native_ops().training_module_path(LFS_HIP_TRAINING_DEFAULT_MODULE),
+            native_ops().training_module_path(LFS_HIP_TRAINING_DEFAULT_MODULE,true));
         queue = native_ops().execution_lease({});
         native_ops().retain_application_module(module);
 #define LOAD(name) name = module->symbol<decltype(name)>(#name)

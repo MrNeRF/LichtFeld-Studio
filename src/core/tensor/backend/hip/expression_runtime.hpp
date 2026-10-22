@@ -14,9 +14,13 @@ void release_expression_native(LfsHipContext* context,LfsHipExpression* expressi
     delete expression;
 }
 }
-int lfs_hip_expression_identity(char* output,size_t capacity,LfsHipError* error) {
+int lfs_hip_expression_identity_for_device(int32_t ordinal,char* output,size_t capacity,LfsHipError* error) {
     return boundary(error,[&] {
         require(output && capacity>=128,"Missing HIP compiler identity output");
+        validate_device(ordinal);
+        hipDeviceProp_t properties{};check(hipGetDeviceProperties(&properties,ordinal));
+        const auto architecture=lfs_hip_base_architecture(properties.gcnArchName);
+        require(lfs_hip_has_architecture(LFS_HIP_COMPILED_ARCH,architecture),"HIP expression target is not in this build");
         int major=0,minor=0,runtime=0,driver=0;
         if(hiprtcVersion(&major,&minor)!=HIPRTC_SUCCESS) throw std::runtime_error("Cannot query HIPRTC version");
         check(hipRuntimeGetVersion(&runtime));check(hipDriverGetVersion(&driver));
@@ -25,13 +29,18 @@ int lfs_hip_expression_identity(char* output,size_t capacity,LfsHipError* error)
 #else
         constexpr const char* platform="linux";
 #endif
-        std::snprintf(output,capacity,"hip-expression-v1-%s-%s-sdk%d-rtc%d.%d-runtime%d-driver%d-fp-contract-off-ieee-denorm",platform,LFS_HIP_COMPILED_ARCH,HIP_VERSION,major,minor,runtime,driver);
+        std::snprintf(output,capacity,"hip-expression-v2-%s-%.*s-sdk%d-rtc%d.%d-runtime%d-driver%d-fp-contract-off-ieee-denorm",platform,int(architecture.size()),architecture.data(),HIP_VERSION,major,minor,runtime,driver);
     });
 }
-int lfs_hip_expression_compile(const char* source,char* artifact,size_t capacity,size_t* bytes,
+int lfs_hip_expression_compile_for_device(int32_t ordinal,const char* source,char* artifact,size_t capacity,size_t* bytes,
     char* diagnostics,size_t diagnostic_capacity,LfsHipError* error) {
     return boundary(error,[&] {
         require(source && bytes && (!capacity || artifact) && (!diagnostic_capacity || diagnostics),"Invalid HIP expression compile descriptor");
+        validate_device(ordinal);
+        DeviceScope selected(ordinal);
+        hipDeviceProp_t properties{};check(hipGetDeviceProperties(&properties,ordinal));
+        const auto architecture=lfs_hip_base_architecture(properties.gcnArchName);
+        require(lfs_hip_has_architecture(LFS_HIP_COMPILED_ARCH,architecture),"HIP expression target is not in this build");
         *bytes=0;
         if(diagnostic_capacity) diagnostics[0]=0;
         struct Program {
@@ -42,7 +51,8 @@ int lfs_hip_expression_compile(const char* source,char* artifact,size_t capacity
             if(result!=HIPRTC_SUCCESS) throw std::runtime_error(std::string("HIPRTC expression: ")+hiprtcGetErrorString(result));
         };
         rtc_check(hiprtcCreateProgram(&program.program,source,"lfs_expression.hip",0,nullptr,nullptr));
-        const char* options[]{"--std=c++20","--gpu-architecture=" LFS_HIP_COMPILED_ARCH,"-O3","-ffp-contract=off","-fno-fast-math","-fdenormal-fp-math=ieee","-Xclang","-fdenormal-fp-math-f32=ieee"};
+        const std::string target="--gpu-architecture="+std::string(architecture);
+        const char* options[]{"--std=c++20",target.c_str(),"-O3","-ffp-contract=off","-fno-fast-math","-fdenormal-fp-math=ieee","-Xclang","-fdenormal-fp-math-f32=ieee"};
         const auto result=hiprtcCompileProgram(program.program,8,options);
         if(result!=HIPRTC_SUCCESS) {
             size_t size=0;
@@ -61,6 +71,17 @@ int lfs_hip_expression_compile(const char* source,char* artifact,size_t capacity
         require(capacity>=*bytes,"HIP expression artifact output is too small");
         rtc_check(hiprtcGetCode(program.program,artifact));
     });
+}
+int lfs_hip_expression_identity(char* output,size_t capacity,LfsHipError* error) {
+    int ordinal=0;
+    const int status=boundary(error,[&]{check(hipGetDevice(&ordinal));});
+    return status?status:lfs_hip_expression_identity_for_device(ordinal,output,capacity,error);
+}
+int lfs_hip_expression_compile(const char* source,char* artifact,size_t capacity,size_t* bytes,
+    char* diagnostics,size_t diagnostic_capacity,LfsHipError* error) {
+    int ordinal=0;
+    const int status=boundary(error,[&]{check(hipGetDevice(&ordinal));});
+    return status?status:lfs_hip_expression_compile_for_device(ordinal,source,artifact,capacity,bytes,diagnostics,diagnostic_capacity,error);
 }
 int lfs_hip_expression_load(LfsHipContext* context,const void* artifact,size_t bytes,LfsHipExpression** output,LfsHipError* error) {
     return boundary(error,[&] {

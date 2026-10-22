@@ -1,6 +1,45 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/HipRasterKernels.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/HipArchitectures.cmake")
+lfs_hip_architectures()
+# A leftover profile from a different build must never be paired with a newer
+# generic module just because both happen to target the same architecture.
+file(GLOB_RECURSE _module_identity_inputs CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.hip" "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.h" "${CMAKE_CURRENT_SOURCE_DIR}/*.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../kernels/*.cu" "${CMAKE_CURRENT_SOURCE_DIR}/../kernels/*.cuh"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../rasterization/fastgs/*.cu"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../rasterization/fastgs/*.cuh"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../rasterization/fastgs/*.h")
+file(GLOB _module_config_inputs "${CMAKE_CURRENT_SOURCE_DIR}/../../../cmake/Hip*.cmake")
+list(APPEND _module_identity_inputs ${_module_config_inputs} "${CMAKE_CURRENT_LIST_FILE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../core/tensor/backend/hip/runtime_api.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../core/tensor/backend/hip/external_memory_api.h")
+set(_module_paths)
+set(_module_configure_inputs)
+foreach(_input IN LISTS _module_identity_inputs)
+    file(REAL_PATH "${_input}" _absolute)
+    list(APPEND _module_paths "${_absolute}")
+    # Included CMake files are already tracked. Re-registering equivalent
+    # noncanonical spellings can create duplicate Ninja regeneration outputs.
+    if(NOT _absolute MATCHES "(\\.cmake|/CMakeLists\\.txt)$")
+        list(APPEND _module_configure_inputs "${_absolute}")
+    endif()
+endforeach()
+list(REMOVE_DUPLICATES _module_paths)
+list(REMOVE_DUPLICATES _module_configure_inputs)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_module_configure_inputs})
+set(_module_identity "${LFS_HIP_COMPILED_ARCHITECTURES}")
+if(EXISTS "${LFS_HIP_ROOT}/include/hip/hip_version.h")
+    file(SHA256 "${LFS_HIP_ROOT}/include/hip/hip_version.h" _sdk_identity)
+    string(APPEND _module_identity "${_sdk_identity}")
+endif()
+foreach(_input IN LISTS _module_paths)
+    file(SHA256 "${_input}" _hash)
+    string(APPEND _module_identity "${_hash}")
+endforeach()
+string(SHA256 _module_set_id "${_module_identity}")
 lfs_hip_raster_objects(_raster_include _raster_objects)
 option(LFS_HIP_FAST_RUNTIME "Compile the native HIP FastGS path" ON)
 if(LFS_HIP_FAST_RUNTIME)
@@ -153,12 +192,22 @@ if(CMAKE_HOST_WIN32)
 else()
     set(_compiler "${LFS_HIP_ROOT}/lib/llvm/bin/clang++")
     set(_module "${CMAKE_CURRENT_BINARY_DIR}/liblfs_hip_training.so")
-    set(_platform_flags -fPIC)
+    set(_platform_flags -fPIC "-Wl,-rpath,$ORIGIN/.." "-Wl,-rpath,$ORIGIN/../../..")
 endif()
-add_custom_command(OUTPUT "${_module}"
+function(lfs_add_hip_training_module module fast_include fast_objects packed offload_flags architectures)
+set(_fast_flags)
+if(LFS_HIP_FAST_RUNTIME)
+    set(_fast_flags -DLFS_HIP_FAST_RUNTIME "-I${fast_include}")
+    if(packed)
+        list(APPEND _fast_flags -DLFS_HIP_FAST_PACKED_GRADIENTS)
+    endif()
+endif()
+add_custom_command(OUTPUT "${module}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<PATH:GET_PARENT_PATH,${module}>"
     COMMAND "${_compiler}" -x hip -std=c++20 -O3 -shared ${_platform_flags} ${_fast_flags}
-        -DLFS_HIP_TRAIN_EXPORTS "--offload-arch=${LFS_HIP_ARCHITECTURE}" "--hip-path=${LFS_HIP_ROOT}"
-        "-DLFS_HIP_COMPILED_ARCH=\"${LFS_HIP_ARCHITECTURE}\""
+        -DLFS_HIP_TRAIN_EXPORTS ${offload_flags} "--hip-path=${LFS_HIP_ROOT}"
+        "-DLFS_HIP_COMPILED_ARCH=\"${architectures}\""
+        "-DLFS_HIP_MODULE_SET_ID=\"${_module_set_id}\""
         "-I${_raster_include}" "-I${LFS_HIP_GLM_INCLUDE_DIR}"
         "-I${CMAKE_CURRENT_BINARY_DIR}/hip-photometric-generated"
         "-I${CMAKE_CURRENT_BINARY_DIR}/hip-mcmc-generated"
@@ -177,8 +226,8 @@ add_custom_command(OUTPUT "${_module}"
         "-I${_color_include}"
         "-I${_mask_include}"
         "-I${CMAKE_CURRENT_SOURCE_DIR}/../../core/include"
-        "${CMAKE_CURRENT_SOURCE_DIR}/training.hip" -x none ${_raster_objects} ${_fast_objects} ${_color_objects} ${_mask_objects} ${_identity_object} -o "${_module}"
-    DEPENDS training.hip training_api.h application_dispatch_api.h application_geometry.hpp application_color_api.h application_bilateral.hpp application_ppisp.hpp ${_color_objects} application_mrnf.hpp application_mrnf_api.h "${_application_mrnf}" application_controller.hpp application_controller_api.h application_blob.hpp application_blob_api.h "${_application_blob}" application_structure.hpp application_structure_api.h "${_application_structure}" application_lpips.hpp application_lpips_api.h "${_application_lpips}" application_fast.hpp application_fast_api.h application_mcmc.hpp application_mcmc_api.h application_refine.hpp application_refine_api.h application_photo.hpp application_photo_api.h application_adam.hpp application_adam_api.h application_sh.hpp application_sh_api.h application_image.hpp application_image_api.h application_extra.hpp application_extra_api.h application_morton.hpp application_morton_api.h ${_raster_objects} ${_fast_objects} ${_identity_object} "${_photometric}" "${_mcmc}" "${_refine}" "${_application_photo}" "${_application_adam}" "${_application_sh}" "${_application_image}" "${_application_extra}" "${_application_morton}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/training.hip" -x none ${_raster_objects} ${fast_objects} ${_color_objects} ${_mask_objects} ${_identity_object} -o "${module}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../../core/tensor/backend/hip/architecture_runtime.hpp" training.hip training_api.h application_dispatch_api.h application_geometry.hpp application_color_api.h application_bilateral.hpp application_ppisp.hpp ${_color_objects} application_mrnf.hpp application_mrnf_api.h "${_application_mrnf}" application_controller.hpp application_controller_api.h application_blob.hpp application_blob_api.h "${_application_blob}" application_structure.hpp application_structure_api.h "${_application_structure}" application_lpips.hpp application_lpips_api.h "${_application_lpips}" application_fast.hpp application_fast_api.h application_mcmc.hpp application_mcmc_api.h application_refine.hpp application_refine_api.h application_photo.hpp application_photo_api.h application_adam.hpp application_adam_api.h application_sh.hpp application_sh_api.h application_image.hpp application_image_api.h application_extra.hpp application_extra_api.h application_morton.hpp application_morton_api.h ${_raster_objects} ${fast_objects} ${_identity_object} "${_photometric}" "${_mcmc}" "${_refine}" "${_application_photo}" "${_application_adam}" "${_application_sh}" "${_application_image}" "${_application_extra}" "${_application_morton}"
         application_masks.hpp application_masks_api.h ${_mask_objects}
         application_gsplat.hpp application_gsplat_api.h
         application_popspa.hpp application_popspa_api.h "${_application_popspa}"
@@ -186,6 +235,9 @@ add_custom_command(OUTPUT "${_module}"
         "${_compiler}" "${LFS_HIP_ROOT}/include/hip/hip_runtime.h"
         "${LFS_HIP_ROOT}/include/hipcub/hipcub.hpp"
     VERBATIM)
+endfunction()
+lfs_add_hip_training_module("${_module}" "${_fast_include}" "${_fast_objects}"
+    "${LFS_HIP_FAST_PACKED_GRADIENTS}" "${LFS_HIP_OFFLOAD_FLAGS}" "${LFS_HIP_COMPILED_ARCHITECTURES}")
 add_custom_target(lfs_hip_training_build ALL DEPENDS "${_module}")
 add_dependencies(lfs_hip_training_build lfs_hip_raster_kernels)
 add_dependencies(lfs_hip_training_build lfs_hip_color_kernels)
@@ -195,6 +247,33 @@ if(LFS_HIP_FAST_RUNTIME)
 endif()
 set(LFS_HIP_TRAINING_LIBRARY "${_module}" PARENT_SCOPE)
 set(LFS_HIP_PHOTOMETRIC_HEADER "${_photometric}" PARENT_SCOPE)
+
+option(LFS_HIP_ARCH_PROFILES "Include validated training profiles in multiarchitecture builds" ON)
+list(LENGTH LFS_HIP_EFFECTIVE_ARCHITECTURES _architecture_count)
+if(LFS_HIP_FAST_RUNTIME AND LFS_HIP_ARCH_PROFILES AND _architecture_count GREATER 1
+        AND "gfx1150" IN_LIST LFS_HIP_EFFECTIVE_ARCHITECTURES)
+    function(lfs_add_gfx1150_profile)
+        set(LFS_HIP_ARCHITECTURE gfx1150)
+        set(LFS_HIP_ARCHITECTURES gfx1150)
+        set(LFS_HIP_VALIDATED_TUNING ON)
+        get_cmake_property(_variables VARIABLES)
+        foreach(_option IN LISTS _variables)
+            if(_option MATCHES "^LFS_HIP_FAST_")
+                set(${_option} ON)
+            endif()
+        endforeach()
+        lfs_hip_fast_objects(_profile_include _profile_objects lfs_hip_fast_gfx1150)
+        get_filename_component(_module_name "${_module}" NAME)
+        set(_profile_module "${CMAKE_CURRENT_BINARY_DIR}/profiles/gfx1150/${_module_name}")
+        lfs_add_hip_training_module("${_profile_module}" "${_profile_include}" "${_profile_objects}"
+            ON "--offload-arch=gfx1150" gfx1150)
+        add_custom_target(lfs_hip_gfx1150_profile ALL DEPENDS "${_profile_module}")
+        add_dependencies(lfs_hip_gfx1150_profile lfs_hip_fast_gfx1150)
+        set(LFS_HIP_PROFILE_LIBRARY "${_profile_module}" PARENT_SCOPE)
+    endfunction()
+    lfs_add_gfx1150_profile()
+    set(LFS_HIP_PROFILE_LIBRARY "${LFS_HIP_PROFILE_LIBRARY}" PARENT_SCOPE)
+endif()
 
 # The app's host compiler owns this adapter; only the isolated module uses HIP.
 if(CMAKE_CXX_COMPILER_LOADED)

@@ -2,12 +2,27 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 function(lfs_hip_fast_objects include_output objects_output)
+    include("${CMAKE_CURRENT_FUNCTION_LIST_DIR}/HipArchitectures.cmake")
+    lfs_hip_architectures()
+    set(_target lfs_hip_fast_kernels)
+    set(_suffix "")
+    if(ARGC GREATER 2)
+        set(_target "${ARGV2}")
+        set(_suffix "-${_target}")
+    endif()
     set(_validated_default OFF)
-    if(LFS_HIP_ARCHITECTURE STREQUAL "gfx1150")
+    if(LFS_HIP_EFFECTIVE_ARCHITECTURES STREQUAL "gfx1150")
         set(_validated_default ON)
     endif()
     option(LFS_HIP_VALIDATED_TUNING "Enable the validated gfx1150 HIP kernel profile" ${_validated_default})
-    if(LFS_HIP_VALIDATED_TUNING AND NOT LFS_HIP_ARCHITECTURE STREQUAL "gfx1150")
+    list(LENGTH LFS_HIP_EFFECTIVE_ARCHITECTURES _target_count)
+    if(_target_count GREATER 1)
+        # Fat binaries use conservative kernels; validated device profiles are
+        # compiled as separate modules with their own single-target flags.
+        set(LFS_HIP_VALIDATED_TUNING OFF)
+        set(LFS_HIP_VALIDATED_TUNING OFF PARENT_SCOPE)
+    endif()
+    if(LFS_HIP_VALIDATED_TUNING AND NOT LFS_HIP_EFFECTIVE_ARCHITECTURES STREQUAL "gfx1150")
         message(FATAL_ERROR "The validated HIP tuning profile currently targets gfx1150; use LFS_HIP_VALIDATED_TUNING=OFF for other architectures")
     endif()
     option(LFS_HIP_FAST_NATIVE_WAVE "Use native full-wave collectives in private wave32 FastGS" ${LFS_HIP_VALIDATED_TUNING})
@@ -75,14 +90,14 @@ function(lfs_hip_fast_objects include_output objects_output)
     if(LFS_HIP_FAST_ADJACENT_PIXELS AND NOT LFS_HIP_FAST_WARP_STAGING)
         message(FATAL_ERROR "HIP adjacent backward subtiles require private wave staging")
     endif()
-    if(LFS_HIP_FAST_RADIX_TUNING AND NOT LFS_HIP_ARCHITECTURE STREQUAL "gfx1150")
+    if(LFS_HIP_FAST_RADIX_TUNING AND NOT LFS_HIP_EFFECTIVE_ARCHITECTURES STREQUAL "gfx1150")
         message(FATAL_ERROR "HIP Fast radix tuning is currently validated only for gfx1150")
     endif()
-    if(NOT TARGET lfs_hip_fast_kernels)
+    if(NOT TARGET ${_target})
         find_package(Python3 REQUIRED COMPONENTS Interpreter)
         get_filename_component(_root "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/.." ABSOLUTE)
         set(_generator "${_root}/src/training/hip/prepare_fast.py")
-        set(_generated "${CMAKE_CURRENT_BINARY_DIR}/hip-fast-generated")
+        set(_generated "${CMAKE_CURRENT_BINARY_DIR}/hip-fast-generated${_suffix}")
         set(_inputs src/training/kernels/warp_reduce.cuh src/training/kernels/effective_rank.cuh
             src/training/kernels/joint_adam_codec.cuh src/training/include/lfs/training/mean_step_scale.cuh
             src/training/include/lfs/training/screen_share.cuh src/core/include/core/sh_value_codec.cuh
@@ -113,6 +128,7 @@ function(lfs_hip_fast_objects include_output objects_output)
             COMMAND "${Python3_EXECUTABLE}" "${_generator}" --root "${_root}" --output "${_generated}"
             COMMAND "${CMAKE_COMMAND}" -E touch "${_generated}/prepared.stamp"
             DEPENDS "${_generator}" "${_root}/src/training/hip/fast_warp_staging.py" "${_root}/src/training/hip/fast_four_pixels.py" "${_root}/src/training/hip/fast_forward_pixels.py" "${_root}/src/training/hip/fast_compact_sort.py" "${_root}/src/training/hip/fast_instance_sort.hpp" "${_root}/src/training/hip/fast_depth_sort.hpp" "${_root}/src/training/hip/fast_tile_workload.hpp" ${_inputs} VERBATIM)
+        set(_platform_flags)
         if(CMAKE_HOST_WIN32)
             set(_compiler "${LFS_HIP_ROOT}/lib/llvm/bin/clang++.exe")
             set(_extension obj)
@@ -183,17 +199,17 @@ function(lfs_hip_fast_objects include_output objects_output)
             set(_object "${_generated}/${_unit}.${_extension}")
             add_custom_command(OUTPUT "${_object}"
                 COMMAND "${_compiler}" -x hip -std=c++20 -O3 -DNDEBUG ${_platform_flags} ${_wave_flags}
-                    "--offload-arch=${LFS_HIP_ARCHITECTURE}" "--hip-path=${LFS_HIP_ROOT}"
+                    ${LFS_HIP_OFFLOAD_FLAGS} "--hip-path=${LFS_HIP_ROOT}"
                     "-I${_generated}" -c "${_generated}/${_unit}.cu" -o "${_object}"
                 DEPENDS ${_outputs} "${_compiler}" VERBATIM)
             list(APPEND _objects "${_object}")
         endforeach()
-        add_custom_target(lfs_hip_fast_kernels DEPENDS "${_generated}/prepared.stamp" ${_objects})
-        set_target_properties(lfs_hip_fast_kernels PROPERTIES
+        add_custom_target(${_target} DEPENDS "${_generated}/prepared.stamp" ${_objects})
+        set_target_properties(${_target} PROPERTIES
             LFS_HIP_INCLUDE "${_generated}" LFS_HIP_OBJECTS "${_objects}")
     endif()
-    get_target_property(_include lfs_hip_fast_kernels LFS_HIP_INCLUDE)
-    get_target_property(_objects lfs_hip_fast_kernels LFS_HIP_OBJECTS)
+    get_target_property(_include ${_target} LFS_HIP_INCLUDE)
+    get_target_property(_objects ${_target} LFS_HIP_OBJECTS)
     set(${include_output} "${_include}" PARENT_SCOPE)
     set(${objects_output} "${_objects}" PARENT_SCOPE)
 endfunction()

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "hip_backend_ops.hpp"
 #include "runtime_api.h"
+#include "module_paths.hpp"
 #include "expression_api.h"
 #ifdef LFS_HIP_EXPRESSION_JIT
 #include "hip_expression_emitter.hpp"
@@ -126,7 +127,11 @@ namespace lfs::core::internal {
             void* module_ = nullptr;
 #endif
         public:
-            explicit InventoryModule(const std::filesystem::path& path) {
+            explicit InventoryModule(std::filesystem::path path) {
+#ifdef LFS_HIP_RUNTIME_DEFAULT_MODULE
+                if(path==std::filesystem::path(LFS_HIP_RUNTIME_DEFAULT_MODULE))
+                    path=hip_packaged_module(path,hip_executable_directory());
+#endif
                 require(path.is_absolute(), "HIP inventory module requires an absolute path");
 #ifdef _WIN32
                 module_ = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
@@ -213,8 +218,8 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_device_info);
         ENTRY(lfs_hip_context_create);
         ENTRY(lfs_hip_context_destroy);
-        ENTRY(lfs_hip_expression_identity);
-        ENTRY(lfs_hip_expression_compile);
+        ENTRY(lfs_hip_expression_identity_for_device);
+        ENTRY(lfs_hip_expression_compile_for_device);
         ENTRY(lfs_hip_expression_load);
         ENTRY(lfs_hip_expression_launch);
         ENTRY(lfs_hip_expression_destroy);
@@ -348,7 +353,11 @@ namespace lfs::core::internal {
         size_t live = 0, peak = 0;
         size_t workspace_bytes = 0;
         size_t algorithm_workspace_bytes = 0;
-        explicit Impl(const std::filesystem::path& path, int ordinal, size_t cache_limit) : ordinal(ordinal), cache_limit(cache_limit) {
+        explicit Impl(std::filesystem::path path, int ordinal, size_t cache_limit) : ordinal(ordinal), cache_limit(cache_limit) {
+#ifdef LFS_HIP_RUNTIME_DEFAULT_MODULE
+            if(path==std::filesystem::path(LFS_HIP_RUNTIME_DEFAULT_MODULE))
+                path=hip_packaged_module(path,hip_executable_directory());
+#endif
             require(path.is_absolute(), "HIP runtime module requires an absolute path");
 #ifdef _WIN32
             module = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
@@ -369,8 +378,8 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_device_info);
                 LOAD(lfs_hip_context_create);
                 LOAD(lfs_hip_context_destroy);
-                LOAD(lfs_hip_expression_identity);
-                LOAD(lfs_hip_expression_compile);
+                LOAD(lfs_hip_expression_identity_for_device);
+                LOAD(lfs_hip_expression_compile_for_device);
                 LOAD(lfs_hip_expression_load);
                 LOAD(lfs_hip_expression_launch);
                 LOAD(lfs_hip_expression_destroy);
@@ -758,6 +767,12 @@ namespace lfs::core::internal {
     };
     bool hip_backend_is_live() noexcept { return live_contexts.load(std::memory_order_relaxed) != 0; }
     HipBackendOps::HipBackendOps(const std::filesystem::path& path, int device, size_t max_cached_bytes) : impl_(std::make_shared<Impl>(path, device, max_cached_bytes)) {}
+    std::filesystem::path HipBackendOps::training_module_path(const std::filesystem::path& fallback,bool generic_only) const {
+        const auto generic=hip_packaged_module(fallback,hip_executable_directory());
+        const char* disabled=std::getenv("LFS_HIP_DISABLE_ARCH_PROFILES");
+        if(generic_only || (disabled && std::string_view(disabled)!="0"))return generic;
+        return hip_profile_module(generic,impl_->device.architecture);
+    }
     HipBackendOps::~HipBackendOps() = default;
     StorageRef HipBackendOps::allocate(size_t bytes, size_t alignment, ExecContext execution) {
         queue(execution);
@@ -2464,7 +2479,7 @@ void HipBackendOps::compiled_expression(const ExpressionLaunch& launch,ExecConte
     LfsHipError error{};
     if(impl_->expression_identity.empty()) {
         char identity[256]{};
-        check(impl_->lfs_hip_expression_identity(identity,sizeof(identity),&error),error);
+        check(impl_->lfs_hip_expression_identity_for_device(impl_->ordinal,identity,sizeof(identity),&error),error);
         impl_->expression_identity=identity;
     }
     const auto key=impl_->expression_identity+"\n"+hip_expression_emitter_id+"\n"+expression_key(*launch.program,launch.signature);
@@ -2472,7 +2487,7 @@ void HipBackendOps::compiled_expression(const ExpressionLaunch& launch,ExecConte
         const auto source=expression_hip(*launch.program,launch.signature);
         std::vector<char> binary(16*1024*1024);
         size_t size=0;char diagnostics[8192]{};
-        const int status=impl_->lfs_hip_expression_compile(source.c_str(),binary.data(),binary.size(),&size,diagnostics,sizeof(diagnostics),&error);
+        const int status=impl_->lfs_hip_expression_compile_for_device(impl_->ordinal,source.c_str(),binary.data(),binary.size(),&size,diagnostics,sizeof(diagnostics),&error);
         if(status) throw std::runtime_error(std::string(error.message)+"\n"+diagnostics);
         binary.resize(size);return binary;
     },[&](std::span<const char> binary)->std::shared_ptr<CompiledExpression> {

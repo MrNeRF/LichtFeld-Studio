@@ -3,6 +3,7 @@
 #include "hip_tensor_functors.hpp"
 #include "runtime_api.h"
 #include "expression_api.h"
+#include "architecture_runtime.hpp"
 #include "timing_api.h"
 
 #include <hip/hip_fp16.h>
@@ -1115,7 +1116,7 @@ int lfs_hip_context_create(int32_t ordinal, LfsHipContext** context, LfsHipError
         hipDeviceProp_t properties{};
         check(hipGetDeviceProperties(&properties, ordinal));
         const std::string_view architecture(properties.gcnArchName);
-        require(architecture.substr(0, architecture.find(':')) == LFS_HIP_COMPILED_ARCH,
+        require(lfs_hip_has_architecture(LFS_HIP_COMPILED_ARCH, architecture),
                 "HIP Tensor module was compiled for a different GPU architecture");
         auto result = std::make_unique<LfsHipContext>();
         result->device = ordinal;

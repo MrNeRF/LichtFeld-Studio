@@ -18,7 +18,9 @@ struct ApplicationCall {
     std::vector<core::Tensor> retained;
     ApplicationCall() : ops(static_cast<core::internal::HipBackendOps&>(core::internal::backend_ops(core::GpuBackend::HIP))), queue(ops.execution_lease({})) {
         const char* path=std::getenv("LFS_HIP_TRAINING_MODULE");
-        module=cached_application_module(path ? path : LFS_HIP_TRAINING_DEFAULT_MODULE);
+        module=path ? cached_application_module(path) : cached_profile_module(
+            ops.training_module_path(LFS_HIP_TRAINING_DEFAULT_MODULE),
+            ops.training_module_path(LFS_HIP_TRAINING_DEFAULT_MODULE,true));
         ops.retain_application_module(module);
     }
     uint64_t bind(const core::Tensor& tensor, core::DataType dtype) {

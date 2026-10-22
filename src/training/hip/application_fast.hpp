@@ -118,7 +118,7 @@ int lfs_hip_application_fast_create(int32_t ordinal, uint64_t queue, uint64_t by
         hipDeviceProp_t properties{};
         hip_check(hipGetDeviceProperties(&properties, ordinal), "HIP application device properties");
         const std::string_view arch(properties.gcnArchName);
-        require(arch.substr(0, arch.find(':')) == LFS_HIP_COMPILED_ARCH, "Application HIP FastGS architecture mismatch");
+        require(lfs_hip_has_architecture(LFS_HIP_COMPILED_ARCH, arch), "Application HIP FastGS architecture mismatch");
         auto native_queue = reinterpret_cast<hipStream_t>(static_cast<uintptr_t>(queue));
         unsigned flags = 0;
         hip_check(hipStreamGetFlags(native_queue, &flags), "validate borrowed HIP queue");
