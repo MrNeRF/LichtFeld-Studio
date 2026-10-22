@@ -4,9 +4,9 @@
 #include "predicate_api.h"
 namespace {
 template<class T>
-__global__ void predicate_typed(uint32_t op,const T* lhs,const T* rhs,uint8_t* output,size_t count,T scalar) {
+__global__ void predicate_typed(uint32_t op,const T* lhs,const T* rhs,uint8_t* output,size_t count,T scalar,bool scalar_left) {
     for(size_t i=size_t(blockIdx.x)*blockDim.x+threadIdx.x;i<count;i+=size_t(gridDim.x)*blockDim.x) {
-        const T a=lhs[i],b=rhs?rhs[i]:scalar;bool value=false;
+        const T a=scalar_left?scalar:lhs[i],b=rhs?rhs[i]:(scalar_left?lhs[i]:scalar);bool value=false;
         switch(op) {
         case LFS_HIP_OP_EqualTensor:case LFS_HIP_OP_EqualScalar:value=a==b;break;
         case LFS_HIP_OP_NotEqualTensor:case LFS_HIP_OP_NotEqualScalar:value=a!=b;break;
@@ -29,7 +29,7 @@ __global__ void predicate_typed(uint32_t op,const T* lhs,const T* rhs,uint8_t* o
 extern "C" int lfs_hip_predicate_typed(LfsHipContext* context,LfsHipView lhs,LfsHipView rhs,LfsHipView output,
                                       const LfsHipPredicate* p,LfsHipError* error) {
     return boundary(error,[&] {
-        require(context&&p&&p->struct_bytes==sizeof(*p)&&!p->reserved&&p->count<=SIZE_MAX&&p->scalar_kind<=3,
+        require(context&&p&&p->struct_bytes==sizeof(*p)&&p->reserved<=1&&p->count<=SIZE_MAX&&p->scalar_kind<=3,
                 "Invalid HIP typed predicate descriptor");
         const bool binary=p->op>=LFS_HIP_OP_EqualTensor&&p->op<=LFS_HIP_OP_LogicalXorTensor;
         const bool scalar=p->op>=LFS_HIP_OP_EqualScalar&&p->op<=LFS_HIP_OP_GreaterEqualScalar;
@@ -66,7 +66,7 @@ extern "C" int lfs_hip_predicate_typed(LfsHipContext* context,LfsHipView lhs,Lfs
             hipLaunchKernelGGL((predicate_typed<T>),dim3(blocks(p->count)),dim3(256),0,context->stream,p->op,
                 reinterpret_cast<const T*>(static_cast<const char*>(lhs.buffer->data)+lhs.offset),
                 binary?reinterpret_cast<const T*>(static_cast<const char*>(rhs.buffer->data)+rhs.offset):nullptr,
-                static_cast<uint8_t*>(output.buffer->data)+output.offset,size_t(p->count),value);
+                static_cast<uint8_t*>(output.buffer->data)+output.offset,size_t(p->count),value,scalar && p->reserved==1);
         };
         switch(p->dtype){case LFS_HIP_I32:launch.template operator()<int32_t>();break;
             case LFS_HIP_I64:launch.template operator()<int64_t>();break;case LFS_HIP_U32:launch.template operator()<uint32_t>();break;

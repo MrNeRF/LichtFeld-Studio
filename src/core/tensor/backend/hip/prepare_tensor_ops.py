@@ -75,3 +75,13 @@ for ident, functor, _ in rows:
 
 half_broadcast = [line.replace("launch_broadcast<float>", "launch_broadcast<__half, __half>").replace("launch_broadcast<uint8_t>", "launch_broadcast<uint8_t, __half>") for line in broadcast]
 (args.output / "hip_tensor_half_broadcast.inc").write_text("\n".join(half_broadcast) + "\n", encoding="utf-8")
+
+left = []
+for ident, functor, _ in rows:
+    if not ident.endswith('Scalar') or ident[:-6] not in scalar_ops:
+        continue
+    predicate = ident.startswith(('Equal', 'NotEqual', 'Less', 'Greater'))
+    functor = 'ops::' + scalar_ops[ident[:-6]] + '_op'
+    out = 'uint8_t' if predicate else 'Storage'
+    left.append(f'case LFS_HIP_OP_{ident}: launch_pointwise<1, {out}, Storage>(context, lhs, {{}}, output, count, scalar, [] __device__ (float x, float s) {{ return {functor}{{}}(s, x); }}); break;')
+(args.output / 'hip_tensor_scalar_left.inc').write_text('\n'.join(left) + '\n', encoding='utf-8')

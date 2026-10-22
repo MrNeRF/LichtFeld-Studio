@@ -1533,6 +1533,21 @@ int lfs_hip_pointwise_f16(LfsHipContext* context, uint32_t op, LfsHipView lhs, L
         }
     });
 }
+int lfs_hip_scalar_left_typed(LfsHipContext* context, uint32_t op, LfsHipView lhs, LfsHipView output, size_t count, float scalar, uint32_t dtype, LfsHipError* error) {
+    return boundary(error, [&] {
+        require(context && op < LFS_HIP_OP_COUNT && (pointwise_flags[op]&3)==1 &&
+                (dtype==LFS_HIP_F32 || dtype==LFS_HIP_F16), "Invalid HIP scalar-left descriptor");
+        DeviceScope device(context->device);
+        using namespace lfs::core;
+        const auto dispatch=[&]<class Storage>() {
+            switch(op) {
+#include "hip_tensor_scalar_left.inc"
+            default: throw std::invalid_argument("Unsupported HIP scalar-left operation");
+            }
+        };
+        if(dtype==LFS_HIP_F16)dispatch.template operator()<__half>();else dispatch.template operator()<float>();
+    });
+}
 int lfs_hip_broadcast_typed(LfsHipContext* context, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, const LfsHipLayout* lhs_layout, const LfsHipLayout* rhs_layout, const LfsHipLayout* output_layout, uint32_t input_dtype, uint32_t output_element_bytes, LfsHipError* error) {
     return boundary(error, [&] {
         require(input_dtype == LFS_HIP_F32 || input_dtype == LFS_HIP_F16, "Unsupported HIP broadcast input dtype");

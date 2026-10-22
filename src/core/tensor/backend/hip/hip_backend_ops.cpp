@@ -265,6 +265,7 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_fill_layout_bits);
         ENTRY(lfs_hip_broadcast_f32);
         ENTRY(lfs_hip_broadcast_typed);
+        ENTRY(lfs_hip_scalar_left_typed);
         ENTRY(lfs_hip_reduce_layout_f32);
         ENTRY(lfs_hip_arg_extreme_f32);
         ENTRY(lfs_hip_cdist_f32);
@@ -419,6 +420,7 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_fill_layout_bits);
                 LOAD(lfs_hip_broadcast_f32);
                 LOAD(lfs_hip_broadcast_typed);
+                LOAD(lfs_hip_scalar_left_typed);
                 LOAD(lfs_hip_reduce_layout_f32);
                 LOAD(lfs_hip_arg_extreme_f32);
                 LOAD(lfs_hip_cdist_f32);
@@ -650,6 +652,7 @@ namespace lfs::core::internal {
                         "HIP typed predicate dtype mismatch");
                 LfsHipPredicate native{};native.struct_bytes=sizeof(native);native.op=uint32_t(program.op);native.dtype=uint32_t(a.dtype);
                 native.count=count;native.scalar_kind=uint32_t(program.scalar.kind);
+                native.reserved=program.scalar.scalar_on_right?0:1;
                 switch(program.scalar.kind) {
                 case ScalarKind::Float:native.float_scalar=program.scalar.value.float_value;break;
                 case ScalarKind::Int32:native.integer_scalar=program.scalar.value.int32_value;break;
@@ -683,10 +686,38 @@ namespace lfs::core::internal {
                 const auto lhs=view(a,count), output=view(out,count);
                 const auto rhs=binary ? view(b,count) : LfsHipView{};
                 LfsHipError error{};
-                check(lfs_hip_boolean_pointwise(context,static_cast<uint32_t>(program.op),lhs,rhs,output,count,scalar_value(program.scalar),&error),error);
+                auto op=program.op;
+                if(!binary && !program.scalar.scalar_on_right) {
+                    switch(op) {
+                    case PointwiseOp::LessScalar:op=PointwiseOp::GreaterScalar;break;
+                    case PointwiseOp::LessEqualScalar:op=PointwiseOp::GreaterEqualScalar;break;
+                    case PointwiseOp::GreaterScalar:op=PointwiseOp::LessScalar;break;
+                    case PointwiseOp::GreaterEqualScalar:op=PointwiseOp::LessEqualScalar;break;
+                    default:break;
+                    }
+                }
+                check(lfs_hip_boolean_pointwise(context,static_cast<uint32_t>(op),lhs,rhs,output,count,scalar_value(program.scalar),&error),error);
                 return;
             }
 
+            if(!binary && !program.scalar.scalar_on_right && (a.dtype==DataType::Float16 || a.dtype==DataType::Float32)) {
+                bool scalar_op=false;
+                switch(program.op) {
+                case PointwiseOp::AddScalar:case PointwiseOp::SubScalar:case PointwiseOp::MulScalar:case PointwiseOp::DivScalar:
+                case PointwiseOp::PowScalar:case PointwiseOp::ModScalar:case PointwiseOp::MinimumScalar:case PointwiseOp::MaximumScalar:
+                case PointwiseOp::EqualScalar:case PointwiseOp::NotEqualScalar:case PointwiseOp::LessScalar:case PointwiseOp::LessEqualScalar:
+                case PointwiseOp::GreaterScalar:case PointwiseOp::GreaterEqualScalar:scalar_op=true;break;
+                default:break;
+                }
+                if(scalar_op) {
+                    const bool predicate=program.op>=PointwiseOp::EqualScalar && program.op<=PointwiseOp::GreaterEqualScalar;
+                    require(program.in_dtype==a.dtype && out.dtype==program.out_dtype && out.dtype==(predicate?DataType::Bool:a.dtype),"HIP scalar-left dtype mismatch");
+                    LfsHipError error{};
+                    check(lfs_hip_scalar_left_typed(context,uint32_t(program.op),view(a,checked_product(count,dtype_size(a.dtype))),
+                        view(out,checked_product(count,dtype_size(out.dtype))),count,scalar_value(program.scalar),uint32_t(a.dtype),&error),error);
+                    return;
+                }
+            }
             if (a.dtype == DataType::Float16) {
                 const bool predicate = (program.op >= PointwiseOp::EqualTensor && program.op <= PointwiseOp::LogicalXorTensor) ||
                                        (program.op >= PointwiseOp::IsNan && program.op <= PointwiseOp::LogicalNot) ||
@@ -1219,7 +1250,6 @@ namespace lfs::core::internal {
     }
     void HipBackendOps::scalar(const PointwiseProgram& p, StorageRef in, StorageRef out, size_t count, ExecContext execution) {
         queue(execution);
-        require(p.scalar.scalar_on_right, "HIP scalar-on-left operations are not implemented");
         std::lock_guard lock(impl_->mutex);
         auto program = p;
         // In-place Tensor scalar methods lower binary functors with the scalar
