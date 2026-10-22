@@ -8,6 +8,7 @@
 #include <core/tensor_splat.hpp>
 #include <core/tensor_export.hpp>
 #include <core/tensor_sh.hpp>
+#include <core/tensor_simplify.hpp>
 #include <core/sh_layout.hpp>
 #include <core/decimate/math.hpp>
 #include <array>
@@ -242,6 +243,49 @@ void triangle_contract() {
         require(!static_cast<const uint8_t*>(observed.data_ptr())[0] && !static_cast<const uint8_t*>(observed.data_ptr())[1],"HIP triangle tree accepted nonfinite queries");
     }
 }
+void simplify_contract() {
+    using namespace lfs::core::internal;
+    const auto direct=[](const SimplifyRows& rows,const Tensor& offsets,const Tensor& members,size_t groups,size_t appearance) {
+        SimplifyRows out{Tensor::empty({groups,3},Device::GPU),Tensor::empty({groups,3},Device::GPU),Tensor::empty({groups,4},Device::GPU),Tensor::empty({groups},Device::GPU),Tensor::empty({groups,appearance},Device::GPU)};
+        const std::array<StorageRef,5> read{storage_ref(rows.means),storage_ref(rows.scales),storage_ref(rows.rotation),storage_ref(rows.opacity),storage_ref(rows.appearance)};
+        const std::array<StorageRef,5> write{storage_ref(out.means),storage_ref(out.scales),storage_ref(out.rotation),storage_ref(out.opacity),storage_ref(out.appearance)};
+        require(backend_ops(GpuBackend::HIP).simplify_merge(read,storage_ref(offsets),storage_ref(members),write,{uint32_t(groups),uint32_t(appearance)},{}),"HIP direct simplify is unavailable");
+        return std::optional<SimplifyRows>(std::move(out));
+    };
+    for(size_t appearance:{size_t(0),size_t(7),size_t(48)})for(bool collapsed:{false,true}) {
+        const std::vector<float> positions{0,0,0,1,0,0,2,0,0,4,0,0};
+        std::vector<float> scales(12),rotation(16,0),features(4*appearance);
+        for(size_t i=0;i<4;++i){scales[3*i]=2;scales[3*i+1]=3;scales[3*i+2]=collapsed?0:4;rotation[4*i]=1;
+            for(size_t k=0;k<appearance;++k)features[i*appearance+k]=.125f*float(i+k);}
+        SimplifyRows rows{Tensor::from_vector(positions,{4,3},Device::GPU),Tensor::from_vector(scales,{4,3},Device::GPU),
+            Tensor::from_vector(rotation,{4,4},Device::GPU),Tensor::from_vector(std::vector<float>{.125f,.25f,.5f,.75f},{4},Device::GPU),
+            Tensor::from_vector(features,{4,appearance},Device::GPU)};
+        auto offsets=Tensor::from_vector(std::vector<int32_t>{0,1,4},{3},Device::GPU);
+        auto members=Tensor::from_vector(std::vector<int32_t>{0,1,2,3},{4},Device::GPU);
+        auto result=appearance?simplify_merge_groups(rows,offsets,members):direct(rows,offsets,members,2,appearance);require(bool(result),"HIP simplify merge is unavailable");
+        auto m=result->means.cpu(),a=result->opacity.cpu(),f=result->appearance.cpu(),sc=result->scales.cpu(),q=result->rotation.cpu();
+        require(m.ptr<float>()[0]==0 && std::abs(double(m.ptr<float>()[3])-17./6.)<5e-7 && a.ptr<float>()[0]==.125f && a.ptr<float>()[1]==.90625f,"HIP simplify moments/opacity differ from reference");
+        for(size_t i=0;i<3;++i)require(sc.ptr<float>()[i]==scales[i],"HIP simplify singleton scale was changed");
+        for(size_t i=0;i<4;++i)require(q.ptr<float>()[i]==rotation[i],"HIP simplify singleton rotation was changed");
+        float logs[3];for(unsigned i=0;i<3;++i)logs[i]=std::log(sc.ptr<float>()[3+i]);
+        const auto covariance=splat_covariance(logs,q.ptr<float>()+4);
+        const double expected[]{197./36.,0,0,0,9,0,0,0,collapsed?0.:16.};
+        for(unsigned i=0;i<9;++i)require(std::abs(covariance[i]-expected[i])<4e-5,"HIP simplify covariance differs from double moment reference");
+        for(size_t k=0;k<appearance;++k) {
+            require(f.ptr<float>()[k]==features[k],"HIP simplify singleton appearance was changed");
+            require(std::abs(f.ptr<float>()[appearance+k]-.125*double(7./3.+k))<2e-6,"HIP simplify appearance differs from weighted reference");
+        }
+        auto empty_offsets=Tensor::from_vector(std::vector<int32_t>{0},{1},Device::GPU),empty_members=Tensor::empty({0},Device::GPU,DataType::Int32);
+        auto empty=appearance?simplify_merge_groups(rows,empty_offsets,empty_members):direct(rows,empty_offsets,empty_members,0,appearance);require(bool(empty) && empty->means.numel()==0,"HIP simplify empty grouping failed");
+        members=Tensor::from_vector(std::vector<int32_t>{0,3,2,1},{4},Device::GPU);
+        std::array<Tensor,5> backing{Tensor::full({2,3},-77,Device::GPU),Tensor::full({2,3},-77,Device::GPU),Tensor::full({2,4},-77,Device::GPU),Tensor::full({2},-77,Device::GPU),Tensor::full({2,appearance},-77,Device::GPU)};
+        const std::array<StorageRef,5> read{storage_ref(rows.means),storage_ref(rows.scales),storage_ref(rows.rotation),storage_ref(rows.opacity),storage_ref(rows.appearance)};
+        std::array<StorageRef,5> write{};for(unsigned i=0;i<5;++i)write[i]=storage_ref(backing[i]);
+        bool rejected=false;try{backend_ops(GpuBackend::HIP).simplify_merge(read,storage_ref(offsets),storage_ref(members),write,{2,uint32_t(appearance)},{});}catch(const std::exception&){rejected=true;}
+        require(rejected,"HIP simplify accepted unsorted members");
+        for(const auto& tensor:backing){auto copy=tensor.cpu();for(size_t i=0;i<copy.numel();++i)require(copy.ptr<float>()[i]==-77,"Rejected HIP simplify modified output");}
+    }
+}
 int main() try {
     GpuBackendScope scope(GpuBackend::HIP);
     for(size_t n : {size_t(0),size_t(1),size_t(17),size_t(257),size_t(4099)}) {
@@ -439,6 +483,7 @@ int main() try {
         require(ez.ptr<float>()[center]==far && bg.ptr<float>()[plane*3+center]==0,"HIP empty point raster background differs");
     }
     triangle_contract();
+    simplify_contract();
     decimate_contract();
     affine_contract();
     low_level_contract();

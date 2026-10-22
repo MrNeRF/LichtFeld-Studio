@@ -76,6 +76,10 @@ affine = affine_source[affine_source.index('        // The float algorithm'):aff
 affine = affine.replace('splat_transform::LinearTransform', 'LinearTransform')
 code += '\n' + affine_source[:affine_source.index('#include')] + '\nnamespace hip_affine {\nstruct LinearTransform { float rows[9]; };\n' + affine + '\n}\n'
 code += '\n' + (source / 'include/core/morton.hpp').read_text(encoding='utf-8').replace('__CUDACC__', '__HIPCC__') + '\n'
+# Lower the existing moment-matching kernel without its CUDA host launcher.
+simplify_source = (source / 'tensor/backend/cuda/kernels/simplify_merge.cu').read_text(encoding='utf-8')
+simplify_body = simplify_source[simplify_source.index('        constexpr float kEpsCov'):simplify_source.index('    } // namespace')]
+code += '\n#include <cfloat>\nnamespace hip_simplify {\n' + simplify_body + '\n}\n'
 args.output.parent.mkdir(parents=True, exist_ok=True)
 args.output.write_text(code, encoding='utf-8')
 

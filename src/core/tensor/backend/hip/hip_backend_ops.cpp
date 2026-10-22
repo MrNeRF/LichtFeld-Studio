@@ -276,6 +276,7 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_morton);
         ENTRY(lfs_hip_multinomial);
         ENTRY(lfs_hip_export);
+        ENTRY(lfs_hip_simplify_merge);
         ENTRY(lfs_hip_nn_norm);
         ENTRY(lfs_hip_nn_linear);
         ENTRY(lfs_hip_nn_attention);
@@ -431,6 +432,7 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_morton);
                 LOAD(lfs_hip_multinomial);
                 LOAD(lfs_hip_export);
+                LOAD(lfs_hip_simplify_merge);
                 LOAD(lfs_hip_nn_norm);
                 LOAD(lfs_hip_nn_linear);
                 LOAD(lfs_hip_nn_attention);
@@ -2771,5 +2773,20 @@ bool HipBackendOps::triangle_tree_parity(StorageRef points,StorageRef visit,Stor
     const LfsHipView inputs[]{view(points),view(triangles),view(boxes),view(visit),{}, {}};LfsHipError error{};
     check(impl_->lfs_hip_point_tree_query(impl_->context,inputs,view(output),&native,2,&error),error);
     return true;
+}
+}
+
+namespace lfs::core::internal {
+bool HipBackendOps::simplify_merge(const std::array<StorageRef,5>& rows,StorageRef offsets,StorageRef members,const std::array<StorageRef,5>& outputs,const SimplifyMergeProgram& p,ExecContext execution) {
+    queue(execution);
+    for(size_t i=0;i<5;++i)require(rows[i].dtype==DataType::Float32 && outputs[i].dtype==DataType::Float32,"HIP simplify rows require Float32");
+    require(offsets.dtype==DataType::Int32 && members.dtype==DataType::Int32,"HIP simplify grouping requires Int32");
+    std::lock_guard lock(impl_->mutex);
+    const auto view=[&](StorageRef value){return value.data?impl_->view(value):(impl_->empty_view(value),LfsHipView{});};
+    LfsHipView inputs[7]{},out[5]{};
+    for(unsigned i=0;i<5;++i){inputs[i]=view(rows[i]);out[i]=view(outputs[i]);}
+    inputs[5]=view(offsets);inputs[6]=view(members);LfsHipError error{};
+    const auto status=impl_->lfs_hip_simplify_merge(impl_->context,inputs,out,p.groups,p.app_dim,&error);
+    impl_->refresh_algorithm_workspace();check(status,error);return true;
 }
 }

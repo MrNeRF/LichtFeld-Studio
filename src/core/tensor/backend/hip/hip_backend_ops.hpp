@@ -206,6 +206,7 @@ namespace lfs::core::internal {
         bool radius_connected_components(StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,size_t,size_t,float,ExecContext) override;
         bool point_tree_counts(StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,std::optional<StorageRef>,StorageRef,const PointTreeProgram&,ExecContext) override;
         bool point_tree_components(StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,const PointTreeProgram&,ExecContext) override;
+        bool simplify_merge(const std::array<StorageRef,5>&,StorageRef,StorageRef,const std::array<StorageRef,5>&,const SimplifyMergeProgram&,ExecContext) override;
         bool triangle_tree_parity(StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,const PointTreeProgram&,ExecContext) override;
         bool point_tree_spacing(StorageRef,StorageRef,StorageRef,StorageRef,StorageRef,const PointTreeProgram&,ExecContext) override;
     private:
