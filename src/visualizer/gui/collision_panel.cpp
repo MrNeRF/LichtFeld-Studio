@@ -21,55 +21,72 @@
 
 namespace lfs::vis::gui {
     namespace {
-        std::shared_ptr<core::MeshData> makeMesh(core::CollisionMesh data) {
+        std::shared_ptr<core::MeshData> makeMesh(core::CollisionMesh data, std::stop_token stop = {}) {
             if (data.vertices.empty() || data.indices.empty())
                 throw std::runtime_error("Collision generation produced an empty surface");
             auto mesh = std::make_shared<core::MeshData>();
             auto vertices = data.vertices.size() / 3, faces = data.indices.size() / 3;
             mesh->vertices = core::Tensor::from_vector(data.vertices, {vertices, 3}, core::Device::CPU);
             mesh->indices = core::Tensor::from_vector(data.indices, {faces, 3}, core::Device::CPU);
-            mesh->compute_normals();
-            std::vector<float> colors(vertices * 4);
-            for (size_t i = 0; i < vertices; ++i) {
-                colors[i * 4] = 0.1f;
-                colors[i * 4 + 1] = 0.65f;
-                colors[i * 4 + 2] = 0.8f;
-                colors[i * 4 + 3] = 1;
+            // A simple parallel-safe indexed normal pass avoids OpenMesh topology
+            // construction and its large adjacency/conversion allocations.
+            mesh->normals = core::Tensor::zeros({vertices, 3}, core::Device::CPU);
+            auto* normals = mesh->normals.ptr<float>();
+            for (size_t f = 0; f < data.indices.size(); f += 3) {
+                if ((f & 4095) == 0 && stop.stop_requested())
+                    throw std::runtime_error("Collision surface cancelled");
+                const auto a = data.indices[f], b = data.indices[f + 1], c = data.indices[f + 2];
+                auto point = [&](int i) { return glm::vec3(data.vertices[i * 3], data.vertices[i * 3 + 1], data.vertices[i * 3 + 2]); };
+                auto n = glm::cross(point(b) - point(a), point(c) - point(a));
+                for (int i : {a, b, c})
+                    for (int k = 0; k < 3; ++k)
+                        normals[i * 3 + k] += n[k];
             }
-            mesh->colors = core::Tensor::from_vector(colors, {vertices, 4}, core::Device::CPU);
+            for (size_t i = 0; i < vertices; ++i) {
+                if ((i & 4095) == 0 && stop.stop_requested())
+                    throw std::runtime_error("Collision surface cancelled");
+                glm::vec3 n(normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2]);
+                if (auto length = glm::length(n); length > 0)
+                    n /= length;
+                for (int k = 0; k < 3; ++k)
+                    normals[i * 3 + k] = n[k];
+            }
+            // Uniform collision color belongs to one material, not V copies.
+            core::Material material;
+            material.base_color = {0.1f, 0.65f, 0.8f, 1.0f};
+            mesh->materials.push_back(material);
             return mesh;
         }
         std::vector<core::CollisionGaussian> extract(
-            const std::vector<core::Scene::SplatSnapshot>& snapshots, glm::mat4 world_to_grid,
+            const std::vector<core::Scene::SplatGeometrySnapshot>& snapshots, glm::mat4 world_to_grid,
             std::stop_token stop) {
             std::vector<core::CollisionGaussian> result;
             for (const auto& snapshot : snapshots) {
                 if (stop.stop_requested())
                     throw std::runtime_error("Collision generation cancelled");
-                auto model = snapshot.materialize();
-                auto means = model->means().to(core::Device::CPU).contiguous();
-                auto scaling = model->get_scaling().to(core::Device::CPU).contiguous();
-                auto rotation = model->get_rotation().to(core::Device::CPU).contiguous();
-                auto opacity = model->get_opacity().to(core::Device::CPU).contiguous();
-                auto deleted = model->has_deleted_mask() ? model->deleted().to(core::Device::CPU).contiguous() : core::Tensor{};
-                auto* m = means.ptr<float>();
-                auto* s = scaling.ptr<float>();
-                auto* r = rotation.ptr<float>();
-                auto* o = opacity.ptr<float>();
+                const auto& means = snapshot.means;
+                const auto& scaling = snapshot.scaling;
+                const auto& rotation = snapshot.rotation;
+                const auto& opacity = snapshot.opacity;
+                const auto& deleted = snapshot.deleted;
+                const auto* m = means.ptr<float>();
+                const auto* s = scaling.ptr<float>();
+                const auto* r = rotation.ptr<float>();
+                const auto* o = opacity.ptr<float>();
                 const auto transform = world_to_grid * snapshot.world_transform;
-                for (size_t i = 0; i < size_t(model->size()); ++i) {
+                for (size_t i = 0; i < snapshot.size; ++i) {
                     if ((i & 4095) == 0 && stop.stop_requested())
                         throw std::runtime_error("Collision generation cancelled");
                     if (deleted.is_valid() && deleted.ptr<bool>()[i])
                         continue;
                     if (result.size() >= 10'000'000)
                         throw std::runtime_error("Collision source exceeds 10 million Gaussians; hide or isolate source nodes");
-                    auto q = glm::quat(r[i * 4], r[i * 4 + 1], r[i * 4 + 2], r[i * 4 + 3]);
+                    auto q = glm::normalize(glm::quat(r[i * 4], r[i * 4 + 1], r[i * 4 + 2], r[i * 4 + 3]));
                     auto axes = glm::mat3_cast(q);
                     for (int a = 0; a < 3; ++a)
-                        axes[a] *= s[i * 3 + a];
+                        axes[a] *= std::exp(s[i * 3 + a]);
                     result.push_back({glm::vec3(transform * glm::vec4(m[i * 3], m[i * 3 + 1], m[i * 3 + 2], 1)),
-                                      glm::mat3(transform) * axes, o[i]});
+                                      glm::mat3(transform) * axes, 1.0f / (1.0f + std::exp(-o[i]))});
                 }
             }
             return result;
@@ -81,12 +98,16 @@ namespace lfs::vis::gui {
         worker_.request_stop();
         if (worker_.joinable())
             worker_.join();
-        if (document_)
+        if (document_) {
             document_->RemoveEventListener("click", this);
+            document_->RemoveEventListener("change", this);
+        }
     }
     void CollisionPanel::reloadRmlResources() {
-        if (document_)
+        if (document_) {
             document_->RemoveEventListener("click", this);
+            document_->RemoveEventListener("change", this);
+        }
         document_ = nullptr;
         host_.reloadDocument();
     }
@@ -120,6 +141,7 @@ namespace lfs::vis::gui {
         }
     }
     void CollisionPanel::writeInputs() {
+        updating_ = true;
         auto set = [&](const char* id, float n) { setValue(id, std::format("{:.6g}", n)); };
         auto check = [&](const char* id, bool on) {
             auto* el = document_->GetElementById(id);
@@ -128,8 +150,13 @@ namespace lfs::vis::gui {
             else
                 el->RemoveAttribute("checked");
         };
+        setValue("units-per-meter", std::format("{:.6g}", settings_.units_per_meter));
+        setValue("detail", std::to_string(settings_.voxel_size / settings_.units_per_meter));
+        setValue("overlay-opacity", std::to_string(display_.opacity));
+        setValue("cutaway", std::to_string(display_.slice));
+        setValue("surface-stride", std::to_string(display_.surface_stride));
         setValue("preset", std::to_string(int(settings_.preset)));
-        setValue("shape", std::to_string(int(settings_.shape)));
+        setValue("shape", std::to_string(int(display_.surface_ready ? display_.surface_shape : settings_.shape)));
         check("cluster", settings_.cluster);
         set("cluster-resolution", settings_.cluster_resolution);
         set("cluster-opacity", settings_.cluster_opacity);
@@ -140,6 +167,7 @@ namespace lfs::vis::gui {
         set("external-size", settings_.external_size);
         check("floor-fill", settings_.floor_fill);
         set("floor-size", settings_.floor_size);
+        check("floor-below-seed", settings_.floor_below_seed);
         set("carve-height", settings_.carve_height);
         set("carve-radius", settings_.carve_radius);
         set("seed-x", world_seed_.x);
@@ -147,15 +175,19 @@ namespace lfs::vis::gui {
         set("seed-z", world_seed_.z);
         if (auto* input = InputController::instance()) {
             const auto& w = input->walkSettings();
-            set("walk-height", w.height);
-            set("walk-radius", w.radius);
-            set("walk-speed", w.speed);
-            set("walk-step", w.step_height);
+            const auto ratio = settings_.units_per_meter / w.units_per_meter;
+            set("walk-height", w.height * ratio);
+            set("walk-radius", w.radius * ratio);
+            set("walk-speed", w.speed * ratio);
+            set("walk-step", w.step_height * ratio);
         }
+        updating_ = false;
+        updateSummary();
         host_.markContentDirty();
     }
     core::CollisionSettings CollisionPanel::readInputs() const {
         auto s = settings_;
+        s.units_per_meter = number("units-per-meter");
         s.cluster = checked("cluster");
         s.cluster_resolution = number("cluster-resolution");
         s.cluster_opacity = number("cluster-opacity");
@@ -166,6 +198,7 @@ namespace lfs::vis::gui {
         s.external_size = number("external-size");
         s.floor_fill = checked("floor-fill");
         s.floor_size = number("floor-size");
+        s.floor_below_seed = checked("floor-below-seed");
         s.carve_height = number("carve-height");
         s.carve_radius = number("carve-radius");
         s.shape = value("shape") == "1" ? core::CollisionShape::Faces : core::CollisionShape::Smooth;
@@ -176,12 +209,19 @@ namespace lfs::vis::gui {
     void CollisionPanel::loadSettings(const core::SceneNode& node) {
         target_ = node.uuid;
         settings_ = node.collision->settings;
+        display_ = node.collision_display;
         world_seed_ = glm::vec3(scene_->getWorldTransform(node.id) * glm::vec4(settings_.seed, 1));
         writeInputs();
         document_->GetElementById("collision-target")->SetInnerRML(Rml::StringUtilities::EncodeRml(node.name));
-        status(std::format("{} occupied voxels; {} triangles. {}",
-                           node.collision->occupiedCount(),
-                           node.mesh ? node.mesh->face_count() : 0, node.collision->warning));
+        if (counted_volume_.lock() != node.collision) {
+            occupied_count_ = node.collision->occupiedCount();
+            counted_volume_ = node.collision;
+        }
+        status(std::format("{} occupied voxels; {}. {} {}",
+                           occupied_count_,
+                           display_.surface_ready ? std::format("{} surface triangles", node.mesh ? node.mesh->face_count() : 0)
+                                                  : "voxel preview ready — no triangle mesh needed for Walk",
+                           last_stats_, node.collision->warning));
     }
     bool CollisionPanel::prepare(const PanelDrawContext& ctx) {
         scene_ = ctx.scene;
@@ -189,8 +229,10 @@ namespace lfs::vis::gui {
         if (!scene_ || !host_.ensureDocumentLoaded())
             return false;
         if (!document_) {
+            settings_.floor_below_seed = true;
             document_ = host_.getDocument();
             document_->AddEventListener("click", this);
+            document_->AddEventListener("change", this);
             if (auto* title = document_->GetElementById("title-text"))
                 title->SetInnerRML(Rml::StringUtilities::EncodeRml(LOC("collision.title")));
             if (auto* input = InputController::instance(); target_.is_nil() && input)
@@ -212,6 +254,20 @@ namespace lfs::vis::gui {
         if (busy_) {
             std::lock_guard lock(mutex_);
             status(progress_);
+            document_->GetElementById("generation-progress")->SetAttribute("value", progress_value_ * 100);
+            document_->GetElementById("progress-time")->SetInnerRML(LOCF("collision.progress_time", progress_step_ + 1, progress_total_, std::chrono::duration<double>(std::chrono::steady_clock::now() - job_started_).count()));
+            host_.markContentDirty();
+        }
+        document_->GetElementById("job-progress")->SetProperty("display", busy_ ? "block" : "none");
+        for (const auto* id : {"generate", "generate-new", "cancel"}) {
+            auto* control = document_->GetElementById(id);
+            const bool disabled = std::string_view(id) == "cancel" ? !busy_ : bool(busy_);
+            if (disabled != control->HasAttribute("disabled")) {
+                if (disabled)
+                    control->SetAttribute("disabled", "disabled");
+                else
+                    control->RemoveAttribute("disabled");
+            }
         }
         if (auto* input = InputController::instance(); input && !input->walkError().empty() && !busy_)
             status(input->walkError());
@@ -238,7 +294,7 @@ namespace lfs::vis::gui {
         s.seed = glm::vec3(world_to_grid * glm::vec4(world_seed_, 1));
         // The scene helper clones owned storage at the GUI safe point. Workers
         // never retain live node/model pointers while selections or nodes change.
-        auto snapshots = scene_->snapshotVisibleSplats();
+        auto snapshots = scene_->snapshotVisibleSplatGeometry();
         if (snapshots.empty())
             throw std::runtime_error("No visible loaded splats to voxelize");
         std::vector<core::Uuid> sources;
@@ -246,13 +302,12 @@ namespace lfs::vis::gui {
             if (node->model && scene_->isNodeEffectivelyVisible(node->id))
                 sources.push_back(node->uuid);
         core::Uuid target = new_node ? core::Uuid{} : target_;
-        bool show_voxels = true;
-        if (!target.is_nil()) {
+        auto display = display_;
+        display.preview = true;
+        display.surface_ready = false;
+        if (!target.is_nil())
             if (auto* node = scene_->getNodeByUuid(target); !node || node->locked.get())
                 throw std::runtime_error("Collision target is missing or locked");
-            else if (node->collision)
-                show_voxels = node->collision->show_voxels;
-        }
         const uint64_t scene_generation = scene_->renderGeneration();
         const uint64_t graph_epoch = scene_->graphEpoch();
         {
@@ -263,21 +318,50 @@ namespace lfs::vis::gui {
         }
         done_ = false;
         busy_ = true;
+        job_started_ = std::chrono::steady_clock::now();
+        progress_value_ = 0;
+        progress_step_ = 0;
+        progress_total_ = 3 + s.cluster + s.external_fill + s.floor_fill + (s.carve_height > 0);
         worker_ = std::jthread([this, snapshots = std::move(snapshots), sources = std::move(sources),
-                                s, grid_to_world, world_to_grid, target, show_voxels, scene_generation, graph_epoch](std::stop_token stop) {
+                                s, grid_to_world, world_to_grid, target, display, scene_generation, graph_epoch](std::stop_token stop) mutable {
             try {
                 auto report = [&](std::string text) {
                     std::lock_guard lock(mutex_);
+                    int phase = 0;
+                    float fraction = 0;
+                    if (text.starts_with("Clustering"))
+                        phase = 1;
+                    else if (text.starts_with("Voxelizing")) {
+                        phase = 1 + s.cluster;
+                        if (text.starts_with("Voxelizing regions: ")) {
+                            auto start = text.find(": ") + 2;
+                            fraction = float(std::stoi(text.substr(start))) / 8;
+                        }
+                    } else if (text.starts_with("Sealing"))
+                        phase = 2 + s.cluster;
+                    else if (text.starts_with("Filling"))
+                        phase = 2 + s.cluster + s.external_fill;
+                    else if (text.starts_with("Flooding"))
+                        phase = 2 + s.cluster + s.external_fill + s.floor_fill;
+                    else if (text.starts_with("Finalizing"))
+                        phase = progress_total_ - 1;
+                    progress_step_ = phase;
+                    progress_value_ = std::max(progress_value_, (phase + fraction) / progress_total_);
                     progress_ = std::move(text);
                 };
                 report("Reading Gaussian snapshot");
                 auto gaussians = extract(snapshots, world_to_grid, stop);
+                snapshots.clear(); // Release snapshot buffers before allocating occupancy.
                 const auto begin = std::chrono::steady_clock::now();
                 auto volume = std::make_shared<core::CollisionVolume>(
                     core::generateCollision(gaussians, s, stop, report));
                 const auto voxelized = std::chrono::steady_clock::now();
-                volume->show_voxels = show_voxels;
-                auto mesh = makeMesh(volume->mesh(s.shape, stop));
+                volume->show_voxels = true;
+                // Scene graph uses a tiny bounds carrier; preview and Walk read
+                // occupancy directly. Build a physical surface only on request.
+                auto mesh = makeMesh(volume->boundsMesh());
+                const auto stats = std::format("{:.2f}s generation; {:.1f} MiB occupancy",
+                                               std::chrono::duration<double>(voxelized - begin).count(), volume->tree.size() * 4.0 / (1024 * 1024));
                 LOG_INFO("Collision generation: source={}, voxel_size={}, opacity={}, occupied={}, tree_nodes={}, generation_ms={}, mesh_ms={}",
                          gaussians.size(), s.voxel_size, s.opacity, volume->occupiedCount(), volume->tree.size(),
                          std::chrono::duration_cast<std::chrono::milliseconds>(voxelized - begin).count(),
@@ -285,7 +369,7 @@ namespace lfs::vis::gui {
                 if (stop.stop_requested())
                     throw std::runtime_error("Collision generation cancelled");
                 std::lock_guard lock(mutex_);
-                result_ = Result{std::move(volume), std::move(mesh), grid_to_world, sources, target, scene_generation, graph_epoch};
+                result_ = Result{std::move(volume), std::move(mesh), grid_to_world, sources, target, scene_generation, graph_epoch, display, stats};
             } catch (const std::exception& error) {
                 std::lock_guard lock(mutex_);
                 error_ = error.what();
@@ -346,6 +430,10 @@ namespace lfs::vis::gui {
         node->local_transform = glm::inverse(parent) * result_->world_transform;
         scene_->markTransformDirty(node->id);
         node->collision = result_->volume;
+        node->collision_display = result_->display;
+        node->collision_display.opacity = display_.opacity;
+        node->collision_display.slice = display_.slice;
+        last_stats_ = result_->stats;
         node->visible = true;
         scene_->markPayloadDiverged(node->id);
         scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
@@ -355,6 +443,95 @@ namespace lfs::vis::gui {
         loadSettings(*node);
         result_.reset();
     }
+    void CollisionPanel::applyPreset() {
+        settings_ = readInputs();
+        const auto preset = value("preset");
+        settings_.applyPreset(preset == "0" ? core::CollisionPreset::Indoor : preset == "2" ? core::CollisionPreset::Object
+                                                                                            : core::CollisionPreset::Outdoor);
+        settings_.floor_below_seed = true;
+        settings_.voxel_size = number("detail") * settings_.units_per_meter;
+        settings_.external_size = settings_.floor_size = 1.6f * settings_.units_per_meter;
+        settings_.cluster_resolution = settings_.units_per_meter;
+        settings_.carve_radius = 0.2f * settings_.units_per_meter;
+        world_seed_ = settings_.seed;
+        writeInputs();
+    }
+    void CollisionPanel::updateSummary() {
+        const float units = number("units-per-meter");
+        const float edge = number("voxel-size");
+        document_->GetElementById("scale-summary")->SetInnerRML(Rml::StringUtilities::EncodeRml(LOCF("collision.scale_summary", edge / units * 100, edge, units)));
+        host_.markContentDirty();
+    }
+    void CollisionPanel::updateDisplay() {
+        display_.opacity = std::clamp(number("overlay-opacity"), 0.0f, 1.0f);
+        display_.slice = std::clamp(number("cutaway"), 0.0f, 1.0f);
+        for (auto [id, n] : {std::pair{"overlay-opacity-value", display_.opacity}, {"cutaway-value", display_.slice}})
+            document_->GetElementById(id)->SetInnerRML(std::format("{:.0f}%", n * 100));
+        if (auto* node = scene_->getNodeByUuid(target_); !busy_ && node && node->collision && !node->locked.get()) {
+            node->collision_display.opacity = display_.opacity;
+            node->collision_display.slice = display_.slice;
+            scene_->notifyMutation(core::Scene::MutationType::DISPLAY_CHANGED);
+        }
+        host_.markContentDirty();
+    }
+    void CollisionPanel::buildSurface() {
+        if (busy_)
+            throw std::runtime_error("Wait for generation to finish");
+        auto* node = scene_->getNodeByUuid(target_);
+        if (!node || !node->collision || node->locked.get())
+            throw std::runtime_error("Select an unlocked collision node");
+        auto volume = node->collision;
+        const auto shape = readInputs().shape;
+        auto display = node->collision_display;
+        display.preview = false;
+        display.surface_ready = true;
+        display.surface_shape = shape;
+        display.surface_stride = std::stoi(value("surface-stride"));
+        auto transform = scene_->getWorldTransform(node->id);
+        const auto generation = scene_->renderGeneration(), epoch = scene_->graphEpoch();
+        const auto target = node->uuid;
+        {
+            std::lock_guard lock(mutex_);
+            error_.clear();
+            progress_ = "Building optional surface (Walk uses full-resolution voxels)";
+        }
+        busy_ = true;
+        done_ = false;
+        job_started_ = std::chrono::steady_clock::now();
+        progress_value_ = 0;
+        progress_step_ = 0;
+        progress_total_ = 3;
+        worker_ = std::jthread([this, volume, display, shape, transform, generation, epoch, target](std::stop_token stop) {
+            try {
+                const auto begin = std::chrono::steady_clock::now();
+                auto report = [&](std::string text) {
+                    std::lock_guard lock(mutex_);
+                    progress_ = std::move(text);
+                    progress_step_ = 1;
+                    progress_value_ = 1.0f / 3;
+                };
+                report("Preparing surface resolution");
+                auto surface = display.surface_stride == 1 ? volume->mesh(shape, stop, report) : volume->coarsened(display.surface_stride, stop).mesh(shape, stop, report);
+                {
+                    std::lock_guard lock(mutex_);
+                    progress_ = "Computing surface normals";
+                    progress_step_ = 2;
+                    progress_value_ = 2.0f / 3;
+                }
+                auto mesh = makeMesh(std::move(surface), stop);
+                auto stats = std::format("{:.2f}s surface; {:.3g} scene-unit surface cells; original voxels retained for Walk",
+                                         std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count(),
+                                         volume->settings.voxel_size * display.surface_stride);
+                std::lock_guard lock(mutex_);
+                result_ = Result{volume, mesh, transform, {}, target, generation, epoch, display, stats};
+            } catch (const std::exception& error) {
+                std::lock_guard lock(mutex_);
+                error_ = error.what();
+            }
+            done_.store(true, std::memory_order_release);
+            python::request_redraw();
+        });
+    }
     void CollisionPanel::ProcessEvent(Rml::Event& event) {
         auto* el = event.GetTargetElement();
         while (el && el->GetId().empty())
@@ -362,7 +539,36 @@ namespace lfs::vis::gui {
         if (!el)
             return;
         auto id = el->GetId();
+        if (updating_)
+            return;
         try {
+            if (event.GetType() == "change") {
+                if (id == "preset")
+                    applyPreset();
+                else if (id == "overlay-opacity" || id == "cutaway")
+                    updateDisplay();
+                else if (id == "detail") {
+                    setValue("voxel-size", std::format("{:.6g}", number("detail") * number("units-per-meter")));
+                    updateSummary();
+                } else if (id == "units-per-meter") {
+                    const float units = number("units-per-meter");
+                    if (!(units > 0))
+                        throw std::invalid_argument("Scene units per metre must be positive");
+                    const auto ratio = units / settings_.units_per_meter;
+                    for (const auto* field : {"voxel-size", "cluster-resolution", "external-size", "floor-size", "carve-height", "carve-radius", "walk-height", "walk-radius", "walk-speed", "walk-step"})
+                        setValue(field, std::format("{:.6g}", number(field) * ratio));
+                    settings_.units_per_meter = units;
+                    updateSummary();
+                }
+                return;
+            }
+            if (id == "advanced-toggle") {
+                advanced_ = !advanced_;
+                document_->GetElementById("advanced")->SetProperty("display", advanced_ ? "block" : "none");
+                host_.markContentDirty();
+                return;
+            }
+
             if (id == "generate")
                 start(false);
             else if (id == "generate-new")
@@ -371,12 +577,7 @@ namespace lfs::vis::gui {
                 worker_.request_stop();
                 status("Cancelling collision generation");
             } else if (id == "apply-preset") {
-                settings_ = readInputs();
-                auto preset = value("preset");
-                settings_.applyPreset(preset == "0" ? core::CollisionPreset::Indoor : preset == "2" ? core::CollisionPreset::Object
-                                                                                                    : core::CollisionPreset::Outdoor);
-                world_seed_ = settings_.seed;
-                writeInputs();
+                applyPreset();
             } else if (id == "camera-seed") {
                 if (auto* input = InputController::instance()) {
                     auto p = lfs::rendering::visualizerWorldPointFromDataWorld(input->cameraPosition());
@@ -391,6 +592,8 @@ namespace lfs::vis::gui {
                     else {
                         auto s = input->walkSettings();
                         s.height = number("walk-height");
+                        s.units_per_meter = number("units-per-meter");
+                        s.gravity = 9.81f * s.units_per_meter;
                         s.radius = number("walk-radius");
                         s.speed = number("walk-speed");
                         s.step_height = number("walk-step");
@@ -419,12 +622,16 @@ namespace lfs::vis::gui {
                     throw std::runtime_error("Select a collision node first");
                 if (node->locked.get())
                     throw std::runtime_error("Collision target is locked");
-                auto volume = std::make_shared<core::CollisionVolume>(*node->collision);
-                volume->show_voxels = id == "show-voxels";
-                node->collision = volume;
-                scene_->markPayloadDiverged(node->id);
-                scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
-                loadSettings(*node);
+                if (id == "show-mesh" && (!node->collision_display.surface_ready ||
+                                          node->collision_display.surface_stride != std::stoi(value("surface-stride")) ||
+                                          readInputs().shape != node->collision_display.surface_shape)) {
+                    buildSurface();
+                } else {
+                    node->collision_display.preview = id == "show-voxels";
+                    display_ = node->collision_display;
+                    scene_->notifyMutation(core::Scene::MutationType::DISPLAY_CHANGED);
+                    loadSettings(*node);
+                }
             }
         } catch (const std::exception& error) {
             LOG_ERROR("Collision authoring: {}", error.what());

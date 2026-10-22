@@ -1185,6 +1185,10 @@ namespace lfs::vis::gui {
                                      : node->name;
                 break;
             case core::NodeType::MESH:
+                if (node->collision && !node->collision_display.surface_ready) {
+                    snapshot.label = std::format("{}  ({})", node->name, LOC("collision.voxel_surface"));
+                    break;
+                }
                 snapshot.label = (node->mesh)
                                      ? std::format("{}  ({}V / {}F)", node->name,
                                                    lfs::core::format_count(node->mesh->vertex_count()),

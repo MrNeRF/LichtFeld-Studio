@@ -7,6 +7,7 @@
 #include "gui/rmlui/rml_panel_host.hpp"
 #include <RmlUi/Core/EventListener.h>
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <thread>
 
@@ -27,6 +28,10 @@ namespace lfs::vis::gui {
         void ProcessEvent(Rml::Event& event) override;
         bool prepare(const PanelDrawContext& ctx);
         void start(bool new_node);
+        void buildSurface();
+        void updateDisplay();
+        void updateSummary();
+        void applyPreset();
         void adoptResult();
         void loadSettings(const core::SceneNode& node);
         void writeInputs();
@@ -42,12 +47,21 @@ namespace lfs::vis::gui {
         core::Uuid target_;
         bool training_ = false;
         core::CollisionSettings settings_;
+        core::CollisionDisplay display_;
+        bool advanced_ = false;
+        bool updating_ = false;
+        std::string last_stats_;
+        std::weak_ptr<const core::CollisionVolume> counted_volume_;
+        uint64_t occupied_count_ = 0;
         glm::vec3 world_seed_{0};
         std::jthread worker_;
         std::atomic<bool> busy_{false};
         std::atomic<bool> done_{false};
         std::mutex mutex_;
         std::string progress_;
+        float progress_value_ = 0;
+        int progress_step_ = 0, progress_total_ = 1;
+        std::chrono::steady_clock::time_point job_started_;
         std::string error_;
         struct Result {
             std::shared_ptr<const core::CollisionVolume> volume;
@@ -57,6 +71,8 @@ namespace lfs::vis::gui {
             core::Uuid target;
             uint64_t scene_generation = 0;
             uint64_t graph_epoch = 0;
+            core::CollisionDisplay display;
+            std::string stats;
         };
         std::optional<Result> result_;
     };

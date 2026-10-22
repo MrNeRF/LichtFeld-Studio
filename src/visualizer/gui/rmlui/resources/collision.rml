@@ -4,10 +4,30 @@
   <link type="text/rcss" href="rendering.rcss"/>
 </head>
 <body template="floating-window">
-  <p>@tr:collision.sources</p>
   <p><span>@tr:collision.target</span> <span id="collision-target">@tr:collision.new_node</span></p>
   <div class="collision-row" data-tooltip="collision.tip_preset"><span>@tr:collision.scene_type</span><select id="preset"><option value="0">@tr:collision.indoor</option><option value="1" selected="selected">@tr:collision.outdoor</option><option value="2">@tr:collision.object</option></select></div>
-  <button id="apply-preset" class="btn btn--secondary" data-tooltip="collision.tip_preset">@tr:collision.apply_preset</button>
+  <div class="collision-row" data-tooltip="collision.tip_units"><span>@tr:collision.units</span><input id="units-per-meter" type="text" value="1"/></div>
+  <div class="collision-row" data-tooltip="collision.tip_detail"><span>@tr:collision.detail</span><input id="detail" type="range" min="0.01" max="0.25" step="0.005" value="0.05"/></div>
+  <p id="scale-summary"></p>
+  <div class="collision-actions">
+    <button id="camera-seed" class="btn btn--secondary" data-tooltip="collision.tip_seed">@tr:collision.camera_seed</button>
+    <button id="generate" class="btn btn--primary">@tr:collision.generate</button>
+    <button id="cancel" class="btn btn--secondary">@tr:collision.cancel_generation</button>
+  </div>
+  <div id="job-progress" style="display: none;"><progress id="generation-progress" value="0" max="100"/><p id="progress-time"></p></div>
+  <p id="collision-status">@tr:collision.initial_status</p>
+  <p>@tr:collision.fast_preview</p>
+  <h3>@tr:collision.inspect</h3>
+  <div class="collision-row collision-scrub"><span>@tr:collision.overlay_strength</span><input id="overlay-opacity" type="range" min="0" max="1" step="0.01" value="1"/><span id="overlay-opacity-value" class="collision-value">100%</span></div>
+  <div class="collision-row collision-scrub" data-tooltip="collision.tip_cutaway"><span>@tr:collision.cutaway</span><input id="cutaway" type="range" min="0" max="1" step="0.001" value="1"/><span id="cutaway-value" class="collision-value">100%</span></div>
+  <div class="collision-actions">
+    <button id="walk" class="btn btn--primary">@tr:collision.enter_walk</button>
+    <button id="exit-walk" class="btn btn--secondary">@tr:collision.exit_walk</button>
+    <button id="edit-splats" class="btn btn--secondary">@tr:collision.edit</button>
+  </div>
+  <p>@tr:collision.walk_hint</p>
+  <button id="advanced-toggle" class="btn btn--secondary">@tr:collision.advanced</button>
+  <div id="advanced" style="display: none;">
   <h3>@tr:collision.cluster_filter</h3>
   <div class="collision-row" data-tooltip="collision.tip_cluster"><span>@tr:collision.cluster_enable</span><input id="cluster" type="checkbox"/></div>
   <div class="collision-row" data-tooltip="collision.tip_resolution"><span>@tr:collision.resolution</span><input id="cluster-resolution" type="text" value="1"/></div>
@@ -21,6 +41,7 @@
   <div class="collision-row" data-tooltip="collision.tip_external"><span>@tr:collision.external</span><input id="external-fill" type="checkbox"/></div>
   <div class="collision-row" data-tooltip="collision.tip_external"><span>@tr:collision.external_size</span><input id="external-size" type="text" value="1.6"/></div>
   <div class="collision-row" data-tooltip="collision.tip_floor"><span>@tr:collision.floor</span><input id="floor-fill" type="checkbox" checked="checked"/></div>
+  <div class="collision-row" data-tooltip="collision.tip_ground_guard"><span>@tr:collision.ground_guard</span><input id="floor-below-seed" type="checkbox" checked="checked"/></div>
   <div class="collision-row" data-tooltip="collision.tip_floor"><span>@tr:collision.floor_size</span><input id="floor-size" type="text" value="1.6"/></div>
   <div class="collision-row" data-tooltip="collision.tip_carve"><span>@tr:collision.carve_height</span><input id="carve-height" type="text" value="0"/></div>
   <div class="collision-row" data-tooltip="collision.tip_carve"><span>@tr:collision.carve_radius</span><input id="carve-radius" type="text" value="0.2"/></div>
@@ -29,28 +50,20 @@
   <div class="collision-row"><span>X</span><input id="seed-x" type="text" value="0"/></div>
   <div class="collision-row"><span>Y</span><input id="seed-y" type="text" value="0"/></div>
   <div class="collision-row"><span>Z</span><input id="seed-z" type="text" value="0"/></div>
-  <button id="camera-seed" class="btn btn--secondary" data-tooltip="collision.seed_hint">@tr:collision.camera_seed</button>
+  <button id="apply-preset" class="btn btn--secondary">@tr:collision.apply_preset</button>
+  <h3>@tr:collision.surface</h3>
+  <p>@tr:collision.surface_help</p>
+  <div class="collision-row"><span>@tr:collision.surface_detail</span><select id="surface-stride"><option value="1">@tr:collision.surface_exact</option><option value="2">2×</option><option value="4" selected="selected">4×</option><option value="8">8×</option><option value="16">16×</option></select></div>
   <div class="collision-actions">
-    <button id="generate" class="btn btn--primary" data-tooltip="collision.regenerate_hint">@tr:collision.generate</button>
+    <button id="show-voxels" class="btn btn--secondary">@tr:collision.voxel_surface</button>
+    <button id="show-mesh" class="btn btn--secondary">@tr:collision.build_surface</button>
     <button id="generate-new" class="btn btn--secondary">@tr:collision.generate_new</button>
-    <button id="cancel" class="btn btn--secondary">@tr:common.cancel</button>
-  </div>
-  <p>@tr:collision.regenerate_hint</p>
-  <div class="collision-actions">
-    <button id="show-voxels" class="btn btn--secondary" data-tooltip="collision.tip_voxel_view">@tr:collision.voxel_surface</button>
-    <button id="show-mesh" class="btn btn--secondary" data-tooltip="collision.tip_shape">@tr:collision.mesh</button>
-    <button id="edit-splats" class="btn btn--secondary" data-tooltip="collision.tip_edit">@tr:collision.edit</button>
   </div>
   <h3>@tr:collision.walk_test</h3>
-  <p>@tr:collision.walk_hint</p>
   <div class="collision-row" data-tooltip="collision.tip_player"><span>@tr:collision.head_height</span><input id="walk-height" type="text" value="1.8"/></div>
   <div class="collision-row" data-tooltip="collision.tip_player"><span>@tr:collision.player_radius</span><input id="walk-radius" type="text" value="0.2"/></div>
   <div class="collision-row" data-tooltip="collision.tip_speed"><span>@tr:collision.speed</span><input id="walk-speed" type="text" value="2.5"/></div>
   <div class="collision-row" data-tooltip="collision.tip_step"><span>@tr:collision.step_height</span><input id="walk-step" type="text" value="0.25"/></div>
-  <div class="collision-actions">
-    <button id="walk" class="btn btn--primary" data-tooltip="collision.walk_hint">@tr:collision.enter_walk</button>
-    <button id="exit-walk" class="btn btn--secondary">@tr:collision.exit_walk</button>
   </div>
-  <p id="collision-status">@tr:collision.initial_status</p>
 </body>
 </rml>
