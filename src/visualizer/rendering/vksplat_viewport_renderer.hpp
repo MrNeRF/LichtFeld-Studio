@@ -692,6 +692,8 @@ namespace lfs::vis {
         std::vector<ModelInputSnapshot> ring_uploaded_{};
 #ifdef LFS_TENSOR_HIP
         std::unique_ptr<HipInputPublications> hip_input_publications_;
+        std::unique_ptr<HipInputPublications> hip_host_publications_;
+        std::uint64_t hip_host_publication_generation_ = 0;
 #endif
         int current_input_sh_degree_ = -1;
 #if LFS_HAS_CUDA

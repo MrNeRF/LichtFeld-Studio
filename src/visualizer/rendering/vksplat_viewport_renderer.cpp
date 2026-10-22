@@ -1212,6 +1212,10 @@ namespace lfs::vis {
                 splat_data.has_deleted_mask() ? &splat_data.deleted() : nullptr;
             const bool shn_q16 = splat_data.shN_value_quantized();
             std::uint64_t exportable_generation = 0;
+#ifdef LFS_TENSOR_HIP
+            if (means.device() == Device::CPU)
+                exportable_generation = splat_data.param_layout_generation();
+#endif
             if (shn.is_valid() && shn.has_exportable_provenance()) {
                 exportable_generation = shn.exportable_bound_generation();
                 if (auto ctrl = shn.exportable_control()) {
@@ -1892,6 +1896,8 @@ namespace lfs::vis {
 #ifdef LFS_TENSOR_HIP
         if (hip_input_publications_)
             hip_input_publications_->invalidate();
+        if (hip_host_publications_)
+            hip_host_publications_->invalidate();
 #endif
         buffers_.num_splats = 0;
         buffers_.num_indices = 0;
@@ -2063,6 +2069,8 @@ namespace lfs::vis {
         retired_input_storages_.clear();
 #ifdef LFS_TENSOR_HIP
         hip_input_publications_.reset();
+        hip_host_publications_.reset();
+        hip_host_publication_generation_ = 0;
 #endif
         ring_.reset();
         retired_inputs_.clear();
@@ -4736,6 +4744,14 @@ namespace lfs::vis {
         const bool force_upload,
         const int upload_sh_degree,
         const bool allow_cached_inputs) {
+#ifdef LFS_TENSOR_HIP
+        const bool host_preview = splat_data.means_raw().device() == Device::CPU;
+#else
+        constexpr bool host_preview = false;
+#endif
+        const bool refresh_inputs = force_upload && !host_preview;
+        if (host_preview && !splat_data.param_layout_generation())
+            return std::unexpected("VkSplat CPU preview requires a completed snapshot generation");
         const std::size_t n = static_cast<std::size_t>(splat_data.size());
         if (n == 0) {
             return std::unexpected("VkSplat cannot render an empty model");
@@ -4774,7 +4790,7 @@ namespace lfs::vis {
         }
         // In-place edits preserve tensor addresses. Invalidate every slot so
         // each buffered copy is refreshed when that slot is next acquired.
-        if (force_upload) {
+        if (refresh_inputs) {
             for (auto& snapshot : ring_uploaded_) {
                 snapshot = {};
             }
@@ -4786,7 +4802,7 @@ namespace lfs::vis {
         const bool deleted_mask_only_change =
             input_snapshot_changed &&
             matchesExceptDeletedMask(uploaded_input_snapshot, current_input_snapshot);
-        const bool input_upload_requested = force_upload || input_snapshot_changed;
+        const bool input_upload_requested = refresh_inputs || input_snapshot_changed;
         const Tensor& means_input = splat_data.means_raw();
         const Tensor& sh0_input = splat_data.sh0_raw();
         const Tensor& rotation_input = splat_data.rotation_raw();
@@ -4794,22 +4810,42 @@ namespace lfs::vis {
         const Tensor& opacity_input = splat_data.opacity_raw();
         const Tensor& shN_input = splat_data.shN_raw();
         const Tensor& shN_bounds_input = splat_data.shN_value_bounds();
-        const auto input_backend = lfs::core::gpu_backend_of(means_input);
+        auto input_backend = lfs::core::gpu_backend_of(means_input);
+#ifdef LFS_TENSOR_HIP
+        if (host_preview)
+            input_backend = lfs::core::GpuBackend::HIP;
+#endif
         if (!input_backend)
             return std::unexpected("VkSplat inputs require GPU storage");
 #ifdef LFS_TENSOR_HIP
         const char* disable_hip_cache = std::getenv("LFS_HIP_DISABLE_VIEWER_PUBLICATIONS_CACHE");
-        const bool reuse_hip_publications = allow_cached_inputs && *input_backend == lfs::core::GpuBackend::HIP &&
+        const bool reuse_hip_publications = (allow_cached_inputs || host_preview) && *input_backend == lfs::core::GpuBackend::HIP &&
                                            !(disable_hip_cache && std::string_view(disable_hip_cache) == "1");
-        if (*input_backend == lfs::core::GpuBackend::HIP) {
+        HipInputPublications* publications = nullptr;
+        const auto publication_slot = host_preview ? 0u : ring_slot;
+        if (host_preview) {
+            if (hip_input_publications_)
+                hip_input_publications_->invalidate();
+            if (!hip_host_publications_) {
+                hip_host_publications_ = std::make_unique<HipInputPublications>();
+                hip_host_publications_->resize(1);
+            }
+            if (!reuse_hip_publications || hip_host_publication_generation_ != splat_data.param_layout_generation())
+                hip_host_publications_->invalidate();
+            hip_host_publication_generation_ = splat_data.param_layout_generation();
+            publications = hip_host_publications_.get();
+        } else if (*input_backend == lfs::core::GpuBackend::HIP) {
+            if (hip_host_publications_)
+                hip_host_publications_->invalidate();
             if (!hip_input_publications_) {
                 hip_input_publications_ = std::make_unique<HipInputPublications>();
                 hip_input_publications_->resize(ring_uploaded_.size());
             }
-            if (!reuse_hip_publications || force_upload)
+            if (!reuse_hip_publications || refresh_inputs)
                 hip_input_publications_->invalidate();
             else if (input_snapshot_changed)
                 hip_input_publications_->invalidate(ring_slot);
+            publications = hip_input_publications_.get();
         }
 #else
         (void)allow_cached_inputs;
@@ -4818,15 +4854,15 @@ namespace lfs::vis {
         const Tensor& deleted_input = splat_data.deleted();
         const bool bind_deleted = has_deleted_mask &&
                                   deleted_input.dtype() == DataType::Bool &&
-                                  deleted_input.device() == Device::GPU &&
+                                  (deleted_input.device() == Device::GPU || host_preview) &&
                                   deleted_input.is_contiguous() &&
                                   static_cast<std::size_t>(deleted_input.numel()) == n;
         const auto& layout = effective_upload_sh_degree > 0 ? external_layout : upload_layout;
         const lfs::core::Q16BindPtrs q16_bind =
-            (!layout->omits_shN && splat_data.shN_value_quantized())
+            (!host_preview && !layout->omits_shN && splat_data.shN_value_quantized())
                 ? lfs::core::resolve_q16_bind_ptrs(splat_data)
                 : lfs::core::Q16BindPtrs{};
-        const bool q16_pair_ok = !splat_data.shN_value_quantized() || layout->omits_shN ||
+        const bool q16_pair_ok = host_preview || !splat_data.shN_value_quantized() || layout->omits_shN ||
                                  (q16_bind.codes && q16_bind.bounds && q16_bind.n_cells_per_prim > 0u);
 
         const auto update_input_metadata = [&](const bool reset_cached_raster_state) {
@@ -4844,7 +4880,14 @@ namespace lfs::vis {
         const std::size_t deleted_mask_bytes = (n + 3u) & ~std::size_t{3u};
         Tensor deleted_for_bind;
         auto& padded_mask = deleted_mask_copies_[ring_slot].padded_mask;
-        if (bind_deleted) {
+        if (bind_deleted && host_preview) {
+            const bool fresh = !padded_mask.is_valid() || padded_mask.device() != Device::CPU || padded_mask.numel() != deleted_mask_bytes;
+            if (fresh)
+                padded_mask = Tensor::zeros({deleted_mask_bytes}, Device::CPU, DataType::Bool);
+            if (fresh || input_upload_requested)
+                padded_mask.slice(0, 0, n).copy_(deleted_input);
+            deleted_for_bind = padded_mask;
+        } else if (bind_deleted) {
             try {
                 deleted_for_bind = vksplat::prepareDeletedMask(
                     context.tensorInterop(), deleted_input, *input_backend,
@@ -4867,14 +4910,26 @@ namespace lfs::vis {
             std::optional<lfs::core::TensorVulkanBuffer> buffer;
 #ifdef LFS_TENSOR_HIP
             bool loaded_publication = false;
-            if (reuse_hip_publications)
-                buffer = hip_input_publications_->get(ring_slot, field, [&] {
-                    loaded_publication = true;
-                    return context.tensorInterop().buffer(tensor);
-                });
-            else {
+            const auto load_publication = [&] {
                 loaded_publication = true;
-                buffer = context.tensorInterop().buffer(tensor);
+                return host_preview ? context.tensorInterop().host_snapshot_buffer(tensor)
+                                    : context.tensorInterop().buffer(tensor);
+            };
+            try {
+                buffer = reuse_hip_publications
+                             ? publications->get(publication_slot, field, load_publication)
+                             : load_publication();
+            } catch (const std::exception& error) {
+                if (!host_preview)
+                    throw;
+                // Only host allocation/copy preparation happened here; no
+                // command consuming this partial snapshot has been submitted.
+                return lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::ResourceExhausted,
+                    .domain = lfs::ErrorDomain::Vulkan,
+                    .user_message = std::format("HIP preview publication failed: {}", error.what()),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
             }
             if (*input_backend == lfs::core::GpuBackend::HIP && std::getenv("LFS_HIP_VALIDATION_PUBLICATION_TRACE"))
                 LOG_DEBUG("HIP viewer publication: slot={} field={} mode={} loaded={}",
@@ -8119,6 +8174,10 @@ namespace lfs::vis {
         }
         const std::uint64_t completion_value = *completion_candidate;
         active_tensor_backend_ = lfs::core::gpu_backend_of(splat_data.means_raw()).value_or(lfs::core::default_gpu_backend());
+#ifdef LFS_TENSOR_HIP
+        if (splat_data.means_raw().device() == Device::CPU)
+            active_tensor_backend_ = lfs::core::GpuBackend::Vulkan;
+#endif
         const auto tensor_scope = context.tensorInterop().execution_scope(active_tensor_backend_);
 
         // Frames submitted after a target was released can still read its
@@ -8351,7 +8410,7 @@ namespace lfs::vis {
 
         std::expected<InputBindingResult, std::string> input_binding = InputBindingResult{};
 #ifdef LFS_TENSOR_HIP
-        if (hip_input_publications_ && (synchronize_input_upload || lod_page_inputs_active))
+        if (hip_input_publications_ && ((synchronize_input_upload && splat_data.means_raw().device() != Device::CPU) || lod_page_inputs_active))
             hip_input_publications_->invalidate();
 #endif
         if (lod_page_inputs_active) {

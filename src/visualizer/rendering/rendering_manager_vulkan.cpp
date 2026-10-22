@@ -54,6 +54,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <expected>
 #include <filesystem>
@@ -1021,6 +1022,26 @@ namespace lfs::vis {
             sample_model_under_lock();
             releaseLodLeafRenderViewUnlessFor(model);
         }
+        std::shared_ptr<const lfs::core::SplatData> hip_preview;
+        bool hip_preview_failed = false;
+#if defined(LFS_TENSOR_HIP) && LFS_BUILD_TRAINER
+        // Aggregates and native shared storage retain their existing paths.
+        const char* async_preview = std::getenv("LFS_HIP_ASYNC_VIEWER");
+        if (!render_lock_contended && is_training && model &&
+            (!async_preview || std::string_view(async_preview) == "1") &&
+            !context.preparing_import && !model->lod_tree && !frame_settings.point_cloud_mode &&
+            !exact_surface_picking_ &&
+            !frame_settings.apply_appearance_correction &&
+            !view_state.split_view_service_.isActive(frame_settings) &&
+            lfs::rendering::isVkSplatBackend(frame_settings.raster_backend) &&
+            scene_state.model_transforms.size() == 1 &&
+            lfs::core::gpu_backend_of(model->means_raw()) == lfs::core::GpuBackend::HIP &&
+            vulkan_context && !vulkan_context->tensorInterop().shares_storage(lfs::core::GpuBackend::HIP)) {
+            if (auto* trainer = trainer_manager->getTrainer();
+                trainer && model == &trainer->get_strategy().get_model())
+                hip_preview = trainer->requestHipPreview();
+        }
+#endif
         bool has_renderable_model = false;
         bool has_visible_gaussian_model = false;
         bool has_point_cloud = false;
@@ -1342,10 +1363,27 @@ namespace lfs::vis {
             return cached_frame_result();
         }
 
+        if (hip_preview) {
+#ifdef LFS_TENSOR_HIP
+            if (std::getenv("LFS_HIP_VALIDATION_ASYNC_PREVIEW_TRACE"))
+                LOG_INFO("HIP viewer uses completed snapshot: model={} splats={} active_sh={}",
+                         static_cast<const void*>(hip_preview.get()), hip_preview->size(), hip_preview->get_active_sh_degree());
+#endif
+            model = hip_preview.get();
+            scene_state.combined_model = model;
+            scene_state.owned_combined_model = hip_preview;
+            scene_state.transform_indices.reset();
+            scene_state.selection_mask.reset();
+            if (scene_state.visible_splat_count)
+                scene_state.visible_splat_count = model->size();
+            scene_state.node_active_sh_degrees.assign(1, model->get_active_sh_degree());
+            render_lock.reset();
+        }
+
         // Only a frame that will perform renderer work may join the trainer's
         // read epoch. Cached frames must not enqueue a legacy-stream wait or
         // publish a reader edge that serializes the next training step.
-        if (is_training && vulkan_context &&
+        if (is_training && !hip_preview && vulkan_context &&
             lfs::rendering::isVkSplatBackend(frame_settings.raster_backend)) {
             if (!scene_renderer_) {
                 scene_renderer_ = createSceneRenderer(*context.graphics_context);
@@ -1355,12 +1393,12 @@ namespace lfs::vis {
             }
         }
         frame_tensor_scope.reset();
-        if (vulkan_context)
+        if (vulkan_context && !hip_preview)
             frame_tensor_scope = vulkan_context->tensorInterop().execution_scope(
                 lfs::core::default_gpu_backend());
 #if LFS_BUILD_TRAINER
         lfs::training::Trainer* live_trainer = nullptr;
-        if (is_training && trainer_manager && scene_renderer_ &&
+        if (is_training && !hip_preview && trainer_manager && scene_renderer_ &&
             rendererTrainingInterop(*scene_renderer_).hasLiveTrainerReleaseFence()) {
             // A live stream without its release fence is a partial initialization;
             // render() will fail too, so never install a handshake missing the
@@ -1901,6 +1939,14 @@ namespace lfs::vis {
                     force_input_upload,
                     *vksplat_target,
                     synchronize_vksplat_input_upload);
+#if defined(LFS_TENSOR_HIP) && LFS_BUILD_TRAINER
+                if (!result && hip_preview &&
+                    result.error().find("HIP preview publication failed:") != std::string::npos) {
+                    if (auto* trainer = trainer_manager->getTrainer())
+                        trainer->suspendHipPreview(result.error());
+                    hip_preview_failed = true;
+                }
+#endif
                 if (result) {
                     if (force_input_upload) {
                         vksplat_inputs_forced_this_frame = true;
@@ -3380,6 +3426,15 @@ namespace lfs::vis {
                         view_state.last_logged_vksplat_render_error_.clear();
                         return publish_vksplat_result(*render_result);
                     }
+#if defined(LFS_TENSOR_HIP) && LFS_BUILD_TRAINER
+                    if (hip_preview && render_result.error().find("HIP preview publication failed:") != std::string::npos) {
+                        if (auto* trainer = trainer_manager->getTrainer())
+                            trainer->suspendHipPreview(render_result.error());
+                        view_state.dirty_mask_.fetch_or(DirtyFlag::ALL, std::memory_order_relaxed);
+                        render_lock.reset();
+                        return cached_frame_result();
+                    }
+#endif
                     const bool shared_scratch_retryable =
                         isRetryableSharedScratchUnavailable(render_result.error());
                     if (synchronize_vksplat_input_upload &&
@@ -3674,6 +3729,11 @@ namespace lfs::vis {
         }
 
         if (!rendered_image) {
+            if (hip_preview_failed) {
+                view_state.dirty_mask_.fetch_or(DirtyFlag::ALL, std::memory_order_relaxed);
+                render_lock.reset();
+                return cached_frame_result();
+            }
             const bool shared_scratch_retryable =
                 synchronize_vksplat_input_upload &&
                 isRetryableSharedScratchUnavailable(render_error);

@@ -35,6 +35,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <source_location>
 #include <stdexcept>
 #include <unordered_map>
 #ifdef _WIN32
@@ -518,11 +519,16 @@ namespace lfs::core::internal {
             application_modules.reset();
             unload();
         }
-        LfsHipView view(StorageRef storage, size_t bytes = 0) {
+        LfsHipView view(StorageRef storage, size_t bytes = 0,
+                       const std::source_location site = std::source_location::current()) {
             require(context && storage.backend == GpuBackend::HIP, "HIP Tensor received a foreign backend or closed context");
             const auto found = allocations.find(storage.data);
             require(found != allocations.end(), "HIP Tensor received unknown storage");
-            require(storage.byte_offset <= found->second.bytes && bytes <= found->second.bytes - storage.byte_offset, "HIP Tensor view exceeds its allocation");
+            if (storage.byte_offset > found->second.bytes || bytes > found->second.bytes - storage.byte_offset)
+                throw std::invalid_argument(std::format(
+                    "HIP Tensor view exceeds its allocation (offset={}, requested={}, allocation={}, dtype={}, operation={} at {}:{})",
+                    storage.byte_offset, bytes, found->second.bytes, static_cast<unsigned>(storage.dtype),
+                    site.function_name(), site.file_name(), site.line()));
             return {found->second.handle, storage.byte_offset};
         }
         void bias(StorageRef input,StorageRef bias,StorageRef output,int count,int channels,int spatial,bool relu) {
@@ -1358,7 +1364,8 @@ namespace lfs::core::internal {
                 impl_->sync();
             return;
         }
-        const auto src = impl_->view(r.src, r.bytes), dst = impl_->view(r.dst, r.bytes);
+        const auto src = impl_->view(r.src, r.bytes);
+        const auto dst = impl_->view(r.dst, r.bytes);
         LfsHipError error{};
         check(impl_->lfs_hip_copy(impl_->context, src, dst, r.bytes, &error), error);
         if (r.synchronous)

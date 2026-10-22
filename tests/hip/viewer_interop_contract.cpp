@@ -89,9 +89,14 @@ int main(int argc,char**argv) try {
         auto second=cache.get(0,0,publish);
         require(publications==2,"Changed HIP model reused an outdated publication");
         require(second && second->buffer!=first->buffer,"A live publication lease was overwritten");
+        auto cpu_source=Tensor::full({publication_count},23.f,Device::CPU);
+        auto cpu_snapshot=interop.host_snapshot_buffer(cpu_source);
+        require(cpu_snapshot && cpu_snapshot->bytes==source.bytes(),"Completed CPU snapshot was not published");
+        cpu_source.fill_(55.f);
+        cpu_source={}; // Consumer copy must survive source mutation and release.
         // Read the first immutable snapshot and overwrite the second with an actual consumer command.
         VkBuffer staging{};VkDeviceMemory memory{};
-        VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};bi.size=source.bytes();
+        VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};bi.size=source.bytes()*2;
         bi.usage=VK_BUFFER_USAGE_TRANSFER_DST_BIT;bi.sharingMode=VK_SHARING_MODE_EXCLUSIVE;
         check(vkCreateBuffer(device,&bi,nullptr,&staging));
         VkMemoryRequirements requirements{};vkGetBufferMemoryRequirements(device,staging,&requirements);
@@ -108,7 +113,12 @@ int main(int argc,char**argv) try {
         check(vkAllocateCommandBuffers(device,&ci,&command));
         VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};check(vkBeginCommandBuffer(command,&begin));
         VkBufferCopy copy{0,0,source.bytes()};vkCmdCopyBuffer(command,static_cast<VkBuffer>(first->buffer),staging,1,&copy);
+        VkBufferCopy cpu_copy{cpu_snapshot->offset,source.bytes(),source.bytes()};
+        vkCmdCopyBuffer(command,static_cast<VkBuffer>(cpu_snapshot->buffer),staging,1,&cpu_copy);
         vkCmdFillBuffer(command,static_cast<VkBuffer>(second->buffer),0,source.bytes(),0x41100000u); // 9.f
+        VkMemoryBarrier host_read{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        host_read.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;host_read.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
+        vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host_read,0,nullptr,0,nullptr);
         check(vkEndCommandBuffer(command));
         VkSemaphoreTypeCreateInfo ti{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};ti.semaphoreType=VK_SEMAPHORE_TYPE_TIMELINE;
         VkSemaphoreCreateInfo si{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};si.pNext=&ti;
@@ -118,8 +128,9 @@ int main(int argc,char**argv) try {
         check(vkQueueSubmit(static_cast<VkQueue>(h.queue),1,&submit,VK_NULL_HANDLE));
         const Tensor* tensors[]={&source};interop.wait(tensors,{done,value});
         require(source.cpu().to_vector()==std::vector<float>(publication_count,9.f),"Consumer edits were not returned to HIP");
-        void* mapped=nullptr;check(vkMapMemory(device,memory,0,source.bytes(),0,&mapped));
+        void* mapped=nullptr;check(vkMapMemory(device,memory,0,source.bytes()*2,0,&mapped));
         for(size_t i=0;i<publication_count;++i)require(static_cast<float*>(mapped)[i]==3.f,"Older publication lease changed after HIP mutation");
+        for(size_t i=0;i<publication_count;++i)require(static_cast<float*>(mapped)[publication_count+i]==23.f,"Completed CPU snapshot changed or was not visible to the consumer GPU");
         vkUnmapMemory(device,memory);
         {
             TensorWorkQueue queue(GpuBackend::HIP,h.device,done,false);

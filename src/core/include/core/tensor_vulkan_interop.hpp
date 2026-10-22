@@ -66,6 +66,12 @@ namespace lfs::core {
         [[nodiscard]] Tensor empty(TensorShape shape, DataType dtype,
                                    GpuBackend backend, size_t capacity = 0);
         [[nodiscard]] std::optional<TensorVulkanBuffer> buffer(const Tensor& tensor);
+#ifdef LFS_TENSOR_HIP
+        // Publish an already completed CPU snapshot without consulting a GPU
+        // producer queue. The returned immutable lease owns its consumer copy.
+        [[nodiscard]] std::optional<TensorVulkanBuffer> host_snapshot_buffer(const Tensor& tensor);
+        [[nodiscard]] bool shares_storage(GpuBackend backend);
+#endif
         void upload_host(Tensor& tensor, std::span<const std::byte> bytes);
         [[nodiscard]] TensorCompletion ready(std::span<const Tensor* const> tensors);
         void wait(std::span<const Tensor* const> tensors, VulkanTimelinePoint point);

@@ -1898,6 +1898,9 @@ namespace lfs::training {
 
     void Trainer::createGpuResources() {
         using namespace lfs::core;
+#ifdef LFS_TENSOR_HIP
+        hip_previews_.reset();
+#endif
         const GpuBackend backend = default_gpu_backend();
         callback_queue_ = std::make_unique<TensorWorkQueue>(backend);
         // Preserve legacy-default ordering for cold uploads and readbacks.
@@ -2116,6 +2119,11 @@ namespace lfs::training {
     }
 
     void Trainer::recordParamsReady() {
+#ifdef LFS_TENSOR_HIP
+        if (strategy_ && training_queue_ &&
+            lfs::core::gpu_backend_of(strategy_->get_model().means_raw()) == lfs::core::GpuBackend::HIP)
+            hip_previews_.advance(strategy_->get_model(), *training_queue_);
+#endif
         if (scene_)
             scene_->invalidateBounds();
         std::lock_guard<std::mutex> lock(stream_sync_mutex_);
@@ -3385,6 +3393,9 @@ namespace lfs::training {
         metrics_queue_.reset();
 
         destroySyncPrimitives();
+#ifdef LFS_TENSOR_HIP
+        hip_previews_.reset();
+#endif
         training_queue_.reset();
 
         if (!exiting_headless) {

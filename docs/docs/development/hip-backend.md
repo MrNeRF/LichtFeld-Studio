@@ -145,7 +145,7 @@ contracts, or a short MCMC run do not establish complete strategy coverage.
 | GPU utilization | The HIP UI path explicitly returns an unavailable sample. | Add device-matched sampling independently of CUDA availability; distinguish a real 0% sample from unavailable data. |
 | GPU memory budget | HIP allocator statistics and `hipMemGetInfo` exist, but the UI does not expose a complete native process-budget path. | Connect meaningful process/device/budget measurements and their validity to the UI; distinguish allocated, reserved and driver-budget values. |
 | Training startup | Short cold/warm diagnostics confirm prepared CPU cache population costs and near-zero loader waits after the first image pass. The serialized HIP queue and appearance stages still need separate attribution. | Optimize measured preparation and queue bottlenecks without changing sampling or quality; retain synchronized diagnostics and unprofiled confirmation. |
-| Viewer/Tensor independence | Idle HIP publications are cached with bounded payloads and explicit invalidation. Short application checks cover camera reuse, edits, same/mixed GPU publication and pause transitions. | Complete bounded asynchronous training previews and interaction-latency measurements; static publication tests alone do not establish active-training responsiveness. |
+| Viewer/Tensor independence | Idle publications are cached. A single live HIP model on a non-shared rendering device uses bounded, complete asynchronous CPU snapshots; native shared storage retains its existing path. | Preserve lifecycle, allocation-fallback and real-model attribute checks. Extend interaction measurements to additional hardware and scene modes that retain synchronized publication. |
 | Hardware/platform validation | Runtime evidence is limited to the available GPU; Windows cross-target compilation is not execution on those targets. | Run the manual build matrix and preserve a conservative path for untested hardware. Wave64 remains outside the implemented scope. |
 
 The known configuration behind the reported broadcast rejection is covered by
@@ -313,19 +313,48 @@ and synchronizes that queue. HIP/Vulkan shared storage also uses host-completed
 ownership transfers, and its `ready` path synchronizes HIP. The portable ingest
 worker creates a separate Tensor work queue only for Vulkan. Consequently,
 simply enabling another worker or adding a queue scope cannot establish HIP
-overlap. Completing asynchronous HIP publication requires explicit queue/storage
-dependencies and bounded snapshot ownership, plus failure and teardown tests;
-do not remove the current waits without replacing their correctness guarantees.
+overlap. Do not remove the established native shared-storage waits without
+replacing their ownership guarantees.
 
-The next active-training implementation should publish complete preview
-snapshots at producer step boundaries and expose only completed generations.
-Navigation renders the last completed snapshot while the next one is pending.
-Do not mix fields from different steps, reuse a consumer-owned buffer, or hold
-the live-model lock across host staging. Bound outstanding generations and bytes;
-when capacity is exhausted, coalesce refresh requests and retain the last good
-preview instead of queuing more copies. Training stop, in-place edits, project
-replacement, densification and device changes need explicit generation handling.
-Final saved/exported model data must still come from the authoritative model.
+### Asynchronous training previews
+
+For a single live model on a renderer without HIP shared storage, the trainer
+captures all attributes on its producer queue before subsequent parameter
+writes. One packed readback is in flight at a time. Completed CPU snapshots
+retain matching count, SH layout, bounds and deletion mask; their explicit
+generation prevents false cache hits when allocator addresses are recycled.
+Navigation can reuse the last complete generation while training advances or
+waits for ingest. Final saves and exports continue to use the live model.
+
+Capture is demand-driven, limited to one admission per 100 ms and stops after
+two seconds without viewer requests. The 256 MiB host payload budget counts the
+pinned slot and CPU generations still owned by readers. Payloads larger than a
+third of that budget use synchronized publication. Driver padding, allocation
+metadata and the separate bounded Vulkan publication cache are additional.
+Immutable consumer buffers are reused across frame slots, rather than copied
+again for each buffered frame. A partial or over-budget capture never replaces
+the authoritative model or repeats an optimizer update.
+
+The default path preserves native HIP/Vulkan shared allocations on the same
+physical GPU. Aggregates, split views, point clouds, LOD, appearance-corrected
+views and exact surface queries retain their existing synchronization policy.
+Pause, stop, edits and project replacement return to the authoritative scene;
+captured generations remain owned until their readers release them.
+
+`LFS_HIP_ASYNC_VIEWER=0` restores synchronized active-training publication.
+Capture failures and consumer snapshot-allocation failures emit a CLI fallback
+message. Consumer allocation rejection retains the last viewport output and
+retries the live-model path, with a cooldown before another optional capture.
+`LFS_HIP_VALIDATION_HOST_PREVIEW_OOM=1` injects a pre-submit rejection for
+application-level fallback tests. Keep it unset for normal use and benchmarks.
+`LFS_HIP_VALIDATION_ASYNC_PREVIEW_TRACE=1` logs actual snapshot consumption;
+tracing must be disabled for latency comparisons.
+
+`lfs_hip_preview_snapshot_contract [--large]` checks complete FP32/FP16
+generations, producer storage replacement, retained readers, reset, cooldown and
+budget rejection. The application trainer's `--verify-preview` compares every
+captured attribute byte against its stopped real model, including SH codes and
+bounds. Consumer read/write tests remain in `lfs_hip_viewer_interop_contract`.
 
 ## Distribution size reduction plan
 

@@ -15,6 +15,9 @@ namespace lfs::core::internal {
     public:
         virtual ~TensorVulkanInteropBackend() = default;
         virtual void shutdown() {}
+#ifdef LFS_TENSOR_HIP
+        virtual bool shares_storage() const noexcept { return false; }
+#endif
         virtual void drain() = 0;
         virtual void run_while_idle(const std::function<void()>& release) { release(); }
         virtual void release_timeline(void* semaphore) = 0;
@@ -32,6 +35,7 @@ namespace lfs::core::internal {
     std::shared_ptr<TensorVulkanInteropBackend> make_host_vulkan_interop(VulkanInteropDevice device, GpuBackend backend);
 #ifdef LFS_TENSOR_HIP
     std::shared_ptr<TensorVulkanInteropBackend> make_hip_vulkan_interop(VulkanInteropDevice device);
+    std::optional<TensorVulkanBuffer> make_host_snapshot_buffer(VulkanInteropDevice device, const Tensor& tensor);
 #endif
     std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_vulkan_interop(VulkanInteropDevice device);
     std::shared_ptr<TensorVulkanInteropBackend> make_metal_vulkan_interop(VulkanInteropDevice device);

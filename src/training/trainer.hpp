@@ -7,6 +7,9 @@
 
 #include "checkpoint.hpp"
 #include "components/bilateral_grid.hpp"
+#ifdef LFS_TENSOR_HIP
+#include "components/hip_preview_snapshots.hpp"
+#endif
 #include "components/popspa_controller.hpp"
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
@@ -255,6 +258,10 @@ namespace lfs::training {
 
         // Allow viewer to lock for rendering
         std::shared_mutex& getRenderMutex() const { return render_mutex_; }
+#ifdef LFS_TENSOR_HIP
+        std::shared_ptr<const lfs::core::SplatData> requestHipPreview() { return hip_previews_.request(); }
+        void suspendHipPreview(std::string_view reason) { hip_previews_.suspend(reason); }
+#endif
         // Held shared by viewer/metric readers around their model read and
         // exclusive by the trainer around the non-refining in-place optimizer
         // step, so a reader can never observe a half-written model. Distinct from
@@ -1048,6 +1055,9 @@ namespace lfs::training {
         // Dedicated stream for all training-thread GPU work, installed as the
         // thread's current stream in train().
         std::unique_ptr<lfs::core::TensorWorkQueue> training_queue_;
+#ifdef LFS_TENSOR_HIP
+        HipPreviewSnapshots hip_previews_;
+#endif
 
         // Non-blocking stream for on-demand GUI metric renders
         // (computeCameraMetrics, called from the UI thread). Lets PSNR/SSIM

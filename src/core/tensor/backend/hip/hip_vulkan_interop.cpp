@@ -189,6 +189,7 @@ public:
         {std::lock_guard lock(mutex_);allocations_[storage.data]=allocation;}
         return Tensor::view_sharing_storage(backing,0,std::move(shape),capacity,dtype,"hip.external_memory");
     }
+    bool shares_storage() const noexcept override { return true; }
     std::optional<TensorVulkanBuffer> buffer(const Tensor& tensor) override {
         if(!tensor.is_valid()||gpu_backend_of(tensor)!=GpuBackend::HIP)return std::nullopt;
         const auto storage=storage_ref(tensor);

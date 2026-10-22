@@ -475,6 +475,13 @@ namespace lfs::core {
         void note_param_layout_changed() noexcept {
             ++_param_layout_generation;
         }
+#ifdef LFS_TENSOR_HIP
+        // A completed, privately owned CPU preview needs an identity independent
+        // of allocator addresses, which can be recycled between generations.
+        void set_host_snapshot_generation(std::uint64_t generation) noexcept {
+            _param_layout_generation = generation;
+        }
+#endif
         // needed_rows growth hook. When layout_changed is non-null, sets it true
         // iff the hook rebased parameter tensors (generation advanced). Callers
         // that held Tensor& across the call MUST re-fetch via get_param / means_raw.

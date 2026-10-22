@@ -14,6 +14,7 @@
 #include <nlohmann/json.hpp>
 #include <charconv>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <stdexcept>
 #include <chrono>
@@ -39,6 +40,7 @@ int main(int argc,char** argv) try {
     bool appearance=false;
     bool profile=false;
     bool float_targets=false;
+    bool verify_preview=false;
     std::string strategy(param::kStrategyMCMC);
     std::optional<std::filesystem::path> resume;
     for(int i=7;i<argc;++i) {
@@ -49,6 +51,7 @@ int main(int argc,char** argv) try {
         else if(std::string_view(argv[i])=="--appearance")appearance=true;
         else if(std::string_view(argv[i])=="--profile")profile=true;
         else if(std::string_view(argv[i])=="--float-targets")float_targets=true;
+        else if(std::string_view(argv[i])=="--verify-preview")verify_preview=true;
         else if(std::string_view(argv[i]).starts_with("--strategy=")) {
             const auto requested=std::string_view(argv[i]).substr(11);
             if(!param::is_valid_strategy_name(requested))throw std::invalid_argument("Unknown test strategy");
@@ -187,6 +190,35 @@ int main(int argc,char** argv) try {
     limiter.request_stop();if(limiter.joinable())limiter.join();
     if(!trained)
         throw std::runtime_error(format_for_developer(trained.error()));
+    if(verify_preview) {
+        TensorWorkQueue preview_queue(GpuBackend::HIP);
+        training::HipPreviewSnapshots previews;
+        (void)previews.request();
+        previews.advance(model,preview_queue);
+        preview_queue.wait();
+        previews.advance(model,preview_queue);
+        const auto snapshot=previews.request();
+        if(!snapshot || snapshot->size()!=model.size() ||
+           snapshot->get_active_sh_degree()!=model.get_active_sh_degree() ||
+           snapshot->get_max_sh_degree()!=model.get_max_sh_degree())
+            throw std::runtime_error("Real trainer preview has incomplete model metadata");
+        const auto fields=[](const SplatData& value){return std::array<const Tensor*,8>{
+            &value.means_raw(),&value.sh0_raw(),&value.rotation_raw(),&value.scaling_raw(),
+            &value.opacity_raw(),&value.shN_raw(),&value.shN_value_bounds(),&value.deleted()};};
+        const auto original=fields(model),captured=fields(*snapshot);
+        for(size_t i=0;i<original.size();++i) {
+            if(original[i]->is_valid()!=captured[i]->is_valid())
+                throw std::runtime_error("Real trainer preview field validity changed");
+            if(!original[i]->is_valid())continue;
+            const auto host=original[i]->cpu();
+            if(captured[i]->device()!=Device::CPU || host.dtype()!=captured[i]->dtype() ||
+               host.bytes()!=captured[i]->bytes() ||
+               (host.bytes()&&std::memcmp(host.data_ptr(),captured[i]->data_ptr(),host.bytes())))
+                throw std::runtime_error("Real trainer preview altered model attribute bytes");
+        }
+        previews.reset();
+        std::puts("PASS real trainer preview: all model fields bit-identical, including SH storage, bounds and deletion mask");
+    }
     completed_iteration=trainer.get_current_iteration();
     if(stop_after?(completed_iteration<int(stop_after) || completed_iteration>=int(params.optimization.iterations)):
         completed_iteration!=int(params.optimization.iterations))

@@ -163,8 +163,15 @@ namespace lfs::training {
 
         void grow_tensor_preserving_prefix(
             lfs::core::Tensor& tensor,
-            const size_t desired_capacity) {
-            if (!tensor.is_valid() || tensor.capacity() >= desired_capacity) {
+            size_t desired_capacity) {
+            if (!tensor.is_valid()) {
+                return;
+            }
+            // A restored free mask can cover max_cap while the GUI model only
+            // reserves live rows plus headroom. Ordinary restored tensors may
+            // report no growth capacity: never rebuild below their logical size.
+            desired_capacity = std::max(desired_capacity, tensor.size(0));
+            if (tensor.capacity() >= desired_capacity) {
                 return;
             }
 

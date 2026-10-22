@@ -446,6 +446,22 @@ namespace lfs::core {
         return impl_->backend(*backend).buffer(tensor);
     }
 
+#ifdef LFS_TENSOR_HIP
+    bool TensorVulkanInterop::shares_storage(GpuBackend backend) {
+        return impl_->backend(backend).shares_storage();
+    }
+    std::optional<TensorVulkanBuffer> TensorVulkanInterop::host_snapshot_buffer(const Tensor& tensor) {
+#ifdef LFS_TENSOR_VULKAN
+        const char* inject = std::getenv("LFS_HIP_VALIDATION_HOST_PREVIEW_OOM");
+        if (inject && std::string_view(inject) == "1")
+            throw TensorError("Injected completed HIP preview publication allocation failure");
+        return internal::make_host_snapshot_buffer(impl_->device, tensor);
+#else
+        throw TensorError("Host snapshot publication requires Vulkan");
+#endif
+    }
+#endif
+
     void TensorVulkanInterop::upload_host(Tensor& tensor, std::span<const std::byte> bytes) {
 #ifdef LFS_TENSOR_VULKAN
         if (!tensor.is_valid() || tensor.device() != Device::GPU ||

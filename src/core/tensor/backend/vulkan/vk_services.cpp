@@ -309,11 +309,12 @@ namespace lfs::core::internal {
             };
             VulkanInteropDevice target_;
             GpuBackend backend_;
+            bool host_snapshot_ = false;
             std::vector<std::weak_ptr<Lease>> leases_;
 
         public:
-            HostTensorVulkanInterop(VulkanInteropDevice target, GpuBackend backend)
-                : target_(target), backend_(backend) {}
+            HostTensorVulkanInterop(VulkanInteropDevice target, GpuBackend backend, bool host_snapshot = false)
+                : target_(target), backend_(backend), host_snapshot_(host_snapshot) {}
             void shutdown() override {
                 for (auto& weak : leases_)
                     if (auto lease = weak.lock())
@@ -342,12 +343,16 @@ namespace lfs::core::internal {
                 return tensor;
             }
             std::optional<TensorVulkanBuffer> buffer(const Tensor& tensor) override {
-                if (!tensor.is_valid() || gpu_backend_of(tensor) != backend_)
+                if (!tensor.is_valid() ||
+                    (host_snapshot_ ? tensor.device() != Device::CPU : gpu_backend_of(tensor) != backend_))
                     return std::nullopt;
                 if (!tensor.is_contiguous())
                     throw TensorError("Foreign GPU renderer input must be contiguous");
                 auto lease = std::make_shared<Lease>();
-                lease->tensor = tensor;
+                // Completed CPU snapshots are copied below; retaining their
+                // source would keep host payload alive beyond its budget ticket.
+                if (!host_snapshot_)
+                    lease->tensor = tensor;
                 auto buffer = std::make_shared<ForeignTensorBuffer>();
                 lease->buffer = buffer;
                 buffer->device = static_cast<VkDevice>(target_.device);
@@ -592,6 +597,13 @@ namespace lfs::core::internal {
     std::shared_ptr<TensorVulkanInteropBackend> make_host_vulkan_interop(VulkanInteropDevice target, GpuBackend backend) {
         return std::make_shared<HostTensorVulkanInterop>(target, backend);
     }
+
+#ifdef LFS_TENSOR_HIP
+    std::optional<TensorVulkanBuffer> make_host_snapshot_buffer(VulkanInteropDevice target, const Tensor& tensor) {
+        HostTensorVulkanInterop publication(target, GpuBackend::HIP, true);
+        return publication.buffer(tensor);
+    }
+#endif
 
     std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_vulkan_interop(VulkanInteropDevice target) {
         return std::make_shared<VulkanTensorVulkanInterop>(target);
