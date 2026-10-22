@@ -9,6 +9,7 @@
 #include <core/tensor_export.hpp>
 #include <core/tensor_sh.hpp>
 #include <core/sh_layout.hpp>
+#include <core/decimate/math.hpp>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -169,6 +170,61 @@ void affine_contract() {
         affine_splat_geometry(transforms,gs,gq,os,oq);compare(es,eq,os,oq,m==3);
     }
 }
+void decimate_contract() {
+    namespace dec=lfs::core::decimate;
+    constexpr size_t n=17;
+    for(int rest : {0,3,8,15}) {
+        auto data=dec::allocate(n,rest,Device::CPU);auto view=data.view();
+        for(size_t i=0;i<n;++i) {
+            for(size_t a=0;a<3;++a) {
+                view.pos[i*3+a]=std::sin(float(i*7+a*3)+.7f)*2;
+                view.scale[i*3+a]=-3.f+.3f*std::cos(float(i+a));
+                view.dc[i*3+a]=std::sin(float(i+a)*.3f)*.2f;
+            }
+            double qnorm=0;
+            for(size_t a=0;a<4;++a){float v=std::sin(float(i*3+a)+.4f);view.rot[i*4+a]=v;qnorm+=double(v)*v;}
+            for(size_t a=0;a<4;++a)view.rot[i*4+a]/=float(std::sqrt(qnorm));
+            view.opacity[i]=std::cos(float(i)*.7f);
+            for(int a=0;a<rest*3;++a)view.sh[i*rest*3+a]=.1f*std::sin(float(i*rest*3+a)*.3f);
+        }
+        auto p=data.pos.to(Device::GPU),r=data.rot.to(Device::GPU),sc=data.scale.to(Device::GPU),o=data.opacity.to(Device::GPU),dc=data.dc.to(Device::GPU),sh=data.sh.to(Device::GPU);
+        std::vector<uint32_t> idx;std::vector<float> cost;
+        decimate_candidates(p,r,sc,o,dc,sh,rest,idx,cost);
+        std::vector<dec::Cache> caches(n);for(uint32_t i=0;i<n;++i)caches[i]=dec::cache_one(view,i);
+        require(idx.size()==n*4 && cost.size()==n*4,"HIP decimation candidate table shape differs");
+        for(uint32_t i=0;i<n;++i) {
+            std::vector<std::pair<float,uint32_t>> expected;
+            for(uint32_t j=0;j<n;++j)if(i!=j){float c=dec::edge(view,caches.data(),i,j);if(std::isfinite(c))expected.emplace_back(c,j);}
+            std::sort(expected.begin(),expected.end());
+            for(size_t a=0;a<4;++a) {
+                const auto wanted=a<expected.size()?expected[a]:std::pair<float,uint32_t>{INFINITY,dec::invalid};
+                require(idx[i*4+a]==wanted.second,"HIP decimation candidate differs from double oracle");
+                require((std::isinf(cost[i*4+a]) && std::isinf(wanted.first)) || std::abs(cost[i*4+a]-wanted.first)<=1e-5f+1e-5f*std::abs(wanted.first),"HIP decimation cost differs from double oracle");
+            }
+        }
+        std::vector<int> groups(n,-1);const std::vector<uint32_t> minimum{0,4,8},members{0,1,4,5,6,8,9,10,11},offsets{0,2,5,9};
+        for(size_t g=0;g<3;++g)for(size_t i=offsets[g];i<offsets[g+1];++i)groups[members[i]]=int(g);
+        constexpr size_t removed=6;
+        auto merged=decimate_merge(p,r,sc,o,dc,sh,rest,groups,minimum,members,offsets,removed);
+        dec::Data actual{merged.position.cpu(),merged.rotation.cpu(),merged.scale.cpu(),merged.opacity.cpu(),merged.dc.cpu(),merged.sh.cpu(),n-removed,rest};
+        auto expected=dec::allocate(n-removed,rest,Device::CPU);auto av=actual.view(),ev=expected.view();uint32_t row=0;
+        for(uint32_t i=0;i<n;++i) {
+            int g=groups[i];if(g>=0 && minimum[g]!=i)continue;
+            if(g>=0)dec::merge_one(view,members.data()+offsets[g],int(offsets[g+1]-offsets[g]),ev,row);
+            else dec::merge_one(view,&i,1,ev,row);
+            ++row;
+        }
+        require(row==n-removed && merged.position.size(0)==row,"HIP decimation merge row count differs");
+        for(size_t i=0;i<row;++i) {
+            for(size_t a=0;a<3;++a){require(std::abs(av.pos[i*3+a]-ev.pos[i*3+a])<1e-5f,"HIP decimation merged position differs");require(std::abs(av.dc[i*3+a]-ev.dc[i*3+a])<1e-5f,"HIP decimation merged color differs");}
+            require(std::abs(av.opacity[i]-ev.opacity[i])<2e-5f,"HIP decimation merged opacity differs");
+            for(int a=0;a<rest*3;++a)require(std::abs(av.sh[i*rest*3+a]-ev.sh[i*rest*3+a])<1e-5f,"HIP decimation merged SH differs");
+            auto ca=splat_covariance(av.scale+i*3,av.rot+i*4),ce=splat_covariance(ev.scale+i*3,ev.rot+i*4);
+            double error=0,norm=0;for(int a=0;a<9;++a){error+=(ca[a]-ce[a])*(ca[a]-ce[a]);norm+=ce[a]*ce[a];}
+            require(std::sqrt(error/norm)<3e-5,"HIP decimation merged covariance differs");
+        }
+    }
+}
 int main() try {
     GpuBackendScope scope(GpuBackend::HIP);
     for(size_t n : {size_t(0),size_t(1),size_t(17),size_t(257),size_t(4099)}) {
@@ -290,7 +346,7 @@ int main() try {
     for(uint32_t rest : {3u,8u,15u}) {
         const size_t n=65,dims=rest*3;
         std::vector<float> canonical(n*dims);
-        for(size_t i=0;i<n;++i)for(size_t d=0;d<dims;++d)canonical[i*dims+d]=float(int((i*37+d*19)%113)-56)*.01f;
+        for(size_t i=0;i<n;++i)for(size_t d=0;d<dims;++d)canonical[i*dims+d]=rest==15 ? float(i%3==0?0:i%3==1?2:3)*.3f+float(d%7)*.01f+.003f*std::sin(float(i+d)) : float(int((i*37+d*19)%113)-56)*.01f;
         auto source=Tensor::from_vector(canonical,{n,rest,3},Device::GPU);
         auto resident=Tensor::empty({sh_swizzled_float_count(n,rest)},Device::GPU,DataType::Float32);
         sh_codec(source,resident,{.source_format=ShFormat::Canonical,.destination_format=ShFormat::Float32,
@@ -326,6 +382,46 @@ int main() try {
             }
         }
     }
+    {
+        constexpr size_t n=4097,k=4096,dims=45;
+        std::vector<float> data(n*dims);
+        for(size_t i=0;i<n;++i)for(size_t d=0;d<dims;++d)data[i*dims+d]=.2f*std::sin(float(i*17+d*13)*.03f);
+        auto canonical=Tensor::from_vector(data,{n,15,3},Device::GPU);
+        auto resident=Tensor::empty({sh_swizzled_float_count(n,15)},Device::GPU,DataType::Float32);
+        sh_codec(canonical,resident,{.source_format=ShFormat::Canonical,.destination_format=ShFormat::Float32,
+            .source_rows=n,.destination_rows=n,.count=n,.source_rest=15,.destination_rest=15});
+        auto [centroids,labels]=kmeans_sh(resident,int(n),15,int(k),2,false);
+        auto c=centroids.cpu(),ids=labels.cpu();std::vector<double> sums(k*dims);std::vector<size_t> counts(k);
+        for(size_t i=0;i<n;++i){auto id=ids.ptr<int32_t>()[i];require(id>=0 && size_t(id)<k,"HIP hierarchical palette invalid label");++counts[id];
+            for(size_t d=0;d<dims;++d)sums[size_t(id)*dims+d]+=data[i*dims+d];}
+        for(size_t j=0;j<k;++j)if(counts[j])for(size_t d=0;d<dims;++d)
+            require(std::abs(c.ptr<float>()[j*dims+d]-sums[j*dims+d]/counts[j])<1e-5,"HIP hierarchical centroid is not member mean");
+    }
+    {
+        PointRaster raster;raster.width=33;raster.height=33;
+        raster.view={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+        const float f=1.f/std::tan(.5f),near=.1f,far=100.f;
+        raster.view_projection={f,0,0,0,0,f,0,0,0,0,far/(near-far),-1,0,0,near*far/(near-far),0};
+        raster.focal_y=f*16.5f;raster.voxel_size=.02f;raster.far_plane=far;raster.background={.1f,.2f,.3f};
+        auto points=Tensor::from_vector(std::vector<float>{0,0,-2,0,0,-1},{2,3},Device::GPU);
+        auto colors=Tensor::from_vector(std::vector<float>{1,0,0,0,1,0},{2,3},Device::GPU);
+        constexpr size_t plane=33*33,center=16*33+16;
+        for(bool transparent : {false,true}) {
+            raster.transparent_background=transparent;
+            auto [image,depth]=rasterize_points(points,colors,raster);auto rgb=image.cpu(),z=depth.cpu();
+            require(rgb.ptr<float>()[center]==0 && rgb.ptr<float>()[plane+center]==1 && z.ptr<float>()[center]==1,"HIP point raster depth/color winner differs");
+            require(z.ptr<float>()[0]==far,"HIP point raster background depth differs");
+            if(transparent)require(rgb.ptr<float>()[plane*3]==0 && rgb.ptr<float>()[plane*3+center]==1,"HIP point raster alpha differs");
+            else require(rgb.ptr<float>()[plane+center+2]==.2f,"HIP point raster disk radius/background differs");
+        }
+        auto deleted=Tensor::from_vector(std::vector<int>{0,1},{2},Device::GPU).to(DataType::UInt8);
+        auto [image,depth]=rasterize_points(points,colors,raster,nullptr,nullptr,nullptr,&deleted);
+        auto rgb=image.cpu(),z=depth.cpu();require(rgb.ptr<float>()[center]==1 && rgb.ptr<float>()[plane+center]==0 && z.ptr<float>()[center]==2,"HIP point raster ignores deleted mask");
+        auto empty=Tensor::from_vector(std::vector<float>{},{0,3},Device::GPU);
+        auto [background,empty_depth]=rasterize_points(empty,empty,raster);auto bg=background.cpu(),ez=empty_depth.cpu();
+        require(ez.ptr<float>()[center]==far && bg.ptr<float>()[plane*3+center]==0,"HIP empty point raster background differs");
+    }
+    decimate_contract();
     affine_contract();
     low_level_contract();
     std::vector<float> chain(1025*3,0.f);
@@ -338,7 +434,7 @@ int main() try {
         for(size_t i=0;i<1025;++i) require(a.ptr<int32_t>()[i]==0 && b.ptr<int32_t>()[i]==0,"HIP concurrent union chain did not reach minimum root");
     }
 
-    std::puts("PASS HIP spatial, PPISP, stable Morton63, multinomial, SH palette/assignment and affine covariance/volume/inplace/batched: hash collisions, masks, self exclusion, saturation, Int32/Float32 minima, direct grid spacing/nearest ties, public mutual radii/spacing/nearest/camera coverage, atomic radius/mutual components, eight concurrent 1025-point chains, nonfinite and empty points");
+    std::puts("PASS HIP spatial, PPISP, stable Morton63, multinomial, SH palette/hierarchical assignment, point raster, decimation and affine covariance/volume/inplace/batched: hash collisions, masks, self exclusion, saturation, Int32/Float32 minima, direct grid spacing/nearest ties, public mutual radii/spacing/nearest/camera coverage, atomic radius/mutual components, eight concurrent 1025-point chains, nonfinite and empty points");
     return 0;
 } catch(const std::exception& e) {std::fprintf(stderr,"HIP spatial failed: %s\n",e.what());return 1;}
 

@@ -2574,12 +2574,12 @@ public:
 };
 void HipBackendOps::launch_export(const char* module,uint32_t phase,std::span<const std::byte> params,
     std::span<const StorageRef> reads,std::span<const StorageRef> writes,size_t work) {
-    uint32_t id=4;
-    const char* names[]{"export_kmeans","export_kmeans_accumulate","export_kmeans_group","export_radix"};
-    for(uint32_t i=0;i<4;++i)if(!std::strcmp(module,names[i]))id=i;
-    require(id<4,"Unknown HIP export module");
+    uint32_t id=9;
+    const char* names[]{"export_kmeans","export_kmeans_accumulate","export_kmeans_group","export_radix","export_morton","export_decimate","export_decimate_cost","export_decimate_merge","point_raster"};
+    for(uint32_t i=0;i<9;++i)if(!std::strcmp(module,names[i]))id=i;
+    require(id<9,"Unknown HIP export module");
     std::lock_guard lock(impl_->mutex);
-    for(auto storage:reads)(void)impl_->view(storage);
+    for(auto storage:reads){if(storage.data)(void)impl_->view(storage);else impl_->empty_view(storage);}
     for(auto storage:writes)(void)impl_->view(storage);
     LfsHipError error{};check(impl_->lfs_hip_export(impl_->context,id,phase,params.data(),params.size(),work,&error),error);
 }
@@ -2588,5 +2588,61 @@ std::tuple<Tensor,Tensor> HipBackendOps::kmeans_sh(const Tensor& sh,int points,i
 }
 void HipBackendOps::assign_sh3(const Tensor& sh,const Tensor& centroids,const Tensor& norms,Tensor& labels,bool fast,bool have_labels,ExecContext execution) {
     queue(execution);HipExportKernels kernels(*this);export_assign_sh3(kernels,sh,centroids,norms,labels,fast,have_labels);
+}
+}
+
+namespace lfs::core::internal {
+void HipBackendOps::decimate_candidates(const Tensor& position,const Tensor& rotation,const Tensor& scale,const Tensor& opacity,
+    const Tensor& dc,const Tensor& sh,int rest,std::vector<uint32_t>& idx,std::vector<float>& cost,ExecContext execution) {
+    queue(execution);HipExportKernels kernels(*this);export_decimate_candidates(kernels,position,rotation,scale,opacity,dc,sh,rest,idx,cost);
+}
+DecimateMerge HipBackendOps::decimate_merge(const Tensor& position,const Tensor& rotation,const Tensor& scale,const Tensor& opacity,
+    const Tensor& dc,const Tensor& sh,int rest,const std::vector<int>& member_group,const std::vector<uint32_t>& minimum,
+    const std::vector<uint32_t>& members,const std::vector<uint32_t>& offsets,size_t removed,ExecContext execution) {
+    queue(execution);HipExportKernels kernels(*this);return export_decimate_merge(kernels,position,rotation,scale,opacity,dc,sh,rest,member_group,minimum,members,offsets,removed);
+}
+}
+
+namespace lfs::core::internal {
+void HipBackendOps::rasterize_points(const PointRasterProgram& p,ExecContext execution) {
+    queue(execution);
+    const size_t pixels=size_t(p.width)*p.height;
+    require(p.width && p.height && pixels<=INT32_MAX/2 && p.count<=INT32_MAX,"Invalid HIP point raster dimensions");
+    require(p.positions.dtype==DataType::Float32 && p.colors.dtype==DataType::Float32 && p.parameters.dtype==DataType::Float32 &&
+            p.scratch.dtype==DataType::Int32 && p.image.dtype==DataType::Float32 && p.depth.dtype==DataType::Float32,"Invalid HIP point raster types");
+    struct Push {
+        uint64_t positions,colors,parameters,scratch,image,depth,transforms,indices,visibility,deleted,overlay;
+        uint32_t count,width,height,transform_count,visibility_count,flags;
+        float ortho_scale,focal_y,voxel_size,far_plane;
+    };static_assert(sizeof(Push)==128);
+    std::vector<StorageRef> reads,writes{p.scratch,p.image,p.depth};
+    std::vector<std::tuple<uint64_t,size_t,bool>> ranges;
+    const auto address=[&](StorageRef storage,size_t bytes,bool write=false)->uint64_t {
+        std::lock_guard lock(impl_->mutex);
+        if(!storage.data){impl_->empty_view(storage);require(!bytes,"Missing HIP raster storage");return 0;}
+        require(storage.byte_offset%((storage.dtype==DataType::Float32 || storage.dtype==DataType::Int32)?4:1)==0,"Misaligned HIP raster storage");
+        auto view=impl_->view(storage,bytes);uint64_t pointer=0;LfsHipError error{};
+        check(impl_->lfs_hip_buffer_address(impl_->context,view.buffer,&pointer,&error),error);
+        pointer+=view.offset;ranges.emplace_back(pointer,bytes,write);return pointer;
+    };
+    const auto input=[&](StorageRef storage,size_t bytes){reads.push_back(storage);return address(storage,bytes);};
+    const auto optional=[&](std::optional<StorageRef> storage,size_t bytes,DataType type)->uint64_t {
+        if(!storage)return 0;
+        require(storage->dtype==type || (type==DataType::UInt8 && storage->dtype==DataType::Bool),"Invalid HIP raster optional input type");
+        return input(*storage,bytes);
+    };
+    const Push push{input(p.positions,p.count*12),input(p.colors,p.count*12),input(p.parameters,(kPointRasterParameters+(p.overlay?258*4:0))*4),
+        address(p.scratch,pixels*8,true),address(p.image,pixels*((p.flags&kPointRasterTransparent)?16:12),true),address(p.depth,pixels*4,true),
+        optional(p.transforms,size_t(p.transform_count)*64,DataType::Float32),optional(p.indices,p.count*4,DataType::Int32),
+        optional(p.visibility,p.visibility_count,DataType::UInt8),optional(p.deleted,p.count,DataType::UInt8),optional(p.overlay,p.count*2,DataType::UInt8),
+        uint32_t(p.count),p.width,p.height,p.transform_count,p.visibility_count,p.flags,p.ortho_scale,p.focal_y,p.voxel_size,p.far_plane};
+    for(size_t i=0;i<ranges.size();++i)for(size_t j=0;j<i;++j) {
+        const auto [a,an,aw]=ranges[i];const auto [b,bn,bw]=ranges[j];
+        require(!an || !bn || (!aw && !bw) || a>=b+bn || b>=a+an,"Overlapping HIP raster output storage");
+    }
+    for(uint32_t phase=0;phase<4;++phase) {
+        const size_t work=(phase==1 || phase==2)?p.count:pixels;
+        if(work)launch_export("point_raster",phase,std::as_bytes(std::span(&push,1)),reads,writes,work);
+    }
 }
 }

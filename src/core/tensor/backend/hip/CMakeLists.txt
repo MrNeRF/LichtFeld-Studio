@@ -83,7 +83,10 @@ add_custom_command(OUTPUT "${_tensor_generated}/hip_export.hpp"
         --source "${_export_shaders}" --slang "${LFS_HIP_CORE_SLANGC}" --output "${_tensor_generated}/hip_export.hpp"
     DEPENDS prepare_export.py "${_export_shaders}/export_kmeans.slang" "${_export_shaders}/export_kmeans_common.slangh"
         "${_export_shaders}/export_kmeans_accumulate.slang" "${_export_shaders}/export_kmeans_group.slang"
-        "${_export_shaders}/export_radix.slang" "${LFS_HIP_CORE_SLANGC}" VERBATIM)
+        "${_export_shaders}/export_radix.slang" "${_export_shaders}/export_morton.slang"
+        "${_export_shaders}/export_decimate.slang" "${_export_shaders}/export_decimate_cost.slang"
+        "${_export_shaders}/export_decimate_merge.slang" "${_export_shaders}/df64.slangh" "${_export_shaders}/point_raster.slang" "${_export_shaders}/byte_read.slangh"
+        "${_point_source}/include/core/rounded_math.slangh" "${LFS_HIP_CORE_SLANGC}" VERBATIM)
 add_custom_command(OUTPUT "${_library}"
     COMMAND "${_compiler}" -x hip -std=c++20 -O3 -shared
         ${_platform_flags}
