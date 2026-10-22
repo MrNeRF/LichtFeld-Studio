@@ -1,5 +1,6 @@
 {
   "toolbar.walk_camera": "Walk Camera (collision)",
+  "collision.progress_time": "Stage {0} / {1} · {2:.1f}s elapsed",
   "collision.title": "Collision",
   "collision.sources": "Sources: all visible, loaded splat nodes; deleted splats are excluded. Stop training before generating.",
   "collision.target": "Target:",
@@ -3388,5 +3389,25 @@
   "preferences.drag_rejected_node": "Nie można wyeksportować: {}. Nie przesłano żadnych plików. Szczegóły znajdują się w dzienniku.",
   "preferences.drag_title": "Przesyłanie splatów",
   "preferences.drag_pause": "Wstrzymaj trening przed przeciągnięciem splatów.",
-  "preferences.drag_failed": "Eksport splatów nie powiódł się. Szczegóły znajdują się w dzienniku aplikacji."
+  "preferences.drag_failed": "Eksport splatów nie powiódł się. Szczegóły znajdują się w dzienniku aplikacji.",
+  "collision.scale_summary": "{0:.3g} cm cells = {1:.4g} scene units; {2:.3g} scene units per metre. Set scale before generating.",
+  "collision.tip_seed": "Use the current camera as the shared seed. Place it at standing eye height above the floor before generating.",
+  "collision.units": "Scene units / metre",
+  "collision.tip_units": "SfM reconstructions have no absolute metric scale. Set how many scene units equal one metre; voxel, fill and player dimensions scale together. Existing splats are not resized.",
+  "collision.detail": "Cell size (metres)",
+  "collision.tip_detail": "Drag for a faster coarse preview or finer detail. The exact value remains available in Advanced. This changes the generated voxel resolution explicitly.",
+  "collision.fast_preview": "Generate builds full-scene voxel collision for preview and Walk. A triangle surface is optional under Advanced.",
+  "collision.inspect": "Inspect collision",
+  "collision.overlay_strength": "Overlay strength",
+  "collision.cutaway": "Cutaway height",
+  "collision.tip_cutaway": "Scrub downward to inspect occupancy inside the volume. Display only: Walk and the saved collision geometry are unchanged.",
+  "collision.advanced": "Advanced generation and surface settings",
+  "collision.surface": "Optional triangle surface",
+  "collision.surface_help": "Build only when a triangle mesh is needed. A coarser surface is smaller and faster; preview and Walk retain the original voxel resolution.",
+  "collision.surface_detail": "Surface cell multiplier",
+  "collision.surface_exact": "1× (exact voxel detail)",
+  "collision.build_surface": "Build / show surface",
+  "collision.cancel_generation": "Cancel",
+  "collision.ground_guard": "Avoid overhead floor columns",
+  "collision.tip_ground_guard": "Only extend floor below supports at least 1.6 metres below the start camera. Canopy-only supports stay solid but are not extended down into walkable space. Disable for exact unrestricted floor fill."
 }
