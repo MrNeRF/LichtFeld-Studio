@@ -53,9 +53,16 @@ int main(int argc, char** argv) {
             limits.block_bytes = request.value("block_bytes", limits.block_bytes);
             limits.total_bytes = request.value("total_bytes", limits.total_bytes);
             limits.inflated_bytes = request.value("inflated_bytes", limits.inflated_bytes);
-            if (request.contains("exif_block_bytes")) {
+            if (request.contains("exif_block_bytes") || request.contains("collection_limits")) {
                 lfs::core::image_codecs::MetadataLimits exif_limits;
-                exif_limits.block_bytes = request.at("exif_block_bytes").get<std::size_t>();
+                exif_limits.block_bytes = request.value("exif_block_bytes", exif_limits.block_bytes);
+                const auto collection = request.value("collection_limits", json::object());
+                exif_limits.blocks = collection.value("blocks", exif_limits.blocks);
+                exif_limits.block_bytes = collection.value("block_bytes", exif_limits.block_bytes);
+                exif_limits.total_bytes = collection.value("total_bytes", exif_limits.total_bytes);
+                exif_limits.png_chunks = collection.value("png_chunks", exif_limits.png_chunks);
+                exif_limits.png_scan_bytes = collection.value("png_scan_bytes", exif_limits.png_scan_bytes);
+                exif_limits.jpeg_header_bytes = collection.value("jpeg_header_bytes", exif_limits.jpeg_header_bytes);
                 const auto path = lfs::core::utf8_to_path(request.at("input").get<std::string>());
                 auto collected = lfs::core::image_codecs::read_source_metadata(path, exif_limits, limits);
                 lfs::media::ImageExifDescription description;
