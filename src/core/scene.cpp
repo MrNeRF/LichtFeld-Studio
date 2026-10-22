@@ -1966,7 +1966,8 @@ namespace lfs::core {
         std::vector<VisibleMesh> result;
         for (const auto& node : nodes_) {
             if (node->type == NodeType::MESH && isNodeEffectivelyVisible(node->id) && node->mesh) {
-                result.push_back({node->mesh.get(), getWorldTransform(node->id), node->id});
+                result.push_back({node->mesh.get(), getWorldTransform(node->id), node->id, false,
+                                  node->collision && node->collision->show_voxels, node->collision.get()});
             }
         }
         return result;

@@ -592,6 +592,8 @@ namespace lfs::core {
             glm::mat4 transform;
             NodeId node_id = NULL_NODE;
             bool is_selected = false;
+            bool collision_voxel_boxes = false;
+            const CollisionVolume* collision_volume = nullptr;
         };
         [[nodiscard]] std::vector<VisibleMesh> getVisibleMeshes() const;
 
