@@ -772,6 +772,12 @@ namespace lfs::core::internal {
     };
     bool hip_backend_is_live() noexcept { return live_contexts.load(std::memory_order_relaxed) != 0; }
     HipBackendOps::HipBackendOps(const std::filesystem::path& path, int device, size_t max_cached_bytes) : impl_(std::make_shared<Impl>(path, device, max_cached_bytes)) {}
+    bool HipBackendOps::architecture_profile_enabled(std::string_view architecture) const {
+        const char* disabled=std::getenv("LFS_HIP_DISABLE_ARCH_PROFILES");
+        return !(disabled && std::string_view(disabled)!="0") &&
+               lfs_hip_base_architecture(impl_->device.architecture)==architecture;
+    }
+
     std::filesystem::path HipBackendOps::training_module_path(const std::filesystem::path& fallback,bool generic_only) const {
         const auto generic=hip_packaged_module(fallback,hip_executable_directory());
         const char* disabled=std::getenv("LFS_HIP_DISABLE_ARCH_PROFILES");

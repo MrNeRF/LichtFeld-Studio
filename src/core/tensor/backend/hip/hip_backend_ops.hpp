@@ -3,6 +3,7 @@
 #pragma once
 #include <core/detail/gpu_backend_ops.hpp>
 #include <filesystem>
+#include <string_view>
 #include "runtime_api.h"
 #include "device_identity_api.h"
 #include "external_memory_api.h"
@@ -65,6 +66,7 @@ namespace lfs::core::internal {
         LFS_CORE_API void retain_application_module(std::shared_ptr<void> module);
         LFS_CORE_API std::filesystem::path training_module_path(const std::filesystem::path& fallback,
                                                                bool generic_only=false) const;
+        LFS_CORE_API bool architecture_profile_enabled(std::string_view architecture) const;
         // Non-owning view of a live Tensor allocation. The arena owner must
         // outlive the returned view, as for the existing raw-view APIs.
         LFS_CORE_API StorageRef borrow_native_range(void* pointer, size_t bytes);

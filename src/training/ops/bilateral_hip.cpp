@@ -29,6 +29,10 @@ void forward(In g,In rgb,In offset,Out output,const GridSliceParams& p) {
 void backward(In g,In rgb,In grad,In offset,Out grad_grid,Out grad_rgb,const GridSliceParams& p) {
     color_shape(grad,rgb.numel());color_shape(grad_rgb,rgb.numel());color_shape(grad_grid,g.numel());
     hip::ColorCall c(1);grid(c,g);image(c,rgb,offset,p);
+    // Keep larger guide grids on the generic LDS footprint. Padding must not
+    // turn a previously valid launch into an out-of-shared-memory failure.
+    c.p.flags[3]=!c.p.flags[1] && c.p.dimensions[2]<=64 &&
+                 c.owner.ops.architecture_profile_enabled("gfx1150");
     c.bind(1,rgb);c.bind(2,grad);c.bind(3,offset);c.bind(4,grad_grid);c.bind(5,grad_rgb);submit(c);
 }
 void tv(In grids,Out loss,Out temporary,int norm_n) {

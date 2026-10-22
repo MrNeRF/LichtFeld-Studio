@@ -14,8 +14,52 @@ def write(name,text):
     path=a.output/name
     path.parent.mkdir(parents=True,exist_ok=True)
     if not path.exists() or path.read_text(encoding='utf-8')!=text:path.write_text(text,encoding='utf-8')
+
+def padded_affine_backward(text):
+    """Emit both HIP LDS layouts; the selected device controls host dispatch.
+
+    Keep the generic and exposure kernels at stride four. A stride-five affine
+    histogram reduces LDS bank conflicts on the validated gfx1150 profile.
+    Fail closed when the source boundaries change instead of silently mixing
+    host allocation sizes with a different device layout.
+    """
+    def replace_once(old,new):
+        nonlocal text
+        if text.count(old)!=1:
+            raise RuntimeError('Review changed bilateral boundary: '+old[:80])
+        text=text.replace(old,new)
+    for helper in ('scatter_grid_grad','flush_smem_to_global'):
+        begin=text.index('    __device__ __forceinline__ void '+helper+'(')
+        end=text.index('\n    }',begin)+6
+        body=text[begin:end].replace('kBwdSmemStrideX','Stride')
+        text=text[:begin]+'    template <int Stride = kBwdSmemStrideX>\n'+body+text[end:]
+    replace_once('template <bool kCHW>\n    __global__ void bilateral_grid_slice_gridgrad_kernel(',
+                 'template <bool kCHW, int Stride = kBwdSmemStrideX>\n    __global__ void bilateral_grid_slice_gridgrad_kernel(')
+    begin=text.index('    __global__ void bilateral_grid_slice_gridgrad_kernel(')
+    end=text.index('\n    }',begin)+6
+    body=text[begin:end].replace('kBwdSmemStrideX','Stride').replace('scatter_grid_grad(', 'scatter_grid_grad<Stride>(').replace('flush_smem_to_global(', 'flush_smem_to_global<Stride>(')
+    text=text[:begin]+body+text[end:]
+    for chw,suffix in (('false',''),('true','_chw')):
+        begin=text.index('    void launch_bilateral_grid_slice_backward'+suffix+'(')
+        end=text.index('\n    }',begin)+6
+        body=text[begin:end].replace('bool /*warp_aggregate*/','bool use_padded_affine')
+        old=f'''        bilateral_grid_slice_gridgrad_kernel<{chw}>
+            <<<tile_grid, block, bwd_hist_smem_bytes(12, L), stream>>>(
+                rgb, grad_output, grad_grid, L, H, W, h, w);'''
+        if body.count(old)!=1:raise RuntimeError('Review changed HIP affine launcher')
+        new=f'''        if (use_padded_affine && L <= 64) {{
+            bilateral_grid_slice_gridgrad_kernel<{chw}, 5>
+                <<<tile_grid, block, size_t(12) * L * kBwdMaxFootprint * 5 * sizeof(float), stream>>>(
+                    rgb, grad_output, grad_grid, L, H, W, h, w);
+        }} else {{
+{old}
+        }}'''
+        text=text[:begin]+body.replace(old,new)+text[end:]
+    return text
+
 for name in FILES:
     text=(a.source/name).read_text(encoding='utf-8')
+    if name=='bilateral_grid_backward.cu':text=padded_affine_backward(text)
     if name=='depth_loss.cu':
         text=text.replace('"../rasterization/gsplat/Cameras.cuh"','"Cameras.cuh"')
         text=text.replace('#include "core/logger.hpp"','#include "hip_geometry_scratch.hpp"')

@@ -8,6 +8,7 @@ extern "C" int lfs_hip_application_bilateral(const LfsHipColorCall* p,LfsHipErro
         require(p&&p->struct_bytes==sizeof(*p)&&p->operation<=7&&p->queue&&p->queue<=UINTPTR_MAX,"Invalid HIP bilateral descriptor");
         for(float v:p->values)require(std::isfinite(v),"Invalid HIP bilateral scalar");
         for(unsigned flag:p->flags)require(flag<=1,"Invalid HIP bilateral flag");
+        require(!p->flags[3] || (p->operation==1 && !p->flags[1]),"Padded HIP bilateral layout requires affine backward");
         const unsigned required[]={0x0b,0x37,0x07,0x03,0x07,0x1f,0x0f,0x03};
         for(unsigned i=0;i<6;++i)if(required[p->operation]&(1u<<i))require(p->bindings[i],"Missing HIP bilateral binding");
         const auto* d=p->dimensions;const auto* v=p->values;
@@ -27,7 +28,7 @@ extern "C" int lfs_hip_application_bilateral(const LfsHipColorCall* p,LfsHipErro
         }
         case 1: {
             const auto fn=p->flags[1]?(p->flags[0]?launch_bilateral_grid_slice_backward_exposure_chroma_chw:launch_bilateral_grid_slice_backward_exposure_chroma):(p->flags[0]?launch_bilateral_grid_slice_backward_chw:launch_bilateral_grid_slice_backward);
-            fn(f(0),f(1),f(2),f(4),f(5),d[2],d[3],d[4],d[5],d[6],f(3),stream,p->flags[2]!=0);break;
+            fn(f(0),f(1),f(2),f(4),f(5),d[2],d[3],d[4],d[5],d[6],f(3),stream,(p->flags[1]?p->flags[2]:p->flags[3])!=0);break;
         }
         case 2:launch_bilateral_grid_tv_forward(f(0),f(1),f(2),d[0],d[1],d[2],d[3],d[4],d[7],stream);break;
         case 3:launch_bilateral_grid_tv_backward(f(0),v[0],f(1),d[0],d[1],d[2],d[3],d[4],d[7],stream);break;

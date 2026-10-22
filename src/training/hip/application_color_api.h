@@ -8,6 +8,8 @@ typedef struct LfsHipColorCall {
     uint64_t queue,bindings[24];
     int32_t dimensions[12];
     float values[8];
+    // Bilateral: CHW, exposure/chroma, warp aggregation, padded affine LDS.
+    // The fourth flag is valid only for affine backward (operation 1).
     uint32_t flags[4];
 } LfsHipColorCall;
 typedef struct LfsHipAnchorCall {

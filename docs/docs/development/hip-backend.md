@@ -58,6 +58,17 @@ separate profiles. It cannot change the kernels in a single-profile developer
 binary. `LFS_HIP_TRAINING_MODULE` is an explicit diagnostic override: a failed
 override reports an error rather than silently choosing another file.
 
+HIP affine bilateral backward also selects a stride-five shared histogram on
+the actual selected `gfx1150` device. Both layouts are compiled into the HIP
+color kernels: other devices and `LFS_HIP_DISABLE_ARCH_PROFILES=1` retain stride
+four. Exposure/chroma retains stride four on every device. This selection does
+not increase the shared-memory requirement of guide grids larger than 64 bins;
+those grids retain the generic layout even on the validated device. It does
+not alter the original CUDA kernels, parameterization, sampling, or RGB-gradient
+calculation. Histogram accumulation remains FP32 and can differ in atomic
+summation order. Validate both settings with the bilateral contract, including
+its global-atomic fallback and shared-histogram partial-tile cases.
+
 ## Support boundaries
 
 The trainer currently requires wave32. Portable builds cover RDNA target IDs

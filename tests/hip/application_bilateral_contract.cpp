@@ -62,8 +62,11 @@ static Slice affine_cpu(bool chw,const std::vector<float>& grid,const std::vecto
 }
 int main()try {
     require(bool(set_default_gpu_backend(GpuBackend::HIP)),"Cannot select HIP");
+    // Small images exercise the global-atomic fallback; larger partial tiles
+    // exercise the shared histogram and its padded HIP profile layout.
+    for(const auto extent:{std::array{17,19},std::array{65,129}})
     for(bool chw:{false,true})for(bool exposure:{false,true}) {
-        constexpr int h=17,w=19;constexpr size_t n=h*w;const size_t channels=exposure?9:12;
+        const int h=extent[0],w=extent[1];const size_t n=size_t(h)*w;const size_t channels=exposure?9:12;
         std::vector<float> grid(channels*3*2*4),rgb(3*n),gradient(3*n),offset(channels);
         for(size_t i=0;i<grid.size();++i)grid[i]=float(int(i%17)-8)*.013f;
         for(size_t i=0;i<channels;++i)offset[i]=float(int(i%5)-2)*.007f;
@@ -72,6 +75,30 @@ int main()try {
         const auto reference=exposure?evaluate(GpuBackend::Vulkan,chw,true,grid,rgb,gradient,offset,h,w):affine_cpu(chw,grid,rgb,gradient,offset,h,w);
         for(size_t i=0;i<native.output.size();++i){near(native.output[i],reference.output[i]);near(native.rgb_gradient[i],reference.rgb_gradient[i],2e-4);}
         for(size_t i=0;i<native.grid_gradient.size();++i)near(native.grid_gradient[i],reference.grid_gradient[i],2e-4);
+    }
+    for(const size_t bins:{size_t{64},size_t{96}}) {
+        // Boundary of the padded profile, then a guide grid whose padded LDS
+        // allocation would exceed 64 KiB although the original layout fits.
+        const auto* ops=training_ops(GpuBackend::HIP).bilateral;
+        auto grid=Tensor::zeros({1,12,bins,1,1},Device::GPU);
+        auto rgb=Tensor::from_vector({.2f,.4f,.6f},{3,1,1},Device::GPU);
+        auto gradient=Tensor::from_vector({.1f,.2f,.3f},{3,1,1},Device::GPU);
+        std::vector<float> identity(12);identity[0]=identity[5]=identity[10]=1;
+        auto offset=Tensor::from_vector(identity,{12},Device::GPU);
+        auto output=Tensor::empty({3,1,1},Device::GPU),gi=Tensor::empty({3,1,1},Device::GPU);
+        auto gg=Tensor::zeros(grid.shape(),Device::GPU);
+        lfs::gpu_ops::GridSliceParams params{lfs::gpu_ops::Layout::CHW,lfs::gpu_ops::GridTransform::Affine,true};
+        ops->slice_forward(grid,rgb,offset,output,params);
+        ops->slice_backward(grid,rgb,gradient,offset,gg,gi,params);
+        const auto values=output.cpu().to_vector(),rgb_grad=gi.cpu().to_vector(),grid_grad=gg.cpu().to_vector();
+        for(int i=0;i<3;++i){near(values[i],.2*(i+1));near(rgb_grad[i],.1*(i+1));}
+        const double z=(.299*double(.2f)+.587*double(.4f)+.114*double(.6f))*(bins-1);
+        const size_t z0=size_t(z);const double fz=z-z0;
+        for(size_t ci=0;ci<12;++ci)for(size_t zi=0;zi<bins;++zi) {
+            const double color=ci%4==3?1.:.2*(ci%4+1);
+            const double weight=zi==z0?1-fz:(zi==z0+1?fz:0.);
+            near(grid_grad[ci*bins+zi],color*.1*(ci/4+1)*weight,2e-4);
+        }
     }
     {
         const auto* ops=training_ops(GpuBackend::HIP).bilateral;
