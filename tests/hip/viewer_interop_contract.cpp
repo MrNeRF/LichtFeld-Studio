@@ -4,6 +4,7 @@
 #include <core/tensor.hpp>
 #include <core/tensor_backend.hpp>
 #include <core/tensor_upload.hpp>
+#include <core/logger.hpp>
 #include <cstdio>
 #include <core/detail/tensor_half.hpp>
 #include <stdexcept>
@@ -12,6 +13,7 @@ using namespace lfs::core;
 static void require(bool v,const char* message){if(!v)throw std::runtime_error(message);}
 static void check(VkResult v){require(v==VK_SUCCESS,"Vulkan contract operation failed");}
 int main(int argc,char**argv) try {
+    Logger::get().init(LogLevel::Info);
     require(bool(set_default_gpu_backend(GpuBackend::HIP)),"Cannot select HIP");
     require(!tensor_backend_shares_vulkan_device() && tensor_backend_needs_vulkan_interop(),"HIP publication capabilities are incorrect");
     auto consumer=HeadlessAdoptedDevice::try_create(true,false,argc>1?argv[1]:"");
@@ -46,7 +48,8 @@ int main(int argc,char**argv) try {
     {
         std::mutex consumer_queue_mutex;
         TensorVulkanInterop interop({.physical_device=h.physical_device,.device=h.device,.sparse_queue=h.queue,.queue_mutex=&consumer_queue_mutex,.queue_families={h.queue_family},.queue_family_count=1,.external_memory=true});
-        auto source=Tensor::full({257},3.f,Device::GPU);
+        const size_t publication_count=argc>2 && std::string_view(argv[2])=="--large" ? 300001 : 257;
+        auto source=Tensor::full({publication_count},3.f,Device::GPU);
         lfs::vis::HipInputPublications cache;
         cache.resize(2);
         unsigned publications=0;
@@ -79,8 +82,8 @@ int main(int argc,char**argv) try {
             require(bool(bounded.get(0,0,load)) && bool(bounded.get(0,0,load)) && loads==4,
                     "Shrinking publication slots did not release the cache budget");
         }
-        require(first && first->device==h.device && first->bytes==257*sizeof(float) && first->device_address,"Invalid published buffer");
-        source.reserve(1024); // Publication must retain the allocation preceding a model-capacity change.
+        require(first && first->device==h.device && first->bytes==publication_count*sizeof(float) && first->device_address,"Invalid published buffer");
+        source.reserve(publication_count*2); // Publication must retain the allocation preceding a model-capacity change.
         source.fill_(7.f);
         cache.invalidate(); // Native/model mutations and training bypass invalidate all slots.
         auto second=cache.get(0,0,publish);
@@ -114,15 +117,15 @@ int main(int argc,char**argv) try {
         VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};submit.pNext=&timeline;submit.commandBufferCount=1;submit.pCommandBuffers=&command;submit.signalSemaphoreCount=1;submit.pSignalSemaphores=&done;
         check(vkQueueSubmit(static_cast<VkQueue>(h.queue),1,&submit,VK_NULL_HANDLE));
         const Tensor* tensors[]={&source};interop.wait(tensors,{done,value});
-        require(source.cpu().to_vector()==std::vector<float>(257,9.f),"Consumer edits were not returned to HIP");
+        require(source.cpu().to_vector()==std::vector<float>(publication_count,9.f),"Consumer edits were not returned to HIP");
         void* mapped=nullptr;check(vkMapMemory(device,memory,0,source.bytes(),0,&mapped));
-        for(size_t i=0;i<257;++i)require(static_cast<float*>(mapped)[i]==3.f,"Older publication lease changed after HIP mutation");
+        for(size_t i=0;i<publication_count;++i)require(static_cast<float*>(mapped)[i]==3.f,"Older publication lease changed after HIP mutation");
         vkUnmapMemory(device,memory);
         {
             TensorWorkQueue queue(GpuBackend::HIP,h.device,done,false);
             require(queue.timeline()==nullptr,"Host-synchronized HIP queue exposes a foreign GPU timeline");
             queue.execute([&]{source.fill_(11.f);},value).wait();
-            require(source.cpu().to_vector()==std::vector<float>(257,11.f),"HIP consumer queue ordering failed");
+            require(source.cpu().to_vector()==std::vector<float>(publication_count,11.f),"HIP consumer queue ordering failed");
             // The real viewport replaces its consumer timeline after training
             // initialization; a constructor-only test misses this transition.
             VkSemaphore replacement{};check(vkCreateSemaphore(device,&si,nullptr,&replacement));
@@ -130,7 +133,7 @@ int main(int argc,char**argv) try {
             signal.semaphore=replacement;signal.value=2;check(vkSignalSemaphore(device,&signal));
             queue.set_consumer_timeline(h.device,{replacement,2});
             queue.execute([&]{source.fill_(13.f);},2).wait();
-            require(source.cpu().to_vector()==std::vector<float>(257,13.f),"HIP replaced consumer timeline ordering failed");
+            require(source.cpu().to_vector()==std::vector<float>(publication_count,13.f),"HIP replaced consumer timeline ordering failed");
             queue.set_consumer_timeline(h.device,{done,value});
             bool rejected=false;
             try { queue.set_consumer_timeline(nullptr,{done,value}); }

@@ -302,6 +302,11 @@ Keep tracing disabled for performance measurements. The headless HIP viewer
 interop contract verifies cached leases, source reallocation, invalidation,
 failed-load retries, budget exhaustion and GPU consumption after invalidation;
 application-level frame and edit validation remains a separate requirement.
+Pass a consumer device index followed by `--large` to
+`lfs_hip_viewer_interop_contract` to exercise publication, reallocation and
+consumer copyback with more than 1 MiB of logical tensor data. Omitting the
+flag retains the small contract. The contract initializes logging so backend
+selection and staging fallbacks are visible in its CLI output.
 
 The current HIP adapter admits one context queue: `wait_for` validates its token
 and synchronizes that queue. HIP/Vulkan shared storage also uses host-completed
