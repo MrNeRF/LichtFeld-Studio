@@ -49,8 +49,12 @@ half-grid seam welding; voxel preview uploads occupancy without uploading the
 physical mesh.
 
 Limits apply to actual source, allocated tree, active-column and output-mesh work:
-10 million source Gaussians, 128,000,001 CPU tree words, 8 million floor columns,
-32,000,001 floor-height nodes, 32 million mesh vertices, and 192 million indices.
+10 million source Gaussians, 512,000,001 CPU tree words, 8 million floor columns,
+32,000,001 floor-height nodes, 64 million mesh vertices, and 384 million indices.
+Generation, validation and project restore share the same tree-word limit
+(approximately 1.91 GiB of words per volume); it remains below the GPU's reserved
+high-bit pointer range. Mesh limits permit approximately 2.15 GiB of positions
+and indices before normals, colors and staging.
 Tree operations and individual postprocessing stages also have finite work
 budgets. Grid axes are limited to 2^21 cells for coordinate/precision safety.
 GPU occupancy must fit the device's storage-buffer range. Allocator capacity,
@@ -106,7 +110,7 @@ remembered collision target from the current visible sources and makes it visibl
 again. Regeneration realigns the node to the current navigation frame; it is not a
 deformation of the previous mesh. **Generate new node** keeps existing nodes.
 
-## Full-scene Bicycle validation and known floor-fill limit
+## Full-scene Bicycle validation
 
 The separate `bicycle-collision-full-scene.licht` validation project contains the
 entire visible 1,000,000-Gaussian trained Model and one Collision node, with no
@@ -132,18 +136,39 @@ Native regressions additionally cover archive hydration, duplication/deletion
 undo, transformed capsules, distant sparse components, boundary seams, all six
 inside-solid bounding exits, and order-dependent independent overlays.
 
-**Unresolved: default Outdoor floor fill is not validated on full Bicycle at
-5 cm.** Even with direct batched construction, the full default Outdoor run
-(floor size `1.6`, floor ON, clustering OFF) reaches the 128,000,001-word output-tree
-budget while processing 2,215,493 active columns and 2,399,449 height nodes. The
-measured failure occurs after 20.125 seconds with 1,026,544 KiB peak RSS. This is
-not a mostly-empty world-AABB allocation or the old per-column mutation failure:
-extruded irregular column patterns exhaust the current octree output budget.
-Floor fill remains available and has dense-versus-sparse parity, uneven-height,
-padding, persistence and cancellation regressions, but those do not establish a
-usable full-scene default Outdoor result. Generation reports the failure and
-preserves the existing collider; it does not silently disable floor fill, crop
-the source or coarsen voxels.
+The separate `bicycle-collision-full-scene-outdoor.licht` project also completes
+the full default **Outdoor** path: all 1,000,000 visible Gaussians, 5 cm voxels,
+opacity `0.1`, **floor fill ON at `1.6`, clustering OFF, exterior fill OFF,
+and carve OFF**. No source copy, crop or resolution change is used. The former
+128-million-word tree and 32-million-vertex mesh caps were conservative
+implementation limits, not machine exhaustion; the bounded capacities above
+allow the actual canonical result.
+
+Native GUI generation produced 2,031,784,505 occupied cells and 133,030,713 CPU
+tree words (507.5 MiB) in 18.381 seconds. Smooth meshing and normals took another
+104.631 seconds, producing 62,855,233 vertices and 125,356,766 triangles.
+Positions and indices alone occupy approximately 2.10 GiB; this remains a very
+large proxy despite chunk-local coplanar simplification, not an optimized
+game-ready mesh. The saved project is 1,745,818,560 bytes (approximately 1.63 GiB).
+Native generation/save/reload peaked at approximately 19.04 GiB RSS on a 62 GiB
+host; the much smaller occupancy buffer does not imply that the complete
+authoring pipeline is suitable for small-memory hosts.
+
+The standalone full-source Outdoor benchmark measured 22.300 seconds generation,
+97.251 seconds meshing and 3.77 GiB peak RSS, with 133,033,817 CPU words,
+18,036,857 packed GPU words (68.8 MiB), 59,499,132 vertices and 118,644,536 triangles.
+It used 2,215,493 active floor columns and 2,399,449 height nodes rather than
+allocating the 3337-by-1793-by-4095 world grid. Native/compiler arithmetic differs
+slightly at voxel boundaries and can affect subsequent simplification counts.
+
+Reopening the Outdoor project hydrated both the complete Model and Collision
+payload, retaining the mesh counts and voxel preview. Walk entered from
+`(0, 4, -3)` and grounded stably at eye Y approximately `0.824`. Hiding the only
+collider rejected Walk entry; restoring it allowed entry again. Floor extrusion
+can create tall filled columns beneath canopy-only source supports; those are
+real generated occupancy, not omitted source regions or a second display mode.
+Synthetic regressions additionally check dense/sparse floor parity, uneven
+heights, surrounded holes, padding, persistence and cancellation.
 
 ## Walk testing
 

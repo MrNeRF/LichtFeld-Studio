@@ -341,7 +341,7 @@ TEST(CollisionSparse, PersistenceRejectsMalformedTopologyAndCoordinateOverflow) 
     j["occupancy_tree"] = "3";
     EXPECT_THROW((void)j.get<CollisionVolume>(), std::invalid_argument);
     j = nlohmann::json(v);
-    j["tree_nodes"] = 128'000'002;
+    j["tree_nodes"] = CollisionVolume::max_tree_words + 1;
     EXPECT_THROW((void)j.get<CollisionVolume>(), std::invalid_argument);
     j = nlohmann::json(v);
     j["tree_size"] = 3;

@@ -48,6 +48,8 @@ namespace lfs::core {
     };
 
     struct CollisionMesh {
+        static constexpr size_t max_vertices = 64'000'000;
+        static constexpr size_t max_indices = 384'000'000;
         std::vector<float> vertices;
         std::vector<int32_t> indices;
     };
@@ -55,6 +57,9 @@ namespace lfs::core {
     // Immutable once attached to a scene node. Coordinates are node-local, +Y up.
     struct LFS_CORE_API CollisionVolume {
         static constexpr size_t max_cells = 16'000'000;
+        static constexpr size_t max_tree_words = 512'000'001;
+        static_assert(max_tree_words + 2 < (uint32_t(1) << 31),
+                      "GPU occupancy reserves the high bit for brick pointers");
         CollisionSettings settings;
         glm::vec3 origin{0};
         glm::ivec3 dimensions{0};

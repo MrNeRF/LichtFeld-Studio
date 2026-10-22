@@ -963,14 +963,14 @@ namespace lfs::core {
                         continue;
                     }
                 }
-                if (output.vertices.size() / 3 >= 32'000'000)
+                if (output.vertices.size() / 3 >= CollisionMesh::max_vertices)
                     throw std::runtime_error("Collision output mesh vertex memory budget exceeded");
                 remap[i] = int32_t(output.vertices.size() / 3);
                 output.vertices.insert(output.vertices.end(), result.vertices.begin() + i * 3, result.vertices.begin() + i * 3 + 3);
                 if (seam)
                     seams.emplace(key, remap[i]);
             }
-            if (output.indices.size() + result.indices.size() > 192'000'000)
+            if (output.indices.size() + result.indices.size() > CollisionMesh::max_indices)
                 throw std::runtime_error("Collision output mesh index memory budget exceeded");
             for (auto index : result.indices)
                 output.indices.push_back(remap[index]);

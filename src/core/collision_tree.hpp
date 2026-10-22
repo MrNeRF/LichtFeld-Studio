@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "core/collision.hpp"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -100,7 +101,7 @@ namespace lfs::core::collision_detail {
         }
 
     public:
-        static constexpr size_t max_nodes = 128'000'001;
+        static constexpr size_t max_nodes = CollisionVolume::max_tree_words;
         int size = 1;
         glm::ivec3 dimensions{1};
         std::vector<uint32_t> nodes{0};

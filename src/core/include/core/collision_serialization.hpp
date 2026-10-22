@@ -69,7 +69,7 @@ namespace lfs::core {
         v.solid.clear();
         if (version == 2) {
             const auto count = j.at("tree_nodes").get<int64_t>();
-            if (count <= 0 || count > 128'000'001)
+            if (count <= 0 || uint64_t(count) > CollisionVolume::max_tree_words)
                 throw std::invalid_argument("Sparse collision payload exceeds node memory limit");
             const auto& tags = j.at("occupancy_tree").get_ref<const std::string&>();
             if (tags.size() != (size_t(count) + 1) / 2)
