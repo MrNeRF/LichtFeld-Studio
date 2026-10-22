@@ -81,6 +81,7 @@ contracts, or a short MCMC run do not establish complete strategy coverage.
 | GPU utilization | The HIP UI path explicitly returns an unavailable sample. | Add device-matched sampling independently of CUDA availability; distinguish a real 0% sample from unavailable data. |
 | GPU memory budget | HIP allocator statistics and `hipMemGetInfo` exist, but the UI does not expose a complete native process-budget path. | Connect meaningful process/device/budget measurements and their validity to the UI; distinguish allocated, reserved and driver-budget values. |
 | Training startup | Very slow initial roughly 100 steps reported in the application; the cause is not established. | Profile cold and warm startup with per-phase timing before selecting an optimization. |
+| Viewer/Tensor independence | Slow 3D viewing reported with Vulkan rendering on a GeForce and HIP Tensor processing on the 890M, even with a relatively low-detail scene. Whether training was active in this specific observation is not established. | Verify the effective devices and profile idle viewing separately from active training, including transfers, synchronization and unchanged-frame reuse. |
 | Hardware/platform validation | Runtime evidence is limited to the available GPU; Windows cross-target compilation is not execution on those targets. | Run the manual build matrix and preserve a conservative path for untested hardware. Wave64 remains outside the implemented scope. |
 
 The broadcast rejection is a confirmed limitation. Other dtype restrictions in
@@ -154,6 +155,35 @@ cross-GPU preview transfers when active. Compare fresh-process cold and warm
 runs with fixed inputs; exclude concurrent builds from performance evidence.
 Only then choose precompilation, bounded prewarming, scheduling, caching or kernel
 changes. Keep CPU image-offload and configured resize behavior intact.
+
+### Mixed-GPU viewer independence
+
+Treat the reported GeForce Vulkan renderer plus 890M HIP Tensor configuration
+as an unresolved performance issue. Separate device selectors do not prove that
+the render loop is independent of Tensor execution. Cross-GPU staging is an
+expected compatibility path, but its presence alone does not explain or justify
+slow viewing of a relatively small scene.
+
+- Confirm effective renderer and Tensor device identities after restart; do not
+  infer active devices solely from saved preferences.
+- Reproduce camera motion with training stopped, paused and active. Keep scene,
+  viewport size and reconstruction settings fixed; measure native rendering and
+  FSR separately. Do not assume the reported observation occurred during training.
+- Trace where render inputs live, when a Tensor-backed scene is converted or
+  copied for Vulkan, bytes transferred, queue waits and CPU staging work. Identify
+  any HIP work or global synchronization on the viewer's critical path.
+- For an unchanged model, verify that camera-only motion reuses renderer-local
+  storage instead of copying the full model from HIP on every frame. During
+  training, inspect generation tracking, preview publication cadence and whether
+  GPU/CPU waits serialize training and presentation unnecessarily.
+- Compare same-device and mixed-device configurations without weakening device
+  identity checks or importing incompatible storage. Any snapshot reuse,
+  asynchronous staging or throttling must preserve lifetimes, mutation ordering,
+  coherent preview data and visible/logged fallback behavior.
+
+Completion requires responsive idle viewing and measured, bounded preview-update
+cost during training. Do not claim that this independence is already verified,
+or that the discrete renderer makes the Tensor device irrelevant to rendering.
 
 ## Distribution size reduction plan
 
