@@ -855,6 +855,68 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
+    // Catches a project resume that adopted the scene's model copy in plain CUDA memory: until the trainer moved it
+    // back, the viewer drew from tensors outside its storage and dropped frames. The copy carries quantized SH, whose
+    // codes and bounds must keep matching capacities when they move.
+    TEST(CheckpointAllocatorRegressionTest, LoadCheckpointMovesAPreloadedModelIntoTheAllocator) {
+        namespace sh_value = lfs::training::sh_value;
+        sh_value::set_sh_value_quant_enabled_for_testing(true);
+        constexpr size_t count = 4;
+        constexpr size_t max_cap = 16;
+        constexpr int sh_degree = 1;
+
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_preloaded_allocator";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        lfs::core::param::TrainingParameters params;
+        params.dataset.output_path = temp_dir;
+        params.optimization.strategy = "mcmc";
+        params.optimization.max_cap = max_cap;
+
+        auto source_model = make_checkpoint_test_splat(count, lfs::core::Device::CUDA, sh_degree);
+        ASSERT_TRUE(sh_value::apply_shN_value_quant(*source_model));
+        lfs::training::MCMC source_strategy(*source_model);
+        ASSERT_TRUE(lfs::test::write_checkpoint_fixture(
+                        temp_dir, 7, source_strategy, params, nullptr, nullptr, nullptr)
+                        .has_value());
+
+        std::vector<std::string> allocated;
+        lfs::core::SplatTensorAllocator allocator =
+            [&allocated](lfs::core::TensorShape shape,
+                         const size_t capacity,
+                         const lfs::core::DataType dtype,
+                         const std::string_view name) -> lfs::core::Tensor {
+            allocated.emplace_back(name);
+            auto tensor = lfs::core::Tensor::zeros_direct(std::move(shape), capacity, lfs::core::Device::CUDA, dtype);
+            tensor.set_name(std::string{name});
+            return tensor;
+        };
+
+        auto preloaded = source_model->clone();
+        auto target_model = make_checkpoint_test_splat(1, lfs::core::Device::CUDA, sh_degree);
+        lfs::training::MCMC target_strategy(*target_model);
+        auto load_params = params;
+        const auto checkpoint_path = lfs::test::checkpoint_fixture_path(temp_dir);
+        std::ifstream source(checkpoint_path, std::ios::binary);
+        const auto load_result = lfs::training::load_checkpoint(
+            source, std::filesystem::file_size(checkpoint_path), target_strategy, load_params, nullptr, nullptr,
+            nullptr, allocator, "preloaded", &preloaded);
+        ASSERT_TRUE(load_result.has_value()) << load_result.error();
+
+        const auto& model = target_strategy.get_model();
+        EXPECT_EQ(*load_result, 7);
+        EXPECT_EQ(static_cast<size_t>(model.size()), count);
+        EXPECT_GE(model.means_raw().capacity(), max_cap);
+        EXPECT_GE(allocated.size(), 5u);
+        EXPECT_TRUE(model.shN_value_quantized());
+        EXPECT_NO_THROW(target_strategy.get_model().set_active_sh_degree(sh_degree));
+
+        sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
     TEST(CheckpointInputValidationTest, RejectsInvalidTensorDtypeAndPreservesLiveModel) {
         const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_invalid_tensor_dtype";
         std::error_code ec;

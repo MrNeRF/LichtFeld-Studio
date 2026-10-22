@@ -16,6 +16,7 @@
 #include "optimizer/adam_optimizer.hpp"
 #include "strategies/istrategy.hpp"
 #include "strategies/strategy_factory.hpp"
+#include "training_setup.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -783,6 +784,12 @@ namespace lfs::training {
                 lfs::core::SplatData::skip_serialized(file);
                 loaded_model = std::move(*preloaded_model);
                 reused_preloaded_model = true;
+                // A preloaded model is a plain copy of the scene's, and the commit below swaps it into the scene
+                // while the viewer may draw; the viewer renders only tensors in the caller's storage.
+                if (auto migrated = migrateTrainingModelToAllocator(loaded_params, loaded_model, tensor_allocator);
+                    !migrated) {
+                    throw std::runtime_error(migrated.error());
+                }
             } else {
                 loaded_model.deserialize(
                     file,
