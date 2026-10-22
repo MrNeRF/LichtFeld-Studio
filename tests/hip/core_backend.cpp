@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "../../src/core/tensor/backend/hip/hip_backend_ops.hpp"
 #include "../../src/core/tensor/backend/readback_buffer.hpp"
+#include "../../src/core/tensor/backend/export_pipeline.hpp"
 #include <algorithm>
 #include <atomic>
 #include <bit>
@@ -21,6 +22,12 @@
 // Tensor factory paths belong to integrated contracts and fail explicitly here.
 // Diagnostic assertions throw locally without pulling in the application logger.
 namespace lfs::core {
+    Tensor::Tensor(Tensor&&) noexcept = default;
+    Tensor& Tensor::operator=(Tensor&&) = default;
+    Tensor::~Tensor() = default;
+    Tensor Tensor::empty(TensorShape, Device, DataType, bool) { throw std::runtime_error("No Tensor factory linked in storage-only test"); }
+    Tensor Tensor::contiguous() const { throw std::runtime_error("No Tensor layout factory linked in storage-only test"); }
+    void Tensor::materialize_deferred_slow() { throw std::runtime_error("No deferred Tensor factory linked in storage-only test"); }
     GpuBackendScope::GpuBackendScope(GpuBackend) { throw std::runtime_error("No Tensor factory scope linked in isolated storage test"); }
     GpuBackendScope::~GpuBackendScope() = default;
     Tensor Tensor::from_external_owner(void*, TensorShape, Device, DataType, std::shared_ptr<void>, size_t, cudaStream_t, std::string) {
@@ -34,6 +41,10 @@ namespace lfs::core {
     }
 }
 namespace lfs::core::internal {
+    std::tuple<Tensor,Tensor> export_kmeans_sh(ExportKernels&,const Tensor&,int,int,int,int) { throw std::runtime_error("No export pipeline linked in storage-only test"); }
+    void export_assign_sh3(ExportKernels&,const Tensor&,const Tensor&,const Tensor&,Tensor&,bool,bool) { throw std::runtime_error("No export pipeline linked in storage-only test"); }
+    void export_decimate_candidates(ExportKernels&,const Tensor&,const Tensor&,const Tensor&,const Tensor&,const Tensor&,const Tensor&,int,std::vector<uint32_t>&,std::vector<float>&) { throw std::runtime_error("No export pipeline linked in storage-only test"); }
+    DecimateMerge export_decimate_merge(ExportKernels&,const Tensor&,const Tensor&,const Tensor&,const Tensor&,const Tensor&,const Tensor&,int,const std::vector<int>&,const std::vector<uint32_t>&,const std::vector<uint32_t>&,const std::vector<uint32_t>&,size_t) { throw std::runtime_error("No export pipeline linked in storage-only test"); }
     GpuBackendOps::~GpuBackendOps() = default;
     void GpuBackendOps::push_range(const char*) { throw std::runtime_error("No ranges in isolated test"); }
     void GpuBackendOps::pop_range() { throw std::runtime_error("No ranges in isolated test"); }
@@ -681,10 +692,112 @@ void test_random(GpuBackendOps& gpu) {
     }
     gpu.deallocate(base, {});
 }
+// Exercise the composed strided broadcast boundary, not just contiguous typed
+// pointwise kernels. Integer values deliberately exceed Float32 exact range.
+void test_integral_broadcast(GpuBackendOps& gpu) {
+    const auto host = [](void* p) { return StorageRef{GpuBackend::HIP,p,0,DataType::UInt8,nullptr,STORAGE_REF_HOST_MEMORY}; };
+    const auto run = [&]<class T>(DataType dtype) {
+        constexpr size_t rows=3, columns=5, count=32;
+        std::array<T,count> a{},b{};
+        if constexpr(sizeof(T)==8) { a[0]=T((uint64_t{1}<<54)+17);a[2]=T(-((int64_t{1}<<54)+9));a[4]=0; }
+        else if constexpr(sizeof(T)==4) { a[0]=T(16777217);a[2]=T(16777219);a[4]=T(7); }
+        else { a[0]=T(1);a[2]=T(dtype==DataType::Bool?0:251);a[4]=T(0); }
+        for(size_t c=0;c<columns;++c)b[c*3]=T(dtype==DataType::Bool?c%2:c);
+        if constexpr(sizeof(T)>=4){b[3]=T(a[0]+1);b[6]=a[0];b[9]=T(a[2]-1);}
+        auto left=gpu.allocate(count*sizeof(T)+32,16,{}),right=gpu.allocate(count*sizeof(T)+32,16,{});
+        auto result=gpu.allocate(count*sizeof(T)+32,16,{});
+        const auto base_left=left,base_right=right,base_result=result;
+        left.byte_offset=right.byte_offset=result.byte_offset=16;left.dtype=right.dtype=dtype;
+        gpu.copy_host_to_device({host(a.data()),left,sizeof(a)});gpu.copy_host_to_device({host(b.data()),right,sizeof(b)});
+        StridedLayout al{},bl{},ol{};
+        al.rank=bl.rank=ol.rank=2;al.dims={rows,1};al.strides={2,1};al.element_count=rows;
+        bl.dims={1,columns};bl.strides={15,3};bl.element_count=columns;
+        ol.dims={rows,columns};ol.strides={8,1};ol.element_count=rows*columns;
+        const PointwiseOp predicates[]={PointwiseOp::EqualTensor,PointwiseOp::NotEqualTensor,PointwiseOp::LessTensor,
+            PointwiseOp::LessEqualTensor,PointwiseOp::GreaterTensor,PointwiseOp::GreaterEqualTensor,
+            PointwiseOp::LogicalAndTensor,PointwiseOp::LogicalOrTensor,PointwiseOp::LogicalXorTensor};
+        for(auto op:predicates) {
+            result.dtype=DataType::Bool;
+            std::vector<uint8_t> actual(count*sizeof(T)+32,0xa5),expected=actual;
+            gpu.copy_host_to_device({host(actual.data()),base_result,actual.size()});
+            PointwiseProgram program{};program.op=op;program.in_dtype=dtype;program.out_dtype=DataType::Bool;
+            gpu.broadcast_binary(program,left,al,right,bl,result,ol,{});
+            gpu.copy_device_to_host({base_result,host(actual.data()),actual.size()});
+            for(size_t row=0;row<rows;++row)for(size_t col=0;col<columns;++col){
+                const T x=a[row*2],y=b[col*3];bool value=false;
+                switch(op){
+                case PointwiseOp::EqualTensor:value=x==y;break;case PointwiseOp::NotEqualTensor:value=x!=y;break;
+                case PointwiseOp::LessTensor:value=x<y;break;case PointwiseOp::LessEqualTensor:value=x<=y;break;
+                case PointwiseOp::GreaterTensor:value=x>y;break;case PointwiseOp::GreaterEqualTensor:value=x>=y;break;
+                case PointwiseOp::LogicalAndTensor:value=bool(x)&&bool(y);break;case PointwiseOp::LogicalOrTensor:value=bool(x)||bool(y);break;
+                case PointwiseOp::LogicalXorTensor:value=bool(x)!=bool(y);break;default:throw std::runtime_error("Invalid predicate fixture");}
+                expected[16+row*8+col]=uint8_t(value);
+            }
+            require(actual==expected,"Typed broadcast predicate differs from exact CPU or overwrites guards");
+        }
+        if(dtype!=DataType::Bool) {
+            const PointwiseOp arithmetic[]={PointwiseOp::AddTensor,PointwiseOp::SubTensor,PointwiseOp::MulTensor,
+                PointwiseOp::DivTensor,PointwiseOp::ModTensor,PointwiseOp::PowTensor,PointwiseOp::MinimumTensor,PointwiseOp::MaximumTensor};
+            for(auto op:arithmetic) {
+                result.dtype=dtype;
+                std::vector<uint8_t> actual(count*sizeof(T)+32,0xa5),expected=actual;
+                gpu.copy_host_to_device({host(actual.data()),base_result,actual.size()});
+                PointwiseProgram program{};program.op=op;program.in_dtype=program.out_dtype=dtype;
+                gpu.broadcast_binary(program,left,al,right,bl,result,ol,{});
+                gpu.copy_device_to_host({base_result,host(actual.data()),actual.size()});
+                for(size_t row=0;row<rows;++row)for(size_t col=0;col<columns;++col){
+                    using U=std::make_unsigned_t<T>;
+                    const T x=a[row*2],y=b[col*3];T value{};
+                    const auto wrap=[](U bits){return std::bit_cast<T>(bits);};
+                    switch(op) {
+                    case PointwiseOp::AddTensor:value=wrap(U(U(x)+U(y)));break;
+                    case PointwiseOp::SubTensor:value=wrap(U(U(x)-U(y)));break;
+                    case PointwiseOp::MulTensor:value=wrap(U(U(x)*U(y)));break;
+                    case PointwiseOp::DivTensor:value=y?T(x/y):T{};break;
+                    case PointwiseOp::ModTensor:value=y?T(x%y):T{};break;
+                    case PointwiseOp::MinimumTensor:value=std::min(x,y);break;
+                    case PointwiseOp::MaximumTensor:value=std::max(x,y);break;
+                    case PointwiseOp::PowTensor:{
+                        U exponent=U(y),factor=U(x),product=1;
+                        if constexpr(std::is_signed_v<T>)if(y<0){value=x==1?T(1):x==T(-1)?(y%2?T(-1):T(1)):T(0);break;}
+                        while(exponent){if(exponent&1)product=U(product*factor);factor=U(factor*factor);exponent>>=1;}
+                        value=wrap(product);break;
+                    }
+                    default:throw std::runtime_error("Invalid integer broadcast fixture");
+                    }
+                    std::memcpy(expected.data()+16+(row*8+col)*sizeof(T),&value,sizeof(T));
+                }
+                require(actual==expected,"Integer broadcast arithmetic differs from exact CPU or overwrites guards");
+            }
+        }
+        PointwiseProgram invalid{};
+        invalid.op=PointwiseOp::EqualTensor;invalid.in_dtype=dtype;invalid.out_dtype=DataType::Bool;
+        result.dtype=DataType::Bool;
+        auto mixed=right;mixed.dtype=dtype==DataType::Int32?DataType::Int64:DataType::Int32;
+        reject([&]{gpu.broadcast_binary(invalid,left,al,mixed,bl,result,ol,{});});
+        auto bad_shape=ol;bad_shape.dims[1]=4;bad_shape.element_count=rows*4;
+        reject([&]{gpu.broadcast_binary(invalid,left,al,right,bl,result,bad_shape,{});});
+        auto alias=left;alias.dtype=DataType::Bool;
+        reject([&]{gpu.broadcast_binary(invalid,left,al,right,bl,alias,ol,{});});
+        if(dtype==DataType::Bool) {
+            invalid.op=PointwiseOp::AddTensor;
+            reject([&]{gpu.broadcast_binary(invalid,left,al,right,bl,result,ol,{});});
+        }
+        gpu.deallocate(base_left,{});gpu.deallocate(base_right,{});gpu.deallocate(base_result,{});
+    };
+    run.template operator()<uint8_t>(DataType::Bool);
+    run.template operator()<int32_t>(DataType::Int32);
+    run.template operator()<int64_t>(DataType::Int64);
+    run.template operator()<uint32_t>(DataType::UInt32);
+    run.template operator()<uint8_t>(DataType::UInt8);
+    std::puts("PASS exact Bool/integer strided broadcasts and padding guards");
+}
+
 int main(int argc, char** argv) try {
     require(argc == 2, "Expected HIP runtime module");
     HipBackendOps native(std::filesystem::absolute(argv[1]), 0);
     GpuBackendOps& gpu = native;
+    test_integral_broadcast(gpu);
     constexpr size_t count = 263;
     auto a = gpu.allocate((count + 16) * 4, 256, {});
     auto b = gpu.allocate((count + 16) * 4, 16, {});
@@ -1186,7 +1299,10 @@ int main(int argc, char** argv) try {
     reject([&] { gpu.scalar(p, a, overlap, count, {}); });
     reject([&] { gpu.scalar(p, a, output, SIZE_MAX, {}); });
     p.scalar.scalar_on_right = false;
-    reject([&] { gpu.scalar(p, a, output, count, {}); });
+    gpu.scalar(p, a, output, count, {});
+    gpu.copy_device_to_host({output, host(actual.data()), count * 4});
+    for(size_t i=0;i<count;++i)
+        require(actual[i]==0.5f*x[i],"HIP scalar-left multiply differs from CPU");
     ExecContext cuda{};
     cuda.cuda_stream = reinterpret_cast<cudaStream_t>(uintptr_t(1));
     reject([&] { gpu.synchronize_stream(cuda); });

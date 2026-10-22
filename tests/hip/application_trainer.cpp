@@ -27,11 +27,19 @@ namespace {
 int main(int argc,char** argv) try {
     using namespace lfs;
     using namespace core;
-    if(argc<7 || argc>9) throw std::invalid_argument("Arguments: dataset output steps max_width max_gaussians SH_degree_plus_one [resume_project] [--exercise-mutations]");
+    if(argc<7) throw std::invalid_argument("Arguments: dataset output steps max_width max_gaussians SH_degree_plus_one [resume_project] [--exercise-mutations] [--strategy=mcmc|mrnf|igs+] [--appearance]");
     bool exercise_mutations=false;
+    bool appearance=false;
+    std::string strategy(param::kStrategyMCMC);
     std::optional<std::filesystem::path> resume;
     for(int i=7;i<argc;++i) {
         if(std::string_view(argv[i])=="--exercise-mutations")exercise_mutations=true;
+        else if(std::string_view(argv[i])=="--appearance")appearance=true;
+        else if(std::string_view(argv[i]).starts_with("--strategy=")) {
+            const auto requested=std::string_view(argv[i]).substr(11);
+            if(!param::is_valid_strategy_name(requested))throw std::invalid_argument("Unknown test strategy");
+            strategy=std::string(param::canonical_strategy_name(requested));
+        }
         else if(!resume)resume=std::filesystem::absolute(argv[i]);
         else throw std::invalid_argument("Unexpected extra argument");
     }
@@ -53,7 +61,9 @@ int main(int argc,char** argv) try {
     params.optimization.max_cap=int(positive(argv[5]));
     params.optimization.sh_degree=int(positive(argv[6]))-1;
     if(params.optimization.sh_degree>3)throw std::invalid_argument("SH degree must be 0 through 3");
-    params.optimization.strategy=std::string(param::kStrategyMCMC);
+    params.optimization.strategy=strategy;
+    params.optimization.use_bilateral_grid=appearance;
+    params.optimization.use_ppisp=appearance;
     params.optimization.undistort=true;
     params.optimization.headless=true;
     params.optimization.save_steps={params.optimization.iterations};

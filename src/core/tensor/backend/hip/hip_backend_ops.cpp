@@ -940,9 +940,11 @@ namespace lfs::core::internal {
     }
     void HipBackendOps::broadcast_binary(const PointwiseProgram& program, StorageRef lhs, const StridedLayout& lhs_layout, StorageRef rhs, const StridedLayout& rhs_layout, StorageRef output, const StridedLayout& output_layout, ExecContext execution) {
         queue(execution);
-        require((lhs.dtype == DataType::Float32 || lhs.dtype == DataType::Float16) && program.in_dtype == lhs.dtype && rhs.dtype == lhs.dtype && output.dtype == program.out_dtype &&
+        require((lhs.dtype == DataType::Float32 || lhs.dtype == DataType::Float16 || lhs.dtype == DataType::Bool ||
+                    lhs.dtype == DataType::UInt8 || lhs.dtype == DataType::Int32 || lhs.dtype == DataType::Int64 || lhs.dtype == DataType::UInt32) &&
+                    program.in_dtype == lhs.dtype && rhs.dtype == lhs.dtype && output.dtype == program.out_dtype &&
                     (output.dtype == lhs.dtype || output.dtype == DataType::Bool),
-                "HIP broadcast requires matching floating operands and floating/bool output");
+                "HIP broadcast requires matching supported operands and matching/predicate output");
         const auto a = native_layout(lhs_layout), b = native_layout(rhs_layout), out = native_layout(output_layout);
         std::lock_guard lock(impl_->mutex);
         const auto av = impl_->view(lhs), bv = impl_->view(rhs), ov = impl_->view(output);

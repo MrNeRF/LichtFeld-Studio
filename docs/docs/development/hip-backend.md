@@ -75,16 +75,18 @@ contracts, or a short MCMC run do not establish complete strategy coverage.
 | Area | Current boundary | Required completion evidence |
 |---|---|---|
 | MCMC | Application training and mutation paths have dedicated tests; portable smoke tests cover only a short run. | Retain existing checks and exercise the final packaged modules through mutation, save and resume. |
-| MRNF | A real application run fails with a HIP broadcast dtype rejection during the post-backward/refinement phase. Native MRNF callback contracts do not cover this composed Tensor path. | Reproduce the original configuration, identify operand types/shapes/operation, add the missing typed operation, and pass the failing phase plus subsequent refinement transitions. |
-| IGS / ImprovedGSPlus | Registered through the normal strategy factory; consumes HIP MCMC, MRNF and refinement operations. No dedicated full-strategy HIP application validation is established. | Exercise initialization, edge/error scoring, split, prune, slot reuse, frozen masks, opacity reset, SH changes, save and resume. Do not infer strategy correctness from callback contracts or MCMC tests. |
-| Tensor dtype/layout coverage | Binary broadcast currently admits only matching Float32/Float16 inputs and floating/Bool output; integer and Bool input broadcasting is not implemented in that entry point. | Audit actual strategy call sites and shared Tensor contracts, including unequal shapes, strided/expanded views, empty inputs and integer/Bool predicates. Preserve exact integer/Bool semantics; do not cast indices through Float32. |
+| MRNF | The real application trainer has a dedicated short mutation/refinement contract with optional bilateral grid and PPISP. The original reported configuration still needs a matching reproduction. | Preserve the composed Tensor regression coverage and pass the original failing phase plus subsequent refinement transitions. Native callback contracts alone are insufficient. |
+| IGS / ImprovedGSPlus | Registered through the normal strategy factory; consumes HIP MCMC, MRNF and refinement operations. A short application-level mutation contract exercises the strategy; this is not complete lifecycle/quality validation. | Exercise initialization, edge/error scoring, split, prune, slot reuse, frozen masks, opacity reset, SH changes, save and resume. Do not infer full strategy correctness from callback contracts or MCMC tests. |
+| Tensor dtype/layout coverage | Binary broadcast supports matching Float32/Float16 operands, native integer arithmetic/comparisons, and Bool predicates. Bool arithmetic is rejected. | Audit actual strategy call sites and shared Tensor contracts, including unequal shapes, strided/expanded views, empty inputs and integer/Bool predicates. Preserve exact integer/Bool semantics; do not cast indices through Float32. |
 | GPU utilization | The HIP UI path explicitly returns an unavailable sample. | Add device-matched sampling independently of CUDA availability; distinguish a real 0% sample from unavailable data. |
 | GPU memory budget | HIP allocator statistics and `hipMemGetInfo` exist, but the UI does not expose a complete native process-budget path. | Connect meaningful process/device/budget measurements and their validity to the UI; distinguish allocated, reserved and driver-budget values. |
 | Training startup | Very slow initial roughly 100 steps reported in the application; the cause is not established. | Profile cold and warm startup with per-phase timing before selecting an optimization. |
 | Viewer/Tensor independence | Slow 3D viewing reported with Vulkan rendering on a GeForce and HIP Tensor processing on the 890M, even with a relatively low-detail scene. Whether training was active in this specific observation is not established. | Verify the effective devices and profile idle viewing separately from active training, including transfers, synchronization and unchanged-frame reuse. |
 | Hardware/platform validation | Runtime evidence is limited to the available GPU; Windows cross-target compilation is not execution on those targets. | Run the manual build matrix and preserve a conservative path for untested hardware. Wave64 remains outside the implemented scope. |
 
-The broadcast rejection is a confirmed limitation. Other dtype restrictions in
+The reported application broadcast rejection still requires an integrated
+reproduction; adding typed storage-level kernels alone does not establish that
+the composed MRNF path is complete. Other dtype restrictions in
 `HipBackendOps` must be compared with the shared API and real callers before
 being classified as missing functionality. Do not turn every shape/type guard
 into an unconditional promise of support or remove validation to silence a
@@ -249,3 +251,14 @@ Four dedicated GitHub workflows cover Windows/Linux, HIP-only/CUDA+HIP, each in
 Release and Debug. They are exclusively `workflow_dispatch`; existing workflows
 are unchanged. These jobs verify builds and CPU policy checks, not GPU quality.
 Benchmark measurements and development reports are kept outside source commits.
+
+The application trainer contract accepts `--strategy=mcmc`, `--strategy=mrnf`
+or `--strategy=igs+`. Its `--appearance` option enables both bilateral grid and
+PPISP. Combine these with `--exercise-mutations` for an explicitly accelerated
+correctness run, and pass the resulting project as `resume_project` to exercise
+checkpoint restoration. Accelerated runs are not performance or quality baselines.
+
+When testing a development build containing a staged `hip/` directory, verify
+the module actually selected beside the executable. Rebuilding the native module
+in its intermediate target directory does not refresh an older staged copy.
+The isolated adapter contract takes the runtime DLL path explicitly.

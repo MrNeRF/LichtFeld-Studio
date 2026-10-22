@@ -1563,10 +1563,14 @@ int lfs_hip_scalar_left_typed(LfsHipContext* context, uint32_t op, LfsHipView lh
         if(dtype==LFS_HIP_F16)dispatch.template operator()<__half>();else dispatch.template operator()<float>();
     });
 }
+namespace {
+void launch_integral_broadcast(LfsHipContext*,uint32_t,LfsHipView,LfsHipView,LfsHipView,LfsHipLayout,LfsHipLayout,LfsHipLayout,uint32_t);
+}
 int lfs_hip_broadcast_typed(LfsHipContext* context, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, const LfsHipLayout* lhs_layout, const LfsHipLayout* rhs_layout, const LfsHipLayout* output_layout, uint32_t input_dtype, uint32_t output_element_bytes, LfsHipError* error) {
     return boundary(error, [&] {
-        require(input_dtype == LFS_HIP_F32 || input_dtype == LFS_HIP_F16, "Unsupported HIP broadcast input dtype");
-        const uint32_t width = input_dtype == LFS_HIP_F16 ? 2u : 4u;
+        require(input_dtype <= LFS_HIP_U32, "Unsupported HIP broadcast input dtype");
+        const uint32_t width = input_dtype == LFS_HIP_F16 ? 2u : input_dtype == LFS_HIP_I64 ? 8u :
+                               input_dtype == LFS_HIP_U8 || input_dtype == LFS_HIP_BOOL ? 1u : 4u;
         require(lhs_layout && rhs_layout && output_layout && op < LFS_HIP_OP_COUNT, "Invalid HIP broadcast descriptor");
         require((pointwise_flags[op] & 3) == 2, "HIP broadcast requires a binary Tensor operation");
         require(output_element_bytes == ((pointwise_flags[op] & 4) ? 1u : width), "HIP broadcast output dtype mismatch");
@@ -1593,7 +1597,9 @@ int lfs_hip_broadcast_typed(LfsHipContext* context, uint32_t op, LfsHipView lhs,
         disjoint(rhs, b_bytes);
         DeviceScope device(context->device);
         using namespace lfs::core;
-        if (input_dtype == LFS_HIP_F16) {
+        if(input_dtype != LFS_HIP_F32 && input_dtype != LFS_HIP_F16) {
+            launch_integral_broadcast(context,op,lhs,rhs,output,a,b,out,input_dtype);
+        } else if (input_dtype == LFS_HIP_F16) {
             switch (op) {
 #include "hip_tensor_half_broadcast.inc"
             default: throw std::invalid_argument("Unsupported HIP half broadcast operation");
@@ -2495,6 +2501,7 @@ int lfs_hip_warp_rgb(LfsHipContext* context, LfsHipView input, uint32_t dtype,
 #include "point_tree_runtime.hpp"
 
 #include "integer_pointwise_runtime.hpp"
+#include "integral_broadcast_runtime.hpp"
 
 #include "ppisp_runtime.hpp"
 
