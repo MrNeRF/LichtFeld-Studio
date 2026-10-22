@@ -94,7 +94,7 @@ endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/VcpkgProfiles.cmake")
 lfs_validate_vcpkg_profile()
 
-project(LichtFeld-Studio VERSION 0.5.4.2 LANGUAGES CUDA CXX C)
+project(LichtFeld-Studio VERSION 0.5.5 LANGUAGES CUDA CXX C)
 
 if(WIN32)
     # Public headers can include windows.h in consumers such as the test targets.
