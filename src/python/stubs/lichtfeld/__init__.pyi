@@ -645,7 +645,9 @@ def get_camera_navigation_mode() -> str:
     """
 
 def set_camera_navigation_mode(mode: str) -> None:
-    """Set the camera mode. Walk requires visible collision geometry and a free capsule; raises RuntimeError otherwise."""
+    """
+    Set the active camera navigation mode. Walk requires a visible collision node and a free capsule at the camera; otherwise raises RuntimeError.
+    """
 
 def get_new_project_navigation_up_axis() -> str:
     """Get the navigation vertical used only for new projects"""
