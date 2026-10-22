@@ -298,9 +298,50 @@ void native_norm() {
         }
     }
 }
+float nn_activation(float x,int activation) {
+    if(activation==1)return std::fmax(x,0.f);
+    if(activation==2)return .5f*x*(1.f+std::tanh(.7978845608028654f*(x+.044715f*x*x*x)));
+    if(activation==3){const float a=std::abs(x*.7071067811865475f),t=1.f/(1.f+.3275911f*a);
+        float r=1.f-(((((1.061405429f*t-1.453152027f)*t)+1.421413741f)*t-.284496736f)*t+.254829592f)*t*std::exp(-a*a);
+        return .5f*x*(1.f+(x<0?-r:r));}
+    if(activation==4)return x/(1.f+std::exp(-x));return x;
+}
+void native_linear() {
+    auto& gpu=backend_ops(GpuBackend::HIP);
+    for(auto dtype : {DataType::Float32,DataType::Float16})for(size_t m : {size_t(3),size_t(17),size_t(65)})
+    for(bool transpose : {false,true})for(bool batched : {false,true}) {
+        constexpr size_t batches=2,n=19,k=33;const size_t output_count=batches*m*n;
+        std::vector<float> av(batches*m*k),wv((batched?batches:1)*n*k),bv(n),sv(n),rv(output_count);
+        for(size_t i=0;i<av.size();++i)av[i]=.3f*std::sin(float(i)*.17f);
+        for(size_t i=0;i<wv.size();++i)wv[i]=.2f*std::cos(float(i)*.13f);
+        for(size_t i=0;i<n;++i){bv[i]=.02f*float(int(i%7)-3);sv[i]=.7f+float(i%3)*.2f;}
+        for(size_t i=0;i<rv.size();++i)rv[i]=.01f*float(int(i%13)-6);
+        auto a=Tensor::from_vector(av,{av.size()},Device::GPU).to(dtype),w=Tensor::from_vector(wv,{wv.size()},Device::GPU).to(dtype);
+        auto bias=Tensor::from_vector(bv,{n},Device::GPU).to(dtype),scale=Tensor::from_vector(sv,{n},Device::GPU).to(dtype);
+        auto residual=Tensor::from_vector(rv,{rv.size()},Device::GPU).to(dtype);
+        auto ah=a.to(DataType::Float32).cpu(),wh=w.to(DataType::Float32).cpu(),bh=bias.to(DataType::Float32).cpu(),sh=scale.to(DataType::Float32).cpu(),rh=residual.to(DataType::Float32).cpu();
+        for(int activation=0;activation<=4;++activation)for(bool affine : {false,true}) {
+            auto output=Tensor::from_vector(std::vector<float>(output_count+2,-77),{output_count+2},Device::GPU).to(dtype);
+            auto out=storage_ref(output);out.byte_offset=dtype==DataType::Float32?4:2;
+            gpu.nn_linear(storage_ref(a),storage_ref(w),affine?std::optional(storage_ref(bias)):std::nullopt,
+                affine?std::optional(storage_ref(scale)):std::nullopt,affine?std::optional(storage_ref(residual)):std::nullopt,out,
+                {batches,m,n,k,transpose,batched,activation},{});
+            auto observed=output.to(DataType::Float32).cpu();
+            require(observed.ptr<float>()[0]==-77 && observed.ptr<float>()[output_count+1]==-77,"HIP linear overwrote output guards");
+            for(size_t batch=0;batch<batches;++batch)for(size_t row=0;row<m;++row)for(size_t col=0;col<n;++col) {
+                float value=0;const size_t offset=(batch*m+row)*n+col;
+                for(size_t t=0;t<k;++t)value=std::fma(ah.ptr<float>()[(batch*m+row)*k+t],wh.ptr<float>()[(batched?batch*n*k:0)+(transpose?col*k+t:t*n+col)],value);
+                if(affine)value+=bh.ptr<float>()[col];value=nn_activation(value,activation);
+                if(affine){value*=sh.ptr<float>()[col];value+=rh.ptr<float>()[offset];}
+                const float tolerance=dtype==DataType::Float16?1e-3f:3e-5f;
+                require(std::isfinite(observed.ptr<float>()[offset+1]) && std::abs(observed.ptr<float>()[offset+1]-value)<tolerance*std::max(1.f,std::abs(value)),"HIP fused linear differs from reference");
+            }
+        }
+    }
+}
 int main() try {
     GpuBackendScope scope(GpuBackend::HIP);
-    unary();integer_arithmetic();native_norm();precise_bits();gathered_and_packed();fold_and_host();cache_and_threads();
-    std::puts("PASS HIP expressions: native layer/RMS norms FP16/FP32 with guards and inplace, native math, exact Int32/Int64/UInt32/UInt8 arithmetic and empty operations, IEEE values, gather bounds, Float16/Bool/UInt8 packed tails, host constants, short/runtime folds, prepare, shape cache and concurrent launches");
+    unary();integer_arithmetic();native_norm();native_linear();precise_bits();gathered_and_packed();fold_and_host();cache_and_threads();
+    std::puts("PASS HIP expressions: native fused linear and layer/RMS norms FP16/FP32 with guards and inplace, native math, exact Int32/Int64/UInt32/UInt8 arithmetic and empty operations, IEEE values, gather bounds, Float16/Bool/UInt8 packed tails, host constants, short/runtime folds, prepare, shape cache and concurrent launches");
     return 0;
 } catch(const std::exception& e) {std::fprintf(stderr,"HIP expression failed: %s\n",e.what());return 1;}

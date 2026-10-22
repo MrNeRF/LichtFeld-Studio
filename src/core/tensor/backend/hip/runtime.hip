@@ -2465,3 +2465,5 @@ int lfs_hip_warp_rgb(LfsHipContext* context, LfsHipView input, uint32_t dtype,
 #include "export_runtime.hpp"
 
 #include "nn_runtime.hpp"
+
+#include "nn_linear_runtime.hpp"

@@ -274,6 +274,7 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_multinomial);
         ENTRY(lfs_hip_export);
         ENTRY(lfs_hip_nn_norm);
+        ENTRY(lfs_hip_nn_linear);
         ENTRY(lfs_hip_point_tree_components);
         ENTRY(lfs_hip_proximity);
         ENTRY(lfs_hip_convert);
@@ -422,6 +423,7 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_multinomial);
                 LOAD(lfs_hip_export);
                 LOAD(lfs_hip_nn_norm);
+                LOAD(lfs_hip_nn_linear);
                 LOAD(lfs_hip_point_tree_components);
                 LOAD(lfs_hip_proximity);
                 LOAD(lfs_hip_convert);
@@ -2659,5 +2661,19 @@ void HipBackendOps::nn_norm(StorageRef input,StorageRef weight,std::optional<Sto
     const auto view=[&](StorageRef storage){return storage.data?impl_->view(storage):(impl_->empty_view(storage),LfsHipView{});};
     const LfsHipNorm native{p.rows,p.cols,p.eps,uint32_t(input.dtype)};LfsHipError error{};
     check(impl_->lfs_hip_nn_norm(impl_->context,view(input),view(weight),bias?view(*bias):LfsHipView{},view(output),&native,&error),error);
+}
+}
+
+namespace lfs::core::internal {
+void HipBackendOps::nn_linear(StorageRef a,StorageRef w,std::optional<StorageRef> bias,std::optional<StorageRef> scale,
+    std::optional<StorageRef> residual,StorageRef output,const LinearProgram& p,ExecContext execution) {
+    queue(execution);
+    require((a.dtype==DataType::Float32 || a.dtype==DataType::Float16) && w.dtype==a.dtype && output.dtype==a.dtype,"HIP NN linear requires matching Float32 or Float16 types");
+    for(const auto& item:{bias,scale,residual})if(item)require(item->dtype==a.dtype,"HIP NN linear affine input type differs");
+    std::lock_guard lock(impl_->mutex);
+    const auto view=[&](StorageRef storage){return storage.data?impl_->view(storage):(impl_->empty_view(storage),LfsHipView{});};
+    const LfsHipView inputs[]{view(a),view(w),bias?view(*bias):LfsHipView{},scale?view(*scale):LfsHipView{},residual?view(*residual):LfsHipView{}};
+    const LfsHipLinear native{p.batch,p.m,p.n,p.k,uint32_t(a.dtype),uint32_t(p.trans_b),uint32_t(p.batched_b),uint32_t(p.activation)};LfsHipError error{};
+    check(impl_->lfs_hip_nn_linear(impl_->context,inputs,view(output),&native,&error),error);
 }
 }

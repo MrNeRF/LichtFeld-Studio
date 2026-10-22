@@ -10,7 +10,6 @@ namespace lfs::core::internal {
 #ifndef LFS_HIP_EXPRESSION_JIT
     void HipBackendOps::compiled_expression(const ExpressionLaunch& launch, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: compiled_expression"); }
 #endif
-    void HipBackendOps::nn_linear(StorageRef a, StorageRef w, std::optional<StorageRef> bias, std::optional<StorageRef> scale, std::optional<StorageRef> residual, StorageRef output, const LinearProgram& program, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: nn_linear"); }
     void HipBackendOps::nn_attention(StorageRef q, StorageRef k, StorageRef v, std::optional<StorageRef> mask, StorageRef output, const AttentionProgram& program, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: nn_attention"); }
     void HipBackendOps::nn_conv2d(StorageRef input, StorageRef weight, std::optional<StorageRef> bias, StorageRef output, const ConvProgram& program, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: nn_conv2d"); }
 } // namespace lfs::core::internal
