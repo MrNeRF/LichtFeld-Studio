@@ -559,13 +559,15 @@ namespace lfs::core {
             const auto apply = [ratio](const size_t v) {
                 return static_cast<size_t>(std::lround(static_cast<float>(v) * ratio));
             };
+            // Intervals must stay at least one step, or a short --iter run fails validation.
+            const auto apply_interval = [&apply](const size_t v) { return std::max<size_t>(1, apply(v)); };
             iterations = apply(iterations);
             start_refine = apply(start_refine);
             stop_refine = apply(stop_refine);
-            reset_every = apply(reset_every);
-            refine_every = apply(refine_every);
+            reset_every = apply_interval(reset_every);
+            refine_every = apply_interval(refine_every);
             morton_reorder_interval = apply(morton_reorder_interval);
-            sh_degree_interval = apply(sh_degree_interval);
+            sh_degree_interval = apply_interval(sh_degree_interval);
             grow_until_iter = apply(grow_until_iter);
 
             for (auto* steps : {&eval_steps, &save_steps}) {
