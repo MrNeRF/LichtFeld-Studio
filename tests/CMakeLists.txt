@@ -35,6 +35,14 @@ endif()
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
+add_executable(lichtfeld_collision_tests test_collision.cpp ../src/core/collision.cpp)
+target_compile_features(lichtfeld_collision_tests PRIVATE cxx_std_23)
+target_compile_definitions(lichtfeld_collision_tests PRIVATE LFS_STATIC_BUILD)
+target_include_directories(lichtfeld_collision_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/core/include)
+target_link_libraries(lichtfeld_collision_tests PRIVATE GTest::gtest_main glm::glm nlohmann_json::nlohmann_json)
+add_test(NAME lichtfeld.collision COMMAND lichtfeld_collision_tests)
+set_tests_properties(lichtfeld.collision PROPERTIES LABELS "cpu;collision;navigation" TIMEOUT 60)
+
 # Deliberately no executable opt-in: exercise extended-path I/O independently
 # of the user's/runner's LongPathsEnabled registry policy.
 if(WIN32 AND (BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS))
