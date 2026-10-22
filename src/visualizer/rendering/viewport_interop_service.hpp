@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include "core/tensor.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
 
@@ -107,18 +109,18 @@ namespace lfs::vis {
     // channels. Visualizer presentation concern (namespace lfs::vis).
     class ViewportInteropService {
     public:
-        ViewportInteropService();
-        ~ViewportInteropService();
+        LFS_VIS_API ViewportInteropService();
+        LFS_VIS_API ~ViewportInteropService();
 
         ViewportInteropService(const ViewportInteropService&) = delete;
         ViewportInteropService& operator=(const ViewportInteropService&) = delete;
 
-        void setSceneImage(std::shared_ptr<const lfs::core::Tensor> image,
-                           glm::ivec2 size,
-                           bool flip_y,
-                           std::uint64_t generation,
-                           VkSemaphore completion_semaphore = VK_NULL_HANDLE,
-                           std::uint64_t completion_value = 0);
+        LFS_VIS_API void setSceneImage(std::shared_ptr<const lfs::core::Tensor> image,
+                                       glm::ivec2 size,
+                                       bool flip_y,
+                                       std::uint64_t generation,
+                                       VkSemaphore completion_semaphore = VK_NULL_HANDLE,
+                                       std::uint64_t completion_value = 0);
         void setExternalSceneImage(VkImage image,
                                    VkImageView image_view,
                                    VkImageLayout layout,
@@ -141,22 +143,22 @@ namespace lfs::vis {
         // Throws std::runtime_error on hard interop failure (callers catch).
         // #1575: coalesces transitions to GENERAL and CUDA uploads, then defers
         // transitions to READ_ONLY until recordFrameBarriers.
-        void prepareFrame(VulkanContext& context, bool resize_deferring);
+        LFS_VIS_API void prepareFrame(VulkanContext& context, bool resize_deferring);
 
         // Roll back layout commits and discard unrecorded frame barriers on
         // every GUI frame that may endFrame, including export-locked frames that
         // skip prepareFrame uploads. prepareFrame calls this at its head.
-        void syncUnsubmittedLayoutCommits(VulkanContext& context);
+        LFS_VIS_API void syncUnsubmittedLayoutCommits(VulkanContext& context);
 
         // #1575: record GENERAL→SHADER_READ_ONLY barriers into the open
         // frame CB and attach CUDA S2 timeline waits to the frame submit. Call
         // immediately after beginFrame succeeds, before any sampling of interop images.
-        void recordFrameBarriers(VkCommandBuffer frame_cb, VulkanContext& context);
+        LFS_VIS_API void recordFrameBarriers(VkCommandBuffer frame_cb, VulkanContext& context);
 
-        void bindViewportParams(VulkanViewportPassParams& params,
-                                std::size_t frame_slot,
-                                bool export_locked,
-                                bool resize_deferring) const;
+        LFS_VIS_API void bindViewportParams(VulkanViewportPassParams& params,
+                                            std::size_t frame_slot,
+                                            bool export_locked,
+                                            bool resize_deferring) const;
 
         struct FrameCompletion {
             VkSemaphore semaphore = VK_NULL_HANDLE;

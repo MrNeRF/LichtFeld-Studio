@@ -206,9 +206,9 @@ namespace lfs::vis::gui {
         [[nodiscard]] LFS_VIS_API bool passiveMouseMoveNeedsRender(float window_x, float window_y) const;
         [[nodiscard]] LFS_VIS_API bool activeOverlayContainsPoint(float window_x,
                                                                   float window_y) const;
-        [[nodiscard]] bool activeOverlayOccludesContext(const Rml::Context* context,
-                                                        float window_x,
-                                                        float window_y) const;
+        [[nodiscard]] LFS_VIS_API bool activeOverlayOccludesContext(const Rml::Context* context,
+                                                                    float window_x,
+                                                                    float window_y) const;
 
         // Focus-state aggregators across all live RmlUi contexts so viewport input
         // suppression reflects the actual GUI surface the user is interacting with.

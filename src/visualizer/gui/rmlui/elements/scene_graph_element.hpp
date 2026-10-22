@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include "gui/utils/native_file_drag.hpp"
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/EventListener.h>
@@ -55,7 +57,7 @@ namespace lfs::vis::gui {
         void setFilterText(std::string_view text);
         void setSelectionMarkersVisible(bool visible);
         [[nodiscard]] bool selectionMarkersVisible() const { return selection_markers_visible_; }
-        [[nodiscard]] bool syncFromScene(const PanelDrawContext& ctx);
+        [[nodiscard]] LFS_VIS_API bool syncFromScene(const PanelDrawContext& ctx);
         [[nodiscard]] bool executeContextMenuAction(std::string_view action);
         [[nodiscard]] bool needsAnimationFrame() const {
             return external_armed_ || (drag_source_id_ != core::NULL_NODE && auto_expand_deadline_ != std::chrono::steady_clock::time_point{}) ||
