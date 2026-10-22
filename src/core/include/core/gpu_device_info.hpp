@@ -38,6 +38,9 @@ namespace lfs::core {
         uint32_t device_node_mask=0;
     };
     LFS_CORE_API std::vector<HipHardwareDevice> enumerate_hip_hardware();
+    // OS/driver sample of the selected physical adapter; -1 means unavailable.
+    // Intended for the background performance sampler, not the render loop.
+    LFS_CORE_API float hip_gpu_utilization();
 #endif
     struct GpuDeviceInfo {
         std::string name;

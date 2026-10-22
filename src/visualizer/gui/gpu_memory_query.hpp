@@ -34,6 +34,7 @@ namespace lfs::vis::gui {
         bool unified_memory = false;
 #ifdef LFS_TENSOR_HIP
         bool native_metrics_unavailable = false;
+        bool native_process_budget = false;
 #endif
     };
 

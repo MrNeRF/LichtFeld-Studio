@@ -142,8 +142,8 @@ contracts, or a short MCMC run do not establish complete strategy coverage.
 | MRNF | The known reported configuration passes beyond its failure boundary with the original schedule and an early stop. Application contracts also cover SH transitions, repeated refinement/Morton, checkpoint and resume. | Retain the composed Tensor regressions and complete the final comparable quality/performance run. Native callback contracts alone are insufficient. |
 | IGS / ImprovedGSPlus | Application lifecycle coverage includes frozen parameters, explicit pruning and slot reuse, SH transitions, opacity resets, appearance, checkpoint/resume and process shutdown. | Retain lifecycle coverage and complete the final comparable quality/performance run. Short accelerated contracts do not establish long-run convergence or validation on other GPUs. |
 | Tensor dtype/layout coverage | Binary broadcast supports matching Float32/Float16 operands, native integer arithmetic/comparisons, and Bool predicates. Bool arithmetic is rejected. | Audit actual strategy call sites and shared Tensor contracts, including unequal shapes, strided/expanded views, empty inputs and integer/Bool predicates. Preserve exact integer/Bool semantics; do not cast indices through Float32. |
-| GPU utilization | The HIP UI path explicitly returns an unavailable sample. | Add device-matched sampling independently of CUDA availability; distinguish a real 0% sample from unavailable data. |
-| GPU memory budget | HIP allocator statistics and `hipMemGetInfo` exist, but the UI does not expose a complete native process-budget path. | Connect meaningful process/device/budget measurements and their validity to the UI; distinguish allocated, reserved and driver-budget values. |
+| GPU utilization | Windows samples OS GPU engine counters matched by LUID/node; Linux reads the selected PCI device's AMDGPU busy counter. Missing samples remain unavailable. | Retain physical-device matching and active-load tests; validate Linux runtime and additional hardware separately. |
+| GPU memory budget | Windows publishes the selected HIP adapter's DXGI LOCAL process usage and budget to the status bar and performance HUD. Allocator statistics remain separate. | Preserve validity and identity checks. Linux process-budget support remains unavailable rather than substituting whole-device VRAM or inventing a shared-memory limit. |
 | Training startup | Short cold/warm diagnostics confirm prepared CPU cache population costs and near-zero loader waits after the first image pass. The serialized HIP queue and appearance stages still need separate attribution. | Optimize measured preparation and queue bottlenecks without changing sampling or quality; retain synchronized diagnostics and unprofiled confirmation. |
 | Viewer/Tensor independence | Idle publications are cached. A single live HIP model on a non-shared rendering device uses bounded, complete asynchronous CPU snapshots; native shared storage retains its existing path. | Preserve lifecycle, allocation-fallback and real-model attribute checks. Extend interaction measurements to additional hardware and scene modes that retain synchronized publication. |
 | Hardware/platform validation | Runtime evidence is limited to the available GPU; Windows cross-target compilation is not execution on those targets. | Run the manual build matrix and preserve a conservative path for untested hardware. Wave64 remains outside the implemented scope. |
@@ -184,18 +184,32 @@ that reserved suffix, validates that live rows fit, and must not modify the suff
 
 ### GPU telemetry and memory-budget completion
 
-`src/visualizer/gui/gpu_memory_query.cpp` currently marks HIP native metrics
-unavailable and returns `-1` for utilization. The HIP device-info path does not
-publish a process budget equivalent to the Vulkan budget extension. Pool
-statistics alone cannot replace that OS/driver budget.
+The HIP device-info path publishes Windows DXGI LOCAL process usage and budget
+using the runtime's exact LUID/node. This OS-managed segment can include shared
+memory on integrated GPUs; neither the BIOS reservation nor `hipMemGetInfo`
+defines that budget. Failed or stale queries are marked unavailable. Budget
+polling is throttled independently from the HIP submission queue and allocator.
+The status bar and performance HUD show process usage against this budget;
+tooltips identify the measurement source. Whole-device usage is not inferred.
+
+Windows utilization uses English PDH GPU Engine counters, matched to the same
+LUID/node, summing clients per engine and selecting the busiest engine. It needs
+two samples and runs in the background performance sampler; initialization does
+not sleep or synchronize HIP. Linux reads `gpu_busy_percent` at the runtime's
+exact PCI sysfs path. Missing support returns `-1`, distinct from a valid zero.
+Linux currently has no equivalent process-budget integration.
+
+`lfs_hip_os_metrics_contract <HIP runtime module> [require-native]` rejects null
+and unknown Windows identities, checks a real GPU load, device identity and, in
+an application build, the GUI dispatch and tooltip. The optional argument makes
+native budget and nonzero load samples mandatory on the validation host.
 
 - Match telemetry to the selected physical GPU using stable device identity,
   not enumeration position. Tensor and rendering devices can differ; label
   their roles and do not accidentally show NVIDIA utilization for AMD training.
-- On Windows investigate the existing DXGI process-budget path and a suitable
-  AMD/OS utilization provider. On Linux investigate the supported AMD telemetry
-  interfaces. Provider choice and dependency availability need verification;
-  these are implementation tasks, not completed integrations.
+- Windows uses only system DXGI/PDH libraries, independently of CUDA. Validate
+  Linux's AMDGPU counter on Linux hardware; investigate process-level memory
+  support separately without relabeling device-wide accounting as a budget.
 - For integrated GPUs distinguish firmware-reserved memory, shared host memory,
   current OS budget and process allocation. A large `hipMemGetInfo` total is not
   the amount of dedicated VRAM and is not an appropriate standalone UI budget.

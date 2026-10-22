@@ -5,6 +5,7 @@
 #ifdef LFS_TENSOR_HIP
 #include "backend/readback_buffer.hpp"
 #include "backend/hip/physical_identity.hpp"
+#include "backend/hip/os_metrics.hpp"
 #endif
 #include "backend/tensor_vulkan_interop.hpp"
 #include "core/cuda/driver_entry.hpp"
@@ -1292,6 +1293,7 @@ namespace lfs::core {
                 const auto identity=internal::hip_device_identity(LFS_HIP_RUNTIME_DEFAULT_MODULE,ordinal);
                 GpuDeviceInfo result{.name=info.name,.total_memory_bytes=info.total_bytes};
                 std::copy_n(identity.uuid,result.uuid.size(),result.uuid.begin());
+                internal::hip_process_budget(identity, result);
                 return result;
             } catch(...) {return std::nullopt;}
         }

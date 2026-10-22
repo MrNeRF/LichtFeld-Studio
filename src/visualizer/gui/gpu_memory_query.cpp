@@ -390,6 +390,8 @@ namespace lfs::vis::gui {
 
     const char* gpuProcessMemoryTooltipKey(const GpuMemoryInfo& info) {
 #ifdef LFS_TENSOR_HIP
+        if(info.native_process_budget)
+            return "ui.vram_hip_budget_tooltip";
         if(info.native_metrics_unavailable)
             return "ui.vram_native_unavailable_tooltip";
 #endif
@@ -400,6 +402,8 @@ namespace lfs::vis::gui {
 
     const char* gpuDeviceMemoryTooltipKey(const GpuMemoryInfo& info) {
 #ifdef LFS_TENSOR_HIP
+        if(info.native_process_budget)
+            return "ui.vram_hip_budget_tooltip";
         if(info.native_metrics_unavailable)
             return "ui.vram_native_unavailable_tooltip";
 #endif
@@ -433,7 +437,10 @@ namespace lfs::vis::gui {
         ) {
             GpuMemoryInfo info;
 #ifdef LFS_TENSOR_HIP
-            info.native_metrics_unavailable = backend == lfs::core::GpuBackend::HIP;
+            info.native_metrics_unavailable = backend == lfs::core::GpuBackend::HIP &&
+                                               !(device && device->supports_process_memory_budget);
+            info.native_process_budget = backend == lfs::core::GpuBackend::HIP &&
+                                          device && device->supports_process_memory_budget;
 #endif
             if (device) {
                 info.device_name = shortenGpuDeviceName(device->name);
@@ -443,6 +450,13 @@ namespace lfs::vis::gui {
             if (device && device->supports_process_memory_budget) {
                 info.process_budget = device->process_memory_budget_bytes;
                 info.process_budget_used = device->process_memory_used_bytes;
+#ifdef LFS_TENSOR_HIP
+                if (info.native_process_budget) {
+                    info.process_valid = true;
+                    info.process_used = info.process_budget_used;
+                    info.process_over_budget = info.process_budget_used > info.process_budget;
+                }
+#endif
             }
             return info;
         }
@@ -493,7 +507,7 @@ namespace lfs::vis::gui {
     float queryGpuUtilization() {
 #ifdef LFS_TENSOR_HIP
         if(lfs::core::configured_gpu_backend()==lfs::core::GpuBackend::HIP)
-            return -1.f; // No native utilization sample: never read another vendor's GPU.
+            return lfs::core::hip_gpu_utilization();
 #endif
 #ifdef __APPLE__
         if (const auto stats = acceleratorStats())

@@ -5452,5 +5452,6 @@
   "project.session.newer_settings.message": "Questo progetto contiene impostazioni non riconosciute da questa versione. Valori predefiniti usati per: {}",
   "preferences.drag_pause": "Metti in pausa l’addestramento prima di trascinare gli splat.",
   "preferences.drag_failed": "Esportazione splat non riuscita. Consulta il registro dell’applicazione per i dettagli.",
-  "ui.vram_native_unavailable_tooltip": "Utilizzo GPU e budget di memoria non disponibili per questo backend."
+  "ui.vram_hip_budget_tooltip": "Memoria usata da questo processo e budget del sistema operativo sulla GPU HIP selezionata. Include la RAM condivisa quando gestita come memoria GPU locale; non indica l'uso dell'intera scheda o la riserva del BIOS.",
+  "ui.vram_native_unavailable_tooltip": "Il campione nativo del budget di memoria GPU non è disponibile per questo backend."
 }

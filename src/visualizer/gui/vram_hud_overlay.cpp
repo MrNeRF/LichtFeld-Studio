@@ -1044,8 +1044,14 @@ namespace lfs::vis::gui {
         };
         const auto memory = sampled != nullptr ? *sampled : queryGpuMemory();
         const auto process_bytes = memory.process_valid ? memory.process_used : 0;
-        const auto total_bytes = memory.total > 0 ? memory.total : s.vram_total_bytes;
-        const auto device_bytes = memory.total > 0 ? memory.total_used : s.vram_used_bytes;
+        auto total_bytes = memory.total > 0 ? memory.total : s.vram_total_bytes;
+        auto device_bytes = memory.total > 0 ? memory.total_used : s.vram_used_bytes;
+#ifdef LFS_TENSOR_HIP
+        if (memory.native_process_budget) {
+            total_bytes = memory.process_budget;
+            device_bytes = memory.process_budget_used;
+        }
+#endif
         const auto vram_process = ratio(process_bytes, total_bytes);
         const auto vram_used = ratio(device_bytes, total_bytes);
         set_width(perf_vram_process_, vram_process);

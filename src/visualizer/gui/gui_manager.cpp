@@ -6629,6 +6629,12 @@ namespace lfs::vis::gui {
                 perf_snapshot->vram_process_bytes = memory.process_used;
                 perf_snapshot->vram_used_bytes = memory.total_used;
                 perf_snapshot->vram_total_bytes = memory.total;
+#ifdef LFS_TENSOR_HIP
+                if (memory.native_process_budget) {
+                    perf_snapshot->vram_used_bytes = memory.process_budget_used;
+                    perf_snapshot->vram_total_bytes = memory.process_budget;
+                }
+#endif
                 if (const auto sample = perf_sampler_.latest()) {
                     perf_snapshot->ram_process_bytes = sample->host.process_rss_bytes;
                     perf_snapshot->ram_used_bytes = sample->host.system_used_bytes;

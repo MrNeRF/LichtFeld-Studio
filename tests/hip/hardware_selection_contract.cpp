@@ -58,7 +58,8 @@ int main() try {
     const auto info=gpu_backend_device_info(GpuBackend::HIP);
     require(info && info->name==valid->name && info->total_memory_bytes==valid->total_memory_bytes,
             "Selected HIP device information does not match inventory");
-    require(!info->supports_process_memory_budget,"HIP inventory invented a dedicated VRAM budget from shared system memory");
+    require(!info->supports_process_memory_budget || info->process_memory_budget_bytes > 0,
+            "HIP advertised a process budget without a valid OS sample");
     require(!gpu_backend_live(GpuBackend::HIP),"HIP selected-device query initialized its Tensor context");
     {
         auto values=Tensor::full({17},3.f,Device::GPU);

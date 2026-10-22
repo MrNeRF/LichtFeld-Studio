@@ -5452,5 +5452,6 @@
   "project.session.newer_settings.message": "This project contains settings this version does not recognize. Default values were used for: {}",
   "preferences.drag_pause": "Pause training before dragging splats.",
   "preferences.drag_failed": "Splat export failed. See the application log for details.",
-  "ui.vram_native_unavailable_tooltip": "GPU utilization and memory budget are unavailable for this backend."
+  "ui.vram_hip_budget_tooltip": "This process's usage and operating-system memory budget on the selected HIP GPU. Shared system memory is included when managed as local GPU memory; this is not whole-device usage or the BIOS reservation.",
+  "ui.vram_native_unavailable_tooltip": "A native GPU memory budget sample is unavailable for this backend."
 }
