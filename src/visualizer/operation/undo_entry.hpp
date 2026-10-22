@@ -504,6 +504,7 @@ namespace lfs::vis::op {
         std::shared_ptr<lfs::core::PointCloud> point_cloud;
         std::shared_ptr<lfs::core::MeshData> mesh;
         std::shared_ptr<const lfs::core::CollisionVolume> collision;
+        lfs::core::CollisionDisplay collision_display;
         std::unique_ptr<lfs::core::CropBoxData> cropbox;
         std::unique_ptr<lfs::core::EllipsoidData> ellipsoid;
         std::unique_ptr<lfs::core::KeyframeData> keyframe;

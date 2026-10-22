@@ -55,6 +55,8 @@ TEST(CollisionScene, ArchiveRestoresGeneratedMeshAndVolumeWithDeferredHydration)
     auto* node = scene.getNodeById(id);
     const auto uuid = node->uuid;
     node->collision = g;
+    node->collision_display = {.preview = true, .surface_ready = false, .opacity = 0.45f, .slice = 0.8f, .surface_stride = 8};
+    const auto display = node->collision_display;
     node->payload_diverged = true;
     node->visible = false;
     scene.setNodeTransform(group, glm::translate(glm::mat4(1), glm::vec3(4, 5, 6)));
@@ -117,6 +119,7 @@ TEST(CollisionScene, ArchiveRestoresGeneratedMeshAndVolumeWithDeferredHydration)
     ASSERT_TRUE(loaded->mesh);
     ASSERT_TRUE(loaded->collision);
     EXPECT_EQ(*loaded->collision, *g);
+    EXPECT_EQ(loaded->collision_display, display);
     EXPECT_EQ(loaded->mesh->vertices.to_vector(), geometry->vertices.to_vector());
     EXPECT_EQ(loaded->mesh->indices.to_vector_int(), geometry->indices.to_vector_int());
     EXPECT_FALSE(loaded->visible.get());
@@ -213,4 +216,113 @@ TEST(CollisionWalkController, RejectsMissingCollisionAndExitsOnTeleportResetOrEs
     ASSERT_EQ(input.cameraNavigationMode(), Mode::Walk);
     input.handleKey(lfs::vis::input::KEY_ESCAPE, lfs::vis::input::ACTION_PRESS, 0);
     EXPECT_EQ(input.cameraNavigationMode(), Mode::FPV);
+}
+
+TEST(CollisionScene, PreviewControlsShareOccupancyAndSurviveSceneLifecycle) {
+    Scene scene;
+    const auto g = volume();
+    const auto id = scene.addMesh("Voxel preview", mesh(*g));
+    auto* node = scene.getNodeById(id);
+    node->collision = g;
+    node->collision_display = {.preview = true, .surface_ready = false, .opacity = 0.4f, .slice = 0.35f, .surface_stride = 8};
+    const auto uuid = node->uuid;
+    const auto* data = g->tree.data();
+    ScenePayloadBindings bindings{{uuid, {.fourcc = "MESH", .instance_uuid = uuid, .source_kind = "mesh"}}};
+    auto graph = capture_scene_graph(scene, bindings);
+    ASSERT_TRUE(graph);
+    const auto found = graph->find(uuid);
+    ASSERT_TRUE(found);
+    ASSERT_TRUE(*found);
+    const auto& record = **found;
+    ASSERT_TRUE(record.collision);
+    const auto copy = record;
+    EXPECT_EQ(copy.collision.get(), record.collision.get());
+    EXPECT_EQ(copy.collision->tree.data(), record.collision->tree.data());
+    EXPECT_EQ(record.collision_display, node->collision_display);
+    const auto encoded = graph->to_bytes();
+    auto parsed = SceneGraphChapter::from_bytes(encoded);
+    ASSERT_TRUE(parsed);
+    const auto restored = parsed->find(uuid);
+    ASSERT_TRUE(restored);
+    ASSERT_TRUE(*restored);
+    EXPECT_EQ((**restored).collision_display, node->collision_display);
+    EXPECT_EQ(*(**restored).collision, *g);
+    EXPECT_EQ(node->collision->tree.data(), data);
+}
+
+TEST(CollisionScene, GeometrySnapshotsOwnOnlyVisibleGeometryAndSurviveEdits) {
+    Scene scene;
+    auto make = [] {
+        return std::make_unique<SplatData>(0,
+                                           Tensor::from_vector(std::vector<float>{1, 2, 3, 4, 5, 6}, {2, 3}, Device::CPU),
+                                           Tensor::zeros({2, 1, 3}, Device::CPU), Tensor::zeros({2, 0, 3}, Device::CPU),
+                                           Tensor::zeros({2, 3}, Device::CPU), Tensor::zeros({2, 4}, Device::CPU),
+                                           Tensor::zeros({2, 1}, Device::CPU), 1.0f);
+    };
+    const auto visible = scene.addSplat("Visible", make());
+    const auto hidden = scene.addSplat("Hidden", make());
+    scene.getNodeById(hidden)->visible = false;
+    const auto transform = glm::translate(glm::mat4(1), glm::vec3(2, 3, 4));
+    scene.setNodeTransform(visible, transform);
+    auto snapshot = scene.snapshotVisibleSplatGeometry();
+    ASSERT_EQ(snapshot.size(), 1);
+    EXPECT_EQ(snapshot[0].size, 2);
+    EXPECT_EQ(snapshot[0].world_transform, transform);
+    EXPECT_EQ(snapshot[0].means.device(), Device::CPU);
+    EXPECT_EQ(snapshot[0].means.ptr<float>()[0], 1);
+    scene.getNodeById(visible)->model->means_raw().ptr<float>()[0] = 99;
+    EXPECT_EQ(snapshot[0].means.ptr<float>()[0], 1);
+    scene.removeNodeById(visible);
+    EXPECT_EQ(snapshot[0].means.ptr<float>()[5], 6);
+}
+
+TEST(CollisionScene, InFlightDrawKeepsReplacedAndDeletedCollisionPayloadsAlive) {
+    Scene scene;
+    auto old_volume = volume();
+    auto old_mesh = mesh(*old_volume);
+    std::weak_ptr<const CollisionVolume> weak_volume = old_volume;
+    std::weak_ptr<const MeshData> weak_mesh = old_mesh;
+    const auto id = scene.addMesh("Collision", old_mesh);
+    auto* node = scene.getNodeById(id);
+    node->collision = old_volume;
+    lfs::vis::SceneRenderState snapshot;
+    snapshot.meshes = scene.getVisibleMeshes();
+    auto draws = lfs::vis::buildViewportMeshDrawItems(snapshot, {}, {0, 0, 1});
+    ASSERT_EQ(draws.size(), 1);
+    EXPECT_EQ(draws[0].collision_owner.get(), old_volume.get());
+    EXPECT_EQ(draws[0].mesh_owner.get(), old_mesh.get());
+    node->collision = volume();
+    node->mesh = mesh(*node->collision);
+    snapshot.meshes.clear();
+    old_volume.reset();
+    old_mesh.reset();
+    scene.removeNodeById(id);
+    ASSERT_FALSE(weak_volume.expired());
+    ASSERT_FALSE(weak_mesh.expired());
+    EXPECT_NO_THROW(draws[0].collision_volume->validate());
+    EXPECT_GT(draws[0].mesh->face_count(), 0);
+    draws.clear();
+    EXPECT_TRUE(weak_volume.expired());
+    EXPECT_TRUE(weak_mesh.expired());
+}
+
+TEST(CollisionScene, DisplayScrubsAvoidGaussianCacheInvalidation) {
+    static int full, composite;
+    full = composite = 0;
+    Scene scene;
+    scene.setRenderInvalidationCallback(+[] { ++full; });
+    scene.setTransformInvalidationCallback(+[] { ++composite; });
+    const auto id = scene.addMesh("Collision", mesh(*volume()));
+    auto* node = scene.getNodeById(id);
+    node->collision = volume();
+    const auto initial_full = full, initial_composite = composite;
+    const auto generation = scene.renderGeneration();
+    const auto* occupancy = node->collision->tree.data();
+    node->collision_display.opacity = 0.4f;
+    node->collision_display.slice = 0.6f;
+    scene.notifyMutation(Scene::MutationType::DISPLAY_CHANGED);
+    EXPECT_EQ(full, initial_full);
+    EXPECT_EQ(composite, initial_composite + 1);
+    EXPECT_GT(scene.renderGeneration(), generation);
+    EXPECT_EQ(node->collision->tree.data(), occupancy);
 }

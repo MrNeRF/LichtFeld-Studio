@@ -3024,9 +3024,10 @@ namespace lfs::vis {
                 CollisionPush push{};
                 push.inverse_mvp = glm::inverse(mvp);
                 push.origin_size = {volume.origin, volume.settings.voxel_size};
-                push.dimensions_flags = glm::uvec4(volume.dimensions, item.is_emphasized ? 1u : 0u);
+                push.dimensions_flags = glm::uvec4(volume.dimensions, (item.is_emphasized ? 1u : 0u) | (uint32_t(std::clamp(item.collision_slice, 0.0f, 1.0f) * 65535.0f) << 1));
                 push.viewport = {viewport.x, viewport.y, viewport.width, viewport.height};
                 push.camera = glm::inverse(item.model) * glm::vec4(params.camera_position, 1);
+                push.camera.w = std::clamp(item.collision_opacity, 0.0f, 1.0f);
                 vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, voxel_box_pipeline);
                 vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, voxel_box_pipeline_layout,
                                         0, 1, &it->second.occupancy_descriptor, 0, nullptr);

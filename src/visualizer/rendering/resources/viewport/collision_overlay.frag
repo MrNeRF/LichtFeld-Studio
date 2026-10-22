@@ -12,9 +12,13 @@ layout(push_constant) uniform CollisionPush {
 } push;
 layout(location = 0) out vec4 outColor;
 
+int sliceHeight() {
+    return int(ceil(float(push.dimensionsFlags.y) * float(push.dimensionsFlags.w >> 1u) / 65535.0));
+}
+
 bool contains(ivec3 cell) {
     return all(greaterThanEqual(cell, ivec3(0))) &&
-           all(lessThan(cell, ivec3(push.dimensionsFlags.xyz)));
+           all(lessThan(cell, ivec3(push.dimensionsFlags.xyz))) && cell.y < sliceHeight();
 }
 
 bool sampleCell(ivec3 cell, out ivec3 leafMin, out ivec3 leafMax) {
@@ -58,8 +62,8 @@ vec4 shadeSurface(vec3 hit, ivec3 cell, float pixelWidth, bool insideSolid) {
     float brightness = boundaryDistance.y <= boundaryDistance.x && boundaryDistance.y <= boundaryDistance.z
                            ? 0.65 : boundaryDistance.z <= boundaryDistance.x ? 0.45 : 0.85;
     vec3 tint = insideSolid ? vec3(1.0, 0.35, 0.08) :
-                push.dimensionsFlags.w != 0u ? vec3(0.65, 0.85, 1.0) : vec3(1.0);
-    float alpha = mix(0.4, 0.8, edge);
+                (push.dimensionsFlags.w & 1u) != 0u ? vec3(0.65, 0.85, 1.0) : vec3(1.0);
+    float alpha = mix(0.4, 0.8, edge) * push.camera.w;
     return vec4(tint * mix(brightness, 0.2, edge) * alpha, alpha);
 }
 
@@ -74,7 +78,8 @@ void main() {
     vec3 rdDx = dFdx(rd), rdDy = dFdy(rd);
     float size = push.originSize.w;
     vec3 gridMin = push.originSize.xyz;
-    vec3 gridMax = gridMin + vec3(push.dimensionsFlags.xyz) * size;
+    vec3 gridMax = gridMin + vec3(push.dimensionsFlags.x, sliceHeight(), push.dimensionsFlags.z) * size;
+    if (sliceHeight() <= 0 || push.camera.w <= 0.0) return;
 
     // Parallel rays need finite slab distances, including when on a grid plane.
     vec3 safeDirection = mix(vec3(1e-20), rd, greaterThan(abs(rd), vec3(1e-20)));
@@ -100,6 +105,7 @@ void main() {
             outColor = shadeSurface(ro + rd * t, cell, pixelWidth, insideSolid);
             return;
         }
+        leafMax.y = min(leafMax.y, sliceHeight());
         ivec3 boundary = mix(leafMin, leafMax, greaterThan(safeDirection, vec3(0.0)));
         vec3 nextPlane = gridMin + vec3(boundary) * size;
         vec3 nextT = (nextPlane - ro) * inverseDirection;

@@ -352,7 +352,8 @@ namespace lfs::io::project {
                 };
             }
             if (node.collision)
-                result.collision = *node.collision;
+                result.collision = node.collision;
+            result.collision_display = node.collision_display;
             if (node.ellipsoid) {
                 result.ellipsoid = EllipsoidRecord{
                     .radii = {node.ellipsoid->radii.x, node.ellipsoid->radii.y,
@@ -745,7 +746,8 @@ namespace lfs::io::project {
                     };
                 }
                 if (record.collision)
-                    desc.collision = std::make_shared<const lfs::core::CollisionVolume>(*record.collision);
+                    desc.collision = record.collision;
+                desc.collision_display = record.collision_display;
                 if (record.cropbox) {
                     desc.cropbox = std::make_unique<lfs::core::CropBoxData>(
                         lfs::core::CropBoxData{

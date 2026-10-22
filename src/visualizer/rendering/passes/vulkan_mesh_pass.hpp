@@ -43,6 +43,8 @@ namespace lfs::vis {
         bool wireframe_overlay = false;
         bool collision_voxel_boxes = false;
         const lfs::core::CollisionVolume* collision_volume = nullptr;
+        float collision_opacity = 1.0f;
+        float collision_slice = 1.0f;
         glm::vec3 wireframe_color{0.2f, 0.2f, 0.2f};
         float wireframe_width = 1.0f;
         // Shadow map: depth-only pre-pass per mesh, then sampler2DShadow read in main shader.
@@ -50,6 +52,8 @@ namespace lfs::vis {
         int shadow_map_resolution = 2048;
         // Bit i set: drawn in viewport panel i (split view sides compare different meshes).
         std::uint32_t panel_mask = ~0u;
+        std::shared_ptr<const lfs::core::MeshData> mesh_owner;
+        std::shared_ptr<const lfs::core::CollisionVolume> collision_owner;
     };
 
     struct VulkanMeshViewportPanel {

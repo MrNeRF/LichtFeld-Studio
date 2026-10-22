@@ -135,4 +135,23 @@ namespace {
         EXPECT_NEAR(color.g, color.r * 0.35f, 0.001f);
         EXPECT_NEAR(color.b, color.r * 0.08f, 0.001f);
     }
+
+    TEST_F(CollisionOverlay, OpacityAndCutawayAreLiveDisplayControls) {
+        const glm::vec3 eye(0.25f, 3, 0.25f), down(0, -1, 0);
+        const auto full = render(eye, down, {item()});
+        auto faded = item();
+        faded.collision_opacity = 0.25f;
+        const auto quarter = render(eye, down, {faded});
+        EXPECT_NEAR(quarter.r, full.r * 0.25f, 0.002f);
+        faded.collision_opacity = 0;
+        EXPECT_LT(glm::length(render(eye, down, {faded})), 0.001f);
+        auto cut = item();
+        cut.collision_slice = 0;
+        EXPECT_LT(glm::length(render(eye, down, {cut})), 0.001f);
+        cut.collision_slice = 0.5f;
+        const auto free_space = render({0.25f, 1, 0.25f}, down, {cut});
+        EXPECT_GT(free_space.r, 0.01f);
+        EXPECT_NEAR(free_space.g, free_space.r, 0.002f);
+        EXPECT_NEAR(free_space.b, free_space.r, 0.002f);
+    }
 } // namespace

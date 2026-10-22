@@ -168,6 +168,7 @@ namespace lfs::core {
         std::shared_ptr<lfs::core::PointCloud> point_cloud;
         std::shared_ptr<lfs::core::MeshData> mesh;
         std::shared_ptr<const CollisionVolume> collision;
+        CollisionDisplay collision_display;
         std::unique_ptr<CropBoxData> cropbox;
         std::unique_ptr<EllipsoidData> ellipsoid;
         std::unique_ptr<KeyframeData> keyframe;
@@ -261,6 +262,7 @@ namespace lfs::core {
             std::shared_ptr<lfs::core::PointCloud> point_cloud;
             std::shared_ptr<lfs::core::MeshData> mesh;
             std::shared_ptr<const CollisionVolume> collision;
+            CollisionDisplay collision_display;
             std::unique_ptr<CropBoxData> cropbox;
             std::unique_ptr<EllipsoidData> ellipsoid;
             std::shared_ptr<lfs::core::Camera> camera;
@@ -299,6 +301,7 @@ namespace lfs::core {
             SELECTION_CHANGED = 1 << 7,
             CLEARED = 1 << 8,
             CAMERA_TRAINING_CHANGED = 1 << 9,
+            DISPLAY_CHANGED = 1 << 10,
         };
 
         void notifyMutation(MutationType type);
@@ -558,6 +561,14 @@ namespace lfs::core {
         // inactive SH and deletion masks; safe for subsequent worker-side IO.
         [[nodiscard]] std::vector<SplatSnapshot> snapshotVisibleSplats() const;
 
+        struct SplatGeometrySnapshot {
+            Tensor means, scaling, rotation, opacity, deleted;
+            glm::mat4 world_transform{1};
+            size_t size = 0;
+        };
+        // Only immutable CPU geometry/log-parameters: no SH, optimizer or color copies.
+        [[nodiscard]] std::vector<SplatGeometrySnapshot> snapshotVisibleSplatGeometry() const;
+
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> getVisibleSelectionIndices() const;
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> getVisibleSelectionMask() const;
         [[nodiscard]] uint64_t renderGeneration() const noexcept {
@@ -594,6 +605,11 @@ namespace lfs::core {
             bool is_selected = false;
             bool collision_voxel_boxes = false;
             const CollisionVolume* collision_volume = nullptr;
+            CollisionDisplay collision_display;
+            // Keep frame snapshots valid when authoring replaces/deletes a node
+            // after scene collection but before rendering consumes the snapshot.
+            std::shared_ptr<const MeshData> mesh_owner;
+            std::shared_ptr<const CollisionVolume> collision_owner;
         };
         [[nodiscard]] std::vector<VisibleMesh> getVisibleMeshes() const;
 

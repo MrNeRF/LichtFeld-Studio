@@ -2745,7 +2745,14 @@ namespace lfs::io::project {
                 try {
                     if (result.type != "mesh")
                         throw std::invalid_argument("Collision payload requires a mesh node");
-                    result.collision = collision->get<lfs::core::CollisionVolume>();
+                    result.collision = std::make_shared<const lfs::core::CollisionVolume>(collision->get<lfs::core::CollisionVolume>());
+                    if (const Json* display = JsonChapterDom::read_json_ref(element, "collision_display"))
+                        result.collision_display = display->get<lfs::core::CollisionDisplay>();
+                    else {
+                        result.collision_display.preview = result.collision->show_voxels;
+                        result.collision_display.surface_stride = 1;
+                        result.collision_display.surface_shape = result.collision->settings.shape;
+                    }
                 } catch (const std::exception& error) {
                     return fail<SceneNodeRecord>(
                         lfs::ErrorCode::DataLoss, "Invalid collision node payload.",
@@ -2961,12 +2968,14 @@ namespace lfs::io::project {
                 if (value.type != "mesh")
                     throw std::invalid_argument("Collision payload requires a mesh node");
                 element["collision"] = nlohmann::json(*value.collision);
+                element["collision_display"] = nlohmann::json(value.collision_display);
             } catch (const std::exception& error) {
                 return fail<void>(lfs::ErrorCode::InvalidArgument,
                                   "Invalid collision node payload.", error.what(), "SCNG", "nodes.collision");
             }
         } else {
             element.erase("collision");
+            element.erase("collision_display");
         }
         return dom_.array_put("nodes", uuid, std::move(element));
     }
