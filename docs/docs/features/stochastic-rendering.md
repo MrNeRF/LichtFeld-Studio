@@ -69,6 +69,8 @@ It is separate from the rotating presentation images. Scene changes, mode change
 model replacement, live training updates, and resize invalidate history. Basic
 stochastic accumulation also resets on camera changes; SteadySplats retains history
 for reprojection. Unsupported temporal projections use the current spatial result.
+An unchanged camera reads history at the same pixel, including background samples
+that have no finite depth. Moving views require a sampled surface for reprojection.
 
 With private rendering scratch, an unchanged camera and scene reuse the last
 submitted projection and tile-count prefix. Deferred GPU wave counts are reused

@@ -9,7 +9,7 @@ struct ResolveUniforms {
     uint height;
     uint mode; // 1: basic stochastic CMA, 2: SteadySplats spatial + temporal
     uint history_valid;
-    uint sample_count;
+    uint sample_count; // Consecutive samples with an unchanged camera.
     uint orthographic;
     uint previous_orthographic;
     uint temporal_projection_valid;
@@ -92,33 +92,44 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uniform ResolveUniforms 
     }
     current /= weight_sum;
 
-    float depth = depths[index];
-    if (u.history_valid == 0u || u.temporal_projection_valid == 0u ||
-        !isfinite(depth) || depth >= 1.0e9f) {
-        resolved_color[index] = current;
-        return;
-    }
-    float2 camera_pixel = float2(p) + u.origins.xy;
-    float2 xy = (camera_pixel - u.intrinsics.zw) / u.intrinsics.xy;
-    float3 view = float3(u.orthographic != 0u ? xy : xy * depth, depth);
-    float4 position = float4(view, 1.0f);
-    float3 previous_view = float3(dot(u.view_to_previous[0], position),
-                                  dot(u.view_to_previous[1], position),
-                                  dot(u.view_to_previous[2], position));
-    if (u.previous_orthographic == 0u && previous_view.z <= 0.0f) {
-        resolved_color[index] = current;
-        return;
-    }
-    float2 previous_xy = u.previous_orthographic != 0u
-        ? previous_view.xy : previous_view.xy / previous_view.z;
-    float2 previous_pixel = previous_xy * u.previous_intrinsics.xy + u.previous_intrinsics.zw - u.origins.zw;
-    if (!all(isfinite(previous_pixel)) || any(previous_pixel < float2(2.0f)) ||
-        any(previous_pixel >= float2(u.width, u.height) - 2.0f)) {
+    if (u.history_valid == 0u || u.temporal_projection_valid == 0u) {
         resolved_color[index] = current;
         return;
     }
 
-    float4 history = fetch_history(previous_pixel, u);
+    float2 previous_pixel = float2(p);
+    float4 history;
+    if (u.sample_count > 0u) {
+        // Identical rays need no depth or interpolation. In particular, a
+        // background draw must not discard valid stationary color history.
+        history = previous_color[index];
+    } else {
+        float depth = depths[index];
+        if (!isfinite(depth) || depth >= 1.0e9f) {
+            resolved_color[index] = current;
+            return;
+        }
+        float2 camera_pixel = float2(p) + u.origins.xy;
+        float2 xy = (camera_pixel - u.intrinsics.zw) / u.intrinsics.xy;
+        float3 view = float3(u.orthographic != 0u ? xy : xy * depth, depth);
+        float4 position = float4(view, 1.0f);
+        float3 previous_view = float3(dot(u.view_to_previous[0], position),
+                                      dot(u.view_to_previous[1], position),
+                                      dot(u.view_to_previous[2], position));
+        if (u.previous_orthographic == 0u && previous_view.z <= 0.0f) {
+            resolved_color[index] = current;
+            return;
+        }
+        float2 previous_xy = u.previous_orthographic != 0u
+            ? previous_view.xy : previous_view.xy / previous_view.z;
+        previous_pixel = previous_xy * u.previous_intrinsics.xy + u.previous_intrinsics.zw - u.origins.zw;
+        if (!all(isfinite(previous_pixel)) || any(previous_pixel < float2(2.0f)) ||
+            any(previous_pixel >= float2(u.width, u.height) - 2.0f)) {
+            resolved_color[index] = current;
+            return;
+        }
+        history = fetch_history(previous_pixel, u);
+    }
     float3 mean = float3(0.0f);
     float3 second = float3(0.0f);
     for (int y = -1; y <= 1; ++y)

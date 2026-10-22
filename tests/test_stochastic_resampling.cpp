@@ -11,6 +11,7 @@
 #include <deque>
 #include <filesystem>
 #include <gtest/gtest.h>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <stdexcept>
@@ -565,6 +566,7 @@ namespace {
         const size_t center = 4 * (6 * width + 6);
         EXPECT_NEAR(resolve()[center], 0.375, 1e-6);
         u.mode = 2;
+        u.sample_count = 0; // Exercise reprojection, including the motion cases below.
         // Flat-region confidence extent is 0.01 in Y. m=20, so retention
         // is 0.7/20. A binary depth reset or a fixed EMA gives a different result.
         EXPECT_NEAR(resolve()[center], 0.207, 1e-6);
@@ -587,5 +589,55 @@ namespace {
         const auto fractional = resolve();
         EXPECT_NEAR(fractional[center], 0.2 + 0.7 * 0.00005 * 6.25 * 6.25, 1e-6);
         EXPECT_NEAR(fractional[center + 1], 0.2 - 0.7 * 0.00005 * 6.25 * 6.25, 1e-6);
+    }
+
+    TEST_F(StochasticResampling, StationaryBackgroundSamplesRetainTemporalHistory) {
+        constexpr uint32_t width = 16, height = 16;
+        constexpr size_t pixels = width * height;
+        constexpr size_t center = 6 * width + 6;
+        std::vector<float> current(pixels * 4, 0.0f), previous(pixels * 4, 0.0f);
+        std::vector<float> depths(pixels, 1.0f);
+        for (size_t p = 0; p < pixels; ++p)
+            for (size_t c = 0; c < 3; ++c)
+                current[4 * p + c] = previous[4 * p + c] = 0.4f;
+        for (const size_t p : {size_t{0}, center}) {
+            for (size_t c = 0; c < 3; ++c)
+                current[4 * p + c] = 0.0f;
+            current[4 * p + 3] = 1.0f;
+            depths[p] = std::numeric_limits<float>::infinity();
+        }
+        upload(buffers_.pixel_state, current);
+        upload(buffers_.pixel_depth, depths);
+        upload(history_.outgoing_weights, std::vector<float>(pixels * 4, 0));
+        upload(history_.color[1], previous);
+        VulkanGSStochasticResolveUniforms u{};
+        u.width = width;
+        u.height = height;
+        u.mode = 2;
+        u.history_valid = 1;
+        u.sample_count = 8;
+        u.temporal_projection_valid = 1;
+        u.intrinsics[0] = u.intrinsics[1] = 1;
+        u.previous_intrinsics[0] = u.previous_intrinsics[1] = 1;
+        for (size_t i = 0; i < 3; ++i)
+            u.view_to_previous[i][i] = 1;
+        auto resolve = [&] {
+            const auto& output = renderer_->executeStochasticResolve(u, buffers_, history_, 0);
+            return read<float>(output, pixels * 4);
+        };
+        const auto stationary = resolve();
+        // Background is a valid Monte Carlo sample. An unchanged camera needs
+        // neither a finite depth nor interpolation, even at the viewport edge.
+        for (const size_t p : {size_t{0}, center}) {
+            EXPECT_NEAR(stationary[4 * p], 0.28, 1e-6);
+            EXPECT_NEAR(stationary[4 * p + 3], 0.3, 1e-6);
+        }
+        u.sample_count = 0; // Moving views cannot reproject an unknown surface.
+        const auto moving = resolve();
+        EXPECT_FLOAT_EQ(moving[4 * center], 0.0f);
+        EXPECT_FLOAT_EQ(moving[4 * center + 3], 1.0f);
+        u.sample_count = 8;
+        u.history_valid = 0;
+        EXPECT_FLOAT_EQ(resolve()[4 * center], 0.0f);
     }
 } // namespace
