@@ -287,6 +287,8 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "label_cropbox_growth_inside" in model.bound_funcs
     assert "cropbox_growth_inside_percent" in model.bound_funcs
     assert "cropbox_growth_inside" in model.bound_binds
+    assert "label_crop_to_cropbox" in model.bound_funcs
+    assert "crop_to_cropbox" in model.bound_binds
     assert "show_selection_volume_gizmos" in model.bound_funcs
     assert "toolbar_action" in model.bound_events
     assert "selection_tool_label" not in model.bound_funcs
@@ -1031,10 +1033,14 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
         cropbox_lr_scale = 0.1
         cropbox_loss_weight = 0.1
         cropbox_growth_inside = 0.8
+        crop_to_cropbox = False
 
         @staticmethod
         def has_params():
             return True
+
+        def get(self, name):
+            return getattr(self, name)
 
         def set(self, name, value):
             set_calls.append((name, value))
@@ -1080,6 +1086,7 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
         0.1,
         0.1,
         0.8,
+        False,
     )
     assert controller._gizmo._build_crop_settings_records(True)[0]["selected"] is True
 
@@ -1098,11 +1105,18 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
     assert growth_percent() == "50%"
     assert model.handle.request_update_calls == 3
 
+    crop_getter, crop_setter = model.bound_binds["crop_to_cropbox"]
+    crop_setter(True)
+    assert set_calls[-1] == ("crop_to_cropbox", True)
+    assert crop_getter() is True
+    assert model.handle.request_update_calls == 4
+
     params.cropbox_lr_scale = 0.42
     params.cropbox_loss_weight = 0.73
     params.cropbox_growth_inside = 1.0
+    params.crop_to_cropbox = False
     signature = controller._gizmo.cropbox_toolbar_signature()
-    assert signature[-3:] == (0.42, 0.73, 1.0)
+    assert signature[3:] == (0.42, 0.73, 1.0, False)
 
     controller._sync_crop_roi_params(signature)
 
@@ -1112,6 +1126,8 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
     assert "cropbox_lr_scale" in model.handle.dirty_calls
     assert "cropbox_loss_weight" in model.handle.dirty_calls
     assert "cropbox_growth_inside_percent" in model.handle.dirty_calls
+    assert crop_getter() is False
+    assert "crop_to_cropbox" in model.handle.dirty_calls
 
     # 0 is Auto: growth follows the error, no fixed share.
     params.cropbox_growth_inside = 0.0
@@ -1119,11 +1135,11 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
     assert growth_percent() == "Auto"
 
 
-@pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1, 0.8)])
+@pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1, 0.8, False)])
 def test_crop_roi_unavailable_state_preserves_last_display_values(toolbar_module, signature):
     module, *_ = toolbar_module
     controller = module._ViewportToolbarController()
-    controller._sync_crop_roi_params(("crop", True, True, 0.0, 0.37, 0.6))
+    controller._sync_crop_roi_params(("crop", True, True, 0.0, 0.37, 0.6, True))
 
     controller._sync_crop_roi_params(signature)
 
@@ -1131,9 +1147,10 @@ def test_crop_roi_unavailable_state_preserves_last_display_values(toolbar_module
     assert controller._cropbox_lr_scale == 0.0
     assert controller._cropbox_loss_weight == 0.37
     assert controller._cropbox_growth_inside == 0.6
+    assert controller._crop_to_cropbox is True
 
 
-@pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1, 0.8)])
+@pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1, 0.8, False)])
 def test_crop_roi_stale_slider_events_do_not_write_live_params(
     toolbar_module, monkeypatch, signature
 ):
@@ -1148,6 +1165,7 @@ def test_crop_roi_stale_slider_events_do_not_write_live_params(
 
     controller._set_crop_roi_param("cropbox_lr_scale", "0.1")
     controller._set_crop_roi_param("cropbox_loss_weight", "0.1")
+    controller._set_crop_to_cropbox(True)
 
     assert writes == []
 

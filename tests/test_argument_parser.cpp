@@ -1456,6 +1456,39 @@ TEST(ArgumentParserTest, TrainingParsesCropBoxRegionOfInterest) {
     EXPECT_FLOAT_EQ((*parsed)->optimization.cropbox_loss_weight, 0.f);
 }
 
+// Catches --crop not reaching the training parameters, or being on without the flag.
+TEST(ArgumentParserTest, TrainingParsesCropAtTheEnd) {
+    const auto data_path = make_test_path("lfs_arg_parser_crop_data");
+    const auto output_path = make_test_path("lfs_arg_parser_crop_output");
+    const auto parse = [&](const bool crop) {
+        std::vector<const char*> argv{"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                                      "--output-path", output_path.c_str(), "--cropbox", "-1,-1,-1,1,1,1"};
+        if (crop)
+            argv.push_back("--crop");
+        return lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+    };
+
+    const auto cropped = parse(true);
+    ASSERT_TRUE(cropped.has_value()) << cropped.error();
+    EXPECT_TRUE((*cropped)->optimization.crop_to_cropbox);
+
+    const auto kept = parse(false);
+    ASSERT_TRUE(kept.has_value()) << kept.error();
+    EXPECT_FALSE((*kept)->optimization.crop_to_cropbox);
+}
+
+// Catches --crop accepted without a region of interest to crop to.
+TEST(ArgumentParserTest, TrainingRejectsCropWithoutCropBox) {
+    const auto data_path = make_test_path("lfs_arg_parser_crop_without_box_data");
+    const auto output_path = make_test_path("lfs_arg_parser_crop_without_box_output");
+    const char* argv[] = {"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                          "--output-path", output_path.c_str(), "--crop"};
+
+    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("--cropbox"), std::string::npos);
+}
+
 TEST(ArgumentParserTest, TrainingRejectsCropBoxWithoutVolume) {
     const auto data_path = make_test_path("lfs_arg_parser_invalid_cropbox_data");
     const auto output_path = make_test_path("lfs_arg_parser_invalid_cropbox_output");

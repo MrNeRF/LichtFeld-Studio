@@ -53,6 +53,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--cropbox-lr-scale", "cropbox_lr_scale", Float},
             OptimizationCliBinding{"--cropbox-loss-weight", "cropbox_loss_weight", Float},
             OptimizationCliBinding{"--cropbox-growth-inside", "cropbox_growth_inside", Float},
+            OptimizationCliBinding{"--crop", "crop_to_cropbox", Bool},
             OptimizationCliBinding{"--thin-structure-weight", "thin_structure_weight", Float},
             OptimizationCliBinding{"--late-lr-anneal", "late_lr_anneal", Float},
             OptimizationCliBinding{"--gradient-loss-weight", "gradient_loss_weight", Float},
@@ -795,6 +796,7 @@ namespace {
             ::args::ValueFlag<int> max_cap(training_group, "max_cap", lfs::core::args::optimization_cli_help("--max-cap"), {"max-cap"});
             ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", lfs::core::args::optimization_cli_help("--min-opacity"), {"min-opacity"});
             ::args::ValueFlag<std::string> cropbox(training_group, "x0,y0,z0,x1,y1,z1", "Train with a region of interest: an enabled crop box on the training model with that minimum and maximum corner in the dataset's coordinates. --cropbox-loss-weight 0 ignores every pixel outside it", {"cropbox"});
+            ::args::Flag crop(training_group, "crop", lfs::core::args::optimization_cli_help("--crop"), {"crop"});
             ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
             ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
             ::args::ValueFlag<float> cropbox_growth_inside(training_group, "share", lfs::core::args::optimization_cli_help("--cropbox-growth-inside"), {"cropbox-growth-inside"});
@@ -1275,6 +1277,10 @@ namespace {
                         ::args::get(cropbox)));
                 params.cropbox = *box;
             }
+            if (crop && !params.cropbox && !params.resume_checkpoint && !params.resume_project)
+                return std::unexpected(
+                    "--crop removes the splats outside the training crop box when training ends: it needs --cropbox, "
+                    "or a resumed project that has a crop box");
 
             auto add_splat_freeze = parse_add_splat_freeze_modifiers(args);
             if (!add_splat_freeze) {
@@ -1583,6 +1589,7 @@ namespace {
                                         use_exposure_correction_flag = bool(use_exposure_correction),
                                         no_exposure_correction_flag = bool(no_exposure_correction),
                                         opacity_decay_rendered_only_flag = bool(opacity_decay_rendered_only),
+                                        crop_flag = bool(crop),
                                         no_opacity_decay_rendered_only_flag = bool(no_opacity_decay_rendered_only),
                                         use_ppisp_flag = bool(use_ppisp),
                                         no_ppisp_exif_exposure_flag = bool(no_ppisp_exif_exposure),
@@ -1708,6 +1715,8 @@ namespace {
                 setVal(densify_structure_weight_val, opt.densify_structure_weight);
                 if (opacity_decay_rendered_only_flag)
                     opt.opacity_decay_rendered_only = true;
+                if (crop_flag)
+                    opt.crop_to_cropbox = true;
                 if (no_opacity_decay_rendered_only_flag)
                     opt.opacity_decay_rendered_only = false;
                 setVal(sh_degree_interval_val, opt.sh_degree_interval);
@@ -1871,6 +1880,7 @@ namespace {
                 note_opt("cropbox_lr_scale", cropbox_lr_scale_val.has_value());
                 note_opt("cropbox_loss_weight", cropbox_loss_weight_val.has_value());
                 note_opt("cropbox_growth_inside", cropbox_growth_inside_val.has_value());
+                note_opt("crop_to_cropbox", crop_flag);
                 note_opt("init_num_pts", init_num_pts_val.has_value());
                 note_opt("init_extent", init_extent_val.has_value());
                 note_opt("init_mesh_resolution", init_mesh_resolution_val.has_value());
