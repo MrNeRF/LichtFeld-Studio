@@ -1940,20 +1940,22 @@ Returns:
             } else {
                 image = invoke();
             }
-            return image ? std::optional<PyTensor>(PyTensor(std::move(*image), true)) : std::nullopt; }, nb::arg("rotation"), nb::arg("translation"), nb::arg("width"), nb::arg("height"), nb::arg("fov") = 14.0f, nb::arg("shift_x") = 0.0f, nb::arg("near_distance") = 0.0f, nb::arg("far_distance") = 100000.0f,
+            return image ? std::optional<PyTensor>(PyTensor(std::move(*image), true)) : std::nullopt; }, nb::arg("rotation"), nb::arg("translation"), nb::arg("width"), nb::arg("height"), nb::arg("fov") = DEFAULT_FOV, nb::arg("shift_x") = 0.0f, nb::arg("near_distance") = 0.0f, nb::arg("far_distance") = 100000.0f,
               R"doc(
 Render a parallel off-axis perspective view for light-field quilts.
 
 rotation is a [3, 3] camera-to-world rotation and translation is a [3] world
-position, using the visualizer camera convention. fov is vertical degrees.
+position, using the visualizer camera convention. fov is vertical degrees
+(default: 60).
 shift_x offsets the principal point horizontally in pixels; positive values
 move the principal point right. near_distance and far_distance clip Gaussian
 centers by camera-space forward distance, not the tails of individual splats.
 
-Projection, clipping, splat scale and editor visualization overrides are local
-to this render; the viewport settings and model are not changed. Other current
-render settings, such as background and appearance, are retained. Rendering is
-dispatched to the viewer thread when necessary.
+Selection highlights are hidden. Projection, clipping, splat scale and editor
+visualization overrides are local to this render; the viewport settings and
+model are not changed. Other current render settings, such as background and
+appearance, are retained. Rendering is dispatched to the viewer thread when
+necessary.
 
 Returns a CPU uint8 Tensor [H, W, 3] RGB image, or None when there is no renderable
 scene, arguments are invalid, or rendering fails. Width and height must be

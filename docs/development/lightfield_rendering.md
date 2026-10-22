@@ -21,8 +21,8 @@ image = lf.render_lightfield_view_u8(
 
 The result is a CPU uint8 tensor `[height, width, 3]` in RGB order, or `None` if
 arguments are invalid, a renderable scene is unavailable, or rendering fails.
-Width/height are limited to 1-2048 and vertical FOV to 1-120 degrees. The principal
-point shift must be finite. Finite clipping distances must satisfy
+Width/height are limited to 1-2048 and vertical FOV to 1-120 degrees, defaulting to 60.
+The principal-point shift must be finite. Finite clipping distances must satisfy
 `0 <= near_distance < far_distance`.
 
 ## Quilt Camera Geometry
@@ -35,7 +35,8 @@ This keeps objects on the focus plane aligned without toe-in rotations.
 
 Near/far clipping tests Gaussian centers by camera-forward distance, not Euclidean
 radius or complete Gaussian support. Large splat tails can cross the clipping planes.
-The function locally disables editor overlays and overrides projection, clipping
+The function hides selection highlights without clearing the selection. It locally
+disables editor overlays and overrides projection, clipping
 and splat display scale; other appearance settings, including background, remain
 inherited from the current render settings.
 
@@ -46,11 +47,13 @@ if its scene/model changes; one render call does not freeze an entire multiview 
 ## Tests
 
 ```powershell
-python -m pytest tests/python/test_lightfield_render_contracts.py -q
+python -m pytest tests/python/test_lightfield_render_runtime.py -q
 ```
 
 An opt-in GUI test is provided in `test_lightfield_render_runtime.py`. Point
 `LFS_LIGHTFIELD_TEST_ENDPOINT` at a **separate, empty** patched GUI instance. It
 refuses a loaded scene or trainer, creates synthetic splats, checks clipping,
-principal-point focus alignment and invalid arguments, then removes its test node.
+principal-point focus alignment, selection-highlight isolation, the default FOV
+and invalid arguments, then removes its test node. A unit test in
+`test_lightfield_test_harness.py` checks that missing NumPy is reported immediately.
 Never point this test at a working or training session.

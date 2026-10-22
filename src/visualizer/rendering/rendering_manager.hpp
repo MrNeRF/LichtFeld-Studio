@@ -750,7 +750,9 @@ namespace lfs::vis {
             std::optional<glm::vec3> background_color_override,
             PreviewImageReadback readback,
             float rasterization_scale = 1.0f,
-            bool equirectangular = false);
+            bool equirectangular = false,
+            const RenderSettings* settings_override = nullptr,
+            bool gaussian_selection_visible = true);
         [[nodiscard]] std::expected<void, std::string> renderPreviewImageToPreviewSlotWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
@@ -771,7 +773,8 @@ namespace lfs::vis {
             float rasterization_scale = 1.0f,
             bool deterministic_export = false,
             bool equirectangular = false,
-            const RenderSettings* settings_override = nullptr);
+            const RenderSettings* settings_override = nullptr,
+            bool gaussian_selection_visible = true);
         [[nodiscard]] std::expected<void, std::string> renderDepthCaptureToPreviewSlotWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,

@@ -751,6 +751,7 @@ namespace lfs::vis {
         settings.point_cloud_mode = false;
         settings.show_rings = false;
         settings.show_center_markers = false;
+        settings.selection_outline = false;
         settings.desaturate_unselected = false;
         settings.depth_filter_enabled = true;
         settings.hide_outside_depth_box = true;
@@ -763,24 +764,13 @@ namespace lfs::vis {
             .focal_y = focal,
             .center_x = width * 0.5f + principal_shift_x,
             .center_y = height * 0.5f};
-        auto rendered = renderPreviewImageToPreviewSlotWithState(
+        auto image = renderPreviewImageWithState(
             scene_manager, *model, std::move(state), rotation, position,
             lfs::rendering::vFovToFocalLength(fov_degrees), width, height,
-            render_lock.has_value(), intrinsics, {}, {}, false, std::nullopt,
-            std::nullopt, false, 1.0f, true, false, &settings);
-        if (!rendered) {
-            LOG_ERROR("Light-field render failed: {}", rendered.error());
-            releasePreviewImageResources();
-            return {};
-        }
-        auto image = vksplat_viewport_renderer_->readOutputImageRgb8(
-            *last_vulkan_context_, VksplatViewportRenderer::OutputSlot::Preview);
+            render_lock.has_value(), intrinsics, false, std::nullopt, std::nullopt,
+            PreviewImageReadback::UInt8Rgb, 1.0f, false, &settings, false);
         releasePreviewImageResources();
-        if (!image) {
-            LOG_ERROR("Light-field readback failed: {}", image.error());
-            return {};
-        }
-        return std::move(*image);
+        return image;
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgba8(SceneManager* const scene_manager,
@@ -1345,7 +1335,9 @@ namespace lfs::vis {
         std::optional<glm::vec3> background_color_override,
         const PreviewImageReadback readback,
         const float rasterization_scale,
-        const bool equirectangular) {
+        const bool equirectangular,
+        const RenderSettings* settings_override,
+        const bool gaussian_selection_visible) {
         const auto readback_config =
             previewImageReadbackConfig(readback, background_color_override.has_value());
 
@@ -1369,7 +1361,8 @@ namespace lfs::vis {
             background_color_override,
             readback_config.transparent_background_override,
             rasterization_scale,
-            readback != PreviewImageReadback::FloatRgb, equirectangular);
+            readback != PreviewImageReadback::FloatRgb, equirectangular,
+            settings_override, gaussian_selection_visible);
         if (!rendered) {
             if (!intrinsics_override && isTileInstanceOverflow(rendered.error()) &&
                 height > kMinPreviewSubdivisionHeight) {
@@ -1436,7 +1429,8 @@ namespace lfs::vis {
         const float rasterization_scale,
         const bool deterministic_export,
         const bool equirectangular,
-        const RenderSettings* settings_override) {
+        const RenderSettings* settings_override,
+        const bool gaussian_selection_visible) {
         if (width <= 0 || height <= 0) {
             return std::unexpected("invalid preview render dimensions");
         }
@@ -1486,6 +1480,7 @@ namespace lfs::vis {
             .settings = preview_settings,
             .render_size = {width, height},
             .viewport_pos = {0, 0},
+            .gaussian_selection_visible = gaussian_selection_visible,
             .cursor_preview = {},
             .gizmo = {},
             .view_panels = {},

@@ -17,12 +17,12 @@ def _verify_in_gui():
     import json
     import traceback
 
-    import lichtfeld as lf
-    import numpy as np
-
     created = False
     name = "Light-field API test"
     try:
+        import lichtfeld as lf
+        import numpy as np
+
         scene = lf.get_scene()
         assert not lf.has_trainer(), "Refusing a session with a trainer"
         assert scene is not None and scene.node_count == 0, (
@@ -82,6 +82,24 @@ def _verify_in_gui():
 
         all_views = render()
         assert all_views.max() > 100, "Blank RGB render"
+        scene.set_selection(list(range(count // 3, 2 * count // 3)))
+        try:
+            assert scene.has_selection(), "Selection test did not select any splats"
+            selection = scene.selection_mask.numpy().copy()
+            selected = render()
+            np.testing.assert_array_equal(
+                selected,
+                all_views,
+                err_msg="Selection leaked into the light-field image",
+            )
+            assert scene.has_selection(), "Rendering cleared the user's selection"
+            np.testing.assert_array_equal(scene.selection_mask.numpy(), selection)
+        finally:
+            scene.clear_selection()
+        default_fov = lf.render_lightfield_view_u8(rotation, eye, 192, 256)
+        explicit_fov = lf.render_lightfield_view_u8(rotation, eye, 192, 256, fov=60)
+        assert default_fov is not None and explicit_fov is not None
+        np.testing.assert_array_equal(default_fov.numpy(), explicit_fov.numpy())
         assert not np.array_equal(all_views, render(5.2, 100)), (
             "Near clipping has no effect"
         )
