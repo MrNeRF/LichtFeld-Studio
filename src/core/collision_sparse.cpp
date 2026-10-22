@@ -1,10 +1,14 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "collision_sparse.hpp"
+#include <atomic>
 #include <cmath>
+#include <format>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <numeric>
+#include <thread>
 #include <unordered_map>
 
 namespace lfs::core::collision_detail {
@@ -67,12 +71,12 @@ namespace lfs::core::collision_detail {
             result.compact();
             return result;
         }
-        void floorFill(Tree& tree, float reach_world, float voxel_size, std::stop_token stop) {
+        void floorFill(Tree& tree, float reach_world, float voxel_size, std::stop_token stop, int maximum_height) {
             // Only columns intersecting source occupancy are materialized.
             std::unordered_map<uint64_t, int> heights;
             auto key = [](int x, int z) { return uint64_t(uint32_t(x)) | (uint64_t(uint32_t(z)) << 32); };
             tree.leaves([&](const Leaf& l) {
-                if (!l.solid)
+                if (!l.solid || l.min.y > maximum_height)
                     return;
                 auto end = glm::min(l.max(), tree.dimensions);
                 for (int z = l.min.z; z < end.z; ++z) {
@@ -223,7 +227,7 @@ namespace lfs::core::collision_detail {
     } // namespace
 
     CollisionVolume voxelizeSparse(std::span<const CollisionGaussian> source, CollisionSettings settings,
-                                   std::stop_token stop) {
+                                   std::stop_token stop, CollisionProgress progress, unsigned parallelism) {
         struct Bounds {
             glm::vec3 min, max;
             float opacity;
@@ -330,118 +334,217 @@ namespace lfs::core::collision_detail {
             glm::vec3 center;
             glm::mat3 inverse;
             float opacity;
+            glm::ivec3 min, max;
         };
         std::vector<Prepared> prepared;
         prepared.reserve(source.size());
+        size_t bound_index = 0;
+        const auto world_max = glm::dvec3(volume.origin) + glm::dvec3(volume.dimensions) * double(size);
         for (const auto& g : source) {
             if (g.opacity == 0 || std::abs(glm::determinant(g.axes)) < 1e-20f)
                 continue;
-            prepared.push_back({g.center, glm::inverse(g.axes), g.opacity});
+            const auto& bound = bounds[bound_index++];
+            // Weak isolated supports can lie arbitrarily far outside the effective
+            // grid. Clip before converting coordinates, retaining their contribution
+            // wherever they overlap the grid without overflowing cell indices.
+            const auto padding = (glm::abs(glm::dvec3(bound.min)) + glm::abs(glm::dvec3(bound.max)) +
+                                  glm::abs(glm::dvec3(volume.origin)) + 1.0) *
+                                 (8 * double(std::numeric_limits<float>::epsilon()));
+            const auto clipped_min = glm::max(glm::dvec3(bound.min) - padding, glm::dvec3(volume.origin));
+            const auto clipped_max = glm::min(glm::dvec3(bound.max) + padding, world_max);
+            if (glm::any(glm::greaterThan(clipped_min, clipped_max)))
+                continue;
+            const auto cell_min = glm::clamp(glm::ivec3(glm::floor((clipped_min - glm::dvec3(volume.origin)) / double(size))),
+                                             glm::ivec3(0), volume.dimensions);
+            const auto cell_max = glm::clamp(glm::ivec3(glm::floor((clipped_max - glm::dvec3(volume.origin)) / double(size))) + 1,
+                                             glm::ivec3(0), volume.dimensions);
+            prepared.push_back({g.center, glm::inverse(g.axes), g.opacity, cell_min, cell_max});
         }
-        uint64_t work = 0;
         std::vector<uint32_t> all(prepared.size());
         std::iota(all.begin(), all.end(), 0);
-        auto children = [&](uint32_t index, auto&& fn) {
-            if (tree.nodes.size() + 8 > Tree::max_nodes)
-                throw std::runtime_error("Sparse collision node memory budget exceeded");
-            const auto base = uint32_t(tree.nodes.size());
-            tree.nodes.resize(tree.nodes.size() + 8);
-            tree.nodes[index] = base + 2;
-            for (int child = 0; child < 8; ++child)
-                fn(base + child, child);
-            const auto first = tree.nodes[base];
-            if (first <= 1 && std::all_of(tree.nodes.begin() + base, tree.nodes.begin() + base + 8,
-                                          [first](auto value) { return value == first; })) {
-                tree.nodes[index] = first;
-                tree.nodes.resize(base);
-            }
-        };
-        std::function<void(uint32_t, glm::ivec3, int, const std::vector<uint32_t>&)> build;
-        build = [&](uint32_t node, glm::ivec3 lo, int n, const std::vector<uint32_t>& candidates) {
-            check(stop);
-            auto hi = glm::min(lo + n, volume.dimensions);
-            if (glm::any(glm::greaterThanEqual(lo, hi)))
-                return;
-            const auto middle = glm::dvec3(volume.origin) +
-                                (glm::dvec3(lo) + glm::dvec3(hi)) * (double(size) / 2);
-            const auto half = glm::dvec3(hi - lo - 1) * (double(size) / 2);
-            // Bound float evaluation error as well as the whole cell-center box.
-            const auto error = (glm::abs(middle) + glm::abs(glm::dvec3(volume.origin)) + 1.0) *
-                               (8 * double(std::numeric_limits<float>::epsilon()));
-            std::vector<uint32_t> relevant;
-            relevant.reserve(candidates.size());
-            double upper = 0, lower = 0;
-            for (auto index : candidates) {
-                if ((++work & 4095) == 0)
-                    check(stop);
-                if (work > 4'000'000'000ULL)
-                    throw std::runtime_error("Sparse Gaussian active-work budget exceeded");
-                const auto& g = prepared[index];
-                auto inv = glm::dmat3(g.inverse);
-                auto q = inv * (middle - glm::dvec3(g.center));
-                auto h = half + error + glm::abs(glm::dvec3(g.center)) * (8 * double(std::numeric_limits<float>::epsilon()));
-                auto qr = glm::abs(inv[0]) * h.x + glm::abs(inv[1]) * h.y + glm::abs(inv[2]) * h.z;
-                auto near = glm::max(glm::abs(q) - qr, glm::dvec3(0));
-                double min_distance = glm::dot(near, near);
-                if (min_distance > 9.0001)
-                    continue;
-                relevant.push_back(index);
-                upper += (1 - upper) * g.opacity * std::exp(-0.5 * min_distance);
-                auto far = glm::abs(q) + qr;
-                double max_distance = glm::dot(far, far);
-                if (max_distance <= 9)
-                    lower += (1 - lower) * g.opacity * std::exp(-0.5 * max_distance);
-            }
-            const double rounding = relevant.size() * (8 * double(std::numeric_limits<float>::epsilon()));
-            if (relevant.empty() || upper + rounding < settings.opacity)
-                return;
-            if (lower > 0 && lower - rounding >= settings.opacity &&
-                glm::all(glm::equal(hi, lo + n))) {
-                tree.nodes[node] = 1;
-                return;
-            }
-            if (n > 8) {
-                children(node, [&](uint32_t index, int child) {
-                    build(index, lo + glm::ivec3(child & 1, (child >> 1) & 1, child >> 2) * (n / 2),
-                          n / 2, relevant);
-                });
-                return;
-            }
-            std::array<float, 512> alpha{};
-            for (auto index : relevant) {
-                const auto& g = prepared[index];
-                for (int z = lo.z; z < hi.z; ++z)
-                    for (int y = lo.y; y < hi.y; ++y)
-                        for (int x = lo.x; x < hi.x; ++x) {
-                            if (++work > 4'000'000'000ULL)
-                                throw std::runtime_error("Sparse Gaussian active-work budget exceeded");
-                            auto& value = alpha[(z - lo.z) * 64 + (y - lo.y) * 8 + x - lo.x];
-                            if (value > 0 && value >= settings.opacity)
-                                continue;
-                            auto q = g.inverse * (volume.origin + (glm::vec3(x, y, z) + 0.5f) * size - g.center);
-                            float distance = glm::dot(q, q);
-                            if (distance <= 9)
-                                value += (1 - value) * g.opacity * std::exp(-0.5f * distance);
-                        }
-            }
-            std::function<void(uint32_t, glm::ivec3, int)> emit = [&](uint32_t index, glm::ivec3 p, int edge) {
-                if (edge == 1) {
-                    if (glm::any(glm::greaterThanEqual(p, hi)))
-                        return;
-                    const auto q = p - lo;
-                    const auto value = alpha[q.z * 64 + q.y * 8 + q.x];
-                    tree.nodes[index] = value > 0 && value >= settings.opacity;
+
+        const auto available = parallelism ? parallelism : std::max(1u, std::thread::hardware_concurrency());
+        const unsigned workers = source.size() >= 4096 && tree.size > 8 ? std::min(available, 8u) : 1;
+        std::atomic<size_t> allocated{workers > 1 ? 9u : 1u};
+        std::atomic<bool> failed{false};
+        std::atomic<uint64_t> shared_work{0};
+        auto buildBranch = [&](int octant) {
+            Tree tree(volume.dimensions, stop);
+            uint64_t work = 0;
+            auto children = [&](uint32_t index, auto&& fn) {
+                if (allocated.fetch_add(8, std::memory_order_relaxed) + 8 > Tree::max_nodes)
+                    throw std::runtime_error("Sparse collision node memory budget exceeded");
+                const auto base = uint32_t(tree.nodes.size());
+                tree.nodes.resize(tree.nodes.size() + 8);
+                tree.nodes[index] = base + 2;
+                for (int child = 0; child < 8; ++child)
+                    fn(base + child, child);
+                const auto first = tree.nodes[base];
+                if (first <= 1 && std::all_of(tree.nodes.begin() + base, tree.nodes.begin() + base + 8,
+                                              [first](auto value) { return value == first; })) {
+                    tree.nodes[index] = first;
+                    allocated.fetch_sub(tree.nodes.size() - base, std::memory_order_relaxed);
+                    tree.nodes.resize(base);
+                }
+            };
+            std::function<void(uint32_t, glm::ivec3, int, const std::vector<uint32_t>&)> build;
+            build = [&](uint32_t node, glm::ivec3 lo, int n, const std::vector<uint32_t>& candidates) {
+                check(stop);
+                if (failed.load(std::memory_order_relaxed))
+                    throw std::runtime_error("Collision generation cancelled after worker failure");
+                auto hi = glm::min(lo + n, volume.dimensions);
+                if (glm::any(glm::greaterThanEqual(lo, hi)))
+                    return;
+                const auto middle = glm::dvec3(volume.origin) +
+                                    (glm::dvec3(lo) + glm::dvec3(hi)) * (double(size) / 2);
+                const auto half = glm::dvec3(hi - lo - 1) * (double(size) / 2);
+                // Bound float evaluation error as well as the whole cell-center box.
+                const auto error = (glm::abs(middle) + glm::abs(glm::dvec3(volume.origin)) + 1.0) *
+                                   (8 * double(std::numeric_limits<float>::epsilon()));
+                std::vector<uint32_t> relevant;
+                relevant.reserve(candidates.size());
+                double upper = 0, lower = 0;
+                for (auto index : candidates) {
+                    if ((++work & 4095) == 0) {
+                        check(stop);
+                        if (shared_work.fetch_add(4096, std::memory_order_relaxed) > 4'000'000'000ULL)
+                            throw std::runtime_error("Sparse Gaussian active-work budget exceeded");
+                    }
+                    if (work > 4'000'000'000ULL)
+                        throw std::runtime_error("Sparse Gaussian active-work budget exceeded");
+                    const auto& g = prepared[index];
+                    auto inv = glm::dmat3(g.inverse);
+                    auto q = inv * (middle - glm::dvec3(g.center));
+                    auto h = half + error + glm::abs(glm::dvec3(g.center)) * (8 * double(std::numeric_limits<float>::epsilon()));
+                    auto qr = glm::abs(inv[0]) * h.x + glm::abs(inv[1]) * h.y + glm::abs(inv[2]) * h.z;
+                    auto near = glm::max(glm::abs(q) - qr, glm::dvec3(0));
+                    double min_distance = glm::dot(near, near);
+                    if (min_distance > 9.0001)
+                        continue;
+                    relevant.push_back(index);
+                    upper += (1 - upper) * g.opacity * std::exp(-0.5 * min_distance);
+                    auto far = glm::abs(q) + qr;
+                    double max_distance = glm::dot(far, far);
+                    if (max_distance <= 9)
+                        lower += (1 - lower) * g.opacity * std::exp(-0.5 * max_distance);
+                }
+                const double rounding = relevant.size() * (8 * double(std::numeric_limits<float>::epsilon()));
+                if (relevant.empty() || upper + rounding < settings.opacity)
+                    return;
+                if (lower > 0 && lower - rounding >= settings.opacity &&
+                    glm::all(glm::equal(hi, lo + n))) {
+                    tree.nodes[node] = 1;
                     return;
                 }
-                children(index, [&](uint32_t child_index, int child) {
-                    emit(child_index, p + glm::ivec3(child & 1, (child >> 1) & 1, child >> 2) * (edge / 2),
-                         edge / 2);
-                });
+                if (n > 8) {
+                    children(node, [&](uint32_t index, int child) {
+                        build(index, lo + glm::ivec3(child & 1, (child >> 1) & 1, child >> 2) * (n / 2),
+                              n / 2, relevant);
+                    });
+                    return;
+                }
+                std::array<float, 512> alpha{};
+                const auto total = uint32_t((hi.x - lo.x) * (hi.y - lo.y) * (hi.z - lo.z));
+                auto remaining = total;
+                for (auto index : relevant) {
+                    const auto& g = prepared[index];
+                    if (remaining == 0)
+                        break;
+                    const auto from = glm::max(lo, g.min), to = glm::min(hi, g.max);
+                    for (int z = from.z; z < to.z; ++z)
+                        for (int y = from.y; y < to.y; ++y)
+                            for (int x = from.x; x < to.x; ++x) {
+                                if ((++work & 4095) == 0) {
+                                    check(stop);
+                                    if (shared_work.fetch_add(4096, std::memory_order_relaxed) > 4'000'000'000ULL)
+                                        throw std::runtime_error("Sparse Gaussian active-work budget exceeded");
+                                }
+                                auto& value = alpha[(z - lo.z) * 64 + (y - lo.y) * 8 + x - lo.x];
+                                if (value > 0 && value >= settings.opacity)
+                                    continue;
+                                auto q = g.inverse * (volume.origin + (glm::vec3(x, y, z) + 0.5f) * size - g.center);
+                                float distance = glm::dot(q, q);
+                                if (distance <= 9) {
+                                    value += (1 - value) * g.opacity * std::exp(-0.5f * distance);
+                                    if (value > 0 && value >= settings.opacity)
+                                        --remaining;
+                                }
+                            }
+                }
+                if (remaining == total)
+                    return;
+                if (remaining == 0 && glm::all(glm::equal(hi, lo + n))) {
+                    tree.nodes[node] = 1;
+                    return;
+                }
+                std::function<void(uint32_t, glm::ivec3, int)> emit = [&](uint32_t index, glm::ivec3 p, int edge) {
+                    if (edge == 1) {
+                        if (glm::any(glm::greaterThanEqual(p, hi)))
+                            return;
+                        const auto q = p - lo;
+                        const auto value = alpha[q.z * 64 + q.y * 8 + q.x];
+                        tree.nodes[index] = value > 0 && value >= settings.opacity;
+                        return;
+                    }
+                    children(index, [&](uint32_t child_index, int child) {
+                        emit(child_index, p + glm::ivec3(child & 1, (child >> 1) & 1, child >> 2) * (edge / 2),
+                             edge / 2);
+                    });
+                };
+                emit(node, lo, n);
             };
-            emit(node, lo, n);
+            if (octant < 0)
+                build(0, {}, tree.size, all);
+            else
+                build(0, glm::ivec3(octant & 1, (octant >> 1) & 1, octant >> 2) * (tree.size / 2), tree.size / 2, all);
+            return std::move(tree.nodes);
         };
-        build(0, {}, tree.size, all);
-        storeTree(volume, std::move(tree));
+        if (workers == 1) {
+            tree.nodes = buildBranch(-1);
+        } else {
+            std::array<std::vector<uint32_t>, 8> branches;
+            std::atomic<unsigned> next{0}, completed{0};
+            std::mutex error_mutex, progress_mutex;
+            std::exception_ptr error;
+            {
+                std::vector<std::jthread> pool;
+                for (unsigned worker = 0; worker < workers; ++worker)
+                    pool.emplace_back([&] {
+                        try {
+                            for (unsigned octant; (octant = next.fetch_add(1)) < 8 && !failed.load();) {
+                                branches[octant] = buildBranch(int(octant));
+                                const auto done = completed.fetch_add(1) + 1;
+                                if (progress) {
+                                    std::lock_guard lock(progress_mutex);
+                                    progress(std::format("Voxelizing regions: {}/8", done));
+                                }
+                            }
+                        } catch (...) {
+                            std::lock_guard lock(error_mutex);
+                            if (!error)
+                                error = std::current_exception();
+                            failed = true;
+                        }
+                    });
+            }
+            if (error)
+                std::rethrow_exception(error);
+            tree.nodes.assign(9, 0);
+            tree.nodes[0] = 3;
+            tree.nodes.reserve(allocated.load());
+            for (unsigned octant = 0; octant < 8; ++octant) {
+                check(stop);
+                auto& branch = branches[octant];
+                const uint32_t shift = uint32_t(tree.nodes.size()) - 1;
+                tree.nodes[octant + 1] = branch[0] <= 1 ? branch[0] : branch[0] + shift;
+                for (size_t i = 1; i < branch.size(); ++i)
+                    tree.nodes.push_back(branch[i] <= 1 ? branch[i] : branch[i] + shift);
+                branch.clear();
+                branch.shrink_to_fit();
+            }
+        }
+        volume.tree_size = tree.size;
+        volume.tree = std::move(tree.nodes);
         return volume;
     }
 
@@ -450,8 +553,14 @@ namespace lfs::core::collision_detail {
         if (volume.occupiedCount() == 0)
             throw std::runtime_error("No occupied voxels; lower opacity or voxel size");
         auto report = [&](const char* text) { check(stop); if (progress) progress(text); };
-        auto tree = volumeTree(volume, stop);
         const auto& s = volume.settings;
+        if (!s.external_fill && !s.floor_fill && s.carve_height == 0)
+            return volume;
+        Tree tree(volume.dimensions, stop);
+        if (!volume.tree.empty())
+            tree.nodes = std::move(volume.tree);
+        else
+            tree = volumeTree(volume, stop);
         if (s.external_fill) {
             report("Sealing sparse exterior");
             const int radius = int(std::min(std::ceil(double(s.external_size) / (2 * s.voxel_size)), double(tree.size)));
@@ -469,7 +578,7 @@ namespace lfs::core::collision_detail {
         }
         if (s.floor_fill) {
             report("Filling sparse ground columns");
-            floorFill(tree, s.floor_size, s.voxel_size, stop);
+            floorFill(tree, s.floor_size, s.voxel_size, stop, s.floor_below_seed ? volume.cell(s.seed - glm::vec3(0, 1.6f * s.units_per_meter, 0)).y : tree.dimensions.y);
         }
         if (s.carve_height > 0) {
             report("Flooding sparse navigable capsule space");
@@ -496,7 +605,7 @@ namespace lfs::core::collision_detail {
         }
         storeTree(volume, std::move(tree));
         volume.validate();
-        report("Building sparse collision surface");
+        report("Finalizing collision occupancy");
         return volume;
     }
 } // namespace lfs::core::collision_detail

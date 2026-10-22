@@ -30,11 +30,15 @@ namespace lfs::core {
         bool external_fill = false;
         float external_size = 1.6f;
         bool floor_fill = true;
+        bool floor_below_seed = false; // LFS guard: do not extrude overhead-only supports.
         float floor_size = 1.6f;
         float carve_height = 0.0f;
         float carve_radius = 0.2f;
         CollisionShape shape = CollisionShape::Smooth;
         glm::vec3 seed{0};
+        // Reconstruction coordinates are not necessarily metres. Explicit calibration,
+        // never inferred from arbitrary camera/scene extents.
+        float units_per_meter = 1.0f;
         void applyPreset(CollisionPreset value);
         void validate() const;
         friend bool operator==(const CollisionSettings&, const CollisionSettings&) = default;
@@ -54,7 +58,21 @@ namespace lfs::core {
         std::vector<int32_t> indices;
     };
 
+    // Authoring state belongs to the node, not the immutable (potentially large)
+    // occupancy payload. Scrubbing the preview must not copy/re-upload that data.
+    struct CollisionDisplay {
+        bool preview = true;
+        bool surface_ready = true; // Existing projects already contain a surface.
+        float opacity = 1.0f;
+        float slice = 1.0f;
+        int surface_stride = 4;
+        CollisionShape surface_shape = CollisionShape::Smooth;
+        friend bool operator==(const CollisionDisplay&, const CollisionDisplay&) = default;
+    };
+
     // Immutable once attached to a scene node. Coordinates are node-local, +Y up.
+    using CollisionProgress = std::function<void(std::string)>;
+
     struct LFS_CORE_API CollisionVolume {
         static constexpr size_t max_cells = 16'000'000;
         static constexpr size_t max_tree_words = 512'000'001;
@@ -85,10 +103,12 @@ namespace lfs::core {
         void forEachSolidBox(const std::function<void(glm::ivec3, glm::ivec3)>& fn) const;
         void forEachBoundaryFace(const std::function<void(glm::ivec3, glm::ivec3)>& fn,
                                  std::stop_token stop = {}) const;
-        [[nodiscard]] CollisionMesh mesh(CollisionShape shape, std::stop_token stop = {}) const;
+        [[nodiscard]] CollisionMesh mesh(CollisionShape shape, std::stop_token stop = {}, CollisionProgress progress = {}) const;
+        [[nodiscard]] CollisionMesh boundsMesh() const;
+        // Explicit surface-only approximation. Walk/preview keep original occupancy.
+        [[nodiscard]] CollisionVolume coarsened(int stride, std::stop_token stop = {}) const;
     };
 
-    using CollisionProgress = std::function<void(std::string)>;
     [[nodiscard]] LFS_CORE_API CollisionVolume generateCollision(
         std::span<const CollisionGaussian> gaussians, CollisionSettings settings,
         std::stop_token stop = {}, CollisionProgress progress = {});
@@ -96,6 +116,7 @@ namespace lfs::core {
         CollisionVolume volume, std::stop_token stop = {}, CollisionProgress progress = {});
 
     struct LFS_CORE_API WalkSettings {
+        float units_per_meter = 1.0f;
         float height = 1.8f;
         float radius = 0.2f;
         float speed = 2.5f;

@@ -2,14 +2,33 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include "core/collision.hpp"
+#include <cmath>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 
 namespace lfs::core {
+    inline void to_json(nlohmann::json& j, const CollisionDisplay& d) {
+        j = {{"preview", d.preview}, {"surface_ready", d.surface_ready}, {"opacity", d.opacity}, {"slice", d.slice}, {"surface_stride", d.surface_stride}, {"surface_shape", d.surface_shape}};
+    }
+    inline void from_json(const nlohmann::json& j, CollisionDisplay& d) {
+        d.preview = j.value("preview", true);
+        d.surface_ready = j.value("surface_ready", true);
+        d.opacity = j.value("opacity", 1.0f);
+        d.slice = j.value("slice", 1.0f);
+        d.surface_stride = j.value("surface_stride", 4);
+        d.surface_shape = j.value("surface_shape", CollisionShape::Smooth);
+        if (!std::isfinite(d.opacity) || d.opacity < 0 || d.opacity > 1 ||
+            !std::isfinite(d.slice) || d.slice < 0 || d.slice > 1 ||
+            (d.surface_shape != CollisionShape::Smooth && d.surface_shape != CollisionShape::Faces) ||
+            d.surface_stride < 1 || d.surface_stride > 16 || (d.surface_stride & (d.surface_stride - 1)))
+            throw std::invalid_argument("Invalid collision display settings");
+    }
+
     inline void to_json(nlohmann::json& j, const CollisionSettings& s) {
-        j = {{"preset", s.preset}, {"cluster", s.cluster}, {"cluster_resolution", s.cluster_resolution}, {"cluster_opacity", s.cluster_opacity}, {"cluster_min_contribution", s.cluster_min_contribution}, {"voxel_size", s.voxel_size}, {"opacity", s.opacity}, {"external_fill", s.external_fill}, {"external_size", s.external_size}, {"floor_fill", s.floor_fill}, {"floor_size", s.floor_size}, {"carve_height", s.carve_height}, {"carve_radius", s.carve_radius}, {"shape", s.shape}, {"seed", {s.seed.x, s.seed.y, s.seed.z}}};
+        j = {{"units_per_meter", s.units_per_meter}, {"preset", s.preset}, {"cluster", s.cluster}, {"cluster_resolution", s.cluster_resolution}, {"cluster_opacity", s.cluster_opacity}, {"cluster_min_contribution", s.cluster_min_contribution}, {"voxel_size", s.voxel_size}, {"opacity", s.opacity}, {"external_fill", s.external_fill}, {"external_size", s.external_size}, {"floor_below_seed", s.floor_below_seed}, {"floor_fill", s.floor_fill}, {"floor_size", s.floor_size}, {"carve_height", s.carve_height}, {"carve_radius", s.carve_radius}, {"shape", s.shape}, {"seed", {s.seed.x, s.seed.y, s.seed.z}}};
     }
     inline void from_json(const nlohmann::json& j, CollisionSettings& s) {
+        s.units_per_meter = j.value("units_per_meter", 1.0f);
         j.at("preset").get_to(s.preset);
         j.at("cluster").get_to(s.cluster);
         j.at("cluster_resolution").get_to(s.cluster_resolution);
@@ -20,6 +39,7 @@ namespace lfs::core {
         j.at("external_fill").get_to(s.external_fill);
         j.at("external_size").get_to(s.external_size);
         j.at("floor_fill").get_to(s.floor_fill);
+        s.floor_below_seed = j.value("floor_below_seed", false);
         j.at("floor_size").get_to(s.floor_size);
         j.at("carve_height").get_to(s.carve_height);
         j.at("carve_radius").get_to(s.carve_radius);

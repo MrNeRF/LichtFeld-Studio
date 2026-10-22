@@ -6,7 +6,7 @@
 
 namespace lfs::core::collision_detail {
     CollisionVolume voxelizeSparse(std::span<const CollisionGaussian> source, CollisionSettings settings,
-                                   std::stop_token stop);
+                                   std::stop_token stop, CollisionProgress progress = {}, unsigned parallelism = 0);
     CollisionVolume processSparse(CollisionVolume volume, std::stop_token stop, CollisionProgress progress);
     inline Tree volumeTree(const CollisionVolume& volume, std::stop_token stop = {}) {
         Tree tree(volume.dimensions, stop);

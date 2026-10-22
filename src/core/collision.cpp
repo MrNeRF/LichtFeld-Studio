@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <format>
 #include <limits>
 #include <stdexcept>
 #include <unordered_map>
@@ -343,10 +344,14 @@ namespace lfs::core {
         preset = value;
         external_fill = value == CollisionPreset::Indoor;
         floor_fill = value == CollisionPreset::Outdoor;
-        carve_height = value == CollisionPreset::Indoor ? 1.6f : 0;
+        carve_height = value == CollisionPreset::Indoor ? 1.6f * units_per_meter : 0;
+        carve_radius = 0.2f * units_per_meter;
+        external_size = floor_size = 1.6f * units_per_meter;
+        cluster_resolution = units_per_meter;
     }
     void CollisionSettings::validate() const {
         positive(voxel_size, "Voxel size");
+        positive(units_per_meter, "Scene units per metre");
         positive(cluster_resolution, "Cluster resolution");
         probability(opacity, "Voxel opacity");
         probability(cluster_opacity, "Cluster opacity");
@@ -423,35 +428,73 @@ namespace lfs::core {
             throw std::invalid_argument("Invalid collision occupancy value");
     }
     bool CollisionVolume::capsuleIntersects(glm::vec3 feet, glm::vec3 up, float height, float radius) const {
-        // Segment/AABB distance minimized with ternary search; the squared distance is convex.
         const glm::vec3 a = feet + up * radius, b = feet + up * (height - radius);
+        const auto delta = b - a;
+        // Segment/AABB distance is piecewise quadratic. Evaluate its exact
+        // minimum on intervals split at the six box-plane crossings, instead
+        // of twenty ternary-search iterations for every occupied voxel.
+        auto intersectsBox = [&](glm::vec3 lo, glm::vec3 hi) {
+            std::array<float, 8> times{0, 1};
+            int count = 2;
+            for (int axis = 0; axis < 3; ++axis) {
+                if (std::abs(delta[axis]) < 1e-12f)
+                    continue;
+                for (float plane : {lo[axis], hi[axis]}) {
+                    const float t = (plane - a[axis]) / delta[axis];
+                    if (t > 0 && t < 1)
+                        times[count++] = t;
+                }
+            }
+            std::sort(times.begin(), times.begin() + count);
+            for (int i = 1; i < count; ++i) {
+                const float left = times[i - 1], right = times[i], middle = (left + right) * 0.5f;
+                const auto point = a + delta * middle;
+                float numerator = 0, denominator = 0;
+                for (int axis = 0; axis < 3; ++axis) {
+                    if (point[axis] >= lo[axis] && point[axis] <= hi[axis])
+                        continue;
+                    const float bound = point[axis] < lo[axis] ? lo[axis] : hi[axis];
+                    numerator += delta[axis] * (a[axis] - bound);
+                    denominator += delta[axis] * delta[axis];
+                }
+                const float t = denominator > 0 ? glm::clamp(-numerator / denominator, left, right) : middle;
+                const auto p = a + delta * t;
+                const auto distance = p - glm::clamp(p, lo, hi);
+                if (glm::dot(distance, distance) < radius * radius)
+                    return true;
+            }
+            return false;
+        };
+        if (!tree.empty()) {
+            size_t visited = 0;
+            auto visit = [&](auto&& self, uint32_t index, glm::ivec3 lo, int edge) -> bool {
+                if (tree[index] == 0 || glm::any(glm::greaterThanEqual(lo, dimensions)))
+                    return false;
+                if (++visited > 2'000'000)
+                    throw std::runtime_error("Capsule query exceeds resource limit");
+                if (!intersectsBox(origin + glm::vec3(lo) * settings.voxel_size,
+                                   origin + glm::vec3(glm::min(lo + edge, dimensions)) * settings.voxel_size))
+                    return false;
+                if (tree[index] == 1)
+                    return true;
+                for (int child = 0; child < 8; ++child)
+                    if (self(self, tree[index] - 2 + child,
+                             lo + glm::ivec3(child & 1, (child >> 1) & 1, child >> 2) * (edge / 2), edge / 2))
+                        return true;
+                return false;
+            };
+            return visit(visit, 0, {}, tree_size);
+        }
         auto low = glm::max(cell(glm::min(a, b) - radius), glm::ivec3(0));
         auto high = glm::min(cell(glm::max(a, b) + radius), dimensions - 1);
-        const float edge = settings.voxel_size;
-        uint64_t tested = 0;
+        uint64_t visited = 0;
         for (int z = low.z; z <= high.z; ++z)
             for (int y = low.y; y <= high.y; ++y)
                 for (int x = low.x; x <= high.x; ++x) {
-                    if (++tested > 2'000'000)
+                    if (++visited > 2'000'000)
                         throw std::runtime_error("Capsule query exceeds resource limit");
-                    glm::ivec3 p(x, y, z);
-                    if (!occupied(p))
-                        continue;
-                    auto min = origin + glm::vec3(p) * edge, max = min + edge;
-                    auto distance = [&](float t) {
-                        auto q = a + t * (b - a);
-                        auto delta = q - glm::clamp(q, min, max);
-                        return glm::dot(delta, delta);
-                    };
-                    float l = 0, r = 1;
-                    for (int iteration = 0; iteration < 20; ++iteration) {
-                        float u = (2 * l + r) / 3, v = (l + 2 * r) / 3;
-                        if (distance(u) < distance(v))
-                            r = v;
-                        else
-                            l = u;
-                    }
-                    if (distance((l + r) / 2) < radius * radius)
+                    if (occupied({x, y, z}) && intersectsBox(origin + glm::vec3(x, y, z) * settings.voxel_size,
+                                                             origin + glm::vec3(x + 1, y + 1, z + 1) * settings.voxel_size))
                         return true;
                 }
         return false;
@@ -523,7 +566,7 @@ namespace lfs::core {
             gaussians = filtered;
         }
         report("Voxelizing rotated Gaussian ellipsoids");
-        auto grid = collision_detail::voxelizeSparse(gaussians, s, stop);
+        auto grid = collision_detail::voxelizeSparse(gaussians, s, stop, progress);
         return processCollisionVolume(std::move(grid), stop, std::move(progress));
     }
     CollisionVolume processCollisionVolume(CollisionVolume grid, std::stop_token stop, CollisionProgress progress) {
@@ -562,7 +605,8 @@ namespace lfs::core {
                 checkpoint(stop);
                 for (int x = 0; x < nx; ++x)
                     for (int y = 0; y < grid.dimensions.y; ++y)
-                        if (grid.occupied({x, y, z})) {
+                        if (grid.occupied({x, y, z}) && (!s.floor_below_seed ||
+                                                         grid.origin.y + y * s.voxel_size <= s.seed.y - 1.6f * s.units_per_meter)) {
                             floors[size_t(z) * nx + x] = y;
                             break;
                         }
@@ -768,7 +812,7 @@ namespace lfs::core {
         });
     }
 
-    CollisionMesh CollisionVolume::mesh(CollisionShape shape, std::stop_token stop) const {
+    CollisionMesh CollisionVolume::mesh(CollisionShape shape, std::stop_token stop, CollisionProgress progress) const {
         validate();
         CollisionMesh result, output;
         std::vector<std::array<int32_t, 3>> keys;
@@ -794,7 +838,7 @@ namespace lfs::core {
                 throw std::runtime_error("Collision mesh triangle limit reached; increase voxel size");
             result.indices.insert(result.indices.end(), {a, b, c});
         };
-        uint64_t work = 0;
+        uint64_t work = 0, chunks = 0;
         std::function<void(glm::ivec3, int)> build = [&](glm::ivec3 lo, int n) {
             checkpoint(stop);
             const auto halo = shape == CollisionShape::Faces ? glm::ivec3(1) : glm::ivec3(0);
@@ -978,6 +1022,8 @@ namespace lfs::core {
             result.indices.clear();
             vertices.clear();
             keys.clear();
+            if (progress && (++chunks == 1 || chunks % 32 == 0))
+                progress(std::format("Surface: {} chunks, {} triangles", chunks, output.indices.size() / 3));
         };
         int root_size = 1;
         while (root_size < std::max({dimensions.x, dimensions.y, dimensions.z}) + 1)
@@ -986,13 +1032,68 @@ namespace lfs::core {
         return output;
     }
 
+    CollisionMesh CollisionVolume::boundsMesh() const {
+        CollisionMesh result;
+        for (int c = 0; c < 8; ++c) {
+            const auto p = origin + glm::vec3((c & 1) ? dimensions.x : 0,
+                                              (c & 2) ? dimensions.y : 0,
+                                              (c & 4) ? dimensions.z : 0) *
+                                        settings.voxel_size;
+            result.vertices.insert(result.vertices.end(), {p.x, p.y, p.z});
+        }
+        result.indices = {0, 2, 3, 0, 3, 1, 4, 5, 7, 4, 7, 6, 0, 1, 5, 0, 5, 4,
+                          2, 6, 7, 2, 7, 3, 0, 4, 6, 0, 6, 2, 1, 3, 7, 1, 7, 5};
+        return result;
+    }
+
+    CollisionVolume CollisionVolume::coarsened(int stride, std::stop_token stop) const {
+        checkpoint(stop);
+        if (stride < 1 || stride > 16 || (stride & (stride - 1)))
+            throw std::invalid_argument("Surface stride must be a power of two from 1 to 16");
+        validate();
+        CollisionVolume out;
+        out.settings = settings;
+        out.settings.voxel_size *= stride;
+        out.origin = origin;
+        out.dimensions = (dimensions + stride - 1) / stride;
+        collision_detail::Tree reduced(out.dimensions, stop);
+        if (tree.empty()) {
+            forEachSolidBox([&](auto lo, auto hi) { reduced.setBox(lo / stride, (hi + stride - 1) / stride); });
+        } else {
+            auto anySolid = [&](auto&& self, uint32_t i) -> bool {
+                if (tree[i] <= 1)
+                    return tree[i] != 0;
+                for (int c = 0; c < 8; ++c)
+                    if (self(self, tree[i] - 2 + c))
+                        return true;
+                return false;
+            };
+            auto visit = [&](auto&& self, uint32_t src, uint32_t dst, int edge) -> void {
+                checkpoint(stop);
+                if (tree[src] <= 1 || edge <= stride) {
+                    reduced.nodes[dst] = anySolid(anySolid, src);
+                    return;
+                }
+                auto base = uint32_t(reduced.nodes.size());
+                reduced.nodes.resize(reduced.nodes.size() + 8);
+                reduced.nodes[dst] = base + 2;
+                for (int c = 0; c < 8; ++c)
+                    self(self, tree[src] - 2 + c, base + c, edge / 2);
+            };
+            visit(visit, 0, 0, tree_size);
+        }
+        collision_detail::storeTree(out, std::move(reduced));
+        return out;
+    }
+
     void WalkSettings::validate() const {
+        positive(units_per_meter, "Scene units per metre");
         positive(height, "Player height");
         positive(radius, "Player radius");
         positive(speed, "Walk speed");
         positive(step_height, "Step height", true);
         positive(gravity, "Gravity");
-        if (height < 2 * radius || height > 10 || radius > 5 || speed > 50 || step_height > height)
+        if (height < 2 * radius || height > 10 * units_per_meter || radius > 5 * units_per_meter || speed > 50 * units_per_meter || step_height > height)
             throw std::invalid_argument("Invalid walk capsule dimensions or speed");
     }
     glm::mat3 walkTangentFrame(glm::vec3 forward, glm::vec3 right, glm::vec3 up) {
@@ -1056,7 +1157,7 @@ namespace lfs::core {
         auto feet = state.eye - up * s.height;
         const int steps = std::clamp(int(std::ceil((glm::length(velocity) * dt +
                                                     std::abs(state.vertical_velocity) * dt + s.gravity * dt * dt) /
-                                                   std::min(0.02f, s.radius / 3))),
+                                                   std::min(0.02f * s.units_per_meter, s.radius / 3))),
                                      1, 1024);
         float tick = dt / steps;
         auto hit = [&](glm::vec3 p) { return blocked(p, up, s.height, s.radius); };
@@ -1067,7 +1168,7 @@ namespace lfs::core {
             } else {
                 bool can_step = state.grounded && s.step_height > 0;
                 if (can_step) {
-                    const int lift_steps = std::max(1, int(std::ceil(s.step_height / std::min(0.02f, s.radius / 3))));
+                    const int lift_steps = std::max(1, int(std::ceil(s.step_height / std::min(0.02f * s.units_per_meter, s.radius / 3))));
                     for (int lift = 1; lift <= lift_steps; ++lift)
                         if (hit(feet + up * (s.step_height * lift / lift_steps))) {
                             can_step = false;
