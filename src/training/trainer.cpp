@@ -6116,7 +6116,16 @@ namespace lfs::training {
                     std::unique_lock<std::shared_mutex> lock(render_mutex_, std::defer_lock);
                     const bool refining = refining_this_step;
                     const bool need_exclusive = refining || morton_due;
-                    if (need_exclusive) {
+                    bool publishes_hip_storage = false;
+#ifdef LFS_TENSOR_HIP
+                    // Allocator migration can replace Tensor objects even on a
+                    // non-refining step. HIP host publication reads those objects
+                    // on the viewer thread; queue ordering alone cannot protect
+                    // their CPU lifetime, including a pending pause transition.
+                    publishes_hip_storage = core::default_gpu_backend() == core::GpuBackend::HIP &&
+                                            static_cast<bool>(splat_tensor_allocator_);
+#endif
+                    if (need_exclusive || publishes_hip_storage) {
                         lock.lock();
                     }
                     // One-lock complete: exclusive render_mutex_ already bars new
@@ -6124,7 +6133,7 @@ namespace lfs::training {
                     // any rebuild that started before exclusive cannot re-enter
                     // (or finish late) across float-workspace swap + trim.
                     std::unique_lock<std::mutex> combined_model_lock;
-                    if (need_exclusive && scene_) {
+                    if ((need_exclusive || publishes_hip_storage) && scene_) {
                         combined_model_lock = scene_->acquireCombinedModelExclusive();
                     }
                     // Drain in-flight reader events immediately before post_backward's
@@ -6170,7 +6179,7 @@ namespace lfs::training {
                             }
                         }
                         bool on_ = false;
-                    } refining_mutation_mark(need_exclusive);
+                    } refining_mutation_mark(need_exclusive || publishes_hip_storage);
                     auto& model = strategy_->get_model();
                     const size_t model_size_before = static_cast<size_t>(model.size());
                     strategy_->post_backward(iter, r_output);

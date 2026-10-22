@@ -31,12 +31,13 @@ namespace {
 int main(int argc,char** argv) try {
     using namespace lfs;
     using namespace core;
-    if(argc<7) throw std::invalid_argument("Arguments: dataset output steps max_width max_gaussians SH_degree_plus_one [resume_project] [--exercise-mutations] [--exercise-lifecycle] [--require-frozen] [--stop-after=N] [--strategy=mcmc|mrnf|igs+] [--appearance]");
+    if(argc<7) throw std::invalid_argument("Arguments: dataset output steps max_width max_gaussians SH_degree_plus_one [resume_project] [--exercise-mutations] [--exercise-lifecycle] [--require-frozen] [--stop-after=N] [--strategy=mcmc|mrnf|igs+] [--appearance] [--profile]");
     bool exercise_mutations=false;
     bool exercise_lifecycle=false;
     bool require_frozen=false;
     unsigned stop_after=0;
     bool appearance=false;
+    bool profile=false;
     std::string strategy(param::kStrategyMCMC);
     std::optional<std::filesystem::path> resume;
     for(int i=7;i<argc;++i) {
@@ -45,6 +46,7 @@ int main(int argc,char** argv) try {
         else if(std::string_view(argv[i])=="--require-frozen")require_frozen=true;
         else if(std::string_view(argv[i]).starts_with("--stop-after="))stop_after=positive(argv[i]+13);
         else if(std::string_view(argv[i])=="--appearance")appearance=true;
+        else if(std::string_view(argv[i])=="--profile")profile=true;
         else if(std::string_view(argv[i]).starts_with("--strategy=")) {
             const auto requested=std::string_view(argv[i]).substr(11);
             if(!param::is_valid_strategy_name(requested))throw std::invalid_argument("Unknown test strategy");
@@ -77,6 +79,11 @@ int main(int argc,char** argv) try {
     params.optimization.use_ppisp=appearance;
     params.optimization.undistort=true;
     params.optimization.headless=true;
+    if(profile) {
+        params.optimization.perf_bench=true;
+        params.optimization.perf_bench_warmup=0;
+        std::puts("APPLICATION HIP: startup profiling includes the first step; NOT A THROUGHPUT BENCHMARK");
+    }
     params.optimization.save_steps={stop_after?stop_after:params.optimization.iterations};
     params.cli_iterations_set=true;
     if(exercise_mutations) {

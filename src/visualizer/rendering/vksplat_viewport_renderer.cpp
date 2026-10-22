@@ -3,6 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vksplat_viewport_renderer.hpp"
+#ifdef LFS_TENSOR_HIP
+#include "hip_input_publications.hpp"
+#endif
 #include "core/native_fs.hpp"
 #include "float_color_readback.hpp"
 #include "rendering/rasterizer/vulkan/src/display_color.h"
@@ -1886,6 +1889,10 @@ namespace lfs::vis {
         for (auto& snap : ring_uploaded_) {
             snap = {};
         }
+#ifdef LFS_TENSOR_HIP
+        if (hip_input_publications_)
+            hip_input_publications_->invalidate();
+#endif
         buffers_.num_splats = 0;
         buffers_.num_indices = 0;
         buffers_.is_unsorted_1 = true;
@@ -2054,6 +2061,9 @@ namespace lfs::vis {
         vulkan_query_complete_value_ = 0;
         last_submitted_render_value_ = 0;
         retired_input_storages_.clear();
+#ifdef LFS_TENSOR_HIP
+        hip_input_publications_.reset();
+#endif
         ring_.reset();
         retired_inputs_.clear();
         current_input_sh_degree_ = -1;
@@ -4688,6 +4698,10 @@ namespace lfs::vis {
         overlays_.resize(count);
         deleted_mask_copies_.resize(count);
         ring_uploaded_.resize(count);
+#ifdef LFS_TENSOR_HIP
+        if (hip_input_publications_)
+            hip_input_publications_->resize(count);
+#endif
         return cell;
     }
 
@@ -4720,7 +4734,8 @@ namespace lfs::vis {
         const lfs::core::SplatData& splat_data,
         const std::size_t ring_slot,
         const bool force_upload,
-        const int upload_sh_degree) {
+        const int upload_sh_degree,
+        const bool allow_cached_inputs) {
         const std::size_t n = static_cast<std::size_t>(splat_data.size());
         if (n == 0) {
             return std::unexpected("VkSplat cannot render an empty model");
@@ -4782,6 +4797,23 @@ namespace lfs::vis {
         const auto input_backend = lfs::core::gpu_backend_of(means_input);
         if (!input_backend)
             return std::unexpected("VkSplat inputs require GPU storage");
+#ifdef LFS_TENSOR_HIP
+        const char* disable_hip_cache = std::getenv("LFS_HIP_DISABLE_VIEWER_PUBLICATIONS_CACHE");
+        const bool reuse_hip_publications = allow_cached_inputs && *input_backend == lfs::core::GpuBackend::HIP &&
+                                           !(disable_hip_cache && std::string_view(disable_hip_cache) == "1");
+        if (*input_backend == lfs::core::GpuBackend::HIP) {
+            if (!hip_input_publications_) {
+                hip_input_publications_ = std::make_unique<HipInputPublications>();
+                hip_input_publications_->resize(ring_uploaded_.size());
+            }
+            if (!reuse_hip_publications || force_upload)
+                hip_input_publications_->invalidate();
+            else if (input_snapshot_changed)
+                hip_input_publications_->invalidate(ring_slot);
+        }
+#else
+        (void)allow_cached_inputs;
+#endif
         const bool has_deleted_mask = splat_data.has_deleted_mask();
         const Tensor& deleted_input = splat_data.deleted();
         const bool bind_deleted = has_deleted_mask &&
@@ -4830,8 +4862,27 @@ namespace lfs::vis {
         std::vector<const Tensor*> bound_tensors;
         const auto take =
             [&](const Tensor& tensor,
-                const char* const label) -> lfs::Result<lfs::core::TensorVulkanBuffer> {
-            auto buffer = context.tensorInterop().buffer(tensor);
+                const char* const label,
+                const std::size_t field) -> lfs::Result<lfs::core::TensorVulkanBuffer> {
+            std::optional<lfs::core::TensorVulkanBuffer> buffer;
+#ifdef LFS_TENSOR_HIP
+            bool loaded_publication = false;
+            if (reuse_hip_publications)
+                buffer = hip_input_publications_->get(ring_slot, field, [&] {
+                    loaded_publication = true;
+                    return context.tensorInterop().buffer(tensor);
+                });
+            else {
+                loaded_publication = true;
+                buffer = context.tensorInterop().buffer(tensor);
+            }
+            if (*input_backend == lfs::core::GpuBackend::HIP && std::getenv("LFS_HIP_VALIDATION_PUBLICATION_TRACE"))
+                LOG_DEBUG("HIP viewer publication: slot={} field={} mode={} loaded={}",
+                          ring_slot, label, reuse_hip_publications ? "cached" : "live", loaded_publication);
+#else
+            (void)field;
+            buffer = context.tensorInterop().buffer(tensor);
+#endif
             if (!buffer) {
                 return lfs::make_error(lfs::ErrorInit{
                     .code = lfs::ErrorCode::FailedPrecondition,
@@ -4848,36 +4899,36 @@ namespace lfs::vis {
             return *buffer;
         };
 
-        auto means_buffer = take(means_input, "means");
+        auto means_buffer = take(means_input, "means", 0);
         if (!means_buffer) {
             return std::unexpected(legacyErrorString(means_buffer.error()));
         }
-        auto sh0_buffer = take(sh0_input, "sh0");
+        auto sh0_buffer = take(sh0_input, "sh0", 1);
         if (!sh0_buffer) {
             return std::unexpected(legacyErrorString(sh0_buffer.error()));
         }
-        auto rotation_buffer = take(rotation_input, "rotation");
+        auto rotation_buffer = take(rotation_input, "rotation", 2);
         if (!rotation_buffer) {
             return std::unexpected(legacyErrorString(rotation_buffer.error()));
         }
-        auto scaling_buffer = take(scaling_input, "scaling");
+        auto scaling_buffer = take(scaling_input, "scaling", 3);
         if (!scaling_buffer) {
             return std::unexpected(legacyErrorString(scaling_buffer.error()));
         }
-        auto opacity_buffer = take(opacity_input, "opacity");
+        auto opacity_buffer = take(opacity_input, "opacity", 4);
         if (!opacity_buffer) {
             return std::unexpected(legacyErrorString(opacity_buffer.error()));
         }
         std::optional<lfs::core::TensorVulkanBuffer> shN_buffer;
         std::optional<lfs::core::TensorVulkanBuffer> shN_bounds_buffer;
         if (!layout->omits_shN) {
-            auto queried = take(shN_input, "shN");
+            auto queried = take(shN_input, "shN", 5);
             if (!queried) {
                 return std::unexpected(legacyErrorString(queried.error()));
             }
             shN_buffer = queried.value();
             if (layout->shN_q16) {
-                auto queried_bounds = take(shN_bounds_input, "shN_value_bounds");
+                auto queried_bounds = take(shN_bounds_input, "shN_value_bounds", 6);
                 if (!queried_bounds) {
                     return std::unexpected(legacyErrorString(queried_bounds.error()));
                 }
@@ -4893,7 +4944,7 @@ namespace lfs::vis {
         buffers_.opacity_raw.deviceBuffer = opacity_view.value();
         buffers_.deleted_mask.deviceBuffer = {};
         if (deleted_for_bind.is_valid()) {
-            auto mask_buffer = take(deleted_for_bind, "deleted mask");
+            auto mask_buffer = take(deleted_for_bind, "deleted mask", 7);
             if (!mask_buffer) {
                 return std::unexpected(legacyErrorString(mask_buffer.error()));
             }
@@ -8084,6 +8135,10 @@ namespace lfs::vis {
                 overlays_[cell] = {};
                 deleted_mask_copies_[cell] = {};
                 ring_uploaded_[cell] = {};
+#ifdef LFS_TENSOR_HIP
+                if (hip_input_publications_)
+                    hip_input_publications_->invalidate(cell);
+#endif
             }
             return true;
         });
@@ -8295,6 +8350,10 @@ namespace lfs::vis {
         }
 
         std::expected<InputBindingResult, std::string> input_binding = InputBindingResult{};
+#ifdef LFS_TENSOR_HIP
+        if (hip_input_publications_ && (synchronize_input_upload || lod_page_inputs_active))
+            hip_input_publications_->invalidate();
+#endif
         if (lod_page_inputs_active) {
             if (auto ok = ensureLodPageInputStorage(context,
                                                     splat_data,
@@ -8307,7 +8366,8 @@ namespace lfs::vis {
                                           splat_data,
                                           ring_slot,
                                           force_input_upload,
-                                          active_sh_degree);
+                                          active_sh_degree,
+                                          !synchronize_input_upload);
         }
         if (!input_binding) {
             return std::unexpected(input_binding.error());

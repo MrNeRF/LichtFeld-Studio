@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <core/detail/tensor_half.hpp>
 #include <stdexcept>
+#include "../../src/visualizer/rendering/hip_input_publications.hpp"
 using namespace lfs::core;
 static void require(bool v,const char* message){if(!v)throw std::runtime_error(message);}
 static void check(VkResult v){require(v==VK_SUCCESS,"Vulkan contract operation failed");}
@@ -46,11 +47,44 @@ int main(int argc,char**argv) try {
         std::mutex consumer_queue_mutex;
         TensorVulkanInterop interop({.physical_device=h.physical_device,.device=h.device,.sparse_queue=h.queue,.queue_mutex=&consumer_queue_mutex,.queue_families={h.queue_family},.queue_family_count=1,.external_memory=true});
         auto source=Tensor::full({257},3.f,Device::GPU);
-        auto first=interop.buffer(source);
+        lfs::vis::HipInputPublications cache;
+        cache.resize(2);
+        unsigned publications=0;
+        auto publish=[&]{++publications;return interop.buffer(source);};
+        auto first=cache.get(0,0,publish);
+        require(first.has_value(),"Initial HIP publication failed");
+        const auto repeated=cache.get(0,0,publish);
+        require(publications==1 && repeated && repeated->buffer==first->buffer,
+                "Unchanged HIP publication performed another transfer");
+        unsigned retries=0;
+        require(!cache.get(1,7,[&]()->std::optional<TensorVulkanBuffer>{++retries;return std::nullopt;}),
+                "Failed publication unexpectedly cached a buffer");
+        require(bool(cache.get(1,7,[&]{++retries;return interop.buffer(source);})) && retries==2,
+                "Failed publication poisoned a later retry");
+        cache.invalidate(1);
+        require(bool(cache.get(0,0,publish)) && publications==1,
+                "Retiring one view invalidated another view's publication");
+        require(bool(cache.get(1,7,[&]{++retries;return interop.buffer(source);})) && retries==3,
+                "Retired view reused its previous publication");
+        {
+            lfs::vis::HipInputPublications bounded(source.bytes());
+            bounded.resize(2);
+            unsigned loads=0;
+            auto load=[&]{++loads;return interop.buffer(source);};
+            auto retained=bounded.get(0,0,load);
+            require(bool(retained),"Bounded publication failed");
+            require(bool(bounded.get(1,0,load)) && bool(bounded.get(1,0,load)) && loads==3,
+                    "Publication cache exceeded its retained-payload budget");
+            bounded.resize(0);bounded.resize(1);
+            require(bool(bounded.get(0,0,load)) && bool(bounded.get(0,0,load)) && loads==4,
+                    "Shrinking publication slots did not release the cache budget");
+        }
         require(first && first->device==h.device && first->bytes==257*sizeof(float) && first->device_address,"Invalid published buffer");
         source.reserve(1024); // Publication must retain the allocation preceding a model-capacity change.
         source.fill_(7.f);
-        auto second=interop.buffer(source);
+        cache.invalidate(); // Native/model mutations and training bypass invalidate all slots.
+        auto second=cache.get(0,0,publish);
+        require(publications==2,"Changed HIP model reused an outdated publication");
         require(second && second->buffer!=first->buffer,"A live publication lease was overwritten");
         // Read the first immutable snapshot and overwrite the second with an actual consumer command.
         VkBuffer staging{};VkDeviceMemory memory{};
@@ -105,6 +139,7 @@ int main(int argc,char**argv) try {
             vkDestroySemaphore(device,replacement,nullptr);
         }
         interop.release_timeline(done);interop.drain(GpuBackend::HIP);
+        cache.clear();
         first.reset();second.reset();
         vkDestroySemaphore(device,done,nullptr);vkDestroyCommandPool(device,pool,nullptr);
         vkDestroyBuffer(device,staging,nullptr);vkFreeMemory(device,memory,nullptr);

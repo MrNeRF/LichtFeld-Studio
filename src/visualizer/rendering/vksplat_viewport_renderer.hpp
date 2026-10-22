@@ -43,6 +43,9 @@
 #include <vector>
 
 namespace lfs::vis {
+#ifdef LFS_TENSOR_HIP
+    class HipInputPublications;
+#endif
 
     // Starts with file-only work: shader blobs are cached for the first
     // renderer initialization without touching Vulkan.
@@ -313,7 +316,8 @@ namespace lfs::vis {
             const lfs::core::SplatData& splat_data,
             std::size_t ring_slot,
             bool force_upload,
-            int upload_sh_degree);
+            int upload_sh_degree,
+            bool allow_cached_inputs = false);
         [[nodiscard]] std::expected<void, std::string> ensureLodPageInputStorage(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
@@ -686,6 +690,9 @@ namespace lfs::vis {
         std::vector<OverlaySlot> overlays_{};
         SelectionQuerySlot selection_query_{};
         std::vector<ModelInputSnapshot> ring_uploaded_{};
+#ifdef LFS_TENSOR_HIP
+        std::unique_ptr<HipInputPublications> hip_input_publications_;
+#endif
         int current_input_sh_degree_ = -1;
 #if LFS_HAS_CUDA
         lfs::core::GpuBackend active_tensor_backend_ = lfs::core::GpuBackend::CUDA;

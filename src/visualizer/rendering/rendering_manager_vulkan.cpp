@@ -595,8 +595,17 @@ namespace lfs::vis {
         // The live trainer path deliberately bypasses scene evaluated payloads.
         // Use it only while optimization is advancing; a paused session renders
         // through the scene so its Node Editor modifier payload is visible.
+        bool hip_model_changing = false;
+#ifdef LFS_TENSOR_HIP
+        // A pause request updates the UI before the HIP worker reaches its
+        // step boundary. Keep live-model synchronization until it acknowledges
+        // that boundary, rather than caching fields still being published.
+        hip_model_changing = trainer_manager &&
+                             lfs::core::default_gpu_backend() == lfs::core::GpuBackend::HIP &&
+                             trainer_manager->isModelChanging();
+#endif
         const bool is_training = scene_manager && scene_manager->hasDataset() &&
-                                 trainer_manager && trainer_manager->isRunning();
+                                 trainer_manager && (trainer_manager->isRunning() || hip_model_changing);
         const bool training_initializing = trainer_manager &&
                                            trainer_manager->getState() == TrainingState::Starting;
         if (!is_training && scene_renderer_) {

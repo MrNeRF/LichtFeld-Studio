@@ -112,8 +112,8 @@ contracts, or a short MCMC run do not establish complete strategy coverage.
 | Tensor dtype/layout coverage | Binary broadcast supports matching Float32/Float16 operands, native integer arithmetic/comparisons, and Bool predicates. Bool arithmetic is rejected. | Audit actual strategy call sites and shared Tensor contracts, including unequal shapes, strided/expanded views, empty inputs and integer/Bool predicates. Preserve exact integer/Bool semantics; do not cast indices through Float32. |
 | GPU utilization | The HIP UI path explicitly returns an unavailable sample. | Add device-matched sampling independently of CUDA availability; distinguish a real 0% sample from unavailable data. |
 | GPU memory budget | HIP allocator statistics and `hipMemGetInfo` exist, but the UI does not expose a complete native process-budget path. | Connect meaningful process/device/budget measurements and their validity to the UI; distinguish allocated, reserved and driver-budget values. |
-| Training startup | Very slow initial roughly 100 steps reported in the application; the cause is not established. | Profile cold and warm startup with per-phase timing before selecting an optimization. |
-| Viewer/Tensor independence | Slow 3D viewing reported with Vulkan rendering on a GeForce and HIP Tensor processing on the 890M, even with a relatively low-detail scene. Whether training was active in this specific observation is not established. | Verify the effective devices and profile idle viewing separately from active training, including transfers, synchronization and unchanged-frame reuse. |
+| Training startup | Short cold/warm diagnostics confirm prepared CPU cache population costs and near-zero loader waits after the first image pass. The serialized HIP queue and appearance stages still need separate attribution. | Optimize measured preparation and queue bottlenecks without changing sampling or quality; retain synchronized diagnostics and unprofiled confirmation. |
+| Viewer/Tensor independence | Idle HIP publications are cached with bounded payloads and explicit invalidation. Short application checks cover camera reuse, edits, same/mixed GPU publication and pause transitions. | Complete bounded asynchronous training previews and interaction-latency measurements; static publication tests alone do not establish active-training responsiveness. |
 | Hardware/platform validation | Runtime evidence is limited to the available GPU; Windows cross-target compilation is not execution on those targets. | Run the manual build matrix and preserve a conservative path for untested hardware. Wave64 remains outside the implemented scope. |
 
 The known configuration behind the reported broadcast rejection is covered by
@@ -193,6 +193,28 @@ changes. Keep CPU image-offload and configured resize behavior intact.
 
 ### Mixed-GPU viewer independence
 
+The acceptance matrix covers every supported Tensor/render backend pairing,
+including different physical devices within one backend. Device equality is
+established by stable physical identity, never by matching backend names or
+enumeration indices. Unsupported combinations must report their limitation
+explicitly rather than silently selecting another GPU.
+
+| Producer/consumer relationship | Publication requirement |
+|---|---|
+| Same physical GPU, compatible storage | Preserve the existing shared-memory and fence path where supported. |
+| Same physical GPU, incompatible APIs/storage | Use a validated conversion/import path or bounded staging. |
+| Different GPUs, same backend | Validate peer-copy support for the actual device pair; otherwise use bounded asynchronous host staging. |
+| Different GPUs and backends | Use validated external/peer interoperability where available; otherwise bounded asynchronous host staging. |
+
+For each supported row verify stopped, paused and active training, model edits,
+resize/densification, project replacement, memory pressure and fallback. Camera
+navigation must be able to render the latest completed coherent preview while a
+new preview is being produced; it must not wait for every training step or
+accumulate an unbounded preview queue. Measure interaction latency and frame-time
+distribution in addition to training throughput. Preserve existing paths until
+their replacements pass equivalent correctness and regression checks. Hardware
+pairs unavailable locally remain unverified and must be recorded as such.
+
 Treat the reported GeForce Vulkan renderer plus 890M HIP Tensor configuration
 as an unresolved performance issue. Separate device selectors do not prove that
 the render loop is independent of Tensor execution. Cross-GPU staging is an
@@ -219,6 +241,54 @@ slow viewing of a relatively small scene.
 Completion requires responsive idle viewing and measured, bounded preview-update
 cost during training. Do not claim that this independence is already verified,
 or that the discrete renderer makes the Tensor device irrelevant to rendering.
+
+The HIP VkSplat idle-input path retains publication leases per buffered view.
+Camera-only frames can reuse those buffers, including host-staged publications
+on a different GPU. The cache accounts for at most 256 MiB of retained payloads
+across views; driver allocation padding and in-flight leases are additional.
+Over-budget publications remain usable but are not retained. Failed optional
+publications are retried. Normal submission fences and frame-retirement leases
+remain required on both cache hits and misses.
+
+Model snapshots, explicit splat dirtiness, view retirement and renderer reset
+invalidate retained entries. Training and LOD page inputs bypass the cache;
+selection/query preparation conservatively invalidates it. This does not solve
+active-training preview synchronization. CUDA, Metal and Vulkan Tensor inputs
+continue through their existing publication paths.
+
+HIP model publication also excludes viewer reads while strategy post-backward
+and allocator migration can replace Tensor objects, including non-refining
+steps. A pending pause retains live synchronization until the worker acknowledges
+its step boundary; the earlier UI state transition alone is insufficient to
+enable idle caching. These guards are HIP-specific and do not change the native
+CUDA, Metal or Vulkan synchronization policy.
+
+For isolated diagnosis, `LFS_HIP_DISABLE_VIEWER_PUBLICATIONS_CACHE=1` restores
+per-frame HIP publication. `LFS_HIP_VALIDATION_PUBLICATION_TRACE=1` emits debug
+messages identifying the view slot, field, cache mode and actual loader calls.
+Keep tracing disabled for performance measurements. The headless HIP viewer
+interop contract verifies cached leases, source reallocation, invalidation,
+failed-load retries, budget exhaustion and GPU consumption after invalidation;
+application-level frame and edit validation remains a separate requirement.
+
+The current HIP adapter admits one context queue: `wait_for` validates its token
+and synchronizes that queue. HIP/Vulkan shared storage also uses host-completed
+ownership transfers, and its `ready` path synchronizes HIP. The portable ingest
+worker creates a separate Tensor work queue only for Vulkan. Consequently,
+simply enabling another worker or adding a queue scope cannot establish HIP
+overlap. Completing asynchronous HIP publication requires explicit queue/storage
+dependencies and bounded snapshot ownership, plus failure and teardown tests;
+do not remove the current waits without replacing their correctness guarantees.
+
+The next active-training implementation should publish complete preview
+snapshots at producer step boundaries and expose only completed generations.
+Navigation renders the last completed snapshot while the next one is pending.
+Do not mix fields from different steps, reuse a consumer-owned buffer, or hold
+the live-model lock across host staging. Bound outstanding generations and bytes;
+when capacity is exhausted, coalesce refresh requests and retain the last good
+preview instead of queuing more copies. Training stop, in-place edits, project
+replacement, densification and device changes need explicit generation handling.
+Final saved/exported model data must still come from the authoritative model.
 
 ## Distribution size reduction plan
 
@@ -290,6 +360,11 @@ or `--strategy=igs+`. Its `--appearance` option enables both bilateral grid and
 PPISP. Combine these with `--exercise-mutations` for an explicitly accelerated
 correctness run, and pass the resulting project as `resume_project` to exercise
 checkpoint restoration. Accelerated runs are not performance or quality baselines.
+
+`--profile` enables PerfBench with zero warmup so diagnostics include the first
+step. Use the HIP validation step/phase/loader trace controls to distinguish
+startup from later windows. Synchronized diagnostic phases are not an unprofiled
+throughput benchmark; keep those controls out of normal application launches.
 
 `--stop-after=N` stops after committed progress reaches N while retaining the
 configured total iteration schedule. The checkpoint is checked against the
