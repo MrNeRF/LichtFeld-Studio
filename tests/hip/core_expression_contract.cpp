@@ -411,6 +411,22 @@ void native_conv() {
         }
     }
 }
+void transpose_nonfinite() {
+    auto& gpu=backend_ops(GpuBackend::HIP);
+    for(auto dtype:{DataType::Float32,DataType::Float16})for(size_t channels:{size_t(1),size_t(5)}) {
+        auto input=Tensor::from_vector(std::vector<float>{1,0},{2},Device::GPU).to(dtype);
+        auto weight=Tensor::from_vector(std::vector<float>(channels,std::numeric_limits<float>::infinity()),{channels},Device::GPU).to(dtype);
+        auto output=Tensor::zeros({channels*4},Device::GPU).to(dtype);
+        ConvProgram p{};p.batch=1;p.out_channels=channels;p.groups=1;p.transpose=true;
+        p.geometry={.channels=1,.height=1,.width=2,.out_height=1,.out_width=4,.kernel_h=1,.kernel_w=1,.stride_h=1,.stride_w=2,.dilation_h=1,.dilation_w=1};
+        gpu.nn_conv2d(storage_ref(input),storage_ref(weight),{},storage_ref(output),p,{});
+        auto observed=output.to(DataType::Float32).cpu();
+        for(size_t c=0;c<channels;++c) {
+            const auto* v=observed.ptr<float>()+c*4;
+            require(v[0]==std::numeric_limits<float>::infinity() && v[1]==0 && std::isnan(v[2]) && v[3]==0,"HIP transpose convolution confused missing taps with actual zero inputs");
+        }
+    }
+}
 void half_inference() {
     auto& gpu=backend_ops(GpuBackend::HIP);
     const auto run=[&](InferenceProgram p,size_t input_count) {
@@ -471,7 +487,7 @@ void half_broadcast() {
 }
 int main() try {
     GpuBackendScope scope(GpuBackend::HIP);
-    unary();integer_arithmetic();native_norm();native_linear();native_attention();native_conv();half_inference();half_broadcast();precise_bits();gathered_and_packed();fold_and_host();cache_and_threads();
+    unary();integer_arithmetic();native_norm();native_linear();native_attention();native_conv();transpose_nonfinite();half_inference();half_broadcast();precise_bits();gathered_and_packed();fold_and_host();cache_and_threads();
     std::puts("PASS HIP expressions: native FP16 inference and attention/convolution/fused linear/layer/RMS norms FP16/FP32 with guards and inplace, native math, exact Int32/Int64/UInt32/UInt8 arithmetic and empty operations, IEEE values, gather bounds, Float16/Bool/UInt8 packed tails, host constants, short/runtime folds, prepare, shape cache and concurrent launches");
     return 0;
 } catch(const std::exception& e) {std::fprintf(stderr,"HIP expression failed: %s\n",e.what());return 1;}

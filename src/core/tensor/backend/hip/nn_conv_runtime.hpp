@@ -5,7 +5,7 @@
 namespace hip_nn {
 // Transposed weights arrive as [out][ky][kx][in]. Gathering their input
 // taps directly avoids a full column image and a second accumulation pass.
-template<class T,bool Transpose> __global__ void conv_columns(const T* input,T* columns,size_t taps,size_t count,size_t offset,LfsHipInferencePush p) {
+template<class T,bool Transpose> __global__ void conv_columns(const T* input,T* columns,size_t taps,size_t count,size_t offset,LfsHipInferencePush p,uint8_t* validity) {
     const size_t total=taps*count;
     for(size_t i=size_t(blockIdx.x)*256+threadIdx.x;i<total;i+=size_t(gridDim.x)*256) {
         const size_t column=i%count+offset,tap=i/count;
@@ -14,7 +14,7 @@ template<class T,bool Transpose> __global__ void conv_columns(const T* input,T* 
             c=tap%p.channels;const size_t k=tap/p.channels;
             x=int64_t(column%p.out_width)+p.pad_w-int64_t(k%p.kernel_w)*p.dilation_w;
             y=int64_t(column/p.out_width)+p.pad_h-int64_t(k/p.kernel_w)*p.dilation_h;
-            if(x<0 || y<0 || x%p.stride_w || y%p.stride_h){columns[i]=T(0);continue;}
+            if(x<0 || y<0 || x%p.stride_w || y%p.stride_h){columns[i]=T(0);validity[i]=0;continue;}
             x/=p.stride_w;y/=p.stride_h;
         } else {
             c=tap/(size_t(p.kernel_h)*p.kernel_w);
@@ -22,7 +22,9 @@ template<class T,bool Transpose> __global__ void conv_columns(const T* input,T* 
             y=int64_t(column/p.out_width)*p.stride_h-p.pad_h+int64_t((tap/p.kernel_w)%p.kernel_h)*p.dilation_h;
             if(p.mode==1){x=x<0?0:x>=p.width?p.width-1:x;y=y<0?0:y>=p.height?p.height-1:y;}
         }
-        columns[i]=(x>=0 && x<p.width && y>=0 && y<p.height)?input[(c*p.height+y)*p.width+x]:T(0);
+        const bool valid=x>=0 && x<p.width && y>=0 && y<p.height;
+        if constexpr(Transpose)validity[i]=valid;
+        columns[i]=valid?input[(c*p.height+y)*p.width+x]:T(0);
     }
 }
 }
@@ -50,7 +52,7 @@ int lfs_hip_nn_conv(LfsHipContext* context,const LfsHipView* inputs,LfsHipView o
             require(inputs[i].buffer!=output.buffer || inputs[i].offset>=output.offset+output_count*width || output.offset>=inputs[i].offset+sizes[i],"HIP convolution output aliases input");
         }
         DeviceScope device(context->device);
-        const size_t chunk=std::max<size_t>(1,std::min<size_t>({pixels,1024,(16*1024*1024)/(taps*width)})),required=taps*chunk*width;
+        const size_t chunk=std::max<size_t>(1,std::min<size_t>({pixels,1024,(16*1024*1024)/(taps*(width+p->transpose))})),required=taps*chunk*(width+p->transpose);
         if(required>context->sort_workspace_bytes) {
             check(hipStreamSynchronize(context->stream));void* replacement=nullptr;check(hipMalloc(&replacement,required));
             if(context->sort_workspace){const auto status=hipFree(context->sort_workspace);if(status!=hipSuccess){(void)hipFree(replacement);check(status);}}
@@ -59,16 +61,17 @@ int lfs_hip_nn_conv(LfsHipContext* context,const LfsHipView* inputs,LfsHipView o
         const auto ptr=[](LfsHipView v)->void*{return v.buffer?static_cast<char*>(v.buffer->data)+v.offset:nullptr;};
         const auto launch=[&]<class T,bool Transpose>() {
             auto* columns=static_cast<T*>(context->sort_workspace);
+            auto* validity=Transpose?reinterpret_cast<uint8_t*>(columns+taps*chunk):nullptr;
             for(size_t batch=0;batch<p->batch;++batch)for(size_t group=0;group<p->groups;++group)for(size_t first=0;first<pixels;first+=chunk) {
                 const size_t used=std::min(chunk,pixels-first);
                 const auto* input=static_cast<const T*>(ptr(inputs[0]))+(batch*p->groups+group)*g.channels*g.height*g.width;
                 const auto* weights=static_cast<const T*>(ptr(inputs[1]))+group*channels*taps;
                 const auto* bias=inputs[2].buffer?static_cast<const T*>(ptr(inputs[2]))+group*channels:nullptr;
                 auto* out=static_cast<T*>(ptr(output))+(batch*p->out_channels+group*channels)*pixels+first;
-                hip_nn::conv_columns<T,Transpose><<<blocks(taps*used),256,0,context->stream>>>(input,columns,taps,used,first,g);
+                hip_nn::conv_columns<T,Transpose><<<blocks(taps*used),256,0,context->stream>>>(input,columns,taps,used,first,g,validity);
                 check(hipGetLastError());
-                if(channels<=4)hip_nn::linear_skinny<T,false,T,T><<<dim3((used+255)/256,channels,1),256,0,context->stream>>>(weights,columns,bias,nullptr,nullptr,out,channels,used,taps,0,p->activation,pixels,true,channels*taps,channels*pixels);
-                else hip_nn::linear_tiled<T,false,T,T><<<dim3((used+63)/64,(channels+63)/64,1),dim3(16,16),0,context->stream>>>(weights,columns,bias,nullptr,nullptr,out,channels,used,taps,0,p->activation,pixels,true,channels*taps,channels*pixels);
+                if(channels<=4)hip_nn::linear_skinny<T,false,T,T,Transpose><<<dim3((used+255)/256,channels,1),256,0,context->stream>>>(weights,columns,bias,nullptr,nullptr,out,channels,used,taps,0,p->activation,pixels,true,channels*taps,channels*pixels,validity);
+                else hip_nn::linear_tiled<T,false,T,T,Transpose><<<dim3((used+63)/64,(channels+63)/64,1),dim3(16,16),0,context->stream>>>(weights,columns,bias,nullptr,nullptr,out,channels,used,taps,0,p->activation,pixels,true,channels*taps,channels*pixels,validity);
                 check(hipGetLastError());
             }
         };

@@ -23,17 +23,21 @@ template<class Out,class In> __device__ void linear_store(Out* output,size_t ind
     if(residual)value+=float(residual[index]);
     if constexpr(std::is_same_v<Out,__half>)output[index]=__float2half_rn(value);else output[index]=value;
 }
-template<class T,bool Transpose,class Weight=T,class Out=T> __global__ void linear_skinny(const T* a,const Weight* w,const T* bias,const T* scale,const Out* residual,Out* output,
-    size_t m,size_t n,size_t k,size_t weight_stride,uint32_t activation,size_t output_pitch,bool row_affine,size_t a_stride,size_t output_stride) {
+template<class T,bool Transpose,class Weight=T,class Out=T,bool Masked=false> __global__ void linear_skinny(const T* a,const Weight* w,const T* bias,const T* scale,const Out* residual,Out* output,
+    size_t m,size_t n,size_t k,size_t weight_stride,uint32_t activation,size_t output_pitch,bool row_affine,size_t a_stride,size_t output_stride,const uint8_t* validity=nullptr) {
     const size_t column=size_t(blockIdx.x)*256+threadIdx.x,row=blockIdx.y,batch=blockIdx.z;
     if(column>=n)return;
     float value=0;const size_t ai=batch*a_stride+row*k,wi=batch*weight_stride;
-    for(size_t t=0;t<k;++t)value=fmaf(float(a[ai+t]),float(w[wi+(Transpose?column*k+t:t*n+column)]),value);
+    for(size_t t=0;t<k;++t) {
+        if constexpr(Masked) {if(!validity[t*n+column])continue;}
+        value=fmaf(float(a[ai+t]),float(w[wi+(Transpose?column*k+t:t*n+column)]),value);
+    }
     linear_store(output,batch*output_stride+row*output_pitch+column,row_affine?row:column,value,bias,scale,residual,activation);
 }
-template<class T,bool Transpose,class Weight=T,class Out=T> __global__ void linear_tiled(const T* a,const Weight* w,const T* bias,const T* scale,const Out* residual,Out* output,
-    size_t m,size_t n,size_t k,size_t weight_stride,uint32_t activation,size_t output_pitch,bool row_affine,size_t a_stride,size_t output_stride) {
+template<class T,bool Transpose,class Weight=T,class Out=T,bool Masked=false> __global__ void linear_tiled(const T* a,const Weight* w,const T* bias,const T* scale,const Out* residual,Out* output,
+    size_t m,size_t n,size_t k,size_t weight_stride,uint32_t activation,size_t output_pitch,bool row_affine,size_t a_stride,size_t output_stride,const uint8_t* validity=nullptr) {
     __shared__ float aa[16][64],bb[16][64];
+    __shared__ uint8_t valid[Masked?16:1][Masked?64:1];
     const unsigned tx=threadIdx.x,ty=threadIdx.y,lane=ty*16+tx;
     const size_t row=size_t(blockIdx.y)*64,col=size_t(blockIdx.x)*64,batch=blockIdx.z;
     if(k){a+=batch*a_stride;w+=batch*weight_stride;}
@@ -43,12 +47,16 @@ template<class T,bool Transpose,class Weight=T,class Out=T> __global__ void line
             const size_t inner=i/64,outer=i%64;
             aa[inner][outer]=row+outer<m && first+inner<k?float(a[(row+outer)*k+first+inner]):0;
             bb[inner][outer]=col+outer<n && first+inner<k?float(w[Transpose?(col+outer)*k+first+inner:(first+inner)*n+col+outer]):0;
+            if constexpr(Masked)valid[inner][outer]=col+outer<n && first+inner<k && validity[(first+inner)*n+col+outer];
         }
         __syncthreads();
         for(unsigned inner=0;inner<16;++inner) {
             float av[4],bv[4];
             for(unsigned i=0;i<4;++i){av[i]=aa[inner][ty+i*16];bv[i]=bb[inner][tx+i*16];}
-            for(unsigned i=0;i<4;++i)for(unsigned j=0;j<4;++j)sums[i][j]=fmaf(av[i],bv[j],sums[i][j]);
+            for(unsigned i=0;i<4;++i)for(unsigned j=0;j<4;++j) {
+                if constexpr(Masked) {if(!valid[inner][tx+j*16])continue;}
+                sums[i][j]=fmaf(av[i],bv[j],sums[i][j]);
+            }
         }
         __syncthreads();
     }
