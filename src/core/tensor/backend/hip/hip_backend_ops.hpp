@@ -7,6 +7,8 @@
 #include "device_identity_api.h"
 #include "external_memory_api.h"
 namespace lfs::core::internal {
+    struct ExpressionCacheStats;
+    LFS_CORE_API ExpressionCacheStats hip_expression_cache_stats();
     bool hip_backend_is_live() noexcept;
     // Hardware inventory loads only the versioned module; no Tensor allocator
     // or execution context is constructed during preferences discovery.
@@ -202,6 +204,7 @@ namespace lfs::core::internal {
 
         void where_scalar(StorageRef mask,StorageRef source,StorageRef output,size_t count,float value,ExecContext);
     private:
+        friend ExpressionCacheStats hip_expression_cache_stats();
         void launch_shared_resize(const LfsHipSharedResize&, StorageRef source, StorageRef destination, StorageRef coefficients_x, StorageRef coefficients_y, ExecContext);
         void launch_inverse_lens(StorageRef, const UndistortParams&, ExecContext);
         void launch_shared_warp(StorageRef, StorageRef, const UndistortParams&, unsigned channels, unsigned mode, ExecContext);

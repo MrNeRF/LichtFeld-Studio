@@ -78,15 +78,18 @@ void low_level_contract() {
     if(floats[1]!=3 || floats[2]!=3 || floats[3]!=2 || floats[4]!=1) throw std::runtime_error("HIP mutual radii minimum differs");
     xyz={-.5f,0,0, .5f,0,0, -.5f,0,0, 10000,0,0};
     gpu.copy_host_to_device({host(xyz.data()),p.storage,48});
-    gpu.nearest_point_indices(p.storage,p.storage,h.storage,n.storage,out,4,4,1,.5f,{});
+    Buffer query(gpu,48,DataType::Float32);
+    std::vector<float> query_points{0,0,0, -.5f,0,0, -100000,0,0, NAN,0,0};
+    gpu.copy_host_to_device({host(query_points.data()),query.storage,48});
+    gpu.nearest_point_indices(query.storage,p.storage,h.storage,n.storage,out,4,4,1,.5f,{});
     gpu.copy_device_to_host({o.storage,host(observed.data()),24});
-    if(observed[1]!=0 || observed[2]!=1 || observed[3]!=0 || observed[4]!=3)
+    if(observed[1]!=0 || observed[2]!=0 || observed[3]!=0 || observed[4]!=-1)
         throw std::runtime_error("HIP nearest exact ties or large empty gap failed");
 }
 int main() try {
     GpuBackendScope scope(GpuBackend::HIP);
     for(size_t n : {size_t(0),size_t(1),size_t(17),size_t(257),size_t(4099)}) {
-        std::vector<float> xyz(n*3), values(n);
+        std::vector<float> xyz(n*3), values(n), radii(n);
         std::vector<int32_t> integers(n);
         std::vector<bool> refs(n), queries(n);
         for(size_t i=0;i<n;++i) {
@@ -94,13 +97,15 @@ int main() try {
             xyz[3*i+1]=float(int(i%13)-6)*0.25f;
             xyz[3*i+2]=float(int(i%7)-3)*0.125f;
             values[i]=float(int(i%31)-15);integers[i]=int32_t(i%31)-15;
-            refs[i]=i%3!=0;queries[i]=i%5!=0;
+            refs[i]=i%3!=0;queries[i]=i%5!=0;radii[i]=.125f*float(1+i%7);
         }
         if(n>10) {xyz[3]=std::numeric_limits<float>::quiet_NaN();xyz[6]=INFINITY;xyz[9]=-INFINITY;}
         const auto p=Tensor::from_vector(xyz,{n,3},Device::CPU);
         const auto r=Tensor::from_vector(refs,{n},Device::CPU),q=Tensor::from_vector(queries,{n},Device::CPU);
         const auto v=Tensor::from_vector(values,{n},Device::CPU),iv=Tensor::from_vector(integers,{n},Device::CPU);
-        auto pg=p.to(Device::GPU),rg=r.to(Device::GPU),qg=q.to(Device::GPU),vg=v.to(Device::GPU),ig=iv.to(Device::GPU);
+        const auto rad=Tensor::from_vector(radii,{n},Device::CPU);
+        auto pg=p.to(Device::GPU),rg=r.to(Device::GPU),qg=q.to(Device::GPU),vg=v.to(Device::GPU),ig=iv.to(Device::GPU),radg=rad.to(Device::GPU);
+        equal(nearest_point_indices(pg,pg),nearest_point_indices(p,p));
 
         std::vector<float> camera_values{
             1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,0,
@@ -120,13 +125,16 @@ int main() try {
             }
             equal(radius_neighbor_min(pg,vg,radius),radius_neighbor_min(p,v,radius));
             equal(radius_neighbor_min(pg,ig,radius),radius_neighbor_min(p,iv,radius));
+            equal(radius_neighbor_min(pg,vg,radius,&radg),radius_neighbor_min(p,v,radius,&rad));
+            equal(radius_neighbor_min(pg,ig,radius,&radg),radius_neighbor_min(p,iv,radius,&rad));
+            equal(point_neighbor_spacing(pg,radius),point_neighbor_spacing(p,radius),true);
 
 
         }
     }
     low_level_contract();
 
-    std::puts("PASS HIP spatial: hash collisions, masks, self exclusion, saturation, Int32/Float32 minima, direct mutual radii/grid spacing/nearest ties, public camera coverage, nonfinite and empty points");
+    std::puts("PASS HIP spatial: hash collisions, masks, self exclusion, saturation, Int32/Float32 minima, direct grid spacing/nearest ties, public mutual radii/spacing/nearest/camera coverage, nonfinite and empty points");
     return 0;
 } catch(const std::exception& e) {std::fprintf(stderr,"HIP spatial failed: %s\n",e.what());return 1;}
 

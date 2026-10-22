@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "hip_tensor_functors.hpp"
 #include "runtime_api.h"
+#include "expression_api.h"
 #include "timing_api.h"
 
 #include <hip/hip_fp16.h>
@@ -48,6 +49,7 @@ struct LfsHipContext {
     int device = 0;
     hipStream_t stream = nullptr;
     std::unordered_set<LfsHipBuffer*> buffers;
+    std::unordered_set<LfsHipExpression*> expressions;
     std::unordered_set<LfsHipReadback*> readbacks;
     std::unordered_set<LfsHipTiming*> timings;
     float* reduction_workspace = nullptr;
@@ -58,6 +60,7 @@ struct LfsHipContext {
 };
 
 namespace {
+    void release_expression_native(LfsHipContext*, LfsHipExpression*);
     struct HipFailure : std::exception {
         hipError_t code;
         explicit HipFailure(hipError_t value) : code(value) {}
@@ -1182,6 +1185,8 @@ int lfs_hip_context_destroy(LfsHipContext* context, LfsHipError* error) {
         // On a runtime failure, retain the handle and unfreed allocations
         // for explicit recovery; never claim that queued work was drained.
         check(hipStreamSynchronize(context->stream));
+        while (!context->expressions.empty())
+            release_expression_native(context,*context->expressions.begin());
         while (!context->buffers.empty()) {
             auto* buffer = *context->buffers.begin();
             release_buffer_resources(buffer);
@@ -2442,3 +2447,5 @@ int lfs_hip_warp_rgb(LfsHipContext* context, LfsHipView input, uint32_t dtype,
 #include "timing_runtime.hpp"
 
 #include "spatial_runtime.hpp"
+
+#include "expression_runtime.hpp"

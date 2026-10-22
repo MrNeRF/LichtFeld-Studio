@@ -7,7 +7,9 @@
 #include <core/tensor_export.hpp>
 #include <stdexcept>
 namespace lfs::core::internal {
+#ifndef LFS_HIP_EXPRESSION_JIT
     void HipBackendOps::compiled_expression(const ExpressionLaunch& launch, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: compiled_expression"); }
+#endif
     void HipBackendOps::rasterize_points(const PointRasterProgram& program, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: rasterize_points"); }
     void HipBackendOps::ppisp_apply(StorageRef input, StorageRef output, int width, int height, const PpispParams& params, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: ppisp_apply"); }
     void HipBackendOps::affine_splat_geometry(StorageRef, StorageRef, StorageRef, StorageRef, const splat_transform::LinearTransform&, size_t, std::optional<StorageRef>, ExecContext) { throw std::runtime_error("HIP Tensor operation not implemented: affine_splat_geometry"); }

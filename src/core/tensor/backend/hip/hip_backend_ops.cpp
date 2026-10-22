@@ -2,6 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "hip_backend_ops.hpp"
 #include "runtime_api.h"
+#include "expression_api.h"
+#ifdef LFS_HIP_EXPRESSION_JIT
+#include "hip_expression_emitter.hpp"
+#endif
 #include "sh_codec_api.h"
 #include "where_api.h"
 #include "inverse_warp_api.h"
@@ -202,6 +206,11 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_device_info);
         ENTRY(lfs_hip_context_create);
         ENTRY(lfs_hip_context_destroy);
+        ENTRY(lfs_hip_expression_identity);
+        ENTRY(lfs_hip_expression_compile);
+        ENTRY(lfs_hip_expression_load);
+        ENTRY(lfs_hip_expression_launch);
+        ENTRY(lfs_hip_expression_destroy);
         ENTRY(lfs_hip_context_synchronize);
         ENTRY(lfs_hip_context_queue);
         ENTRY(lfs_hip_context_ready);
@@ -298,6 +307,21 @@ namespace lfs::core::internal {
         // Extensions must not capture this context; native code stays loaded
         // until queued kernels drain. A failed teardown pins this list.
         std::unique_ptr<std::vector<std::shared_ptr<void>>> application_modules;
+#ifdef LFS_HIP_EXPRESSION_JIT
+        std::string expression_identity;
+        ExpressionCache expressions;
+        struct ExpressionKernel final : CompiledExpression {
+            Impl* owner=nullptr;
+            LfsHipExpression* module=nullptr;
+            ~ExpressionKernel() override {
+                if(module) {
+                    LfsHipError error{};
+                    if(owner->lfs_hip_expression_destroy(owner->context,module,&error))
+                        std::fprintf(stderr,"[error] HIP expression module retained until context teardown: %s\n",error.message);
+                }
+            }
+        };
+#endif
         size_t live = 0, peak = 0;
         size_t workspace_bytes = 0;
         size_t algorithm_workspace_bytes = 0;
@@ -321,6 +345,11 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_device_info);
                 LOAD(lfs_hip_context_create);
                 LOAD(lfs_hip_context_destroy);
+                LOAD(lfs_hip_expression_identity);
+                LOAD(lfs_hip_expression_compile);
+                LOAD(lfs_hip_expression_load);
+                LOAD(lfs_hip_expression_launch);
+                LOAD(lfs_hip_expression_destroy);
                 LOAD(lfs_hip_context_synchronize);
                 LOAD(lfs_hip_context_queue);
                 LOAD(lfs_hip_context_ready);
@@ -419,6 +448,9 @@ namespace lfs::core::internal {
             module = nullptr;
         }
         ~Impl() {
+#ifdef LFS_HIP_EXPRESSION_JIT
+            expressions.clear();
+#endif
             if (context) {
                 LfsHipError error{};
                 if (lfs_hip_context_destroy(context, &error)) {
@@ -1732,6 +1764,9 @@ namespace lfs::core::internal {
         if (!impl_->context)
             return;
         LfsHipError error{};
+#ifdef LFS_HIP_EXPRESSION_JIT
+        impl_->expressions.clear();
+#endif
         check(impl_->lfs_hip_context_destroy(impl_->context, &error), error);
         impl_->context = nullptr;
         impl_->application_modules.reset();
@@ -2304,3 +2339,46 @@ void HipBackendOps::camera_frustum_counts(StorageRef p, StorageRef c, StorageRef
     check(impl_->lfs_hip_proximity(impl_->context,inputs,impl_->view(o),count,cameras,1,maximum,1,&error),error);
 }
 }
+
+#ifdef LFS_HIP_EXPRESSION_JIT
+namespace lfs::core::internal {
+ExpressionCacheStats hip_expression_cache_stats() {
+    auto& backend=static_cast<HipBackendOps&>(backend_ops(GpuBackend::HIP));
+    std::lock_guard lock(backend.impl_->mutex);
+    return backend.impl_->expressions.stats();
+}
+void HipBackendOps::compiled_expression(const ExpressionLaunch& launch,ExecContext execution) {
+    queue(execution);
+    require(launch.program && launch.words && launch.words<=ExpressionLayout::max_words &&
+            launch.read_count<=launch.reads.size() && launch.write_count<=launch.writes.size(),"Invalid HIP expression descriptor");
+    std::lock_guard lock(impl_->mutex);
+    require(impl_->context,"HIP expression context is closed");
+    for(size_t i=0;i<launch.read_count;++i) (void)impl_->view(launch.reads[i]);
+    for(size_t i=0;i<launch.write_count;++i) (void)impl_->view(launch.writes[i]);
+    LfsHipError error{};
+    if(impl_->expression_identity.empty()) {
+        char identity[256]{};
+        check(impl_->lfs_hip_expression_identity(identity,sizeof(identity),&error),error);
+        impl_->expression_identity=identity;
+    }
+    const auto key=impl_->expression_identity+"\n"+hip_expression_emitter_id+"\n"+expression_key(*launch.program,launch.signature);
+    const auto kernel=impl_->expressions.get(key,[&] {
+        const auto source=expression_hip(*launch.program,launch.signature);
+        std::vector<char> binary(16*1024*1024);
+        size_t size=0;char diagnostics[8192]{};
+        const int status=impl_->lfs_hip_expression_compile(source.c_str(),binary.data(),binary.size(),&size,diagnostics,sizeof(diagnostics),&error);
+        if(status) throw std::runtime_error(std::string(error.message)+"\n"+diagnostics);
+        binary.resize(size);return binary;
+    },[&](std::span<const char> binary)->std::shared_ptr<CompiledExpression> {
+        auto compiled=std::make_shared<Impl::ExpressionKernel>();
+        compiled->owner=impl_.get();compiled->bytes=binary.size();
+        check(impl_->lfs_hip_expression_load(impl_->context,binary.data(),binary.size(),&compiled->module,&error),error);
+        return compiled;
+    });
+    if(launch.prepare_only || !launch.count) return;
+    const auto work=(uint64_t(launch.count)+expression_packing(launch.signature)-1)/expression_packing(launch.signature);
+    check(impl_->lfs_hip_expression_launch(impl_->context,static_cast<Impl::ExpressionKernel&>(*kernel).module,
+                                        launch.arguments.data(),launch.words,work,&error),error);
+}
+}
+#endif
