@@ -61,6 +61,19 @@ code = '\n'.join([
     tree_math[tree_math.index('    // Bounds on the squared'):tree_math.rindex('} // namespace')], '}',
     '#undef LFS_POINT_HD\n',
 ])
+# Keep the canonical PPISP math and parameter layout without Tensor headers.
+ppisp = (source / 'tensor/internal/ppisp.hpp').read_text(encoding='utf-8')
+params = (source / 'include/core/tensor_ppisp.hpp').read_text(encoding='utf-8')
+code += '\n' + ppisp[:ppisp.index('#pragma once')] + '\nnamespace hip_ppisp {\n'
+code += definition(params, 'struct PpispParams {', ';') + '\n'
+code += definition(ppisp, 'LFS_PPISP_HD void ppisp_pixel(').replace('LFS_PPISP_HD', '__device__ __forceinline__')
+code += '\n}\n'
+# Reuse the compensated FP32 GPU factorization; no runtime CUDA dependency.
+affine_source = (source / 'cuda/kernels/splat_transform.cu').read_text(encoding='utf-8')
+affine = affine_source[affine_source.index('        // The float algorithm'):affine_source.index('    } // namespace')]
+affine = affine.replace('splat_transform::LinearTransform', 'LinearTransform')
+code += '\n' + affine_source[:affine_source.index('#include')] + '\nnamespace hip_affine {\nstruct LinearTransform { float rows[9]; };\n' + affine + '\n}\n'
+code += '\n' + (source / 'include/core/morton.hpp').read_text(encoding='utf-8').replace('__CUDACC__', '__HIPCC__') + '\n'
 args.output.parent.mkdir(parents=True, exist_ok=True)
 args.output.write_text(code, encoding='utf-8')
 

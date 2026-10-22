@@ -2453,3 +2453,9 @@ int lfs_hip_warp_rgb(LfsHipContext* context, LfsHipView input, uint32_t dtype,
 #include "point_tree_runtime.hpp"
 
 #include "integer_pointwise_runtime.hpp"
+
+#include "ppisp_runtime.hpp"
+
+#include "affine_runtime.hpp"
+
+#include "morton_runtime.hpp"

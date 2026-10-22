@@ -4,6 +4,10 @@
 #include <core/detail/gpu_backend_ops.hpp>
 #include <core/tensor_backend.hpp>
 #include <core/tensor_spatial.hpp>
+#include <core/tensor_ppisp.hpp>
+#include <core/tensor_splat.hpp>
+#include <core/tensor_export.hpp>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -111,6 +115,58 @@ void low_level_contract() {
     if(observed[1]!=0 || observed[2]!=0 || observed[3]!=0 || observed[4]!=-1)
         throw std::runtime_error("HIP nearest exact ties or large empty gap failed");
 }
+std::array<double,9> splat_covariance(const float* scales,const float* quat) {
+    double w=quat[0],x=quat[1],y=quat[2],z=quat[3];
+    const double n=std::sqrt(w*w+x*x+y*y+z*z);w/=n;x/=n;y/=n;z/=n;
+    const double r[]{1-2*(y*y+z*z),2*(x*y-w*z),2*(x*z+w*y),
+                     2*(x*y+w*z),1-2*(x*x+z*z),2*(y*z-w*x),
+                     2*(x*z-w*y),2*(y*z+w*x),1-2*(x*x+y*y)};
+    std::array<double,9> result{};
+    for(int i=0;i<3;++i) for(int j=0;j<3;++j) for(int k=0;k<3;++k)
+        result[i*3+j]+=r[i*3+k]*r[j*3+k]*std::exp(2.*scales[k]);
+    return result;
+}
+void affine_contract() {
+    constexpr size_t n=257;
+    std::vector<float> scales(n*3),quats(n*4);
+    for(size_t i=0;i<n;++i) {
+        for(size_t j=0;j<3;++j) scales[i*3+j]=-12.f+16.f*float((i*37+j*71)%257)/256.f;
+        for(size_t j=0;j<4;++j) quats[i*4+j]=std::sin(float(i*4+j)+.3f);
+    }
+    auto cs=Tensor::from_vector(scales,{n,3},Device::CPU),cq=Tensor::from_vector(quats,{n,4},Device::CPU);
+    auto gs=Tensor::from_vector(scales,{n,3},Device::GPU),gq=Tensor::from_vector(quats,{n,4},Device::GPU);
+    const std::array<splat_transform::LinearTransform,4> matrices{{{{1,0,0,0,1,0,0,0,1}},{{1,.7f,0,0,1,-.4f,0,0,1}},
+                                                                {{-1,0,0,0,2,0,0,0,.4f}},{{0,0,0,0,0,0,0,0,0}}}};
+    const auto compare=[&](const Tensor& es,const Tensor& eq,const Tensor& os,const Tensor& oq,bool zero) {
+        auto actual_s=os.cpu(),actual_q=oq.cpu();
+        for(size_t i=0;i<n;++i) {
+            for(size_t k=0;k<4;++k) require(std::isfinite(actual_q.ptr<float>()[i*4+k]),"HIP affine nonfinite quaternion");
+            if(zero) {
+                for(size_t k=0;k<3;++k) require(actual_s.ptr<float>()[i*3+k]==-INFINITY,"HIP affine zero extent changed");
+                continue;
+            }
+            const auto expected=splat_covariance(es.ptr<float>()+i*3,eq.ptr<float>()+i*4);
+            const auto actual=splat_covariance(actual_s.ptr<float>()+i*3,actual_q.ptr<float>()+i*4);
+            double error=0,norm=0,volume=0;
+            for(int k=0;k<9;++k) {error+=(actual[k]-expected[k])*(actual[k]-expected[k]);norm+=expected[k]*expected[k];}
+            for(int k=0;k<3;++k) volume+=double(actual_s.ptr<float>()[i*3+k])-es.ptr<float>()[i*3+k];
+            require(std::sqrt(error/norm)<3e-6,"HIP affine covariance differs from CPU");
+            require(std::abs(volume)<4e-5,"HIP affine short-axis volume differs from CPU");
+        }
+    };
+    for(size_t m=0;m<matrices.size();++m) {
+        auto es=Tensor::zeros({n,3},Device::CPU),eq=Tensor::zeros({n,4},Device::CPU);
+        affine_splat_geometry(matrices[m],cs,cq,es,eq);
+        auto os=Tensor::zeros({n,3},Device::GPU),oq=Tensor::zeros({n,4},Device::GPU);
+        affine_splat_geometry(matrices[m],gs,gq,os,oq);compare(es,eq,os,oq,m==3);
+        auto inplace_s=gs.clone(),inplace_q=gq.clone();
+        affine_splat_geometry(matrices[m],inplace_s,inplace_q,inplace_s,inplace_q);compare(es,eq,inplace_s,inplace_q,m==3);
+        std::vector<float> batch(n*9);
+        for(size_t i=0;i<n;++i) std::copy_n(matrices[m].rows,9,batch.data()+i*9);
+        auto transforms=Tensor::from_vector(batch,{n,9},Device::GPU);
+        affine_splat_geometry(transforms,gs,gq,os,oq);compare(es,eq,os,oq,m==3);
+    }
+}
 int main() try {
     GpuBackendScope scope(GpuBackend::HIP);
     for(size_t n : {size_t(0),size_t(1),size_t(17),size_t(257),size_t(4099)}) {
@@ -163,6 +219,44 @@ int main() try {
 
         }
     }
+    // Compare the public native PPISP path against the canonical CPU math.
+    for(int width : {1,17,257}) {
+        const int height=19;
+        std::vector<float> pixels(size_t(width)*height*3);
+        for(size_t i=0;i<pixels.size();++i) pixels[i]=float(int(i%113)-7)/97.f;
+        auto cpu=Tensor::from_vector(pixels,{3,size_t(height),size_t(width)},Device::CPU);
+        auto gpu=Tensor::from_vector(pixels,{3,size_t(height),size_t(width)},Device::GPU);
+        for(bool adjusted : {false,true}) {
+            PpispParams params;
+            if(adjusted) {
+                params.exposure_factor=1.37f;params.x_offset=3;params.y_offset=5;
+                params.full_width=width+7;params.full_height=height+11;
+                for(int c=0;c<3;++c) {
+                    params.vignetting[c*5]=.02f*c;params.vignetting[c*5+1]=-.01f*c;
+                    params.vignetting[c*5+2]=-.15f;params.vignetting[c*5+3]=.03f;
+                    params.crf[c*5]=1.13f;params.crf[c*5+1]=.93f;params.crf[c*5+2]=1.07f;
+                }
+            }
+            auto expected=ppisp_apply(cpu,params);auto result=ppisp_apply(gpu,params).cpu();
+            for(size_t i=0;i<pixels.size();++i)
+                require(std::isfinite(result.ptr<float>()[i]) && std::abs(result.ptr<float>()[i]-expected.ptr<float>()[i])<3e-6f,"HIP PPISP differs from CPU");
+        }
+    }
+    for(size_t n : {size_t(0),size_t(1),size_t(257),size_t(4099)}) {
+        for(bool coincident : {false,true}) {
+            std::vector<float> xyz(n*3);
+            for(size_t i=0;i<n;++i) for(size_t a=0;a<3;++a)
+                xyz[i*3+a]=coincident ? 1.f : float(int(((i/3)*37+a*71)%257)-128)*.37f;
+            auto cpu=Tensor::from_vector(xyz,{n,3},Device::CPU),gpu=Tensor::from_vector(xyz,{n,3},Device::GPU);
+            Tensor expected_keys,actual_keys;
+            auto expected=morton_sort_indices(cpu,&expected_keys);
+            auto actual=morton_sort_indices(gpu,&actual_keys).cpu();auto observed_keys=actual_keys.cpu();
+            require(actual.dtype()==DataType::Int32 && actual_keys.dtype()==DataType::Int64,"HIP Morton wrong output types");
+            require(!n || (!std::memcmp(actual.data_ptr(),expected.data_ptr(),n*4) && !std::memcmp(observed_keys.data_ptr(),expected_keys.data_ptr(),n*8)),
+                    "HIP Morton keys/order differ from stable CPU order");
+        }
+    }
+    affine_contract();
     low_level_contract();
     std::vector<float> chain(1025*3,0.f);
     for(size_t i=0;i<1025;++i) chain[3*i]=.5f*float(i);
@@ -174,7 +268,7 @@ int main() try {
         for(size_t i=0;i<1025;++i) require(a.ptr<int32_t>()[i]==0 && b.ptr<int32_t>()[i]==0,"HIP concurrent union chain did not reach minimum root");
     }
 
-    std::puts("PASS HIP spatial: hash collisions, masks, self exclusion, saturation, Int32/Float32 minima, direct grid spacing/nearest ties, public mutual radii/spacing/nearest/camera coverage, atomic radius/mutual components, eight concurrent 1025-point chains, nonfinite and empty points");
+    std::puts("PASS HIP spatial, PPISP, stable Morton63 and affine covariance/volume/inplace/batched: hash collisions, masks, self exclusion, saturation, Int32/Float32 minima, direct grid spacing/nearest ties, public mutual radii/spacing/nearest/camera coverage, atomic radius/mutual components, eight concurrent 1025-point chains, nonfinite and empty points");
     return 0;
 } catch(const std::exception& e) {std::fprintf(stderr,"HIP spatial failed: %s\n",e.what());return 1;}
 

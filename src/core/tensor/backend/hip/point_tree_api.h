@@ -8,9 +8,19 @@ typedef struct LfsHipPointTree {
     float radius;
     int32_t max_count;
 } LfsHipPointTree;
+typedef struct LfsHipPpisp {
+    float exposure_factor, vignetting[15], color_matrix[9], crf[15];
+    int32_t y_offset, full_height, x_offset, full_width;
+} LfsHipPpisp;
 #ifdef __cplusplus
 extern "C" {
 #endif
+LFS_HIP_API int lfs_hip_morton(LfsHipContext*,LfsHipView positions,LfsHipView keys,LfsHipView indices,
+                               size_t count,LfsHipError*);
+LFS_HIP_API int lfs_hip_affine(LfsHipContext*,const LfsHipView* inputs,const LfsHipView* outputs,
+                               const float* matrix,size_t count,LfsHipError*);
+LFS_HIP_API int lfs_hip_ppisp(LfsHipContext*,LfsHipView input,LfsHipView output,
+                              int32_t width,int32_t height,const LfsHipPpisp*,LfsHipError*);
 /* inputs: positions, sorted positions, boxes, visit, radii, optional query mask. */
 LFS_HIP_API int lfs_hip_point_tree_components(LfsHipContext*,const LfsHipView* inputs,LfsHipView labels,
                                             const LfsHipPointTree*,LfsHipError*);

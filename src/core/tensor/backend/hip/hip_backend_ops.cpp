@@ -25,6 +25,9 @@
 #include <core/tensor.hpp>
 #include <core/tensor_environment.hpp>
 #include <core/tensor_image.hpp>
+#include <core/tensor_ppisp.hpp>
+#include "../../internal/tensor_impl.hpp"
+#include <core/splat_transform_math.hpp>
 #include <core/failure_report.hpp>
 #include <cstdio>
 #include <cstring>
@@ -263,6 +266,9 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_cdist_f32);
         ENTRY(lfs_hip_radius_query);
         ENTRY(lfs_hip_point_tree_query);
+        ENTRY(lfs_hip_ppisp);
+        ENTRY(lfs_hip_affine);
+        ENTRY(lfs_hip_morton);
         ENTRY(lfs_hip_point_tree_components);
         ENTRY(lfs_hip_proximity);
         ENTRY(lfs_hip_convert);
@@ -405,6 +411,9 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_cdist_f32);
                 LOAD(lfs_hip_radius_query);
                 LOAD(lfs_hip_point_tree_query);
+                LOAD(lfs_hip_ppisp);
+                LOAD(lfs_hip_affine);
+                LOAD(lfs_hip_morton);
                 LOAD(lfs_hip_point_tree_components);
                 LOAD(lfs_hip_proximity);
                 LOAD(lfs_hip_convert);
@@ -2477,5 +2486,53 @@ bool HipBackendOps::point_tree_components(StorageRef p,StorageRef sorted,Storage
     const LfsHipView inputs[]{view(p),view(sorted),view(boxes),view(box_radii),view(visit),view(sorted_radii),view(radii)};
     LfsHipError error{};
     check(impl_->lfs_hip_point_tree_components(impl_->context,inputs,view(labels),&native,&error),error);return true;
+}
+}
+
+namespace lfs::core::internal {
+void HipBackendOps::ppisp_apply(StorageRef input,StorageRef output,int width,int height,const PpispParams& params,ExecContext execution) {
+    queue(execution);
+    require(input.dtype==DataType::Float32 && output.dtype==DataType::Float32,"HIP PPISP requires Float32");
+    static_assert(sizeof(PpispParams)==sizeof(LfsHipPpisp));
+    static_assert(offsetof(PpispParams,x_offset)==offsetof(LfsHipPpisp,x_offset));
+    LfsHipPpisp native{};std::memcpy(&native,&params,sizeof(native));
+    std::lock_guard lock(impl_->mutex);LfsHipError error{};
+    check(impl_->lfs_hip_ppisp(impl_->context,impl_->view(input),impl_->view(output),width,height,&native,&error),error);
+}
+}
+
+namespace lfs::core::internal {
+void HipBackendOps::affine_splat_geometry(StorageRef scales,StorageRef rotations,StorageRef out_scales,StorageRef out_rotations,
+    const splat_transform::LinearTransform& matrix,size_t count,std::optional<StorageRef> matrices,ExecContext execution) {
+    queue(execution);
+    for(auto value : {scales,rotations,out_scales,out_rotations})
+        require(value.dtype==DataType::Float32,"HIP affine geometry requires Float32");
+    if(matrices) require(matrices->dtype==DataType::Float32,"HIP affine matrices require Float32");
+    std::lock_guard lock(impl_->mutex);
+    const auto view=[&](StorageRef value){return value.data?impl_->view(value):(impl_->empty_view(value),LfsHipView{});};
+    const LfsHipView inputs[]{view(scales),view(rotations),matrices?view(*matrices):LfsHipView{}};
+    const LfsHipView outputs[]{view(out_scales),view(out_rotations)};
+    LfsHipError error{};
+    check(impl_->lfs_hip_affine(impl_->context,inputs,outputs,matrix.rows,count,&error),error);
+}
+}
+
+namespace lfs::core::internal {
+Tensor HipBackendOps::morton_sort(const Tensor& positions,Tensor* sorted_keys,ExecContext execution) {
+    queue(execution);const GpuBackendScope scope(GpuBackend::HIP);
+    require(storage_ref(positions).backend==GpuBackend::HIP && positions.dtype()==DataType::Float32 && positions.ndim()==2 && positions.size(1)==3,
+            "HIP Morton requires Float32 positions [N,3]");
+    const auto count=positions.size(0);require(count<=INT32_MAX,"HIP Morton count exceeds indexing range");
+    auto keys=Tensor::empty({count},Device::GPU,DataType::Int64);
+    auto indices=Tensor::empty({count},Device::GPU,DataType::Int32);
+    if(count) {
+        auto input=positions.contiguous();
+        std::lock_guard lock(impl_->mutex);LfsHipError error{};
+        check(impl_->lfs_hip_morton(impl_->context,impl_->view(storage_ref(input)),impl_->view(storage_ref(keys)),
+                                   impl_->view(storage_ref(indices)),count,&error),error);
+        impl_->refresh_algorithm_workspace();
+    }
+    if(sorted_keys)*sorted_keys=std::move(keys);
+    return indices;
 }
 }

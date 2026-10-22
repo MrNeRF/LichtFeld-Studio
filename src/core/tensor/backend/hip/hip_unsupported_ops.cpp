@@ -11,9 +11,6 @@ namespace lfs::core::internal {
     void HipBackendOps::compiled_expression(const ExpressionLaunch& launch, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: compiled_expression"); }
 #endif
     void HipBackendOps::rasterize_points(const PointRasterProgram& program, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: rasterize_points"); }
-    void HipBackendOps::ppisp_apply(StorageRef input, StorageRef output, int width, int height, const PpispParams& params, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: ppisp_apply"); }
-    void HipBackendOps::affine_splat_geometry(StorageRef, StorageRef, StorageRef, StorageRef, const splat_transform::LinearTransform&, size_t, std::optional<StorageRef>, ExecContext) { throw std::runtime_error("HIP Tensor operation not implemented: affine_splat_geometry"); }
-    Tensor HipBackendOps::morton_sort(const Tensor& positions, Tensor* sorted_keys, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: morton_sort"); }
     std::tuple<Tensor, Tensor> HipBackendOps::kmeans_sh(const Tensor& shN, int n_points, int sh_coeffs, int k, int iterations, bool fast, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: kmeans_sh"); }
     void HipBackendOps::assign_sh3(const Tensor& shN, const Tensor& centroids, const Tensor& norms, Tensor& labels, bool fast, bool have_labels, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: assign_sh3"); }
     void HipBackendOps::decimate_candidates(const Tensor& position, const Tensor& rotation, const Tensor& scale, const Tensor& opacity, const Tensor& dc, const Tensor& sh, int rest, std::vector<uint32_t>& idx, std::vector<float>& cost, ExecContext context) { throw std::runtime_error("HIP Tensor operation not implemented: decimate_candidates"); }
