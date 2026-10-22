@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/path_utils.hpp"
 #include "media/video_encode_session.hpp"
-#include "media/video_player.hpp"
 #include <algorithm>
 #include <fstream>
 #include <iterator>
@@ -232,10 +231,6 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
 #ifdef __linux__
     if (request.value("non_utf8_filename", false)) {
         require(std::filesystem::is_regular_file(path), "encoder writes the exact native filename");
-        lfs::io::VideoPlayer player;
-        require(player.open(path), "player reopens the native non-UTF8 output filename");
-        require(player.width() == options.width && player.height() == options.height && player.currentFrameData(),
-                "player decodes the native non-UTF8 output");
     }
 #endif
     if (request.value("verify_apple_recovery", false)) {

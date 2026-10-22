@@ -169,6 +169,12 @@ class IngestCLI(unittest.TestCase):
         encoded_path = os.fsdecode(os.fsencode(self.root) + b"/encoded-\xff.mp4")
         encoded_probe, _ = self.invoke("probe", encoded_path)
         self.assertEqual(encoded_probe["media"]["streams"][0]["width"], 64)
+        decoded, _ = self.invoke("extract", encoded_path, "--output", self.root / "native-encoded-frames",
+                                 "--interval", "1")
+        self.assertEqual(decoded["frames_accepted"], json.loads(encoded.stdout)["frames"])
+        decoded_frames = list((self.root / "native-encoded-frames").glob("*.png"))
+        self.assertEqual(len(decoded_frames), decoded["frames_accepted"])
+        self.assertTrue(all(frame.stat().st_size > 0 for frame in decoded_frames))
 
     def test_source_container_metadata_failure_preserves_the_probe_error(self):
         path = self.root / "missing metadata input.bin"
