@@ -84,6 +84,20 @@ scores, camera gradients and regularization outputs therefore retain ordinary
 HIP `atomicAdd`, including when the model itself uses shared Vulkan storage.
 Do not broaden native-atomic dispatch to imported or fine-grained allocations.
 
+Fused L1/SSIM backward selects the per-plane 32x8 HIP kernel only for Float32
+targets on `gfx1150`, with at least 1,048,576 pixels per image and a supported
+dispatch grid. UInt8 targets, small images, masked/decoupled loss and other
+devices retain the canonical kernel. FP16 partial storage and the forward loss
+are unchanged. The adapted kernel records its upstream PR and immutable source
+revision in `application_photo_plane_kernel.hpp`.
+
+`LFS_HIP_DISABLE_PLANE_SSIM=1` disables this specialization; the existing global
+`LFS_HIP_DISABLE_ARCH_PROFILES=1` also disables it. Set these before process
+startup: an executable and its HIP DLL can have separate CRT environments.
+`LFS_HIP_VALIDATION_PHOTO_DISPATCH=1` traces the actual Float32 fused dispatch
+and should be disabled for timing. The dispatch neither allocates another
+photometric workspace nor changes the target dtype.
+
 ## Completion status and remaining work
 
 ### Execution sequence
@@ -367,6 +381,13 @@ Python, and the same source checkout. No GPU is required to compile it.
 `tests/hip/profile_policy` verifies compile-time profile selection without an
 SDK. `tests/hip/module_policy` verifies module paths and target matching without
 a GPU. Native numerical and application contracts require a compatible GPU.
+The module-policy test also checks the photometric dtype/path/device gates and
+dispatch limits. `tests/hip/photo_plane_parity.py <contract-executable> <module>
+<new-fixture-directory> --expect-plane` compares fresh generic, selected and
+global-opt-out processes on a validated device. It checks complete gradients,
+loss and workspace sizes, including UInt8 preservation, valid padding and odd
+multi-tile image sizes. Keep the generated fixture directory outside tracked
+sources; the comparison requires no Torch dependency.
 
 Four dedicated GitHub workflows cover Windows/Linux, HIP-only/CUDA+HIP, each in
 Release and Debug. They are exclusively `workflow_dispatch`; existing workflows
@@ -378,6 +399,9 @@ or `--strategy=igs+`. Its `--appearance` option enables both bilateral grid and
 PPISP. Combine these with `--exercise-mutations` for an explicitly accelerated
 correctness run, and pass the resulting project as `resume_project` to exercise
 checkpoint restoration. Accelerated runs are not performance or quality baselines.
+`--float-targets` uses the existing high-precision image-loading option to
+exercise the Float32 loss dispatch. It is a diagnostic fixture option; omit it
+for the standard UInt8 comparison protocol.
 
 `--profile` enables PerfBench with zero warmup so diagnostics include the first
 step. Use the HIP validation step/phase/loader trace controls to distinguish

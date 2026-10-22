@@ -9,6 +9,8 @@ from prepare_application_mcmc import function
 def prepare(source,reduction,l1,warp,output):
     text=source.read_text(encoding='utf-8')
     body=text[text.index('namespace {\n')+len('namespace {\n'):text.index('    template <typename Fn>\n    void dispatch_target_ptr')]
+    if 'fusedL1SSIMBackwardHIP' in body:
+        raise ValueError('Review upstream HIP photometric integration before inserting plane kernel')
     for name in ('fusedssimCUDA','fusedssim_backwardCUDA','fusedL1SSIMForwardCUDA','fusedL1SSIMBackwardCUDA',
                  'maskedFusedL1SSIMForwardCUDA','maskedDecoupledFusedL1SSIMForwardCUDA',
                  'maskedFusedL1SSIMBackwardCUDA','decoupledFusedL1SSIMForwardCUDA','maskedSSIMMapCUDA'):
@@ -38,7 +40,7 @@ def prepare(source,reduction,l1,warp,output):
 '''+warptext+'''
 namespace lfs_hip_application_photo_kernels {
 namespace cg=cooperative_groups;
-'''+body+error+'''
+'''+body+(Path(__file__).parent/'application_photo_plane_kernel.hpp').read_text(encoding='utf-8')+error+'''
 namespace reduction {
 constexpr float SSIM_EPSILON=1e-8f;
 '''+red+l1body+'\n}\n}\n'

@@ -31,13 +31,14 @@ namespace {
 int main(int argc,char** argv) try {
     using namespace lfs;
     using namespace core;
-    if(argc<7) throw std::invalid_argument("Arguments: dataset output steps max_width max_gaussians SH_degree_plus_one [resume_project] [--exercise-mutations] [--exercise-lifecycle] [--require-frozen] [--stop-after=N] [--strategy=mcmc|mrnf|igs+] [--appearance] [--profile]");
+    if(argc<7) throw std::invalid_argument("Arguments: dataset output steps max_width max_gaussians SH_degree_plus_one [resume_project] [--exercise-mutations] [--exercise-lifecycle] [--require-frozen] [--stop-after=N] [--strategy=mcmc|mrnf|igs+] [--appearance] [--profile] [--float-targets]");
     bool exercise_mutations=false;
     bool exercise_lifecycle=false;
     bool require_frozen=false;
     unsigned stop_after=0;
     bool appearance=false;
     bool profile=false;
+    bool float_targets=false;
     std::string strategy(param::kStrategyMCMC);
     std::optional<std::filesystem::path> resume;
     for(int i=7;i<argc;++i) {
@@ -47,6 +48,7 @@ int main(int argc,char** argv) try {
         else if(std::string_view(argv[i]).starts_with("--stop-after="))stop_after=positive(argv[i]+13);
         else if(std::string_view(argv[i])=="--appearance")appearance=true;
         else if(std::string_view(argv[i])=="--profile")profile=true;
+        else if(std::string_view(argv[i])=="--float-targets")float_targets=true;
         else if(std::string_view(argv[i]).starts_with("--strategy=")) {
             const auto requested=std::string_view(argv[i]).substr(11);
             if(!param::is_valid_strategy_name(requested))throw std::invalid_argument("Unknown test strategy");
@@ -69,6 +71,9 @@ int main(int argc,char** argv) try {
     params.dataset.max_width=int(positive(argv[4]));
     params.dataset.resize_factor=1;
     params.dataset.loading_params.use_cpu_memory=true;
+    // Diagnostic fixture for the existing high-precision ingest path. Default
+    // loading and the primary comparison protocol remain unchanged.
+    params.dataset.loading_params.use_16bit_color=float_targets;
     params.optimization.iterations=positive(argv[3]);
     if(stop_after>=params.optimization.iterations)throw std::invalid_argument("Stop boundary must precede the configured schedule end");
     params.optimization.max_cap=int(positive(argv[5]));

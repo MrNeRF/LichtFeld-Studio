@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "../../../src/core/tensor/backend/hip/module_paths.hpp"
+#include "../../../src/training/hip/photo_plane_policy.hpp"
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -30,5 +31,17 @@ int main(int argc,char** argv)try {
     require(!lfs_hip_has_architecture("gfx1103,gfx1150","gfx110"),"Target prefix incorrectly matched");
     require(!lfs_hip_has_architecture("gfx1103,gfx1150","gfx942"),"Wave64 target incorrectly admitted");
     require(hip_executable_directory().is_absolute(),"Cannot locate executable for relocation");
+    using lfs::training::hip::photo_plane_backward_enabled;
+    require(photo_plane_backward_enabled(2,false,1,3,1440,1920,"gfx1150",false),"Measured float profile was not admitted");
+    require(!photo_plane_backward_enabled(2,true,1,3,1440,1920,"gfx1150",false),"Byte target selected regressing plane kernel");
+    for(unsigned path:{0u,1u,3u,4u,5u})
+        require(!photo_plane_backward_enabled(path,false,1,3,1440,1920,"gfx1150",false),"Unmeasured loss path selected plane kernel");
+    for(auto arch:{"gfx1103","gfx1151","gfx942",""})
+        require(!photo_plane_backward_enabled(2,false,1,3,1440,1920,arch,false),"Unvalidated architecture selected plane kernel");
+    require(!photo_plane_backward_enabled(2,false,1,3,1440,1920,"gfx1150",true),"Profile opt-out ignored");
+    require(!photo_plane_backward_enabled(2,false,1,3,17,19,"gfx1150",false),"Small image selected plane kernel");
+    require(!photo_plane_backward_enabled(2,false,21846,3,1440,1920,"gfx1150",false),"Plane-grid overflow selected plane kernel");
+    require(!photo_plane_backward_enabled(2,false,1,1,524281,3,"gfx1150",false),"Y-grid overflow selected plane kernel");
+    require(!photo_plane_backward_enabled(2,false,1,1,1,INT_MAX,"gfx1150",false),"X extent overflow selected plane kernel");
     std::cout<<"PASS HIP module paths, relocation, architecture list and conservative selection\n";
 }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}

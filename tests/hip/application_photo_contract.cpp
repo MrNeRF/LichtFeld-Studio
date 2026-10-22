@@ -9,7 +9,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <stdexcept>
+#include <string_view>
 using namespace lfs;
 using namespace core;
 namespace lfs::training {
@@ -55,7 +57,7 @@ double reference(const std::vector<float>& image,const std::vector<float>& raw,c
     return loss/(denominator>0 ? denominator : normalizer+(masked ? 1e-8 : 0));
 }
 int main(int argc,char** argv) try {
-    require(argc==2 && std::filesystem::path(argv[1]).is_absolute(),"Pass absolute HIP training module");
+    require((argc==2 || (argc==3 && std::string_view(argv[2]).starts_with("--plane-dump="))) && std::filesystem::path(argv[1]).is_absolute(),"Pass absolute HIP training module [--plane-dump=absolute-directory]");
 #ifdef _WIN32
     require(_putenv_s("LFS_HIP_TRAINING_MODULE",argv[1])==0,"Cannot set HIP module");
 #else
@@ -141,6 +143,39 @@ int main(int argc,char** argv) try {
         require(rejected,"Photometric accepted non-HIP prediction");
         ops.shrink_to_required(saved); ops.reset(saved);
         require(ops.workspace_bytes(saved).allocated==0 && !saved.ssim_map.is_valid(),"Photometric workspace reset retained allocations");
+        if(argc==3) {
+            // The Python parity runner compares these whole-gradient dumps in
+            // separate processes. A HIP DLL may use a separate CRT environment;
+            // changing this executable's getenv state is not a valid opt-out.
+            const auto directory=std::filesystem::path(std::string_view(argv[2]).substr(13));
+            require(directory.is_absolute() && std::filesystem::is_directory(directory),"Plane dump directory must exist and be absolute");
+            for(auto extent:{std::array{1025,1089},std::array{1440,1920}})
+            for(bool byte:{false,true})for(bool padding:{false,true}) {
+                const size_t height=extent[0],width=extent[1],pixels=3*height*width;
+                std::vector<float> input(pixels),target_values(pixels);
+                for(size_t i=0;i<pixels;++i){input[i]=.15f+.7f*float((i*19+3)%997)/997;target_values[i]=.1f+.8f*float((i*31+11)%991)/991;}
+                const TensorShape dimensions{1,3,height,width};
+                auto prediction=Tensor::from_vector(input,dimensions,Device::GPU);
+                auto target_tensor=Tensor::from_vector(target_values,dimensions,Device::GPU);
+                if(byte)target_tensor=target_tensor.mul(255.f).to(DataType::UInt8);
+                gpu_ops::PhotoParams comparison;comparison.path=gpu_ops::PhotoPath::Fused;
+                comparison.ssim_weight=.2f;comparison.valid_padding=padding;
+                ops.evaluate(saved,prediction,{},target_tensor,{},comparison,loss,gradient,raw_gradient);
+                const auto selected=gradient.cpu().to_vector();
+                for(float value:selected)require(std::isfinite(value),"Plane gradient is not finite");
+                const float actual_loss=loss.item();
+                const uint64_t workspace=ops.workspace_bytes(saved).allocated,elements=selected.size();
+                const auto name=std::to_string(height)+"x"+std::to_string(width)+"-byte"+std::to_string(byte)+"-padding"+std::to_string(padding)+".bin";
+                std::ofstream file(directory/name,std::ios::binary);
+                file.write(reinterpret_cast<const char*>(&actual_loss),sizeof(actual_loss));
+                file.write(reinterpret_cast<const char*>(&workspace),sizeof(workspace));
+                file.write(reinterpret_cast<const char*>(&elements),sizeof(elements));
+                file.write(reinterpret_cast<const char*>(selected.data()),std::streamsize(selected.size()*sizeof(float)));
+                require(bool(file),"Cannot write plane gradient comparison");
+                std::printf("PASS plane dump %zux%zu byte=%d padding=%d\n",height,width,int(byte),int(padding));
+                ops.reset(saved);
+            }
+        }
     }
     require(configured_gpu_backend()==configured,"Photometric changed default backend");
     require(bool(shutdown_gpu_backend(GpuBackend::HIP)),"Photometric leaked resources");

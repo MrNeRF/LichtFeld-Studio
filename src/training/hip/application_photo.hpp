@@ -3,7 +3,28 @@
 #pragma once
 #include "application_photo_api.h"
 #include "application_photo_generated.hpp"
+#include "photo_plane_policy.hpp"
 namespace {
+bool application_photo_plane_enabled(const LfsHipPhotoCall& call) {
+    const char* profiles=std::getenv("LFS_HIP_DISABLE_ARCH_PROFILES");
+    const char* plane=std::getenv("LFS_HIP_DISABLE_PLANE_SSIM");
+    const bool disabled=(profiles && std::string_view(profiles)!="0") ||
+                        (plane && std::string_view(plane)!="0");
+    // Do not query device properties for paths that cannot be admitted.
+    if (!lfs::training::hip::photo_plane_backward_enabled(
+            call.path,call.byte_target,call.n,call.c,call.h,call.w,"gfx1150",disabled))
+        return false;
+    struct DeviceProfile { int ordinal=-1; std::string architecture; };
+    thread_local DeviceProfile profile;
+    if (profile.ordinal!=call.device) {
+        hipDeviceProp_t properties{};
+        hip_check(hipGetDeviceProperties(&properties,call.device),"HIP photometric device profile");
+        profile.architecture=lfs_hip_base_architecture(properties.gcnArchName);
+        profile.ordinal=call.device;
+    }
+    return lfs::training::hip::photo_plane_backward_enabled(
+        call.path,call.byte_target,call.n,call.c,call.h,call.w,profile.architecture,disabled);
+}
 template<class Target,class Mask>
 void application_photo_launch(const LfsHipPhotoCall& call) {
     using namespace lfs_hip_application_photo_kernels;
@@ -46,6 +67,17 @@ void application_photo_launch(const LfsHipPhotoCall& call) {
             hipLaunchKernelGGL((fusedL1SSIMBackwardCUDA<Target,true,true>),grid,block,0,stream,
                 1.f,h,w,c,c1,c2,norm,valid,f(1),target,f(8),partial+count,partial+2*count,partial+3*count);
         } else if(call.path==2) {
+            if constexpr (std::is_same_v<Target,float>) {
+                const bool plane=application_photo_plane_enabled(call);
+                if(std::getenv("LFS_HIP_VALIDATION_PHOTO_DISPATCH"))
+                    std::fprintf(stderr,"HIP fused SSIM backward: device=%d plane=%d target=Float32\n",call.device,int(plane));
+                if(plane) {
+                    hipLaunchKernelGGL((fusedL1SSIMBackwardHIP<Target,true,false>),
+                        dim3((w+31)/32,(h+7)/8,n*c),dim3(32,8),0,stream,
+                        call.weight,h,w,c,norm,valid,f(0),target,f(7),partial,partial+count,partial+2*count);
+                    return;
+                }
+            }
             hipLaunchKernelGGL((fusedL1SSIMBackwardCUDA<Target>),grid,block,0,stream,
                 call.weight,h,w,c,c1,c2,norm,valid,f(0),target,f(7),partial,partial+count,partial+2*count);
         }
