@@ -312,10 +312,15 @@ namespace lfs::core {
 #endif
     }
 
-    // UTF-8 representation for a filename-taking library at its I/O boundary.
+    // Native filename representation for a filename-taking library at its I/O boundary.
+    // Windows uses UTF-8; POSIX paths retain arbitrary native bytes.
     // Do not use this representation in UI, project JSON, or subprocess arguments.
     inline std::string path_to_native_utf8(const std::filesystem::path& path) {
+#ifdef _WIN32
         return path_to_utf8(lfs::core::native_fs::native_path(path));
+#else
+        return path.native();
+#endif
     }
 
     inline std::string path_to_generic_utf8(const std::filesystem::path& p) {

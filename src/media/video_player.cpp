@@ -167,12 +167,12 @@ namespace lfs::io {
             close();
             clearError();
 
-            const std::string path_utf8 = lfs::core::path_to_utf8(path);
+            const std::string path_utf8 = lfs::core::path_to_native_utf8(path);
 
             const int open_result = avformat_open_input(&fmt_ctx_, path_utf8.c_str(), nullptr, nullptr);
             if (open_result < 0) {
                 setError("Failed to open video: " + ffmpegError(open_result));
-                LOG_WARN("VideoPlayer: Failed to open {}", path_utf8);
+                LOG_WARN("VideoPlayer: Failed to open {}", lfs::core::path_to_utf8(path));
                 return false;
             }
 

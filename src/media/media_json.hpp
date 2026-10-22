@@ -2,9 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "media/media_probe.hpp"
+#include "media/metadata_observation.hpp"
 #include "media/source_exif.hpp"
+#include "media/source_metadata.hpp"
 #include <cmath>
 #include <nlohmann/json.hpp>
+#include <type_traits>
 namespace lfs::media::json_detail {
     using nlohmann::json;
     inline std::string dump(const json& value) {
@@ -20,12 +23,13 @@ namespace lfs::media::json_detail {
     }
     template <class T>
     inline json optional(const std::optional<T>& value) { return value ? json(*value) : json(nullptr); }
-    inline std::string hexBytes(const std::vector<uint8_t>& bytes) {
+    template <class Bytes>
+    inline std::string hexBytes(const Bytes& bytes) {
         constexpr char digits[] = "0123456789abcdef";
         std::string result(bytes.size() * 2, '0');
         for (size_t i = 0; i < bytes.size(); ++i) {
-            result[2 * i] = digits[bytes[i] >> 4];
-            result[2 * i + 1] = digits[bytes[i] & 15];
+            result[2 * i] = digits[static_cast<uint8_t>(bytes[i]) >> 4];
+            result[2 * i + 1] = digits[static_cast<uint8_t>(bytes[i]) & 15];
         }
         return result;
     }
@@ -107,6 +111,103 @@ namespace lfs::media::json_detail {
                 archive["directories"].push_back(std::move(node));
             }
             result["tiff"] = std::move(archive);
+        }
+        return result;
+    }
+    inline json description(const MediaDescription& media);
+    inline json metadataText(const MetadataTextEntry& entry) {
+        // Text presentation follows the existing UTF-8 replacement policy;
+        // the hex fields retain the exact demuxer-exposed key/value bytes.
+        return {{"key", entry.key}, {"value", entry.value}, {"key_bytes", hexBytes(entry.key)}, {"value_bytes", hexBytes(entry.value)}};
+    }
+    inline json metadataReference(const SourceMetadataReference& reference) {
+        if (const auto* exif = std::get_if<ExifEntryReference>(&reference))
+            return {{"kind", "exif_entry"}, {"block", exif->block}, {"entry", exif->entry}};
+        if (const auto* tiff = std::get_if<TiffTagReference>(&reference))
+            return {{"kind", "tiff_tag"}, {"directory", tiff->directory}, {"tag", tiff->tag}};
+        if (const auto* tag = std::get_if<ContainerTagReference>(&reference))
+            return {{"kind", "container_tag"}, {"entry", tag->entry}};
+        if (const auto* stream = std::get_if<StreamDescriptionReference>(&reference))
+            return {{"kind", "stream_description"}, {"stream", stream->stream}};
+        if (const auto* tag = std::get_if<StreamTagReference>(&reference))
+            return {{"kind", "stream_tag"}, {"stream", tag->stream}, {"entry", tag->entry}};
+        const auto& block = std::get<StreamSideDataReference>(reference);
+        return {{"kind", "stream_side_data"}, {"stream", block.stream}, {"block", block.block}};
+    }
+    inline json sourceMetadata(const SourceMetadataCatalog& catalog) {
+        const char* status = "unknown";
+        switch (catalog.indexStatus()) {
+        case MetadataIndexStatus::Complete: status = "complete"; break;
+        case MetadataIndexStatus::Limited: status = "limited"; break;
+        }
+        json result{{"scope", catalog.container() ? "container_stream" : "static_image_exif"}, {"index_status", status}, {"records", json::array()}};
+        if (!catalog.container())
+            result["image_exif"] = sourceExif(catalog.imageExif());
+        if (catalog.container()) {
+            result["description"] = description(*catalog.container());
+            result["source_metadata"] = nullptr;
+            if (catalog.container()->source_metadata) {
+                const auto& metadata = *catalog.container()->source_metadata;
+                json source{{"limited", metadata.limited}, {"binary_encoding", "hex"}, {"tags", json::array()}, {"streams", json::array()}};
+                source["provider"] = metadata.provider ? json{{"name", metadata.provider->name}, {"version", metadata.provider->version}, {"codec_api_version", metadata.provider->codec_api_version}} : json(nullptr);
+                for (const auto& tag : metadata.tags)
+                    source["tags"].push_back(metadataText(tag));
+                for (const auto& stream : metadata.streams) {
+                    json node{{"stream_index", stream.stream_index}, {"tags", json::array()}, {"coded_side_data", json::array()}};
+                    for (const auto& tag : stream.tags)
+                        node["tags"].push_back(metadataText(tag));
+                    for (const auto& block : stream.coded_side_data)
+                        node["coded_side_data"].push_back({{"ffmpeg_type", block.type}, {"bytes", hexBytes(block.bytes)}});
+                    source["streams"].push_back(std::move(node));
+                }
+                result["source_metadata"] = std::move(source);
+            }
+        }
+        const auto& locator = catalog.sourceLocator();
+        result["source_locator"] = locator ? json(locator->display) : json(nullptr);
+        result["source_locator_bytes"] = locator ? json(hexBytes(locator->native_bytes)) : json(nullptr);
+        const char* encoding = "unknown";
+        if (locator) {
+            switch (locator->encoding) {
+            case MetadataPathEncoding::PosixBytes: encoding = "posix_bytes"; break;
+            case MetadataPathEncoding::Utf16LE: encoding = "utf16le"; break;
+            }
+        }
+        result["source_locator_encoding"] = locator ? json(encoding) : json(nullptr);
+        result["identity_scope"] = "in_memory_observation";
+        for (const auto& reference : catalog.records())
+            result["records"].push_back(metadataReference(reference));
+        return result;
+    }
+    inline json metadataSummary(const MetadataSummary& summary) {
+        json result{{"scope", "static_stream_properties"}, {"limited", summary.limited}, {"facts", json::array()}};
+        for (const auto& fact : summary.facts) {
+            json value;
+            std::visit([&](const auto& scalar) {
+                using T = std::decay_t<decltype(scalar)>;
+                if constexpr (std::is_same_v<T, ExifRational>)
+                    value = {{"numerator", scalar.numerator}, {"denominator", scalar.denominator}};
+                else if constexpr (std::is_same_v<T, double>)
+                    value = std::isfinite(scalar) ? json(scalar) : json(std::isnan(scalar) ? "nan" : scalar < 0 ? "-inf"
+                                                                                                                : "+inf");
+                else
+                    value = scalar;
+            },
+                       fact.value);
+            const char* state = "unknown";
+            switch (fact.state) {
+            case MetadataValueState::Present: state = "present"; break;
+            case MetadataValueState::Absent: state = "absent"; break;
+            case MetadataValueState::Invalid: state = "invalid"; break;
+            case MetadataValueState::Unsupported: state = "unsupported"; break;
+            }
+            const char* origin = "unknown";
+            switch (fact.origin) {
+            case MetadataValueOrigin::InterpretedSource: origin = "interpreted_source"; break;
+            case MetadataValueOrigin::DemuxerObservation: origin = "demuxer_observation"; break;
+            case MetadataValueOrigin::Derived: origin = "derived"; break;
+            }
+            result["facts"].push_back({{"semantic", fact.semantic}, {"value", std::move(value)}, {"unit", metadataUnitId(fact.unit)}, {"state", state}, {"origin", origin}, {"temporal_scope", "static"}, {"source", metadataReference(fact.source.reference)}});
         }
         return result;
     }

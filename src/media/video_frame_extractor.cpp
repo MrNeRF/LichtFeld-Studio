@@ -1089,7 +1089,7 @@ namespace lfs::io {
             };
 
             try {
-                const std::string video_path_utf8 = lfs::core::path_to_utf8(params.video_path);
+                const std::string video_path_utf8 = lfs::core::path_to_native_utf8(params.video_path);
 
                 if (avformat_open_input(&fmt_ctx, video_path_utf8.c_str(), nullptr,
                                         nullptr) < 0) {

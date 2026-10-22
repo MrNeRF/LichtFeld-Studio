@@ -978,7 +978,7 @@ NB_MODULE(lichtfeld, m) {
         auto user_packages = lfs::python::get_user_packages_dir();
         nb::module_ sys = nb::module_::import_("sys");
         nb::list path = nb::cast<nb::list>(sys.attr("path"));
-        const std::string pkg_path = lfs::core::path_to_native_utf8(user_packages);
+        const std::string pkg_path = lfs::core::path_to_utf8(lfs::core::native_fs::native_path(user_packages));
         bool found = false;
         for (size_t i = 0; i < path.size(); ++i) {
             if (nb::cast<std::string>(path[i]) == pkg_path) {

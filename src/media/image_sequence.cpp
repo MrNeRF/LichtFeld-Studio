@@ -98,7 +98,11 @@ namespace lfs::media {
         bool abort_requested = false;
 
         bool cancelled() {
-            return abort_requested || (options.cancelled && options.cancelled()) || abort_requested;
+            if (abort_requested)
+                return true;
+            const bool requested = options.cancelled && options.cancelled();
+            // A callback can call abort() and still return false.
+            return requested || abort_requested;
         }
 
         void abort() noexcept {
@@ -124,7 +128,13 @@ namespace lfs::media {
             files.numbering = FrameFileNumbering::DeliveryIndex;
             // Preserve each writer's own callback while adding the job token.
             const auto combine = [this, job = options.cancelled](const std::function<bool()>& writer) {
-                return [this, job, writer] { return abort_requested || (job && job()) || (writer && writer()) || abort_requested; };
+                return [this, job, writer] {
+                    if (abort_requested)
+                        return true;
+                    const bool requested = (job && job()) || (writer && writer());
+                    // Observe abort() requested while polling either callback.
+                    return requested || abort_requested;
+                };
             };
             files.image_output.cancelled = combine(files.image_output.cancelled);
             files.exr.cancelled = combine(files.exr.cancelled);

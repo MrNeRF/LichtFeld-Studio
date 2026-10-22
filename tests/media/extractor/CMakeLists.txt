@@ -12,7 +12,7 @@ set_directory_properties(PROPERTIES COMPILE_DEFINITIONS "${_media_test_definitio
 add_library(media_shared_core_bridge SHARED shared_core_bridge.cpp)
 target_link_libraries(media_shared_core_bridge PRIVATE lfs_error)
 set_target_properties(media_shared_core_bridge PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
-add_executable(media_extraction_runner runner.cpp probe_unit_contracts.cpp source_exif_contracts.cpp frame_sink_contracts.cpp shared_core_contracts.cpp jpeg_backend_contracts.cpp encode_session_contracts.cpp float_exr_contracts.cpp atomic_file_contracts.cpp)
+add_executable(media_extraction_runner runner.cpp probe_unit_contracts.cpp source_exif_contracts.cpp source_metadata_contracts.cpp metadata_observation_contracts.cpp frame_sink_contracts.cpp shared_core_contracts.cpp jpeg_backend_contracts.cpp encode_session_contracts.cpp float_exr_contracts.cpp atomic_file_contracts.cpp)
 set_target_properties(media_extraction_runner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 target_compile_features(media_extraction_runner PRIVATE cxx_std_23)
 target_compile_definitions(media_extraction_runner PRIVATE LFS_HAS_CUDA=0)
@@ -188,5 +188,13 @@ add_test(NAME MediaAv1ProviderFallbackContracts COMMAND media_av1_provider_runne
 set_tests_properties(MediaAv1ProviderFallbackContracts PROPERTIES LABELS "media;cpu;offline" TIMEOUT 60)
 if(WIN32)
     set_tests_properties(MediaAv1ProviderFallbackContracts PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")
+endif()
+
+add_test(NAME MediaSourceMetadataUnitContracts COMMAND media_extraction_runner --source-metadata-unit)
+set_tests_properties(MediaSourceMetadataUnitContracts PROPERTIES LABELS "media;cpu;offline" TIMEOUT 30)
+
+if(WIN32)
+    set_tests_properties(MediaSourceMetadataUnitContracts PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")
 endif()
