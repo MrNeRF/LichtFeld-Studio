@@ -15,6 +15,7 @@
 #include "bias_api.h"
 #include "external_access.hpp"
 #include "point_filter_api.h"
+#include "point_tree_api.h"
 #include "predicate_api.h"
 #include "timing_api.h"
 #include "../readback_buffer.hpp"
@@ -260,6 +261,7 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_arg_extreme_f32);
         ENTRY(lfs_hip_cdist_f32);
         ENTRY(lfs_hip_radius_query);
+        ENTRY(lfs_hip_point_tree_query);
         ENTRY(lfs_hip_proximity);
         ENTRY(lfs_hip_convert);
         ENTRY(lfs_hip_index_cast);
@@ -399,6 +401,7 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_arg_extreme_f32);
                 LOAD(lfs_hip_cdist_f32);
                 LOAD(lfs_hip_radius_query);
+                LOAD(lfs_hip_point_tree_query);
                 LOAD(lfs_hip_proximity);
                 LOAD(lfs_hip_convert);
                 LOAD(lfs_hip_index_cast);
@@ -2382,3 +2385,36 @@ void HipBackendOps::compiled_expression(const ExpressionLaunch& launch,ExecConte
 }
 }
 #endif
+
+namespace lfs::core::internal {
+void HipBackendOps::launch_point_tree(StorageRef p,StorageRef sorted,StorageRef boxes,StorageRef visit,
+    std::optional<StorageRef> radii,std::optional<StorageRef> queries,StorageRef output,const PointTreeProgram& program,
+    bool spacing,ExecContext execution) {
+    queue(execution);
+    require(p.dtype==DataType::Float32 && sorted.dtype==DataType::Float32 && boxes.dtype==DataType::Float32 &&
+            visit.dtype==DataType::Int32 && output.dtype==(spacing?DataType::Float32:DataType::Int32),"Invalid HIP point-tree types");
+    if(radii) require(radii->dtype==DataType::Float32,"Invalid HIP point-tree radii type");
+    if(queries) require(queries->dtype==DataType::Bool || queries->dtype==DataType::UInt8,"Invalid HIP point-tree mask type");
+    require(spacing || radii.has_value(),"Missing HIP point-tree radii");
+    require(!program.points || !radii || radii->data,"Missing HIP point-tree radii storage");
+    require(!program.points || !queries || queries->data,"Missing HIP point-tree query storage");
+    std::lock_guard lock(impl_->mutex);
+    LfsHipPointTree native{};
+    native.points=program.points;native.references=program.references;native.levels=program.levels;
+    static_assert(kPointTreeMaxLevels==8 && kPointTreeFanout==32);
+    std::copy_n(program.level_offset,8,native.level_offset);std::copy_n(program.level_count,8,native.level_count);
+    native.radius=program.radius;native.max_count=program.max_count;
+    const auto view=[&](StorageRef storage) {return storage.data ? impl_->view(storage) : (impl_->empty_view(storage),LfsHipView{});};
+    const LfsHipView inputs[]{view(p),view(sorted),view(boxes),view(visit),radii?view(*radii):LfsHipView{},queries?view(*queries):LfsHipView{}};
+    LfsHipError error{};
+    check(impl_->lfs_hip_point_tree_query(impl_->context,inputs,view(output),&native,spacing,&error),error);
+}
+bool HipBackendOps::point_tree_counts(StorageRef p,StorageRef sorted,StorageRef boxes,StorageRef visit,StorageRef radii,
+    std::optional<StorageRef> queries,StorageRef output,const PointTreeProgram& program,ExecContext execution) {
+    launch_point_tree(p,sorted,boxes,visit,radii,queries,output,program,false,execution);return true;
+}
+bool HipBackendOps::point_tree_spacing(StorageRef p,StorageRef sorted,StorageRef boxes,StorageRef visit,StorageRef output,
+    const PointTreeProgram& program,ExecContext execution) {
+    launch_point_tree(p,sorted,boxes,visit,{}, {},output,program,true,execution);return true;
+}
+}

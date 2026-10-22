@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <vector>
 using namespace lfs::core;
+void require(bool value,const char* message) {if(!value) throw std::runtime_error(message);}
 void equal(const Tensor& gpu, const Tensor& cpu, bool approximate=false) {
     auto result=gpu.cpu();
     if(result.numel()!=cpu.numel() || result.dtype()!=cpu.dtype()) throw std::runtime_error("Spatial shape/type differs");
@@ -76,6 +77,19 @@ void low_level_contract() {
     gpu.radius_neighbor_min(p.storage,v.storage,r.storage,h.storage,n.storage,floating_out,4,1,.75f,rad.storage,{});
     gpu.copy_device_to_host({o.storage,host(floats.data()),24});
     if(floats[1]!=3 || floats[2]!=3 || floats[3]!=2 || floats[4]!=1) throw std::runtime_error("HIP mutual radii minimum differs");
+    Buffer boxes(gpu,24,DataType::Float32),visit(gpu,16,DataType::Int32);
+    std::vector<float> bounds{0,0,0,3,0,0};std::vector<int32_t> order{0,1,2,3};
+    gpu.copy_host_to_device({host(bounds.data()),boxes.storage,24});
+    gpu.copy_host_to_device({host(order.data()),visit.storage,16});
+    PointTreeProgram tree{};tree.points=4;tree.references=4;tree.levels=1;tree.level_count[0]=1;tree.radius=2.f;tree.max_count=100;
+    require(gpu.point_tree_spacing(p.storage,p.storage,boxes.storage,visit.storage,floating_out,tree,{}),"HIP point-tree spacing declined native dispatch");
+    gpu.copy_device_to_host({o.storage,host(floats.data()),24});
+    for(size_t i=0;i<4;++i) if(std::abs(floats[i+1]-spacing[i])>1e-6f) throw std::runtime_error("HIP native tree spacing differs");
+    require(gpu.point_tree_counts(p.storage,p.storage,boxes.storage,visit.storage,rad.storage,{},out,tree,{}),"HIP point-tree counts declined native dispatch");
+    gpu.copy_device_to_host({o.storage,host(observed.data()),24});
+    if(observed[1]!=2 || observed[2]!=2 || observed[3]!=0 || observed[4]!=0) throw std::runtime_error("HIP native tree counts differ");
+    auto bad_tree=tree;bad_tree.level_count[0]=2;
+    reject([&]{gpu.point_tree_counts(p.storage,p.storage,boxes.storage,visit.storage,rad.storage,{},out,bad_tree,{});});
     xyz={-.5f,0,0, .5f,0,0, -.5f,0,0, 10000,0,0};
     gpu.copy_host_to_device({host(xyz.data()),p.storage,48});
     Buffer query(gpu,48,DataType::Float32);
@@ -128,6 +142,8 @@ int main() try {
             equal(radius_neighbor_min(pg,vg,radius,&radg),radius_neighbor_min(p,v,radius,&rad));
             equal(radius_neighbor_min(pg,ig,radius,&radg),radius_neighbor_min(p,iv,radius,&rad));
             equal(point_neighbor_spacing(pg,radius),point_neighbor_spacing(p,radius),true);
+            equal(radius_neighbor_counts(pg,rg,radg,9999),radius_neighbor_counts(p,r,rad,9999));
+            equal(radius_neighbor_counts(pg,rg,radg,3,&qg),radius_neighbor_counts(p,r,rad,3,&q));
 
 
         }

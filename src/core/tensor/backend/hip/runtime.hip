@@ -2449,3 +2449,5 @@ int lfs_hip_warp_rgb(LfsHipContext* context, LfsHipView input, uint32_t dtype,
 #include "spatial_runtime.hpp"
 
 #include "expression_runtime.hpp"
+
+#include "point_tree_runtime.hpp"
