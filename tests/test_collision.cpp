@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "../src/core/collision_sparse.hpp"
 #include "core/collision.hpp"
 #include "core/collision_serialization.hpp"
 #include <algorithm>
@@ -487,4 +488,124 @@ TEST(CollisionPerformance, IndoorFiveCentimeterCarve) {
     std::cout << "Native 6m x 3.5m x 6m / 5cm carve: " << seconds << " s\n";
     EXPECT_FALSE(carved.occupied(carved.cell({3, 1.8f, 3})));
     EXPECT_LT(seconds, 15);
+}
+
+TEST(CollisionAuthoring, CoarseSurfaceRetainsAllSupportsWithoutChangingWalkData) {
+    auto g = grid({17, 13, 19});
+    box(g, {1, 2, 3}, {3, 4, 5});
+    g.solid[g.index({16, 12, 18})] = 1;
+    const auto before = g.solid;
+    const auto coarse = g.coarsened(4);
+    EXPECT_EQ(coarse.dimensions, glm::ivec3(5, 4, 5));
+    EXPECT_FLOAT_EQ(coarse.settings.voxel_size, g.settings.voxel_size * 4);
+    for (int z = 0; z < 19; ++z)
+        for (int y = 0; y < 13; ++y)
+            for (int x = 0; x < 17; ++x)
+                if (g.occupied({x, y, z}))
+                    EXPECT_TRUE(coarse.occupied(glm::ivec3(x, y, z) / 4));
+    EXPECT_EQ(g.solid, before);
+    EXPECT_EQ(g.boundsMesh().vertices.size(), 24u);
+    EXPECT_EQ(g.boundsMesh().indices.size(), 36u);
+    EXPECT_THROW((void)g.coarsened(3), std::invalid_argument);
+    std::stop_source cancelled;
+    cancelled.request_stop();
+    EXPECT_THROW((void)g.coarsened(4, cancelled.get_token()), std::runtime_error);
+}
+
+TEST(CollisionAuthoring, CalibratedSceneScaleKeepsMetricPresetDimensions) {
+    CollisionSettings settings;
+    settings.units_per_meter = 10;
+    settings.applyPreset(CollisionPreset::Indoor);
+    EXPECT_FLOAT_EQ(settings.carve_height, 16);
+    EXPECT_FLOAT_EQ(settings.carve_radius, 2);
+    EXPECT_FLOAT_EQ(settings.floor_size, 16);
+    WalkSettings walk;
+    walk.units_per_meter = 10;
+    walk.height = 18;
+    walk.radius = 2;
+    walk.speed = 25;
+    walk.step_height = 2.5f;
+    EXPECT_NO_THROW(walk.validate());
+    settings.units_per_meter = 0;
+    EXPECT_THROW(settings.validate(), std::invalid_argument);
+}
+
+TEST(CollisionPipeline, GroundGuardKeepsCanopyButDoesNotExtrudeItDownward) {
+    auto original = grid({20, 40, 20});
+    box(original, {2, 1, 2}, {5, 1, 5});
+    box(original, {12, 30, 12}, {15, 30, 15});
+    box(original, {8, 12, 8}, {9, 12, 9});
+    original.settings.floor_fill = true;
+    original.settings.floor_size = 0;
+    original.settings.floor_below_seed = true;
+    original.settings.seed = {0.4f, 1.8f, 0.4f};
+    auto sparse = original;
+    sparse.tree = sparse.octreeOccupancy();
+    sparse.tree_size = 64;
+    sparse.solid.clear();
+    const auto dense_result = processCollisionVolume(original);
+    const auto sparse_result = processCollisionVolume(std::move(sparse));
+    EXPECT_TRUE(sparse_result.occupied({3, 0, 3}));
+    EXPECT_TRUE(sparse_result.occupied({13, 30, 13}));
+    EXPECT_FALSE(sparse_result.occupied({13, 0, 13}));
+    EXPECT_TRUE(sparse_result.occupied({8, 12, 8}));
+    EXPECT_FALSE(sparse_result.occupied({8, 0, 8}));
+    for (int z = 0; z < 20; ++z)
+        for (int y = 0; y < 40; ++y)
+            for (int x = 0; x < 20; ++x)
+                EXPECT_EQ(dense_result.occupied({x, y, z}), sparse_result.occupied({x, y, z}));
+}
+
+TEST(WalkCollision, SparseCapsuleTraversalMatchesDenseForRotatedSegments) {
+    auto dense = grid({17, 17, 17});
+    box(dense, {2, 2, 2}, {5, 8, 5});
+    box(dense, {10, 9, 10}, {13, 12, 13});
+    auto sparse = dense;
+    sparse.tree = sparse.octreeOccupancy();
+    sparse.tree_size = 32;
+    sparse.solid.clear();
+    std::mt19937 generator(81741);
+    std::uniform_real_distribution<float> position(-0.3f, 1.9f), direction(-1, 1);
+    for (int i = 0; i < 200; ++i) {
+        const glm::vec3 feet(position(generator), position(generator), position(generator));
+        const auto up = glm::normalize(glm::vec3(direction(generator), direction(generator), direction(generator)));
+        EXPECT_EQ(dense.capsuleIntersects(feet, up, 0.8f, 0.12f),
+                  sparse.capsuleIntersects(feet, up, 0.8f, 0.12f));
+    }
+}
+
+TEST(CollisionAuthoring, DisplaySettingsAndScalePersistWithLegacyDefaults) {
+    CollisionDisplay display{.preview = true, .surface_ready = false, .opacity = 0.3f, .slice = 0.6f, .surface_stride = 4};
+    EXPECT_EQ(nlohmann::json(display).get<CollisionDisplay>(), display);
+    CollisionSettings settings;
+    settings.units_per_meter = 0.25f;
+    settings.floor_below_seed = true;
+    EXPECT_EQ(nlohmann::json(settings).get<CollisionSettings>(), settings);
+    auto legacy = nlohmann::json(settings);
+    legacy.erase("units_per_meter");
+    legacy.erase("floor_below_seed");
+    const auto old = legacy.get<CollisionSettings>();
+    EXPECT_EQ(old.units_per_meter, 1);
+    EXPECT_FALSE(old.floor_below_seed);
+    auto broken = nlohmann::json(display);
+    broken["slice"] = -1;
+    EXPECT_THROW(broken.get<CollisionDisplay>(), std::invalid_argument);
+}
+
+TEST(CollisionVoxelization, ParallelBricksMatchSerialIncludingPartialBoundaryCells) {
+    std::vector<CollisionGaussian> source;
+    for (int i = 0; i < 4096; ++i)
+        source.push_back({{float(i % 16) * 0.12f, float((i / 16) % 16) * 0.12f, float(i / 256) * 0.12f}, glm::mat3(0.035f), 0.8f});
+    CollisionSettings settings;
+    settings.applyPreset(CollisionPreset::Object);
+    settings.voxel_size = 0.07f;
+    const auto serial = collision_detail::voxelizeSparse(source, settings, {}, {}, 1);
+    const auto parallel = collision_detail::voxelizeSparse(source, settings, {}, {}, 4);
+    ASSERT_EQ(serial.dimensions, parallel.dimensions);
+    ASSERT_EQ(serial.origin, parallel.origin);
+    EXPECT_EQ(serial.occupiedCount(), parallel.occupiedCount());
+    for (int z = 0; z < serial.dimensions.z; ++z)
+        for (int y = 0; y < serial.dimensions.y; ++y)
+            for (int x = 0; x < serial.dimensions.x; ++x)
+                ASSERT_EQ(serial.occupied({x, y, z}), parallel.occupied({x, y, z}));
 }
