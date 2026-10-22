@@ -77,6 +77,13 @@ Compiling a target is not a claim of runtime or numerical validation on that
 hardware. GPU/driver availability remains subject to the selected SDK and OS.
 The tested device profile is `gfx1150`; other targets use conservative kernels.
 
+The profile's native FP32 atomics are restricted to session-owned backward
+helper gradients allocated by `FastFrame`. Model storage ownership does not
+establish ownership of output bindings. Densification statistics, edge/impact
+scores, camera gradients and regularization outputs therefore retain ordinary
+HIP `atomicAdd`, including when the model itself uses shared Vulkan storage.
+Do not broaden native-atomic dispatch to imported or fine-grained allocations.
+
 ## Completion status and remaining work
 
 ### Execution sequence

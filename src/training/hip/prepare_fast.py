@@ -135,8 +135,9 @@ __device__ inline unsigned long long lfs_fast_wave_ballot(int predicate) {
     return __ballot_sync(0x00000000ffffffffull, predicate);
 #endif
 }
-// All destinations in this private session are hipMalloc-owned device buffers.
-// Do not enable this specialization for host/fine-grained atomic destinations.
+// Only session-owned helper gradients may use this specialization. Application
+// outputs (densification, scores, camera and regularizers) retain atomicAdd:
+// their bindings may refer to imported or fine-grained memory.
 __device__ inline void lfs_fast_device_atomic_add(float* destination, float value) {
 #ifdef LFS_HIP_FAST_DEVICE_ATOMICS
     (void)unsafeAtomicAdd(destination, value);
@@ -285,8 +286,15 @@ def prepare(root: Path, output: Path) -> None:
         }
 '''
             text = text.replace(anchor, row, 1).replace(anchor, sh, 1)
-        if relative.endswith(("kernel_utils.cuh", "kernels_backward.cuh")):
-            text = re.sub(r"\batomicAdd\(", "lfs_fast_device_atomic_add(", text)
+        if relative.endswith("kernels_backward.cuh"):
+            # These four ranges come from FastFrame::backward_helpers, which
+            # creates private Buffer allocations without imported backing.
+            # Never infer ownership of other outputs from the input model.
+            text, replaced = re.subn(
+                r"\batomicAdd(?=\(&grad_(?:mean2d|conic|compensated_opacity|color)\[)",
+                "lfs_fast_device_atomic_add", text)
+            if replaced != 9:
+                raise RuntimeError("Review changed HIP helper-gradient atomic destinations")
         if relative.endswith(("kernel_utils.cuh", "kernels_backward.cuh", "kernels_forward.cuh")):
             text = re.sub(r"\bexpf\(", "lfs_fast_exp(", text)
         if relative.endswith("kernels_forward.cuh"):
@@ -401,8 +409,12 @@ def prepare(root: Path, output: Path) -> None:
                                     destination = densification_info + (lane_id - 13) * n_primitives + primitive_idx;
                             } else if (lane_id == 15 && edge_score_out != nullptr)
                                 destination = edge_score_out + primitive_idx;
-                            if (destination != nullptr)
-                                lfs_fast_device_atomic_add(destination, lane_id < 13 ? clamp_grad(value) : value);
+                            if (destination != nullptr) {
+                                if (lane_id < 13)
+                                    lfs_fast_device_atomic_add(destination, clamp_grad(value));
+                                else
+                                    atomicAdd(destination, value);
+                            }
                         }
 ''' + original[lane_end:]
             # The upstream removal-impact path has separate sum/max atomics.
