@@ -76,8 +76,14 @@ const _VulkanBuffer& VulkanGSRenderer::executeStochasticResolve(
         history.color[i].deviceBuffer.label = i == 0 ? "stochastic.color_0" : "stochastic.color_1";
         resizeDeviceBuffer(history.color[i], pixels * 4);
     }
+    if (uniforms.mode == 2u) {
+        history.rest_average.deviceBuffer.label = "stochastic.rest_average";
+        resizeDeviceBuffer(history.rest_average, pixels * 4);
+    }
     const auto& weights = uniforms.mode == 2u ? history.outgoing_weights.deviceBuffer
                                               : buffers.pixel_state.deviceBuffer;
+    const auto& rest_average = uniforms.mode == 2u ? history.rest_average.deviceBuffer
+                                                   : buffers.pixel_state.deviceBuffer;
     executeCompute({{uniforms.width, 16}, {uniforms.height, 16}},
                    &uniforms, sizeof(uniforms), pipeline_stochastic_resolve,
                    std::vector<TaggedBinding>{
@@ -86,6 +92,7 @@ const _VulkanBuffer& VulkanGSRenderer::executeStochasticResolve(
                        {weights, BufferUse::ComputeRead},
                        {history.color[output_index ^ 1u].deviceBuffer, BufferUse::ComputeRead},
                        {history.color[output_index].deviceBuffer, BufferUse::ComputeWrite},
+                       {rest_average, uniforms.mode == 2u ? BufferUse::ComputeReadWrite : BufferUse::ComputeRead},
                    });
     return history.color[output_index].deviceBuffer;
 }

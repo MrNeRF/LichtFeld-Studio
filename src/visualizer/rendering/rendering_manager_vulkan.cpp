@@ -2433,8 +2433,7 @@ namespace lfs::vis {
 
         DirtyMask frame_dirty = dirty_mask_.exchange(0);
         if (vksplat_viewport_renderer_) {
-            if ((frame_dirty & ~DirtyFlag::CAMERA) != 0)
-                vksplat_viewport_renderer_->invalidateStochasticHistory();
+            vksplat_viewport_renderer_->invalidateStochasticHistory(frame_dirty);
             vksplat_viewport_renderer_->setCameraNavigating(
                 is_training && (frame_dirty & DirtyFlag::CAMERA) != 0);
         }

@@ -23,6 +23,8 @@ namespace lfs::rendering {
         SteadySplats = 2,
     };
 
+    inline constexpr int DEFAULT_STOCHASTIC_REFINEMENT_FRAMES = 16;
+
     inline bool isGaussianTransparencyModeId(const std::string_view id) {
         return id == "alpha_blend" || id == "stochastic" || id == "steady_splats";
     }

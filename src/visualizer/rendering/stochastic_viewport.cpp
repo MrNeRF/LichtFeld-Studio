@@ -26,6 +26,15 @@ namespace lfs::vis {
         }
     } // namespace
 
+    void VksplatViewportRenderer::invalidateStochasticHistory(const DirtyMask dirty_flags) {
+        // Camera/pivot and overlay redraws do not change splat radiance.
+        // Keep their color and occluder history for temporal reuse.
+        if ((dirty_flags & ~(DirtyFlag::CAMERA | DirtyFlag::OVERLAY)) == 0)
+            return;
+        ++stochastic_history_generation_;
+        stochastic_projection_cache_ = {};
+    }
+
     VksplatViewportRenderer::StochasticFrame VksplatViewportRenderer::prepareStochasticFrame(
         VulkanGSRendererUniforms& uniforms, const lfs::core::SplatData& model,
         const OutputSlot slot, const bool content_changed) const {
@@ -130,6 +139,7 @@ namespace lfs::vis {
             renderer_.destroyBuffer(history.buffers.outgoing_weights.deviceBuffer);
             for (auto& color : history.buffers.color)
                 renderer_.destroyBuffer(color.deviceBuffer);
+            renderer_.destroyBuffer(history.buffers.rest_average.deviceBuffer);
             history = {};
         }
     }

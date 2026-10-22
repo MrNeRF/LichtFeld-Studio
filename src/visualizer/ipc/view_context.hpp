@@ -124,7 +124,7 @@ namespace lfs::vis {
         size_t split_view_offset = 0;
         int raster_backend = 2;
         int transparency_mode = 0;
-        int stochastic_max_frames = 32;
+        int stochastic_max_frames = lfs::rendering::DEFAULT_STOCHASTIC_REFINEMENT_FRAMES;
         bool gut = false;
         bool equirectangular = false;
         bool orthographic = false;

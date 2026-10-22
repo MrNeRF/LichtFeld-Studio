@@ -7,6 +7,7 @@
 #include "core/error.hpp"
 #include "core/exportable_storage.hpp"
 #include "core/splat_data.hpp"
+#include "dirty_flags.hpp"
 #include "lod_page_cache.hpp"
 #include "lod_pool_quant.hpp"
 #include "lod_upload_engine.hpp"
@@ -202,10 +203,7 @@ namespace lfs::vis {
         // While the camera moves during training, the viewer and training take
         // turns on the shared scratch (see kTrainingFramesPerNavigationRender).
         void setCameraNavigating(bool navigating);
-        void invalidateStochasticHistory() {
-            ++stochastic_history_generation_;
-            stochastic_projection_cache_ = {};
-        }
+        void invalidateStochasticHistory(DirtyMask dirty_flags = DirtyFlag::ALL);
 
         // Invoked with the completion value immediately after each live-model
         // submit, BEFORE the shared arena frame is released — the trainer's

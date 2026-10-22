@@ -38,6 +38,7 @@ namespace lfs::vis {
         static bool allocated(const VksplatViewportRenderer& renderer) {
             for (const auto& history : renderer.stochastic_histories_)
                 if (history.buffers.color[0].deviceBuffer.buffer != VK_NULL_HANDLE ||
+                    history.buffers.rest_average.deviceBuffer.buffer != VK_NULL_HANDLE ||
                     history.buffers.ids_depths.deviceBuffer.buffer != VK_NULL_HANDLE)
                     return true;
             return false;
@@ -83,6 +84,32 @@ namespace {
         EXPECT_EQ(right.stochastic_frame, 2u);
     }
 
+    TEST(StochasticViewport, CameraAndOverlayRedrawsPreserveHistoryWhileSceneChangesResetIt) {
+        Renderer renderer;
+        lfs::core::SplatData model;
+        auto u = camera(2);
+        Access::commit(renderer, Access::prepare(renderer, u, model, Slot::Main), Slot::Main);
+        for (const auto dirty : {lfs::vis::DirtyMask{0}, lfs::vis::DirtyFlag::CAMERA,
+                                 lfs::vis::DirtyFlag::OVERLAY,
+                                 lfs::vis::DirtyFlag::CAMERA | lfs::vis::DirtyFlag::OVERLAY}) {
+            renderer.invalidateStochasticHistory(dirty);
+            u.world_view_transform[12] += 0.01f;
+            const auto frame = Access::prepare(renderer, u, model, Slot::Main);
+            EXPECT_TRUE(frame.history_valid) << "dirty flags " << dirty;
+            EXPECT_EQ(frame.samples, 0u); // The camera moved; radiance reprojects.
+            Access::commit(renderer, frame, Slot::Main);
+        }
+        for (const auto dirty : {lfs::vis::DirtyFlag::SPLATS, lfs::vis::DirtyFlag::MESH,
+                                 lfs::vis::DirtyFlag::VIEWPORT, lfs::vis::DirtyFlag::PPISP,
+                                 lfs::vis::DirtyFlag::SELECTION, lfs::vis::DirtyFlag::BACKGROUND,
+                                 lfs::vis::DirtyFlag::SPLIT_VIEW, lfs::vis::DirtyFlag::SPLIT_POSITION}) {
+            renderer.invalidateStochasticHistory(dirty);
+            const auto frame = Access::prepare(renderer, u, model, Slot::Main);
+            EXPECT_FALSE(frame.history_valid) << "dirty flags " << dirty;
+            Access::commit(renderer, frame, Slot::Main);
+        }
+    }
+
     TEST(StochasticViewport, BasicAccumulationResetsForCameraAndContentChanges) {
         Renderer renderer;
         lfs::core::SplatData model;
@@ -121,6 +148,9 @@ namespace {
         EXPECT_EQ(frame.samples, 0u);
         Access::commit(renderer, frame, Slot::Main);
         EXPECT_EQ(Access::prepare(renderer, u, model, Slot::Main).samples, 1u);
+        frame = Access::prepare(renderer, u, model, Slot::Main, true);
+        EXPECT_FALSE(frame.history_valid);
+        EXPECT_EQ(frame.samples, 0u);
         EXPECT_FALSE(Access::prepare(renderer, u, other, Slot::Main).history_valid);
         ++u.image_width;
         EXPECT_FALSE(Access::prepare(renderer, u, model, Slot::Main).history_valid);
@@ -159,6 +189,9 @@ namespace {
     TEST(StochasticViewport, SettingsDefaultToAlphaBlendAndRoundTripThroughTheProxy) {
         lfs::vis::RenderSettings settings;
         EXPECT_EQ(settings.transparency_mode, lfs::rendering::GaussianTransparencyMode::AlphaBlend);
+        EXPECT_EQ(settings.stochastic_max_frames, 16);
+        EXPECT_EQ(lfs::vis::RenderSettingsProxy{}.stochastic_max_frames, settings.stochastic_max_frames);
+        EXPECT_EQ(lfs::rendering::ViewportRenderRequest{}.stochastic_max_frames, settings.stochastic_max_frames);
         settings.transparency_mode = lfs::rendering::GaussianTransparencyMode::SteadySplats;
         settings.stochastic_max_frames = 128;
         auto proxy = lfs::vis::to_proxy(settings);

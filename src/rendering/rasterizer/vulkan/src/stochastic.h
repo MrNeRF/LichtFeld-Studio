@@ -17,6 +17,7 @@ struct VulkanGSStochasticBuffers {
     Buffer<float> occlusion;
     Buffer<float> outgoing_weights;
     std::array<Buffer<float>, 2> color;
+    Buffer<float> rest_average;
 };
 
 struct VulkanGSStochasticResolveUniforms {

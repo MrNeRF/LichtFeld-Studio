@@ -15,6 +15,7 @@
 #include <memory>
 #include <numeric>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -166,6 +167,7 @@ namespace {
                 renderer_->destroyBuffer(history_.outgoing_weights.deviceBuffer);
                 for (auto& color : history_.color)
                     renderer_->destroyBuffer(color.deviceBuffer);
+                renderer_->destroyBuffer(history_.rest_average.deviceBuffer);
                 renderer_.reset();
             }
             if (allocator_)
@@ -535,6 +537,100 @@ namespace {
         EXPECT_NEAR(tied[4], sample_ratio * (1 - target_occluder_alpha) / (1 - source_occluder_alpha), 1e-6);
     }
 
+    TEST_F(StochasticResampling, SpatialGatherMatchesOracleAcrossWorkgroupAndViewportEdges) {
+        constexpr std::array<std::array<uint32_t, 2>, 6> sizes{{{1, 1}, {1, 19}, {33, 1}, {15, 17}, {16, 16}, {33, 19}}};
+        constexpr std::array<std::array<int, 2>, 4> offsets{{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}};
+        for (const auto& size : sizes) {
+            const auto [width, height] = size;
+            SCOPED_TRACE(::testing::Message() << width << "x" << height);
+            const size_t pixels = width * height;
+            std::vector<float> current(pixels * 4), weights(pixels * 4);
+            for (size_t p = 0; p < pixels; ++p)
+                for (size_t c = 0; c < 4; ++c) {
+                    current[4 * p + c] = 0.03f * static_cast<float>((p * 7 + c * 11) % 29);
+                    weights[4 * p + c] = 0.05f * static_cast<float>(1 + (p * 3 + c * 7) % 17);
+                }
+            upload(buffers_.pixel_state, current);
+            upload(buffers_.pixel_depth, std::vector<float>(pixels, 1));
+            upload(history_.outgoing_weights, weights);
+            VulkanGSStochasticResolveUniforms u{};
+            u.width = width;
+            u.height = height;
+            u.mode = 2;
+            const auto& output = renderer_->executeStochasticResolve(u, buffers_, history_, 0);
+            const auto actual = read<float>(output, pixels * 4);
+            for (uint32_t y = 0; y < height; ++y)
+                for (uint32_t x = 0; x < width; ++x) {
+                    const size_t p = y * width + x;
+                    std::array<double, 4> sum;
+                    std::copy_n(current.begin() + 4 * p, 4, sum.begin());
+                    double mass = 1;
+                    for (size_t d = 0; d < offsets.size(); ++d) {
+                        const int nx = static_cast<int>(x) + offsets[d][0];
+                        const int ny = static_cast<int>(y) + offsets[d][1];
+                        if (nx < 0 || ny < 0 || nx >= static_cast<int>(width) || ny >= static_cast<int>(height))
+                            continue;
+                        const size_t n = ny * width + nx;
+                        const double weight = weights[4 * n + (d ^ 1u)];
+                        mass += weight;
+                        for (size_t c = 0; c < 4; ++c)
+                            sum[c] += weight * current[4 * n + c];
+                    }
+                    for (size_t c = 0; c < 4; ++c)
+                        EXPECT_NEAR(actual[4 * p + c], sum[c] / mass, 1e-6) << "pixel " << x << "," << y;
+                }
+            // The basic mode bypasses the shared neighborhood, including in
+            // partial groups where only a subset of the lanes own pixels.
+            u.mode = 1;
+            const auto& basic = renderer_->executeStochasticResolve(u, buffers_, history_, 0);
+            EXPECT_EQ(read<float>(basic, pixels * 4), current);
+        }
+    }
+
+    TEST_F(StochasticResampling, TemporalMomentsMatchOracleAcrossWorkgroupAndViewportEdges) {
+        constexpr uint32_t width = 33, height = 19;
+        constexpr size_t pixels = width * height;
+        std::vector<float> current(pixels * 4, 0), previous(pixels * 4, 0);
+        for (uint32_t y = 0; y < height; ++y)
+            for (uint32_t x = 0; x < width; ++x)
+                for (size_t c = 0; c < 3; ++c) {
+                    current[4 * (y * width + x) + c] = 0.1f + 0.04f * ((7 * x + 11 * y) % 13);
+                    previous[4 * (y * width + x) + c] = 1.5f;
+                }
+        upload(buffers_.pixel_state, current);
+        upload(buffers_.pixel_depth, std::vector<float>(pixels, 1));
+        upload(history_.outgoing_weights, std::vector<float>(pixels * 4, 0));
+        upload(history_.color[1], previous);
+        VulkanGSStochasticResolveUniforms u{};
+        u.width = width;
+        u.height = height;
+        u.mode = 2;
+        u.history_valid = u.temporal_projection_valid = u.sample_count = 1;
+        const auto& output = renderer_->executeStochasticResolve(u, buffers_, history_, 0);
+        const auto actual = read<float>(output, pixels * 4);
+        for (uint32_t y = 0; y < height; ++y)
+            for (uint32_t x = 0; x < width; ++x) {
+                double mean = 0, second = 0;
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        const auto qx = std::clamp(static_cast<int>(x) + dx, 0, static_cast<int>(width) - 1);
+                        const auto qy = std::clamp(static_cast<int>(y) + dy, 0, static_cast<int>(height) - 1);
+                        const double value = current[4 * (qy * width + qx)];
+                        mean += value / 9;
+                        second += value * value / 9;
+                    }
+                const double extent = std::max(0.01, 4 * std::sqrt(std::max(0.0, second - mean * mean)));
+                const double retention = 0.7 / std::max(1.0, std::abs(1.5 - mean) / extent);
+                const size_t p = y * width + x;
+                // Grayscale has Y=value and Co=Cg=0. Spatial weights are zero;
+                // the retained first stationary sample contributes 1/9.
+                const double expected = current[4 * p] + (1.5 - current[4 * p]) * retention * (8.0 / 9.0);
+                for (size_t c = 0; c < 3; ++c)
+                    EXPECT_NEAR(actual[4 * p + c], expected, 3e-6) << "pixel " << x << "," << y;
+                EXPECT_FLOAT_EQ(actual[4 * p + 3], 0);
+            }
+    }
+
     TEST_F(StochasticResampling, TemporalRecurrenceAndReprojectionMatchThePaper) {
         constexpr uint32_t width = 16, height = 16;
         constexpr size_t pixels = width * height;
@@ -591,7 +687,82 @@ namespace {
         EXPECT_NEAR(fractional[center + 1], 0.2 - 0.7 * 0.00005 * 6.25 * 6.25, 1e-6);
     }
 
-    TEST_F(StochasticResampling, StationaryBackgroundSamplesRetainTemporalHistory) {
+    TEST_F(StochasticResampling, StationaryWarmupFadesIntoRawVisibilityAverage) {
+        constexpr size_t pixels = 3;
+        // The center ray always samples background. Its two neighbors are red,
+        // so spatial reuse alone stays biased at 2/3 red, 1/3 transmittance.
+        upload(buffers_.pixel_state, std::vector<float>{1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0});
+        upload(buffers_.pixel_depth, std::vector<float>(pixels, std::numeric_limits<float>::infinity()));
+        upload(history_.outgoing_weights, std::vector<float>(pixels * 4, 1));
+        upload(history_.color[1], std::vector<float>(pixels * 4, 0));
+        // Uninitialized/old rest storage must not contribute to a new average.
+        upload(history_.rest_average, std::vector<float>(pixels * 4, 100));
+        VulkanGSStochasticResolveUniforms u{};
+        u.width = pixels;
+        u.height = 1;
+        u.mode = 2;
+        u.history_valid = 1;
+        u.temporal_projection_valid = 1;
+        std::vector<float> resolved;
+        for (uint32_t n = 1; n <= 64; ++n) {
+            u.sample_count = n;
+            const auto& output = renderer_->executeStochasticResolve(u, buffers_, history_, (n - 1) % 2);
+            resolved = read<float>(output, pixels * 4);
+            if (n == 1 || n == 8 || n == 9 || n == 64) {
+                const auto average = read<float>(history_.rest_average.deviceBuffer, pixels * 4);
+                const double expected_red = std::min(n, 8u) * (2.0 / 3.0) / n;
+                EXPECT_NEAR(average[4], expected_red, 1e-6);
+                EXPECT_NEAR(average[7], 1.0 - expected_red, 1e-6);
+            }
+        }
+        // Convergence must reduce spatial blur, not just average the same
+        // spatially biased estimate indefinitely or retain a fixed EMA floor.
+        EXPECT_LT(resolved[4], 0.12f);
+        EXPECT_GT(resolved[7], 0.88f);
+    }
+
+    TEST_F(StochasticResampling, StationaryAverageRestartsAfterMotionAndInvalidation) {
+        constexpr size_t pixels = 1;
+        upload(buffers_.pixel_depth, std::vector<float>{std::numeric_limits<float>::infinity()});
+        upload(history_.outgoing_weights, std::vector<float>(4, 0));
+        upload(history_.color[1], std::vector<float>{0, 0, 0, 1});
+        VulkanGSStochasticResolveUniforms u{};
+        u.width = u.height = pixels;
+        u.mode = 2;
+        u.history_valid = 1;
+        u.temporal_projection_valid = 1;
+        uint32_t output_index = 0;
+        const auto resolve = [&](uint32_t n, std::vector<float> sample) {
+            upload(buffers_.pixel_state, std::move(sample));
+            u.sample_count = n;
+            const auto& output = renderer_->executeStochasticResolve(u, buffers_, history_, output_index);
+            const auto color = read<float>(output, 4);
+            output_index ^= 1u;
+            return color;
+        };
+        resolve(1, {1, 0, 0, 0});
+        resolve(2, {0, 0, 0, 1});
+        auto average = read<float>(history_.rest_average.deviceBuffer, 4);
+        EXPECT_NEAR(average[0], 0.5, 1e-6);
+        EXPECT_NEAR(average[3], 0.5, 1e-6);
+
+        // Motion must not update the stationary average or enter the next one.
+        const auto moving = resolve(0, {0, 1, 0, 0});
+        EXPECT_FLOAT_EQ(moving[1], 1.0f);
+        EXPECT_EQ(read<float>(history_.rest_average.deviceBuffer, 4), average);
+        resolve(1, {0, 0, 1, 0});
+        average = read<float>(history_.rest_average.deviceBuffer, 4);
+        EXPECT_EQ(average, (std::vector<float>{0, 0, 1, 0}));
+
+        u.history_valid = 0;
+        const auto invalidated = resolve(0, {0, 0, 0, 1});
+        EXPECT_FLOAT_EQ(invalidated[3], 1.0f);
+        u.history_valid = 1;
+        resolve(1, {1, 0, 0, 0});
+        EXPECT_EQ(read<float>(history_.rest_average.deviceBuffer, 4), (std::vector<float>{1, 0, 0, 0}));
+    }
+
+    TEST_F(StochasticResampling, BackgroundSamplesRetainStationaryAndMovingHistory) {
         constexpr uint32_t width = 16, height = 16;
         constexpr size_t pixels = width * height;
         constexpr size_t center = 6 * width + 6;
@@ -610,6 +781,7 @@ namespace {
         upload(buffers_.pixel_depth, depths);
         upload(history_.outgoing_weights, std::vector<float>(pixels * 4, 0));
         upload(history_.color[1], previous);
+        upload(history_.rest_average, previous);
         VulkanGSStochasticResolveUniforms u{};
         u.width = width;
         u.height = height;
@@ -629,13 +801,44 @@ namespace {
         // Background is a valid Monte Carlo sample. An unchanged camera needs
         // neither a finite depth nor interpolation, even at the viewport edge.
         for (const size_t p : {size_t{0}, center}) {
-            EXPECT_NEAR(stationary[4 * p], 0.28, 1e-6);
-            EXPECT_NEAR(stationary[4 * p + 3], 0.3, 1e-6);
+            EXPECT_NEAR(stationary[4 * p], 0.315, 1e-6);
+            EXPECT_NEAR(stationary[4 * p + 3], 0.2125, 1e-6);
         }
-        u.sample_count = 0; // Moving views cannot reproject an unknown surface.
+        u.sample_count = 0;
         const auto moving = resolve();
-        EXPECT_FLOAT_EQ(moving[4 * center], 0.0f);
-        EXPECT_FLOAT_EQ(moving[4 * center + 3], 1.0f);
+        // A background draw is a valid sample at infinity, not a reason to
+        // discard radiance history. Its homogeneous direction ignores camera
+        // translation. Soft rejection still decides how much history to keep.
+        EXPECT_NEAR(moving[4 * center], 0.28f, 1e-6);
+        EXPECT_NEAR(moving[4 * center + 3], 0.3f, 1e-6);
+        u.view_to_previous[0][3] = 1000.0f;
+        const auto translated = resolve();
+        EXPECT_NEAR(translated[4 * center], moving[4 * center], 1e-6);
+        EXPECT_NEAR(translated[4 * center + 3], moving[4 * center + 3], 1e-6);
+        // Rotation must move the history lookup. A 90-degree roll about the
+        // principal point maps (6,6) to (10,6), whose history is 0.42.
+        for (size_t p = 0; p < pixels; ++p)
+            for (size_t c = 0; c < 3; ++c)
+                previous[4 * p + c] = 0.32f + 0.01f * static_cast<float>(p % width);
+        upload(history_.color[1], previous);
+        u.intrinsics[0] = u.intrinsics[1] = 4;
+        u.previous_intrinsics[0] = u.previous_intrinsics[1] = 4;
+        u.intrinsics[2] = u.intrinsics[3] = 8;
+        u.previous_intrinsics[2] = u.previous_intrinsics[3] = 8;
+        u.view_to_previous[0][0] = u.view_to_previous[1][1] = 0;
+        u.view_to_previous[0][1] = -1;
+        u.view_to_previous[1][0] = 1;
+        const auto rotated = resolve();
+        EXPECT_NEAR(rotated[4 * center], 0.7f * 0.42f, 1e-6);
+        EXPECT_NEAR(rotated[4 * center + 3], 0.3f, 1e-6);
+        // Directions behind the prior camera and unsupported orthographic
+        // reprojections must continue to bypass history.
+        u.view_to_previous[2][2] = -1.0f;
+        EXPECT_FLOAT_EQ(resolve()[4 * center], 0.0f);
+        u.view_to_previous[2][2] = 1.0f;
+        u.orthographic = 1;
+        EXPECT_FLOAT_EQ(resolve()[4 * center], 0.0f);
+        u.orthographic = 0;
         u.sample_count = 8;
         u.history_valid = 0;
         EXPECT_FLOAT_EQ(resolve()[4 * center], 0.0f);

@@ -10,13 +10,14 @@ fragments are combined:
 | SteadySplats | Stochastic samples with spatial importance resampling and reprojected temporal reuse. |
 
 Each new sample is displayed immediately. **Refinement frames** limits the new
-samples rendered after the camera or scene changes (32 by default). New input
+samples rendered after the camera or scene changes (16 by default). New input
 starts a new refinement window. The viewer stops requesting extra frames at the
 limit; it does not wait for a batch of samples before responding to navigation.
 These finite refinement requests can advance as GPU frame slots become available,
 with input processed between samples. Periodic GUI animations keep display pacing.
-SteadySplats uses an exponential temporal filter, so this limit is a work budget,
-not a guarantee of convergence to the alpha-blended image.
+SteadySplats uses an exponential temporal filter during motion and a separate
+running average while the camera rests. The limit is a work budget; increasing
+it allows more stationary noise reduction without delaying navigation.
 
 Stochastic modes currently apply to 3DGS without LOD. Outlines, rings, center
 markers, 3DGUT, offscreen previews, and exports retain alpha blending. Depth
@@ -40,6 +41,14 @@ Algorithms 1–3 and equations 9, 14, 20, and 21:
   color with Catmull–Rom interpolation. YCoCg neighborhood moments and
   velocity-dependent confidence bounds reduce history retention at disocclusions.
   Historical color is not clipped. Nominal retention is 0.70.
+- While the camera rests, a separate running average follows the
+  [official web viewer](https://derthomy.github.io/SteadySplats/viewer.html).
+  The first eight stationary frames contribute spatial estimates; later frames
+  contribute raw visibility samples, so the spatial warmup's influence fades.
+  The average uses a new-sample weight of `1/n` and blends into the temporal
+  result with weight `n/(n+8)`. Camera or content changes restart this average.
+  This convergence policy extends the paper's motion filter. LFS retains its
+  configurable refinement limit (16 by default; up to 1024), then idles.
 
 The visibility comparison uses LFS's native radial depth keys to preserve its
 alpha-blending order in expectation. Actual view-space depth is retained for
@@ -69,8 +78,19 @@ It is separate from the rotating presentation images. Scene changes, mode change
 model replacement, live training updates, and resize invalidate history. Basic
 stochastic accumulation also resets on camera changes; SteadySplats retains history
 for reprojection. Unsupported temporal projections use the current spatial result.
+Camera and overlay redraw flags preserve history, including the combined requests
+used by pivot animations. Overlay-only refreshes reuse the cached splat image;
+they do not signal a model or color change.
 An unchanged camera reads history at the same pixel, including background samples
-that have no finite depth. Moving views require a sampled surface for reprojection.
+that have no finite depth. Surface samples use their depth for reprojection.
+The stationary average contains only frames since the camera stopped; reprojected
+motion history does not enter it. During perspective camera motion, background
+draws reproject as directions at infinity: rotation affects the history lookup,
+while translation does not. They retain the same soft history rejection as surface
+draws, rather than forcing a reset whenever no fragment survives. Background
+reprojection when either view is orthographic bypasses temporal reuse because a
+direction at infinity has no finite orthographic image position.
+Each logical view owns its average independently.
 
 With private rendering scratch, an unchanged camera and scene reuse the last
 submitted projection and tile-count prefix. Deferred GPU wave counts are reused
@@ -83,11 +103,18 @@ wave path. The white-noise reference hoists pixel and frame hashes and shares
 primitive hashes while retaining exactly the same thresholds.
 Visibility samples, resampling, and the refinement limit remain unchanged.
 
+The resolve workgroup stages its samples and reuse weights in shared memory,
+including a one-pixel apron. Spatial gathering and the paper's 3 x 3 temporal
+moments read this cache. Values retain full precision, and history interpolation
+continues to use the full Catmull-Rom filter. This changes memory access without
+changing the estimator. Partial workgroups participate in the cache barrier
+before inactive lanes exit.
+
 Color history stores floating-point premultiplied color and transmittance before
 final composition and display conversion. It does not average 8-bit screenshots.
-SteadySplats adds 144 bytes per pixel for reuse and color history; basic stochastic
-adds 32 bytes per pixel. Buffers are allocated when used and released when the scene
-or renderer is released.
+SteadySplats adds 160 bytes per pixel for reuse, color history and the stationary
+average; basic stochastic adds 32 bytes per pixel. Buffers are allocated when used
+and released when the scene or renderer is released.
 Stochastic visibility also retains the radial depth keys through rasterization,
 which requires four extra bytes per Gaussian in the legacy scratch buffers.
 The immutable STBN volume adds 1 MiB per renderer/device, shared by all views,
@@ -102,7 +129,8 @@ The MCP `render_settings_get` and `render_settings_set` tools expose the same fi
 The focused test targets are `stochastic_tests` and `stochastic_viewport_tests`.
 They check GPU visibility probabilities, background mass, primitive permutation,
 wave partitioning, spatial weights against a double-precision oracle, deduplication,
-depth ties, reprojection, soft rejection, and viewport history ownership. GPU tests
+depth ties, reprojection, soft rejection, stationary convergence and reset behavior,
+and viewport history ownership. GPU tests
 also compare cached and uncached visibility, test period rotation, and verify
 spatial and temporal error reduction for a known constant-opacity surface.
 `tests/python/test_stochastic_noise.py` checks uniformity and thresholded spatial
