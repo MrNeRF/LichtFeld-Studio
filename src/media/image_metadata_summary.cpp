@@ -220,7 +220,11 @@ namespace lfs::media {
                 const bool latitude = tag.id == 2;
                 bool duplicate = false;
                 const auto* ref = unique(group, tag.id - 1, duplicate);
-                const auto direction = ref ? text(*ref) : std::nullopt;
+                auto direction = ref ? text(*ref) : std::nullopt;
+                // Some cameras omit the terminator on these one-character refs.
+                // Keep this tolerance local; all other ASCII fields stay strict.
+                if (!direction && ref && ref->type == 2 && ref->count == 1 && ref->bytes.size() == 1)
+                    direction = std::string_view(reinterpret_cast<const char*>(ref->bytes.data()), 1);
                 std::array<double, 3> dms{};
                 const double limit = latitude ? 90 : 180;
                 bool valid = tag.type == 5 && tag.count == 3;
@@ -278,7 +282,7 @@ namespace lfs::media {
                 const bool unknown_zone = zone && unknownText(*zone, TextKind::Offset);
                 const bool unknown_fraction = fraction && unknownText(*fraction, TextKind::Subseconds);
                 const bool leap = base && leapSecond(*base);
-                const bool valid = base && (civilTime(*base) || leap) && (!offset || unknown_zone || (zone && timeOffset(*zone))) &&
+                const bool valid = base && (civilTime(*base) || leap) &&
                                    (!subsec || unknown_fraction || (fraction && digits(*fraction)));
                 auto state = base && unknownText(*base, TextKind::CivilTime) ? MetadataValueState::Absent : !valid  ? MetadataValueState::Invalid
                                                                                                         : duplicate ? MetadataValueState::Unsupported
@@ -286,7 +290,7 @@ namespace lfs::media {
                                                                                                                     : MetadataValueState::Present;
                 if (!group.complete)
                     state = MetadataValueState::Unsupported;
-                if (unknown_zone)
+                if (unknown_zone || (offset && (!zone || !timeOffset(*zone))))
                     zone.reset();
                 if (unknown_fraction)
                     fraction.reset();
@@ -382,10 +386,16 @@ namespace lfs::media {
                     if (!tag)
                         continue;
                     auto& group = groups[{true, position->directory, {}}];
-                    const auto& kind = catalog.imageExif().original.tiff->directories[position->directory].kind;
-                    group.role = kind == "image" || kind == "subimage" ? Role::Image : kind == "exif" ? Role::Exif
-                                                                                   : kind == "gps"    ? Role::Gps
-                                                                                                      : Role::Other;
+                    const auto& directories = catalog.imageExif().original.tiff->directories;
+                    const auto& directory = directories[position->directory];
+                    const auto& primary = directories.front();
+                    if (primary.kind == "image" && !primary.parent) {
+                        if (position->directory == 0)
+                            group.role = Role::Image;
+                        else if (directory.parent == primary.offset)
+                            group.role = directory.kind == "exif" ? Role::Exif : directory.kind == "gps" ? Role::Gps
+                                                                                                         : Role::Other;
+                    }
                     group.tags.push_back({&reference, tag->id, tag->type, tag->count, false, 0, tag->unsigned_values, tag->floating_values, {}, tag->bytes});
                 }
             }
@@ -397,7 +407,7 @@ namespace lfs::media {
                 group.complete = catalog.indexStatus() == MetadataIndexStatus::Complete &&
                                  (!tiff || catalog.imageExif().original.status == core::image_codecs::MetadataStatus::Collected);
                 if (!tiff) {
-                    if (path.size() == 1) {
+                    if (path.size() == 1 && path.front() == 0) {
                         group.role = Role::Image;
                     } else {
                         auto parent_path = path;
@@ -443,13 +453,13 @@ namespace lfs::media {
                         constexpr double maximum = std::numeric_limits<double>::max();
                         switch (tag.id) {
                         case 0x829a: more = builder.scalar(tag, "exposure.duration", MetadataUnit::Seconds, 5, positive, maximum, ambiguous); break;
-                        case 0x829d: more = builder.scalar(tag, "lens.f_number", MetadataUnit::Unitless, 5, positive, maximum, ambiguous); break;
+                        case 0x829d: more = builder.scalar(tag, "lens.f_number", MetadataUnit::Unitless, 5, 0, maximum, ambiguous, 0); break;
                         case 0x8827: more = builder.scalar(tag, "sensitivity.photographic", MetadataUnit::Unitless, 3, 0, 65535, ambiguous, 0, 65535); break;
                         case 0x8830: more = builder.scalar(tag, "sensitivity.type", MetadataUnit::Unitless, 3, 0, 7, ambiguous, 0); break;
                         case 0x8831: more = builder.scalar(tag, "sensitivity.standard_output", MetadataUnit::Unitless, 4, 0, UINT32_MAX, ambiguous, 0); break;
                         case 0x8832: more = builder.scalar(tag, "sensitivity.recommended_exposure_index", MetadataUnit::Unitless, 4, 0, UINT32_MAX, ambiguous, 0); break;
                         case 0x8833: more = builder.scalar(tag, "sensitivity.iso_speed", MetadataUnit::Unitless, 4, 0, UINT32_MAX, ambiguous, 0); break;
-                        case 0x920a: more = builder.scalar(tag, "lens.focal_length", MetadataUnit::Millimetres, 5, positive, maximum, ambiguous); break;
+                        case 0x920a: more = builder.scalar(tag, "lens.focal_length", MetadataUnit::Millimetres, 5, 0, maximum, ambiguous, 0); break;
                         case 0xa405: more = builder.scalar(tag, "lens.focal_length_35mm", MetadataUnit::Millimetres, 3, 0, 65535, ambiguous, 0); break;
                         case 0xa433: more = builder.string(tag, "lens.make", ambiguous); break;
                         case 0xa434: more = builder.string(tag, "lens.model", ambiguous); break;

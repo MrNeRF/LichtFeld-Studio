@@ -198,7 +198,7 @@ stream summary until the metadata contracts stabilize.
 
 | Directory | Interpreted fields |
 |---|---|
-| Image IFD | Camera make/model, EXIF orientation code, modification civil time |
+| Primary image IFD | Camera make/model, EXIF orientation code, modification civil time |
 | Exif IFD | Exposure duration, f-number, photographic sensitivity and explicit extended sensitivity fields, focal length, 35 mm equivalent focal length, lens make/model, original/digitized civil time, subseconds and UTC offsets |
 | GPS IFD | Signed latitude/longitude, altitude with reference 0/1, map datum, UTC date and seconds of day |
 
@@ -209,9 +209,12 @@ ISO: its extended marker is unsupported in that fact, while separately present
 standard-output, recommended-exposure and ISO-speed fields retain their own
 semantics. Zero equivalent focal length is unknown, not a zero-length lens.
 
-EXIF groups use the envelope ordinal and full directory path; TIFF groups use
-the observed directory ordinal and reader-supplied kind. Thumbnail and other
-image IFDs remain distinct. Numeric tag IDs in unrelated directories are not
+EXIF groups use the envelope ordinal and full directory path; only IFD0 and its
+direct Exif/GPS children supply the image summary. TIFF uses the first main image
+directory and its own direct Exif/GPS children, identified by the reader-supplied
+kind and parent offset. Thumbnails, later pages, SubIFDs and their metadata remain
+in the raw catalog and do not produce primary-image facts. Numeric tag IDs in
+unrelated directories are not
 interpreted as GPS or Exif fields. A limited catalog cannot borrow missing
 operands from retained originals outside its reference index.
 
@@ -242,7 +245,11 @@ Original and digitized dates are validated as civil dates and assembled with
 subseconds and an offset only from the same Exif directory. Fractional digits
 are retained without conversion through floating point. An absent or explicitly
 unknown offset yields a local civil timestamp with `Timezone unspecified`, not
-UTC. Modification time remains a civil field; it is not joined across IFDs.
+UTC. A malformed offset also leaves a valid civil date and subseconds usable as
+local time; its separate offset fact remains Invalid and its original record is
+retained among the compound inputs. Duplicate offsets, incomplete directories,
+invalid dates and invalid subseconds do not acquire this fallback. Modification
+time remains a civil field; it is not joined across IFDs.
 Partial dates, leap-second values and non-ASCII text are not normalized into
 valid timestamps. Unknown, invalid, ambiguous and unsupported observations are
 explicit; unrecognized tags remain available in the original catalog.
@@ -264,6 +271,11 @@ are formatting padding and are omitted from the significant fractional digits.
 Unknown dates accept all-space and colon-preserving blank forms; subsecond
 padding follows [CIPA Exif](https://www.cipa.jp/std/documents/e/DC-008-2012_E.pdf).
 Unknown offsets are retained as unknown, including colon-preserving blanks.
+Zero f-number and focal length mean an unknown manual-lens value, with the
+original rational retained; a zero denominator remains Invalid. The GPS
+hemisphere projection accepts exactly one ASCII N/S or E/W byte without a NUL
+terminator. This narrow compatibility case does not relax other ASCII fields
+or override provider diagnostics.
 Offset validation checks numeric hour/minute syntax, not membership in a
 geographic timezone registry. Leap-second representations are retained as
 unsupported interpretations, not asserted to be corrupt. The internal summary

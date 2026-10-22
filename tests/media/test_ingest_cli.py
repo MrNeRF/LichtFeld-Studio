@@ -200,6 +200,7 @@ class IngestCLI(unittest.TestCase):
                 self.assertEqual(summary["scope"], "static_image_properties")
                 self.assertFalse(summary["limited"])
                 facts = {item["semantic"]: item for item in summary["facts"]}
+                self.assertEqual(len(facts), len(summary["facts"]), "unexpected duplicate semantic in a single-image fixture")
                 for semantic in ("camera.make", "camera.model", "lens.model", "lens.focal_length", "gps.latitude", "gps.longitude", "gps.altitude_sea_level", "time.original"):
                     self.assertIn(semantic, facts, result)
                     self.assertEqual(facts[semantic]["state"], "present", facts[semantic])
@@ -220,6 +221,59 @@ class IngestCLI(unittest.TestCase):
                         self.assertIn(operand, references)
                 self.assertEqual(path.read_bytes(), before)
                 self.assertEqual(path.stat().st_mtime_ns, modified)
+
+    def test_camera_metadata_review_real_carriers(self):
+        path = self.root / "Camera review é 日本語.bin"
+        carriers = [(carrier, little, False) for carrier in ("jpeg", "png", "tiff") for little in (True, False)]
+        carriers += [("tiff", little, True) for little in (True, False)]
+        for carrier, little, big in carriers:
+            with self.subTest(carrier=carrier, little=little, big=big):
+                source_exif_fixture.write_camera_metadata(path, carrier=carrier, little=little, big=big)
+                baseline, _ = self.invoke("source-metadata", path)
+                source_exif_fixture.write_camera_metadata(path, carrier=carrier, little=little, big=big, thumbnail=True, unknown_optics=True)
+                original, modified = path.read_bytes(), path.stat().st_mtime_ns
+                result, _ = self.invoke("source-metadata", path)
+                raw, _ = self.invoke("source-exif", path)
+                self.assertEqual(result["metadata"]["image_exif"], raw["exif"])
+                self.assertEqual(raw["exif"]["status"], "collected", result)
+                self.assertIn(b"Thumbnail Camera", original)
+                facts = result["summary"]["facts"]
+                by_semantic = {item["semantic"]: item for item in facts}
+                self.assertEqual(len(by_semantic), len(facts))
+                self.assertEqual(set(by_semantic), {item["semantic"] for item in baseline["summary"]["facts"]})
+                for semantic in ("camera.make", "camera.model", "orientation.exif", "time.modified.civil"):
+                    self.assertEqual(by_semantic[semantic]["value"], next(item["value"] for item in baseline["summary"]["facts"] if item["semantic"] == semantic))
+                    self.assertFalse(by_semantic[semantic]["ambiguous"])
+                for semantic in ("lens.f_number", "lens.focal_length"):
+                    self.assertEqual(by_semantic[semantic]["state"], "absent")
+                    self.assertEqual(by_semantic[semantic]["diagnostic"], "Source declares unknown value")
+                for item in facts:
+                    if carrier == "tiff":
+                        directory = raw["exif"]["tiff"]["directories"][item["source"]["directory"]]
+                        primary = raw["exif"]["tiff"]["directories"][0]
+                        self.assertTrue(directory == primary or
+                                        (directory["parent"] == primary["offset"] and directory["kind"] in ("exif", "gps")))
+                    else:
+                        entry = raw["exif"]["blocks"][item["source"]["block"]]["interpretation"]["entries"][item["source"]["entry"]]
+                        self.assertEqual(entry["directory_path"][0], 0)
+                self.assertEqual(path.read_bytes(), original)
+                self.assertEqual(path.stat().st_mtime_ns, modified)
+        # Exercise malformed ASCII through EXIF parsing, without suppressing
+        # libtiff provider diagnostics for nonconforming TIFF fields.
+        for carrier in ("jpeg", "png"):
+            for little in (True, False):
+                with self.subTest(carrier=carrier, little=little, unterminated=True):
+                    source_exif_fixture.write_camera_metadata(path, carrier=carrier, little=little,
+                                                              unterminated_refs=True, invalid_offset=True)
+                    result, _ = self.invoke("source-metadata", path)
+                    self.assertEqual(result["metadata"]["image_exif"]["status"], "collected")
+                    facts = {item["semantic"]: item for item in result["summary"]["facts"]}
+                    self.assertEqual(facts["gps.latitude"]["value"], -45.5)
+                    self.assertEqual(facts["gps.longitude"]["value"], -73.25)
+                    self.assertEqual(facts["time.original.offset"]["state"], "invalid")
+                    self.assertEqual(facts["time.original"]["state"], "present")
+                    self.assertEqual(facts["time.original"]["value"], "2024-02-29T12:34:56.000123")
+                    self.assertEqual(facts["time.original"]["diagnostic"], "Timezone unspecified")
 
     def test_camera_metadata_summary_retains_tiff_provider_warnings(self):
         path = self.root / "TIFF padded warning é 日本語.bin"

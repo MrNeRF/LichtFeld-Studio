@@ -24,7 +24,8 @@ def write_png(path, *, post_idat=False, duplicate=False, idat_chunks=1, damaged_
     return tiff
 
 
-def write_camera_metadata(path, *, carrier="png", little=True, big=False, padded=False, nul_padding=None):
+def write_camera_metadata(path, *, carrier="png", little=True, big=False, padded=False, nul_padding=None,
+                          thumbnail=False, unknown_optics=False, unterminated_refs=False, invalid_offset=False):
     """Independent byte-level camera/GPS fixture, including nested IFDs."""
     if big and carrier != "tiff":
         raise ValueError("EXIF envelopes use classic TIFF")
@@ -43,6 +44,7 @@ def write_camera_metadata(path, *, carrier="png", little=True, big=False, padded
          (272, 2, 8, b"Model A\0"), (273, 16 if big else 4, 1, b""),
          (274, 3, 1, short(6)), (277, 3, 1, short(3)),
          (278, 4, 1, long(1)), (279, 4, 1, long(3)),
+         (0x0132, 2, 20, b"2024:02:29 12:34:56\0"),
          (0x8769, 18 if big else 4, 1, b""),
          (0x8825, 18 if big else 4, 1, b"")],
         [(0x829a, 5, 1, rational(1, 125)),
@@ -61,6 +63,22 @@ def write_camera_metadata(path, *, carrier="png", little=True, big=False, padded
          (5, 1, 1, b"\x01"), (6, 5, 1, rational(125, 10)),
          (7, 5, 3, rational(10, 1) + rational(4, 1) + rational(1, 2)),
          (18, 2, 7, b"WGS-84\0"), (29, 2, 11, b"2024:02:29\0")]]
+    if unknown_optics:
+        directories[1] = [(id_, type_, count, rational(0, 10) if id_ in (0x829d, 0x920a) else value)
+                          for id_, type_, count, value in directories[1]]
+    if unterminated_refs:
+        directories[2] = [(id_, type_, 1, value[:1]) if id_ in (1, 3) else (id_, type_, count, value)
+                          for id_, type_, count, value in directories[2]]
+    if invalid_offset:
+        directories[1] = [(id_, type_, 6, value[:-1]) if id_ == 0x9011 else (id_, type_, count, value)
+                          for id_, type_, count, value in directories[1]]
+    if thumbnail:
+        secondary = [(id_, type_, count, value) for id_, type_, count, value in directories[0]
+                     if id_ not in (271, 272, 274, 0x0132, 0x8769, 0x8825)]
+        secondary += [(254, 4, 1, long(1)), (271, 2, 17, b"Thumbnail Camera\0"),
+                      (272, 2, 16, b"Thumbnail Model\0"), (274, 3, 1, short(1)),
+                      (0x0132, 2, 20, b"2000:01:01 00:00:00\0")]
+        directories.append(secondary)
     if padded:
         for index, tags in enumerate(directories):
             for ordinal, (id_, type_, count, value) in enumerate(tags):
@@ -78,14 +96,17 @@ def write_camera_metadata(path, *, carrier="png", little=True, big=False, padded
         next_offset += count_width + entry_width * len(tags) + slot
     payload = bytearray()
     tables = bytearray()
-    pixel_slot = None
+    pixel_slots = []
     for directory, tags in enumerate(directories):
         tables.extend(len(tags).to_bytes(count_width, byte_order))
         for id_, type_, count, value in sorted(tags):
             if directory == 0 and id_ in (0x8769, 0x8825):
                 value = integer(offsets[1 if id_ == 0x8769 else 2])
-            if directory == 0 and id_ == 273:
+            if id_ == 273:
                 pixel_slot = header_size + len(tables) + (12 if big else 8)
+                # All image directories refer to the same tiny RGB strip.
+                # Record each slot for filling after table/payload construction.
+                pixel_slots.append(pixel_slot)
             tables.extend(struct.pack(order + "HH" + ("Q" if big else "I"), id_, type_, count))
             if len(value) > slot:
                 payload.extend(bytes((-(next_offset + len(payload))) % (8 if big else 2)))
@@ -93,11 +114,12 @@ def write_camera_metadata(path, *, carrier="png", little=True, big=False, padded
                 payload.extend(value)
             else:
                 tables.extend(value.ljust(slot, b"\0"))
-        tables.extend(bytes(slot))
+        tables.extend(integer(offsets[3]) if directory == 0 and thumbnail else bytes(slot))
     header = (b"II" if little else b"MM") + short(43 if big else 42)
     header += short(8) + short(0) + integer(header_size) if big else integer(header_size)
     data = bytearray(header + tables + payload)
-    data[pixel_slot:pixel_slot + slot] = integer(len(data))
+    for pixel_slot in pixel_slots:
+        data[pixel_slot:pixel_slot + slot] = integer(len(data))
     data.extend(b"\x14\x50\xa0")
     if carrier == "tiff":
         path.write_bytes(data)

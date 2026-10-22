@@ -91,6 +91,23 @@ namespace {
         decoy.count = 3;
         decoy.rational_values = {{1, 1}, {2, 1}, {3, 1}};
         ascii(0x010f, {1}, "Thumbnail Camera");
+        ascii(0x0110, {0}, "Primary Model");
+        ascii(0x0132, {0}, "2024:02:29 12:34:56");
+        auto& orientation = add(0x0112, 3, {0});
+        orientation.count = 1;
+        orientation.unsigned_values = {6};
+        ascii(0x0110, {1}, "Thumbnail Model");
+        ascii(0x0132, {1}, "2000:01:01 00:00:00");
+        auto& thumbnail_orientation = add(0x0112, 3, {1});
+        thumbnail_orientation.count = 1;
+        thumbnail_orientation.unsigned_values = {1};
+        auto& thumbnail_exif = add(0x8769, 4, {1});
+        thumbnail_exif.directory = true;
+        thumbnail_exif.count = 1;
+        const auto thumbnail_exif_ordinal = thumbnail_exif.entry_index;
+        auto& thumbnail_focal = add(0x920a, 5, {1, thumbnail_exif_ordinal});
+        thumbnail_focal.count = 1;
+        thumbnail_focal.rational_values = {{99, 1}};
         return image;
     }
     const MetadataFact& fact(const MetadataSummary& summary, std::string_view semantic) {
@@ -105,6 +122,15 @@ namespace {
         const auto normalized = summarizeImageMetadata(*original);
         require(bool(normalized) && !normalized->limited && normalized->scope == MetadataSummaryScope::ImageProperties, "complete image summary");
         require(std::get<std::string>(fact(*normalized, "camera.make").value) == "Test Camera", "camera ASCII preserved");
+        for (const auto semantic : {"camera.make", "camera.model", "orientation.exif", "time.modified.civil", "lens.focal_length"})
+            require(std::count_if(normalized->facts.begin(), normalized->facts.end(), [&](const auto& item) { return item.semantic == semantic; }) == 1,
+                    "secondary image and its EXIF fields cannot become primary image facts");
+        require(std::get<int64_t>(fact(*normalized, "orientation.exif").value) == 6, "primary orientation is not replaced by thumbnail orientation");
+        for (const auto& item : normalized->facts) {
+            const auto* ref = std::get_if<ExifEntryReference>(&item.source.reference);
+            const auto* entry = ref ? original->exifEntry(*ref) : nullptr;
+            require(entry && entry->directory_path.front() == 0, "every image summary fact belongs to IFD0 or its direct metadata children");
+        }
         require(std::get<ExifRational>(fact(*normalized, "lens.focal_length").value).denominator == 10 &&
                     fact(*normalized, "lens.focal_length").unit == MetadataUnit::Millimetres,
                 "exact EXIF focal rational and units");
@@ -135,6 +161,76 @@ namespace {
             return *found;
         };
         auto changed = image;
+        for (const auto id : {uint16_t(0x920a), uint16_t(0x829d)}) {
+            changed = image;
+            auto& optic = edit(changed, 0x920a);
+            optic.id = id;
+            optic.rational_values = {{0, 10}};
+            const auto semantic = id == 0x920a ? "lens.focal_length" : "lens.f_number";
+            const auto unknown = summarize(changed);
+            require(fact(unknown, semantic).state == MetadataValueState::Absent &&
+                        fact(unknown, semantic).diagnostic == "Source declares unknown value" &&
+                        std::get<ExifRational>(fact(unknown, semantic).value).denominator == 10,
+                    "zero manual-lens optics are unknown and retain their exact rational");
+            optic.rational_values = {{0, 0}};
+            require(fact(summarize(changed), semantic).state == MetadataValueState::Invalid, "zero denominator never becomes unknown optics");
+            optic.type = 4;
+            optic.rational_values.clear();
+            optic.unsigned_values = {0};
+            require(fact(summarize(changed), semantic).state == MetadataValueState::Invalid, "wrong-type zero is not interpreted as an unknown optical rational");
+        }
+        for (const auto id : {uint16_t(1), uint16_t(3)}) {
+            for (const auto direction : id == 1 ? std::string_view("NS") : std::string_view("EW")) {
+                changed = image;
+                auto& ref = edit(changed, id);
+                ref.bytes = {static_cast<uint8_t>(direction)};
+                ref.count = 1;
+                const auto accepted = summarize(changed);
+                const double magnitude = id == 1 ? 45.5 : 73.25;
+                require(std::get<double>(fact(accepted, id == 1 ? "gps.latitude" : "gps.longitude").value) ==
+                            (direction == 'S' || direction == 'W' ? -magnitude : magnitude),
+                        "one-byte unterminated ASCII hemisphere reference is interpreted narrowly");
+            }
+        }
+        for (const auto invalid_ref : {std::string("NN"), std::string("n"), std::string("E"), std::string(" "), std::string("\xff")}) {
+            changed = image;
+            auto& ref = edit(changed, 1);
+            ref.bytes.assign(invalid_ref.begin(), invalid_ref.end());
+            ref.count = static_cast<uint32_t>(ref.bytes.size());
+            require(fact(summarize(changed), "gps.latitude").state == MetadataValueState::Invalid, "hemisphere tolerance does not accept malformed values or multiple characters");
+        }
+        for (const auto wrong_type : {false, true}) {
+            changed = image;
+            auto& ref = edit(changed, 1);
+            ref.bytes = {'N'};
+            ref.count = wrong_type ? 1 : 2;
+            ref.type = wrong_type ? 1 : 2;
+            require(fact(summarize(changed), "gps.latitude").state == MetadataValueState::Invalid, "one-byte reference requires both ASCII type and matching declared count");
+        }
+        changed = image;
+        edit(changed, 0x010f).bytes.pop_back();
+        --edit(changed, 0x010f).count;
+        require(fact(summarize(changed), "camera.make").state == MetadataValueState::Invalid, "unterminated ASCII tolerance is not generalized to camera text");
+        changed = image;
+        edit(changed, 0x9011).bytes.pop_back();
+        --edit(changed, 0x9011).count;
+        const auto invalid_zone = summarize(changed);
+        require(fact(invalid_zone, "time.original.offset").state == MetadataValueState::Invalid &&
+                    fact(invalid_zone, "time.original").state == MetadataValueState::Present &&
+                    std::get<std::string>(fact(invalid_zone, "time.original").value) == "2024-02-29T12:34:56.000123456789" &&
+                    fact(invalid_zone, "time.original").diagnostic == "Timezone unspecified" &&
+                    fact(invalid_zone, "time.original").inputs.size() == 2,
+                "malformed offset retains a valid local timestamp and the original component provenance");
+        edit(changed, 0x9003).id = 0x9004;
+        edit(changed, 0x9011).id = 0x9012;
+        edit(changed, 0x9291).id = 0x9292;
+        const auto digitized_zone = summarize(changed);
+        require(fact(digitized_zone, "time.digitized.offset").state == MetadataValueState::Invalid &&
+                    fact(digitized_zone, "time.digitized").state == MetadataValueState::Present &&
+                    std::get<std::string>(fact(digitized_zone, "time.digitized").value) == "2024-02-29T12:34:56.000123456789" &&
+                    fact(digitized_zone, "time.digitized").diagnostic == "Timezone unspecified",
+                "digitized civil time uses the same conservative invalid-offset fallback");
+        changed = image;
         auto& padded_make = edit(changed, 0x010f);
         padded_make.bytes.resize(32, 0);
         padded_make.count = 32;
@@ -221,7 +317,10 @@ namespace {
         }
         changed = image;
         edit(changed, 0x9011).bytes = {'+', '2', '4', ':', '0', '1', 0};
-        require(fact(summarize(changed), "time.original").state == MetadataValueState::Invalid, "offset range");
+        require(fact(summarize(changed), "time.original").state == MetadataValueState::Present &&
+                    fact(summarize(changed), "time.original").diagnostic == "Timezone unspecified" &&
+                    fact(summarize(changed), "time.original.offset").state == MetadataValueState::Invalid,
+                "invalid offset range does not invalidate usable local date and subseconds");
         edit(changed, 0x9011).bytes = {'+', '1', '4', ':', '0', '1', 0};
         require(fact(summarize(changed), "time.original").state == MetadataValueState::Present, "offset validation does not invent a geographic timezone bound");
         changed = image;
@@ -300,6 +399,11 @@ namespace {
         tiff.original.tiff.emplace();
         for (const auto kind : {"image", "exif", "gps"})
             tiff.original.tiff->directories.push_back({0, {}, kind, {}});
+        tiff.original.tiff->directories[0].offset = 8;
+        for (std::size_t index = 1; index < 3; ++index) {
+            tiff.original.tiff->directories[index].offset = 128 * index;
+            tiff.original.tiff->directories[index].parent = 8;
+        }
         for (const auto& entry : image.interpretations[0].entries) {
             if (entry.directory || entry.directory_path[0] != 0)
                 continue;
@@ -314,11 +418,33 @@ namespace {
                 tag.floating_values.push_back(double(ratio.numerator) / double(ratio.denominator));
             tiff.original.tiff->directories[directory].tags.push_back(std::move(tag));
         }
+        const auto primary_directories = tiff.original.tiff->directories;
+        tiff.original.tiff->directories.push_back({512, {}, "image", primary_directories[0].tags});
+        tiff.original.tiff->directories.push_back({768, 8, "subimage", primary_directories[0].tags});
+        tiff.original.tiff->directories.push_back({1024, 512, "exif", primary_directories[1].tags});
+        tiff.original.tiff->directories.push_back({1280, 768, "gps", primary_directories[2].tags});
         const auto decoded_tiff = summarize(tiff);
+        require(decoded_tiff.facts.size() == normalized->facts.size(), "TIFF secondary pages/subimages and their metadata cannot add primary facts");
+        for (const auto& item : decoded_tiff.facts) {
+            const auto* ref = std::get_if<TiffTagReference>(&item.source.reference);
+            require(ref && ref->directory < 3, "all TIFF facts retain provenance in the primary image or its own metadata children");
+        }
         require(std::get<double>(fact(decoded_tiff, "lens.focal_length").value) == 35 &&
                     std::get<double>(fact(decoded_tiff, "gps.latitude").value) == -45.5 &&
                     std::get<std::string>(fact(decoded_tiff, "time.original").value) == std::get<std::string>(time.value),
                 "TIFF decoded values agree without fabricated rational precision");
+        auto unknown_tiff = tiff;
+        auto& optics = unknown_tiff.original.tiff->directories[1].tags;
+        const auto focal = std::find_if(optics.begin(), optics.end(), [](const auto& tag) { return tag.id == 0x920a; });
+        require(focal != optics.end(), "TIFF focal fixture exists");
+        focal->floating_values = {0};
+        auto f_number = *focal;
+        f_number.id = 0x829d;
+        optics.push_back(std::move(f_number));
+        const auto unknown_tiff_summary = summarize(unknown_tiff);
+        require(fact(unknown_tiff_summary, "lens.focal_length").state == MetadataValueState::Absent &&
+                    fact(unknown_tiff_summary, "lens.f_number").state == MetadataValueState::Absent,
+                "libtiff floating zero optics have the same unknown semantics as exact EXIF rationals");
         tiff.original.status = lfs::core::image_codecs::MetadataStatus::Limited;
         const auto partial_tiff = summarize(tiff);
         require(partial_tiff.limited && fact(partial_tiff, "gps.latitude").state == MetadataValueState::Unsupported &&
