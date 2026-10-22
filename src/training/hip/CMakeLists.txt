@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/HipRasterKernels.cmake")
 lfs_hip_raster_objects(_raster_include _raster_objects)
-option(LFS_HIP_FAST_RUNTIME "Compile the experimental native HIP FastGS path" OFF)
+option(LFS_HIP_FAST_RUNTIME "Compile the native HIP FastGS path" ON)
 if(LFS_HIP_FAST_RUNTIME)
     include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/HipFastKernels.cmake")
     lfs_hip_fast_objects(_fast_include _fast_objects)

@@ -59,8 +59,8 @@ def forward(text: str) -> str:
             };
             static const bool compact_keys = [] {
                 const char* value = std::getenv("LFS_HIP_FAST_COMPACT_TILE_KEYS");
-                const bool enabled = value && std::string_view(value) == "1";
-                if (enabled) std::fprintf(stderr, "[info] HIP experimental compact stable tile keys enabled\\n");
+                const bool enabled = !value || std::string_view(value) != "0";
+                if (enabled) std::fprintf(stderr, "[info] HIP compact stable tile keys enabled\\n");
                 return enabled;
             }();
             if (compact_keys && hip_depth_order.indices)

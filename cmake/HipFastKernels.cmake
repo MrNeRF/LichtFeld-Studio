@@ -2,42 +2,76 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 function(lfs_hip_fast_objects include_output objects_output)
-    option(LFS_HIP_FAST_NATIVE_WAVE "Use native full-wave collectives in private wave32 FastGS" OFF)
-    option(LFS_HIP_FAST_APPROX_FUNCTIONS "Test selective approximate math in private HIP FastGS" OFF)
-    option(LFS_HIP_FAST_DEVICE_ATOMICS "Use hardware FP32 atomics on HIP-owned coarse-grained gradient buffers" OFF)
-    option(LFS_HIP_FAST_WAVE_REDUCE "Use AMD device-library full-wave FP32 reductions" OFF)
-    option(LFS_HIP_FAST_INTRINSIC_MATH "Use selected FP32 exponential and bounded division intrinsics" OFF)
-    option(LFS_HIP_FAST_SCATTER_REDUCE "Distribute reduced gradient fields across a HIP wave" OFF)
-    option(LFS_HIP_FAST_PACKED_GRADIENTS "Use packed 16-field screen-space gradients in private HIP FastGS" OFF)
-    option(LFS_HIP_FAST_WARP_STAGING "Stage backward batches independently in native HIP wave32 registers" OFF)
-    option(LFS_HIP_FAST_ADJACENT_PIXELS "Pair adjacent backward subtiles in private HIP wave staging" OFF)
-    option(LFS_HIP_FAST_UNIFORM_BROADCAST "Read uniform staged HIP wave payloads through scalar lanes" OFF)
+    set(_validated_default OFF)
+    if(LFS_HIP_ARCHITECTURE STREQUAL "gfx1150")
+        set(_validated_default ON)
+    endif()
+    option(LFS_HIP_VALIDATED_TUNING "Enable the validated gfx1150 HIP kernel profile" ${_validated_default})
+    if(LFS_HIP_VALIDATED_TUNING AND NOT LFS_HIP_ARCHITECTURE STREQUAL "gfx1150")
+        message(FATAL_ERROR "The validated HIP tuning profile currently targets gfx1150; use LFS_HIP_VALIDATED_TUNING=OFF for other architectures")
+    endif()
+    option(LFS_HIP_FAST_NATIVE_WAVE "Use native full-wave collectives in private wave32 FastGS" ${LFS_HIP_VALIDATED_TUNING})
+    option(LFS_HIP_FAST_APPROX_FUNCTIONS "Test selective approximate math in private HIP FastGS" ${LFS_HIP_VALIDATED_TUNING})
+    option(LFS_HIP_FAST_DEVICE_ATOMICS "Use hardware FP32 atomics on HIP-owned coarse-grained gradient buffers" ${LFS_HIP_VALIDATED_TUNING})
+    option(LFS_HIP_FAST_WAVE_REDUCE "Use AMD device-library full-wave FP32 reductions" ${LFS_HIP_VALIDATED_TUNING})
+    option(LFS_HIP_FAST_INTRINSIC_MATH "Use selected FP32 exponential and bounded division intrinsics" ${LFS_HIP_VALIDATED_TUNING})
+    option(LFS_HIP_FAST_SCATTER_REDUCE "Distribute reduced gradient fields across a HIP wave" ${LFS_HIP_VALIDATED_TUNING})
+    option(LFS_HIP_FAST_PACKED_GRADIENTS "Use packed 16-field screen-space gradients in private HIP FastGS" ${LFS_HIP_VALIDATED_TUNING})
+    option(LFS_HIP_FAST_WARP_STAGING "Stage backward batches independently in native HIP wave32 registers" ${LFS_HIP_VALIDATED_TUNING})
+    option(LFS_HIP_FAST_ADJACENT_PIXELS "Pair adjacent backward subtiles in private HIP wave staging" ${LFS_HIP_VALIDATED_TUNING})
+    option(LFS_HIP_FAST_UNIFORM_BROADCAST "Read uniform staged HIP wave payloads through scalar lanes" ${LFS_HIP_VALIDATED_TUNING})
+    option(LFS_HIP_FAST_FORWARD_EIGHT_PIXELS "Use single-wave eight-pixel RGB forward in private HIP FastGS" ${LFS_HIP_VALIDATED_TUNING})
+    option(LFS_HIP_FAST_BUTTERFLY_FIELDS "Use field-distributed reductions in private HIP RGB backward" ${LFS_HIP_VALIDATED_TUNING})
+    option(LFS_HIP_FAST_EIGHT_PIXELS "Use a single-wave eight-pixel RGB backward in private HIP FastGS" ${LFS_HIP_VALIDATED_TUNING})
+    option(LFS_HIP_FAST_FOUR_PIXELS "Use guarded four-pixel RGB backward in private HIP FastGS" ${LFS_HIP_VALIDATED_TUNING})
+    option(LFS_HIP_FAST_FORWARD_ADJACENT "Pair adjacent forward subtiles in private HIP FastGS" ${LFS_HIP_VALIDATED_TUNING})
+    option(LFS_HIP_FAST_RGB_SPECIALIZATION "Specialize HIP backward when depth and edge outputs are absent" ${LFS_HIP_VALIDATED_TUNING})
+    option(LFS_HIP_FAST_FACTOR_ADJOINT "Reuse the color adjoint in private HIP FastGS backward" ${LFS_HIP_VALIDATED_TUNING})
+    option(LFS_HIP_FAST_RADIX_TUNING "Use experimental gfx1150-specific FastGS radix configuration" ${LFS_HIP_VALIDATED_TUNING})
+    # Generic mode is authoritative even when a reused cache contains tuned
+    # switches from an earlier build. Keep cache values for expert diagnostics.
+    if(NOT LFS_HIP_VALIDATED_TUNING)
+        foreach(_option IN ITEMS
+            LFS_HIP_FAST_NATIVE_WAVE
+            LFS_HIP_FAST_APPROX_FUNCTIONS
+            LFS_HIP_FAST_DEVICE_ATOMICS
+            LFS_HIP_FAST_WAVE_REDUCE
+            LFS_HIP_FAST_INTRINSIC_MATH
+            LFS_HIP_FAST_SCATTER_REDUCE
+            LFS_HIP_FAST_PACKED_GRADIENTS
+            LFS_HIP_FAST_WARP_STAGING
+            LFS_HIP_FAST_ADJACENT_PIXELS
+            LFS_HIP_FAST_UNIFORM_BROADCAST
+            LFS_HIP_FAST_FORWARD_EIGHT_PIXELS
+            LFS_HIP_FAST_BUTTERFLY_FIELDS
+            LFS_HIP_FAST_EIGHT_PIXELS
+            LFS_HIP_FAST_FOUR_PIXELS
+            LFS_HIP_FAST_FORWARD_ADJACENT
+            LFS_HIP_FAST_RGB_SPECIALIZATION
+            LFS_HIP_FAST_FACTOR_ADJOINT
+            LFS_HIP_FAST_RADIX_TUNING
+        )
+            set(${_option} OFF)
+        endforeach()
+    endif()
     if(LFS_HIP_FAST_UNIFORM_BROADCAST AND (NOT LFS_HIP_FAST_WARP_STAGING OR NOT LFS_HIP_FAST_NATIVE_WAVE))
         message(FATAL_ERROR "HIP uniform payload reads require native wave staging")
     endif()
-    option(LFS_HIP_FAST_FORWARD_EIGHT_PIXELS "Use single-wave eight-pixel RGB forward in private HIP FastGS" OFF)
     if(LFS_HIP_FAST_FORWARD_EIGHT_PIXELS AND NOT LFS_HIP_FAST_UNIFORM_BROADCAST)
         message(FATAL_ERROR "HIP single-wave forward requires uniform native payload reads")
     endif()
-    option(LFS_HIP_FAST_BUTTERFLY_FIELDS "Use field-distributed reductions in private HIP RGB backward" OFF)
     if(LFS_HIP_FAST_BUTTERFLY_FIELDS AND (NOT LFS_HIP_FAST_EIGHT_PIXELS OR NOT LFS_HIP_FAST_SCATTER_REDUCE))
         message(FATAL_ERROR "HIP butterfly fields require the scattered eight-pixel backward")
     endif()
-    option(LFS_HIP_FAST_EIGHT_PIXELS "Use a single-wave eight-pixel RGB backward in private HIP FastGS" OFF)
-    option(LFS_HIP_FAST_FOUR_PIXELS "Use guarded four-pixel RGB backward in private HIP FastGS" OFF)
     if(LFS_HIP_FAST_FOUR_PIXELS AND (NOT LFS_HIP_FAST_ADJACENT_PIXELS OR NOT LFS_HIP_FAST_SCATTER_REDUCE))
         message(FATAL_ERROR "HIP four-pixel backward requires adjacent wave staging and scattered reductions")
     endif()
     if(LFS_HIP_FAST_EIGHT_PIXELS AND NOT LFS_HIP_FAST_FOUR_PIXELS)
         message(FATAL_ERROR "HIP eight-pixel backward requires the four-pixel clipping layout")
     endif()
-    option(LFS_HIP_FAST_FORWARD_ADJACENT "Pair adjacent forward subtiles in private HIP FastGS" OFF)
     if(LFS_HIP_FAST_ADJACENT_PIXELS AND NOT LFS_HIP_FAST_WARP_STAGING)
         message(FATAL_ERROR "HIP adjacent backward subtiles require private wave staging")
     endif()
-    option(LFS_HIP_FAST_RGB_SPECIALIZATION "Specialize HIP backward when depth and edge outputs are absent" OFF)
-    option(LFS_HIP_FAST_FACTOR_ADJOINT "Reuse the color adjoint in private HIP FastGS backward" OFF)
-    option(LFS_HIP_FAST_RADIX_TUNING "Use experimental gfx1150-specific FastGS radix configuration" OFF)
     if(LFS_HIP_FAST_RADIX_TUNING AND NOT LFS_HIP_ARCHITECTURE STREQUAL "gfx1150")
         message(FATAL_ERROR "HIP Fast radix tuning is currently validated only for gfx1150")
     endif()

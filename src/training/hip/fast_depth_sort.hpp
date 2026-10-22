@@ -34,9 +34,9 @@ inline LfsHipDepthOrder lfs_hip_prepare_depth_order(const std::function<char*(si
     bool allowed, bool* attempted) {
     static const bool enabled = [] {
         const char* value = std::getenv("LFS_HIP_FAST_DEPTH_PRESORT");
-        const bool requested = value && std::string_view(value) == "1";
+        const bool requested = !value || std::string_view(value) != "0";
         if (requested)
-            std::fprintf(stderr, "[info] HIP experimental stable visible-depth presort enabled\n");
+            std::fprintf(stderr, "[info] HIP stable visible-depth presort enabled\n");
         return requested;
     }();
     if (!enabled || !allowed || n < 32768)
