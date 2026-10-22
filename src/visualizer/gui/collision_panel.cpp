@@ -154,6 +154,8 @@ namespace lfs::vis::gui {
         setValue("detail", std::to_string(settings_.voxel_size / settings_.units_per_meter));
         setValue("overlay-opacity", std::to_string(display_.opacity));
         setValue("cutaway", std::to_string(display_.slice));
+        for (auto [id, n] : {std::pair{"overlay-opacity-value", display_.opacity}, {"cutaway-value", display_.slice}})
+            document_->GetElementById(id)->SetInnerRML(std::format("{:.0f}%", n * 100));
         setValue("surface-stride", std::to_string(display_.surface_stride));
         setValue("preset", std::to_string(int(settings_.preset)));
         setValue("shape", std::to_string(int(display_.surface_ready ? display_.surface_shape : settings_.shape)));
@@ -240,16 +242,27 @@ namespace lfs::vis::gui {
             writeInputs();
         }
         adoptResult();
-        if (!busy_ && !target_.is_nil() && !scene_->getNodeByUuid(target_)) {
-            target_ = {};
-            document_->GetElementById("collision-target")->SetInnerRML(Rml::StringUtilities::EncodeRml(LOC("collision.new_node")));
-            status(LOC("collision.initial_status"));
+        if (!busy_ && !target_.is_nil()) {
+            auto* node = scene_->getNodeByUuid(target_);
+            if (!node) {
+                target_ = {};
+                last_stats_.clear();
+                document_->GetElementById("collision-target")->SetInnerRML(Rml::StringUtilities::EncodeRml(LOC("collision.new_node")));
+                status(LOC("collision.initial_status"));
+            } else if (node->collision && counted_volume_.lock() != node->collision) {
+                // A project reload can restore the same UUID with a different
+                // payload and display state. UUID equality is not a cache key.
+                last_stats_.clear();
+                loadSettings(*node);
+            }
         }
         if (auto* manager = services().sceneOrNull(); manager && !busy_) {
             auto ids = manager->getSelectedNodeIds();
             if (ids.size() == 1)
-                if (auto* node = scene_->getNodeById(ids[0]); node && node->collision && node->uuid != target_)
+                if (auto* node = scene_->getNodeById(ids[0]); node && node->collision && node->uuid != target_) {
+                    last_stats_.clear();
                     loadSettings(*node);
+                }
         }
         if (busy_) {
             std::lock_guard lock(mutex_);
