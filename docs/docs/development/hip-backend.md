@@ -66,6 +66,145 @@ Compiling a target is not a claim of runtime or numerical validation on that
 hardware. GPU/driver availability remains subject to the selected SDK and OS.
 The tested device profile is `gfx1150`; other targets use conservative kernels.
 
+## Completion status and remaining work
+
+The backend is integrated, but it is **not yet validated as a complete training
+replacement**. A successful build, populated operation tables, isolated kernel
+contracts, or a short MCMC run do not establish complete strategy coverage.
+
+| Area | Current boundary | Required completion evidence |
+|---|---|---|
+| MCMC | Application training and mutation paths have dedicated tests; portable smoke tests cover only a short run. | Retain existing checks and exercise the final packaged modules through mutation, save and resume. |
+| MRNF | A real application run fails with a HIP broadcast dtype rejection during the post-backward/refinement phase. Native MRNF callback contracts do not cover this composed Tensor path. | Reproduce the original configuration, identify operand types/shapes/operation, add the missing typed operation, and pass the failing phase plus subsequent refinement transitions. |
+| IGS / ImprovedGSPlus | Registered through the normal strategy factory; consumes HIP MCMC, MRNF and refinement operations. No dedicated full-strategy HIP application validation is established. | Exercise initialization, edge/error scoring, split, prune, slot reuse, frozen masks, opacity reset, SH changes, save and resume. Do not infer strategy correctness from callback contracts or MCMC tests. |
+| Tensor dtype/layout coverage | Binary broadcast currently admits only matching Float32/Float16 inputs and floating/Bool output; integer and Bool input broadcasting is not implemented in that entry point. | Audit actual strategy call sites and shared Tensor contracts, including unequal shapes, strided/expanded views, empty inputs and integer/Bool predicates. Preserve exact integer/Bool semantics; do not cast indices through Float32. |
+| GPU utilization | The HIP UI path explicitly returns an unavailable sample. | Add device-matched sampling independently of CUDA availability; distinguish a real 0% sample from unavailable data. |
+| GPU memory budget | HIP allocator statistics and `hipMemGetInfo` exist, but the UI does not expose a complete native process-budget path. | Connect meaningful process/device/budget measurements and their validity to the UI; distinguish allocated, reserved and driver-budget values. |
+| Training startup | Very slow initial roughly 100 steps reported in the application; the cause is not established. | Profile cold and warm startup with per-phase timing before selecting an optimization. |
+| Hardware/platform validation | Runtime evidence is limited to the available GPU; Windows cross-target compilation is not execution on those targets. | Run the manual build matrix and preserve a conservative path for untested hardware. Wave64 remains outside the implemented scope. |
+
+The broadcast rejection is a confirmed limitation. Other dtype restrictions in
+`HipBackendOps` must be compared with the shared API and real callers before
+being classified as missing functionality. Do not turn every shape/type guard
+into an unconditional promise of support or remove validation to silence a
+failure. IGS uses Bool masks, but an identical IGS failure has not been reproduced.
+
+### Correctness completion order
+
+1. Capture the MRNF failure's operation, input/output dtypes, shapes, strides,
+   selected device and phase. Add a focused regression case for the composed
+   path, then implement the correct HIP operation without changing CUDA, Metal
+   or Vulkan dispatch or semantics.
+2. Check non-floating broadcast and related operation coverage against MCMC,
+   MRNF and IGS call sites. In particular cover Bool mask combinations, integer
+   indexing/comparison and promotion, selection, scatter, reductions and sorting
+   where the strategies actually require them. A specialized direct path may
+   coexist with a correct generic implementation; an implicit CPU fallback is
+   not completion of native HIP support.
+3. Add short application tests for each strategy with accelerated schedules that
+   actually execute split/prune/compaction/slot reuse, frozen masks, SH changes,
+   configured losses and checkpoint/resume. These runs are correctness checks,
+   not comparable timing or quality measurements. Include the user's failing
+   MRNF configuration with bilateral grid and PPISP rather than validating only
+   a reduced configuration.
+4. Recheck the packaged CUDA+HIP build and HIP-only build with the same regression
+   cases, default profile selection and conservative fallback. Check failures
+   before and after mutation separately; do not replay an already-mutated step.
+5. Use the established undistorted 1920/SH0/1M-cap/2000-step protocol for the final
+   comparable check, not after each small change. Preserve the numerical,
+   quality and visual checks; report remaining uncertainty explicitly.
+
+### GPU telemetry and memory-budget completion
+
+`src/visualizer/gui/gpu_memory_query.cpp` currently marks HIP native metrics
+unavailable and returns `-1` for utilization. The HIP device-info path does not
+publish a process budget equivalent to the Vulkan budget extension. Pool
+statistics alone cannot replace that OS/driver budget.
+
+- Match telemetry to the selected physical GPU using stable device identity,
+  not enumeration position. Tensor and rendering devices can differ; label
+  their roles and do not accidentally show NVIDIA utilization for AMD training.
+- On Windows investigate the existing DXGI process-budget path and a suitable
+  AMD/OS utilization provider. On Linux investigate the supported AMD telemetry
+  interfaces. Provider choice and dependency availability need verification;
+  these are implementation tasks, not completed integrations.
+- For integrated GPUs distinguish firmware-reserved memory, shared host memory,
+  current OS budget and process allocation. A large `hipMemGetInfo` total is not
+  the amount of dedicated VRAM and is not an appropriate standalone UI budget.
+- Keep driver-budget polling separate from HIP allocator accounting. Include
+  cached blocks and algorithm workspaces in their own categories; avoid double
+  counting imported Vulkan storage. A staging copy on another GPU is separate
+  storage and must be attributed accordingly.
+- Handle unavailable/stale samples explicitly, throttle polling, and invalidate
+  identity-specific caches when devices change. Test active and idle training,
+  both same-GPU and mixed-GPU rendering, without requiring a CUDA device.
+
+### Slow initial training steps
+
+Treat the reported initial slowdown as unresolved; do not dismiss approximately
+100 slow steps as expected warmup. Separate the optimizer's configured learning
+rate warmup from runtime initialization costs. Record steps 1-10, 11-50, 51-100
+and a later steady window, keeping the actual strategy and settings in the record.
+
+Measure expression-cache misses and HIPRTC compilation/loading, native module
+initialization, CPU decode, resize/undistort and prepared-image cache population,
+allocation/pool growth, host/device transfers, forward, losses, backward,
+optimizer, strategy post-backward, and viewer synchronization. Include FSR and
+cross-GPU preview transfers when active. Compare fresh-process cold and warm
+runs with fixed inputs; exclude concurrent builds from performance evidence.
+Only then choose precompilation, bounded prewarming, scheduling, caching or kernel
+changes. Keep CPU image-offload and configured resize behavior intact.
+
+## Distribution size reduction plan
+
+The current universal package contains an uncompressed device-code image for
+each declared target, plus a complete optimized `gfx1150` training module.
+Distribution-size work is outstanding; the large package is not an optimized
+release-size baseline. Benchmark reports and measured artifact sizes belong in
+external development records, not in source commits.
+
+1. **Native offload compression:** the installed SDK compiler advertises
+   `--offload-compress`. Apply it to the relevant HIP device bundles, verify
+   actual compression of the final artifacts, and test generic/profile loading,
+   fallback and HIPRTC on Windows and Linux. Measure disk size, initialization
+   time, host-memory peak and training correctness; a recognized compiler flag
+   alone is not validation. Do not recompress prebuilt SDK DLLs with this flag.
+2. **Remove profile duplication:** inspect host/device sections and determine
+   how much common rasterization, utility and training code the generic and
+   optimized modules duplicate. Separate only the specialized kernels if this
+   materially reduces the payload. Preserve module lifetime, version/build-set
+   checks and generic fallback; an ABI redesign needs its own compatibility tests.
+3. **Inspect linking:** inventory exported symbols, sections, instantiated
+   kernels and repeated device libraries. Check dead-code elimination and
+   identical-code folding where supported. Preserve C ABI exports and any
+   dynamically looked-up kernel; do not blindly strip or disable optimizations.
+4. **Optional family packages:** an installer may deliver the common application
+   and only the selected HIP architecture/family. Keep the universal offline
+   package as a separate option; reducing target coverage is a product choice,
+   not a transparent optimization. Generic-family targets or SPIR-V need a
+   separate compatibility/performance investigation before replacing native
+   targets.
+5. **SDK dependencies:** keep `amd_comgr.dll` and the matching runtime components
+   required by the current HIPRTC expression path. Cache hits do not eliminate
+   cold-start compilation. Optional download moves these bytes out of the base
+   package but does not remove their installed cost for HIP users. Do not assume
+   a compatible copy comes with the graphics driver.
+6. **Packaging correctness:** the generic Windows library-exclusion regex can
+   exclude build/dependency directories whose names contain `windows`. Validate
+   recursive PE imports, loader search directories and Python DLL placement with
+   a reduced PATH. Fix the actual packaging rule before relying on manual DLL
+   completion for repeatable distributions. License-reference extraction must
+   not open web URLs as Windows UNC paths; preserve full local license coverage.
+
+For each candidate compare the same feature set, target list and build type.
+Record uncompressed installed bytes and compressed download bytes separately.
+Do not promise a tenfold reduction or remove COMGR, supported architectures,
+training functionality or quality checks merely to reach a size target.
+
+References: [AMD code portability and compression](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.14.0/conceptual/code-portability.html),
+[Clang offload compression](https://clang.llvm.org/docs/ClangCommandLineReference.html),
+[HIPRTC in SDK 10.1](https://rocm.docs.amd.com/projects/HIP/en/docs-10.1.0/how-to/hip_rtc.html).
+
 ## Verification
 
 `cmake/hip-native` builds only native modules for cross-target compilation checks
