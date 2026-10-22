@@ -80,6 +80,7 @@ set(CORE_SOURCES
         argument_parser.cpp
         camera.cpp
         collision.cpp
+        collision_sparse.cpp
         checkpoint_format.cpp
         image_loader.cpp
         cuda_version.cpp

@@ -59,6 +59,9 @@ namespace lfs::core {
         glm::vec3 origin{0};
         glm::ivec3 dimensions{0};
         std::vector<uint8_t> solid;
+        // Sparse payload: 0/1 uniform leaves, otherwise child-base + 2.
+        std::vector<uint32_t> tree;
+        int tree_size = 0;
         bool show_voxels = false;
         std::string warning;
         friend bool operator==(const CollisionVolume&, const CollisionVolume&) = default;
@@ -70,6 +73,13 @@ namespace lfs::core {
         [[nodiscard]] bool capsuleIntersects(glm::vec3 feet, glm::vec3 up,
                                              float height, float radius) const;
         void validate() const;
+        [[nodiscard]] std::vector<uint32_t> packedOccupancy() const;
+        [[nodiscard]] std::vector<uint32_t> octreeOccupancy() const;
+        [[nodiscard]] std::vector<uint32_t> gpuOccupancy() const;
+        [[nodiscard]] uint64_t occupiedCount() const;
+        void forEachSolidBox(const std::function<void(glm::ivec3, glm::ivec3)>& fn) const;
+        void forEachBoundaryFace(const std::function<void(glm::ivec3, glm::ivec3)>& fn,
+                                 std::stop_token stop = {}) const;
         [[nodiscard]] CollisionMesh mesh(CollisionShape shape, std::stop_token stop = {}) const;
     };
 

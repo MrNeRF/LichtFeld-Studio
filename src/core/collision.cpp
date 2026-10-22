@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/collision.hpp"
+#include "collision_sparse.hpp"
 
 #include <algorithm>
 #include <array>
@@ -8,6 +9,7 @@
 #include <limits>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace lfs::core {
     namespace {
@@ -209,69 +211,8 @@ namespace lfs::core {
                 result[i] = distance[i] < threshold;
             return result;
         }
-        CollisionVolume voxelize(std::span<const CollisionGaussian> gaussians, CollisionSettings s,
-                                 std::stop_token stop) {
-            glm::vec3 lo(std::numeric_limits<float>::max()), hi(-lo);
-            for (const auto& g : gaussians) {
-                if (!finite(g.center) || !finite(g.axes[0]) || !finite(g.axes[1]) ||
-                    !finite(g.axes[2]) || !std::isfinite(g.opacity) || g.opacity < 0 || g.opacity > 1)
-                    throw std::invalid_argument("Non-finite or invalid Gaussian in collision source");
-                if (g.opacity <= 0)
-                    continue;
-                glm::vec3 extent;
-                for (int a = 0; a < 3; ++a)
-                    extent[a] = 3 * glm::length(glm::vec3(g.axes[0][a], g.axes[1][a], g.axes[2][a]));
-                lo = glm::min(lo, g.center - extent);
-                hi = glm::max(hi, g.center + extent);
-            }
-            if (!finite(lo) || !finite(hi) || glm::any(glm::greaterThan(lo, hi)))
-                throw std::invalid_argument("No opaque Gaussians in source");
-            CollisionVolume grid;
-            grid.settings = s;
-            grid.origin = glm::floor(lo / s.voxel_size) * s.voxel_size - glm::vec3(2 * s.voxel_size);
-            auto dims = glm::ceil((hi - grid.origin) / s.voxel_size) + glm::vec3(3);
-            if (!finite(dims) || glm::any(glm::greaterThan(dims, glm::vec3(CollisionVolume::max_cells))))
-                throw std::runtime_error("Scene extent exceeds collision grid limit; increase voxel size");
-            grid.dimensions = glm::ivec3(dims);
-            grid.solid.resize(cellCount(grid.dimensions));
-            std::vector<float> alpha(grid.solid.size(), 0);
-            uint64_t work = 0;
-            for (const auto& g : gaussians) {
-                checkpoint(stop);
-                if (g.opacity <= 0)
-                    continue;
-                if (std::abs(glm::determinant(g.axes)) < 1e-20f)
-                    continue;
-                auto inverse = glm::inverse(g.axes);
-                glm::vec3 extent;
-                for (int a = 0; a < 3; ++a)
-                    extent[a] = 3 * glm::length(glm::vec3(g.axes[0][a], g.axes[1][a], g.axes[2][a]));
-                auto start = glm::max(grid.cell(g.center - extent), glm::ivec3(0));
-                auto end = glm::min(grid.cell(g.center + extent), grid.dimensions - 1);
-                auto d = end - start + 1;
-                work += uint64_t(d.x) * d.y * d.z;
-                if (work > max_work)
-                    throw std::runtime_error("Gaussian voxelization work limit reached; increase voxel size");
-                for (int z = start.z; z <= end.z; ++z) {
-                    checkpoint(stop);
-                    for (int y = start.y; y <= end.y; ++y)
-                        for (int x = start.x; x <= end.x; ++x) {
-                            glm::ivec3 p(x, y, z);
-                            const auto q = inverse * (grid.origin + (glm::vec3(p) + 0.5f) * s.voxel_size - g.center);
-                            float d2 = glm::dot(q, q);
-                            if (d2 > 9)
-                                continue;
-                            auto i = grid.index(p);
-                            float contribution = g.opacity * std::exp(-0.5f * d2);
-                            alpha[i] += (1 - alpha[i]) * contribution;
-                        }
-                }
-            }
-            for (size_t i = 0; i < alpha.size(); ++i)
-                grid.solid[i] = alpha[i] > 0 && alpha[i] >= s.opacity;
-            return grid;
-        }
-        void simplifyCoplanar(CollisionMesh& mesh, std::stop_token stop) {
+        void simplifyCoplanar(CollisionMesh& mesh, std::stop_token stop,
+                              std::vector<std::array<int32_t, 3>>* keys = nullptr) {
             const size_t vertices = mesh.vertices.size() / 3, faces = mesh.indices.size() / 3;
             std::vector<std::vector<int32_t>> incident(vertices);
             std::vector<uint8_t> alive(faces, 1);
@@ -375,6 +316,7 @@ namespace lfs::core {
                 }
             }
             CollisionMesh compact;
+            std::vector<std::array<int32_t, 3>> compact_keys;
             std::vector<int32_t> remap(vertices, -1);
             for (size_t f = 0; f < faces; ++f) {
                 if (!alive[f])
@@ -385,11 +327,15 @@ namespace lfs::core {
                         remap[old] = int32_t(compact.vertices.size() / 3);
                         auto p = point(old);
                         compact.vertices.insert(compact.vertices.end(), {p.x, p.y, p.z});
+                        if (keys)
+                            compact_keys.push_back((*keys)[old]);
                     }
                     compact.indices.push_back(remap[old]);
                 }
             }
             mesh = std::move(compact);
+            if (keys)
+                *keys = std::move(compact_keys);
         }
     } // namespace
 
@@ -424,7 +370,19 @@ namespace lfs::core {
         return glm::all(glm::greaterThanEqual(p, glm::ivec3(0))) && glm::all(glm::lessThan(p, dimensions));
     }
     bool CollisionVolume::occupied(glm::ivec3 p) const {
-        return contains(p) && solid[index(p)] != 0;
+        if (!contains(p))
+            return false;
+        if (tree.empty())
+            return solid[index(p)] != 0;
+        uint32_t i = 0;
+        int n = tree_size;
+        while (tree[i] > 1) {
+            n /= 2;
+            auto bit = glm::ivec3(glm::greaterThanEqual(p, glm::ivec3(n)));
+            i = tree[i] - 2 + bit.x + 2 * bit.y + 4 * bit.z;
+            p -= bit * n;
+        }
+        return tree[i] != 0;
     }
     glm::ivec3 CollisionVolume::cell(glm::vec3 p) const {
         const auto q = glm::floor((p - origin) / settings.voxel_size);
@@ -434,7 +392,32 @@ namespace lfs::core {
     }
     void CollisionVolume::validate() const {
         settings.validate();
-        if (!finite(origin) || solid.size() != cellCount(dimensions))
+        if (!finite(origin))
+            throw std::invalid_argument("Invalid collision volume payload");
+        if (!tree.empty()) {
+            collision_detail::Tree expected(dimensions);
+            if (!solid.empty() || tree_size != expected.size || tree.size() > collision_detail::Tree::max_nodes)
+                throw std::invalid_argument("Invalid sparse collision volume payload");
+            std::vector<uint8_t> seen(tree.size());
+            size_t visited = 0;
+            std::function<void(uint32_t, int)> visit = [&](uint32_t i, int n) {
+                if (i >= tree.size() || seen[i]++)
+                    throw std::invalid_argument("Invalid sparse collision child reference");
+                ++visited;
+                if (tree[i] <= 1)
+                    return;
+                auto base = tree[i] - 2;
+                if (n <= 1 || base <= i || uint64_t(base) + 8 > tree.size())
+                    throw std::invalid_argument("Invalid sparse collision branch");
+                for (int a = 0; a < 8; ++a)
+                    visit(base + a, n / 2);
+            };
+            visit(0, tree_size);
+            if (visited != tree.size())
+                throw std::invalid_argument("Unreachable sparse collision nodes");
+            return;
+        }
+        if (solid.size() != cellCount(dimensions))
             throw std::invalid_argument("Invalid collision volume payload");
         if (std::any_of(solid.begin(), solid.end(), [](auto v) { return v > 1; }))
             throw std::invalid_argument("Invalid collision occupancy value");
@@ -479,6 +462,8 @@ namespace lfs::core {
         s.validate();
         if (gaussians.empty())
             throw std::invalid_argument("No source Gaussians");
+        if (gaussians.size() > 10'000'000)
+            throw std::runtime_error("Collision source exceeds 10 million Gaussians");
         auto report = [&](const char* text) { checkpoint(stop); if (progress) progress(text); };
         std::vector<CollisionGaussian> filtered;
         if (s.cluster) {
@@ -486,13 +471,15 @@ namespace lfs::core {
             auto coarse_settings = s;
             coarse_settings.voxel_size = s.cluster_resolution;
             coarse_settings.opacity = s.cluster_opacity;
-            auto coarse = voxelize(gaussians, coarse_settings, stop);
+            auto coarse = collision_detail::voxelizeSparse(gaussians, coarse_settings, stop);
             auto seed = glm::clamp(coarse.cell(s.seed), glm::ivec3(0), coarse.dimensions - 1);
             if (!coarse.occupied(seed)) {
                 const auto requested_seed = seed;
                 float best = std::numeric_limits<float>::max();
                 bool found = false;
-                eachCell(coarse, stop, [&](auto p) {
+                coarse.forEachSolidBox([&](auto lo, auto hi) {
+                    checkpoint(stop);
+                    auto p = glm::clamp(requested_seed, lo, hi - 1);
                     auto delta = glm::vec3(p - requested_seed);
                     float distance = glm::dot(delta, delta);
                     if (coarse.occupied(p) && distance < best) {
@@ -504,10 +491,7 @@ namespace lfs::core {
                 if (!found)
                     throw std::runtime_error("Cluster opacity threshold produced no solid voxels");
             }
-            auto inverted = coarse.solid;
-            for (auto& value : inverted)
-                value = !value;
-            auto region = flood(coarse, inverted, std::span(&seed, 1), stop);
+            auto region = collision_detail::volumeTree(coarse, stop).flood(std::span(&seed, 1), true);
             uint64_t work = 0;
             for (const auto& g : gaussians) {
                 checkpoint(stop);
@@ -526,7 +510,7 @@ namespace lfs::core {
                             if (++work > max_work)
                                 throw std::runtime_error("Cluster work limit reached");
                             glm::ivec3 p(x, y, z);
-                            if (!region[coarse.index(p)])
+                            if (!region.occupied(p))
                                 continue;
                             auto q = inv * (coarse.origin + (glm::vec3(p) + 0.5f) * s.cluster_resolution - g.center);
                             keep = g.opacity * std::exp(-0.5f * glm::dot(q, q)) >= s.cluster_min_contribution;
@@ -539,10 +523,12 @@ namespace lfs::core {
             gaussians = filtered;
         }
         report("Voxelizing rotated Gaussian ellipsoids");
-        auto grid = voxelize(gaussians, s, stop);
+        auto grid = collision_detail::voxelizeSparse(gaussians, s, stop);
         return processCollisionVolume(std::move(grid), stop, std::move(progress));
     }
     CollisionVolume processCollisionVolume(CollisionVolume grid, std::stop_token stop, CollisionProgress progress) {
+        if (!grid.tree.empty())
+            return collision_detail::processSparse(std::move(grid), stop, std::move(progress));
         grid.validate();
         auto s = grid.settings;
         auto report = [&](const char* text) { checkpoint(stop); if (progress) progress(text); };
@@ -643,152 +629,361 @@ namespace lfs::core {
         return grid;
     }
 
+    std::vector<uint32_t> CollisionVolume::packedOccupancy() const {
+        validate();
+        const auto count = cellCount(dimensions);
+        std::vector<uint32_t> result((count + 31) / 32, 0);
+        eachCell(*this, {}, [&](auto p) {
+            if (occupied(p)) {
+                const auto i = index(p);
+                result[i / 32] |= uint32_t(1) << (i % 32);
+            }
+        });
+        return result;
+    }
+    std::vector<uint32_t> CollisionVolume::octreeOccupancy() const {
+        validate();
+        return collision_detail::volumeTree(*this).nodes;
+    }
+    std::vector<uint32_t> CollisionVolume::gpuOccupancy() const {
+        validate();
+        const auto dense_tree = tree.empty() ? octreeOccupancy() : std::vector<uint32_t>{};
+        const auto& source = tree.empty() ? dense_tree : tree;
+        int root_size = 1;
+        while (root_size < std::max({dimensions.x, dimensions.y, dimensions.z}))
+            root_size *= 2;
+        std::vector<uint32_t> result(1);
+        std::function<void(uint32_t, uint32_t, int)> pack = [&](uint32_t src, uint32_t dst, int edge) {
+            if (source[src] <= 1) {
+                result[dst] = source[src];
+                return;
+            }
+            if (edge <= 4) {
+                const auto base = uint32_t(result.size());
+                result.resize(result.size() + 2);
+                result[dst] = 0x80000000u | base;
+                for (int z = 0; z < edge; ++z)
+                    for (int y = 0; y < edge; ++y)
+                        for (int x = 0; x < edge; ++x) {
+                            auto i = src;
+                            int n = edge;
+                            glm::ivec3 p(x, y, z);
+                            while (source[i] > 1) {
+                                n /= 2;
+                                auto bit = glm::ivec3(glm::greaterThanEqual(p, glm::ivec3(n)));
+                                i = source[i] - 2 + bit.x + 2 * bit.y + 4 * bit.z;
+                                p -= bit * n;
+                            }
+                            if (source[i]) {
+                                auto bit = x + 4 * y + 16 * z;
+                                result[base + bit / 32] |= uint32_t(1) << (bit % 32);
+                            }
+                        }
+                return;
+            }
+            auto base = uint32_t(result.size());
+            result.resize(result.size() + 8);
+            result[dst] = base + 2;
+            for (int child = 0; child < 8; ++child)
+                pack(source[src] - 2 + child, base + child, edge / 2);
+        };
+        pack(0, 0, root_size);
+        return result;
+    }
+    void CollisionVolume::forEachSolidBox(const std::function<void(glm::ivec3, glm::ivec3)>& fn) const {
+        if (!tree.empty()) {
+            std::function<void(uint32_t, glm::ivec3, int)> visit = [&](uint32_t i, glm::ivec3 lo, int n) {
+                if (glm::any(glm::greaterThanEqual(lo, dimensions)) || tree[i] == 0)
+                    return;
+                if (tree[i] == 1) {
+                    fn(lo, glm::min(lo + n, dimensions));
+                    return;
+                }
+                for (int a = 0; a < 8; ++a)
+                    visit(tree[i] - 2 + a, lo + glm::ivec3(a & 1, (a >> 1) & 1, a >> 2) * (n / 2), n / 2);
+            };
+            visit(0, {}, tree_size);
+        } else {
+            for (int z = 0; z < dimensions.z; ++z)
+                for (int y = 0; y < dimensions.y; ++y)
+                    for (int x = 0; x < dimensions.x;) {
+                        if (!occupied({x, y, z})) {
+                            ++x;
+                            continue;
+                        }
+                        int start = x++;
+                        while (x < dimensions.x && occupied({x, y, z}))
+                            ++x;
+                        fn({start, y, z}, {x, y + 1, z + 1});
+                    }
+        }
+    }
+    uint64_t CollisionVolume::occupiedCount() const {
+        uint64_t count = 0;
+        forEachSolidBox([&](auto lo, auto hi) {
+            auto d = hi - lo;
+            count += uint64_t(d.x) * d.y * d.z;
+        });
+        return count;
+    }
+    void CollisionVolume::forEachBoundaryFace(const std::function<void(glm::ivec3, glm::ivec3)>& fn,
+                                              std::stop_token stop) const {
+        const auto occupancy = collision_detail::volumeTree(*this, stop);
+        uint64_t work = 0;
+        occupancy.leaves([&](const collision_detail::Leaf& l) {
+            checkpoint(stop);
+            if (!l.solid)
+                return;
+            auto end = glm::min(l.max(), dimensions);
+            for (auto normal : directions) {
+                int axis = normal.x ? 0 : normal.y ? 1
+                                                   : 2;
+                int u = (axis + 1) % 3, v = (axis + 2) % 3;
+                auto emit = [&](auto lo, auto hi) {
+                    for (int b = lo[v]; b < hi[v]; ++b) {
+                        checkpoint(stop);
+                        for (int a = lo[u]; a < hi[u]; ++a) {
+                            if (++work > 32'000'000)
+                                throw std::runtime_error("Collision surface work budget exceeded");
+                            glm::ivec3 p = l.min;
+                            p[axis] = normal[axis] > 0 ? end[axis] - 1 : l.min[axis];
+                            p[u] = a;
+                            p[v] = b;
+                            fn(p, normal);
+                        }
+                    }
+                };
+                auto lo = l.min, hi = end;
+                lo[axis] = normal[axis] > 0 ? end[axis] : l.min[axis] - 1;
+                hi[axis] = lo[axis] + 1;
+                if (lo[axis] < 0 || lo[axis] >= dimensions[axis]) {
+                    emit(l.min, end);
+                } else {
+                    occupancy.visit(lo, hi, [&](const collision_detail::Leaf& neighbor) {
+                        if (!neighbor.solid)
+                            emit(glm::max(lo, neighbor.min), glm::min(hi, neighbor.max()));
+                    });
+                }
+            }
+        });
+    }
+
     CollisionMesh CollisionVolume::mesh(CollisionShape shape, std::stop_token stop) const {
         validate();
-        CollisionMesh result;
+        CollisionMesh result, output;
+        std::vector<std::array<int32_t, 3>> keys;
+        std::unordered_map<std::array<int32_t, 3>, int32_t, GridPointHash> seams;
+        const auto occupancy = collision_detail::volumeTree(*this, stop);
         // Integer half-grid coordinates weld neighboring cubes exactly.
         std::unordered_map<std::array<int32_t, 3>, int32_t, GridPointHash> vertices;
         auto vertex = [&](glm::ivec3 p) {
             const std::array<int32_t, 3> k{p.x, p.y, p.z};
             if (auto it = vertices.find(k); it != vertices.end())
                 return it->second;
-            if (result.vertices.size() / 3 >= 4'000'000)
+            if (result.vertices.size() / 3 >= 16'000'000)
                 throw std::runtime_error("Collision mesh vertex limit reached; increase voxel size");
             auto id = static_cast<int32_t>(result.vertices.size() / 3);
             auto v = origin + glm::vec3(p) * (settings.voxel_size / 2);
             result.vertices.insert(result.vertices.end(), {v.x, v.y, v.z});
+            keys.push_back(k);
             vertices.emplace(k, id);
             return id;
         };
         auto triangle = [&](int a, int b, int c) {
-            if (result.indices.size() >= 24'000'000)
+            if (result.indices.size() >= 96'000'000)
                 throw std::runtime_error("Collision mesh triangle limit reached; increase voxel size");
             result.indices.insert(result.indices.end(), {a, b, c});
         };
-        if (shape == CollisionShape::Faces) {
-            eachCell(*this, stop, [&](auto p) {
-                if (!occupied(p))
+        uint64_t work = 0;
+        std::function<void(glm::ivec3, int)> build = [&](glm::ivec3 lo, int n) {
+            checkpoint(stop);
+            const auto halo = shape == CollisionShape::Faces ? glm::ivec3(1) : glm::ivec3(0);
+            if (occupancy.uniform(lo - halo, lo + n + 1) >= 0)
+                return;
+            if (n > 32) {
+                for (int child = 0; child < 8; ++child)
+                    build(lo + glm::ivec3(child & 1, (child >> 1) & 1, child >> 2) * (n / 2), n / 2);
+                return;
+            }
+            work += uint64_t(n) * n * n;
+            if (work > 2'000'000'000ULL)
+                throw std::runtime_error("Sparse mesh active-chunk work budget exceeded");
+            const int stride = n + 2;
+            const auto cache_lo = lo - 1;
+            std::vector<uint8_t> cache(size_t(stride) * stride * stride, 0);
+            occupancy.visit(cache_lo, lo + n + 1, [&](const collision_detail::Leaf& l) {
+                if (!l.solid)
                     return;
-                for (auto normal : directions) {
-                    if (occupied(p + normal))
-                        continue;
-                    int axis = normal.x ? 0 : normal.y ? 1
-                                                       : 2;
-                    int u = (axis + 1) % 3, v = (axis + 2) % 3;
-                    glm::ivec3 q = p * 2;
-                    if (normal[axis] > 0)
-                        q[axis] += 2;
-                    glm::ivec3 du(0), dv(0);
-                    du[u] = 2;
-                    dv[v] = 2;
-                    int a = vertex(q), b = vertex(q + du), c = vertex(q + du + dv), d = vertex(q + dv);
-                    if (normal[axis] > 0) {
-                        triangle(a, b, c);
-                        triangle(a, c, d);
-                    } else {
-                        triangle(a, c, b);
-                        triangle(a, d, c);
-                    }
-                }
+                auto a = glm::max(l.min, cache_lo), b = glm::min(l.max(), glm::min(lo + n + 1, dimensions));
+                for (int z = a.z; z < b.z; ++z)
+                    for (int y = a.y; y < b.y; ++y)
+                        std::fill_n(cache.begin() + ((z - cache_lo.z) * stride + y - cache_lo.y) * stride + a.x - cache_lo.x,
+                                    b.x - a.x, uint8_t(1));
             });
-        } else {
-            // Table-free marching cubes: face contours link crossing cube edges.
-            // Four-crossing faces consistently isolate solid corners, resolving
-            // ambiguous shared faces identically from either adjacent cube.
-            constexpr glm::ivec3 corners[] = {{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}, {0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1}};
-            constexpr int edges[12][2] = {{0, 1}, {1, 2}, {2, 3}, {3, 0}, {4, 5}, {5, 6}, {6, 7}, {7, 4}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
-            constexpr int faces[6][4] = {{0, 1, 2, 3}, {4, 5, 6, 7}, {0, 9, 4, 8}, {2, 10, 6, 11}, {3, 11, 7, 8}, {1, 10, 5, 9}};
-            constexpr glm::ivec3 face_normals[] = {{0, 0, -1}, {0, 0, 1}, {0, -1, 0}, {0, 1, 0}, {-1, 0, 0}, {1, 0, 0}};
-            for (int z = -1; z < dimensions.z; ++z) {
-                checkpoint(stop);
-                for (int y = -1; y < dimensions.y; ++y)
-                    for (int x = -1; x < dimensions.x; ++x) {
-                        glm::ivec3 p(x, y, z);
-                        bool inside[8];
-                        int count = 0;
-                        for (int i = 0; i < 8; ++i) {
-                            inside[i] = occupied(p + corners[i]);
-                            count += inside[i];
-                        }
-                        if (!count || count == 8)
-                            continue;
-                        int ids[12], next_edge[12];
-                        std::fill_n(ids, 12, -1);
-                        std::fill_n(next_edge, 12, -1);
-                        for (int e = 0; e < 12; ++e)
-                            if (inside[edges[e][0]] != inside[edges[e][1]])
-                                ids[e] = vertex(p * 2 + corners[edges[e][0]] + corners[edges[e][1]] + glm::ivec3(1));
-                        for (int face_index = 0; face_index < 6; ++face_index) {
-                            const auto& face = faces[face_index];
-                            auto link = [&](int a, int b) {
-                                auto edge = edges[a];
-                                auto outward = glm::vec3(corners[inside[edge[0]] ? edge[1] : edge[0]] -
-                                                         corners[inside[edge[0]] ? edge[0] : edge[1]]);
-                                auto delta = glm::vec3(corners[edges[b][0]] + corners[edges[b][1]] -
-                                                       corners[edges[a][0]] - corners[edges[a][1]]);
-                                if (glm::dot(delta, glm::cross(outward, glm::vec3(face_normals[face_index]))) > 0)
-                                    next_edge[a] = b;
-                                else
-                                    next_edge[b] = a;
-                            };
-                            int crossing[4], n = 0;
-                            for (auto e : face)
-                                if (ids[e] >= 0)
-                                    crossing[n++] = e;
-                            if (n == 2)
-                                link(crossing[0], crossing[1]);
-                            else if (n == 4) {
-                                // Pair the two edges adjacent to each solid face corner.
-                                for (int i = 0; i < 4; ++i) {
-                                    int e = face[i], f = face[(i + 1) % 4], shared = -1;
-                                    for (int a : edges[e])
-                                        for (int b : edges[f])
-                                            if (a == b)
-                                                shared = a;
-                                    if (shared >= 0 && inside[shared])
-                                        link(e, f);
+            auto cached = [&](glm::ivec3 p) {
+                auto q = p - cache_lo;
+                return cache[(q.z * stride + q.y) * stride + q.x] != 0;
+            };
+            if (shape == CollisionShape::Faces) {
+                for (int z = std::max(lo.z, 0); z < std::min(lo.z + n, dimensions.z); ++z)
+                    for (int y = std::max(lo.y, 0); y < std::min(lo.y + n, dimensions.y); ++y)
+                        for (int x = std::max(lo.x, 0); x < std::min(lo.x + n, dimensions.x); ++x) {
+                            glm::ivec3 p(x, y, z);
+                            if (!cached(p))
+                                continue;
+                            for (auto normal : directions) {
+                                if (cached(p + normal))
+                                    continue;
+                                int axis = normal.x ? 0 : normal.y ? 1
+                                                                   : 2;
+                                int u = (axis + 1) % 3, v = (axis + 2) % 3;
+                                glm::ivec3 q = p * 2;
+                                if (normal[axis] > 0)
+                                    q[axis] += 2;
+                                glm::ivec3 du(0), dv(0);
+                                du[u] = 2;
+                                dv[v] = 2;
+                                int a = vertex(q), b = vertex(q + du), c = vertex(q + du + dv), d = vertex(q + dv);
+                                if (normal[axis] > 0) {
+                                    triangle(a, b, c);
+                                    triangle(a, c, d);
+                                } else {
+                                    triangle(a, c, b);
+                                    triangle(a, d, c);
                                 }
                             }
                         }
-                        bool used[12]{};
-                        for (int e = 0; e < 12; ++e) {
-                            if (ids[e] < 0 || used[e])
+            } else {
+                // Table-free marching cubes: face contours link crossing cube edges.
+                // Four-crossing faces consistently isolate solid corners, resolving
+                // ambiguous shared faces identically from either adjacent cube.
+                constexpr glm::ivec3 corners[] = {{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}, {0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1}};
+                constexpr int edges[12][2] = {{0, 1}, {1, 2}, {2, 3}, {3, 0}, {4, 5}, {5, 6}, {6, 7}, {7, 4}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+                constexpr int faces[6][4] = {{0, 1, 2, 3}, {4, 5, 6, 7}, {0, 9, 4, 8}, {2, 10, 6, 11}, {3, 11, 7, 8}, {1, 10, 5, 9}};
+                constexpr glm::ivec3 face_normals[] = {{0, 0, -1}, {0, 0, 1}, {0, -1, 0}, {0, 1, 0}, {-1, 0, 0}, {1, 0, 0}};
+                for (int z = lo.z; z < std::min(lo.z + n, dimensions.z); ++z)
+                    for (int y = lo.y; y < std::min(lo.y + n, dimensions.y); ++y)
+                        for (int x = lo.x; x < std::min(lo.x + n, dimensions.x); ++x) {
+                            glm::ivec3 p(x, y, z);
+                            bool inside[8];
+                            int count = 0;
+                            for (int i = 0; i < 8; ++i) {
+                                inside[i] = cached(p + corners[i]);
+                                count += inside[i];
+                            }
+                            if (!count || count == 8)
                                 continue;
-                            std::vector<int> loop;
-                            int current = e;
-                            do {
-                                if (next_edge[current] < 0 || used[current])
-                                    throw std::runtime_error("Invalid marching-cubes contour");
-                                used[current] = true;
-                                loop.push_back(ids[current]);
-                                current = next_edge[current];
-                            } while (current != e);
-                            if (loop.size() < 3)
-                                continue;
-                            if (loop.size() == 3) {
-                                triangle(loop[0], loop[1], loop[2]);
-                            } else {
-                                // An interior fan avoids introducing a diagonal on
-                                // a shared cube face (which could have four incident
-                                // triangles when the neighboring cube chooses it too).
-                                glm::vec3 center(0);
-                                for (auto id : loop)
-                                    center += glm::vec3(result.vertices[id * 3], result.vertices[id * 3 + 1], result.vertices[id * 3 + 2]);
-                                center /= float(loop.size());
-                                if (result.vertices.size() / 3 >= 4'000'000)
-                                    throw std::runtime_error("Collision mesh vertex limit reached; increase voxel size");
-                                auto id = int32_t(result.vertices.size() / 3);
-                                result.vertices.insert(result.vertices.end(), {center.x, center.y, center.z});
-                                for (size_t i = 0; i < loop.size(); ++i)
-                                    triangle(id, loop[i], loop[(i + 1) % loop.size()]);
+                            int ids[12], next_edge[12];
+                            std::fill_n(ids, 12, -1);
+                            std::fill_n(next_edge, 12, -1);
+                            for (int e = 0; e < 12; ++e)
+                                if (inside[edges[e][0]] != inside[edges[e][1]])
+                                    ids[e] = vertex(p * 2 + corners[edges[e][0]] + corners[edges[e][1]] + glm::ivec3(1));
+                            for (int face_index = 0; face_index < 6; ++face_index) {
+                                const auto& face = faces[face_index];
+                                auto link = [&](int a, int b) {
+                                    auto edge = edges[a];
+                                    auto outward = glm::vec3(corners[inside[edge[0]] ? edge[1] : edge[0]] -
+                                                             corners[inside[edge[0]] ? edge[0] : edge[1]]);
+                                    auto delta = glm::vec3(corners[edges[b][0]] + corners[edges[b][1]] -
+                                                           corners[edges[a][0]] - corners[edges[a][1]]);
+                                    if (glm::dot(delta, glm::cross(outward, glm::vec3(face_normals[face_index]))) > 0)
+                                        next_edge[a] = b;
+                                    else
+                                        next_edge[b] = a;
+                                };
+                                int crossing[4], n = 0;
+                                for (auto e : face)
+                                    if (ids[e] >= 0)
+                                        crossing[n++] = e;
+                                if (n == 2)
+                                    link(crossing[0], crossing[1]);
+                                else if (n == 4) {
+                                    // Pair the two edges adjacent to each solid face corner.
+                                    for (int i = 0; i < 4; ++i) {
+                                        int e = face[i], f = face[(i + 1) % 4], shared = -1;
+                                        for (int a : edges[e])
+                                            for (int b : edges[f])
+                                                if (a == b)
+                                                    shared = a;
+                                        if (shared >= 0 && inside[shared])
+                                            link(e, f);
+                                    }
+                                }
+                            }
+                            bool used[12]{};
+                            for (int e = 0; e < 12; ++e) {
+                                if (ids[e] < 0 || used[e])
+                                    continue;
+                                std::vector<int> loop;
+                                int current = e;
+                                do {
+                                    if (next_edge[current] < 0 || used[current])
+                                        throw std::runtime_error("Invalid marching-cubes contour");
+                                    used[current] = true;
+                                    loop.push_back(ids[current]);
+                                    current = next_edge[current];
+                                } while (current != e);
+                                if (loop.size() < 3)
+                                    continue;
+                                if (loop.size() == 3) {
+                                    triangle(loop[0], loop[1], loop[2]);
+                                } else {
+                                    // An interior fan avoids introducing a diagonal on
+                                    // a shared cube face (which could have four incident
+                                    // triangles when the neighboring cube chooses it too).
+                                    glm::vec3 center(0);
+                                    for (auto id : loop)
+                                        center += glm::vec3(result.vertices[id * 3], result.vertices[id * 3 + 1], result.vertices[id * 3 + 2]);
+                                    center /= float(loop.size());
+                                    if (result.vertices.size() / 3 >= 16'000'000)
+                                        throw std::runtime_error("Collision mesh vertex limit reached; increase voxel size");
+                                    auto id = int32_t(result.vertices.size() / 3);
+                                    result.vertices.insert(result.vertices.end(), {center.x, center.y, center.z});
+                                    keys.push_back({INT32_MAX, INT32_MAX, INT32_MAX});
+                                    for (size_t i = 0; i < loop.size(); ++i)
+                                        triangle(id, loop[i], loop[(i + 1) % loop.size()]);
+                                }
                             }
                         }
-                    }
             }
-        }
-        if (shape == CollisionShape::Smooth)
-            simplifyCoplanar(result, stop);
-        return result;
+            if (shape == CollisionShape::Smooth)
+                simplifyCoplanar(result, stop, &keys);
+            std::vector<int32_t> remap(result.vertices.size() / 3);
+            for (size_t i = 0; i < remap.size(); ++i) {
+                const auto& key = keys[i];
+                bool seam = false;
+                for (int axis = 0; axis < 3; ++axis) {
+                    int shift = shape == CollisionShape::Smooth ? 1 : 0;
+                    seam |= key[axis] == lo[axis] * 2 + shift || key[axis] == (lo[axis] + n) * 2 + shift;
+                }
+                if (seam) {
+                    if (auto existing = seams.find(key); existing != seams.end()) {
+                        remap[i] = existing->second;
+                        continue;
+                    }
+                }
+                if (output.vertices.size() / 3 >= 32'000'000)
+                    throw std::runtime_error("Collision output mesh vertex memory budget exceeded");
+                remap[i] = int32_t(output.vertices.size() / 3);
+                output.vertices.insert(output.vertices.end(), result.vertices.begin() + i * 3, result.vertices.begin() + i * 3 + 3);
+                if (seam)
+                    seams.emplace(key, remap[i]);
+            }
+            if (output.indices.size() + result.indices.size() > 192'000'000)
+                throw std::runtime_error("Collision output mesh index memory budget exceeded");
+            for (auto index : result.indices)
+                output.indices.push_back(remap[index]);
+            result.vertices.clear();
+            result.indices.clear();
+            vertices.clear();
+            keys.clear();
+        };
+        int root_size = 1;
+        while (root_size < std::max({dimensions.x, dimensions.y, dimensions.z}) + 1)
+            root_size *= 2;
+        build(glm::ivec3(-1), root_size);
+        return output;
     }
 
     void WalkSettings::validate() const {
