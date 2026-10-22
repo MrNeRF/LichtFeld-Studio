@@ -244,15 +244,16 @@ namespace {
         float3 camera_center{};
         bool reserve_growth = false;
         bool reuse_phase_helpers = false;
+        bool has_growth_reserve = false;
         char* phase_candidate = nullptr;
         size_t phase_candidate_bytes = 0;
         bool depth_presort_allowed = true;
         bool depth_presort_attempted = false;
         FastFrame(Budget& budget, hipStream_t queue) : budget(budget), queue(queue) {
             const char* value = std::getenv("LFS_HIP_FAST_ARENA_GROWTH");
-            reserve_growth = value && std::string_view(value) == "1";
+            reserve_growth = !value || std::string_view(value) != "0";
             value = std::getenv("LFS_HIP_FAST_PHASE_HELPERS");
-            reuse_phase_helpers = value && std::string_view(value) == "1";
+            reuse_phase_helpers = !value || std::string_view(value) != "0";
         }
         char* allocate(size_t bytes) {
             bytes = std::max<size_t>(bytes, 256);
@@ -267,7 +268,26 @@ namespace {
                 const uint64_t available = budget.limit - budget.live;
                 if (reserve_growth && bytes >= 1024 * 1024 && bytes <= available && extra <= available - bytes)
                     capacity += extra;
-                auto replacement = std::make_unique<Buffer>(budget, capacity);
+                std::unique_ptr<Buffer> replacement;
+                try {
+                    replacement = std::make_unique<Buffer>(budget, capacity);
+                } catch (const Failure& failure) {
+                    if (capacity == bytes || failure.status != LFS_HIP_TRAIN_RESOURCE_EXHAUSTED)
+                        throw;
+                } catch (const LfsHipRasterFailure& failure) {
+                    if (capacity == bytes || failure.code != hipErrorOutOfMemory)
+                        throw;
+                }
+                if (!replacement) {
+                    const auto pending = hipGetLastError();
+                    if (pending != hipSuccess && pending != hipErrorOutOfMemory)
+                        hip_check(pending, "HIP optional workspace growth pending error");
+                    reserve_growth = false;
+                    std::fprintf(stderr, "[warning] HIP optional workspace growth exceeded available memory; "
+                                         "retrying exact capacity and disabling extra headroom for this workspace\n");
+                    replacement = std::make_unique<Buffer>(budget, bytes);
+                }
+                has_growth_reserve |= replacement->bytes > bytes;
                 buffers[cursor].swap(replacement);
             }
             return static_cast<char*>(buffers[cursor++]->pointer);
@@ -291,7 +311,7 @@ namespace {
                 depth_presort_attempted = false;
                 try {
                     submit();
-                    if (depth_presort_attempted) {
+                    if (depth_presort_attempted || has_growth_reserve) {
                         // Keep room for the mandatory backward helpers as well.
                         // Otherwise optional forward storage could fit the budget
                         // yet make an otherwise valid training step fail later.
@@ -308,17 +328,17 @@ namespace {
                         const uint64_t available = budget.limit - budget.live;
                         if (helper_charge > available || extra_backward_bytes > available - helper_charge)
                             throw Failure(LFS_HIP_TRAIN_RESOURCE_EXHAUSTED,
-                                          "HIP depth presort leaves insufficient backward workspace budget");
+                                          "HIP optional forward storage leaves insufficient backward workspace budget");
                     }
                     return;
                 } catch (const Failure& failure) {
-                    if (!depth_presort_attempted || failure.status != LFS_HIP_TRAIN_RESOURCE_EXHAUSTED)
+                    if ((!depth_presort_attempted && !has_growth_reserve) || failure.status != LFS_HIP_TRAIN_RESOURCE_EXHAUSTED)
                         throw;
                 } catch (const LfsHipRasterFailure& failure) {
-                    if (!depth_presort_attempted || failure.code != hipErrorOutOfMemory)
+                    if ((!depth_presort_attempted && !has_growth_reserve) || failure.code != hipErrorOutOfMemory)
                         throw;
                 } catch (const std::bad_alloc&) {
-                    if (!depth_presort_attempted)
+                    if (!depth_presort_attempted && !has_growth_reserve)
                         throw;
                 }
                 // No optimizer has run in forward. Complete submitted readers
@@ -334,9 +354,17 @@ namespace {
                 sh_gradient.reset();
                 tiles = nullptr;
                 result = {};
-                depth_presort_allowed = false;
-                std::fprintf(stderr, "[warning] HIP visible-depth presort exceeded available memory; "
-                                     "retrying with the original sort and disabling presort for this workspace\n");
+                if (depth_presort_attempted) {
+                    depth_presort_allowed = false;
+                    std::fprintf(stderr, "[warning] HIP visible-depth presort exceeded available memory; "
+                                         "retrying with the original sort and disabling presort for this workspace\n");
+                }
+                if (has_growth_reserve) {
+                    reserve_growth = false;
+                    has_growth_reserve = false;
+                    std::fprintf(stderr, "[warning] HIP workspace headroom leaves insufficient training memory; "
+                                         "retrying with exact workspace capacities\n");
+                }
             }
         }
         float* backward_helpers(size_t bytes) {
@@ -1224,7 +1252,7 @@ int lfs_hip_train_set_rasterizer(LfsHipTraining* session, uint32_t kind, LfsHipE
             session->ensure_geometry();
         else {
             const char* trim = std::getenv("LFS_HIP_FAST_TRIM_UNUSED");
-            if (trim && std::string_view(trim) == "1")
+            if (!trim || std::string_view(trim) != "0")
                 session->trim_geometry();
         }
         session->fast_raster = kind == 1;

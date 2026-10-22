@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
             Session session(module, config, source.model());
             const auto original = session.info().allocated_bytes;
             const char* value = std::getenv("LFS_HIP_FAST_TRIM_UNUSED");
-            const bool trim = value && std::string_view(value) == "1";
+            const bool trim = !value || std::string_view(value) != "0";
             session.set_rasterizer(1);
             const auto trimmed = session.info().allocated_bytes;
             require(trimmed == original - (trim ? size_t(n) * 56 : 0),
