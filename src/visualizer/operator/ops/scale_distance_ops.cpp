@@ -145,7 +145,8 @@ namespace lfs::vis::op {
                 return OperatorResult::RUNNING_MODAL;
             }
             if (applyScale(ctx, target_distance)) {
-                return OperatorResult::RUNNING_MODAL;
+                clearAllPoints();
+                return OperatorResult::FINISHED;
             }
             return OperatorResult::RUNNING_MODAL;
 
@@ -400,7 +401,7 @@ namespace lfs::vis::op {
         const auto pick = *pending_pick_;
         pending_pick_.reset();
         if (!applyPointSample(sample, pick.point_index)) {
-            setStatus("align.status_no_surface", 1.5);
+            setStatus(Strings::ScaleDistance::STATUS_NO_SURFACE, 1.5);
         }
     }
 
@@ -527,13 +528,13 @@ namespace lfs::vis::op {
 
         const auto transform = computeScaleDistanceTransform(picked_points_[0], picked_points_[1], target_distance);
         if (!transform) {
-            setStatus("distance_scale.status_invalid_distance", 2.0);
+            setStatus(Strings::ScaleDistance::STATUS_INVALID_DISTANCE, 2.0);
             return false;
         }
 
         const auto target_ids = resolveScaleTargets(ctx);
         if (target_ids.empty()) {
-            setStatus("align.status_no_target", 2.0);
+            setStatus(Strings::ScaleDistance::STATUS_NO_TARGET, 2.0);
             return false;
         }
 
@@ -575,11 +576,7 @@ namespace lfs::vis::op {
         entry->captureAfter();
         pushSceneSnapshotIfChanged(std::move(entry));
 
-        // Update the 2 points with the transform so they stay on the exact same feature
-        // of the splat and the measured distance matches the target distance!
-        picked_points_[0] = glm::vec3(*transform * glm::vec4(picked_points_[0], 1.0f));
-        picked_points_[1] = glm::vec3(*transform * glm::vec4(picked_points_[1], 1.0f));
-        syncPickedPointsToServices();
+        clearAllPoints();
 
         if (auto* rm = services().renderingOrNull()) {
             rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);

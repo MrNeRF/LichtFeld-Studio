@@ -2379,22 +2379,35 @@ def get_align_edge_to_axis() -> bool:
 def set_align_edge_to_axis(enabled: bool) -> None:
     """Enable or disable align edge-to-+X in-plane yaw (session lifetime)"""
 
-def can_apply_distance_scale() -> bool:
-    """True when 2 valid points are picked for distance scale"""
+def can_apply_scale_distance() -> bool:
+    """True when 2 valid points are picked for scale distance"""
 
-def get_distance_scale_measured() -> float:
+def can_apply_distance_scale() -> bool:
+    """True when 2 valid points are picked for distance scale (alias)"""
+
+def get_scale_distance_measured() -> float:
     """Get the measured distance between the 2 picked points"""
 
+def get_distance_scale_measured() -> float:
+    """Get the measured distance between the 2 picked points (alias)"""
+
+def apply_scale_distance(target_distance: float) -> bool:
+    """Request the running scale distance modal to rescale the scene to target distance"""
+
 def apply_distance_scale(target_distance: float) -> bool:
-    """
-    Request the running distance scale modal to rescale the scene to target distance
-    """
+    """Request the running distance scale modal to rescale the scene to target distance (alias)"""
+
+def clear_scale_distance() -> None:
+    """Request the running scale distance modal to clear picked points"""
 
 def clear_distance_scale() -> None:
-    """Request the running distance scale modal to clear picked points"""
+    """Request the running distance scale modal to clear picked points (alias)"""
 
-def get_distance_scale_points() -> list["std::array<float, 3ul>"]:
-    """Get the picked points for the distance scale tool"""
+def get_scale_distance_points() -> list[list[float]]:
+    """Get the picked points for the scale distance tool"""
+
+def get_distance_scale_points() -> list[list[float]]:
+    """Get the picked points for the distance scale tool (alias)"""
 
 def fit_crop_tool(use_percentile: bool = False) -> None:
     """

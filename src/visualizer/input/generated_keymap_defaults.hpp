@@ -79,7 +79,7 @@ inline const nlohmann::json& historicalKeymapDefaults() {
     return table;
 }
     // clang-format on
-    inline constexpr std::array<std::pair<std::string_view, int>, 90> kCurrentActionSymbols = {{
+    inline constexpr std::array<std::pair<std::string_view, int>, 91> kCurrentActionSymbols = {{
         {"NONE", static_cast<int>(Action::NONE)},
         {"CAMERA_ORBIT", static_cast<int>(Action::CAMERA_ORBIT)},
         {"CAMERA_PAN", static_cast<int>(Action::CAMERA_PAN)},
@@ -170,5 +170,6 @@ inline const nlohmann::json& historicalKeymapDefaults() {
         {"ASSET_REFRESH", static_cast<int>(Action::ASSET_REFRESH)},
         {"TOGGLE_PYTHON_CONSOLE", static_cast<int>(Action::TOGGLE_PYTHON_CONSOLE)},
         {"CAMERA_RESTORE_HOME", static_cast<int>(Action::CAMERA_RESTORE_HOME)},
+        {"TOOL_SCALE_DISTANCE", static_cast<int>(Action::TOOL_SCALE_DISTANCE)},
     }};
 } // namespace lfs::vis::input

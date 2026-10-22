@@ -156,6 +156,7 @@ namespace lfs::vis::input {
         ASSET_REFRESH,
         TOGGLE_PYTHON_CONSOLE,
         CAMERA_RESTORE_HOME,
+        TOOL_SCALE_DISTANCE,
 
     };
 

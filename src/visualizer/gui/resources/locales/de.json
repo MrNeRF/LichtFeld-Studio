@@ -1186,7 +1186,8 @@
     "mirror": "Spiegeln",
     "crop": "Zuschneiden",
     "align": "Ausrichten",
-    "distance_scale": "Distance Scale"
+    "distance_scale": "Abstand skalieren",
+    "scale_distance": "Abstand skalieren"
   },
   "toolbar": {
     "selection": "Auswahl",
@@ -1253,12 +1254,18 @@
     "reset_default": "Auf Standard zurücksetzen",
     "fullscreen": "Vollbild",
     "toggle_ui": "UI umschalten",
-    "distance_scale": "Distance Scale",
-    "distance_scale_tool": "Distance Tool",
-    "distance_scale_measured": "Measured:",
-    "distance_scale_set": "Set Distance:",
-    "distance_scale_apply": "Confirm scale",
-    "distance_scale_reset": "Reset points"
+    "distance_scale": "Abstand skalieren",
+    "distance_scale_tool": "Abstand skalieren",
+    "distance_scale_measured": "Gemessen:",
+    "distance_scale_set": "Abstand festlegen:",
+    "distance_scale_apply": "Skalierung bestätigen",
+    "distance_scale_reset": "Punkte zurücksetzen",
+    "scale_distance": "Abstand skalieren",
+    "scale_distance_tool": "Abstand skalieren",
+    "scale_distance_measured": "Gemessen:",
+    "scale_distance_set": "Abstand festlegen:",
+    "scale_distance_apply": "Skalierung bestätigen",
+    "scale_distance_reset": "Punkte zurücksetzen"
   },
   "transform": {
     "node": "Knoten: %s",
@@ -1786,6 +1793,7 @@
     "action.tool_scale": "Skalierwerkzeug",
     "action.tool_mirror": "Spiegelwerkzeug",
     "action.tool_align": "Ausrichtungswerkzeug",
+    "action.tool_scale_distance": "Abstand-Skalieren-Werkzeug",
     "action.pie_menu": "Kreismenü",
     "action.group_selected_scene_nodes": "Ausgewählte Szenenknoten gruppieren",
     "action.ungroup_selected_scene_node": "Ausgewählten Szenenknoten aus Gruppe lösen",
@@ -3325,6 +3333,16 @@
   "preferences.drag_pause": "Vor dem Ziehen der Splats das Training pausieren.",
   "preferences.drag_failed": "Splat-Export fehlgeschlagen. Details stehen im Anwendungsprotokoll.",
   "distance_scale": {
-    "status_invalid_distance": "Distance must be greater than zero."
+    "status_invalid_distance": "Der Abstand muss größer als null sein."
+  },
+  "scale_distance": {
+    "click_1st": "1. Punkt klicken",
+    "click_2nd": "2. Punkt klicken",
+    "points_count": "Punkte: {}/2",
+    "hint_picking": "Klick: Punkt setzen/auswählen. Marker ziehen: bewegen. Entf: Auswahl. Esc: abbrechen.",
+    "hint_review": "Zielabstand in der Leiste eingeben und Bestätigen klicken. Punkte zum Anpassen ziehen. Esc: abbrechen.",
+    "status_invalid_distance": "Der Abstand muss größer als null sein.",
+    "status_no_surface": "Keine Oberfläche unter dem Cursor.",
+    "status_no_target": "Kein transformierbares Ziel zum Skalieren."
   }
 }

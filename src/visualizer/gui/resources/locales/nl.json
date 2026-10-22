@@ -1186,7 +1186,8 @@
     "mirror": "Spiegelen",
     "crop": "Bijsnijden",
     "align": "Uitlijnen",
-    "distance_scale": "Distance Scale"
+    "distance_scale": "Afstand schalen",
+    "scale_distance": "Afstand schalen"
   },
   "toolbar": {
     "selection": "Selectie",
@@ -1253,12 +1254,18 @@
     "reset_default": "Reset naar Standaard",
     "fullscreen": "Volledig Scherm",
     "toggle_ui": "Schakel UI",
-    "distance_scale": "Distance Scale",
-    "distance_scale_tool": "Distance Tool",
-    "distance_scale_measured": "Measured:",
-    "distance_scale_set": "Set Distance:",
-    "distance_scale_apply": "Confirm scale",
-    "distance_scale_reset": "Reset points"
+    "distance_scale": "Afstand schalen",
+    "distance_scale_tool": "Afstand schalen",
+    "distance_scale_measured": "Gemeten:",
+    "distance_scale_set": "Afstand instellen:",
+    "distance_scale_apply": "Schaling bevestigen",
+    "distance_scale_reset": "Punten resetten",
+    "scale_distance": "Afstand schalen",
+    "scale_distance_tool": "Afstand schalen",
+    "scale_distance_measured": "Gemeten:",
+    "scale_distance_set": "Afstand instellen:",
+    "scale_distance_apply": "Schaling bevestigen",
+    "scale_distance_reset": "Punten resetten"
   },
   "transform": {
     "node": "Node: %s",
@@ -1786,6 +1793,7 @@
     "action.tool_scale": "Schaalgereedschap",
     "action.tool_mirror": "Spiegelgereedschap",
     "action.tool_align": "Uitlijngereedschap",
+    "action.tool_scale_distance": "Afstand-schaalgereedschap",
     "action.pie_menu": "Cirkelmenu",
     "action.group_selected_scene_nodes": "Geselecteerde sceneknooppunten groeperen",
     "action.ungroup_selected_scene_node": "Geselecteerd sceneknooppunt degroeperen",
@@ -3325,6 +3333,16 @@
   "preferences.drag_pause": "Pauzeer de training voordat u splats sleept.",
   "preferences.drag_failed": "Exporteren van splats mislukt. Zie het toepassingslogboek voor details.",
   "distance_scale": {
-    "status_invalid_distance": "Distance must be greater than zero."
+    "status_invalid_distance": "Afstand moet groter zijn dan nul."
+  },
+  "scale_distance": {
+    "click_1st": "Klik 1e punt",
+    "click_2nd": "Klik 2e punt",
+    "points_count": "Punten: {}/2",
+    "hint_picking": "Klik: punt plaatsen/selecteren. Marker slepen: verplaatsen. Del: selectie. Esc: annuleren.",
+    "hint_review": "Voer doelafstand in op werkbalk en klik op Bevestigen. Sleep punten om aan te passen. Esc: annuleren.",
+    "status_invalid_distance": "Afstand moet groter zijn dan nul.",
+    "status_no_surface": "Geen oppervlak onder de cursor.",
+    "status_no_target": "Geen transformeerbaar doel om te schalen."
   }
 }

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "tools/scale_distance_tool.hpp"
+#include "tools/unified_tool_registry.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/number_format.hpp"
 #include "core/services.hpp"
@@ -333,15 +334,14 @@ namespace lfs::vis::tools {
         const float max_width = std::max(40.0f, std::min(560.0f * ui_scale,
                                                          panel_proj.info.width - (info_x - panel_proj.info.x) - 2.0f * padding));
 
-        const char* hint_text = (picked_points.size() < 2)
-                                    ? "Click 2 points on the splat to measure distance"
-                                    : "Drag points to adjust. Enter desired distance in toolbar and confirm.";
-        const auto lines = wrapHint(*overlay, hint_text, hud_size, max_width);
-        char count_buf[32];
-        std::snprintf(count_buf, sizeof(count_buf), "Points: %zu / 2", picked_points.size());
+        const char* hint_key = (picked_points.size() < 2)
+                                   ? lichtfeld::Strings::ScaleDistance::HINT_PICKING
+                                   : lichtfeld::Strings::ScaleDistance::HINT_REVIEW;
+        const auto lines = wrapHint(*overlay, LOC(hint_key), hud_size, max_width);
+        const auto count_text = LOCF(lichtfeld::Strings::ScaleDistance::POINTS_COUNT, lfs::core::format_count(picked_points.size()));
         const auto* status = services().getScaleDistanceStatusMessage();
 
-        float width = overlay->measureText(count_buf, t.fonts.large_size).x;
+        float width = overlay->measureText(count_text, t.fonts.large_size).x;
         for (const auto& line : lines)
             width = std::max(width, overlay->measureText(line, hud_size).x);
         const auto status_lines = status ? wrapHint(*overlay, *status, hud_size, max_width)
@@ -357,7 +357,7 @@ namespace lfs::vis::tools {
         overlay->addRectFilled(hud_pos - glm::vec2(padding),
                                hud_pos + glm::vec2(width + padding, height + padding),
                                toOverlay(t.overlay.background, 0.96f));
-        overlay->addText(hud_pos, count_buf, toOverlay(t.overlay.text), t.fonts.large_size);
+        overlay->addText(hud_pos, count_text.c_str(), toOverlay(t.overlay.text), t.fonts.large_size);
         glm::vec2 text_pos(hud_pos.x, hud_pos.y + t.fonts.large_size + 8.0f * ui_scale);
         for (const auto& line : lines) {
             overlay->addText(text_pos, line.c_str(), toOverlay(t.overlay.text), hud_size);
@@ -424,21 +424,29 @@ namespace lfs::vis::tools {
             }
         }
 
-        const char* instruction = nullptr;
+        const char* instruction_key = nullptr;
         switch (picked_points.size()) {
-        case 0: instruction = "Click 1st point"; break;
-        case 1: instruction = "Click 2nd point"; break;
+        case 0: instruction_key = lichtfeld::Strings::ScaleDistance::CLICK_1ST; break;
+        case 1: instruction_key = lichtfeld::Strings::ScaleDistance::CLICK_2ND; break;
         default: break;
         }
-        if (instruction) {
+        if (instruction_key) {
             drawLabel(*overlay, {mouse_pos.x + 15.0f, mouse_pos.y - 10.0f},
-                      instruction, toOverlay(t.overlay.text), label_size);
+                      LOC(instruction_key), toOverlay(t.overlay.text), label_size);
         }
     }
 
     void ScaleDistanceTool::onEnabledChanged(bool enabled) {
-        if (tool_context_ && tool_context_->getRenderingManager())
-            tool_context_->getRenderingManager()->setExactSurfacePicking(enabled);
+        if (tool_context_ && tool_context_->getRenderingManager()) {
+            if (enabled) {
+                tool_context_->getRenderingManager()->setExactSurfacePicking(true);
+            } else {
+                const std::string active = UnifiedToolRegistry::instance().getActiveTool();
+                if (active != "builtin.align") {
+                    tool_context_->getRenderingManager()->setExactSurfacePicking(false);
+                }
+            }
+        }
         if (!enabled) {
             if (op::operators().activeModalId() == op::to_string(op::BuiltinOp::ScaleDistancePickPoint)) {
                 op::operators().cancelModalOperator();

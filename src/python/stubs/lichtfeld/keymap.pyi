@@ -183,6 +183,10 @@ class Action(enum.Enum):
 
     TOGGLE_PYTHON_CONSOLE = 90
 
+    CAMERA_RESTORE_HOME = 91
+
+    TOOL_SCALE_DISTANCE = 92
+
     UNGROUP_SELECTED_SCENE_NODE = 86
 
 class ToolMode(enum.Enum):

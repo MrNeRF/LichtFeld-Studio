@@ -457,6 +457,17 @@ namespace lichtfeld::Strings {
         inline constexpr const char* STATUS_NO_TARGET = "align.status_no_target";
     } // namespace Align
 
+    namespace ScaleDistance {
+        inline constexpr const char* CLICK_1ST = "scale_distance.click_1st";
+        inline constexpr const char* CLICK_2ND = "scale_distance.click_2nd";
+        inline constexpr const char* POINTS_COUNT = "scale_distance.points_count";
+        inline constexpr const char* HINT_PICKING = "scale_distance.hint_picking";
+        inline constexpr const char* HINT_REVIEW = "scale_distance.hint_review";
+        inline constexpr const char* STATUS_INVALID_DISTANCE = "scale_distance.status_invalid_distance";
+        inline constexpr const char* STATUS_NO_SURFACE = "scale_distance.status_no_surface";
+        inline constexpr const char* STATUS_NO_TARGET = "scale_distance.status_no_target";
+    } // namespace ScaleDistance
+
     namespace Ellipsoid {
         inline constexpr const char* TITLE = "ellipsoid.title";
         inline constexpr const char* NOT_VISIBLE = "ellipsoid.not_visible";

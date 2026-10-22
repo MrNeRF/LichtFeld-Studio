@@ -1186,7 +1186,8 @@
     "mirror": "Reflejar",
     "crop": "Recortar",
     "align": "Alinear",
-    "distance_scale": "Distance Scale"
+    "distance_scale": "Escalar distancia",
+    "scale_distance": "Escalar distancia"
   },
   "toolbar": {
     "selection": "Selección",
@@ -1253,12 +1254,18 @@
     "reset_default": "Restablecer a Predeterminado",
     "fullscreen": "Pantalla completa",
     "toggle_ui": "Alternar interfaz",
-    "distance_scale": "Distance Scale",
-    "distance_scale_tool": "Distance Tool",
-    "distance_scale_measured": "Measured:",
-    "distance_scale_set": "Set Distance:",
-    "distance_scale_apply": "Confirm scale",
-    "distance_scale_reset": "Reset points"
+    "distance_scale": "Escalar distancia",
+    "distance_scale_tool": "Escalar distancia",
+    "distance_scale_measured": "Medido:",
+    "distance_scale_set": "Establecer distancia:",
+    "distance_scale_apply": "Confirmar escala",
+    "distance_scale_reset": "Restablecer puntos",
+    "scale_distance": "Escalar distancia",
+    "scale_distance_tool": "Escalar distancia",
+    "scale_distance_measured": "Medido:",
+    "scale_distance_set": "Establecer distancia:",
+    "scale_distance_apply": "Confirmar escala",
+    "scale_distance_reset": "Restablecer puntos"
   },
   "transform": {
     "node": "Nodo: %s",
@@ -1786,6 +1793,7 @@
     "action.tool_scale": "Herramienta escalar",
     "action.tool_mirror": "Herramienta espejo",
     "action.tool_align": "Herramienta alinear",
+    "action.tool_scale_distance": "Herramienta escalar distancia",
     "action.pie_menu": "Menú radial",
     "action.group_selected_scene_nodes": "Agrupar nodos de escena seleccionados",
     "action.ungroup_selected_scene_node": "Desagrupar nodo de escena seleccionado",
@@ -3325,6 +3333,16 @@
   "preferences.drag_pause": "Pausa el entrenamiento antes de arrastrar los splats.",
   "preferences.drag_failed": "Error al exportar los splats. Consulta el registro de la aplicación para ver los detalles.",
   "distance_scale": {
-    "status_invalid_distance": "Distance must be greater than zero."
+    "status_invalid_distance": "La distancia debe ser mayor que cero."
+  },
+  "scale_distance": {
+    "click_1st": "Clic en el 1.er punto",
+    "click_2nd": "Clic en el 2.º punto",
+    "points_count": "Puntos: {}/2",
+    "hint_picking": "Clic: colocar/seleccionar punto. Arrastrar marca: mover. Supr: quitar seleccionada. Esc: cancelar.",
+    "hint_review": "Introduce la distancia objetivo en la barra y haz clic en Confirmar. Arrastra los puntos para ajustar. Esc: cancelar.",
+    "status_invalid_distance": "La distancia debe ser mayor que cero.",
+    "status_no_surface": "No hay superficie bajo el cursor.",
+    "status_no_target": "No hay un objetivo transformable para escalar."
   }
 }

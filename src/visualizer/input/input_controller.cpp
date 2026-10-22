@@ -304,6 +304,8 @@ namespace lfs::vis {
                 return ToolType::Mirror;
             case input::Action::TOOL_ALIGN:
                 return ToolType::Align;
+            case input::Action::TOOL_SCALE_DISTANCE:
+                return ToolType::ScaleDistance;
             default:
                 return std::nullopt;
             }

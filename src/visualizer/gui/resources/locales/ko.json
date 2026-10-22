@@ -1186,7 +1186,8 @@
     "mirror": "미러",
     "crop": "자르기",
     "align": "정렬",
-    "distance_scale": "Distance Scale"
+    "distance_scale": "거리 기준 크기 조절",
+    "scale_distance": "거리 기준 크기 조절"
   },
   "toolbar": {
     "selection": "선택",
@@ -1253,12 +1254,18 @@
     "reset_default": "기본값으로 재설정",
     "fullscreen": "전체 화면",
     "toggle_ui": "UI 토글",
-    "distance_scale": "Distance Scale",
-    "distance_scale_tool": "Distance Tool",
-    "distance_scale_measured": "Measured:",
-    "distance_scale_set": "Set Distance:",
-    "distance_scale_apply": "Confirm scale",
-    "distance_scale_reset": "Reset points"
+    "distance_scale": "거리 기준 크기 조절",
+    "distance_scale_tool": "거리 스케일",
+    "distance_scale_measured": "측정치:",
+    "distance_scale_set": "거리 설정:",
+    "distance_scale_apply": "크기 조절 확정",
+    "distance_scale_reset": "점 재설정",
+    "scale_distance": "거리 기준 크기 조절",
+    "scale_distance_tool": "거리 스케일",
+    "scale_distance_measured": "측정치:",
+    "scale_distance_set": "거리 설정:",
+    "scale_distance_apply": "크기 조절 확정",
+    "scale_distance_reset": "점 재설정"
   },
   "transform": {
     "node": "노드: %s",
@@ -1786,6 +1793,7 @@
     "action.tool_scale": "크기 조정 도구",
     "action.tool_mirror": "거울 도구",
     "action.tool_align": "정렬 도구",
+    "action.tool_scale_distance": "거리 스케일 도구",
     "action.pie_menu": "파이 메뉴",
     "action.group_selected_scene_nodes": "선택한 장면 노드 그룹화",
     "action.ungroup_selected_scene_node": "선택한 장면 노드 그룹 해제",
@@ -3325,6 +3333,16 @@
   "preferences.drag_pause": "스플랫을 드래그하기 전에 학습을 일시 중지하세요.",
   "preferences.drag_failed": "스플랫 내보내기에 실패했습니다. 자세한 내용은 애플리케이션 로그를 확인하세요.",
   "distance_scale": {
-    "status_invalid_distance": "Distance must be greater than zero."
+    "status_invalid_distance": "거리는 0보다 커야 합니다."
+  },
+  "scale_distance": {
+    "click_1st": "첫 번째 점 클릭",
+    "click_2nd": "두 번째 점 클릭",
+    "points_count": "점: {}/2",
+    "hint_picking": "클릭: 점 배치/선택. 마커 드래그: 이동. Del: 선택 삭제. Esc: 취소.",
+    "hint_review": "툴바에 목표 거리를 입력하고 확정을 클릭하여 크기 조절. 점을 드래그하여 조정. Esc: 취소.",
+    "status_invalid_distance": "거리는 0보다 커야 합니다.",
+    "status_no_surface": "커서 아래에 표면이 없습니다.",
+    "status_no_target": "크기를 조절할 변환 가능한 대상이 없습니다."
   }
 }

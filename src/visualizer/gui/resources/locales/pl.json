@@ -1186,7 +1186,8 @@
     "mirror": "Odbij",
     "crop": "Przytnij",
     "align": "Wyrównaj",
-    "distance_scale": "Distance Scale"
+    "distance_scale": "Skaluj według odległości",
+    "scale_distance": "Skaluj według odległości"
   },
   "toolbar": {
     "selection": "Zaznaczenie",
@@ -1253,12 +1254,18 @@
     "reset_default": "Resetuj do Domyślnych",
     "fullscreen": "Pełny Ekran",
     "toggle_ui": "Przełącz UI",
-    "distance_scale": "Distance Scale",
-    "distance_scale_tool": "Distance Tool",
-    "distance_scale_measured": "Measured:",
-    "distance_scale_set": "Set Distance:",
-    "distance_scale_apply": "Confirm scale",
-    "distance_scale_reset": "Reset points"
+    "distance_scale": "Skaluj według odległości",
+    "distance_scale_tool": "Skala odległości",
+    "distance_scale_measured": "Zmierzono:",
+    "distance_scale_set": "Ustaw odległość:",
+    "distance_scale_apply": "Zatwierdź skalę",
+    "distance_scale_reset": "Zresetuj punkty",
+    "scale_distance": "Skaluj według odległości",
+    "scale_distance_tool": "Skala odległości",
+    "scale_distance_measured": "Zmierzono:",
+    "scale_distance_set": "Ustaw odległość:",
+    "scale_distance_apply": "Zatwierdź skalę",
+    "scale_distance_reset": "Zresetuj punkty"
   },
   "transform": {
     "node": "Węzeł: %s",
@@ -1786,6 +1793,7 @@
     "action.tool_scale": "Narzędzie skalowania",
     "action.tool_mirror": "Narzędzie lustrzane",
     "action.tool_align": "Narzędzie wyrównywania",
+    "action.tool_scale_distance": "Narzędzie skali odległości",
     "action.pie_menu": "Menu kołowe",
     "action.group_selected_scene_nodes": "Grupuj wybrane węzły sceny",
     "action.ungroup_selected_scene_node": "Rozgrupuj wybrany węzeł sceny",
@@ -3325,6 +3333,16 @@
   "preferences.drag_pause": "Wstrzymaj trening przed przeciągnięciem splatów.",
   "preferences.drag_failed": "Eksport splatów nie powiódł się. Szczegóły znajdują się w dzienniku aplikacji.",
   "distance_scale": {
-    "status_invalid_distance": "Distance must be greater than zero."
+    "status_invalid_distance": "Odległość musi być większa od zera."
+  },
+  "scale_distance": {
+    "click_1st": "Kliknij 1. punkt",
+    "click_2nd": "Kliknij 2. punkt",
+    "points_count": "Punkty: {}/2",
+    "hint_picking": "Klik: ustaw/wybierz punkt. Przeciągnij marker: przesuń. Del: usuń wybrany. Esc: anuluj.",
+    "hint_review": "Wpisz docelową odległość na pasku i kliknij Zatwierdź. Przeciągnij punkty, aby poprawić. Esc: anuluj.",
+    "status_invalid_distance": "Odległość musi być większa od zera.",
+    "status_no_surface": "Brak powierzchni pod kursorem.",
+    "status_no_target": "Brak obiektu do przeskalowania."
   }
 }

@@ -33,7 +33,6 @@ namespace lfs::python {
             .value("TransformScale", vis::op::BuiltinOp::TransformScale)
             .value("TransformApplyBatch", vis::op::BuiltinOp::TransformApplyBatch)
             .value("AlignPickPoint", vis::op::BuiltinOp::AlignPickPoint)
-            .value("ScaleDistancePickPoint", vis::op::BuiltinOp::ScaleDistancePickPoint)
             .value("Undo", vis::op::BuiltinOp::Undo)
             .value("Redo", vis::op::BuiltinOp::Redo)
             .value("Delete", vis::op::BuiltinOp::Delete)
@@ -46,7 +45,8 @@ namespace lfs::python {
             .value("EllipsoidAdd", vis::op::BuiltinOp::EllipsoidAdd)
             .value("EllipsoidSet", vis::op::BuiltinOp::EllipsoidSet)
             .value("EllipsoidFit", vis::op::BuiltinOp::EllipsoidFit)
-            .value("EllipsoidReset", vis::op::BuiltinOp::EllipsoidReset);
+            .value("EllipsoidReset", vis::op::BuiltinOp::EllipsoidReset)
+            .value("ScaleDistancePickPoint", vis::op::BuiltinOp::ScaleDistancePickPoint);
 
         nb::enum_<vis::op::BuiltinTool>(ops, "BuiltinTool")
             .value("Select", vis::op::BuiltinTool::Select)

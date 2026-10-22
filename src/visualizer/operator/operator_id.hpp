@@ -21,7 +21,6 @@ namespace lfs::vis::op {
         TransformApplyBatch,
 
         AlignPickPoint,
-        ScaleDistancePickPoint,
 
         Undo,
         Redo,
@@ -36,6 +35,8 @@ namespace lfs::vis::op {
         EllipsoidSet,
         EllipsoidFit,
         EllipsoidReset,
+
+        ScaleDistancePickPoint,
 
         _Count
     };

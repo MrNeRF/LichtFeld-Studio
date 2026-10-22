@@ -24,13 +24,13 @@ namespace lfs::vis::op {
         OperatorResult modal(OperatorContext& ctx, OperatorProperties& props) override;
         void cancel(OperatorContext& ctx) override;
 
+    private:
+        friend class ScaleDistanceOperatorTest;
+
         void setPickedPointsForTesting(const std::vector<glm::vec3>& pts) {
             picked_points_ = pts;
             syncPickedPointsToServices();
         }
-
-    private:
-        friend class ScaleDistanceOperatorTest;
         std::vector<glm::vec3> picked_points_;
         int pick_button_ = 0;
         bool press_active_ = false;

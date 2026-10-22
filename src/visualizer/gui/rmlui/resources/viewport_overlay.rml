@@ -132,7 +132,7 @@
             </div>
         </div>
 
-        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar" data-class-distance-scale-active="show_distance_scale_toolbar">
+        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar" data-class-scale-distance-active="show_scale_distance_toolbar" data-class-distance-scale-active="show_distance_scale_toolbar">
             <div id="primary-transform-toolbar" class="toolbar-container hidden"
                  data-class-hidden="!show_transform_toolbar">
                 <div class="icon-btn"
@@ -177,29 +177,29 @@
                     <span class="align-button-label" data-if="button.label != ''">{{button.label}}</span>
                 </div>
             </div>
-            <div id="primary-distance-scale-toolbar" class="toolbar-container distance-scale-toolbar hidden"
-                 data-class-hidden="!show_distance_scale_toolbar">
-                <span class="distance-scale-title">@tr:toolbar.distance_scale_tool</span>
+            <div id="primary-scale-distance-toolbar" class="toolbar-container scale-distance-toolbar distance-scale-toolbar hidden"
+                 data-class-hidden="!show_scale_distance_toolbar">
+                <span class="scale-distance-title distance-scale-title">@tr:toolbar.scale_distance_tool</span>
                 <div class="toolbar-separator"></div>
-                <span class="distance-scale-label">@tr:toolbar.distance_scale_measured</span>
-                <span class="distance-scale-value">{{distance_scale_measured_str}}</span>
+                <span class="scale-distance-label distance-scale-label">@tr:toolbar.scale_distance_measured</span>
+                <span class="scale-distance-value distance-scale-value">{{scale_distance_measured_str}}</span>
                 <div class="toolbar-separator"></div>
-                <span class="distance-scale-label">@tr:toolbar.distance_scale_set</span>
-                <input type="text" class="number-input distance-scale-input" id="primary-distance-scale-target" data-value="distance_scale_target_str" />
+                <span class="scale-distance-label distance-scale-label">@tr:toolbar.scale_distance_set</span>
+                <input type="text" class="number-input scale-distance-input distance-scale-input" id="primary-scale-distance-target" data-value="scale_distance_target_str" />
                 <div class="icon-btn"
-                     id="primary-distance-scale-confirm"
-                     title="@tr:toolbar.distance_scale_apply"
-                     data-attrif-disabled="!distance_scale_can_apply"
-                     data-class-disabled="!distance_scale_can_apply"
-                     data-event-click="toolbar_action('distance_scale_apply', '')">
+                     id="primary-scale-distance-confirm"
+                     title="@tr:toolbar.scale_distance_apply"
+                     data-attrif-disabled="!scale_distance_can_apply"
+                     data-class-disabled="!scale_distance_can_apply"
+                     data-event-click="toolbar_action('scale_distance_apply', '')">
                     <img src="../icon/check.png" />
                 </div>
                 <div class="icon-btn"
-                     id="primary-distance-scale-reset"
-                     title="@tr:toolbar.distance_scale_reset"
-                     data-attrif-disabled="!distance_scale_can_reset"
-                     data-class-disabled="!distance_scale_can_reset"
-                     data-event-click="toolbar_action('distance_scale_reset', '')">
+                     id="primary-scale-distance-reset"
+                     title="@tr:toolbar.scale_distance_reset"
+                     data-attrif-disabled="!scale_distance_can_reset"
+                     data-class-disabled="!scale_distance_can_reset"
+                     data-event-click="toolbar_action('scale_distance_reset', '')">
                     <img src="../icon/reset.png" />
                 </div>
             </div>
@@ -433,7 +433,7 @@
             </div>
         </div>
 
-        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar" data-class-distance-scale-active="show_distance_scale_toolbar">
+        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar" data-class-scale-distance-active="show_scale_distance_toolbar" data-class-distance-scale-active="show_distance_scale_toolbar">
             <div id="secondary-transform-toolbar" class="toolbar-container hidden"
                  data-class-hidden="!show_transform_toolbar">
                 <div class="icon-btn"
@@ -478,29 +478,29 @@
                     <span class="align-button-label" data-if="button.label != ''">{{button.label}}</span>
                 </div>
             </div>
-            <div id="secondary-distance-scale-toolbar" class="toolbar-container distance-scale-toolbar hidden"
-                 data-class-hidden="!show_distance_scale_toolbar">
-                <span class="distance-scale-title">@tr:toolbar.distance_scale_tool</span>
+            <div id="secondary-scale-distance-toolbar" class="toolbar-container scale-distance-toolbar distance-scale-toolbar hidden"
+                 data-class-hidden="!show_scale_distance_toolbar">
+                <span class="scale-distance-title distance-scale-title">@tr:toolbar.scale_distance_tool</span>
                 <div class="toolbar-separator"></div>
-                <span class="distance-scale-label">@tr:toolbar.distance_scale_measured</span>
-                <span class="distance-scale-value">{{distance_scale_measured_str}}</span>
+                <span class="scale-distance-label distance-scale-label">@tr:toolbar.scale_distance_measured</span>
+                <span class="scale-distance-value distance-scale-value">{{scale_distance_measured_str}}</span>
                 <div class="toolbar-separator"></div>
-                <span class="distance-scale-label">@tr:toolbar.distance_scale_set</span>
-                <input type="text" class="number-input distance-scale-input" id="secondary-distance-scale-target" data-value="distance_scale_target_str" />
+                <span class="scale-distance-label distance-scale-label">@tr:toolbar.scale_distance_set</span>
+                <input type="text" class="number-input scale-distance-input distance-scale-input" id="secondary-scale-distance-target" data-value="scale_distance_target_str" />
                 <div class="icon-btn"
-                     id="secondary-distance-scale-confirm"
-                     title="@tr:toolbar.distance_scale_apply"
-                     data-attrif-disabled="!distance_scale_can_apply"
-                     data-class-disabled="!distance_scale_can_apply"
-                     data-event-click="toolbar_action('distance_scale_apply', '')">
+                     id="secondary-scale-distance-confirm"
+                     title="@tr:toolbar.scale_distance_apply"
+                     data-attrif-disabled="!scale_distance_can_apply"
+                     data-class-disabled="!scale_distance_can_apply"
+                     data-event-click="toolbar_action('scale_distance_apply', '')">
                     <img src="../icon/check.png" />
                 </div>
                 <div class="icon-btn"
-                     id="secondary-distance-scale-reset"
-                     title="@tr:toolbar.distance_scale_reset"
-                     data-attrif-disabled="!distance_scale_can_reset"
-                     data-class-disabled="!distance_scale_can_reset"
-                     data-event-click="toolbar_action('distance_scale_reset', '')">
+                     id="secondary-scale-distance-reset"
+                     title="@tr:toolbar.scale_distance_reset"
+                     data-attrif-disabled="!scale_distance_can_reset"
+                     data-class-disabled="!scale_distance_can_reset"
+                     data-event-click="toolbar_action('scale_distance_reset', '')">
                     <img src="../icon/reset.png" />
                 </div>
             </div>

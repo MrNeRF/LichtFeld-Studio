@@ -179,6 +179,7 @@ namespace lfs::python {
             .value("TOOL_SCALE", Action::TOOL_SCALE)
             .value("TOOL_MIRROR", Action::TOOL_MIRROR)
             .value("TOOL_ALIGN", Action::TOOL_ALIGN)
+            .value("TOOL_SCALE_DISTANCE", Action::TOOL_SCALE_DISTANCE)
             .value("PIE_MENU", Action::PIE_MENU)
             .value("DEPTH_ADJUST_NEAR", Action::DEPTH_ADJUST_NEAR)
             .value("HISTOGRAM_ZOOM_MARKED", Action::HISTOGRAM_ZOOM_MARKED)

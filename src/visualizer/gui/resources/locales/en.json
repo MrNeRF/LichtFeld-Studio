@@ -1197,7 +1197,8 @@
     "mirror": "Mirror",
     "crop": "Crop",
     "align": "Align",
-    "distance_scale": "Distance Scale"
+    "distance_scale": "Scale Distance",
+    "scale_distance": "Scale Distance"
   },
   "toolbar": {
     "selection": "Selection",
@@ -1206,8 +1207,8 @@
     "scale": "Scale",
     "mirror": "Mirror",
     "align_3point": "3-Point Align",
-    "distance_scale": "Distance Scale",
-    "distance_scale_tool": "Distance Tool",
+    "distance_scale": "Scale Distance",
+    "distance_scale_tool": "Scale Distance",
     "distance_scale_measured": "Measured:",
     "distance_scale_set": "Set Distance:",
     "distance_scale_apply": "Confirm scale",
@@ -1269,7 +1270,13 @@
     "resize_bounds": "Resize Bounds",
     "reset_default": "Reset to Default",
     "fullscreen": "Fullscreen",
-    "toggle_ui": "Toggle UI"
+    "toggle_ui": "Toggle UI",
+    "scale_distance": "Scale Distance",
+    "scale_distance_tool": "Scale Distance",
+    "scale_distance_measured": "Measured:",
+    "scale_distance_set": "Set Distance:",
+    "scale_distance_apply": "Confirm scale",
+    "scale_distance_reset": "Reset points"
   },
   "transform": {
     "node": "Node: %s",
@@ -1797,6 +1804,7 @@
     "action.tool_scale": "Scale Tool",
     "action.tool_mirror": "Mirror Tool",
     "action.tool_align": "Align Tool",
+    "action.tool_scale_distance": "Scale Distance Tool",
     "action.pie_menu": "Pie Menu",
     "action.group_selected_scene_nodes": "Group Selected Scene Nodes",
     "action.ungroup_selected_scene_node": "Ungroup Selected Scene Node",
@@ -3326,5 +3334,15 @@
   "project.session.newer_settings.title": "Project settings from a newer version",
   "project.session.newer_settings.message": "This project contains settings this version does not recognize. Default values were used for: {}",
   "preferences.drag_pause": "Pause training before dragging splats.",
-  "preferences.drag_failed": "Splat export failed. See the application log for details."
+  "preferences.drag_failed": "Splat export failed. See the application log for details.",
+  "scale_distance": {
+    "click_1st": "Click 1st point",
+    "click_2nd": "Click 2nd point",
+    "points_count": "Points: {}/2",
+    "hint_picking": "Click: place/select point. Drag marker: move. Del: remove selected. Esc: cancel.",
+    "hint_review": "Enter target distance in toolbar and click Confirm to scale. Drag points to adjust. Esc: cancel.",
+    "status_invalid_distance": "Distance must be greater than zero.",
+    "status_no_surface": "No surface under the cursor.",
+    "status_no_target": "No transformable target to scale."
+  }
 }

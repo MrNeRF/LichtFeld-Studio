@@ -1774,6 +1774,7 @@ namespace lfs::vis::input {
             Action::TOOL_SCALE,
             Action::TOOL_MIRROR,
             Action::TOOL_ALIGN,
+            Action::TOOL_SCALE_DISTANCE,
             Action::CANCEL_POLYGON,
         };
         const auto defaults = createDefaultProfile().bindings;
@@ -2082,6 +2083,7 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_4}, Action::TOOL_SCALE, "Scale"},
             {KeyTrigger{KEY_5}, Action::TOOL_MIRROR, "Mirror"},
             {KeyTrigger{KEY_6}, Action::TOOL_ALIGN, "Align"},
+            {KeyTrigger{KEY_7}, Action::TOOL_SCALE_DISTANCE, "Scale Distance"},
             {KeyTrigger{KEY_GRAVE_ACCENT}, Action::PIE_MENU, "Pie Menu"},
         };
 
@@ -2229,6 +2231,7 @@ namespace lfs::vis::input {
         case Action::TOOL_SCALE: return "Scale Tool";
         case Action::TOOL_MIRROR: return "Mirror Tool";
         case Action::TOOL_ALIGN: return "Align Tool";
+        case Action::TOOL_SCALE_DISTANCE: return "Scale Distance Tool";
         case Action::PIE_MENU: return "Pie Menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "Zoom Histogram at Cursor";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "Toggle Camera Frustums";
@@ -2325,6 +2328,7 @@ namespace lfs::vis::input {
         case Action::TOOL_SCALE: return "tool_scale";
         case Action::TOOL_MIRROR: return "tool_mirror";
         case Action::TOOL_ALIGN: return "tool_align";
+        case Action::TOOL_SCALE_DISTANCE: return "tool_scale_distance";
         case Action::PIE_MENU: return "pie_menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "histogram_zoom_marked";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "toggle_camera_frustums";
@@ -3113,6 +3117,7 @@ namespace lfs::vis::input {
         case Action::TOOL_SCALE:
         case Action::TOOL_MIRROR:
         case Action::TOOL_ALIGN:
+        case Action::TOOL_SCALE_DISTANCE:
             return d_tools_key;
 
         case Action::PIE_MENU:

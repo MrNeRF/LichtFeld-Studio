@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/services.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/ops/scale_distance_ops.hpp"
@@ -171,7 +170,6 @@ namespace lfs::vis::op {
             context_.reset();
             manager_.reset();
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
         }
 
         OperatorResult requestAction(Services::ScaleDistanceUiAction action, float target = 0.0f) {
@@ -202,22 +200,13 @@ namespace lfs::vis::op {
 
         // Apply scale to target distance = 6.0 (scale factor = 3.0)
         const auto result = requestAction(Services::ScaleDistanceUiAction::Apply, 6.0f);
-        EXPECT_EQ(result, OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(result, OperatorResult::FINISHED);
 
         const auto scaled_transform = targetTransform();
         EXPECT_NE(scaled_transform, original_transform);
 
-        // Pointers in services are transformed to new positions
-        const auto& new_pts = services().getScaleDistancePickedPoints();
-        ASSERT_EQ(new_pts.size(), 2u);
-        EXPECT_NEAR(glm::length(new_pts[1] - new_pts[0]), 6.0f, 1e-4f);
-
-        // Midpoint remains identical
-        const glm::vec3 orig_mid = (p0 + p1) * 0.5f;
-        const glm::vec3 new_mid = (new_pts[0] + new_pts[1]) * 0.5f;
-        EXPECT_NEAR(new_mid.x, orig_mid.x, 1e-4f);
-        EXPECT_NEAR(new_mid.y, orig_mid.y, 1e-4f);
-        EXPECT_NEAR(new_mid.z, orig_mid.z, 1e-4f);
+        // Points in services are cleared upon successful apply
+        EXPECT_TRUE(services().getScaleDistancePickedPoints().empty());
 
         // Exactly 1 undo step created
         EXPECT_EQ(undoHistory().undoCount(), 1u);

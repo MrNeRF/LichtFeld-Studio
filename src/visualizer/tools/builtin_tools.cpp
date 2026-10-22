@@ -81,7 +81,7 @@ namespace lfs::vis {
         addTool("builtin.mirror", "Mirror", "mirror", "5", "transform", ORDER_MIRROR, ToolType::Mirror);
         addCropTool();
         addTool("builtin.align", "Align", "align", "6", "align", ORDER_ALIGN, ToolType::Align);
-        addTool("builtin.distance_scale", "Distance Scale", "bounds", "7", "align", ORDER_SCALE_DISTANCE, ToolType::ScaleDistance);
+        addTool("builtin.scale_distance", "Scale Distance", "bounds", "7", "align", ORDER_SCALE_DISTANCE, ToolType::ScaleDistance);
     }
 
 } // namespace lfs::vis

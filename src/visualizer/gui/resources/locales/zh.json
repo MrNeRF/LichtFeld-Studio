@@ -1186,7 +1186,8 @@
     "mirror": "镜像",
     "crop": "裁剪",
     "align": "对齐",
-    "distance_scale": "Distance Scale"
+    "distance_scale": "按距离缩放",
+    "scale_distance": "按距离缩放"
   },
   "toolbar": {
     "selection": "选择",
@@ -1253,12 +1254,18 @@
     "reset_default": "重置为默认",
     "fullscreen": "全屏",
     "toggle_ui": "切换UI",
-    "distance_scale": "Distance Scale",
-    "distance_scale_tool": "Distance Tool",
-    "distance_scale_measured": "Measured:",
-    "distance_scale_set": "Set Distance:",
-    "distance_scale_apply": "Confirm scale",
-    "distance_scale_reset": "Reset points"
+    "distance_scale": "按距离缩放",
+    "distance_scale_tool": "距离缩放",
+    "distance_scale_measured": "测量值:",
+    "distance_scale_set": "设置距离:",
+    "distance_scale_apply": "确认缩放",
+    "distance_scale_reset": "重置点",
+    "scale_distance": "按距离缩放",
+    "scale_distance_tool": "距离缩放",
+    "scale_distance_measured": "测量值:",
+    "scale_distance_set": "设置距离:",
+    "scale_distance_apply": "确认缩放",
+    "scale_distance_reset": "重置点"
   },
   "transform": {
     "node": "节点：%s",
@@ -1786,6 +1793,7 @@
     "action.tool_scale": "缩放工具",
     "action.tool_mirror": "镜像工具",
     "action.tool_align": "对齐工具",
+    "action.tool_scale_distance": "距离缩放工具",
     "action.pie_menu": "饼形菜单",
     "action.group_selected_scene_nodes": "对所选场景节点分组",
     "action.ungroup_selected_scene_node": "取消所选场景节点分组",
@@ -3325,6 +3333,16 @@
   "preferences.drag_pause": "拖动高斯点前请暂停训练。",
   "preferences.drag_failed": "高斯点导出失败。详情请查看应用程序日志。",
   "distance_scale": {
-    "status_invalid_distance": "Distance must be greater than zero."
+    "status_invalid_distance": "距离必须大于零。"
+  },
+  "scale_distance": {
+    "click_1st": "点击第 1 个点",
+    "click_2nd": "点击第 2 个点",
+    "points_count": "点: {}/2",
+    "hint_picking": "点击：放置/选择点。拖动标记：移动。Del：删除所选。Esc：取消。",
+    "hint_review": "在工具栏输入目标距离并点击确认进行缩放。拖动点进行调整。Esc：取消。",
+    "status_invalid_distance": "距离必须大于零。",
+    "status_no_surface": "光标下没有表面。",
+    "status_no_target": "没有可缩放的可变换目标。"
   }
 }

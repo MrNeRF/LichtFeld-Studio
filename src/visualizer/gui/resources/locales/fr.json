@@ -1186,7 +1186,8 @@
     "mirror": "Miroir",
     "crop": "Rogner",
     "align": "Aligner",
-    "distance_scale": "Distance Scale"
+    "distance_scale": "Mettre à l’échelle par distance",
+    "scale_distance": "Mettre à l’échelle par distance"
   },
   "toolbar": {
     "selection": "Sélection",
@@ -1253,12 +1254,18 @@
     "reset_default": "Réinitialiser par Défaut",
     "fullscreen": "Plein Écran",
     "toggle_ui": "Basculer UI",
-    "distance_scale": "Distance Scale",
-    "distance_scale_tool": "Distance Tool",
-    "distance_scale_measured": "Measured:",
-    "distance_scale_set": "Set Distance:",
-    "distance_scale_apply": "Confirm scale",
-    "distance_scale_reset": "Reset points"
+    "distance_scale": "Mettre à l’échelle par distance",
+    "distance_scale_tool": "Échelle par distance",
+    "distance_scale_measured": "Mesuré :",
+    "distance_scale_set": "Définir la distance :",
+    "distance_scale_apply": "Confirmer l’échelle",
+    "distance_scale_reset": "Réinitialiser les points",
+    "scale_distance": "Mettre à l’échelle par distance",
+    "scale_distance_tool": "Échelle par distance",
+    "scale_distance_measured": "Mesuré :",
+    "scale_distance_set": "Définir la distance :",
+    "scale_distance_apply": "Confirmer l’échelle",
+    "scale_distance_reset": "Réinitialiser les points"
   },
   "transform": {
     "node": "Nœud : %s",
@@ -1786,6 +1793,7 @@
     "action.tool_scale": "Outil de mise à l'échelle",
     "action.tool_mirror": "Outil miroir",
     "action.tool_align": "Outil d'alignement",
+    "action.tool_scale_distance": "Outil de mise à l’échelle par distance",
     "action.pie_menu": "Menu radial",
     "action.group_selected_scene_nodes": "Grouper les nœuds de scène sélectionnés",
     "action.ungroup_selected_scene_node": "Dissocier le nœud de scène sélectionné",
@@ -3325,6 +3333,16 @@
   "preferences.drag_pause": "Mettre l’entraînement en pause avant de faire glisser les splats.",
   "preferences.drag_failed": "Échec de l’exportation des splats. Consulter le journal de l’application pour les détails.",
   "distance_scale": {
-    "status_invalid_distance": "Distance must be greater than zero."
+    "status_invalid_distance": "La distance doit être supérieure à zéro."
+  },
+  "scale_distance": {
+    "click_1st": "Cliquez le 1er point",
+    "click_2nd": "Cliquez le 2e point",
+    "points_count": "Points : {}/2",
+    "hint_picking": "Clic : placer/sélectionner un point. Glisser un point : déplacer. Suppr : sélection. Échap : annuler.",
+    "hint_review": "Entrez la distance cible dans la barre et cliquez sur Confirmer. Faites glisser les points pour ajuster. Échap : annuler.",
+    "status_invalid_distance": "La distance doit être supérieure à zéro.",
+    "status_no_surface": "Aucune surface sous le curseur.",
+    "status_no_target": "Aucune cible transformable à mettre à l’échelle."
   }
 }

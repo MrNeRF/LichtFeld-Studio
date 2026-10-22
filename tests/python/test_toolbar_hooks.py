@@ -274,10 +274,15 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "show_transform_space_controls" in model.bound_funcs
     assert "show_transform_pivot_controls" in model.bound_funcs
     assert "show_align_toolbar" in model.bound_funcs
+    assert "show_scale_distance_toolbar" in model.bound_funcs
     assert "show_distance_scale_toolbar" in model.bound_funcs
+    assert "scale_distance_can_apply" in model.bound_funcs
     assert "distance_scale_can_apply" in model.bound_funcs
+    assert "scale_distance_can_reset" in model.bound_funcs
     assert "distance_scale_can_reset" in model.bound_funcs
+    assert "scale_distance_measured_str" in model.bound_funcs
     assert "distance_scale_measured_str" in model.bound_funcs
+    assert "scale_distance_target_str" in model.bound_binds
     assert "distance_scale_target_str" in model.bound_binds
     assert "show_crop_toolbar" in model.bound_funcs
     assert "show_crop_edit_controls" in model.bound_funcs
@@ -1503,7 +1508,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert 'class="toolbar-flyout-divider hidden"' not in rml
     assert "toolbar-flyout" not in rml
     assert rml.count('data-for="button : selection_group_buttons"') == 2
-    assert rml.count('class="toolbar-separator"') == 6
+    assert rml.count('class="toolbar-separator"') == 10
     assert 'class="toolbar-separator hidden"' in rml
     assert rml.count('class="viewport-gizmo-controls"') == 2
     assert rml.count('class="viewport-gizmo-control-row"') == 2
@@ -2536,4 +2541,42 @@ def test_distance_scale_toolbar_actions_and_snapshot(toolbar_module, monkeypatch
 
     controller.dispatch("distance_scale_reset", "")
     assert cleared["count"] == 1
+
+
+def test_scale_distance_toolbar_actions_and_snapshot(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    applied_targets = []
+    cleared = {"count": 0}
+
+    lf_stub.ui.can_apply_scale_distance = lambda: True
+    lf_stub.ui.get_scale_distance_measured = lambda: 2.5
+    lf_stub.ui.get_scale_distance_points = lambda: [[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]]
+    lf_stub.ui.apply_scale_distance = lambda target: applied_targets.append(target) or True
+    lf_stub.ui.clear_scale_distance = lambda: cleared.__setitem__("count", cleared["count"] + 1)
+
+    controller = module._GizmoToolbarController()
+    snapshot = controller.snapshot()
+    assert snapshot["show_scale_distance_toolbar"] is False
+
+    tool_def = SimpleNamespace(
+        id="builtin.scale_distance",
+        icon="bounds",
+        label="Scale Distance",
+        submodes=(),
+        pivot_modes=(),
+        can_activate=lambda _context: True,
+    )
+    monkeypatch.setattr(module.ToolRegistry, "get", lambda tool_id: tool_def if tool_id == "builtin.scale_distance" else None)
+    monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: "builtin.scale_distance")
+
+    snapshot = controller.snapshot()
+    assert snapshot["show_scale_distance_toolbar"] is True
+
+    controller.dispatch("scale_distance_apply", "3.0")
+    assert applied_targets == [3.0]
+
+    controller.dispatch("scale_distance_reset", "")
+    assert cleared["count"] == 1
+
 
