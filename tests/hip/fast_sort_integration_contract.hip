@@ -9,6 +9,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <stdexcept>
 #include <vector>
 #include <utility>
@@ -35,7 +36,9 @@ struct Allocations {
     uint64_t floats(size_t n,const float* input=nullptr){float* p;check(hipMalloc(&p,n*sizeof(float)));pointers.push_back(p);if(input)check(hipMemcpy(p,input,n*sizeof(float),hipMemcpyHostToDevice));else check(hipMemset(p,0,n*sizeof(float)));return reinterpret_cast<uint64_t>(p);}
 };
 int main(int argc,char** argv)try{
-    require(argc==3,"Pass absolute baseline and candidate training modules");
+    require(argc==3 || (argc==4 && !std::strcmp(argv[3],"--profile")),
+            "Pass absolute baseline and candidate training modules, optionally --profile");
+    const bool compare_profiles=argc==4;
     check(hipSetDevice(0));hipStream_t stream;check(hipStreamCreateWithFlags(&stream,hipStreamNonBlocking));
     Module baseline(argv[1]),candidate(argv[2]);
     constexpr unsigned attributes[]{3,3,4,1,3};
@@ -46,6 +49,9 @@ int main(int argc,char** argv)try{
                             Case{65,33,40019,4,true,false}, Case{65,33,40019,1,false,true},
                             Case{193,129,1000000,1,false,false}, Case{1,1,40019,1,false,false,1},
                             Case{1,1,40019,1,false,false,2}}){
+        // These admission assertions assume the original sort's workspace
+        // layout. Kernel profiles can also use different radix scratch sizes.
+        if(compare_profiles && fixture.tight)continue;
         const auto width=fixture.width,height=fixture.height;const auto n=fixture.count;Allocations memory;
         std::array<std::vector<float>,5> host;
         for(unsigned g=0;g<5;++g)host[g].resize(n*attributes[g]);
@@ -88,9 +94,21 @@ int main(int argc,char** argv)try{
             else if(n>=32768)require(info.visible>=32768,"Fixture does not exercise depth presort");
             else require(info.visible<32768,"Small fixture did not exercise fallback");
             auto download=[&](uint64_t address,size_t count){std::vector<float> data(count);check(hipMemcpy(data.data(),reinterpret_cast<void*>(address),count*sizeof(float),hipMemcpyDeviceToHost));return data;};
+            double max_forward_error=0;
+            auto matches=[&](const auto& actual,const auto& reference){
+                if(!compare_profiles)return actual==reference;
+                require(actual.size()==reference.size(),"Profile output shape changed");
+                for(size_t i=0;i<actual.size();++i){
+                    const double difference=std::abs(double(actual[i])-reference[i]);
+                    max_forward_error=std::max(max_forward_error,difference);
+                    if(!std::isfinite(actual[i]) || !std::isfinite(reference[i]) ||
+                       difference>2e-5+2e-5*std::abs(reference[i]))return false;
+                }
+                return true;
+            };
             auto image=download(f.image,3*pixels),alpha=download(f.alpha,pixels);
-            if(!variant){reference_image=image;reference_alpha=alpha;}else require(image==reference_image && alpha==reference_alpha,"Forward pixels/alpha changed with exact sort");
-            if(fixture.channels){auto depth=download(f.depth,pixels),normal=download(f.normal,3*pixels);if(!variant){reference_depth=depth;reference_normal=normal;}else require(depth==reference_depth && normal==reference_normal,"Forward depth/normal changed");}
+            if(!variant){reference_image=image;reference_alpha=alpha;}else require(matches(image,reference_image) && matches(alpha,reference_alpha),"Forward pixels/alpha differ beyond comparison policy");
+            if(fixture.channels){auto depth=download(f.depth,pixels),normal=download(f.normal,3*pixels);if(!variant){reference_depth=depth;reference_normal=normal;}else require(matches(depth,reference_depth) && matches(normal,reference_normal),"Forward depth/normal differ beyond comparison policy");}
             if(fixture.tight){
                 if(variant)require(info.live_bytes==reference_peak,"Fallback retained optional depth-sort workspace");
                 for(unsigned g=0;g<5;++g)require(download(parameters[g],host[g].size())==host[g],"Forward/fallback modified model parameters");
@@ -106,8 +124,10 @@ int main(int argc,char** argv)try{
             double max_error=0;
             for(unsigned g=0;g<6;++g){if(!b.groups[g].gradient_out)continue;auto actual=download(b.groups[g].gradient_out,b.groups[g].elements);if(!variant)reference_gradients[g]=actual;else for(size_t i=0;i<actual.size();++i){double difference=std::abs(double(actual[i])-reference_gradients[g][i]);max_error=std::max(max_error,difference);require(std::isfinite(actual[i]) && difference<=2e-5+2e-5*std::abs(reference_gradients[g][i]),"Raw gradient changed beyond atomic accumulation tolerance");}}
             invoke(module.destroy(state,&error));
-            std::printf("variant=%d image=%dx%d bases=%u channels=%d visible=%d instances=%d workspace_peak=%llu max_gradient_error=%.9g exact_forward=1\n",variant,width,height,fixture.bases,fixture.channels,info.visible,info.instances,(unsigned long long)info.peak_bytes,max_error);std::fflush(stdout);
+            std::printf("variant=%d image=%dx%d bases=%u channels=%d visible=%d instances=%d workspace_peak=%llu max_gradient_error=%.9g max_forward_error=%.9g exact_forward=%d\n",variant,width,height,fixture.bases,fixture.channels,info.visible,info.instances,(unsigned long long)info.peak_bytes,max_error,max_forward_error,!compare_profiles);std::fflush(stdout);
         }
     }
-    check(hipStreamDestroy(stream));std::puts("PASS large native FastGS sort integration: exact images/alpha and bounded gradients");
+    check(hipStreamDestroy(stream));std::puts(compare_profiles?
+        "PASS native FastGS profile comparison: bounded forward and gradient errors":
+        "PASS large native FastGS sort integration: exact images/alpha and bounded gradients");
 }catch(const std::exception& e){std::fprintf(stderr,"FAIL %s\n",e.what());return 1;}

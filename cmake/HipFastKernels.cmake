@@ -52,6 +52,9 @@ function(lfs_hip_fast_objects include_output objects_output)
             LFS_HIP_FAST_RADIX_TUNING
         )
             set(${_option} OFF)
+            # The training-module caller must use the same effective layout
+            # as the generated kernels, even when the cache still says ON.
+            set(${_option} OFF PARENT_SCOPE)
         endforeach()
     endif()
     if(LFS_HIP_FAST_UNIFORM_BROADCAST AND (NOT LFS_HIP_FAST_WARP_STAGING OR NOT LFS_HIP_FAST_NATIVE_WAVE))
