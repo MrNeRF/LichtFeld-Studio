@@ -52,8 +52,10 @@ bool occupied(ivec3 cell) {
     return sampleCell(cell, lo, hi);
 }
 
-vec4 shadeSurface(vec3 hit, ivec3 cell, float pixelWidth, bool insideSolid) {
-    vec3 local = clamp((hit - push.originSize.xyz) / push.originSize.w - vec3(cell), 0.0, 1.0);
+vec4 shadeSurface(vec3 hit, float pixelWidth, bool insideSolid) {
+    // Tree traversal can cross many cells in one uniform leaf. Shade the actual
+    // hit voxel, never the stale cell from before that skip (notably on exits).
+    vec3 local = fract((hit - push.originSize.xyz) / push.originSize.w);
     vec3 boundaryDistance = min(local, 1.0 - local);
     float smallest = min(boundaryDistance.x, min(boundaryDistance.y, boundaryDistance.z));
     float largest = max(boundaryDistance.x, max(boundaryDistance.y, boundaryDistance.z));
@@ -102,7 +104,7 @@ void main() {
         ivec3 leafMin, leafMax;
         if (sampleCell(cell, leafMin, leafMax) != insideSolid) {
             float pixelWidth = max(length(roDx + t * rdDx), length(roDy + t * rdDy)) / size;
-            outColor = shadeSurface(ro + rd * t, cell, pixelWidth, insideSolid);
+            outColor = shadeSurface(ro + rd * t, pixelWidth, insideSolid);
             return;
         }
         leafMax.y = min(leafMax.y, sliceHeight());
@@ -114,13 +116,12 @@ void main() {
             // Outside the grid is empty, including a completely occupied volume's exit.
             if (insideSolid) {
                 float pixelWidth = max(length(roDx + end * rdDx), length(roDy + end * rdDy)) / size;
-                outColor = shadeSurface(ro + rd * end, cell, pixelWidth, true);
+                outColor = shadeSurface(ro + rd * end, pixelWidth, true);
             }
             return;
         }
         // Advance all tied axes to avoid visiting zero-width cells at corners.
         bvec3 crossed = lessThanEqual(nextT, vec3(next));
-        ivec3 previousCell = cell;
         cell = ivec3(floor((ro + rd * next - gridMin) / size));
         ivec3 across = mix(leafMin - 1, leafMax, greaterThan(safeDirection, vec3(0.0)));
         cell = mix(cell, across, crossed);
@@ -128,7 +129,7 @@ void main() {
         if (!contains(cell)) {
             if (insideSolid) {
                 float pixelWidth = max(length(roDx + t * rdDx), length(roDy + t * rdDy)) / size;
-                outColor = shadeSurface(ro + rd * t, previousCell, pixelWidth, true);
+                outColor = shadeSurface(ro + rd * t, pixelWidth, true);
             }
             return;
         }

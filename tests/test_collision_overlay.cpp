@@ -82,6 +82,20 @@ namespace {
         }
     }
 
+    TEST_F(CollisionOverlay, ObliqueSolidExitUsesHitCellInsteadOfSkippedLeafEntry) {
+        volume.origin = glm::vec3(-4);
+        volume.dimensions = {8, 8, 8};
+        volume.solid.assign(512, 1);
+        // Both rays exit the interior of the same voxel face. The long ray
+        // crosses multiple cells inside a single compressed solid leaf.
+        const glm::vec3 direction(0.3f, 0, -1);
+        const auto long_ray = render({0.25f, 0.25f, 0.25f}, direction, {item()});
+        const auto short_ray = render({1.45f, 0.25f, -3.75f}, direction, {item()});
+        EXPECT_NEAR(short_ray.r, 0.18f, 0.005f);
+        EXPECT_NEAR(long_ray.r, short_ray.r, 0.005f);
+        EXPECT_NEAR(long_ray.g, long_ray.r * 0.35f, 0.001f);
+    }
+
     TEST_F(CollisionOverlay, OutsideSurfaceIsGrayAndSelectedSurfaceIsBlue) {
         const auto gray = render({0.25f, 0.25f, 5}, {0, 0, -1}, {item()});
         EXPECT_GT(gray.r, 0.1f);
