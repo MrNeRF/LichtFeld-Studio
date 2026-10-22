@@ -149,7 +149,7 @@ tree words (507.5 MiB) in 18.381 seconds. Smooth meshing and normals took anothe
 104.631 seconds, producing 62,855,233 vertices and 125,356,766 triangles.
 Positions and indices alone occupy approximately 2.10 GiB; this remains a very
 large proxy despite chunk-local coplanar simplification, not an optimized
-game-ready mesh. The saved project is 1,745,818,560 bytes (approximately 1.63 GiB).
+game-ready mesh. The compacted saved project is approximately 1.63 GiB.
 Native generation/save/reload peaked at approximately 19.04 GiB RSS on a 62 GiB
 host; the much smaller occupancy buffer does not imply that the complete
 authoring pipeline is suitable for small-memory hosts.
@@ -158,8 +158,9 @@ The standalone full-source Outdoor benchmark measured 22.300 seconds generation,
 97.251 seconds meshing and 3.77 GiB peak RSS, with 133,033,817 CPU words,
 18,036,857 packed GPU words (68.8 MiB), 59,499,132 vertices and 118,644,536 triangles.
 It used 2,215,493 active floor columns and 2,399,449 height nodes rather than
-allocating the 3337-by-1793-by-4095 world grid. Native/compiler arithmetic differs
-slightly at voxel boundaries and can affect subsequent simplification counts.
+allocating the 3337-by-1793-by-4095 world grid. Small native/compiler arithmetic
+differences at voxel boundaries can cause larger downstream differences in
+coplanar simplification counts.
 
 Reopening the Outdoor project hydrated both the complete Model and Collision
 payload, retaining the mesh counts and voxel preview. Walk entered from
