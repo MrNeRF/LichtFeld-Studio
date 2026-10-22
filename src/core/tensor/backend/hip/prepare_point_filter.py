@@ -26,6 +26,7 @@ math = (source / 'tensor/internal/point_math.hpp').read_text(encoding='utf-8')
 spatial = (source / 'include/core/tensor_spatial.hpp').read_text(encoding='utf-8')
 spatial_math = (source / 'tensor/internal/point_spatial.hpp').read_text(encoding='utf-8')
 tree_math = (source / 'tensor/internal/point_tree.hpp').read_text(encoding='utf-8')
+triangle_math = (source / 'tensor/internal/triangle_tree.hpp').read_text(encoding='utf-8')
 descriptors = (source / 'include/core/detail/descriptors.hpp').read_text(encoding='utf-8')
 nearest = (source / 'tensor/internal/nearest_point.hpp').read_text(encoding='utf-8')
 labels = (source / 'tensor/internal/point_labels.hpp').read_text(encoding='utf-8')
@@ -58,7 +59,8 @@ code = '\n'.join([
     definition(descriptors, 'struct PointTreeProgram {', ';'),
     spatial_math[spatial_math.index('    // Radius-wide cells'):spatial_math.rindex('} // namespace')],
     nearest[nearest.index('    LFS_NEAREST_HD int nearestPoint'):nearest.rindex('} // namespace')].replace('LFS_NEAREST_HD', 'LFS_POINT_HD').replace('float width) {', 'float width) {\n#pragma clang fp contract(off)\n').replace('float maximum) {', 'float maximum) {\n#pragma clang fp contract(off)\n'),
-    tree_math[tree_math.index('    // Bounds on the squared'):tree_math.rindex('} // namespace')], '}',
+    tree_math[tree_math.index('    // Bounds on the squared'):tree_math.rindex('} // namespace')],
+    '\n'.join(definition(triangle_math, 'LFS_POINT_HD inline ' + signature).replace('{', '{\n#pragma clang fp contract(off)', 1) for signature in ('void rayFrame(', 'bool rayCrossesTriangle(', 'int32_t triangleTreeParity(')), '}',
     '#undef LFS_POINT_HD\n',
 ])
 # Keep the canonical PPISP math and parameter layout without Tensor headers.

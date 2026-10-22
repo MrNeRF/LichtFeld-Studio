@@ -40,7 +40,7 @@ add_custom_command(OUTPUT "${_tensor_generated}/hip_point_filter.hpp" "${_tensor
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/prepare_point_filter.py"
         --source "${_point_source}" --output "${_tensor_generated}/hip_point_filter.hpp"
     DEPENDS prepare_point_filter.py "${_point_source}/include/core/morton.hpp" "${_point_source}/cuda/kernels/splat_transform.cu" "${_point_source}/tensor/internal/ppisp.hpp" "${_point_source}/include/core/tensor_ppisp.hpp" "${_point_source}/tensor/internal/point_filter.hpp"
-        "${_point_source}/tensor/internal/point_math.hpp" "${_point_source}/tensor/internal/point_spatial.hpp" "${_point_source}/tensor/internal/nearest_point.hpp" "${_point_source}/tensor/internal/point_tree.hpp" "${_point_source}/include/core/detail/descriptors.hpp" "${_point_source}/tensor/backend/cuda/kernels/tensor_spatial.cu" "${_point_source}/include/core/tensor_spatial.hpp"
+        "${_point_source}/tensor/internal/point_math.hpp" "${_point_source}/tensor/internal/point_spatial.hpp" "${_point_source}/tensor/internal/nearest_point.hpp" "${_point_source}/tensor/internal/point_tree.hpp" "${_point_source}/tensor/internal/triangle_tree.hpp" "${_point_source}/include/core/detail/descriptors.hpp" "${_point_source}/tensor/backend/cuda/kernels/tensor_spatial.cu" "${_point_source}/include/core/tensor_spatial.hpp"
         "${_point_source}/tensor/internal/point_labels.hpp"
         "${_point_source}/tensor/internal/point_projection.hpp" "${_point_source}/tensor/internal/point_region.hpp"
     VERBATIM)

@@ -225,6 +225,23 @@ void decimate_contract() {
         }
     }
 }
+void triangle_contract() {
+    const std::vector<float> vertices{0,0,0,1,0,0,1,1,0,0,1,0,0,0,1,1,0,1,1,1,1,0,1,1};
+    const std::vector<int32_t> cube{0,1,2,0,2,3,4,6,5,4,7,6,0,4,5,0,5,1,1,5,6,1,6,2,2,6,7,2,7,3,3,7,4,3,4,0};
+    std::vector<float> positions(257*3);
+    for(size_t i=0;i<257;++i){positions[3*i]=float(int(i%19)-4)*.113f;positions[3*i+1]=float(int(i%13)-2)*.117f;positions[3*i+2]=.313f;}
+    positions[0]=NAN;positions[3]=INFINITY;
+    auto cpu_vertices=Tensor::from_vector(vertices,{8,3},Device::CPU),gpu_vertices=cpu_vertices.to(Device::GPU);
+    auto cpu_points=Tensor::from_vector(positions,{257,3},Device::CPU),gpu_points=cpu_points.to(Device::GPU);
+    for(size_t copies:{size_t(1),size_t(87)}) {
+        std::vector<int32_t> faces;for(size_t i=0;i<copies;++i)faces.insert(faces.end(),cube.begin(),cube.end());
+        auto cpu_faces=Tensor::from_vector(faces,{faces.size()/3,3},Device::CPU),gpu_faces=cpu_faces.to(Device::GPU);
+        TriangleRayIndex cpu(cpu_vertices,cpu_faces),gpu(gpu_vertices,gpu_faces);
+        auto expected=cpu.odd_crossings(cpu_points),observed=gpu.odd_crossings(gpu_points).cpu();
+        for(size_t i=0;i<257;++i)require(static_cast<const uint8_t*>(observed.data_ptr())[i]==static_cast<const uint8_t*>(expected.data_ptr())[i],"HIP triangle tree differs from CPU parity");
+        require(!static_cast<const uint8_t*>(observed.data_ptr())[0] && !static_cast<const uint8_t*>(observed.data_ptr())[1],"HIP triangle tree accepted nonfinite queries");
+    }
+}
 int main() try {
     GpuBackendScope scope(GpuBackend::HIP);
     for(size_t n : {size_t(0),size_t(1),size_t(17),size_t(257),size_t(4099)}) {
@@ -421,6 +438,7 @@ int main() try {
         auto [background,empty_depth]=rasterize_points(empty,empty,raster);auto bg=background.cpu(),ez=empty_depth.cpu();
         require(ez.ptr<float>()[center]==far && bg.ptr<float>()[plane*3+center]==0,"HIP empty point raster background differs");
     }
+    triangle_contract();
     decimate_contract();
     affine_contract();
     low_level_contract();

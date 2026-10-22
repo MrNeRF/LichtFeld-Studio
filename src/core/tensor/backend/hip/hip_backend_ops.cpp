@@ -2757,3 +2757,19 @@ void HipBackendOps::nn_conv2d(StorageRef input,StorageRef weight,std::optional<S
     impl_->refresh_algorithm_workspace();check(status,error);
 }
 }
+
+namespace lfs::core::internal {
+bool HipBackendOps::triangle_tree_parity(StorageRef points,StorageRef visit,StorageRef triangles,StorageRef boxes,StorageRef output,const PointTreeProgram& p,ExecContext execution) {
+    queue(execution);
+    require(points.dtype==DataType::Float32 && triangles.dtype==DataType::Float32 && boxes.dtype==DataType::Float32 &&
+            visit.dtype==DataType::Int32 && output.dtype==DataType::Int32,"Invalid HIP triangle-tree dtypes");
+    LfsHipPointTree native{};native.points=p.points;native.references=p.references;native.levels=p.levels;
+    std::copy_n(p.level_offset,8,native.level_offset);
+    std::copy_n(p.level_count,8,native.level_count);
+    std::lock_guard lock(impl_->mutex);
+    const auto view=[&](StorageRef value){return value.data?impl_->view(value):(impl_->empty_view(value),LfsHipView{});};
+    const LfsHipView inputs[]{view(points),view(triangles),view(boxes),view(visit),{}, {}};LfsHipError error{};
+    check(impl_->lfs_hip_point_tree_query(impl_->context,inputs,view(output),&native,2,&error),error);
+    return true;
+}
+}
