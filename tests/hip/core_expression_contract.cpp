@@ -263,9 +263,44 @@ void cache_and_threads() {
     std::printf("HIP expression cache: entries=%zu bytes=%zu compilations=%llu disk=%llu hits=%llu\n",stats.entries,stats.bytes,
         static_cast<unsigned long long>(stats.compilations),static_cast<unsigned long long>(stats.disk_hits),static_cast<unsigned long long>(stats.hits));
 }
+void native_norm() {
+    auto& gpu=backend_ops(GpuBackend::HIP);
+    for(auto dtype : {DataType::Float32,DataType::Float16})for(size_t cols : {size_t(1),size_t(17),size_t(65),size_t(257),size_t(1025)}) {
+        constexpr size_t rows=7;const size_t count=rows*cols;
+        std::vector<float> values(count),weights(cols),biases(cols);
+        for(size_t i=0;i<count;++i)values[i]=std::sin(float(i)*.37f)*2;
+        for(size_t i=0;i<cols;++i){weights[i]=1.f+.2f*std::cos(float(i));biases[i]=.1f*std::sin(float(i));}
+        auto input=Tensor::from_vector(values,{rows,cols},Device::GPU).to(dtype);
+        auto weight=Tensor::from_vector(weights,{cols},Device::GPU).to(dtype);
+        auto bias=Tensor::from_vector(biases,{cols},Device::GPU).to(dtype);
+        auto host=input.to(DataType::Float32).cpu(),hw=weight.to(DataType::Float32).cpu(),hb=bias.to(DataType::Float32).cpu();
+        for(bool layer : {false,true}) {
+            auto output=Tensor::from_vector(std::vector<float>(count+2,-77),{count+2},Device::GPU).to(dtype);
+            auto out=storage_ref(output);out.byte_offset=dtype==DataType::Float32?4:2;
+            gpu.nn_norm(storage_ref(input),storage_ref(weight),layer?std::optional(storage_ref(bias)):std::nullopt,out,{rows,cols,1e-5f},{});
+            auto observed=output.to(DataType::Float32).cpu();
+            require(observed.ptr<float>()[0]==-77 && observed.ptr<float>()[count+1]==-77,"HIP norm overwrote output guards");
+            for(size_t row=0;row<rows;++row) {
+                double mean=0,squares=0;
+                if(layer){for(size_t col=0;col<cols;++col)mean+=host.ptr<float>()[row*cols+col];mean/=cols;}
+                for(size_t col=0;col<cols;++col){double x=host.ptr<float>()[row*cols+col]-mean;squares+=x*x;}
+                const double deviation=std::sqrt(squares/cols+1e-5f);
+                for(size_t col=0;col<cols;++col) {
+                    const double wanted=(host.ptr<float>()[row*cols+col]-mean)/deviation*hw.ptr<float>()[col]+(layer?hb.ptr<float>()[col]:0);
+                    const double tolerance=dtype==DataType::Float16?2e-3:2e-5;
+                    require(std::abs(observed.ptr<float>()[1+row*cols+col]-wanted)<tolerance*std::max(1.,std::abs(wanted)),"HIP layer/RMS norm differs from reference");
+                }
+            }
+            auto inplace=input.clone();
+            gpu.nn_norm(storage_ref(inplace),storage_ref(weight),layer?std::optional(storage_ref(bias)):std::nullopt,storage_ref(inplace),{rows,cols,1e-5f},{});
+            auto self=inplace.to(DataType::Float32).cpu();
+            for(size_t i=0;i<count;++i)require(self.ptr<float>()[i]==observed.ptr<float>()[i+1],"HIP norm inplace changed result");
+        }
+    }
+}
 int main() try {
     GpuBackendScope scope(GpuBackend::HIP);
-    unary();integer_arithmetic();precise_bits();gathered_and_packed();fold_and_host();cache_and_threads();
-    std::puts("PASS HIP expressions: native math, exact Int32/Int64/UInt32/UInt8 arithmetic and empty operations, IEEE values, gather bounds, Float16/Bool/UInt8 packed tails, host constants, short/runtime folds, prepare, shape cache and concurrent launches");
+    unary();integer_arithmetic();native_norm();precise_bits();gathered_and_packed();fold_and_host();cache_and_threads();
+    std::puts("PASS HIP expressions: native layer/RMS norms FP16/FP32 with guards and inplace, native math, exact Int32/Int64/UInt32/UInt8 arithmetic and empty operations, IEEE values, gather bounds, Float16/Bool/UInt8 packed tails, host constants, short/runtime folds, prepare, shape cache and concurrent launches");
     return 0;
 } catch(const std::exception& e) {std::fprintf(stderr,"HIP expression failed: %s\n",e.what());return 1;}

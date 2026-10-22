@@ -16,6 +16,7 @@
 #include "external_access.hpp"
 #include "point_filter_api.h"
 #include "point_tree_api.h"
+#include "nn_api.h"
 #include "predicate_api.h"
 #include "timing_api.h"
 #include "../readback_buffer.hpp"
@@ -272,6 +273,7 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_morton);
         ENTRY(lfs_hip_multinomial);
         ENTRY(lfs_hip_export);
+        ENTRY(lfs_hip_nn_norm);
         ENTRY(lfs_hip_point_tree_components);
         ENTRY(lfs_hip_proximity);
         ENTRY(lfs_hip_convert);
@@ -419,6 +421,7 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_morton);
                 LOAD(lfs_hip_multinomial);
                 LOAD(lfs_hip_export);
+                LOAD(lfs_hip_nn_norm);
                 LOAD(lfs_hip_point_tree_components);
                 LOAD(lfs_hip_proximity);
                 LOAD(lfs_hip_convert);
@@ -2644,5 +2647,17 @@ void HipBackendOps::rasterize_points(const PointRasterProgram& p,ExecContext exe
         const size_t work=(phase==1 || phase==2)?p.count:pixels;
         if(work)launch_export("point_raster",phase,std::as_bytes(std::span(&push,1)),reads,writes,work);
     }
+}
+}
+
+namespace lfs::core::internal {
+void HipBackendOps::nn_norm(StorageRef input,StorageRef weight,std::optional<StorageRef> bias,StorageRef output,const NormProgram& p,ExecContext execution) {
+    queue(execution);
+    require((input.dtype==DataType::Float32 || input.dtype==DataType::Float16) && weight.dtype==input.dtype && output.dtype==input.dtype &&
+            (!bias || bias->dtype==input.dtype),"HIP NN norm requires matching Float32 or Float16 types");
+    std::lock_guard lock(impl_->mutex);
+    const auto view=[&](StorageRef storage){return storage.data?impl_->view(storage):(impl_->empty_view(storage),LfsHipView{});};
+    const LfsHipNorm native{p.rows,p.cols,p.eps,uint32_t(input.dtype)};LfsHipError error{};
+    check(impl_->lfs_hip_nn_norm(impl_->context,view(input),view(weight),bias?view(*bias):LfsHipView{},view(output),&native,&error),error);
 }
 }
