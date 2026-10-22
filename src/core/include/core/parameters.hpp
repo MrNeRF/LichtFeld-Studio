@@ -585,6 +585,10 @@ namespace lfs::core {
             // Optional splat file for initialization (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)
             std::optional<std::string> init_path = std::nullopt;
 
+            // Region of interest: an enabled crop box on the training model, min x, y, z then max x, y, z in the
+            // dataset's coordinates. --cropbox-loss-weight and --cropbox-lr-scale set how much the rest still counts.
+            std::optional<std::array<float, 6>> cropbox = std::nullopt;
+
             // Optional trained splats to append to the training model before optimizer initialization
             std::vector<std::filesystem::path> add_splat_paths;
             std::vector<bool> add_splat_freeze;

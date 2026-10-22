@@ -1433,6 +1433,51 @@ TEST(ArgumentParserTest, TrainingParsesCropBoxLossWeight) {
     EXPECT_FLOAT_EQ((*parsed)->optimization.cropbox_loss_weight, 0.4f);
 }
 
+TEST(ArgumentParserTest, TrainingParsesCropBoxRegionOfInterest) {
+    const auto data_path = make_test_path("lfs_arg_parser_cropbox_data");
+    const auto output_path = make_test_path("lfs_arg_parser_cropbox_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--cropbox",
+        "-0.5, -0.25,0,0.5,0.25 ,1.75",
+        "--cropbox-loss-weight",
+        "0"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    ASSERT_TRUE((*parsed)->cropbox.has_value());
+    EXPECT_EQ(*(*parsed)->cropbox, (std::array<float, 6>{-0.5f, -0.25f, 0.f, 0.5f, 0.25f, 1.75f}));
+    EXPECT_FLOAT_EQ((*parsed)->optimization.cropbox_loss_weight, 0.f);
+}
+
+TEST(ArgumentParserTest, TrainingRejectsCropBoxWithoutVolume) {
+    const auto data_path = make_test_path("lfs_arg_parser_invalid_cropbox_data");
+    const auto output_path = make_test_path("lfs_arg_parser_invalid_cropbox_output");
+
+    for (const char* box : {"0,0,0,1,1", "0,0,0,1,1,1,1", "0,0,1,1,1,1", "a,0,0,1,1,1"}) {
+        SCOPED_TRACE(box);
+        const char* argv[] = {
+            "LichtFeld-Studio",
+            "--headless",
+            "--data-path",
+            data_path.c_str(),
+            "--output-path",
+            output_path.c_str(),
+            "--cropbox",
+            box};
+
+        auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        ASSERT_FALSE(parsed.has_value());
+        EXPECT_NE(parsed.error().find("Invalid --cropbox"), std::string::npos) << parsed.error();
+    }
+}
+
 TEST(ArgumentParserTest, TrainingRejectsCropBoxLossWeightOutsideUnitInterval) {
     const auto data_path = make_test_path("lfs_arg_parser_invalid_cropbox_loss_weight_data");
     const auto output_path = make_test_path("lfs_arg_parser_invalid_cropbox_loss_weight_output");
