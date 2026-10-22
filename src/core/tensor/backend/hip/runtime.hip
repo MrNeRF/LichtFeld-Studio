@@ -862,18 +862,18 @@ namespace {
         }
         return offset;
     }
-    template <class Out, class Op>
-    __global__ void broadcast_kernel(const float* lhs, const float* rhs, Out* output, LfsHipLayout a, LfsHipLayout b, LfsHipLayout out, Op op) {
+    template <class Out, class In, class Op>
+    __global__ void broadcast_kernel(const In* lhs, const In* rhs, Out* output, LfsHipLayout a, LfsHipLayout b, LfsHipLayout out, Op op) {
         for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < out.elements; i += size_t(gridDim.x) * blockDim.x)
-            output[layout_index(i, out)] = op(lhs[broadcast_index(i, a, out)], rhs[broadcast_index(i, b, out)]);
+            output[layout_index(i, out)] = op(float(lhs[broadcast_index(i, a, out)]), float(rhs[broadcast_index(i, b, out)]));
     }
-    template <class Out, class Op>
+    template <class Out, class In = float, class Op>
     void launch_broadcast(LfsHipContext* context, LfsHipView lhs, LfsHipView rhs, LfsHipView output, LfsHipLayout a, LfsHipLayout b, LfsHipLayout out, Op op) {
         if (!out.elements)
             return;
-        hipLaunchKernelGGL((broadcast_kernel<Out, Op>), dim3(blocks(out.elements)), dim3(256), 0, context->stream,
-                           reinterpret_cast<const float*>(static_cast<const char*>(lhs.buffer->data) + lhs.offset),
-                           reinterpret_cast<const float*>(static_cast<const char*>(rhs.buffer->data) + rhs.offset),
+        hipLaunchKernelGGL((broadcast_kernel<Out, In, Op>), dim3(blocks(out.elements)), dim3(256), 0, context->stream,
+                           reinterpret_cast<const In*>(static_cast<const char*>(lhs.buffer->data) + lhs.offset),
+                           reinterpret_cast<const In*>(static_cast<const char*>(rhs.buffer->data) + rhs.offset),
                            reinterpret_cast<Out*>(static_cast<char*>(output.buffer->data) + output.offset), a, b, out, op);
         check(hipGetLastError());
     }
@@ -1533,13 +1533,15 @@ int lfs_hip_pointwise_f16(LfsHipContext* context, uint32_t op, LfsHipView lhs, L
         }
     });
 }
-int lfs_hip_broadcast_f32(LfsHipContext* context, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, const LfsHipLayout* lhs_layout, const LfsHipLayout* rhs_layout, const LfsHipLayout* output_layout, uint32_t output_element_bytes, LfsHipError* error) {
+int lfs_hip_broadcast_typed(LfsHipContext* context, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, const LfsHipLayout* lhs_layout, const LfsHipLayout* rhs_layout, const LfsHipLayout* output_layout, uint32_t input_dtype, uint32_t output_element_bytes, LfsHipError* error) {
     return boundary(error, [&] {
+        require(input_dtype == LFS_HIP_F32 || input_dtype == LFS_HIP_F16, "Unsupported HIP broadcast input dtype");
+        const uint32_t width = input_dtype == LFS_HIP_F16 ? 2u : 4u;
         require(lhs_layout && rhs_layout && output_layout && op < LFS_HIP_OP_COUNT, "Invalid HIP broadcast descriptor");
         require((pointwise_flags[op] & 3) == 2, "HIP broadcast requires a binary Tensor operation");
-        require(output_element_bytes == ((pointwise_flags[op] & 4) ? 1u : 4u), "HIP broadcast output dtype mismatch");
+        require(output_element_bytes == ((pointwise_flags[op] & 4) ? 1u : width), "HIP broadcast output dtype mismatch");
         const auto a = *lhs_layout, b = *rhs_layout, out = *output_layout;
-        const size_t a_bytes = layout_span(a, 4, false), b_bytes = layout_span(b, 4, false);
+        const size_t a_bytes = layout_span(a, width, false), b_bytes = layout_span(b, width, false);
         const size_t out_bytes = layout_span(out, output_element_bytes, true);
         require(a.rank <= out.rank && b.rank <= out.rank, "HIP broadcast input rank exceeds output");
         for (uint32_t r = 0; r < out.rank; ++r) {
@@ -1552,7 +1554,7 @@ int lfs_hip_broadcast_f32(LfsHipContext* context, uint32_t op, LfsHipView lhs, L
         validate(context, lhs.buffer, lhs.offset, a_bytes);
         validate(context, rhs.buffer, rhs.offset, b_bytes);
         validate(context, output.buffer, output.offset, out_bytes);
-        require(lhs.offset % 4 == 0 && rhs.offset % 4 == 0 && output.offset % output_element_bytes == 0, "Unaligned HIP broadcast view");
+        require(lhs.offset % width == 0 && rhs.offset % width == 0 && output.offset % output_element_bytes == 0, "Unaligned HIP broadcast view");
         auto disjoint = [&](LfsHipView input, size_t bytes) {
             require(input.buffer != output.buffer || !bytes || !out_bytes || input.offset >= output.offset + out_bytes || output.offset >= input.offset + bytes,
                     "HIP broadcast output must not overlap an input");
@@ -1561,11 +1563,21 @@ int lfs_hip_broadcast_f32(LfsHipContext* context, uint32_t op, LfsHipView lhs, L
         disjoint(rhs, b_bytes);
         DeviceScope device(context->device);
         using namespace lfs::core;
-        switch (op) {
+        if (input_dtype == LFS_HIP_F16) {
+            switch (op) {
+#include "hip_tensor_half_broadcast.inc"
+            default: throw std::invalid_argument("Unsupported HIP half broadcast operation");
+            }
+        } else {
+            switch (op) {
 #include "hip_tensor_broadcast.inc"
-        default: throw std::invalid_argument("Unsupported HIP broadcast operation");
+            default: throw std::invalid_argument("Unsupported HIP broadcast operation");
+            }
         }
     });
+}
+int lfs_hip_broadcast_f32(LfsHipContext* context, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, const LfsHipLayout* lhs_layout, const LfsHipLayout* rhs_layout, const LfsHipLayout* output_layout, uint32_t output_element_bytes, LfsHipError* error) {
+    return lfs_hip_broadcast_typed(context, op, lhs, rhs, output, lhs_layout, rhs_layout, output_layout, LFS_HIP_F32, output_element_bytes, error);
 }
 int lfs_hip_arange_f32(LfsHipContext* context, LfsHipView dst, size_t count, float start, float step, LfsHipError* error) {
     return boundary(error, [&] {

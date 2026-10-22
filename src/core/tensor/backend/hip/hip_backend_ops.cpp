@@ -264,6 +264,7 @@ namespace lfs::core::internal {
         ENTRY(lfs_hip_fill_strided_f32);
         ENTRY(lfs_hip_fill_layout_bits);
         ENTRY(lfs_hip_broadcast_f32);
+        ENTRY(lfs_hip_broadcast_typed);
         ENTRY(lfs_hip_reduce_layout_f32);
         ENTRY(lfs_hip_arg_extreme_f32);
         ENTRY(lfs_hip_cdist_f32);
@@ -417,6 +418,7 @@ namespace lfs::core::internal {
                 LOAD(lfs_hip_fill_strided_f32);
                 LOAD(lfs_hip_fill_layout_bits);
                 LOAD(lfs_hip_broadcast_f32);
+                LOAD(lfs_hip_broadcast_typed);
                 LOAD(lfs_hip_reduce_layout_f32);
                 LOAD(lfs_hip_arg_extreme_f32);
                 LOAD(lfs_hip_cdist_f32);
@@ -885,14 +887,14 @@ namespace lfs::core::internal {
     }
     void HipBackendOps::broadcast_binary(const PointwiseProgram& program, StorageRef lhs, const StridedLayout& lhs_layout, StorageRef rhs, const StridedLayout& rhs_layout, StorageRef output, const StridedLayout& output_layout, ExecContext execution) {
         queue(execution);
-        require(program.in_dtype == DataType::Float32 && lhs.dtype == DataType::Float32 && rhs.dtype == DataType::Float32 && output.dtype == program.out_dtype &&
-                    (output.dtype == DataType::Float32 || output.dtype == DataType::Bool),
-                "HIP broadcast requires float32 operands and float32/bool output");
+        require((lhs.dtype == DataType::Float32 || lhs.dtype == DataType::Float16) && program.in_dtype == lhs.dtype && rhs.dtype == lhs.dtype && output.dtype == program.out_dtype &&
+                    (output.dtype == lhs.dtype || output.dtype == DataType::Bool),
+                "HIP broadcast requires matching floating operands and floating/bool output");
         const auto a = native_layout(lhs_layout), b = native_layout(rhs_layout), out = native_layout(output_layout);
         std::lock_guard lock(impl_->mutex);
         const auto av = impl_->view(lhs), bv = impl_->view(rhs), ov = impl_->view(output);
         LfsHipError error{};
-        check(impl_->lfs_hip_broadcast_f32(impl_->context, static_cast<uint32_t>(program.op), av, bv, ov, &a, &b, &out, output.dtype == DataType::Bool ? 1 : 4, &error), error);
+        check(impl_->lfs_hip_broadcast_typed(impl_->context, static_cast<uint32_t>(program.op), av, bv, ov, &a, &b, &out, uint32_t(lhs.dtype), uint32_t(dtype_size(output.dtype)), &error), error);
     }
     void HipBackendOps::reduce(StorageRef input, StorageRef output, const StridedLayout& layout, const ReduceProgram& program, ExecContext execution) {
         queue(execution);

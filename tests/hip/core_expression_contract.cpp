@@ -444,9 +444,34 @@ void half_inference() {
     auto observed=output.to(DataType::Float32).cpu();const float value=input.to(DataType::Float32).cpu().ptr<float>()[0];
     for(size_t i=0;i<2*3*4;++i)require(observed.ptr<float>()[i]==value,"HIP FP16 adaptive pool changed constant input");
 }
+void half_broadcast() {
+    auto& gpu=backend_ops(GpuBackend::HIP);
+    auto a=Tensor::from_vector(std::vector<float>{-.37f,.21f,.91f},{3},Device::GPU).to(DataType::Float16);
+    auto b=Tensor::from_vector(std::vector<float>{.13f,-.77f,.55f,.99f,.31f},{5},Device::GPU).to(DataType::Float16);
+    StridedLayout al{},bl{},ol{};al.rank=2;al.dims={3,1};al.strides={1,0};al.element_count=3;
+    bl.rank=2;bl.dims={1,5};bl.strides={0,1};bl.element_count=5;
+    ol.rank=2;ol.dims={3,5};ol.strides={5,1};ol.element_count=15;
+    auto av=a.to(DataType::Float32).cpu(),bv=b.to(DataType::Float32).cpu();
+    for(auto op:{PointwiseOp::AddTensor,PointwiseOp::SubTensor,PointwiseOp::MulTensor,PointwiseOp::DivTensor,PointwiseOp::LessTensor}) {
+        const bool predicate=op==PointwiseOp::LessTensor;
+        const auto dtype=predicate?DataType::Bool:DataType::Float16;
+        auto output=Tensor::zeros({17},Device::GPU).to(dtype);
+        auto ref=storage_ref(output);ref.byte_offset=predicate?1:2;
+        PointwiseProgram p{};p.op=op;p.in_dtype=DataType::Float16;p.out_dtype=dtype;
+        gpu.broadcast_binary(p,storage_ref(a),al,storage_ref(b),bl,ref,ol,{});
+        auto observed=output.to(DataType::Float32).cpu();
+        require(observed.ptr<float>()[0]==0 && observed.ptr<float>()[16]==0,"HIP half broadcast overwrote guards");
+        for(size_t i=0;i<15;++i) {
+            const float x=av.ptr<float>()[i/5],y=bv.ptr<float>()[i%5];
+            const float v=op==PointwiseOp::AddTensor?x+y:op==PointwiseOp::SubTensor?x-y:op==PointwiseOp::MulTensor?x*y:op==PointwiseOp::DivTensor?x/y:float(x<y);
+            const float expected=predicate?v:detail::tensor_half_to_float(detail::tensor_float_to_half(v));
+            require(observed.ptr<float>()[i+1]==expected,"HIP half broadcast changed FP32 math or layout");
+        }
+    }
+}
 int main() try {
     GpuBackendScope scope(GpuBackend::HIP);
-    unary();integer_arithmetic();native_norm();native_linear();native_attention();native_conv();half_inference();precise_bits();gathered_and_packed();fold_and_host();cache_and_threads();
+    unary();integer_arithmetic();native_norm();native_linear();native_attention();native_conv();half_inference();half_broadcast();precise_bits();gathered_and_packed();fold_and_host();cache_and_threads();
     std::puts("PASS HIP expressions: native FP16 inference and attention/convolution/fused linear/layer/RMS norms FP16/FP32 with guards and inplace, native math, exact Int32/Int64/UInt32/UInt8 arithmetic and empty operations, IEEE values, gather bounds, Float16/Bool/UInt8 packed tails, host constants, short/runtime folds, prepare, shape cache and concurrent launches");
     return 0;
 } catch(const std::exception& e) {std::fprintf(stderr,"HIP expression failed: %s\n",e.what());return 1;}

@@ -72,3 +72,6 @@ for ident, functor, _ in rows:
     predicate = ident.startswith(('Equal', 'NotEqual', 'Less', 'Greater', 'Logical'))
     broadcast.append(f'case LFS_HIP_OP_{ident}: launch_broadcast<{"uint8_t" if predicate else "float"}>(context, lhs, rhs, output, a, b, out, {functor}{{}}); break;')
 (args.output / 'hip_tensor_broadcast.inc').write_text('\n'.join(broadcast) + '\n', encoding='utf-8')
+
+half_broadcast = [line.replace("launch_broadcast<float>", "launch_broadcast<__half, __half>").replace("launch_broadcast<uint8_t>", "launch_broadcast<uint8_t, __half>") for line in broadcast]
+(args.output / "hip_tensor_half_broadcast.inc").write_text("\n".join(half_broadcast) + "\n", encoding="utf-8")

@@ -256,6 +256,7 @@ LFS_HIP_API int lfs_hip_radius_query(LfsHipContext*, const LfsHipView* inputs, L
                                     size_t count, size_t buckets, float radius, uint32_t mode,
                                     int32_t maximum, uint32_t exclude_self, LfsHipError*);
 LFS_HIP_API int lfs_hip_broadcast_f32(LfsHipContext*, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, const LfsHipLayout* lhs_layout, const LfsHipLayout* rhs_layout, const LfsHipLayout* output_layout, uint32_t output_element_bytes, LfsHipError*);
+LFS_HIP_API int lfs_hip_broadcast_typed(LfsHipContext*, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, const LfsHipLayout* lhs_layout, const LfsHipLayout* rhs_layout, const LfsHipLayout* output_layout, uint32_t input_dtype, uint32_t output_element_bytes, LfsHipError*);
 
 #ifdef __cplusplus
 }
