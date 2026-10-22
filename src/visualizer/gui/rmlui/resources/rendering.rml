@@ -74,6 +74,23 @@
             </select>
           </div>
         </div>
+        <div class="setting-row setting-row--aligned" data-tooltip="tooltip.transparency_mode">
+          <span class="setting-row__label-col" data-reset-prop="transparency_mode">{{label_transparency_mode}}</span>
+          <div class="setting-row__control-col setting-row__control-col--fill">
+            <select data-value="transparency_mode">
+              <option value="alpha_blend">@tr:rendering_panel.alpha_blend</option>
+              <option value="stochastic">@tr:rendering_panel.stochastic</option>
+              <option value="steady_splats">@tr:rendering_panel.steady_splats</option>
+            </select>
+          </div>
+        </div>
+        <div class="setting-row setting-row--aligned" data-if="transparency_mode != 'alpha_blend'" data-tooltip="tooltip.stochastic_max_frames">
+          <span class="setting-row__label-col" data-reset-prop="stochastic_max_frames">{{label_stochastic_max_frames}}</span>
+          <div class="setting-row__control-col setting-row__control-col--slider">
+            <input type="range" class="setting-slider" data-value="stochastic_max_frames" min="1" max="1024" step="1" />
+            <span class="slider-value">{{stochastic_max_frames | format_int}}</span>
+          </div>
+        </div>
         <div class="setting-row setting-row--aligned" data-tooltip="tooltip.camera_metrics_mode">
           <span class="setting-row__label-col" data-reset-prop="camera_metrics_mode">{{label_camera_metrics_mode}}</span>
           <div class="setting-row__control-col setting-row__control-col--fill">

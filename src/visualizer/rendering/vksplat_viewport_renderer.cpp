@@ -746,6 +746,10 @@ namespace lfs::vis {
         [[nodiscard]] std::map<std::string, std::string> makeVkSplatSpirvPaths() {
             const std::filesystem::path root = resolveVkSplatSpirvRoot();
             return {
+                {"rasterize_stochastic", lfs::core::path_to_utf8(root / "generated/rasterize_stochastic.spv")},
+                {"rasterize_stochastic_plain", lfs::core::path_to_utf8(root / "generated/rasterize_stochastic_plain.spv")},
+                {"stochastic_reuse", lfs::core::path_to_utf8(root / "generated/stochastic_reuse.spv")},
+                {"stochastic_resolve", lfs::core::path_to_utf8(root / "generated/stochastic_resolve.spv")},
                 {"projection_forward", lfs::core::path_to_utf8((root / "generated/projection_forward.spv"))},
                 {"projection_forward_3dgut", lfs::core::path_to_utf8((root / "generated/projection_forward_3dgut.spv"))},
                 {"projection_forward_quant", lfs::core::path_to_utf8((root / "generated/projection_forward_quant.spv"))},
@@ -2229,6 +2233,7 @@ namespace lfs::vis {
         }
 
         stopLodStreaming("LOD scene released before upload completed");
+        releaseStochasticBuffers();
         detachManagedBuffers();
         for (std::size_t ring_slot = 0; ring_slot < kInputRingSize; ++ring_slot) {
             releaseDeletedMaskSlot(*context_, ring_slot);
@@ -2344,6 +2349,7 @@ namespace lfs::vis {
             detachManagedBuffers();
             releaseGpuLodTreeStorage();
             try {
+                releaseStochasticBuffers();
                 renderer_.cleanupBuffers(buffers_);
                 renderer_.cleanup();
             } catch (const lfs::Exception& e) {
@@ -6123,7 +6129,8 @@ namespace lfs::vis {
         const bool depth_view,
         const float depth_min,
         const float depth_max,
-        const lfs::rendering::DepthVisualizationMode depth_visualization_mode) {
+        const lfs::rendering::DepthVisualizationMode depth_visualization_mode,
+        const _VulkanBuffer* color_override) {
         if (auto ok = ensureComposePipeline(context); !ok) {
             return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::FailedPrecondition,
@@ -6133,6 +6140,7 @@ namespace lfs::vis {
             }));
         }
         const std::size_t output_index = outputSlotIndex(output_slot);
+        const auto& color_buffer = color_override != nullptr ? *color_override : buffers_.pixel_state.deviceBuffer;
         if (cmd == VK_NULL_HANDLE || output_index >= OutputSlotRing::kOutputSlotCount ||
             output_ring_slot >= OutputSlotRing::kFrameRingSize) {
             return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
@@ -6273,17 +6281,17 @@ namespace lfs::vis {
         const auto valid_buffer_range = [](const _VulkanBuffer& buffer) {
             return buffer.size > 0 && buffer.containsRange(0, buffer.size);
         };
-        if (!valid_buffer_range(buffers_.pixel_state.deviceBuffer) ||
+        if (!valid_buffer_range(color_buffer) ||
             !valid_buffer_range(buffers_.pixel_depth.deviceBuffer)) {
             return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::FailedPrecondition,
                 .domain = lfs::ErrorDomain::Rendering,
                 .user_message = std::format(
                     "VkSplat composition buffer ranges must fit their allocations (pixel_buffer={:#x}, pixel_offset={}, pixel_size={}, pixel_allocation={}, depth_buffer={:#x}, depth_offset={}, depth_size={}, depth_allocation={}) ({}:{})",
-                    vkHandleValue(buffers_.pixel_state.deviceBuffer.buffer),
-                    buffers_.pixel_state.deviceBuffer.offset,
-                    buffers_.pixel_state.deviceBuffer.size,
-                    buffers_.pixel_state.deviceBuffer.allocSize,
+                    vkHandleValue(color_buffer.buffer),
+                    color_buffer.offset,
+                    color_buffer.size,
+                    color_buffer.allocSize,
                     vkHandleValue(buffers_.pixel_depth.deviceBuffer.buffer),
                     buffers_.pixel_depth.deviceBuffer.offset,
                     buffers_.pixel_depth.deviceBuffer.size,
@@ -6293,9 +6301,9 @@ namespace lfs::vis {
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
         }
-        pixel_info.buffer = buffers_.pixel_state.deviceBuffer.buffer;
-        pixel_info.offset = buffers_.pixel_state.deviceBuffer.offset;
-        pixel_info.range = buffers_.pixel_state.deviceBuffer.size;
+        pixel_info.buffer = color_buffer.buffer;
+        pixel_info.offset = color_buffer.offset;
+        pixel_info.range = color_buffer.size;
         VkDescriptorBufferInfo depth_info{};
         depth_info.buffer = buffers_.pixel_depth.deviceBuffer.buffer;
         depth_info.offset = buffers_.pixel_depth.deviceBuffer.offset;
@@ -6336,9 +6344,9 @@ namespace lfs::vis {
         pixel_barriers[0].dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
         pixel_barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         pixel_barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        pixel_barriers[0].buffer = buffers_.pixel_state.deviceBuffer.buffer;
-        pixel_barriers[0].offset = buffers_.pixel_state.deviceBuffer.offset;
-        pixel_barriers[0].size = buffers_.pixel_state.deviceBuffer.size;
+        pixel_barriers[0].buffer = color_buffer.buffer;
+        pixel_barriers[0].offset = color_buffer.offset;
+        pixel_barriers[0].size = color_buffer.size;
         pixel_barriers[1] = pixel_barriers[0];
         pixel_barriers[1].buffer = buffers_.pixel_depth.deviceBuffer.buffer;
         pixel_barriers[1].offset = buffers_.pixel_depth.deviceBuffer.offset;
@@ -9180,10 +9188,22 @@ namespace lfs::vis {
             uniforms.lod_enabled |= 2u;
         }
 
+        // Editing guides and deterministic captures retain their existing exact
+        // alpha-blended behavior. This option changes transparency, not projection.
+        const int requested_mode = static_cast<int>(request.transparency_mode);
+        const auto& guides = request.overlay.markers;
+        const bool stochastic_active = (requested_mode == 1 || requested_mode == 2) &&
+                                       !request.gut && !lod_request_active &&
+                                       !depth_capture_mode_ && !deterministic_export &&
+                                       output_slot != OutputSlot::Preview &&
+                                       !guides.show_rings && !guides.show_center_markers &&
+                                       !guides.show_object_outline;
+        uniforms.stochastic_mode = stochastic_active ? static_cast<std::uint32_t>(requested_mode) : 0u;
+
         // HiGS requires compact-slot-safe indexing, 16-bit storage, and immutable
         // input. 3DGUT and live training use the legacy per-render-tile chain.
         const bool higs_candidate =
-            !request.gut && renderer_.supportsFloat16Storage() && !synchronize_input_upload &&
+            !stochastic_active && !request.gut && renderer_.supportsFloat16Storage() && !synchronize_input_upload &&
             !depth_capture_mode_;
         // Depth view and camera-frustum occlusion consume per-pixel median depth.
         // mip_filter bit 1
@@ -9369,6 +9389,13 @@ namespace lfs::vis {
         lfs::Status compose_status;
         std::size_t armed_depth_waves = 0;
         int depth_wave_sort_bits = 0;
+        const auto stochastic_frame = prepareStochasticFrame(
+            uniforms, splat_data, output_slot, force_input_upload || synchronize_input_upload);
+        bool stochastic_committed = false;
+        const auto stochastic_failure = ScopeExit([&] {
+            if (!stochastic_committed)
+                stochastic_histories_[static_cast<std::size_t>(output_slot)].valid = false;
+        });
         try {
             // Timer/guard ordering trick: the LOG_TIMER for batch_total is
             // declared FIRST so it destructs LAST. The DeviceGuard `batch`
@@ -9389,6 +9416,7 @@ namespace lfs::vis {
                                      completion_value);
             {
                 LOG_TIMER("vksplat.render.record");
+                PerfTimer::Timer<PerfTimer::ViewportFrame> gpu_frame_timer(&renderer_);
                 {
                     LOG_TIMER("vksplat.render.record.executeProjectionForward");
                     if (buffers_.has_lod_indices && lod_indices_upload_pending_ && !buffers_.lod_indices.empty()) {
@@ -9553,7 +9581,7 @@ namespace lfs::vis {
                 } else {
                     {
                         LOG_TIMER("vksplat.render.record.executeSortPrimitivesByDepth");
-                        renderer_.executeSortPrimitivesByDepth(uniforms, buffers_);
+                        renderer_.executeSortPrimitivesByDepth(uniforms, buffers_, !stochastic_active);
                     }
                     {
                         LOG_TIMER("vksplat.render.record.executeApplyDepthOrdering");
@@ -9677,6 +9705,8 @@ namespace lfs::vis {
                 LOG_TIMER("vksplat.render.record.composePixelState");
                 // Record compose into the rasterizer's batch so the entire frame
                 // submits and waits exactly once instead of fence-blocking twice.
+                const auto* stochastic_color = resolveStochasticFrame(
+                    uniforms, stochastic_frame, output_slot, request.frame_view.background_color);
                 compose_status = composePixelState(
                     context,
                     renderer_.activeCommandBuffer(),
@@ -9688,7 +9718,8 @@ namespace lfs::vis {
                     request.depth_view,
                     request.depth_view_min,
                     request.depth_view_max,
-                    request.depth_visualization_mode);
+                    request.depth_visualization_mode,
+                    stochastic_color);
             }
             // record/composePixelState timer scope ends here.
             // On try-block exit, `batch` submits and publishes its timeline signal before the
@@ -9736,6 +9767,8 @@ namespace lfs::vis {
             return std::unexpected(legacyErrorString(compose_status.error()));
         }
 
+        commitStochasticFrame(stochastic_frame, output_slot);
+        stochastic_committed = true;
         renderer_.tagDeferredVisibleCountReadback(render_complete_timeline_, completion_value);
         renderer_.tagDeferredLodSelectionReadback(render_complete_timeline_, completion_value);
         renderer_.tagDeferredInstanceCountReadback(render_complete_timeline_, completion_value);
@@ -9797,6 +9830,9 @@ namespace lfs::vis {
             .completion_value = completion_value,
             .lod_page_generation = lod_page_generation,
             .lod_streaming_active = lod_streaming_active || lod_feedback_active,
+            .stochastic_accumulation_active = stochastic_active && !synchronize_input_upload &&
+                                              stochastic_frame.samples + 1u < static_cast<std::uint32_t>(
+                                                                                  std::clamp(request.stochastic_max_frames, 1, 1024)),
         };
     }
 

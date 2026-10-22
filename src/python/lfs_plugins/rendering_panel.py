@@ -72,6 +72,7 @@ BOOL_PROPS = [
 ]
 
 SLIDER_PROPS = [
+    "stochastic_max_frames",
     "selection_outline_opacity", "selection_outline_width", "selection_outline_threshold",
     "axes_size", "grid_opacity", "camera_frustum_scale", "voxel_size",
     "focal_length_mm", "render_scale", "color_exposure", "environment_exposure", "environment_rotation_degrees",
@@ -84,6 +85,7 @@ SLIDER_PROPS = [
 ]
 
 SCRUB_FIELD_DEFS = {
+    "stochastic_max_frames": ScrubFieldSpec(1, 1024, 1, "%d", data_type=int),
     "selection_outline_opacity": ScrubFieldSpec(0, 1, 0.01, "%.2f"),
     "selection_outline_width": ScrubFieldSpec(1, 12, 0.01, "%.2f"),
     "selection_outline_threshold": ScrubFieldSpec(0.05, 0.95, 0.01, "%.2f"),
@@ -126,6 +128,7 @@ SCRUB_FIELD_DEFS = {
 
 SELECT_PROPS = [
     "grid_plane", "sh_degree", "raster_backend", "camera_metrics_mode", "mesh_shadow_resolution", "color_tonemapping",
+    "transparency_mode",
 ]
 RASTER_BACKENDS = {"3dgs", "3dgut"}
 
@@ -185,6 +188,8 @@ LOCALE_KEY = {
     "hide_outside_depth_box": "main_panel.hide_outside_depth_box",
     "equirectangular": "main_panel.equirectangular",
     "raster_backend": "main_panel.raster_backend",
+    "transparency_mode": "main_panel.transparency_mode",
+    "stochastic_max_frames": "main_panel.stochastic_max_frames",
     "mip_filter": "main_panel.mip_filter",
     "axes_size": "main_panel.axes_size",
     "grid_opacity": "main_panel.grid_opacity",
@@ -638,7 +643,8 @@ class RenderingPanel(Panel):
         settings = lf.get_render_settings()
         if settings is None:
             return
-        settings._set_without_session_dirty(prop, float(value))
+        typed_value = int(round(float(value))) if prop == "stochastic_max_frames" else float(value)
+        settings._set_without_session_dirty(prop, typed_value)
         self._render_slider_pending = True
 
     def on_update(self, doc):
@@ -951,7 +957,8 @@ class RenderingPanel(Panel):
         settings = lf.get_render_settings()
         if not settings:
             return
-        settings._set_without_session_dirty(prop, float(value))
+        typed_value = int(round(float(value))) if prop == "stochastic_max_frames" else float(value)
+        settings._set_without_session_dirty(prop, typed_value)
         if self._handle:
             self._handle.dirty(prop)
             if prop == "focal_length_mm":

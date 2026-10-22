@@ -123,6 +123,8 @@ namespace lfs::vis {
         float split_position = 0.5f;
         size_t split_view_offset = 0;
         int raster_backend = 2;
+        int transparency_mode = 0;
+        int stochastic_max_frames = 32;
         bool gut = false;
         bool equirectangular = false;
         bool orthographic = false;

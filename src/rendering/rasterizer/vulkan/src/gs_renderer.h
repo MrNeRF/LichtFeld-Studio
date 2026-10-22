@@ -5,6 +5,7 @@
 #include "../shader/src/slang/overlay_flags.inc"
 #include "indirect_layout.h"
 #include "perf_timer.h"
+#include "stochastic.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -119,9 +120,9 @@ PACK_STRUCT(struct VulkanGSRendererUniforms {
     // Orthographic views move the eye back along the view axis so nothing lies behind it; depth outputs subtract
     // this distance again, so they stay measured from the viewport camera (match shader).
     float depth_offset;
-    uint32_t depth_offset_pad0;
-    uint32_t depth_offset_pad1;
-    uint32_t depth_offset_pad2;
+    uint32_t stochastic_frame;
+    uint32_t stochastic_mode;
+    uint32_t stochastic_history_valid;
 });
 static_assert(sizeof(VulkanGSRendererUniforms) == 224);
 static_assert(offsetof(VulkanGSRendererUniforms, shN_address) % 8 == 0);
@@ -409,7 +410,17 @@ public:
     // Projection rejects are compacted out on the GPU before the radix sort.
     // Writes the depth-ranked primitive indices into buffers.primitive_sort_indices.
     void executeSortPrimitivesByDepth(const VulkanGSRendererUniforms& uniforms,
-                                      VulkanGSPipelineBuffers& buffers);
+                                      VulkanGSPipelineBuffers& buffers,
+                                      bool sort_depth = true);
+
+    void executeStochasticReuse(const VulkanGSRendererUniforms& uniforms,
+                                VulkanGSPipelineBuffers& buffers,
+                                VulkanGSStochasticBuffers& history);
+    [[nodiscard]] const _VulkanBuffer& executeStochasticResolve(
+        const VulkanGSStochasticResolveUniforms& uniforms,
+        VulkanGSPipelineBuffers& buffers,
+        VulkanGSStochasticBuffers& history,
+        std::size_t output_index);
 
     // Reorder tiles_touched into depth-rank order so the subsequent cumsum
     // produces offsets matching the depth-ordered walk in generate_keys.
@@ -533,6 +544,10 @@ protected:
     _ComputePipelinePair pipeline_rasterize_forward = _ComputePipelinePair(15);
     _ComputePipelinePair pipeline_rasterize_forward_3dgut = _ComputePipelinePair(24);
     _ComputePipelinePair pipeline_rasterize_forward_plain = _ComputePipelinePair(15);
+    _ComputePipelinePair pipeline_rasterize_stochastic = _ComputePipelinePair(16);
+    _ComputePipelinePair pipeline_rasterize_stochastic_plain = _ComputePipelinePair(16);
+    _ComputePipeline pipeline_stochastic_reuse = _ComputePipeline(7);
+    _ComputePipeline pipeline_stochastic_resolve = _ComputePipeline(5);
     _ComputePipelinePair pipeline_rasterize_forward_3dgut_plain = _ComputePipelinePair(24);
     _ComputePipelinePair pipeline_rasterize_forward_3dgut_rad = _ComputePipelinePair(24);
     _ComputePipelinePair pipeline_rasterize_forward_3dgut_plain_rad = _ComputePipelinePair(24);

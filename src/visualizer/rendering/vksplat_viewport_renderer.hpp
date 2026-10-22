@@ -46,6 +46,7 @@ namespace lfs::vis {
     class VksplatViewportRenderer {
         friend struct VksplatScratchReleaseTestAccess;
         friend struct SplitOutputLifetimeTestAccess;
+        friend struct StochasticHistoryTestAccess;
 
     public:
         struct RenderResult {
@@ -65,6 +66,7 @@ namespace lfs::vis {
             std::uint64_t lod_page_generation = 0;
             // True while page decodes/uploads are still in flight.
             bool lod_streaming_active = false;
+            bool stochastic_accumulation_active = false;
         };
 
         struct ModelInputSnapshot {
@@ -200,6 +202,7 @@ namespace lfs::vis {
         // While the camera moves during training, the viewer and training take
         // turns on the shared scratch (see kTrainingFramesPerNavigationRender).
         void setCameraNavigating(bool navigating);
+        void invalidateStochasticHistory() { ++stochastic_history_generation_; }
 
         // Invoked with the completion value immediately after each live-model
         // submit, BEFORE the shared arena frame is released — the trainer's
@@ -392,7 +395,35 @@ namespace lfs::vis {
             bool depth_view,
             float depth_min,
             float depth_max,
-            lfs::rendering::DepthVisualizationMode depth_visualization_mode);
+            lfs::rendering::DepthVisualizationMode depth_visualization_mode,
+            const _VulkanBuffer* color_override = nullptr);
+
+        struct StochasticHistory {
+            VulkanGSStochasticBuffers buffers;
+            VulkanGSRendererUniforms camera{};
+            const lfs::core::SplatData* model = nullptr;
+            std::uint64_t generation = 0;
+            std::uint32_t samples = 0;
+            std::size_t last_color = 0;
+            bool valid = false;
+        };
+        struct StochasticFrame {
+            VulkanGSRendererUniforms camera{};
+            const lfs::core::SplatData* model = nullptr;
+            std::uint64_t generation = 0;
+            std::uint32_t samples = 0;
+            std::size_t output_color = 0;
+            bool history_valid = false;
+            bool enabled = false;
+        };
+        [[nodiscard]] StochasticFrame prepareStochasticFrame(
+            VulkanGSRendererUniforms& uniforms, const lfs::core::SplatData& model,
+            OutputSlot slot, bool content_changed) const;
+        [[nodiscard]] const _VulkanBuffer* resolveStochasticFrame(
+            const VulkanGSRendererUniforms& uniforms, const StochasticFrame& frame,
+            OutputSlot slot, const glm::vec3& background);
+        void commitStochasticFrame(const StochasticFrame& frame, OutputSlot slot);
+        void releaseStochasticBuffers();
         [[nodiscard]] lfs::Status waitForRingSlot(
             std::size_t ring_slot,
             std::string_view reason);
@@ -677,6 +708,9 @@ namespace lfs::vis {
         std::unique_ptr<ComposePipeline> compose_;
         static constexpr std::size_t kOutputSlotCount = OutputSlotRing::kOutputSlotCount;
         static constexpr std::size_t kFrameRingSize = OutputSlotRing::kFrameRingSize;
+        std::array<StochasticHistory, kOutputSlotCount> stochastic_histories_;
+        std::uint64_t stochastic_history_generation_ = 1;
+        std::uint32_t stochastic_sample_serial_ = 0;
         OutputSlotRing ring_{};
         OutputImagePool output_pool_{};
         struct PublishedOutput {

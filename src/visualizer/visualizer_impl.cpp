@@ -2805,8 +2805,10 @@ namespace lfs::vis {
         if (scene_capture_jobs_.hasPending()) {
             const bool has_mesh = scene_manager_ &&
                                   !scene_manager_->getScene().getVisibleMeshes().empty();
+            // A capture requests a fresh frame, not a content edit. Preserve
+            // stochastic history; any actual edits already carry their own flags.
             if (scene_capture_jobs_.beginFrame(has_mesh))
-                rendering_manager_->markDirty(DirtyFlag::ALL, FrameReason::AsyncCompletion,
+                rendering_manager_->markDirty(DirtyFlag::CAMERA, FrameReason::AsyncCompletion,
                                               "viewport_capture");
         }
 

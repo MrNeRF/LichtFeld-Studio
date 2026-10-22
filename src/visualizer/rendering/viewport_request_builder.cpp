@@ -456,6 +456,8 @@ namespace lfs::vis {
             .color_exposure = ctx.settings.color_exposure,
             .color_tonemapping = ctx.settings.color_tonemapping,
             .splat_render_profile = ctx.settings.splat_render_profile,
+            .transparency_mode = ctx.settings.transparency_mode,
+            .stochastic_max_frames = ctx.settings.stochastic_max_frames,
             .scaling_modifier = ctx.settings.scaling_modifier,
             .antialiasing = ctx.settings.antialiasing,
             .mip_filter = ctx.settings.mip_filter,

@@ -73,6 +73,8 @@ namespace lfs::vis {
         p.split_position = s.split_position;
         p.split_view_offset = s.split_view_offset;
         p.raster_backend = static_cast<int>(s.raster_backend);
+        p.transparency_mode = static_cast<int>(s.transparency_mode);
+        p.stochastic_max_frames = s.stochastic_max_frames;
         p.gut = lfs::rendering::isGutBackend(s.raster_backend);
         p.equirectangular = s.equirectangular;
         p.orthographic = s.orthographic;
@@ -172,6 +174,9 @@ namespace lfs::vis {
         s.split_position = p.split_position;
         s.split_view_offset = p.split_view_offset;
         const auto previous_backend = s.raster_backend;
+        s.transparency_mode = static_cast<lfs::rendering::GaussianTransparencyMode>(
+            std::clamp(p.transparency_mode, 0, 2));
+        s.stochastic_max_frames = std::clamp(p.stochastic_max_frames, 1, 1024);
         const bool previous_gut = s.gut;
         const auto requested_backend = static_cast<lfs::rendering::GaussianRasterBackend>(p.raster_backend);
         const bool gut_toggle_only = requested_backend == previous_backend && p.gut != previous_gut;

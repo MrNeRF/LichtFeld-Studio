@@ -1,0 +1,455 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#include "rendering/rasterizer/vulkan/src/gs_renderer.h"
+#include <algorithm>
+#include <array>
+#include <bit>
+#include <cmath>
+#include <cstring>
+#include <deque>
+#include <filesystem>
+#include <gtest/gtest.h>
+#include <memory>
+#include <numeric>
+#include <stdexcept>
+#include <vector>
+
+namespace {
+    using lfs::rendering::vulkan::BufferUse;
+
+    class StochasticRenderer : public VulkanGSRenderer {
+    public:
+        void initialize(VkInstance instance, VkPhysicalDevice physical, VkDevice device,
+                        VkQueue queue, uint32_t family, VmaAllocator allocator) {
+            VulkanGSPipeline::initializeExternal(instance, physical, device, queue, family, allocator);
+            const auto root = std::filesystem::path(LFS_STOCHASTIC_TEST_SPIRV_DIR);
+            createComputePipeline(pipeline_rasterize_stochastic_plain[0], (root / "rasterize_stochastic_plain.spv").string());
+            createComputePipeline(pipeline_stochastic_reuse, (root / "stochastic_reuse.spv").string());
+            createComputePipeline(pipeline_stochastic_resolve, (root / "stochastic_resolve.spv").string());
+            createComputePipeline(pipeline_visible_flags, (root / "visible_flags.spv").string(), true, 128u);
+            createComputePipeline(pipeline_prepare_visible_sort, (root / "prepare_visible_sort.spv").string());
+            createComputePipeline(pipeline_compact_visible_primitives,
+                                  (root / "compact_visible_primitives.spv").string(), true, 128u);
+            createComputePipeline(pipeline_cumsum.single_pass, (root / "cumsum_single_pass.spv").string());
+            createPendingComputePipelines();
+        }
+
+        void sample(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers,
+                    const _VulkanBuffer& dummy) {
+            DEVICE_GUARD;
+            executeCompute({{uniforms.image_width, 16}, {uniforms.image_height, 16}},
+                           &uniforms, sizeof(uniforms), pipeline_rasterize_stochastic_plain[0],
+                           std::vector<TaggedBinding>{
+                               {buffers.sorting_gauss_idx_1.deviceBuffer, BufferUse::ComputeRead},
+                               {buffers.tile_ranges.deviceBuffer, BufferUse::ComputeRead},
+                               {buffers.xy_vs.deviceBuffer, BufferUse::ComputeRead},
+                               {buffers.inv_cov_vs_opacity.deviceBuffer, BufferUse::ComputeRead},
+                               {buffers.rgb.deviceBuffer, BufferUse::ComputeRead},
+                               {buffers.depths.deviceBuffer, BufferUse::ComputeRead},
+                               {buffers.pixel_state.deviceBuffer, BufferUse::ComputeReadWrite},
+                               {buffers.pixel_depth.deviceBuffer, BufferUse::ComputeReadWrite},
+                               {buffers.n_contributors.deviceBuffer, BufferUse::ComputeReadWrite},
+                               {buffers.pixel_depth_weight.deviceBuffer, BufferUse::ComputeReadWrite},
+                               {dummy, BufferUse::ComputeRead},
+                               {dummy, BufferUse::ComputeRead},
+                               {dummy, BufferUse::ComputeRead},
+                               {dummy, BufferUse::ComputeRead},
+                               {dummy, BufferUse::ComputeRead},
+                               {buffers.primitive_depth_keys.deviceBuffer, BufferUse::ComputeRead},
+                           });
+        }
+    };
+
+    class StochasticResampling : public ::testing::Test {
+    protected:
+        VkInstance instance_ = VK_NULL_HANDLE;
+        VkDevice device_ = VK_NULL_HANDLE;
+        VmaAllocator allocator_ = VK_NULL_HANDLE;
+        std::unique_ptr<StochasticRenderer> renderer_;
+        VulkanGSPipelineBuffers buffers_;
+        VulkanGSStochasticBuffers history_;
+        Buffer<float> dummy_;
+
+        void SetUp() override {
+            VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+            app.pApplicationName = "stochastic resampling tests";
+            app.apiVersion = VK_API_VERSION_1_3;
+            VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+            instance_info.pApplicationInfo = &app;
+            if (vkCreateInstance(&instance_info, nullptr, &instance_) != VK_SUCCESS)
+                GTEST_SKIP() << "Vulkan 1.3 is unavailable";
+            uint32_t count = 0;
+            ASSERT_EQ(vkEnumeratePhysicalDevices(instance_, &count, nullptr), VK_SUCCESS);
+            if (count == 0)
+                GTEST_SKIP() << "No Vulkan device";
+            std::vector<VkPhysicalDevice> devices(count);
+            ASSERT_EQ(vkEnumeratePhysicalDevices(instance_, &count, devices.data()), VK_SUCCESS);
+            VkPhysicalDevice physical = VK_NULL_HANDLE;
+            uint32_t queue_family = 0;
+            for (auto candidate : devices) {
+                VkPhysicalDeviceProperties properties{};
+                vkGetPhysicalDeviceProperties(candidate, &properties);
+                if (properties.apiVersion < VK_API_VERSION_1_3 || properties.limits.maxPushConstantsSize < 224)
+                    continue;
+                uint32_t extension_count = 0;
+                vkEnumerateDeviceExtensionProperties(candidate, nullptr, &extension_count, nullptr);
+                std::vector<VkExtensionProperties> extensions(extension_count);
+                vkEnumerateDeviceExtensionProperties(candidate, nullptr, &extension_count, extensions.data());
+                if (std::none_of(extensions.begin(), extensions.end(), [](const auto& extension) {
+                        return std::strcmp(extension.extensionName, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME) == 0;
+                    }))
+                    continue;
+                uint32_t family_count = 0;
+                vkGetPhysicalDeviceQueueFamilyProperties(candidate, &family_count, nullptr);
+                std::vector<VkQueueFamilyProperties> families(family_count);
+                vkGetPhysicalDeviceQueueFamilyProperties(candidate, &family_count, families.data());
+                for (uint32_t family = 0; family < family_count; ++family)
+                    if ((families[family].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0) {
+                        physical = candidate;
+                        queue_family = family;
+                        break;
+                    }
+                if (physical != VK_NULL_HANDLE)
+                    break;
+            }
+            if (physical == VK_NULL_HANDLE)
+                GTEST_SKIP() << "No device supports the viewer's Vulkan compute contracts";
+
+            VkPhysicalDeviceVulkan13Features features13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+            VkPhysicalDeviceVulkan12Features features12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+            features12.pNext = &features13;
+            VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+            features.pNext = &features12;
+            vkGetPhysicalDeviceFeatures2(physical, &features);
+            if (!features13.synchronization2 || !features12.timelineSemaphore || !features12.bufferDeviceAddress ||
+                !features.features.shaderInt64)
+                GTEST_SKIP() << "Required Vulkan shader features are unavailable";
+            const float priority = 1.0f;
+            VkDeviceQueueCreateInfo queue_info{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+            queue_info.queueFamilyIndex = queue_family;
+            queue_info.queueCount = 1;
+            queue_info.pQueuePriorities = &priority;
+            const char* extensions[] = {VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME};
+            VkDeviceCreateInfo device_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+            device_info.pNext = &features;
+            device_info.queueCreateInfoCount = 1;
+            device_info.pQueueCreateInfos = &queue_info;
+            device_info.enabledExtensionCount = 1;
+            device_info.ppEnabledExtensionNames = extensions;
+            ASSERT_EQ(vkCreateDevice(physical, &device_info, nullptr, &device_), VK_SUCCESS);
+            VkQueue queue = VK_NULL_HANDLE;
+            vkGetDeviceQueue(device_, queue_family, 0, &queue);
+            VmaAllocatorCreateInfo allocator_info{};
+            allocator_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+            allocator_info.instance = instance_;
+            allocator_info.physicalDevice = physical;
+            allocator_info.device = device_;
+            allocator_info.vulkanApiVersion = VK_API_VERSION_1_3;
+            ASSERT_EQ(vmaCreateAllocator(&allocator_info, &allocator_), VK_SUCCESS);
+            renderer_ = std::make_unique<StochasticRenderer>();
+            ASSERT_NO_THROW(renderer_->initialize(instance_, physical, device_, queue, queue_family, allocator_));
+        }
+
+        void TearDown() override {
+            if (renderer_) {
+                vkDeviceWaitIdle(device_);
+                renderer_->cleanupBuffers(buffers_);
+                renderer_->destroyBuffer(dummy_.deviceBuffer);
+                renderer_->destroyBuffer(history_.ids_depths.deviceBuffer);
+                renderer_->destroyBuffer(history_.occlusion.deviceBuffer);
+                renderer_->destroyBuffer(history_.outgoing_weights.deviceBuffer);
+                for (auto& color : history_.color)
+                    renderer_->destroyBuffer(color.deviceBuffer);
+                renderer_.reset();
+            }
+            if (allocator_)
+                vmaDestroyAllocator(allocator_);
+            if (device_)
+                vkDestroyDevice(device_, nullptr);
+            if (instance_)
+                vkDestroyInstance(instance_, nullptr);
+        }
+
+        template <typename T>
+        void upload(Buffer<T>& buffer, std::vector<T> values) {
+            buffer.assign(values.begin(), values.end());
+            renderer_->resizeDeviceBuffer(buffer, values.size());
+            renderer_->beginCommandBatch();
+            const lfs::rendering::vulkan::DeclaredAccess access{
+                .buffer = &buffer.deviceBuffer,
+                .use = BufferUse::TransferWrite};
+            renderer_->planTransfer(std::span{&access, 1});
+            vkCmdUpdateBuffer(renderer_->activeCommandBuffer(), buffer.deviceBuffer.buffer,
+                              buffer.deviceBuffer.offset, values.size() * sizeof(T), values.data());
+            renderer_->endCommandBatch();
+            renderer_->waitForPendingBatch();
+        }
+
+        template <typename T>
+        std::vector<T> read(const _VulkanBuffer& source, const size_t count) {
+            renderer_->waitForPendingBatch();
+            const VkDeviceSize bytes = count * sizeof(T);
+            VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+            info.size = bytes;
+            info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            VmaAllocationCreateInfo allocation_info{};
+            allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+            allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+            VkBuffer destination = VK_NULL_HANDLE;
+            VmaAllocation allocation = VK_NULL_HANDLE;
+            VmaAllocationInfo allocation_result{};
+            if (vmaCreateBuffer(allocator_, &info, &allocation_info, &destination, &allocation, &allocation_result) != VK_SUCCESS)
+                throw std::runtime_error("Cannot allocate test readback");
+            renderer_->beginCommandBatch();
+            const lfs::rendering::vulkan::DeclaredAccess access{.buffer = &source, .use = BufferUse::TransferRead};
+            renderer_->planTransfer(std::span{&access, 1});
+            const VkBufferCopy copy{source.offset, 0, bytes};
+            vkCmdCopyBuffer(renderer_->activeCommandBuffer(), source.buffer, destination, 1, &copy);
+            VkBufferMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            barrier.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+            barrier.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.buffer = destination;
+            barrier.size = bytes;
+            VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            dependency.bufferMemoryBarrierCount = 1;
+            dependency.pBufferMemoryBarriers = &barrier;
+            vkCmdPipelineBarrier2(renderer_->activeCommandBuffer(), &dependency);
+            renderer_->endCommandBatch();
+            renderer_->waitForPendingBatch();
+            vmaInvalidateAllocation(allocator_, allocation, 0, bytes);
+            std::vector<T> result(count);
+            std::memcpy(result.data(), allocation_result.pMappedData, static_cast<size_t>(bytes));
+            vmaDestroyBuffer(allocator_, destination, allocation);
+            return result;
+        }
+
+        VulkanGSRendererUniforms samplingScene() {
+            upload(buffers_.sorting_gauss_idx_1, std::vector<int32_t>{0, 1});
+            upload(buffers_.tile_ranges, std::vector<int32_t>{0, 2});
+            upload(buffers_.xy_vs, std::vector<float>{0, 0, 0, 0});
+            upload(buffers_.inv_cov_vs_opacity, std::vector<float>{1e-7f, 0, 1e-7f, 0.8f, 1e-7f, 0, 1e-7f, 0.6f});
+            upload(buffers_.rgb, std::vector<float>{1, 0, 0, 0, 1, 0});
+            upload(buffers_.depths, std::vector<float>{1, 2});
+            upload(buffers_.primitive_depth_keys, std::vector<uint32_t>{
+                                                      std::bit_cast<uint32_t>(1.0f), std::bit_cast<uint32_t>(4.0f)});
+            upload(dummy_, std::vector<float>(4, 0));
+            renderer_->resizeDeviceBuffer(buffers_.pixel_state, 64);
+            renderer_->resizeDeviceBuffer(buffers_.pixel_depth, 16);
+            renderer_->resizeDeviceBuffer(buffers_.pixel_depth_weight, 16);
+            renderer_->resizeDeviceBuffer(buffers_.n_contributors, 16);
+            VulkanGSRendererUniforms u{};
+            u.image_width = u.image_height = 4;
+            u.grid_width = u.grid_height = 1;
+            u.num_splats = 2;
+            u.stochastic_mode = 1;
+            return u;
+        }
+    };
+
+    TEST_F(StochasticResampling, VisibilityMatchesAlphaTransmittanceAndIncludesBackground) {
+        auto u = samplingScene();
+        // Exercise the native compaction/snapshot lifetime before sampling, not
+        // just isolated raster inputs. Alpha blending aliases indices onto keys.
+        upload(buffers_.tiles_touched, std::vector<int32_t>{1, 1});
+        aliasDeviceView(buffers_.primitive_sort_indices.deviceBuffer, buffers_.primitive_depth_keys.deviceBuffer);
+        renderer_->beginCommandBatch();
+        renderer_->executeSortPrimitivesByDepth(u, buffers_, false);
+        renderer_->endCommandBatch();
+        EXPECT_EQ(read<uint32_t>(buffers_.primitive_depth_keys.deviceBuffer, 2),
+                  (std::vector<uint32_t>{std::bit_cast<uint32_t>(1.0f), std::bit_cast<uint32_t>(4.0f)}));
+        EXPECT_EQ(read<int32_t>(buffers_.primitive_sort_indices.deviceBuffer, 2), (std::vector<int32_t>{0, 1}));
+        const auto measure = [&] {
+            std::array<int, 3> counts{};
+            for (uint32_t frame = 0; frame < 512; ++frame) {
+                u.stochastic_frame = frame;
+                renderer_->sample(u, buffers_, dummy_.deviceBuffer);
+                const auto samples = read<float>(buffers_.pixel_state.deviceBuffer, 64);
+                for (size_t p = 0; p < 16; ++p) {
+                    const size_t choice = samples[4 * p] > 0.5f ? 0 : samples[4 * p + 1] > 0.5f ? 1
+                                                                                                : 2;
+                    ++counts[choice];
+                    EXPECT_FLOAT_EQ(samples[4 * p + 3], choice == 2 ? 1.0f : 0.0f);
+                }
+            }
+            return counts;
+        };
+        auto counts = measure();
+        // Shared thresholds would yield the wrong far-splat probability. The
+        // third outcome verifies that background mass is not renormalized away.
+        EXPECT_NEAR(counts[0] / 8192.0, 0.8, 0.025);
+        EXPECT_NEAR(counts[1] / 8192.0, 0.2 * 0.6, 0.025);
+        EXPECT_NEAR(counts[2] / 8192.0, 0.2 * 0.4, 0.025);
+        // Native 3DGS sorts by radial distance. Changing those keys must
+        // change visibility, while view-space Z remains available for depth.
+        upload(buffers_.primitive_depth_keys, std::vector<uint32_t>{
+                                                  std::bit_cast<uint32_t>(4.0f), std::bit_cast<uint32_t>(1.0f)});
+        counts = measure();
+        EXPECT_NEAR(counts[0] / 8192.0, 0.4 * 0.8, 0.025);
+        EXPECT_NEAR(counts[1] / 8192.0, 0.6, 0.025);
+        EXPECT_NEAR(counts[2] / 8192.0, 0.4 * 0.2, 0.025);
+    }
+
+    TEST_F(StochasticResampling, PrimitivePermutationAndWavePartitionDoNotChangeSamples) {
+        auto u = samplingScene();
+        for (uint32_t frame = 0; frame < 32; ++frame) {
+            u.stochastic_frame = frame;
+            u.depth_wave = 0;
+            upload(buffers_.sorting_gauss_idx_1, std::vector<int32_t>{0, 1});
+            upload(buffers_.tile_ranges, std::vector<int32_t>{0, 2});
+            renderer_->sample(u, buffers_, dummy_.deviceBuffer);
+            const auto expected = read<float>(buffers_.pixel_state.deviceBuffer, 64);
+            const auto expected_depth = read<float>(buffers_.pixel_depth.deviceBuffer, 16);
+            upload(buffers_.sorting_gauss_idx_1, std::vector<int32_t>{1, 0});
+            renderer_->sample(u, buffers_, dummy_.deviceBuffer);
+            EXPECT_EQ(read<float>(buffers_.pixel_state.deviceBuffer, 64), expected);
+            upload(buffers_.tile_ranges, std::vector<int32_t>{0, 1});
+            upload(buffers_.sorting_gauss_idx_1, std::vector<int32_t>{1});
+            renderer_->sample(u, buffers_, dummy_.deviceBuffer);
+            upload(buffers_.sorting_gauss_idx_1, std::vector<int32_t>{0});
+            u.depth_wave = 1;
+            renderer_->sample(u, buffers_, dummy_.deviceBuffer);
+            EXPECT_EQ(read<float>(buffers_.pixel_state.deviceBuffer, 64), expected);
+            EXPECT_EQ(read<float>(buffers_.pixel_depth.deviceBuffer, 16), expected_depth);
+        }
+    }
+
+    TEST_F(StochasticResampling, SpatialWeightsMatchDoublePrecisionDeduplicatedOcclusionOracle) {
+        std::vector<float> positions, conics;
+        for (int id = 0; id < 7; ++id) {
+            positions.insert(positions.end(), {0.1f * id, 0.0f});
+            conics.insert(conics.end(), {0.8f, 0.0f, 0.8f, 0.3f + 0.05f * id});
+        }
+        upload(buffers_.xy_vs, positions);
+        upload(buffers_.inv_cov_vs_opacity, conics);
+        VulkanGSRendererUniforms u{};
+        u.image_width = 3;
+        u.image_height = 1;
+        u.stochastic_mode = 2;
+        const auto alpha = [&](const uint32_t id, const double x, const double y) {
+            if (id == 0xffffffffu)
+                return 1.0;
+            const double dx = x - positions[2 * id];
+            const double value = conics[4 * id + 3] * std::exp(-0.5 * conics[4 * id] * (dx * dx + y * y));
+            return value >= 0.5 / 255.0 ? std::min(0.999, value) : 0.0;
+        };
+        const std::array<std::array<double, 2>, 4> targets{{{0, 0}, {2, 0}, {1, -1}, {1, 1}}};
+        std::deque<uint32_t> fifo;
+        for (const uint32_t id : {0u, 0u, 1u, 0u, 2u, 3u, 4u, 5u, 1u, 6u, 0xffffffffu}) {
+            const float depth = id == 0xffffffffu ? 1.0e10f : static_cast<float>(id + 1u);
+            upload(buffers_.n_contributors, std::vector<int32_t>(3, std::bit_cast<int32_t>(id)));
+            upload(buffers_.pixel_depth, std::vector<float>(3, depth));
+            upload(buffers_.pixel_depth_weight, std::vector<float>(3, depth));
+            std::array<double, 4> expected{};
+            for (size_t d = 0; d < 4; ++d) {
+                expected[d] = alpha(id, targets[d][0], targets[d][1]) / alpha(id, 1, 0);
+                for (const auto occluder : fifo)
+                    if (occluder + 1u < depth)
+                        expected[d] *= (1.0 - alpha(occluder, targets[d][0], targets[d][1])) /
+                                       (1.0 - alpha(occluder, 1, 0));
+            }
+            renderer_->executeStochasticReuse(u, buffers_, history_);
+            const auto weights = read<float>(history_.outgoing_weights.deviceBuffer, 12);
+            for (size_t d = 0; d < 4; ++d)
+                EXPECT_NEAR(weights[4 + d], expected[d], 2e-5 * std::max(1.0, expected[d]));
+            if (id != 0xffffffffu && std::find(fifo.begin(), fifo.end(), id) == fifo.end()) {
+                fifo.push_front(id);
+                if (fifo.size() > 4)
+                    fifo.pop_back();
+            }
+            const auto stored = read<uint32_t>(history_.ids_depths.deviceBuffer, 24);
+            for (size_t k = 0; k < fifo.size(); ++k)
+                EXPECT_EQ(stored[8 + k * 2], fifo[k]);
+            u.stochastic_history_valid = 1;
+        }
+    }
+
+    TEST_F(StochasticResampling, IdentityAndDepthTiesRemainCorrectAcrossCameraMotion) {
+        upload(buffers_.xy_vs, std::vector<float>{0, 0, 1, 0});
+        upload(buffers_.inv_cov_vs_opacity, std::vector<float>{1, 0, 1, 0.3f, 1, 0, 1, 0.5f});
+        upload(buffers_.n_contributors, std::vector<int32_t>(3, 0));
+        upload(buffers_.pixel_depth_weight, std::vector<float>(3, 1));
+        VulkanGSRendererUniforms u{};
+        u.image_width = 3;
+        u.image_height = 1;
+        u.stochastic_mode = 2;
+        renderer_->executeStochasticReuse(u, buffers_, history_);
+        const auto expected = read<float>(history_.outgoing_weights.deviceBuffer, 12);
+        // Its stored depth is from a previous camera. A primitive must never
+        // acquire a self-occlusion factor when its current depth increases.
+        u.stochastic_history_valid = 1;
+        upload(buffers_.pixel_depth_weight, std::vector<float>(3, 2));
+        renderer_->executeStochasticReuse(u, buffers_, history_);
+        EXPECT_EQ(read<float>(history_.outgoing_weights.deviceBuffer, 12), expected);
+        // At equal depth, the sampler's stable lower-ID tie break also applies
+        // to reuse weights: primitive 0 can occlude primitive 1.
+        upload(buffers_.n_contributors, std::vector<int32_t>(3, 1));
+        upload(buffers_.pixel_depth_weight, std::vector<float>(3, 1));
+        renderer_->executeStochasticReuse(u, buffers_, history_);
+        const auto tied = read<float>(history_.outgoing_weights.deviceBuffer, 12);
+        const double source_occluder_alpha = static_cast<double>(0.3f) * std::exp(-0.5);
+        const double target_occluder_alpha = static_cast<double>(0.3f);
+        const double sample_ratio = std::exp(-0.5);
+        EXPECT_NEAR(tied[4], sample_ratio * (1 - target_occluder_alpha) / (1 - source_occluder_alpha), 1e-6);
+    }
+
+    TEST_F(StochasticResampling, TemporalRecurrenceAndReprojectionMatchThePaper) {
+        constexpr uint32_t width = 16, height = 16;
+        constexpr size_t pixels = width * height;
+        std::vector<float> current(pixels * 4, 0.0f), previous(pixels * 4, 0.0f);
+        for (size_t p = 0; p < pixels; ++p)
+            for (size_t c = 0; c < 3; ++c) {
+                current[4 * p + c] = 0.2f;
+                previous[4 * p + c] = 0.4f;
+            }
+        upload(buffers_.pixel_state, current);
+        upload(buffers_.pixel_depth, std::vector<float>(pixels, 1));
+        upload(history_.outgoing_weights, std::vector<float>(pixels * 4, 0));
+        upload(history_.color[1], previous);
+        VulkanGSStochasticResolveUniforms u{};
+        u.width = width;
+        u.height = height;
+        u.history_valid = 1;
+        u.mode = 1;
+        u.sample_count = 7;
+        u.intrinsics[0] = u.intrinsics[1] = 1;
+        u.previous_intrinsics[0] = u.previous_intrinsics[1] = 1;
+        for (size_t i = 0; i < 3; ++i)
+            u.view_to_previous[i][i] = 1;
+        u.temporal_projection_valid = 1;
+        auto resolve = [&] {
+            const auto& output = renderer_->executeStochasticResolve(u, buffers_, history_, 0);
+            return read<float>(output, pixels * 4);
+        };
+        const size_t center = 4 * (6 * width + 6);
+        EXPECT_NEAR(resolve()[center], 0.375, 1e-6);
+        u.mode = 2;
+        // Flat-region confidence extent is 0.01 in Y. m=20, so retention
+        // is 0.7/20. A binary depth reset or a fixed EMA gives a different result.
+        EXPECT_NEAR(resolve()[center], 0.207, 1e-6);
+        u.history_valid = 0;
+        EXPECT_NEAR(resolve()[center], 0.2, 1e-6);
+        u.history_valid = 1;
+        u.view_to_previous[0][3] = 100;
+        EXPECT_NEAR(resolve()[center], 0.2, 1e-6);
+
+        // An unclipped, in-confidence quadratic signal verifies fractional
+        // Catmull-Rom history fetch and the camera transform's direction.
+        for (size_t p = 0; p < pixels; ++p) {
+            const float x = static_cast<float>(p % width);
+            previous[4 * p] = 0.2f + 0.00005f * x * x;
+            previous[4 * p + 1] = 0.2f - 0.00005f * x * x;
+            previous[4 * p + 2] = 0.2f;
+        }
+        upload(history_.color[1], previous);
+        u.view_to_previous[0][3] = 0.25f;
+        const auto fractional = resolve();
+        EXPECT_NEAR(fractional[center], 0.2 + 0.7 * 0.00005 * 6.25 * 6.25, 1e-6);
+        EXPECT_NEAR(fractional[center + 1], 0.2 - 0.7 * 0.00005 * 6.25 * 6.25, 1e-6);
+    }
+} // namespace

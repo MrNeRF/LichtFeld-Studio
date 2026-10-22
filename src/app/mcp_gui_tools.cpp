@@ -1138,6 +1138,8 @@ namespace lfs::app {
                                  {"split_position", settings.split_position},
                                  {"split_view_offset", settings.split_view_offset},
                                  {"raster_backend", std::string(lfs::rendering::gaussianRasterBackendId(static_cast<lfs::rendering::GaussianRasterBackend>(settings.raster_backend)))},
+                                 {"transparency_mode", std::string(lfs::rendering::gaussianTransparencyModeId(static_cast<lfs::rendering::GaussianTransparencyMode>(settings.transparency_mode)))},
+                                 {"stochastic_max_frames", settings.stochastic_max_frames},
                                  {"equirectangular", settings.equirectangular},
                                  {"orthographic", settings.orthographic},
                                  {"ortho_scale", settings.ortho_scale},
@@ -1365,6 +1367,21 @@ namespace lfs::app {
             }
             if (auto result = set_raster_backend(settings); !result)
                 return std::unexpected(result.error());
+            if (args.contains("transparency_mode")) {
+                const auto& value = args["transparency_mode"];
+                if (!value.is_string() || !lfs::rendering::isGaussianTransparencyModeId(value.get<std::string>()))
+                    return std::unexpected("Field 'transparency_mode' must be 'alpha_blend', 'stochastic', or 'steady_splats'");
+                settings.transparency_mode = static_cast<int>(
+                    lfs::rendering::gaussianTransparencyModeFromId(value.get<std::string>()));
+                touched = true;
+            }
+            if (args.contains("stochastic_max_frames")) {
+                const auto& value = args["stochastic_max_frames"];
+                if (!value.is_number_integer() || value < 1 || value > 1024)
+                    return std::unexpected("Field 'stochastic_max_frames' must be an integer in [1, 1024]");
+                settings.stochastic_max_frames = value.get<int>();
+                touched = true;
+            }
             set_bool("equirectangular", settings.equirectangular);
             set_bool("orthographic", settings.orthographic);
             set_float("ortho_scale", settings.ortho_scale);
@@ -3383,6 +3400,8 @@ namespace lfs::app {
                         {"environment_exposure", json{{"type", "number"}}},
                         {"environment_rotation_degrees", json{{"type", "number"}}},
                         {"raster_backend", json{{"type", "string"}, {"enum", json::array({"3dgs", "3dgut"})}}},
+                        {"transparency_mode", json{{"type", "string"}, {"enum", json::array({"alpha_blend", "stochastic", "steady_splats"})}}},
+                        {"stochastic_max_frames", json{{"type", "integer"}, {"minimum", 1}, {"maximum", 1024}}},
                         {"antialiasing", json{{"type", "boolean"}}},
                         {"show_grid", json{{"type", "boolean"}}},
                         {"show_camera_frustums", json{{"type", "boolean"}}},

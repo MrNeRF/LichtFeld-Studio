@@ -31,6 +31,7 @@ namespace lfs::vis {
         Input,
         CameraMotion,
         CameraSettle,
+        StochasticAccumulation,
         SceneChange,
         SettingsChange,
         Selection,
@@ -64,6 +65,7 @@ namespace lfs::vis {
         case FrameReason::Input: return "Input";
         case FrameReason::CameraMotion: return "CameraMotion";
         case FrameReason::CameraSettle: return "CameraSettle";
+        case FrameReason::StochasticAccumulation: return "StochasticAccumulation";
         case FrameReason::SceneChange: return "SceneChange";
         case FrameReason::SettingsChange: return "SettingsChange";
         case FrameReason::Selection: return "Selection";

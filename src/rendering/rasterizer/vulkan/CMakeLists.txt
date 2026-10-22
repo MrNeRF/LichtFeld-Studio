@@ -7,6 +7,7 @@ add_library(lfs_vulkan_rasterizer STATIC
         src/buffer.cpp
         src/gs_pipeline.cpp
         src/gs_renderer.cpp
+        src/stochastic.cpp
         src/perf_timer.cpp
         src/vma_implementation.cpp
         # Phase 7A: shared bounded-wait + SubmissionState + VulkanDispatch seam.
@@ -213,6 +214,8 @@ _vulkan_add_slang_shader(cumsum_add_block_offsets  cumsum.slang CUMSUM_PHASE=3)
 _vulkan_add_slang_shader(cumsum_single_pass        cumsum.slang CUMSUM_PHASE=0)
 _vulkan_add_slang_shader(radix_histogram_clear     radix_histogram_clear.slang)
 _vulkan_add_slang_shader(expected_depth_finalize   expected_depth_finalize.slang)
+_vulkan_add_slang_shader(stochastic_reuse          stochastic_reuse.slang)
+_vulkan_add_slang_shader(stochastic_resolve        stochastic_resolve.slang)
 _vulkan_add_slang_shader(selection_outline_coverage selection_outline_coverage.slang)
 _vulkan_add_slang_shader(selection_outline_resolve selection_outline_resolve.slang)
 _vulkan_add_slang_shader(selection_outline_seeds selection_outline_seeds.slang)
@@ -266,6 +269,8 @@ _vulkan_add_slang_shader(selection_polygon_rasterize selection_polygon_rasterize
 _vulkan_add_slang_shader(rasterize_forward               alphablend_shader.slang EXPORT_MODE=0)
 _vulkan_add_slang_shader(rasterize_forward_3dgut         alphablend_shader.slang EXPORT_MODE=0 LFS_3DGUT_RASTERIZE=1)
 _vulkan_add_slang_shader(rasterize_forward_plain         alphablend_shader.slang EXPORT_MODE=0 LFS_RASTER_OVERLAYS=0)
+_vulkan_add_slang_shader(rasterize_stochastic            alphablend_shader.slang EXPORT_MODE=0 LFS_STOCHASTIC_RASTER=1)
+_vulkan_add_slang_shader(rasterize_stochastic_plain      alphablend_shader.slang EXPORT_MODE=0 LFS_STOCHASTIC_RASTER=1 LFS_RASTER_OVERLAYS=0)
 _vulkan_add_slang_shader(rasterize_forward_3dgut_plain   alphablend_shader.slang EXPORT_MODE=0 LFS_3DGUT_RASTERIZE=1 LFS_RASTER_OVERLAYS=0)
 # Spark RAD scenes get their own 3DGUT variants so LOD-parent kernels stay out of the ordinary loop.
 _vulkan_add_slang_shader(rasterize_outline_gut_rad alphablend_shader.slang EXPORT_MODE=0 LFS_SELECTION_OUTLINE=1 LFS_3DGUT_RASTERIZE=1 LFS_SPARK_RAD_RASTER=1)
