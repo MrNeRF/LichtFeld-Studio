@@ -3669,7 +3669,6 @@ namespace lfs::python {
                     {"scale", ToolType::Scale},
                     {"mirror", ToolType::Mirror},
                     {"align", ToolType::Align},
-                    {"distance_scale", ToolType::ScaleDistance},
                     {"scale_distance", ToolType::ScaleDistance},
                 };
 
@@ -4085,7 +4084,6 @@ namespace lfs::python {
                     {"builtin.mirror", vis::ToolType::Mirror},
                     {"builtin.align", vis::ToolType::Align},
                     {"builtin.scale_distance", vis::ToolType::ScaleDistance},
-                    {"builtin.distance_scale", vis::ToolType::ScaleDistance},
                 };
                 const auto it = tool_map.find(id);
                 if (it == tool_map.end()) {
@@ -4106,7 +4104,6 @@ namespace lfs::python {
                     {"builtin.mirror", vis::ToolType::Mirror},
                     {"builtin.align", vis::ToolType::Align},
                     {"builtin.scale_distance", vis::ToolType::ScaleDistance},
-                    {"builtin.distance_scale", vis::ToolType::ScaleDistance},
                 };
                 auto it = tool_map.find(id);
                 if (it != tool_map.end()) {
@@ -4575,7 +4572,6 @@ namespace lfs::python {
             return std::isfinite(dist) && dist > 1e-6f;
         };
         m.def("can_apply_scale_distance", can_apply_scale_distance_fn, "True when 2 valid points are picked for scale distance");
-        m.def("can_apply_distance_scale", can_apply_scale_distance_fn, "Alias for can_apply_scale_distance");
 
         auto get_scale_distance_measured_fn = []() -> float {
             const auto& pts = lfs::vis::services().getScaleDistancePickedPoints();
@@ -4585,7 +4581,6 @@ namespace lfs::python {
             return std::isfinite(dist) ? dist : 0.0f;
         };
         m.def("get_scale_distance_measured", get_scale_distance_measured_fn, "Get measured distance between 2 picked points");
-        m.def("get_distance_scale_measured", get_scale_distance_measured_fn, "Alias for get_scale_distance_measured");
 
         auto apply_scale_distance_fn = [](const float target_distance) -> bool {
             if (lfs::vis::op::operators().activeModalId() !=
@@ -4600,7 +4595,6 @@ namespace lfs::python {
             return true;
         };
         m.def("apply_scale_distance", apply_scale_distance_fn, nb::arg("target_distance"), "Request scale distance modal to rescale scene");
-        m.def("apply_distance_scale", apply_scale_distance_fn, nb::arg("target_distance"), "Alias for apply_scale_distance");
 
         auto clear_scale_distance_fn = []() {
             if (lfs::vis::op::operators().activeModalId() !=
@@ -4614,7 +4608,6 @@ namespace lfs::python {
             lfs::vis::op::operators().dispatchModalEvent(evt);
         };
         m.def("clear_scale_distance", clear_scale_distance_fn, "Request scale distance modal to clear picked points");
-        m.def("clear_distance_scale", clear_scale_distance_fn, "Alias for clear_scale_distance");
 
         auto get_scale_distance_points_fn = []() -> std::vector<std::array<float, 3>> {
             const auto& pts = lfs::vis::services().getScaleDistancePickedPoints();
@@ -4626,7 +4619,6 @@ namespace lfs::python {
             return out;
         };
         m.def("get_scale_distance_points", get_scale_distance_points_fn, "Get picked points for scale distance tool");
-        m.def("get_distance_scale_points", get_scale_distance_points_fn, "Alias for get_scale_distance_points");
 
         m.def(
             "fit_crop_tool",
@@ -5925,6 +5917,9 @@ namespace lfs::python {
         };
         bridge.draw_modals = []() { PyModalRegistry::instance().draw_modals(); };
         bridge.has_modals = []() { return PyModalRegistry::instance().has_open_modals(); };
+        bridge.unload_panel_plugin = [](const char* panel_id) {
+            return panel_id && unload_panel_plugin(panel_id);
+        };
 
         if (const auto& enqueue_cb = get_modal_enqueue_callback())
             PyModalRegistry::instance().set_enqueue_callback(enqueue_cb);

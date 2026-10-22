@@ -416,6 +416,12 @@ class SceneNode:
     def has_depth(self) -> bool:
         """Whether this camera node has a depth map file"""
 
+    @property
+    def has_distortion(self) -> bool:
+        """
+        Whether this camera node has lens distortion or non-pinhole camera model
+        """
+
     def load_mask(self, resize_factor: int = 1, max_width: int = 0, invert: bool = False, threshold: float = 0.5) -> lichtfeld.Tensor | None:
         """
         Load mask as tensor [1, H, W] on CUDA (None if not a camera node or no mask)
@@ -724,6 +730,16 @@ class Scene:
 
     def get_active_cameras(self) -> list[SceneNode]:
         """Get camera nodes enabled for training"""
+
+    def has_active_distorted_cameras(self) -> bool:
+        """
+        Check if any active camera enabled for training has distortion or non-pinhole model
+        """
+
+    def can_undistort_active_cameras(self) -> bool:
+        """
+        Check if all active cameras needing distortion handling can be undistorted
+        """
 
     def has_training_data(self) -> bool:
         """Check if training dataset is loaded"""

@@ -41,7 +41,7 @@ namespace lfs::vis {
             case ToolType::Scale: return "builtin.scale";
             case ToolType::Mirror: return "builtin.mirror";
             case ToolType::Align: return "builtin.align";
-            case ToolType::ScaleDistance: return "builtin.distance_scale";
+            case ToolType::ScaleDistance: return "builtin.scale_distance";
             case ToolType::None:
             default: return {};
             }

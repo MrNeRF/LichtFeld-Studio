@@ -242,6 +242,12 @@ namespace lfs::python {
                 return false;
             return live.camera->has_depth();
         }
+        bool has_distortion() const {
+            const auto& live = node();
+            if (!live.camera)
+                return false;
+            return live.camera->has_distortion();
+        }
         std::optional<PyTensor> load_mask(int resize_factor = 1, int max_width = 0,
                                           bool invert = false, float threshold = 0.5f) {
             const auto& live = node();
@@ -554,6 +560,8 @@ namespace lfs::python {
         void set_camera_training_enabled(const std::string& name, bool enabled);
         size_t active_camera_count() const { return scene_->getActiveCameraCount(); }
         std::vector<PySceneNode> get_active_cameras();
+        bool has_active_distorted_cameras() const;
+        bool can_undistort_active_cameras() const;
 
         // Training data
         bool has_training_data() const { return scene_->hasTrainingData(); }

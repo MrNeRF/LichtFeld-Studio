@@ -50,6 +50,7 @@ namespace lfs::vis::gui {
 
     private:
         friend class lfs::vis::WindowInputDispatchTest;
+        friend class lfs::vis::SidebarInputDispatchTest;
         struct InputForwardResult {
             bool event_forwarded = false;
         };

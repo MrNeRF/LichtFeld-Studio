@@ -784,7 +784,11 @@
     "button.stop": "Zatrzymaj Trening",
     "button.reset": "Resetuj Trening",
     "button.add": "Dodaj",
-    "button.remove": "Usuń"
+    "button.remove": "Usuń",
+    "distorted_warning.title": "Wykryto zniekształcone obrazy",
+    "distorted_warning.message": "Wykryto zniekształcone obrazy. Włącz korekcję zniekształceń lub GUT, aby trenować z kamerami ze zniekształceniami.",
+    "distorted_warning.btn_undistort": "Korekcja zniekształceń",
+    "distorted_warning.btn_gut": "GUT"
   },
   "rendering": "Renderowanie",
   "scene": {
@@ -1186,7 +1190,6 @@
     "mirror": "Odbij",
     "crop": "Przytnij",
     "align": "Wyrównaj",
-    "distance_scale": "Skaluj według odległości",
     "scale_distance": "Skaluj według odległości"
   },
   "toolbar": {
@@ -1254,12 +1257,6 @@
     "reset_default": "Resetuj do Domyślnych",
     "fullscreen": "Pełny Ekran",
     "toggle_ui": "Przełącz UI",
-    "distance_scale": "Skaluj według odległości",
-    "distance_scale_tool": "Skala odległości",
-    "distance_scale_measured": "Zmierzono:",
-    "distance_scale_set": "Ustaw odległość:",
-    "distance_scale_apply": "Zatwierdź skalę",
-    "distance_scale_reset": "Zresetuj punkty",
     "scale_distance": "Skaluj według odległości",
     "scale_distance_tool": "Skala odległości",
     "scale_distance_measured": "Zmierzono:",
@@ -1653,6 +1650,8 @@
     "status_label": "Stan: %s"
   },
   "input_settings": {
+    "action.next_sidebar_category": "Następna kategoria panelu bocznego",
+    "action.previous_sidebar_category": "Poprzednia kategoria panelu bocznego",
     "mouse_back": "Przycisk myszy Wstecz",
     "mouse_forward": "Przycisk myszy Dalej",
     "invalid_profile_name": "Nieprawidłowa nazwa profilu. Użyj prostej nazwy bez separatorów ścieżki i znaków zastrzeżonych.",
@@ -2314,6 +2313,7 @@
     "status_loading": "ładowanie",
     "status_error": "błąd",
     "status_disabled": "wyłączony",
+    "status_restart_required": "wymagany restart",
     "error.enter_github_url": "Wpisz URL GitHub",
     "status.installed": "Zainstalowano: {}",
     "status.install_failed": "Instalacja nie powiodła się",
@@ -2707,7 +2707,8 @@
     "gt_metrics_training_required": "Metryki kamery wymagają zainicjowanej sesji treningowej.",
     "gt_metrics_calculation_failed": "Nie udało się obliczyć metryk dla tego widoku.",
     "perf_hud_tooltip": "Pokaż lub ukryj HUD wydajności",
-    "all_panel_tabs": "Wszystkie panele"
+    "scroll_panel_tabs_up": "Przewiń karty paneli w górę",
+    "scroll_panel_tabs_down": "Przewiń karty paneli w dół"
   },
   "runtime": {
     "environment_map_failed": "Nie można odczytać mapy środowiska „{}”. Zachowano poprzednie środowisko.",
@@ -3332,9 +3333,6 @@
   "preferences.drag_title": "Przesyłanie splatów",
   "preferences.drag_pause": "Wstrzymaj trening przed przeciągnięciem splatów.",
   "preferences.drag_failed": "Eksport splatów nie powiódł się. Szczegóły znajdują się w dzienniku aplikacji.",
-  "distance_scale": {
-    "status_invalid_distance": "Odległość musi być większa od zera."
-  },
   "scale_distance": {
     "click_1st": "Kliknij 1. punkt",
     "click_2nd": "Kliknij 2. punkt",

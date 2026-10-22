@@ -1350,7 +1350,7 @@ namespace lfs::vis::gui {
             }
 
             const bool is_align_mode = (active_tool_id == "builtin.align");
-            const bool is_scale_distance_mode = (active_tool_id == "builtin.scale_distance" || active_tool_id == "builtin.distance_scale");
+            const bool is_scale_distance_mode = (active_tool_id == "builtin.scale_distance");
 
             const bool enable_align = is_align_mode && has_selected_node && !selected_crop_volume;
             const bool enable_scale_distance = is_scale_distance_mode && has_selected_node && !selected_crop_volume;

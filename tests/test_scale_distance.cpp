@@ -120,12 +120,12 @@ namespace lfs::vis::op {
         auto& store = app_store();
         (void)store.store().drain_dirty_into_frame();
         int notifications = 0;
-        auto token = store.distance_scale_state_generation.subscribe([&](const auto&) { ++notifications; });
-        const auto initial_gen = store.distance_scale_state_generation.get();
+        auto token = store.scale_distance_state_generation.subscribe([&](const auto&) { ++notifications; });
+        const auto initial_gen = store.scale_distance_state_generation.get();
 
         // Identical points should not bump generation
         services().setScaleDistancePickedPoints(services().getScaleDistancePickedPoints());
-        EXPECT_EQ(store.distance_scale_state_generation.get(), initial_gen);
+        EXPECT_EQ(store.scale_distance_state_generation.get(), initial_gen);
 
         // Setting picked points notifies UI
         services().setScaleDistancePickedPoints({{0.0f, 0.0f, 0.0f}, {2.0f, 0.0f, 0.0f}});
@@ -182,6 +182,10 @@ namespace lfs::vis::op {
             return manager_->getScene().getNode("target")->transform();
         }
 
+        void setPickedPoints(const std::vector<glm::vec3>& pts) {
+            operation_.setPickedPointsForTesting(pts);
+        }
+
         std::unique_ptr<SceneManager> manager_;
         std::unique_ptr<OperatorContext> context_;
         ScaleDistancePickPointOperator operation_;
@@ -193,7 +197,7 @@ namespace lfs::vis::op {
         // 2 points placed: distance = 2.0
         const glm::vec3 p0{0.0f, 0.0f, 0.0f};
         const glm::vec3 p1{2.0f, 0.0f, 0.0f};
-        operation_.setPickedPointsForTesting({p0, p1});
+        setPickedPoints({p0, p1});
 
         EXPECT_TRUE(operation_.poll(*context_));
         EXPECT_EQ(services().getScaleDistancePickedPoints().size(), 2u);
@@ -204,6 +208,19 @@ namespace lfs::vis::op {
 
         const auto scaled_transform = targetTransform();
         EXPECT_NE(scaled_transform, original_transform);
+
+        // Midpoint should remain anchored at (1, 0, 0)
+        const glm::vec3 mid = (p0 + p1) * 0.5f;
+        const glm::vec3 orig_world_mid = glm::vec3(original_transform * glm::vec4(mid, 1.0f));
+        const glm::vec3 scaled_world_mid = glm::vec3(scaled_transform * glm::vec4(mid, 1.0f));
+        EXPECT_NEAR(scaled_world_mid.x, orig_world_mid.x, 1e-4f);
+        EXPECT_NEAR(scaled_world_mid.y, orig_world_mid.y, 1e-4f);
+        EXPECT_NEAR(scaled_world_mid.z, orig_world_mid.z, 1e-4f);
+
+        // Distance between points on transformed node should match target distance (6.0)
+        const glm::vec3 scaled_p0 = glm::vec3(scaled_transform * glm::vec4(p0, 1.0f));
+        const glm::vec3 scaled_p1 = glm::vec3(scaled_transform * glm::vec4(p1, 1.0f));
+        EXPECT_NEAR(glm::length(scaled_p1 - scaled_p0), 6.0f, 1e-4f);
 
         // Points in services are cleared upon successful apply
         EXPECT_TRUE(services().getScaleDistancePickedPoints().empty());
@@ -219,7 +236,7 @@ namespace lfs::vis::op {
     }
 
     TEST_F(ScaleDistanceOperatorTest, ClearRemovesPickedPoints) {
-        operation_.setPickedPointsForTesting({{0.0f, 0.0f, 0.0f}, {1.0f, 2.0f, 3.0f}});
+        setPickedPoints({{0.0f, 0.0f, 0.0f}, {1.0f, 2.0f, 3.0f}});
         EXPECT_EQ(services().getScaleDistancePickedPoints().size(), 2u);
 
         requestAction(Services::ScaleDistanceUiAction::Clear);
@@ -237,6 +254,36 @@ namespace lfs::vis::op {
 
         manager_->clearSelection();
         EXPECT_FALSE(operation_.poll(*context_));
+    }
+
+    TEST(BuiltinOpTest, RoundTripToStringAndFromString) {
+        for (size_t i = 0; i < static_cast<size_t>(BuiltinOp::_Count); ++i) {
+            const auto op = static_cast<BuiltinOp>(i);
+            const char* str = to_string(op);
+            ASSERT_NE(str, nullptr);
+            EXPECT_NE(std::string_view(str), "");
+            const auto parsed = builtin_op_from_string(str);
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, op);
+            const char* label = builtin_op_label(op);
+            ASSERT_NE(label, nullptr);
+            EXPECT_NE(std::string_view(label), "");
+        }
+    }
+
+    TEST(BuiltinToolTest, RoundTripToStringAndFromString) {
+        for (size_t i = 0; i < static_cast<size_t>(BuiltinTool::_Count); ++i) {
+            const auto tool = static_cast<BuiltinTool>(i);
+            const char* str = to_string(tool);
+            ASSERT_NE(str, nullptr);
+            EXPECT_NE(std::string_view(str), "");
+            const auto parsed = builtin_tool_from_string(str);
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, tool);
+            const char* label = builtin_tool_label(tool);
+            ASSERT_NE(label, nullptr);
+            EXPECT_NE(std::string_view(label), "");
+        }
     }
 
 } // namespace lfs::vis::op

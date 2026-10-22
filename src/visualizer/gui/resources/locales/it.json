@@ -797,7 +797,11 @@
     "button.stop": "Interrompi Training",
     "button.reset": "Resetta Training",
     "button.add": "Aggiungi",
-    "button.remove": "Rimuovi"
+    "button.remove": "Rimuovi",
+    "distorted_warning.title": "Immagini distorte rilevate",
+    "distorted_warning.message": "Rilevate immagini distorte. Attiva Rimuovi distorsione o GUT per addestrare con fotocamere con distorsione.",
+    "distorted_warning.btn_undistort": "Rimuovi distorsione",
+    "distorted_warning.btn_gut": "GUT"
   },
   "rendering": "Rendering",
   "scene": {
@@ -1199,7 +1203,6 @@
     "mirror": "Specchia",
     "crop": "Ritaglia",
     "align": "Allinea",
-    "distance_scale": "Scala distanza",
     "scale_distance": "Scala distanza"
   },
   "toolbar": {
@@ -1267,12 +1270,6 @@
     "reset_default": "Ripristina Predefinito",
     "fullscreen": "Schermo Intero",
     "toggle_ui": "Alterna UI",
-    "distance_scale": "Scala distanza",
-    "distance_scale_tool": "Scala distanza",
-    "distance_scale_measured": "Misurato:",
-    "distance_scale_set": "Imposta distanza:",
-    "distance_scale_apply": "Conferma scala",
-    "distance_scale_reset": "Reimposta punti",
     "scale_distance": "Scala distanza",
     "scale_distance_tool": "Scala distanza",
     "scale_distance_measured": "Misurato:",
@@ -1666,6 +1663,8 @@
     "status_label": "Stato: %s"
   },
   "input_settings": {
+    "action.next_sidebar_category": "Categoria successiva della barra laterale",
+    "action.previous_sidebar_category": "Categoria precedente della barra laterale",
     "mouse_back": "Pulsante Indietro del mouse",
     "mouse_forward": "Pulsante Avanti del mouse",
     "invalid_profile_name": "Nome del profilo non valido. Usa un nome semplice senza separatori di percorso o caratteri riservati.",
@@ -2327,6 +2326,7 @@
     "status_loading": "caricamento in corso",
     "status_error": "errore",
     "status_disabled": "disabilitato",
+    "status_restart_required": "riavvio richiesto",
     "error.enter_github_url": "Inserisci un URL GitHub",
     "status.installed": "Installato: {}",
     "status.install_failed": "Installazione non riuscita",
@@ -2720,7 +2720,8 @@
     "gt_metrics_training_required": "Le metriche della camera richiedono una sessione di addestramento inizializzata.",
     "gt_metrics_calculation_failed": "Impossibile calcolare le metriche di questa vista.",
     "perf_hud_tooltip": "Mostra o nascondi l'HUD delle prestazioni",
-    "all_panel_tabs": "Tutti i pannelli"
+    "scroll_panel_tabs_up": "Scorri le schede dei pannelli verso l'alto",
+    "scroll_panel_tabs_down": "Scorri le schede dei pannelli verso il basso"
   },
   "runtime": {
     "environment_map_failed": "Impossibile leggere la mappa ambiente «{}». È stato mantenuto l’ambiente precedente.",
@@ -3332,9 +3333,6 @@
   "project.session.newer_settings.message": "Questo progetto contiene impostazioni non riconosciute da questa versione. Valori predefiniti usati per: {}",
   "preferences.drag_pause": "Metti in pausa l’addestramento prima di trascinare gli splat.",
   "preferences.drag_failed": "Esportazione splat non riuscita. Consulta il registro dell’applicazione per i dettagli.",
-  "distance_scale": {
-    "status_invalid_distance": "La distanza deve essere maggiore di zero."
-  },
   "scale_distance": {
     "click_1st": "Clicca il 1° punto",
     "click_2nd": "Clicca il 2° punto",

@@ -107,6 +107,7 @@ namespace lfs::vis {
 
     private:
         friend class WindowInputDispatchTest;
+        friend class SidebarInputDispatchTest;
         void processEvent(const ::SDL_Event& event);
         void dispatchQueuedEvent(const ::SDL_Event& event);
         void dispatchPolledEvent(const ::SDL_Event& event);

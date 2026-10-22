@@ -275,15 +275,10 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "show_transform_pivot_controls" in model.bound_funcs
     assert "show_align_toolbar" in model.bound_funcs
     assert "show_scale_distance_toolbar" in model.bound_funcs
-    assert "show_distance_scale_toolbar" in model.bound_funcs
     assert "scale_distance_can_apply" in model.bound_funcs
-    assert "distance_scale_can_apply" in model.bound_funcs
     assert "scale_distance_can_reset" in model.bound_funcs
-    assert "distance_scale_can_reset" in model.bound_funcs
     assert "scale_distance_measured_str" in model.bound_funcs
-    assert "distance_scale_measured_str" in model.bound_funcs
     assert "scale_distance_target_str" in model.bound_binds
-    assert "distance_scale_target_str" in model.bound_binds
     assert "show_crop_toolbar" in model.bound_funcs
     assert "show_crop_edit_controls" in model.bound_funcs
     assert "show_crop_enable_separator" in model.bound_funcs
@@ -1962,22 +1957,23 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     tab_rule = right_panel_rcss[tab_start:tab_end]
     assert "box-sizing: border-box;" in tab_rule
     assert "border-width: 1dp;" in tab_rule
-    assert "border-bottom-width: 2dp;" in tab_rule
-    assert "transition: none;" in tab_rule
+    assert "width: 25dp;" in tab_rule
+    assert "margin: 0 0 0 3dp;" in tab_rule
     assert "0.15s" not in tab_rule
 
-    assert right_panel_rml.index('href="panel_tabs.rcss"') < right_panel_rml.index(
-        'href="right_panel.rcss"'
-    )
-    assert right_panel_cpp.index('loadBaseRCSS("rmlui/panel_tabs.rcss")') < (
-        right_panel_cpp.index('loadBaseRCSS("rmlui/right_panel.rcss")')
-    )
+    assert 'href="panel_tabs.rcss"' not in right_panel_rml
+    assert 'loadBaseRCSS("rmlui/panel_tabs.rcss")' not in right_panel_cpp
+    active_geometry_start = right_panel_rcss.index(".tab.active {")
+    active_geometry_end = right_panel_rcss.index("\n}", active_geometry_start)
+    active_geometry = right_panel_rcss[active_geometry_start:active_geometry_end]
+    assert "width: 28dp;" in active_geometry
+    assert "margin-left: 0;" in active_geometry
+    assert "border-right-width: 0;" in active_geometry
 
     for token in (
         "right_panel.tab_border",
-        "right_panel.tab_bottom_border",
         "right_panel.tab_active_border",
-        "right_panel.tab_active_bottom_border",
+        "right_panel.tab_focus_border",
     ):
         assert f"@{{{token}}}" in right_panel_theme
         assert f'"{token}"' in resolver
@@ -1998,10 +1994,10 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     active_start = right_panel_theme.index(".tab.active {")
     active_end = right_panel_theme.index("\n}", active_start)
     active_rule = right_panel_theme[active_start:active_end]
-    assert "border-bottom-color: @{right_panel.tab_active_bottom_border};" in active_rule
+    assert "background-color: transparent;" in active_rule
+    assert "border-color: @{right_panel.tab_active_border};" in active_rule
 
     assert "@{panel.body_decor};" in shell_theme
-    assert "@{chrome.right_panel_decor};" in right_panel_theme
     assert "@{panel.host_body_decor};" in panel_host_theme
     assert '{"panel.host_body_decor"' in resolver
 
@@ -2504,43 +2500,6 @@ def test_align_toolbar_buttons_follow_native_state(toolbar_module):
     assert buttons[1]["enabled"] is True
     assert buttons[3]["selected"] is False
     assert buttons[4]["selected"] is True
-
-
-def test_distance_scale_toolbar_actions_and_snapshot(toolbar_module, monkeypatch):
-    module, _hook_calls, _remove_calls = toolbar_module
-    lf_stub = sys.modules["lichtfeld"]
-    applied_targets = []
-    cleared = {"count": 0}
-
-    lf_stub.ui.can_apply_distance_scale = lambda: True
-    lf_stub.ui.get_distance_scale_measured = lambda: 2.5
-    lf_stub.ui.get_distance_scale_points = lambda: [[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]]
-    lf_stub.ui.apply_distance_scale = lambda target: applied_targets.append(target) or True
-    lf_stub.ui.clear_distance_scale = lambda: cleared.__setitem__("count", cleared["count"] + 1)
-
-    controller = module._GizmoToolbarController()
-    snapshot = controller.snapshot()
-    assert snapshot["show_distance_scale_toolbar"] is False
-
-    tool_def = SimpleNamespace(
-        id="builtin.distance_scale",
-        icon="bounds",
-        label="Distance Scale",
-        submodes=(),
-        pivot_modes=(),
-        can_activate=lambda _context: True,
-    )
-    monkeypatch.setattr(module.ToolRegistry, "get", lambda tool_id: tool_def if tool_id == "builtin.distance_scale" else None)
-    monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: "builtin.distance_scale")
-
-    snapshot = controller.snapshot()
-    assert snapshot["show_distance_scale_toolbar"] is True
-
-    controller.dispatch("distance_scale_apply", "3.0")
-    assert applied_targets == [3.0]
-
-    controller.dispatch("distance_scale_reset", "")
-    assert cleared["count"] == 1
 
 
 def test_scale_distance_toolbar_actions_and_snapshot(toolbar_module, monkeypatch):

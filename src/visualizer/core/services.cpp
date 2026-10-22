@@ -11,8 +11,8 @@ namespace lfs::vis {
         publish_align_state_generation();
     }
 
-    void Services::notifyDistanceScaleStateChanged() {
-        publish_distance_scale_state_generation();
+    void Services::notifyScaleDistanceStateChanged() {
+        publish_scale_distance_state_generation();
     }
 
     Services& Services::instance() {

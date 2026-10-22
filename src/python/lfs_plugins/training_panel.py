@@ -2753,29 +2753,100 @@ class TrainingPanel(Panel):
         params = lf.optimization_params()
         error = params.validate() if params and params.has_params() else ""
         if error:
-            btn_mcmc = tr("training.conflict.btn_use_mcmc")
-            btn_gut = tr("training.conflict.btn_disable_gut")
-            btn_cancel = tr("training.conflict.btn_cancel")
+            self._show_strategy_gut_conflict_dialog()
+        else:
+            self._proceed_to_start()
 
-            def _on_conflict(button, _mcmc=btn_mcmc, _gut=btn_gut):
-                p = lf.optimization_params()
-                if button == _mcmc:
-                    p.set_strategy("mcmc")
-                    lf.start_training()
-                elif button == _gut:
-                    p.gut = False
-                    lf.start_training()
+    def _show_strategy_gut_conflict_dialog(self):
+        btn_mcmc = tr("training.conflict.btn_use_mcmc")
+        btn_gut = tr("training.conflict.btn_disable_gut")
+        btn_cancel = tr("training.conflict.btn_cancel")
 
-            lf.ui.confirm_dialog(
-                tr("training.error.strategy_gut_title"),
-                tr("training.conflict.strategy_gut_start_message"),
-                [btn_mcmc, btn_gut, btn_cancel],
-                _on_conflict,
-            )
-        elif self._should_offer_pc_save():
+        def _on_conflict(button, _mcmc=btn_mcmc, _gut=btn_gut):
+            p = lf.optimization_params()
+            if button == _mcmc:
+                p.set_strategy("mcmc")
+                self._proceed_to_start()
+            elif button == _gut:
+                p.gut = False
+                self._proceed_to_start()
+
+        lf.ui.confirm_dialog(
+            tr("training.error.strategy_gut_title"),
+            tr("training.conflict.strategy_gut_start_message"),
+            [btn_mcmc, btn_gut, btn_cancel],
+            _on_conflict,
+        )
+
+    def _proceed_to_start(self):
+        if self._should_offer_pc_save():
             self._show_save_pc_dialog()
         else:
-            lf.start_training()
+            self._check_distortion_and_start()
+
+    def _scene_has_active_distorted_cameras(self):
+        scene = lf.get_scene()
+        if scene is None:
+            return False
+        return scene.has_active_distorted_cameras()
+
+    def _scene_can_undistort_active_cameras(self):
+        scene = lf.get_scene()
+        if scene is None:
+            return False
+        return scene.can_undistort_active_cameras()
+
+    def _check_distortion_and_start(self):
+        params = lf.optimization_params()
+        if (
+            params is not None
+            and params.has_params()
+            and not (params.undistort or params.gut)
+            and self._scene_has_active_distorted_cameras()
+        ):
+            can_undistort = self._scene_can_undistort_active_cameras()
+            can_gut = params.strategy != "igs+"
+            btn_undistort = tr("training.distorted_warning.btn_undistort")
+            btn_gut = tr("training.distorted_warning.btn_gut")
+            btn_cancel = tr("training.conflict.btn_cancel")
+
+            buttons = []
+            if can_undistort:
+                buttons.append(btn_undistort)
+            if can_gut:
+                buttons.append(btn_gut)
+            buttons.append(btn_cancel)
+
+            def _on_result(button, _u=btn_undistort, _g=btn_gut):
+                if button == _u:
+                    p = lf.optimization_params()
+                    if p and p.has_params():
+                        p.undistort = True
+                    if self._handle:
+                        self._handle.dirty_all()
+                    lf.start_training()
+                elif button == _g:
+                    p = lf.optimization_params()
+                    if p and p.has_params():
+                        p.gut = True
+                    if self._handle:
+                        self._handle.dirty_all()
+                    error = p.validate() if p and p.has_params() else ""
+                    if error:
+                        self._show_strategy_gut_conflict_dialog()
+                    else:
+                        lf.start_training()
+
+            lf.ui.confirm_dialog(
+                tr("training.distorted_warning.title"),
+                tr("training.distorted_warning.message"),
+                buttons,
+                _on_result,
+                style="warning",
+            )
+            return
+
+        lf.start_training()
 
     def _show_overwrite_dialog(self, conflict):
         btn_overwrite = tr("training.overwrite.btn_overwrite_start")
@@ -2831,9 +2902,9 @@ class TrainingPanel(Panel):
                     self._save_modified_pc()
                 except Exception as e:
                     lf.log.error(f"Failed to save point cloud: {e}")
-                lf.start_training()
+                self._check_distortion_and_start()
             elif button == _k:
-                lf.start_training()
+                self._check_distortion_and_start()
 
         message = (
             tr("training.save_pc.message_project")

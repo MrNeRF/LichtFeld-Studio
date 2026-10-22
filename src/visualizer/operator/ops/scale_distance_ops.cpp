@@ -262,11 +262,8 @@ namespace lfs::vis::op {
 
         if (event->type == ModalEvent::Type::KEY) {
             const auto* key = event->as<KeyEvent>();
-            if (!key) {
-                return OperatorResult::RUNNING_MODAL;
-            }
-            if (key->action != lfs::vis::input::ACTION_PRESS) {
-                return OperatorResult::RUNNING_MODAL;
+            if (!key || key->action != lfs::vis::input::ACTION_PRESS) {
+                return OperatorResult::PASS_THROUGH;
             }
 
             switch (key->key) {
@@ -292,7 +289,7 @@ namespace lfs::vis::op {
                 return OperatorResult::RUNNING_MODAL;
 
             default:
-                break;
+                return OperatorResult::PASS_THROUGH;
             }
         }
 
@@ -401,7 +398,7 @@ namespace lfs::vis::op {
         const auto pick = *pending_pick_;
         pending_pick_.reset();
         if (!applyPointSample(sample, pick.point_index)) {
-            setStatus(Strings::ScaleDistance::STATUS_NO_SURFACE, 1.5);
+            setStatus(lichtfeld::Strings::ScaleDistance::STATUS_NO_SURFACE, 1.5);
         }
     }
 
@@ -528,13 +525,13 @@ namespace lfs::vis::op {
 
         const auto transform = computeScaleDistanceTransform(picked_points_[0], picked_points_[1], target_distance);
         if (!transform) {
-            setStatus(Strings::ScaleDistance::STATUS_INVALID_DISTANCE, 2.0);
+            setStatus(lichtfeld::Strings::ScaleDistance::STATUS_INVALID_DISTANCE, 2.0);
             return false;
         }
 
         const auto target_ids = resolveScaleTargets(ctx);
         if (target_ids.empty()) {
-            setStatus(Strings::ScaleDistance::STATUS_NO_TARGET, 2.0);
+            setStatus(lichtfeld::Strings::ScaleDistance::STATUS_NO_TARGET, 2.0);
             return false;
         }
 

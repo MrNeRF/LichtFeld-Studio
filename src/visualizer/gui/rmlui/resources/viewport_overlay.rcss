@@ -2205,8 +2205,7 @@ body {
 
 /* Leave room for the tool strip and corner axis control in each pane. */
 .toolbar-hcenter.align-active,
-.toolbar-hcenter.scale-distance-active,
-.toolbar-hcenter.distance-scale-active {
+.toolbar-hcenter.scale-distance-active {
     padding-left: 44dp;
     padding-right: 121dp;
     box-sizing: border-box;
@@ -2233,8 +2232,7 @@ body {
 }
 
 /* Scale distance toolbar styling */
-.toolbar-hcenter .scale-distance-toolbar,
-.toolbar-hcenter .distance-scale-toolbar {
+.toolbar-hcenter .scale-distance-toolbar {
     max-width: 100%;
     flex-wrap: wrap;
     justify-content: center;
@@ -2242,23 +2240,20 @@ body {
     padding: 4dp 10dp;
 }
 
-.scale-distance-title,
-.distance-scale-title {
+.scale-distance-title {
     font-size: 13dp;
     font-weight: bold;
     white-space: nowrap;
     align-self: center;
 }
 
-.scale-distance-label,
-.distance-scale-label {
+.scale-distance-label {
     font-size: 13dp;
     white-space: nowrap;
     align-self: center;
 }
 
-.scale-distance-value,
-.distance-scale-value {
+.scale-distance-value {
     font-size: 13dp;
     font-weight: bold;
     white-space: nowrap;
@@ -2266,8 +2261,7 @@ body {
     align-self: center;
 }
 
-.scale-distance-input,
-.distance-scale-input {
+.scale-distance-input {
     width: 68dp;
     min-width: 68dp;
     height: 24dp;

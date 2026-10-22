@@ -784,7 +784,11 @@
     "button.stop": "トレーニングを停止",
     "button.reset": "トレーニングをリセット",
     "button.add": "追加",
-    "button.remove": "削除"
+    "button.remove": "削除",
+    "distorted_warning.title": "歪みのある画像が検出されました",
+    "distorted_warning.message": "歪みのある画像が検出されました。歪みのあるカメラで学習するには、歪み補正またはGUTを有効にしてください。",
+    "distorted_warning.btn_undistort": "歪み補正",
+    "distorted_warning.btn_gut": "GUT"
   },
   "rendering": "レンダリング",
   "scene": {
@@ -1186,7 +1190,6 @@
     "mirror": "ミラー",
     "crop": "切り抜き",
     "align": "整列",
-    "distance_scale": "距離で拡大縮小",
     "scale_distance": "距離で拡大縮小"
   },
   "toolbar": {
@@ -1254,12 +1257,6 @@
     "reset_default": "デフォルトにリセット",
     "fullscreen": "全画面表示",
     "toggle_ui": "UIを切り替え",
-    "distance_scale": "距離で拡大縮小",
-    "distance_scale_tool": "距離スケール",
-    "distance_scale_measured": "測定値:",
-    "distance_scale_set": "距離を設定:",
-    "distance_scale_apply": "スケールを確定",
-    "distance_scale_reset": "点をリセット",
     "scale_distance": "距離で拡大縮小",
     "scale_distance_tool": "距離スケール",
     "scale_distance_measured": "測定値:",
@@ -1653,6 +1650,8 @@
     "status_label": "ステータス: %s"
   },
   "input_settings": {
+    "action.next_sidebar_category": "次のサイドバーカテゴリ",
+    "action.previous_sidebar_category": "前のサイドバーカテゴリ",
     "mouse_back": "マウス戻るボタン",
     "mouse_forward": "マウス進むボタン",
     "invalid_profile_name": "無効なプロファイル名です。パス区切り文字や予約文字を含まない名前を使用してください。",
@@ -2314,6 +2313,7 @@
     "status_loading": "読み込み中",
     "status_error": "エラー",
     "status_disabled": "無効",
+    "status_restart_required": "再起動が必要",
     "error.enter_github_url": "GitHub URL を入力してください",
     "status.installed": "インストール済み: {}",
     "status.install_failed": "インストール失敗",
@@ -2707,7 +2707,8 @@
     "gt_metrics_training_required": "カメラ指標には初期化済みのトレーニングセッションが必要です。",
     "gt_metrics_calculation_failed": "このビューの指標を計算できませんでした。",
     "perf_hud_tooltip": "パフォーマンス HUD の表示/非表示",
-    "all_panel_tabs": "すべてのパネル"
+    "scroll_panel_tabs_up": "パネルタブを上にスクロール",
+    "scroll_panel_tabs_down": "パネルタブを下にスクロール"
   },
   "runtime": {
     "environment_map_failed": "環境マップ「{}」を読み込めませんでした。前の環境を保持しました。",
@@ -3332,9 +3333,6 @@
   "preferences.drag_title": "スプラットの転送",
   "preferences.drag_pause": "スプラットをドラッグする前にトレーニングを一時停止してください。",
   "preferences.drag_failed": "スプラットのエクスポートに失敗しました。詳細はアプリケーションログを確認してください。",
-  "distance_scale": {
-    "status_invalid_distance": "距離はゼロより大きい必要があります。"
-  },
   "scale_distance": {
     "click_1st": "1点目をクリック",
     "click_2nd": "2点目をクリック",

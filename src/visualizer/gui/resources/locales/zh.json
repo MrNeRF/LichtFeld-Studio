@@ -784,7 +784,11 @@
     "button.stop": "停止训练",
     "button.reset": "重置训练",
     "button.add": "添加",
-    "button.remove": "移除"
+    "button.remove": "移除",
+    "distorted_warning.title": "检测到畸变图像",
+    "distorted_warning.message": "检测到畸变图像。请启用去畸变或GUT以使用有畸变的相机进行训练。",
+    "distorted_warning.btn_undistort": "去畸变",
+    "distorted_warning.btn_gut": "GUT"
   },
   "rendering": "渲染",
   "scene": {
@@ -1186,7 +1190,6 @@
     "mirror": "镜像",
     "crop": "裁剪",
     "align": "对齐",
-    "distance_scale": "按距离缩放",
     "scale_distance": "按距离缩放"
   },
   "toolbar": {
@@ -1254,12 +1257,6 @@
     "reset_default": "重置为默认",
     "fullscreen": "全屏",
     "toggle_ui": "切换UI",
-    "distance_scale": "按距离缩放",
-    "distance_scale_tool": "距离缩放",
-    "distance_scale_measured": "测量值:",
-    "distance_scale_set": "设置距离:",
-    "distance_scale_apply": "确认缩放",
-    "distance_scale_reset": "重置点",
     "scale_distance": "按距离缩放",
     "scale_distance_tool": "距离缩放",
     "scale_distance_measured": "测量值:",
@@ -1653,6 +1650,8 @@
     "status_label": "状态：%s"
   },
   "input_settings": {
+    "action.next_sidebar_category": "下一个侧边栏类别",
+    "action.previous_sidebar_category": "上一个侧边栏类别",
     "mouse_back": "鼠标后退键",
     "mouse_forward": "鼠标前进键",
     "invalid_profile_name": "配置文件名称无效。请使用不含路径分隔符或保留字符的简单名称。",
@@ -2314,6 +2313,7 @@
     "status_loading": "正在加载",
     "status_error": "错误",
     "status_disabled": "已禁用",
+    "status_restart_required": "需要重启",
     "error.enter_github_url": "请输入 GitHub URL",
     "status.installed": "已安装：{}",
     "status.install_failed": "安装失败",
@@ -2707,7 +2707,8 @@
     "gt_metrics_training_required": "相机指标需要已初始化的训练会话。",
     "gt_metrics_calculation_failed": "无法计算此视图的指标。",
     "perf_hud_tooltip": "显示或隐藏性能 HUD",
-    "all_panel_tabs": "所有面板"
+    "scroll_panel_tabs_up": "向上滚动面板标签",
+    "scroll_panel_tabs_down": "向下滚动面板标签"
   },
   "runtime": {
     "environment_map_failed": "无法读取环境贴图“{}”。已保留之前的环境。",
@@ -3332,9 +3333,6 @@
   "preferences.drag_title": "高斯点传输",
   "preferences.drag_pause": "拖动高斯点前请暂停训练。",
   "preferences.drag_failed": "高斯点导出失败。详情请查看应用程序日志。",
-  "distance_scale": {
-    "status_invalid_distance": "距离必须大于零。"
-  },
   "scale_distance": {
     "click_1st": "点击第 1 个点",
     "click_2nd": "点击第 2 个点",

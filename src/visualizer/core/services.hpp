@@ -206,16 +206,18 @@ namespace lfs::vis {
                 static_cast<size_t>(*scale_distance_selected_point_) >= scale_distance_picked_points_.size()) {
                 scale_distance_selected_point_.reset();
             }
-            notifyDistanceScaleStateChanged();
+            notifyScaleDistanceStateChanged();
         }
         [[nodiscard]] const std::vector<glm::vec3>& getScaleDistancePickedPoints() const { return scale_distance_picked_points_; }
         void clearScaleDistancePickedPoints() {
-            const bool changed = !scale_distance_picked_points_.empty() || !scale_distance_status_message_.empty();
+            const bool points_changed = !scale_distance_picked_points_.empty();
             scale_distance_picked_points_.clear();
             scale_distance_selected_point_.reset();
-            clearScaleDistanceStatusMessage();
-            if (changed)
-                notifyDistanceScaleStateChanged();
+            const bool msg_changed = !scale_distance_status_message_.empty();
+            scale_distance_status_message_.clear();
+            scale_distance_status_until_ = {};
+            if (points_changed || msg_changed)
+                notifyScaleDistanceStateChanged();
         }
 
         void setScaleDistanceSelectedPoint(std::optional<int> index) {
@@ -252,6 +254,7 @@ namespace lfs::vis {
             scale_distance_status_until_ = std::chrono::steady_clock::now() +
                                           std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                               std::chrono::duration<double>(duration_seconds));
+            notifyScaleDistanceStateChanged();
         }
 
         [[nodiscard]] const std::string* getScaleDistanceStatusMessage() const {
@@ -265,8 +268,11 @@ namespace lfs::vis {
         }
 
         void clearScaleDistanceStatusMessage() {
+            if (scale_distance_status_message_.empty())
+                return;
             scale_distance_status_message_.clear();
             scale_distance_status_until_ = {};
+            notifyScaleDistanceStateChanged();
         }
 
         void clear() {
@@ -291,7 +297,7 @@ namespace lfs::vis {
 
     private:
         void notifyAlignStateChanged();
-        void notifyDistanceScaleStateChanged();
+        void notifyScaleDistanceStateChanged();
 
         Services() = default;
         ~Services() = default;

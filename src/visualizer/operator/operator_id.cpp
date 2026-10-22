@@ -23,7 +23,6 @@ namespace lfs::vis::op {
             {"transform.scale", "Scale"},
             {"transform.apply_batch", "Apply Batch Transform"},
             {"align.pick_point", "Align to Ground"},
-            {"scale_distance.pick_point", "Scale by Distance"},
             {"ed.undo", "Undo"},
             {"ed.redo", "Redo"},
             {"ed.delete", "Delete"},
@@ -37,6 +36,7 @@ namespace lfs::vis::op {
             {"ellipsoid.set", "Set Ellipsoid"},
             {"ellipsoid.fit", "Fit Ellipsoid"},
             {"ellipsoid.reset", "Reset Ellipsoid"},
+            {"scale_distance.pick_point", "Scale by Distance"},
         }};
 
         struct ToolInfo {
@@ -51,7 +51,7 @@ namespace lfs::vis::op {
             {"builtin.scale", "Scale"},
             {"builtin.mirror", "Mirror"},
             {"builtin.align", "Align"},
-            {"builtin.distance_scale", "Distance Scale"},
+            {"builtin.scale_distance", "Scale Distance"},
         }};
 
     } // namespace

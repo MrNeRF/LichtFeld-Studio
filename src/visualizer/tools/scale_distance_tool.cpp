@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "tools/scale_distance_tool.hpp"
-#include "tools/unified_tool_registry.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/number_format.hpp"
 #include "core/services.hpp"
@@ -438,14 +437,7 @@ namespace lfs::vis::tools {
 
     void ScaleDistanceTool::onEnabledChanged(bool enabled) {
         if (tool_context_ && tool_context_->getRenderingManager()) {
-            if (enabled) {
-                tool_context_->getRenderingManager()->setExactSurfacePicking(true);
-            } else {
-                const std::string active = UnifiedToolRegistry::instance().getActiveTool();
-                if (active != "builtin.align") {
-                    tool_context_->getRenderingManager()->setExactSurfacePicking(false);
-                }
-            }
+            tool_context_->getRenderingManager()->setExactSurfacePicking(enabled);
         }
         if (!enabled) {
             if (op::operators().activeModalId() == op::to_string(op::BuiltinOp::ScaleDistancePickPoint)) {

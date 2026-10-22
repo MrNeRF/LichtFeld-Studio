@@ -784,7 +784,11 @@
     "button.stop": "Training stoppen",
     "button.reset": "Training resetten",
     "button.add": "Toevoegen",
-    "button.remove": "Verwijderen"
+    "button.remove": "Verwijderen",
+    "distorted_warning.title": "Vervormde beelden gedetecteerd",
+    "distorted_warning.message": "Vervormde beelden gedetecteerd. Schakel Vervorming corrigeren of GUT in om te trainen met camera’s met vervorming.",
+    "distorted_warning.btn_undistort": "Vervorming corrigeren",
+    "distorted_warning.btn_gut": "GUT"
   },
   "rendering": "Renderen",
   "scene": {
@@ -1186,7 +1190,6 @@
     "mirror": "Spiegelen",
     "crop": "Bijsnijden",
     "align": "Uitlijnen",
-    "distance_scale": "Afstand schalen",
     "scale_distance": "Afstand schalen"
   },
   "toolbar": {
@@ -1254,12 +1257,6 @@
     "reset_default": "Reset naar Standaard",
     "fullscreen": "Volledig Scherm",
     "toggle_ui": "Schakel UI",
-    "distance_scale": "Afstand schalen",
-    "distance_scale_tool": "Afstand schalen",
-    "distance_scale_measured": "Gemeten:",
-    "distance_scale_set": "Afstand instellen:",
-    "distance_scale_apply": "Schaling bevestigen",
-    "distance_scale_reset": "Punten resetten",
     "scale_distance": "Afstand schalen",
     "scale_distance_tool": "Afstand schalen",
     "scale_distance_measured": "Gemeten:",
@@ -1653,6 +1650,8 @@
     "status_label": "Status: %s"
   },
   "input_settings": {
+    "action.next_sidebar_category": "Volgende zijbalkcategorie",
+    "action.previous_sidebar_category": "Vorige zijbalkcategorie",
     "mouse_back": "Muisknop Terug",
     "mouse_forward": "Muisknop Vooruit",
     "invalid_profile_name": "Ongeldige profielnaam. Gebruik een eenvoudige naam zonder padscheidingstekens of gereserveerde tekens.",
@@ -2314,6 +2313,7 @@
     "status_loading": "bezig met laden",
     "status_error": "fout",
     "status_disabled": "uitgeschakeld",
+    "status_restart_required": "herstart vereist",
     "error.enter_github_url": "Voer een GitHub-URL in",
     "status.installed": "Geïnstalleerd: {}",
     "status.install_failed": "Installatie mislukt",
@@ -2707,7 +2707,8 @@
     "gt_metrics_training_required": "Camerametrieken vereisen een geïnitialiseerde trainingssessie.",
     "gt_metrics_calculation_failed": "Metrieken voor deze weergave konden niet worden berekend.",
     "perf_hud_tooltip": "Prestatie-HUD tonen of verbergen",
-    "all_panel_tabs": "Alle panelen"
+    "scroll_panel_tabs_up": "Paneeltabbladen omhoog scrollen",
+    "scroll_panel_tabs_down": "Paneeltabbladen omlaag scrollen"
   },
   "runtime": {
     "environment_map_failed": "Omgevingskaart ‘{}’ kon niet worden gelezen. De vorige omgeving is behouden.",
@@ -3332,9 +3333,6 @@
   "preferences.drag_title": "Splats overdragen",
   "preferences.drag_pause": "Pauzeer de training voordat u splats sleept.",
   "preferences.drag_failed": "Exporteren van splats mislukt. Zie het toepassingslogboek voor details.",
-  "distance_scale": {
-    "status_invalid_distance": "Afstand moet groter zijn dan nul."
-  },
   "scale_distance": {
     "click_1st": "Klik 1e punt",
     "click_2nd": "Klik 2e punt",

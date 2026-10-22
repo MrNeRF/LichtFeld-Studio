@@ -237,7 +237,7 @@ namespace lfs::vis {
             ViewportToolbarGeneration,
             GalleryStateValue,
             AlignStateGeneration,
-            DistanceScaleStateGeneration,
+            ScaleDistanceStateGeneration,
         };
 
         AppStore();
@@ -280,7 +280,7 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<std::uint64_t> render_settings_generation;
         lfs::core::reactive::Observable<std::uint64_t> viewport_toolbar_generation;
         lfs::core::reactive::Observable<std::uint64_t> align_state_generation;
-        lfs::core::reactive::Observable<std::uint64_t> distance_scale_state_generation;
+        lfs::core::reactive::Observable<std::uint64_t> scale_distance_state_generation;
 
     private:
         lfs::core::reactive::Store store_;
@@ -288,7 +288,7 @@ namespace lfs::vis {
 
     LFS_VIS_API AppStore& app_store();
     LFS_VIS_API void publish_align_state_generation();
-    LFS_VIS_API void publish_distance_scale_state_generation();
+    LFS_VIS_API void publish_scale_distance_state_generation();
     LFS_VIS_API void publish_language_generation();
     LFS_VIS_API void publish_viewport_toolbar_generation();
 

@@ -53,7 +53,7 @@ namespace lfs::vis {
           render_settings_generation(store_, Field::RenderSettingsGeneration, "render_settings_generation", 0),
           viewport_toolbar_generation(store_, Field::ViewportToolbarGeneration, "viewport_toolbar_generation", 0),
           align_state_generation(store_, Field::AlignStateGeneration, "align_state_generation", 0),
-          distance_scale_state_generation(store_, Field::DistanceScaleStateGeneration, "distance_scale_state_generation", 0) {}
+          scale_distance_state_generation(store_, Field::ScaleDistanceStateGeneration, "scale_distance_state_generation", 0) {}
 
     AppStore& app_store() {
         static AppStore instance;
@@ -65,8 +65,8 @@ namespace lfs::vis {
         signal.set(signal.get() + 1);
     }
 
-    void publish_distance_scale_state_generation() {
-        auto& signal = app_store().distance_scale_state_generation;
+    void publish_scale_distance_state_generation() {
+        auto& signal = app_store().scale_distance_state_generation;
         signal.set(signal.get() + 1);
     }
 

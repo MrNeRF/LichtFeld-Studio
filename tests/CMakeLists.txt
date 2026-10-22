@@ -153,6 +153,9 @@ if(BUILD_VISUALIZER_TESTS)
     endif()
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
+        test_keymap_upgrade.cpp
+        test_keymap_default_contract.cpp
+        test_sidebar_input_dispatch.cpp
         test_point_cloud_vulkan_projection.cpp
         test_viewport_grid.cpp
         test_align_transform.cpp
@@ -165,7 +168,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_guide_segment_clipping.cpp
         test_viewport_depth_layout.cpp
         test_panel_layout_render_demand.cpp
-        test_right_panel_tab_picker.cpp
+        test_right_panel_tabs.cpp
         test_preferences_migration.cpp
         test_python_editor_input.cpp
         test_startup_overlay_geometry.cpp
@@ -215,7 +218,24 @@ if(BUILD_VISUALIZER_TESTS)
         GTest::gtest_main
         Zep::Zep
         SDL3::SDL3
+        ZLIB::ZLIB
     )
+    # Exercise sidebar gestures through the SDL dispatcher without building the
+    # full CUDA test suite or unrelated transform/LSP/project test helpers.
+    add_executable(lichtfeld_sidebar_input_tests test_sidebar_input_dispatch.cpp)
+    target_compile_features(lichtfeld_sidebar_input_tests PRIVATE cxx_std_23)
+    target_include_directories(lichtfeld_sidebar_input_tests PRIVATE
+        $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(lichtfeld_sidebar_input_tests PRIVATE
+        PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+    target_link_libraries(lichtfeld_sidebar_input_tests PRIVATE
+        lfs_io lfs_visualizer lfs_core lfs_python_runtime
+        GTest::gtest_main Zep::Zep SDL3::SDL3)
+    add_test(NAME lichtfeld.sidebar_input COMMAND lichtfeld_sidebar_input_tests
+        --gtest_filter=SidebarInputDispatchTest.Sidebar*)
+    set_tests_properties(lichtfeld.sidebar_input PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy"
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     add_test(
         NAME lichtfeld_visualizer_tests
         COMMAND lichtfeld_visualizer_tests
@@ -791,6 +811,7 @@ set(TEST_FILES
     test_keymap_upgrade.cpp
     test_keymap_default_contract.cpp
     test_ordered_input_dispatch.cpp
+    test_sidebar_input_dispatch.cpp
     test_python_editor_input.cpp
     test_input_controller_dataset_load.cpp
     test_selection_service_interactions.cpp
@@ -896,7 +917,7 @@ set(TEST_FILES
     test_menu_bar_title.cpp
     test_guide_segment_clipping.cpp
     test_status_bar_mining.cpp
-    test_right_panel_tab_picker.cpp
+    test_right_panel_tabs.cpp
     test_rotated_sh_correctness.cpp
     test_splat_raw_payload.cpp
     test_tensor_stream.cpp

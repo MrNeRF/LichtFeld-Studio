@@ -26,7 +26,7 @@ def _theme_size_values(node, key):
             yield from _theme_size_values(value, key)
 
 
-def test_every_scrollbar_uses_the_theme_size():
+def test_every_visible_scrollbar_uses_the_theme_size():
     # Keep intentional family metrics while preventing panels from overriding them.
     themes_dir = PROJECT_ROOT / "src" / "visualizer" / "gui" / "assets" / "themes"
     for theme_path in themes_dir.glob("*.json"):
@@ -41,6 +41,11 @@ def test_every_scrollbar_uses_the_theme_size():
         if rcss_path.name.startswith("components"):
             continue
         for selector, body in rule.findall(rcss_path.read_text(encoding="utf-8")):
+            # Sidebar overflow supports native keyboard focus scrolling, while
+            # its custom tab rail deliberately hides the scrollbar.
+            if rcss_path.name == "right_panel.rcss" and selector.strip() == "#tab-strip-viewport scrollbarvertical":
+                assert re.search(r"\bwidth:\s*0\s*;", body)
+                continue
             assert not re.search(r"\b(?:width|height|min-width|min-height):", body), (
                 f"{rcss_path.name}: {selector.strip()}"
             )
@@ -225,9 +230,7 @@ def test_optional_gradients_style_the_primary_application_chrome():
     consumers = {
         "chrome.menu_decor": ("shell.theme.rcss", "menubar.theme.rcss"),
         "chrome.status_decor": ("shell.theme.rcss", "statusbar.theme.rcss"),
-        "chrome.right_panel_decor": ("right_panel.theme.rcss",),
         "chrome.right_panel_edge_shape": ("right_panel.theme.rcss",),
-        "chrome.right_panel_separator_decor": ("right_panel.theme.rcss",),
         "chrome.toolbar_decor": ("viewport_overlay.theme.rcss",),
         "controls.selected_decor": ("viewport_overlay.theme.rcss",),
         "controls.selected_icon": ("viewport_overlay.theme.rcss",),

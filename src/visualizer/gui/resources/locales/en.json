@@ -793,7 +793,11 @@
     "button.stop": "Stop Training",
     "button.reset": "Reset Training",
     "button.add": "Add",
-    "button.remove": "Remove"
+    "button.remove": "Remove",
+    "distorted_warning.title": "Distorted Images Detected",
+    "distorted_warning.message": "Distorted images detected. Enable Undistort or GUT to train on cameras with distortion.",
+    "distorted_warning.btn_undistort": "Undistort",
+    "distorted_warning.btn_gut": "GUT"
   },
   "rendering": "Rendering",
   "scene": {
@@ -1197,7 +1201,6 @@
     "mirror": "Mirror",
     "crop": "Crop",
     "align": "Align",
-    "distance_scale": "Scale Distance",
     "scale_distance": "Scale Distance"
   },
   "toolbar": {
@@ -1207,12 +1210,6 @@
     "scale": "Scale",
     "mirror": "Mirror",
     "align_3point": "3-Point Align",
-    "distance_scale": "Scale Distance",
-    "distance_scale_tool": "Scale Distance",
-    "distance_scale_measured": "Measured:",
-    "distance_scale_set": "Set Distance:",
-    "distance_scale_apply": "Confirm scale",
-    "distance_scale_reset": "Reset points",
     "crop_box": "Crop Box",
     "enable_crop_box": "Enable Crop Box",
     "crop_roi_settings": "Crop ROI Settings",
@@ -1664,6 +1661,8 @@
     "status_label": "Status: %s"
   },
   "input_settings": {
+    "action.next_sidebar_category": "Next Sidebar Category",
+    "action.previous_sidebar_category": "Previous Sidebar Category",
     "mouse_back": "Mouse Back",
     "mouse_forward": "Mouse Forward",
     "invalid_profile_name": "Invalid profile name. Use a simple name without path separators or reserved characters.",
@@ -2325,6 +2324,7 @@
     "status_loading": "loading",
     "status_error": "error",
     "status_disabled": "disabled",
+    "status_restart_required": "restart required",
     "error.enter_github_url": "Please enter a GitHub URL",
     "status.installed": "Installed: {}",
     "status.install_failed": "Install failed",
@@ -2719,7 +2719,8 @@
     "gt_metrics_training_required": "Camera metrics need an initialized training session.",
     "gt_metrics_calculation_failed": "Could not calculate metrics for this view.",
     "perf_hud_tooltip": "Show or hide the performance HUD",
-    "all_panel_tabs": "All panels"
+    "scroll_panel_tabs_up": "Scroll panel tabs up",
+    "scroll_panel_tabs_down": "Scroll panel tabs down"
   },
   "runtime": {
     "environment_map_failed": "Could not read environment map \"{}\". The previous environment was kept.",
@@ -2827,9 +2828,6 @@
     "edge_label": "1 → 2 along X",
     "edge_on_help": "Edge 1 to 2 along X: ON. Levels the plane, then turns the scene so edge 1 to 2 follows the red X arrow.",
     "edge_off_help": "Edge 1 to 2 along X: OFF. Levels the plane without the extra turn."
-  },
-  "distance_scale": {
-    "status_invalid_distance": "Distance must be greater than zero."
   },
   "toast": {
     "camera_training_next_run": "Camera changes apply to the next training run. This run keeps its current images.",
