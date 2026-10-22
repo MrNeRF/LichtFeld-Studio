@@ -515,6 +515,22 @@ set_tests_properties(lichtfeld_frame_tests PROPERTIES
     TIMEOUT 30
 )
 
+add_executable(lichtfeld_tls_distrust_tests test_tls_distrust.cpp)
+target_include_directories(lichtfeld_tls_distrust_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/core/include)
+target_link_libraries(lichtfeld_tls_distrust_tests PRIVATE GTest::gtest_main OpenSSL::SSL OpenSSL::Crypto)
+set_target_properties(lichtfeld_tls_distrust_tests PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+add_test(NAME lichtfeld_tls_distrust_tests
+    COMMAND $<TARGET_FILE:lichtfeld_tls_distrust_tests> --gtest_color=no
+)
+set_tests_properties(lichtfeld_tls_distrust_tests PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    LABELS "fast;security"
+    TIMEOUT 30
+)
+
 if(NOT BUILD_TESTS)
     message(STATUS "Building CPU-only format tests (no CUDA); full suite disabled")
     return()  # lichtfeld_format_tests is defined above; the rest needs CUDA/Torch
