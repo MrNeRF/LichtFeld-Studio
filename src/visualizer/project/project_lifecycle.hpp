@@ -33,6 +33,7 @@ namespace lfs::training {
 
 namespace lfs::vis {
     class VisualizerImpl;
+    class PayloadRecaptureTest;
     class StoredSessionRestoreTest_CompletionPublishesOnViewerThread_Test;
     class VisualizerImplResetTest_AsyncViewerTrainingStartCanBeCanceledBeforeInitialization_Test;
     class VisualizerImplResetTest_AsyncTrainingBindCancelDoesNotStart_Test;
@@ -391,6 +392,7 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsSettlesCompletedSidecarAutosave_Test;
         friend class lfs::vis::VisualizerImplResetTest_AsyncCaptureKeepsNewerSceneDirty_Test;
+        friend class lfs::vis::PayloadRecaptureTest;
         friend class lfs::vis::VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
         friend class lfs::vis::VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
@@ -545,14 +547,14 @@ namespace lfs::vis::project {
 
         struct PendingSplatCapture {
             lfs::core::Uuid uuid;
-            std::uint64_t scene_serial = 0;
+            std::uint64_t payload_serial = 0;
             std::unique_ptr<lfs::io::project::AsyncSplatCapture>
                 capture;
         };
 
         struct CompletedSplatCapture {
             lfs::core::Uuid uuid;
-            std::uint64_t scene_serial = 0;
+            std::uint64_t payload_serial = 0;
             lfs::io::project::SplatChapterPayload payload;
         };
 
@@ -782,6 +784,8 @@ namespace lfs::vis::project {
         bool settings_persistence_enabled_ = true;
         std::atomic<std::uint64_t> epoch_{0};
         std::atomic<std::uint64_t> scene_mutation_serial_{0};
+        // Advances only on MODEL_CHANGED, the mutations that alter payload bytes.
+        std::atomic<std::uint64_t> payload_mutation_serial_{0};
         std::uint64_t active_restore_ticket_ = 0;
         std::atomic<std::uint64_t>
             selection_mutation_serial_{0};
@@ -838,6 +842,7 @@ namespace lfs::vis::project {
         std::mutex pending_splat_capture_mutex_;
         std::vector<CompletedSplatCapture>
             completed_splat_captures_;
+        // payload_mutation_serial_ at each node's last SPLT capture.
         std::unordered_map<lfs::core::Uuid, std::uint64_t>
             captured_splat_serials_;
         std::uint64_t

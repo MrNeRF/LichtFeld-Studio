@@ -377,6 +377,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
         friend class VisualizerImplResetTest_CleanProjectWorksAfterFirstSaveWithoutReopen_Test;
         friend class VisualizerImplResetTest_AsyncCaptureKeepsNewerSceneDirty_Test;
+        friend class PayloadRecaptureTest;
         friend class VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
         friend class VisualizerImplResetTest_RecoveredProjectSwitchDeletesTempOnlyAfterReplacement_Test;
         friend class VisualizerImplResetTest_FailedNewProjectKeepsRecoveredSessionTemp_Test;

@@ -1111,8 +1111,11 @@ namespace lfs::vis::cap {
 
             const glm::mat4 local_transform = node->local_transform.get();
             if (node->model) {
-                if (auto result = bakeSplatTransformPreservingStorage(*node->model, local_transform); !result)
+                if (auto result = bakeSplatTransformPreservingStorage(*node->model, local_transform); !result) {
+                    // Earlier nodes, or part of this one, may already hold baked values.
+                    scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
                     return std::unexpected(std::string(result.error().user_message()));
+                }
             } else if (node->point_cloud) {
                 bake_point_cloud_transform(*node->point_cloud, local_transform);
             } else if (node->mesh) {

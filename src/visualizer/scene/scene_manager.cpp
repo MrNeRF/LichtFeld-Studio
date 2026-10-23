@@ -291,24 +291,30 @@ namespace lfs::vis {
 
                 static constexpr std::array<const char*, 4> NAMES{
                     "SplatData.means", "SplatData.rotation", "SplatData.shN", "SplatData.shN_value_bounds"};
-                for (const auto& state : states_) {
-                    auto& node = *scene_.getNodeByUuid(state.uuid);
-                    auto& model = *node.model;
-                    const auto targets = fields(model);
-                    for (size_t i = 0; i < targets.size(); ++i) {
-                        auto& target = *targets[i];
-                        const auto& saved = state.fields[i];
-                        if (!saved.is_valid()) {
-                            target = {};
-                            continue;
+                try {
+                    for (const auto& state : states_) {
+                        auto& node = *scene_.getNodeByUuid(state.uuid);
+                        auto& model = *node.model;
+                        const auto targets = fields(model);
+                        for (size_t i = 0; i < targets.size(); ++i) {
+                            auto& target = *targets[i];
+                            const auto& saved = state.fields[i];
+                            if (!saved.is_valid()) {
+                                target = {};
+                                continue;
+                            }
+                            if (!target.is_valid() || target.shape() != saved.shape() || target.dtype() != saved.dtype()) {
+                                target = model.allocate_named_param(saved.shape(), state.capacities[i], saved.dtype(), NAMES[i]);
+                            }
+                            target.copy_from(saved);
                         }
-                        if (!target.is_valid() || target.shape() != saved.shape() || target.dtype() != saved.dtype()) {
-                            target = model.allocate_named_param(saved.shape(), state.capacities[i], saved.dtype(), NAMES[i]);
-                        }
-                        target.copy_from(saved);
+                        node.payload_diverged = state.payload_diverged;
+                        node.point_cloud_source = state.point_cloud_source;
                     }
-                    node.payload_diverged = state.payload_diverged;
-                    node.point_cloud_source = state.point_cloud_source;
+                } catch (...) {
+                    // Nodes restored before the failure hold changed Gaussians.
+                    scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+                    throw;
                 }
                 states_ = std::move(current);
                 scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
@@ -6278,14 +6284,17 @@ namespace lfs::vis {
                 }
             }
         } catch (const std::exception& error) {
+            // A failed rollback leaves some Gaussians deleted.
             try {
                 rollback_partial_deletions();
             } catch (const std::exception& rollback_error) {
+                scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
                 return std::unexpected(std::format(
                     "Failed to soft-delete selected Gaussians: {}; rollback failed: {}",
                     error.what(),
                     rollback_error.what()));
             } catch (...) {
+                scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
                 return std::unexpected(std::format(
                     "Failed to soft-delete selected Gaussians: {}; rollback failed with unknown exception",
                     error.what()));
@@ -6295,6 +6304,7 @@ namespace lfs::vis {
             try {
                 rollback_partial_deletions();
             } catch (...) {
+                scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
                 return std::unexpected(
                     "Failed to soft-delete selected Gaussians: unknown exception; rollback failed");
             }

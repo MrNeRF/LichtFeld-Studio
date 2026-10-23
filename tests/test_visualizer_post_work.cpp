@@ -20293,6 +20293,221 @@ contract["check_selection_submode_follows_native_mode"](lf)
         EXPECT_TRUE(lifecycle->hasDirtyProject());
     }
 
+    // Autosave recaptures a splat payload only after its Gaussians changed. Scene-graph
+    // edits are saved in their own chapters and must not copy the whole model again.
+    class PayloadRecaptureTest : public VisualizerImplResetTest {
+    protected:
+        void SetUp() override {
+            VisualizerImplResetTest::SetUp();
+            if (!cuda_device_available()) {
+                GTEST_SKIP() << "CUDA device unavailable";
+            }
+            lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(false);
+        }
+
+        void TearDown() override {
+            lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(std::nullopt);
+            VisualizerImplResetTest::TearDown();
+        }
+
+        [[nodiscard]] static std::unique_ptr<lfs::core::SplatData> cudaSplat(const std::size_t count) {
+            const auto cpu = lfs::test::licht::make_splat(count);
+            return std::make_unique<lfs::core::SplatData>(
+                0, cpu->means().to(lfs::core::Device::CUDA), cpu->sh0().to(lfs::core::Device::CUDA),
+                lfs::core::Tensor{}, cpu->scaling_raw().to(lfs::core::Device::CUDA),
+                cpu->rotation_raw().to(lfs::core::Device::CUDA), cpu->opacity_raw().to(lfs::core::Device::CUDA),
+                1.0f);
+        }
+
+        void prepare(VisualizerImpl& viewer) {
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        }
+
+        [[nodiscard]] bool open(VisualizerImpl& viewer, const std::filesystem::path& path) {
+            return viewer.projectOpen(path, ProjectSwitchDisposition::DiscardChanges) &&
+                   waitForHydrationComplete(viewer, viewer.work_queue_mutex_, viewer.work_queue_);
+        }
+
+        // Runs autosave passes until they settle and counts how often the node's SPLT
+        // bytes in the project document were replaced by a new capture.
+        [[nodiscard]] int autosaveCaptures(VisualizerImpl& viewer, const lfs::core::Uuid& uuid,
+                                           const std::function<void()>& after_first_pass = {}) {
+            auto& lifecycle = *viewer.project_lifecycle_;
+            const auto splat_bytes = [&]() -> const std::byte* {
+                const auto* payload = lifecycle.document_->find_splat(uuid);
+                return payload ? payload->bytes().data() : nullptr;
+            };
+            int captures = 0;
+            const auto* last = splat_bytes();
+            for (int pass = 0; pass < 4; ++pass) {
+                const auto started = lifecycle.startAutosave();
+                EXPECT_TRUE(started) << lfs::format_for_developer(started.error());
+                EXPECT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                    return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+                }));
+                const auto* current = splat_bytes();
+                if (current && current != last)
+                    ++captures;
+                last = current;
+                if (pass == 0 && after_first_pass)
+                    after_first_pass();
+            }
+            return captures;
+        }
+
+        // The untitled crash-recovery file, hydrated into a fresh scene.
+        [[nodiscard]] std::unique_ptr<lfs::core::Scene> autosavedScene(VisualizerImpl& viewer) {
+            const auto& path = viewer.project_lifecycle_->scratch_autosave_path_;
+            EXPECT_TRUE(path && std::filesystem::is_regular_file(*path));
+            auto scene = std::make_unique<lfs::core::Scene>();
+            if (!path)
+                return scene;
+            const auto document = lfs::test::licht::require_result_ptr(
+                lfs::io::project::ProjectDocument::open(*path));
+            const auto hydrated = document->hydrate(*scene);
+            EXPECT_TRUE(hydrated) << lfs::format_for_developer(hydrated.error());
+            return scene;
+        }
+
+        void expectAutosavedGaussians(VisualizerImpl& viewer, const lfs::core::Uuid& uuid) {
+            const auto saved_scene = autosavedScene(viewer);
+            const auto* saved = saved_scene->getNodeByUuid(uuid);
+            const auto* live = viewer.getScene().getNodeByUuid(uuid);
+            ASSERT_TRUE(saved && saved->model && live && live->model);
+            EXPECT_EQ(saved->model->size(), live->model->size());
+            EXPECT_EQ(saved->model->visible_count(), live->model->visible_count());
+            EXPECT_EQ(saved->model->means().cpu().to_vector(), live->model->means().cpu().to_vector());
+            EXPECT_EQ(saved->model->opacity_raw().cpu().to_vector(), live->model->opacity_raw().cpu().to_vector());
+        }
+    };
+
+    TEST_F(PayloadRecaptureTest, UntitledSceneEditsDoNotRecapture) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_NO_FATAL_FAILURE(prepare(viewer));
+        auto& scene = viewer.getScene();
+        auto* const manager = viewer.getSceneManager();
+        const auto splat_id = scene.addSplat("Scene only", cudaSplat(64));
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        const auto uuid = scene.getNodeById(splat_id)->uuid;
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 1) << "first capture of a new model";
+
+        const auto cropbox_id = cap::ensureCropBox(*manager, viewer.getRenderingManager(), splat_id);
+        ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+        cap::CropBoxUpdate move;
+        move.translation = glm::vec3(0.5f, 0.25f, 0.0f);
+        ASSERT_TRUE(cap::updateCropBox(*manager, viewer.getRenderingManager(), *cropbox_id, move));
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "crop box add and move";
+        ASSERT_TRUE(manager->renameNode(splat_id, "Renamed"));
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "rename";
+        scene.setSelection({1, 2, 3});
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "Gaussian selection";
+        scene.setNodeLocked("Renamed", true);
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "lock";
+
+        const auto saved_scene = autosavedScene(viewer);
+        const auto* saved = saved_scene->getNodeByUuid(uuid);
+        ASSERT_NE(saved, nullptr);
+        EXPECT_EQ(saved->name, "Renamed");
+        EXPECT_TRUE(static_cast<bool>(saved->locked));
+        const auto* saved_cropbox = saved_scene->getNodeById(saved_scene->getCropBoxForSplat(saved->id));
+        ASSERT_NE(saved_cropbox, nullptr);
+        EXPECT_EQ(glm::vec3(saved_cropbox->local_transform.get()[3]), glm::vec3(0.5f, 0.25f, 0.0f));
+        ASSERT_NE(saved->model, nullptr);
+        EXPECT_EQ(saved->model->size(), 64u);
+    }
+
+    TEST_F(PayloadRecaptureTest, UntitledGaussianEditsRecaptureOnce) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_NO_FATAL_FAILURE(prepare(viewer));
+        auto& scene = viewer.getScene();
+        auto* const manager = viewer.getSceneManager();
+        auto* const rendering = viewer.getRenderingManager();
+        const auto splat_id = scene.addSplat("Edited", cudaSplat(64));
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        const auto uuid = scene.getNodeById(splat_id)->uuid;
+        manager->selectNode(splat_id);
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 1);
+
+        const auto expect_recaptured_once = [&](const char* operation) {
+            SCOPED_TRACE(operation);
+            EXPECT_EQ(autosaveCaptures(viewer, uuid), 1);
+            expectAutosavedGaussians(viewer, uuid);
+        };
+        ASSERT_TRUE(cap::writeGaussianField(*manager, rendering, "Edited", "opacity", {0, 5}, {0.25f, -0.75f}));
+        expect_recaptured_once("Gaussian field write");
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        expect_recaptured_once("undo Gaussian field write");
+        ASSERT_TRUE(op::undoHistory().redo().success);
+        expect_recaptured_once("redo Gaussian field write");
+        scene.setSelection({1, 2, 3});
+        ASSERT_TRUE(manager->deleteSelectedGaussiansWithHistory());
+        ASSERT_EQ(scene.getNodeById(splat_id)->model->visible_count(), 61u);
+        expect_recaptured_once("delete selected");
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        ASSERT_EQ(scene.getNodeById(splat_id)->model->visible_count(), 64u);
+        expect_recaptured_once("undo delete");
+        scene.clearSelection();
+        manager->selectNode(splat_id);
+        ASSERT_TRUE(manager->executeMirror(lfs::core::MirrorAxis::X));
+        expect_recaptured_once("mirror");
+
+        const auto cropbox_id = cap::ensureCropBox(*manager, rendering, splat_id);
+        ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+        cap::CropBoxUpdate half;
+        half.min_bounds = glm::vec3(-100.0f, -1.0f, -1.0f);
+        half.max_bounds = glm::vec3(0.0f, 1.0f, 1.0f);
+        ASSERT_TRUE(cap::updateCropBox(*manager, rendering, *cropbox_id, half));
+        manager->selectNode(splat_id);
+        lfs::core::events::cmd::ApplyCropBox{}.emit();
+        const auto cropped = scene.getNodeById(splat_id)->model->visible_count();
+        ASSERT_GT(cropped, 0u);
+        ASSERT_LT(cropped, 64u);
+        expect_recaptured_once("crop apply");
+    }
+
+    // Without VRAM headroom the capture runs synchronously on the viewer thread, so a
+    // repeated capture freezes the application on every autosave.
+    TEST_F(PayloadRecaptureTest, SynchronousCaptureRunsOncePerPayloadChange) {
+        lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(true);
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_NO_FATAL_FAILURE(prepare(viewer));
+        auto& scene = viewer.getScene();
+        const auto splat_id = scene.addSplat("Synchronous", cudaSplat(64));
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        const auto uuid = scene.getNodeById(splat_id)->uuid;
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 1) << "first capture";
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "idle autosaves";
+        ASSERT_TRUE(viewer.getSceneManager()->renameNode(splat_id, "Renamed"));
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "rename";
+        ASSERT_TRUE(cap::writeGaussianField(*viewer.getSceneManager(), viewer.getRenderingManager(), "Renamed",
+                                            "opacity", {0}, {0.5f}));
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 1) << "Gaussian field write";
+        expectAutosavedGaussians(viewer, uuid);
+    }
+
+    TEST_F(PayloadRecaptureTest, SavedProjectSceneEditsDoNotRecapture) {
+        const auto path = temporary_.path / "payload-recapture.licht";
+        write_splt_project(path, lfs::test::licht::make_splat(64), "Saved");
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_NO_FATAL_FAILURE(prepare(viewer));
+        ASSERT_TRUE(open(viewer, path));
+        auto& scene = viewer.getScene();
+        auto* const manager = viewer.getSceneManager();
+        const auto* const node = scene.getNode("Saved");
+        ASSERT_NE(node, nullptr);
+        const auto splat_id = node->id;
+        const auto uuid = node->uuid;
+
+        // A rename while the capture of a Gaussian edit is in flight must not repeat it.
+        ASSERT_TRUE(cap::writeGaussianField(*manager, viewer.getRenderingManager(), "Saved", "opacity", {0}, {0.5f}));
+        EXPECT_EQ(autosaveCaptures(viewer, uuid, [&] { ASSERT_TRUE(manager->renameNode(splat_id, "Renamed")); }), 1);
+        const auto cropbox_id = cap::ensureCropBox(*manager, viewer.getRenderingManager(), splat_id);
+        ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+        scene.setSelection({1, 2});
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "crop box and selection";
+    }
+
     TEST_F(VisualizerImplResetTest,
            PreTrainingProjectSaveRestoresCameraEnabledAndHidden) {
         if (!cuda_device_available()) {

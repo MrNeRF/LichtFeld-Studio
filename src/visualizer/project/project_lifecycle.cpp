@@ -4027,7 +4027,7 @@ namespace lfs::vis::project {
                         }
                         completed.push_back({
                             .uuid = captures[i].uuid,
-                            .scene_serial = captures[i].scene_serial,
+                            .payload_serial = captures[i].payload_serial,
                             .payload = std::move(*payload),
                         });
                     }
@@ -5565,7 +5565,7 @@ namespace lfs::vis::project {
                         error = developerError(set.error());
                         break;
                     }
-                    captured_splat_serials_[item.uuid] = item.scene_serial;
+                    captured_splat_serials_[item.uuid] = item.payload_serial;
                 }
             }
             if (error.empty()) {
@@ -6212,6 +6212,8 @@ namespace lfs::vis::project {
         if ((mutation_flags & model_flag) != 0) {
             payload_dirty_.store(
                 true, std::memory_order_release);
+            payload_mutation_serial_.fetch_add(
+                1, std::memory_order_acq_rel);
         }
     }
 
@@ -6439,6 +6441,8 @@ namespace lfs::vis::project {
         const auto sync_started = std::chrono::steady_clock::now();
         const auto sync_scene_serial = scene_mutation_serial_.load(
             std::memory_order_acquire);
+        const auto sync_payload_serial = payload_mutation_serial_.load(
+            std::memory_order_acquire);
         auto scene_capture_finished = sync_started;
         auto payload_capture_finished = sync_started;
         auto selection_capture_finished = sync_started;
@@ -6649,9 +6653,11 @@ namespace lfs::vis::project {
                 if (already_present && !capture_payloads) {
                     continue;
                 }
+                // Scene-graph edits never touch the captured bytes; only a
+                // payload mutation since the last capture makes them stale.
                 const auto captured = captured_splat_serials_.find(node->uuid);
-                if (captured != captured_splat_serials_.end() &&
-                    captured->second >= sync_scene_serial) {
+                if (already_present && captured != captured_splat_serials_.end() &&
+                    captured->second >= sync_payload_serial) {
                     continue;
                 }
 
@@ -6678,7 +6684,7 @@ namespace lfs::vis::project {
                 } else if (*async) {
                     async_captures.push_back({
                         .uuid = node->uuid,
-                        .scene_serial = sync_scene_serial,
+                        .payload_serial = sync_payload_serial,
                         .capture = std::move(*async),
                     });
                 }
@@ -6719,14 +6725,6 @@ namespace lfs::vis::project {
             }
             const auto& fourcc =
                 binding->second.fourcc;
-            const auto captured_splat = captured_splat_serials_.find(node->uuid);
-            const bool splat_already_captured =
-                fourcc == "SPLT" &&
-                captured_splat != captured_splat_serials_.end() &&
-                // A rename or selection change can advance the scene serial
-                // while a capture finishes. Its bytes are still current when
-                // geometry is clean, and its provenance must still be recorded.
-                (captured_splat->second >= sync_scene_serial || !capture_payloads);
             if (fourcc == "SPLT") {
                 live_splats.insert(node->uuid);
             } else if (fourcc == "PCLD") {
@@ -6752,6 +6750,14 @@ namespace lfs::vis::project {
                                state.fourcc.to_string() ==
                                    fourcc;
                     });
+            const auto captured_splat = captured_splat_serials_.find(node->uuid);
+            const bool splat_already_captured =
+                fourcc == "SPLT" && already_present &&
+                captured_splat != captured_splat_serials_.end() &&
+                // Scene-graph edits can advance the scene serial while a capture
+                // finishes. Its bytes are still current when no payload mutation
+                // followed, and its provenance must still be recorded.
+                (captured_splat->second >= sync_payload_serial || !capture_payloads);
             // An async capture has already installed the SPLT bytes, but its
             // provenance is still registered by this synchronization pass.
             // Do not let the clean-payload fast path skip that metadata.
@@ -6811,6 +6817,9 @@ namespace lfs::vis::project {
                     !set) {
                     return set;
                 }
+                // The synchronous fallback (CPU models, no VRAM headroom) is
+                // recorded too, so it does not repeat on every autosave.
+                captured_splat_serials_[node->uuid] = sync_payload_serial;
             } else if (fourcc == "PCLD") {
                 if (!node->point_cloud) {
                     return fail<void>(
