@@ -1,0 +1,76 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+# SPDX-License-Identifier: GPL-3.0-or-later
+include_guard(GLOBAL)
+
+function(lfs_hip_windows_runtime_files output sdk)
+    # Dependency discovery belongs in script mode, not project configure mode.
+    if(NOT CMAKE_SCRIPT_MODE_FILE)
+        set(_result_file "${CMAKE_CURRENT_BINARY_DIR}/hip-runtime-dependencies.txt")
+        execute_process(COMMAND "${CMAKE_COMMAND}" "-DLFS_HIP_RUNTIME_SDK=${sdk}"
+            "-DLFS_HIP_RUNTIME_RESULT=${_result_file}"
+            -P "${CMAKE_CURRENT_FUNCTION_LIST_FILE}"
+            RESULT_VARIABLE _status)
+        if(NOT _status EQUAL 0)
+            message(FATAL_ERROR "HIP SDK runtime dependency discovery failed")
+        endif()
+        file(READ "${_result_file}" _files)
+        set(${output} "${_files}" PARENT_SCOPE)
+        return()
+    endif()
+    # HIPRTC and COMGR are loaded dynamically, so retain these roots explicitly.
+    # OpenCL is not a HIP root: include it only if a selected SDK actually imports it.
+    file(GLOB _roots "${sdk}/bin/amdhip64*.dll" "${sdk}/bin/amd_comgr.dll" "${sdk}/bin/hiprtc*.dll")
+    file(GLOB _hip "${sdk}/bin/amdhip64*.dll")
+    file(GLOB _rtc "${sdk}/bin/hiprtc*.dll")
+    list(FILTER _rtc EXCLUDE REGEX "hiprtc-builtins")
+    if(NOT _hip OR NOT _rtc OR NOT EXISTS "${sdk}/bin/amd_comgr.dll")
+        message(FATAL_ERROR "HIP packaging requires the SDK HIP runtime, HIPRTC and COMGR; use a complete development SDK")
+    endif()
+    set(_tool "${sdk}/lib/llvm/bin/llvm-objdump.exe")
+    if(NOT EXISTS "${_tool}")
+        # Preserve older SDK distributions whose dependency tool is unavailable.
+        file(GLOB _extra "${sdk}/bin/amdocl64.dll" "${sdk}/bin/rocm_kpack.dll")
+        set(${output} ${_roots} ${_extra} PARENT_SCOPE)
+        message(WARNING "HIP dependency inspection unavailable; retaining conservative SDK runtime set")
+        return()
+    endif()
+    set(CMAKE_GET_RUNTIME_DEPENDENCIES_PLATFORM "windows+pe")
+    set(CMAKE_GET_RUNTIME_DEPENDENCIES_TOOL "objdump")
+    set(CMAKE_GET_RUNTIME_DEPENDENCIES_COMMAND "${_tool}")
+    set(_saved_path "$ENV{PATH}")
+    set(ENV{PATH} "${sdk}/bin;${sdk}/lib/llvm/bin;$ENV{PATH}")
+    cmake_policy(PUSH)
+    if(POLICY CMP0207)
+        cmake_policy(SET CMP0207 NEW)
+    endif()
+    file(GET_RUNTIME_DEPENDENCIES LIBRARIES ${_roots}
+        DIRECTORIES "${sdk}/bin"
+        PRE_EXCLUDE_REGEXES [[api-ms-.*]] [[ext-ms-.*]]
+        RESOLVED_DEPENDENCIES_VAR _resolved UNRESOLVED_DEPENDENCIES_VAR _unresolved)
+    cmake_policy(POP)
+    set(ENV{PATH} "${_saved_path}")
+    if(_unresolved)
+        message(FATAL_ERROR "Unresolved HIP SDK runtime dependencies: ${_unresolved}")
+    endif()
+    set(_files ${_roots})
+    file(REAL_PATH "${sdk}/bin" _sdk_bin)
+    cmake_path(CONVERT "${_sdk_bin}" TO_CMAKE_PATH_LIST _sdk_bin NORMALIZE)
+    string(TOLOWER "${_sdk_bin}/" _prefix)
+    foreach(_file IN LISTS _resolved)
+        file(REAL_PATH "${_file}" _absolute)
+        cmake_path(CONVERT "${_absolute}" TO_CMAKE_PATH_LIST _absolute NORMALIZE)
+        string(TOLOWER "${_absolute}" _lower)
+        string(FIND "${_lower}" "${_prefix}" _position)
+        if(_position EQUAL 0)
+            list(APPEND _files "${_absolute}")
+        endif()
+    endforeach()
+    list(REMOVE_DUPLICATES _files)
+    list(SORT _files)
+    set(${output} "${_files}" PARENT_SCOPE)
+endfunction()
+
+if(CMAKE_SCRIPT_MODE_FILE AND DEFINED LFS_HIP_RUNTIME_SDK)
+    lfs_hip_windows_runtime_files(_runtime_files "${LFS_HIP_RUNTIME_SDK}")
+    file(WRITE "${LFS_HIP_RUNTIME_RESULT}" "${_runtime_files}")
+endif()

@@ -4,6 +4,42 @@ HIP is an optional Tensor and training backend on Windows and Linux. It does not
 require CUDA, Torch, or PyTorch. Rendering uses the separately selected rendering
 backend. Enabling HIP does not change the defaults of other backends.
 
+## SDK and build prerequisites
+
+The four opt-in HIP CI workflows pin the ROCm SDK Python distribution to
+**10.1.0** and use Python 3.13 for the isolated SDK environment. The HIP API
+inside this SDK has its own version (7.16); these are different version schemes.
+The application retains its normal Python dependency and does not use Torch.
+Use the SDK built for the host OS. The SDK supplies build tools and libraries;
+it does not install an AMD display/kernel driver.
+
+On Windows, use an x64 Visual Studio developer shell and install the SDK outside
+the checkout:
+
+```powershell
+$sdkEnv = "$env:LOCALAPPDATA/LichtFeld/rocm-sdk-10.1"
+py -3.13 -m venv $sdkEnv
+& "$sdkEnv/Scripts/python.exe" -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ 'rocm[devel]==10.1.0'
+& "$sdkEnv/Scripts/rocm-sdk.exe" init
+$env:LFS_HIP_ROOT = & "$sdkEnv/Scripts/python.exe" -c 'import sysconfig; from pathlib import Path; print(Path(sysconfig.get_paths()["purelib"])/"_rocm_sdk_devel")'
+```
+
+On Linux, install the normal upstream build prerequisites, then use a separate
+SDK environment. CI compiles on Ubuntu 24.04 with GCC/G++ 14 and Python 3.13:
+
+```sh
+python3.13 -m venv "$HOME/.cache/lichtfeld/rocm-sdk-10.1"
+sdk_env="$HOME/.cache/lichtfeld/rocm-sdk-10.1"
+"$sdk_env/bin/python" -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ 'rocm[devel]==10.1.0'
+"$sdk_env/bin/rocm-sdk" init
+export LFS_HIP_ROOT="$("$sdk_env/bin/python" -c 'import sysconfig; from pathlib import Path; print(Path(sysconfig.get_paths()["purelib"])/"_rocm_sdk_devel")')"
+```
+
+The mixed CUDA+HIP presets also need the upstream CUDA toolchain. The manual CI
+installs CUDA 12.8 automatically for those jobs. HIP-only presets need no CUDA
+installation. A final portable package ships HIP runtime libraries, not the
+SDK's Python environment, headers, compiler executables or development archives.
+
 ## Developer build
 
 Use a complete ROCm development SDK and the application's normal dependencies:
@@ -22,6 +58,36 @@ Use separate build directories for different target/profile configurations.
 
 ## Portable builds
 
+The existing build presets and default CUDA/Vulkan portable configuration are
+preserved. ROCm distribution uses separate build directories and presets:
+
+| OS | CUDA + HIP portable | HIP-only portable |
+|---|---|---|
+| Windows | `windows-rocm-portable` | `windows-rocm-only-portable` |
+| Linux | `linux-rocm-portable` | `linux-rocm-only-portable` |
+
+These inherit the normal Windows/Linux release profiles and enable compressed
+universal HIP modules and the matching optimized device profile. For example:
+
+```sh
+cmake --preset windows-rocm-portable
+cmake --build --preset windows-rocm-portable
+cmake --install build-windows-rocm-portable --prefix dist-windows-rocm-portable
+```
+
+Use the Linux preset names on Linux, or the `rocm-only` variants to omit CUDA.
+Set `LFS_HIP_ROOT` first. Local iterative host builds can explicitly add
+`-DLFS_FAST_COMPILE=ON`; compiler cache is inherited from the normal build preset.
+Native HIP kernels retain their optimized compilation flags.
+
+The four workflows `hip-windows.yml`, `hip-ubuntu.yml`,
+`hip-cuda-windows.yml` and `hip-cuda-ubuntu.yml` remain **workflow_dispatch only**.
+They automatically install/cache the pinned SDK without Torch, initialize it,
+locate its headers, and compile all declared HIP targets in Release and Debug.
+They also check compressed target coverage, single-target profile isolation,
+module policy and runtime packaging. These are compile/CPU checks, not evidence
+of GPU execution on the hosted runners. Normal upstream CI remains unchanged.
+
 `LFS_HIP_PORTABLE=ON` includes the declared wave32 and wave64 targets in the generic runtime
 and training modules. `LFS_HIP_ARCHITECTURES` can explicitly restrict the target
 list, for example `-DLFS_HIP_ARCHITECTURES="gfx1103;gfx1150"`. An explicit list
@@ -34,7 +100,9 @@ expression cache identity, independently of the process's current device.
 
 Multiarchitecture builds use conservative FastGS kernels. With
 `LFS_HIP_ARCH_PROFILES=ON`, a build containing `gfx1150` additionally includes a
-separate validated `gfx1150` training profile. Single-target developer builds
+separate validated `gfx1150` training profile. Every raster, color, mask and FastGS
+object in that profile is compiled only for `gfx1150`; the generic module keeps
+all requested architectures. Single-target developer builds
 retain their compile-time profile choice. `LFS_HIP_VALIDATED_TUNING=OFF` disables
 the specialized kernel options, including cached options inherited from an
 earlier configuration. Common stable sort and workspace improvements remain
@@ -135,8 +203,7 @@ Keep experiment reports and measurements outside source commits.
    exhaustive half and typed broadcast contracts informed by the AMD port.
 2. **AMD-port candidates:** compare group32 reductions on the complete generic
    backward, including gradients and timing, before adopting a microbenchmark
-   gain. Preserve the validated OCKL profile when it wins. Audit subgroup masks,
-   ballots and shuffles as a separate wave64 portability task; compiling a target
+   gain. Preserve the validated OCKL profile when it wins. Keep the logical 32-lane subgroup contracts on physical wave64; compiling a target
    is not hardware validation and must not silently enable unsupported kernels.
    Preserve the half conversion and complete stream-dependency regression tests.
 3. **Viewer independence:** reduce redundant HIP-to-other-device publication,
@@ -169,7 +236,7 @@ contracts, or a short MCMC run do not establish complete strategy coverage.
 | GPU memory budget | Windows publishes the selected HIP adapter's DXGI LOCAL process usage and budget to the status bar and performance HUD. Allocator statistics remain separate. | Preserve validity and identity checks. Linux process-budget support remains unavailable rather than substituting whole-device VRAM or inventing a shared-memory limit. |
 | Training startup | Short cold/warm diagnostics confirm prepared CPU cache population costs and near-zero loader waits after the first image pass. The serialized HIP queue and appearance stages still need separate attribution. | Optimize measured preparation and queue bottlenecks without changing sampling or quality; retain synchronized diagnostics and unprofiled confirmation. |
 | Viewer/Tensor independence | Idle publications are cached. A single live HIP model on a non-shared rendering device uses bounded, complete asynchronous CPU snapshots; native shared storage retains its existing path. | Preserve lifecycle, allocation-fallback and real-model attribute checks. Extend interaction measurements to additional hardware and scene modes that retain synchronized publication. |
-| Hardware/platform validation | Runtime evidence is limited to the available GPU; Windows cross-target compilation is not execution on those targets. | Run the manual build matrix and preserve a conservative path for untested hardware. Wave64 remains outside the implemented scope. |
+| Hardware/platform validation | Runtime evidence is limited to the available GPU; Windows cross-target compilation is not execution on those targets. | Run the manual build matrix and preserve a conservative path for untested hardware. Wave64 subgroup support is implemented; execution on native wave64 hardware remains unverified. |
 
 The known configuration behind the reported broadcast rejection is covered by
 an integrated early-stop test; typed storage-level kernels alone would not
@@ -413,7 +480,7 @@ external development records, not in source commits.
    other GPUs. Before default enablement, validate the complete universal package,
    generic/profile fallback, Linux runtime, startup/memory and final training
    quality. Do not recompress prebuilt SDK DLLs with this compiler flag.
-2. **Remove profile duplication:** inspect host/device sections and determine
+2. **Profile target isolation:** profile raster/color/mask objects are compiled only for the profile architecture, while the generic module retains the universal target list. This prevents foreign architecture payloads from entering the profile. Further inspect host/device sections and determine
    how much common rasterization, utility and training code the generic and
    optimized modules duplicate. Separate only the specialized kernels if this
    materially reduces the payload. Preserve module lifetime, version/build-set
@@ -550,3 +617,24 @@ The image contract covers both CHW/HWC publication, all supported forward lens
 models, exact bytes against the original path, reuse, concurrent requests,
 budget rejection, recovery and owned-storage release. Its optional JPEG argument
 also exercises a full-resolution source with max-side 1920 preparation.
+
+### Runtime payload and notices
+
+Windows HIP packaging retains HIP, HIPRTC and COMGR as explicit dynamic roots,
+then resolves their recursive SDK DLL imports. OpenCL is included when the SDK
+actually imports it. When the SDK dependency inspection tool is unavailable,
+packaging keeps the conservative dependency set. An incomplete SDK or an
+unresolved import fails packaging instead of producing a broken distribution.
+System and graphics-driver files are not copied as SDK dependencies.
+
+Linux runtime staging follows soname symlink chains and preserves the aliases,
+avoiding a separate physical copy of the same library for each soname. SDK
+LICENSE, COPYING and NOTICE files are retained under the installed data directory
+in `licenses/rocm`, with their component directories. Development headers,
+compiler binaries and the SDK Python environment are not part of this payload.
+
+The four ROCm portable presets opt into device-code compression. Existing
+upstream presets and workflows retain their original options. The target graph
+check verifies that generic objects retain all declared targets and that each
+profile object contains only its named target. This build-time check does not
+replace execution on other hardware or validation of the final installed app.

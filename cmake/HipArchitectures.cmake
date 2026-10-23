@@ -7,7 +7,7 @@ function(lfs_hip_architectures)
     option(LFS_HIP_PORTABLE "Build HIP code for all declared architectures" OFF)
     set(_portable gfx1010 gfx1011 gfx1012 gfx1030 gfx1031 gfx1032 gfx1033 gfx1034 gfx1035 gfx1036
         gfx1100 gfx1101 gfx1102 gfx1103 gfx1150 gfx1151 gfx1152 gfx1153 gfx1200 gfx1201
-        gfx900 gfx906 gfx908 gfx90a gfx940 gfx941 gfx942 gfx950)
+        gfx900 gfx906 gfx908 gfx90a gfx942 gfx950)
     set(LFS_HIP_ARCHITECTURES "" CACHE STRING "HIP target list; empty uses the developer target")
     if(LFS_HIP_PORTABLE AND NOT LFS_HIP_ARCHITECTURES)
         set(_architectures ${_portable})

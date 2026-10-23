@@ -124,6 +124,76 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo"
       }
+    },
+    {
+      "name": "rocm-portable-options",
+      "hidden": true,
+      "cacheVariables": {
+        "BUILD_PORTABLE": "ON",
+        "LFS_HIP_RUNTIME": "ON",
+        "LFS_TENSOR_HIP": "ON",
+        "LFS_HIP_TRAINING_RUNTIME": "ON",
+        "LFS_HIP_PORTABLE": "ON",
+        "LFS_HIP_ARCH_PROFILES": "ON",
+        "LFS_HIP_OFFLOAD_COMPRESSION": "ON",
+        "LFS_HIP_ROOT": "$env{LFS_HIP_ROOT}"
+      }
+    },
+    {
+      "name": "windows-rocm-portable",
+      "displayName": "Windows portable with CUDA and ROCm",
+      "description": "Separate portable build, inheriting the normal release profile and adding compressed universal HIP modules",
+      "inherits": [
+        "windows-release",
+        "rocm-portable-options"
+      ],
+      "binaryDir": "${sourceDir}/build-windows-rocm-portable",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "LFS_ENABLE_CUDA": "ON"
+      }
+    },
+    {
+      "name": "windows-rocm-only-portable",
+      "displayName": "Windows portable with ROCm, CUDA disabled",
+      "description": "Same ROCm portable features without requiring a CUDA toolkit",
+      "inherits": "windows-rocm-portable",
+      "binaryDir": "${sourceDir}/build-windows-rocm-only-portable",
+      "cacheVariables": {
+        "LFS_ENABLE_CUDA": "OFF"
+      }
+    },
+    {
+      "name": "linux-rocm-portable",
+      "displayName": "Linux portable with CUDA and ROCm",
+      "description": "Separate portable build, inheriting the normal release profile and adding compressed universal HIP modules",
+      "inherits": [
+        "linux-release",
+        "rocm-portable-options"
+      ],
+      "binaryDir": "${sourceDir}/build-linux-rocm-portable",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "LFS_ENABLE_CUDA": "ON"
+      }
+    },
+    {
+      "name": "linux-rocm-only-portable",
+      "displayName": "Linux portable with ROCm, CUDA disabled",
+      "description": "Same ROCm portable features without requiring a CUDA toolkit",
+      "inherits": "linux-rocm-portable",
+      "binaryDir": "${sourceDir}/build-linux-rocm-only-portable",
+      "cacheVariables": {
+        "LFS_ENABLE_CUDA": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -201,6 +271,46 @@
         "rhs": "Linux"
       },
       "jobs": 6
+    },
+    {
+      "name": "windows-rocm-portable",
+      "configurePreset": "windows-rocm-portable",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "jobs": 2
+    },
+    {
+      "name": "windows-rocm-only-portable",
+      "configurePreset": "windows-rocm-only-portable",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "jobs": 2
+    },
+    {
+      "name": "linux-rocm-portable",
+      "configurePreset": "linux-rocm-portable",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "jobs": 2
+    },
+    {
+      "name": "linux-rocm-only-portable",
+      "configurePreset": "linux-rocm-only-portable",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "jobs": 2
     }
   ]
 }

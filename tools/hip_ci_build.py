@@ -19,8 +19,10 @@ def main():
     build = root / 'build-hip-ci'
     command = ['cmake', '-S', str(root), '-B', str(build), '-G', 'Ninja',
                '-DCMAKE_BUILD_TYPE=' + args.build_type, '-DLFS_ENABLE_CUDA=' + args.cuda,
+               '-DBUILD_PORTABLE=ON',
                '-DLFS_HIP_RUNTIME=ON', '-DLFS_TENSOR_HIP=ON', '-DLFS_HIP_TRAINING_RUNTIME=ON',
                '-DLFS_HIP_PORTABLE=ON', '-DLFS_HIP_ARCH_PROFILES=ON',
+               '-DLFS_HIP_OFFLOAD_COMPRESSION=ON',
                '-DLFS_HIP_ROOT=' + str(sdk), '-DLFS_TENSOR_VULKAN=ON',
                '-DLFS_FAST_COMPILE=OFF', '-DBUILD_TESTS=OFF', '-DBUILD_PYTHON_STUBS=OFF',
                '-DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF', '-DLFS_DEV_IMPORT_SOURCE_RESOURCES=OFF',
@@ -43,6 +45,15 @@ def main():
                     '-G', 'Ninja'], check=True)
     subprocess.run(['cmake', '--build', str(policy), '--parallel', '2'], check=True)
     subprocess.run(['ctest', '--test-dir', str(policy), '--output-on-failure', '--no-tests=error'], check=True)
+    subprocess.run([sys.executable, str(root / 'tools/check_hip_bundle_targets.py'), '--build', str(build)], check=True)
+    subprocess.run(['cmake', '-DTEST_ROOT=' + str(build / 'runtime-symlinks'), '-P',
+                    str(root / 'tests/cmake/hip_runtime_symlinks.cmake')], check=True)
+    if os.name == 'nt':
+        runtime_policy = build / 'runtime-package-policy'
+        subprocess.run(['cmake', '-S', str(root / 'tests/hip/runtime_package'), '-B', str(runtime_policy),
+                        '-G', 'Ninja', '-DTEST_SDK=' + str(sdk)], check=True)
+        subprocess.run(['cmake', '--build', str(runtime_policy), '--parallel', '2'], check=True)
+        subprocess.run(['ctest', '--test-dir', str(runtime_policy), '--output-on-failure', '--no-tests=error'], check=True)
     print('PASS compilation and CPU policy checks; GPU execution is not validated by this job.')
 
 

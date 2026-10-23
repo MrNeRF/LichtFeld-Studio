@@ -21,19 +21,29 @@ if(LFS_HIP_PROFILE_LIBRARY)
     install(FILES "${LFS_HIP_PROFILE_LIBRARY}" DESTINATION "${CMAKE_INSTALL_BINDIR}/hip/profiles/gfx1150")
 endif()
 if(WIN32)
-    file(GLOB _hip_dependencies_runtime
-        "${LFS_HIP_ROOT}/bin/amdhip64*.dll" "${LFS_HIP_ROOT}/bin/amd_comgr.dll"
-        "${LFS_HIP_ROOT}/bin/amdocl64.dll" "${LFS_HIP_ROOT}/bin/hiprtc*.dll"
-        "${LFS_HIP_ROOT}/bin/rocm_kpack.dll")
+    include("${CMAKE_CURRENT_LIST_DIR}/CollectHipRuntime.cmake")
+    lfs_hip_windows_runtime_files(_hip_dependencies_runtime "${LFS_HIP_ROOT}")
 else()
     file(GLOB _hip_dependencies_runtime
         "${LFS_HIP_ROOT}/lib*/libamdhip64.so*" "${LFS_HIP_ROOT}/lib*/libamd_comgr.so*"
         "${LFS_HIP_ROOT}/lib*/libhiprtc*.so*" "${LFS_HIP_ROOT}/lib*/libhsa-runtime64.so*"
         "${LFS_HIP_ROOT}/lib*/librocprofiler-register.so*")
 endif()
-foreach(_dependency IN LISTS _hip_dependencies_runtime)
-    list(APPEND _hip_copy_commands COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${_dependency}" "${CMAKE_BINARY_DIR}/")
-endforeach()
+list(APPEND _hip_copy_commands COMMAND "${CMAKE_COMMAND}"
+    "-DLFS_HIP_RUNTIME_FILES=${_hip_dependencies_runtime}"
+    "-DLFS_HIP_RUNTIME_DEST=${CMAKE_BINARY_DIR}"
+    -P "${CMAKE_CURRENT_LIST_DIR}/StageHipRuntime.cmake")
 install(FILES ${_hip_dependencies_runtime} DESTINATION "${CMAKE_INSTALL_BINDIR}")
+# Retain the SDK's own notices without distributing its development payload.
+file(GLOB_RECURSE _hip_sdk_notices LIST_DIRECTORIES false
+    "${LFS_HIP_ROOT}/share/doc/*LICENSE*"
+    "${LFS_HIP_ROOT}/share/doc/*COPYING*"
+    "${LFS_HIP_ROOT}/share/doc/*NOTICE*")
+foreach(_notice IN LISTS _hip_sdk_notices)
+    file(RELATIVE_PATH _notice_relative "${LFS_HIP_ROOT}/share/doc" "${_notice}")
+    cmake_path(GET _notice_relative PARENT_PATH _notice_directory)
+    install(FILES "${_notice}"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME}/licenses/rocm/${_notice_directory}")
+endforeach()
 add_custom_target(lfs_hip_package ALL ${_hip_copy_commands} DEPENDS ${_hip_dependencies} VERBATIM)
 add_dependencies(${PROJECT_NAME} lfs_hip_package)

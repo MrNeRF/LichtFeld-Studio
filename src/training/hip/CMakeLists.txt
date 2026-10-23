@@ -262,13 +262,20 @@ if(LFS_HIP_FAST_RUNTIME AND LFS_HIP_ARCH_PROFILES AND _architecture_count GREATE
                 set(${_option} ON)
             endif()
         endforeach()
+        # Every object linked into this module must have the same single target.
+        # Reusing universal raster/color/mask objects embeds all their foreign
+        # architecture images in the profile, duplicating most of the package.
+        lfs_hip_raster_objects(_raster_include _raster_objects lfs_hip_raster_gfx1150)
+        lfs_hip_color_objects(_color_include _color_objects lfs_hip_color_gfx1150 lfs_hip_raster_gfx1150)
+        lfs_hip_mask_objects(_mask_include _mask_objects lfs_hip_mask_gfx1150 lfs_hip_color_gfx1150)
         lfs_hip_fast_objects(_profile_include _profile_objects lfs_hip_fast_gfx1150)
         get_filename_component(_module_name "${_module}" NAME)
         set(_profile_module "${CMAKE_CURRENT_BINARY_DIR}/profiles/gfx1150/${_module_name}")
         lfs_add_hip_training_module("${_profile_module}" "${_profile_include}" "${_profile_objects}"
             ON "--offload-arch=gfx1150" gfx1150)
         add_custom_target(lfs_hip_gfx1150_profile ALL DEPENDS "${_profile_module}")
-        add_dependencies(lfs_hip_gfx1150_profile lfs_hip_fast_gfx1150)
+        add_dependencies(lfs_hip_gfx1150_profile lfs_hip_fast_gfx1150
+            lfs_hip_raster_gfx1150 lfs_hip_color_gfx1150 lfs_hip_mask_gfx1150)
         set(LFS_HIP_PROFILE_LIBRARY "${_profile_module}" PARENT_SCOPE)
     endfunction()
     lfs_add_gfx1150_profile()

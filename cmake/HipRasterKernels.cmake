@@ -2,13 +2,19 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 function(lfs_hip_raster_objects include_output objects_output)
-    if(NOT TARGET lfs_hip_raster_kernels)
+    set(_target lfs_hip_raster_kernels)
+    set(_suffix "")
+    if(ARGC GREATER 2)
+        set(_target "${ARGV2}")
+        set(_suffix "-${_target}")
+    endif()
+    if(NOT TARGET ${_target})
         find_package(Python3 REQUIRED COMPONENTS Interpreter)
         find_path(LFS_HIP_GLM_INCLUDE_DIR glm/glm.hpp REQUIRED)
         get_filename_component(_root "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/.." ABSOLUTE)
         set(_source "${_root}/src/training/rasterization/gsplat")
         set(_generator "${_root}/src/training/hip/prepare_gsplat.py")
-        set(_generated "${CMAKE_CURRENT_BINARY_DIR}/hip-raster-generated")
+        set(_generated "${CMAKE_CURRENT_BINARY_DIR}/hip-raster-generated${_suffix}")
         set(_names Common.h Cameras.h Cameras.cuh FromWorldRay.cuh Rasterization.h
             TileBatch.h Utils.cuh RasterizeToPixelsFromWorld3DGSFwd.cu
             RasterizeToPixelsFromWorld3DGSBwd.cu Projection.h Intersect.h
@@ -70,12 +76,12 @@ function(lfs_hip_raster_objects include_output objects_output)
                     "${LFS_HIP_ROOT}/include/hip/hip_runtime.h" VERBATIM)
             list(APPEND _objects "${_object}")
         endforeach()
-        add_custom_target(lfs_hip_raster_kernels DEPENDS "${_generated}/prepared.stamp" ${_objects})
-        set_target_properties(lfs_hip_raster_kernels PROPERTIES
+        add_custom_target(${_target} DEPENDS "${_generated}/prepared.stamp" ${_objects})
+        set_target_properties(${_target} PROPERTIES
             LFS_HIP_INCLUDE "${_generated}" LFS_HIP_OBJECTS "${_objects}")
     endif()
-    get_target_property(_include lfs_hip_raster_kernels LFS_HIP_INCLUDE)
-    get_target_property(_objects lfs_hip_raster_kernels LFS_HIP_OBJECTS)
+    get_target_property(_include ${_target} LFS_HIP_INCLUDE)
+    get_target_property(_objects ${_target} LFS_HIP_OBJECTS)
     set(${include_output} "${_include}" PARENT_SCOPE)
     set(${objects_output} "${_objects}" PARENT_SCOPE)
 endfunction()
