@@ -4,6 +4,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/services.hpp"
+#include "gui/collision_job_status.hpp"
 #include "gui/ui_context.hpp"
 #include "input/input_controller.hpp"
 #include "python/python_runtime.hpp"
@@ -11,6 +12,7 @@
 #include "scene/scene_manager.hpp"
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Elements/ElementFormControl.h>
+#include <SDL3/SDL_clipboard.h>
 #include <algorithm>
 #include <charconv>
 #include <chrono>
@@ -109,6 +111,10 @@ namespace lfs::vis::gui {
             document_->RemoveEventListener("change", this);
         }
         document_ = nullptr;
+        if (!busy_) {
+            job_outcome_.clear();
+            error_report_.clear();
+        }
         host_.reloadDocument();
     }
     std::string CollisionPanel::value(const char* id) const {
@@ -139,6 +145,47 @@ namespace lfs::vis::gui {
             el->SetInnerRML(encoded);
             host_.markContentDirty();
         }
+    }
+    void CollisionPanel::clearError() {
+        error_report_.clear();
+        document_->GetElementById("collision-error")->SetProperty("display", "none");
+        document_->GetElementById("collision-status")->SetClass("is-error", false);
+    }
+    void CollisionPanel::finishJob(std::string outcome) {
+        job_outcome_ = std::move(outcome);
+        job_graph_epoch_ = scene_ ? scene_->graphEpoch() : 0;
+        if (job_outcome_ == "completed")
+            progress_value_ = 1;
+        document_->GetElementById("progress-stage")->SetInnerRML(Rml::StringUtilities::EncodeRml(job_title_ + " — " + job_outcome_));
+        updateProgressBar();
+        document_->GetElementById("progress-time")->SetInnerRML(LOCF("collision.progress_finished", std::chrono::duration<double>(std::chrono::steady_clock::now() - job_started_).count()));
+        document_->GetElementById("progress-task")->SetInnerRML("");
+        host_.markContentDirty();
+    }
+    void CollisionPanel::updateProgressBar() {
+        const float percent = std::clamp(progress_value_, 0.0f, 1.0f) * 100;
+        document_->GetElementById("generation-progress")->SetAttribute("aria-valuenow", percent);
+        document_->GetElementById("generation-progress-fill")->SetProperty("width", std::format("{:.2f}%", percent));
+    }
+    void CollisionPanel::showError(std::string message, bool failed_job) {
+        const auto info = collisionFailureInfo(message);
+        if (failed_job)
+            finishJob(info.cancelled ? "cancelled" : "failed");
+        status(info.title);
+        auto set = [&](const char* id, const std::string& text) {
+            document_->GetElementById(id)->SetInnerRML(Rml::StringUtilities::EncodeRml(text));
+        };
+        const auto context = failed_job
+                                 ? std::format("{} · Failed step: {} · {:.1f}s elapsed. {}", job_title_, collisionTaskLabel(progress_),
+                                               std::chrono::duration<double>(std::chrono::steady_clock::now() - job_started_).count(), job_context_)
+                                 : "The requested action was not applied.";
+        set("error-advice", info.advice);
+        set("error-context", context);
+        set("error-details", message);
+        error_report_ = info.title + "\n" + info.advice + "\n" + context + "\n" + message;
+        document_->GetElementById("collision-error")->SetProperty("display", "block");
+        document_->GetElementById("collision-status")->SetClass("is-error", !info.cancelled);
+        host_.markContentDirty();
     }
     void CollisionPanel::writeInputs() {
         updating_ = true;
@@ -242,6 +289,10 @@ namespace lfs::vis::gui {
             writeInputs();
         }
         adoptResult();
+        if (!busy_ && !job_outcome_.empty() && job_graph_epoch_ != scene_->graphEpoch()) {
+            job_outcome_.clear();
+            clearError();
+        }
         if (!busy_ && !target_.is_nil()) {
             auto* node = scene_->getNodeByUuid(target_);
             if (!node) {
@@ -264,17 +315,23 @@ namespace lfs::vis::gui {
                     loadSettings(*node);
                 }
         }
-        if (busy_) {
+        const auto now = std::chrono::steady_clock::now();
+        if (busy_ && now >= next_progress_ui_) {
             std::lock_guard lock(mutex_);
-            status(progress_);
-            document_->GetElementById("generation-progress")->SetAttribute("value", progress_value_ * 100);
-            document_->GetElementById("progress-time")->SetInnerRML(LOCF("collision.progress_time", progress_step_ + 1, progress_total_, std::chrono::duration<double>(std::chrono::steady_clock::now() - job_started_).count()));
+            status(job_title_ + "…");
+            document_->GetElementById("progress-stage")->SetInnerRML(Rml::StringUtilities::EncodeRml(collisionTaskLabel(progress_)));
+            updateProgressBar();
+            document_->GetElementById("progress-time")->SetInnerRML(LOCF("collision.progress_work", progress_step_ + 1, progress_total_, progress_value_ * 100, std::chrono::duration<double>(now - job_started_).count()));
+            document_->GetElementById("progress-task")->SetInnerRML(LOCF("collision.progress_activity", std::chrono::duration<double>(now - progress_updated_).count()));
+            next_progress_ui_ = now + std::chrono::milliseconds(100);
             host_.markContentDirty();
         }
-        document_->GetElementById("job-progress")->SetProperty("display", busy_ ? "block" : "none");
+        document_->GetElementById("job-progress")->SetProperty("display", job_outcome_.empty() ? "none" : "block");
+        document_->GetElementById("job-progress")->SetClass("is-failed", job_outcome_ == "failed");
+        document_->GetElementById("job-progress")->SetClass("is-running", bool(busy_));
         for (const auto* id : {"generate", "generate-new", "cancel"}) {
             auto* control = document_->GetElementById(id);
-            const bool disabled = std::string_view(id) == "cancel" ? !busy_ : bool(busy_);
+            const bool disabled = std::string_view(id) == "cancel" ? !busy_ || worker_.get_stop_token().stop_requested() : bool(busy_);
             if (disabled != control->HasAttribute("disabled")) {
                 if (disabled)
                     control->SetAttribute("disabled", "disabled");
@@ -296,6 +353,7 @@ namespace lfs::vis::gui {
         if (scene_->getVisibleGaussianCount() > 10'000'000)
             throw std::runtime_error("Collision source exceeds 10 million Gaussians; isolate source nodes first");
         settings_ = readInputs();
+        clearError();
         world_seed_ = settings_.seed;
         auto* input = InputController::instance();
         if (!input)
@@ -332,6 +390,13 @@ namespace lfs::vis::gui {
         done_ = false;
         busy_ = true;
         job_started_ = std::chrono::steady_clock::now();
+        progress_updated_ = job_started_;
+        next_progress_ui_ = {};
+        job_outcome_ = "running";
+        job_graph_epoch_ = scene_->graphEpoch();
+        job_title_ = LOC("collision.generating");
+        job_context_ = std::format("{} visible source splats; cell size {:.4g} scene units; opacity {:.4g}; connected filter {}.",
+                                   scene_->getVisibleGaussianCount(), s.voxel_size, s.opacity, s.cluster ? "on" : "off");
         progress_value_ = 0;
         progress_step_ = 0;
         progress_total_ = 3 + s.cluster + s.external_fill + s.floor_fill + (s.carve_height > 0);
@@ -340,6 +405,7 @@ namespace lfs::vis::gui {
             try {
                 auto report = [&](std::string text) {
                     std::lock_guard lock(mutex_);
+                    progress_updated_ = std::chrono::steady_clock::now();
                     int phase = 0;
                     float fraction = 0;
                     if (text.starts_with("Clustering")) {
@@ -373,7 +439,7 @@ namespace lfs::vis::gui {
                         phase = progress_total_ - 1;
                     progress_step_ = phase;
                     progress_value_ = std::max(progress_value_, (phase + fraction) / progress_total_);
-                    progress_ = std::move(text);
+                    progress_ = stop.stop_requested() ? "Cancelling — waiting for the current batch to finish" : std::move(text);
                 };
                 report("Reading Gaussian snapshot");
                 auto gaussians = extract(snapshots, world_to_grid, stop);
@@ -383,6 +449,7 @@ namespace lfs::vis::gui {
                     core::generateCollision(gaussians, s, stop, report, core::voxelizeCollisionGpu));
                 const auto voxelized = std::chrono::steady_clock::now();
                 volume->show_voxels = true;
+                report("Finalizing viewport preview");
                 // Scene graph uses a tiny bounds carrier; preview and Walk read
                 // occupancy directly. Build a physical surface only on request.
                 auto mesh = makeMesh(volume->boundsMesh());
@@ -413,18 +480,20 @@ namespace lfs::vis::gui {
         std::lock_guard lock(mutex_);
         if (!error_.empty()) {
             LOG_ERROR("Collision generation: {}", error_);
-            status(error_);
+            showError(error_, true);
             return;
         }
         if (!result_)
             return;
         if (scene_->renderGeneration() != result_->scene_generation || scene_->graphEpoch() != result_->graph_epoch) {
+            finishJob("discarded");
             status("Collision result discarded: scene changed during generation. Regenerate from the current scene.");
             result_.reset();
             return;
         }
         for (auto uuid : result_->sources) {
             if (!scene_->getNodeByUuid(uuid)) {
+                finishJob("discarded");
                 status("Collision result discarded: source was deleted or the project changed");
                 result_.reset();
                 return;
@@ -432,6 +501,7 @@ namespace lfs::vis::gui {
         }
         auto* node = result_->target.is_nil() ? nullptr : scene_->getNodeByUuid(result_->target);
         if (!result_->target.is_nil() && !node) {
+            finishJob("discarded");
             status("Collision result discarded: target node was deleted");
             result_.reset();
             return;
@@ -444,6 +514,7 @@ namespace lfs::vis::gui {
                 throw std::runtime_error("Could not create collision node");
         } else {
             if (node->locked.get()) {
+                finishJob("discarded");
                 status("Collision result discarded: target is locked");
                 result_.reset();
                 return;
@@ -467,6 +538,7 @@ namespace lfs::vis::gui {
         if (auto* manager = services().sceneOrNull())
             manager->selectNode(node->id);
         loadSettings(*node);
+        finishJob("completed");
         result_.reset();
     }
     void CollisionPanel::resetSurfaceSettings() {
@@ -515,6 +587,7 @@ namespace lfs::vis::gui {
         if (!node || !node->collision || node->locked.get())
             throw std::runtime_error("Select an unlocked collision node");
         auto volume = node->collision;
+        clearError();
         const auto shape = readInputs().shape;
         auto display = node->collision_display;
         display.preview = false;
@@ -532,6 +605,12 @@ namespace lfs::vis::gui {
         busy_ = true;
         done_ = false;
         job_started_ = std::chrono::steady_clock::now();
+        progress_updated_ = job_started_;
+        next_progress_ui_ = {};
+        job_outcome_ = "running";
+        job_graph_epoch_ = scene_->graphEpoch();
+        job_title_ = LOC("collision.building_surface");
+        job_context_ = std::format("Surface resolution {}×; source collision cell {:.4g} scene units.", display.surface_stride, volume->settings.voxel_size);
         progress_value_ = 0;
         progress_step_ = 0;
         progress_total_ = 3;
@@ -540,6 +619,7 @@ namespace lfs::vis::gui {
                 const auto begin = std::chrono::steady_clock::now();
                 auto report = [&](std::string text) {
                     std::lock_guard lock(mutex_);
+                    progress_updated_ = std::chrono::steady_clock::now();
                     progress_ = std::move(text);
                     progress_step_ = 1;
                     progress_value_ = 1.0f / 3;
@@ -549,6 +629,7 @@ namespace lfs::vis::gui {
                 {
                     std::lock_guard lock(mutex_);
                     progress_ = "Computing surface normals";
+                    progress_updated_ = std::chrono::steady_clock::now();
                     progress_step_ = 2;
                     progress_value_ = 2.0f / 3;
                 }
@@ -576,6 +657,21 @@ namespace lfs::vis::gui {
         if (updating_)
             return;
         try {
+            if (event.GetType() == "click" && el->HasAttribute("data-collision-section")) {
+                const auto section = el->GetAttribute<Rml::String>("data-collision-section", "");
+                if (auto* content = document_->GetElementById(section)) {
+                    const bool expanded = content->IsClassSet("collapsed");
+                    content->SetClass("collapsed", !expanded);
+                    el->SetClass("is-expanded", expanded);
+                    el->SetAttribute("aria-expanded", expanded ? "true" : "false");
+                    host_.markContentDirty();
+                }
+                return;
+            }
+            if (id == "copy-error") {
+                SDL_SetClipboardText(error_report_.c_str());
+                return;
+            }
             if (event.GetType() == "change") {
                 if (id == "overlay-opacity" || id == "cutaway" || id == "sharp-preview")
                     updateDisplay();
@@ -593,19 +689,15 @@ namespace lfs::vis::gui {
                 updateSummary();
                 return;
             }
-            if (id == "advanced-toggle") {
-                advanced_ = !advanced_;
-                document_->GetElementById("advanced")->SetProperty("display", advanced_ ? "block" : "none");
-                host_.markContentDirty();
-                return;
-            }
-
             if (id == "generate")
                 start(false);
             else if (id == "generate-new")
                 start(true);
             else if (id == "cancel") {
                 worker_.request_stop();
+                std::lock_guard lock(mutex_);
+                progress_ = "Cancelling — waiting for the current batch to finish";
+                progress_updated_ = std::chrono::steady_clock::now();
                 status("Cancelling collision generation");
             } else if (id == "reset-surface") {
                 resetSurfaceSettings();
@@ -666,7 +758,7 @@ namespace lfs::vis::gui {
             }
         } catch (const std::exception& error) {
             LOG_ERROR("Collision authoring: {}", error.what());
-            status(error.what());
+            showError(error.what());
         }
     }
     void CollisionPanel::draw(const PanelDrawContext& ctx) {

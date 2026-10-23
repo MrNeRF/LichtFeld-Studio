@@ -25,6 +25,8 @@ namespace lfs::core {
         };
         report(0);
         auto input = collision_detail::prepareCollision(source, settings, stop);
+        if (progress)
+            progress("Voxelizing acceleration structure (CPU)");
         auto& gs = input.gaussians;
         using Node = cuda::CollisionBvhNode;
         std::vector<Node> nodes;
@@ -66,6 +68,7 @@ namespace lfs::core {
             settings.voxel_size, -std::log1p(-double(settings.opacity)), stop, report);
         if (bricks.empty())
             throw std::runtime_error("No occupied voxels; lower opacity or voxel size");
+        report(.97f);
         // Only compact occupied 4^3 masks return to the host. Sorted prefixes
         // build the canonical Walk/archive tree directly, without per-voxel inserts.
         std::sort(bricks.begin(), bricks.end(), [](auto a, auto b) { return a.morton < b.morton; });

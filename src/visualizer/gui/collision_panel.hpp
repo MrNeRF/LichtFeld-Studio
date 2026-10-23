@@ -41,6 +41,10 @@ namespace lfs::vis::gui {
         std::string value(const char* id) const;
         void setValue(const char* id, std::string value);
         void status(std::string text);
+        void showError(std::string message, bool failed_job = false);
+        void clearError();
+        void finishJob(std::string outcome);
+        void updateProgressBar();
         RmlPanelHost host_;
         Rml::ElementDocument* document_ = nullptr;
         core::Scene* scene_ = nullptr;
@@ -48,7 +52,6 @@ namespace lfs::vis::gui {
         bool training_ = false;
         core::CollisionSettings settings_;
         core::CollisionDisplay display_;
-        bool advanced_ = false;
         bool updating_ = false;
         std::string last_stats_;
         std::weak_ptr<const core::CollisionVolume> counted_volume_;
@@ -62,6 +65,10 @@ namespace lfs::vis::gui {
         float progress_value_ = 0;
         int progress_step_ = 0, progress_total_ = 1;
         std::chrono::steady_clock::time_point job_started_;
+        std::chrono::steady_clock::time_point progress_updated_;
+        std::chrono::steady_clock::time_point next_progress_ui_;
+        std::string job_title_, job_context_, job_outcome_, error_report_;
+        uint64_t job_graph_epoch_ = 0;
         std::string error_;
         struct Result {
             std::shared_ptr<const core::CollisionVolume> volume;

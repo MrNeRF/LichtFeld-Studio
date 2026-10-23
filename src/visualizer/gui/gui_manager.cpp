@@ -5171,7 +5171,7 @@ namespace lfs::vis::gui {
             auto panel = std::make_shared<CollisionPanel>(&rmlui_manager_);
             native_panel_storage_.push_back(panel);
             reg_panel("native.collision", "Collision", panel, PanelSpace::Floating, 12,
-                      static_cast<uint32_t>(PanelOption::DEFAULT_CLOSED), 480.0f, 760.0f);
+                      static_cast<uint32_t>(PanelOption::DEFAULT_CLOSED), 480.0f, 560.0f);
         }
 
         reg_panel("native.selection_overlay", "Selection Overlay",

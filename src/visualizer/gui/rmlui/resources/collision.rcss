@@ -52,8 +52,32 @@ p {
 #advanced { margin-top: 8dp; border-top: 1dp #465063; }
 
 #job-progress { margin: 8dp 0; }
-#job-progress progress { display: block; width: 100%; height: 8dp; background: #273241; }
-#job-progress progress fill { background: #66aaff; }
+#generation-progress { display: block; width: 100%; height: 8dp; background-color: #364253; }
+#generation-progress-fill { display: block; width: 0%; height: 100%; background-color: #66aaff; }
 #progress-time { color: #aabbcf; }
 
 .collision-scrub span { width: 48%; }
+
+.collision-section.collapsed { display: none; }
+.collision-section-header {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 28dp;
+    margin: 8dp 0 3dp;
+    padding: 6dp 0;
+    border-top-width: 1dp;
+    text-align: left;
+}
+.collision-section-header .section-arrow { flex-shrink: 0; }
+.collision-section-header.is-expanded .section-arrow { transform: rotate(90deg); }
+.collision-section { padding: 0 2dp 4dp; }
+#progress-stage { font-weight: bold; }
+#job-progress { padding: 8dp; background: #273241; border-radius: 4dp; }
+#job-progress.is-failed #generation-progress-fill { background-color: #ec8796; }
+#progress-task, .collision-note { color: #aabbcf; font-size: 11dp; }
+#job-progress .collision-note { display: none; }
+#job-progress.is-running .collision-note { display: block; }
+#collision-error { padding: 8dp; border: 1dp #a86673; border-radius: 4dp; }
+#collision-status.is-error { color: #f0a5b1; font-weight: bold; }
+#error-context, #error-details { font-size: 11dp; }
+#error-details { white-space: pre-wrap; }
