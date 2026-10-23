@@ -7,6 +7,7 @@
 
 #include "Cameras.cuh"
 #include "Common.h"
+#include "FreeSpace.h"
 #include "FromWorldRay.cuh"
 #include "Rasterization.h"
 #include "Utils.cuh"
@@ -342,7 +343,8 @@ namespace gsplat_lfs {
         float* __restrict__ densification_info,
         const scalar_t* __restrict__ densification_error_map,
         const float* __restrict__ edge_weight_map,
-        float* __restrict__ edge_score_out, const TileRange tiles) {
+        float* __restrict__ edge_score_out, const TileRange tiles,
+        const FreeSpaceRender) {
         auto block = cg::this_thread_block();
         const uint32_t cid = block.group_index().x;
         const uint32_t tile_id =
@@ -585,7 +587,8 @@ namespace gsplat_lfs {
         float* __restrict__ densification_info,               // [2, N] flattened or nullptr
         const scalar_t* __restrict__ densification_error_map, // [H, W] or nullptr
         const float* __restrict__ edge_weight_map,
-        float* __restrict__ edge_score_out, const TileRange tiles) {
+        float* __restrict__ edge_score_out, const TileRange tiles,
+        const FreeSpaceRender free_space) {
         auto block = cg::this_thread_block();
         uint32_t cid = block.group_index().x;
         uint32_t tile_id =
@@ -698,6 +701,16 @@ namespace gsplat_lfs {
         }
         const bool do_dens = densification_info != nullptr && densification_error_map != nullptr;
         const float pixel_error = do_dens ? densification_error_map[pix_id] : 0.f;
+
+        // T_front = prod(1 - alpha) over the splats in front of the scan limit,
+        // so each of them gets -v_T_front * T_front / (1 - alpha) on its alpha.
+        float free_limit = 0.f;
+        float free_v_T = 0.f;
+        if (free_space.v_T_front != nullptr && free_space.gt_depth != nullptr && active) {
+            const size_t free_pix = static_cast<size_t>(cid) * image_height * image_width + pix_id;
+            free_limit = free_space.limit(cid, j, i, image_width, image_height);
+            free_v_T = free_space.v_T_front[free_pix] * free_space.T_front[free_pix];
+        }
 
         // collect and process batches of gaussians
         // each thread loads one gaussian at a time before rasterizing
@@ -821,6 +834,9 @@ namespace gsplat_lfs {
                         v_alpha += T_final * ra * v_render_a;
                         if (have_bg) {
                             v_alpha += -T_final * ra * bg_accum;
+                        }
+                        if (free_limit > 0.f && rgbs_batch[t * CDIM + free_space.depth_channel] < free_limit) {
+                            v_alpha -= free_v_T * ra;
                         }
 
                         if (opac * vis <= 0.999f) {
@@ -947,8 +963,12 @@ namespace gsplat_lfs {
         const float* densification_error_map,
         const float* edge_weight_map,
         float* edge_score_out,
-        cudaStream_t stream, TileRange tiles) {
+        cudaStream_t stream, TileRange tiles,
+        const FreeSpaceRender& free_space_in) {
         const bool packed = false; // Only support non-packed for now
+        // The free-space test reads the splat depth from a render channel.
+        const FreeSpaceRender free_space =
+            free_space_in.depth_channel < CDIM ? free_space_in : FreeSpaceRender{};
         const uint32_t tile_width = (image_width + tile_size - 1) / tile_size;
         const uint32_t tile_height = (image_height + tile_size - 1) / tile_size;
 
@@ -1005,7 +1025,7 @@ namespace gsplat_lfs {
                 densification_info,
                 densification_error_map,
                 edge_weight_map,
-                edge_score_out, tiles);
+                edge_score_out, tiles, free_space);
             LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.rasterize_to_pixels_bwd");
         };
 
@@ -1144,7 +1164,8 @@ namespace gsplat_lfs {
         const float* densification_error_map,                                  \
         const float* edge_weight_map,                                          \
         float* edge_score_out,                                                 \
-        cudaStream_t stream, TileRange tiles);
+        cudaStream_t stream, TileRange tiles,                                  \
+        const FreeSpaceRender& free_space);
 
     __INS__(1)
     __INS__(2)

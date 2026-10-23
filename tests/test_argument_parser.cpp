@@ -1591,6 +1591,32 @@ TEST(ArgumentParserTest, TrainingParsesExplicitDepthLossOptions) {
     EXPECT_EQ((*parsed)->optimization.depth_loss_mode, "ssi-disparity");
 }
 
+TEST(ArgumentParserTest, TrainingParsesFreeSpaceOptions) {
+    const auto data_path = make_test_path("lfs_arg_parser_free_space_data");
+    const auto output_path = make_test_path("lfs_arg_parser_free_space_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--free-space-weight",
+        "0.05",
+        "--free-space-margin",
+        "0.2",
+        "--free-space-margin-rel",
+        "0.03"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_FLOAT_EQ((*parsed)->optimization.free_space_weight, 0.05f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.free_space_margin, 0.2f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.free_space_margin_rel, 0.03f);
+}
+
 TEST(ArgumentParserTest, TrainingRejectsLegacyDepthLossAlias) {
     const auto data_path = make_test_path("lfs_arg_parser_depth_invalid_data");
     const auto output_path = make_test_path("lfs_arg_parser_depth_invalid_output");

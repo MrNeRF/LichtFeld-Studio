@@ -394,6 +394,33 @@ namespace lfs::core::param {
             .locale("training_params.depth_auto_generate")
             .tooltip("training.tooltip.depth_auto_generate")
             .all_strategies()
+            .float_prop(&OptimizationParameters::free_space_weight,
+                        "free_space_weight", "Free Space Weight", d.free_space_weight, 0.0f, 1.0f,
+                        "With metric depth maps and --gut, removes opacity in front of the depth map surface; 0 turns it off, 0.05 works well")
+            .locale("training.losses.free_space_weight")
+            .tooltip("training.tooltip.free_space_weight")
+            .flags(PROP_ADVANCED)
+            .precision(3)
+            .ui_step(0.01)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::free_space_margin,
+                        "free_space_margin", "Free Space Margin", d.free_space_margin, 0.0f, 10.0f,
+                        "Metres in front of the depth map surface where opacity stays allowed")
+            .locale("training.losses.free_space_margin")
+            .tooltip("training.tooltip.free_space_margin")
+            .flags(PROP_ADVANCED)
+            .precision(2)
+            .ui_step(0.01)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::free_space_margin_rel,
+                        "free_space_margin_rel", "Free Space Relative Margin", d.free_space_margin_rel, 0.0f, 1.0f,
+                        "Fraction of the depth used as margin where it is larger than the margin in metres")
+            .locale("training.losses.free_space_margin_rel")
+            .tooltip("training.tooltip.free_space_margin_rel")
+            .flags(PROP_ADVANCED)
+            .precision(3)
+            .ui_step(0.005)
+            .all_strategies()
             .bool_prop(&OptimizationParameters::use_normal_loss,
                        "use_normal_loss", "Use Normal Loss", d.use_normal_loss,
                        "Use dataset normal maps for normal supervision")

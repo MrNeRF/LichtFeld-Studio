@@ -978,6 +978,8 @@ namespace lfs::core {
                 std::pair{"sh_rest_reg", sh_rest_reg},
                 std::pair{"mask_opacity_penalty_weight", mask_opacity_penalty_weight},
                 std::pair{"depth_loss_weight", depth_loss_weight},
+                std::pair{"free_space_weight", free_space_weight},
+                std::pair{"free_space_margin", free_space_margin},
                 std::pair{"bilateral_grid_lr", bilateral_grid_lr},
                 std::pair{"tv_loss_weight", tv_loss_weight},
                 std::pair{"ppisp_lr", ppisp_lr},
@@ -1009,6 +1011,7 @@ namespace lfs::core {
                 std::pair{"bounds_percentile", bounds_percentile},
                 std::pair{"normal_start_fraction", normal_start_fraction},
                 std::pair{"normal_end_fraction", normal_end_fraction},
+                std::pair{"free_space_margin_rel", free_space_margin_rel},
             };
             for (const auto& [name, value] : probability_fields) {
                 const bool automatic_mrnf_value = is_mrnf_strategy(strategy) && value == -1.0f &&

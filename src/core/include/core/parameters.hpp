@@ -318,6 +318,9 @@ namespace lfs::core {
             float depth_loss_weight = 2.0f;      // Depth supervision weight (decays over training)
             std::string depth_loss_mode = "ssi"; // ssi (auto prior), ssi-disparity, ssi-depth, or metric
             bool depth_auto_generate = true;     // Generate missing/mismatched maps from images/ with MoGe-2
+            float free_space_weight = 0.0f;      // Opacity in front of metric depth maps (--gut); 0 = off
+            float free_space_margin = 0.15f;     // Metres in front of the depth map that stay unpenalized
+            float free_space_margin_rel = 0.02f; // Or this fraction of the depth, whichever is larger
 
             // Normal supervision
             bool use_normal_loss = false;             // Use dataset normal maps when available
