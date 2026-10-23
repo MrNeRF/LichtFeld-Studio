@@ -6,7 +6,12 @@
 
 #include "core/parameters.hpp"
 
+#include <vector>
+
 namespace lfs::app {
+
+    std::vector<lfs::core::param::BatchJobItem> resolve_batch_jobs(
+        const lfs::core::param::BatchTrainingParameters& params);
 
     int run_batch_training(const lfs::core::param::BatchTrainingParameters& params);
 

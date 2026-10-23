@@ -24,6 +24,7 @@
 #include <print>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #ifdef _WIN32
@@ -45,6 +46,7 @@ namespace lfs::app {
         using json = nlohmann::json;
 
         std::atomic<bool> g_batch_interrupted{false};
+        std::atomic<int> g_interrupt_count{0};
 #ifndef _WIN32
         std::atomic<pid_t> g_active_child_pid{0};
 #else
@@ -53,18 +55,24 @@ namespace lfs::app {
 
 #ifndef _WIN32
         void handle_sigint(int sig) {
+            const int count = ++g_interrupt_count;
             g_batch_interrupted.store(true);
             pid_t child = g_active_child_pid.load();
             if (child > 0) {
-                kill(child, sig);
+                if (count == 1) {
+                    kill(child, sig);
+                } else {
+                    kill(child, SIGKILL);
+                }
             }
         }
 #else
         BOOL WINAPI handle_console_ctrl(DWORD ctrl_type) {
             if (ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT) {
+                const int count = ++g_interrupt_count;
                 g_batch_interrupted.store(true);
                 HANDLE child = g_active_child_process.load();
-                if (child != nullptr) {
+                if (child != nullptr && count >= 2) {
                     TerminateProcess(child, 130);
                 }
                 return TRUE;
@@ -76,6 +84,7 @@ namespace lfs::app {
         struct ScopedSignalHandler {
             ScopedSignalHandler() {
                 g_batch_interrupted.store(false);
+                g_interrupt_count.store(0);
 #ifndef _WIN32
                 struct sigaction sa{};
                 sa.sa_handler = handle_sigint;
@@ -172,7 +181,7 @@ namespace lfs::app {
             }
         }
 
-        std::vector<lfs::core::param::BatchJobItem> resolve_jobs(
+        std::vector<lfs::core::param::BatchJobItem> resolve_jobs_internal(
             const lfs::core::param::BatchTrainingParameters& params) {
             std::vector<lfs::core::param::BatchJobItem> jobs = params.jobs;
             std::vector<fs::path> candidate_paths;
@@ -225,6 +234,9 @@ namespace lfs::app {
                 }
             }
 
+            // Sort candidate paths alphabetically for reproducible queue ordering
+            std::sort(candidate_paths.begin(), candidate_paths.end());
+
             // Convert discovered dataset paths into BatchJobItems
             for (const auto& path : candidate_paths) {
                 lfs::core::param::BatchJobItem item;
@@ -245,14 +257,53 @@ namespace lfs::app {
                     continue;
                 }
                 seen_canonical_paths.push_back(path_str);
+                unique_jobs.push_back(std::move(job));
+            }
 
+            // Check for duplicate folder names among jobs without explicit custom names
+            std::unordered_map<std::string, int> base_name_counts;
+            for (const auto& job : unique_jobs) {
                 if (job.name.empty()) {
-                    job.name = lfs::core::path_to_utf8(job.dataset_path.stem());
-                    if (job.name.empty() || job.name == ".") {
-                        job.name = "dataset_" + std::to_string(unique_jobs.size() + 1);
+                    std::string base = lfs::core::path_to_utf8(job.dataset_path.stem());
+                    if (base.empty() || base == ".") {
+                        base = "dataset";
+                    }
+                    base_name_counts[base]++;
+                }
+            }
+
+            // Assign unique names: qualify colliding names with parent folder or numeric suffix
+            std::unordered_map<std::string, int> name_frequencies;
+            for (auto& job : unique_jobs) {
+                if (job.name.empty()) {
+                    std::string base = lfs::core::path_to_utf8(job.dataset_path.stem());
+                    if (base.empty() || base == ".") {
+                        base = "dataset";
+                    }
+                    if (base_name_counts[base] > 1) {
+                        auto parent = job.dataset_path.parent_path().stem();
+                        std::string parent_str = lfs::core::path_to_utf8(parent);
+                        if (!parent_str.empty() && parent_str != "." && parent_str != "/" && parent_str != "\\") {
+                            job.name = parent_str + "_" + base;
+                        } else {
+                            job.name = base;
+                        }
+                    } else {
+                        job.name = base;
                     }
                 }
 
+                std::string candidate_name = job.name;
+                int& count = name_frequencies[candidate_name];
+                count++;
+                if (count > 1) {
+                    job.name = candidate_name + "_" + std::to_string(count);
+                }
+            }
+
+            // Assign output paths and ensure no collisions
+            std::vector<std::string> seen_output_paths;
+            for (auto& job : unique_jobs) {
                 if (job.output_path.empty()) {
                     if (!params.output_dir.empty()) {
                         job.output_path = params.output_dir / job.name;
@@ -261,7 +312,28 @@ namespace lfs::app {
                     }
                 }
 
-                unique_jobs.push_back(std::move(job));
+                std::error_code ec;
+                auto canonical_out = fs::weakly_canonical(job.output_path, ec);
+                std::string out_str = lfs::core::path_to_utf8(ec ? job.output_path : canonical_out);
+
+                if (std::find(seen_output_paths.begin(), seen_output_paths.end(), out_str) != seen_output_paths.end()) {
+                    int suffix = 2;
+                    fs::path base_out = job.output_path;
+                    while (true) {
+                        fs::path cand = base_out;
+                        cand += "_" + std::to_string(suffix);
+                        auto cand_canonical = fs::weakly_canonical(cand, ec);
+                        std::string cand_str = lfs::core::path_to_utf8(ec ? cand : cand_canonical);
+                        if (std::find(seen_output_paths.begin(), seen_output_paths.end(), cand_str) == seen_output_paths.end()) {
+                            job.output_path = cand;
+                            seen_output_paths.push_back(cand_str);
+                            break;
+                        }
+                        suffix++;
+                    }
+                } else {
+                    seen_output_paths.push_back(out_str);
+                }
             }
 
             return unique_jobs;
@@ -384,14 +456,62 @@ namespace lfs::app {
             HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
             char buffer[4096];
             DWORD bytesRead = 0;
+            bool cancel_message_printed = false;
 
-            while (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) && bytesRead > 0) {
-                buffer[bytesRead] = '\0';
-                DWORD bytesWritten = 0;
-                WriteFile(hStdOut, buffer, bytesRead, &bytesWritten, nullptr);
-                if (log_file.is_open()) {
-                    log_file.write(buffer, bytesRead);
-                    log_file.flush();
+            while (true) {
+                DWORD bytesAvailable = 0;
+                if (!PeekNamedPipe(hReadPipe, nullptr, 0, nullptr, &bytesAvailable, nullptr)) {
+                    break;
+                }
+
+                if (bytesAvailable > 0) {
+                    DWORD toRead = std::min<DWORD>(static_cast<DWORD>(sizeof(buffer) - 1), bytesAvailable);
+                    if (ReadFile(hReadPipe, buffer, toRead, &bytesRead, nullptr) && bytesRead > 0) {
+                        buffer[bytesRead] = '\0';
+                        DWORD bytesWritten = 0;
+                        WriteFile(hStdOut, buffer, bytesRead, &bytesWritten, nullptr);
+                        if (log_file.is_open()) {
+                            log_file.write(buffer, bytesRead);
+                            log_file.flush();
+                        }
+                    }
+                }
+
+                DWORD wait_res = WaitForSingleObject(pi.hProcess, 50);
+                if (wait_res == WAIT_OBJECT_0) {
+                    while (PeekNamedPipe(hReadPipe, nullptr, 0, nullptr, &bytesAvailable, nullptr) && bytesAvailable > 0) {
+                        DWORD toRead = std::min<DWORD>(static_cast<DWORD>(sizeof(buffer) - 1), bytesAvailable);
+                        if (ReadFile(hReadPipe, buffer, toRead, &bytesRead, nullptr) && bytesRead > 0) {
+                            DWORD bytesWritten = 0;
+                            WriteFile(hStdOut, buffer, bytesRead, &bytesWritten, nullptr);
+                            if (log_file.is_open()) {
+                                log_file.write(buffer, bytesRead);
+                                log_file.flush();
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    break;
+                }
+
+                if (g_batch_interrupted.load()) {
+                    result.cancelled = true;
+                    result.error_message = "Cancelled by user";
+                    if (result.exit_code == 0) {
+                        result.exit_code = 130;
+                    }
+
+                    const int count = g_interrupt_count.load();
+                    if (count >= 2) {
+                        std::println(stderr, "\n[Batch] Second interrupt received. Force terminating child process...");
+                        TerminateProcess(pi.hProcess, 130);
+                        WaitForSingleObject(pi.hProcess, 5000);
+                        break;
+                    } else if (!cancel_message_printed) {
+                        std::println(stderr, "\n[Batch] Interrupt received. Waiting for child process to save and shut down cleanly... (Press Ctrl+C again to force kill)");
+                        cancel_message_printed = true;
+                    }
                 }
 
                 if (params.timeout_minutes > 0) {
@@ -399,16 +519,22 @@ namespace lfs::app {
                         std::chrono::steady_clock::now() - start_time).count();
                     if (elapsed_sec > params.timeout_minutes * 60) {
                         TerminateProcess(pi.hProcess, 124);
+                        result.exit_code = 124;
                         result.error_message = std::format("Job timed out after {} minutes", params.timeout_minutes);
+                        WaitForSingleObject(pi.hProcess, 5000);
                         break;
                     }
                 }
             }
 
-            WaitForSingleObject(pi.hProcess, INFINITE);
             DWORD exitCodeDword = 0;
             GetExitCodeProcess(pi.hProcess, &exitCodeDword);
-            result.exit_code = static_cast<int>(exitCodeDword);
+            if (result.exit_code == 0) {
+                result.exit_code = static_cast<int>(exitCodeDword);
+            }
+            if (result.cancelled && result.exit_code == 0) {
+                result.exit_code = 130;
+            }
 
             g_active_child_process.store(nullptr);
             CloseHandle(pi.hProcess);
@@ -424,8 +550,16 @@ namespace lfs::app {
                 return result;
             }
 
-            // Set read end non-blocking so we can monitor timeout and SIGINT
             fcntl(pipe_fds[0], F_SETFL, O_NONBLOCK);
+
+            const std::string program_utf8 = lfs::core::path_to_utf8(executable);
+            std::vector<char*> c_argv;
+            c_argv.reserve(child_args.size() + 2);
+            c_argv.push_back(const_cast<char*>(program_utf8.c_str()));
+            for (const auto& arg : child_args) {
+                c_argv.push_back(const_cast<char*>(arg.c_str()));
+            }
+            c_argv.push_back(nullptr);
 
             const pid_t pid = fork();
             if (pid == -1) {
@@ -443,16 +577,7 @@ namespace lfs::app {
                 close(pipe_fds[0]);
                 close(pipe_fds[1]);
 
-                const std::string program_utf8 = lfs::core::path_to_utf8(executable);
-                std::vector<char*> argv;
-                argv.reserve(child_args.size() + 2);
-                argv.push_back(const_cast<char*>(program_utf8.c_str()));
-                for (const auto& arg : child_args) {
-                    argv.push_back(const_cast<char*>(arg.c_str()));
-                }
-                argv.push_back(nullptr);
-
-                execvp(program_utf8.c_str(), argv.data());
+                execvp(program_utf8.c_str(), c_argv.data());
                 _exit(127);
             }
 
@@ -461,6 +586,9 @@ namespace lfs::app {
 
             char buffer[4096];
             bool child_done = false;
+            bool cancel_message_printed = false;
+            bool timeout_triggered = false;
+            auto timeout_sigterm_time = std::chrono::steady_clock::time_point{};
 
             while (!child_done) {
                 struct pollfd pfd{};
@@ -506,47 +634,60 @@ namespace lfs::app {
                     } else if (WIFSIGNALED(status)) {
                         result.exit_code = 128 + WTERMSIG(status);
                     }
+
+                    if (g_batch_interrupted.load()) {
+                        result.cancelled = true;
+                        result.error_message = "Cancelled by user";
+                        if (result.exit_code == 0) {
+                            result.exit_code = 130;
+                        }
+                    }
+                    break;
                 }
 
-                if (g_batch_interrupted.load()) {
-                    kill(pid, SIGTERM);
+                if (!child_done && g_batch_interrupted.load()) {
                     result.cancelled = true;
                     result.error_message = "Cancelled by user";
-                    bool terminated = false;
-                    for (int t = 0; t < 20; ++t) {
-                        if (waitpid(pid, &status, WNOHANG) == pid) {
-                            terminated = true;
-                            break;
-                        }
-                        usleep(50000);
+                    if (result.exit_code == 0) {
+                        result.exit_code = 130;
                     }
-                    if (!terminated) {
+
+                    const int count = g_interrupt_count.load();
+                    if (count >= 2) {
+                        std::println(stderr, "\n[Batch] Second interrupt received. Force killing child process (PID {})...", pid);
                         kill(pid, SIGKILL);
                         waitpid(pid, &status, 0);
+                        child_done = true;
+                        result.exit_code = 130;
+                        break;
+                    } else if (!cancel_message_printed) {
+                        std::println(stderr, "\n[Batch] Interrupt received. Waiting for child process to save and shut down cleanly... (Press Ctrl+C again to force kill)");
+                        cancel_message_printed = true;
                     }
-                    child_done = true;
                 }
 
-                if (params.timeout_minutes > 0) {
+                if (!child_done && params.timeout_minutes > 0) {
                     const auto elapsed_sec = std::chrono::duration<double>(
                         std::chrono::steady_clock::now() - start_time).count();
                     if (elapsed_sec > params.timeout_minutes * 60) {
-                        kill(pid, SIGTERM);
-                        result.exit_code = 124;
-                        result.error_message = std::format("Job timed out after {} minutes", params.timeout_minutes);
-                        bool terminated = false;
-                        for (int t = 0; t < 20; ++t) {
-                            if (waitpid(pid, &status, WNOHANG) == pid) {
-                                terminated = true;
+                        if (!timeout_triggered) {
+                            timeout_triggered = true;
+                            timeout_sigterm_time = std::chrono::steady_clock::now();
+                            result.exit_code = 124;
+                            result.error_message = std::format("Job timed out after {} minutes", params.timeout_minutes);
+                            std::println(stderr, "\n[Batch] Job timed out after {} minutes. Sending SIGTERM to PID {}...", params.timeout_minutes, pid);
+                            kill(pid, SIGTERM);
+                        } else {
+                            const auto grace_elapsed = std::chrono::duration<double>(
+                                std::chrono::steady_clock::now() - timeout_sigterm_time).count();
+                            if (grace_elapsed > 30.0) {
+                                std::println(stderr, "\n[Batch] Child process did not exit within 30s grace period after timeout. Force killing (PID {})...", pid);
+                                kill(pid, SIGKILL);
+                                waitpid(pid, &status, 0);
+                                child_done = true;
                                 break;
                             }
-                            usleep(50000);
                         }
-                        if (!terminated) {
-                            kill(pid, SIGKILL);
-                            waitpid(pid, &status, 0);
-                        }
-                        child_done = true;
                     }
                 }
             }
@@ -558,6 +699,9 @@ namespace lfs::app {
             const auto end_time = std::chrono::steady_clock::now();
             result.duration_seconds = std::chrono::duration<double>(end_time - start_time).count();
             result.success = (result.exit_code == 0 && !result.cancelled);
+            if (result.cancelled && result.exit_code == 0) {
+                result.exit_code = 130;
+            }
             if (!result.success && result.error_message.empty()) {
                 result.error_message = std::format("Process exited with code {}", result.exit_code);
             }
@@ -678,6 +822,11 @@ namespace lfs::app {
 
     } // namespace
 
+    std::vector<lfs::core::param::BatchJobItem> resolve_batch_jobs(
+        const lfs::core::param::BatchTrainingParameters& params) {
+        return resolve_jobs_internal(params);
+    }
+
     int run_batch_training(const lfs::core::param::BatchTrainingParameters& params) {
         ScopedSignalHandler signal_handler;
 
@@ -690,7 +839,7 @@ namespace lfs::app {
             return 1;
         }
 
-        const auto jobs = resolve_jobs(params);
+        const auto jobs = resolve_batch_jobs(params);
         if (jobs.empty()) {
             LOG_ERROR("Batch training: No valid datasets found.");
             std::println(stderr, "\nError: No valid datasets found.");
@@ -764,6 +913,7 @@ namespace lfs::app {
                     cancelled_res.dataset_path = jobs[remaining].dataset_path;
                     cancelled_res.output_path = jobs[remaining].output_path;
                     cancelled_res.cancelled = true;
+                    cancelled_res.exit_code = 130;
                     cancelled_res.error_message = "Cancelled before start";
                     results.push_back(std::move(cancelled_res));
                 }
@@ -786,6 +936,16 @@ namespace lfs::app {
                              i + 1, jobs.size(), format_duration(res.duration_seconds), res.name);
             } else if (res.cancelled) {
                 std::println("\n[Batch Job {}/{}] CANCELLED: {}", i + 1, jobs.size(), res.name);
+                for (size_t remaining = i + 1; remaining < jobs.size(); ++remaining) {
+                    JobExecutionResult cancelled_res;
+                    cancelled_res.name = jobs[remaining].name;
+                    cancelled_res.dataset_path = jobs[remaining].dataset_path;
+                    cancelled_res.output_path = jobs[remaining].output_path;
+                    cancelled_res.cancelled = true;
+                    cancelled_res.exit_code = 130;
+                    cancelled_res.error_message = "Cancelled by user";
+                    results.push_back(std::move(cancelled_res));
+                }
                 break;
             } else {
                 std::println("\n[Batch Job {}/{}] FAILED (exit code {}): {}",
@@ -802,6 +962,7 @@ namespace lfs::app {
                         cancelled_res.dataset_path = jobs[remaining].dataset_path;
                         cancelled_res.output_path = jobs[remaining].output_path;
                         cancelled_res.cancelled = true;
+                        cancelled_res.exit_code = 130;
                         cancelled_res.error_message = "Cancelled due to previous failure";
                         results.push_back(std::move(cancelled_res));
                     }

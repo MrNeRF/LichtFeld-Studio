@@ -2777,6 +2777,56 @@ dataset options work as in training; see the Evaluation page of the docs.
                 return binding.parse_type == lfs::core::args::OptimizationCliParseType::Bool;
             }
         }
+        static constexpr std::string_view EXTRA_BOOL_FLAGS[] = {
+            "--no-download",
+            "--exclude-export",
+            "--no-provenance",
+            "--no-cpu-cache",
+            "--use-16bit",
+            "--no-save-eval-images",
+            "--headless",
+            "--train",
+            "--safe-mode",
+            "--reset-preferences",
+            "--reset-layout",
+            "--reset-all-settings",
+            "--no-splash",
+            "--debug-python",
+            "--perf-bench",
+            "--verbose",
+            "-q",
+            "--quiet",
+            "--tcp-connection",
+            "--undistort",
+            "--eval",
+            "--eval-all",
+            "--eval-flip",
+            "--use-depth-loss",
+            "--no-depth-auto-generate",
+            "--use-normal-loss",
+            "--no-normal-auto-generate",
+            "--bilateral-grid",
+            "--exposure-correction",
+            "--no-exposure-correction",
+            "--ppisp",
+            "--no-ppisp-exif-exposure",
+            "--ppisp-controller",
+            "--ppisp-freeze",
+            "--gut",
+            "--enable-sparsity",
+            "--enable-mip",
+            "--random",
+            "--invert-masks",
+            "--no-alpha-as-mask",
+            "--no-error-map",
+            "--no-edge-map",
+            "--opacity-decay-rendered-only",
+            "--no-opacity-decay-rendered-only"
+        };
+        for (const auto& f : EXTRA_BOOL_FLAGS) {
+            if (f == flag)
+                return true;
+        }
         return false;
     }
 
@@ -2937,6 +2987,38 @@ dataset options work as in training; see the Evaluation page of the docs.
 
         for (auto&& a : shared_training_args) {
             params.shared_args.push_back(std::move(a));
+        }
+
+        if (!params.shared_args.empty()) {
+            std::vector<std::string> validate_args = {"lichtfeld-studio", "--headless"};
+            bool has_d = false;
+            bool has_o = false;
+            for (size_t k = 0; k < params.shared_args.size(); ++k) {
+                if (params.shared_args[k] == "-d" || params.shared_args[k] == "--data-path")
+                    has_d = true;
+                if (params.shared_args[k] == "-o" || params.shared_args[k] == "--output-path")
+                    has_o = true;
+            }
+            if (!has_d) {
+                validate_args.push_back("-d");
+                validate_args.push_back("val_dummy_dataset");
+            }
+            if (!has_o) {
+                validate_args.push_back("-o");
+                validate_args.push_back("val_dummy_output");
+            }
+            for (const auto& a : params.shared_args) {
+                validate_args.push_back(a);
+            }
+            std::vector<const char*> validate_argv;
+            validate_argv.reserve(validate_args.size());
+            for (const auto& a : validate_args) {
+                validate_argv.push_back(a.c_str());
+            }
+            auto val_res = parse_args_and_params(static_cast<int>(validate_argv.size()), validate_argv.data());
+            if (!val_res) {
+                return std::unexpected(std::format("Invalid training argument: {}", val_res.error()));
+            }
         }
 
         if (params.input_paths.empty() && params.jobs.empty() && params.config_file.empty()) {
