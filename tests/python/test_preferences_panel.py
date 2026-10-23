@@ -369,6 +369,8 @@ def preferences_panel_module(monkeypatch):
             ),
             NEXT_SIDEBAR_CATEGORY=SimpleNamespace(name="NEXT_SIDEBAR_CATEGORY", value=92),
             PREVIOUS_SIDEBAR_CATEGORY=SimpleNamespace(name="PREVIOUS_SIDEBAR_CATEGORY", value=93),
+            REMOVE_LAST_POINT=SimpleNamespace(name="REMOVE_LAST_POINT", value=95),
+            APPLY_ALIGNMENT=SimpleNamespace(name="APPLY_ALIGNMENT", value=96),
             ASSET_GALLERY_COPY_LINK=SimpleNamespace(
                 name="ASSET_GALLERY_COPY_LINK", value=81
             ),

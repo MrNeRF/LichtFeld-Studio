@@ -94,6 +94,9 @@ namespace lfs::vis {
         void setScene(core::Scene* scene) { scene_ = scene; }
         // Publishes the training crop box to the trainer from the thread that owns the scene.
         void syncCropBox();
+        // With "Crop to ROI at end" on, the training crop box that exports of the training model are cropped to.
+        // Read on the thread that owns the scene.
+        [[nodiscard]] std::optional<lfs::training::TrainingCropBoxGeometry> exportCropBox() const;
         [[nodiscard]] const core::Scene* getScene() const { return scene_; }
 
         // Training control

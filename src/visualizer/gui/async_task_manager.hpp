@@ -18,6 +18,7 @@
 #include "gui/gallery_scene_publication.hpp"
 #include "io/loader.hpp"
 #include "io/video/video_export_options.hpp"
+#include "training/training_cropbox_mask.hpp"
 #include <atomic>
 #include <chrono>
 #include <deque>
@@ -232,6 +233,8 @@ namespace lfs::vis {
             struct ExportSplatSource {
                 const lfs::core::SplatData* data = nullptr;
                 glm::mat4 transform{1.0f};
+                // The training model with "Crop to ROI at end" on: exported cropped to its crop box.
+                std::optional<lfs::training::TrainingCropBoxGeometry> crop;
             };
 
             void startAsyncExport(lfs::core::ExportFormat format, const std::filesystem::path& path,

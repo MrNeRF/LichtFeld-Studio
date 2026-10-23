@@ -1250,6 +1250,17 @@ namespace lfs::vis {
         trainer_->setCropBoxSnapshot(lfs::training::resolve_training_cropbox_geom(*scene_));
     }
 
+    std::optional<lfs::training::TrainingCropBoxGeometry> TrainerManager::exportCropBox() const {
+        // The editable setting is what the toolbar shows; it reaches the trainer only while training runs.
+        const auto* const params = services().paramsOrNull();
+        const bool crop = params && params->isLoaded()
+                              ? params->getActiveParams().crop_to_cropbox
+                              : trainer_ && trainer_->getParams().optimization.crop_to_cropbox;
+        if (!crop || !scene_)
+            return std::nullopt;
+        return lfs::training::resolve_training_cropbox_geom(*scene_);
+    }
+
     bool TrainerManager::startTraining() {
         LOG_TIMER("TrainerManager::startTraining");
 

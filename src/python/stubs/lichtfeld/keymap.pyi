@@ -151,7 +151,7 @@ class Action(enum.Enum):
 
     TOOL_ALIGN = 67
 
-    TOOL_SCALE_DISTANCE = 94
+    TOOL_SCALE_DISTANCE = 96
 
     PIE_MENU = 68
 
@@ -188,6 +188,10 @@ class Action(enum.Enum):
     NEXT_SIDEBAR_CATEGORY = 92
 
     PREVIOUS_SIDEBAR_CATEGORY = 93
+
+    REMOVE_LAST_POINT = 94
+
+    APPLY_ALIGNMENT = 95
 
     UNGROUP_SELECTED_SCENE_NODE = 86
 

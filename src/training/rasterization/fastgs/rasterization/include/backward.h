@@ -67,6 +67,7 @@ namespace fast_lfs::rasterization {
         float* edge_score_out,
         float* impact_sum_out,
         float* impact_peak_out,
-        cudaStream_t stream);
+        cudaStream_t stream,
+        const ColorVarianceLoss& color_variance = {});
 
 } // namespace fast_lfs::rasterization

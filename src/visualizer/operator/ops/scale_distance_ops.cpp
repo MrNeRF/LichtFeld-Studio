@@ -260,14 +260,15 @@ namespace lfs::vis::op {
             }
         }
 
-        if (event->type == ModalEvent::Type::KEY) {
-            const auto* key = event->as<KeyEvent>();
-            if (!key || key->action != lfs::vis::input::ACTION_PRESS) {
+        // Keys arrive as key map actions, so every control follows the user's bindings.
+        if (event->type == ModalEvent::Type::ACTION) {
+            const auto* action = event->as<ActionEvent>();
+            if (!action) {
                 return OperatorResult::PASS_THROUGH;
             }
 
-            switch (key->key) {
-            case lfs::vis::input::KEY_ESCAPE:
+            switch (action->action) {
+            case lfs::vis::input::Action::CANCEL_POLYGON:
                 if (selected_point_) {
                     selected_point_.reset();
                     services().clearScaleDistanceSelectedPoint();
@@ -279,8 +280,11 @@ namespace lfs::vis::op {
                 }
                 return OperatorResult::RUNNING_MODAL;
 
-            case lfs::vis::input::KEY_DELETE:
-            case lfs::vis::input::KEY_BACKSPACE:
+            case lfs::vis::input::Action::REMOVE_LAST_POINT:
+                removeLastPoint();
+                return OperatorResult::RUNNING_MODAL;
+
+            case lfs::vis::input::Action::DELETE_SELECTED:
                 if (selected_point_) {
                     removeSelectedPoint();
                 } else {
@@ -289,8 +293,9 @@ namespace lfs::vis::op {
                 return OperatorResult::RUNNING_MODAL;
 
             default:
-                return OperatorResult::PASS_THROUGH;
+                break;
             }
+            return OperatorResult::PASS_THROUGH;
         }
 
         return OperatorResult::RUNNING_MODAL;

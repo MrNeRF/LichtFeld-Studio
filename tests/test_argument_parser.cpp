@@ -15,6 +15,7 @@
 using lfs::core::param::apply_explicit_training_overrides;
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -1433,6 +1434,25 @@ TEST(ArgumentParserTest, TrainingParsesCropBoxLossWeight) {
     EXPECT_FLOAT_EQ((*parsed)->optimization.cropbox_loss_weight, 0.4f);
 }
 
+// Catches the color variance flags not reaching the training parameters.
+TEST(ArgumentParserTest, TrainingParsesColorVarianceLoss) {
+    const auto data_path = make_test_path("lfs_arg_parser_color_variance_data");
+    const auto output_path = make_test_path("lfs_arg_parser_color_variance_output");
+    const auto parse = [&](const char* warmup) {
+        const char* argv[] = {
+            "LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(), "--output-path", output_path.c_str(),
+            "--no-exposure-correction", "--color-variance-weight", "0.5", warmup};
+        return lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    };
+
+    auto parsed = parse("--color-variance-warmup-iters=15000");
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_FLOAT_EQ((*parsed)->optimization.color_variance_weight, 0.5f);
+    EXPECT_EQ((*parsed)->optimization.color_variance_warmup_iters, 15000u);
+    EXPECT_TRUE((*parsed)->cli_step_values_set);
+    EXPECT_FALSE(parse("--color-variance-warmup-iters=-1").has_value());
+}
+
 TEST(ArgumentParserTest, TrainingParsesCropBoxRegionOfInterest) {
     const auto data_path = make_test_path("lfs_arg_parser_cropbox_data");
     const auto output_path = make_test_path("lfs_arg_parser_cropbox_output");
@@ -1508,6 +1528,67 @@ TEST(ArgumentParserTest, TrainingRejectsCropBoxWithoutVolume) {
         auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
         ASSERT_FALSE(parsed.has_value());
         EXPECT_NE(parsed.error().find("Invalid --cropbox"), std::string::npos) << parsed.error();
+    }
+}
+
+// Catches --cropbox-rotation not reaching the parameters or training_config.json, or set without the flag.
+TEST(ArgumentParserTest, TrainingParsesCropBoxRotation) {
+    const auto data_path = make_test_path("lfs_arg_parser_cropbox_rotation_data");
+    const auto output_path = make_test_path("lfs_arg_parser_cropbox_rotation_output");
+    const auto parse = [&](const char* rotation) {
+        std::vector<const char*> argv{"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                                      "--output-path", output_path.c_str(), "--cropbox", "-1,-2,-3,1,2,3"};
+        if (rotation) {
+            argv.push_back("--cropbox-rotation");
+            argv.push_back(rotation);
+        }
+        return lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+    };
+
+    const auto rotated = parse("-30, 45.5 ,400");
+    ASSERT_TRUE(rotated.has_value()) << rotated.error();
+    ASSERT_TRUE((*rotated)->cropbox_rotation.has_value());
+    EXPECT_EQ(*(*rotated)->cropbox_rotation, (std::array<float, 3>{-30.f, 45.5f, 400.f}));
+
+    const auto config_path = std::filesystem::path(make_test_path("lfs_arg_parser_cropbox_rotation_config")) /
+                             "training_config.json";
+    const auto saved = lfs::core::param::save_training_parameters_to_json(**rotated, config_path);
+    ASSERT_TRUE(saved.has_value()) << saved.error();
+    std::ifstream config_file(config_path);
+    const auto config = nlohmann::json::parse(config_file);
+    EXPECT_EQ(config.at("cropbox"), nlohmann::json::parse("[-1, -2, -3, 1, 2, 3]"));
+    EXPECT_EQ(config.at("cropbox_rotation"), nlohmann::json::parse("[-30, 45.5, 400]"));
+
+    const auto unrotated = parse(nullptr);
+    ASSERT_TRUE(unrotated.has_value()) << unrotated.error();
+    EXPECT_FALSE((*unrotated)->cropbox_rotation.has_value());
+}
+
+TEST(ArgumentParserTest, TrainingRejectsCropBoxRotationWithoutCropBox) {
+    const auto data_path = make_test_path("lfs_arg_parser_cropbox_rotation_without_box_data");
+    const auto output_path = make_test_path("lfs_arg_parser_cropbox_rotation_without_box_output");
+    const char* argv[] = {"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                          "--output-path", output_path.c_str(), "--cropbox-rotation", "0,0,30"};
+
+    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("--cropbox-rotation"), std::string::npos) << parsed.error();
+    EXPECT_NE(parsed.error().find("needs --cropbox"), std::string::npos) << parsed.error();
+}
+
+TEST(ArgumentParserTest, TrainingRejectsCropBoxRotationWithoutThreeFiniteNumbers) {
+    const auto data_path = make_test_path("lfs_arg_parser_invalid_cropbox_rotation_data");
+    const auto output_path = make_test_path("lfs_arg_parser_invalid_cropbox_rotation_output");
+
+    for (const char* rotation : {"0,30", "0,0,30,0", "0,,30", "a,0,0", "nan,0,0", "0,inf,0", "0,0,1e40"}) {
+        SCOPED_TRACE(rotation);
+        const char* argv[] = {"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                              "--output-path", output_path.c_str(), "--cropbox", "-1,-1,-1,1,1,1",
+                              "--cropbox-rotation", rotation};
+
+        const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        ASSERT_FALSE(parsed.has_value());
+        EXPECT_NE(parsed.error().find("Invalid --cropbox-rotation"), std::string::npos) << parsed.error();
     }
 }
 
@@ -1689,6 +1770,41 @@ TEST(ArgumentParserTest, TrainingRejectsOutOfRangeNumericFlags) {
         static_cast<int>(zero_warmup_argv.size()), zero_warmup_argv.data());
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_EQ((*parsed)->optimization.perf_bench_warmup, 0);
+}
+
+// Sharpen flags reach LoadingParams and the --resume overlay; out-of-range values and unknown kernels are rejected.
+TEST(ArgumentParserTest, SharpenFlagsLandInLoadingParamsAndRejectOutOfRangeValues) {
+    const auto data_path = make_test_path("lfs_arg_parser_sharpen_data");
+    const auto output_path = make_test_path("lfs_arg_parser_sharpen_output");
+    const auto parse = [&](const std::vector<std::string>& extra) {
+        std::vector<std::string> args{"LichtFeld-Studio", "--headless", "--data-path", data_path, "--output-path", output_path};
+        args.insert(args.end(), extra.begin(), extra.end());
+        std::vector<const char*> argv;
+        for (const auto& arg : args)
+            argv.push_back(arg.c_str());
+        return lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+    };
+
+    auto parsed = parse({"--sharpen-kernel", "laplacian8", "--sharpen-amount", "1.5", "--sharpen-threshold", "0.02"});
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    const auto& sharpen = (*parsed)->dataset.loading_params.sharpen;
+    EXPECT_EQ(sharpen.kernel, lfs::core::SharpenKernel::Laplacian8);
+    EXPECT_FLOAT_EQ(sharpen.amount, 1.5f);
+    EXPECT_FLOAT_EQ(sharpen.radius, 1.0f);
+    EXPECT_FLOAT_EQ(sharpen.threshold, 0.02f);
+    const auto overlay = nlohmann::json::parse((*parsed)->overrides.dataset_json);
+    EXPECT_EQ(overlay["loading_params"]["sharpen_kernel"], "laplacian8");
+    EXPECT_FLOAT_EQ(overlay["loading_params"]["sharpen_amount"].get<float>(), 1.5f);
+    EXPECT_FALSE(overlay["loading_params"].contains("sharpen_radius"));
+
+    for (const auto& [flag, value, field] : {std::array<std::string, 3>{"--sharpen-amount", "5.5", "sharpen_amount"},
+                                             std::array<std::string, 3>{"--sharpen-radius", "0.1", "sharpen_radius"},
+                                             std::array<std::string, 3>{"--sharpen-threshold", "1.5", "sharpen_threshold"},
+                                             std::array<std::string, 3>{"--sharpen-kernel", "box", "'box'"}}) {
+        const auto rejected = parse({flag, value});
+        ASSERT_FALSE(rejected.has_value()) << flag;
+        EXPECT_NE(rejected.error().find(field), std::string::npos) << rejected.error();
+    }
 }
 
 TEST(ArgumentParserTest, NegativeShDegreeIntervalReportsSuppliedValue) {

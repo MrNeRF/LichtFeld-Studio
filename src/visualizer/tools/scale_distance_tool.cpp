@@ -8,6 +8,7 @@
 #include "core/services.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/string_keys.hpp"
+#include "input/input_controller.hpp"
 #include "input/sdl_coordinate_utils.hpp"
 #include "internal/viewport.hpp"
 #include "operator/operator_registry.hpp"
@@ -114,6 +115,12 @@ namespace lfs::vis::tools {
                     text.remove_prefix(1);
             }
             return lines;
+        }
+
+        [[nodiscard]] std::string scaleDistanceShortcut(const input::Action action) {
+            const auto* const controller = InputController::instance();
+            return controller ? controller->getBindings().getLocalizedTriggerDescription(action, input::ToolMode::ALIGN)
+                              : std::string{};
         }
 
         struct PanelProjection {
@@ -333,10 +340,13 @@ namespace lfs::vis::tools {
         const float max_width = std::max(40.0f, std::min(560.0f * ui_scale,
                                                          panel_proj.info.width - (info_x - panel_proj.info.x) - 2.0f * padding));
 
-        const char* hint_key = (picked_points.size() < 2)
-                                   ? lichtfeld::Strings::ScaleDistance::HINT_PICKING
-                                   : lichtfeld::Strings::ScaleDistance::HINT_REVIEW;
-        const auto lines = wrapHint(*overlay, LOC(hint_key), hud_size, max_width);
+        const auto cancel_key = scaleDistanceShortcut(input::Action::CANCEL_POLYGON);
+        const auto hint = (picked_points.size() < 2)
+                              ? LOCF(lichtfeld::Strings::ScaleDistance::HINT_PICKING,
+                                     scaleDistanceShortcut(input::Action::DELETE_SELECTED),
+                                     cancel_key)
+                              : LOCF(lichtfeld::Strings::ScaleDistance::HINT_REVIEW, cancel_key);
+        const auto lines = wrapHint(*overlay, hint, hud_size, max_width);
         const auto count_text = LOCF(lichtfeld::Strings::ScaleDistance::POINTS_COUNT, lfs::core::format_count(picked_points.size()));
         const auto* status = services().getScaleDistanceStatusMessage();
 

@@ -142,6 +142,8 @@ STRATEGY_LABEL_KEYS = {
 }
 
 DATASET_BOOL_PROPS = ["use_cpu_cache", "use_16bit_color"]
+DATASET_SLIDER_PROPS = ["sharpen_amount", "sharpen_radius", "sharpen_threshold"]
+SHARPEN_KERNELS = ("usm", "laplacian4", "laplacian8")
 
 def _resolved_ppisp_activation_step(
     params,
@@ -166,6 +168,9 @@ SLIDER_PROPS = ["lambda_dssim", "init_opacity"]
 SCRUB_FIELD_DEFS = {
     "lambda_dssim": ScrubFieldSpec(0.0, 1.0, 0.01, "%.3f"),
     "init_opacity": ScrubFieldSpec(0.01, 1.0, 0.01, "%.3f"),
+    "sharpen_amount": ScrubFieldSpec(0.0, 5.0, 0.05, "%.2f"),
+    "sharpen_radius": ScrubFieldSpec(0.3, 10.0, 0.1, "%.1f"),
+    "sharpen_threshold": ScrubFieldSpec(0.0, 1.0, 0.005, "%.3f"),
 }
 
 RENDER_SYNC = {
@@ -327,7 +332,7 @@ class TrainingPanel(Panel):
         self._bind_select_props(model, p, d)
         self._bind_text_props(model, p)
         self._bind_bespoke_num_props(model, p, d)
-        self._bind_slider_props(model, p)
+        self._bind_slider_props(model, p, d)
         self._bind_color(model, p)
         self._bind_status(model, p)
         self._bind_display(model, p, d)
@@ -455,6 +460,17 @@ class TrainingPanel(Panel):
         model.bind_func(
             "label_use_16bit_color", lambda: tr("training.dataset.use_16bit_color")
         )
+        model.bind_func("label_sharpen", lambda: tr("training.dataset.sharpen"))
+        for setting in ("amount", "radius", "threshold"):
+            model.bind_func(
+                f"label_sharpen_{setting}",
+                lambda setting=setting: tr(f"training.dataset.sharpen_{setting}"),
+            )
+        for kernel in SHARPEN_KERNELS:
+            model.bind_func(
+                f"label_sharpen_{kernel}",
+                lambda kernel=kernel: tr(f"training.options.sharpen_kernel.{kernel}"),
+            )
         model.bind_func(
             "label_dataset_output", lambda: tr("training.dataset.output")
         )
@@ -795,6 +811,10 @@ class TrainingPanel(Panel):
             ),
         )
         model.bind_func("has_dataset", lambda: d() is not None and d().has_params())
+        model.bind_func(
+            "sharpen_uses_radius",
+            lambda: d() is not None and d().has_params() and d().sharpen_kernel == "usm",
+        )
         model.bind_func("dep_init_mesh", self._init_file_is_mesh)
         model.bind_func(
             "show_dataset_no_data", lambda: d() is None or not d().has_params()
@@ -894,6 +914,11 @@ class TrainingPanel(Panel):
             "resize_factor_str",
             lambda: str(d().resize_factor) if d() and d().has_params() else "-1",
             lambda v: self._set_resize_factor(v),
+        )
+        model.bind(
+            "sharpen_kernel",
+            lambda: d().sharpen_kernel if d() and d().has_params() else "usm",
+            lambda v: self._set_sharpen_kernel(v),
         )
 
     def _bind_text_props(self, model, p):
@@ -1162,15 +1187,16 @@ class TrainingPanel(Panel):
         for key in BG_COLOR_TEXT_KEYS:
             self._handle.dirty(key)
 
-    def _bind_slider_props(self, model, p):
-        for prop in SLIDER_PROPS:
-            model.bind(
-                prop,
-                lambda pr=prop: (
-                    float(getattr(p(), pr, 0.0)) if p() and p().has_params() else 0.0
-                ),
-                lambda v, pr=prop: self._set_slider_prop(pr, v),
-            )
+    def _bind_slider_props(self, model, p, d):
+        for source, props in ((p, SLIDER_PROPS), (d, DATASET_SLIDER_PROPS)):
+            for prop in props:
+                model.bind(
+                    prop,
+                    lambda pr=prop, src=source: (
+                        float(getattr(src(), pr, 0.0)) if src() and src().has_params() else 0.0
+                    ),
+                    lambda v, pr=prop: self._set_slider_prop(pr, v),
+                )
 
     def _bind_color(self, model, p):
         def _bg():
@@ -2030,6 +2056,18 @@ class TrainingPanel(Panel):
         except (ValueError, TypeError, RuntimeError):
             pass
 
+    def _set_sharpen_kernel(self, val_str):
+        d = lf.dataset_params()
+        value = str(val_str or "")
+        if not d or not d.has_params() or value not in SHARPEN_KERNELS or value == d.sharpen_kernel:
+            return
+        try:
+            d.sharpen_kernel = value
+        except (ValueError, RuntimeError):
+            return
+        if self._handle:
+            self._handle.dirty_all()
+
     @staticmethod
     def _can_edit_configuration():
         return _trainer_run_is_finished() or (
@@ -2237,9 +2275,16 @@ class TrainingPanel(Panel):
             return False
         return True
 
+    @staticmethod
+    def _slider_params(prop):
+        return lf.dataset_params() if prop in DATASET_SLIDER_PROPS else lf.optimization_params()
+
     def _set_slider_prop(self, prop, val):
-        params = lf.optimization_params()
+        params = self._slider_params(prop)
         if not params or not params.has_params():
+            return
+        # Dataset settings are locked while training runs.
+        if prop in DATASET_SLIDER_PROPS and not params.can_edit():
             return
         try:
             value = float(val)
@@ -2254,7 +2299,7 @@ class TrainingPanel(Panel):
             pass
 
     def _get_scrub_value(self, prop):
-        params = lf.optimization_params()
+        params = self._slider_params(prop)
         if not params or not params.has_params():
             spec = SCRUB_FIELD_DEFS[prop]
             return spec.min_value

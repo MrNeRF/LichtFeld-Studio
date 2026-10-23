@@ -127,4 +127,26 @@ namespace lfs::training {
             deleted_mask);
     }
 
+    std::optional<core::Tensor> training_cropbox_crop_mask(
+        const core::SplatData& model,
+        const TrainingCropBoxGeometry& geometry) {
+        return compute_cropbox_remove_mask(
+            model.means(), geometry.min, geometry.max, geometry.model_to_cropbox, geometry.inverse);
+    }
+
+    std::optional<core::SplatData> crop_copy_to_training_cropbox(
+        const core::SplatData& model,
+        const TrainingCropBoxGeometry& geometry) {
+        // Deleted rows outside the box need no copy: a model cropped by soft deletion (MCMC) exports as it is.
+        const core::Tensor* const deleted = model.deleted_mask_matches_size() ? &model.deleted() : nullptr;
+        const auto removed = compute_cropbox_remove_mask(
+            model.means(), geometry.min, geometry.max, geometry.model_to_cropbox, geometry.inverse, deleted);
+        if (!removed || removed->sum_scalar() == 0)
+            return std::nullopt;
+        auto keep = removed->logical_not();
+        if (deleted)
+            keep = keep.logical_and(deleted->logical_not());
+        return core::extract_by_mask(model, keep);
+    }
+
 } // namespace lfs::training

@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <mutex>
 #include <set>
 #include <stdexcept>
@@ -40,6 +41,20 @@ namespace lfs::python {
             if (value < -1 || value == 0) {
                 throw std::invalid_argument("resize_factor must be -1 (auto) or a positive factor");
             }
+        }
+
+        void set_sharpen_kernel(DatasetConfig& config, const std::string& name) {
+            const auto kernel = lfs::core::sharpen_kernel_from_string(name);
+            if (!kernel)
+                throw std::invalid_argument("sharpen_kernel must be 'usm', 'laplacian4' or 'laplacian8'");
+            config.loading_params.sharpen.kernel = *kernel;
+        }
+
+        float checked_sharpen_value(const std::string_view name, const float value, const float min_value,
+                                    const float max_value) {
+            if (!std::isfinite(value) || value < min_value || value > max_value)
+                throw std::invalid_argument(std::format("{} must be within [{}, {}]", name, min_value, max_value));
+            return value;
         }
 
     } // namespace
@@ -127,6 +142,32 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
+        auto add_float = [&](const std::string& id, const std::string& name, float default_val, float min_val,
+                             float max_val, double step, const std::string& desc,
+                             std::function<float(const DatasetConfig&)> getter,
+                             std::function<void(DatasetConfig&, float)> setter) {
+            PropertyMeta meta;
+            meta.id = id;
+            meta.name = name;
+            meta.description = desc;
+            meta.type = PropType::Float;
+            meta.default_value = static_cast<double>(default_val);
+            meta.min_value = min_val;
+            meta.max_value = max_val;
+            meta.soft_min = min_val;
+            meta.soft_max = max_val;
+            meta.step = step;
+            meta.getter = [getter](const PropertyObjectRef& ref) -> std::any {
+                assert(ref.is_cpp() && "Cannot call C++ property getter with Python object");
+                return getter(*static_cast<const DatasetConfig*>(ref.ptr));
+            };
+            meta.setter = [setter](PropertyObjectRef& ref, const std::any& val) {
+                assert(ref.is_cpp() && "Cannot call C++ property setter with Python object");
+                setter(*static_cast<DatasetConfig*>(ref.ptr), std::any_cast<float>(val));
+            };
+            group.properties.push_back(std::move(meta));
+        };
+
         auto add_bool = [&](const std::string& id, const std::string& name, bool default_val, const std::string& desc,
                             bool readonly, std::function<bool(const DatasetConfig&)> getter,
                             std::function<void(DatasetConfig&, bool)> setter = nullptr) {
@@ -196,6 +237,37 @@ namespace lfs::python {
             "use_16bit_color", "16-bit Color", false, "Train with 16-bit color images (HDR); caches losslessly as JPEG 2000", false,
             [](const DatasetConfig& c) { return c.loading_params.use_16bit_color; },
             [](DatasetConfig& c, bool v) { c.loading_params.use_16bit_color = v; });
+
+        add_string(
+            "sharpen_kernel", "Sharpen Kernel", "usm", "Training image sharpening filter: usm, laplacian4 or laplacian8",
+            false,
+            [](const DatasetConfig& c) { return std::string(lfs::core::sharpen_kernel_name(c.loading_params.sharpen.kernel)); },
+            set_sharpen_kernel);
+
+        add_float(
+            "sharpen_amount", "Sharpen Amount", 0.0f, 0.0f, lfs::core::kMaxSharpenAmount, 0.05,
+            "Strength of training image sharpening; 0 turns it off",
+            [](const DatasetConfig& c) { return c.loading_params.sharpen.amount; },
+            [](DatasetConfig& c, float v) {
+                c.loading_params.sharpen.amount = checked_sharpen_value("sharpen_amount", v, 0.0f, lfs::core::kMaxSharpenAmount);
+            });
+
+        add_float(
+            "sharpen_radius", "Sharpen Radius", 1.0f, lfs::core::kMinSharpenRadius, lfs::core::kMaxSharpenRadius, 0.1,
+            "Blur sigma of the usm kernel in pixels of the resized image",
+            [](const DatasetConfig& c) { return c.loading_params.sharpen.radius; },
+            [](DatasetConfig& c, float v) {
+                c.loading_params.sharpen.radius = checked_sharpen_value(
+                    "sharpen_radius", v, lfs::core::kMinSharpenRadius, lfs::core::kMaxSharpenRadius);
+            });
+
+        add_float(
+            "sharpen_threshold", "Sharpen Threshold", 0.0f, 0.0f, 1.0f, 0.005,
+            "Luma differences below this value (0 to 1) stay unsharpened",
+            [](const DatasetConfig& c) { return c.loading_params.sharpen.threshold; },
+            [](DatasetConfig& c, float v) {
+                c.loading_params.sharpen.threshold = checked_sharpen_value("sharpen_threshold", v, 0.0f, 1.0f);
+            });
 
         PropertyRegistry::instance().register_group(std::move(group));
     }
@@ -1002,6 +1074,16 @@ namespace lfs::python {
                 [](PyOptimizationParams& self, float v) { self.set("lambda_dssim", nb::cast(v)); },
                 "Weight for structural similarity loss")
             .def_prop_rw(
+                "color_variance_weight",
+                [](PyOptimizationParams& self) { return self.params().color_variance_weight; },
+                [](PyOptimizationParams& self, float v) { self.set("color_variance_weight", nb::cast(v)); },
+                "Reduces noise in stochastic rendering by aligning visible splat colors; 0 disables")
+            .def_prop_rw(
+                "color_variance_warmup_iters",
+                [](PyOptimizationParams& self) { return self.params().color_variance_warmup_iters; },
+                [](PyOptimizationParams& self, size_t v) { self.set("color_variance_warmup_iters", nb::cast(v)); },
+                "Completed training iterations before color variance starts")
+            .def_prop_rw(
                 "sh_degree",
                 [](PyOptimizationParams& self) { return self.params().sh_degree; },
                 [](PyOptimizationParams& self, int v) { self.set("sh_degree", nb::cast(v)); },
@@ -1535,6 +1617,28 @@ namespace lfs::python {
                     self.params().loading_params.use_16bit_color = v;
                 },
                 "Train with 16-bit color images (HDR); caches losslessly as JPEG 2000")
+            .def_prop_rw(
+                "sharpen_kernel",
+                [](const PyDatasetConfig& self) {
+                    return std::string(lfs::core::sharpen_kernel_name(self.params().loading_params.sharpen.kernel));
+                },
+                [](PyDatasetConfig& self, const std::string& v) { self.set("sharpen_kernel", nb::cast(v)); },
+                "Training image sharpening filter: 'usm', 'laplacian4' or 'laplacian8'")
+            .def_prop_rw(
+                "sharpen_amount",
+                [](const PyDatasetConfig& self) { return self.params().loading_params.sharpen.amount; },
+                [](PyDatasetConfig& self, float v) { self.set("sharpen_amount", nb::cast(v)); },
+                "Strength of training image sharpening, 0 to 5; 0 turns it off")
+            .def_prop_rw(
+                "sharpen_radius",
+                [](const PyDatasetConfig& self) { return self.params().loading_params.sharpen.radius; },
+                [](PyDatasetConfig& self, float v) { self.set("sharpen_radius", nb::cast(v)); },
+                "Blur sigma of the usm kernel in pixels of the resized image, 0.3 to 10")
+            .def_prop_rw(
+                "sharpen_threshold",
+                [](const PyDatasetConfig& self) { return self.params().loading_params.sharpen.threshold; },
+                [](PyDatasetConfig& self, float v) { self.set("sharpen_threshold", nb::cast(v)); },
+                "Luma differences below this value (0 to 1) stay unsharpened")
             .def_prop_ro(
                 "centralize_dataset",
                 [](const PyDatasetConfig& self) { return self.params().centralize_dataset; },

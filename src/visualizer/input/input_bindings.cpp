@@ -78,7 +78,7 @@ namespace lfs::vis::input {
             publishKeymapNotice(lfs::ErrorCode::InvalidArgument, std::move(message));
         }
 
-        constexpr int PROFILE_VERSION = 35; // Add scale distance tool shortcut.
+        constexpr int PROFILE_VERSION = 36; // Add scale distance tool shortcut.
 
         [[nodiscard]] std::optional<Binding> parseStoredBinding(const nlohmann::json& value);
         [[nodiscard]] std::string triggerIdentity(const Binding& binding);
@@ -139,7 +139,7 @@ namespace lfs::vis::input {
 
         static_assert(kLatestHistoricalProfileVersion == PROFILE_VERSION - 1,
                       "Snapshot the previous keymap defaults before bumping PROFILE_VERSION");
-        constexpr Action LAST_ACTION = Action::PREVIOUS_SIDEBAR_CATEGORY;
+        constexpr Action LAST_ACTION = Action::TOOL_SCALE_DISTANCE;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -2141,6 +2141,18 @@ namespace lfs::vis::input {
                                     KeyTrigger{KEY_KP_ENTER, MODIFIER_NONE},
                                     Action::APPLY_CROP_BOX,
                                     "Apply/confirm"});
+        profile.bindings.push_back({ToolMode::ALIGN,
+                                    KeyTrigger{KEY_BACKSPACE, MODIFIER_NONE},
+                                    Action::REMOVE_LAST_POINT,
+                                    "Remove last point"});
+        profile.bindings.push_back({ToolMode::ALIGN,
+                                    KeyTrigger{KEY_ENTER, MODIFIER_NONE},
+                                    Action::APPLY_ALIGNMENT,
+                                    "Apply alignment"});
+        profile.bindings.push_back({ToolMode::ALIGN,
+                                    KeyTrigger{KEY_KP_ENTER, MODIFIER_NONE},
+                                    Action::APPLY_ALIGNMENT,
+                                    "Apply alignment"});
 
         // Node picking only for transform modes (not selection/cropbox/align)
         for (const auto mode : NODE_PICK_MODES) {
@@ -2240,6 +2252,8 @@ namespace lfs::vis::input {
         case Action::HISTOGRAM_ZOOM_MARKED: return "Zoom Histogram at Cursor";
         case Action::NEXT_SIDEBAR_CATEGORY: return "Next Sidebar Category";
         case Action::PREVIOUS_SIDEBAR_CATEGORY: return "Previous Sidebar Category";
+        case Action::REMOVE_LAST_POINT: return "Remove Last Point";
+        case Action::APPLY_ALIGNMENT: return "Apply Alignment";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "Toggle Camera Frustums";
         case Action::OPEN_PREFERENCES: return "Open Preferences";
         case Action::TOGGLE_MCP_SERVER: return "Toggle MCP Server";
@@ -2339,6 +2353,8 @@ namespace lfs::vis::input {
         case Action::HISTOGRAM_ZOOM_MARKED: return "histogram_zoom_marked";
         case Action::NEXT_SIDEBAR_CATEGORY: return "next_sidebar_category";
         case Action::PREVIOUS_SIDEBAR_CATEGORY: return "previous_sidebar_category";
+        case Action::REMOVE_LAST_POINT: return "remove_last_point";
+        case Action::APPLY_ALIGNMENT: return "apply_alignment";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "toggle_camera_frustums";
         case Action::OPEN_PREFERENCES: return "open_preferences";
         case Action::TOGGLE_MCP_SERVER: return "toggle_mcp_server";
@@ -2959,6 +2975,10 @@ namespace lfs::vis::input {
             .allowed_kinds = K::TRIGGER_KIND_KEY,
             .ui_section = ActionSection::CropBox,
         };
+        static constexpr ActionDescriptor d_align_key{
+            .allowed_kinds = K::TRIGGER_KIND_KEY,
+            .ui_section = ActionSection::Align,
+        };
 
         static constexpr ActionDescriptor d_view_global_key{
             .allowed_kinds = K::TRIGGER_KIND_KEY,
@@ -3089,6 +3109,9 @@ namespace lfs::vis::input {
 
         case Action::APPLY_CROP_BOX:
             return d_crop_box_key;
+        case Action::REMOVE_LAST_POINT:
+        case Action::APPLY_ALIGNMENT:
+            return d_align_key;
 
         case Action::NODE_PICK:
             return d_node_pick;

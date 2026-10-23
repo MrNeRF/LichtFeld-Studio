@@ -1915,6 +1915,54 @@ Returns:
     CPU uint8 Tensor [H, W, 3] RGB image, or None if no active visualizer scene is available
 )doc");
 
+        m.def("render_lightfield_view_u8", [](const PyTensor& rotation, const PyTensor& translation, int width, int height, float fov, float shift_x, float near_distance, float far_distance) -> std::optional<PyTensor> {
+            const auto r = tensorToVisualizerRotation(rotation);
+            const auto t = tensorToVisualizerTranslation(translation);
+            if (!r || !t)
+                return std::nullopt;
+            auto* viewer = get_visualizer();
+            auto invoke = [&]() -> std::optional<core::Tensor> {
+                auto* rm = viewer ? viewer->getRenderingManager() : nullptr;
+                if (!rm)
+                    return std::nullopt;
+                auto image = rm->renderLightFieldViewRgb8(viewer->getSceneManager(), *r, *t,
+                    width, height, fov, shift_x, near_distance, far_distance);
+                return image ? std::optional<core::Tensor>(*image) : std::nullopt;
+            };
+            std::optional<core::Tensor> image;
+            if (viewer && !viewer->isOnViewerThread()) {
+                if (!viewer->acceptsPostedWork())
+                    return std::nullopt;
+                nb::gil_scoped_release release;
+                image = vis::post_work_and_wait(
+                    [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+                    invoke, []() -> std::optional<core::Tensor> { return std::nullopt; });
+            } else {
+                image = invoke();
+            }
+            return image ? std::optional<PyTensor>(PyTensor(std::move(*image), true)) : std::nullopt; }, nb::arg("rotation"), nb::arg("translation"), nb::arg("width"), nb::arg("height"), nb::arg("fov") = DEFAULT_FOV, nb::arg("shift_x") = 0.0f, nb::arg("near_distance") = 0.0f, nb::arg("far_distance") = 100000.0f,
+              R"doc(
+Render a parallel off-axis perspective view for light-field quilts.
+
+rotation is a [3, 3] camera-to-world rotation and translation is a [3] world
+position, using the visualizer camera convention. fov is vertical degrees
+(default: 60).
+shift_x offsets the principal point horizontally in pixels; positive values
+move the principal point right. near_distance and far_distance clip Gaussian
+centers by camera-space forward distance, not the tails of individual splats.
+
+Selection highlights are hidden. Projection, clipping, splat scale and editor
+visualization overrides are local to this render; the viewport settings and
+model are not changed. Other current render settings, such as background and
+appearance, are retained. Rendering is dispatched to the viewer thread when
+necessary.
+
+Returns a CPU uint8 Tensor [H, W, 3] RGB image, or None when there is no renderable
+scene, arguments are invalid, or rendering fails. Width and height must be
+1-2048, fov must be 1-120, shift_x must be finite, and clipping distances must
+be finite with 0 <= near_distance < far_distance.
+)doc");
+
         m.def("compute_screen_positions", &compute_screen_positions, nb::arg("rotation"), nb::arg("translation"),
               nb::arg("width"), nb::arg("height"), nb::arg("fov") = DEFAULT_FOV,
               R"doc(

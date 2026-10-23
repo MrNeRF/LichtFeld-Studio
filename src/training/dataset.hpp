@@ -6,6 +6,7 @@
 
 #include "core/alloc_counter.hpp"
 #include "core/camera.hpp"
+#include "core/image_sharpen.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
@@ -230,6 +231,7 @@ namespace lfs::training {
         int resize_factor = 1;
         int max_width = 0;
         int test_every = 8;
+        lfs::core::SharpenParams sharpen;
     };
 
     /// Camera dataset - loads images from cameras
@@ -370,6 +372,7 @@ namespace lfs::training {
 
         int get_resize_factor() const { return config_.resize_factor; }
         int get_max_width() const { return config_.max_width; }
+        const lfs::core::SharpenParams& get_sharpen() const { return config_.sharpen; }
 
         /// Returns fraction of non-JPEG images (0.0 = all JPEG, 1.0 = none)
         [[nodiscard]] float get_non_jpeg_ratio() const { return non_jpeg_ratio(cameras_); }
@@ -544,6 +547,7 @@ namespace lfs::training {
             request.params.resize_factor = dataset_->get_resize_factor();
             request.params.max_width = dataset_->get_max_width();
             request.params.output_uint8 = !config_.use_16bit_color;
+            request.params.sharpen = dataset_->get_sharpen();
             if (!cam->image_size_loaded() ||
                 (dataset_->get_max_width() > 0 &&
                  (cam->image_height() > dataset_->get_max_width() ||

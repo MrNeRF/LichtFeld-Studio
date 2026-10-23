@@ -2832,7 +2832,8 @@ namespace lfs::vis {
             ~Shutdown() { panel.shutdown(); }
         } shutdown{right_panel};
         gui::RightPanelLayout layout;
-        layout.size = {150.0f, 100.0f};
+        // The four tabs overflow the strip, but each one fits inside it.
+        layout.size = {150.0f, 160.0f};
         std::vector<gui::TabSnapshot> tabs;
         for (const char* id : {"first", "second", "third", "fourth"})
             tabs.push_back({.id = id, .label = id, .dom_id = std::string("rp-tab-") + id});
@@ -2845,6 +2846,7 @@ namespace lfs::vis {
             auto* const tab = document->GetElementById(std::string("rp-tab-") + active);
             ASSERT_NE(tab, nullptr);
             EXPECT_GT(strip->GetScrollHeight(), strip->GetClientHeight());
+            ASSERT_LE(tab->GetOffsetHeight(), strip->GetClientHeight());
             const float top = tab->GetAbsoluteTop() - strip->GetAbsoluteTop();
             EXPECT_GE(top, -0.5f);
             EXPECT_LE(top + tab->GetOffsetHeight(), strip->GetClientHeight() + 0.5f);

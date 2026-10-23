@@ -186,6 +186,25 @@ namespace lfs::vis::op {
             operation_.setPickedPointsForTesting(pts);
         }
 
+        OperatorResult send(const ModalEvent& event) {
+            context_->setModalEvent(event);
+            OperatorProperties properties;
+            return operation_.modal(*context_, properties);
+        }
+
+        OperatorResult key(const int key) {
+            return send({.type = ModalEvent::Type::KEY, .data = KeyEvent{key, 0, input::ACTION_PRESS, 0}});
+        }
+
+        OperatorResult bound(const input::Action bound_action) {
+            return send({.type = ModalEvent::Type::ACTION, .data = ActionEvent{.action = bound_action}});
+        }
+
+        void selectPoint(const int index) {
+            operation_.selected_point_ = index;
+            operation_.syncPickedPointsToServices();
+        }
+
         std::unique_ptr<SceneManager> manager_;
         std::unique_ptr<OperatorContext> context_;
         ScaleDistancePickPointOperator operation_;
@@ -254,6 +273,27 @@ namespace lfs::vis::op {
 
         manager_->clearSelection();
         EXPECT_FALSE(operation_.poll(*context_));
+    }
+
+    TEST_F(ScaleDistanceOperatorTest, ModalActionRoutingAndPointRemoval) {
+        setPickedPoints({{0.0f, 0.0f, 0.0f}, {3.0f, 4.0f, 0.0f}});
+        EXPECT_EQ(services().getScaleDistancePickedPoints().size(), 2u);
+
+        // Fixed keys are now passed through because keys arrive as key map actions.
+        for (const int fixed_key : {input::KEY_BACKSPACE, input::KEY_DELETE, input::KEY_ESCAPE}) {
+            EXPECT_EQ(key(fixed_key), OperatorResult::PASS_THROUGH) << fixed_key;
+        }
+        EXPECT_EQ(services().getScaleDistancePickedPoints().size(), 2u);
+
+        selectPoint(0);
+        EXPECT_EQ(bound(input::Action::DELETE_SELECTED), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(services().getScaleDistancePickedPoints().size(), 1u);
+
+        EXPECT_EQ(bound(input::Action::REMOVE_LAST_POINT), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(services().getScaleDistancePickedPoints().size(), 0u);
+
+        EXPECT_EQ(bound(input::Action::UNDO), OperatorResult::PASS_THROUGH);
+        EXPECT_EQ(bound(input::Action::CANCEL_POLYGON), OperatorResult::CANCELLED);
     }
 
     TEST(BuiltinOpTest, RoundTripToStringAndFromString) {

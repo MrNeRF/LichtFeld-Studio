@@ -1542,6 +1542,29 @@ def render_view_u8(rotation: Tensor, translation: Tensor, width: int, height: in
         CPU uint8 Tensor [H, W, 3] RGB image, or None if no active visualizer scene is available
     """
 
+def render_lightfield_view_u8(rotation: Tensor, translation: Tensor, width: int, height: int, fov: float = 60.0, shift_x: float = 0.0, near_distance: float = 0.0, far_distance: float = 100000.0) -> Tensor | None:
+    """
+    Render a parallel off-axis perspective view for light-field quilts.
+
+    rotation is a [3, 3] camera-to-world rotation and translation is a [3] world
+    position, using the visualizer camera convention. fov is vertical degrees
+    (default: 60).
+    shift_x offsets the principal point horizontally in pixels; positive values
+    move the principal point right. near_distance and far_distance clip Gaussian
+    centers by camera-space forward distance, not the tails of individual splats.
+
+    Selection highlights are hidden. Projection, clipping, splat scale and editor
+    visualization overrides are local to this render; the viewport settings and
+    model are not changed. Other current render settings, such as background and
+    appearance, are retained. Rendering is dispatched to the viewer thread when
+    necessary.
+
+    Returns a CPU uint8 Tensor [H, W, 3] RGB image, or None when there is no renderable
+    scene, arguments are invalid, or rendering fails. Width and height must be
+    1-2048, fov must be 1-120, shift_x must be finite, and clipping distances must
+    be finite with 0 <= near_distance < far_distance.
+    """
+
 def compute_screen_positions(rotation: Tensor, translation: Tensor, width: int, height: int, fov: float = 60.0) -> Tensor | None:
     """
     Compute screen positions of all Gaussians for a given camera view.
@@ -2186,6 +2209,22 @@ class OptimizationParams:
     def lambda_dssim(self, arg: float, /) -> None: ...
 
     @property
+    def color_variance_weight(self) -> float:
+        """
+        Reduces noise in stochastic rendering by aligning visible splat colors; 0 disables
+        """
+
+    @color_variance_weight.setter
+    def color_variance_weight(self, arg: float, /) -> None: ...
+
+    @property
+    def color_variance_warmup_iters(self) -> int:
+        """Completed training iterations before color variance starts"""
+
+    @color_variance_warmup_iters.setter
+    def color_variance_warmup_iters(self, arg: int, /) -> None: ...
+
+    @property
     def sh_degree(self) -> int:
         """Spherical harmonics degree (0-3)"""
 
@@ -2784,6 +2823,34 @@ class DatasetParams:
 
     @use_16bit_color.setter
     def use_16bit_color(self, arg: bool, /) -> None: ...
+
+    @property
+    def sharpen_kernel(self) -> str:
+        """Training image sharpening filter: 'usm', 'laplacian4' or 'laplacian8'"""
+
+    @sharpen_kernel.setter
+    def sharpen_kernel(self, arg: str, /) -> None: ...
+
+    @property
+    def sharpen_amount(self) -> float:
+        """Strength of training image sharpening, 0 to 5; 0 turns it off"""
+
+    @sharpen_amount.setter
+    def sharpen_amount(self, arg: float, /) -> None: ...
+
+    @property
+    def sharpen_radius(self) -> float:
+        """Blur sigma of the usm kernel in pixels of the resized image, 0.3 to 10"""
+
+    @sharpen_radius.setter
+    def sharpen_radius(self, arg: float, /) -> None: ...
+
+    @property
+    def sharpen_threshold(self) -> float:
+        """Luma differences below this value (0 to 1) stay unsharpened"""
+
+    @sharpen_threshold.setter
+    def sharpen_threshold(self, arg: float, /) -> None: ...
 
     @property
     def centralize_dataset(self) -> str:

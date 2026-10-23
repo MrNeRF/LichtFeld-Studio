@@ -291,24 +291,30 @@ namespace lfs::vis {
 
                 static constexpr std::array<const char*, 4> NAMES{
                     "SplatData.means", "SplatData.rotation", "SplatData.shN", "SplatData.shN_value_bounds"};
-                for (const auto& state : states_) {
-                    auto& node = *scene_.getNodeByUuid(state.uuid);
-                    auto& model = *node.model;
-                    const auto targets = fields(model);
-                    for (size_t i = 0; i < targets.size(); ++i) {
-                        auto& target = *targets[i];
-                        const auto& saved = state.fields[i];
-                        if (!saved.is_valid()) {
-                            target = {};
-                            continue;
+                try {
+                    for (const auto& state : states_) {
+                        auto& node = *scene_.getNodeByUuid(state.uuid);
+                        auto& model = *node.model;
+                        const auto targets = fields(model);
+                        for (size_t i = 0; i < targets.size(); ++i) {
+                            auto& target = *targets[i];
+                            const auto& saved = state.fields[i];
+                            if (!saved.is_valid()) {
+                                target = {};
+                                continue;
+                            }
+                            if (!target.is_valid() || target.shape() != saved.shape() || target.dtype() != saved.dtype()) {
+                                target = model.allocate_named_param(saved.shape(), state.capacities[i], saved.dtype(), NAMES[i]);
+                            }
+                            target.copy_from(saved);
                         }
-                        if (!target.is_valid() || target.shape() != saved.shape() || target.dtype() != saved.dtype()) {
-                            target = model.allocate_named_param(saved.shape(), state.capacities[i], saved.dtype(), NAMES[i]);
-                        }
-                        target.copy_from(saved);
+                        node.payload_diverged = state.payload_diverged;
+                        node.point_cloud_source = state.point_cloud_source;
                     }
-                    node.payload_diverged = state.payload_diverged;
-                    node.point_cloud_source = state.point_cloud_source;
+                } catch (...) {
+                    // Nodes restored before the failure hold changed Gaussians.
+                    scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+                    throw;
                 }
                 states_ = std::move(current);
                 scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
@@ -637,6 +643,7 @@ namespace lfs::vis {
         LOG_DEBUG("SceneManager initialized");
     }
     SceneManager::~SceneManager() {
+        event_handlers_ = lfs::event::ScopedHandler{};
         if (python::get_application_scene() == &scene_)
             python::set_application_scene(nullptr);
         if (consolidated_compaction_thread_.joinable()) {
@@ -649,31 +656,31 @@ namespace lfs::vis {
     void SceneManager::setupEventHandlers() {
 
         // Handle PLY commands
-        cmd::AddPLY::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::AddPLY>([this](const auto& cmd) {
             addSplatFile(cmd.path, cmd.name);
         });
 
-        cmd::RemovePLY::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::RemovePLY>([this](const auto& cmd) {
             removePLY(cmd.name, cmd.keep_children);
         });
 
-        cmd::SetPLYVisibility::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::SetPLYVisibility>([this](const auto& cmd) {
             setPLYVisibility(cmd.name, cmd.visible);
         });
 
-        cmd::RemoveNodeById::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::RemoveNodeById>([this](const auto& cmd) {
             removeNode(static_cast<core::NodeId>(cmd.node_id), cmd.keep_children);
         });
 
-        cmd::RenameNodeById::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::RenameNodeById>([this](const auto& cmd) {
             renameNode(static_cast<core::NodeId>(cmd.node_id), cmd.new_name);
         });
 
-        cmd::SetNodeVisibilityById::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::SetNodeVisibilityById>([this](const auto& cmd) {
             setNodeVisibility(static_cast<core::NodeId>(cmd.node_id), cmd.visible);
         });
 
-        cmd::SetNodeLocked::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::SetNodeLocked>([this](const auto& cmd) {
             const auto* node = scene_.getNode(cmd.name);
             if (!node || static_cast<bool>(node->locked) == cmd.locked) {
                 return;
@@ -687,16 +694,16 @@ namespace lfs::vis {
                 op::SceneGraphMetadataEntry::captureNodes(*this, {cmd.name}));
         });
 
-        cmd::ImportColmapCameras::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::ImportColmapCameras>([this](const auto& cmd) {
             loadColmapCamerasOnly(cmd.sparse_path);
         });
 
-        cmd::PrepareTrainingFromScene::when([this](const auto&) {
+        event_handlers_.subscribe<cmd::PrepareTrainingFromScene>([this](const auto&) {
             prepareTrainingFromScene();
         });
 
         // Handle PLY cycling with proper event emission for UI updates
-        cmd::CyclePLY::when([this](const auto&) {
+        event_handlers_.subscribe<cmd::CyclePLY>([this](const auto&) {
             // Check if rendering manager has split view enabled (in PLY comparison mode)
             if (services().renderingOrNull()) {
                 auto settings = services().renderingOrNull()->getSettings();
@@ -722,58 +729,58 @@ namespace lfs::vis {
             }
         });
 
-        cmd::CropPLY::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::CropPLY>([this](const auto& cmd) {
             handleCropActivePly(cmd.crop_box, cmd.inverse, cmd.target_node_id);
         });
 
-        cmd::CropPLYEllipsoid::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::CropPLYEllipsoid>([this](const auto& cmd) {
             handleCropByEllipsoid(cmd.world_transform, cmd.radii, cmd.inverse, cmd.target_node_id);
         });
 
-        cmd::FitCropBoxToScene::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::FitCropBoxToScene>([this](const auto& cmd) {
             updateCropBoxToFitScene(cmd.use_percentile);
         });
 
-        cmd::FitEllipsoidToScene::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::FitEllipsoidToScene>([this](const auto& cmd) {
             updateEllipsoidToFitScene(cmd.use_percentile);
         });
 
-        cmd::AddCropBox::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::AddCropBox>([this](const auto& cmd) {
             handleAddCropBox(cmd.node_name);
         });
 
-        cmd::AddCropEllipsoid::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::AddCropEllipsoid>([this](const auto& cmd) {
             handleAddCropEllipsoid(cmd.node_name);
         });
 
-        cmd::ResetCropBox::when([this](const auto&) {
+        event_handlers_.subscribe<cmd::ResetCropBox>([this](const auto&) {
             handleResetCropBox();
         });
 
-        cmd::ResetEllipsoid::when([this](const auto&) {
+        event_handlers_.subscribe<cmd::ResetEllipsoid>([this](const auto&) {
             handleResetEllipsoid();
         });
 
-        cmd::RenamePLY::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::RenamePLY>([this](const auto& cmd) {
             handleRenamePly(cmd);
         });
 
-        cmd::ReparentNode::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::ReparentNode>([this](const auto& cmd) {
             reparentNode(cmd.node_name, cmd.new_parent_name);
         });
 
-        cmd::ReparentNodeById::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::ReparentNodeById>([this](const auto& cmd) {
             reparentNode(static_cast<core::NodeId>(cmd.node_id),
                          static_cast<core::NodeId>(cmd.new_parent_id));
         });
 
-        cmd::MoveNodeById::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::MoveNodeById>([this](const auto& cmd) {
             moveNode(static_cast<core::NodeId>(cmd.node_id),
                      static_cast<core::NodeId>(cmd.new_parent_id),
                      cmd.index);
         });
 
-        cmd::MoveNodesById::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::MoveNodesById>([this](const auto& cmd) {
             std::vector<core::NodeId> ids;
             ids.reserve(cmd.node_ids.size());
             for (const int32_t id : cmd.node_ids)
@@ -781,7 +788,7 @@ namespace lfs::vis {
             moveNodes(ids, static_cast<core::NodeId>(cmd.new_parent_id), cmd.index);
         });
 
-        cmd::GroupNodesById::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::GroupNodesById>([this](const auto& cmd) {
             std::vector<core::NodeId> ids;
             ids.reserve(cmd.node_ids.size());
             for (const int32_t id : cmd.node_ids)
@@ -789,36 +796,36 @@ namespace lfs::vis {
             groupNodes(ids);
         });
 
-        cmd::UngroupNodeById::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::UngroupNodeById>([this](const auto& cmd) {
             ungroupNode(static_cast<core::NodeId>(cmd.node_id));
         });
 
-        cmd::AddGroup::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::AddGroup>([this](const auto& cmd) {
             addGroupNode(cmd.name, cmd.parent_name);
         });
 
-        cmd::AddGroupByParentId::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::AddGroupByParentId>([this](const auto& cmd) {
             addGroupNode(cmd.name, static_cast<core::NodeId>(cmd.parent_id));
         });
 
-        cmd::DuplicateNode::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::DuplicateNode>([this](const auto& cmd) {
             duplicateNodeTree(cmd.name);
         });
 
-        cmd::DuplicateNodeById::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::DuplicateNodeById>([this](const auto& cmd) {
             duplicateNodeTree(static_cast<core::NodeId>(cmd.node_id));
         });
 
-        cmd::MergeGroup::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::MergeGroup>([this](const auto& cmd) {
             mergeGroupNode(cmd.name);
         });
 
-        cmd::MergeGroupById::when([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::MergeGroupById>([this](const auto& cmd) {
             mergeGroupNode(static_cast<core::NodeId>(cmd.node_id));
         });
 
         // Handle node selection from scene panel (both PLYs and Groups)
-        ui::NodeSelected::when([this](const auto& event) {
+        event_handlers_.subscribe<ui::NodeSelected>([this](const auto& event) {
             const bool camera_navigation_selection = event.type == "Camera";
             if (!camera_navigation_selection &&
                 services().trainerOrNull() &&
@@ -840,7 +847,7 @@ namespace lfs::vis {
         });
 
         // Handle node deselection (but not during training)
-        ui::NodeDeselected::when([this](const auto&) {
+        event_handlers_.subscribe<ui::NodeDeselected>([this](const auto&) {
             if (services().trainerOrNull() && services().trainerOrNull()->isRunning()) {
                 return;
             }
@@ -848,21 +855,21 @@ namespace lfs::vis {
         });
 
         // Gaussian-level selection operations
-        cmd::DeleteSelected::when([this](const auto&) { deleteSelectedGaussians(); });
-        cmd::InvertSelection::when([this](const auto&) { invertSelection(); });
-        cmd::DeselectAll::when([this](const auto&) { deselectAllGaussians(); });
-        cmd::SelectAll::when([this](const auto&) { selectAllGaussians(); });
-        cmd::CopySelection::when([this](const auto&) { copySelectionToClipboard(); });
-        cmd::CutSelection::when([this](const auto&) { cutSelectedGaussians(); });
-        cmd::PasteSelection::when([this](const auto&) { pasteSelectionFromClipboard(); });
-        cmd::SelectBrush::when([this](const auto& e) { (void)selectBrush(e.x, e.y, e.radius, e.mode, e.camera_index); });
-        cmd::SelectRect::when([this](const auto& e) { (void)selectRect(e.x0, e.y0, e.x1, e.y1, e.mode, e.camera_index); });
-        cmd::SelectPolygon::when([this](const auto& e) { (void)selectPolygon(e.points, e.mode, e.camera_index); });
-        cmd::SelectLasso::when([this](const auto& e) { (void)selectLasso(e.points, e.mode, e.camera_index); });
-        cmd::SelectRing::when([this](const auto& e) { (void)selectRing(e.x, e.y, e.mode, e.camera_index); });
-        cmd::ApplySelectionMask::when([this](const auto& e) { (void)applySelectionMask(e.mask); });
+        event_handlers_.subscribe<cmd::DeleteSelected>([this](const auto&) { deleteSelectedGaussians(); });
+        event_handlers_.subscribe<cmd::InvertSelection>([this](const auto&) { invertSelection(); });
+        event_handlers_.subscribe<cmd::DeselectAll>([this](const auto&) { deselectAllGaussians(); });
+        event_handlers_.subscribe<cmd::SelectAll>([this](const auto&) { selectAllGaussians(); });
+        event_handlers_.subscribe<cmd::CopySelection>([this](const auto&) { copySelectionToClipboard(); });
+        event_handlers_.subscribe<cmd::CutSelection>([this](const auto&) { cutSelectedGaussians(); });
+        event_handlers_.subscribe<cmd::PasteSelection>([this](const auto&) { pasteSelectionFromClipboard(); });
+        event_handlers_.subscribe<cmd::SelectBrush>([this](const auto& e) { (void)selectBrush(e.x, e.y, e.radius, e.mode, e.camera_index); });
+        event_handlers_.subscribe<cmd::SelectRect>([this](const auto& e) { (void)selectRect(e.x0, e.y0, e.x1, e.y1, e.mode, e.camera_index); });
+        event_handlers_.subscribe<cmd::SelectPolygon>([this](const auto& e) { (void)selectPolygon(e.points, e.mode, e.camera_index); });
+        event_handlers_.subscribe<cmd::SelectLasso>([this](const auto& e) { (void)selectLasso(e.points, e.mode, e.camera_index); });
+        event_handlers_.subscribe<cmd::SelectRing>([this](const auto& e) { (void)selectRing(e.x, e.y, e.mode, e.camera_index); });
+        event_handlers_.subscribe<cmd::ApplySelectionMask>([this](const auto& e) { (void)applySelectionMask(e.mask); });
 
-        state::SelectionChanged::when([](const auto& event) {
+        event_handlers_.subscribe<state::SelectionChanged>([](const auto& event) {
             python::update_selection(event.has_selection, event.count);
         });
     }
@@ -6278,14 +6285,17 @@ namespace lfs::vis {
                 }
             }
         } catch (const std::exception& error) {
+            // A failed rollback leaves some Gaussians deleted.
             try {
                 rollback_partial_deletions();
             } catch (const std::exception& rollback_error) {
+                scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
                 return std::unexpected(std::format(
                     "Failed to soft-delete selected Gaussians: {}; rollback failed: {}",
                     error.what(),
                     rollback_error.what()));
             } catch (...) {
+                scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
                 return std::unexpected(std::format(
                     "Failed to soft-delete selected Gaussians: {}; rollback failed with unknown exception",
                     error.what()));
@@ -6295,6 +6305,7 @@ namespace lfs::vis {
             try {
                 rollback_partial_deletions();
             } catch (...) {
+                scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
                 return std::unexpected(
                     "Failed to soft-delete selected Gaussians: unknown exception; rollback failed");
             }

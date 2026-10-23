@@ -550,3 +550,71 @@ body.fit-8 #mcp-summary { display: none; }
 body.fit-8 #mcp-compact { display: block; }
 body.fit-8 #mcp-chip { margin-right: 4dp; padding: 0 3dp; }
 body.fit-8 #fps-group { margin-left: 6dp; }
+
+/* Tessle eats leaf snacks along the training track. */
+#progress-container.tessle {
+    background-color: #1d1f22;
+    border-radius: 2dp;
+    decorator: none;
+    border-bottom: 1dp #45494d;
+    box-sizing: border-box;
+}
+
+#progress-container.tessle #progress-fill {
+    visibility: hidden;
+}
+
+.tessle-leaf {
+    position: absolute;
+    top: 5dp;
+    width: 3dp;
+    height: 2dp;
+    pointer-events: none;
+}
+
+#tessle-figure {
+    position: absolute;
+    top: 0;
+    width: 14dp;
+    height: 14dp;
+    pointer-events: none;
+    z-index: 2;
+}
+
+#progress-text.progress-text--tessle {
+    width: auto;
+    padding: 0 3dp;
+    line-height: 14dp;
+    color: #e4e6e9;
+    background-color: #1d1f22;
+    text-align: left;
+}
+
+/* Checkpoints are collectible fruit beneath the character and percentage. */
+#progress-container.tessle #progress-markers {
+    z-index: 0;
+}
+
+#progress-container.tessle .progress-marker {
+    top: 0;
+    bottom: auto;
+    width: 14dp;
+    height: 14dp;
+    margin-left: -7dp;
+    border-radius: 0;
+    background-color: transparent;
+}
+
+#progress-container.tessle .progress-marker.is-past {
+    opacity: 0;
+}
+
+#progress-container.tessle .progress-marker.is-hovered,
+#progress-container.tessle .progress-marker.is-preview {
+    top: -1dp;
+    width: 16dp;
+    height: 16dp;
+    margin-left: -8dp;
+    opacity: 1;
+    background-color: transparent;
+}

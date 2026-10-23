@@ -83,6 +83,8 @@ namespace lfs::training {
     /// Write `--export` formats next to project.licht after a terminal project
     /// save. No-op when `params.export_formats` is empty. Frozen --add-splat rows
     /// are left out when --exclude-export was given or restored from the checkpoint.
+    /// With --crop, the files hold only the splats inside the training crop box,
+    /// also after a stop, which leaves the model whole.
     [[nodiscard]] lfs::Status export_final_splats(
         const Trainer& trainer,
         const lfs::core::param::TrainingParameters& params);
@@ -154,6 +156,12 @@ namespace lfs::training {
         const lfs::core::param::TrainingParameters& params,
         lfs::core::Scene& scene,
         lfs::core::SplatTensorAllocator tensor_allocator = {});
+
+    /// Give the training model the enabled --cropbox crop box, turned by --cropbox-rotation about its centre.
+    /// Does nothing without --cropbox.
+    [[nodiscard]] lfs::Status applyTrainingCropBox(
+        const lfs::core::param::TrainingParameters& params,
+        lfs::core::Scene& scene);
 
     /// Build the training splat without mutating the scene graph. A nullopt
     /// result means an existing training model was updated in place. A populated

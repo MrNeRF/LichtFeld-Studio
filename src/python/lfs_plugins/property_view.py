@@ -356,6 +356,8 @@ REGISTRY_PLACEMENT = {
         "cropbox_lr_scale",
     ),
     "losses_registry": (
+        "color_variance_weight",
+        "color_variance_warmup_iters",
         "scale_reg_decay_power",
         "erank_reg",
         "dc_reg",

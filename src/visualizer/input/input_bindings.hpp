@@ -158,6 +158,8 @@ namespace lfs::vis::input {
         CAMERA_RESTORE_HOME,
         NEXT_SIDEBAR_CATEGORY,
         PREVIOUS_SIDEBAR_CATEGORY,
+        REMOVE_LAST_POINT,
+        APPLY_ALIGNMENT,
         TOOL_SCALE_DISTANCE,
     };
 
@@ -239,6 +241,7 @@ namespace lfs::vis::input {
         SelectionGlobal,
         Depth,
         CropBox,
+        Align,
         Editing,
         ViewGlobal,
         Tools,
