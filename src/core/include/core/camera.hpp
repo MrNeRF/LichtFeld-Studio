@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <future>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -26,6 +27,17 @@ namespace lfs::core {
     enum class CameraSplit : uint8_t {
         Train,
         Eval
+    };
+
+    // Linear rolling-shutter motion about the reference pose, which is the camera at the
+    // middle of the readout. For a source coordinate c along the readout axis of N pixels
+    // (pixel centres at 0.5), s = c / N - 0.5 and the world-to-camera transform is
+    //   (I + s [rotation]x) (R X + t - s displacement).
+    // Both vectors span the whole readout and are expressed in the reference camera.
+    struct RollingShutterMotion {
+        bool readout_rows = true; // false: the readout runs along columns
+        std::array<float, 3> rotation{};
+        std::array<float, 3> displacement{};
     };
 
     class LFS_CORE_API Camera {
@@ -276,6 +288,11 @@ namespace lfs::core {
         bool has_distortion() const noexcept;
         const UndistortParams& undistort_params() const noexcept { return _undistort_params; }
 
+        const std::optional<RollingShutterMotion>& rolling_shutter() const noexcept { return _rolling_shutter; }
+        void set_rolling_shutter(std::optional<RollingShutterMotion> motion) noexcept {
+            _rolling_shutter = motion;
+        }
+
     private:
         // IDs
         float _FoVx = 0.f;
@@ -350,6 +367,8 @@ namespace lfs::core {
         bool _undistort_prepared = false;
         UndistortDestination _undistort_destination = UndistortDestination::Calibration;
         UndistortParams _undistort_params{};
+
+        std::optional<RollingShutterMotion> _rolling_shutter;
 
         // CUDA stream for async operations
         cudaStream_t _stream = nullptr;

@@ -241,7 +241,8 @@ namespace gsplat_lfs {
         const float* tangential_coeffs,
         const float* thin_prism_coeffs,
         RasterizeWithSHResult& result,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        const float* reference_viewmats) {
         gsplat_lfs::debug_validate_cuda_pointer(means, "means");
         gsplat_lfs::debug_validate_cuda_pointer(quats, "quats");
         gsplat_lfs::debug_validate_cuda_pointer(scales, "scales");
@@ -264,6 +265,7 @@ namespace gsplat_lfs {
 
         // Use scales directly (scaling_modifier should be applied by caller if needed)
         const float* scaled_scales = scales;
+        const float* const reference = reference_viewmats ? reference_viewmats : viewmats0;
 
         // Step 1: Projection
         projection_ut_3dgs_fused(
@@ -288,7 +290,7 @@ namespace gsplat_lfs {
         // Step 3: Compute viewing directions and evaluate SH
         if (render_mode == 0 || render_mode >= 3) {
             if (sh_degree > 0) {
-                compute_view_dirs(means, viewmats0, C, N, result.dirs, stream);
+                compute_view_dirs(means, reference, C, N, result.dirs, stream);
             }
             spherical_harmonics_swizzled_fwd(
                 sh_degree, sh_layout_degree, sh_degree > 0 ? result.dirs : nullptr,
@@ -296,7 +298,7 @@ namespace gsplat_lfs {
                 result.colors, channels, stream);
         }
         if (channels != 3) {
-            geometry_features_fwd(means, quats, scales, viewmats0, result.colors,
+            geometry_features_fwd(means, quats, scales, reference, result.colors,
                                   N, C, channels, camera_model, stream);
         }
 
@@ -410,7 +412,8 @@ namespace gsplat_lfs {
         const float* edge_weight_map,
         float* edge_score_out,
         cudaStream_t stream,
-        const std::vector<TileBatch>& batches, int32_t* tiles_per_gauss) {
+        const std::vector<TileBatch>& batches, int32_t* tiles_per_gauss,
+        const float* reference_viewmats) {
         // Determine output channels
         uint32_t channels = 3;
         if (render_mode == 1 || render_mode == 2) {
@@ -423,6 +426,7 @@ namespace gsplat_lfs {
 
         const float* render_backgrounds = (render_mode == 1 || render_mode == 2) ? nullptr : backgrounds;
         const float* render_bg_images = (render_mode == 1 || render_mode == 2) ? nullptr : bg_images;
+        const float* const reference = reference_viewmats ? reference_viewmats : viewmats0;
 
         const size_t color_values = checked_multiply(
             checked_multiply(static_cast<size_t>(C), static_cast<size_t>(N),
@@ -473,7 +477,7 @@ namespace gsplat_lfs {
         }
 
         if (channels != 3) {
-            geometry_features_bwd(means, quats, scales, viewmats0, v_colors, v_means, v_quats,
+            geometry_features_bwd(means, quats, scales, reference, v_colors, v_means, v_quats,
                                   N, C, channels, camera_model, stream);
         }
 
