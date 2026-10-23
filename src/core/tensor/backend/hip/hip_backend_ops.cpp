@@ -32,6 +32,7 @@
 #include "../../internal/tensor_impl.hpp"
 #include <core/splat_transform_math.hpp>
 #include <core/failure_report.hpp>
+#include <core/memory_pressure.hpp>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -169,19 +170,34 @@ namespace lfs::core::internal {
                         "HIP hardware inventory ABI mismatch");
             }
         };
+        std::shared_ptr<const InventoryModule> inventory_module(const std::filesystem::path& path) {
+            // Inventory is also read by UI/background samplers. Keep one native
+            // module registration rather than concurrently registering and
+            // unloading its device images on every name/budget query. No Tensor
+            // context is created or retained by this discovery-only cache.
+            static std::mutex mutex;
+            static std::unordered_map<std::filesystem::path,std::shared_ptr<const InventoryModule>> modules;
+            std::lock_guard lock(mutex);
+            const auto key=path.lexically_normal();
+            if(const auto found=modules.find(key);found!=modules.end())return found->second;
+            auto module=std::make_shared<InventoryModule>(path);
+            module->validate();
+            modules.emplace(key,module);
+            return module;
+        }
     }
     int hip_device_count(const std::filesystem::path& path) {
-        InventoryModule module(path); module.validate();
+        const auto module=inventory_module(path);
         int32_t count = 0; LfsHipError error{};
-        check(module.symbol<decltype(&lfs_hip_device_count)>("lfs_hip_device_count")(&count, &error), error);
+        check(module->symbol<decltype(&lfs_hip_device_count)>("lfs_hip_device_count")(&count, &error), error);
         require(count >= 0, "HIP hardware inventory returned a negative device count");
         return count;
     }
     LfsHipDevice hip_device_info(const std::filesystem::path& path, int ordinal) {
         require(ordinal >= 0, "HIP device ordinal must be nonnegative");
-        InventoryModule module(path); module.validate();
+        const auto module=inventory_module(path);
         LfsHipDevice result{}; LfsHipError error{};
-        check(module.symbol<decltype(&lfs_hip_device_info)>("lfs_hip_device_info")(ordinal, &result, &error), error);
+        check(module->symbol<decltype(&lfs_hip_device_info)>("lfs_hip_device_info")(ordinal, &result, &error), error);
         result.name[sizeof(result.name)-1] = 0;
         result.architecture[sizeof(result.architecture)-1] = 0;
         result.pci_bus_id[sizeof(result.pci_bus_id)-1] = 0;
@@ -189,9 +205,9 @@ namespace lfs::core::internal {
     }
     LfsHipDeviceIdentity hip_device_identity(const std::filesystem::path& path,int ordinal) {
         require(ordinal>=0,"HIP device ordinal must be nonnegative");
-        InventoryModule module(path);module.validate();
+        const auto module=inventory_module(path);
         LfsHipDeviceIdentity result{};result.struct_bytes=sizeof(result);LfsHipError error{};
-        check(module.symbol<decltype(&lfs_hip_device_identity)>("lfs_hip_device_identity")(ordinal,&result,&error),error);
+        check(module->symbol<decltype(&lfs_hip_device_identity)>("lfs_hip_device_identity")(ordinal,&result,&error),error);
         result.compiled_architecture[sizeof(result.compiled_architecture)-1]=0;
         require(result.struct_bytes==sizeof(result),"HIP device identity size mismatch");
         return result;
@@ -898,6 +914,13 @@ namespace lfs::core::internal {
     StorageRef HipBackendOps::allocate(size_t bytes, size_t alignment, ExecContext execution) {
         queue(execution);
         require(bytes > 0 && alignment && alignment <= 256 && (alignment & (alignment - 1)) == 0, "Invalid HIP allocation size/alignment");
+        const auto allocation_failure=[&] {
+            return AllocationFailure{.domain=MemoryDomain::HipDevice,.requested_bytes=bytes,
+                .alignment=alignment,.device=impl_->ordinal,.label=execution.allocation_label,
+                .operation=execution.allocation_operation,.native_error=2};
+        };
+        if(MemoryPressureCoordinator::instance().probe_should_fail(MemoryDomain::HipDevice,bytes))
+            throw MemoryAllocationError(allocation_failure());
         std::lock_guard lock(impl_->mutex);
         require(impl_->context, "HIP Tensor context is closed");
         Impl::Allocation allocation{};
@@ -918,6 +941,8 @@ namespace lfs::core::internal {
                 impl_->trim_cache();
                 status = impl_->lfs_hip_buffer_allocate(impl_->context, bytes, &allocation.handle, &error);
             }
+            if(status && error.native_code==2)
+                throw MemoryAllocationError(allocation_failure());
             check(status, error);
             allocation.bytes = bytes;
             allocation.cacheable = cacheable;

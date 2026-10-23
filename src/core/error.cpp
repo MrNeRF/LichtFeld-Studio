@@ -505,6 +505,7 @@ namespace lfs::core {
             case MemoryDomain::VulkanDevice:
                 return ErrorDomain::Vulkan;
             case MemoryDomain::MetalDevice:
+            case MemoryDomain::HipDevice:
                 return ErrorDomain::Tensor;
             case MemoryDomain::PinnedHost:
             case MemoryDomain::PageableHost:

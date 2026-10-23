@@ -5,6 +5,7 @@
 #include "../../internal/tensor_impl.hpp"
 #include <core/tensor.hpp>
 #include <core/tensor_execution.hpp>
+#include <core/memory_pressure.hpp>
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
@@ -40,7 +41,8 @@ int hip_tensor_scratch_allocate(void*, int device, uint64_t producer_queue, uint
         *address=native;
         *owner=storage.release();
         return 0;
-    } catch(const HipBackendError& e){return fail(e.native_code,e.what());}
+    } catch(const MemoryAllocationError& e){return fail(2,e.what());}
+      catch(const HipBackendError& e){return fail(e.native_code,e.what());}
       catch(const std::bad_alloc&){return fail(2,"HIP Tensor scratch host allocation failed");}
       catch(const std::exception& e){return fail(-1,e.what());}
       catch(...){return fail(-1,"HIP Tensor scratch allocation failed");}

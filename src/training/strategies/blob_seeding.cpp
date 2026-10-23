@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <numeric>
+#include <thread>
 
 namespace lfs::training {
     namespace {
@@ -202,16 +203,30 @@ namespace lfs::training {
             neighbors, {view_count, static_cast<size_t>(neighbor_count)}, Device::GPU);
         // Chunks bound the device copies of peaks and sweep results on captures with millions of peaks.
         std::vector<float> sweep_values(peak_count * bs::SweepFieldCount);
-        for (size_t first = 0; first < peak_count; first += SWEEP_CHUNK_PEAKS) {
+        // HIP work queues currently share native submission ordering. Bound
+        // each background sweep and finish its readback before submitting the
+        // next one so the foreground trainer can acquire the queue in between.
+        // Peak order, sweep arithmetic and the final CPU merge are unchanged.
+        size_t sweep_chunk = SWEEP_CHUNK_PEAKS;
+#ifdef LFS_TENSOR_HIP
+        const bool cooperative_hip = lfs::core::default_gpu_backend() == lfs::core::GpuBackend::HIP;
+        if (cooperative_hip)
+            sweep_chunk = 4096;
+#endif
+        for (size_t first = 0; first < peak_count; first += sweep_chunk) {
             if (stop.stop_requested())
                 return seeds;
-            const size_t count = std::min(SWEEP_CHUNK_PEAKS, peak_count - first);
+            const size_t count = std::min(sweep_chunk, peak_count - first);
             const auto chunk = peaks_host.slice(0, first, first + count).contiguous().gpu();
             const auto sweep = bs::sweep_peaks(
                                    chunk, geometry_device, neighbors_device, bitmaps)
                                    .cpu();
             std::copy_n(sweep.ptr<float>(), count * bs::SweepFieldCount,
                         sweep_values.begin() + static_cast<std::ptrdiff_t>(first * bs::SweepFieldCount));
+#ifdef LFS_TENSOR_HIP
+            if (cooperative_hip)
+                std::this_thread::yield();
+#endif
         }
         const float* sweep_rows = sweep_values.data();
         const float* peak_rows = peaks_host.ptr<float>();

@@ -1,6 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include <core/tensor_backend.hpp>
+#include <core/memory_pressure.hpp>
+#include <core/gpu_device_info.hpp>
+#include "core/tensor/backend/hip/external_access.hpp"
 #include <lfs/training/ops/registry.hpp>
 #include <lfs/training/ops/blob.hpp>
 #include <algorithm>
@@ -8,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <future>
 #include <stdexcept>
 using namespace lfs::core;
 using namespace lfs::training;
@@ -33,6 +37,55 @@ static Detection detect(GpuBackend backend,const std::vector<float>& image,size_
 }
 int main()try {
     require(bool(set_default_gpu_backend(GpuBackend::HIP)),"Cannot select HIP");
+    {
+        std::vector<std::future<std::string>> inventory;
+        for(int i=0;i<8;++i)inventory.push_back(std::async(std::launch::async,[] {
+            const auto devices=enumerate_hip_hardware();
+            require(!devices.empty(),"Concurrent HIP inventory returned no devices");
+            return devices.front().uuid;
+        }));
+        const auto identity=inventory.front().get();
+        for(size_t i=1;i<inventory.size();++i)
+            require(inventory[i].get()==identity,"Concurrent HIP inventory identity changed");
+        require(!gpu_backend_live(GpuBackend::HIP),"HIP inventory created a Tensor context");
+    }
+    {
+        require(device_memory_domain(GpuBackend::HIP)==MemoryDomain::HipDevice,"HIP pressure mapped to CUDA");
+        require(is_device_heap(MemoryDomain::HipDevice),"HIP pressure is not a device heap");
+        auto& pressure=MemoryPressureCoordinator::instance();
+        pressure.reset_for_testing();
+        size_t free=0,foreign_queries=0;
+        pressure.set_free_memory_probe([&](MemoryDomain domain) {
+            if(domain!=MemoryDomain::HipDevice)++foreign_queries;
+            return free;
+        });
+        AllocationFailure failure{.domain=MemoryDomain::HipDevice,.requested_bytes=1024,.label="HIP pressure contract"};
+        const auto error=to_error(failure,LFS_SOURCE_SITE_CURRENT());
+        require(error.domain()==lfs::ErrorDomain::Tensor,"HIP allocation error was classified as CUDA");
+        pressure.run_episode(failure,PressureContext::RenderThread);
+        require(pressure.pressure_active(),"HIP pressure lease was not established");
+        free=pressure.reserve_bytes(MemoryDomain::HipDevice)*2;
+        pressure.maybe_recover();
+        require(!pressure.pressure_active()&&foreign_queries==0,"HIP pressure recovery queried another backend");
+        pressure.reset_for_testing();
+    }
+    {
+        auto live=Tensor::full({17},.75f,Device::GPU);
+        auto& pressure=MemoryPressureCoordinator::instance();
+        pressure.set_allocation_probe([](MemoryDomain domain,size_t){return domain==MemoryDomain::HipDevice;});
+        bool rejected=false;
+        try{(void)Tensor::empty({4097},Device::GPU);}
+        catch(const MemoryAllocationError& e){rejected=e.domain()==MemoryDomain::HipDevice;}
+        uint64_t address=123;
+        void* owner=reinterpret_cast<void*>(uintptr_t{1});
+        LfsHipError native_error{};
+        const auto callback_status=internal::hip_tensor_scratch_allocate(nullptr,selected_hip_device(),0,4097,&address,&owner,&native_error);
+        pressure.reset_for_testing();
+        require(rejected,"HIP allocator did not preserve its typed memory domain");
+        require(callback_status!=0&&native_error.native_code==2&&!address&&!owner,
+                "HIP scratch callback lost ResourceExhausted or published a failed owner");
+        for(const auto value:live.cpu().to_vector())require(value==.75f,"HIP allocation failure damaged a live Tensor");
+    }
     {
         const auto* ops=training_ops(GpuBackend::HIP).blob;
         require(ops&&ops->detect&&ops->downsample&&ops->sweep,"Incomplete HIP Blob family");
@@ -75,6 +128,21 @@ int main()try {
         const auto accepted=ops->sweep(peaks,view_tensor,neighbor_tensor,bitmap).cpu().to_vector();
         close(accepted[0],.2,2e-6,"Blob sweep depth differs from analytical identical-camera case");
         close(accepted[1],1,0,"Blob sweep did not accept nine supporting views");
+        // Background HIP batching must preserve every row, including a tail
+        // after the cooperative batch boundary. This exercises accepted rows
+        // rather than only the all-zero rejection case.
+        constexpr size_t batch=4096, total=batch+17;
+        std::vector<float> repeated(total*7);
+        const std::array<float,7> row{18,9,0,0,.5f,.5f,.5f};
+        for(size_t i=0;i<total;++i)std::copy(row.begin(),row.end(),repeated.begin()+i*7);
+        auto many=Tensor::from_vector(repeated,{total,7},Device::GPU);
+        const auto whole=ops->sweep(many,view_tensor,neighbor_tensor,bitmap).cpu().to_vector();
+        std::vector<float> chunked;
+        for(size_t first=0;first<total;first+=batch) {
+            const auto part=ops->sweep(many.slice(0,first,std::min(total,first+batch)).contiguous(),view_tensor,neighbor_tensor,bitmap).cpu().to_vector();
+            chunked.insert(chunked.end(),part.begin(),part.end());
+        }
+        require(whole==chunked,"Cooperative HIP blob sweep changed output rows");
         bitmap.zero_();
         const auto rejected=ops->sweep(peaks,view_tensor,neighbor_tensor,bitmap).cpu().to_vector();
         require(rejected[0]==0&&rejected[1]==0,"Blob sweep accepted an unsupported peak");

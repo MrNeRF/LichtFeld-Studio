@@ -1051,12 +1051,17 @@ class RenderingPanel(Panel):
 
     def _compute_fov(self):
         s = lf.get_render_settings()
-        view = lf.get_current_view()
-        if not s or not view or view.width <= 0 or view.height <= 0:
+        size_query = getattr(lf, "get_current_view_size", None)
+        if size_query is not None:
+            size = size_query()
+        else:
+            view = lf.get_current_view()
+            size = (view.width, view.height) if view else None
+        if not s or not size or size[0] <= 0 or size[1] <= 0:
             return ""
         focal_mm = s.focal_length_mm
         vfov = 2.0 * math.degrees(math.atan(SENSOR_HALF_HEIGHT_MM / focal_mm))
-        aspect = view.width / view.height
+        aspect = size[0] / size[1]
         hfov = 2.0 * math.degrees(math.atan(aspect * math.tan(math.radians(vfov * 0.5))))
         fmt = lf.ui.tr("rendering_panel.fov_format")
         if fmt:

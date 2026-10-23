@@ -47,6 +47,10 @@ namespace lfs::core {
                 return GpuBackend::Vulkan;
             if (domain == MemoryDomain::MetalDevice)
                 return GpuBackend::Metal;
+#ifdef LFS_TENSOR_HIP
+            if (domain == MemoryDomain::HipDevice)
+                return GpuBackend::HIP;
+#endif
             return std::nullopt;
         }
 
@@ -201,6 +205,7 @@ namespace lfs::core {
         std::atomic<uint64_t> episode_counter{0};
         std::atomic<bool> pressure_active{false};
         std::atomic<size_t> last_target_free{0};
+        std::atomic<MemoryDomain> last_failure_domain{MemoryDomain::CudaDevice};
         std::chrono::steady_clock::time_point last_recover_check{};
 
         std::mutex probe_mutex;
@@ -209,7 +214,7 @@ namespace lfs::core {
         std::function<size_t(MemoryDomain)> free_probe;
 
         // One reserve per backend, indexed by GpuBackend on every platform.
-        static constexpr size_t kReserveSlots = static_cast<size_t>(GpuBackend::Metal) + 1;
+        static constexpr size_t kReserveSlots = kGpuBackendCount;
         std::array<std::once_flag, kReserveSlots> reserve_once;
         std::array<size_t, kReserveSlots> reserve_bytes{};
 
@@ -451,6 +456,7 @@ namespace lfs::core {
         if (viewer_failure) {
             impl_->pressure_active.store(true);
             impl_->last_target_free.store(target);
+            impl_->last_failure_domain.store(failure.domain);
         }
 
         PressureRequest request{
@@ -608,8 +614,13 @@ namespace lfs::core {
 
         const size_t target = impl_->last_target_free.load();
         const size_t hysteresis = saturating_add(target, target / 5); // require 20% headroom to restore
-        if (impl_->query_free(LFS_HAS_CUDA ? MemoryDomain::CudaDevice
-                                           : device_memory_domain(default_gpu_backend())) >= hysteresis) {
+        auto recovery_domain = LFS_HAS_CUDA ? MemoryDomain::CudaDevice
+                                           : device_memory_domain(default_gpu_backend());
+#ifdef LFS_TENSOR_HIP
+        if (impl_->last_failure_domain.load() == MemoryDomain::HipDevice)
+            recovery_domain = MemoryDomain::HipDevice;
+#endif
+        if (impl_->query_free(recovery_domain) >= hysteresis) {
             impl_->pressure_active.store(false);
             LOG_INFO("VRAM pressure lease released; sustained headroom restored");
         }
@@ -656,6 +667,7 @@ namespace lfs::core {
         impl_->episode_counter.store(0);
         impl_->pressure_active.store(false);
         impl_->last_target_free.store(0);
+        impl_->last_failure_domain.store(MemoryDomain::CudaDevice);
         impl_->last_recover_check = {};
     }
 

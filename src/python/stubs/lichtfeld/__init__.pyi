@@ -1729,6 +1729,10 @@ def compute_screen_positions(rotation: Tensor, translation: Tensor, width: int, 
         Tensor [N, 2] with (x, y) pixel coordinates for each Gaussian
     """
 
+def get_current_view_size() -> tuple[int, int] | None:
+    """Active view width and height; does not allocate GPU tensors."""
+    ...
+
 def get_current_view() -> ViewInfo | None:
     """Get current viewport camera pose (None if not available)."""
 

@@ -10,6 +10,8 @@
 #include <core/detail/fused_pointwise.hpp>
 #include <core/detail/tensor_dtype_dispatch.hpp>
 #include <core/failure_report.hpp>
+#include <core/memory_pressure.hpp>
+#include <core/tensor_execution.hpp>
 #include <core/tensor.hpp>
 #include <cstdio>
 #include <cstring>
@@ -22,6 +24,17 @@
 // Tensor factory paths belong to integrated contracts and fail explicitly here.
 // Diagnostic assertions throw locally without pulling in the application logger.
 namespace lfs::core {
+    // This storage-only harness has no reclaim clients or fault injector.
+    // The integrated Blob contract covers the real coordinator and HIP OOM.
+    MemoryPressureCoordinator::MemoryPressureCoordinator() : impl_(nullptr) {}
+    MemoryPressureCoordinator::~MemoryPressureCoordinator() = default;
+    MemoryPressureCoordinator& MemoryPressureCoordinator::instance() {
+        static MemoryPressureCoordinator coordinator;
+        return coordinator;
+    }
+    bool MemoryPressureCoordinator::probe_should_fail(MemoryDomain,size_t) const {return false;}
+    MemoryAllocationError::MemoryAllocationError(const AllocationFailure& failure)
+        : std::runtime_error("Isolated HIP allocation failure"),failure_(failure) {}
     Tensor::Tensor(Tensor&&) noexcept = default;
     Tensor& Tensor::operator=(Tensor&&) = default;
     Tensor::~Tensor() = default;
@@ -30,6 +43,10 @@ namespace lfs::core {
     void Tensor::materialize_deferred_slow() { throw std::runtime_error("No deferred Tensor factory linked in storage-only test"); }
     GpuBackendScope::GpuBackendScope(GpuBackend) { throw std::runtime_error("No Tensor factory scope linked in isolated storage test"); }
     GpuBackendScope::~GpuBackendScope() = default;
+    TensorExecutionTarget TensorExecutionTarget::default_queue(GpuBackend backend) {return TensorExecutionTarget(backend,nullptr);}
+    void TensorExecutionTarget::wait() const {throw std::runtime_error("No Tensor execution queue linked in isolated storage test");}
+    TensorExecutionTarget::Scope::Scope(TensorExecutionTarget target) : backend_scope_(target.backend()),previous_target_(nullptr) {}
+    TensorExecutionTarget::Scope::~Scope() = default;
     Tensor Tensor::from_external_owner(void*, TensorShape, Device, DataType, std::shared_ptr<void>, size_t, cudaStream_t, std::string) {
         throw std::runtime_error("No external Tensor factory linked in isolated storage test");
     }
@@ -41,6 +58,7 @@ namespace lfs::core {
     }
 }
 namespace lfs::core::internal {
+    GpuBackendOps& backend_ops(GpuBackend) {throw std::runtime_error("No Tensor registry linked in isolated storage test");}
     std::tuple<Tensor,Tensor> export_kmeans_sh(ExportKernels&,const Tensor&,int,int,int,int) { throw std::runtime_error("No export pipeline linked in storage-only test"); }
     void export_assign_sh3(ExportKernels&,const Tensor&,const Tensor&,const Tensor&,Tensor&,bool,bool) { throw std::runtime_error("No export pipeline linked in storage-only test"); }
     void export_decimate_candidates(ExportKernels&,const Tensor&,const Tensor&,const Tensor&,const Tensor&,const Tensor&,const Tensor&,int,std::vector<uint32_t>&,std::vector<float>&) { throw std::runtime_error("No export pipeline linked in storage-only test"); }

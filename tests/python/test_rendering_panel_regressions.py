@@ -8,8 +8,26 @@ from types import ModuleType, SimpleNamespace
 import sys
 
 import pytest
+import math
 
 from locale_utils import missing_locale_keys
+
+
+def test_fov_metadata_does_not_request_gpu_camera_tensors(rendering_panel_module):
+    module = rendering_panel_module
+    module.lf.get_render_settings = lambda: SimpleNamespace(focal_length_mm=35.0)
+    module.lf.get_current_view_size = lambda: (1920, 1080)
+    def forbidden():
+        raise AssertionError("FOV label must not create GPU camera tensors")
+    module.lf.get_current_view = forbidden
+    module.lf.ui.tr = lambda _: ""
+    vfov = 2.0 * math.degrees(math.atan(module.SENSOR_HALF_HEIGHT_MM / 35.0))
+    hfov = 2.0 * math.degrees(math.atan(math.tan(math.radians(vfov * .5)) * 1920 / 1080))
+    assert module.RenderingPanel()._compute_fov() == f"H:{hfov:.1f}° V:{vfov:.1f}°"
+    module.lf.get_current_view_size = lambda: None
+    assert module.RenderingPanel()._compute_fov() == ""
+    module.lf.get_current_view_size = lambda: (0, 1080)
+    assert module.RenderingPanel()._compute_fov() == ""
 
 
 class _BindingModelStub:

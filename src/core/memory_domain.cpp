@@ -14,6 +14,7 @@ namespace lfs::core {
         case MemoryDomain::MetalDevice: return "metal-device";
         case MemoryDomain::PinnedHost: return "pinned-host";
         case MemoryDomain::PageableHost: return "pageable-host";
+        case MemoryDomain::HipDevice: return "hip-device";
         }
         return "unknown";
     }
@@ -22,7 +23,8 @@ namespace lfs::core {
         return domain == MemoryDomain::CudaDevice ||
                domain == MemoryDomain::CudaVmm ||
                domain == MemoryDomain::VulkanDevice ||
-               domain == MemoryDomain::MetalDevice;
+               domain == MemoryDomain::MetalDevice ||
+               domain == MemoryDomain::HipDevice;
     }
 
     MemoryDomain device_memory_domain(const GpuBackend backend) noexcept {
@@ -30,6 +32,9 @@ namespace lfs::core {
         case GpuBackend::CUDA: return MemoryDomain::CudaDevice;
         case GpuBackend::Vulkan: return MemoryDomain::VulkanDevice;
         case GpuBackend::Metal: return MemoryDomain::MetalDevice;
+#ifdef LFS_TENSOR_HIP
+        case GpuBackend::HIP: return MemoryDomain::HipDevice;
+#endif
         }
         return MemoryDomain::CudaDevice;
     }

@@ -2126,6 +2126,12 @@ Returns:
     Tensor [N, 2] with (x, y) pixel coordinates for each Gaussian
 )doc");
 
+        m.def("get_current_view_size", []() -> nb::object {
+            const auto view = vis::get_current_view_info();
+            if (!view)
+                return nb::none();
+            return nb::make_tuple(view->width, view->height);
+        }, "Get active view width and height without creating or uploading GPU tensors");
         m.def("get_current_view", &get_current_view,
               R"doc(
 Get current viewport camera pose (None if not available).
