@@ -8,18 +8,23 @@ No external `splat-transform` executable is required.
 
 ## Quick setup
 
-1. Choose **Indoor**, **Outdoor**, or **Object**. Changing the type applies its preset.
-2. Set **Scene units / metre**. Reconstruction coordinates have no inherent metric
+The same surface-first setup works for rooms, outdoor scans and objects:
+
+1. Set **Scene units / metre**. Reconstruction coordinates have no inherent metric
    scale: if a known two-metre object spans five scene units, enter `2.5`.
    This calibrates collision and player dimensions without resizing the splats.
-3. Drag **Cell size (metres)**. Start at `0.05` (5 cm); larger cells are faster and
+2. Drag **Cell size (metres)**. Start at `0.05` (5 cm); larger cells are faster and
    less detailed. The readout also shows the actual cell size in scene units.
-4. Leave **Fill solid ground (optional)** off for surface-shaped collision. Enable
-   it only when solid volume beneath the supports is needed.
-5. Place the camera where walking should start, press **Use camera position**,
-   then **Generate / Regenerate**.
-6. Inspect the boxes, then **Enter walk**. Use **Overlay strength** and
-   **Cutaway height** to reveal surfaces inside the scene.
+3. Place the camera near the desired region and press **Use camera position**.
+   Optionally enable **Keep connected region near seed** to exclude disconnected
+   source geometry. Leave it off to include all visible splats.
+4. Press **Generate / Regenerate**, inspect the boxes, then **Enter walk**.
+   Use **Overlay strength** and **Cutaway height** to reveal surfaces inside the scene.
+
+**Next generation** shows the current source-filter, filling and carving settings. To restore the
+shared surface-only setup, choose **Reset to surface collision** under Advanced.
+This keeps the scale, cell size and seed; regenerate to apply it. No Indoor/Outdoor
+choice or automatic scene classification is required.
 
 The normal generation path builds full-resolution voxel collision and its preview.
 It does **not** build a triangle surface: neither the preview nor Walk needs one.
@@ -41,16 +46,16 @@ Advanced settings retain independent access to the pipeline parameters:
 | --- | --- |
 | Cluster filter (optional) | Resolution `1`, opacity `0.999`, minimum contribution `0.1` |
 | Voxelization | Cell size `0.05`, accumulated opacity `0.1` |
-| Indoor | Exterior fill size `1.6`, capsule carve height `1.6`, radius `0.2` |
-| Outdoor | Surface shell; floor fill, exterior fill and carving off |
-| Object | Exterior fill, floor fill and carving off |
+| Common setup | Surface shell; all filling and carving off |
+| Optional room sealing | Exterior fill size `1.6`; carve height `1.6`, radius `0.2` when explicitly enabled |
+| Optional solid ground | Floor fill size `1.6` |
 | Surface | Smooth or exposed voxel faces; separate surface resolution multiplier |
 
-Dimensional preset values and the Walk capsule scale with **Scene units / metre**.
+Dimensional settings and the Walk capsule scale with **Scene units / metre**.
 Changing it rescales these settings, not existing generated nodes. Regenerate to
 apply changes. The exact voxel size remains editable in scene units under Advanced.
 
-New Outdoor authoring leaves ground fill **off**. Voxelization follows Gaussian
+New authoring leaves ground fill **off**. Voxelization follows Gaussian
 surface support; filling below the first occupied support in each XZ column can
 turn foliage and other elevated surfaces into solid pillars. This is the main
 cause of a dense, enclosing result, not the sparse tree's compression. Enable
@@ -69,14 +74,58 @@ Center-only sampling could miss sub-voxel sheets; the previous over-alpha
 accumulation also differed from upstream. Native sparse bounds and early exits
 use the same density threshold as the cell evaluator.
 
-Preset dimensions and fill options are based on the
+Metric dimensions and fill options are based on the
 [SuperSplat collision guide](https://developer.playcanvas.com/user-manual/supersplat/studio/collision/)
 and [splat-transform parameters](https://developer.playcanvas.com/user-manual/splat-transform/collision/).
 Their metre-based dimensions require calibration for an arbitrarily scaled scene.
-LFS deliberately starts Outdoor without ground extrusion to preserve visible
-surface shape; this differs from the upstream Outdoor ground-fill recipe.
+LFS deliberately starts without filling to preserve visible surface shape.
+Room sealing and ground fill change different regions of the volume and are
+not automatically combined. Existing projects retain their precise options;
+legacy Indoor/Outdoor/Object preset identifiers remain readable in archives.
 The native algorithms are independently implemented and do not promise
 byte-identical upstream output.
+
+## Connected-region filtering
+
+The optional filter coarse-voxelizes the source, finds the occupied component
+nearest the seed, and retains splats associated with that component. Flooding is
+six-connected: touching only at an edge or corner does not join components.
+The retained count and any seed snap distance are shown after generation. A snap
+to a distant component is a reason to move the seed, not proof of a good selection.
+
+Following [upstream cluster selection](https://github.com/playcanvas/splat-transform/blob/4f90012be983078010d631fa0572baa99d5c1965/src/lib/voxel/filter-cluster.ts),
+splats centered inside the selected region are retained immediately, including
+thin and low-opacity detail. Other splats must contribute at occupied coarse-cell
+centers. If a splat's three-sigma AABB is wider than two coarse cells on any axis,
+it needs at least `ceil(10% * AABB volume / cell volume)` qualifying hits instead
+of one. This rejects large outliers whose tails barely touch the selected region.
+Native queries skip empty tree regions and count uniformly qualifying occupied
+regions without scanning every cell of a large AABB. Source ordering is retained.
+The coarse pass, connected flood and splat selection report progress separately.
+The input Model is unchanged: filtering affects the generated collider only.
+
+The previous filter omitted center retention and the large-splat overlap rule.
+On the full 1M Bicycle dump with coarse resolution `1`, opacity `0.999`, minimum
+contribution `0.1` and seed `(0,3,-3)`, it kept just **548 splats**. The corrected
+filter retains **855,274**. Filtering itself takes about **0.05 s** in both runs;
+the coarse CPU pass dominates at roughly **1.25 s**. Corrected full generation
+takes **5.36 s**, versus **1.48 s** for the severely over-filtered old result.
+This is a correctness comparison, not an identical-output speedup. Upstream uses
+GPU coarse voxelization; these measurements are for our native CPU path and do
+not constitute a benchmark against the upstream executable.
+
+The corresponding native GUI run retains **855,727 splats**, generates in **5.25 s**,
+and uses **33.3 MiB** CPU occupancy (6,692,430 occupied cells). Native source
+activation/rounding can differ slightly from the standalone source dump. The
+separate validation archive is `bicycle-collision-clustered.licht`; the original
+1M Model and pristine training outputs remain intact. Walk grounds at eye Y
+approximately `0.867` from `(0,3,-3)`.
+
+Native grid alignment and Euclidean nearest-cell search can differ from
+upstream block alignment and shell-order seed search. The native filter also
+avoids upstream's block-count-only "all in one cluster" bypass: separate occupied
+components can share a block. Tests compare hierarchical queries to an independent
+cell-by-cell evaluator and cover center retention, outliers and corner contact.
 
 ## Preview and optional surfaces
 
