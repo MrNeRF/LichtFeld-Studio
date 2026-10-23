@@ -157,6 +157,12 @@ namespace lfs::training {
         lfs::core::Scene& scene,
         lfs::core::SplatTensorAllocator tensor_allocator = {});
 
+    /// Give the training model the enabled --cropbox crop box, turned by --cropbox-rotation about its centre.
+    /// Does nothing without --cropbox.
+    [[nodiscard]] std::expected<void, std::string> applyTrainingCropBox(
+        const lfs::core::param::TrainingParameters& params,
+        lfs::core::Scene& scene);
+
     /// Build the training splat without mutating the scene graph. A nullopt
     /// result means an existing training model was updated in place. A populated
     /// install payload must be applied with installTrainingModel() on the thread

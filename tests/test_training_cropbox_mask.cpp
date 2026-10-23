@@ -3,16 +3,24 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda/sh_layout.cuh"
+#include "core/parameters.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "io/scene_chapter_adapter.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
+#include "training/training_setup.hpp"
 #include "training_cropbox_mask.hpp"
+#include "visualizer/gui_capabilities.hpp"
+#include "visualizer/scene_coordinate_utils.hpp"
 
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 
+#include <array>
+#include <cmath>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -117,6 +125,24 @@ namespace {
                 EXPECT_FLOAT_EQ(actual[c][r], expected[c][r]) << "at column " << c << ", row " << r;
             }
         }
+    }
+
+    // A training model with the crop box that --cropbox and --cropbox-rotation give it when training starts.
+    lfs::core::SplatData* add_training_model_with_cli_cropbox(
+        lfs::core::Scene& scene,
+        std::vector<float> means,
+        const std::array<float, 6>& box,
+        const std::optional<std::array<float, 3>>& rotation) {
+        auto model = make_test_splat(std::move(means));
+        auto* const model_ptr = model.get();
+        scene.addSplat("Model", std::move(model));
+        scene.setTrainingModelNode("Model");
+        lfs::core::param::TrainingParameters params;
+        params.cropbox = box;
+        params.cropbox_rotation = rotation;
+        const auto applied = lfs::training::applyTrainingCropBox(params, scene);
+        EXPECT_TRUE(applied.has_value()) << (applied ? "" : applied.error());
+        return model_ptr;
     }
 
     CropBoxSceneSnapshot snapshot_cropbox_scene(const lfs::core::Scene& scene,
@@ -544,4 +570,136 @@ TEST(TrainingCropBoxMask, ExportCopyIsSkippedWhenNoLiveRowLiesOutsideTheBox) {
         {kCropTestCount},
         lfs::core::Device::CUDA);
     EXPECT_FALSE(lfs::training::crop_copy_to_training_cropbox(*soft_cropped, translated_cropbox_geometry(false)));
+}
+
+// Catches --cropbox without --cropbox-rotation storing anything but the corners on an unrotated box.
+TEST(TrainingCropBoxMask, CliCropBoxWithoutRotationKeepsTheCornersUnrotated) {
+    lfs::core::Scene scene;
+    add_training_model_with_cli_cropbox(scene, {0.0f, 0.0f, 0.0f}, {-1.0f, -2.0f, -3.0f, 4.0f, 5.0f, 6.0f},
+                                        std::nullopt);
+
+    const lfs::core::NodeId cropbox_id = cropbox_id_for_model(scene);
+    const auto* const cropbox = scene.getCropBoxData(cropbox_id);
+    ASSERT_NE(cropbox, nullptr);
+    expect_vec3_eq(cropbox->min, {-1.0f, -2.0f, -3.0f});
+    expect_vec3_eq(cropbox->max, {4.0f, 5.0f, 6.0f});
+    EXPECT_TRUE(cropbox->enabled);
+    EXPECT_FALSE(cropbox->inverse);
+    expect_mat4_eq(scene.getNodeTransform(cropbox_id), glm::mat4(1.0f));
+}
+
+// Catches the rotation being ignored, turning the box about a corner or the origin instead of its centre,
+// turning it the other way, or about the viewer's axes: 30 degrees about the dataset's Z turns the long X edge of
+// the box toward the dataset's (cos 30, sin 30, 0).
+TEST(TrainingCropBoxMask, CliCropBoxRotationTurnsTheBoxAboutItsCentre) {
+    const float c = std::cos(glm::radians(30.0f));
+    const float s = std::sin(glm::radians(30.0f));
+    lfs::core::Scene scene;
+    auto* const model = add_training_model_with_cli_cropbox(
+        scene,
+        {10.0f + 2.9f * c, 2.9f * s, 0.0f,  // along the turned long edge, outside the unturned box
+         12.9f, 0.45f, 0.45f,               // near a corner of the unturned box
+         10.0f + 2.9f * c, -2.9f * s, 0.0f, // turned the other way
+         10.0f, 0.0f, 0.0f},                // centre
+        {7.0f, -0.5f, -0.5f, 13.0f, 0.5f, 0.5f},
+        std::array<float, 3>{0.0f, 0.0f, 30.0f});
+
+    const auto remove_mask = lfs::training::compute_training_cropbox_remove_mask(scene, *model);
+    ASSERT_TRUE(remove_mask.has_value());
+    EXPECT_EQ(remove_mask->to(lfs::core::Device::CPU).to_vector_bool(),
+              (std::vector<bool>{false, true, true, false}));
+
+    const auto geometry = lfs::training::resolve_training_cropbox_geom(scene);
+    ASSERT_TRUE(geometry.has_value());
+    const auto means = model->means().to(lfs::core::Device::CPU).to_vector();
+    std::vector<bool> inside;
+    for (size_t i = 0; i < means.size(); i += 3) {
+        const glm::vec3 p(geometry->world_to_cropbox * glm::vec4(means[i], means[i + 1], means[i + 2], 1.0f));
+        inside.push_back(glm::all(glm::greaterThanEqual(p, geometry->min)) &&
+                         glm::all(glm::lessThanEqual(p, geometry->max)));
+    }
+    EXPECT_EQ(inside, (std::vector<bool>{true, false, false, true}));
+
+    // The evaluation mask box spans the turned box around the same centre.
+    glm::vec3 reach{0.0f};
+    for (const auto& corner : lfs::training::training_cropbox_model_corners(*geometry))
+        reach = glm::max(reach, glm::abs(glm::vec3(corner[0], corner[1], corner[2]) - glm::vec3(10.0f, 0.0f, 0.0f)));
+    EXPECT_NEAR(reach.x, 3.0f * c + 0.5f * s, 1e-5f);
+    EXPECT_NEAR(reach.y, 3.0f * s + 0.5f * c, 1e-5f);
+    EXPECT_NEAR(reach.z, 0.5f, 1e-5f);
+}
+
+// Catches a saved project that loses or alters the turned crop box, and a node the transform panel would not show
+// as the same turn: the panel flips Y and Z into the viewer's axes, so it shows rx+180, ry, rz.
+TEST(TrainingCropBoxMask, CliCropBoxRotationRoundTripsThroughTheProject) {
+    using lfs::io::project::PayloadBinding;
+    lfs::core::Scene scene;
+    add_training_model_with_cli_cropbox(scene, {10.0f, 1.5f, 2.5f}, {7.0f, 1.0f, 2.0f, 13.0f, 2.0f, 3.0f},
+                                        std::array<float, 3>{25.0f, -40.0f, 70.0f});
+    const lfs::core::NodeId cropbox_id = cropbox_id_for_model(scene);
+    const glm::mat4 transform = scene.getNodeTransform(cropbox_id);
+    const glm::mat4 expected =
+        glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 1.5f, 2.5f)) *
+        glm::rotate(glm::mat4(1.0f), glm::radians(25.0f), glm::vec3(1.0f, 0.0f, 0.0f)) *
+        glm::rotate(glm::mat4(1.0f), glm::radians(-40.0f), glm::vec3(0.0f, 1.0f, 0.0f)) *
+        glm::rotate(glm::mat4(1.0f), glm::radians(70.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    for (int col = 0; col < 4; ++col) {
+        for (int row = 0; row < 4; ++row)
+            EXPECT_NEAR(transform[col][row], expected[col][row], 1e-6f) << "at column " << col << ", row " << row;
+    }
+
+    const auto* const model_node = scene.getNode("Model");
+    ASSERT_NE(model_node, nullptr);
+    const lfs::io::project::ScenePayloadBindings bindings{
+        {model_node->uuid, PayloadBinding{.fourcc = "CKPT",
+                                          .instance_uuid = *lfs::core::Uuid::from_string(
+                                              "6b1f0c52-2d3e-4f61-9a7b-0c1d2e3f4a5b"),
+                                          .source_kind = "checkpoint"}}};
+    const auto captured = lfs::io::project::capture_scene_graph(scene, bindings);
+    ASSERT_TRUE(captured) << lfs::format_for_developer(captured.error());
+    const auto bytes = captured->to_bytes();
+    const auto decoded = lfs::io::project::SceneGraphChapter::from_bytes(bytes);
+    ASSERT_TRUE(decoded) << lfs::format_for_developer(decoded.error());
+    lfs::core::Scene restored;
+    const lfs::io::project::ScenePayloadResolver resolver{
+        .splat = [](const PayloadBinding&) -> lfs::Result<std::unique_ptr<lfs::core::SplatData>> {
+            return make_test_splat({10.0f, 1.5f, 2.5f});
+        }};
+    const auto hydrated = lfs::io::project::hydrate_scene_graph(*decoded, restored, resolver);
+    ASSERT_TRUE(hydrated) << lfs::format_for_developer(hydrated.error());
+
+    const lfs::core::NodeId restored_id = cropbox_id_for_model(restored);
+    const auto* const restored_cropbox = restored.getCropBoxData(restored_id);
+    ASSERT_NE(restored_cropbox, nullptr);
+    const glm::mat4 restored_transform = restored.getNodeTransform(restored_id);
+    for (int col = 0; col < 4; ++col) {
+        for (int row = 0; row < 4; ++row)
+            EXPECT_EQ(restored_transform[col][row], transform[col][row]) << "at column " << col << ", row " << row;
+    }
+    expect_vec3_eq(restored_cropbox->min, {-3.0f, -0.5f, -0.5f});
+    expect_vec3_eq(restored_cropbox->max, {3.0f, 0.5f, 0.5f});
+    EXPECT_TRUE(restored_cropbox->enabled);
+    EXPECT_FALSE(restored_cropbox->inverse);
+
+    const glm::mat4 local = lfs::rendering::dataWorldTransformToVisualizerWorld(transform);
+    const glm::mat4 world = lfs::vis::scene_coords::nodeVisualizerWorldTransform(restored, restored_id);
+    for (const glm::mat4& panel : {local, world}) {
+        const auto components = lfs::vis::cap::decomposeTransform(panel);
+        const glm::mat3 shown = glm::mat3(
+            glm::rotate(glm::mat4(1.0f), components.rotation.x, glm::vec3(1.0f, 0.0f, 0.0f)) *
+            glm::rotate(glm::mat4(1.0f), components.rotation.y, glm::vec3(0.0f, 1.0f, 0.0f)) *
+            glm::rotate(glm::mat4(1.0f), components.rotation.z, glm::vec3(0.0f, 0.0f, 1.0f)));
+        const glm::mat3 flipped = lfs::rendering::DATA_TO_VISUALIZER_WORLD_AXES * glm::mat3(expected);
+        for (int col = 0; col < 3; ++col) {
+            for (int row = 0; row < 3; ++row)
+                EXPECT_NEAR(shown[col][row], flipped[col][row], 1e-5f) << "at column " << col << ", row " << row;
+        }
+        const glm::vec3 degrees = glm::degrees(components.rotation);
+        EXPECT_NEAR(degrees.x, -155.0f, 1e-3f);
+        EXPECT_NEAR(degrees.y, -40.0f, 1e-3f);
+        EXPECT_NEAR(degrees.z, 70.0f, 1e-3f);
+        EXPECT_NEAR(components.translation.x, 10.0f, 1e-5f);
+        EXPECT_NEAR(components.translation.y, -1.5f, 1e-5f);
+        EXPECT_NEAR(components.translation.z, -2.5f, 1e-5f);
+    }
 }

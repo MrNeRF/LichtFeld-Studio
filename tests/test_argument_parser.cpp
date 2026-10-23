@@ -1512,6 +1512,67 @@ TEST(ArgumentParserTest, TrainingRejectsCropBoxWithoutVolume) {
     }
 }
 
+// Catches --cropbox-rotation not reaching the parameters or training_config.json, or set without the flag.
+TEST(ArgumentParserTest, TrainingParsesCropBoxRotation) {
+    const auto data_path = make_test_path("lfs_arg_parser_cropbox_rotation_data");
+    const auto output_path = make_test_path("lfs_arg_parser_cropbox_rotation_output");
+    const auto parse = [&](const char* rotation) {
+        std::vector<const char*> argv{"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                                      "--output-path", output_path.c_str(), "--cropbox", "-1,-2,-3,1,2,3"};
+        if (rotation) {
+            argv.push_back("--cropbox-rotation");
+            argv.push_back(rotation);
+        }
+        return lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+    };
+
+    const auto rotated = parse("-30, 45.5 ,400");
+    ASSERT_TRUE(rotated.has_value()) << rotated.error();
+    ASSERT_TRUE((*rotated)->cropbox_rotation.has_value());
+    EXPECT_EQ(*(*rotated)->cropbox_rotation, (std::array<float, 3>{-30.f, 45.5f, 400.f}));
+
+    const auto config_path = std::filesystem::path(make_test_path("lfs_arg_parser_cropbox_rotation_config")) /
+                             "training_config.json";
+    const auto saved = lfs::core::param::save_training_parameters_to_json(**rotated, config_path);
+    ASSERT_TRUE(saved.has_value()) << saved.error();
+    std::ifstream config_file(config_path);
+    const auto config = nlohmann::json::parse(config_file);
+    EXPECT_EQ(config.at("cropbox"), nlohmann::json::parse("[-1, -2, -3, 1, 2, 3]"));
+    EXPECT_EQ(config.at("cropbox_rotation"), nlohmann::json::parse("[-30, 45.5, 400]"));
+
+    const auto unrotated = parse(nullptr);
+    ASSERT_TRUE(unrotated.has_value()) << unrotated.error();
+    EXPECT_FALSE((*unrotated)->cropbox_rotation.has_value());
+}
+
+TEST(ArgumentParserTest, TrainingRejectsCropBoxRotationWithoutCropBox) {
+    const auto data_path = make_test_path("lfs_arg_parser_cropbox_rotation_without_box_data");
+    const auto output_path = make_test_path("lfs_arg_parser_cropbox_rotation_without_box_output");
+    const char* argv[] = {"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                          "--output-path", output_path.c_str(), "--cropbox-rotation", "0,0,30"};
+
+    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("--cropbox-rotation"), std::string::npos) << parsed.error();
+    EXPECT_NE(parsed.error().find("needs --cropbox"), std::string::npos) << parsed.error();
+}
+
+TEST(ArgumentParserTest, TrainingRejectsCropBoxRotationWithoutThreeFiniteNumbers) {
+    const auto data_path = make_test_path("lfs_arg_parser_invalid_cropbox_rotation_data");
+    const auto output_path = make_test_path("lfs_arg_parser_invalid_cropbox_rotation_output");
+
+    for (const char* rotation : {"0,30", "0,0,30,0", "0,,30", "a,0,0", "nan,0,0", "0,inf,0", "0,0,1e40"}) {
+        SCOPED_TRACE(rotation);
+        const char* argv[] = {"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                              "--output-path", output_path.c_str(), "--cropbox", "-1,-1,-1,1,1,1",
+                              "--cropbox-rotation", rotation};
+
+        const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        ASSERT_FALSE(parsed.has_value());
+        EXPECT_NE(parsed.error().find("Invalid --cropbox-rotation"), std::string::npos) << parsed.error();
+    }
+}
+
 TEST(ArgumentParserTest, TrainingRejectsCropBoxLossWeightOutsideUnitInterval) {
     const auto data_path = make_test_path("lfs_arg_parser_invalid_cropbox_loss_weight_data");
     const auto output_path = make_test_path("lfs_arg_parser_invalid_cropbox_loss_weight_output");

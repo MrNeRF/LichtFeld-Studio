@@ -15,8 +15,20 @@ LichtFeld-Studio -d ./dataset -o ./output --headless --cropbox -0.6,-0.2,-0.1,0.
 ## The box
 
 - `--cropbox x0,y0,z0,x1,y1,z1` adds an enabled crop box under the training model with that minimum and maximum corner, in the dataset's coordinates. Each minimum must be below its maximum.
+- `--cropbox-rotation rx,ry,rz` turns that box about its centre, see [Rotated boxes](#rotated-boxes).
 - The box is a normal crop box node. The saved project keeps it, and the GUI shows and edits it like one drawn by hand: add it with the crop tool, then move, rotate or scale it with the gizmo or the numeric fields.
-- With `--eval`, `training_config.json` records the box as `cropbox`. `--eval-mask cropbox` scores only the pixels the box covers, see [Evaluation](evaluation.md).
+- With `--eval`, `training_config.json` records the box as `cropbox` (and `cropbox_rotation`). `--eval-mask cropbox` scores only the pixels the box covers, see [Evaluation](evaluation.md).
+- `--cropbox` and `--cropbox-rotation` set up the box when a headless run starts a fresh model. With `--resume` the box comes from the project; in the GUI, draw it with the crop tool.
+
+### Rotated boxes
+
+`--cropbox-rotation rx,ry,rz` takes three angles in degrees about the dataset's X, Y and Z axes, the same frame as the `--cropbox` corners. The box keeps its size and centre from `--cropbox` and is turned about the centre by `Rx(rx) · Ry(ry) · Rz(rz)`: first about Z, then Y, then X. Any orientation can be expressed, so the box can follow a rotated tile grid or a tilted scene. For example, `0,0,30` turns the box's X edge toward `(cos 30°, sin 30°, 0)`. Without the flag the box stays aligned to the axes.
+
+Everything uses the turned box: the loss and learning-rate weighting outside it, `--cropbox-growth-inside`, `--crop`, `--eval-mask cropbox` and the saved project, which opens as a normal rotated crop box.
+
+The GUI's transform panel shows the box in the viewer's axes, where Y and Z point the other way. Its Rotation fields therefore show the same turn as `rx + 180, ry, rz` (wrapped to ±180°, while `|ry|` is below 90°), and its Position as `(cx, −cy, −cz)`. To copy angles from the panel to the command line, subtract 180 from X. A box without rotation shows Rotation `±180, 0, 0`.
+
+Use `=` when a value starts with a minus sign, for example `--cropbox-rotation=-15,0,40`.
 
 ## Training options
 
@@ -50,3 +62,12 @@ LichtFeld-Studio -d ./dataset -o ./tiles --output-name tile_b --headless \
 ```
 
 A tile run that is stopped keeps all its splats and can be continued with `--resume`; it is cropped when it completes.
+
+When the tile grid is turned relative to the dataset axes, give each tile its unturned extent around its centre and the grid's angle:
+
+```sh
+LichtFeld-Studio -d ./dataset -o ./tiles --output-name tile_a --headless \
+  --cropbox=-10,-5,-10,0,5,0 --cropbox-rotation=0,25,0 --cropbox-loss-weight 0 --crop --export ply
+```
+
+The box is turned about its own centre, so a turned grid needs each tile's centre placed on the turned grid as well.

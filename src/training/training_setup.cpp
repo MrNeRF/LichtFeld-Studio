@@ -2,6 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#define GLM_ENABLE_EXPERIMENTAL
+
 #include "training_setup.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/error.hpp"
@@ -35,6 +37,8 @@
 #include <exception>
 #include <filesystem>
 #include <format>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/euler_angles.hpp>
 #include <memory>
 #include <mutex>
 #include <numeric>
@@ -1324,19 +1328,11 @@ namespace lfs::training {
         return {};
     }
 
-    std::expected<void, std::string> initializeTrainingModel(
+    std::expected<void, std::string> applyTrainingCropBox(
         const lfs::core::param::TrainingParameters& params,
-        lfs::core::Scene& scene,
-        lfs::core::SplatTensorAllocator tensor_allocator) {
-        auto prepared = prepareTrainingModel(params, scene, std::move(tensor_allocator));
-        if (!prepared) {
-            return std::unexpected(std::move(prepared.error()));
-        }
-        if (!*prepared) {
+        lfs::core::Scene& scene) {
+        if (!params.cropbox) {
             return {};
-        }
-        if (auto installed = installTrainingModel(scene, std::move(**prepared)); !installed || !params.cropbox) {
-            return installed;
         }
         const auto* model = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
         if (!model) {
@@ -1356,11 +1352,39 @@ namespace lfs::training {
         data.max = {box[3], box[4], box[5]};
         data.inverse = false;
         data.enabled = true;
-        scene.setCropBoxData(cropbox_id, data);
-        scene.setNodeTransform(cropbox_id, glm::mat4{1.0f});
         LOG_INFO("Region of interest: crop box ({}, {}, {}) to ({}, {}, {})", box[0], box[1], box[2], box[3], box[4],
                  box[5]);
+        glm::mat4 transform{1.0f};
+        if (params.cropbox_rotation) {
+            // Rx * Ry * Rz about the dataset's axes, the frame of the corners, turning the box about its centre.
+            const auto& degrees = *params.cropbox_rotation;
+            transform = glm::translate(glm::mat4{1.0f}, (data.min + data.max) * 0.5f) *
+                        glm::eulerAngleXYZ(glm::radians(degrees[0]), glm::radians(degrees[1]), glm::radians(degrees[2]));
+            data.max = (data.max - data.min) * 0.5f;
+            data.min = -data.max;
+            LOG_INFO("Region of interest: crop box turned by ({}, {}, {}) degrees about its centre", degrees[0],
+                     degrees[1], degrees[2]);
+        }
+        scene.setCropBoxData(cropbox_id, data);
+        scene.setNodeTransform(cropbox_id, transform);
         return {};
+    }
+
+    std::expected<void, std::string> initializeTrainingModel(
+        const lfs::core::param::TrainingParameters& params,
+        lfs::core::Scene& scene,
+        lfs::core::SplatTensorAllocator tensor_allocator) {
+        auto prepared = prepareTrainingModel(params, scene, std::move(tensor_allocator));
+        if (!prepared) {
+            return std::unexpected(std::move(prepared.error()));
+        }
+        if (!*prepared) {
+            return {};
+        }
+        if (auto installed = installTrainingModel(scene, std::move(**prepared)); !installed) {
+            return installed;
+        }
+        return applyTrainingCropBox(params, scene);
     }
 
     std::expected<void, std::string> validateDatasetPath(

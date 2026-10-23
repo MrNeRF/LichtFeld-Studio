@@ -702,6 +702,10 @@ namespace lfs::core {
             return box;
         }
 
+        std::optional<std::array<float, 3>> parse_cropbox_rotation(const std::string_view spec) {
+            return parse_float_list<3>(spec);
+        }
+
         bool is_eval_mask_depth(const std::string_view spec) {
             return spec.starts_with("depth:");
         }
@@ -1530,6 +1534,8 @@ namespace lfs::core {
                 json["optimization"] = opt_copy.to_json();
                 if (params.cropbox)
                     json["cropbox"] = *params.cropbox;
+                if (params.cropbox_rotation)
+                    json["cropbox_rotation"] = *params.cropbox_rotation;
 
                 const auto now = std::chrono::system_clock::now();
                 const auto time_t_val = std::chrono::system_clock::to_time_t(now);
