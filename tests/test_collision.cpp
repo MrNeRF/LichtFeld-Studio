@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "../src/core/collision_sparse.hpp"
+#include "../src/visualizer/gui/collision_job_status.hpp"
 #include "core/collision.hpp"
 #include "core/collision_serialization.hpp"
 #include <algorithm>
@@ -11,6 +12,27 @@
 #include <random>
 
 using namespace lfs::core;
+TEST(CollisionJobStatus, NamesCpuGpuAndFilterWorkWithoutParsingFailures) {
+    using lfs::vis::gui::collisionTaskLabel;
+    EXPECT_EQ(collisionTaskLabel("Voxelizing GPU: 0/100"), "Preparing Gaussian bounds on CPU");
+    EXPECT_EQ(collisionTaskLabel("Voxelizing GPU: 30/100"), "Finding potentially occupied regions on GPU");
+    EXPECT_EQ(collisionTaskLabel("Voxelizing GPU: 90/100"), "Evaluating collision cells on GPU");
+    EXPECT_EQ(collisionTaskLabel("Voxelizing GPU: 97/100"), "Assembling sparse occupancy on CPU");
+    EXPECT_EQ(collisionTaskLabel("Clustering coarse Voxelizing GPU: 0/100"), "Connected-region filter: Preparing Gaussian bounds on CPU");
+    EXPECT_EQ(collisionTaskLabel("Voxelizing GPU: unknown"), "Voxelizing GPU: unknown");
+    EXPECT_EQ(collisionTaskLabel("Surface: 100 chunks, 2000 triangles"), "Surface: 100 chunks, 2000 triangles");
+}
+TEST(CollisionJobStatus, FailuresGiveRecoveryAdviceAndDistinguishCancellation) {
+    using lfs::vis::gui::collisionFailureInfo;
+    EXPECT_TRUE(collisionFailureInfo("Collision generation cancelled").cancelled);
+    const auto budget = collisionFailureInfo("Collision GPU active-region budget exceeded (32 million regions)");
+    EXPECT_FALSE(budget.cancelled);
+    EXPECT_NE(budget.advice.find("larger cells"), std::string::npos);
+    EXPECT_NE(collisionFailureInfo("CUDA: out of memory").advice.find("GPU"), std::string::npos);
+    EXPECT_EQ(collisionFailureInfo("Invalid number: opacity").title, "Check the collision settings");
+    EXPECT_EQ(collisionFailureInfo("No occupied voxels").title, "No collision cells found");
+    EXPECT_FALSE(collisionFailureInfo("Unexpected failure").advice.empty());
+}
 namespace {
     CollisionVolume grid(glm::ivec3 dimensions = {12, 12, 12}, float size = 0.1f) {
         CollisionVolume g;
