@@ -633,7 +633,7 @@ namespace lfs::core::image_codecs {
             failure(MetadataStatus::Limited, "JXL: metadata decoder allocation limit exhausted");
             return result;
         }
-        if (JxlDecoderSubscribeEvents(decoder.get(), JXL_DEC_BOX) != JXL_DEC_SUCCESS) {
+        if (JxlDecoderSubscribeEvents(decoder.get(), JXL_DEC_BOX | JXL_DEC_BOX_COMPLETE) != JXL_DEC_SUCCESS) {
             failure(MetadataStatus::Malformed, "JXL: cannot configure box collection");
             return result;
         }
@@ -705,6 +705,13 @@ namespace lfs::core::image_codecs {
                             error.c_str());
                     return result;
                 }
+            } else if (status == JXL_DEC_BOX_COMPLETE) {
+                // Commit before parsing the next header: it may be malformed.
+                // Completion events are not new boxes and must not change ordinals.
+                if (active != Carrier::None && release_output())
+                    finish();
+                if (exif_stopped && xml_stopped)
+                    return result;
             } else if (status == JXL_DEC_BOX || status == JXL_DEC_SUCCESS) {
                 if (active != Carrier::None && release_output())
                     finish();

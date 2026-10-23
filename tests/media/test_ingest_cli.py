@@ -371,10 +371,18 @@ class IngestCLI(unittest.TestCase):
                 self.assertEqual(block["interpretation"]["status"], "parsed")
                 self.assertFalse(block["jxl_box"]["brotli_compressed"])
             reference, _ = self.invoke("source-metadata", fixture)
-            # The second box preserves duplicate observations, including separate fact references.
-            actual = {(fact["semantic"], str(fact["value"])) for fact in result["summary"]["facts"]}
-            expected = {(fact["semantic"], str(fact["value"])) for fact in reference["summary"]["facts"]}
-            self.assertEqual(actual, expected)
+            # Compare every occurrence, including compound inputs and its source block.
+            expected = []
+            for ordinal in range(2):
+                for fact in reference["summary"]["facts"]:
+                    duplicate = json.loads(json.dumps(fact))
+                    for source in [duplicate["source"], *duplicate["inputs"]]:
+                        self.assertEqual(source["kind"], "exif_entry")
+                        source["block"] = ordinal
+                    expected.append(duplicate)
+            self.assertCountEqual(result["summary"]["facts"], expected)
+            self.assertEqual([block["jxl_box"]["ordinal"] for block in exif["blocks"]], [2, 5])
+            self.assertEqual(metadata["image_xmp"]["blocks"][0]["jxl_box"]["ordinal"], 3)
             self.assertEqual(path.read_bytes(), original)
             self.assertEqual(path.stat().st_mtime_ns, stamp)
         # Independent Brotli fixture: four-byte zero offset and a little-endian orientation IFD.
@@ -390,6 +398,7 @@ class IngestCLI(unittest.TestCase):
         self._xmp_jxl(path, [(b"Exif", b""), (b"Exif", bytes.fromhex("ffffffff"))])
         result, _ = self.invoke("source-metadata", path)
         self.assertEqual(result["metadata"]["image_exif"]["status"], "collected")
+        self.assertEqual(len(result["metadata"]["image_exif"]["blocks"]), 2)
         self.assertTrue(all(b["interpretation"]["status"] == "malformed" for b in result["metadata"]["image_exif"]["blocks"]))
 
     def test_source_metadata_exif_jxl_independent_quotas(self):
@@ -447,7 +456,7 @@ class IngestCLI(unittest.TestCase):
             self.assertEqual(exif["status"], "malformed", exif)
             self.assertEqual([bytes.fromhex(b["bytes"]) for b in exif["blocks"]], [b"prefix"])
         # A carrier stopped at its quota does not claim later malformed boxes were examined.
-        self._xmp_jxl(path, [(b"Exif", b"one"), (b"Exif", b"two")], [(b"xml ", b"last"), (b"junk", b"complete")])
+        self._xmp_jxl(path, [(b"Exif", b"one"), (b"Exif", b"two")], [(b"xml ", b"last")])
         path.write_bytes(path.read_bytes() + struct.pack(">I4s", 7, b"junk"))
         result = self._xmp_limited(path, collection_limits={"blocks": 1})
         self.assertEqual(result["image_exif"]["status"], "limited")
@@ -476,6 +485,31 @@ class IngestCLI(unittest.TestCase):
         path.write_bytes((ROOT / "tests/data/jxl/rgb8.jxl").read_bytes())
         result, _ = self.invoke("source-metadata", path)
         self.assertEqual(result["metadata"]["image_exif"]["status"], "absent")
+
+    def test_source_metadata_jxl_completed_boxes_survive_bad_next_header(self):
+        path = self.root / "complete-box-before-error.jxl"
+        exif = bytes.fromhex("0000000049492a0008000000010012010300010000000600000000000000")
+        cases = [
+            (b"Exif", exif, bytes.fromhex("1b1d00000471633b82982dd1d44c4a60f12503273dfc9f790164538216"), "image_exif"),
+            (b"xml ", b"<xmp/>\x00\xff", bytes.fromhex("8b03803c786d702f3e00ff03"), "image_xmp"),
+        ]
+        for kind, decoded, brotli, carrier in cases:
+            for compressed in (False, True):
+                for tail in (struct.pack(">I4s", 7, b"junk"), struct.pack(">I4sI", 1, b"junk", 0)):
+                    with self.subTest(kind=kind, compressed=compressed, tail=tail):
+                        self._xmp_jxl(path, after=[(b"brob", kind + brotli)] if compressed else [(kind, decoded)])
+                        path.write_bytes(path.read_bytes() + tail)
+                        result, _ = self.invoke("source-metadata", path)
+                        observed = result["metadata"][carrier]
+                        self.assertEqual(observed["status"], "malformed", observed)
+                        self.assertEqual(len(observed["blocks"]), 1)
+                        block = observed["blocks"][0]
+                        self.assertEqual(bytes.fromhex(block["bytes"]), decoded)
+                        self.assertEqual(block["jxl_box"], {"ordinal": 3, "brotli_compressed": compressed})
+                        if carrier == "image_exif":
+                            self.assertEqual(block["interpretation"]["status"], "parsed")
+                            legacy, _ = self.invoke("source-exif", path)
+                            self.assertEqual(legacy["exif"], observed)
 
     def test_source_metadata_xmp_jxl_boxes_and_legacy(self):
         path = self.root / "XMP JPEG XL \u00e9 \u65e5\u672c\u8a9e.jxl"
