@@ -2564,7 +2564,7 @@ class OptimizationParams:
     @property
     def depth_loss_mode(self) -> str:
         """
-        Depth prior convention: 'ssi' (auto-detect), 'ssi-disparity', or 'ssi-depth'
+        Depth prior convention: 'ssi' (auto-detect), 'ssi-disparity', 'ssi-depth', or 'metric' (absolute depth, 16-bit in mm)
         """
 
     @depth_loss_mode.setter
