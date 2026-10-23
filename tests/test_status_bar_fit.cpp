@@ -123,6 +123,9 @@ namespace {
         std::string mode_color = "#ffffff";
         bool show_training = true;
         bool progress_miner = false;
+        bool progress_pacman = false;
+        std::string pacman_left = "0dp";
+        std::string pacman_sprite = "../icon/pacman/open.png";
         bool miner_raised = false;
         bool miner_step_a = false;
         bool miner_strike = false;
@@ -260,6 +263,9 @@ namespace {
             bound &= constructor.Bind("mode_color", &model_.mode_color);
             bound &= constructor.Bind("show_training", &model_.show_training);
             bound &= constructor.Bind("progress_miner", &model_.progress_miner);
+            bound &= constructor.Bind("progress_pacman", &model_.progress_pacman);
+            bound &= constructor.Bind("pacman_left", &model_.pacman_left);
+            bound &= constructor.Bind("pacman_sprite", &model_.pacman_sprite);
             bound &= constructor.Bind("miner_raised", &model_.miner_raised);
             bound &= constructor.Bind("miner_step_a", &model_.miner_step_a);
             bound &= constructor.Bind("miner_strike", &model_.miner_strike);

@@ -1008,6 +1008,7 @@
     "progress_bar_style": "進捗バー",
     "progress_bar_classic": "クラシック",
     "progress_bar_miner": "Miner",
+    "progress_bar_pacman": "Pac-Man",
     "viewport_chrome_style": "ビューポート操作",
     "viewport_chrome_solid": "不透明",
     "viewport_chrome_translucent": "半透明",

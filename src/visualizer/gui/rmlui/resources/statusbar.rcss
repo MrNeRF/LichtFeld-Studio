@@ -550,3 +550,82 @@ body.fit-8 #mcp-summary { display: none; }
 body.fit-8 #mcp-compact { display: block; }
 body.fit-8 #mcp-chip { margin-right: 4dp; padding: 0 3dp; }
 body.fit-8 #fps-group { margin-left: 6dp; }
+
+/* Arcade track: the remaining pellets are eaten at the training frontier. */
+#progress-container.pacman {
+    background-color: #080c20;
+    border-radius: 5dp;
+    decorator: none;
+    border-top: 1dp #3855d6;
+    border-bottom: 1dp #3855d6;
+    box-sizing: border-box;
+}
+
+#progress-container.pacman #progress-fill {
+    visibility: hidden;
+}
+
+.pacman-pellet {
+    position: absolute;
+    top: 5dp;
+    width: 3dp;
+    height: 3dp;
+    border-radius: 2dp;
+    background-color: #ffdfaa;
+}
+
+#pacman-figure {
+    position: absolute;
+    top: 0;
+    width: 14dp;
+    height: 14dp;
+    pointer-events: none;
+    z-index: 2;
+}
+
+#progress-text.progress-text--pacman {
+    width: auto;
+    padding: 0 3dp;
+    line-height: 14dp;
+    color: #fff3bd;
+    background-color: #080c20;
+    text-align: left;
+}
+
+/* Cyan save-step handles stay distinct from the cream power pellets. */
+#progress-container.pacman .progress-marker {
+    top: 4dp;
+    bottom: auto;
+    height: 6dp;
+    z-index: 3;
+    border-radius: 4dp;
+    background-color: #b8eaff;
+}
+
+#progress-container.pacman .progress-marker.is-past {
+    background-color: #526393;
+}
+
+#progress-container.pacman .progress-marker.is-hovered,
+#progress-container.pacman .progress-marker.is-preview {
+    top: 3dp;
+    height: 8dp;
+    background-color: #ffffff;
+}
+
+.pacman-item {
+    position: absolute;
+    top: 0;
+    width: 14dp;
+    height: 14dp;
+    pointer-events: none;
+}
+
+.pacman-power-pellet {
+    position: absolute;
+    top: 3dp;
+    width: 8dp;
+    height: 8dp;
+    border-radius: 4dp;
+    background-color: #fff3bd;
+}

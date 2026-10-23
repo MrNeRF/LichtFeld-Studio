@@ -1008,6 +1008,7 @@
     "progress_bar_style": "Voortgangsbalk",
     "progress_bar_classic": "Klassiek",
     "progress_bar_miner": "Miner",
+    "progress_bar_pacman": "Pac-Man",
     "viewport_chrome_style": "Viewportbediening",
     "viewport_chrome_solid": "Dekkend",
     "viewport_chrome_translucent": "Doorschijnend",

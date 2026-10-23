@@ -66,6 +66,7 @@ class PreferencesPanel(Panel):
     PROGRESS_BAR_OPTIONS = (
         ("classic", "preferences.progress_bar_classic"),
         ("miner", "preferences.progress_bar_miner"),
+        ("pacman", "preferences.progress_bar_pacman"),
     )
 
     VIEWPORT_CHROME_OPTIONS = (
