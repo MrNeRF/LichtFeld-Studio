@@ -181,8 +181,12 @@ namespace lfs::core::nn::models {
         if (height <= 0 || width <= 0)
             return 0;
         const std::size_t pixels = static_cast<std::size_t>(height) * static_cast<std::size_t>(width);
+#ifdef LFS_TENSOR_HIP
         const bool hip_half = compute_ == DataType::Float16 && dispatch_ &&
                               gpu_backend_of(weights_.begin()->second) == GpuBackend::HIP;
+#else
+        constexpr bool hip_half = false;
+#endif
         // HIP runs the half-precision shared-feature path, not the exact
         // float32 arena. Using the latter's estimate creates unnecessarily
         // small tiles and repeatedly evaluates their large VGG halos.
@@ -232,6 +236,7 @@ namespace lfs::core::nn::models {
                 mask_bytes += allocation_size(static_cast<std::size_t>(height >> block) *
                                               static_cast<std::size_t>(width >> block) * sizeof(float));
         }
+#ifdef LFS_TENSOR_HIP
         if (compute_ == DataType::Float16 && dispatch_ &&
             gpu_backend_of(weights_.begin()->second) == GpuBackend::HIP) {
             // Conservative bound: three shared half feature buffers (384
@@ -239,6 +244,7 @@ namespace lfs::core::nn::models {
             return crop_h * crop_w * kFastBytesPerPixel +
                    kBlocks * sizeof(float) + mask_bytes;
         }
+#endif
         if (compute_ == DataType::Float32 || gpu_backend_of(weights_.begin()->second) != GpuBackend::CUDA) {
             std::size_t bytes = crop_h * crop_w * kExactBytesPerPixel + mask_bytes;
             if (compute_ == DataType::Float16 && dispatch_ &&
