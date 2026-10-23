@@ -1511,6 +1511,8 @@ namespace lfs::core {
                 json["dataset"] = params.dataset.to_json();
                 json["server"] = params.server.to_json();
                 json["optimization"] = opt_copy.to_json();
+                if (params.cropbox)
+                    json["cropbox"] = *params.cropbox;
 
                 const auto now = std::chrono::system_clock::now();
                 const auto time_t_val = std::chrono::system_clock::to_time_t(now);

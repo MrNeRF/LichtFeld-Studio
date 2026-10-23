@@ -16,6 +16,8 @@
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include <httplib.h>
 
+#include "core/tls_distrust.hpp"
+
 namespace lfs::vis::gui {
 
     MenuBar::MenuBar() = default;
@@ -52,6 +54,10 @@ namespace lfs::vis::gui {
 
         thumb.download_future = std::async(std::launch::async, [video_id]() -> std::vector<uint8_t> {
             httplib::Client cli("https://img.youtube.com");
+            cli.set_server_certificate_verifier([](SSL* ssl) {
+                return lfs::core::peer_chain_has_distrusted_ca(ssl) ? httplib::SSLVerifierResponse::CertificateRejected
+                                                                    : httplib::SSLVerifierResponse::NoDecisionMade;
+            });
             cli.set_connection_timeout(5);
             cli.set_read_timeout(5);
 

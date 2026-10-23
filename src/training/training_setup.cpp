@@ -1335,7 +1335,32 @@ namespace lfs::training {
         if (!*prepared) {
             return {};
         }
-        return installTrainingModel(scene, std::move(**prepared));
+        if (auto installed = installTrainingModel(scene, std::move(**prepared)); !installed || !params.cropbox) {
+            return installed;
+        }
+        const auto* model = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
+        if (!model) {
+            return std::unexpected("--cropbox needs the training model in the scene");
+        }
+        lfs::core::NodeId cropbox_id = scene.getCropBoxForSplat(model->id);
+        if (cropbox_id == lfs::core::NULL_NODE) {
+            cropbox_id = scene.addCropBox("Model_cropbox", model->id);
+        }
+        if (cropbox_id == lfs::core::NULL_NODE) {
+            return std::unexpected("Failed to add the --cropbox region of interest to the training model");
+        }
+        const auto& box = *params.cropbox;
+        lfs::core::CropBoxData data = scene.getCropBoxData(cropbox_id) ? *scene.getCropBoxData(cropbox_id)
+                                                                       : lfs::core::CropBoxData{};
+        data.min = {box[0], box[1], box[2]};
+        data.max = {box[3], box[4], box[5]};
+        data.inverse = false;
+        data.enabled = true;
+        scene.setCropBoxData(cropbox_id, data);
+        scene.setNodeTransform(cropbox_id, glm::mat4{1.0f});
+        LOG_INFO("Region of interest: crop box ({}, {}, {}) to ({}, {}, {})", box[0], box[1], box[2], box[3], box[4],
+                 box[5]);
+        return {};
     }
 
     std::expected<void, std::string> validateDatasetPath(

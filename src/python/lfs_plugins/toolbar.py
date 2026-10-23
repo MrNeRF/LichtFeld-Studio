@@ -163,13 +163,13 @@ def _toggle_bottom_dock_panel(panel_id, visible, set_visible):
 
 
 def _crop_roi_param_state():
-    """Return (available, LR scale, loss weight, growth inside) from the live parameter owner."""
+    """Return (available, LR scale, loss weight, growth inside, crop at end) from the live parameter owner."""
     try:
         import lichtfeld as lf
 
         getter = getattr(lf, "optimization_params", None)
         params = getter() if callable(getter) else None
-        unavailable = (False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT, _CROP_ROI_GROWTH_DEFAULT)
+        unavailable = (False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT, _CROP_ROI_GROWTH_DEFAULT, False)
         if params is None:
             return unavailable
         has_params = getattr(params, "has_params", None)
@@ -179,11 +179,12 @@ def _crop_roi_param_state():
         lr_scale = float(params.cropbox_lr_scale)
         loss_weight = float(params.cropbox_loss_weight)
         growth_inside = float(params.cropbox_growth_inside)
+        crop_at_end = bool(params.get("crop_to_cropbox"))
         if not all(math.isfinite(value) for value in (lr_scale, loss_weight, growth_inside)):
             return unavailable
-        return True, lr_scale, loss_weight, growth_inside
+        return True, lr_scale, loss_weight, growth_inside, crop_at_end
     except (AttributeError, TypeError, ValueError, RuntimeError):
-        return False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT, _CROP_ROI_GROWTH_DEFAULT
+        return False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT, _CROP_ROI_GROWTH_DEFAULT, False
 
 
 def _button_record(button_id, action, value, icon_src, *,
@@ -1516,6 +1517,7 @@ class _ViewportToolbarController:
         self._cropbox_lr_scale = _CROP_ROI_DEFAULT
         self._cropbox_loss_weight = _CROP_ROI_DEFAULT
         self._cropbox_growth_inside = _CROP_ROI_GROWTH_DEFAULT
+        self._crop_to_cropbox = False
         self._show_selection_volume_gizmos = False
         self._show_transform_space_controls = False
         self._show_transform_pivot_controls = False
@@ -1573,6 +1575,15 @@ class _ViewportToolbarController:
             "cropbox_growth_inside",
             lambda: f"{self._cropbox_growth_inside:.2f}",
             lambda value: self._set_crop_roi_param("cropbox_growth_inside", value),
+        )
+        model.bind_func(
+            "label_crop_to_cropbox",
+            lambda: _ui_label("toolbar.crop_to_roi_at_end", "Crop to ROI at end"),
+        )
+        model.bind(
+            "crop_to_cropbox",
+            lambda: self._crop_to_cropbox,
+            self._set_crop_to_cropbox,
         )
         measured_lambda = lambda: f"{self._scale_distance_measured:.4f}" if self._scale_distance_points >= 2 else "—"
         model.bind_func("scale_distance_measured_str", measured_lambda)
@@ -1856,7 +1867,7 @@ class _ViewportToolbarController:
             # even while hidden. Do not replace live values with UI defaults when
             # training initialization clears selection or detaches the owner.
             return dirty
-        _node_name, _enabled, _available, lr_scale, loss_weight, growth_inside = cropbox_toolbar_signature
+        _node_name, _enabled, _available, lr_scale, loss_weight, growth_inside, crop_at_end = cropbox_toolbar_signature
 
         dirty |= self._sync_value("cropbox_lr_scale", float(lr_scale))
         dirty |= self._sync_value("cropbox_loss_weight", float(loss_weight))
@@ -1864,6 +1875,7 @@ class _ViewportToolbarController:
             dirty = True
             if self._handle:
                 self._handle.dirty("cropbox_growth_inside_percent")
+        dirty |= self._sync_value("crop_to_cropbox", bool(crop_at_end))
         return dirty
 
     def _sync_flag(self, name, value):
@@ -1883,6 +1895,30 @@ class _ViewportToolbarController:
         if self._handle:
             self._handle.dirty(name)
         return True
+
+    def _set_crop_to_cropbox(self, value):
+        signature = self._gizmo.cropbox_toolbar_signature()
+        if signature is None or not signature[2]:
+            return
+        enabled = value if isinstance(value, bool) else str(value).lower() in ("1", "true", "on")
+        try:
+            import lichtfeld as lf
+
+            params = lf.optimization_params()
+            if params is None:
+                return
+            has_params = getattr(params, "has_params", None)
+            if callable(has_params) and not has_params():
+                return
+            params.set("crop_to_cropbox", enabled)
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            return
+        self._sync_value("crop_to_cropbox", enabled)
+        self._last_toolbar_signature = None
+        if self._handle:
+            request_update = getattr(self._handle, "request_update", None)
+            if callable(request_update):
+                request_update()
 
     def _set_crop_roi_param(self, name, value):
         # Recheck live selection: an event may arrive before the next toolbar

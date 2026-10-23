@@ -130,8 +130,10 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ env.VCPKG_ROOT }}
-          key: vcpkg-tool-${{ runner.os }}-2026-02-21
-          restore-keys: vcpkg-tool-${{ runner.os }}-
+          # The vcpkg checkout must contain every pinned port version, so the key moves
+          # with the pins. No restore-keys: an older clone restored under a new key
+          # would make the clone below fail on the existing directory.
+          key: vcpkg-tool-${{ runner.os }}-2026-10-22
 
       - name: Setup vcpkg
         if: steps.cache-vcpkg-tool.outputs.cache-hit != 'true'

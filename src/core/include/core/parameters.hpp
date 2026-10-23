@@ -261,6 +261,9 @@ namespace lfs::core {
             // With an active crop box: share of new splats placed inside it (0..1). 0 = auto: growth
             // follows the ROI-weighted error with no fixed split.
             float cropbox_growth_inside = 0.0f;
+            // With an active crop box: when training ends, the splats outside it are removed, so the saved
+            // project and every export hold only the region of interest.
+            bool crop_to_cropbox = false;
             float lambda_dssim = 0.2f;
             float min_opacity = 0.005f;
             size_t refine_every = 100;
@@ -584,6 +587,10 @@ namespace lfs::core {
 
             // Optional splat file for initialization (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)
             std::optional<std::string> init_path = std::nullopt;
+
+            // Region of interest: an enabled crop box on the training model, min x, y, z then max x, y, z in the
+            // dataset's coordinates. --cropbox-loss-weight and --cropbox-lr-scale set how much the rest still counts.
+            std::optional<std::array<float, 6>> cropbox = std::nullopt;
 
             // Optional trained splats to append to the training model before optimizer initialization
             std::vector<std::filesystem::path> add_splat_paths;
