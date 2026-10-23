@@ -1304,7 +1304,7 @@ namespace lfs::vis::gui {
             float text_left_dp = 0.0f;
             if (model_.progress_tessle) {
                 const auto frame = tessle::buildFrame(progress, bar_dp, static_cast<int64_t>(elapsed * 1000.0f));
-                // Prefer the cleared trail, leaving the pellets ahead unobstructed.
+                // Prefer the cleared trail, leaving the leaves ahead unobstructed.
                 const float desired = frame.left_dp >= text_width_dp + 8.0f
                                           ? frame.left_dp - text_width_dp - 8.0f
                                           : frame.left_dp + 18.0f;

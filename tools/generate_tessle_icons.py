@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Regenerate Tessle's sprites from the selected CSS concept (requires Pillow)."""
+"""Regenerate Tessle Leafjaw's sprites from the selected CSS concept (requires Pillow)."""
 from pathlib import Path
 from PIL import Image, ImageDraw
 
 OUTPUT = Path(__file__).resolve().parents[1] / "src/visualizer/gui/assets/icon/tessle"
 SCALE = 8
-SIZE = 18
+SIZE = 28
+SKIN, SHADE, INK, TOOTH = "#70d6ad", "#459c7d", "#193b34", "#fff2d2"
 
 
 def canvas():
@@ -18,72 +19,64 @@ def box(values):
     return tuple(round(v * SCALE) for v in values)
 
 
-def save(image, name):
-    image.resize((56, 56), Image.Resampling.LANCZOS).save(OUTPUT / f"{name}.png")
+def save(image, name, size=(56, 56)):
+    image.resize(size, Image.Resampling.LANCZOS).save(OUTPUT / f"{name}.png")
 
 
-def robot(powered, openness):
+def leaf_shape(draw, bounds, color):
+    # Opposite rounded corners form the same leaf silhouette as the CSS concept.
+    x, y, right, bottom = bounds
+    points = []
+    for start, control, end in (((right, y), (x, y), (x, bottom)),
+                                ((x, bottom), (right, bottom), (right, y))):
+        for step in range(21):
+            t = step / 20
+            points.append(box(tuple((1 - t) ** 2 * a + 2 * (1 - t) * t * b + t ** 2 * c
+                                    for a, b, c in zip(start, control, end))))
+    draw.polygon(points, fill=color)
+
+
+def creature(openness):
     image = canvas()
     draw = ImageDraw.Draw(image)
-    skin, shade, visor = ("#b3ffe1", "#76b6a0", "#713f77") if powered else ("#62d7af", "#2f9d83", "#153c3b")
-    draw.rounded_rectangle(box((0, 5, 2, 12)), radius=SCALE, fill=shade)
-    draw.rectangle(box((5, 14, 8, 16)), fill=shade)
-    draw.rectangle(box((11, 14, 14, 16)), fill=shade)
-    draw.rounded_rectangle(box((3, 8, 16, 13)), radius=SCALE, fill="#13272a")
+    leaf_shape(draw, (0, 13, 10, 21), SHADE)
+    for x in (9, 19):
+        draw.rounded_rectangle(box((x, 23, x + 5, 27)), radius=2 * SCALE, fill=SHADE)
+    for x, y, color, angle in ((8, 0, SHADE, 20), (13, 1, SKIN, -12)):
+        ear = canvas()
+        leaf_shape(ImageDraw.Draw(ear), (x, y, x + 6, y + 10), color)
+        image.alpha_composite(ear.rotate(angle, Image.Resampling.BICUBIC, center=box((x + 3, y + 5))))
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle(box((7, 16, 27, 23)), radius=2 * SCALE, fill=INK)
 
     jaw = canvas()
-    jaw_draw = ImageDraw.Draw(jaw)
-    jaw_draw.rounded_rectangle(box((3, 10, 16, 14)), radius=SCALE, fill=shade)
-    jaw_draw.rectangle(box((9, 9, 11, 11)), fill="#fff3d7")
-    jaw = jaw.rotate(-10 * openness, resample=Image.Resampling.BICUBIC,
-                     center=box((5, 10)), translate=box((0, 2 * openness - 1)))
-    image.alpha_composite(jaw)
-    draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle(box((2, 2, 16, 10)), radius=2 * SCALE, fill=skin)
-    draw.rectangle(box((3, 9, 16, 10)), fill=shade)
-    draw.rectangle(box((13, 9, 15, 12)), fill="#fff3d7")
-    draw.rounded_rectangle(box((7, 4, 14, 7)), radius=SCALE // 2, fill=visor)
-    for x in (8, 12):
-        draw.rectangle(box((x, 5, x + 1.2, 6.3)), fill="#fff8e2" if powered else "#eefdf6")
-    return image
+    draw = ImageDraw.Draw(jaw)
+    top = 17 if openness == 0 else 18
+    draw.rounded_rectangle(box((6, top, 26, top + 5)), radius=3 * SCALE, fill=SHADE)
+    draw.rectangle(box((6, top, 26, top + 2)), fill=SHADE)
+    draw.rectangle(box((18, top - 2, 21, top + 1)), fill=TOOTH)
+    image.alpha_composite(jaw.rotate(-21 * openness, Image.Resampling.BICUBIC, center=box((8, top))))
 
-
-def drone(color, alternate=False, powered=False):
-    image = canvas()
-    draw = ImageDraw.Draw(image)
-    y = 0.6 if alternate else 0
-    shade = "#397293" if powered else "#946240"
-    draw.rectangle(box((1, 7 + y, 3, 10 + y)), fill=shade)
-    draw.rectangle(box((15, 7 + y, 17, 10 + y)), fill=shade)
-    draw.rounded_rectangle(box((3, 5 + y, 15, 13 + y)), radius=SCALE, fill=shade)
-    draw.rounded_rectangle(box((3, 5 + y, 14, 12 + y)), radius=SCALE, fill=color)
-    if powered:
-        for x in (5, 10):
-            draw.rectangle(box((x, 8 + y, x + 1.7, 9.7 + y)), fill="#f6f5e5")
-    else:
-        draw.rectangle(box((10, 8 + y, 12, 10 + y)), fill="#25313a")
+    upper = canvas()
+    draw = ImageDraw.Draw(upper)
+    draw.rounded_rectangle(box((5, 5, 27, 19)), radius=8 * SCALE, fill=SKIN)
+    draw.rounded_rectangle(box((5, 12, 27, 19)), radius=2 * SCALE, fill=SKIN)
+    draw.ellipse(box((15, 8, 19, 12)), fill=INK)
+    draw.rounded_rectangle(box((22, 17, 25, 20)), radius=SCALE // 2, fill=TOOTH)
+    image.alpha_composite(upper.rotate(4 * openness, Image.Resampling.BICUBIC, center=box((5, 19))))
     return image
 
 
 def generate():
     OUTPUT.mkdir(parents=True, exist_ok=True)
-    for powered in (False, True):
-        for name, openness in (("closed", 0), ("half", 0.5), ("open", 1)):
-            save(robot(powered, openness), ("power-" if powered else "") + name)
-    for name, color in (("amber", "#ddab78"), ("copper", "#c99b8e")):
-        for alternate in (False, True):
-            save(drone(color, alternate), f"drone-{name}-{'b' if alternate else 'a'}")
-    save(drone("#79adc8", powered=True), "powered-drone")
+    for name, openness in (("closed", 0), ("half", 0.5), ("open", 1)):
+        save(creature(openness), name)
 
-    image = canvas()
-    draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle(box((6, 6, 12, 11)), radius=SCALE, fill="#713f77")
-    draw.rectangle(box((8, 7, 10, 9)), fill="#b3ffe1")
-    draw.rectangle(box((3, 8, 5, 9)), fill="#76b6a0")
-    draw.rectangle(box((13, 8, 15, 9)), fill="#76b6a0")
-    save(image, "drone-core")
+    image = Image.new("RGBA", (6 * SCALE, 4 * SCALE))
+    leaf_shape(ImageDraw.Draw(image), (0, 0, 6, 4), "#b1d2ad")
+    save(image, "leaf", (48, 32))
 
-    # Save-step cherries remain the same size as the existing marker hit targets.
+    # Preserve the checkpoint fruit and its existing editing hit target.
     image = Image.new("RGBA", (14 * SCALE, 14 * SCALE))
     draw = ImageDraw.Draw(image)
     draw.line([box((3.5, 8)), box((8, 1)), box((10.5, 7.5))], fill="#6bd05a", width=SCALE)

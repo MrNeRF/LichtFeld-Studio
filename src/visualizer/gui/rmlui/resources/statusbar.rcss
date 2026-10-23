@@ -551,9 +551,9 @@ body.fit-8 #mcp-compact { display: block; }
 body.fit-8 #mcp-chip { margin-right: 4dp; padding: 0 3dp; }
 body.fit-8 #fps-group { margin-left: 6dp; }
 
-/* Tessle clears data chips along the training track. */
+/* Tessle eats leaf snacks along the training track. */
 #progress-container.tessle {
-    background-color: #111c1d;
+    background-color: #142824;
     border-radius: 2dp;
     decorator: none;
     border-bottom: 1dp #41665c;
@@ -564,12 +564,12 @@ body.fit-8 #fps-group { margin-left: 6dp; }
     visibility: hidden;
 }
 
-.tessle-pellet {
+.tessle-leaf {
     position: absolute;
-    top: 6dp;
-    width: 2dp;
+    top: 5dp;
+    width: 3dp;
     height: 2dp;
-    background-color: #b6e6d6;
+    pointer-events: none;
 }
 
 #tessle-figure {
@@ -586,7 +586,7 @@ body.fit-8 #fps-group { margin-left: 6dp; }
     padding: 0 3dp;
     line-height: 14dp;
     color: #e3f2ea;
-    background-color: #111c1d;
+    background-color: #142824;
     text-align: left;
 }
 
@@ -617,21 +617,4 @@ body.fit-8 #fps-group { margin-left: 6dp; }
     margin-left: -8dp;
     opacity: 1;
     background-color: transparent;
-}
-
-.tessle-item {
-    position: absolute;
-    top: 0;
-    width: 14dp;
-    height: 14dp;
-    pointer-events: none;
-}
-
-.tessle-power-pellet {
-    position: absolute;
-    top: 3dp;
-    width: 8dp;
-    height: 8dp;
-    border-radius: 4dp;
-    background-color: #e3f2ea;
 }

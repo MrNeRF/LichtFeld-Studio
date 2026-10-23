@@ -11,7 +11,6 @@ namespace lfs::vis::gui::tessle {
 
     struct Frame {
         float left_dp = 0.0f;
-        bool powered = false;
         std::string sprite;
         std::string scenery_rml;
     };

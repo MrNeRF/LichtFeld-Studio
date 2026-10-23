@@ -17,28 +17,22 @@ namespace lfs::vis::gui::tessle {
         }
     } // namespace
 
-    TEST(StatusBarTessle, PowerPelletActivatesBothChasesAndExpires) {
-        for (const float step : {0.20f, 0.65f}) {
-            const auto before = buildFrame(step - 0.001f, 360, 200);
-            const auto powered = buildFrame(step, 360, 200);
-            EXPECT_FALSE(before.powered);
-            EXPECT_TRUE(powered.powered);
-            EXPECT_EQ(count(before.scenery_rml, "tessle-power-pellet"),
-                      count(powered.scenery_rml, "tessle-power-pellet") + 1);
-            EXPECT_NE(powered.sprite.find("power-open.png"), std::string::npos);
-            EXPECT_EQ(count(powered.scenery_rml, "/powered-drone.png"), 1);
-            EXPECT_FALSE(buildFrame(step + 0.231f, 360, 200).powered);
-        }
+    TEST(StatusBarTessle, JawAnimationCyclesAndClampsNegativeTime) {
+        EXPECT_EQ(buildFrame(0.5f, 360, 0).sprite, "../icon/tessle/closed.png");
+        EXPECT_EQ(buildFrame(0.5f, 360, 100).sprite, "../icon/tessle/half.png");
+        EXPECT_EQ(buildFrame(0.5f, 360, 200).sprite, "../icon/tessle/open.png");
+        EXPECT_EQ(buildFrame(0.5f, 360, 300).sprite, "../icon/tessle/half.png");
+        EXPECT_EQ(buildFrame(0.5f, 360, 400).sprite, buildFrame(0.5f, 360, -100).sprite);
     }
 
-    TEST(StatusBarTessle, CollectedDroneRetreatsAsCoreThenDisappears) {
-        const auto before = buildFrame(0.349f, 360, 200);
-        const auto eaten = buildFrame(0.351f, 360, 200);
-        const auto after = buildFrame(0.389f, 360, 200);
-        EXPECT_EQ(count(before.scenery_rml, "tessle-drone"), 1);
-        EXPECT_EQ(count(eaten.scenery_rml, "tessle-drone"), 0);
-        EXPECT_EQ(count(eaten.scenery_rml, "tessle-core"), 1);
-        EXPECT_EQ(count(after.scenery_rml, "tessle-core"), 0);
+    TEST(StatusBarTessle, LeavesAreCollectedAndLeaveAClearTrail) {
+        const auto before = buildFrame(0.0f, 140, 0);
+        const auto after = buildFrame(0.1f, 140, 0);
+        EXPECT_NE(before.scenery_rml.find("left:22.00dp"), std::string::npos);
+        EXPECT_EQ(after.scenery_rml.find("left:22.00dp"), std::string::npos);
+        EXPECT_NE(after.scenery_rml.find("left:42.00dp"), std::string::npos);
+        EXPECT_EQ(count(before.scenery_rml, "tessle-leaf"), 6);
+        EXPECT_EQ(count(after.scenery_rml, "tessle-leaf"), 5);
     }
 
     TEST(StatusBarTessle, SceneryDoesNotInventCheckpoints) {
@@ -86,22 +80,17 @@ namespace lfs::vis::gui::tessle {
         EXPECT_EQ(count(classic + miner, "cherries.png"), 0);
     }
 
-    TEST(StatusBarTessle, EncountersStaySparseAtEveryWidth) {
+    TEST(StatusBarTessle, SceneryContainsOnlyLeavesAndCompletesCleanlyAtEveryWidth) {
         for (const float width : {140.0f, 220.0f, 360.0f}) {
             for (int step = 0; step <= 1000; ++step) {
                 const auto frame = buildFrame(step / 1000.0f, width, 200);
-                const auto drones = count(frame.scenery_rml, "tessle-drone");
-                const auto cherries = count(frame.scenery_rml, "tessle-cherries");
-                EXPECT_LE(drones, 1);
-                EXPECT_EQ(cherries, 0);
-                EXPECT_LE(count(frame.scenery_rml, "tessle-power-pellet"), 1);
-                EXPECT_LE(drones + cherries, 1);
+                EXPECT_EQ(count(frame.scenery_rml, "<img"), count(frame.scenery_rml, "tessle-leaf"));
+                EXPECT_EQ(count(frame.scenery_rml, "<div"), 0);
             }
+            const auto complete = buildFrame(1.0f, width, 0);
+            EXPECT_FLOAT_EQ(complete.left_dp, width - 14.0f);
+            EXPECT_TRUE(complete.scenery_rml.empty());
         }
-        const auto complete = buildFrame(1.0f, 140, 0);
-        EXPECT_FLOAT_EQ(complete.left_dp, 126.0f);
-        EXPECT_TRUE(complete.scenery_rml.empty());
-        EXPECT_FALSE(complete.powered);
     }
 
     TEST(StatusBarTessle, InvalidGeometryAndProgressCannotEscapeTheTrack) {
