@@ -10,16 +10,20 @@ No external `splat-transform` executable is required.
 
 The same surface-first setup works for rooms, outdoor scans and objects:
 
-1. Set **Scene units / metre**. Reconstruction coordinates have no inherent metric
-   scale: if a known two-metre object spans five scene units, enter `2.5`.
-   This calibrates collision and player dimensions without resizing the splats.
-2. Drag **Cell size (metres)**. Start at `0.05` (5 cm); larger cells are faster and
-   less detailed. The readout also shows the actual cell size in scene units.
-3. Place the camera near the desired region and press **Use camera position**.
-   Optionally enable **Keep connected region near seed** to exclude disconnected
-   source geometry. Leave it off to include all visible splats.
-4. Press **Generate / Regenerate**, inspect the boxes, then **Enter walk**.
-   Use **Overlay strength** and **Cutaway height** to reveal surfaces inside the scene.
+1. Leave **Auto** enabled for a practical starting resolution based on the visible
+   Gaussian surface footprint and source count. Large aerial scans need larger
+   cells than small object scans. The resolved size is reported after generation.
+2. Use the single **Cell size (metres)** field or its adjacent scrubber for an exact
+   custom value. Editing either turns Auto off. Custom resolution is never retried
+   at a larger size silently. Calibrate **Scene units / metre** under Advanced if
+   the reconstruction is not already metric.
+3. Start with **Surface cleanup**. It removes exceptional volumetric reconstruction
+   outliers without selecting a central crop or dropping disconnected components.
+   **Keep all splats** disables this statistical cleanup.
+4. Press **Generate**, inspect the boxes, then expand **Walk and edit** and choose
+   **Enter walk**. **Overlay strength** and **Cutaway height** reveal inner surfaces.
+   Select an existing collider to regenerate it, or choose **New collider** for a
+   separate node.
 
 **Next generation** shows the current source-filter, filling and carving settings. To restore the
 shared surface-only setup, choose **Reset to surface collision** under Advanced.
@@ -33,10 +37,11 @@ and elapsed time. Stages have different costs; the bar is not a time estimate.
 **Cancel** leaves the existing collider intact. Source snapshots own their data;
 source edits or a project change invalidate an in-flight result.
 
-The popup groups controls under collapsible **Generate collision**, **Inspect
-collision**, **Walk and edit**, and **Advanced** headers. Progress and errors stay
-visible when settings are collapsed. Advanced filtering, voxelization, filling,
-seed and triangle-surface controls each have their own header.
+The popup follows the Logging utility window: one compact settings toolbar and
+one generation action bar, with a scrollable body. Cell size, opacity and source
+filtering appear once. **Inspect collision**, **Walk and edit**, and **Advanced**
+are collapsible. Scale, filter tuning, filling, seed and triangle-surface options
+live under Advanced. Progress and error reports are outside those sections.
 
 Progress names the current CPU or GPU task and shows the work-stage count,
 percentage, elapsed time and time since the last progress update. Completed,
@@ -44,8 +49,8 @@ cancelled and failed operations retain their final status. A failure includes
 recovery advice and expandable **Error details** with the failed task, source
 count, relevant settings and exact diagnostic. **Copy details** copies that report.
 
-The initial seed comes from the camera, in data-world XYZ. Use camera position
-refreshes it. Keep it at standing eye height above the desired floor. Clustering
+The initial seed comes from the camera, in data-world XYZ. **Use camera position**
+under Advanced filtering refreshes it. Keep it at standing eye height above the desired floor. Strict clustering
 chooses the nearest coarse component; exterior filling needs an enclosed seed;
 capsule carving needs enough clearance there. The navigation up-axis is respected.
 
@@ -55,8 +60,9 @@ Advanced settings retain independent access to the pipeline parameters:
 
 | Stage | Defaults at one scene unit per metre |
 | --- | --- |
-| Cluster filter (optional) | Resolution `1`, opacity `0.999`, minimum contribution `0.1` |
-| Voxelization | Cell size `0.05`, accumulated opacity `0.1` |
+| Source filtering | Surface cleanup; optional connected source region at resolution `1` |
+| Strict opacity region (optional) | Resolution `1`, opacity `0.999`, minimum contribution `0.1` |
+| Voxelization | Auto cell size (minimum `0.05` metres), accumulated opacity `0.1` |
 | Common setup | Surface shell; all filling and carving off |
 | Optional room sealing | Exterior fill size `1.6`; carve height `1.6`, radius `0.2` when explicitly enabled |
 | Optional solid ground | Floor fill size `1.6` |
@@ -64,7 +70,9 @@ Advanced settings retain independent access to the pipeline parameters:
 
 Dimensional settings and the Walk capsule scale with **Scene units / metre**.
 Changing it rescales these settings, not existing generated nodes. Regenerate to
-apply changes. The exact voxel size remains editable in scene units under Advanced.
+apply changes. Exact cell size is edited in metres in the toolbar; its scene-unit
+equivalent is shown in the summary. Existing saved colliders retain exact resolution
+and strict filtering semantics unless Auto or the new filtering mode is selected.
 
 New authoring leaves ground fill **off**. Voxelization follows Gaussian
 surface support; filling below the first occupied support in each XZ column can
@@ -98,13 +106,32 @@ byte-identical upstream output.
 
 ## Connected-region filtering
 
-The optional filter coarse-voxelizes the source, finds the occupied component
-nearest the seed, and retains splats associated with that component. Flooding is
-six-connected: touching only at an edge or corner does not join components.
-The retained count and any seed snap distance are shown after generation. A snap
-to a distant component is a reason to move the seed, not proof of a good selection.
+**Surface cleanup** uses far-out Tukey fences (Q3 + 3 IQR) in log Gaussian
+thickness and equivalent-volume radius, with at least an eightfold scale margin.
+A very thin sheet (thickness below one quarter of Q1) is exempt from the volume
+criterion; a long axis alone is not enough to reject it. Statistics are invariant
+to uniform scene scale and rotation. Fewer than 128 usable splats bypass this
+statistical rejection. This is a heuristic: unusual legitimate multi-scale
+geometry can be rejected, so the removed count is reported and **Keep all splats**
+is always available. Source splats are never modified.
 
-Following [upstream cluster selection](https://github.com/playcanvas/splat-transform/blob/4f90012be983078010d631fa0572baa99d5c1965/src/lib/voxel/filter-cluster.ts),
+**Connected region** additionally builds a sparse graph of source-centre cells.
+All 26 immediate neighbours connect, including diagonal surface observations;
+Gaussian support boxes do not bridge the graph. This avoids requiring a sparse
+surface to reach 99.9% opacity before it can be structural. A seed inside an
+observed cell respects that component. Otherwise, the most populated component
+within two connectivity cells of the nearest observed support is selected, so a
+nearby isolated floater does not automatically beat a substantial surface.
+This is an explicit region filter: disconnected objects can be excluded. It does
+not dilate or fill the final collision cells.
+
+**Strict opacity region** preserves the earlier SuperSplat-style algorithm:
+coarse opacity voxelization, nearest occupied seed and six-connected flood fill.
+Its opacity and minimum-contribution controls are shown only in that mode.
+A scan with weak, thin or fragmented support may select a tiny component at the
+strict 0.999 default; inspect the retained count or choose Connected region.
+
+In Strict opacity region, following [upstream cluster selection](https://github.com/playcanvas/splat-transform/blob/4f90012be983078010d631fa0572baa99d5c1965/src/lib/voxel/filter-cluster.ts),
 splats centered inside the selected region are retained immediately, including
 thin and low-opacity detail. Other splats must contribute at occupied coarse-cell
 centers. If a splat's three-sigma AABB is wider than two coarse cells on any axis,
@@ -228,13 +255,19 @@ triangle surface. Coarsened optional surfaces can still be large. Render snapsho
 retain payload ownership until consumed, including when the collider is replaced
 or deleted during a frame.
 
-Storage uses an adaptive occupancy tree, not a dense world allocation. The CPU
+Storage uses an adaptive occupancy tree, not a dense world allocation.
+Sparse archives now use version-3 preorder ternary topology with short run tokens;
+it writes directly from the tree and decodes directly into native child blocks.
+Versions 1 (dense RLE) and 2 (sparse hex tags) remain readable. This avoids the
+old two-nodes-per-hex-character expansion that exceeded the JSON chapter limit
+on large scans. Cleanup notes and resolved automatic settings survive reload. The CPU
 reference evaluates 8³ bricks; CUDA evaluates 4³ bricks. GPU traversal uses uniform regions and packed 4-cubed leaf
 masks. Finite limits apply to actual allocated work: 10 million source Gaussians,
 512,000,001 CPU tree words (about 1.91 GiB), 8 million floor columns,
 32,000,001 floor-height nodes, 64 million surface vertices and 384 million indices.
-Grid axes are limited to 2^21 cells. CUDA worklists are bounded to 32 million
-active regions. GPU buffers must fit device limits.
+Grid axes are limited to 2^21 cells. CUDA uses at most 1,048,576 child regions per
+GPU batch, with parent queues retained per depth. Compressed occupied output is
+bounded to 64 million records. GPU buffers must fit device limits.
 Snapshots, allocator capacity, uploads and optional surfaces add peak memory.
 Failures name the exceeded budget and do not replace an existing collider.
 The legacy dense reader retains its 16-million-cell limit.
@@ -312,3 +345,61 @@ scale/shear uses conservative capsule clearance. Walk tests the voxel volume,
 so it can be more conservative than the optional smooth surface. Capsule queries
 skip sparse empty regions and use exact segment/box distance, rather than scanning
 all cells with iterative per-cell distance searches.
+
+## Robust generation measurements (Forest 001709)
+
+The full aligned five-million-splat `images_4` training snapshot was measured on
+an RTX 4090. These are native generation timings, excluding file parsing,
+training, GUI upload and optional triangle meshing:
+
+- Auto + Surface cleanup: **5.68 s**, resolved **0.28 m**, **161,762,050** occupied
+  cells, **669,886,756 bytes** canonical occupancy; **2.28 GiB** peak process RSS.
+- Explicit 0.20 m + Surface cleanup: **12.67 s** before the final linear validation
+  optimization; **404,009,408** cells, **1,426,784,516 bytes** occupancy.
+- Cleanup retained **4,997,972 / 5,000,000** source splats. No crop or ROI was used.
+- Connected source selection retained **4,824,405** splats near the road seed;
+  this is an optional region selection, not full-scene coverage.
+- Explicit 0.05 m exceeds the current 64M compressed-output-record budget on this
+  entire aerial scan. It fails explicitly; custom detail is never coarsened.
+
+GPU traversal uses bounded depth-first batches instead of a scene-wide frontier.
+Parent queues stay on-device; only occupancy records and small counters return.
+Conservative lower-density proofs emit uniform occupied regions before leaf-cell
+sampling; uncertain boundaries still use the exact original sampler. Sparse
+validation checks canonical sibling-block ownership and depth with one byte per
+eight-node block, reducing validation scratch memory eightfold. Auto estimates
+resolution from the median two-sigma projected Gaussian footprint and source count,
+with a target of 32M surface samples. It is a starting estimate, not a guarantee
+that every source or optional fill/surface operation fits its resource budget.
+
+Reproduce native timings with the `bench_collision_generation` opt-in CMake target
+and a native source snapshot (13 float32 values per row: centre xyz, three
+column-major one-sigma axes, alpha). The benchmark accepts `none`, `cleanup`,
+`connected`, `strict`, and `auto`, logs stage timestamps, and reports actual size,
+source count, occupancy and memory payload separately from parsing and meshing.
+
+For an equal-resolution comparison, the full 1M Bicycle snapshot was run three
+alternating trials per version at 5 cm with filtering/filling off, matching
+`-O3 -mavx2 -mfma` and CUDA fast-math settings. Median generation fell from
+**1.517 s to 1.286 s (15.2% less time)**. Every run produced the same
+**122,325,186 occupied cells** and **154,557,764-byte** canonical tree. Whole-process
+peak RSS was similar (~672 MiB before, ~676 MiB after); the eightfold scratch
+reduction is specific to validation, not an eightfold total-memory claim. The GPU voxelization stage (including transfers)
+was slightly slower on this small source; CPU validation savings
+produced the end-to-end improvement. The forest Auto result above uses a different
+resolution and must not be presented as an equal-detail speedup.
+
+The actual GUI full-forest run completed native generation in **5.263 s**
+(**7.5 s** through snapshot/preview adoption), resolved 0.28 m, with
+**161,762,005** occupied cells and **638.8 MiB** occupancy. Original Model=5M
+remained visible. All **1,874 camera world transforms** matched their pre-generation
+fingerprint. The small occupancy difference from the standalone PLY benchmark
+comes from native snapshot/PLY reconstruction and grid-frame floating point;
+this is not the equal-input Bicycle comparison.
+
+A separate `forest-collision-adaptive-validation.licht` saved and reopened through
+actual archive hydration with both Model=5M and the collider restored, all 1,874
+cameras present, Auto still enabled at 0.28 m, and the cleanup count preserved.
+The prior hex encoding produced an 87,110,676-byte JSON chapter that exceeded the
+64 MiB reader limit; the version-3 encoding reopens successfully under that same
+limit. The pristine training project, trained PLY and aligned handoff are unchanged.
