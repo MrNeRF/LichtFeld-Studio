@@ -944,6 +944,15 @@ namespace lfs::core::internal {
 
     void VulkanContext::submit(const VkCommandBuffer command,
                                const uint64_t signal_value) {
+#ifdef __APPLE__
+        submit(command, signal_value, VK_NULL_HANDLE);
+    }
+
+    void VulkanContext::submit(const VkCommandBuffer command,
+                               const uint64_t signal_value, const VkFence completion) {
+#else
+        constexpr VkFence completion = VK_NULL_HANDLE;
+#endif
         if (dead()) {
             vk_check(this, VK_ERROR_DEVICE_LOST, "vkQueueSubmit2");
         }
@@ -961,15 +970,28 @@ namespace lfs::core::internal {
         submit_info.signalSemaphoreInfoCount = 1;
         submit_info.pSignalSemaphoreInfos = &signal_info;
         std::lock_guard lock(queue_mutex_);
-        vk_check(this, lfs::rendering::vk_queue_submit2_synced(queue_, 1, &submit_info, VK_NULL_HANDLE),
+        vk_check(this, lfs::rendering::vk_queue_submit2_synced(queue_, 1, &submit_info, completion),
                  "vkQueueSubmit2");
         publish_submitted_locked(signal_value);
     }
 
     void VulkanContext::submit_after(const VkCommandBuffer command, const uint64_t wait_value,
                                      const uint64_t signal_value) {
+#ifdef __APPLE__
+        submit_after(command, wait_value, signal_value, VK_NULL_HANDLE);
+    }
+
+    void VulkanContext::submit_after(const VkCommandBuffer command, const uint64_t wait_value,
+                                     const uint64_t signal_value, const VkFence completion) {
+#else
+        constexpr VkFence completion = VK_NULL_HANDLE;
+#endif
         if (wait_value == 0 || wait_value >= signal_value) {
+#ifdef __APPLE__
+            submit(command, signal_value, completion);
+#else
             submit(command, signal_value);
+#endif
             return;
         }
         if (dead()) {
@@ -993,7 +1015,7 @@ namespace lfs::core::internal {
         submit_info.signalSemaphoreInfoCount = 1;
         submit_info.pSignalSemaphoreInfos = &signal_info;
         std::lock_guard lock(queue_mutex_);
-        vk_check(this, lfs::rendering::vk_queue_submit2_synced(queue_, 1, &submit_info, VK_NULL_HANDLE),
+        vk_check(this, lfs::rendering::vk_queue_submit2_synced(queue_, 1, &submit_info, completion),
                  "vkQueueSubmit2");
         publish_submitted_locked(signal_value);
     }

@@ -250,6 +250,35 @@ namespace {
             EXPECT_FLOAT_EQ(host.ptr<float>()[i], values[i] * 2 + 3) << i;
     }
 
+    TEST_P(Programs, TransientComputeModulesSurviveSubmissionRetirement) {
+        if (!gpu_backend_available(GetParam()))
+            GTEST_SKIP();
+        GpuBackendScope scope(GetParam());
+        constexpr size_t count = 4099;
+        const auto input = Tensor::ones({count}, Device::GPU);
+        for (int step = 0; step < 32; ++step) {
+            SCOPED_TRACE(step);
+            auto output = Tensor::empty({count}, Device::GPU);
+            {
+                auto module = M::load(program_contract_entries(), GetParam());
+                ASSERT_TRUE(module) << module.error().detail();
+                const Params params{.count = uint32_t(count), .scale = 2, .bias = float(step)};
+                const std::array bindings{M::Binding{0, &input}, M::Binding{8, &output, M::Access::ReadWrite}};
+                const auto result = (*module)->dispatch({.function = "transform",
+                                                         .arguments = {std::as_bytes(std::span(&params, 1)), bindings},
+                                                         .groups = {M::groups_for(count, 64), 1, 1}});
+                ASSERT_TRUE(result) << result.error().detail();
+            }
+            // Destroy the module before observing its timeline, then begin more
+            // recording. Metal validation must not see its pipeline released
+            // while the native command buffer still retains references to it.
+            const auto values = output.cpu().to_vector();
+            const auto churn = Tensor::zeros({64}, Device::GPU);
+            EXPECT_EQ(values, std::vector<float>(count, 2.f + float(step)));
+            EXPECT_FLOAT_EQ(churn.cpu().sum().item<float>(), 0.f);
+        }
+    }
+
     TEST_P(Programs, DependentDispatchChainStaysOrdered) {
         if (!gpu_backend_available(GetParam()))
             GTEST_SKIP();

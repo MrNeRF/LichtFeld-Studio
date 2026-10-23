@@ -40,6 +40,44 @@ namespace lfs::core::internal {
         thread_local ThreadRecorderToken tls_recorder;
         thread_local std::vector<uint64_t> tls_queue_stack;
 
+#ifdef __APPLE__
+        struct SubmissionFence {
+            VkDevice device;
+            VkFence handle = VK_NULL_HANDLE;
+
+            explicit SubmissionFence(VulkanContext& context) : device(context.device()) {
+                const VkFenceCreateInfo info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+                vk_check(&context, vkCreateFence(device, &info, nullptr, &handle), "vkCreateFence(recorder)");
+            }
+            ~SubmissionFence() { vkDestroyFence(device, handle, nullptr); }
+            SubmissionFence(const SubmissionFence&) = delete;
+            SubmissionFence& operator=(const SubmissionFence&) = delete;
+
+            bool ready(VulkanContext& context) const {
+                const auto result = vkGetFenceStatus(device, handle);
+                if (result == VK_NOT_READY)
+                    return false;
+                vk_check(&context, result, "vkGetFenceStatus(recorder)");
+                return true;
+            }
+            void wait(VulkanContext& context) const {
+                if (ready(context))
+                    return;
+                constexpr uint64_t slice_nanoseconds = 2'000'000'000ull;
+                for (uint32_t slice = 0; slice < 60; ++slice) {
+                    const auto result = vkWaitForFences(device, 1, &handle, VK_TRUE, slice_nanoseconds);
+                    if (result != VK_TIMEOUT) {
+                        vk_check(&context, result, "vkWaitForFences(recorder)");
+                        return;
+                    }
+                    if (context.dead())
+                        break;
+                }
+                vk_check(&context, VK_ERROR_DEVICE_LOST, "vkWaitForFences(recorder stalled)");
+            }
+        };
+#endif
+
     } // namespace
 
     struct VulkanRecorderRegistry::Recorder {
@@ -47,6 +85,9 @@ namespace lfs::core::internal {
             VkCommandBuffer command = VK_NULL_HANDLE;
             uint64_t value = 0;
             std::vector<std::shared_ptr<void>> lifetimes;
+#ifdef __APPLE__
+            std::shared_ptr<SubmissionFence> completion;
+#endif
         };
 
         uint64_t id = 0;
@@ -57,6 +98,9 @@ namespace lfs::core::internal {
         // only when kInFlightLimit batches are outstanding.
         std::deque<Submitted> in_flight;
         std::vector<VkCommandBuffer> available_commands;
+#ifdef __APPLE__
+        std::vector<std::shared_ptr<SubmissionFence>> available_fences;
+#endif
         uint64_t reserved_value = 0;
         uint64_t submitted_value = 0;
         uint32_t command_count = 0;
@@ -74,6 +118,15 @@ namespace lfs::core::internal {
     void VulkanRecorderRegistry::retire_completed_locked(Recorder& recorder,
                                                          const uint64_t completed) {
         while (!recorder.in_flight.empty() && recorder.in_flight.front().value <= completed) {
+#ifdef __APPLE__
+            // MoltenVK may publish the timeline signal before Metal has retired
+            // its command-buffer references. Retain resources until the submit
+            // fence completes; polling does not serialize ordinary submissions.
+            auto& completion = recorder.in_flight.front().completion;
+            if (!completion->ready(context_))
+                break;
+            recorder.available_fences.push_back(std::move(completion));
+#endif
             recorder.available_commands.push_back(recorder.in_flight.front().command);
             recorder.in_flight.pop_front();
         }
@@ -141,6 +194,9 @@ namespace lfs::core::internal {
         retire_completed_locked(recorder, context_.completed_timeline());
         if (recorder.in_flight.size() >= kInFlightLimit) {
             context_.wait(recorder.in_flight.front().value);
+#ifdef __APPLE__
+            recorder.in_flight.front().completion->wait(context_);
+#endif
             retire_completed_locked(recorder, context_.completed_timeline());
         }
         if (recorder.available_commands.empty()) {
@@ -236,11 +292,27 @@ namespace lfs::core::internal {
         } else if (!recorder.queue_owned) {
             wait = std::max(wait, legacy_submitted_);
         }
+#ifdef __APPLE__
+        std::shared_ptr<SubmissionFence> completion;
+        if (recorder.available_fences.empty()) {
+            completion = std::make_shared<SubmissionFence>(context_);
+        } else {
+            completion = std::move(recorder.available_fences.back());
+            recorder.available_fences.pop_back();
+            vk_check(&context_, vkResetFences(context_.device(), 1, &completion->handle), "vkResetFences(recorder)");
+        }
+        if (wait != 0 && wait < value) {
+            context_.submit_after(command, wait, value, completion->handle);
+        } else {
+            context_.submit(command, value, completion->handle);
+        }
+#else
         if (wait != 0 && wait < value) {
             context_.submit_after(command, wait, value);
         } else {
             context_.submit(command, value);
         }
+#endif
         recorder.submitted_value = value;
         if (recorder.legacy) {
             legacy_submitted_ = std::max(legacy_submitted_, value);
@@ -248,7 +320,14 @@ namespace lfs::core::internal {
         if (!recorder.queue_owned) {
             implicit_submitted_ = std::max(implicit_submitted_, value);
         }
-        recorder.in_flight.push_back({command, value, std::move(recorder.lifetimes)});
+        Recorder::Submitted submitted;
+        submitted.command = command;
+        submitted.value = value;
+        submitted.lifetimes = std::move(recorder.lifetimes);
+#ifdef __APPLE__
+        submitted.completion = std::move(completion);
+#endif
+        recorder.in_flight.push_back(std::move(submitted));
     }
 
     uint64_t VulkanRecorderRegistry::flush_through_locked(const uint64_t value) {
@@ -276,6 +355,8 @@ namespace lfs::core::internal {
                 return false;
             }
             retire_completed_locked(recorder, completed);
+            if (!recorder.in_flight.empty())
+                return false;
             vkDestroyCommandPool(context_.device(), recorder.pool, nullptr);
             return true;
         });
@@ -358,6 +439,11 @@ namespace lfs::core::internal {
             context_.wait(value);
         }
         std::lock_guard lock(mutex_);
+#ifdef __APPLE__
+        for (const auto& [id, recorder] : recorders_)
+            if (!recorder->in_flight.empty())
+                recorder->in_flight.back().completion->wait(context_);
+#endif
         collect_completed_locked(context_.completed_timeline());
     }
 
@@ -629,6 +715,10 @@ namespace lfs::core::internal {
                     if (recorder->submitted_value != 0) {
                         context_.wait(recorder->submitted_value);
                     }
+#ifdef __APPLE__
+                    if (!recorder->in_flight.empty())
+                        recorder->in_flight.back().completion->wait(context_);
+#endif
                 }
             } catch (...) {
                 // LFS-CENSUS-OK(empty-catch): mark_device_lost_once reports the loss.
