@@ -170,6 +170,14 @@ namespace lfs::vis {
     loadProjectLocationPreference();
     [[nodiscard]] LFS_VIS_API std::filesystem::path
     projectLocationPreferenceRaw();
+    // The configured project location as an absolute path, resolved without disk
+    // access. An empty path when none is configured.
+    [[nodiscard]] LFS_VIS_API std::filesystem::path
+    resolvedProjectLocationPreference();
+    // The create-and-write probe that setProjectLocationPreference applies. It touches
+    // the disk, so keep it off the UI thread.
+    [[nodiscard]] LFS_VIS_API lfs::Status
+    probeProjectLocation(const std::filesystem::path& path);
     LFS_VIS_API void clearProjectLocationPreference();
     [[nodiscard]] LFS_VIS_API std::filesystem::path defaultProjectLocation();
 

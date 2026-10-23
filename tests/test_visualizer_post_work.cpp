@@ -15,8 +15,10 @@
 #include "core/logger.hpp"
 #include "core/main_loop.hpp"
 #include "core/mesh_data.hpp"
+#include "core/native_fs.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/resource_messages.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/user_paths.hpp"
@@ -96,6 +98,7 @@
 #include <set>
 #include <span>
 #include <sstream>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -14159,24 +14162,336 @@ contract["check_selection_submode_follows_native_mode"](lf)
     }
 
     TEST_F(VisualizerImplResetTest,
-           ScratchDirectoryIsFixedUnderRootRegardlessOfPreferences) {
-        const auto home = temporary_.path / "fixed-scratch-home";
+           ScratchDirectoryFollowsProjectLocationPreference) {
+        const auto home = temporary_.path / "located-scratch-home";
         std::filesystem::create_directories(home);
         const ScopedLfsHome lfs_home(home);
-        const auto working = temporary_.path / "legacy-working";
-        ASSERT_TRUE(lfs::vis::setProjectLocationPreference(working));
+        const auto location = temporary_.path / "second-drive" / "projects";
+        ASSERT_TRUE(lfs::vis::setProjectLocationPreference(location));
         const auto paths = lfs::core::UserPaths::resolve();
         ASSERT_TRUE(paths);
+        const auto located = (location / ".lichtfeld-tmp").lexically_normal();
+        {
+            lfs::vis::ViewerOptions options;
+            options.show_startup_overlay = false;
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(nullptr, viewer.getViewport());
+            auto* const lifecycle = viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                lifecycle->settleScratchLocationCheck();
+                return !lifecycle->scratch_location_check_;
+            }));
+            EXPECT_EQ(lifecycle->scratchAutosaveDirectory(), located);
+            ASSERT_NE(viewer.getScene().addGroup("Untitled on second drive"),
+                      lfs::core::NULL_NODE);
+            lifecycle->settings_.autosave_dirty_epoch_threshold = 1;
+            lifecycle->last_autosaved_dirty_epoch_ = 0;
+            lifecycle->last_autosaved_scene_serial_ = 0;
+            lifecycle->last_autosave_at_ =
+                std::chrono::steady_clock::now() - std::chrono::hours(1);
+            lifecycle->last_mutation_at_ =
+                std::chrono::steady_clock::now() - std::chrono::hours(1);
+            lifecycle->updateMaintenance();
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] { return !viewer.jobs().anyRunning(JobType::ProjectWrite); }));
+            const auto uuid = lifecycle->document_->project_uuid();
+            const auto scratch = lfs::io::project::scratch_autosave_path(located, uuid);
+            EXPECT_TRUE(std::filesystem::is_regular_file(scratch));
+#ifdef _WIN32
+            const auto attributes = GetFileAttributesW(
+                lfs::core::native_fs::native_path(located).c_str());
+            ASSERT_NE(attributes, INVALID_FILE_ATTRIBUTES);
+            EXPECT_NE(attributes & FILE_ATTRIBUTE_HIDDEN, 0u);
+#endif
+            EXPECT_TRUE(lifecycle->isScratchPath(scratch));
+            EXPECT_FALSE(lifecycle->hasSourcePath());
+            EXPECT_FALSE(std::filesystem::exists(
+                lfs::io::project::scratch_autosave_path(paths->rootDir() / "tmp", uuid)));
+        }
+        lfs::vis::clearProjectLocationPreference();
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ScratchDirectoryFallsBackToRootWhenProjectLocationUnusable) {
+        const auto home = temporary_.path / "fallback-scratch-home";
+        std::filesystem::create_directories(home);
+        const ScopedLfsHome lfs_home(home);
+        lfs::vis::clearProjectLocationPreference();
+        const auto paths = lfs::core::UserPaths::resolve();
+        ASSERT_TRUE(paths);
+        const auto root_tmp = (paths->rootDir() / "tmp").lexically_normal();
         lfs::vis::ViewerOptions options;
         options.show_startup_overlay = false;
         VisualizerImpl viewer(options);
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
-        EXPECT_EQ(
-            viewer.project_lifecycle_->scratchAutosaveDirectory(),
-            (paths->rootDir() / "tmp").lexically_normal());
-        EXPECT_NE(
-            viewer.project_lifecycle_->scratchAutosaveDirectory(),
-            (working / "tmp").lexically_normal());
+        auto* const lifecycle = viewer.project_lifecycle_.get();
+        ASSERT_NE(lifecycle, nullptr);
+        EXPECT_EQ(lifecycle->scratchAutosaveDirectory(), root_tmp);
+
+        const auto removed_drive = temporary_.path / "removed-drive";
+        const auto location = removed_drive / "projects";
+        ASSERT_TRUE(lfs::vis::setProjectLocationPreference(location));
+        lifecycle->freezeTempProjectDirectory();
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            lifecycle->settleScratchLocationCheck();
+            return !lifecycle->scratch_location_check_;
+        }));
+        EXPECT_EQ(lifecycle->scratchAutosaveDirectory(),
+                  (location / ".lichtfeld-tmp").lexically_normal());
+
+        // The configured folder can no longer be created: its parent is a file.
+        std::filesystem::remove_all(removed_drive);
+        std::ofstream(removed_drive) << "not a directory";
+        std::mutex warnings_mutex;
+        std::vector<std::string> warnings;
+        const auto handler_token = lfs::core::Logger::get().add_log_handler(
+            [&](const lfs::core::LogLevel level, const lfs::core::SourceSite&,
+                const std::string_view message) {
+                if (level == lfs::core::LogLevel::Warn &&
+                    message.find("untitled scratch") != std::string_view::npos) {
+                    const std::lock_guard lock(warnings_mutex);
+                    warnings.emplace_back(message);
+                }
+            });
+        lifecycle->freezeTempProjectDirectory();
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            lifecycle->settleScratchLocationCheck();
+            return !lifecycle->scratch_location_check_;
+        }));
+        lfs::core::Logger::get().remove_log_handler(handler_token);
+        EXPECT_EQ(lifecycle->scratchAutosaveDirectory(), root_tmp);
+        EXPECT_EQ(warnings.size(), 1u);
+        EXPECT_FALSE(std::filesystem::is_directory(location));
+        lfs::vis::clearProjectLocationPreference();
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           StartupRecoveryScansRootAndProjectLocationScratch) {
+        const auto home = temporary_.path / "two-scratch-home";
+        std::filesystem::create_directories(home);
+        const ScopedLfsHome lfs_home(home);
+        const auto location = temporary_.path / "second-drive" / "projects";
+        ASSERT_TRUE(lfs::vis::setProjectLocationPreference(location));
+        const auto paths = lfs::core::UserPaths::resolve();
+        ASSERT_TRUE(paths);
+        // A crash file from a session started before the preference was set,
+        // and one from a session under the configured location.
+        const auto root_scratch = lfs::io::project::scratch_autosave_path(
+            paths->rootDir() / "tmp", lfs::core::generate_uuid_v4());
+        const auto located_scratch = lfs::io::project::scratch_autosave_path(
+            location / ".lichtfeld-tmp", lfs::core::generate_uuid_v4());
+        for (const auto& scratch : {root_scratch, located_scratch}) {
+            std::filesystem::create_directories(scratch.parent_path());
+            write_project_with_specified_checkpoint(
+                scratch, lfs::core::generate_uuid_v4(),
+                lfs::core::generate_uuid_v4());
+        }
+        {
+            lfs::vis::ViewerOptions options;
+            options.show_startup_overlay = false;
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            auto* const lifecycle = viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            EXPECT_TRUE(lifecycle->isScratchPath(root_scratch));
+            EXPECT_TRUE(lifecycle->isScratchPath(located_scratch));
+            std::set<std::filesystem::path> offered;
+            for (const auto& candidate :
+                 lifecycle->inspectStartupRecoveryCandidates()) {
+                EXPECT_TRUE(candidate.untitled_scratch);
+                offered.insert(candidate.master_path.lexically_normal());
+            }
+            EXPECT_TRUE(offered.contains(root_scratch.lexically_normal()));
+            EXPECT_TRUE(offered.contains(located_scratch.lexically_normal()));
+            std::mutex prune_mutex;
+            std::vector<std::thread::id> prune_threads;
+            const auto handler_token = lfs::core::Logger::get().add_log_handler(
+                [&](const lfs::core::LogLevel, const lfs::core::SourceSite&,
+                    const std::string_view message) {
+                    if (message.find("Pruned leftover untitled scratch") != std::string_view::npos) {
+                        const std::lock_guard lock(prune_mutex);
+                        prune_threads.push_back(std::this_thread::get_id());
+                    }
+                });
+            // The GUI startup path: scan on the worker, then offer and prune.
+            lifecycle->openStartupProject(std::nullopt, true);
+            lifecycle->runStartupRecoveryScan();
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return lifecycle->startup_recovery_scan_ready_.load(std::memory_order_acquire);
+            }));
+            lifecycle->applyStartupRecoveryScan();
+            lifecycle->joinScratchPrune();
+            lfs::core::Logger::get().remove_log_handler(handler_token);
+            EXPECT_TRUE(lifecycle->recovery_prompt_pending_);
+            const bool root_exists = std::filesystem::exists(root_scratch);
+            const bool located_exists = std::filesystem::exists(located_scratch);
+            EXPECT_TRUE(root_exists || located_exists);
+            EXPECT_FALSE(root_exists && located_exists);
+            ASSERT_EQ(prune_threads.size(), 1u);
+            EXPECT_NE(prune_threads.front(), std::this_thread::get_id());
+        }
+        lfs::vis::clearProjectLocationPreference();
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           UntitledAutosaveDiskFullToastNamesFolder) {
+        ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
+            (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
+        struct LocaleReset {
+            ~LocaleReset() { lfs::event::LocalizationManager::getInstance().reset(); }
+        } const locale_reset;
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        auto* const lifecycle = viewer.project_lifecycle_.get();
+        ASSERT_NE(lifecycle, nullptr);
+        CapturingErrorConsumer consumer;
+        auto subscription = lfs::ErrorBus::instance().subscribe(consumer);
+        const auto scratch = lfs::io::project::scratch_autosave_path(
+            lifecycle->scratchAutosaveDirectory(),
+            lifecycle->document_->project_uuid());
+        const auto handle = viewer.jobs().init(JobType::ProjectWrite, "Full disk autosave");
+        ASSERT_TRUE(handle);
+        lifecycle->project_write_job_ = *handle;
+        lifecycle->project_write_purpose_ =
+            project::ProjectLifecycle::ProjectWritePurpose::Autosave;
+        lifecycle->project_write_destination_ = scratch;
+        std::async(std::launch::async, [&] { viewer.jobs().work(*handle); }).get();
+        const auto full = lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::ResourceExhausted,
+            .domain = lfs::ErrorDomain::IO,
+            .operation_id = {},
+            .user_message = lfs::core::DISK_SPACE_SAVE_ERROR_MESSAGE,
+            .detail = "simulated full volume",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+            .fields = {},
+            .native = std::nullopt,
+        });
+        std::async(std::launch::async, [&] {
+            viewer.jobs().finishWork(*handle, false, lfs::format_for_developer(full),
+                                     lfs::ErrorCode::ResourceExhausted, full);
+        }).get();
+        lifecycle->settleProjectWrite();
+        const auto folder = lfs::core::path_to_utf8(scratch.parent_path());
+        EXPECT_TRUE(std::ranges::any_of(
+            consumer.user_messages,
+            [&](const std::string& message) {
+                return message.find(folder) != std::string::npos;
+            }))
+            << (consumer.user_messages.empty() ? std::string{} : consumer.user_messages.back());
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           AutosaveDiskFullToastShowsOncePerFailureStreak) {
+        ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
+            (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
+        struct LocaleReset {
+            ~LocaleReset() { lfs::event::LocalizationManager::getInstance().reset(); }
+        } const locale_reset;
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        auto* const lifecycle = viewer.project_lifecycle_.get();
+        ASSERT_NE(lifecycle, nullptr);
+        CapturingErrorConsumer consumer;
+        auto subscription = lfs::ErrorBus::instance().subscribe(consumer);
+        const auto full = lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::ResourceExhausted,
+            .domain = lfs::ErrorDomain::IO,
+            .operation_id = {},
+            .user_message = lfs::core::DISK_SPACE_SAVE_ERROR_MESSAGE,
+            .detail = "simulated full volume",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+            .fields = {},
+            .native = std::nullopt,
+        });
+        const auto settle_autosave = [&](const std::filesystem::path& destination,
+                                         const bool disk_full) {
+            const auto handle = viewer.jobs().init(JobType::ProjectWrite, "Autosave");
+            ASSERT_TRUE(handle);
+            lifecycle->project_write_job_ = *handle;
+            lifecycle->project_write_purpose_ =
+                project::ProjectLifecycle::ProjectWritePurpose::Autosave;
+            lifecycle->project_write_destination_ = destination;
+            std::async(std::launch::async, [&] { viewer.jobs().work(*handle); }).get();
+            std::async(std::launch::async, [&] {
+                if (disk_full) {
+                    viewer.jobs().finishWork(*handle, false, lfs::format_for_developer(full),
+                                             lfs::ErrorCode::ResourceExhausted, full);
+                } else {
+                    viewer.jobs().finishWork(*handle, false);
+                }
+            }).get();
+            lifecycle->settleProjectWrite();
+        };
+        const auto scratch = lfs::io::project::scratch_autosave_path(
+            lifecycle->scratchAutosaveDirectory(), lifecycle->document_->project_uuid());
+        const auto other = lfs::io::project::scratch_autosave_path(
+            lifecycle->scratchAutosaveDirectory(), lfs::core::generate_uuid_v4());
+        const auto folder = lfs::core::path_to_utf8(scratch.parent_path());
+        const auto toasts = [&] {
+            return std::ranges::count_if(consumer.user_messages, [&](const std::string& message) {
+                return message.find(folder) != std::string::npos;
+            });
+        };
+        // Backoff retries of the same failing autosave stay quiet.
+        settle_autosave(scratch, true);
+        settle_autosave(scratch, true);
+        settle_autosave(scratch, true);
+        EXPECT_EQ(toasts(), 1);
+        // A successful autosave ends the streak.
+        settle_autosave(scratch, false);
+        settle_autosave(scratch, true);
+        settle_autosave(scratch, true);
+        EXPECT_EQ(toasts(), 2);
+        // So does a new destination.
+        settle_autosave(other, true);
+        EXPECT_EQ(toasts(), 3);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ScratchLocationProbeRunsOffCallingThread) {
+        const auto home = temporary_.path / "probe-thread-home";
+        std::filesystem::create_directories(home);
+        const ScopedLfsHome lfs_home(home);
+        const auto location = temporary_.path / "network-share" / "projects";
+        ASSERT_TRUE(lfs::vis::setProjectLocationPreference(location));
+        const auto paths = lfs::core::UserPaths::resolve();
+        ASSERT_TRUE(paths);
+        {
+            lfs::vis::ViewerOptions options;
+            options.show_startup_overlay = false;
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            auto* const lifecycle = viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            // A share that does not answer: the probe blocks until the test releases it.
+            std::promise<void> release;
+            const auto released = release.get_future().share();
+            const auto caller = std::this_thread::get_id();
+            auto probe_thread = std::make_shared<std::atomic<bool>>(false);
+            lifecycle->scratch_location_probe_ =
+                [released, caller, probe_thread](const std::filesystem::path& probed) {
+                    probe_thread->store(std::this_thread::get_id() != caller);
+                    released.wait_for(std::chrono::seconds(5));
+                    return lfs::vis::probeProjectLocation(probed);
+                };
+            lifecycle->freezeTempProjectDirectory();
+            ASSERT_TRUE(lifecycle->scratch_location_check_);
+            EXPECT_FALSE(lifecycle->scratch_location_check_->done.load());
+            EXPECT_EQ(lifecycle->scratchAutosaveDirectory(),
+                      (paths->rootDir() / "tmp").lexically_normal());
+            release.set_value();
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                lifecycle->settleScratchLocationCheck();
+                return !lifecycle->scratch_location_check_;
+            }));
+            EXPECT_TRUE(probe_thread->load());
+            EXPECT_EQ(lifecycle->scratchAutosaveDirectory(),
+                      (location / ".lichtfeld-tmp").lexically_normal());
+        }
         lfs::vis::clearProjectLocationPreference();
     }
 
@@ -14203,6 +14518,7 @@ contract["check_selection_submode_follows_native_mode"](lf)
             installModalOverlay(
                 gui->rml_modal_overlay_, gui->rmlui_manager_);
             viewer.project_lifecycle_->openStartupProject(std::nullopt);
+            viewer.project_lifecycle_->joinScratchPrune();
             EXPECT_TRUE(
                 viewer.project_lifecycle_->recovery_prompt_pending_);
             const bool older_exists =
@@ -16646,6 +16962,7 @@ contract["check_selection_submode_follows_native_mode"](lf)
         VisualizerImpl viewer(options);
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.project_lifecycle_->pruneUnlockedScratchFilesExcept(std::nullopt);
+        viewer.project_lifecycle_->joinScratchPrune();
         EXPECT_TRUE(std::filesystem::is_regular_file(scratch));
         lfs::vis::clearProjectLocationPreference();
     }

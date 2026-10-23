@@ -2724,6 +2724,7 @@
     "environment_map_failed": "Nie można odczytać mapy środowiska „{}”. Zachowano poprzednie środowisko.",
     "training_save_no_memory": "Nie udało się zapisać projektu: {}",
     "autosave_deferred_no_memory": "Autozapis został wstrzymany: za mało wolnej pamięci ({}). Trening jest kontynuowany; autozapis wznowi się, gdy pamięć zostanie zwolniona.",
+    "autosave_no_disk_space": "Za mało miejsca na dysku, aby automatycznie zapisać projekt w „{}”.",
     "training_init_unavailable": "Plik inicjalizacji treningu \"{}\" jest niedostępny; trening rozpocznie się od przywróconej chmury punktów.",
     "scene_filter": "Filtr: \"{}\"",
     "config_load_failed": "Nie można wczytać '{}':\n\n{}",

@@ -2737,6 +2737,7 @@
     "environment_map_failed": "Impossibile leggere la mappa ambiente «{}». È stato mantenuto l’ambiente precedente.",
     "training_save_no_memory": "Salvataggio del progetto non riuscito: {}",
     "autosave_deferred_no_memory": "Il salvataggio automatico è in pausa: memoria libera insufficiente ({}). L'addestramento continua; il salvataggio automatico riprenderà quando si libererà memoria.",
+    "autosave_no_disk_space": "Spazio su disco insufficiente per salvare automaticamente il progetto in «{}».",
     "training_init_unavailable": "Il file di inizializzazione dell'addestramento \"{}\" non è disponibile; l'addestramento parte dalla nuvola di punti ripristinata.",
     "scene_filter": "Filtro: \"{}\"",
     "config_load_failed": "Impossibile caricare '{}':\n\n{}",

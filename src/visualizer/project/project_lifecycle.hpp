@@ -153,7 +153,12 @@ namespace lfs::vis {
     class VisualizerImplResetTest_ProjectCreateOnDirtyEmitsCreatePath_Test;
     class VisualizerImplResetTest_StartupScansLegacyWorkingTmpDirectory_Test;
     class VisualizerImplResetTest_StartupPruneNeverTouchesProjectLocation_Test;
-    class VisualizerImplResetTest_ScratchDirectoryIsFixedUnderRootRegardlessOfPreferences_Test;
+    class VisualizerImplResetTest_ScratchDirectoryFollowsProjectLocationPreference_Test;
+    class VisualizerImplResetTest_ScratchDirectoryFallsBackToRootWhenProjectLocationUnusable_Test;
+    class VisualizerImplResetTest_StartupRecoveryScansRootAndProjectLocationScratch_Test;
+    class VisualizerImplResetTest_UntitledAutosaveDiskFullToastNamesFolder_Test;
+    class VisualizerImplResetTest_AutosaveDiskFullToastShowsOncePerFailureStreak_Test;
+    class VisualizerImplResetTest_ScratchLocationProbeRunsOffCallingThread_Test;
     class VisualizerImplResetTest_ProjectCreateWhileTrainingPromptsWithCreatePath_Test;
     class VisualizerImplResetTest_RecoveredScratchSaveStillRefusesAndStaysOutOfMru_Test;
 } // namespace lfs::vis
@@ -494,7 +499,12 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_ProjectCreateOnDirtyEmitsCreatePath_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupScansLegacyWorkingTmpDirectory_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupPruneNeverTouchesProjectLocation_Test;
-        friend class lfs::vis::VisualizerImplResetTest_ScratchDirectoryIsFixedUnderRootRegardlessOfPreferences_Test;
+        friend class lfs::vis::VisualizerImplResetTest_ScratchDirectoryFollowsProjectLocationPreference_Test;
+        friend class lfs::vis::VisualizerImplResetTest_ScratchDirectoryFallsBackToRootWhenProjectLocationUnusable_Test;
+        friend class lfs::vis::VisualizerImplResetTest_StartupRecoveryScansRootAndProjectLocationScratch_Test;
+        friend class lfs::vis::VisualizerImplResetTest_UntitledAutosaveDiskFullToastNamesFolder_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AutosaveDiskFullToastShowsOncePerFailureStreak_Test;
+        friend class lfs::vis::VisualizerImplResetTest_ScratchLocationProbeRunsOffCallingThread_Test;
         friend class lfs::vis::VisualizerImplResetTest_ProjectCreateWhileTrainingPromptsWithCreatePath_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoveredScratchSaveStillRefusesAndStaysOutOfMru_Test;
         enum class Hydration {
@@ -584,9 +594,13 @@ namespace lfs::vis::project {
         scratchAutosaveDirectory() const;
         [[nodiscard]] bool isScratchPath(
             const std::filesystem::path& path) const;
+        [[nodiscard]] std::vector<std::filesystem::path>
+        scratchDirectories() const;
         void freezeTempProjectDirectory();
+        void settleScratchLocationCheck();
         void pruneUnlockedScratchFilesExcept(
             const std::optional<std::filesystem::path>& keep);
+        void joinScratchPrune();
         [[nodiscard]] std::optional<
             lfs::io::project::WriterLockLease>
         snapshotWriterLease(
@@ -778,6 +792,16 @@ namespace lfs::vis::project {
         mutable std::mutex settings_mutex_;
         std::filesystem::path settings_path_;
         std::filesystem::path temp_project_directory_;
+        std::filesystem::path root_temp_project_directory_;
+        std::filesystem::path location_temp_project_directory_;
+        struct ScratchLocationCheck {
+            std::atomic<bool> done{false};
+            lfs::Status status;
+        };
+        // Write probe of the project location; runs off the UI thread.
+        std::function<lfs::Status(const std::filesystem::path&)>
+            scratch_location_probe_;
+        std::shared_ptr<ScratchLocationCheck> scratch_location_check_;
         std::filesystem::path legacy_recovery_directory_;
         std::filesystem::path legacy_working_tmp_directory_;
         bool isolated_scratch_storage_ = false;
@@ -818,6 +842,7 @@ namespace lfs::vis::project {
         bool autosave_quiesce_logged_ = false;
         std::uint64_t autosave_sequence_ = 0;
         bool autosave_memory_warning_published_ = false;
+        std::optional<std::filesystem::path> autosave_disk_full_destination_;
         std::atomic<bool> pending_training_start_active_{false};
         std::function<lfs::Result<void>()> pending_training_start_;
         std::weak_ptr<lfs::io::project::ProjectDocument> pending_training_document_;
@@ -876,6 +901,8 @@ namespace lfs::vis::project {
             startup_recovery_scan_candidates_;
         std::atomic<bool> startup_recovery_scan_ready_{false};
         std::jthread startup_recovery_scan_thread_;
+        std::atomic<bool> scratch_prune_running_{false};
+        std::jthread scratch_prune_thread_;
         std::uint64_t recovery_prompt_generation_ = 0;
         std::optional<RecoveryCandidate>
             pending_recovery_candidate_;

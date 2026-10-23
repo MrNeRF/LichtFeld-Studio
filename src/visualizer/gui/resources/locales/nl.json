@@ -2724,6 +2724,7 @@
     "environment_map_failed": "Omgevingskaart ‘{}’ kon niet worden gelezen. De vorige omgeving is behouden.",
     "training_save_no_memory": "Project opslaan mislukt: {}",
     "autosave_deferred_no_memory": "Automatisch opslaan is gepauzeerd: onvoldoende vrij geheugen ({}). De training gaat door; automatisch opslaan wordt hervat zodra er geheugen vrijkomt.",
+    "autosave_no_disk_space": "Niet genoeg schijfruimte om het project automatisch op te slaan in ‘{}’.",
     "training_init_unavailable": "Het trainingsinitialisatiebestand \"{}\" is niet beschikbaar; de training start vanaf de herstelde puntenwolk.",
     "scene_filter": "Filter: \"{}\"",
     "config_load_failed": "Kan '{}' niet laden:\n\n{}",

@@ -2724,6 +2724,7 @@
     "environment_map_failed": "環境マップ「{}」を読み込めませんでした。前の環境を保持しました。",
     "training_save_no_memory": "プロジェクトを保存できませんでした: {}",
     "autosave_deferred_no_memory": "自動保存は一時停止中です: 空きメモリが不足しています（{}）。トレーニングは継続します。メモリが解放されると自動保存を再開します。",
+    "autosave_no_disk_space": "「{}」にプロジェクトを自動保存するためのディスク容量が不足しています。",
     "training_init_unavailable": "学習初期化ファイル \"{}\" を利用できません。復元された点群から学習を開始します。",
     "scene_filter": "フィルター：\"{}\"",
     "config_load_failed": "'{}'を読み込めませんでした：\n\n{}",

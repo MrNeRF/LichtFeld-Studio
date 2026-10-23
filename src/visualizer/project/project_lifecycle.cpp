@@ -2496,6 +2496,10 @@ namespace lfs::vis::project {
 #endif
         }
 
+        // Untitled crash files inside a configured project location. The leading dot
+        // keeps the Asset Manager folder scan out of it.
+        constexpr const char* PROJECT_LOCATION_SCRATCH_DIRECTORY = ".lichtfeld-tmp";
+
         [[nodiscard]] std::filesystem::path freezeNormalizedPath(
             const std::filesystem::path& path) {
             if (path.empty()) {
@@ -2512,6 +2516,107 @@ namespace lfs::vis::project {
                 absolute_path, error);
             return error ? absolute_path.lexically_normal()
                          : resolved;
+        }
+
+        // Absolute and normalized without touching the disk, for folders on a project
+        // location that may be a slow or disconnected share.
+        [[nodiscard]] std::filesystem::path lexicalAbsolutePath(
+            const std::filesystem::path& path) {
+            std::error_code error;
+            const auto absolute_path = std::filesystem::absolute(path, error);
+            return (error ? path : absolute_path).lexically_normal();
+        }
+
+        // Windows does not treat a leading dot as hidden.
+        void hideDirectory([[maybe_unused]] const std::filesystem::path& directory) {
+#ifdef _WIN32
+            const auto native = lfs::core::native_fs::native_path(directory);
+            const DWORD attributes = GetFileAttributesW(native.c_str());
+            if (attributes == INVALID_FILE_ATTRIBUTES ||
+                !SetFileAttributesW(native.c_str(), attributes | FILE_ATTRIBUTE_HIDDEN)) {
+                LOG_WARN("Could not hide {}: Windows error {}",
+                         lfs::core::path_to_utf8(directory), GetLastError());
+            }
+#endif
+        }
+
+        void pruneUnlockedScratchFiles(
+            const std::vector<std::filesystem::path>& directories,
+            const std::filesystem::path& project_location_preference,
+            const std::optional<std::filesystem::path>& keep) {
+            const auto project_location =
+                freezeNormalizedPath(project_location_preference);
+            std::optional<std::filesystem::path> keep_normalized;
+            if (keep && !keep->empty()) {
+                keep_normalized = freezeNormalizedPath(*keep);
+            }
+            for (const auto& directory : directories) {
+                if (!project_location.empty() &&
+                    freezeNormalizedPath(directory) == project_location) {
+                    continue;
+                }
+                std::error_code error;
+                if (!lfs::core::native_fs::is_directory(directory, error) ||
+                    error) {
+                    continue;
+                }
+                std::vector<std::filesystem::path> candidates;
+                for (std::filesystem::directory_iterator
+                         iterator(lfs::core::native_fs::traversal_path(directory), error),
+                     end;
+                     !error && iterator != end;
+                     iterator.increment(error)) {
+                    std::error_code type_error;
+                    if (!iterator->is_regular_file(type_error) ||
+                        type_error) {
+                        continue;
+                    }
+                    const auto entry = lfs::core::native_fs::entry_path(directory, iterator->path());
+                    if (!lfs::io::project::is_scratch_autosave_path(
+                            entry, directory)) {
+                        continue;
+                    }
+                    candidates.push_back(entry);
+                }
+                for (const auto& scratch : candidates) {
+                    if (keep_normalized &&
+                        freezeNormalizedPath(scratch) ==
+                            *keep_normalized) {
+                        continue;
+                    }
+                    const auto sidecar =
+                        lfs::io::project::autosave_sidecar_path(
+                            scratch);
+                    if (auto removed =
+                            lfs::io::project::remove_autosave_artifacts(
+                                scratch);
+                        !removed) {
+                        if (removed.error().code() ==
+                            lfs::ErrorCode::Unavailable) {
+                            continue;
+                        }
+                    }
+                    if (auto removed =
+                            lfs::io::project::remove_scratch_autosave(
+                                scratch);
+                        !removed) {
+                        if (removed.error().code() ==
+                            lfs::ErrorCode::Unavailable) {
+                            continue;
+                        }
+                        LOG_WARN(
+                            "Could not prune scratch autosave {}: {}",
+                            lfs::core::path_to_utf8(scratch),
+                            developerError(removed.error()));
+                        continue;
+                    }
+                    LOG_INFO(
+                        "Pruned leftover untitled scratch {}",
+                        lfs::core::path_to_utf8(scratch));
+                    std::error_code ignored;
+                    lfs::core::native_fs::remove(sidecar, ignored);
+                }
+            }
         }
     } // namespace
 
@@ -2586,6 +2691,7 @@ namespace lfs::vis::project {
           settings_persistence_enabled_(
               !lfs::core::environment::flag("LFS_SAFE_MODE", false) &&
               !settings_path_.empty()) {
+        scratch_location_probe_ = probeProjectLocation;
         freezeTempProjectDirectory();
         resetMaintenanceClocks();
         if (settings_persistence_enabled_) {
@@ -2635,6 +2741,7 @@ namespace lfs::vis::project {
         if (startup_recovery_scan_thread_.joinable()) {
             startup_recovery_scan_thread_.join();
         }
+        joinScratchPrune();
         stopHydrationThreads();
         std::optional<std::filesystem::path> discard_master;
         if (close_discard_requested_) {
@@ -5806,6 +5913,7 @@ namespace lfs::vis::project {
                         now();
                 autosave_quiesce_logged_ = false;
                 autosave_memory_warning_published_ = false;
+                autosave_disk_full_destination_.reset();
             } else if (
                 !dest_is_scratch &&
                 (project_write_purpose_ ==
@@ -5877,8 +5985,10 @@ namespace lfs::vis::project {
                     "Autosave skipped because the master moved: {}",
                     error);
             } else {
+                const bool disk_full =
+                    lfs::core::is_disk_space_save_error(error);
                 const bool memory_deferred =
-                    was_autosave &&
+                    was_autosave && !disk_full &&
                     last_project_write_error_code_ ==
                         lfs::ErrorCode::ResourceExhausted &&
                     viewer_.getTrainerManager() &&
@@ -5897,7 +6007,7 @@ namespace lfs::vis::project {
                             error, error);
                     }
                     autosave_memory_warning_published_ = true;
-                } else if (!was_autosave && lfs::core::is_disk_space_save_error(error)) {
+                } else if (!was_autosave && disk_full) {
                     LOG_ERROR(
                         "Project background write failed: {}",
                         error);
@@ -5911,6 +6021,24 @@ namespace lfs::vis::project {
                         .is_disk_space_error = true,
                         .is_project_save = true}
                         .emit();
+                } else if (disk_full) {
+                    // Autosave only toasts; name the folder so the full volume is visible.
+                    // Once per failure streak: backoff retries of the same write stay quiet.
+                    LOG_ERROR(
+                        "Project background write failed: {}",
+                        error);
+                    if (autosave_disk_full_destination_ !=
+                        project_write_destination_) {
+                        autosave_disk_full_destination_ =
+                            project_write_destination_;
+                        publishProjectToast(
+                            lfs::ErrorCode::ResourceExhausted,
+                            lfs::ErrorDomain::IO,
+                            LOCF("runtime.autosave_no_disk_space",
+                                 lfs::core::path_to_utf8(
+                                     project_write_destination_.parent_path())),
+                            gui::error_op::kSave);
+                    }
                 } else {
                     LOG_ERROR(
                         "Project background write failed: {}",
@@ -5993,6 +6121,7 @@ namespace lfs::vis::project {
 
     void ProjectLifecycle::updateMaintenance() {
         applyStartupRecoveryScan();
+        settleScratchLocationCheck();
         settleProjectWrite();
         processPendingTrainingStart();
         if (pending_training_cancel_settlement_ && !pending_training_start_ &&
@@ -10112,21 +10241,9 @@ namespace lfs::vis::project {
             runStartupRecoveryScan();
         } else {
             lfs::io::project::sweep_stale_licht_artifacts_for_known_masters(known);
-            lfs::io::project::sweep_stale_scratch_autosaves(
-                temp_project_directory_, {.verify_payloads = false});
-            if (!legacy_recovery_directory_.empty() &&
-                freezeNormalizedPath(legacy_recovery_directory_) !=
-                    freezeNormalizedPath(temp_project_directory_)) {
+            for (const auto& directory : scratchDirectories()) {
                 lfs::io::project::sweep_stale_scratch_autosaves(
-                    legacy_recovery_directory_, {.verify_payloads = false});
-            }
-            if (!legacy_working_tmp_directory_.empty() &&
-                freezeNormalizedPath(legacy_working_tmp_directory_) !=
-                    freezeNormalizedPath(temp_project_directory_) &&
-                freezeNormalizedPath(legacy_working_tmp_directory_) !=
-                    freezeNormalizedPath(legacy_recovery_directory_)) {
-                lfs::io::project::sweep_stale_scratch_autosaves(
-                    legacy_working_tmp_directory_, {.verify_payloads = false});
+                    directory, {.verify_payloads = false});
             }
         }
 
@@ -10179,7 +10296,8 @@ namespace lfs::vis::project {
             startup_recovery_scan_candidates_.reset();
         }
         startup_recovery_scan_thread_ = std::jthread(
-            [this, known = std::move(known)](
+            [this, known = std::move(known),
+             scratch_directories = scratchDirectories()](
                 const std::stop_token stop_token) {
                 LOG_TIMER("startup.recovery.scan");
                 try {
@@ -10192,27 +10310,9 @@ namespace lfs::vis::project {
                     }
                     const lfs::io::project::RecoveryInspectionOptions detection_options{
                         .verify_payloads = false};
-                    lfs::io::project::sweep_stale_scratch_autosaves(
-                        temp_project_directory_, detection_options);
-                    if (stop_token.stop_requested()) {
-                        return;
-                    }
-                    if (!legacy_recovery_directory_.empty() &&
-                        freezeNormalizedPath(legacy_recovery_directory_) !=
-                            freezeNormalizedPath(temp_project_directory_)) {
+                    for (const auto& directory : scratch_directories) {
                         lfs::io::project::sweep_stale_scratch_autosaves(
-                            legacy_recovery_directory_, detection_options);
-                        if (stop_token.stop_requested()) {
-                            return;
-                        }
-                    }
-                    if (!legacy_working_tmp_directory_.empty() &&
-                        freezeNormalizedPath(legacy_working_tmp_directory_) !=
-                            freezeNormalizedPath(temp_project_directory_) &&
-                        freezeNormalizedPath(legacy_working_tmp_directory_) !=
-                            freezeNormalizedPath(legacy_recovery_directory_)) {
-                        lfs::io::project::sweep_stale_scratch_autosaves(
-                            legacy_working_tmp_directory_, detection_options);
+                            directory, detection_options);
                         if (stop_token.stop_requested()) {
                             return;
                         }
@@ -10344,23 +10444,7 @@ namespace lfs::vis::project {
                 });
             }
         }
-        std::vector<std::filesystem::path> scratch_dirs;
-        if (!temp_project_directory_.empty()) {
-            scratch_dirs.push_back(temp_project_directory_);
-        }
-        if (!legacy_recovery_directory_.empty() &&
-            freezeNormalizedPath(legacy_recovery_directory_) !=
-                freezeNormalizedPath(temp_project_directory_)) {
-            scratch_dirs.push_back(legacy_recovery_directory_);
-        }
-        if (!legacy_working_tmp_directory_.empty() &&
-            freezeNormalizedPath(legacy_working_tmp_directory_) !=
-                freezeNormalizedPath(temp_project_directory_) &&
-            freezeNormalizedPath(legacy_working_tmp_directory_) !=
-                freezeNormalizedPath(legacy_recovery_directory_)) {
-            scratch_dirs.push_back(legacy_working_tmp_directory_);
-        }
-        for (const auto& scratch_dir : scratch_dirs) {
+        for (const auto& scratch_dir : scratchDirectories()) {
             for (auto& inspection :
                  lfs::io::project::scan_scratch_autosaves(
                      scratch_dir, detection_options)) {
@@ -10799,6 +10883,10 @@ namespace lfs::vis::project {
         return lfs::io::project::is_scratch_autosave_path(
                    path, temp_project_directory_) ||
                lfs::io::project::is_scratch_autosave_path(
+                   path, root_temp_project_directory_) ||
+               lfs::io::project::is_scratch_autosave_path(
+                   path, location_temp_project_directory_) ||
+               lfs::io::project::is_scratch_autosave_path(
                    path, legacy_recovery_directory_) ||
                lfs::io::project::is_scratch_autosave_path(
                    path, legacy_working_tmp_directory_);
@@ -10813,18 +10901,71 @@ namespace lfs::vis::project {
                isScratchPath(*document_->source_path());
     }
 
+    // Every directory that may hold untitled crash files, in scan order: the frozen
+    // scratch directory, <root>/tmp, the project location's folder (both, whichever the
+    // session uses, so a preference change between sessions loses nothing), and the
+    // legacy directories of older builds. The paths are already normalized, so this
+    // never touches the disk.
+    std::vector<std::filesystem::path>
+    ProjectLifecycle::scratchDirectories() const {
+        std::vector<std::filesystem::path> directories;
+        for (const auto* directory :
+             {&temp_project_directory_, &root_temp_project_directory_,
+              &location_temp_project_directory_, &legacy_recovery_directory_,
+              &legacy_working_tmp_directory_}) {
+            if (!directory->empty() &&
+                std::ranges::find(directories, *directory) == directories.end()) {
+                directories.push_back(*directory);
+            }
+        }
+        return directories;
+    }
+
     void ProjectLifecycle::freezeTempProjectDirectory() {
+        scratch_location_check_.reset();
+        location_temp_project_directory_.clear();
         if (isolated_scratch_storage_) {
             temp_project_directory_ = freezeNormalizedPath(
                 settings_path_.parent_path() / "tmp");
+            root_temp_project_directory_ = temp_project_directory_;
             legacy_recovery_directory_ = freezeNormalizedPath(
                 settings_path_.parent_path() / "recovery");
             return;
         }
         const auto paths = lfs::core::UserPaths::resolve();
-        temp_project_directory_ =
+        root_temp_project_directory_ =
             paths ? freezeNormalizedPath(paths->rootDir() / "tmp")
                   : std::filesystem::path{};
+        temp_project_directory_ = root_temp_project_directory_;
+        // The project location may be a slow or disconnected share, so the UI thread
+        // never touches it here: the session starts on <root>/tmp and moves to the
+        // location's folder once a worker's write probe succeeds.
+        if (const auto location = resolvedProjectLocationPreference();
+            !location.empty()) {
+            location_temp_project_directory_ =
+                location / PROJECT_LOCATION_SCRATCH_DIRECTORY;
+            auto check = std::make_shared<ScratchLocationCheck>();
+            try {
+                std::thread([check, probe = scratch_location_probe_, location] {
+                    try {
+                        check->status = probe(location);
+                    } catch (...) {
+                        check->status = lfs::Status::failure(lifecycleError(
+                            lfs::ErrorCode::Unavailable,
+                            "The project location could not be checked.",
+                            "the project location write probe threw",
+                            "project.project_location"));
+                    }
+                    check->done.store(true, std::memory_order_release);
+                }).detach();
+                scratch_location_check_ = std::move(check);
+            } catch (const std::system_error& error) {
+                LOG_WARN(
+                    "The project location cannot hold untitled scratch files; using {}: {}",
+                    lfs::core::path_to_utf8(root_temp_project_directory_),
+                    error.what());
+            }
+        }
         legacy_recovery_directory_ =
             paths ? freezeNormalizedPath(paths->recoveryDir())
                   : std::filesystem::path{};
@@ -10832,10 +10973,31 @@ namespace lfs::vis::project {
         legacy_working_tmp_directory_ =
             raw_working.empty()
                 ? std::filesystem::path{}
-                : freezeNormalizedPath(raw_working / "tmp");
-        if (freezeNormalizedPath(legacy_working_tmp_directory_) ==
-            freezeNormalizedPath(temp_project_directory_)) {
+                : lexicalAbsolutePath(raw_working / "tmp");
+        if (legacy_working_tmp_directory_ == temp_project_directory_) {
             legacy_working_tmp_directory_.clear();
+        }
+    }
+
+    void ProjectLifecycle::settleScratchLocationCheck() {
+        if (!scratch_location_check_ ||
+            !scratch_location_check_->done.load(std::memory_order_acquire)) {
+            return;
+        }
+        const auto check = std::exchange(scratch_location_check_, nullptr);
+        if (check->status) {
+            temp_project_directory_ = location_temp_project_directory_;
+            return;
+        }
+        LOG_WARN(
+            "The project location cannot hold untitled scratch files; using {}: {}",
+            lfs::core::path_to_utf8(root_temp_project_directory_),
+            developerError(check->status.error()));
+    }
+
+    void ProjectLifecycle::joinScratchPrune() {
+        if (scratch_prune_thread_.joinable()) {
+            scratch_prune_thread_.join();
         }
     }
 
@@ -10853,94 +11015,28 @@ namespace lfs::vis::project {
 
     void ProjectLifecycle::pruneUnlockedScratchFilesExcept(
         const std::optional<std::filesystem::path>& keep) {
-        std::vector<std::filesystem::path> directories;
-        if (!temp_project_directory_.empty()) {
-            directories.push_back(temp_project_directory_);
+        // Scratch folders may sit on a slow or disconnected share; prune off the UI thread.
+        if (scratch_prune_running_.load(std::memory_order_acquire)) {
+            LOG_DEBUG("Scratch prune skipped: the previous prune is still running");
+            return;
         }
-        if (!legacy_recovery_directory_.empty() &&
-            freezeNormalizedPath(legacy_recovery_directory_) !=
-                freezeNormalizedPath(temp_project_directory_)) {
-            directories.push_back(legacy_recovery_directory_);
-        }
-        if (!legacy_working_tmp_directory_.empty() &&
-            freezeNormalizedPath(legacy_working_tmp_directory_) !=
-                freezeNormalizedPath(temp_project_directory_) &&
-            freezeNormalizedPath(legacy_working_tmp_directory_) !=
-                freezeNormalizedPath(legacy_recovery_directory_)) {
-            directories.push_back(legacy_working_tmp_directory_);
-        }
-        const auto project_location =
-            freezeNormalizedPath(loadProjectLocationPreference());
-        std::optional<std::filesystem::path> keep_normalized;
-        if (keep && !keep->empty()) {
-            keep_normalized = freezeNormalizedPath(*keep);
-        }
-        for (const auto& directory : directories) {
-            if (!project_location.empty() &&
-                freezeNormalizedPath(directory) == project_location) {
-                continue;
-            }
-            std::error_code error;
-            if (!lfs::core::native_fs::is_directory(directory, error) ||
-                error) {
-                continue;
-            }
-            std::vector<std::filesystem::path> candidates;
-            for (std::filesystem::directory_iterator
-                     iterator(lfs::core::native_fs::traversal_path(directory), error),
-                 end;
-                 !error && iterator != end;
-                 iterator.increment(error)) {
-                std::error_code type_error;
-                if (!iterator->is_regular_file(type_error) ||
-                    type_error) {
-                    continue;
-                }
-                const auto entry = lfs::core::native_fs::entry_path(directory, iterator->path());
-                if (!lfs::io::project::is_scratch_autosave_path(
-                        entry, directory)) {
-                    continue;
-                }
-                candidates.push_back(entry);
-            }
-            for (const auto& scratch : candidates) {
-                if (keep_normalized &&
-                    freezeNormalizedPath(scratch) ==
-                        *keep_normalized) {
-                    continue;
-                }
-                const auto sidecar =
-                    lfs::io::project::autosave_sidecar_path(
-                        scratch);
-                if (auto removed =
-                        lfs::io::project::remove_autosave_artifacts(
-                            scratch);
-                    !removed) {
-                    if (removed.error().code() ==
-                        lfs::ErrorCode::Unavailable) {
-                        continue;
+        joinScratchPrune();
+        scratch_prune_running_.store(true, std::memory_order_release);
+        try {
+            scratch_prune_thread_ = std::jthread(
+                [directories = scratchDirectories(),
+                 project_location = loadProjectLocationPreference(), keep,
+                 running = &scratch_prune_running_] {
+                    try {
+                        pruneUnlockedScratchFiles(directories, project_location, keep);
+                    } catch (const std::exception& error) {
+                        LOG_WARN("Scratch prune failed: {}", error.what());
                     }
-                }
-                if (auto removed =
-                        lfs::io::project::remove_scratch_autosave(
-                            scratch);
-                    !removed) {
-                    if (removed.error().code() ==
-                        lfs::ErrorCode::Unavailable) {
-                        continue;
-                    }
-                    LOG_WARN(
-                        "Could not prune scratch autosave {}: {}",
-                        lfs::core::path_to_utf8(scratch),
-                        developerError(removed.error()));
-                    continue;
-                }
-                LOG_INFO(
-                    "Pruned leftover untitled scratch {}",
-                    lfs::core::path_to_utf8(scratch));
-                std::error_code ignored;
-                lfs::core::native_fs::remove(sidecar, ignored);
-            }
+                    running->store(false, std::memory_order_release);
+                });
+        } catch (const std::system_error& error) {
+            scratch_prune_running_.store(false, std::memory_order_release);
+            LOG_WARN("Scratch prune could not start: {}", error.what());
         }
     }
 
@@ -11031,6 +11127,13 @@ namespace lfs::vis::project {
             isScratchPath(*scratch_autosave_path_)) {
             return {};
         }
+        settleScratchLocationCheck();
+        if (scratch_location_check_) {
+            scratch_location_check_.reset();
+            LOG_WARN(
+                "The project location has not answered yet; this session keeps its untitled scratch files in {}",
+                lfs::core::path_to_utf8(temp_project_directory_));
+        }
         if (temp_project_directory_.empty()) {
             return fail<void>(
                 lfs::ErrorCode::Unavailable,
@@ -11053,15 +11156,19 @@ namespace lfs::vis::project {
             !bound) {
             return bound;
         }
+        const auto scratch_directory = scratch_autosave_path_->parent_path();
         std::error_code create_error;
-        lfs::core::native_fs::create_directories(
-            temp_project_directory_, create_error);
+        const bool created = lfs::core::native_fs::create_directories(
+            scratch_directory, create_error);
         if (create_error) {
             return fail<void>(
                 lfs::ErrorCode::PermissionDenied,
                 "The temp project directory could not be created.",
                 create_error.message(),
                 "project.temp_project_directory");
+        }
+        if (created && scratch_directory == location_temp_project_directory_) {
+            hideDirectory(scratch_directory);
         }
         if (scratch_lock_ &&
             scratch_lock_->owns(*scratch_autosave_path_)) {

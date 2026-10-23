@@ -2724,6 +2724,7 @@
     "environment_map_failed": "Impossible de lire la carte d’environnement « {} ». L’environnement précédent a été conservé.",
     "training_save_no_memory": "Échec de l'enregistrement du projet : {}",
     "autosave_deferred_no_memory": "L'enregistrement automatique est en pause : mémoire libre insuffisante ({}). L'entraînement continue ; l'enregistrement automatique reprendra dès que de la mémoire sera libérée.",
+    "autosave_no_disk_space": "Pas assez d'espace disque pour enregistrer automatiquement le projet dans « {} ».",
     "training_init_unavailable": "Le fichier d'initialisation de l'entraînement \"{}\" est indisponible ; l'entraînement part du nuage de points restauré.",
     "scene_filter": "Filtre : \"{}\"",
     "config_load_failed": "Impossible de charger '{}':\n\n{}",

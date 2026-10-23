@@ -1539,6 +1539,24 @@ namespace lfs::vis {
     std::filesystem::path projectLocationPreferenceRaw() {
         return UserPreferences::instance().projectLocationPreference();
     }
+    std::filesystem::path resolvedProjectLocationPreference() {
+        const auto raw = projectLocationPreferenceRaw();
+        if (raw.empty())
+            return {};
+        const auto expanded = expandLeadingTilde(raw);
+        std::error_code error;
+        const auto absolute = std::filesystem::absolute(expanded, error);
+        return error || !expanded.is_absolute() ? std::filesystem::path{}
+                                                : absolute.lexically_normal();
+    }
+    lfs::Status probeProjectLocation(const std::filesystem::path& path) {
+        if (auto probed = validateWritableDirectory(
+                path, "project_location", "The project location",
+                ".lfs-project-write-probe-");
+            !probed)
+            return lfs::Status::failure(std::move(probed).error());
+        return {};
+    }
     void clearProjectLocationPreference() {
         UserPreferences::instance().clearProjectLocation();
     }

@@ -2724,6 +2724,7 @@
     "environment_map_failed": "无法读取环境贴图“{}”。已保留之前的环境。",
     "training_save_no_memory": "项目保存失败：{}",
     "autosave_deferred_no_memory": "自动保存已暂停：可用内存不足（{}）。训练将继续；内存释放后自动保存会恢复。",
+    "autosave_no_disk_space": "磁盘空间不足，无法将项目自动保存到“{}”。",
     "training_init_unavailable": "训练初始化文件 \"{}\" 不可用；训练将从恢复的点云开始。",
     "scene_filter": "筛选器：“{}”",
     "config_load_failed": "无法加载“{}”：\n\n{}",
