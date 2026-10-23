@@ -163,6 +163,9 @@ namespace lfs::training {
         core::Tensor target;
         core::Tensor loss; // Optional caller-zeroed CUDA float32 scalar.
         float weight = 0.0f;
+        // Optional CUDA Float32 [H, W] pixel weights, such as the crop box ROI. The loss
+        // then takes their weighted mean over the pixels, like the photometric loss.
+        core::Tensor pixel_weight;
     };
 
     // Accumulates FP64 removal energy into aligned CUDA UInt8 [N, sizeof(double)] storage.

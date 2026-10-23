@@ -147,7 +147,7 @@ void fast_lfs::rasterization::backward(
                 LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.backward.blend_backward");
             };
         auto launch_blend = [&]<DensificationType DENS_TYPE, bool NORMAL_CHANNEL, bool IMPACT_SCORE, int WARP_CULL_MODE>() {
-            if (color_variance.weight_per_pixel > 0.0f)
+            if (color_variance.weight > 0.0f)
                 launch_blend_backward_typed.template operator()<DENS_TYPE, NORMAL_CHANNEL, IMPACT_SCORE, WARP_CULL_MODE, true>();
             else
                 launch_blend_backward_typed.template operator()<DENS_TYPE, NORMAL_CHANNEL, IMPACT_SCORE, WARP_CULL_MODE, false>();

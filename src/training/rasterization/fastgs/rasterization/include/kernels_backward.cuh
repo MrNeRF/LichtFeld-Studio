@@ -797,6 +797,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         float grad_T1 = inside1 ? background_transmittance_grad(background_grad, grad_c1, pixel_idx1, n_pixels) : 0.0f;
         float3 target0 = make_float3(0.0f);
         float3 target1 = make_float3(0.0f);
+        float variance_scale0 = 0.0f;
+        float variance_scale1 = 0.0f;
         float variance_loss_local = 0.0f;
         if constexpr (COLOR_VARIANCE) {
             auto load_target = [&](const bool inside, const uint idx) {
@@ -809,8 +811,21 @@ namespace fast_lfs::rasterization::kernels::backward {
                 const auto* p = color_variance.target;
                 return make_float3(p[idx], p[n_pixels + idx], p[2 * n_pixels + idx]);
             };
+            const float pixel_weight_sum =
+                color_variance.pixel_weight != nullptr ? *color_variance.pixel_weight_sum : 0.0f;
+            auto load_scale = [&](const bool inside, const uint idx) {
+                if (!inside)
+                    return 0.0f;
+                if (color_variance.pixel_weight == nullptr)
+                    return color_variance.weight / static_cast<float>(n_pixels);
+                return pixel_weight_sum > 0.0f
+                           ? color_variance.weight * color_variance.pixel_weight[idx] / pixel_weight_sum
+                           : 0.0f;
+            };
             target0 = load_target(inside0, pixel_idx0);
             target1 = load_target(inside1, pixel_idx1);
+            variance_scale0 = load_scale(inside0, pixel_idx0);
+            variance_scale1 = load_scale(inside1, pixel_idx1);
         }
         float3 behind0 = make_float3(0.0f);
         float3 behind1 = make_float3(0.0f);
@@ -1056,7 +1071,8 @@ namespace fast_lfs::rasterization::kernels::backward {
                                                 const float edge_weight,
                                                 float& T, float3& grad_c, float& grad_T,
                                                 const float grad_d, const float3& grad_n,
-                                                float3& behind, const float3& target) {
+                                                float3& behind, const float3& target,
+                                                const float variance_scale) {
                         if (!use || !inside || static_cast<uint>(tile_primitive_idx) >= last)
                             return;
                         const float2 delta = mean2d - pixel;
@@ -1104,13 +1120,13 @@ namespace fast_lfs::rasterization::kernels::backward {
                         float variance_cost = 0.0f;
                         if constexpr (COLOR_VARIANCE) {
                             const float3 residual = color - target;
-                            variance_cost = color_variance.weight_per_pixel * dot(residual, residual);
+                            variance_cost = variance_scale * dot(residual, residual);
                             // Differentiate the rendered [0, max_blend_color] colors.
                             // Keep the photometric below-black recovery heuristic separate.
                             const float3 positive = make_float3(color.x > 0.0f ? 1.0f : 0.0f,
                                                                 color.y > 0.0f ? 1.0f : 0.0f,
                                                                 color.z > 0.0f ? 1.0f : 0.0f);
-                            dL_dcolor += (2.0f * color_variance.weight_per_pixel * blending_weight) *
+                            dL_dcolor += (2.0f * variance_scale * blending_weight) *
                                          residual * positive * color_grad_factor;
                             variance_loss_local += blending_weight * variance_cost;
                         }
@@ -1160,9 +1176,9 @@ namespace fast_lfs::rasterization::kernels::backward {
                     };
 
                     accumulate_pixel(use0, inside0, last0, pixel0, pixel_error0, edge_weight0,
-                                     T0, grad_c0, grad_T0, grad_d0, grad_n0, behind0, target0);
+                                     T0, grad_c0, grad_T0, grad_d0, grad_n0, behind0, target0, variance_scale0);
                     accumulate_pixel(use1, inside1, last1, pixel1, pixel_error1, edge_weight1,
-                                     T1, grad_c1, grad_T1, grad_d1, grad_n1, behind1, target1);
+                                     T1, grad_c1, grad_T1, grad_d1, grad_n1, behind1, target1, variance_scale1);
 
                     // Warp-reduce → one global atomic per splat per warp.
                     const unsigned contrib_mask = __ballot_sync(0xffffffffu, has_contribution);

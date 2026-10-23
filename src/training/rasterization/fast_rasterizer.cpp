@@ -690,6 +690,8 @@ namespace lfs::training {
         const cudaStream_t stream = grad_image.stream();
 
         fast_lfs::rasterization::ColorVarianceLoss variance;
+        // Lives until the backward below is enqueued; freeing it then orders the kernel's read.
+        core::Tensor pixel_weight_sum;
         if (!std::isfinite(color_variance.weight) || color_variance.weight < 0.0f)
             throw std::runtime_error("Color variance weight must be finite and nonnegative");
         if (color_variance.weight > 0.0f) {
@@ -706,7 +708,16 @@ namespace lfs::training {
                                     loss.dtype() != core::DataType::Float32 || !loss.is_contiguous())) {
                 throw std::runtime_error("Color variance loss must be a CUDA Float32 scalar");
             }
-            core::pin_operands({&grad_image, &target, &loss});
+            const auto& pixel_weight = color_variance.pixel_weight;
+            if (pixel_weight.is_valid()) {
+                if (pixel_weight.shape() != core::TensorShape{static_cast<size_t>(H), static_cast<size_t>(W)} ||
+                    pixel_weight.device() != core::Device::CUDA || !pixel_weight.is_contiguous() ||
+                    pixel_weight.dtype() != core::DataType::Float32) {
+                    throw std::runtime_error("Color variance pixel weights must be contiguous CUDA Float32 [H, W]");
+                }
+                pixel_weight_sum = pixel_weight.sum();
+            }
+            core::pin_operands({&grad_image, &target, &loss, &pixel_weight, &pixel_weight_sum});
             target.sync_to_stream(ctx.forward_ctx.stream);
             if (loss.is_valid())
                 loss.sync_to_stream(ctx.forward_ctx.stream);
@@ -714,7 +725,13 @@ namespace lfs::training {
                 variance.target_u8 = target.ptr<std::uint8_t>();
             else
                 variance.target = target.ptr<float>();
-            variance.weight_per_pixel = color_variance.weight / (static_cast<float>(H) * static_cast<float>(W));
+            variance.weight = color_variance.weight;
+            if (pixel_weight.is_valid()) {
+                pixel_weight.sync_to_stream(ctx.forward_ctx.stream);
+                pixel_weight_sum.sync_to_stream(ctx.forward_ctx.stream);
+                variance.pixel_weight = pixel_weight.ptr<float>();
+                variance.pixel_weight_sum = pixel_weight_sum.ptr<float>();
+            }
             variance.loss_out = loss.is_valid() ? loss.ptr<float>() : nullptr;
         }
 

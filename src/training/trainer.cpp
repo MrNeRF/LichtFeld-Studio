@@ -6279,14 +6279,6 @@ namespace lfs::training {
                                                ? std::optional{popspa_step_parameters()}
                                                : std::nullopt;
                 const auto& step_params = popspa_params ? *popspa_params : params_.optimization;
-                if (step_params.color_variance_weight > 0.0f && cropbox_ && step_params.cropbox_loss_weight < 1.0f) {
-                    return lfs::make_error(lfs::ErrorInit{
-                        .code = lfs::ErrorCode::InvalidArgument,
-                        .domain = lfs::ErrorDomain::Training,
-                        .user_message = "Color variance does not yet support crop box loss weighting. Set cropbox_loss_weight to 1.",
-                        .detection = LFS_SOURCE_SITE_CURRENT(),
-                    });
-                }
                 auto& gaussian_optimizer = active_gaussian_optimizer();
                 if (in_popspa) {
                     gaussian_optimizer.zero_grad(iter);
@@ -6979,6 +6971,9 @@ namespace lfs::training {
                             roi_stream);
                         roi_weight = roi_weight_map_;
                         roi_weight.sync_to_stream(lfs::core::getCurrentCUDAStream());
+                        // Color variance weights its pixels like the photometric loss.
+                        if (color_variance.weight > 0.0f)
+                            color_variance.pixel_weight = roi_weight;
                     }
 
                     current_phase = StepPhase::Loss;

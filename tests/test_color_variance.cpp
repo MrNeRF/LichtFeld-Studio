@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <numeric>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -47,7 +48,8 @@ namespace {
 
     // Independent double-precision forward oracle. It evaluates the weighted
     // objective directly in front-to-back order; no backward recurrence is used.
-    double reference(const Scene& scene, const std::vector<float>& target, double weight, bool photometric = false) {
+    double reference(const Scene& scene, const std::vector<float>& target, double weight, bool photometric = false,
+                     const std::vector<float>& pixel_weight = {}) {
         struct Primitive {
             double x, y, a, b, c, opacity;
             std::array<double, 3> color;
@@ -85,6 +87,9 @@ namespace {
                 p.color[ch] = std::clamp(color, 0.0, 4.0);
             }
         }
+        double weight_sum = pixels;
+        if (!pixel_weight.empty())
+            weight_sum = std::accumulate(pixel_weight.begin(), pixel_weight.end(), 0.0);
         double loss = 0.0;
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
@@ -98,7 +103,10 @@ namespace {
                         continue;
                     for (int ch = 0; ch < 3; ++ch) {
                         const double residual = p.color[ch] - target[ch * pixels + pix];
-                        loss += weight / pixels * T * alpha * residual * residual;
+                        const double pixel_share = weight_sum > 0.0
+                                                       ? (pixel_weight.empty() ? 1.0 : pixel_weight[pix]) / weight_sum
+                                                       : 0.0;
+                        loss += weight * pixel_share * T * alpha * residual * residual;
                         image[ch] += T * alpha * p.color[ch];
                     }
                     T *= 1.0 - alpha;
@@ -139,7 +147,8 @@ namespace {
         std::array<std::vector<float>, 6> gradients;
     };
 
-    Capture capture(const Scene& scene, float weight = 0.7f, bool u8 = false, bool photo = false, bool omit_disabled_target = false) {
+    Capture capture(const Scene& scene, float weight = 0.7f, bool u8 = false, bool photo = false, bool omit_disabled_target = false,
+                    const std::vector<float>& pixel_weight = {}) {
         auto cam = make_camera();
         auto owned_model = make_model(scene);
         auto& model = *owned_model;
@@ -168,6 +177,8 @@ namespace {
         auto grad = cuda_tensor(image_grad, {3, height, width});
         // A disabled loss must not validate or read its unused target.
         FastGSColorVarianceLoss variance{weight == 0.0f && omit_disabled_target ? Tensor{} : gt, loss, weight};
+        if (!pixel_weight.empty())
+            variance.pixel_weight = cuda_tensor(pixel_weight, {height, width});
         fast_rasterize_backward(fwd->second, grad, model, opt, {}, {}, DensificationType::None,
                                 1, {}, {}, {}, true, variance);
         Capture result{loss.cpu().item<float>(), {}};
@@ -196,30 +207,70 @@ namespace {
         }
     };
 
-    TEST_F(ColorVarianceCuda, LossAndEveryParameterGradientMatchIndependentReference) {
-        for (const bool photo : {false, true}) {
-            Scene scene;
-            const auto actual = capture(scene, 0.7f, false, photo);
-            EXPECT_NEAR(actual.loss, reference(scene, targets(), 0.7), 2e-6);
-            std::array<std::vector<float>*, 6> parameters{&scene.means, &scene.scales, &scene.rotations,
-                                                          &scene.opacity, &scene.sh0, &scene.shN};
-            for (size_t k = 0; k < parameters.size(); ++k) {
-                for (size_t i = 0; i < parameters[k]->size(); ++i) {
-                    SCOPED_TRACE(::testing::Message() << "photo=" << photo << " group=" << k << " index=" << i);
-                    auto& value = (*parameters[k])[i];
-                    const float old = value;
-                    value = old + 1e-4f;
-                    const double plus = reference(scene, targets(), 0.7, photo);
-                    const float step_plus = value;
-                    value = old - 1e-4f;
-                    const double minus = reference(scene, targets(), 0.7, photo);
-                    const float step_minus = value;
-                    value = old;
-                    const double expected = (plus - minus) / (step_plus - step_minus);
-                    EXPECT_NEAR(actual.gradients[k][i], expected, 2e-5 + 1e-3 * std::abs(expected));
-                }
+    // Central differences of the reference against every parameter gradient of `actual`.
+    void expect_reference_gradients(Scene scene, const Capture& actual, const bool photo,
+                                    const std::vector<float>& pixel_weight = {}) {
+        std::array<std::vector<float>*, 6> parameters{&scene.means, &scene.scales, &scene.rotations,
+                                                      &scene.opacity, &scene.sh0, &scene.shN};
+        for (size_t k = 0; k < parameters.size(); ++k) {
+            for (size_t i = 0; i < parameters[k]->size(); ++i) {
+                SCOPED_TRACE(::testing::Message() << "photo=" << photo << " group=" << k << " index=" << i);
+                auto& value = (*parameters[k])[i];
+                const float old = value;
+                value = old + 1e-4f;
+                const double plus = reference(scene, targets(), 0.7, photo, pixel_weight);
+                const float step_plus = value;
+                value = old - 1e-4f;
+                const double minus = reference(scene, targets(), 0.7, photo, pixel_weight);
+                const float step_minus = value;
+                value = old;
+                const double expected = (plus - minus) / (step_plus - step_minus);
+                EXPECT_NEAR(actual.gradients[k][i], expected, 2e-5 + 1e-3 * std::abs(expected));
             }
         }
+    }
+
+    // A crop box ROI map: full weight inside a rectangle, the outside weight elsewhere.
+    std::vector<float> roi_weights(const float outside) {
+        std::vector<float> result(pixels, outside);
+        for (int y = 4; y < 15; ++y)
+            for (int x = 5; x < 13; ++x)
+                result[y * width + x] = 1.0f;
+        return result;
+    }
+
+    TEST_F(ColorVarianceCuda, LossAndEveryParameterGradientMatchIndependentReference) {
+        for (const bool photo : {false, true}) {
+            const Scene scene;
+            const auto actual = capture(scene, 0.7f, false, photo);
+            EXPECT_NEAR(actual.loss, reference(scene, targets(), 0.7), 2e-6);
+            expect_reference_gradients(scene, actual, photo);
+        }
+    }
+
+    TEST_F(ColorVarianceCuda, PixelWeightsTakeTheWeightedMeanLikeThePhotometricLoss) {
+        for (const float outside : {0.0f, 0.1f}) {
+            SCOPED_TRACE(::testing::Message() << "outside=" << outside);
+            const Scene scene;
+            const auto weights = roi_weights(outside);
+            const auto actual = capture(scene, 0.7f, false, true, false, weights);
+            EXPECT_NEAR(actual.loss, reference(scene, targets(), 0.7, false, weights), 2e-6);
+            expect_reference_gradients(scene, actual, true, weights);
+        }
+
+        // Uniform weights are the plain pixel mean; zero weights leave only the photometric part.
+        const auto plain = capture(Scene{});
+        const auto uniform = capture(Scene{}, 0.7f, false, false, false, std::vector<float>(pixels, 0.5f));
+        EXPECT_NEAR(uniform.loss, plain.loss, 1e-7);
+        for (size_t k = 0; k < plain.gradients.size(); ++k)
+            for (size_t j = 0; j < plain.gradients[k].size(); ++j)
+                EXPECT_NEAR(uniform.gradients[k][j], plain.gradients[k][j], 1e-6);
+        const auto photometric = capture(Scene{}, 0.0f, false, true);
+        const auto unweighted = capture(Scene{}, 0.7f, false, true, false, std::vector<float>(pixels, 0.0f));
+        EXPECT_EQ(unweighted.loss, 0.0f);
+        for (size_t k = 0; k < photometric.gradients.size(); ++k)
+            for (size_t j = 0; j < photometric.gradients[k].size(); ++j)
+                EXPECT_NEAR(unweighted.gradients[k][j], photometric.gradients[k][j], 1e-7);
     }
 
     TEST_F(ColorVarianceCuda, UInt8AndNormalizedFloatTargetsAgree) {
