@@ -13,6 +13,7 @@
 #include <lcms2.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <climits>
@@ -572,6 +573,156 @@ namespace lfs::core::image_codecs {
             return false;
         const auto signature = JxlSignatureCheck(bytes.data(), bytes.size());
         return signature == JXL_SIG_CODESTREAM || signature == JXL_SIG_CONTAINER;
+    }
+
+    SourceXmp read_jxl_xmp(const std::filesystem::path& path, const XmpLimits& limits) {
+        SourceXmp result;
+        result.scope = "jxl-container-xml";
+        result.status = MetadataStatus::Absent;
+        const auto failure = [&](MetadataStatus status, const char* message) {
+            result.status = status;
+            result.diagnostic = message;
+        };
+        Input input(path);
+        if (!input.opened) {
+            failure(MetadataStatus::IoError, "JXL: cannot open metadata source");
+            return result;
+        }
+        std::array<uint8_t, 12> signature{};
+        input.file.read(reinterpret_cast<char*>(signature.data()), signature.size());
+        const auto signature_size = static_cast<size_t>(input.file.gcount());
+        if (input.file.bad()) {
+            failure(MetadataStatus::IoError, "JXL: cannot read metadata source");
+            return result;
+        }
+        if (JxlSignatureCheck(signature.data(), signature_size) == JXL_SIG_CODESTREAM)
+            return result;
+        input.file.clear();
+        input.file.seekg(0);
+        if (input.remaining > (uint64_t{2} << 30)) {
+            failure(MetadataStatus::Limited, "JXL: metadata encoded-input limit exhausted");
+            return result;
+        }
+        CodecMemory memory{64u << 20};
+        const JxlMemoryManager manager{&memory, CodecMemory::allocate, CodecMemory::release};
+        // Output storage must outlive the decoder even on an exceptional exit.
+        std::vector<uint8_t> pending;
+        std::unique_ptr<JxlDecoder, decltype(&JxlDecoderDestroy)> decoder(JxlDecoderCreate(&manager), JxlDecoderDestroy);
+        if (!decoder) {
+            failure(MetadataStatus::Limited, "JXL: metadata decoder allocation limit exhausted");
+            return result;
+        }
+        if (JxlDecoderSubscribeEvents(decoder.get(), JXL_DEC_BOX) != JXL_DEC_SUCCESS) {
+            failure(MetadataStatus::Malformed, "JXL: cannot configure box collection");
+            return result;
+        }
+        // Configure before processing: libjxl starts each box decoder before emitting its box event.
+        const bool decompress = JxlDecoderSetDecompressBoxes(decoder.get(), JXL_TRUE) == JXL_DEC_SUCCESS;
+        size_t retained = 0, boxes = 0, budget = 0, written = 0, supplied = 0;
+        bool active = false, compressed = false;
+        uint64_t ordinal = 0;
+        const auto finish = [&] {
+            if (!active)
+                return;
+            pending.resize(written);
+            XmpBlock block;
+            block.envelope = XmpEnvelope::JxlXml;
+            block.jxl_box = JxlXmpBox{ordinal, compressed};
+            block.bytes = std::move(pending);
+            retained += written;
+            result.blocks.push_back(std::move(block));
+            if (result.status == MetadataStatus::Absent)
+                result.status = MetadataStatus::Collected;
+            active = false;
+        };
+        for (;;) {
+            const auto status = JxlDecoderProcessInput(decoder.get());
+            if (memory.exhausted) {
+                failure(MetadataStatus::Limited, "JXL: metadata decoder allocation limit exhausted");
+                return result;
+            }
+            if (status == JXL_DEC_NEED_MORE_INPUT) {
+                std::string error;
+                if (!input.refill(decoder.get(), 4u << 20, error)) {
+                    result.status = input.file.bad() ? MetadataStatus::IoError : error == "JXL: buffered input byte limit exhausted" ? MetadataStatus::Limited
+                                                                                                                                     : MetadataStatus::Malformed;
+                    result.diagnostic = std::move(error);
+                    return result;
+                }
+            } else if (status == JXL_DEC_BOX || status == JXL_DEC_SUCCESS) {
+                if (active) {
+                    const auto unused = JxlDecoderReleaseBoxBuffer(decoder.get());
+                    written += supplied - unused;
+                    supplied = 0;
+                    if (written > budget) {
+                        failure(MetadataStatus::Limited, "JXL: XMP decoded-byte budget exhausted");
+                        return result;
+                    }
+                    finish();
+                }
+                if (status == JXL_DEC_SUCCESS)
+                    return result;
+                if (boxes++ >= 4096) {
+                    failure(MetadataStatus::Limited, "JXL: metadata box enumeration limit exhausted");
+                    return result;
+                }
+                JxlBoxType raw{}, type{};
+                if (JxlDecoderGetBoxType(decoder.get(), raw, JXL_FALSE) != JXL_DEC_SUCCESS ||
+                    JxlDecoderGetBoxType(decoder.get(), type, JXL_TRUE) != JXL_DEC_SUCCESS) {
+                    failure(MetadataStatus::Malformed, "JXL: invalid metadata box type");
+                    return result;
+                }
+                if (std::memcmp(type, "xml ", 4))
+                    continue;
+                if (result.blocks.size() >= limits.blocks) {
+                    failure(MetadataStatus::Limited, "JXL: XMP block count budget exhausted");
+                    return result;
+                }
+                compressed = !std::memcmp(raw, "brob", 4);
+                ordinal = boxes - 1;
+                budget = std::min(limits.block_bytes, limits.total_bytes - retained);
+                if (compressed)
+                    budget = std::min(budget, limits.inflated_bytes);
+                uint64_t contents = 0;
+                if (JxlDecoderGetBoxSizeContents(decoder.get(), &contents) != JXL_DEC_SUCCESS) {
+                    failure(MetadataStatus::Malformed, "JXL: invalid metadata box size");
+                    return result;
+                }
+                if (!compressed && contents > budget) {
+                    failure(MetadataStatus::Limited, "JXL: XMP collection byte budget exhausted");
+                    continue;
+                }
+                if (compressed && !decompress) {
+                    failure(MetadataStatus::Unsupported, "JXL: compressed metadata is unsupported by this provider");
+                    return result;
+                }
+                written = 0;
+                pending.resize(std::min(size_t{4096}, compressed ? budget + 1 : static_cast<size_t>(std::min<uint64_t>(contents, budget)) + 1));
+                supplied = pending.size();
+                if (JxlDecoderSetBoxBuffer(decoder.get(), pending.data(), supplied) != JXL_DEC_SUCCESS) {
+                    failure(MetadataStatus::Malformed, "JXL: cannot set metadata box buffer");
+                    return result;
+                }
+                active = true;
+            } else if (status == JXL_DEC_BOX_NEED_MORE_OUTPUT && active) {
+                const auto unused = JxlDecoderReleaseBoxBuffer(decoder.get());
+                written += supplied - unused;
+                if (written > budget) {
+                    failure(MetadataStatus::Limited, "JXL: XMP decoded-byte budget exhausted");
+                    return result;
+                }
+                const auto next = std::min(budget + 1, std::max(pending.size() + 1, pending.size() * 2));
+                pending.resize(next);
+                supplied = next - written;
+                if (JxlDecoderSetBoxBuffer(decoder.get(), pending.data() + written, supplied) != JXL_DEC_SUCCESS) {
+                    failure(MetadataStatus::Malformed, "JXL: cannot extend metadata box buffer");
+                    return result;
+                }
+            } else {
+                failure(MetadataStatus::Malformed, "JXL: invalid or incomplete metadata container");
+                return result;
+            }
+        }
     }
 
     uint32_t jxl_encoder_version() { return JxlEncoderVersion(); }

@@ -337,6 +337,118 @@ class IngestCLI(unittest.TestCase):
         result, _ = self.invoke("source-metadata", self.root / "missing-xmp.png")
         self.assertEqual(result["metadata"]["image_xmp"]["status"], "io_error")
 
+    def _xmp_jxl(self, path, before=(), after=()):
+        def box(kind, data):
+            return struct.pack(">I4s", len(data) + 8, kind) + data
+        codestream = (ROOT / "tests/data/jxl/rgb8.jxl").read_bytes()
+        path.write_bytes(box(b"JXL ", b"\x0d\x0a\x87\x0a") + box(b"ftyp", b"jxl " + bytes(4) + b"jxl ") +
+                         b"".join(box(kind, data) for kind, data in before) + box(b"jxlc", codestream) +
+                         b"".join(box(kind, data) for kind, data in after))
+
+    def test_source_metadata_xmp_jxl_boxes_and_legacy(self):
+        path = self.root / "XMP JPEG XL \u00e9 \u65e5\u672c\u8a9e.jxl"
+        packet = b'<x xmlns="urn:unknown">\x00\xff</x>'
+        compressed = bytes.fromhex("8b03803c786d702f3e00ff03")  # Brotli b"<xmp/>\x00\xff".
+        self._xmp_jxl(path, [(b"xml ", packet), (b"Exif", b"opaque"), (b"junk", b"ignored")],
+                      [(b"brob", b"xml " + compressed), (b"xml ", packet), (b"xml ", b"")])
+        original, stamp = path.read_bytes(), path.stat().st_mtime_ns
+        legacy, _ = self.invoke("source-exif", path)
+        result, _ = self.invoke("source-metadata", path)
+        metadata = result["metadata"]
+        self.assertEqual(metadata["image_exif"], legacy["exif"])
+        xmp = metadata["image_xmp"]
+        self.assertEqual(xmp["status"], "collected", xmp)
+        self.assertEqual([bytes.fromhex(b["bytes"]) for b in xmp["blocks"]], [packet, b"<xmp/>\x00\xff", packet, b""])
+        self.assertEqual([b["jxl_box"]["brotli_compressed"] for b in xmp["blocks"]], [False, True, False, False])
+        ordinals = [b["jxl_box"]["ordinal"] for b in xmp["blocks"]]
+        self.assertEqual(ordinals, sorted(set(ordinals)))
+        for block in xmp["blocks"]:
+            self.assertEqual(block["envelope"], "jxl_xml")
+            self.assertEqual(block["representation"], "libjxl_decoded_bytes")
+            self.assertEqual(block["bytes"], block["payload_bytes"])
+            self.assertFalse(block["compressed"])
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(path.stat().st_mtime_ns, stamp)
+        self.assertEqual(self._xmp_limited(path, records=0)["image_xmp"], xmp)
+        for raw in (False, True):
+            if raw:
+                path.write_bytes((ROOT / "tests/data/jxl/rgb8.jxl").read_bytes())
+            else:
+                self._xmp_jxl(path)
+            result, _ = self.invoke("source-metadata", path)
+            self.assertEqual(result["metadata"]["image_xmp"]["status"], "absent")
+
+    def test_source_metadata_xmp_jxl_budgets_and_damage(self):
+        path = self.root / "limited-xmp.jxl"
+        self._xmp_jxl(path, [(b"xml ", b"x" * 129), (b"xml ", b"last")])
+        limited = self._xmp_limited(path, block_bytes=128)["image_xmp"]
+        self.assertEqual(limited["status"], "limited")
+        self.assertEqual([bytes.fromhex(b["bytes"]) for b in limited["blocks"]], [b"last"])
+        compressed = bytes.fromhex("1bff1f0024f0e2b140722f0000")  # Brotli 8192 b"x" bytes.
+        self._xmp_jxl(path, [(b"xml ", b"first"), (b"brob", b"xml " + compressed)], [(b"xml ", b"later")])
+        for budget in (8191, 8192, 8193):
+            xmp = self._xmp_limited(path, inflated_bytes=budget)["image_xmp"]
+            self.assertEqual(xmp["status"], "limited" if budget == 8191 else "collected", xmp)
+            self.assertEqual(bytes.fromhex(xmp["blocks"][0]["bytes"]), b"first")
+            self.assertEqual(len(xmp["blocks"]), 1 if budget == 8191 else 3)
+        self._xmp_jxl(path, [(b"xml ", b"one"), (b"xml ", b"two")])
+        for budget in (5, 6):
+            xmp = self._xmp_limited(path, total_bytes=budget)["image_xmp"]
+            self.assertEqual(len(xmp["blocks"]), 1 if budget == 5 else 2)
+        xmp = self._xmp_limited(path, blocks=1)["image_xmp"]
+        self.assertEqual(xmp["status"], "limited")
+        self.assertEqual(len(xmp["blocks"]), 1)
+        for bad in (b"broken", compressed[:-1]):
+            self._xmp_jxl(path, [(b"xml ", b"first"), (b"brob", b"xml " + bad)])
+            result, _ = self.invoke("source-metadata", path)
+            xmp = result["metadata"]["image_xmp"]
+            self.assertEqual(xmp["status"], "malformed", xmp)
+            self.assertEqual([bytes.fromhex(b["bytes"]) for b in xmp["blocks"]], [b"first"])
+        self._xmp_jxl(path, [(b"xml ", b"first")], [(b"xml ", b"truncated")])
+        path.write_bytes(path.read_bytes()[:-3])
+        result, _ = self.invoke("source-metadata", path)
+        self.assertEqual(result["metadata"]["image_xmp"]["status"], "malformed")
+
+    def test_source_metadata_xmp_jxl_box_framing_and_scan_limits(self):
+        path = self.root / "framing-xmp.jxl"
+        self._xmp_jxl(path)
+        original = path.read_bytes()
+        # Extended-size and EOF-sized boxes, independent of the application's parser.
+        packet = b"<opaque/>\x00\xff"
+        for box in (struct.pack(">I4sQ", 1, b"xml ", len(packet) + 16) + packet,
+                    struct.pack(">I4s", 0, b"xml ") + packet):
+            path.write_bytes(original + box)
+            result, _ = self.invoke("source-metadata", path)
+            self.assertEqual(result["metadata"]["image_xmp"]["status"], "collected", result)
+            self.assertEqual(bytes.fromhex(result["metadata"]["image_xmp"]["blocks"][0]["bytes"]), packet)
+        for box in (struct.pack(">I4sQ", 1, b"xml ", 15), struct.pack(">I4s", 7, b"xml ")):
+            path.write_bytes(original + box)
+            result, _ = self.invoke("source-metadata", path)
+            self.assertEqual(result["metadata"]["image_xmp"]["status"], "malformed")
+        large = b"x" * 70000 + b"\x00\xff"
+        self._xmp_jxl(path, [(b"xml ", large)])
+        result, _ = self.invoke("source-metadata", path)
+        self.assertEqual(bytes.fromhex(result["metadata"]["image_xmp"]["blocks"][0]["bytes"]), large)
+        # Split the codestream into two jxlp boxes, keeping XML between them.
+        codestream = (ROOT / "tests/data/jxl/rgb8.jxl").read_bytes()
+        def box(kind, data):
+            return struct.pack(">I4s", len(data) + 8, kind) + data
+        prefix = original[:32]
+        midpoint = len(codestream) // 2
+        path.write_bytes(prefix + box(b"jxlp", bytes(4) + codestream[:midpoint]) +
+                         box(b"xml ", packet) + box(b"jxlp", struct.pack(">I", 0x80000001) + codestream[midpoint:]))
+        result, _ = self.invoke("source-metadata", path)
+        self.assertEqual(result["metadata"]["image_xmp"]["status"], "collected", result)
+        self.assertEqual(bytes.fromhex(result["metadata"]["image_xmp"]["blocks"][0]["bytes"]), packet)
+        for count in (4092, 4094):
+            self._xmp_jxl(path, [(b"junk", b"")] * count)
+            result, _ = self.invoke("source-metadata", path)
+            self.assertEqual(result["metadata"]["image_xmp"]["status"], "absent" if count == 4092 else "limited", result)
+        self._xmp_jxl(path, [(b"xml ", b"one")], [(b"junk", b"ignored")])
+        self.assertEqual(self._xmp_limited(path, blocks=1)["image_xmp"]["status"], "collected")
+        self._xmp_jxl(path, [(b"brob", b"xml " + bytes.fromhex("8b03803c786d702f3e00ff03"))])
+        self.assertEqual(self._xmp_limited(path, inflated_bytes=0)["image_xmp"]["status"], "limited")
+
     def test_source_metadata_xmp_heif_primary_items(self):
         packet = b'<x xmlns="urn:unknown">\0\xff</x>'
         for carrier in ["avif", "heic"]:

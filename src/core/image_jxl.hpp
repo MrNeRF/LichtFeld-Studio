@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
+#include "core/source_metadata.hpp"
 #include "image_codecs.hpp"
 
 namespace lfs::core::image_codecs {
@@ -54,6 +55,8 @@ namespace lfs::core::image_codecs {
         // 0 selects a bounded automatic pool; 1 explicitly selects serial.
         size_t max_threads = 0;
     };
+
+    [[nodiscard]] SourceXmp read_jxl_xmp(const std::filesystem::path&, const XmpLimits&);
 
     LFS_IMAGE_CODECS_API bool is_jxl(std::span<const uint8_t>);
     LFS_IMAGE_CODECS_API bool probe_jxl(const std::filesystem::path&, Probe&, std::string&, const JxlDecodeLimits& = {});
