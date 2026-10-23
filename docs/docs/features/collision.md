@@ -33,6 +33,17 @@ and elapsed time. Stages have different costs; the bar is not a time estimate.
 **Cancel** leaves the existing collider intact. Source snapshots own their data;
 source edits or a project change invalidate an in-flight result.
 
+The popup groups controls under collapsible **Generate collision**, **Inspect
+collision**, **Walk and edit**, and **Advanced** headers. Progress and errors stay
+visible when settings are collapsed. Advanced filtering, voxelization, filling,
+seed and triangle-surface controls each have their own header.
+
+Progress names the current CPU or GPU task and shows the work-stage count,
+percentage, elapsed time and time since the last progress update. Completed,
+cancelled and failed operations retain their final status. A failure includes
+recovery advice and expandable **Error details** with the failed task, source
+count, relevant settings and exact diagnostic. **Copy details** copies that report.
+
 The initial seed comes from the camera, in data-world XYZ. Use camera position
 refreshes it. Keep it at standing eye height above the desired floor. Clustering
 chooses the nearest coarse component; exterior filling needs an enclosed seed;
