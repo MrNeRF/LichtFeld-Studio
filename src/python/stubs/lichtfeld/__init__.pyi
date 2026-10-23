@@ -817,13 +817,13 @@ class Tensor:
     @property
     def device(self) -> str:
         """
-        Device: 'cpu', 'cuda', 'vulkan' or 'metal' according to the tensor backend
+        Device: 'cpu', 'cuda', 'vulkan', 'metal' or 'hip' according to the tensor backend
         """
 
     @property
     def backend(self) -> str:
         """
-        Backend: 'cpu' for CPU tensors, 'cuda', 'vulkan' or 'metal' for GPU tensors
+        Backend: 'cpu' for CPU tensors; the active CUDA, Vulkan, Metal or HIP backend for GPU tensors
         """
 
     @property
@@ -1731,7 +1731,6 @@ def compute_screen_positions(rotation: Tensor, translation: Tensor, width: int, 
 
 def get_current_view_size() -> tuple[int, int] | None:
     """Active view width and height; does not allocate GPU tensors."""
-    ...
 
 def get_current_view() -> ViewInfo | None:
     """Get current viewport camera pose (None if not available)."""

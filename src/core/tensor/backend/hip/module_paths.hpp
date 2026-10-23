@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include "architecture_runtime.hpp"
+#include "core/native_fs.hpp"
 #include <filesystem>
 #include <string>
 #ifdef _WIN32
@@ -37,7 +38,7 @@ inline std::filesystem::path hip_packaged_module(const std::filesystem::path& co
     if(!executable_directory.is_absolute())return compiled;
     const auto packaged=executable_directory/"hip"/compiled.filename();
     std::error_code error;
-    return std::filesystem::is_regular_file(packaged,error)?packaged:compiled;
+    return lfs::core::native_fs::is_regular_file(packaged, error) ? packaged : compiled;
 }
 inline std::filesystem::path hip_profile_module(const std::filesystem::path& generic,
                                                std::string_view architecture) {
@@ -47,6 +48,6 @@ inline std::filesystem::path hip_profile_module(const std::filesystem::path& gen
         if(!((digit>='0' && digit<='9') || (digit>='a' && digit<='f')))return generic;
     const auto profile=generic.parent_path()/"profiles"/std::string(architecture)/generic.filename();
     std::error_code error;
-    return std::filesystem::is_regular_file(profile,error)?profile:generic;
+    return lfs::core::native_fs::is_regular_file(profile, error) ? profile : generic;
 }
 } // namespace lfs::core::internal

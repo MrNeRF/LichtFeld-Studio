@@ -245,7 +245,7 @@ namespace lfs::training {
                 // These are queued host-clock boundaries, not device times.
                 // HIP event timestamps were independently found unreliable.
                 const auto ticks = now_ns();
-                static std::ofstream trace(lfs::core::utf8_to_path(path), std::ios::binary);
+                static std::ofstream trace(lfs::core::native_fs::native_path(lfs::core::utf8_to_path(path)), std::ios::binary);
                 trace << phase_active_iter_ << ',' << static_cast<int>(b) << ',' << ticks << '\n';
                 trace.flush();
                 return;
@@ -529,7 +529,7 @@ namespace lfs::training {
         // No trace, stream, or environment lookup exists in non-HIP builds.
         if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::HIP) {
             if (const char* path = std::getenv("LFS_HIP_VALIDATION_STEP_TRACE")) {
-                static std::ofstream trace(lfs::core::utf8_to_path(path), std::ios::binary);
+                static std::ofstream trace(lfs::core::native_fs::native_path(lfs::core::utf8_to_path(path)), std::ios::binary);
                 trace << iter << ',' << std::setprecision(9) << ms << ',' << used << ','
                       << total << ',' << live_splats << ',' << loss << ','
                       << memory.pool_used_current << ',' << memory.pool_reserved_current << '\n';
@@ -596,7 +596,7 @@ namespace lfs::training {
 #ifdef LFS_TENSOR_HIP
         if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::HIP) {
             if (const char* path = std::getenv("LFS_HIP_VALIDATION_PHASE_TRACE")) {
-                static std::ofstream trace(lfs::core::utf8_to_path(std::string(path) + ".loader.csv"), std::ios::binary);
+                static std::ofstream trace(lfs::core::native_fs::native_path(lfs::core::utf8_to_path(std::string(path) + ".loader.csv")), std::ios::binary);
                 trace << iter << ',' << std::setprecision(9) << wait_ms << '\n';
                 trace.flush();
             }

@@ -5457,5 +5457,6 @@
   "preferences.drag_title": "スプラットの転送",
   "preferences.drag_pause": "スプラットをドラッグする前にトレーニングを一時停止してください。",
   "preferences.drag_failed": "スプラットのエクスポートに失敗しました。詳細はアプリケーションログを確認してください。",
+  "ui.vram_hip_budget_tooltip": "選択したHIP GPUにおける、このプロセスのメモリ使用量とOSのメモリ予算です。共有システムメモリがローカルGPUメモリとして管理される場合は含まれます。GPU全体の使用量やBIOSの予約量ではありません。",
   "ui.vram_native_unavailable_tooltip": "このバックエンドでは GPU 使用率とメモリ予算を取得できません。"
 }

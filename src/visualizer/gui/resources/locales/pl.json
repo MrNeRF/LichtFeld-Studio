@@ -5457,5 +5457,6 @@
   "preferences.drag_title": "Przesyłanie splatów",
   "preferences.drag_pause": "Wstrzymaj trening przed przeciągnięciem splatów.",
   "preferences.drag_failed": "Eksport splatów nie powiódł się. Szczegóły znajdują się w dzienniku aplikacji.",
+  "ui.vram_hip_budget_tooltip": "Użycie pamięci tego procesu i budżet pamięci systemu operacyjnego na wybranym GPU HIP. Współdzielona pamięć systemowa jest uwzględniana, gdy jest zarządzana jako lokalna pamięć GPU; nie jest to użycie całego GPU ani rezerwacja BIOS-u.",
   "ui.vram_native_unavailable_tooltip": "Wykorzystanie GPU i limit pamięci są niedostępne dla tego backendu."
 }

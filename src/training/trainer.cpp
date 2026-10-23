@@ -8990,7 +8990,7 @@ namespace lfs::training {
                 if (core::default_gpu_backend() == core::GpuBackend::HIP && iter % 25 == 0) {
                     if (const char* path = std::getenv("LFS_HIP_VALIDATION_LOADER_STATS")) {
                         const auto stats = train_dataloader->get_stats();
-                        static std::ofstream trace(core::utf8_to_path(path), std::ios::binary);
+                        static std::ofstream trace(lfs::core::native_fs::native_path(core::utf8_to_path(path)), std::ios::binary);
                         trace << iter << ',' << stats.total_images_loaded << ',' << stats.hot_path_hits << ','
                               << stats.cold_path_misses << ',' << stats.jpeg_cache_entries << ','
                               << stats.jpeg_cache_bytes << ',' << stats.cpu_decode_calls << ','

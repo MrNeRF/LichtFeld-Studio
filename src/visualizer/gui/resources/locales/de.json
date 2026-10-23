@@ -5457,5 +5457,6 @@
   "preferences.drag_title": "Splat-Übertragung",
   "preferences.drag_pause": "Vor dem Ziehen der Splats das Training pausieren.",
   "preferences.drag_failed": "Splat-Export fehlgeschlagen. Details stehen im Anwendungsprotokoll.",
+  "ui.vram_hip_budget_tooltip": "Speichernutzung dieses Prozesses und Speicherbudget des Betriebssystems auf der ausgewählten HIP-GPU. Gemeinsam genutzter Systemspeicher wird einbezogen, wenn er als lokaler GPU-Speicher verwaltet wird; dies ist weder die Nutzung der gesamten GPU noch die BIOS-Reservierung.",
   "ui.vram_native_unavailable_tooltip": "GPU-Auslastung und Speicherbudget sind für dieses Backend nicht verfügbar."
 }

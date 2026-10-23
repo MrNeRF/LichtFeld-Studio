@@ -5457,5 +5457,6 @@
   "preferences.drag_title": "Transferencia de splats",
   "preferences.drag_pause": "Pausa el entrenamiento antes de arrastrar los splats.",
   "preferences.drag_failed": "Error al exportar los splats. Consulta el registro de la aplicación para ver los detalles.",
+  "ui.vram_hip_budget_tooltip": "Uso de memoria de este proceso y presupuesto de memoria del sistema operativo en la GPU HIP seleccionada. Se incluye la memoria compartida del sistema cuando se gestiona como memoria local de la GPU; no indica el uso de toda la GPU ni la reserva del BIOS.",
   "ui.vram_native_unavailable_tooltip": "El uso de la GPU y el presupuesto de memoria no están disponibles para este backend."
 }

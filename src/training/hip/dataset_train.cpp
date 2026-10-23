@@ -12,6 +12,7 @@
 #include <cmath>
 #include <core/image_io.hpp>
 #include <core/logger.hpp>
+#include <core/native_fs.hpp>
 #include <core/splat_data.hpp>
 #include <core/tensor_backend.hpp>
 #include <csignal>
@@ -44,7 +45,7 @@ namespace {
     }
     // PPM is an exact, dependency-free inspection artifact of float CHW RGB.
     void image(const std::filesystem::path& path, const LfsHipTrainFrame& frame, const std::vector<float>& values) {
-        std::ofstream stream(path, std::ios::binary);
+        std::ofstream stream(lfs::core::native_fs::native_path(path), std::ios::binary);
         stream.exceptions(std::ios::badbit | std::ios::failbit);
         stream << "P6\n"
                << frame.width << ' ' << frame.height << "\n255\n";
@@ -69,9 +70,9 @@ int main(int argc, char** argv) try {
     const auto steps = integer(argv[4]), max_width = integer(argv[5]), max_views = integer(argv[6]);
     if (max_width > 16384 || max_views > 100000 || steps > 10000000)
         throw std::invalid_argument("Experimental runner limit exceeded");
-    if (!std::filesystem::is_regular_file(module) || !std::filesystem::is_directory(dataset))
+    if (!lfs::core::native_fs::is_regular_file(module) || !lfs::core::native_fs::is_directory(dataset))
         throw std::invalid_argument("Training module or dataset does not exist");
-    if (!std::filesystem::create_directory(output))
+    if (!lfs::core::native_fs::create_directory(output))
         throw std::invalid_argument("Output directory already exists; choose a new directory");
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     Logger::get().init(LogLevel::Debug, (output / "runtime.log").string(), "", true, output.string());
@@ -226,7 +227,7 @@ int main(int argc, char** argv) try {
             std::fprintf(stderr, "[warning] HIP host target fallback to ordinary RAM: %s\n", error.what());
         }
     }
-    std::ofstream preparation(output / "preparation.csv", std::ios::binary);
+    std::ofstream preparation(lfs::core::native_fs::native_path(output / "preparation.csv"), std::ios::binary);
     preparation.exceptions(std::ios::badbit | std::ios::failbit);
     preparation << "view,calibration_ms,decode_resize_ms,planar_ms,undistort_ms,ownership_ms,width,height,bytes,source_upload_ms,warp_readback_ms,gpu_live_before,gpu_live_after,gpu_pool_after,validation_ms,reference_max_error,reference_mse,image_prepare_backend\n";
     double preparation_ms = 0;
@@ -351,7 +352,7 @@ int main(int argc, char** argv) try {
         std::printf("[info] Prepared view %zu/%zu (%u x %u); CPU targets %zu bytes\n", i + 1, count, frames.back().descriptor().width, frames.back().descriptor().height, target_bytes);
         std::fflush(stdout);
     }
-    std::ofstream csv(output / "steps.csv", std::ios::binary);
+    std::ofstream csv(lfs::core::native_fs::native_path(output / "steps.csv"), std::ios::binary);
     csv.exceptions(std::ios::badbit | std::ios::failbit);
     csv << "step,view,frame_ms,step_ms,allocated_bytes,intersections\n";
     std::mt19937 random(42);
@@ -452,7 +453,7 @@ int main(int argc, char** argv) try {
                 static_cast<unsigned long long>(final_info.allocated_bytes),
                 static_cast<unsigned long long>(final_info.peak_allocated_bytes),
                 static_cast<unsigned long long>(final_info.budget_bytes));
-    std::ofstream summary(output / "summary.json", std::ios::binary);
+    std::ofstream summary(lfs::core::native_fs::native_path(output / "summary.json"), std::ios::binary);
     summary.exceptions(std::ios::badbit | std::ios::failbit);
     summary << std::setprecision(12) << "{\"experimental_fixed_topology\":true,\"sh_degree\":0,\"views\":" << count << ",\"gaussians\":" << n
             << ",\"rasterizer\":\"" << (fast_raster ? "FastGS" : "3DGUT") << "\",\"optimizer\":\"" << (fused_optimizer ? "joint-fused" : "fp32") << "\""

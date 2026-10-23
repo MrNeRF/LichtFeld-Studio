@@ -5457,5 +5457,6 @@
   "preferences.drag_title": "高斯点传输",
   "preferences.drag_pause": "拖动高斯点前请暂停训练。",
   "preferences.drag_failed": "高斯点导出失败。详情请查看应用程序日志。",
+  "ui.vram_hip_budget_tooltip": "所选 HIP GPU 上此进程的内存用量和操作系统内存预算。当共享系统内存作为本地 GPU 内存管理时，也会计入其中；这并非整张显卡的用量或 BIOS 预留量。",
   "ui.vram_native_unavailable_tooltip": "此后端无法提供 GPU 使用率和内存预算。"
 }

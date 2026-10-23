@@ -5457,5 +5457,6 @@
   "preferences.drag_title": "Splats overdragen",
   "preferences.drag_pause": "Pauzeer de training voordat u splats sleept.",
   "preferences.drag_failed": "Exporteren van splats mislukt. Zie het toepassingslogboek voor details.",
+  "ui.vram_hip_budget_tooltip": "Het geheugengebruik van dit proces en het geheugenbudget van het besturingssysteem op de geselecteerde HIP-GPU. Gedeeld systeemgeheugen wordt meegerekend wanneer het als lokaal GPU-geheugen wordt beheerd; dit is niet het gebruik van de hele GPU of de BIOS-reservering.",
   "ui.vram_native_unavailable_tooltip": "GPU-gebruik en geheugenbudget zijn niet beschikbaar voor deze backend."
 }

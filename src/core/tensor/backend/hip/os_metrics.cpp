@@ -1,13 +1,14 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "os_metrics.hpp"
+#include "core/native_fs.hpp"
 #include "hip_backend_ops.hpp"
 #include "physical_identity.hpp"
-#include <core/tensor_backend.hpp>
 #include <algorithm>
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <core/tensor_backend.hpp>
 #include <cstring>
 #include <cwchar>
 #include <fstream>
@@ -146,7 +147,7 @@ namespace lfs::core {
             const auto info = internal::hip_device_info(LFS_HIP_RUNTIME_DEFAULT_MODULE, ordinal);
             const auto pci = internal::pci_physical_id(info.pci_bus_id);
             if (pci.empty()) return -1.f;
-            std::ifstream input("/sys/bus/pci/devices/" + pci.substr(4) + "/gpu_busy_percent");
+            std::ifstream input(lfs::core::native_fs::native_path("/sys/bus/pci/devices/" + pci.substr(4) + "/gpu_busy_percent"));
             int percent = -1;
             if (input >> percent && percent >= 0 && percent <= 100) return static_cast<float>(percent);
 #endif

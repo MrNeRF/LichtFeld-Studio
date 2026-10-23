@@ -2934,6 +2934,9 @@ def get_vulkan_hardware() -> list:
 def get_cuda_hardware() -> list:
     """Discover CUDA adapters without selecting a tensor backend"""
 
+def get_hip_hardware() -> list:
+    """Discover ROCm / HIP adapters without initializing a Tensor context"""
+
 def get_gpu_runtime_status() -> dict:
     """
     Get running GPU identities and whether saved GPU changes require a restart
@@ -2942,7 +2945,7 @@ def get_gpu_runtime_status() -> dict:
 def get_tensor_backend_preferences() -> dict:
     """Get saved tensor backend preferences; changes apply after restart"""
 
-def set_tensor_backend_preferences(backend: str = 'auto', vulkan_device: str = '', vulkan_validation: int = 0, force_fp32_half: bool = False, force_no_atomic_float: bool = False, rendering_vulkan_device: str = '', cuda_device: str = '') -> None:
+def set_tensor_backend_preferences(backend: str = 'auto', vulkan_device: str = '', vulkan_validation: int = 0, force_fp32_half: bool = False, force_no_atomic_float: bool = False, rendering_vulkan_device: str = '', cuda_device: str = '', hip_device: str = '') -> None:
     """
     Save tensor and rendering GPU preferences for the next application start
     """
