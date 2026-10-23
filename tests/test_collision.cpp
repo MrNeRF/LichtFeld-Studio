@@ -625,14 +625,19 @@ TEST(CollisionAuthoring, DisplaySettingsAndScalePersistWithLegacyDefaults) {
     EXPECT_TRUE(legacy_display.get<CollisionDisplay>().sharp);
     CollisionSettings settings;
     settings.units_per_meter = 0.25f;
+    settings.auto_resolution = true;
     settings.floor_below_seed = true;
     EXPECT_EQ(nlohmann::json(settings).get<CollisionSettings>(), settings);
     auto legacy = nlohmann::json(settings);
     legacy.erase("units_per_meter");
     legacy.erase("floor_below_seed");
+    legacy.erase("adaptive_filter");
+    legacy.erase("auto_resolution");
     const auto old = legacy.get<CollisionSettings>();
     EXPECT_EQ(old.units_per_meter, 1);
     EXPECT_FALSE(old.floor_below_seed);
+    EXPECT_FALSE(old.adaptive_filter);
+    EXPECT_FALSE(old.auto_resolution);
     auto broken = nlohmann::json(display);
     broken["slice"] = -1;
     EXPECT_THROW(broken.get<CollisionDisplay>(), std::invalid_argument);
@@ -796,4 +801,129 @@ TEST(CollisionCluster, HierarchicalQueriesMatchDirectOccupiedCellReference) {
     std::stop_source stop;
     stop.request_stop();
     EXPECT_THROW((void)collision_detail::selectCluster(source, coarse, {2, 1.2f, 2}, .1f, stop.get_token()), std::runtime_error);
+}
+
+TEST(CollisionAdaptive, RemovesOnlyExceptionalVolumeAndPreservesBroadThinAndRemoteSurfaces) {
+    std::vector<CollisionGaussian> source;
+    for (int i = 0; i < 256; ++i)
+        source.push_back({{i * .1f, 0, 0}, glm::mat3(.1f), .5f});
+    source.push_back({{0, 0, 0}, glm::mat3(100), .9f});
+    source.push_back({{0, 0, 0}, glm::mat3(100, 0, 0, 0, .001f, 0, 0, 0, 100), .9f});
+    source.push_back({{100000, 0, 0}, glm::mat3(.1f), .5f});
+    CollisionSettings s;
+    const auto a = collision_detail::selectAdaptiveSource(source, s);
+    EXPECT_EQ(a.indices.size(), source.size() - 1);
+    EXPECT_EQ(a.indices[a.indices.size() - 2], 257u);
+    EXPECT_EQ(a.indices.back(), 258u);
+    for (auto& g : source) {
+        g.center *= .001f;
+        g.axes *= .001f;
+    }
+    s.units_per_meter *= .001f;
+    s.cluster_resolution *= .001f;
+    EXPECT_EQ(collision_detail::selectAdaptiveSource(source, s).indices, a.indices);
+}
+TEST(CollisionAdaptive, SparseDiagonalObservationsConnectWithoutChangingCollisionOccupancy) {
+    std::vector<CollisionGaussian> source;
+    for (int i = 0; i < 20; ++i)
+        source.push_back({{i + .5f, i + .5f, 0}, glm::mat3(.01f), .2f});
+    source.push_back({{100, 0, 0}, glm::mat3(.01f), .2f});
+    CollisionSettings s;
+    s.cluster = true;
+    s.seed = source.front().center;
+    auto selection = collision_detail::selectAdaptiveSource(source, s);
+    ASSERT_EQ(selection.indices.size(), 20u);
+    auto volume = generateCollision(source, s);
+    for (int i = 0; i < 20; ++i)
+        EXPECT_TRUE(volume.occupied(volume.cell(source[i].center)));
+    EXPECT_FALSE(volume.occupied(volume.cell({1, 1, 0})));
+    EXPECT_FALSE(volume.occupied(volume.cell(source.back().center)));
+    // Classic strict opacity filtering remains explicit and unchanged.
+    s.adaptive_filter = false;
+    EXPECT_THROW((void)generateCollision(source, s), std::runtime_error);
+}
+TEST(CollisionAdaptive, EmptySeedPrefersNearbySupportButExplicitSmallRegionIsRespected) {
+    std::vector<CollisionGaussian> source;
+    source.push_back({{.2f, .2f, .2f}, glm::mat3(.01f), .5f});
+    for (int i = 0; i < 100; ++i)
+        source.push_back({{2.1f + i * .01f, .2f, .2f}, glm::mat3(.01f), .5f});
+    CollisionSettings s;
+    s.cluster = true;
+    s.seed = {-.1f, .2f, .2f};
+    EXPECT_EQ(collision_detail::selectAdaptiveSource(source, s).indices.size(), 100u);
+    s.seed = source.front().center;
+    EXPECT_EQ(collision_detail::selectAdaptiveSource(source, s).indices, std::vector<uint32_t>{0});
+    std::stop_source stop;
+    stop.request_stop();
+    EXPECT_THROW((void)collision_detail::selectAdaptiveSource(source, s, stop.get_token()), std::runtime_error);
+    source[0].center.x = std::numeric_limits<float>::infinity();
+    EXPECT_THROW((void)collision_detail::selectAdaptiveSource(source, s), std::invalid_argument);
+}
+
+TEST(CollisionAdaptive, AutomaticResolutionScalesWithObservedFootprintAndPreservesCustomValues) {
+    std::vector<CollisionGaussian> source(10000, {{0, 0, 0}, glm::mat3(1), .5f});
+    const auto edge = collision_detail::recommendCollisionVoxelSize(source, 1);
+    EXPECT_FLOAT_EQ(edge, .07f);
+    for (auto& g : source)
+        g.axes *= .1f;
+    EXPECT_NEAR(collision_detail::recommendCollisionVoxelSize(source, .1f), edge * .1f, 1e-6);
+    // Empty world distance has no influence on the recommendation.
+    source.back().center = {1e8f, -1e8f, 1e8f};
+    EXPECT_NEAR(collision_detail::recommendCollisionVoxelSize(source, .1f), edge * .1f, 1e-6);
+    CollisionSettings s;
+    s.voxel_size = .03f;
+    const CollisionGaussian g{{0, 0, 0}, glm::mat3(.01f), .9f};
+    EXPECT_FLOAT_EQ(generateCollision(std::span(&g, 1), s).settings.voxel_size, .03f);
+    s.auto_resolution = true;
+    EXPECT_FLOAT_EQ(generateCollision(std::span(&g, 1), s).settings.voxel_size, .05f);
+}
+TEST(CollisionSparse, CanonicalValidationRejectsAliasesUnreachableBlocksAndExcessDepth) {
+    CollisionVolume v;
+    v.dimensions = {4, 4, 4};
+    v.tree_size = 4;
+    v.tree.resize(25, 0);
+    v.tree[0] = 3;
+    v.tree[1] = 11;
+    v.tree[2] = 19;
+    EXPECT_NO_THROW(v.validate());
+    auto bad = v;
+    bad.tree[2] = 11;
+    EXPECT_THROW(bad.validate(), std::invalid_argument);
+    bad = v;
+    bad.tree[2] = 0;
+    EXPECT_THROW(bad.validate(), std::invalid_argument);
+    bad = v;
+    bad.tree[2] = 18;
+    EXPECT_THROW(bad.validate(), std::invalid_argument);
+    bad = v;
+    bad.dimensions = {2, 2, 2};
+    bad.tree_size = 2;
+    EXPECT_THROW(bad.validate(), std::invalid_argument);
+    bad = v;
+    bad.tree[0] = 2;
+    EXPECT_THROW(bad.validate(), std::invalid_argument);
+}
+TEST(CollisionAdaptive, TransparentAndDegenerateSplatsCannotBridgeSourceRegions) {
+    std::vector<CollisionGaussian> source{{{.1f, .1f, .1f}, glm::mat3(.1f), .9f},
+                                          {{1.1f, .1f, .1f}, glm::mat3(.1f), 0},
+                                          {{2.1f, .1f, .1f}, glm::mat3(.1f), .9f},
+                                          {{1.1f, .1f, .1f}, glm::mat3(0), .9f}};
+    CollisionSettings s;
+    s.cluster = true;
+    s.seed = source[0].center;
+    EXPECT_EQ(collision_detail::selectAdaptiveSource(source, s).indices, std::vector<uint32_t>{0});
+}
+
+TEST(CollisionSparse, PostprocessingDoesNotCountOccupiedPaddingAsSceneGeometry) {
+    CollisionVolume v;
+    v.dimensions = {1, 3, 3};
+    v.tree_size = 4;
+    v.tree.resize(9, 0);
+    v.tree[0] = 3;
+    v.tree[2] = 1;
+    EXPECT_NO_THROW(v.validate());
+    EXPECT_EQ(v.occupiedCount(), 0);
+    EXPECT_THROW((void)processCollisionVolume(v), std::runtime_error);
+    v.tree[1] = 1;
+    EXPECT_NO_THROW((void)processCollisionVolume(v));
 }
