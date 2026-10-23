@@ -976,6 +976,13 @@ namespace lfs::training {
         core::Tensor normal_consistency_partials_;
         core::Tensor normal_prior_depth_scalar_;
         core::Tensor roi_weight_map_;
+        // The reported loss measures the image inside the crop box: its weight map (outside 0)
+        // and the forward-only L1/D-SSIM over it, on loss readback iterations.
+        core::Tensor roi_report_weight_map_;
+        lfs::training::kernels::MaskedL1SSIMValueWorkspace roi_report_loss_;
+        kernels::GradientResidualWorkspace roi_report_residual_;
+        losses::MaskPreprocessWorkspace roi_report_mask_;
+        core::Tensor roi_report_structure_weight_;
         // Dataset-level normal-prior convention, resolved once at startup
         bool normal_prior_flip_yz_ = false;
         bool normal_prior_world_space_ = false;
@@ -1130,8 +1137,12 @@ namespace lfs::training {
         // the pipeline with .item(). NaN/Inf detection lags by at most
         // LOSS_RING * LOSS_SYNC_INTERVAL iterations.
         static constexpr size_t LOSS_RING = 4;
+        static constexpr int LOSS_SYNC_INTERVAL = 10;
+        [[nodiscard]] static bool is_loss_readback_iteration(const int iter) {
+            return iter % LOSS_SYNC_INTERVAL == 0 || iter == 1;
+        }
         struct LossReadbackSlot {
-            float* pinned = nullptr;
+            float* pinned = nullptr; // [loss, weight of the reported region]
             cudaEvent_t done = nullptr;
             int iter = 0;
             bool in_flight = false;
@@ -1144,7 +1155,14 @@ namespace lfs::training {
         // called directly.
         std::function<cudaError_t()> recovery_sync_for_testing_;
 
-        void submitLossReadback(const lfs::core::Tensor& total_loss, int iter);
+        // `region_weight` is the pixel weight behind a crop box loss; a sample whose view
+        // misses the box is not reported.
+        core::Tensor report_region_image_loss(const core::Tensor& corrected, const core::Tensor& raw,
+                                              const core::Tensor& target, const core::Tensor& mask,
+                                              const core::Tensor& region, const core::Tensor& structure_map,
+                                              const core::param::OptimizationParameters& params, int iteration);
+        void submitLossReadback(const lfs::core::Tensor& total_loss, int iter,
+                                const lfs::core::Tensor& region_weight = {});
         std::expected<void, std::string> harvestLossReadbacks(bool drain, bool in_controller_phase);
 
         int invisible_iteration_streak_ = 0;

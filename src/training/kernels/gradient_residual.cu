@@ -170,9 +170,10 @@ namespace lfs::training::kernels {
         loss = Tensor::empty({1}, Device::CUDA);
     }
 
-    lfs::core::Tensor gradient_residual_loss_gradient(
+    // The loss, and its gradient added to `gradient` when one is given.
+    static lfs::core::Tensor run_gradient_residual(
         const lfs::core::Tensor& image, const lfs::core::Tensor& target,
-        const lfs::core::Tensor& pixel_weight, lfs::core::Tensor& gradient,
+        const lfs::core::Tensor& pixel_weight, lfs::core::Tensor* gradient,
         const float weight, GradientResidualWorkspace& workspace) {
         using namespace lfs::core;
         if (weight == 0.0f)
@@ -181,8 +182,10 @@ namespace lfs::training::kernels {
         LFS_ASSERT(image.ndim() == 3 && image.shape()[0] == 3 && image.is_contiguous());
         LFS_ASSERT(target.shape() == image.shape() && target.device() == Device::CUDA && target.is_contiguous());
         LFS_ASSERT(target.dtype() == DataType::Float32 || target.dtype() == DataType::UInt8);
-        LFS_ASSERT(gradient.shape() == image.shape() && gradient.device() == Device::CUDA);
-        LFS_ASSERT(gradient.dtype() == DataType::Float32 && gradient.is_contiguous());
+        if (gradient) {
+            LFS_ASSERT(gradient->shape() == image.shape() && gradient->device() == Device::CUDA);
+            LFS_ASSERT(gradient->dtype() == DataType::Float32 && gradient->is_contiguous());
+        }
         LFS_ASSERT(std::isfinite(weight) && weight > 0.0f && weight <= 8.0f);
         const int height = static_cast<int>(image.shape()[1]), width = static_cast<int>(image.shape()[2]);
         LFS_ASSERT(height > 0 && width > 0);
@@ -198,7 +201,8 @@ namespace lfs::training::kernels {
         workspace.partial.set_stream(stream);
         workspace.totals.set_stream(stream);
         workspace.loss.set_stream(stream);
-        gradient.set_stream(stream);
+        if (gradient)
+            gradient->set_stream(stream);
         const int blocks = std::min((n + BLOCK_SIZE - 1) / BLOCK_SIZE, MAX_BLOCKS);
         const dim3 tiles((width + TILE_X - 1) / TILE_X, (height + TILE_Y - 1) / TILE_Y);
         const dim3 tile_threads(TILE_X, TILE_Y);
@@ -209,8 +213,10 @@ namespace lfs::training::kernels {
             gradient_residual_reduce<<<1, BLOCK_SIZE, 0, stream>>>(
                 workspace.partial.ptr<float>(), workspace.totals.ptr<float>(), workspace.loss.ptr<float>(), blocks, weight);
             LFS_CUDA_LAUNCH_CHECK(stream, "training.gradient_residual.reduce");
+            if (!gradient)
+                return;
             gradient_residual_backward<<<tiles, tile_threads, 0, stream>>>(
-                image.ptr<float>(), target_ptr, mask, workspace.totals.ptr<float>(), gradient.ptr<float>(),
+                image.ptr<float>(), target_ptr, mask, workspace.totals.ptr<float>(), gradient->ptr<float>(),
                 height, width, GRADIENT_LOSS_EPSILON);
             LFS_CUDA_LAUNCH_CHECK(stream, "training.gradient_residual.backward");
         };
@@ -225,5 +231,18 @@ namespace lfs::training::kernels {
         else
             launch_masked(target.ptr<float>());
         return workspace.loss;
+    }
+
+    lfs::core::Tensor gradient_residual_loss_gradient(
+        const lfs::core::Tensor& image, const lfs::core::Tensor& target,
+        const lfs::core::Tensor& pixel_weight, lfs::core::Tensor& gradient,
+        const float weight, GradientResidualWorkspace& workspace) {
+        return run_gradient_residual(image, target, pixel_weight, &gradient, weight, workspace);
+    }
+
+    lfs::core::Tensor gradient_residual_loss(
+        const lfs::core::Tensor& image, const lfs::core::Tensor& target,
+        const lfs::core::Tensor& pixel_weight, const float weight, GradientResidualWorkspace& workspace) {
+        return run_gradient_residual(image, target, pixel_weight, nullptr, weight, workspace);
     }
 } // namespace lfs::training::kernels

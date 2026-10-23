@@ -298,6 +298,27 @@ namespace lfs::training::kernels {
         const MaskedFusedL1SSIMContext& ctx,
         MaskedFusedL1SSIMWorkspace& workspace);
 
+    // Forward-only masked L1+SSIM for reporting a loss over part of an image, such as the
+    // crop box region: the value masked_fused_l1_ssim_forward, or with `raw`
+    // masked_decoupled_fused_l1_ssim_forward, returns for the same inputs. It keeps no
+    // gradient state and owns its buffers, so it never aliases the training loss arena;
+    // the result stays on the device.
+    struct MaskedL1SSIMValueWorkspace {
+        lfs::core::Tensor ssim_map;       // [N, 1, H, W]
+        lfs::core::Tensor reduction_temp; // [<=2048], split into loss and mask partial sums
+        lfs::core::Tensor loss;           // [1] weighted mean
+        lfs::core::Tensor mask_sum;       // [1] normalization, below 1 when no pixel counts
+    };
+
+    void masked_fused_l1_ssim_value(
+        const lfs::core::Tensor& corrected,
+        const lfs::core::Tensor& raw,
+        const lfs::core::Tensor& target,
+        const lfs::core::Tensor& mask,
+        float ssim_weight,
+        MaskedL1SSIMValueWorkspace& workspace,
+        float denominator = 0.0f);
+
     struct MaskedDecoupledFusedL1SSIMWorkspace {
         lfs::core::Tensor ssim_map; // [N, 1, H, W]
         lfs::core::Tensor cs_map;   // [N, 1, H, W] channel-mean CS on the raw render

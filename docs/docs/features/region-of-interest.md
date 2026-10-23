@@ -41,6 +41,8 @@ Use `=` when a value starts with a minus sign, for example `--cropbox-rotation=-
 
 The options only matter with an enabled crop box on the training model. In the GUI they are in the viewport toolbar's **Crop ROI Settings** while a crop box is selected.
 
+With a crop box, the loss shown in the progress bar, the GUI's loss chart and to Python measures the image inside the box only: the training image loss over the pixels that see the box, plus the usual regularizers. The pixels outside it still train with `--cropbox-loss-weight`, but they do not change the number, and a view that does not see the box is left out of it.
+
 ## Cropping with `--crop`
 
 - **Training completes:** every splat outside the box is removed from the model (with an inverted box, the splats inside it). The final project save and every export hold only the ROI. The project can still be resumed, from the cropped model.
