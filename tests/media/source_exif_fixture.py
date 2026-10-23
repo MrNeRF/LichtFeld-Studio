@@ -201,7 +201,7 @@ def write_invalid_heif(path):
     path.write_bytes(original)
 
 
-def write_tiff(path, *, little=True, big=False, pages=1, pixel_offset=None, cycle=False, short_datetime=False):
+def write_tiff(path, *, little=True, big=False, pages=1, pixel_offset=None, cycle=False, short_datetime=False, xmp_packets=None, xmp_type=1):
     """Independent classic/BigTIFF producer; no libtiff writer is used."""
     order = "<" if little else ">"
     slot = 8 if big else 4
@@ -239,6 +239,9 @@ def write_tiff(path, *, little=True, big=False, pages=1, pixel_offset=None, cycl
                          (65009, 17, 2, struct.pack(order + "qq", -2**63, -1))])
         if short_datetime:
             tags.append((306, 3, 1, struct.pack(order + "H", 2)))
+        if xmp_packets is not None and xmp_packets[page] is not None:
+            packet = xmp_packets[page]
+            tags.append((700, xmp_type, len(packet) // {3: 2, 4: 4, 11: 4, 12: 8}.get(xmp_type, 1), packet))
         tags.sort(key=lambda tag: tag[0])
         count_width, entry_width = (8, 20) if big else (2, 12)
         tail = offset + count_width + entry_width * len(tags) + slot
@@ -316,7 +319,7 @@ def check_tiff(test, result, path, payload, *, big=False, little=True, pages=1):
 
 
 
-def write_tiff_graph(path, *, little=True, big=False, cycle=False, blobs=(), subimages=1, alpha=False):
+def write_tiff_graph(path, *, little=True, big=False, cycle=False, blobs=(), subimages=1, alpha=False, subimage_blobs=(), directory_tags=None):
     """Image -> EXIF/GPS/SubIFD, plus EXIF -> interoperability, all independent."""
     order = "<" if little else ">"
     byte_order = "little" if little else "big"
@@ -341,6 +344,7 @@ def write_tiff_graph(path, *, little=True, big=False, cycle=False, blobs=(), sub
     if cycle == "self-subimage":
         nodes[3] = base + [(330, pointer_type, 1, "subimage")]
     nodes[0].extend((id_, 1 if id_ in (700, 34377) else 7, len(value), value) for id_, value in blobs)
+    nodes[3] = nodes[3] + [(id_, 1 if id_ in (700, 34377) else 7, len(value), value) for id_, value in subimage_blobs]
     if alpha:
         nodes[0] = [tag for tag in nodes[0] if tag[0] not in (277, 279)]
         nodes[0].extend([(277, 3, 1, scalar(4, 2)), (279, 4, 1, scalar(4, 4)), (338, 3, 1, scalar(2, 2)),
@@ -348,6 +352,9 @@ def write_tiff_graph(path, *, little=True, big=False, cycle=False, blobs=(), sub
     nodes[0] = [(id_, type_, subimages if id_ == 330 else count, value)
                 for id_, type_, count, value in nodes[0]]
     names = ["image", "exif", "gps", "subimage", "interoperability"]
+    for kind, tags in (directory_tags or {}).items():
+        index = names.index(kind)
+        nodes[index] = nodes[index] + list(tags)
     header = (b"II" if little else b"MM") + scalar(43 if big else 42, 2)
     header += scalar(8, 2) + scalar(0, 2) + scalar(16, 8) if big else scalar(8, 4)
     data = bytearray(header)

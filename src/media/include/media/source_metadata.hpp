@@ -84,6 +84,7 @@ namespace lfs::media {
         [[nodiscard]] LFS_MEDIA_API const ExifEntry* exifEntry(ExifEntryReference) const noexcept;
         [[nodiscard]] LFS_MEDIA_API const core::image_codecs::TiffSourceTag* tiffTag(TiffTagReference) const noexcept;
         [[nodiscard]] LFS_MEDIA_API const core::image_codecs::XmpBlock* xmpBlock(XmpBlockReference) const noexcept;
+        [[nodiscard]] LFS_MEDIA_API std::optional<std::span<const std::uint8_t>> xmpBytes(XmpBlockReference) const noexcept;
 
     private:
         // Payload and identity form one immutable shared observation.

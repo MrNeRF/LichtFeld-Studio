@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -91,7 +92,8 @@ namespace lfs::core::image_codecs {
     };
     enum class XmpEnvelope { JpegApp1,
                              JpegExtendedApp1,
-                             PngInternationalText };
+                             PngInternationalText,
+                             TiffTag };
     struct XmpLimits {
         std::size_t blocks = 64;
         std::size_t block_bytes = 1024 * 1024;
@@ -99,9 +101,14 @@ namespace lfs::core::image_codecs {
         std::size_t total_bytes = 4 * 1024 * 1024;
         std::size_t inflated_bytes = 1024 * 1024;
     };
+    struct TiffXmpReference {
+        std::size_t directory = 0;
+        std::size_t tag = 0;
+    };
     struct XmpBlock {
         XmpEnvelope envelope = XmpEnvelope::JpegApp1;
         // Exact APP1 or iTXt chunk data, including its carrier header.
+        // TIFF packets reference library-decoded bytes owned by SourceExif.
         std::vector<std::uint8_t> bytes;
         // Used only for compressed PNG text; originals remain unchanged.
         std::optional<std::vector<std::uint8_t>> inflated;
@@ -111,7 +118,13 @@ namespace lfs::core::image_codecs {
         std::string diagnostic;
         // PNG chunk CRC; JPEG has no corresponding checksum.
         std::optional<bool> crc_valid;
+        std::optional<TiffXmpReference> tiff_tag;
     };
+    // Resolves retained bytes; an empty span is a valid empty packet.
+    // TIFF references borrow its library-decoded tag bytes; source ranges retain
+    // on-disk representations. Other envelopes own their original bytes.
+    [[nodiscard]] LFS_IMAGE_CODECS_API std::optional<std::span<const std::uint8_t>> source_xmp_bytes(
+        const SourceExif&, const XmpBlock&) noexcept;
     struct SourceXmp {
         MetadataStatus status = MetadataStatus::NotExamined;
         std::string scope;
