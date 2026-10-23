@@ -14,6 +14,7 @@
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "gsplat/GeometryFeatures.h"
 #include "gsplat/Ops.h"
+#include "training/components/rolling_shutter.hpp"
 #include "training/kernels/densification_kernels.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include <algorithm>
@@ -45,8 +46,8 @@ namespace lfs::training {
 
             void begin_frame() {
                 bump = 0;
-                // K(9) + radial(6) + tangential(2) + thin-prism(4)
-                ensure_pinned(32);
+                // K(9) + radial(6) + tangential(2) + thin-prism(4) + rolling-shutter poses(32)
+                ensure_pinned(64);
             }
 
             void ensure_pinned(size_t n) {
@@ -93,6 +94,7 @@ namespace lfs::training {
             core::Tensor radial;
             core::Tensor tangential;
             core::Tensor thin_prism;
+            core::Tensor shutter_viewmats;
             core::Tensor image_chw;
             core::Tensor alpha_chw;
             core::Tensor depth_chw;
@@ -379,6 +381,40 @@ namespace lfs::training {
                 thin_prism_ptr = thin_prism_cuda.ptr<float>();
             }
 
+            // Rolling shutter: gsplat interpolates between the first and last readout line
+            // of the render window, and the reference pose keeps view directions and per-splat
+            // features. Undistorted images have no readout lines, and the equirectangular
+            // projection has no shutter type.
+            const auto& shutter_motion = viewpoint_camera.rolling_shutter();
+            core::Tensor shutter_viewmats;
+            const float* shutter_viewmats_ptr = nullptr;
+            ShutterType shutter_type = ShutterType::GLOBAL;
+            if (shutter_motion && !undistorted && camera_model != CameraModelType::EQUIRECTANGULAR) {
+                const bool rows = shutter_motion->readout_rows;
+                const int full_extent = static_cast<int>(rows ? full_image_height : full_image_width);
+                const int offset = rows ? tile_y_offset : tile_x_offset;
+                const int extent = static_cast<int>(rows ? image_height : image_width);
+                // gsplat's relative readout time divides by extent - 1.
+                if (extent > 1) {
+                    auto R_host = viewpoint_camera.R().cpu().contiguous();
+                    auto T_host = viewpoint_camera.T().cpu().contiguous();
+                    std::array<float, 9> rotation{};
+                    std::array<float, 3> translation{};
+                    std::memcpy(rotation.data(), R_host.ptr<float>(), sizeof(rotation));
+                    std::memcpy(translation.data(), T_host.ptr<float>(), sizeof(translation));
+                    const auto poses = rolling_shutter_window_poses(
+                        *shutter_motion, rotation, translation, full_extent, offset, extent);
+                    std::array<float, 32> packed{};
+                    std::copy(poses.first.begin(), poses.first.end(), packed.begin());
+                    std::copy(poses.last.begin(), poses.last.end(), packed.begin() + 16);
+                    gsplat_thread_caches.staging.copy_to(
+                        gsplat_thread_caches.shutter_viewmats, packed.data(), packed.size(), fwd_stream);
+                    shutter_viewmats = gsplat_thread_caches.shutter_viewmats;
+                    shutter_viewmats_ptr = shutter_viewmats.ptr<float>();
+                    shutter_type = rows ? ShutterType::ROLLING_TOP_TO_BOTTOM : ShutterType::ROLLING_LEFT_TO_RIGHT;
+                }
+            }
+
             UnscentedTransformParameters ut_params;
 
             // Calculate buffer dimensions
@@ -552,8 +588,8 @@ namespace lfs::training {
                 image_width,
                 image_height,
                 tile_size,
-                viewmat_ptr,
-                nullptr, // viewmats1 (rolling shutter)
+                shutter_viewmats_ptr ? shutter_viewmats_ptr : viewmat_ptr,
+                shutter_viewmats_ptr ? shutter_viewmats_ptr + 16 : nullptr,
                 K_ptr,
                 camera_model,
                 eps2d,
@@ -564,12 +600,13 @@ namespace lfs::training {
                 calc_compensations,
                 static_cast<int>(render_mode),
                 ut_params,
-                ShutterType::GLOBAL,
+                shutter_type,
                 radial_ptr,
                 tangential_ptr,
                 thin_prism_ptr,
                 result,
                 fwd_stream,
+                viewmat_ptr,
                 free_space);
             // isect_ids / flatten_ids are borrowed from the TLS VMM cache —
             // never transfer ownership or free on error paths.
@@ -664,6 +701,9 @@ namespace lfs::training {
             ctx.viewmat_ptr = viewmat_ptr;
             ctx.K_ptr = K_ptr;
             ctx.K_tensor = K_tensor;
+            ctx.shutter_viewmats_ptr = shutter_viewmats_ptr;
+            ctx.shutter_type = shutter_type;
+            ctx.shutter_viewmats = shutter_viewmats;
             ctx.bg_color = channels == 3 ? bg_color : feature_bg;
             ctx.bg_image = channels == 3 ? bg_image : feature_bg_image; // Save bg_image for backward pass
 
@@ -932,8 +972,8 @@ namespace lfs::training {
                 ctx.image_width,
                 ctx.image_height,
                 ctx.tile_size,
-                ctx.viewmat_ptr,
-                nullptr, // viewmats1
+                ctx.shutter_viewmats_ptr ? ctx.shutter_viewmats_ptr : ctx.viewmat_ptr,
+                ctx.shutter_viewmats_ptr ? ctx.shutter_viewmats_ptr + 16 : nullptr,
                 ctx.K_ptr,
                 ctx.camera_model,
                 ctx.eps2d,
@@ -944,7 +984,7 @@ namespace lfs::training {
                 ctx.calc_compensations,
                 static_cast<int>(ctx.render_mode),
                 ut_params,
-                ShutterType::GLOBAL,
+                ctx.shutter_type,
                 ctx.radial_ptr,
                 ctx.tangential_ptr,
                 ctx.thin_prism_ptr,
@@ -971,7 +1011,7 @@ namespace lfs::training {
                 pixel_error_map_ptr,
                 edge_weight_map_ptr,
                 edge_score_out_ptr,
-                stream, ctx.batches, ctx.tiles_per_gauss_ptr, free_space);
+                stream, ctx.batches, ctx.tiles_per_gauss_ptr, ctx.viewmat_ptr, free_space);
 
             gsplat_lfs::flatten_scale_grad(ctx.scales.ptr<float>(), v_scales_ptr, N, flatten_weight, stream);
 
@@ -1072,6 +1112,7 @@ namespace lfs::training {
         gsplat_thread_caches.radial = {};
         gsplat_thread_caches.tangential = {};
         gsplat_thread_caches.thin_prism = {};
+        gsplat_thread_caches.shutter_viewmats = {};
         gsplat_thread_caches.image_chw = {};
         gsplat_thread_caches.alpha_chw = {};
         gsplat_thread_caches.depth_chw = {};

@@ -26,8 +26,8 @@ namespace gsplat_lfs {
         if (pix >= pixels)
             return;
         const uint32_t x = pix % p.width, y = pix / p.width;
-        const WorldRay ray = from_world_pixel_ray<Perfect>(p.camera_model, ShutterType::GLOBAL,
-                                                           p.width, p.height, float(x) + 0.5f, float(y) + 0.5f, p.viewmat, nullptr, p.K, 0,
+        const WorldRay ray = from_world_pixel_ray<Perfect>(p.camera_model, p.shutter,
+                                                           p.width, p.height, float(x) + 0.5f, float(y) + 0.5f, p.viewmat, p.viewmat1, p.K, 0,
                                                            p.radial, p.tangential, p.thin_prism);
         if (!ray.valid_flag)
             return;
@@ -71,7 +71,8 @@ namespace gsplat_lfs {
     void launch_pop_scores(const PopScoreInputs& p, double* scores, cudaStream_t stream) {
         stream = lfs::resolve_stream(stream);
         const uint32_t blocks = (p.width * p.height + 255) / 256;
-        if (p.channels == 3 && is_perfect_pinhole_launch(p.camera_model, p.radial, p.tangential, p.thin_prism))
+        if (p.channels == 3 && is_global_shutter_launch(p.shutter, p.viewmat1) &&
+            is_perfect_pinhole_launch(p.camera_model, p.radial, p.tangential, p.thin_prism))
             pop_scores_kernel<true><<<blocks, 256, 0, stream>>>(p, scores);
         else
             pop_scores_kernel<false><<<blocks, 256, 0, stream>>>(p, scores);

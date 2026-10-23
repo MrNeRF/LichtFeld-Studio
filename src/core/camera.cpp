@@ -227,6 +227,7 @@ namespace lfs::core {
           _undistort_prepared(other._undistort_prepared),
           _undistort_destination(other._undistort_destination),
           _undistort_params(other._undistort_params),
+          _rolling_shutter(other._rolling_shutter),
           _stream(other._stream),
           _sfm_observations(std::move(other._sfm_observations)),
           _sfm_observation_source(std::move(other._sfm_observation_source)),
@@ -298,6 +299,7 @@ namespace lfs::core {
             _undistort_prepared = other._undistort_prepared;
             _undistort_destination = other._undistort_destination;
             _undistort_params = other._undistort_params;
+            _rolling_shutter = other._rolling_shutter;
             _sfm_observations = std::move(other._sfm_observations);
             _sfm_observation_source = std::move(other._sfm_observation_source);
             _sfm_observation_node = other._sfm_observation_node;
@@ -354,6 +356,7 @@ namespace lfs::core {
         _undistort_prepared = other._undistort_prepared;
         _undistort_destination = other._undistort_destination;
         _undistort_params = other._undistort_params;
+        _rolling_shutter = other._rolling_shutter;
 
         // Non-blocking so image loading doesn't serialize with the legacy stream.
         // On failure fall back to the default stream rather than a bad handle.

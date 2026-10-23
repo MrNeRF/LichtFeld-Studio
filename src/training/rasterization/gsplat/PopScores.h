@@ -24,6 +24,9 @@ namespace gsplat_lfs {
         const int32_t* ids;
         uint32_t width, height, tile_size, channels;
         CameraModelType camera_model;
+        // Rolling shutter: viewmat is the first readout line and viewmat1 the last.
+        const float* viewmat1 = nullptr;
+        ShutterType shutter = ShutterType::GLOBAL;
     };
     void launch_pop_scores(const PopScoreInputs& inputs, double* scores, cudaStream_t stream);
 } // namespace gsplat_lfs

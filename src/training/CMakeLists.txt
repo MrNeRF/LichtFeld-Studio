@@ -110,6 +110,7 @@ set(TRAINING_NEW_SOURCES
     components/ppisp_controller.cu
     components/ppisp_controller_pool.cu
     components/ppisp_file.cpp
+    components/rolling_shutter.cpp
     components/popspa_controller.cpp
     control/command_api.cpp
     metrics/compare_images.cpp

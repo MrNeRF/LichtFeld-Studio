@@ -104,9 +104,11 @@ namespace lfs::training {
         }
         const gsplat_lfs::PopScoreInputs inputs{
             ctx.means.ptr<float>(), ctx.quats.ptr<float>(), ctx.scales.ptr<float>(), ctx.opacities.ptr<float>(), ctx.colors_ptr,
-            optional_float(ctx.bg_color), optional_float(ctx.bg_image), ctx.viewmat_ptr, ctx.K_ptr,
+            optional_float(ctx.bg_color), optional_float(ctx.bg_image),
+            ctx.shutter_viewmats_ptr ? ctx.shutter_viewmats_ptr : ctx.viewmat_ptr, ctx.K_ptr,
             ctx.radial_ptr, ctx.tangential_ptr, ctx.thin_prism_ptr, ctx.tile_offsets_ptr, ctx.flatten_ids_ptr,
-            ctx.image_width, ctx.image_height, ctx.tile_size, ctx.channels, ctx.camera_model};
+            ctx.image_width, ctx.image_height, ctx.tile_size, ctx.channels, ctx.camera_model,
+            ctx.shutter_viewmats_ptr ? ctx.shutter_viewmats_ptr + 16 : nullptr, ctx.shutter_type};
         const auto stream = core::prepare_inputs_for_stream({&scores, &ctx.means, &ctx.quats, &ctx.scales, &ctx.opacities}, ctx.stream ? ctx.stream : core::getCurrentCUDAStream());
         prepare_background(ctx.bg_color, ctx.bg_image, stream);
         gsplat_lfs::launch_pop_scores(inputs, reinterpret_cast<double*>(scores.data_ptr()), stream);
