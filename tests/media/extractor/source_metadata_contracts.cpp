@@ -201,6 +201,37 @@ int runSourceMetadataContracts() {
     require(!catalogSourceMetadata(invalid_tiff, {}, {}, tiff_xmp), "TIFF XMP cannot reference a different tag ID");
     tiff_xmp.blocks[0].tiff_tag->directory = std::numeric_limits<size_t>::max();
     require(!catalogSourceMetadata(invalid_tiff, {}, {}, tiff_xmp), "TIFF XMP rejects invalid directory ordinals");
+    SourceXmp heif_xmp;
+    heif_xmp.status = MetadataStatus::Collected;
+    XmpBlock heif_block;
+    heif_block.envelope = XmpEnvelope::HeifMime;
+    heif_block.heif_item = HeifXmpItem{2, 4, "application/rdf+xml; title=\xff", "\xfe"};
+    heif_block.bytes = {0, 255, 60, 120, 47, 62};
+    heif_xmp.blocks.push_back(std::move(heif_block));
+    const auto* heif_bytes = heif_xmp.blocks[0].bytes.data();
+    auto heif_catalog = catalogSourceMetadata({}, {}, {}, std::move(heif_xmp));
+    require(bool(heif_catalog), "HEIF MIME observation is accepted by the existing catalog");
+    const auto heif_json = json_detail::json::parse(json_detail::dump(json_detail::sourceMetadata(*heif_catalog)));
+    const auto& mime = heif_json.at("image_xmp").at("blocks")[0].at("heif_item");
+    require(mime.at("content_type_bytes") == "6170706c69636174696f6e2f7264662b786d6c3b207469746c653dff" &&
+                mime.at("content_encoding_bytes") == "fe",
+            "HEIF MIME original bytes survive JSON replacement of invalid UTF-8 display text");
+    const auto heif_handle = heif_catalog->bind(XmpBlockReference{0});
+    const auto heif_view = heif_catalog->xmpBytes({0});
+    require(heif_handle && heif_view && heif_view->data() == heif_bytes,
+            "HEIF payload ownership transfers into the snapshot without another byte copy");
+    heif_catalog = SourceMetadataCatalog{};
+    require(heif_view->data() == heif_bytes && (*heif_view)[1] == 255,
+            "bound HEIF handle keeps the borrowed bytes alive after catalog destruction");
+    SourceXmp invalid_heif;
+    invalid_heif.blocks.push_back(XmpBlock{});
+    invalid_heif.blocks[0].envelope = XmpEnvelope::HeifMime;
+    require(!catalogSourceMetadata({}, {}, {}, invalid_heif), "HEIF MIME blocks require item provenance");
+    invalid_heif.blocks[0].heif_item = HeifXmpItem{2, 0, "application/rdf+xml", ""};
+    require(!catalogSourceMetadata({}, {}, {}, invalid_heif), "HEIF MIME blocks reject zero item IDs");
+    invalid_heif.blocks[0].heif_item->metadata_item = 4;
+    invalid_heif.blocks[0].inflated = std::vector<uint8_t>{1};
+    require(!catalogSourceMetadata({}, {}, {}, invalid_heif), "HEIF decoded items cannot claim a separate PNG inflation buffer");
     auto original = description();
     const auto* payload = original.original.blocks[0].bytes.data();
     auto catalog = catalogSourceMetadata(std::move(original));

@@ -1,0 +1,16 @@
+diff --git a/libheif/api/libheif/heif_context.cc b/libheif/api/libheif/heif_context.cc
+--- a/libheif/api/libheif/heif_context.cc
++++ b/libheif/api/libheif/heif_context.cc
+@@ -43,10 +43,10 @@ heif_context* heif_context_alloc()
+ {
+   load_plugins_if_not_initialized_yet();
+ 
+-  heif_context* ctx = new heif_context;
++  auto ctx = std::make_unique<heif_context>();
+   ctx->context = std::make_shared<HeifContext>();
+ 
+-  return ctx;
++  return ctx.release();
+ }
+ 
+ void heif_context_free(heif_context* ctx)

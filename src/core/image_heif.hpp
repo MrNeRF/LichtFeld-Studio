@@ -5,6 +5,7 @@
 #include "image_codecs.hpp"
 namespace lfs::core::image_codecs {
     [[nodiscard]] SourceExif read_heif_exif(const std::filesystem::path&, const MetadataLimits&);
+    [[nodiscard]] SourceImageMetadata read_heif_metadata(const std::filesystem::path&, const MetadataLimits&, const XmpLimits&);
     LFS_IMAGE_CODECS_API bool is_heif(std::span<const std::uint8_t>);
     LFS_IMAGE_CODECS_API bool probe_heif(const std::filesystem::path&, Probe&, std::string&);
     // Raw decode preserves encoded RGB; display decode maps supported SDR profiles to sRGB.

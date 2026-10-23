@@ -16,6 +16,7 @@
 #include <libheif/heif_properties.h>
 #include <limits>
 #include <memory>
+#include <string_view>
 #include <unordered_set>
 
 namespace lfs::core::image_codecs {
@@ -545,58 +546,160 @@ namespace lfs::core::image_codecs {
             return decode_heif(input, image, error, display) && copy_target(image, target, info, error);
         }
     } // namespace
-    SourceExif read_heif_exif(const std::filesystem::path& path, const MetadataLimits& limits) {
-        SourceExif result;
-        result.scope = "heif-primary-image";
-        Source source;
-        if (!source.open(path, result.diagnostic, true)) {
-            result.status = source.file.is_open() ? MetadataStatus::Malformed : MetadataStatus::IoError;
-            return result;
-        }
-        heif_item_id primary = 0;
-        if (!checked(heif_context_get_primary_image_ID(source.context.get(), &primary), result.diagnostic)) {
-            result.status = MetadataStatus::Malformed;
-            return result;
-        }
-        const int count = heif_image_handle_get_number_of_metadata_blocks(source.handle.get(), "Exif");
-        if (count < 0) {
-            result.status = MetadataStatus::Malformed;
-            result.diagnostic = "HEIF: invalid EXIF block count";
-            return result;
-        }
-        result.status = count ? MetadataStatus::Collected : MetadataStatus::Absent;
-        const auto retained = std::min(static_cast<size_t>(count), limits.blocks);
-        std::vector<heif_item_id> ids(retained);
-        if (retained && heif_image_handle_get_list_of_metadata_block_IDs(source.handle.get(), "Exif", ids.data(), static_cast<int>(retained)) != static_cast<int>(retained)) {
-            result.status = MetadataStatus::Malformed;
-            result.diagnostic = "HEIF: inconsistent EXIF block list";
-            return result;
-        }
-        size_t total = 0;
-        for (auto id : ids) {
-            const auto size = heif_image_handle_get_metadata_size(source.handle.get(), id);
-            if (size > limits.block_bytes || size > limits.total_bytes - total) {
-                result.status = MetadataStatus::Limited;
-                result.diagnostic = "EXIF collection budget exhausted";
-                return result;
-            }
-            ExifBlock block;
-            block.envelope = ExifEnvelope::HeifOffset;
-            block.image_item = primary;
-            block.metadata_item = id;
-            block.bytes.resize(size);
-            if (!checked(heif_image_handle_get_metadata(source.handle.get(), id, block.bytes.data()), result.diagnostic)) {
+    namespace {
+        void collect_heif_exif(Source& source, heif_item_id primary, const MetadataLimits& limits, SourceExif& result) {
+            const int count = heif_image_handle_get_number_of_metadata_blocks(source.handle.get(), "Exif");
+            if (count < 0) {
                 result.status = MetadataStatus::Malformed;
+                result.diagnostic = "HEIF: invalid EXIF block count";
+                return;
+            }
+            result.status = count ? MetadataStatus::Collected : MetadataStatus::Absent;
+            const auto retained = std::min(static_cast<size_t>(count), limits.blocks);
+            std::vector<heif_item_id> ids(retained);
+            if (retained && heif_image_handle_get_list_of_metadata_block_IDs(source.handle.get(), "Exif", ids.data(), static_cast<int>(retained)) != static_cast<int>(retained)) {
+                result.status = MetadataStatus::Malformed;
+                result.diagnostic = "HEIF: inconsistent EXIF block list";
+                return;
+            }
+            size_t total = 0;
+            for (auto id : ids) {
+                const auto size = heif_image_handle_get_metadata_size(source.handle.get(), id);
+                if (size > limits.block_bytes || size > limits.total_bytes - total) {
+                    result.status = MetadataStatus::Limited;
+                    result.diagnostic = "EXIF collection budget exhausted";
+                    return;
+                }
+                ExifBlock block;
+                block.envelope = ExifEnvelope::HeifOffset;
+                block.image_item = primary;
+                block.metadata_item = id;
+                block.bytes.resize(size);
+                if (!checked(heif_image_handle_get_metadata(source.handle.get(), id, block.bytes.data()), result.diagnostic)) {
+                    result.status = MetadataStatus::Malformed;
+                    return;
+                }
+                total += size;
+                result.blocks.push_back(std::move(block));
+            }
+            if (static_cast<size_t>(count) > retained) {
+                result.status = MetadataStatus::Limited;
+                result.diagnostic = "EXIF block count budget exhausted";
+            }
+            return;
+        }
+        bool xmp_mime_type(std::string_view value) {
+            auto essence = value.substr(0, value.find(';'));
+            const auto first = essence.find_first_not_of(" \t");
+            if (first == std::string_view::npos)
+                return false;
+            essence = essence.substr(first, essence.find_last_not_of(" \t") - first + 1);
+            constexpr std::string_view expected = "application/rdf+xml";
+            return essence.size() == expected.size() && std::equal(essence.begin(), essence.end(), expected.begin(), [](char a, char b) {
+                       return (a >= 'A' && a <= 'Z' ? a + ('a' - 'A') : a) == b;
+                   });
+        }
+        SourceImageMetadata collect_heif_metadata(const std::filesystem::path& path, const MetadataLimits& limits, const XmpLimits* xmp_limits) {
+            SourceImageMetadata result;
+            result.exif.scope = "heif-primary-image";
+            if (xmp_limits)
+                result.xmp.scope = "heif-primary-image-mime";
+            Source source;
+            if (!source.open(path, result.exif.diagnostic, true)) {
+                result.exif.status = source.file.is_open() ? MetadataStatus::Malformed : MetadataStatus::IoError;
+                if (xmp_limits) {
+                    result.xmp.status = result.exif.status;
+                    result.xmp.diagnostic = result.exif.diagnostic;
+                }
                 return result;
             }
-            total += size;
-            result.blocks.push_back(std::move(block));
+            heif_item_id primary = 0;
+            if (!checked(heif_context_get_primary_image_ID(source.context.get(), &primary), result.exif.diagnostic)) {
+                result.exif.status = MetadataStatus::Malformed;
+                if (xmp_limits) {
+                    result.xmp.status = result.exif.status;
+                    result.xmp.diagnostic = result.exif.diagnostic;
+                }
+                return result;
+            }
+            collect_heif_exif(source, primary, limits, result.exif);
+            if (!xmp_limits)
+                return result;
+            auto& xmp = result.xmp;
+            const int count = heif_image_handle_get_number_of_metadata_blocks(source.handle.get(), "mime");
+            if (count < 0) {
+                xmp.status = MetadataStatus::Malformed;
+                xmp.diagnostic = "HEIF: invalid MIME item count";
+                return result;
+            }
+            // Bounds enumeration, including MIME items that are not XMP.
+            constexpr int max_items = 4096;
+            const int examined = std::min(count, max_items);
+            std::vector<heif_item_id> ids(examined);
+            if (examined && heif_image_handle_get_list_of_metadata_block_IDs(source.handle.get(), "mime", ids.data(), examined) != examined) {
+                xmp.status = MetadataStatus::Malformed;
+                xmp.diagnostic = "HEIF: inconsistent MIME item list";
+                return result;
+            }
+            xmp.status = MetadataStatus::Absent;
+            size_t retained = 0;
+            for (auto id : ids) {
+                const char* type = heif_image_handle_get_metadata_content_type(source.handle.get(), id);
+                if (!type || !xmp_mime_type(type))
+                    continue;
+                const auto omit = [&] {
+                    xmp.status = MetadataStatus::Limited;
+                    xmp.diagnostic = "XMP collection budget exhausted";
+                };
+                const auto budget = std::min(xmp_limits->block_bytes, xmp_limits->total_bytes - retained);
+                const std::string_view content_type(type);
+                if (xmp.blocks.size() >= xmp_limits->blocks) {
+                    omit();
+                    return result;
+                }
+                if (content_type.size() > budget) {
+                    omit();
+                    continue;
+                }
+                // Provider strings are only guaranteed until its next API call.
+                HeifXmpItem item{primary, id, std::string(content_type), {}};
+                const char* encoding = heif_item_get_mime_item_content_encoding(source.context.get(), id);
+                const std::string_view content_encoding(encoding ? encoding : "");
+                if (content_encoding.size() > budget - item.content_type.size()) {
+                    omit();
+                    continue;
+                }
+                item.content_encoding = content_encoding;
+                const auto size = heif_image_handle_get_metadata_size(source.handle.get(), id);
+                if (size > budget - item.content_type.size() - item.content_encoding.size()) {
+                    omit();
+                    continue;
+                }
+                XmpBlock block;
+                block.envelope = XmpEnvelope::HeifMime;
+                block.heif_item = std::move(item);
+                block.bytes.resize(size);
+                if (!checked(heif_image_handle_get_metadata(source.handle.get(), id, block.bytes.data()), xmp.diagnostic)) {
+                    xmp.status = MetadataStatus::Malformed;
+                    return result;
+                }
+                retained += size + block.heif_item->content_type.size() + block.heif_item->content_encoding.size();
+                xmp.blocks.push_back(std::move(block));
+                if (xmp.status == MetadataStatus::Absent)
+                    xmp.status = MetadataStatus::Collected;
+            }
+            if (count > examined) {
+                xmp.status = MetadataStatus::Limited;
+                xmp.diagnostic = "HEIF MIME item enumeration budget exhausted";
+            }
+            return result;
         }
-        if (static_cast<size_t>(count) > retained) {
-            result.status = MetadataStatus::Limited;
-            result.diagnostic = "EXIF block count budget exhausted";
-        }
-        return result;
+    } // namespace
+    SourceExif read_heif_exif(const std::filesystem::path& path, const MetadataLimits& limits) {
+        return collect_heif_metadata(path, limits, nullptr).exif;
+    }
+    SourceImageMetadata read_heif_metadata(const std::filesystem::path& path, const MetadataLimits& limits, const XmpLimits& xmp_limits) {
+        return collect_heif_metadata(path, limits, &xmp_limits);
     }
     bool is_heif(std::span<const uint8_t> bytes) {
         if (bytes.size() < 12)
