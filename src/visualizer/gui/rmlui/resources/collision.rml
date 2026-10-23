@@ -30,6 +30,7 @@
   <p>@tr:collision.walk_hint</p>
   <button id="advanced-toggle" class="btn btn--secondary">@tr:collision.advanced</button>
   <div id="advanced" style="display: none;">
+  <div class="collision-row" data-tooltip="collision.tip_sharp"><span>@tr:collision.sharp</span><input id="sharp-preview" type="checkbox"/></div>
   <h3>@tr:collision.cluster_filter</h3>
   <div class="collision-row" data-tooltip="collision.tip_resolution"><span>@tr:collision.resolution</span><input id="cluster-resolution" type="text" value="1"/></div>
   <div class="collision-row" data-tooltip="collision.tip_opacity"><span>@tr:collision.opacity</span><input id="cluster-opacity" type="text" value="0.999"/></div>

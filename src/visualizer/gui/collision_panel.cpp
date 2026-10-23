@@ -159,6 +159,7 @@ namespace lfs::vis::gui {
         setValue("surface-stride", std::to_string(display_.surface_stride));
         setValue("shape", std::to_string(int(display_.surface_ready ? display_.surface_shape : settings_.shape)));
         check("cluster", settings_.cluster);
+        check("sharp-preview", display_.sharp);
         set("cluster-resolution", settings_.cluster_resolution);
         set("cluster-opacity", settings_.cluster_opacity);
         set("cluster-min", settings_.cluster_min_contribution);
@@ -343,7 +344,9 @@ namespace lfs::vis::gui {
                     float fraction = 0;
                     if (text.starts_with("Clustering")) {
                         phase = 1;
-                        if (text.starts_with("Clustering coarse Voxelizing regions: "))
+                        if (text.starts_with("Clustering coarse Voxelizing GPU: "))
+                            fraction = 0.35f * float(std::stoi(text.substr(text.find(": ") + 2))) / 100;
+                        else if (text.starts_with("Clustering coarse Voxelizing regions: "))
                             fraction = 0.35f * float(std::stoi(text.substr(text.find(": ") + 2))) / 8;
                         else if (text.starts_with("Clustering connected"))
                             fraction = 0.4f;
@@ -354,7 +357,9 @@ namespace lfs::vis::gui {
                             fraction = 1;
                     } else if (text.starts_with("Voxelizing")) {
                         phase = 1 + s.cluster;
-                        if (text.starts_with("Voxelizing regions: ")) {
+                        if (text.starts_with("Voxelizing GPU: "))
+                            fraction = float(std::stoi(text.substr(text.find(": ") + 2))) / 100;
+                        else if (text.starts_with("Voxelizing regions: ")) {
                             auto start = text.find(": ") + 2;
                             fraction = float(std::stoi(text.substr(start))) / 8;
                         }
@@ -375,7 +380,7 @@ namespace lfs::vis::gui {
                 snapshots.clear(); // Release snapshot buffers before allocating occupancy.
                 const auto begin = std::chrono::steady_clock::now();
                 auto volume = std::make_shared<core::CollisionVolume>(
-                    core::generateCollision(gaussians, s, stop, report));
+                    core::generateCollision(gaussians, s, stop, report, core::voxelizeCollisionGpu));
                 const auto voxelized = std::chrono::steady_clock::now();
                 volume->show_voxels = true;
                 // Scene graph uses a tiny bounds carrier; preview and Walk read
@@ -490,11 +495,13 @@ namespace lfs::vis::gui {
         host_.markContentDirty();
     }
     void CollisionPanel::updateDisplay() {
+        display_.sharp = checked("sharp-preview");
         display_.opacity = std::clamp(number("overlay-opacity"), 0.0f, 1.0f);
         display_.slice = std::clamp(number("cutaway"), 0.0f, 1.0f);
         for (auto [id, n] : {std::pair{"overlay-opacity-value", display_.opacity}, {"cutaway-value", display_.slice}})
             document_->GetElementById(id)->SetInnerRML(std::format("{:.0f}%", n * 100));
         if (auto* node = scene_->getNodeByUuid(target_); !busy_ && node && node->collision && !node->locked.get()) {
+            node->collision_display.sharp = display_.sharp;
             node->collision_display.opacity = display_.opacity;
             node->collision_display.slice = display_.slice;
             scene_->notifyMutation(core::Scene::MutationType::DISPLAY_CHANGED);
@@ -570,7 +577,7 @@ namespace lfs::vis::gui {
             return;
         try {
             if (event.GetType() == "change") {
-                if (id == "overlay-opacity" || id == "cutaway")
+                if (id == "overlay-opacity" || id == "cutaway" || id == "sharp-preview")
                     updateDisplay();
                 else if (id == "detail") {
                     setValue("voxel-size", std::format("{:.6g}", number("detail") * number("units-per-meter")));
