@@ -247,6 +247,31 @@ int runSourceMetadataContracts() {
     jxl_catalog = SourceMetadataCatalog{};
     require(jxl_handle && jxl_copy.resolve(*jxl_handle) && jxl_copy.xmpBytes({0})->data() == jxl_bytes,
             "JXL bound handle retains the same immutable observation");
+    ImageExifDescription jxl_exif;
+    ExifBlock exif_box;
+    exif_box.envelope = ExifEnvelope::JxlOffset;
+    exif_box.jxl_box = JxlBox{4, true};
+    exif_box.bytes = {0, 0, 0, 0, 255};
+    jxl_exif.original.blocks.push_back(std::move(exif_box));
+    jxl_exif.interpretations.emplace_back();
+    const auto* exif_bytes = jxl_exif.original.blocks[0].bytes.data();
+    auto exif_catalog = catalogSourceMetadata(jxl_exif);
+    require(bool(exif_catalog), "JXL EXIF accepts matching box provenance");
+    exif_catalog = catalogSourceMetadata(std::move(jxl_exif));
+    auto retained_exif = *exif_catalog;
+    exif_catalog = SourceMetadataCatalog{};
+    require(retained_exif.imageExif().original.blocks[0].bytes.data() == exif_bytes &&
+                retained_exif.imageExif().original.blocks[0].bytes.back() == 255,
+            "JXL EXIF catalog owns the moved payload across catalog destruction");
+    auto invalid_exif = retained_exif.imageExif();
+    invalid_exif.original.blocks[0].jxl_box.reset();
+    require(!catalogSourceMetadata(invalid_exif), "JXL EXIF requires box provenance");
+    invalid_exif.original.blocks[0].jxl_box = JxlBox{4, true};
+    invalid_exif.original.blocks[0].image_item = 1;
+    require(!catalogSourceMetadata(invalid_exif), "JXL EXIF rejects HEIF item provenance");
+    invalid_exif.original.blocks[0].image_item.reset();
+    invalid_exif.original.blocks[0].envelope = ExifEnvelope::JpegApp1;
+    require(!catalogSourceMetadata(invalid_exif), "non-JXL EXIF cannot claim JXL box provenance");
     SourceXmp invalid_jxl;
     invalid_jxl.blocks.push_back(XmpBlock{});
     invalid_jxl.blocks[0].envelope = XmpEnvelope::JxlXml;

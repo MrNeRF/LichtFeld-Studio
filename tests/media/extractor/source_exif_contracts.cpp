@@ -114,6 +114,25 @@ int runSourceExifContracts() {
         heif.bytes = {0, 0, 0, 3, 9, 8, 7};
         heif.bytes.insert(heif.bytes.end(), snapshot.begin() + 6, snapshot.end());
         require(interpretExif(heif).status == ExifParseStatus::Parsed, "nonzero HEIF offset respected");
+        auto jxl = heif;
+        jxl.envelope = ExifEnvelope::JxlOffset;
+        jxl.jxl_box = JxlBox{7, true};
+        require(interpretExif(jxl).status == ExifParseStatus::Parsed, "JXL nonzero TIFF offset supports either byte order");
+        ImageExifDescription jxl_description;
+        jxl_description.original.blocks.push_back(jxl);
+        jxl_description.interpretations.push_back(interpretExif(jxl));
+        const auto jxl_json = json_detail::sourceExif(jxl_description).at("blocks")[0];
+        require(jxl_json.at("envelope") == "jxl_offset" && jxl_json.at("representation") == "libjxl_decoded_bytes" &&
+                    jxl_json.at("jxl_box").at("ordinal") == 7 && jxl_json.at("jxl_box").at("brotli_compressed") == true &&
+                    jxl_json.at("bytes") == json_detail::hexBytes(jxl.bytes),
+                "JXL EXIF transport preserves decoded envelope bytes and provider box provenance");
+        for (size_t size = 0; size < jxl.bytes.size(); ++size) {
+            auto short_jxl = jxl;
+            short_jxl.bytes.resize(size);
+            require(interpretExif(short_jxl).status != ExifParseStatus::Parsed, "truncated JXL TIFF envelope cannot be fully interpreted");
+        }
+        jxl.bytes[0] = 255;
+        require(interpretExif(jxl).status == ExifParseStatus::Malformed, "JXL out-of-range TIFF offset is rejected");
         heif.bytes[0] = 255;
         require(interpretExif(heif).status == ExifParseStatus::Malformed, "oversized HEIF offset rejected");
         for (size_t size = 0; size < snapshot.size(); ++size) {

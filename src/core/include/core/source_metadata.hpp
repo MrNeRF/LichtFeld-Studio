@@ -21,7 +21,8 @@ namespace lfs::core::image_codecs {
                                 IoError };
     enum class ExifEnvelope { JpegApp1,
                               HeifOffset,
-                              PngExif };
+                              PngExif,
+                              JxlOffset };
     struct MetadataLimits {
         // Bounds the JPEG header window, not the size of the source image.
         std::size_t jpeg_header_bytes = 1024 * 1024;
@@ -39,13 +40,20 @@ namespace lfs::core::image_codecs {
         std::size_t tiff_entries = 4096;
         std::size_t tiff_value_bytes = 8 * 1024 * 1024;
     };
+    struct JxlXmpBox {
+        std::uint64_t ordinal = 0; // Provider box-event ordinal, including structural boxes.
+        bool brotli_compressed = false;
+    };
+    using JxlBox = JxlXmpBox;
     struct ExifBlock {
         ExifEnvelope envelope = ExifEnvelope::JpegApp1;
-        // HEIF image and metadata item identifiers; absent for JPEG/PNG.
+        // HEIF image and metadata item identifiers; absent for other carriers.
         std::optional<std::uint32_t> image_item;
         std::optional<std::uint32_t> metadata_item;
-        // Exact original envelope and payload, independent of reader lifetime.
+        // JPEG/PNG retain original envelopes; HEIF/JXL retain provider-decoded
+        // values, including their TIFF-offset prefix, independent of reader lifetime.
         std::vector<std::uint8_t> bytes;
+        std::optional<JxlBox> jxl_box;
     };
     struct TiffSourceRange {
         std::uint64_t offset = 0;
@@ -82,7 +90,7 @@ namespace lfs::core::image_codecs {
     struct SourceExif {
         MetadataStatus status = MetadataStatus::NotExamined;
         // Explicit scope: JPEG before SOS, PNG through IEND, HEIF primary image,
-        // or the observed TIFF library metadata read set.
+        // JXL container Exif boxes, or the observed TIFF library metadata read set.
         std::string scope;
         std::string diagnostic;
         std::vector<ExifBlock> blocks;
@@ -113,10 +121,6 @@ namespace lfs::core::image_codecs {
         std::uint32_t metadata_item = 0;
         std::string content_type;
         std::string content_encoding;
-    };
-    struct JxlXmpBox {
-        std::uint64_t ordinal = 0; // Provider box-event ordinal, including structural boxes.
-        bool brotli_compressed = false;
     };
     struct XmpBlock {
         XmpEnvelope envelope = XmpEnvelope::JpegApp1;
