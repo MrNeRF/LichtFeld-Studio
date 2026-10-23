@@ -21,6 +21,21 @@ std::array<float,3> evaluate(GpuBackend backend,const std::filesystem::path& wei
     if(!loaded)throw std::runtime_error(format_for_developer(loaded.error()));
     const auto* ops=training::training_ops(backend).lpips;require(ops!=nullptr,"LPIPS application family is missing");loaded->set_dispatch(*ops);
     if(backend==GpuBackend::HIP) {
+        // Keep the native half conversion seam honest through the public
+        // dispatch, including signed zeros, subnormals, infinities and every
+        // NaN payload. Weight packing must only transpose the raw half bits.
+        constexpr size_t out_channels=32,in_channels=256;
+        std::vector<uint16_t> raw(9*out_channels*in_channels);
+        for(size_t i=0;i<raw.size();++i)raw[i]=static_cast<uint16_t>(i);
+        auto original=Tensor::from_blob(raw.data(),{out_channels,in_channels,3,3},Device::CPU,DataType::Float16).to(Device::GPU);
+        auto packed=Tensor::empty({9,out_channels,in_channels},Device::GPU,DataType::Float16);
+        ops->weight_taps(original,packed);
+        const auto host=packed.cpu();
+        const auto* bits=reinterpret_cast<const uint16_t*>(host.data_ptr());
+        for(size_t tap=0;tap<9;++tap)for(size_t out=0;out<out_channels;++out)for(size_t in=0;in<in_channels;++in)
+            require(bits[(tap*out_channels+out)*in_channels+in]==raw[(out*in_channels+in)*9+tap],
+                    "HIP LPIPS weight packing changed raw half bits");
+        std::puts("PASS HIP LPIPS all 65536 half bit patterns through native weight packing");
         require(loaded->tile_size_for(240,320)>16,"HIP half LPIPS still budgets the float32 arena");
         require(loaded->estimated_peak_bytes(240,320)<=64ull<<20,"HIP LPIPS tile exceeds its activation budget");
     }

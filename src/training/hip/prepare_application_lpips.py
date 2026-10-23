@@ -35,6 +35,26 @@ source=source.replace('(blockIdx * blockDim + threadIdx).x','(blockIdx.x*blockDi
 # be truncated into a thread offset or overwritten with a chunk base.
 source,replaced=re.subn(r'uint (\w+) = uint\(p_0\.g_0\) \+ (\w+);',r'uint \1 = \2;',source)
 if replaced!=1:raise RuntimeError('Review changed LPIPS dispatch index before generating HIP')
+# Native finite FP16 conversion is bit-exact to the portable IEEE routines.
+# Keep their exceptional-value path so NaN sign/payload bits stay unchanged.
+for old,new in (
+    ('__device__ float halfBitsToFloat_0(uint bits_0)', '__device__ float soft_halfBitsToFloat_0(uint bits_0)'),
+    ('__device__ uint floatToHalfBits_0(float value_2)', '__device__ uint soft_floatToHalfBits_0(float value_2)')):
+    if source.count(old)!=1:raise RuntimeError('Review changed LPIPS half conversion before native lowering')
+    source=source.replace(old,new)
+for marker,helper in (
+    ('__device__ float load_half_0(', '''__device__ float halfBitsToFloat_0(uint bits_0) {
+    if((bits_0&0x7c00u)==0x7c00u)return soft_halfBitsToFloat_0(bits_0);
+    return __half2float(__ushort_as_half(static_cast<unsigned short>(bits_0)));
+}
+'''),
+    ('__device__ void store_half_0(', '''__device__ uint floatToHalfBits_0(float value_2) {
+    if((__float_as_uint(value_2)&0x7f800000u)==0x7f800000u)return soft_floatToHalfBits_0(value_2);
+    return __half_as_ushort(__float2half_rn(value_2));
+}
+''')):
+    if source.count(marker)!=1:raise RuntimeError('Review changed LPIPS half storage before native lowering')
+    source=source.replace(marker,helper+marker)
 source=re.sub(r'((?:__device__|__global__)[^;{}]*\{)',r'\1\n#pragma clang fp contract(off)\n',source)
 # The portable shader atomically adds one contribution per pixel. On HIP,
 # reduce within the physical wave and block first, retaining the per-pixel
@@ -93,6 +113,7 @@ header='''/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include <hip/hip_runtime.h>
+#include <hip/hip_fp16.h>
 namespace lfs_hip_application_lpips_kernels {
 '''+prelude+source+'\n}\n'
 a.output.parent.mkdir(parents=True,exist_ok=True)
