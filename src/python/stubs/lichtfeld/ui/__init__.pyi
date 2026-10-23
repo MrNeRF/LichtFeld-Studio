@@ -2383,16 +2383,16 @@ def can_apply_scale_distance() -> bool:
     """True when 2 valid points are picked for scale distance"""
 
 def get_scale_distance_measured() -> float:
-    """Get the measured distance between the 2 picked points"""
+    """Get measured distance between 2 picked points"""
 
 def apply_scale_distance(target_distance: float) -> bool:
-    """Request the running scale distance modal to rescale the scene to target distance"""
+    """Request scale distance modal to rescale scene"""
 
 def clear_scale_distance() -> None:
-    """Request the running scale distance modal to clear picked points"""
+    """Request scale distance modal to clear picked points"""
 
 def get_scale_distance_points() -> list[list[float]]:
-    """Get the picked points for the scale distance tool"""
+    """Get picked points for scale distance tool"""
 
 def fit_crop_tool(use_percentile: bool = False) -> None:
     """
