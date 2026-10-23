@@ -467,10 +467,14 @@ bounds. Consumer read/write tests remain in `lfs_hip_viewer_interop_contract`.
 
 ## Distribution size reduction plan
 
-The current universal package contains an uncompressed device-code image for
-each declared target, plus a complete optimized `gfx1150` training module.
-The opt-in device-code compression path is implemented; universal package size
-and complete install validation remain outstanding. The large existing package
+The separate ROCm portable presets compress device-code images for every declared
+target and include a matching optimized `gfx1150` training module. Windows
+universal native modules have passed isolated functional contracts, cold HIPRTC,
+short application training, preferred-profile selection, global opt-out and
+corrupt-profile CLI fallback. Binary inspection checks every embedded target;
+these checks do not certify execution on untested GPUs. Complete application
+installation and native Linux/hardware validation remain separate gates.
+The large existing package
 is not an optimized release-size baseline. Benchmark reports and measured artifact sizes belong in
 external development records, not in source commits.
 
@@ -626,7 +630,8 @@ also exercises a full-resolution source with max-side 1920 preparation.
 ### Runtime payload and notices
 
 Windows HIP packaging retains HIP, HIPRTC and COMGR as explicit dynamic roots,
-then resolves their recursive SDK DLL imports. OpenCL is included when the SDK
+then resolves their recursive SDK DLL imports. A build-directory manifest
+passes the complete file list to staging without shell/list splitting. OpenCL is included when the SDK
 actually imports it. When the SDK dependency inspection tool is unavailable,
 packaging keeps the conservative dependency set. An incomplete SDK or an
 unresolved import fails packaging instead of producing a broken distribution.
