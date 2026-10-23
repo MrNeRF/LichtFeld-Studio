@@ -1,24 +1,26 @@
 <rml>
 <head>
   <link type="text/template" href="floating_window.rml"/>
-  <link type="text/rcss" href="rendering.rcss"/>
+
 </head>
 <body template="floating-window">
-  <p>@tr:collision.shared_setup</p>
-  <p><span>@tr:collision.target</span> <span id="collision-target">@tr:collision.new_node</span></p>
-  <button id="setup-toggle" class="section-header collision-section-header is-expanded" data-collision-section="setup" aria-expanded="true"><span class="section-arrow">▶</span><span>@tr:collision.setup</span></button>
-  <div id="setup" class="collision-section">
-  <div class="collision-row" data-tooltip="collision.tip_units"><span>@tr:collision.units</span><input id="units-per-meter" type="text" value="1"/></div>
-  <div class="collision-row" data-tooltip="collision.tip_detail"><span>@tr:collision.detail</span><input id="detail" type="range" min="0.01" max="0.25" step="0.005" value="0.05"/></div>
-  <p id="scale-summary"></p>
-  <div class="collision-row" data-tooltip="collision.tip_cluster"><span>@tr:collision.cluster_enable</span><input id="cluster" type="checkbox"/></div>
-  <p id="pipeline-summary"></p>
-  <div class="collision-actions">
-    <button id="camera-seed" class="btn btn--secondary" data-tooltip="collision.tip_seed">@tr:collision.camera_seed</button>
-    <button id="generate" class="btn btn--primary">@tr:collision.generate</button>
-    <button id="cancel" class="btn btn--secondary">@tr:collision.cancel_generation</button>
+  <div class="collision-toolbar">
+    <div class="collision-field collision-cell-field" data-tooltip="collision.tip_detail"><div class="collision-field-title"><label for="voxel-size">@tr:collision.detail</label><label class="collision-auto" data-tooltip="collision.tip_auto"><input id="auto-resolution" type="checkbox" checked="checked"/><span>@tr:collision.auto</span></label></div>
+      <div class="collision-cell-input"><input id="voxel-size" type="text" value="0.05"/><input id="detail" type="range" min="0.01" max="0.25" step="0.005" value="0.05"/></div>
+    </div>
+    <div class="collision-field collision-alpha-field" data-tooltip="collision.tip_opacity"><label for="opacity">@tr:collision.opacity</label><input id="opacity" type="text" value="0.1"/></div>
+    <div class="collision-field collision-filter-field" data-tooltip="collision.tip_filter_mode"><label for="filter-mode">@tr:collision.filter_mode</label><select id="filter-mode">
+      <option value="1" selected="selected">@tr:collision.filter_cleanup</option><option value="2">@tr:collision.filter_connected</option><option value="0">@tr:collision.filter_none</option><option value="3">@tr:collision.filter_strict</option>
+    </select></div>
   </div>
+  <div class="collision-actions collision-primary-actions">
+    <button id="generate" class="btn btn--primary"><span>@tr:collision.generate</span></button>
+    <button id="cancel" class="btn btn--secondary"><span>@tr:collision.cancel_generation</span></button>
+    <span class="collision-action-spacer"/>
+    <button id="generate-new" class="btn btn--ghost"><span>@tr:collision.generate_new</span></button>
   </div>
+  <div id="collision-scroll" tabindex="0">
+  <div class="collision-summary"><p><span>@tr:collision.target</span> <span id="collision-target">@tr:collision.new_node</span></p><p id="scale-summary"/><p id="pipeline-summary"/></div>
   <div id="job-progress" style="display: none;">
     <p id="progress-stage"/>
     <div id="generation-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="generation-progress-fill"/></div>
@@ -30,7 +32,7 @@
   <div id="collision-error" style="display: none;">
     <p id="error-advice"/>
     <button id="error-toggle" class="section-header collision-section-header is-expanded" data-collision-section="error-details-section" aria-expanded="true"><span class="section-arrow">▶</span><span>@tr:collision.error_details</span></button>
-    <div id="error-details-section" class="collision-section"><p id="error-context"/><p id="error-details"/><button id="copy-error" class="btn btn--secondary">@tr:collision.copy_details</button></div>
+    <div id="error-details-section" class="collision-section"><p id="error-context"/><p id="error-details"/><button id="copy-error" class="btn btn--secondary"><span>@tr:collision.copy_details</span></button></div>
   </div>
   <button id="inspect-toggle" class="section-header collision-section-header is-expanded" data-collision-section="inspect" aria-expanded="true"><span class="section-arrow">▶</span><span>@tr:collision.inspect</span></button>
   <div id="inspect" class="collision-section">
@@ -41,9 +43,9 @@
   <button id="walk-section-toggle" class="section-header collision-section-header" data-collision-section="walk-section" aria-expanded="false"><span class="section-arrow">▶</span><span>@tr:collision.walk_section</span></button>
   <div id="walk-section" class="collision-section collapsed">
   <div class="collision-actions">
-    <button id="walk" class="btn btn--primary">@tr:collision.enter_walk</button>
-    <button id="exit-walk" class="btn btn--secondary">@tr:collision.exit_walk</button>
-    <button id="edit-splats" class="btn btn--secondary">@tr:collision.edit</button>
+    <button id="walk" class="btn btn--primary"><span>@tr:collision.enter_walk</span></button>
+    <button id="exit-walk" class="btn btn--secondary"><span>@tr:collision.exit_walk</span></button>
+    <button id="edit-splats" class="btn btn--secondary"><span>@tr:collision.edit</span></button>
   </div>
   <p>@tr:collision.walk_hint</p>
   <div class="collision-row" data-tooltip="collision.tip_player"><span>@tr:collision.head_height</span><input id="walk-height" type="text" value="1.8"/></div>
@@ -53,22 +55,19 @@
   </div>
   <button id="advanced-toggle" class="section-header collision-section-header" data-collision-section="advanced" aria-expanded="false"><span class="section-arrow">▶</span><span>@tr:collision.advanced</span></button>
   <div id="advanced" class="collision-section collapsed">
-  <button id="reset-surface" class="btn btn--secondary" data-tooltip="collision.tip_reset_surface">@tr:collision.reset_surface</button>
+  <p class="collision-note">@tr:collision.shared_setup</p>
+  <div class="collision-row" data-tooltip="collision.tip_units"><label for="units-per-meter">@tr:collision.units</label><input id="units-per-meter" type="text" value="1"/></div>
+  <button id="reset-surface" class="btn btn--ghost" data-tooltip="collision.tip_reset_surface"><span>@tr:collision.reset_surface</span></button>
 
   <div class="collision-row" data-tooltip="collision.tip_sharp"><span>@tr:collision.sharp</span><input id="sharp-preview" type="checkbox"/></div>
   <button id="filter-options-toggle" class="section-header collision-section-header" data-collision-section="filter-options" aria-expanded="false"><span class="section-arrow">▶</span><span>@tr:collision.cluster_filter</span></button>
   <div id="filter-options" class="collision-section collapsed">
+  <p class="collision-note" id="filter-help">@tr:collision.filter_help</p>
+  <button id="camera-seed" class="btn btn--secondary" data-tooltip="collision.tip_seed"><span>@tr:collision.camera_seed</span></button>
 
   <div class="collision-row" data-tooltip="collision.tip_resolution"><span>@tr:collision.resolution</span><input id="cluster-resolution" type="text" value="1"/></div>
-  <div class="collision-row" data-tooltip="collision.tip_opacity"><span>@tr:collision.opacity</span><input id="cluster-opacity" type="text" value="0.999"/></div>
-  <div class="collision-row" data-tooltip="collision.tip_contribution"><span>@tr:collision.contribution</span><input id="cluster-min" type="text" value="0.1"/></div>
-  </div>
-  <button id="voxel-options-toggle" class="section-header collision-section-header is-expanded" data-collision-section="voxel-options" aria-expanded="true"><span class="section-arrow">▶</span><span>@tr:collision.voxelization</span></button>
-  <div id="voxel-options" class="collision-section">
-
-  <div class="collision-row" data-tooltip="collision.tip_voxel"><span>@tr:collision.voxel_size</span><input id="voxel-size" type="text" value="0.05"/></div>
-  <div class="collision-row" data-tooltip="collision.tip_opacity"><span>@tr:collision.opacity</span><input id="opacity" type="text" value="0.1"/></div>
-  <div class="collision-row" data-tooltip="collision.tip_shape"><span>@tr:collision.shape</span><select id="shape"><option value="0" selected="selected">@tr:collision.smooth</option><option value="1">@tr:collision.faces</option></select></div>
+  <div class="collision-row collision-strict-option" data-tooltip="collision.tip_opacity"><span>@tr:collision.opacity</span><input id="cluster-opacity" type="text" value="0.999"/></div>
+  <div class="collision-row collision-strict-option" data-tooltip="collision.tip_contribution"><span>@tr:collision.contribution</span><input id="cluster-min" type="text" value="0.1"/></div>
   </div>
   <button id="fill-options-toggle" class="section-header collision-section-header" data-collision-section="fill-options" aria-expanded="false"><span class="section-arrow">▶</span><span>@tr:collision.fill_carve</span></button>
   <div id="fill-options" class="collision-section collapsed">
@@ -93,11 +92,13 @@
   <div id="surface-options" class="collision-section collapsed">
 
   <p>@tr:collision.surface_help</p>
+  <div class="collision-row" data-tooltip="collision.tip_shape"><span>@tr:collision.shape</span><select id="shape"><option value="0" selected="selected">@tr:collision.smooth</option><option value="1">@tr:collision.faces</option></select></div>
+
   <div class="collision-row"><span>@tr:collision.surface_detail</span><select id="surface-stride"><option value="1">@tr:collision.surface_exact</option><option value="2">2×</option><option value="4" selected="selected">4×</option><option value="8">8×</option><option value="16">16×</option></select></div>
   <div class="collision-actions">
-    <button id="show-voxels" class="btn btn--secondary">@tr:collision.voxel_surface</button>
-    <button id="show-mesh" class="btn btn--secondary">@tr:collision.build_surface</button>
-    <button id="generate-new" class="btn btn--secondary">@tr:collision.generate_new</button>
+    <button id="show-voxels" class="btn btn--secondary"><span>@tr:collision.voxel_surface</span></button>
+    <button id="show-mesh" class="btn btn--secondary"><span>@tr:collision.build_surface</span></button>
+  </div>
   </div>
   </div>
   </div>

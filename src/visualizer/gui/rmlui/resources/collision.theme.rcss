@@ -1,0 +1,20 @@
+.collision-field input[type="text"], .collision-field select,
+.collision-row input[type="text"], .collision-row select {
+    background-color: @{surface_bright}; color: @{text}; border-color: @{border};
+    border-radius: @{num(size.frame_rounding)}dp;
+}
+.collision-field input[type="text"]:hover, .collision-field select:hover,
+.collision-row input[type="text"]:hover, .collision-row select:hover { border-color: @{alpha(primary, 0.5)}; }
+.collision-field input[type="text"]:focus, .collision-field select:focus,
+.collision-row input[type="text"]:focus, .collision-row select:focus { border-color: @{primary}; }
+.collision-primary-actions, .collision-section-header { border-color: @{border}; }
+.collision-field label, #scale-summary, #pipeline-summary, .collision-note, #progress-time, #progress-task { color: @{text_dim}; }
+.collision-actions .btn { border-radius: @{num(size.frame_rounding)}dp; }
+#collision-scroll scrollbarvertical sliderbar { background-color: @{alpha(text_dim, 0.55)}; }
+#collision-scroll scrollbarvertical sliderbar:hover { background-color: @{primary}; }
+#job-progress { background-color: @{surface_bright}; }
+#generation-progress { background-color: @{border}; }
+#generation-progress-fill { background-color: @{primary}; }
+#job-progress.is-failed #generation-progress-fill { background-color: @{error}; }
+#collision-error { border-color: @{error}; }
+#collision-status.is-error { color: @{error}; }

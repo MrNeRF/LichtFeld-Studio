@@ -1,83 +1,73 @@
-/* Collision authoring panel. RmlPanelHost loads this sibling stylesheet. */
-.collision-row {
-    display: flex;
-    align-items: center;
-    margin: 5dp 0;
+/* Match the Logging utility window: compact fields, one action bar, inset scroll. */
+#content-wrap { padding: 0 8dp 8dp; overflow: hidden; min-width: 0; min-height: 0; }
+#content { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.collision-toolbar, .collision-actions {
+    display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8dp;
+    padding: 8dp 12dp; flex-shrink: 0; min-width: 0;
 }
-
-.collision-row span {
-    width: 58%;
-    flex-shrink: 0;
+.collision-toolbar { gap: 12dp; }
+.collision-field { display: flex; flex-direction: column; gap: 5dp; min-width: 0; }
+.collision-field label { font-size: 11dp; line-height: 14dp; }
+.collision-cell-field { flex: 1 1 200dp; }
+.collision-alpha-field { width: 70dp; }
+.collision-filter-field { flex: 1 1 160dp; }
+.collision-cell-input { display: flex; align-items: center; gap: 8dp; }
+.collision-cell-input input[type="text"] { width: 64dp; flex-shrink: 0; }
+.collision-cell-input input[type="range"] { flex: 1; min-width: 60dp; }
+.collision-field input[type="text"], .collision-field select,
+.collision-row input[type="text"], .collision-row select {
+    box-sizing: border-box; width: 100%; height: 28dp; min-height: 28dp;
+    padding: 5dp 10dp; border-width: 1dp; font-size: 12dp; line-height: 16dp;
 }
-
-.collision-row input, .collision-row select {
-    width: 40%;
+.collision-cell-input input[type="text"] { width: 64dp; }
+.collision-primary-actions { border-bottom-width: 1dp; padding-top: 0; align-items: center; }
+.collision-action-spacer { flex: 1; }
+.collision-actions .btn, .collision-section > .btn {
+    box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
+    height: 28dp; min-height: 28dp; padding: 0 10dp; font-size: 12dp;
 }
-
-.collision-row input[type="checkbox"] {
-    width: 16dp;
-    height: 16dp;
-}
-
-.collision-actions {
-    display: flex;
-    flex-wrap: wrap;
-    margin: 8dp 0;
-}
-
-.collision-actions button {
-    margin: 3dp;
-    padding: 5dp;
-}
-
-#collision-status {
-    margin: 8dp 0;
-}
-
-h3 {
-    display: block;
-    margin: 10dp 0 5dp;
-    font-weight: bold;
-}
-
-p {
-    display: block;
-    margin: 5dp 0;
-}
-
-.collision-row input[type="range"] { width: 38%; }
-.collision-row .collision-value { width: 12%; text-align: right; }
-.collision-row .collision-value { flex-shrink: 1; }
-#scale-summary { color: #9aaabb; font-size: 11dp; }
-#advanced { margin-top: 8dp; border-top: 1dp #465063; }
-
-#job-progress { margin: 8dp 0; }
-#generation-progress { display: block; width: 100%; height: 8dp; background-color: #364253; }
-#generation-progress-fill { display: block; width: 0%; height: 100%; background-color: #66aaff; }
-#progress-time { color: #aabbcf; }
-
-.collision-scrub span { width: 48%; }
-
+#collision-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; tab-index: auto; padding: 0 12dp 8dp; }
+.collision-summary { padding: 6dp 0; }
+p { display: block; margin: 5dp 0; font-size: 12dp; line-height: 17dp; }
+.collision-row { display: flex; align-items: center; gap: 8dp; margin: 6dp 0; }
+.collision-row > span, .collision-row > label { flex: 1; min-width: 0; font-size: 12dp; }
+.collision-row input[type="text"], .collision-row select { width: 130dp; flex-shrink: 0; }
+.collision-row input[type="checkbox"] { width: 16dp; height: 16dp; flex-shrink: 0; }
+.collision-row input[type="range"] { width: 130dp; }
+.collision-row .collision-value { flex: 0 0 38dp; text-align: right; font-size: 11dp; }
+.collision-section .collision-actions { padding: 6dp 0; }
 .collision-section.collapsed { display: none; }
 .collision-section-header {
-    box-sizing: border-box;
-    width: 100%;
-    min-height: 28dp;
-    margin: 8dp 0 3dp;
-    padding: 6dp 0;
-    border-top-width: 1dp;
-    text-align: left;
+    display: flex; align-items: center; gap: 6dp; box-sizing: border-box; width: 100%;
+    min-height: 30dp; margin: 8dp 0 3dp; padding: 6dp 0;
+    border-top-width: 1dp; text-align: left; font-size: 12dp;
 }
 .collision-section-header .section-arrow { flex-shrink: 0; }
 .collision-section-header.is-expanded .section-arrow { transform: rotate(90deg); }
 .collision-section { padding: 0 2dp 4dp; }
+.collision-strict-option { display: none; }
+.collision-strict .collision-strict-option { display: flex; }
+#camera-seed { display: none; }
+.collision-seeded #camera-seed { display: inline-flex; }
+#scale-summary, #pipeline-summary, .collision-note { font-size: 11dp; }
+#collision-status { margin: 8dp 0; }
 #progress-stage { font-weight: bold; }
-#job-progress { padding: 8dp; background: #273241; border-radius: 4dp; }
-#job-progress.is-failed #generation-progress-fill { background-color: #ec8796; }
-#progress-task, .collision-note { color: #aabbcf; font-size: 11dp; }
+#job-progress { margin: 8dp 0; padding: 8dp; border-radius: 4dp; }
+#generation-progress { display: block; width: 100%; height: 8dp; }
+#generation-progress-fill { display: block; width: 0%; height: 100%; }
+#progress-task { font-size: 11dp; }
 #job-progress .collision-note { display: none; }
 #job-progress.is-running .collision-note { display: block; }
-#collision-error { padding: 8dp; border: 1dp #a86673; border-radius: 4dp; }
-#collision-status.is-error { color: #f0a5b1; font-weight: bold; }
+#collision-error { padding: 8dp; border-width: 1dp; border-radius: 4dp; }
+#collision-status.is-error { font-weight: bold; }
 #error-context, #error-details { font-size: 11dp; }
 #error-details { white-space: pre-wrap; }
+.collision-actions .btn { min-width: 80dp; flex-shrink: 0; white-space: nowrap; }
+.collision-actions .btn span { line-height: 16dp; white-space: nowrap; }
+.collision-primary-actions #generate-new { display: none; }
+.collision-targeted .collision-primary-actions #generate-new { display: inline-flex; }
+.collision-summary p > span:first-child { margin-right: 4dp; }
+.collision-field-title { display: flex; align-items: center; justify-content: space-between; gap: 8dp; }
+.collision-auto { display: flex; align-items: center; gap: 4dp; }
+.collision-auto input[type="checkbox"] { width: 14dp; height: 14dp; margin: 0; }
+.collision-auto span { font-size: 11dp; }

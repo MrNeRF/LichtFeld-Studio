@@ -53,7 +53,7 @@ namespace lfs::vis::gui {
             return {"Collision operation cancelled", "No generated result was applied. You can change the settings and try again.", true};
         if (lower.find("budget") != std::string::npos || lower.find("coordinate range") != std::string::npos)
             return {"Collision resource limit reached",
-                    "Try larger cells or hide unwanted source splats. Large outlier splats can create enormous collision regions. The exact limit and the failed step are below."};
+                    "Enable Auto resolution or choose larger cells in Custom. Try Surface cleanup for reconstruction outliers. Large outlier splats can create enormous collision regions. The exact limit and the failed step are below."};
         if (lower.find("out of memory") != std::string::npos || lower.find("bad_alloc") != std::string::npos)
             return {"Not enough memory for this collision operation",
                     "Try larger cells, a coarser optional triangle surface, or fewer visible source splats. Free GPU memory if the details name CUDA."};

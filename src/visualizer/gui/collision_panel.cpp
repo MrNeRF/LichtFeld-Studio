@@ -172,6 +172,7 @@ namespace lfs::vis::gui {
         if (failed_job)
             finishJob(info.cancelled ? "cancelled" : "failed");
         status(info.title);
+        document_->GetElementById("collision-scroll")->SetScrollTop(0);
         auto set = [&](const char* id, const std::string& text) {
             document_->GetElementById(id)->SetInnerRML(Rml::StringUtilities::EncodeRml(text));
         };
@@ -198,6 +199,7 @@ namespace lfs::vis::gui {
                 el->RemoveAttribute("checked");
         };
         setValue("units-per-meter", std::format("{:.6g}", settings_.units_per_meter));
+        document_->GetElementById("detail")->SetAttribute("max", std::max(.25f, 2 * settings_.voxel_size / settings_.units_per_meter));
         setValue("detail", std::to_string(settings_.voxel_size / settings_.units_per_meter));
         setValue("overlay-opacity", std::to_string(display_.opacity));
         setValue("cutaway", std::to_string(display_.slice));
@@ -205,12 +207,13 @@ namespace lfs::vis::gui {
             document_->GetElementById(id)->SetInnerRML(std::format("{:.0f}%", n * 100));
         setValue("surface-stride", std::to_string(display_.surface_stride));
         setValue("shape", std::to_string(int(display_.surface_ready ? display_.surface_shape : settings_.shape)));
-        check("cluster", settings_.cluster);
+        setValue("filter-mode", settings_.adaptive_filter ? (settings_.cluster ? "2" : "1") : (settings_.cluster ? "3" : "0"));
         check("sharp-preview", display_.sharp);
+        check("auto-resolution", settings_.auto_resolution);
         set("cluster-resolution", settings_.cluster_resolution);
         set("cluster-opacity", settings_.cluster_opacity);
         set("cluster-min", settings_.cluster_min_contribution);
-        set("voxel-size", settings_.voxel_size);
+        set("voxel-size", settings_.voxel_size / settings_.units_per_meter);
         set("opacity", settings_.opacity);
         check("external-fill", settings_.external_fill);
         set("external-size", settings_.external_size);
@@ -237,11 +240,14 @@ namespace lfs::vis::gui {
     core::CollisionSettings CollisionPanel::readInputs() const {
         auto s = settings_;
         s.units_per_meter = number("units-per-meter");
-        s.cluster = checked("cluster");
+        s.auto_resolution = checked("auto-resolution");
+        const auto filter = value("filter-mode");
+        s.cluster = filter == "2" || filter == "3";
+        s.adaptive_filter = filter == "1" || filter == "2";
         s.cluster_resolution = number("cluster-resolution");
         s.cluster_opacity = number("cluster-opacity");
         s.cluster_min_contribution = number("cluster-min");
-        s.voxel_size = number("voxel-size");
+        s.voxel_size = number("voxel-size") * s.units_per_meter;
         s.opacity = number("opacity");
         s.external_fill = checked("external-fill");
         s.external_size = number("external-size");
@@ -279,6 +285,8 @@ namespace lfs::vis::gui {
             return false;
         if (!document_) {
             settings_.floor_below_seed = true;
+            if (target_.is_nil())
+                settings_.auto_resolution = true;
             document_ = host_.getDocument();
             document_->AddEventListener("click", this);
             document_->AddEventListener("change", this);
@@ -289,6 +297,7 @@ namespace lfs::vis::gui {
             writeInputs();
         }
         adoptResult();
+        document_->SetClass("collision-targeted", !target_.is_nil());
         if (!busy_ && !job_outcome_.empty() && job_graph_epoch_ != scene_->graphEpoch()) {
             job_outcome_.clear();
             clearError();
@@ -389,6 +398,7 @@ namespace lfs::vis::gui {
         }
         done_ = false;
         busy_ = true;
+        document_->GetElementById("collision-scroll")->SetScrollTop(0);
         job_started_ = std::chrono::steady_clock::now();
         progress_updated_ = job_started_;
         next_progress_ui_ = {};
@@ -397,15 +407,19 @@ namespace lfs::vis::gui {
         job_title_ = LOC("collision.generating");
         job_context_ = std::format("{} visible source splats; cell size {:.4g} scene units; opacity {:.4g}; connected filter {}.",
                                    scene_->getVisibleGaussianCount(), s.voxel_size, s.opacity, s.cluster ? "on" : "off");
+        if (s.auto_resolution)
+            job_context_ += " Automatic resolution enabled; displayed cell size is the previous/minimum value.";
         progress_value_ = 0;
         progress_step_ = 0;
-        progress_total_ = 3 + s.cluster + s.external_fill + s.floor_fill + (s.carve_height > 0);
+        progress_total_ = 3 + (s.cluster || s.adaptive_filter) + s.external_fill + s.floor_fill + (s.carve_height > 0);
         worker_ = std::jthread([this, snapshots = std::move(snapshots), sources = std::move(sources),
                                 s, grid_to_world, world_to_grid, target, display, scene_generation, graph_epoch](std::stop_token stop) mutable {
             try {
                 auto report = [&](std::string text) {
                     std::lock_guard lock(mutex_);
                     progress_updated_ = std::chrono::steady_clock::now();
+                    if (text.starts_with("Voxelizing Auto cell size:"))
+                        job_context_ += " " + text.substr(11);
                     int phase = 0;
                     float fraction = 0;
                     if (text.starts_with("Clustering")) {
@@ -419,10 +433,15 @@ namespace lfs::vis::gui {
                         else if (text.starts_with("Clustering splats: ")) {
                             const auto slash = text.find('/');
                             fraction = 0.5f + 0.5f * float(std::stoull(text.substr(text.find(": ") + 2))) / std::stoull(text.substr(slash + 1));
-                        } else if (text.starts_with("Clustering complete"))
+                        } else if (text.starts_with("Clustering source connectivity: ")) {
+                            const auto slash = text.find('/');
+                            fraction = 0.3f + 0.6f * float(std::stoull(text.substr(text.find(": ") + 2))) / std::max(1ull, std::stoull(text.substr(slash + 1)));
+                        } else if (text.starts_with("Clustering cleanup:"))
+                            fraction = s.cluster ? 0.3f : 1.f;
+                        else if (text.starts_with("Clustering complete"))
                             fraction = 1;
                     } else if (text.starts_with("Voxelizing")) {
-                        phase = 1 + s.cluster;
+                        phase = 1 + (s.cluster || s.adaptive_filter);
                         if (text.starts_with("Voxelizing GPU: "))
                             fraction = float(std::stoi(text.substr(text.find(": ") + 2))) / 100;
                         else if (text.starts_with("Voxelizing regions: ")) {
@@ -430,11 +449,11 @@ namespace lfs::vis::gui {
                             fraction = float(std::stoi(text.substr(start))) / 8;
                         }
                     } else if (text.starts_with("Sealing"))
-                        phase = 2 + s.cluster;
+                        phase = 2 + (s.cluster || s.adaptive_filter);
                     else if (text.starts_with("Filling"))
-                        phase = 2 + s.cluster + s.external_fill;
+                        phase = 2 + (s.cluster || s.adaptive_filter) + s.external_fill;
                     else if (text.starts_with("Flooding"))
-                        phase = 2 + s.cluster + s.external_fill + s.floor_fill;
+                        phase = 2 + (s.cluster || s.adaptive_filter) + s.external_fill + s.floor_fill;
                     else if (text.starts_with("Finalizing"))
                         phase = progress_total_ - 1;
                     progress_step_ = phase;
@@ -456,7 +475,7 @@ namespace lfs::vis::gui {
                 const auto stats = std::format("{:.2f}s generation; {:.1f} MiB occupancy",
                                                std::chrono::duration<double>(voxelized - begin).count(), volume->tree.size() * 4.0 / (1024 * 1024));
                 LOG_INFO("Collision generation: source={}, voxel_size={}, opacity={}, occupied={}, tree_nodes={}, generation_ms={}, mesh_ms={}",
-                         gaussians.size(), s.voxel_size, s.opacity, volume->occupiedCount(), volume->tree.size(),
+                         gaussians.size(), volume->settings.voxel_size, s.opacity, volume->occupiedCount(), volume->tree.size(),
                          std::chrono::duration_cast<std::chrono::milliseconds>(voxelized - begin).count(),
                          std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - voxelized).count());
                 if (stop.stop_requested())
@@ -548,16 +567,21 @@ namespace lfs::vis::gui {
         settings_.applyPreset(core::CollisionPreset::Outdoor);
         settings_.seed = previous.seed;
         settings_.voxel_size = previous.voxel_size;
+        settings_.auto_resolution = previous.auto_resolution;
         settings_.floor_below_seed = true;
         world_seed_ = settings_.seed;
         writeInputs();
     }
     void CollisionPanel::updateSummary() {
         const float units = number("units-per-meter");
-        const float edge = number("voxel-size");
-        document_->GetElementById("scale-summary")->SetInnerRML(Rml::StringUtilities::EncodeRml(LOCF("collision.scale_summary", edge / units * 100, edge, units)));
-        std::string pipeline = LOC("collision.voxelization");
-        for (const auto& [enabled, key] : {std::pair{checked("cluster"), "collision.cluster_filter"},
+        const float edge = number("voxel-size") * units;
+        const auto filter = value("filter-mode");
+        document_->SetClass("collision-auto-resolution", checked("auto-resolution"));
+        document_->SetClass("collision-strict", filter == "3");
+        document_->SetClass("collision-seeded", filter == "2" || filter == "3");
+        document_->GetElementById("scale-summary")->SetInnerRML(Rml::StringUtilities::EncodeRml(checked("auto-resolution") ? LOC("collision.auto_summary") : LOCF("collision.scale_summary", edge / units * 100, edge, units)));
+        std::string pipeline = filter == "1" || filter == "2" ? std::string(LOC("collision.filter_cleanup")) + " · " + LOC("collision.voxelization") : LOC("collision.voxelization");
+        for (const auto& [enabled, key] : {std::pair{filter == "2" || filter == "3", "collision.cluster_filter"},
                                            {checked("external-fill"), "collision.external"},
                                            {checked("floor-fill"), "collision.floor"},
                                            {number("carve-height") > 0, "collision.capsule_carve"}})
@@ -603,6 +627,7 @@ namespace lfs::vis::gui {
             progress_ = "Building optional surface (Walk uses full-resolution voxels)";
         }
         busy_ = true;
+        document_->GetElementById("collision-scroll")->SetScrollTop(0);
         done_ = false;
         job_started_ = std::chrono::steady_clock::now();
         progress_updated_ = job_started_;
@@ -676,13 +701,18 @@ namespace lfs::vis::gui {
                 if (id == "overlay-opacity" || id == "cutaway" || id == "sharp-preview")
                     updateDisplay();
                 else if (id == "detail") {
-                    setValue("voxel-size", std::format("{:.6g}", number("detail") * number("units-per-meter")));
+                    setValue("voxel-size", value("detail"));
+                    document_->GetElementById("auto-resolution")->RemoveAttribute("checked");
+                } else if (id == "voxel-size") {
+                    document_->GetElementById("detail")->SetAttribute("max", std::max(.25f, 2 * number("voxel-size")));
+                    setValue("detail", value("voxel-size"));
+                    document_->GetElementById("auto-resolution")->RemoveAttribute("checked");
                 } else if (id == "units-per-meter") {
                     const float units = number("units-per-meter");
                     if (!(units > 0))
                         throw std::invalid_argument("Scene units per metre must be positive");
                     const auto ratio = units / settings_.units_per_meter;
-                    for (const auto* field : {"voxel-size", "cluster-resolution", "external-size", "floor-size", "carve-height", "carve-radius", "walk-height", "walk-radius", "walk-speed", "walk-step"})
+                    for (const auto* field : {"cluster-resolution", "external-size", "floor-size", "carve-height", "carve-radius", "walk-height", "walk-radius", "walk-speed", "walk-step"})
                         setValue(field, std::format("{:.6g}", number(field) * ratio));
                     settings_.units_per_meter = units;
                 }
