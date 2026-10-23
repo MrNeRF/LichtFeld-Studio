@@ -143,6 +143,11 @@ Cutaway clips the upper part of the volume along its local up-axis. These contro
 and the selected display mode persist per node. Intersecting nodes composite
 independently, so their blended appearance remains draw-order dependent.
 
+**Sharp box preview** under Advanced is on by default and traces every pixel.
+Turning it off requests hardware 2×2 fragment shading where supported, with a
+full-resolution fallback elsewhere. This softens edges without changing any
+collision cells or Walk queries. Opacity, cutaway and sharpness are live controls.
+
 Use **Build / show surface** under Advanced only when a triangle surface is needed.
 The default `4×` surface multiplier conservatively combines occupied cells into a
 coarser grid before meshing. All components remain represented, but fine gaps can
@@ -165,16 +170,24 @@ selection, delete, crop and transform tools, then regenerate the same node.
 ## Performance and limits
 
 Collision snapshots copy only means, raw scale/rotation/opacity and deletion
-state, without spherical harmonics or optimizer state. Up to eight independent
-spatial regions voxelize concurrently. Conservative opacity bounds skip provably
-empty/solid regions; active bricks evaluate only relevant Gaussian support and
-stop accumulating a cell once it is occupied. Sparse postprocessing takes
+state, without spherical harmonics or optimizer state. The GUI uses native CUDA
+for both coarse cluster voxelization and final voxelization. Conservative bounds
+and the Gaussian BVH are prepared on CPU; weak-support bounds use up to eight
+threads. CUDA expands only potentially occupied regions and evaluates 4³ bricks
+with 64 lanes, stopping density accumulation once the requested threshold is met.
+Prepared Gaussian/BVH records upload once per pass; only nonempty brick masks
+return to CPU for canonical Walk/archive topology. There is no dense world-sized
+alpha allocation or intermediate triangle surface. Connected filtering, optional
+filling/carving and canonical-tree assembly remain on CPU. This is GPU
+voxelization, not an entirely GPU-resident authoring pipeline. The CPU evaluator
+remains available as a reference. Sparse postprocessing takes
 ownership of its input tree instead of copying it. Archive snapshots share the
 immutable payload. Optional surface normals use a direct indexed pass without
 constructing OpenMesh adjacency or per-vertex uniform colors.
 
-A full 1,000,000-Gaussian Bicycle source dump, with 5 cm cells and opacity `0.1`,
-now produces **122,325,185 occupied cells** in **12.25 s**, using **147.4 MiB** CPU
+The earlier CPU baseline on a full 1,000,000-Gaussian Bicycle source dump, with
+5 cm cells and opacity `0.1`, produces **122,325,185 occupied cells** in
+**12.25 s**, using **147.4 MiB** CPU
 occupancy (standalone peak RSS **578 MiB**). With the same revised sampler and
 optional guarded ground fill, it produces **850,702,239 cells**, uses **299.4 MiB**
 occupancy, and takes **13.84 s**. Ground fill changes collision semantics; these
@@ -182,7 +195,7 @@ are not identical-output speed comparisons. Both include all source Gaussians
 without cropping, clustering or coarsening occupancy. Timings are machine-specific
 and exclude GUI upload/save costs.
 
-The native GUI surface-only run took **10.35 s**, with **122,325,186 cells** and
+The earlier CPU native GUI surface-only run took **10.35 s**, with **122,325,186 cells** and
 **147.4 MiB** CPU occupancy. The separate full-scene validation project is
 `bicycle-collision-surface-aligned.licht`; the complete 1M Model remains visible.
 Save/reload preserves the collider identity and surface-only settings; rehydrated
@@ -197,15 +210,71 @@ triangle surface. Coarsened optional surfaces can still be large. Render snapsho
 retain payload ownership until consumed, including when the collider is replaced
 or deleted during a frame.
 
-Storage uses an adaptive occupancy tree and 8-cubed evaluation bricks, not a dense
-world allocation. GPU traversal uses uniform regions and packed 4-cubed leaf
+Storage uses an adaptive occupancy tree, not a dense world allocation. The CPU
+reference evaluates 8³ bricks; CUDA evaluates 4³ bricks. GPU traversal uses uniform regions and packed 4-cubed leaf
 masks. Finite limits apply to actual allocated work: 10 million source Gaussians,
 512,000,001 CPU tree words (about 1.91 GiB), 8 million floor columns,
 32,000,001 floor-height nodes, 64 million surface vertices and 384 million indices.
-Grid axes are limited to 2^21 cells. GPU buffers must fit device limits.
+Grid axes are limited to 2^21 cells. CUDA worklists are bounded to 32 million
+active regions. GPU buffers must fit device limits.
 Snapshots, allocator capacity, uploads and optional surfaces add peak memory.
 Failures name the exceeded budget and do not replace an existing collider.
 The legacy dense reader retains its 16-million-cell limit.
+
+### Measured CUDA and rendering improvements
+
+On the RTX 4090 validation machine, CUDA generation takes **1.86 s** unfiltered
+and **1.10 s** with the corrected connected filter, versus the prior **12.25 s**
+and **5.36 s** CPU baselines. These include CPU preparation and tree assembly,
+but exclude GUI snapshot, upload and save costs. Unfiltered CUDA occupancy is
+122,325,196 cells / 147.4 MiB; clustered occupancy is 6,692,435 cells / 33.3 MiB.
+Floating-point evaluation near a threshold can change a few occupied cells;
+coarse connectivity can amplify such boundary differences. No byte-identical
+CPU/GPU output is promised. Small deterministic fixtures compare every cell.
+
+The GUI generated all visible 1M Bicycle splats with filtering in **1.21 s**,
+retaining 855,274 splats and 6,692,434 occupied cells. The separate archive is
+`bicycle-collision-gpu.licht`; the pristine training project and PLY are unchanged.
+
+The severe preview slowdown was a numerical traversal bug: rounding a
+non-crossed coordinate could move it backwards at an edge, creating a two-cell
+cycle. In the unfiltered overview, 536 rays exhausted the 9,227-step safety bound.
+Every axis now advances monotonically along its ray. Ancestor paths and packed
+brick masks are cached; uniform regions jump directly to their exit. Camera
+occupancy is queried once per draw, storage uploads to device-preferred memory,
+and projected collider bounds limit the scissor or reject offscreen draws.
+The sharp overview improved from **40.16 ms to 1.26 ms** GPU time.
+
+The following comparison runs the unchanged
+[SuperSplat WGSL](https://github.com/playcanvas/supersplat-viewer/blob/34c137ab1c010b99a1c199b68c36210990331262/src/voxel-debug-overlay.ts)
+in Node Dawn 0.6.2/Vulkan on the same RTX 4090, driver 615.78.08, with the exact
+same occupancy and camera. Both use 1920×1080, full pixel shading, ten warmups,
+30 GPU timestamp samples and RGBA32F/depth32F render attachments. Upstream time
+includes compute and its fullscreen composite; native includes its rendering
+pass. Upload, compilation, CPU readback, splats and UI are excluded. Upstream
+retains its original RGBA8 intermediate and its own edge-width formula.
+
+| Bicycle view | LFS sharp median | SuperSplat median | Speed ratio |
+| --- | ---: | ---: | ---: |
+| Full surface overview | 1.263 ms | 1.665 ms | 1.32× |
+| Full surface, Walk height | 1.355 ms | 1.697 ms | 1.25× |
+| Clustered overview | 1.057 ms | 1.345 ms | 1.27× |
+| Clustered close-up | 0.711 ms | 0.986 ms | 1.39× |
+| Legacy floor-filled overview | 0.252 ms | 0.413 ms | 1.64× |
+
+Overview hit coverage differs at only 3 of 2,073,600 pixels, consistent with the
+different boundary epsilon. This is a kernel/pass comparison on one machine,
+not an end-to-end benchmark of either application or a universal speed guarantee.
+Hardware 2×2 preview is deliberately excluded from this quality comparison.
+
+Native vertical capsule intersection takes about **1 µs/query** on 1,000 seeded
+near-scene positions. Axis-aligned capsules use exact interval distance; rotated
+capsules retain exact piecewise-quadratic segment/box distance after a cheap
+conservative rejection. Upstream's iterative penetration resolver is a different
+operation and is not presented as an equivalent timing.
+
+See `tests/benchmarks/collision/README.md` for reproducible render and query
+benchmarks. Neither benchmark retrains or modifies a project.
 
 ## Walk testing
 
