@@ -408,3 +408,94 @@ def check_tiff_graph(test, result, path, maker):
             original = bytes.fromhex(span["bytes"])
             file.seek(span["offset"])
             test.assertEqual(original, file.read(len(original)))
+
+
+def write_heif_metadata(path, items=(), *, carrier="avif"):
+    """Attach independently constructed MIME/Exif items to existing encoded images.
+
+    Items specify data, optional content_type/encoding/type and image IDs.
+    The two-image fixtures have primary image 2; image 1 stays non-primary.
+    """
+    source = "multi.avif" if carrier == "avif" else "system-multi.heic"
+    data = (Path(__file__).resolve().parents[1] / "data/heif" / source).read_bytes()
+
+    def box(kind, payload):
+        return struct.pack(">I4s", len(payload) + 8, kind) + payload
+
+    def full(kind, version, payload):
+        return box(kind, bytes([version, 0, 0, 0]) + payload)
+
+    def children(start, end):
+        result = {}
+        while start < end:
+            size, kind = struct.unpack_from(">I4s", data, start)
+            assert size >= 8 and start + size <= end and kind not in result
+            result[kind] = data[start:start + size]
+            start += size
+        assert start == end
+        return result
+
+    top = children(0, len(data))
+    meta = top[b"meta"]
+    offset = data.index(meta)
+    old = children(offset + 12, offset + len(meta))
+    iloc = old[b"iloc"][8:]
+    assert iloc[:6] == bytes(4) + b"\x44\x40"
+    count = struct.unpack_from(">H", iloc, 6)[0]
+    entries = []
+    cursor = 8
+    for _ in range(count):
+        id_, reference, base, extents = struct.unpack_from(">HHIH", iloc, cursor)
+        assert reference == 0
+        cursor += 10
+        payload = bytearray()
+        for _ in range(extents):
+            start, length = struct.unpack_from(">II", iloc, cursor)
+            cursor += 8
+            part = data[base + start:base + start + length]
+            assert len(part) == length
+            payload.extend(part)
+        entries.append((id_, bytes(payload)))
+    assert cursor == len(iloc)
+    primary = struct.unpack_from(">H", old[b"pitm"], 12)[0]
+    assert primary == 2
+    info = old[b"iinf"]
+    assert info[8:12] == bytes(4)
+    info_count = struct.unpack_from(">H", info, 12)[0]
+    infe = info[14:]
+    references = old[b"iref"][12:]
+    ids = []
+    next_id = max(id_ for id_, _ in entries) + 1
+    for item in items:
+        id_ = next_id
+        next_id += 1
+        ids.append(id_)
+        kind = item.get("type", b"mime")
+        header = struct.pack(">HH4s", id_, 0, kind) + b"metadata\0"
+        if kind == b"mime":
+            header += item.get("content_type", "application/rdf+xml").encode() + b"\0"
+            header += item.get("encoding", "").encode() + b"\0"
+        infe += full(b"infe", 2, header)
+        entries.append((id_, item["data"]))
+        images = item.get("images", [primary])
+        if images:
+            references += box(b"cdsc", struct.pack(">HH", id_, len(images)) +
+                              b"".join(struct.pack(">H", image) for image in images))
+
+    def metadata(base):
+        locations = bytearray()
+        for id_, payload in entries:
+            locations.extend(struct.pack(">HHHII", id_, 0, 1, base, len(payload)))
+            base += len(payload)
+        replacement = {
+            b"iloc": full(b"iloc", 0, b"\x44\0" + struct.pack(">H", len(entries)) + locations),
+            b"iinf": full(b"iinf", 0, struct.pack(">H", info_count + len(items)) + infe),
+            b"iref": full(b"iref", 0, references),
+        }
+        return full(b"meta", 0, b"".join(replacement.get(kind, raw) for kind, raw in old.items()))
+
+    ftyp = top[b"ftyp"]
+    header = metadata(0)
+    header = metadata(len(ftyp) + len(header) + 8)
+    path.write_bytes(ftyp + header + box(b"mdat", b"".join(payload for _, payload in entries)))
+    return ids

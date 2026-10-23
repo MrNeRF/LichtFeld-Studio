@@ -154,11 +154,17 @@ namespace lfs::media::json_detail {
                 using core::image_codecs::XmpEnvelope;
                 const char* envelope = block.envelope == XmpEnvelope::JpegApp1 ? "jpeg_app1" : block.envelope == XmpEnvelope::JpegExtendedApp1   ? "jpeg_extended_app1"
                                                                                            : block.envelope == XmpEnvelope::PngInternationalText ? "png_itxt"
-                                                                                                                                                 : "tiff_tag700";
+                                                                                           : block.envelope == XmpEnvelope::TiffTag              ? "tiff_tag700"
+                                                                                                                                                 : "heif_mime";
                 json payload = nullptr;
                 if (block.status == core::image_codecs::MetadataStatus::Collected && original && block.payload_offset <= original->size())
                     payload = block.inflated ? hexBytes(*block.inflated) : hexBytes(original->subspan(block.payload_offset));
                 retained["blocks"].push_back({{"envelope", envelope}, {"bytes", original ? json(hexBytes(*original)) : json(nullptr)}, {"status", metadataStatus(block.status)}, {"diagnostic", block.diagnostic}, {"crc_valid", optional(block.crc_valid)}, {"payload_offset", block.payload_offset}, {"payload_kind", block.envelope == XmpEnvelope::JpegExtendedApp1 ? "extended_segment" : "packet"}, {"compressed", block.compressed}, {"payload_bytes", std::move(payload)}});
+                if (block.heif_item) {
+                    const auto& item = *block.heif_item;
+                    retained["blocks"].back()["representation"] = "libheif_decoded_bytes";
+                    retained["blocks"].back()["heif_item"] = {{"image_item", item.image_item}, {"metadata_item", item.metadata_item}, {"content_type", item.content_type}, {"content_encoding", item.content_encoding}};
+                }
                 if (block.tiff_tag) {
                     retained["blocks"].back()["representation"] = "libtiff_decoded_bytes";
                     const auto reference = *block.tiff_tag;

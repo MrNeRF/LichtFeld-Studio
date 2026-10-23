@@ -2898,9 +2898,12 @@ namespace lfs::core::image_codecs {
             return result;
         }
         if (is_heif(std::span(signature).first(signature_size))) {
-            if (xmp)
-                xmp->result.status = MetadataStatus::Unsupported;
-            return read_heif_exif(path, limits);
+            if (!xmp)
+                return read_heif_exif(path, limits);
+            xmp->supported_carrier = true;
+            auto observed = read_heif_metadata(path, limits, xmp->limits);
+            xmp->result = std::move(observed.xmp);
+            return std::move(observed.exif);
         }
         if (signature_size >= kPngSignature.size() && std::equal(kPngSignature.begin(), kPngSignature.end(), signature.begin())) {
             if (limits.png_scan_bytes < kPngSignature.size() || limits.png_scan_bytes > 1024 * 1024 * 1024 ||
@@ -3026,9 +3029,15 @@ namespace lfs::core::image_codecs {
     }
 
     std::optional<std::span<const uint8_t>> source_xmp_bytes(const SourceExif& exif, const XmpBlock& block) noexcept {
-        if (block.envelope != XmpEnvelope::TiffTag)
-            return block.tiff_tag ? std::nullopt : std::optional(std::span<const uint8_t>(block.bytes));
-        if (!block.tiff_tag || !exif.tiff || !block.bytes.empty() || block.inflated || block.compressed || block.payload_offset || block.crc_valid)
+        if (block.envelope != XmpEnvelope::TiffTag) {
+            if (block.tiff_tag || (block.envelope == XmpEnvelope::HeifMime) != block.heif_item.has_value())
+                return std::nullopt;
+            if (block.heif_item && (!block.heif_item->image_item || !block.heif_item->metadata_item ||
+                                    block.inflated || block.compressed || block.payload_offset || block.crc_valid))
+                return std::nullopt;
+            return std::span<const uint8_t>(block.bytes);
+        }
+        if (!block.tiff_tag || block.heif_item || !exif.tiff || !block.bytes.empty() || block.inflated || block.compressed || block.payload_offset || block.crc_valid)
             return std::nullopt;
         const auto reference = *block.tiff_tag;
         const auto& directories = exif.tiff->directories;
@@ -3060,7 +3069,7 @@ namespace lfs::core::image_codecs {
         const auto& scan_diagnostic = collector.scan_status ? collector.scan_diagnostic : result.exif.diagnostic;
         if (result.xmp.status == MetadataStatus::NotExamined) {
             result.xmp.status = (scan_status == MetadataStatus::IoError || scan_status == MetadataStatus::Limited) ? scan_status : MetadataStatus::Unsupported;
-            result.xmp.diagnostic = (scan_status == MetadataStatus::IoError || scan_status == MetadataStatus::Limited) ? scan_diagnostic : "XMP collection supports JPEG APP1, PNG iTXt and observed TIFF tag 700";
+            result.xmp.diagnostic = (scan_status == MetadataStatus::IoError || scan_status == MetadataStatus::Limited) ? scan_diagnostic : "XMP collection supports JPEG APP1, PNG iTXt, observed TIFF tag 700 and HEIF primary-image MIME items";
         } else if ((collector.supported_carrier || result.xmp.status != MetadataStatus::Unsupported) &&
                    (scan_status == MetadataStatus::Limited || scan_status == MetadataStatus::Malformed || scan_status == MetadataStatus::IoError)) {
             // Conservatively retain the enclosing scan's incomplete/invalid status.
