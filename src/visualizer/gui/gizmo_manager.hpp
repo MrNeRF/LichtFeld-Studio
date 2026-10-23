@@ -23,6 +23,7 @@
 
 namespace lfs::vis {
     class VisualizerImpl;
+    class CropVolumeSourceTest_GizmoEditsAreSavedAsSceneState_Test;
 
     namespace gui {
 
@@ -116,6 +117,7 @@ namespace lfs::vis {
             [[nodiscard]] bool isPieMenuOpen() const { return pie_menu_.isOpen(); }
 
         private:
+            friend class lfs::vis::CropVolumeSourceTest_GizmoEditsAreSavedAsSceneState_Test;
             struct ToolStateStamp {
                 bool valid = false;
                 bool ui_hidden = false;

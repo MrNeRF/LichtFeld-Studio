@@ -2704,6 +2704,285 @@ contract["check_selection_submode_follows_native_mode"](lf)
         lfs::vis::UnifiedToolRegistry::instance().setActiveTool("");
     }
 
+    // Crop volumes are scene-graph state. Every edit must mark the project modified
+    // without marking the splat payload dirty: that replaced the PLY's embedded source
+    // bytes by a capture of the whole model on the next save.
+    class CropVolumeSourceTest : public VisualizerImplResetTest {
+    protected:
+        struct SavedSplatPayload {
+            std::string binding;
+            std::uint64_t offset = 0;
+        };
+
+        void SetUp() override {
+            VisualizerImplResetTest::SetUp();
+            if (!cuda_device_available()) {
+                GTEST_SKIP() << "CUDA device unavailable";
+            }
+            std::filesystem::copy_file(
+                std::filesystem::path(PROJECT_ROOT_PATH) / "tests" / "data" / "portable-ply.licht", path_);
+            ASSERT_EQ(savedSplatPayload().binding, "DSRC/ply");
+        }
+
+        [[nodiscard]] SavedSplatPayload savedSplatPayload() const {
+            namespace pj = lfs::io::project;
+            const auto document = lfs::test::licht::require_result_ptr(pj::ProjectDocument::open(path_));
+            const auto reader = lfs::test::licht::require_result(pj::ProjectReader::open(path_));
+            for (const auto& record : lfs::test::licht::require_result(document->scene_graph().nodes())) {
+                if (record.type != "splat" || !record.payload)
+                    continue;
+                const auto* row = reader.find(record.payload->fourcc == "DSRC" ? pj::FOURCC_DSRC : pj::FOURCC_SPLT,
+                                              record.payload->instance_uuid);
+                return {record.payload->fourcc + "/" + record.payload->source_kind, row ? row->payload_offset : 0};
+            }
+            return {};
+        }
+
+        [[nodiscard]] lfs::core::NodeId open(VisualizerImpl& viewer) {
+            if (!viewer.getParameterManager()->ensureLoaded() ||
+                !viewer.projectOpen(path_, ProjectSwitchDisposition::DiscardChanges) ||
+                !waitUntil([&] {
+                    viewer.pumpPostedWorkForProjectWrite();
+                    const auto info = viewer.projectGetInfo();
+                    return info && info->hydration_state == "complete";
+                })) {
+                return lfs::core::NULL_NODE;
+            }
+            for (const auto* node : viewer.getScene().getNodes()) {
+                if (node->type == lfs::core::NodeType::SPLAT)
+                    return node->id;
+            }
+            return lfs::core::NULL_NODE;
+        }
+
+        void save(VisualizerImpl& viewer) {
+            lfs::test::licht::require_status(viewer.projectSave(false));
+            ASSERT_TRUE(waitUntil([&] {
+                viewer.pumpPostedWorkForProjectWrite();
+                return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+            }));
+            ASSERT_FALSE(viewer.projectGetInfo()->dirty);
+        }
+
+        // The edit marked the project modified, and saving it kept the PLY source
+        // binding without rewriting the splat payload.
+        void expectSavedAsSceneState(VisualizerImpl& viewer) {
+            EXPECT_TRUE(viewer.projectGetInfo()->dirty);
+            const auto before = savedSplatPayload();
+            ASSERT_NO_FATAL_FAILURE(save(viewer));
+            const auto after = savedSplatPayload();
+            EXPECT_EQ(after.binding, "DSRC/ply");
+            EXPECT_EQ(after.offset, before.offset) << "the save rewrote the splat payload";
+        }
+
+        // A raw scene volume, sized like the capabilities do: the fixture's splats are
+        // flat, and a zero radius cannot be saved.
+        [[nodiscard]] static lfs::core::NodeId addEllipsoid(lfs::core::Scene& scene, const lfs::core::NodeId parent,
+                                                            const std::string& name) {
+            const auto id = scene.addEllipsoid(name, parent);
+            if (id != lfs::core::NULL_NODE) {
+                auto data = *scene.getEllipsoidData(id);
+                data.radii = glm::vec3(1.0f);
+                scene.setEllipsoidData(id, data);
+            }
+            return id;
+        }
+
+        std::filesystem::path path_ = temporary_.path / "crop-volume-ply-source.licht";
+    };
+
+    TEST_F(CropVolumeSourceTest, GizmoEditsAreSavedAsSceneState) {
+        std::string cropbox_name;
+        lfs::core::CropBoxData edited;
+        glm::mat4 edited_transform{1.0f};
+        {
+            VisualizerImpl viewer(projectOptions());
+            const auto splat_id = open(viewer);
+            ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+            auto* const manager = viewer.getSceneManager();
+            const auto cropbox_id = cap::ensureCropBox(*manager, viewer.getRenderingManager(), splat_id);
+            ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+            cropbox_name = viewer.getScene().getNodeById(*cropbox_id)->name;
+            manager->selectNode(splat_id);
+            auto& gizmo = viewer.getGuiManager()->gizmo();
+            gizmo.setCropToolShape("box");
+            struct ActiveToolReset {
+                ~ActiveToolReset() { UnifiedToolRegistry::instance().setActiveTool(""); }
+            } active_tool_reset;
+            UnifiedToolRegistry::instance().setActiveTool("builtin.cropbox");
+            ASSERT_NO_FATAL_FAILURE(save(viewer));
+
+            // Resize the box, then move it, committing each edit the way a gizmo drag does.
+            ASSERT_TRUE(gizmo.ensureCropToolStateForRestore());
+            gizmo.crop_tool_box_min_ = glm::vec3(-0.25f, -0.5f, -0.75f);
+            gizmo.crop_tool_box_max_ = glm::vec3(0.5f, 0.25f, 0.125f);
+            ASSERT_TRUE(gizmo.persistActiveCropToolToNode(false));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+
+            ASSERT_TRUE(gizmo.ensureCropToolStateForRestore());
+            gizmo.crop_tool_visualizer_transform_ =
+                glm::translate(glm::mat4(1.0f), glm::vec3(0.5f, -0.25f, 1.0f)) *
+                gizmo.crop_tool_visualizer_transform_;
+            ASSERT_TRUE(gizmo.persistActiveCropToolToNode(false));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+
+            const auto* const cropbox = viewer.getScene().getNode(cropbox_name);
+            ASSERT_NE(cropbox, nullptr);
+            EXPECT_EQ(cropbox->cropbox->min, glm::vec3(-0.25f, -0.5f, -0.75f));
+            EXPECT_EQ(cropbox->cropbox->max, glm::vec3(0.5f, 0.25f, 0.125f));
+            EXPECT_NE(cropbox->local_transform.get(), glm::mat4(1.0f));
+            edited = *cropbox->cropbox;
+            edited_transform = cropbox->local_transform.get();
+        }
+
+        VisualizerImpl reopened(projectOptions());
+        ASSERT_NE(open(reopened), lfs::core::NULL_NODE);
+        const auto* const restored = reopened.getScene().getNode(cropbox_name);
+        ASSERT_NE(restored, nullptr);
+        ASSERT_NE(restored->cropbox, nullptr);
+        EXPECT_EQ(restored->cropbox->min, edited.min);
+        EXPECT_EQ(restored->cropbox->max, edited.max);
+        EXPECT_EQ(restored->cropbox->enabled, edited.enabled);
+        EXPECT_EQ(restored->local_transform.get(), edited_transform);
+    }
+
+    // Panel, Python, MCP and the inverse toggle edit crop box data through updateCropBox.
+    TEST_F(CropVolumeSourceTest, CropBoxDataEditsMarkProjectModifiedAndRoundTrip) {
+        std::string cropbox_name;
+        {
+            VisualizerImpl viewer(projectOptions());
+            const auto splat_id = open(viewer);
+            ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+            auto* const manager = viewer.getSceneManager();
+            auto* const rendering = viewer.getRenderingManager();
+            const auto cropbox_id = cap::ensureCropBox(*manager, rendering, splat_id);
+            ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+            cropbox_name = viewer.getScene().getNodeById(*cropbox_id)->name;
+            ASSERT_TRUE(cap::resetCropBox(*manager, rendering, *cropbox_id));
+            ASSERT_NO_FATAL_FAILURE(save(viewer));
+
+            const auto edit = [&](const glm::vec3& min, const glm::vec3& max, const bool inverse) {
+                cap::CropBoxUpdate update;
+                update.min_bounds = min;
+                update.max_bounds = max;
+                update.has_inverse = true;
+                update.inverse = inverse;
+                ASSERT_TRUE(cap::updateCropBox(*manager, rendering, *cropbox_id, update));
+                ASSERT_EQ(viewer.getScene().getNodeById(*cropbox_id)->local_transform.get(), glm::mat4(1.0f));
+            };
+            ASSERT_NO_FATAL_FAILURE(edit(glm::vec3(-0.5f), glm::vec3(0.25f), true));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+            // The transform is already identity, so Reset changes only the box data.
+            ASSERT_TRUE(cap::resetCropBox(*manager, rendering, *cropbox_id));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+            ASSERT_NO_FATAL_FAILURE(edit(glm::vec3(-0.75f, -0.5f, -0.25f), glm::vec3(0.125f, 0.25f, 0.5f), true));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+        }
+
+        VisualizerImpl reopened(projectOptions());
+        ASSERT_NE(open(reopened), lfs::core::NULL_NODE);
+        const auto* const restored = reopened.getScene().getNode(cropbox_name);
+        ASSERT_NE(restored, nullptr);
+        ASSERT_NE(restored->cropbox, nullptr);
+        EXPECT_EQ(restored->cropbox->min, glm::vec3(-0.75f, -0.5f, -0.25f));
+        EXPECT_EQ(restored->cropbox->max, glm::vec3(0.125f, 0.25f, 0.5f));
+        EXPECT_TRUE(restored->cropbox->inverse);
+    }
+
+    TEST_F(CropVolumeSourceTest, EllipsoidEditsKeepSourceAndRoundTrip) {
+        std::string ellipsoid_name;
+        glm::mat4 edited_transform{1.0f};
+        {
+            VisualizerImpl viewer(projectOptions());
+            const auto splat_id = open(viewer);
+            ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+            auto* const manager = viewer.getSceneManager();
+            auto* const rendering = viewer.getRenderingManager();
+            const auto ellipsoid_id = addEllipsoid(viewer.getScene(), splat_id, "volume");
+            ASSERT_NE(ellipsoid_id, lfs::core::NULL_NODE);
+            ellipsoid_name = viewer.getScene().getNodeById(ellipsoid_id)->name;
+            ASSERT_NO_FATAL_FAILURE(save(viewer));
+
+            const auto edit = [&](const glm::vec3& radii) {
+                cap::EllipsoidUpdate update;
+                update.radii = radii;
+                update.has_inverse = true;
+                update.inverse = true;
+                ASSERT_TRUE(cap::updateEllipsoid(*manager, rendering, ellipsoid_id, update));
+            };
+            ASSERT_NO_FATAL_FAILURE(edit(glm::vec3(0.5f, 0.25f, 0.125f)));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+            ASSERT_TRUE(cap::fitEllipsoidToParent(*manager, rendering, ellipsoid_id, false));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+            ASSERT_TRUE(cap::resetEllipsoid(*manager, rendering, ellipsoid_id));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+            ASSERT_NO_FATAL_FAILURE(edit(glm::vec3(0.75f, 0.5f, 0.25f)));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+            edited_transform = viewer.getScene().getNodeById(ellipsoid_id)->local_transform.get();
+        }
+
+        VisualizerImpl reopened(projectOptions());
+        ASSERT_NE(open(reopened), lfs::core::NULL_NODE);
+        const auto* const restored = reopened.getScene().getNode(ellipsoid_name);
+        ASSERT_NE(restored, nullptr);
+        ASSERT_NE(restored->ellipsoid, nullptr);
+        EXPECT_EQ(restored->ellipsoid->radii, glm::vec3(0.75f, 0.5f, 0.25f));
+        EXPECT_TRUE(restored->ellipsoid->inverse);
+        EXPECT_EQ(restored->local_transform.get(), edited_transform);
+    }
+
+    TEST_F(CropVolumeSourceTest, CropBoxUndoRedoMarksProjectModified) {
+        VisualizerImpl viewer(projectOptions());
+        const auto splat_id = open(viewer);
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        auto* const manager = viewer.getSceneManager();
+        const auto cropbox_id = cap::ensureCropBox(*manager, viewer.getRenderingManager(), splat_id);
+        ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+        const auto original = *viewer.getScene().getNodeById(*cropbox_id)->cropbox;
+        cap::CropBoxUpdate update;
+        update.min_bounds = glm::vec3(-0.5f);
+        update.max_bounds = glm::vec3(0.25f);
+        ASSERT_TRUE(cap::updateCropBox(*manager, viewer.getRenderingManager(), *cropbox_id, update));
+        ASSERT_NO_FATAL_FAILURE(save(viewer));
+
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_EQ(viewer.getScene().getNodeById(*cropbox_id)->cropbox->min, original.min);
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+        ASSERT_TRUE(op::undoHistory().redo().success);
+        EXPECT_EQ(viewer.getScene().getNodeById(*cropbox_id)->cropbox->min, glm::vec3(-0.5f));
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+    }
+
+    // Adding an ellipsoid, converting it to a box, undoing and redoing the conversion,
+    // and removing the duplicate volume of the other shape all change scene state only.
+    TEST_F(CropVolumeSourceTest, CropVolumeAddConvertUndoAndRemoveKeepSource) {
+        VisualizerImpl viewer(projectOptions());
+        const auto splat_id = open(viewer);
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        auto* const manager = viewer.getSceneManager();
+        auto* const rendering = viewer.getRenderingManager();
+        auto& scene = viewer.getScene();
+
+        const auto volume_id = cap::ensureEllipsoid(*manager, rendering, splat_id);
+        ASSERT_TRUE(volume_id) << volume_id.error();
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+        ASSERT_TRUE(cap::ensureCropBox(*manager, rendering, splat_id));
+        ASSERT_EQ(scene.getNodeById(*volume_id)->type, lfs::core::NodeType::CROPBOX);
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        ASSERT_EQ(scene.getNodeById(*volume_id)->type, lfs::core::NodeType::ELLIPSOID);
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+        ASSERT_TRUE(op::undoHistory().redo().success);
+        ASSERT_EQ(scene.getNodeById(*volume_id)->type, lfs::core::NodeType::CROPBOX);
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+
+        ASSERT_NE(addEllipsoid(scene, splat_id, "duplicate"), lfs::core::NULL_NODE);
+        ASSERT_NO_FATAL_FAILURE(save(viewer));
+        ASSERT_TRUE(cap::ensureCropBox(*manager, rendering, splat_id));
+        ASSERT_EQ(scene.getEllipsoidForSplat(splat_id), lfs::core::NULL_NODE);
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+    }
+
     // Catches tool switches that leave crop mode only while the crop tool is active: undo
     // reselects a crop volume without crop mode, and the transform tool then kept the volume
     // selected and visible instead of switching to its splat.

@@ -1582,16 +1582,17 @@ namespace lfs::vis::op {
                     scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
                 }
                 break;
+            // Crop volumes are scene-graph state and leave the splat payload clean.
             case lfs::core::NodeType::CROPBOX:
                 if (snapshot.cropbox) {
                     node.cropbox = std::make_unique<lfs::core::CropBoxData>(*snapshot.cropbox);
-                    scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+                    scene.notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
                 }
                 break;
             case lfs::core::NodeType::ELLIPSOID:
                 if (snapshot.ellipsoid) {
                     node.ellipsoid = std::make_unique<lfs::core::EllipsoidData>(*snapshot.ellipsoid);
-                    scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+                    scene.notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
                 }
                 break;
             case lfs::core::NodeType::CAMERA:
@@ -3118,6 +3119,7 @@ namespace lfs::vis::op {
                 "Cannot replay crop-box history after its node changed");
         }
         *node->cropbox = before_;
+        scene_.getScene().notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
         scene_.setNodeTransform(
             node->name, transform_before_);
         scene_.setNodeVisibility(
@@ -3145,6 +3147,7 @@ namespace lfs::vis::op {
                 "Cannot replay crop-box history after its node changed");
         }
         *node->cropbox = after_;
+        scene_.getScene().notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
         scene_.setNodeTransform(
             node->name, transform_after_);
         scene_.setNodeVisibility(
@@ -3233,6 +3236,7 @@ namespace lfs::vis::op {
                 "Cannot replay ellipsoid history after its node changed");
         }
         *node->ellipsoid = before_;
+        scene_.getScene().notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
         scene_.setNodeTransform(
             node->name, transform_before_);
         scene_.setNodeVisibility(
@@ -3260,6 +3264,7 @@ namespace lfs::vis::op {
                 "Cannot replay ellipsoid history after its node changed");
         }
         *node->ellipsoid = after_;
+        scene_.getScene().notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
         scene_.setNodeTransform(
             node->name, transform_after_);
         scene_.setNodeVisibility(
