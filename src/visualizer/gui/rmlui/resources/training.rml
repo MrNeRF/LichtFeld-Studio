@@ -414,6 +414,31 @@
             <span class="prop-label">{{label_use_16bit_color}}</span>
             <input type="checkbox" data-checked="use_16bit_color" />
           </div>
+          <div class="setting-row" data-tooltip="training.tooltip.sharpen_kernel" data-if="!pv_search_active">
+            <span class="prop-label">{{label_sharpen}}</span>
+            <select data-value="sharpen_kernel">
+              <option value="usm">{{label_sharpen_usm}}</option>
+              <option value="laplacian4">{{label_sharpen_laplacian4}}</option>
+              <option value="laplacian8">{{label_sharpen_laplacian8}}</option>
+            </select>
+          </div>
+          <div class="sharpen-settings-group" data-if="!pv_search_active">
+            <div class="setting-row" data-tooltip="training.tooltip.sharpen_amount">
+              <span class="prop-label">{{label_sharpen_amount}}</span>
+              <input type="range" class="setting-slider" data-value="sharpen_amount" min="0" max="5" step="0.05" />
+              <span class="slider-value">{{sharpen_amount | format_float(2)}}</span>
+            </div>
+            <div class="setting-row" data-tooltip="training.tooltip.sharpen_radius" data-if="sharpen_uses_radius">
+              <span class="prop-label">{{label_sharpen_radius}}</span>
+              <input type="range" class="setting-slider" data-value="sharpen_radius" min="0.3" max="10" step="0.1" />
+              <span class="slider-value">{{sharpen_radius | format_float(1)}}</span>
+            </div>
+            <div class="setting-row" data-tooltip="training.tooltip.sharpen_threshold">
+              <span class="prop-label">{{label_sharpen_threshold}}</span>
+              <input type="range" class="setting-slider" data-value="sharpen_threshold" min="0" max="1" step="0.005" />
+              <span class="slider-value">{{sharpen_threshold | format_float(3)}}</span>
+            </div>
+          </div>
           <div class="setting-row" data-tooltip="training.tooltip.dataset_output" data-if="!pv_search_active">
             <span class="prop-label">{{label_dataset_output}}</span>
             <span class="text-disabled">{{dataset_output_display}}</span>

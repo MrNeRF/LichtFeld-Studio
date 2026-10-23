@@ -15,6 +15,7 @@
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "cuda/image_format_kernels.cuh"
+#include "cuda/image_sharpen.hpp"
 #include "cuda/masked_image_fill.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/nvcodec_image_loader.hpp"
@@ -32,6 +33,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <format>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -436,7 +438,8 @@ namespace lfs::io {
         }
 
         [[nodiscard]] bool load_params_need_processing(const LoadParams& params) {
-            return params.resize_factor > 1 || params.max_width > 0 || params.undistort != nullptr;
+            return params.resize_factor > 1 || params.max_width > 0 || params.undistort != nullptr ||
+                   params.sharpen.enabled();
         }
 
         [[nodiscard]] bool decodes_float(const std::filesystem::path& path, const LoadParams& params) {
@@ -580,6 +583,24 @@ namespace lfs::io {
                 throw std::runtime_error(std::string("undistortion failed: ") + cudaGetErrorString(status));
         }
 
+        // Runs after resize and undistortion so caches store the sharpened image.
+        void apply_requested_sharpen(lfs::core::Tensor& tensor, const LoadParams& params) {
+            if (params.sharpen.enabled())
+                tensor = sharpen_image(tensor, params.sharpen, !params.decode_float,
+                                       static_cast<cudaStream_t>(params.cuda_stream));
+        }
+
+        // Radius only changes the usm result.
+        std::string sharpen_cache_suffix(const lfs::core::SharpenParams& sharpen) {
+            if (!sharpen.enabled())
+                return {};
+            auto suffix = std::format("_sharpen_{}_a{}_t{}", lfs::core::sharpen_kernel_name(sharpen.kernel),
+                                      sharpen.amount, sharpen.threshold);
+            if (sharpen.kernel == lfs::core::SharpenKernel::Usm)
+                suffix += std::format("_r{}", sharpen.radius);
+            return suffix;
+        }
+
         lfs::core::Tensor process_mask(lfs::core::Tensor mask, const float threshold) {
             if (!mask.is_valid())
                 return {};
@@ -645,8 +666,10 @@ namespace lfs::io {
             if (!tensor.is_valid() || tensor.numel() == 0)
                 return {};
 
-            if (apply_processing)
+            if (apply_processing) {
                 apply_requested_undistort(tensor, params);
+                apply_requested_sharpen(tensor, params);
+            }
 
             return tensor;
         }
@@ -1291,6 +1314,7 @@ namespace lfs::io {
         }
 
         apply_requested_undistort(decoded, params);
+        apply_requested_sharpen(decoded, params);
         return decoded;
     }
 
@@ -1358,14 +1382,14 @@ namespace lfs::io {
                 << undistort_cache_hash(params, decodes_16bit(params), 0x726762ULL);
             if (params.decode_float)
                 key << "_f32";
-            return key.str();
+            return key.str() + sharpen_cache_suffix(params.sharpen);
         }
         auto key = lfs::core::path_to_utf8(path) + ":rf" + std::to_string(params.resize_factor) + "_mw" + std::to_string(params.max_width);
         if (decodes_16bit(params))
             key += "_16b";
         if (params.decode_float)
             key += "_f32";
-        return key;
+        return key + sharpen_cache_suffix(params.sharpen);
     }
 
     std::string PipelinedImageLoader::make_mask_cache_key(
@@ -2880,6 +2904,7 @@ namespace lfs::io {
 
                             if (decode_from_base_cache) {
                                 apply_requested_undistort(tensor, batch[i].params);
+                                apply_requested_sharpen(tensor, batch[i].params);
                                 write_derived_cache(*nvcodec, tensor, batch[i].cache_key,
                                                     batch[i].params.cuda_stream, batch[i].params);
                             }
@@ -3038,6 +3063,7 @@ namespace lfs::io {
                         const UndistortSlotGuard slot;
                         alpha = lfs::core::undistort_mask_area(alpha, scaled, nullptr);
                     }
+                    apply_requested_sharpen(rgb, item.params);
 
                     // Later epochs read alpha back from its 16-bit cache: put the first load on the same grid.
                     {
@@ -3481,6 +3507,7 @@ namespace lfs::io {
                     }
 
                     apply_requested_undistort(decoded, item.params);
+                    apply_requested_sharpen(decoded, item.params);
 
                     if (is_nvcodec_available()) {
                         write_derived_cache(*nvcodec, decoded, item.cache_key, nullptr, item.params);
@@ -3505,6 +3532,7 @@ namespace lfs::io {
                     try {
                         auto decoded = decode_file_on_cpu(item.path, item.params);
                         apply_requested_undistort(decoded, item.params);
+                        apply_requested_sharpen(decoded, item.params);
                         {
                             std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
                             if (auto it = pending_pairs_.find(item.sequence_id);

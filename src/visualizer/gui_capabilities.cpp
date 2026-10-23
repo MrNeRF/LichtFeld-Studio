@@ -206,7 +206,8 @@ namespace lfs::vis::cap {
                 node->ellipsoid = std::move(data);
             }
 
-            scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+            // The volume is replaced by one of the other shape; no Gaussian changes.
+            scene.notifyMutation(core::Scene::MutationType::NODE_ADDED);
             if (rendering_manager)
                 rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
             sync_crop_volume_render_settings(rendering_manager, *node, target_shape);
@@ -241,7 +242,6 @@ namespace lfs::vis::cap {
                 vis::op::SceneGraphPatchEntry::captureState(scene_manager, {keep_name, remove_name}, history_options);
 
             scene.removeNode(remove_name, false);
-            scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
             if (rendering_manager)
                 rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
 
@@ -1111,8 +1111,11 @@ namespace lfs::vis::cap {
 
             const glm::mat4 local_transform = node->local_transform.get();
             if (node->model) {
-                if (auto result = bakeSplatTransformPreservingStorage(*node->model, local_transform); !result)
+                if (auto result = bakeSplatTransformPreservingStorage(*node->model, local_transform); !result) {
+                    // Earlier nodes, or part of this one, may already hold baked values.
+                    scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
                     return std::unexpected(std::string(result.error().user_message()));
+                }
             } else if (node->point_cloud) {
                 bake_point_cloud_transform(*node->point_cloud, local_transform);
             } else if (node->mesh) {
@@ -1495,6 +1498,9 @@ namespace lfs::vis::cap {
             scene.setCropBoxData(cropbox_id, updated_data);
         if (transform_changed)
             scene_manager.setNodeTransform(cropbox_node->name, composeTransform(updated_components));
+        // Crop box data is scene-graph state; a data-only edit must still mark the project modified.
+        if (cropbox_changed)
+            scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
 
         if (rendering_manager && (cropbox_changed || transform_changed))
             rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
@@ -1562,6 +1568,7 @@ namespace lfs::vis::cap {
         updated_data.max = half_size;
         scene.setCropBoxData(cropbox_id, updated_data);
         scene.setNodeTransform(cropbox_node->name, glm::translate(glm::mat4(1.0f), center));
+        scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
 
         if (rendering_manager) {
             auto settings = rendering_manager->getSettings();
@@ -1598,6 +1605,7 @@ namespace lfs::vis::cap {
         reset_data.enabled = before_data.enabled;
         scene.setCropBoxData(cropbox_id, reset_data);
         scene.setNodeTransform(cropbox_node->name, glm::mat4(1.0f));
+        scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
 
         if (rendering_manager) {
             auto settings = rendering_manager->getSettings();
@@ -1773,7 +1781,8 @@ namespace lfs::vis::cap {
             rendering_manager->updateSettings(settings);
         }
 
-        scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        // Announce the new volume again now that its radii and transform are set.
+        scene.notifyMutation(core::Scene::MutationType::NODE_ADDED);
         vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
             scene_manager,
             "Add Ellipsoid",
@@ -1855,7 +1864,7 @@ namespace lfs::vis::cap {
         }
 
         if (ellipsoid_changed)
-            scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+            scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
 
         if (ellipsoid_changed || transform_changed || visibility_changed) {
             auto entry = std::make_unique<vis::op::EllipsoidUndoEntry>(
@@ -1912,7 +1921,7 @@ namespace lfs::vis::cap {
             rendering_manager->updateSettings(settings, vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
         }
 
-        scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
 
         auto entry = std::make_unique<vis::op::EllipsoidUndoEntry>(
             scene_manager, rendering_manager, ellipsoid_node->name, before_data, before_transform,
@@ -1949,7 +1958,7 @@ namespace lfs::vis::cap {
             rendering_manager->updateSettings(settings, vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
         }
 
-        scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
 
         auto entry = std::make_unique<vis::op::EllipsoidUndoEntry>(
             scene_manager, rendering_manager, ellipsoid_node->name, before_data, before_transform,

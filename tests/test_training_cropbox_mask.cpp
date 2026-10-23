@@ -49,12 +49,24 @@ namespace {
             1.0f);
     }
 
-    std::unique_ptr<lfs::core::SplatData> make_crop_test_splat() {
+    std::unique_ptr<lfs::core::SplatData> make_crop_test_splat(
+        const lfs::core::Device device = lfs::core::Device::CPU) {
         return make_test_splat({10.0f, 0.0f, 0.0f,
                                 10.75f, 0.0f, 0.0f,
                                 9.25f, 0.0f, 0.0f,
                                 0.0f, 0.0f, 0.0f,
-                                12.0f, 0.0f, 0.0f});
+                                12.0f, 0.0f, 0.0f},
+                               device);
+    }
+
+    // The unit box around x = 10 in the model frame, as add_training_model_with_translated_cropbox places it.
+    lfs::training::TrainingCropBoxGeometry translated_cropbox_geometry(const bool inverse) {
+        const glm::mat4 model_to_cropbox = glm::translate(glm::mat4(1.0f), glm::vec3(-10.0f, 0.0f, 0.0f));
+        return {.min = glm::vec3(-1.0f),
+                .max = glm::vec3(1.0f),
+                .world_to_cropbox = model_to_cropbox,
+                .model_to_cropbox = model_to_cropbox,
+                .inverse = inverse};
     }
 
     lfs::core::SplatData* add_training_model_with_translated_cropbox(
@@ -485,4 +497,51 @@ TEST(TrainingCropBoxMask, ModelCornersUndoTheCropBoxTransform) {
         for (size_t axis = 0; axis < 3; ++axis)
             EXPECT_NEAR(corners[index][axis], point[axis], 1e-5f) << "corner " << index << " axis " << axis;
     }
+}
+
+// Catches an export crop that keeps the rows it should remove or changes the model it copies.
+TEST(TrainingCropBoxMask, ExportCopyHoldsOnlyTheCroppedRowsAndLeavesTheModelWhole) {
+    for (const bool inverse : {false, true}) {
+        SCOPED_TRACE(inverse ? "inverse" : "normal");
+        auto model = make_crop_test_splat(lfs::core::Device::CUDA);
+        const auto means_before = model->means().to(lfs::core::Device::CPU).to_vector();
+
+        const auto copy = lfs::training::crop_copy_to_training_cropbox(*model, translated_cropbox_geometry(inverse));
+
+        ASSERT_TRUE(copy.has_value());
+        EXPECT_EQ(copy->means().to(lfs::core::Device::CPU).to_vector(),
+                  inverse ? (std::vector<float>{0.0f, 0.0f, 0.0f, 12.0f, 0.0f, 0.0f})
+                          : (std::vector<float>{10.0f, 0.0f, 0.0f, 10.75f, 0.0f, 0.0f, 9.25f, 0.0f, 0.0f}));
+        EXPECT_EQ(static_cast<size_t>(model->size()), kCropTestCount);
+        EXPECT_EQ(model->means().to(lfs::core::Device::CPU).to_vector(), means_before);
+    }
+}
+
+// Catches soft-deleted rows coming back in a cropped export.
+TEST(TrainingCropBoxMask, ExportCopyLeavesOutSoftDeletedRows) {
+    auto model = make_crop_test_splat(lfs::core::Device::CUDA);
+    model->deleted() = lfs::core::Tensor::from_vector(
+        std::vector<bool>{false, true, false, false, false},
+        {kCropTestCount},
+        lfs::core::Device::CUDA);
+
+    const auto copy = lfs::training::crop_copy_to_training_cropbox(*model, translated_cropbox_geometry(false));
+
+    ASSERT_TRUE(copy.has_value());
+    EXPECT_EQ(copy->means().to(lfs::core::Device::CPU).to_vector(),
+              (std::vector<float>{10.0f, 0.0f, 0.0f, 9.25f, 0.0f, 0.0f}));
+}
+
+// Catches an export copy made although no live row lies outside the box, as after a completed run.
+TEST(TrainingCropBoxMask, ExportCopyIsSkippedWhenNoLiveRowLiesOutsideTheBox) {
+    auto inside = make_test_splat({10.0f, 0.0f, 0.0f, 10.5f, 0.5f, -0.5f}, lfs::core::Device::CUDA);
+    EXPECT_FALSE(lfs::training::crop_copy_to_training_cropbox(*inside, translated_cropbox_geometry(false)));
+
+    // MCMC crops by soft-deleting the rows outside the box.
+    auto soft_cropped = make_crop_test_splat(lfs::core::Device::CUDA);
+    soft_cropped->deleted() = lfs::core::Tensor::from_vector(
+        std::vector<bool>{false, false, false, true, true},
+        {kCropTestCount},
+        lfs::core::Device::CUDA);
+    EXPECT_FALSE(lfs::training::crop_copy_to_training_cropbox(*soft_cropped, translated_cropbox_geometry(false)));
 }

@@ -187,6 +187,10 @@ class Action(enum.Enum):
 
     PREVIOUS_SIDEBAR_CATEGORY = 93
 
+    REMOVE_LAST_POINT = 94
+
+    APPLY_ALIGNMENT = 95
+
     UNGROUP_SELECTED_SCENE_NODE = 86
 
 class ToolMode(enum.Enum):

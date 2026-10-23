@@ -6,6 +6,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "core/image_sharpen.hpp"
 #include "core/mesh2splat.hpp"
 #include "core/path_utils.hpp"
 
@@ -261,8 +262,8 @@ namespace lfs::core {
             // With an active crop box: share of new splats placed inside it (0..1). 0 = auto: growth
             // follows the ROI-weighted error with no fixed split.
             float cropbox_growth_inside = 0.0f;
-            // With an active crop box: when training ends, the splats outside it are removed, so the saved
-            // project and every export hold only the region of interest.
+            // With an active crop box: the splats outside it are removed when training completes and left out
+            // of every export. A stopped run keeps them so it can resume.
             bool crop_to_cropbox = false;
             float lambda_dssim = 0.2f;
             float min_opacity = 0.005f;
@@ -484,6 +485,8 @@ namespace lfs::core {
             bool print_cache_status = true;
             int print_status_freq_num = 500; // every print_status_freq_num calls for load print cache status
             bool use_16bit_color = false;
+            // Training images only; evaluation and the GT view load the photos unchanged.
+            SharpenParams sharpen;
             nlohmann::json to_json() const;
             static LoadingParams from_json(const nlohmann::json& j);
         };

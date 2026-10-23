@@ -14,11 +14,13 @@
 #include <gtest/gtest.h>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <set>
 #include <sstream>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -3087,6 +3089,147 @@ namespace {
         EXPECT_EQ(files, (std::vector<std::string>{"scene.licht", "scene.ply"}));
 
         std::filesystem::remove_all(output_path, ec);
+    }
+
+    // A box over the lower half of the training model along x: cropping to it keeps some splats and removes others.
+    void add_half_training_cropbox(lfs::core::Scene& scene) {
+        const auto* const node = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
+        ASSERT_NE(node, nullptr);
+        const auto means = node->model->means().to(lfs::core::Device::CPU).to_vector();
+        ASSERT_GE(means.size(), size_t{6});
+        glm::vec3 lo(std::numeric_limits<float>::max());
+        glm::vec3 hi(std::numeric_limits<float>::lowest());
+        std::vector<float> xs;
+        for (size_t i = 0; i + 2 < means.size(); i += 3) {
+            const glm::vec3 mean(means[i], means[i + 1], means[i + 2]);
+            lo = glm::min(lo, mean);
+            hi = glm::max(hi, mean);
+            xs.push_back(mean.x);
+        }
+        std::ranges::nth_element(xs, xs.begin() + xs.size() / 2);
+        const auto cropbox_id = scene.addCropBox("Model_cropbox", node->id);
+        ASSERT_NE(cropbox_id, lfs::core::NULL_NODE);
+        lfs::core::CropBoxData box;
+        box.min = lo - 1.0f;
+        box.max = {xs[xs.size() / 2], hi.y + 1.0f, hi.z + 1.0f};
+        box.enabled = true;
+        scene.setCropBoxData(cropbox_id, box);
+        scene.setNodeTransform(cropbox_id, glm::mat4{1.0f});
+    }
+
+    size_t ply_vertex_count(const std::filesystem::path& path) {
+        std::ifstream in(path, std::ios::binary);
+        constexpr std::string_view prefix = "element vertex ";
+        for (std::string line; std::getline(in, line) && line != "end_header";) {
+            if (line.starts_with(prefix))
+                return std::stoull(line.substr(prefix.size()));
+        }
+        return 0;
+    }
+
+    // Catches --crop cropping a stopped run, which then resumes without the splats outside the box, or no longer
+    // cropping a completed run.
+    TEST_F(ProjectCheckpointTrainerInstall, CropToCropBoxCropsOnlyACompletedRun) {
+        for (const bool stopped : {false, true}) {
+            SCOPED_TRACE(stopped ? "stopped" : "completed");
+            const auto output_path = std::filesystem::temp_directory_path() / "lfs_test_crop_on_completion";
+            std::error_code ec;
+            std::filesystem::remove_all(output_path, ec);
+            std::filesystem::create_directories(output_path);
+
+            auto params = make_tiny_headless_params(output_path, 4);
+            params.optimization.crop_to_cropbox = true;
+
+            lfs::core::Scene scene;
+            ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+            ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+            ASSERT_NO_FATAL_FAILURE(add_half_training_cropbox(scene));
+            const size_t initial = scene.getTrainingModel()->visible_count();
+            auto trainer = std::make_unique<lfs::training::Trainer>(scene);
+            ASSERT_TRUE(trainer->initialize(params));
+            lfs::training::grant_headless_project_saves(*trainer, params);
+            std::stop_source stop;
+            if (stopped) {
+                trainer->setOnIterationStart([&] {
+                    if (trainer->get_current_iteration() >= 2)
+                        stop.request_stop();
+                });
+            }
+            auto train = trainer->train(stop.get_token());
+            ASSERT_TRUE(train) << lfs::format_for_developer(train.error());
+
+            // MCMC removes splats by soft-deleting them, so count the live ones.
+            const auto& model = trainer->get_strategy().get_model();
+            const size_t trained = model.visible_count();
+            const auto outside = lfs::training::compute_training_cropbox_remove_mask(scene, model);
+            ASSERT_TRUE(outside);
+            if (stopped) {
+                EXPECT_EQ(trained, initial);
+                EXPECT_GT(outside->sum_scalar(), 0);
+            } else {
+                EXPECT_LT(trained, initial);
+                EXPECT_EQ(outside->sum_scalar(), 0);
+            }
+            trainer->shutdown();
+
+            // The terminal save holds the model as the run left it.
+            auto document = lfs::io::project::ProjectDocument::open(output_path / "project.licht");
+            ASSERT_TRUE(document) << lfs::format_for_developer(document.error());
+            lfs::core::Scene restored;
+            const auto hydration = document->hydrate(restored);
+            ASSERT_TRUE(hydration) << lfs::format_for_developer(hydration.error());
+            ASSERT_NE(restored.getTrainingModel(), nullptr);
+            EXPECT_EQ(static_cast<size_t>(restored.getTrainingModel()->visible_count()), trained);
+
+            std::filesystem::remove_all(output_path, ec);
+        }
+    }
+
+    // Catches a --crop export of a stopped run holding the splats outside the crop box, or cropping the model itself.
+    TEST_F(ProjectCheckpointTrainerInstall, CropExportOfAStoppedRunHoldsOnlyTheCropBox) {
+        for (const bool crop : {true, false}) {
+            SCOPED_TRACE(crop ? "--crop" : "without --crop");
+            const auto output_path = std::filesystem::temp_directory_path() / "lfs_test_crop_export";
+            std::error_code ec;
+            std::filesystem::remove_all(output_path, ec);
+            std::filesystem::create_directories(output_path);
+
+            auto params = make_tiny_headless_params(output_path, 4);
+            params.optimization.crop_to_cropbox = crop;
+            params.dataset.output_name = "scene";
+            params.export_formats = {lfs::core::param::OutputFormat::PLY};
+
+            lfs::core::Scene scene;
+            ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+            ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+            ASSERT_NO_FATAL_FAILURE(add_half_training_cropbox(scene));
+            auto trainer = std::make_unique<lfs::training::Trainer>(scene);
+            ASSERT_TRUE(trainer->initialize(params));
+            lfs::training::grant_headless_project_saves(*trainer, params);
+            std::stop_source stop;
+            trainer->setOnIterationStart([&] {
+                if (trainer->get_current_iteration() >= 2)
+                    stop.request_stop();
+            });
+            auto train = trainer->train(stop.get_token());
+            ASSERT_TRUE(train) << lfs::format_for_developer(train.error());
+
+            const auto& model = trainer->get_strategy().get_model();
+            const size_t trained = model.visible_count();
+            const auto outside = lfs::training::compute_training_cropbox_remove_mask(scene, model);
+            ASSERT_TRUE(outside);
+            const auto removed = static_cast<size_t>(outside->sum_scalar());
+            ASSERT_GT(removed, size_t{0});
+            ASSERT_LT(removed, trained);
+
+            auto exported = lfs::training::export_final_splats(*trainer, params);
+            ASSERT_TRUE(exported) << lfs::format_for_developer(exported.error());
+            EXPECT_EQ(static_cast<size_t>(model.visible_count()), trained);
+            EXPECT_EQ(ply_vertex_count(output_path / "scene.ply"), crop ? trained - removed : trained);
+            trainer->shutdown();
+
+            std::filesystem::remove_all(output_path, ec);
+        }
     }
 
     TEST_F(ProjectCheckpointTrainerInstall,

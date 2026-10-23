@@ -242,7 +242,14 @@ directory containing a `.licht` project is retained. Legacy keys are then
 removed. The migration does not perform a write probe.
 
 Untitled crash files and untitled training snapshots live in
-`<root>/tmp/<session-uuid>.licht`, not under `dataset.output_path`.
+`<project location>/.lichtfeld-tmp/<session-uuid>.licht` when a custom project
+location is set and passes the write probe, otherwise in
+`<root>/tmp/<session-uuid>.licht`; never under `dataset.output_path`. The probe
+runs on a worker when an untitled session starts, so a slow or disconnected share
+never blocks the UI; a session whose first autosave comes before the probe answers
+stays in `<root>/tmp`. A running session keeps its folder when the preference
+changes. `.lichtfeld-tmp` is marked hidden on Windows. Startup recovery and
+cleanup scan both folders, and the cleanup runs on a worker.
 An explicit CLI `-o` / `--output-path` is different: training binds a titled
 `<output_path>/project.licht` instead of the untitled temp file. The temp
 directory is created lazily on first scratch write. The project location

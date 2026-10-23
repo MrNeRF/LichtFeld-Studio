@@ -39,7 +39,8 @@
     color: @{text_dim};
 }
 
-.mask-settings-group {
+.mask-settings-group,
+.sharpen-settings-group {
     border-left-color: @{panel.primary_accent};
 }
 

@@ -224,9 +224,10 @@ namespace lfs::core {
                 scene_->notifyMutation(Scene::MutationType::VISIBILITY_CHANGED);
             }
         });
+        // Locking is scene-graph state; MODEL_CHANGED would mark the splat payload dirty.
         locked.setCallback([this] {
             if (scene_) {
-                scene_->notifyMutation(Scene::MutationType::MODEL_CHANGED);
+                scene_->notifyMutation(Scene::MutationType::TRANSFORM_CHANGED);
             }
         });
     }

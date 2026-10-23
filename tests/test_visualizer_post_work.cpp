@@ -15,8 +15,10 @@
 #include "core/logger.hpp"
 #include "core/main_loop.hpp"
 #include "core/mesh_data.hpp"
+#include "core/native_fs.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/resource_messages.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/user_paths.hpp"
@@ -96,6 +98,7 @@
 #include <set>
 #include <span>
 #include <sstream>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -2702,6 +2705,285 @@ contract["check_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(live_splats(), splats_before);
         EXPECT_NE(scene.getNode("target_cropbox"), nullptr);
         lfs::vis::UnifiedToolRegistry::instance().setActiveTool("");
+    }
+
+    // Crop volumes are scene-graph state. Every edit must mark the project modified
+    // without marking the splat payload dirty: that replaced the PLY's embedded source
+    // bytes by a capture of the whole model on the next save.
+    class CropVolumeSourceTest : public VisualizerImplResetTest {
+    protected:
+        struct SavedSplatPayload {
+            std::string binding;
+            std::uint64_t offset = 0;
+        };
+
+        void SetUp() override {
+            VisualizerImplResetTest::SetUp();
+            if (!cuda_device_available()) {
+                GTEST_SKIP() << "CUDA device unavailable";
+            }
+            std::filesystem::copy_file(
+                std::filesystem::path(PROJECT_ROOT_PATH) / "tests" / "data" / "portable-ply.licht", path_);
+            ASSERT_EQ(savedSplatPayload().binding, "DSRC/ply");
+        }
+
+        [[nodiscard]] SavedSplatPayload savedSplatPayload() const {
+            namespace pj = lfs::io::project;
+            const auto document = lfs::test::licht::require_result_ptr(pj::ProjectDocument::open(path_));
+            const auto reader = lfs::test::licht::require_result(pj::ProjectReader::open(path_));
+            for (const auto& record : lfs::test::licht::require_result(document->scene_graph().nodes())) {
+                if (record.type != "splat" || !record.payload)
+                    continue;
+                const auto* row = reader.find(record.payload->fourcc == "DSRC" ? pj::FOURCC_DSRC : pj::FOURCC_SPLT,
+                                              record.payload->instance_uuid);
+                return {record.payload->fourcc + "/" + record.payload->source_kind, row ? row->payload_offset : 0};
+            }
+            return {};
+        }
+
+        [[nodiscard]] lfs::core::NodeId open(VisualizerImpl& viewer) {
+            if (!viewer.getParameterManager()->ensureLoaded() ||
+                !viewer.projectOpen(path_, ProjectSwitchDisposition::DiscardChanges) ||
+                !waitUntil([&] {
+                    viewer.pumpPostedWorkForProjectWrite();
+                    const auto info = viewer.projectGetInfo();
+                    return info && info->hydration_state == "complete";
+                })) {
+                return lfs::core::NULL_NODE;
+            }
+            for (const auto* node : viewer.getScene().getNodes()) {
+                if (node->type == lfs::core::NodeType::SPLAT)
+                    return node->id;
+            }
+            return lfs::core::NULL_NODE;
+        }
+
+        void save(VisualizerImpl& viewer) {
+            lfs::test::licht::require_status(viewer.projectSave(false));
+            ASSERT_TRUE(waitUntil([&] {
+                viewer.pumpPostedWorkForProjectWrite();
+                return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+            }));
+            ASSERT_FALSE(viewer.projectGetInfo()->dirty);
+        }
+
+        // The edit marked the project modified, and saving it kept the PLY source
+        // binding without rewriting the splat payload.
+        void expectSavedAsSceneState(VisualizerImpl& viewer) {
+            EXPECT_TRUE(viewer.projectGetInfo()->dirty);
+            const auto before = savedSplatPayload();
+            ASSERT_NO_FATAL_FAILURE(save(viewer));
+            const auto after = savedSplatPayload();
+            EXPECT_EQ(after.binding, "DSRC/ply");
+            EXPECT_EQ(after.offset, before.offset) << "the save rewrote the splat payload";
+        }
+
+        // A raw scene volume, sized like the capabilities do: the fixture's splats are
+        // flat, and a zero radius cannot be saved.
+        [[nodiscard]] static lfs::core::NodeId addEllipsoid(lfs::core::Scene& scene, const lfs::core::NodeId parent,
+                                                            const std::string& name) {
+            const auto id = scene.addEllipsoid(name, parent);
+            if (id != lfs::core::NULL_NODE) {
+                auto data = *scene.getEllipsoidData(id);
+                data.radii = glm::vec3(1.0f);
+                scene.setEllipsoidData(id, data);
+            }
+            return id;
+        }
+
+        std::filesystem::path path_ = temporary_.path / "crop-volume-ply-source.licht";
+    };
+
+    TEST_F(CropVolumeSourceTest, GizmoEditsAreSavedAsSceneState) {
+        std::string cropbox_name;
+        lfs::core::CropBoxData edited;
+        glm::mat4 edited_transform{1.0f};
+        {
+            VisualizerImpl viewer(projectOptions());
+            const auto splat_id = open(viewer);
+            ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+            auto* const manager = viewer.getSceneManager();
+            const auto cropbox_id = cap::ensureCropBox(*manager, viewer.getRenderingManager(), splat_id);
+            ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+            cropbox_name = viewer.getScene().getNodeById(*cropbox_id)->name;
+            manager->selectNode(splat_id);
+            auto& gizmo = viewer.getGuiManager()->gizmo();
+            gizmo.setCropToolShape("box");
+            struct ActiveToolReset {
+                ~ActiveToolReset() { UnifiedToolRegistry::instance().setActiveTool(""); }
+            } active_tool_reset;
+            UnifiedToolRegistry::instance().setActiveTool("builtin.cropbox");
+            ASSERT_NO_FATAL_FAILURE(save(viewer));
+
+            // Resize the box, then move it, committing each edit the way a gizmo drag does.
+            ASSERT_TRUE(gizmo.ensureCropToolStateForRestore());
+            gizmo.crop_tool_box_min_ = glm::vec3(-0.25f, -0.5f, -0.75f);
+            gizmo.crop_tool_box_max_ = glm::vec3(0.5f, 0.25f, 0.125f);
+            ASSERT_TRUE(gizmo.persistActiveCropToolToNode(false));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+
+            ASSERT_TRUE(gizmo.ensureCropToolStateForRestore());
+            gizmo.crop_tool_visualizer_transform_ =
+                glm::translate(glm::mat4(1.0f), glm::vec3(0.5f, -0.25f, 1.0f)) *
+                gizmo.crop_tool_visualizer_transform_;
+            ASSERT_TRUE(gizmo.persistActiveCropToolToNode(false));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+
+            const auto* const cropbox = viewer.getScene().getNode(cropbox_name);
+            ASSERT_NE(cropbox, nullptr);
+            EXPECT_EQ(cropbox->cropbox->min, glm::vec3(-0.25f, -0.5f, -0.75f));
+            EXPECT_EQ(cropbox->cropbox->max, glm::vec3(0.5f, 0.25f, 0.125f));
+            EXPECT_NE(cropbox->local_transform.get(), glm::mat4(1.0f));
+            edited = *cropbox->cropbox;
+            edited_transform = cropbox->local_transform.get();
+        }
+
+        VisualizerImpl reopened(projectOptions());
+        ASSERT_NE(open(reopened), lfs::core::NULL_NODE);
+        const auto* const restored = reopened.getScene().getNode(cropbox_name);
+        ASSERT_NE(restored, nullptr);
+        ASSERT_NE(restored->cropbox, nullptr);
+        EXPECT_EQ(restored->cropbox->min, edited.min);
+        EXPECT_EQ(restored->cropbox->max, edited.max);
+        EXPECT_EQ(restored->cropbox->enabled, edited.enabled);
+        EXPECT_EQ(restored->local_transform.get(), edited_transform);
+    }
+
+    // Panel, Python, MCP and the inverse toggle edit crop box data through updateCropBox.
+    TEST_F(CropVolumeSourceTest, CropBoxDataEditsMarkProjectModifiedAndRoundTrip) {
+        std::string cropbox_name;
+        {
+            VisualizerImpl viewer(projectOptions());
+            const auto splat_id = open(viewer);
+            ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+            auto* const manager = viewer.getSceneManager();
+            auto* const rendering = viewer.getRenderingManager();
+            const auto cropbox_id = cap::ensureCropBox(*manager, rendering, splat_id);
+            ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+            cropbox_name = viewer.getScene().getNodeById(*cropbox_id)->name;
+            ASSERT_TRUE(cap::resetCropBox(*manager, rendering, *cropbox_id));
+            ASSERT_NO_FATAL_FAILURE(save(viewer));
+
+            const auto edit = [&](const glm::vec3& min, const glm::vec3& max, const bool inverse) {
+                cap::CropBoxUpdate update;
+                update.min_bounds = min;
+                update.max_bounds = max;
+                update.has_inverse = true;
+                update.inverse = inverse;
+                ASSERT_TRUE(cap::updateCropBox(*manager, rendering, *cropbox_id, update));
+                ASSERT_EQ(viewer.getScene().getNodeById(*cropbox_id)->local_transform.get(), glm::mat4(1.0f));
+            };
+            ASSERT_NO_FATAL_FAILURE(edit(glm::vec3(-0.5f), glm::vec3(0.25f), true));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+            // The transform is already identity, so Reset changes only the box data.
+            ASSERT_TRUE(cap::resetCropBox(*manager, rendering, *cropbox_id));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+            ASSERT_NO_FATAL_FAILURE(edit(glm::vec3(-0.75f, -0.5f, -0.25f), glm::vec3(0.125f, 0.25f, 0.5f), true));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+        }
+
+        VisualizerImpl reopened(projectOptions());
+        ASSERT_NE(open(reopened), lfs::core::NULL_NODE);
+        const auto* const restored = reopened.getScene().getNode(cropbox_name);
+        ASSERT_NE(restored, nullptr);
+        ASSERT_NE(restored->cropbox, nullptr);
+        EXPECT_EQ(restored->cropbox->min, glm::vec3(-0.75f, -0.5f, -0.25f));
+        EXPECT_EQ(restored->cropbox->max, glm::vec3(0.125f, 0.25f, 0.5f));
+        EXPECT_TRUE(restored->cropbox->inverse);
+    }
+
+    TEST_F(CropVolumeSourceTest, EllipsoidEditsKeepSourceAndRoundTrip) {
+        std::string ellipsoid_name;
+        glm::mat4 edited_transform{1.0f};
+        {
+            VisualizerImpl viewer(projectOptions());
+            const auto splat_id = open(viewer);
+            ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+            auto* const manager = viewer.getSceneManager();
+            auto* const rendering = viewer.getRenderingManager();
+            const auto ellipsoid_id = addEllipsoid(viewer.getScene(), splat_id, "volume");
+            ASSERT_NE(ellipsoid_id, lfs::core::NULL_NODE);
+            ellipsoid_name = viewer.getScene().getNodeById(ellipsoid_id)->name;
+            ASSERT_NO_FATAL_FAILURE(save(viewer));
+
+            const auto edit = [&](const glm::vec3& radii) {
+                cap::EllipsoidUpdate update;
+                update.radii = radii;
+                update.has_inverse = true;
+                update.inverse = true;
+                ASSERT_TRUE(cap::updateEllipsoid(*manager, rendering, ellipsoid_id, update));
+            };
+            ASSERT_NO_FATAL_FAILURE(edit(glm::vec3(0.5f, 0.25f, 0.125f)));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+            ASSERT_TRUE(cap::fitEllipsoidToParent(*manager, rendering, ellipsoid_id, false));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+            ASSERT_TRUE(cap::resetEllipsoid(*manager, rendering, ellipsoid_id));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+            ASSERT_NO_FATAL_FAILURE(edit(glm::vec3(0.75f, 0.5f, 0.25f)));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+            edited_transform = viewer.getScene().getNodeById(ellipsoid_id)->local_transform.get();
+        }
+
+        VisualizerImpl reopened(projectOptions());
+        ASSERT_NE(open(reopened), lfs::core::NULL_NODE);
+        const auto* const restored = reopened.getScene().getNode(ellipsoid_name);
+        ASSERT_NE(restored, nullptr);
+        ASSERT_NE(restored->ellipsoid, nullptr);
+        EXPECT_EQ(restored->ellipsoid->radii, glm::vec3(0.75f, 0.5f, 0.25f));
+        EXPECT_TRUE(restored->ellipsoid->inverse);
+        EXPECT_EQ(restored->local_transform.get(), edited_transform);
+    }
+
+    TEST_F(CropVolumeSourceTest, CropBoxUndoRedoMarksProjectModified) {
+        VisualizerImpl viewer(projectOptions());
+        const auto splat_id = open(viewer);
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        auto* const manager = viewer.getSceneManager();
+        const auto cropbox_id = cap::ensureCropBox(*manager, viewer.getRenderingManager(), splat_id);
+        ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+        const auto original = *viewer.getScene().getNodeById(*cropbox_id)->cropbox;
+        cap::CropBoxUpdate update;
+        update.min_bounds = glm::vec3(-0.5f);
+        update.max_bounds = glm::vec3(0.25f);
+        ASSERT_TRUE(cap::updateCropBox(*manager, viewer.getRenderingManager(), *cropbox_id, update));
+        ASSERT_NO_FATAL_FAILURE(save(viewer));
+
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_EQ(viewer.getScene().getNodeById(*cropbox_id)->cropbox->min, original.min);
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+        ASSERT_TRUE(op::undoHistory().redo().success);
+        EXPECT_EQ(viewer.getScene().getNodeById(*cropbox_id)->cropbox->min, glm::vec3(-0.5f));
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+    }
+
+    // Adding an ellipsoid, converting it to a box, undoing and redoing the conversion,
+    // and removing the duplicate volume of the other shape all change scene state only.
+    TEST_F(CropVolumeSourceTest, CropVolumeAddConvertUndoAndRemoveKeepSource) {
+        VisualizerImpl viewer(projectOptions());
+        const auto splat_id = open(viewer);
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        auto* const manager = viewer.getSceneManager();
+        auto* const rendering = viewer.getRenderingManager();
+        auto& scene = viewer.getScene();
+
+        const auto volume_id = cap::ensureEllipsoid(*manager, rendering, splat_id);
+        ASSERT_TRUE(volume_id) << volume_id.error();
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+        ASSERT_TRUE(cap::ensureCropBox(*manager, rendering, splat_id));
+        ASSERT_EQ(scene.getNodeById(*volume_id)->type, lfs::core::NodeType::CROPBOX);
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        ASSERT_EQ(scene.getNodeById(*volume_id)->type, lfs::core::NodeType::ELLIPSOID);
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+        ASSERT_TRUE(op::undoHistory().redo().success);
+        ASSERT_EQ(scene.getNodeById(*volume_id)->type, lfs::core::NodeType::CROPBOX);
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+
+        ASSERT_NE(addEllipsoid(scene, splat_id, "duplicate"), lfs::core::NULL_NODE);
+        ASSERT_NO_FATAL_FAILURE(save(viewer));
+        ASSERT_TRUE(cap::ensureCropBox(*manager, rendering, splat_id));
+        ASSERT_EQ(scene.getEllipsoidForSplat(splat_id), lfs::core::NULL_NODE);
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
     }
 
     // Catches tool switches that leave crop mode only while the crop tool is active: undo
@@ -13880,24 +14162,336 @@ contract["check_selection_submode_follows_native_mode"](lf)
     }
 
     TEST_F(VisualizerImplResetTest,
-           ScratchDirectoryIsFixedUnderRootRegardlessOfPreferences) {
-        const auto home = temporary_.path / "fixed-scratch-home";
+           ScratchDirectoryFollowsProjectLocationPreference) {
+        const auto home = temporary_.path / "located-scratch-home";
         std::filesystem::create_directories(home);
         const ScopedLfsHome lfs_home(home);
-        const auto working = temporary_.path / "legacy-working";
-        ASSERT_TRUE(lfs::vis::setProjectLocationPreference(working));
+        const auto location = temporary_.path / "second-drive" / "projects";
+        ASSERT_TRUE(lfs::vis::setProjectLocationPreference(location));
         const auto paths = lfs::core::UserPaths::resolve();
         ASSERT_TRUE(paths);
+        const auto located = (location / ".lichtfeld-tmp").lexically_normal();
+        {
+            lfs::vis::ViewerOptions options;
+            options.show_startup_overlay = false;
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(nullptr, viewer.getViewport());
+            auto* const lifecycle = viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                lifecycle->settleScratchLocationCheck();
+                return !lifecycle->scratch_location_check_;
+            }));
+            EXPECT_EQ(lifecycle->scratchAutosaveDirectory(), located);
+            ASSERT_NE(viewer.getScene().addGroup("Untitled on second drive"),
+                      lfs::core::NULL_NODE);
+            lifecycle->settings_.autosave_dirty_epoch_threshold = 1;
+            lifecycle->last_autosaved_dirty_epoch_ = 0;
+            lifecycle->last_autosaved_scene_serial_ = 0;
+            lifecycle->last_autosave_at_ =
+                std::chrono::steady_clock::now() - std::chrono::hours(1);
+            lifecycle->last_mutation_at_ =
+                std::chrono::steady_clock::now() - std::chrono::hours(1);
+            lifecycle->updateMaintenance();
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] { return !viewer.jobs().anyRunning(JobType::ProjectWrite); }));
+            const auto uuid = lifecycle->document_->project_uuid();
+            const auto scratch = lfs::io::project::scratch_autosave_path(located, uuid);
+            EXPECT_TRUE(std::filesystem::is_regular_file(scratch));
+#ifdef _WIN32
+            const auto attributes = GetFileAttributesW(
+                lfs::core::native_fs::native_path(located).c_str());
+            ASSERT_NE(attributes, INVALID_FILE_ATTRIBUTES);
+            EXPECT_NE(attributes & FILE_ATTRIBUTE_HIDDEN, 0u);
+#endif
+            EXPECT_TRUE(lifecycle->isScratchPath(scratch));
+            EXPECT_FALSE(lifecycle->hasSourcePath());
+            EXPECT_FALSE(std::filesystem::exists(
+                lfs::io::project::scratch_autosave_path(paths->rootDir() / "tmp", uuid)));
+        }
+        lfs::vis::clearProjectLocationPreference();
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ScratchDirectoryFallsBackToRootWhenProjectLocationUnusable) {
+        const auto home = temporary_.path / "fallback-scratch-home";
+        std::filesystem::create_directories(home);
+        const ScopedLfsHome lfs_home(home);
+        lfs::vis::clearProjectLocationPreference();
+        const auto paths = lfs::core::UserPaths::resolve();
+        ASSERT_TRUE(paths);
+        const auto root_tmp = (paths->rootDir() / "tmp").lexically_normal();
         lfs::vis::ViewerOptions options;
         options.show_startup_overlay = false;
         VisualizerImpl viewer(options);
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
-        EXPECT_EQ(
-            viewer.project_lifecycle_->scratchAutosaveDirectory(),
-            (paths->rootDir() / "tmp").lexically_normal());
-        EXPECT_NE(
-            viewer.project_lifecycle_->scratchAutosaveDirectory(),
-            (working / "tmp").lexically_normal());
+        auto* const lifecycle = viewer.project_lifecycle_.get();
+        ASSERT_NE(lifecycle, nullptr);
+        EXPECT_EQ(lifecycle->scratchAutosaveDirectory(), root_tmp);
+
+        const auto removed_drive = temporary_.path / "removed-drive";
+        const auto location = removed_drive / "projects";
+        ASSERT_TRUE(lfs::vis::setProjectLocationPreference(location));
+        lifecycle->freezeTempProjectDirectory();
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            lifecycle->settleScratchLocationCheck();
+            return !lifecycle->scratch_location_check_;
+        }));
+        EXPECT_EQ(lifecycle->scratchAutosaveDirectory(),
+                  (location / ".lichtfeld-tmp").lexically_normal());
+
+        // The configured folder can no longer be created: its parent is a file.
+        std::filesystem::remove_all(removed_drive);
+        std::ofstream(removed_drive) << "not a directory";
+        std::mutex warnings_mutex;
+        std::vector<std::string> warnings;
+        const auto handler_token = lfs::core::Logger::get().add_log_handler(
+            [&](const lfs::core::LogLevel level, const lfs::core::SourceSite&,
+                const std::string_view message) {
+                if (level == lfs::core::LogLevel::Warn &&
+                    message.find("untitled scratch") != std::string_view::npos) {
+                    const std::lock_guard lock(warnings_mutex);
+                    warnings.emplace_back(message);
+                }
+            });
+        lifecycle->freezeTempProjectDirectory();
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            lifecycle->settleScratchLocationCheck();
+            return !lifecycle->scratch_location_check_;
+        }));
+        lfs::core::Logger::get().remove_log_handler(handler_token);
+        EXPECT_EQ(lifecycle->scratchAutosaveDirectory(), root_tmp);
+        EXPECT_EQ(warnings.size(), 1u);
+        EXPECT_FALSE(std::filesystem::is_directory(location));
+        lfs::vis::clearProjectLocationPreference();
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           StartupRecoveryScansRootAndProjectLocationScratch) {
+        const auto home = temporary_.path / "two-scratch-home";
+        std::filesystem::create_directories(home);
+        const ScopedLfsHome lfs_home(home);
+        const auto location = temporary_.path / "second-drive" / "projects";
+        ASSERT_TRUE(lfs::vis::setProjectLocationPreference(location));
+        const auto paths = lfs::core::UserPaths::resolve();
+        ASSERT_TRUE(paths);
+        // A crash file from a session started before the preference was set,
+        // and one from a session under the configured location.
+        const auto root_scratch = lfs::io::project::scratch_autosave_path(
+            paths->rootDir() / "tmp", lfs::core::generate_uuid_v4());
+        const auto located_scratch = lfs::io::project::scratch_autosave_path(
+            location / ".lichtfeld-tmp", lfs::core::generate_uuid_v4());
+        for (const auto& scratch : {root_scratch, located_scratch}) {
+            std::filesystem::create_directories(scratch.parent_path());
+            write_project_with_specified_checkpoint(
+                scratch, lfs::core::generate_uuid_v4(),
+                lfs::core::generate_uuid_v4());
+        }
+        {
+            lfs::vis::ViewerOptions options;
+            options.show_startup_overlay = false;
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            auto* const lifecycle = viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            EXPECT_TRUE(lifecycle->isScratchPath(root_scratch));
+            EXPECT_TRUE(lifecycle->isScratchPath(located_scratch));
+            std::set<std::filesystem::path> offered;
+            for (const auto& candidate :
+                 lifecycle->inspectStartupRecoveryCandidates()) {
+                EXPECT_TRUE(candidate.untitled_scratch);
+                offered.insert(candidate.master_path.lexically_normal());
+            }
+            EXPECT_TRUE(offered.contains(root_scratch.lexically_normal()));
+            EXPECT_TRUE(offered.contains(located_scratch.lexically_normal()));
+            std::mutex prune_mutex;
+            std::vector<std::thread::id> prune_threads;
+            const auto handler_token = lfs::core::Logger::get().add_log_handler(
+                [&](const lfs::core::LogLevel, const lfs::core::SourceSite&,
+                    const std::string_view message) {
+                    if (message.find("Pruned leftover untitled scratch") != std::string_view::npos) {
+                        const std::lock_guard lock(prune_mutex);
+                        prune_threads.push_back(std::this_thread::get_id());
+                    }
+                });
+            // The GUI startup path: scan on the worker, then offer and prune.
+            lifecycle->openStartupProject(std::nullopt, true);
+            lifecycle->runStartupRecoveryScan();
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return lifecycle->startup_recovery_scan_ready_.load(std::memory_order_acquire);
+            }));
+            lifecycle->applyStartupRecoveryScan();
+            lifecycle->joinScratchPrune();
+            lfs::core::Logger::get().remove_log_handler(handler_token);
+            EXPECT_TRUE(lifecycle->recovery_prompt_pending_);
+            const bool root_exists = std::filesystem::exists(root_scratch);
+            const bool located_exists = std::filesystem::exists(located_scratch);
+            EXPECT_TRUE(root_exists || located_exists);
+            EXPECT_FALSE(root_exists && located_exists);
+            ASSERT_EQ(prune_threads.size(), 1u);
+            EXPECT_NE(prune_threads.front(), std::this_thread::get_id());
+        }
+        lfs::vis::clearProjectLocationPreference();
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           UntitledAutosaveDiskFullToastNamesFolder) {
+        ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
+            (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
+        struct LocaleReset {
+            ~LocaleReset() { lfs::event::LocalizationManager::getInstance().reset(); }
+        } const locale_reset;
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        auto* const lifecycle = viewer.project_lifecycle_.get();
+        ASSERT_NE(lifecycle, nullptr);
+        CapturingErrorConsumer consumer;
+        auto subscription = lfs::ErrorBus::instance().subscribe(consumer);
+        const auto scratch = lfs::io::project::scratch_autosave_path(
+            lifecycle->scratchAutosaveDirectory(),
+            lifecycle->document_->project_uuid());
+        const auto handle = viewer.jobs().init(JobType::ProjectWrite, "Full disk autosave");
+        ASSERT_TRUE(handle);
+        lifecycle->project_write_job_ = *handle;
+        lifecycle->project_write_purpose_ =
+            project::ProjectLifecycle::ProjectWritePurpose::Autosave;
+        lifecycle->project_write_destination_ = scratch;
+        std::async(std::launch::async, [&] { viewer.jobs().work(*handle); }).get();
+        const auto full = lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::ResourceExhausted,
+            .domain = lfs::ErrorDomain::IO,
+            .operation_id = {},
+            .user_message = lfs::core::DISK_SPACE_SAVE_ERROR_MESSAGE,
+            .detail = "simulated full volume",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+            .fields = {},
+            .native = std::nullopt,
+        });
+        std::async(std::launch::async, [&] {
+            viewer.jobs().finishWork(*handle, false, lfs::format_for_developer(full),
+                                     lfs::ErrorCode::ResourceExhausted, full);
+        }).get();
+        lifecycle->settleProjectWrite();
+        const auto folder = lfs::core::path_to_utf8(scratch.parent_path());
+        EXPECT_TRUE(std::ranges::any_of(
+            consumer.user_messages,
+            [&](const std::string& message) {
+                return message.find(folder) != std::string::npos;
+            }))
+            << (consumer.user_messages.empty() ? std::string{} : consumer.user_messages.back());
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           AutosaveDiskFullToastShowsOncePerFailureStreak) {
+        ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
+            (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
+        struct LocaleReset {
+            ~LocaleReset() { lfs::event::LocalizationManager::getInstance().reset(); }
+        } const locale_reset;
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        auto* const lifecycle = viewer.project_lifecycle_.get();
+        ASSERT_NE(lifecycle, nullptr);
+        CapturingErrorConsumer consumer;
+        auto subscription = lfs::ErrorBus::instance().subscribe(consumer);
+        const auto full = lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::ResourceExhausted,
+            .domain = lfs::ErrorDomain::IO,
+            .operation_id = {},
+            .user_message = lfs::core::DISK_SPACE_SAVE_ERROR_MESSAGE,
+            .detail = "simulated full volume",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+            .fields = {},
+            .native = std::nullopt,
+        });
+        const auto settle_autosave = [&](const std::filesystem::path& destination,
+                                         const bool disk_full) {
+            const auto handle = viewer.jobs().init(JobType::ProjectWrite, "Autosave");
+            ASSERT_TRUE(handle);
+            lifecycle->project_write_job_ = *handle;
+            lifecycle->project_write_purpose_ =
+                project::ProjectLifecycle::ProjectWritePurpose::Autosave;
+            lifecycle->project_write_destination_ = destination;
+            std::async(std::launch::async, [&] { viewer.jobs().work(*handle); }).get();
+            std::async(std::launch::async, [&] {
+                if (disk_full) {
+                    viewer.jobs().finishWork(*handle, false, lfs::format_for_developer(full),
+                                             lfs::ErrorCode::ResourceExhausted, full);
+                } else {
+                    viewer.jobs().finishWork(*handle, false);
+                }
+            }).get();
+            lifecycle->settleProjectWrite();
+        };
+        const auto scratch = lfs::io::project::scratch_autosave_path(
+            lifecycle->scratchAutosaveDirectory(), lifecycle->document_->project_uuid());
+        const auto other = lfs::io::project::scratch_autosave_path(
+            lifecycle->scratchAutosaveDirectory(), lfs::core::generate_uuid_v4());
+        const auto folder = lfs::core::path_to_utf8(scratch.parent_path());
+        const auto toasts = [&] {
+            return std::ranges::count_if(consumer.user_messages, [&](const std::string& message) {
+                return message.find(folder) != std::string::npos;
+            });
+        };
+        // Backoff retries of the same failing autosave stay quiet.
+        settle_autosave(scratch, true);
+        settle_autosave(scratch, true);
+        settle_autosave(scratch, true);
+        EXPECT_EQ(toasts(), 1);
+        // A successful autosave ends the streak.
+        settle_autosave(scratch, false);
+        settle_autosave(scratch, true);
+        settle_autosave(scratch, true);
+        EXPECT_EQ(toasts(), 2);
+        // So does a new destination.
+        settle_autosave(other, true);
+        EXPECT_EQ(toasts(), 3);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ScratchLocationProbeRunsOffCallingThread) {
+        const auto home = temporary_.path / "probe-thread-home";
+        std::filesystem::create_directories(home);
+        const ScopedLfsHome lfs_home(home);
+        const auto location = temporary_.path / "network-share" / "projects";
+        ASSERT_TRUE(lfs::vis::setProjectLocationPreference(location));
+        const auto paths = lfs::core::UserPaths::resolve();
+        ASSERT_TRUE(paths);
+        {
+            lfs::vis::ViewerOptions options;
+            options.show_startup_overlay = false;
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            auto* const lifecycle = viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            // A share that does not answer: the probe blocks until the test releases it.
+            std::promise<void> release;
+            const auto released = release.get_future().share();
+            const auto caller = std::this_thread::get_id();
+            auto probe_thread = std::make_shared<std::atomic<bool>>(false);
+            lifecycle->scratch_location_probe_ =
+                [released, caller, probe_thread](const std::filesystem::path& probed) {
+                    probe_thread->store(std::this_thread::get_id() != caller);
+                    released.wait_for(std::chrono::seconds(5));
+                    return lfs::vis::probeProjectLocation(probed);
+                };
+            lifecycle->freezeTempProjectDirectory();
+            ASSERT_TRUE(lifecycle->scratch_location_check_);
+            EXPECT_FALSE(lifecycle->scratch_location_check_->done.load());
+            EXPECT_EQ(lifecycle->scratchAutosaveDirectory(),
+                      (paths->rootDir() / "tmp").lexically_normal());
+            release.set_value();
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                lifecycle->settleScratchLocationCheck();
+                return !lifecycle->scratch_location_check_;
+            }));
+            EXPECT_TRUE(probe_thread->load());
+            EXPECT_EQ(lifecycle->scratchAutosaveDirectory(),
+                      (location / ".lichtfeld-tmp").lexically_normal());
+        }
         lfs::vis::clearProjectLocationPreference();
     }
 
@@ -13924,6 +14518,7 @@ contract["check_selection_submode_follows_native_mode"](lf)
             installModalOverlay(
                 gui->rml_modal_overlay_, gui->rmlui_manager_);
             viewer.project_lifecycle_->openStartupProject(std::nullopt);
+            viewer.project_lifecycle_->joinScratchPrune();
             EXPECT_TRUE(
                 viewer.project_lifecycle_->recovery_prompt_pending_);
             const bool older_exists =
@@ -16367,6 +16962,7 @@ contract["check_selection_submode_follows_native_mode"](lf)
         VisualizerImpl viewer(options);
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.project_lifecycle_->pruneUnlockedScratchFilesExcept(std::nullopt);
+        viewer.project_lifecycle_->joinScratchPrune();
         EXPECT_TRUE(std::filesystem::is_regular_file(scratch));
         lfs::vis::clearProjectLocationPreference();
     }
@@ -20012,6 +20608,221 @@ contract["check_selection_submode_follows_native_mode"](lf)
                 return !viewer.jobs().anyRunning(JobType::ProjectWrite);
             }));
         EXPECT_TRUE(lifecycle->hasDirtyProject());
+    }
+
+    // Autosave recaptures a splat payload only after its Gaussians changed. Scene-graph
+    // edits are saved in their own chapters and must not copy the whole model again.
+    class PayloadRecaptureTest : public VisualizerImplResetTest {
+    protected:
+        void SetUp() override {
+            VisualizerImplResetTest::SetUp();
+            if (!cuda_device_available()) {
+                GTEST_SKIP() << "CUDA device unavailable";
+            }
+            lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(false);
+        }
+
+        void TearDown() override {
+            lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(std::nullopt);
+            VisualizerImplResetTest::TearDown();
+        }
+
+        [[nodiscard]] static std::unique_ptr<lfs::core::SplatData> cudaSplat(const std::size_t count) {
+            const auto cpu = lfs::test::licht::make_splat(count);
+            return std::make_unique<lfs::core::SplatData>(
+                0, cpu->means().to(lfs::core::Device::CUDA), cpu->sh0().to(lfs::core::Device::CUDA),
+                lfs::core::Tensor{}, cpu->scaling_raw().to(lfs::core::Device::CUDA),
+                cpu->rotation_raw().to(lfs::core::Device::CUDA), cpu->opacity_raw().to(lfs::core::Device::CUDA),
+                1.0f);
+        }
+
+        void prepare(VisualizerImpl& viewer) {
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        }
+
+        [[nodiscard]] bool open(VisualizerImpl& viewer, const std::filesystem::path& path) {
+            return viewer.projectOpen(path, ProjectSwitchDisposition::DiscardChanges) &&
+                   waitForHydrationComplete(viewer, viewer.work_queue_mutex_, viewer.work_queue_);
+        }
+
+        // Runs autosave passes until they settle and counts how often the node's SPLT
+        // bytes in the project document were replaced by a new capture.
+        [[nodiscard]] int autosaveCaptures(VisualizerImpl& viewer, const lfs::core::Uuid& uuid,
+                                           const std::function<void()>& after_first_pass = {}) {
+            auto& lifecycle = *viewer.project_lifecycle_;
+            const auto splat_bytes = [&]() -> const std::byte* {
+                const auto* payload = lifecycle.document_->find_splat(uuid);
+                return payload ? payload->bytes().data() : nullptr;
+            };
+            int captures = 0;
+            const auto* last = splat_bytes();
+            for (int pass = 0; pass < 4; ++pass) {
+                const auto started = lifecycle.startAutosave();
+                EXPECT_TRUE(started) << lfs::format_for_developer(started.error());
+                EXPECT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                    return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+                }));
+                const auto* current = splat_bytes();
+                if (current && current != last)
+                    ++captures;
+                last = current;
+                if (pass == 0 && after_first_pass)
+                    after_first_pass();
+            }
+            return captures;
+        }
+
+        // The untitled crash-recovery file, hydrated into a fresh scene.
+        [[nodiscard]] std::unique_ptr<lfs::core::Scene> autosavedScene(VisualizerImpl& viewer) {
+            const auto& path = viewer.project_lifecycle_->scratch_autosave_path_;
+            EXPECT_TRUE(path && std::filesystem::is_regular_file(*path));
+            auto scene = std::make_unique<lfs::core::Scene>();
+            if (!path)
+                return scene;
+            const auto document = lfs::test::licht::require_result_ptr(
+                lfs::io::project::ProjectDocument::open(*path));
+            const auto hydrated = document->hydrate(*scene);
+            EXPECT_TRUE(hydrated) << lfs::format_for_developer(hydrated.error());
+            return scene;
+        }
+
+        void expectAutosavedGaussians(VisualizerImpl& viewer, const lfs::core::Uuid& uuid) {
+            const auto saved_scene = autosavedScene(viewer);
+            const auto* saved = saved_scene->getNodeByUuid(uuid);
+            const auto* live = viewer.getScene().getNodeByUuid(uuid);
+            ASSERT_TRUE(saved && saved->model && live && live->model);
+            EXPECT_EQ(saved->model->size(), live->model->size());
+            EXPECT_EQ(saved->model->visible_count(), live->model->visible_count());
+            EXPECT_EQ(saved->model->means().cpu().to_vector(), live->model->means().cpu().to_vector());
+            EXPECT_EQ(saved->model->opacity_raw().cpu().to_vector(), live->model->opacity_raw().cpu().to_vector());
+        }
+    };
+
+    TEST_F(PayloadRecaptureTest, UntitledSceneEditsDoNotRecapture) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_NO_FATAL_FAILURE(prepare(viewer));
+        auto& scene = viewer.getScene();
+        auto* const manager = viewer.getSceneManager();
+        const auto splat_id = scene.addSplat("Scene only", cudaSplat(64));
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        const auto uuid = scene.getNodeById(splat_id)->uuid;
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 1) << "first capture of a new model";
+
+        const auto cropbox_id = cap::ensureCropBox(*manager, viewer.getRenderingManager(), splat_id);
+        ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+        cap::CropBoxUpdate move;
+        move.translation = glm::vec3(0.5f, 0.25f, 0.0f);
+        ASSERT_TRUE(cap::updateCropBox(*manager, viewer.getRenderingManager(), *cropbox_id, move));
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "crop box add and move";
+        ASSERT_TRUE(manager->renameNode(splat_id, "Renamed"));
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "rename";
+        scene.setSelection({1, 2, 3});
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "Gaussian selection";
+        scene.setNodeLocked("Renamed", true);
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "lock";
+
+        const auto saved_scene = autosavedScene(viewer);
+        const auto* saved = saved_scene->getNodeByUuid(uuid);
+        ASSERT_NE(saved, nullptr);
+        EXPECT_EQ(saved->name, "Renamed");
+        EXPECT_TRUE(static_cast<bool>(saved->locked));
+        const auto* saved_cropbox = saved_scene->getNodeById(saved_scene->getCropBoxForSplat(saved->id));
+        ASSERT_NE(saved_cropbox, nullptr);
+        EXPECT_EQ(glm::vec3(saved_cropbox->local_transform.get()[3]), glm::vec3(0.5f, 0.25f, 0.0f));
+        ASSERT_NE(saved->model, nullptr);
+        EXPECT_EQ(saved->model->size(), 64u);
+    }
+
+    TEST_F(PayloadRecaptureTest, UntitledGaussianEditsRecaptureOnce) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_NO_FATAL_FAILURE(prepare(viewer));
+        auto& scene = viewer.getScene();
+        auto* const manager = viewer.getSceneManager();
+        auto* const rendering = viewer.getRenderingManager();
+        const auto splat_id = scene.addSplat("Edited", cudaSplat(64));
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        const auto uuid = scene.getNodeById(splat_id)->uuid;
+        manager->selectNode(splat_id);
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 1);
+
+        const auto expect_recaptured_once = [&](const char* operation) {
+            SCOPED_TRACE(operation);
+            EXPECT_EQ(autosaveCaptures(viewer, uuid), 1);
+            expectAutosavedGaussians(viewer, uuid);
+        };
+        ASSERT_TRUE(cap::writeGaussianField(*manager, rendering, "Edited", "opacity", {0, 5}, {0.25f, -0.75f}));
+        expect_recaptured_once("Gaussian field write");
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        expect_recaptured_once("undo Gaussian field write");
+        ASSERT_TRUE(op::undoHistory().redo().success);
+        expect_recaptured_once("redo Gaussian field write");
+        scene.setSelection({1, 2, 3});
+        ASSERT_TRUE(manager->deleteSelectedGaussiansWithHistory());
+        ASSERT_EQ(scene.getNodeById(splat_id)->model->visible_count(), 61u);
+        expect_recaptured_once("delete selected");
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        ASSERT_EQ(scene.getNodeById(splat_id)->model->visible_count(), 64u);
+        expect_recaptured_once("undo delete");
+        scene.clearSelection();
+        manager->selectNode(splat_id);
+        ASSERT_TRUE(manager->executeMirror(lfs::core::MirrorAxis::X));
+        expect_recaptured_once("mirror");
+
+        const auto cropbox_id = cap::ensureCropBox(*manager, rendering, splat_id);
+        ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+        cap::CropBoxUpdate half;
+        half.min_bounds = glm::vec3(-100.0f, -1.0f, -1.0f);
+        half.max_bounds = glm::vec3(0.0f, 1.0f, 1.0f);
+        ASSERT_TRUE(cap::updateCropBox(*manager, rendering, *cropbox_id, half));
+        manager->selectNode(splat_id);
+        lfs::core::events::cmd::ApplyCropBox{}.emit();
+        const auto cropped = scene.getNodeById(splat_id)->model->visible_count();
+        ASSERT_GT(cropped, 0u);
+        ASSERT_LT(cropped, 64u);
+        expect_recaptured_once("crop apply");
+    }
+
+    // Without VRAM headroom the capture runs synchronously on the viewer thread, so a
+    // repeated capture freezes the application on every autosave.
+    TEST_F(PayloadRecaptureTest, SynchronousCaptureRunsOncePerPayloadChange) {
+        lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(true);
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_NO_FATAL_FAILURE(prepare(viewer));
+        auto& scene = viewer.getScene();
+        const auto splat_id = scene.addSplat("Synchronous", cudaSplat(64));
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        const auto uuid = scene.getNodeById(splat_id)->uuid;
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 1) << "first capture";
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "idle autosaves";
+        ASSERT_TRUE(viewer.getSceneManager()->renameNode(splat_id, "Renamed"));
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "rename";
+        ASSERT_TRUE(cap::writeGaussianField(*viewer.getSceneManager(), viewer.getRenderingManager(), "Renamed",
+                                            "opacity", {0}, {0.5f}));
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 1) << "Gaussian field write";
+        expectAutosavedGaussians(viewer, uuid);
+    }
+
+    TEST_F(PayloadRecaptureTest, SavedProjectSceneEditsDoNotRecapture) {
+        const auto path = temporary_.path / "payload-recapture.licht";
+        write_splt_project(path, lfs::test::licht::make_splat(64), "Saved");
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_NO_FATAL_FAILURE(prepare(viewer));
+        ASSERT_TRUE(open(viewer, path));
+        auto& scene = viewer.getScene();
+        auto* const manager = viewer.getSceneManager();
+        const auto* const node = scene.getNode("Saved");
+        ASSERT_NE(node, nullptr);
+        const auto splat_id = node->id;
+        const auto uuid = node->uuid;
+
+        // A rename while the capture of a Gaussian edit is in flight must not repeat it.
+        ASSERT_TRUE(cap::writeGaussianField(*manager, viewer.getRenderingManager(), "Saved", "opacity", {0}, {0.5f}));
+        EXPECT_EQ(autosaveCaptures(viewer, uuid, [&] { ASSERT_TRUE(manager->renameNode(splat_id, "Renamed")); }), 1);
+        const auto cropbox_id = cap::ensureCropBox(*manager, viewer.getRenderingManager(), splat_id);
+        ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+        scene.setSelection({1, 2});
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "crop box and selection";
     }
 
     TEST_F(VisualizerImplResetTest,

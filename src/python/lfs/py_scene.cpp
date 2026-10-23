@@ -232,7 +232,7 @@ namespace lfs::python {
         if (live.type != core::NodeType::SPLAT || !live.model) {
             return std::nullopt;
         }
-        return PySplatData(live.model.get());
+        return PySplatData(live.model.get(), scene_);
     }
 
     std::optional<PyPointCloud> PySceneNode::point_cloud() {

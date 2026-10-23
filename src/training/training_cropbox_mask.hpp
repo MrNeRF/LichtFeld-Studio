@@ -48,4 +48,15 @@ namespace lfs::training {
         const core::Scene& scene,
         const core::SplatData& model);
 
+    // Rows of the training model that cropping it to the box removes: outside the box, inside it when inverse.
+    [[nodiscard]] std::optional<core::Tensor> training_cropbox_crop_mask(
+        const core::SplatData& model,
+        const TrainingCropBoxGeometry& geometry);
+
+    // A copy of the training model cropped to the box, without its deleted rows, for exports that leave the
+    // model as it is. Empty when no live row lies outside the box.
+    [[nodiscard]] std::optional<core::SplatData> crop_copy_to_training_cropbox(
+        const core::SplatData& model,
+        const TrainingCropBoxGeometry& geometry);
+
 } // namespace lfs::training
