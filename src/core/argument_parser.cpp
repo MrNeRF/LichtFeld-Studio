@@ -2830,7 +2830,8 @@ dataset options work as in training; see the Evaluation page of the docs.
         return false;
     }
 
-    std::expected<lfs::core::args::ParsedArgs, std::string> parseBatchTrainArgs(const int argc, const char* const argv[]) {
+    std::optional<lfs::core::args::ParsedArgs> parseBatchTrainArgs(
+        const int argc, const char* const argv[], std::string& error) {
         namespace core_args = lfs::core::args;
         namespace param = lfs::core::param;
 
@@ -3017,12 +3018,14 @@ dataset options work as in training; see the Evaluation page of the docs.
             }
             auto val_res = parse_args_and_params(static_cast<int>(validate_argv.size()), validate_argv.data());
             if (!val_res) {
-                return std::unexpected(std::format("Invalid training argument: {}", val_res.error()));
+                error = std::format("Invalid training argument: {}", val_res.error());
+                return std::nullopt;
             }
         }
 
         if (params.input_paths.empty() && params.jobs.empty() && params.config_file.empty()) {
-            return std::unexpected(std::format("Missing input datasets or batch config\n\n{}", parser.Help()));
+            error = std::format("Missing input datasets or batch config\n\n{}", parser.Help());
+            return std::nullopt;
         }
 
         return core_args::BatchTrainingMode{std::move(params)};
@@ -3045,7 +3048,11 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
         if (arg1 == "convert") {
             return parseConvertArgs(argc, argv);
         } else if (arg1 == "batch-train" || arg1 == "batch" || arg1 == "batch_train") {
-            return parseBatchTrainArgs(argc, argv);
+            std::string err;
+            if (auto parsed = parseBatchTrainArgs(argc, argv, err)) {
+                return std::move(*parsed);
+            }
+            return std::unexpected(std::move(err));
         } else if (arg1 == "eval") {
             std::string error;
             if (auto parsed = parseEvalArgs(argc, argv, error)) {

@@ -42,7 +42,7 @@ namespace lfs::app {
 
     namespace {
 
-        namespace fs = std::filesystem;
+        using std::filesystem::path;
         using json = nlohmann::json;
 
         std::atomic<bool> g_batch_interrupted{false};
@@ -144,7 +144,7 @@ namespace lfs::app {
             return ss.str();
         }
 
-        bool is_hidden_or_output_dir(const fs::path& path) {
+        bool is_hidden_or_output_dir(const path& path) {
             const auto filename = lfs::core::path_to_utf8(path.filename());
             if (filename.empty())
                 return false;
@@ -155,8 +155,8 @@ namespace lfs::app {
             return false;
         }
 
-        void discover_datasets_recursive(const fs::path& root, int depth, int max_depth,
-                                         std::vector<fs::path>& discovered) {
+        void discover_datasets_recursive(const path& root, int depth, int max_depth,
+                                         std::vector<path>& discovered) {
             if (depth > max_depth)
                 return;
             if (!lfs::core::native_fs::exists(root) || !lfs::core::native_fs::is_directory(root))
@@ -184,7 +184,7 @@ namespace lfs::app {
         std::vector<lfs::core::param::BatchJobItem> resolve_jobs_internal(
             const lfs::core::param::BatchTrainingParameters& params) {
             std::vector<lfs::core::param::BatchJobItem> jobs = params.jobs;
-            std::vector<fs::path> candidate_paths;
+            std::vector<path> candidate_paths;
 
             for (const auto& input : params.input_paths) {
                 if (!lfs::core::native_fs::exists(input)) {
@@ -250,7 +250,7 @@ namespace lfs::app {
 
             for (auto& job : jobs) {
                 std::error_code ec;
-                auto canonical = fs::weakly_canonical(job.dataset_path, ec);
+                auto canonical = lfs::core::native_fs::weakly_canonical(job.dataset_path, ec);
                 std::string path_str = lfs::core::path_to_utf8(ec ? job.dataset_path : canonical);
 
                 if (std::find(seen_canonical_paths.begin(), seen_canonical_paths.end(), path_str) != seen_canonical_paths.end()) {
@@ -313,16 +313,16 @@ namespace lfs::app {
                 }
 
                 std::error_code ec;
-                auto canonical_out = fs::weakly_canonical(job.output_path, ec);
+                auto canonical_out = lfs::core::native_fs::weakly_canonical(job.output_path, ec);
                 std::string out_str = lfs::core::path_to_utf8(ec ? job.output_path : canonical_out);
 
                 if (std::find(seen_output_paths.begin(), seen_output_paths.end(), out_str) != seen_output_paths.end()) {
                     int suffix = 2;
-                    fs::path base_out = job.output_path;
+                    path base_out = job.output_path;
                     while (true) {
-                        fs::path cand = base_out;
+                        path cand = base_out;
                         cand += "_" + std::to_string(suffix);
-                        auto cand_canonical = fs::weakly_canonical(cand, ec);
+                        auto cand_canonical = lfs::core::native_fs::weakly_canonical(cand, ec);
                         std::string cand_str = lfs::core::path_to_utf8(ec ? cand : cand_canonical);
                         if (std::find(seen_output_paths.begin(), seen_output_paths.end(), cand_str) == seen_output_paths.end()) {
                             job.output_path = cand;
@@ -341,8 +341,8 @@ namespace lfs::app {
 
         struct JobExecutionResult {
             std::string name;
-            fs::path dataset_path;
-            fs::path output_path;
+            path dataset_path;
+            path output_path;
             bool success = false;
             bool cancelled = false;
             int exit_code = 0;
@@ -392,7 +392,7 @@ namespace lfs::app {
         JobExecutionResult execute_job(
             const lfs::core::param::BatchJobItem& job,
             const lfs::core::param::BatchTrainingParameters& params,
-            const fs::path& executable) {
+            const path& executable) {
             JobExecutionResult result;
             result.name = job.name;
             result.dataset_path = job.dataset_path;
@@ -408,7 +408,7 @@ namespace lfs::app {
             }
 
             const auto log_path = job.output_path / "training_log.txt";
-            std::ofstream log_file(log_path, std::ios::out | std::ios::trunc);
+            std::ofstream log_file(lfs::core::native_fs::native_path(log_path), std::ios::out | std::ios::trunc);
             if (!log_file.is_open()) {
                 LOG_WARN("Could not open log file at {}", lfs::core::path_to_utf8(log_path));
             }
@@ -715,7 +715,7 @@ namespace lfs::app {
             const double total_duration_seconds,
             const std::string& timestamp) {
 
-            fs::path summary_path = params.summary_file;
+            path summary_path = params.summary_file;
             if (summary_path.empty()) {
                 if (!params.output_dir.empty()) {
                     summary_path = params.output_dir / "batch_summary.json";
@@ -724,7 +724,7 @@ namespace lfs::app {
                 }
             }
 
-            fs::path report_path = params.report_file;
+            path report_path = params.report_file;
             if (report_path.empty()) {
                 if (!params.output_dir.empty()) {
                     report_path = params.output_dir / "batch_report.txt";
@@ -777,7 +777,7 @@ namespace lfs::app {
                     std::error_code ec;
                     lfs::core::native_fs::create_directories(summary_path.parent_path(), ec);
                 }
-                std::ofstream json_out(summary_path);
+                std::ofstream json_out(lfs::core::native_fs::native_path(summary_path));
                 if (json_out.is_open()) {
                     json_out << summary_json.dump(2) << std::endl;
                     LOG_INFO("Wrote batch summary to {}", lfs::core::path_to_utf8(summary_path));
@@ -791,7 +791,7 @@ namespace lfs::app {
                     std::error_code ec;
                     lfs::core::native_fs::create_directories(report_path.parent_path(), ec);
                 }
-                std::ofstream txt_out(report_path);
+                std::ofstream txt_out(lfs::core::native_fs::native_path(report_path));
                 if (txt_out.is_open()) {
                     txt_out << "================================================================================\n";
                     txt_out << "LICHTFELD STUDIO - BATCH TRAINING REPORT\n";
@@ -830,7 +830,7 @@ namespace lfs::app {
     int run_batch_training(const lfs::core::param::BatchTrainingParameters& params) {
         ScopedSignalHandler signal_handler;
 
-        fs::path executable;
+        path executable;
         try {
             executable = lfs::core::getExecutablePath();
         } catch (const std::exception& e) {
