@@ -36,6 +36,37 @@ source=source.replace('(blockIdx * blockDim + threadIdx).x','(blockIdx.x*blockDi
 source,replaced=re.subn(r'uint (\w+) = uint\(p_0\.g_0\) \+ (\w+);',r'uint \1 = \2;',source)
 if replaced!=1:raise RuntimeError('Review changed LPIPS dispatch index before generating HIP')
 source=re.sub(r'((?:__device__|__global__)[^;{}]*\{)',r'\1\n#pragma clang fp contract(off)\n',source)
+# The portable shader atomically adds one contribution per pixel. On HIP,
+# reduce within the physical wave and block first, retaining the per-pixel
+# arithmetic and pooled feature stores. All lanes reach the barrier, including
+# tail/masked lanes; blocks beyond the score pixels only produce max-pooling.
+kernel_start=source.index('template<unsigned Operation> __global__ void lpips_kernel')
+prefix,kernel_source=source[:kernel_start],source[kernel_start:]
+kernel_source=kernel_source.replace('#pragma clang fp contract(off)',
+    '#pragma clang fp contract(off)\n    float lfs_block_contribution=0.0f;',1)
+kernel_source,replaced=re.subn(r'float \w+ = atomicAdd\((\w+), ([^;]+)\);',
+    r'lfs_block_contribution = \2;',kernel_source)
+if replaced!=1:raise RuntimeError('Review changed LPIPS score atomic before lowering block reduction')
+kernel_end=kernel_source.rfind('\n    return;\n}')
+if kernel_end<0:raise RuntimeError('Review changed LPIPS kernel exit before lowering block reduction')
+reduction='''
+    if constexpr(Operation==3) {
+        if(blockIdx.x*blockDim.x < p_0.count_0) {
+            __shared__ float wave_totals[8]; // 256 threads, physical wave32 or wave64.
+            const unsigned lane=threadIdx.x%warpSize, wave=threadIdx.x/warpSize;
+            float sum=lfs_block_contribution;
+            for(unsigned offset=warpSize/2;offset;offset/=2)sum+=__shfl_down(sum,offset,warpSize);
+            if(lane==0)wave_totals[wave]=sum;
+            __syncthreads();
+            if(wave==0) {
+                sum=lane<blockDim.x/warpSize?wave_totals[lane]:0.0f;
+                for(unsigned offset=warpSize/2;offset;offset/=2)sum+=__shfl_down(sum,offset,warpSize);
+                if(lane==0)atomicAdd(reinterpret_cast<float*>(p_0.d_0),sum);
+            }
+        }
+    }
+'''
+source=prefix+kernel_source[:kernel_end]+reduction+kernel_source[kernel_end:]
 known={'F32_asuint','U32_asfloat','F32_abs','F32_exp','F32_tanh','F32_rsqrt','F32_fma','F32_max','I32_min','I32_max','U32_max'}
 unknown=set(re.findall(r'\b(?:F32|U32|I32|F64|U64|I64)_[A-Za-z0-9_]+',source))-known
 if unknown:raise RuntimeError('HIP intrinsic implementations required: '+', '.join(sorted(unknown)))
