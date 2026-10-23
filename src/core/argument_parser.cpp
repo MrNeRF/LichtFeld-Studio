@@ -58,6 +58,8 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--late-lr-anneal", "late_lr_anneal", Float},
             OptimizationCliBinding{"--gradient-loss-weight", "gradient_loss_weight", Float},
             OptimizationCliBinding{"--densify-structure-weight", "densify_structure_weight", Float},
+            OptimizationCliBinding{"--color-variance-weight", "color_variance_weight", Float},
+            OptimizationCliBinding{"--color-variance-warmup-iters", "color_variance_warmup_iters", Integer},
             OptimizationCliBinding{"--opacity-decay-rendered-only", "opacity_decay_rendered_only", Bool},
             OptimizationCliBinding{"--no-opacity-decay-rendered-only", "opacity_decay_rendered_only", Bool, true},
             OptimizationCliBinding{"--steps-scaler", "steps_scaler", Float, false, "; cannot be combined with --iter"},
@@ -805,6 +807,8 @@ namespace {
             ::args::ValueFlag<float> late_lr_anneal(training_group, "fraction", lfs::core::args::optimization_cli_help("--late-lr-anneal"), {"late-lr-anneal"});
             ::args::ValueFlag<float> gradient_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--gradient-loss-weight"), {"gradient-loss-weight"});
             ::args::ValueFlag<float> densify_structure_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--densify-structure-weight"), {"densify-structure-weight"});
+            ::args::ValueFlag<float> color_variance_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--color-variance-weight"), {"color-variance-weight"});
+            ::args::ValueFlag<int> color_variance_warmup_iters(training_group, "iterations", lfs::core::args::optimization_cli_help("--color-variance-warmup-iters"), {"color-variance-warmup-iters"});
             ::args::Flag opacity_decay_rendered_only(training_group, "enabled", lfs::core::args::optimization_cli_help("--opacity-decay-rendered-only"), {"opacity-decay-rendered-only"});
             ::args::Flag no_opacity_decay_rendered_only(training_group, "disabled", lfs::core::args::optimization_cli_help("--no-opacity-decay-rendered-only"), {"no-opacity-decay-rendered-only"});
             ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", lfs::core::args::optimization_cli_help("--steps-scaler"), {"steps-scaler"});
@@ -1474,6 +1478,8 @@ namespace {
                     return std::unexpected("ERROR: --morton-reorder-interval must be >= 0 (0 disables)");
                 }
             }
+            if (color_variance_warmup_iters && ::args::get(color_variance_warmup_iters) < 0)
+                return std::unexpected("ERROR: --color-variance-warmup-iters must be >= 0");
 
             // Validate min_opacity (0.0-1.0)
             if (min_opacity) {
@@ -1572,6 +1578,8 @@ namespace {
                                         late_lr_anneal_val = cli_option_present({"--late-lr-anneal"}) ? std::optional<float>(::args::get(late_lr_anneal)) : std::optional<float>(),
                                         gradient_loss_weight_val = cli_option_present({"--gradient-loss-weight"}) ? std::optional<float>(::args::get(gradient_loss_weight)) : std::optional<float>(),
                                         densify_structure_weight_val = cli_option_present({"--densify-structure-weight"}) ? std::optional<float>(::args::get(densify_structure_weight)) : std::optional<float>(),
+                                        color_variance_weight_val = cli_option_present({"--color-variance-weight"}) ? std::optional<float>(::args::get(color_variance_weight)) : std::optional<float>(),
+                                        color_variance_warmup_iters_val = cli_option_present({"--color-variance-warmup-iters"}) ? std::optional<int>(::args::get(color_variance_warmup_iters)) : std::optional<int>(),
                                         steps_scaler_val = cli_option_present({"--steps-scaler"}) ? std::optional<float>(::args::get(steps_scaler)) : std::optional<float>(),
                                         sh_degree_interval_val = cli_option_present({"--sh-degree-interval"}) ? std::optional<int>(::args::get(sh_degree_interval)) : std::optional<int>(),
                                         morton_reorder_interval_val = cli_option_present({"--morton-reorder-interval"}) ? std::optional<int>(::args::get(morton_reorder_interval)) : std::optional<int>(),
@@ -1717,6 +1725,7 @@ namespace {
                 params.cli_step_values_set = iterations_val.has_value() ||
                                              sh_degree_interval_val.has_value() ||
                                              morton_reorder_interval_val.has_value() ||
+                                             color_variance_warmup_iters_val.has_value() ||
                                              (eval_steps_val && !eval_steps_val->empty());
                 note_opt("iterations", iterations_val.has_value());
                 setVal(resize_factor_val, ds.resize_factor);
@@ -1745,6 +1754,9 @@ namespace {
                 setVal(late_lr_anneal_val, opt.late_lr_anneal);
                 setVal(gradient_loss_weight_val, opt.gradient_loss_weight);
                 setVal(densify_structure_weight_val, opt.densify_structure_weight);
+                setVal(color_variance_weight_val, opt.color_variance_weight);
+                if (color_variance_warmup_iters_val)
+                    opt.color_variance_warmup_iters = static_cast<size_t>(*color_variance_warmup_iters_val);
                 if (opacity_decay_rendered_only_flag)
                     opt.opacity_decay_rendered_only = true;
                 if (crop_flag)
@@ -1903,6 +1915,8 @@ namespace {
                 note_opt("late_lr_anneal", late_lr_anneal_val.has_value());
                 note_opt("gradient_loss_weight", gradient_loss_weight_val.has_value());
                 note_opt("densify_structure_weight", densify_structure_weight_val.has_value());
+                note_opt("color_variance_weight", color_variance_weight_val.has_value());
+                note_opt("color_variance_warmup_iters", color_variance_warmup_iters_val.has_value());
                 note_opt("opacity_decay_rendered_only", opacity_decay_rendered_only_flag || no_opacity_decay_rendered_only_flag);
                 note_opt("steps_scaler", steps_scaler_val.has_value());
                 note_opt("sh_degree_interval", sh_degree_interval_val.has_value());
