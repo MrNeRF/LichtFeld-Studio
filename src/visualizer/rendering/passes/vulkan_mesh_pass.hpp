@@ -42,6 +42,7 @@ namespace lfs::vis {
         // Wireframe overlay drawn after the main mesh pass.
         bool wireframe_overlay = false;
         bool collision_voxel_boxes = false;
+        bool collision_sharp = true;
         const lfs::core::CollisionVolume* collision_volume = nullptr;
         float collision_opacity = 1.0f;
         float collision_slice = 1.0f;

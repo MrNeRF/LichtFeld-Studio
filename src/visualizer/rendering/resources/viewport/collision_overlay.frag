@@ -13,7 +13,7 @@ layout(push_constant) uniform CollisionPush {
 layout(location = 0) out vec4 outColor;
 
 int sliceHeight() {
-    return int(ceil(float(push.dimensionsFlags.y) * float(push.dimensionsFlags.w >> 1u) / 65535.0));
+    return int(ceil(float(push.dimensionsFlags.y) * float((push.dimensionsFlags.w >> 1u) & 65535u) / 65535.0));
 }
 
 bool contains(ivec3 cell) {
@@ -21,25 +21,50 @@ bool contains(ivec3 cell) {
            all(lessThan(cell, ivec3(push.dimensionsFlags.xyz))) && cell.y < sliceHeight();
 }
 
+ivec3 cacheMin = ivec3(-1);
+int cacheSize = 0;
+uvec2 cacheMask = uvec2(0);
+bool cacheMixed = false;
+bool cacheSolid = false;
+uint traversalPath[22];
+int traversalLevel;
+
 bool sampleCell(ivec3 cell, out ivec3 leafMin, out ivec3 leafMax) {
-    int size = 1;
-    while (size < int(max(push.dimensionsFlags.x, max(push.dimensionsFlags.y, push.dimensionsFlags.z))))
-        size *= 2;
-    uint index = 0u;
-    leafMin = ivec3(0);
-    while (cells[index] > 1u && (cells[index] & 0x80000000u) == 0u) {
-        size /= 2;
-        ivec3 bit = ivec3(greaterThanEqual(cell, leafMin + size));
-        index = cells[index] - 2u + uint(bit.x + 2 * bit.y + 4 * bit.z);
-        leafMin += bit * size;
+    if (cacheSize > 0 && all(greaterThanEqual(cell, cacheMin)) && all(lessThan(cell, cacheMin + cacheSize))) {
+        if (cacheMixed) {
+            ivec3 local = cell - cacheMin;
+            uint bit = uint(local.x + 4 * local.y + 16 * local.z);
+            leafMin = cell; leafMax = cell + 1;
+            return (cacheMask[bit >> 5u] & (1u << (bit & 31u))) != 0u;
+        }
+        leafMin = cacheMin;
+        leafMax = min(cacheMin + cacheSize, ivec3(push.dimensionsFlags.xyz));
+        return cacheSolid;
     }
-    if ((cells[index] & 0x80000000u) != 0u) {
+    int size = 1 << traversalLevel;
+    uint index = traversalPath[traversalLevel];
+    uint word = cells[index];
+    while (word > 1u && (word & 0x80000000u) == 0u) {
+        --traversalLevel;
+        size /= 2;
+        ivec3 bit = (cell >> traversalLevel) & 1;
+        index = word - 2u + uint(bit.x + 2 * bit.y + 4 * bit.z);
+        traversalPath[traversalLevel] = index;
+        word = cells[index];
+    }
+    leafMin = cell & ~(size - 1);
+    cacheMin = leafMin;
+    cacheSize = size;
+    cacheMixed = (cells[index] & 0x80000000u) != 0u;
+    cacheSolid = cells[index] != 0u;
+    if (cacheMixed) {
         ivec3 local = cell - leafMin;
         uint bit = uint(local.x + 4 * local.y + 16 * local.z);
         uint base = cells[index] & 0x7fffffffu;
+        cacheMask = uvec2(cells[base], cells[base + 1u]);
         leafMin = cell;
         leafMax = cell + 1;
-        return (cells[base + (bit >> 5u)] & (1u << (bit & 31u))) != 0u;
+        return (cacheMask[bit >> 5u] & (1u << (bit & 31u))) != 0u;
     }
     leafMax = min(leafMin + size, ivec3(push.dimensionsFlags.xyz));
     return cells[index] != 0u;
@@ -60,7 +85,8 @@ vec4 shadeSurface(vec3 hit, float pixelWidth, bool insideSolid) {
     float smallest = min(boundaryDistance.x, min(boundaryDistance.y, boundaryDistance.z));
     float largest = max(boundaryDistance.x, max(boundaryDistance.y, boundaryDistance.z));
     float edgeDistance = boundaryDistance.x + boundaryDistance.y + boundaryDistance.z - smallest - largest;
-    float edge = 1.0 - smoothstep(0.0, clamp(pixelWidth * 1.5, 0.01, 0.5), edgeDistance);
+    float screenScale = (push.dimensionsFlags.w & (1u << 23u)) != 0u ? 0.5 : 1.0;
+    float edge = 1.0 - smoothstep(0.0, clamp(pixelWidth * screenScale * 1.5, 0.01, 0.5), edgeDistance);
     float brightness = boundaryDistance.y <= boundaryDistance.x && boundaryDistance.y <= boundaryDistance.z
                            ? 0.65 : boundaryDistance.z <= boundaryDistance.x ? 0.45 : 0.85;
     vec3 tint = insideSolid ? vec3(1.0, 0.35, 0.08) :
@@ -95,7 +121,9 @@ void main() {
     if (t >= end)
         return;
 
-    bool insideSolid = occupied(ivec3(floor((push.camera.xyz - gridMin) / size)));
+    bool insideSolid = (push.dimensionsFlags.w & (1u << 22u)) != 0u;
+    traversalLevel = int((push.dimensionsFlags.w >> 17u) & 31u);
+    traversalPath[traversalLevel] = 0u;
     vec3 point = ro + rd * (t + size * 1e-4);
     ivec3 cell = clamp(ivec3(floor((point - gridMin) / size)),
                       ivec3(0), ivec3(push.dimensionsFlags.xyz) - 1);
@@ -122,9 +150,15 @@ void main() {
         }
         // Advance all tied axes to avoid visiting zero-width cells at corners.
         bvec3 crossed = lessThanEqual(nextT, vec3(next));
+        ivec3 previousCell = cell;
         cell = ivec3(floor((ro + rd * next - gridMin) / size));
         ivec3 across = mix(leafMin - 1, leafMax, greaterThan(safeDirection, vec3(0.0)));
         cell = mix(cell, across, crossed);
+        // Rounding at an edge can put a non-crossed axis back into the
+        // previous cell. Clamp every axis to the ray's direction so tied
+        // crossings cannot bounce between two cells until the safety limit.
+        cell = mix(min(cell, previousCell), max(cell, previousCell),
+                   greaterThan(safeDirection, vec3(0.0)));
         t = next;
         if (!contains(cell)) {
             if (insideSolid) {
@@ -133,5 +167,10 @@ void main() {
             }
             return;
         }
+        // Retain the ray's ancestor path. Ascend only as far as the most
+        // significant changed coordinate bit; never restart at the root.
+        uvec3 changed = uvec3(previousCell ^ cell);
+        int ancestor = findMSB(changed.x | changed.y | changed.z) + 1;
+        traversalLevel = max(traversalLevel, ancestor);
     }
 }

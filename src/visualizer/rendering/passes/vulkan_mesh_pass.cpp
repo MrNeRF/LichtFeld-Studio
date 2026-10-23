@@ -131,6 +131,51 @@ namespace lfs::vis {
         };
         static_assert(sizeof(CollisionPush) == 128);
 
+        std::optional<VkRect2D> collisionScissor(const glm::mat4& mvp, glm::vec3 lo, glm::vec3 hi,
+                                                 VkViewport viewport, VkRect2D original) {
+            std::array<glm::vec4, 8> corners;
+            for (int c = 0; c < 8; ++c) {
+                corners[c] = mvp * glm::vec4(c & 1 ? hi.x : lo.x, c & 2 ? hi.y : lo.y,
+                                             c & 4 ? hi.z : lo.z, 1);
+                for (int a = 0; a < 4; ++a)
+                    if (!std::isfinite(corners[c][a]))
+                        return original;
+            }
+            for (int plane = 0; plane < 6; ++plane) {
+                const bool outside = std::all_of(corners.begin(), corners.end(), [&](glm::vec4 p) {
+                    switch (plane) {
+                    case 0: return p.x < -p.w;
+                    case 1: return p.x > p.w;
+                    case 2: return p.y < -p.w;
+                    case 3: return p.y > p.w;
+                    case 4: return p.z < 0;
+                    default: return p.z > p.w;
+                    }
+                });
+                if (outside)
+                    return std::nullopt;
+            }
+            // A box crossing the eye plane needs homogeneous clipping. Keep
+            // the full scissor in that case rather than underestimating it.
+            if (std::any_of(corners.begin(), corners.end(), [](glm::vec4 p) { return p.w <= 0; }))
+                return original;
+            glm::vec2 low(1), high(-1);
+            for (auto p : corners) {
+                low = glm::min(low, glm::vec2(p) / p.w);
+                high = glm::max(high, glm::vec2(p) / p.w);
+            }
+            const glm::vec2 start(viewport.x, viewport.y), extent(viewport.width, viewport.height);
+            low = glm::clamp(start + (low * 0.5f + 0.5f) * extent - 1.0f, start, start + extent);
+            high = glm::clamp(start + (high * 0.5f + 0.5f) * extent + 1.0f, start, start + extent);
+            const int x = std::max(original.offset.x, int(std::floor(low.x)));
+            const int y = std::max(original.offset.y, int(std::floor(low.y)));
+            const int right = std::min(int(original.offset.x + original.extent.width), int(std::ceil(high.x)));
+            const int bottom = std::min(int(original.offset.y + original.extent.height), int(std::ceil(high.y)));
+            if (right <= x || bottom <= y)
+                return std::nullopt;
+            return VkRect2D{{x, y}, {uint32_t(right - x), uint32_t(bottom - y)}};
+        }
+
     } // namespace
 
     struct VulkanMeshPass::Impl {
@@ -1833,8 +1878,10 @@ namespace lfs::vis {
             blend.attachmentCount = 1;
             blend.pAttachments = &blend_attachment;
 
-            std::array<VkDynamicState, 3> dynamic_states{
+            std::vector<VkDynamicState> dynamic_states{
                 VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_LINE_WIDTH};
+            if (boxes && context->hasFragmentShadingRate())
+                dynamic_states.push_back(VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR);
             VkPipelineDynamicStateCreateInfo dynamic{};
             dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
             dynamic.dynamicStateCount = static_cast<std::uint32_t>(dynamic_states.size());
@@ -1894,6 +1941,12 @@ namespace lfs::vis {
             rendering_info.stencilAttachmentFormat =
                 hasStencilAspect(depth_format) ? depth_format : VK_FORMAT_UNDEFINED;
 
+            VkPipelineFragmentShadingRateStateCreateInfoKHR rate{};
+            rate.sType = VK_STRUCTURE_TYPE_PIPELINE_FRAGMENT_SHADING_RATE_STATE_CREATE_INFO_KHR;
+            rate.fragmentSize = {1, 1};
+            rate.combinerOps[0] = rate.combinerOps[1] = VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR;
+            if (boxes && context->hasFragmentShadingRate())
+                rendering_info.pNext = &rate;
             VkGraphicsPipelineCreateInfo pipeline_info{};
             pipeline_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
             pipeline_info.pNext = &rendering_info;
@@ -2139,17 +2192,38 @@ namespace lfs::vis {
             if (buffer_info.size > properties.limits.maxStorageBufferRange)
                 return logVkFailure(std::format("Collision occupancy buffer exceeds device storage-buffer limit ({} > {})",
                                                 buffer_info.size, properties.limits.maxStorageBufferRange));
-            buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-            buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-            VmaAllocationCreateInfo allocation_info{};
-            allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-            allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-            auto result = vmaCreateBuffer(allocator, &buffer_info, &allocation_info,
-                                          &gpu.occupancy_buffer, &gpu.occupancy_alloc, nullptr);
-            if (result != VK_SUCCESS)
-                return reportVkFailure("vmaCreateBuffer(collision)", result, "Collision occupancy upload allocation failed");
-            if (!writeBuffer(gpu.occupancy_alloc, packed.data(), buffer_info.size))
+            // Random shader traversal belongs in VRAM, not a host-preferred allocation.
+            if (!createDeviceLocalBuffer(buffer_info.size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                         gpu.occupancy_buffer, gpu.occupancy_alloc))
                 return false;
+            VkBuffer staging = VK_NULL_HANDLE;
+            VmaAllocation staging_alloc = VK_NULL_HANDLE;
+            if (!createStagingBuffer(buffer_info.size, packed.data(), staging, staging_alloc))
+                return false;
+            auto command = beginSingleTimeCommands();
+            if (command == VK_NULL_HANDLE) {
+                vmaDestroyBuffer(allocator, staging, staging_alloc);
+                return false;
+            }
+            VkBufferCopy copy{0, 0, buffer_info.size};
+            vkCmdCopyBuffer(command, staging, gpu.occupancy_buffer, 1, &copy);
+            VkBufferMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+            barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+            barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.buffer = gpu.occupancy_buffer;
+            barrier.size = VK_WHOLE_SIZE;
+            VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            dependency.bufferMemoryBarrierCount = 1;
+            dependency.pBufferMemoryBarriers = &barrier;
+            vkCmdPipelineBarrier2(command, &dependency);
+            const bool uploaded = endSingleTimeCommands(command);
+            vmaDestroyBuffer(allocator, staging, staging_alloc);
+            if (!uploaded)
+                return false;
+            VkResult result;
             VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
             VkDescriptorPoolCreateInfo pool_info{};
             pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -3009,7 +3083,7 @@ namespace lfs::vis {
                 return;
             for (const auto& item : params.items) {
                 if (!item.mesh || !item.collision_voxel_boxes || !item.collision_volume ||
-                    params.draw_group >= 32 || !((item.panel_mask >> params.draw_group) & 1u))
+                    item.collision_opacity <= 0 || item.collision_slice <= 0 || params.draw_group >= 32 || !((item.panel_mask >> params.draw_group) & 1u))
                     continue;
                 auto it = mesh_cache.find(item.mesh->id());
                 if (it == mesh_cache.end() || it->second.occupancy_descriptor == VK_NULL_HANDLE ||
@@ -3017,6 +3091,10 @@ namespace lfs::vis {
                     continue;
                 const auto& volume = *item.collision_volume;
                 const auto mvp = view_projection * item.model;
+                const auto bounds_scissor = collisionScissor(mvp, volume.origin,
+                                                             volume.origin + glm::vec3(volume.dimensions) * volume.settings.voxel_size, viewport, scissor);
+                if (!bounds_scissor)
+                    continue;
                 if (std::abs(glm::determinant(mvp)) < 1e-12f) {
                     LOG_ERROR("Cannot render collision overlay with a singular transform");
                     continue;
@@ -3027,6 +3105,16 @@ namespace lfs::vis {
                 push.dimensions_flags = glm::uvec4(volume.dimensions, (item.is_emphasized ? 1u : 0u) | (uint32_t(std::clamp(item.collision_slice, 0.0f, 1.0f) * 65535.0f) << 1));
                 push.viewport = {viewport.x, viewport.y, viewport.width, viewport.height};
                 push.camera = glm::inverse(item.model) * glm::vec4(params.camera_position, 1);
+                const auto camera_cell = volume.cell(glm::vec3(push.camera));
+                const auto clip_height = int(std::ceil(double(volume.dimensions.y) * (push.dimensions_flags.w >> 1u) / 65535.0));
+                const bool inside = volume.occupied(camera_cell) && camera_cell.y < clip_height;
+                int root_log = 0;
+                while ((1 << root_log) < std::max({volume.dimensions.x, volume.dimensions.y, volume.dimensions.z}))
+                    ++root_log;
+                push.dimensions_flags.w |= uint32_t(root_log) << 17u;
+                push.dimensions_flags.w |= uint32_t(inside) << 22u;
+                const bool fast = context->hasFragmentShadingRate() && !item.collision_sharp;
+                push.dimensions_flags.w |= uint32_t(fast) << 23u;
                 push.camera.w = std::clamp(item.collision_opacity, 0.0f, 1.0f);
                 vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, voxel_box_pipeline);
                 vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, voxel_box_pipeline_layout,
@@ -3034,8 +3122,11 @@ namespace lfs::vis {
                 vkCmdPushConstants(cb, voxel_box_pipeline_layout,
                                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                    0, sizeof(push), &push);
+                context->setFragmentShadingRate(cb, fast);
+                vkCmdSetScissor(cb, 0, 1, &*bounds_scissor);
                 vkCmdDraw(cb, 3, 1, 0, 0);
             }
+            vkCmdSetScissor(cb, 0, 1, &scissor);
         }
     };
 

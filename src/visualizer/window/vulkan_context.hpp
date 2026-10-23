@@ -233,6 +233,14 @@ namespace lfs::vis {
         [[nodiscard]] PFN_vkCmdEndConditionalRenderingEXT vkCmdEndConditionalRendering() const {
             return vk_cmd_end_conditional_rendering_;
         }
+        [[nodiscard]] bool hasFragmentShadingRate() const { return has_fragment_shading_rate_; }
+        void setFragmentShadingRate(VkCommandBuffer command, bool fast) const {
+            if (!has_fragment_shading_rate_)
+                return;
+            const VkExtent2D size{fast ? 2u : 1u, fast ? 2u : 1u};
+            const VkFragmentShadingRateCombinerOpKHR ops[2]{VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR, VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR};
+            vk_cmd_fragment_shading_rate_(command, &size, ops);
+        }
         [[nodiscard]] bool hasFillModeNonSolid() const { return has_fill_mode_non_solid_; }
         [[nodiscard]] bool hasWideLines() const { return has_wide_lines_; }
         [[nodiscard]] float minLineWidth() const { return line_width_range_[0]; }
@@ -621,6 +629,8 @@ namespace lfs::vis {
         bool has_conditional_rendering_ = false;
         bool has_host_image_copy_ = false;
         bool has_fill_mode_non_solid_ = false;
+        bool has_fragment_shading_rate_ = false;
+        PFN_vkCmdSetFragmentShadingRateKHR vk_cmd_fragment_shading_rate_ = nullptr;
         bool has_wide_lines_ = false;
         std::array<float, 2> line_width_range_{1.0f, 1.0f};
         lfs::rendering::VulkanDebugNameWriter debug_name_writer_;

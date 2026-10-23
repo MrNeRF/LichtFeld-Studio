@@ -660,6 +660,7 @@ namespace lfs::vis {
             item.collision_voxel_boxes = mesh.collision_voxel_boxes;
             item.collision_volume = mesh.collision_volume;
             item.collision_opacity = mesh.collision_display.opacity;
+            item.collision_sharp = mesh.collision_display.sharp;
             item.collision_slice = mesh.collision_display.slice;
             item.wireframe_color = settings.mesh_wireframe_color;
             item.wireframe_width = settings.mesh_wireframe_width;
