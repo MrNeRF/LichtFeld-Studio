@@ -1,8 +1,14 @@
 # Isolated HIP bring-up
 
-This directory is a standalone CMake project. The application does not include
-it and does not advertise an incomplete HIP tensor backend. Probes are off by
-default; the disabled configuration needs no SDK, compiler, or GPU.
+This directory contains the standalone bring-up probes, separate from the
+application HIP backend. Probes are off by default; the disabled configuration
+needs no SDK, compiler, or GPU.
+
+For the SDK-independent CPU suite, application contract compilation and optional
+local GPU execution, see the [HIP backend test entry points](../../docs/docs/development/hip-backend.md#cpu-and-gpu-test-entry-points).
+The CPU suite is configured from `tests/hip/cpu`; it does not initialize a GPU.
+The four manual HIP workflows compile the application contracts but do not run
+GPU tests on hosted runners.
 
 On Windows, run the following from a Visual Studio x64 developer shell, using
 an explicitly selected ROCm SDK root and a CMake version of at least 3.30:

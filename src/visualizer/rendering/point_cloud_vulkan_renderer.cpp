@@ -2002,6 +2002,11 @@ namespace lfs::vis {
                 return std::unexpected<std::string>(u.error());
             }
 
+            // Finish Tensor conversions/uploads before excluding HIP producers.
+            // Resident shared buffers must remain Vulkan-owned through submit;
+            // ready() alone only completes preceding producer work.
+            const auto consumer_scope = context->tensorInterop().consumer_scope();
+
             // Make the just-uploaded data visible to the vertex stage.
             VkMemoryBarrier2 xfer_to_vert{};
             xfer_to_vert.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;

@@ -21,7 +21,7 @@ std::optional<std::string> last_error() {
         auto& ops=static_cast<core::internal::HipBackendOps&>(core::internal::backend_ops(core::GpuBackend::HIP));
         (void)ops.queue_ready({});
         return std::nullopt;
-    } catch(const std::exception& error) { return std::string(error.what()); }
+    } catch(const std::exception& error) { /* LFS-CENSUS-OK(empty-catch): Return failure text through the session-validation callback. */  return std::string(error.what()); }
 }
 }
 const gpu_ops::SessionOps& hip_session_ops() {

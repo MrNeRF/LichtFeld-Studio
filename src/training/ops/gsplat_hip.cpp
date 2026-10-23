@@ -38,7 +38,7 @@ struct Implementation {
 };
 struct Saved final:BackendState {
     std::unique_ptr<Implementation> impl;std::string message;
-    ~Saved()override{if(impl)try{impl->close();}catch(const std::exception& e){std::fprintf(stderr,"[error] HIP Gsplat retained after failed completion: %s\n",e.what());(void)impl.release();}}
+    ~Saved()override{if(impl)try{impl->close();}catch(const std::exception& e){ /* LFS-CENSUS-OK(empty-catch): Return an explicit raster failure or report failed cleanup while retaining owners. */ std::fprintf(stderr,"[error] HIP Gsplat retained after failed completion: %s\n",e.what());(void)impl.release();}}
 };
 Saved& state(GsplatSaved& s){if(!s.backend)s.backend=std::make_unique<Saved>();auto* p=dynamic_cast<Saved*>(s.backend.get());require(p,"HIP Gsplat received a foreign saved state");return *p;}
 State create(){return std::make_unique<Saved>();}
@@ -86,7 +86,7 @@ RasterResult forward(GsplatSaved& saved,const SplatInputs& splats,In view,In rad
         if(channels==8)outputs.normal=s.packed.slice(0,4,7);saved.camera_rays=rays_out?s.rays:Tensor{};saved.equirectangular=camera==3;
         uint64_t bytes=0,intersections=0;if(int c=s.lfs_hip_application_gsplat_info(s.handle,&bytes,&intersections,&error))throw hip::TrainingError(c,error);return {RasterResult::Code::Success,intersections>0,{}};
     }catch(const hip::TrainingError& e){box.message=e.what();return {e.status==LFS_HIP_TRAIN_RESOURCE_EXHAUSTED?RasterResult::Code::ResourceExhausted:RasterResult::Code::Failed,false,box.message};}
-    catch(const std::exception& e){box.message=e.what();return {RasterResult::Code::Failed,false,box.message};}
+    catch(const std::exception& e){ /* LFS-CENSUS-OK(empty-catch): Return an explicit raster failure or report failed cleanup while retaining owners. */ box.message=e.what();return {RasterResult::Code::Failed,false,box.message};}
 }
 void backward(GsplatSaved& saved,In image,In alpha,const GsplatGradients& g,Out density,In error_map,In edge_map,Out edge_scores,Out shares) {
     const core::TensorExecutionTarget::Scope execution(core::TensorExecutionTarget::default_queue(core::GpuBackend::HIP));
@@ -104,8 +104,8 @@ void backward(GsplatSaved& saved,In image,In alpha,const GsplatGradients& g,Out 
     if(s.channels!=1){b.grad_sh0=gradient(AdamSlot::Sh0,size_t(s.count)*3);if(s.params.sh.active_bases>1)b.grad_shN=gradient(AdamSlot::ShN,core::sh_swizzled_float_count(s.count,s.params.sh.layout_bases-1));}
     LfsHipError e{};if(int c=s.lfs_hip_application_gsplat_backward(s.handle,&b,&e))throw hip::TrainingError(c,e);s.live=false;
 }
-void release(GsplatSaved& saved)noexcept{auto* p=dynamic_cast<Saved*>(saved.backend.get());if(!p||!p->impl)return;try{p->impl->release();}catch(const std::exception& e){std::fprintf(stderr,"[error] HIP Gsplat frame retained: %s\n",e.what());}}
-bool release_caches(GsplatSaved& saved)noexcept{auto* p=dynamic_cast<Saved*>(saved.backend.get());if(!p||!p->impl)return true;if(p->impl->live)return false;try{p->impl->close();p->impl.reset();saved.camera_rays={};return true;}catch(const std::exception& e){std::fprintf(stderr,"[error] HIP Gsplat caches retained: %s\n",e.what());return false;}}
+void release(GsplatSaved& saved)noexcept{auto* p=dynamic_cast<Saved*>(saved.backend.get());if(!p||!p->impl)return;try{p->impl->release();}catch(const std::exception& e){ /* LFS-CENSUS-OK(empty-catch): Return an explicit raster failure or report failed cleanup while retaining owners. */ std::fprintf(stderr,"[error] HIP Gsplat frame retained: %s\n",e.what());}}
+bool release_caches(GsplatSaved& saved)noexcept{auto* p=dynamic_cast<Saved*>(saved.backend.get());if(!p||!p->impl)return true;if(p->impl->live)return false;try{p->impl->close();p->impl.reset();saved.camera_rays={};return true;}catch(const std::exception& e){ /* LFS-CENSUS-OK(empty-catch): Return an explicit raster failure or report failed cleanup while retaining owners. */ std::fprintf(stderr,"[error] HIP Gsplat caches retained: %s\n",e.what());return false;}}
 void record(const GsplatSaved& saved,In,In,In,In,In){auto* p=dynamic_cast<const Saved*>(saved.backend.get());if(!p||!p->impl)return;uint64_t bytes=0,intersections=0;LfsHipError e{};if(int c=p->impl->lfs_hip_application_gsplat_info(p->impl->handle,&bytes,&intersections,&e))throw hip::TrainingError(c,e);diagnostics::VramProfiler::instance().recordCurrentBytes("rasterizer.gsplat","hip.workspace",bytes,diagnostics::VramAllocationMethod::Arena);}
 }
 const gpu_ops::GsplatRasterOps& hip_gsplat_ops(){static const gpu_ops::GsplatRasterOps ops{create,forward,backward,release,record,release_caches,

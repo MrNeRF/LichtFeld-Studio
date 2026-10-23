@@ -357,7 +357,7 @@ namespace lfs::io {
             if (!running_.load(std::memory_order_acquire)) return;
             bytes.shrink_to_fit();
             put_in_jpeg_cache(key, std::make_shared<std::vector<uint8_t>>(std::move(bytes)));
-        } catch (const std::exception& error) {
+        } catch (const std::exception& error) { /* LFS-CENSUS-OK(empty-catch): Warn once and preserve the prepared image if optional cache encoding fails. */
             warn_portable_cache_failure(error.what());
         }
     }

@@ -53,7 +53,7 @@ extern "C" int lfs_hip_buffer_import_external(LfsHipContext* context,
             try {
                 release_buffer_resources(buffer.get());
                 context->buffers.erase(buffer.get());
-            } catch (...) {
+            } catch (...) { /* LFS-CENSUS-OK(empty-catch): Retain the registered importer for context teardown and propagate the outer ABI failure. */
                 // Preserve the registered handle for context teardown; the exporter
                 // must remain alive when the import could not be safely destroyed.
                 *output = buffer.release();

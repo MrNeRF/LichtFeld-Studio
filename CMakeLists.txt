@@ -772,6 +772,7 @@ if(LFS_HIP_RUNTIME)
             src/core/tensor/backend/hip/os_metrics.cpp
             src/core/tensor/backend/hip/hip_backend_ops.cpp
             src/core/tensor/backend/hip/external_access.cpp
+            src/core/tensor/backend/hip/external_access_coordinator.cpp
             src/core/tensor/backend/hip/hip_image_ops.cpp
             src/core/tensor/backend/hip/hip_shared_image_ops.cpp
             src/core/tensor/backend/hip/hip_unsupported_ops.cpp)
@@ -1086,11 +1087,19 @@ add_subdirectory(src/rendering)  # Rendering module (lfs::rendering namespace)
 add_subdirectory(src/sequencer)  # Sequencer module (lfs::sequencer namespace)
 add_subdirectory(src/preprocessing) # CLI preprocessing module (ONNXRuntime)
 add_subdirectory(src/visualizer) # Visualizer module (lfs::vis namespace)
+if(LFS_TENSOR_HIP AND LFS_TENSOR_VULKAN)
+    add_executable(lfs_hip_secondary_viewer_contract EXCLUDE_FROM_ALL tests/hip/secondary_viewer_contract.cpp)
+    target_compile_features(lfs_hip_secondary_viewer_contract PRIVATE cxx_std_23)
+    target_include_directories(lfs_hip_secondary_viewer_contract PRIVATE
+        src src/visualizer src/rendering/include src/sequencer/include src/preprocessing/include external)
+    target_link_libraries(lfs_hip_secondary_viewer_contract PRIVATE lfs_core lfs_visualizer lfs_io $<$<BOOL:${LFS_BUILD_TRAINER}>:lfs_training> SDL3::SDL3 Vulkan::Vulkan)
+endif()
 if(TARGET lfs_hip_os_metrics_contract)
     target_link_libraries(lfs_hip_os_metrics_contract PRIVATE lfs_visualizer)
     target_include_directories(lfs_hip_os_metrics_contract PRIVATE src/visualizer)
     target_compile_definitions(lfs_hip_os_metrics_contract PRIVATE LFS_HIP_METRICS_GUI=1)
 endif()
+include(cmake/HipContracts.cmake)
 if(LFS_AMD_FSR3_AVAILABLE)
     add_subdirectory(src/scene_upscalers/amd_fsr3)
 endif()

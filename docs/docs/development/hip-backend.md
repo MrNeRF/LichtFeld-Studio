@@ -196,6 +196,72 @@ photometric workspace nor changes the target dtype.
 
 ## Completion status and remaining work
 
+### CPU and GPU test entry points
+
+The four manual HIP workflows run the SDK-independent CPU suite before compiling
+the application and the `lfs_hip_compile_contracts` target. The latter compiles
+the host-side HIP contracts, including the native viewer consumers; it does not
+run GPU work. Hosted GitHub runners are not GPU validation.
+
+Run the CPU suite independently with a C++23 compiler, Python and the application's
+GLM headers. It links neither Core nor HIP/CUDA runtime libraries:
+
+```sh
+cmake -S tests/hip/cpu -B build-hip-cpu -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLFS_CPU_DEPENDENCY_INCLUDE=/absolute/path/to/dependencies/include
+cmake --build build-hip-cpu
+ctest --test-dir build-hip-cpu --output-on-failure --no-tests=error
+```
+
+The suite covers producer/consumer exclusion and recovery with synthetic storage,
+GPU identity collisions, independent renderer/tensor restart policy, native
+memory-sample mapping, architecture validation, Windows packaging exclusions,
+compression policy and deterministic adaptation of the current upstream kernel
+sources. An optional `-DTEST_SDK=/absolute/path/to/sdk` additionally checks the
+compiler's positive offload-compression capability without executing a GPU.
+
+For local GPU execution, configure the application with
+`-DLFS_HIP_REGISTER_GPU_TESTS=ON`, build `lfs_hip_compile_contracts`, then run
+`ctest --test-dir <application-build> -R "^hip[.]gpu[.]" --output-on-failure`. HIP tests carry
+both `hip` and `gpu` labels and run serially. The three contracts requiring MoGe
+weights/reference data, LPIPS weights, or a fresh checkpoint result directory
+retain their explicit CLI arguments and are compiled but not automatically
+registered. The dataset trainer and performance probes also keep their documented
+manual protocols. Do not infer dataset quality or performance from these checks.
+
+`lfs_hip_secondary_viewer_contract <Vulkan-device> [shared|staged]` exercises the
+actual point-cloud renderer and reference-image publication with HIP tensors.
+Run it once on the same physical adapter and once with a distinct Vulkan adapter
+when available. Set `LFS_VK_VALIDATION=1` before startup to request validation layers;
+check that the layer is available and inspect errors as well as the exit status.
+
+### Secondary viewer consumers and memory telemetry
+
+Point-cloud rendering prepares Tensor uploads/conversions before acquiring the
+HIP/Vulkan consumer scope, then keeps shared buffers Vulkan-owned through command
+recording and submission. It retains direct shared vertex buffers on a matching
+adapter. Reference images have a different lifetime: their frame is submitted
+after UI callbacks which may themselves use HIP. They publish a completed,
+immutable CPU snapshot into renderer-owned storage on generation changes, instead
+of retaining external HIP ownership across UI callbacks. Cached generations do
+not repeat that upload. The ordinary native Vulkan splat rendering path is
+unchanged by this reference-image policy.
+
+HIP memory display maps only samples matched to its selected adapter. A valid
+native process budget is distinct from whole-device usage; missing telemetry
+stays unknown and does not borrow CUDA telemetry. CPU tests cover valid, absent,
+stale-invalid and over-budget samples. These tests must not require telemetry to
+be absent on a machine where Windows DXGI supplies it.
+
+The neutrality gate recognizes HIP operation adapters and native implementations
+at the same boundary as the existing CUDA/Vulkan implementations. Its named HIP
+policy seams allow public backend selection only: private Tensor includes and
+raw HIP API calls remain forbidden in neutral consumers. Reviewed catch handlers
+document their C-ABI status conversion, optional fallback, or failure-path owner
+retention with the existing census annotation. The kernel-launch gate recognizes
+HIP error checks without relaxing the existing CUDA check window.
+
 ### Execution sequence
 
 Complete the following gates locally before replacing the portable package.

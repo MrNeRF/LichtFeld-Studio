@@ -94,7 +94,7 @@ struct FastState final : BackendState {
     ~FastState() override {
         if (!implementation) return;
         try { implementation->close(); }
-        catch (const std::exception& error) {
+        catch (const std::exception& error) { /* LFS-CENSUS-OK(empty-catch): Return an explicit raster failure or report failed cleanup while retaining owners. */
             std::fprintf(stderr, "[error] HIP application raster retained after incomplete teardown: %s\n", error.what());
             (void)implementation.release(); // retain module, queue, model and outputs
         }
@@ -170,7 +170,7 @@ RasterResult forward(FastSaved& saved, const SplatInputs& splats, In view, In ca
         return {RasterResult::Code::Success,info.instances>0,{}};
     } catch (const hip::TrainingError& error) {
         return failure(owner,error.status==LFS_HIP_TRAIN_RESOURCE_EXHAUSTED ? RasterResult::Code::ResourceExhausted : RasterResult::Code::Failed,error.what());
-    } catch (const std::exception& error) { return failure(owner,RasterResult::Code::Failed,error.what()); }
+    } catch (const std::exception& error) { /* LFS-CENSUS-OK(empty-catch): Return an explicit raster failure or report failed cleanup while retaining owners. */  return failure(owner,RasterResult::Code::Failed,error.what()); }
 }
 void backward(FastSaved& saved, const RenderGradients& gradients, Out densification, In error_map, In edge_map, Out edge_scores,
               const BackwardAdam& adam, DensificationType densification_type) {
@@ -289,7 +289,7 @@ void release_caches(FastSaved& saved) noexcept {
     auto* owner=dynamic_cast<FastState*>(saved.backend.get());
     if (!owner || !owner->implementation || owner->implementation->live) return;
     try { owner->implementation->close(); owner->implementation.reset(); }
-    catch (const std::exception& error) { std::fprintf(stderr,"[error] HIP application FastGS caches retained: %s\n",error.what()); }
+    catch (const std::exception& error) { /* LFS-CENSUS-OK(empty-catch): Return an explicit raster failure or report failed cleanup while retaining owners. */  std::fprintf(stderr,"[error] HIP application FastGS caches retained: %s\n",error.what()); }
 }
 }
 const gpu_ops::FastRasterOps& hip_fast_ops() {

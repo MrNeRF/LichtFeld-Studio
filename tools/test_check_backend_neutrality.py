@@ -10,12 +10,34 @@ import io
 import shutil
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import check_backend_neutrality as gate
 
 
 class NeutralTrainerIncludeTest(unittest.TestCase):
+    def test_hip_implementations_follow_the_existing_native_boundary(self) -> None:
+        for relative in ("src/training/ops/session_hip.cpp",
+                         "src/training/include/lfs/training/ops/session_hip.hpp",
+                         "src/training/hip/application_tensor.hpp"):
+            self.assertFalse(gate.neutral_trainer_file(relative), relative)
+
+    def test_hip_policy_exception_does_not_allow_native_calls_or_private_headers(self) -> None:
+        source = ('#include "core/tensor/backend/hip/hip_backend_ops.hpp"\n'
+                  '#include <hip/hip_runtime.h>\n'
+                  'bool f(B b) { hipDeviceSynchronize(); return b == core::GpuBackend::HIP; }\n')
+        path = gate.PROJECT_ROOT / "src/training/trainer.cpp"
+        with patch.object(Path, "read_text", return_value=source):
+            kinds = {finding[1] for finding in gate.scan(path)}
+        self.assertNotIn("backend-branch", kinds)
+        self.assertIn("private-header", kinds)
+        self.assertIn("hip-header", kinds)
+        self.assertIn("hip-native-api", kinds)
+        path = gate.PROJECT_ROOT / "src/training/unreviewed_policy.cpp"
+        with patch.object(Path, "read_text", return_value=source):
+            self.assertIn("backend-branch", {finding[1] for finding in gate.scan(path)})
+
     def test_neutral_trainer_file_rejects_kernel_and_cuda_headers(self) -> None:
         relative = "src/training/trainer.cpp"
         self.assertTrue(gate.neutral_trainer_file(relative))

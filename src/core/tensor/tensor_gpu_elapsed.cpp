@@ -64,7 +64,7 @@ namespace lfs::core {
                 auto& ops = static_cast<internal::HipBackendOps&>(internal::backend_ops(backend));
                 impl_->hip = ops.create_timestamps(event_count);
                 impl_->ready = impl_->hip != nullptr;
-            } catch (const std::exception& error) {
+            } catch (const std::exception& error) { /* LFS-CENSUS-OK(empty-catch): Report optional timestamp unavailability without disrupting training. */
                 std::fprintf(stderr, "[warn] HIP GPU timestamps unavailable: %s\n", error.what());
             }
             return;

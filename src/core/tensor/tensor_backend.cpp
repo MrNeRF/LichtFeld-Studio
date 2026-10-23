@@ -821,7 +821,7 @@ namespace lfs::core {
         if (backend == GpuBackend::HIP) {
             try {
                 return selected_hip_device() >= 0;
-            } catch (...) { return false; }
+            } catch (...) { /* LFS-CENSUS-OK(empty-catch): Availability probes return unavailable without initializing a Tensor context. */  return false; }
         }
 #endif
         if (backend == GpuBackend::Vulkan) {
@@ -1295,7 +1295,7 @@ namespace lfs::core {
                 std::copy_n(identity.uuid,result.uuid.size(),result.uuid.begin());
                 internal::hip_process_budget(identity, result);
                 return result;
-            } catch(...) {return std::nullopt;}
+            } catch(...) { /* LFS-CENSUS-OK(empty-catch): Availability probes return unavailable without initializing a Tensor context. */ return std::nullopt;}
         }
 #endif
         if (backend == GpuBackend::CUDA) {

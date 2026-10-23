@@ -150,7 +150,7 @@ namespace lfs::core {
             int percent = -1;
             if (input >> percent && percent >= 0 && percent <= 100) return static_cast<float>(percent);
 #endif
-        } catch (...) { }
+        } catch (...) { /* LFS-CENSUS-OK(empty-catch): Optional telemetry returns unavailable instead of a different device sample. */  }
         return -1.f;
     }
 }

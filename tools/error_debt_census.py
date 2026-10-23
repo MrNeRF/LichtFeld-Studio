@@ -449,6 +449,8 @@ KERNEL_CHECK_MARKERS = (
     "LFS_ENSURE_CUDA_SUCCESS",
     "cudaGetLastError",
     "cudaPeekAtLastError",
+    "hipGetLastError",
+    "hipPeekAtLastError",
 )
 
 
@@ -765,6 +767,14 @@ class AllowlistEntry:
 
 
 ALLOWLIST: tuple[AllowlistEntry, ...] = (
+    AllowlistEntry(
+        rule="unchecked-kernel-launch",
+        file="src/core/tensor/backend/hip/multinomial_runtime.hpp",
+        line_pattern=r"multinomial_draw_native<<<",
+        owner="hip-tensor",
+        reason="the replacement branch is checked by hipGetLastError immediately after the shared if/else; the lexical three-line window crosses the unused alternative branch",
+        expiry="when the lexical launch checker models branch joins",
+    ),
     AllowlistEntry(
         rule="expected-string",
         file="src/core/include/core/error.hpp",

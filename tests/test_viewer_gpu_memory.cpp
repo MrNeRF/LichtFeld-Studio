@@ -4,31 +4,56 @@
 #include "core/gpu_device_info.hpp"
 #include "core/tensor_backend.hpp"
 #include "gui/gpu_memory_query.hpp"
+#include "gui/hip_memory_status.hpp"
 
 #include <gtest/gtest.h>
 
 using namespace lfs::core;
 
 #ifdef LFS_TENSOR_HIP
-TEST(ViewerGpuMemory, HipStatusNeverUsesAnotherAdaptersCudaTelemetry) {
-    if(!gpu_backend_available(GpuBackend::HIP))GTEST_SKIP()<<"HIP unavailable";
-    const auto before=gpu_backend_live(GpuBackend::HIP);
-    const auto device=gpu_backend_device_info(GpuBackend::HIP);
-    ASSERT_TRUE(device);
-    const auto status=lfs::vis::gui::queryGpuMemory(GpuBackend::HIP);
-    EXPECT_FALSE(status.device_name.empty());
-    EXPECT_EQ(status.total,device->total_memory_bytes);
+TEST(ViewerGpuMemory, HipStatusUsesOnlyItsDeviceMatchedNativeSample) {
+    GpuDeviceInfo device;
+    device.name = "Selected HIP adapter";
+    device.total_memory_bytes = 8ull << 30;
+    device.supports_process_memory_budget = true;
+    device.process_memory_budget_bytes = 6ull << 30;
+    device.process_memory_used_bytes = 2ull << 30;
+    const auto status = lfs::vis::gui::selectHipGpuMemory(&device);
+    EXPECT_EQ(status.device_name, device.name);
+    EXPECT_EQ(status.total, device.total_memory_bytes);
     EXPECT_TRUE(status.uses_process_budget);
-    EXPECT_EQ(status.process_budget,0u);
-    EXPECT_EQ(status.process_budget_used,0u);
-    EXPECT_EQ(status.total_used,0u);
-    EXPECT_EQ(status.process_used,0u);
-    EXPECT_FALSE(status.process_valid);
+    EXPECT_TRUE(status.native_process_budget);
+    EXPECT_FALSE(status.native_metrics_unavailable);
+    EXPECT_EQ(status.process_budget, device.process_memory_budget_bytes);
+    EXPECT_EQ(status.process_used, device.process_memory_used_bytes);
+    EXPECT_TRUE(status.process_valid);
+    EXPECT_FALSE(status.process_over_budget);
+    EXPECT_EQ(status.total_used, 0u);
     EXPECT_FALSE(status.gpu_utilization_valid);
-    EXPECT_STREQ(lfs::vis::gui::gpuProcessMemoryTooltipKey(status),"ui.vram_native_unavailable_tooltip");
-    EXPECT_STREQ(lfs::vis::gui::gpuDeviceMemoryTooltipKey(status),"ui.vram_native_unavailable_tooltip");
-    EXPECT_EQ(gpu_backend_live(GpuBackend::HIP),before);
+    EXPECT_STREQ(lfs::vis::gui::gpuDeviceMemoryTooltipKey(status), "ui.vram_hip_budget_tooltip");
+    device.process_memory_used_bytes = device.process_memory_budget_bytes + 1;
+    EXPECT_TRUE(lfs::vis::gui::selectHipGpuMemory(&device).process_over_budget);
 }
+
+TEST(ViewerGpuMemory, HipMissingTelemetryRemainsUnknown) {
+    GpuDeviceInfo device;
+    device.name = "Selected HIP adapter";
+    device.total_memory_bytes = 8ull << 30;
+    // Stale values must not become valid without the native validity flag.
+    device.process_memory_budget_bytes = 6ull << 30;
+    device.process_memory_used_bytes = 2ull << 30;
+    for (const auto* sample : {&device, static_cast<GpuDeviceInfo*>(nullptr)}) {
+        const auto status = lfs::vis::gui::selectHipGpuMemory(sample);
+        EXPECT_TRUE(status.native_metrics_unavailable);
+        EXPECT_FALSE(status.native_process_budget);
+        EXPECT_FALSE(status.process_valid);
+        EXPECT_EQ(status.process_budget, 0u);
+        EXPECT_EQ(status.process_used, 0u);
+        EXPECT_FALSE(status.gpu_utilization_valid);
+        EXPECT_STREQ(lfs::vis::gui::gpuProcessMemoryTooltipKey(status), "ui.vram_native_unavailable_tooltip");
+    }
+}
+
 #endif
 
 TEST(ViewerGpuMemory, VulkanStatusDoesNotRequireCudaOrReportDeviceUsageAsProcessUsage) {

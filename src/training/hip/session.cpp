@@ -227,7 +227,7 @@ namespace lfs::training::hip {
     Session::~Session() {
         try {
             close();
-        } catch (const std::exception& error) {
+        } catch (const std::exception& error) { /* LFS-CENSUS-OK(empty-catch): Report failed teardown and retain unsafe native owners. */
             std::fprintf(stderr, "[error] HIP training teardown failed; session, module and model owner retained: %s\n", error.what());
             (void)impl_.release();
         }

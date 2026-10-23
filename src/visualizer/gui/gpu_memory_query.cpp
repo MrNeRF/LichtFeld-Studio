@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/gpu_memory_query.hpp"
+#include "gui/hip_memory_status.hpp"
 #include "core/gpu_device_info.hpp"
 #include "core/host_metrics.hpp"
 #include "core/tensor_backend.hpp"
@@ -430,18 +431,15 @@ namespace lfs::vis::gui {
             }
         }
 #endif
-        if (backend == lfs::core::GpuBackend::Vulkan || backend == lfs::core::GpuBackend::Metal
 #ifdef LFS_TENSOR_HIP
-            || backend == lfs::core::GpuBackend::HIP
+        if (backend == lfs::core::GpuBackend::HIP) {
+            auto info = selectHipGpuMemory(device ? &*device : nullptr);
+            info.device_name = shortenGpuDeviceName(std::move(info.device_name));
+            return info;
+        }
 #endif
-        ) {
+        if (backend == lfs::core::GpuBackend::Vulkan || backend == lfs::core::GpuBackend::Metal) {
             GpuMemoryInfo info;
-#ifdef LFS_TENSOR_HIP
-            info.native_metrics_unavailable = backend == lfs::core::GpuBackend::HIP &&
-                                               !(device && device->supports_process_memory_budget);
-            info.native_process_budget = backend == lfs::core::GpuBackend::HIP &&
-                                          device && device->supports_process_memory_budget;
-#endif
             if (device) {
                 info.device_name = shortenGpuDeviceName(device->name);
                 info.total = device->total_memory_bytes;
@@ -450,13 +448,6 @@ namespace lfs::vis::gui {
             if (device && device->supports_process_memory_budget) {
                 info.process_budget = device->process_memory_budget_bytes;
                 info.process_budget_used = device->process_memory_used_bytes;
-#ifdef LFS_TENSOR_HIP
-                if (info.native_process_budget) {
-                    info.process_valid = true;
-                    info.process_used = info.process_budget_used;
-                    info.process_over_budget = info.process_budget_used > info.process_budget;
-                }
-#endif
             }
             return info;
         }

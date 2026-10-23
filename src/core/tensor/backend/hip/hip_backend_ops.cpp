@@ -1001,7 +1001,7 @@ namespace lfs::core::internal {
             check(impl_->lfs_hip_buffer_release(impl_->context, value.buffer, &error), error);
             impl_->live -= bytes;
             impl_->allocations.erase(found);
-        } catch (const std::exception& error) { std::fprintf(stderr, "[error] HIP Tensor deallocation failed; allocation retained: %s\n", error.what()); }
+        } catch (const std::exception& error) { /* LFS-CENSUS-OK(empty-catch): Report failed cleanup and retain GPU owners until safe teardown. */  std::fprintf(stderr, "[error] HIP Tensor deallocation failed; allocation retained: %s\n", error.what()); }
     }
     // These small matrix building blocks reuse the native queue and storage
     // validation; no host download or fallback to another GPU backend.
@@ -1685,7 +1685,7 @@ namespace lfs::core::internal {
                     LfsHipError error{};
                     check(impl->lfs_hip_buffer_release(impl->context, handle, &error), error);
                     if (registered) impl->allocations.erase(pointer);
-                } catch (const std::exception& error) {
+                } catch (const std::exception& error) { /* LFS-CENSUS-OK(empty-catch): Report failed cleanup and retain GPU owners until safe teardown. */
                     // A failed device drain cannot make freeing the exporter safe.
                     // Retain both domains, as for the existing failed context teardown.
                     (void)new std::pair<std::shared_ptr<Impl>, std::shared_ptr<void>>(impl, exporter);

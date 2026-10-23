@@ -616,16 +616,32 @@ namespace lfs::vis {
             const auto bytes = std::size_t(channel.source_size.x) * channel.source_size.y * 4;
             if (!prepared.is_valid() || prepared.bytes() != bytes)
                 throw std::runtime_error("Viewport image dimensions do not match the source tensor");
-            if (!unit.snapshot.is_valid() || unit.snapshot.shape() != prepared.shape() ||
-                unit.snapshot.dtype() != prepared.dtype() || lfs::core::gpu_backend_of(unit.snapshot) != backend)
-                unit.snapshot = context.tensorInterop().empty(prepared.shape(), prepared.dtype(), backend);
-            unit.snapshot.copy_from(prepared);
-            const auto storage = context.tensorInterop().buffer(unit.snapshot);
-            if (!storage)
-                throw std::runtime_error("Viewport image upload requires Vulkan-visible tensor storage");
-            unit.storage = *storage;
-            const lfs::core::Tensor* input = &unit.snapshot;
-            unit.ready = context.tensorInterop().ready({&input, 1});
+#ifdef LFS_TENSOR_HIP
+            if (backend == lfs::core::GpuBackend::HIP) {
+                // Reference images are published only on a generation change.
+                // Keep their completed snapshot independent of the producer:
+                // this frame is submitted later, after UI callbacks which may
+                // themselves need HIP. A consumer scope cannot span those calls.
+                unit.snapshot = prepared.cpu();
+                const auto storage = context.tensorInterop().host_snapshot_buffer(unit.snapshot);
+                if (!storage)
+                    throw std::runtime_error("HIP viewport image requires a completed host publication");
+                unit.storage = *storage;
+                unit.ready = {};
+            } else
+#endif
+            {
+                if (!unit.snapshot.is_valid() || unit.snapshot.shape() != prepared.shape() ||
+                    unit.snapshot.dtype() != prepared.dtype() || lfs::core::gpu_backend_of(unit.snapshot) != backend)
+                    unit.snapshot = context.tensorInterop().empty(prepared.shape(), prepared.dtype(), backend);
+                unit.snapshot.copy_from(prepared);
+                const auto storage = context.tensorInterop().buffer(unit.snapshot);
+                if (!storage)
+                    throw std::runtime_error("Viewport image upload requires Vulkan-visible tensor storage");
+                unit.storage = *storage;
+                const lfs::core::Tensor* input = &unit.snapshot;
+                unit.ready = context.tensorInterop().ready({&input, 1});
+            }
             pending_frame_barriers_.push_back({&unit, plan.target, &channel, channel.source_generation});
         }
         pending_uploads_.clear();

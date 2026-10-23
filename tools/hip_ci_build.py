@@ -29,7 +29,17 @@ def main():
                '-DLFS_ENABLE_CUDA_DEVICE_DEBUG=OFF']
     subprocess.run([sys.executable, str(root / 'tools/ci_retry_configure.py'), '--'] + command,
                    check=True)
-    subprocess.run(['cmake', '--build', str(build), '--target', 'LichtFeld-Studio',
+    # Compile and execute the host contracts before the expensive GPU image
+    # build. This suite links neither Core, HIP nor CUDA and creates no context.
+    cpu = build / 'cpu-contracts'
+    triplet = 'x64-windows' if os.name == 'nt' else 'x64-linux'
+    subprocess.run(['cmake', '-S', str(root / 'tests/hip/cpu'), '-B', str(cpu),
+                    '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=' + args.build_type,
+                    '-DTEST_SDK=' + str(sdk),
+                    '-DLFS_CPU_DEPENDENCY_INCLUDE=' + str(build / 'vcpkg_installed' / triplet / 'include')], check=True)
+    subprocess.run(['cmake', '--build', str(cpu), '--parallel', '2'], check=True)
+    subprocess.run(['ctest', '--test-dir', str(cpu), '--output-on-failure', '--no-tests=error'], check=True)
+    subprocess.run(['cmake', '--build', str(build), '--target', 'LichtFeld-Studio', 'lfs_hip_compile_contracts',
                     '--parallel', '2'], check=True)
     # These checks require neither a GPU nor a loaded AMD driver.
     for name, flags in [

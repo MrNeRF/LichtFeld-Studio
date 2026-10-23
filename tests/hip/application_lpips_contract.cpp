@@ -6,6 +6,7 @@
 #include <core/detail/tensor_half.hpp>
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -19,7 +20,7 @@ const TrainingOps& vulkan_training_ops_table(){++other_tables;static const Train
 const TrainingOps& metal_training_ops_table(){++other_tables;static const TrainingOps t{.backend=GpuBackend::Metal};return t;}
 }
 void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
-float half(float value){return core::detail::tensor_half_to_float(core::detail::tensor_float_to_half(value));}
+float round_half(float value){return core::detail::tensor_half_to_float(core::detail::tensor_float_to_half(value));}
 std::vector<float> values(const Tensor& tensor){return tensor.cpu().to(DataType::Float32).to_vector();}
 float activate(float x,nn::Activation mode){
     const double v=x;
@@ -32,7 +33,7 @@ float activate(float x,nn::Activation mode){
     }
     throw std::runtime_error("Unknown CPU activation");
 }
-int half_order(float x){const auto code=core::detail::tensor_float_to_half_bits(x);return code&0x8000?int(uint16_t(~code)):int(code|0x8000);}
+int half_order(float x){const auto code=std::bit_cast<uint16_t>(core::detail::tensor_float_to_half(x));return code&0x8000?int(uint16_t(~code)):int(code|0x8000);}
 void convolution_case(const gpu_ops::LpipsOps& ops,DataType type,bool replicate,int stride,int dilation,nn::Activation activation){
     constexpr size_t batches=2,ci=5,co=17,h=7,w=11;
     const int padding=dilation;
@@ -83,10 +84,10 @@ void rgb_case(const gpu_ops::LpipsOps& ops,bool official){
         for(size_t channel=0;channel<ci;++channel)for(int ky=0;ky<3;++ky)for(int kx=0;kx<3;++kx){
             const int iy=int(y)+ky-1,ix=int(xx)+kx-1;if(iy<0 || ix<0 || iy>=int(h) || ix>=int(w))continue;
             float value=x[((batch*ci+channel)*h+iy)*w+ix];if(official)value=2.f*value-1.f;
-            value=half((value-p.shift[channel])/p.scale[channel]);
+            value=round_half((value-p.shift[channel])/p.scale[channel]);
             reference=std::fma(value,weights[(oc*ci+channel)*9+ky*3+kx],reference);
         }
-        reference=half(std::max(0.f,reference+bias[oc]));
+        reference=round_half(std::max(0.f,reference+bias[oc]));
         require(got[((batch*co+oc)*h+y)*w+xx]==reference,"HIP LPIPS RGB normalization/convolution differs from exact CPU binary-fraction reference");
     }
 }

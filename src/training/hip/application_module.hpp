@@ -114,7 +114,7 @@ inline std::shared_ptr<ApplicationModule> cached_profile_module(const std::files
             std::fprintf(stderr,"[info] HIP architecture profile selected: %s\n",architecture.c_str());
             return module;
         }
-        catch(const std::exception& error) {
+        catch(const std::exception& error) { /* LFS-CENSUS-OK(empty-catch): Report unavailable profile and select the generic fallback. */
             failed.insert(preferred);
             std::fprintf(stderr,"[warning] HIP architecture profile unavailable (%s); falling back to generic training module\n",error.what());
         }

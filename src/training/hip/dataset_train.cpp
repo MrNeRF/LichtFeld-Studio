@@ -222,11 +222,11 @@ int main(int argc, char** argv) try {
                 budget = std::min<size_t>(budget, integer(limit));
             host_targets = std::make_unique<HostTargets>(module, config.device_ordinal, budget);
             std::printf("[info] HIP owned host targets enabled; pinned budget %zu bytes.\n", budget);
-        } catch (const std::exception& error) {
+        } catch (const std::exception& error) { /* LFS-CENSUS-OK(empty-catch): Report optional host-target fallback or exit with an explicit failure status. */
             std::fprintf(stderr, "[warning] HIP host target fallback to ordinary RAM: %s\n", error.what());
         }
     }
-    std::ofstream preparation(output / "preparation.csv");
+    std::ofstream preparation(output / "preparation.csv", std::ios::binary);
     preparation.exceptions(std::ios::badbit | std::ios::failbit);
     preparation << "view,calibration_ms,decode_resize_ms,planar_ms,undistort_ms,ownership_ms,width,height,bytes,source_upload_ms,warp_readback_ms,gpu_live_before,gpu_live_after,gpu_pool_after,validation_ms,reference_max_error,reference_mse,image_prepare_backend\n";
     double preparation_ms = 0;
@@ -351,7 +351,7 @@ int main(int argc, char** argv) try {
         std::printf("[info] Prepared view %zu/%zu (%u x %u); CPU targets %zu bytes\n", i + 1, count, frames.back().descriptor().width, frames.back().descriptor().height, target_bytes);
         std::fflush(stdout);
     }
-    std::ofstream csv(output / "steps.csv");
+    std::ofstream csv(output / "steps.csv", std::ios::binary);
     csv.exceptions(std::ios::badbit | std::ios::failbit);
     csv << "step,view,frame_ms,step_ms,allocated_bytes,intersections\n";
     std::mt19937 random(42);
@@ -452,7 +452,7 @@ int main(int argc, char** argv) try {
                 static_cast<unsigned long long>(final_info.allocated_bytes),
                 static_cast<unsigned long long>(final_info.peak_allocated_bytes),
                 static_cast<unsigned long long>(final_info.budget_bytes));
-    std::ofstream summary(output / "summary.json");
+    std::ofstream summary(output / "summary.json", std::ios::binary);
     summary.exceptions(std::ios::badbit | std::ios::failbit);
     summary << std::setprecision(12) << "{\"experimental_fixed_topology\":true,\"sh_degree\":0,\"views\":" << count << ",\"gaussians\":" << n
             << ",\"rasterizer\":\"" << (fast_raster ? "FastGS" : "3DGUT") << "\",\"optimizer\":\"" << (fused_optimizer ? "joint-fused" : "fp32") << "\""
@@ -469,7 +469,7 @@ int main(int argc, char** argv) try {
     session->close();
     std::puts("[info] Saved trained.ply, steps.csv, summary.json and before/after/target PPM images. Fresh optimizer only; PLY is not a resumable optimizer checkpoint.");
     return interrupted ? 130 : 0;
-} catch (const std::exception& error) {
+} catch (const std::exception& error) { /* LFS-CENSUS-OK(empty-catch): Report optional host-target fallback or exit with an explicit failure status. */
     std::fprintf(stderr, "[error] Experimental HIP dataset training stopped without fallback: %s\n", error.what());
     return 1;
 }

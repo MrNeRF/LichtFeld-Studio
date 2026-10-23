@@ -173,7 +173,7 @@ namespace lfs::training {
                     if (inputs[i]->is_valid() && inputs[i]->bytes() && gpu_backend_of(*inputs[i]))
                         ring_->enqueue(*inputs[i], 0, inputs[i]->bytes(), 0, offsets_[i]);
                 ring_->seal(0);
-            } catch (const std::exception& error) {
+            } catch (const std::exception& error) { /* LFS-CENSUS-OK(empty-catch): Drain and warn before suspending optional capture; never replay an optimizer step. */
                 // Optional captures never replay an optimizer step. The ring
                 // drains any partially submitted copies before releasing input.
                 ring_.reset();

@@ -42,6 +42,9 @@ TRAINER_CUDA_FILE = re.compile(
     r'include/lfs/training/ops/[^/]+_cuda\.hpp|'
     r'ops/[^/]+_vulkan\.cpp|'
     r'include/lfs/training/ops/[^/]+_vulkan\.hpp|'
+    r'ops/[^/]+_hip\.cpp|'
+    r'include/lfs/training/ops/[^/]+_hip\.hpp|'
+    r'hip/.*|'
     r'vulkan/.*|'
     r'rasterization/[^/]+_cuda\.(?:cpp|hpp)|perf_bench_cuda\.cpp)$')
 # Neutral trainer sources dispatch through the ops table. Kernel and CUDA
@@ -88,9 +91,26 @@ PRIVATE_SEAMS = {
             "converted by lane F2b",
     },
 }
+# Reviewed public-backend policies, not native API/allocator exemptions. These
+# sites select scheduling, storage or presentation policy through public Tensor
+# interfaces. Continue checking private headers/symbols and raw native calls.
+HIP_POLICY_SEAMS = {
+    "src/training/components/hip_preview_snapshots.hpp": "Optional immutable publication policy.",
+    "src/training/ops/registry.cpp": "Register the explicitly selected backend's operation table.",
+    "src/training/perf_bench.cpp": "Native timestamp lifecycle and opt-in measurement policy.",
+    "src/training/sh_value_storage.cpp": "Select the native SH value-storage contract.",
+    "src/training/strategies/blob_seeding.cpp": "Bound background batches sharing the producer queue.",
+    "src/training/strategies/strategy_utils.cpp": "Select synchronization and timing policy through Tensor queues.",
+    "src/training/trainer.cpp": "Attach queues, backend resource lifecycle and immutable previews.",
+    "src/training/training_snapshot_service.cpp": "Publish completed snapshots for the native producer.",
+    "src/visualizer/nodes/modifier_evaluation_worker.cpp": "Backend capability eligibility.",
+    "src/visualizer/rendering/rendering_manager_vulkan.cpp": "Choose immutable native training previews.",
+    "src/visualizer/rendering/viewport_interop_service.cpp": "Publish immutable reference-image generations.",
+}
 INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"]', re.M)
 CUDA_HEADER = re.compile(r'^(?:cuda(?:_runtime(?:_api)?|_fp16|_bf16)?\.h|driver_types\.h|vector_types\.h|cublas.*\.h|curand.*\.h|cub/.*)$')
 NATIVE_CALL = re.compile(r'\b(cuda[A-Z]\w*|cu[A-Z]\w*)\s*\(')
+HIP_NATIVE_CALL = re.compile(r'\bhip[A-Z]\w*\s*\(')
 CUDA_STREAM = re.compile(r'\bcudaStream_t\b')
 TRAINER_NATIVE = re.compile(
     r'\b(?:cuda[A-Z]\w*|cu[A-Z]\w*|nvtx\w*|getCurrentCUDAStream|setCurrentCUDAStream|'
@@ -151,6 +171,10 @@ def scan(path: Path) -> list[tuple[int, str, str]]:
                                                                "test_strided_reduce_", "expression_reference",
                                                                "cuda_backend_test", "test_alloc_counter", "test_zip_gather")):
         return []
+    if relative.startswith("tests/hip/"):
+        # Backend contracts explicitly inspect Tensor implementation state,
+        # like the tensor_* and test_cuda_* fixtures above.
+        return []
     source = path.read_text(encoding="utf-8")
     comments_removed = mask_tokens(source, strings=False)
     code = mask_tokens(source)
@@ -176,6 +200,11 @@ def scan(path: Path) -> list[tuple[int, str, str]]:
         if neutral_trainer_file(relative) and TRAINER_KERNEL_INCLUDE.search(normalized):
             add(match.start(), "trainer-cuda-include", header)
     if native_checked:
+        for match in HIP_NATIVE_CALL.finditer(code):
+            add(match.start(), "hip-native-api", match.group())
+        for match in INCLUDE.finditer(comments_removed):
+            if match[1].replace("\\", "/").startswith("hip/"):
+                add(match.start(), "hip-header", match[1])
         if relative.startswith(TRAINER_ROOTS):
             for match in TRAINER_NATIVE.finditer(code):
                 add(match.start(), "trainer-native-api", match.group())
@@ -184,6 +213,8 @@ def scan(path: Path) -> list[tuple[int, str, str]]:
         for match in CUDA_STREAM.finditer(code):
             add(match.start(), "cuda-stream", match.group())
         for match in BACKEND_BRANCH.finditer(code):
+            if relative in HIP_POLICY_SEAMS and re.search(r'GpuBackend::HIP\b', match.group()):
+                continue
             add(match.start(), "backend-branch", match.group())
     for match in INTERNAL_NAMESPACE.finditer(code):
         add(match.start(), "private-symbol", match.group())
