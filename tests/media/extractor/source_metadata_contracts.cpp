@@ -205,12 +205,17 @@ int runSourceMetadataContracts() {
     heif_xmp.status = MetadataStatus::Collected;
     XmpBlock heif_block;
     heif_block.envelope = XmpEnvelope::HeifMime;
-    heif_block.heif_item = HeifXmpItem{2, 4, "application/rdf+xml", ""};
+    heif_block.heif_item = HeifXmpItem{2, 4, "application/rdf+xml; title=\xff", "\xfe"};
     heif_block.bytes = {0, 255, 60, 120, 47, 62};
     heif_xmp.blocks.push_back(std::move(heif_block));
     const auto* heif_bytes = heif_xmp.blocks[0].bytes.data();
     auto heif_catalog = catalogSourceMetadata({}, {}, {}, std::move(heif_xmp));
     require(bool(heif_catalog), "HEIF MIME observation is accepted by the existing catalog");
+    const auto heif_json = json_detail::json::parse(json_detail::dump(json_detail::sourceMetadata(*heif_catalog)));
+    const auto& mime = heif_json.at("image_xmp").at("blocks")[0].at("heif_item");
+    require(mime.at("content_type_bytes") == "6170706c69636174696f6e2f7264662b786d6c3b207469746c653dff" &&
+                mime.at("content_encoding_bytes") == "fe",
+            "HEIF MIME original bytes survive JSON replacement of invalid UTF-8 display text");
     const auto heif_handle = heif_catalog->bind(XmpBlockReference{0});
     const auto heif_view = heif_catalog->xmpBytes({0});
     require(heif_handle && heif_view && heif_view->data() == heif_bytes,

@@ -547,14 +547,12 @@ namespace lfs::core::image_codecs {
         }
     } // namespace
     namespace {
-        SourceExif collect_heif_exif(Source& source, heif_item_id primary, const MetadataLimits& limits) {
-            SourceExif result;
-            result.scope = "heif-primary-image";
+        void collect_heif_exif(Source& source, heif_item_id primary, const MetadataLimits& limits, SourceExif& result) {
             const int count = heif_image_handle_get_number_of_metadata_blocks(source.handle.get(), "Exif");
             if (count < 0) {
                 result.status = MetadataStatus::Malformed;
                 result.diagnostic = "HEIF: invalid EXIF block count";
-                return result;
+                return;
             }
             result.status = count ? MetadataStatus::Collected : MetadataStatus::Absent;
             const auto retained = std::min(static_cast<size_t>(count), limits.blocks);
@@ -562,7 +560,7 @@ namespace lfs::core::image_codecs {
             if (retained && heif_image_handle_get_list_of_metadata_block_IDs(source.handle.get(), "Exif", ids.data(), static_cast<int>(retained)) != static_cast<int>(retained)) {
                 result.status = MetadataStatus::Malformed;
                 result.diagnostic = "HEIF: inconsistent EXIF block list";
-                return result;
+                return;
             }
             size_t total = 0;
             for (auto id : ids) {
@@ -570,7 +568,7 @@ namespace lfs::core::image_codecs {
                 if (size > limits.block_bytes || size > limits.total_bytes - total) {
                     result.status = MetadataStatus::Limited;
                     result.diagnostic = "EXIF collection budget exhausted";
-                    return result;
+                    return;
                 }
                 ExifBlock block;
                 block.envelope = ExifEnvelope::HeifOffset;
@@ -579,7 +577,7 @@ namespace lfs::core::image_codecs {
                 block.bytes.resize(size);
                 if (!checked(heif_image_handle_get_metadata(source.handle.get(), id, block.bytes.data()), result.diagnostic)) {
                     result.status = MetadataStatus::Malformed;
-                    return result;
+                    return;
                 }
                 total += size;
                 result.blocks.push_back(std::move(block));
@@ -588,7 +586,7 @@ namespace lfs::core::image_codecs {
                 result.status = MetadataStatus::Limited;
                 result.diagnostic = "EXIF block count budget exhausted";
             }
-            return result;
+            return;
         }
         bool xmp_mime_type(std::string_view value) {
             auto essence = value.substr(0, value.find(';'));
@@ -624,7 +622,7 @@ namespace lfs::core::image_codecs {
                 }
                 return result;
             }
-            result.exif = collect_heif_exif(source, primary, limits);
+            collect_heif_exif(source, primary, limits, result.exif);
             if (!xmp_limits)
                 return result;
             auto& xmp = result.xmp;
@@ -655,7 +653,11 @@ namespace lfs::core::image_codecs {
                 };
                 const auto budget = std::min(xmp_limits->block_bytes, xmp_limits->total_bytes - retained);
                 const std::string_view content_type(type);
-                if (xmp.blocks.size() >= xmp_limits->blocks || content_type.size() > budget) {
+                if (xmp.blocks.size() >= xmp_limits->blocks) {
+                    omit();
+                    return result;
+                }
+                if (content_type.size() > budget) {
                     omit();
                     continue;
                 }

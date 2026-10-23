@@ -453,6 +453,37 @@ class IngestCLI(unittest.TestCase):
         self.assertEqual(result["metadata"]["image_xmp"]["status"], "malformed")
         self.assertTrue(result["metadata"]["image_xmp"]["diagnostic"])
 
+    def test_source_metadata_xmp_heif_mime_bytes_and_count_boundary(self):
+        path = self.root / "mime-boundary.avif"
+        content_type = b"application/rdf+xml; title=Z"
+        source_exif_fixture.write_heif_metadata(path, [{"data": b"packet", "content_type": content_type.decode()}])
+        data = path.read_bytes()
+        self.assertEqual(data.count(content_type), 1)
+        path.write_bytes(data.replace(content_type, content_type[:-1] + b"\xff"))
+        result, _ = self.invoke("source-metadata", path)
+        mime = result["metadata"]["image_xmp"]["blocks"][0]["heif_item"]
+        self.assertEqual(bytes.fromhex(mime["content_type_bytes"]), content_type[:-1] + b"\xff")
+        self.assertEqual(mime["content_encoding_bytes"], "")
+        self.assertTrue(mime["content_type"].endswith("\ufffd"))
+        for extra_xmp in (False, True):
+            items = [{"data": b"packet"} for _ in range(64)]
+            items += [{"data": b"unrelated", "content_type": "application/xml"}]
+            if extra_xmp:
+                items += [{"data": b"omitted"}]
+            source_exif_fixture.write_heif_metadata(path, items)
+            result, _ = self.invoke("source-metadata", path)
+            xmp = result["metadata"]["image_xmp"]
+            self.assertEqual(len(xmp["blocks"]), 64)
+            self.assertEqual(xmp["status"], "limited" if extra_xmp else "collected")
+        for count in (997, 998):
+            source_exif_fixture.write_heif_metadata(path, [{"data": b"x"} for _ in range(count)])
+            result, _ = self.invoke("source-metadata", path)
+            xmp = result["metadata"]["image_xmp"]
+            self.assertEqual(xmp["status"], "limited" if count == 997 else "malformed")
+            self.assertEqual(len(xmp["blocks"]), 64 if count == 997 else 0)
+            if count == 998:
+                self.assertIn("security limit", xmp["diagnostic"].lower())
+
     def test_source_metadata_xmp_heif_provider_failures(self):
         path = self.root / "invalid-xmp.avif"
         for data, encoding in [(b"broken", "compress_zlib"), (b"unknown", "unknown")]:

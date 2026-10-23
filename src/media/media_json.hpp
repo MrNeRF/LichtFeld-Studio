@@ -163,7 +163,7 @@ namespace lfs::media::json_detail {
                 if (block.heif_item) {
                     const auto& item = *block.heif_item;
                     retained["blocks"].back()["representation"] = "libheif_decoded_bytes";
-                    retained["blocks"].back()["heif_item"] = {{"image_item", item.image_item}, {"metadata_item", item.metadata_item}, {"content_type", item.content_type}, {"content_encoding", item.content_encoding}};
+                    retained["blocks"].back()["heif_item"] = {{"image_item", item.image_item}, {"metadata_item", item.metadata_item}, {"content_type", item.content_type}, {"content_type_bytes", hexBytes(item.content_type)}, {"content_encoding", item.content_encoding}, {"content_encoding_bytes", hexBytes(item.content_encoding)}};
                 }
                 if (block.tiff_tag) {
                     retained["blocks"].back()["representation"] = "libtiff_decoded_bytes";
