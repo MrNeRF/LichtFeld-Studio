@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "media/source_exif.hpp"
 #include "media/media_ingest.hpp"
+#include "media/source_exif_internal.hpp"
 extern "C" {
 #include <libavcodec/exif.h>
 }
@@ -305,11 +306,9 @@ namespace lfs::media {
         return result;
     }
 
-    Result<ImageExifDescription> MediaIngest::sourceExif(const std::filesystem::path& path) {
-        if (path.empty())
-            return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "EXIF source path must not be empty", .detection = LFS_SOURCE_SITE_CURRENT()});
+    ImageExifDescription detail::describeSourceExif(core::image_codecs::SourceExif original) {
         ImageExifDescription result;
-        result.original = core::image_codecs::read_source_exif(path);
+        result.original = std::move(original);
         ExifParseLimits remaining;
         for (const auto& block : result.original.blocks) {
             auto interpreted = interpretExif(block, remaining);
@@ -319,5 +318,11 @@ namespace lfs::media {
             result.interpretations.push_back(std::move(interpreted));
         }
         return result;
+    }
+
+    Result<ImageExifDescription> MediaIngest::sourceExif(const std::filesystem::path& path) {
+        if (path.empty())
+            return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "EXIF source path must not be empty", .detection = LFS_SOURCE_SITE_CURRENT()});
+        return detail::describeSourceExif(core::image_codecs::read_source_exif(path));
     }
 } // namespace lfs::media

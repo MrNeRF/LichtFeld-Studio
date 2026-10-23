@@ -7,6 +7,7 @@
 #include "media/source_metadata.hpp"
 #include <cmath>
 #include <nlohmann/json.hpp>
+#include <span>
 #include <type_traits>
 namespace lfs::media::json_detail {
     using nlohmann::json;
@@ -121,6 +122,8 @@ namespace lfs::media::json_detail {
         return {{"key", entry.key}, {"value", entry.value}, {"key_bytes", hexBytes(entry.key)}, {"value_bytes", hexBytes(entry.value)}};
     }
     inline json metadataReference(const SourceMetadataReference& reference) {
+        if (const auto* xmp = std::get_if<XmpBlockReference>(&reference))
+            return {{"kind", "xmp_block"}, {"block", xmp->block}};
         if (const auto* exif = std::get_if<ExifEntryReference>(&reference))
             return {{"kind", "exif_entry"}, {"block", exif->block}, {"entry", exif->entry}};
         if (const auto* tiff = std::get_if<TiffTagReference>(&reference))
@@ -141,8 +144,21 @@ namespace lfs::media::json_detail {
         case MetadataIndexStatus::Limited: status = "limited"; break;
         }
         json result{{"scope", catalog.container() ? "container_stream" : "static_image_exif"}, {"index_status", status}, {"records", json::array()}};
-        if (!catalog.container())
+        if (!catalog.container()) {
             result["image_exif"] = sourceExif(catalog.imageExif());
+            const auto& xmp = catalog.imageXmp();
+            json retained{{"status", metadataStatus(xmp.status)}, {"scope", xmp.scope}, {"diagnostic", xmp.diagnostic}, {"binary_encoding", "hex"}, {"xml_validation", "not_examined"}, {"extended_assembly", "not_performed"}, {"blocks", json::array()}};
+            for (const auto& block : xmp.blocks) {
+                using core::image_codecs::XmpEnvelope;
+                const char* envelope = block.envelope == XmpEnvelope::JpegApp1 ? "jpeg_app1" : block.envelope == XmpEnvelope::JpegExtendedApp1 ? "jpeg_extended_app1"
+                                                                                                                                               : "png_itxt";
+                json payload = nullptr;
+                if (block.status == core::image_codecs::MetadataStatus::Collected && block.payload_offset <= block.bytes.size())
+                    payload = block.inflated ? hexBytes(*block.inflated) : hexBytes(std::span(block.bytes).subspan(block.payload_offset));
+                retained["blocks"].push_back({{"envelope", envelope}, {"bytes", hexBytes(block.bytes)}, {"status", metadataStatus(block.status)}, {"diagnostic", block.diagnostic}, {"crc_valid", optional(block.crc_valid)}, {"payload_offset", block.payload_offset}, {"payload_kind", block.envelope == XmpEnvelope::JpegExtendedApp1 ? "extended_segment" : "packet"}, {"compressed", block.compressed}, {"payload_bytes", std::move(payload)}});
+            }
+            result["image_xmp"] = std::move(retained);
+        }
         if (catalog.container()) {
             result["description"] = description(*catalog.container());
             result["source_metadata"] = nullptr;

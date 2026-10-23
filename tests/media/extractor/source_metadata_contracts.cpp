@@ -143,6 +143,36 @@ namespace {
 
 int runSourceMetadataContracts() {
     containerContracts();
+    SourceXmp xmp;
+    xmp.status = MetadataStatus::Collected;
+    XmpBlock packet;
+    packet.bytes = {0, 255, 42};
+    packet.payload_offset = 1;
+    xmp.blocks.push_back(packet);
+    xmp.blocks.push_back(packet);
+    const auto* xmp_bytes = xmp.blocks.front().bytes.data();
+    auto with_xmp = catalogSourceMetadata({}, {}, std::nullopt, std::move(xmp));
+    require(bool(with_xmp) && with_xmp->records().size() == 2 && with_xmp->xmpBlock({0})->bytes.data() == xmp_bytes,
+            "XMP occurrences transfer payload ownership without copying");
+    const auto handle = with_xmp->bind(XmpBlockReference{1});
+    require(handle && with_xmp->resolve(*handle) && !with_xmp->xmpBlock({2}) &&
+                !with_xmp->xmpBlock({std::numeric_limits<std::size_t>::max()}),
+            "XMP snapshot references check occurrence bounds");
+    auto other_xmp = catalogSourceMetadata({});
+    require(!other_xmp->resolve(*handle), "XMP handles cannot cross source observations");
+    const auto xmp_json = json_detail::sourceMetadata(*with_xmp);
+    require(xmp_json.at("image_xmp").at("blocks")[0].at("bytes") == "00ff2a" &&
+                xmp_json.at("image_xmp").at("blocks")[0].at("payload_bytes") == "ff2a" &&
+                xmp_json.at("records")[1].at("block") == 1,
+            "XMP serialization preserves binary originals and duplicate ordinals");
+    auto limited_xmp = catalogSourceMetadata({}, {.records = 0}, std::nullopt, with_xmp->imageXmp());
+    require(limited_xmp && limited_xmp->indexStatus() == MetadataIndexStatus::Limited &&
+                limited_xmp->records().empty() && limited_xmp->imageXmp().blocks.size() == 2 &&
+                limited_xmp->imageExifIndexStatus() == MetadataIndexStatus::Complete,
+            "XMP retention is independent of the reference index budget");
+    auto kept_xmp = *with_xmp;
+    with_xmp = SourceMetadataCatalog{};
+    require(kept_xmp.resolve(*handle).has_value(), "XMP handles survive catalog reassignment");
     auto original = description();
     const auto* payload = original.original.blocks[0].bytes.data();
     auto catalog = catalogSourceMetadata(std::move(original));
@@ -188,10 +218,20 @@ int runSourceMetadataContracts() {
         auto limited = catalogSourceMetadata(description(), {.records = count});
         require(bool(limited) && limited->records().size() == std::min(count, std::size_t{4}), "reference limit enforced at exact boundary");
         require((limited->indexStatus() == MetadataIndexStatus::Limited) == (count < 4), "limit reported only when an entry is omitted");
+        require(limited->imageExifIndexStatus() == limited->indexStatus(), "omitting an EXIF or TIFF reference marks the image sub-index limited");
         require(limited->imageExif().interpretations[0].entries.size() == 2 &&
                     limited->imageExif().original.tiff->directories[0].tags.size() == 2,
                 "limited index never truncates already collected values");
     }
+    auto xmp_tail = catalogSourceMetadata(description(), {.records = 4}, std::nullopt, kept_xmp.imageXmp());
+    require(xmp_tail && xmp_tail->indexStatus() == MetadataIndexStatus::Limited &&
+                xmp_tail->imageExifIndexStatus() == MetadataIndexStatus::Complete,
+            "XMP-only index omission preserves complete EXIF/TIFF sub-index status");
+    auto copied_index = *xmp_tail;
+    auto moved_index = std::move(copied_index);
+    require(moved_index.imageExifIndexStatus() == MetadataIndexStatus::Complete &&
+                SourceMetadataCatalog{}.imageExifIndexStatus() == MetadataIndexStatus::Complete,
+            "sub-index status follows immutable ownership and an empty catalog is complete");
     auto no_data = catalogSourceMetadata({}, {.records = 0});
     require(bool(no_data) && no_data->indexStatus() == MetadataIndexStatus::Complete,
             "empty unexamined source is not falsely reported limited or collected");

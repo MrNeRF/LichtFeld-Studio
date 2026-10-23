@@ -17,6 +17,7 @@ import sys
 import tempfile
 import struct
 import unittest
+import zlib
 ROOT=Path(__file__).resolve().parents[2]
 _exif_spec = importlib.util.spec_from_file_location("source_exif_fixture", ROOT / "tests/media/source_exif_fixture.py")
 source_exif_fixture = importlib.util.module_from_spec(_exif_spec)
@@ -66,6 +67,272 @@ def defined_symbols(path, exports=False):
 def ffmpeg_public(name):
     return re.match(r"^(av|avcodec|avformat|avutil|avfilter|avdevice|avio|swscale|swresample|sws|swr)_",name)
 class IngestCLI(unittest.TestCase):
+    @staticmethod
+    def _xmp_jpeg(path, blocks):
+        source_exif_fixture.write_jpeg(path)
+        original = path.read_bytes()
+        markers = b"".join(b"\xff\xe1" + struct.pack(">H", len(block) + 2) + block for block in blocks)
+        path.write_bytes(original[:2] + markers + original[2:])
+
+    @staticmethod
+    def _xmp_png(path, before, after=(), *, bad_crc=False):
+        source_exif_fixture.write_png(path)
+        original = path.read_bytes()
+        def chunk(payload, damage=False):
+            crc = zlib.crc32(b"iTXt" + payload) ^ int(damage)
+            return struct.pack(">I", len(payload)) + b"iTXt" + payload + struct.pack(">I", crc)
+        offset = 8
+        while original[offset + 4:offset + 8] != b"IDAT":
+            offset += 12 + struct.unpack_from(">I", original, offset)[0]
+        path.write_bytes(original[:offset] + b"".join(chunk(b, bad_crc and i == 0) for i, b in enumerate(before)) +
+                         original[offset:-12] + b"".join(chunk(b) for b in after) + original[-12:])
+
+    def _xmp_limited(self, path, **limits):
+        request = self.root / "xmp-budget-request.json"
+        request.write_text(json.dumps({"operation": "source-metadata", "input": str(path), **limits}), encoding="utf-8")
+        result = subprocess.run([str(RUNNER), str(request)], capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        return json.loads(result.stdout)
+
+    def test_source_metadata_xmp_jpeg_originals_and_extended_segments(self):
+        path = self.root / "XMP source é 日本語.jpeg"
+        standard = b"http://ns.adobe.com/xap/1.0/\0"
+        extended = b"http://ns.adobe.com/xmp/extension/\0"
+        # Preserve arbitrary XML/encoding and unknown namespaces without parsing.
+        packet = b'<?xml version="1.0"?><!DOCTYPE x SYSTEM "file:///not-read"><x xmlns="urn:unknown">\x00\xff</x>'
+        segments = [extended + b"A" * 32 + struct.pack(">II", 6, offset) + payload
+                    for offset, payload in [(3, b"def"), (0, b"abc")]]
+        envelopes = [standard + packet, *segments, standard + packet]
+        self._xmp_jpeg(path, envelopes)
+        before, stamp = path.read_bytes(), path.stat().st_mtime_ns
+        exif, _ = self.invoke("source-exif", path)
+        result, stderr = self.invoke("source-metadata", path)
+        self.assertEqual(stderr, b"")
+        metadata = result["metadata"]
+        self.assertEqual(metadata["image_exif"], exif["exif"])
+        xmp = metadata["image_xmp"]
+        self.assertEqual(xmp["status"], "collected")
+        self.assertEqual(xmp["xml_validation"], "not_examined")
+        self.assertEqual(xmp["extended_assembly"], "not_performed")
+        self.assertEqual([bytes.fromhex(b["bytes"]) for b in xmp["blocks"]], envelopes)
+        self.assertEqual([bytes.fromhex(b["payload_bytes"]) for b in xmp["blocks"]], [packet, b"def", b"abc", packet])
+        self.assertEqual([b["payload_kind"] for b in xmp["blocks"]], ["packet", "extended_segment", "extended_segment", "packet"])
+        self.assertEqual([r["block"] for r in metadata["records"] if r["kind"] == "xmp_block"], list(range(4)))
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(path.stat().st_mtime_ns, stamp)
+        for malformed in [extended, extended + b"?" * 32 + struct.pack(">II", 3, 0) + b"abc",
+                          extended + b"A" * 32 + struct.pack(">II", 3, 2) + b"abc"]:
+            with self.subTest(malformed=malformed):
+                self._xmp_jpeg(path, [standard + b"good", malformed, standard + b"last"])
+                result, _ = self.invoke("source-metadata", path)
+                xmp = result["metadata"]["image_xmp"]
+                self.assertEqual(xmp["status"], "malformed")
+                self.assertEqual([b["status"] for b in xmp["blocks"]], ["collected", "malformed", "collected"])
+                self.assertEqual(bytes.fromhex(xmp["blocks"][1]["bytes"]), malformed)
+                self.assertIsNone(xmp["blocks"][1]["payload_bytes"])
+
+    def test_source_metadata_xmp_png_compression_crc_and_originals(self):
+        path = self.root / "XMP source é 日本語.png"
+        prefix = b"XML:com.adobe.xmp\0"
+        packet = b'<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:v="urn:vendor"><v:a>unknown</v:a></x:xmpmeta>'
+        plain = prefix + b"\0\0\0\0" + packet
+        compressed = prefix + b"\1\0en\0Translated\0" + zlib.compress(packet)
+        self._xmp_png(path, [plain], [compressed, plain])
+        before, stamp = path.read_bytes(), path.stat().st_mtime_ns
+        exif, _ = self.invoke("source-exif", path)
+        result, stderr = self.invoke("source-metadata", path)
+        self.assertEqual(stderr, b"")
+        self.assertEqual(result["metadata"]["image_exif"], exif["exif"])
+        blocks = result["metadata"]["image_xmp"]["blocks"]
+        self.assertEqual([bytes.fromhex(b["bytes"]) for b in blocks], [plain, compressed, plain])
+        self.assertEqual([bytes.fromhex(b["payload_bytes"]) for b in blocks], [packet] * 3)
+        self.assertEqual([b["compressed"] for b in blocks], [False, True, False])
+        self.assertTrue(all(b["crc_valid"] for b in blocks))
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(path.stat().st_mtime_ns, stamp)
+        self._xmp_png(path, [plain], [plain], bad_crc=True)
+        result, _ = self.invoke("source-metadata", path)
+        blocks = result["metadata"]["image_xmp"]["blocks"]
+        self.assertEqual([b["crc_valid"] for b in blocks], [False, True])
+        self.assertEqual([b["status"] for b in blocks], ["malformed", "collected"])
+        for malformed in [prefix, prefix + b"\2\0\0\0x", prefix + b"\1\1\0\0x",
+                          prefix + b"\0\0unterminated", prefix + b"\1\0\0\0bad zlib",
+                          compressed + b"trailing"]:
+            with self.subTest(malformed=malformed):
+                self._xmp_png(path, [malformed], [plain])
+                result, _ = self.invoke("source-metadata", path)
+                xmp = result["metadata"]["image_xmp"]
+                self.assertEqual(xmp["status"], "malformed")
+                self.assertEqual(xmp["blocks"][0]["status"], "malformed")
+                self.assertIsNone(xmp["blocks"][0]["payload_bytes"])
+                self.assertEqual(bytes.fromhex(xmp["blocks"][1]["payload_bytes"]), packet)
+        self._xmp_png(path, [plain])
+        path.write_bytes(path.read_bytes()[:-10])
+        result, _ = self.invoke("source-metadata", path)
+        self.assertEqual(result["metadata"]["image_xmp"]["status"], "malformed")
+
+    def test_source_metadata_xmp_png_method_and_inflate_boundaries(self):
+        path = self.root / "xmp-boundaries.png"
+        prefix = b"XML:com.adobe.xmp\0"
+        for method in [1, 255]:
+            envelope = prefix + bytes([0, method, 0, 0]) + b"<x/>"
+            self._xmp_png(path, [envelope])
+            block = self._xmp_limited(path)["image_xmp"]["blocks"][0]
+            self.assertEqual(block["status"], "collected")
+            self.assertEqual(bytes.fromhex(block["bytes"]), envelope)
+            self.assertEqual(bytes.fromhex(block["payload_bytes"]), b"<x/>")
+        for size in [0, 1, 8191, 8192, 8193, 65536]:
+            packet = b"x" * size
+            envelope = prefix + b"\1\0\0\0" + zlib.compress(packet)
+            self._xmp_png(path, [envelope])
+            exact = self._xmp_limited(path, inflated_bytes=size)["image_xmp"]["blocks"][0]
+            self.assertEqual(exact["status"], "collected", size)
+            self.assertEqual(bytes.fromhex(exact["payload_bytes"]), packet)
+            if size:
+                limited = self._xmp_limited(path, inflated_bytes=size - 1)["image_xmp"]["blocks"][0]
+                self.assertEqual(limited["status"], "limited")
+                self.assertIsNone(limited["payload_bytes"])
+            for damaged in [envelope[:-1], envelope + b"trailing", envelope + zlib.compress(b"extra")]:
+                self._xmp_png(path, [damaged])
+                block = self._xmp_limited(path)["image_xmp"]["blocks"][0]
+                self.assertEqual(block["status"], "malformed")
+                self.assertIsNone(block["payload_bytes"])
+
+    def test_source_metadata_xmp_png_exif_prefix_and_collection_limits(self):
+        path = self.root / "xmp-exif-budget.png"
+        envelope = b"XML:com.adobe.xmp\0\0\0\0\0<x/>"
+        self._xmp_png(path, [envelope])
+        for limits in [{"block_bytes": 1}, {"total_bytes": 1}]:
+            result = self._xmp_limited(path, collection_limits=limits)
+            self.assertEqual(result["image_exif"], result["legacy_exif"])
+            self.assertEqual(len(result["image_xmp"]["blocks"]), 1)
+            self.assertEqual(result["image_xmp"]["blocks"][0]["status"], "collected")
+        original = path.read_bytes()
+        offset = 8
+        while original[offset + 4:offset + 8] != b"eXIf":
+            offset += 12 + struct.unpack_from(">I", original, offset)[0]
+        end = offset + 12 + struct.unpack_from(">I", original, offset)[0]
+        def exif_chunk(payload):
+            return struct.pack(">I", len(payload)) + b"eXIf" + payload + struct.pack(">I", zlib.crc32(b"eXIf" + payload))
+        # Once a block is omitted, a later smaller EXIF block must remain omitted.
+        path.write_bytes(original[:offset] + exif_chunk(b"x" * 1048577) +
+                         original[offset:end] + original[end:])
+        result = self._xmp_limited(path, collection_limits={})
+        self.assertEqual(result["image_exif"], result["legacy_exif"])
+        self.assertEqual(result["image_exif"]["blocks"], [])
+        self.assertEqual(len(result["image_xmp"]["blocks"]), 1)
+        path.write_bytes(original[:end] + original[offset:end] + original[end:])
+        result = self._xmp_limited(path, collection_limits={"blocks": 1})
+        # This collector-only adapter supplies placeholder interpretations to the catalog.
+        for block in result["image_exif"]["blocks"]:
+            block["interpretation"] = None
+        self.assertEqual(result["image_exif"], result["legacy_exif"])
+        self.assertEqual(len(result["image_exif"]["blocks"]), 1)
+        self.assertEqual(len(result["image_xmp"]["blocks"]), 1)
+        path.write_bytes(original)
+        for limits in [{"blocks": 0}, {"block_bytes": 0}, {"total_bytes": 0},
+                       {"png_chunks": 0}, {"png_chunks": 65537},
+                       {"png_scan_bytes": 0}, {"png_scan_bytes": 1073741825}]:
+            result = self._xmp_limited(path, collection_limits=limits)
+            self.assertEqual(result["image_xmp"]["status"], "limited", limits)
+            self.assertNotIn("supports JPEG", result["image_xmp"]["diagnostic"])
+        result = self._xmp_limited(path, collection_limits={"png_scan_bytes": 33})
+        self.assertEqual(result["image_xmp"]["status"], "limited")
+        self.assertEqual(result["image_xmp"]["blocks"], [])
+
+    def test_source_metadata_png_exif_status_freezes_after_omission(self):
+        path = self.root / "exif-frozen.png"
+        source_exif_fixture.write_png(path, include_exif=False)
+        original = path.read_bytes()
+        def chunk(kind, data, bad_crc=False):
+            return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) ^ int(bad_crc))
+        packet = b"XML:com.adobe.xmp\0\0\0\0\0<after/>"
+        large = chunk(b"eXIf", b"x" * (1536 * 1024))
+        small = chunk(b"eXIf", b"II*\0")
+        for damage, expected, diagnostic in [
+                (chunk(b"tEXt", b"key\0value", True), "malformed", "CRC mismatch"),
+                (b"\0\0\0", "malformed", "Truncated"),
+                (chunk(b"tEXt", b"k\0v"), "limited", "EXIF collection budget exhausted")]:
+            with self.subTest(expected=expected, diagnostic=diagnostic):
+                path.write_bytes(original[:33] + large + small + chunk(b"iTXt", packet) + damage +
+                                 (b"" if damage == bytes(3) else original[33:]))
+                exif, _ = self.invoke("source-exif", path)
+                result, _ = self.invoke("source-metadata", path)
+                self.assertEqual(result["metadata"]["image_exif"], exif["exif"])
+                self.assertEqual(exif["exif"]["status"], "limited")
+                self.assertEqual(exif["exif"]["blocks"], [])
+                xmp = result["metadata"]["image_xmp"]
+                self.assertEqual(xmp["status"], expected, xmp)
+                self.assertIn(diagnostic, xmp["diagnostic"])
+                self.assertEqual(bytes.fromhex(xmp["blocks"][0]["payload_bytes"]), b"<after/>")
+        # Actual scan exhaustion is reported separately from the frozen EXIF result.
+        path.write_bytes(original[:33] + large + small + chunk(b"iTXt", packet) + original[33:])
+        result = self._xmp_limited(path, exif_block_bytes=16, collection_limits={"png_chunks": 2})
+        self.assertEqual(result["image_exif"], result["legacy_exif"])
+        self.assertIn("PNG non-IDAT chunk count", result["image_xmp"]["diagnostic"])
+        self.assertNotIn("PNG non-IDAT", result["image_exif"]["diagnostic"])
+
+    def test_source_metadata_xmp_budgets_and_absence(self):
+        path = self.root / "xmp-budget.jpeg"
+        envelope = b"http://ns.adobe.com/xap/1.0/\0" + b"x" * 31
+        self._xmp_jpeg(path, [envelope, envelope])
+        cases = [({"blocks": 1}, 1), ({"block_bytes": len(envelope) - 1}, 0),
+                 ({"total_bytes": 2 * len(envelope) - 1}, 1), ({"blocks": 0}, 0)]
+        for limits, count in cases:
+            with self.subTest(limits=limits):
+                result = self._xmp_limited(path, **limits)
+                self.assertEqual(result["image_xmp"]["status"], "limited")
+                self.assertEqual(len(result["image_xmp"]["blocks"]), count)
+                self.assertEqual(len(result["image_exif"]["blocks"]), 2)
+        exact = self._xmp_limited(path, block_bytes=len(envelope), total_bytes=2 * len(envelope), blocks=2)
+        self.assertEqual(exact["image_xmp"]["status"], "collected")
+        no_index = self._xmp_limited(path, records=0)
+        self.assertEqual(no_index["index_status"], "limited")
+        self.assertEqual(len(no_index["image_xmp"]["blocks"]), 2)
+        self.assertEqual(no_index["records"], [])
+        large_exif, small_exif = b"Exif\0\0" + b"x" * 32, b"Exif\0\0II"
+        self._xmp_jpeg(path, [large_exif, small_exif, envelope])
+        low_exif = self._xmp_limited(path, exif_block_bytes=16)
+        self.assertEqual(low_exif["image_exif"], low_exif["legacy_exif"])
+        self.assertEqual(low_exif["image_exif"]["blocks"], [])
+        self.assertEqual(len(low_exif["image_xmp"]["blocks"]), 1)
+        source_exif_fixture.write_camera_metadata(path, carrier="jpeg")
+        original = path.read_bytes()
+        path.write_bytes(original[:2] + b"\xff\xe1" + struct.pack(">H", len(envelope) + 2) + envelope + original[2:])
+        full = self._xmp_limited(path)
+        exif_records = sum(record["kind"] != "xmp_block" for record in full["records"])
+        only_xmp_omitted = self._xmp_limited(path, records=exif_records)
+        self.assertEqual(only_xmp_omitted["index_status"], "limited")
+        self.assertEqual(only_xmp_omitted["test_summary"]["facts"], full["test_summary"]["facts"],
+                         "Omitting only XMP references must not invalidate complete EXIF compound facts")
+        exif_omitted = self._xmp_limited(path, records=exif_records - 1)
+        self.assertTrue(any(fact["diagnostic"] == "Directory metadata is incomplete" for fact in exif_omitted["test_summary"]["facts"]))
+        path = self.root / "xmp-bomb.png"
+        packet = b"x" * 65536
+        compressed = b"XML:com.adobe.xmp\0\1\0\0\0" + zlib.compress(packet)
+        self._xmp_png(path, [compressed])
+        for limits in [{"inflated_bytes": len(packet) - 1}, {"total_bytes": len(compressed) + len(packet) - 1}]:
+            with self.subTest(limits=limits):
+                limited = self._xmp_limited(path, **limits)["image_xmp"]
+                self.assertEqual(limited["status"], "limited")
+                self.assertEqual(limited["blocks"][0]["status"], "limited")
+                self.assertEqual(bytes.fromhex(limited["blocks"][0]["bytes"]), compressed)
+                self.assertIsNone(limited["blocks"][0]["payload_bytes"])
+        exact = self._xmp_limited(path, inflated_bytes=len(packet), total_bytes=len(compressed) + len(packet))["image_xmp"]
+        self.assertEqual(bytes.fromhex(exact["blocks"][0]["payload_bytes"]), packet)
+        source_exif_fixture.write_png(path, include_exif=False)
+        result, _ = self.invoke("source-metadata", path)
+        self.assertEqual(result["metadata"]["image_xmp"]["status"], "absent")
+        self._xmp_png(path, [b"Other\0\0\0\0\0" + b"x" * 20000], [b"XML:com.adobe.xmp\0\0\0\0\0abc"])
+        result = self._xmp_limited(path, block_bytes=128)["image_xmp"]
+        self.assertEqual(result["status"], "collected")
+        self.assertEqual(len(result["blocks"]), 1)
+        source_exif_fixture.write_tiff(path)
+        result, _ = self.invoke("source-metadata", path)
+        self.assertEqual(result["metadata"]["image_xmp"]["status"], "unsupported")
+        result, _ = self.invoke("source-metadata", self.root / "missing-xmp.png")
+        self.assertEqual(result["metadata"]["image_xmp"]["status"], "io_error")
+
     def test_source_container_metadata_reuses_probe_without_writing(self):
         path = self.source()
         before = path.read_bytes()

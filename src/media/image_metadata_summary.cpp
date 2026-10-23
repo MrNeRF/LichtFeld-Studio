@@ -371,6 +371,7 @@ namespace lfs::media {
                 builder.result.limited = true;
                 return std::move(builder.result);
             }
+            const bool image_index_complete = catalog.imageExifIndexStatus() == MetadataIndexStatus::Complete;
             std::map<GroupKey, Group> groups;
             for (const auto& reference : catalog.records()) {
                 if (const auto* position = std::get_if<ExifEntryReference>(&reference)) {
@@ -404,7 +405,7 @@ namespace lfs::media {
                 // A retained prefix cannot establish uniqueness or absence of
                 // compound operands. Parsed EXIF blocks remain self-contained;
                 // the TIFF reader may stop within an observed directory.
-                group.complete = catalog.indexStatus() == MetadataIndexStatus::Complete &&
+                group.complete = image_index_complete &&
                                  (!tiff || catalog.imageExif().original.status == core::image_codecs::MetadataStatus::Collected);
                 if (!tiff) {
                     if (path.size() == 1 && path.front() == 0) {

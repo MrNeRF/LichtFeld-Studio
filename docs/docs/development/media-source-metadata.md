@@ -12,17 +12,17 @@ auto catalog = lfs::media::catalogSourceMetadata(std::move(description));
 
 The CLI exposes `media-ingest source-metadata INPUT`. Its version 1 JSON result
 contains a `static_image_exif` scope, an index status, the existing EXIF JSON
-representation and occurrence references. `source-exif` keeps its existing
+representation, explicit XMP collection and occurrence references. `source-exif` keeps its existing
 contract. Successful transport does not imply complete or valid metadata:
 consumers must inspect collection, interpretation and index statuses separately.
 
 ## Ownership and identity
 
-The catalog owns an immutable shared snapshot containing the existing `ImageExifDescription`. Original envelopes,
+The catalog owns an immutable shared snapshot containing `ImageExifDescription` and `SourceXmp`. Original envelopes,
 observed TIFF source ranges and decoded values are retained in that owner.
 The occurrence index stores only ordinal references, not another copy of values.
 Duplicate IDs and unknown tags remain distinct and ordered. References select
-an EXIF block/entry or TIFF directory/tag. They are meaningful only within the
+an EXIF block/entry, TIFF directory/tag or XMP block. They are meaningful only within the
 catalog they came from; they are not globally stable source identifiers.
 
 Checked C++ lookup returns null for invalid indices. The public API exposes only
@@ -58,8 +58,8 @@ new provider operation to cancel in the indexing adapter.
 ## Supported sources
 
 The catalog indexes the existing JPEG/PNG/HEIF EXIF block descriptions
-and observed TIFF tags. It adds no new image carrier reader, vendor decoder, Python
-binding or metadata writer. Container/stream observations use the existing video probe as described below. HEIF remains scoped to the existing primary-image
+and observed TIFF tags, plus opaque JPEG/PNG XMP envelopes. It reuses existing carrier scans
+and adds no vendor decoder, Python binding or metadata writer. Container/stream observations use the existing video probe as described below. HEIF remains scoped to the existing primary-image
 collector. Unsupported carriers retain the existing collector status.
 
 The common observation and timing contracts below build on retained source data.
@@ -280,3 +280,37 @@ Offset validation checks numeric hour/minute syntax, not membership in a
 geographic timezone registry. Leap-second representations are retained as
 unsupported interpretations, not asserted to be corrupt. The internal summary
 scope is a closed enum; JSON identifiers remain unchanged.
+
+## Opaque XMP collection
+
+`MediaIngest::sourceMetadata(path, index_limits, xmp_limits)` explicitly collects JPEG APP1 and PNG iTXt XMP while using the existing EXIF carrier scan. The CLI `source-metadata INPUT` exposes the result as `metadata.image_xmp`; `source-exif`, default probing, image decoding and training do not request this additional collection. `image_exif` and the camera summary retain their existing meaning. The historical image catalog scope identifier remains unchanged.
+
+`core::image_codecs::read_source_metadata` returns the collected EXIF and XMP snapshots from that one scan. The existing `read_source_exif` still takes the EXIF-only path. `catalogSourceMetadata` can consume an already collected EXIF description and XMP snapshot without rereading the source. `imageXmp`, `xmpBlock`, `XmpBlockReference` and source-bound handles expose immutable, owning occurrences through the same catalog/index contracts as other metadata.
+
+| Carrier | Preserved observation | Payload view |
+| --- | --- | --- |
+| JPEG standard XMP APP1 | Exact APP1 data, including the NUL-terminated Adobe identifier | Remaining packet bytes |
+| JPEG Extended XMP APP1 | Each exact segment, identifier, GUID, declared full length and segment offset, in source order | Individual segment data; no reassembly or completeness claim |
+| PNG XMP iTXt | Exact chunk data including keyword, compression fields, language and translated keyword; CRC validity reported separately | Original uncompressed text or bounded zlib-inflated text |
+
+Unknown namespaces, malformed XML, non-UTF-8 bytes, duplicate packets and conflicting properties are not normalized or discarded. JSON transports binary originals and payloads as hex. Collection status and per-block status describe carrier framing and limits, **not XML or RDF validity**. XML is not parsed, external entities are never resolved, and no XMP field is used to alter camera calibration, GPS, orientation, color or timestamps. Extended JPEG GUID/range framing is checked, but segments are not sorted, linked to a standard packet, hashed, merged or declared complete. Those operations require their own interpretation contract and corpus.
+
+The collector accepts compressed PNG iTXt and nonempty language fields as PNG representations, preserving their originals. This is broader than Adobe's recommended uncompressed XMP iTXt convention. Invalid compression flags/methods, unterminated carrier fields, invalid/trailing compressed streams and CRC damage remain visible as malformed observations. A malformed or limited block has no usable payload view; retained envelope bytes remain available. Intact later blocks can still be collected. No pixel decoding is performed; PNG IDAT payload CRCs and pixel validity are outside this operation.
+
+`XmpLimits` defaults to 64 blocks, 1 MiB per original envelope, 4 MiB aggregate retained original plus inflated bytes, and 1 MiB inflated text per compressed block. Inflate uses at most the remaining aggregate budget, with one extra scratch byte to distinguish an exact-boundary result from overflow. Scratch capacity is not retained per packet. Original blocks are kept when inflation is limited; no partial XML payload is returned. Hard parameter ceilings are 4096 blocks, 16 MiB per envelope/inflation and 64 MiB aggregate. EXIF retention/parsing, JPEG header window, PNG scan/chunk and reference-index limits remain separate. These are retained-byte/work bounds, not a process-wide allocator ceiling. Allocation failure in the public media collection API returns ResourceExhausted.
+
+Compressed iTXt is inflated incrementally with bounded scratch space. Exact output limits, empty packets, truncated streams and trailing compressed bytes are checked before exposing any inflated payload. For uncompressed iTXt, the compression-method byte is ignored as required by the PNG decoder contract.
+
+Exhausting EXIF retention freezes the retained EXIF prefix, while the combined PNG scan continues looking for XMP within its existing scan-byte and chunk limits. The EXIF-only reader retains its early-stop behavior.
+
+The enclosing scan's limited, malformed or I/O status is preserved conservatively, including partial observations. This can reflect a framing/EXIF problem even when an individual XMP block is intact. An index limit does not discard already collected XMP originals. A valid opaque packet does not establish its truth, uniqueness or precedence over EXIF; camera interpretation continues using EXIF/TIFF only.
+
+This increment does not collect XMP from TIFF, HEIF/AVIF, JPEG XL, WebP, EXR, videos or external sidecars. Those carriers report unsupported rather than absent for this XMP collector. Existing TIFF tag observations can already retain tag 700; that does not imply qualified XMP collection/interpretation for TIFF. JPEG inspection stops at the first scan header, as does existing EXIF collection. No metadata writing or sidecar discovery is performed.
+
+Storage references: [Adobe XMP specifications, Part 3](https://developer.adobe.com/xmp/docs/xmp-specifications/) and [PNG iTXt specification](https://www.w3.org/TR/png-3/#11iTXt). A future increment should add qualified carrier support and namespace-aware interpretation when it has a concrete consumer, then vendor adapters, export/sidecar preservation and dataset integration. It must not infer broad vendor telemetry support from opaque packet retention.
+
+When the shared reference index omits only XMP blocks, already fully indexed EXIF/TIFF camera operands remain usable. The overall catalog/summary still reports its index limit. Actual missing EXIF/TIFF references retain the conservative incomplete-directory behavior. A regression case covers both sides of this boundary.
+
+`SourceMetadataCatalog::imageExifIndexStatus()` records whether every collected EXIF/TIFF value was indexed. It is independent of the overall index status and of collection/parsing status. Omitting only trailing XMP references keeps this sub-index complete; camera summaries use that recorded state directly.
+
+When combined PNG collection continues after its first EXIF retention omission, the EXIF snapshot freezes both its retained prefix and its status/diagnostic at the same point as `source-exif`. Later carrier errors or scan exhaustion remain visible in the XMP scan status, while intact XMP packets can still be retained.
