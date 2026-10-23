@@ -1089,7 +1089,7 @@ namespace lfs::io {
             };
 
             try {
-                const std::string video_path_utf8 = lfs::core::path_to_utf8(params.video_path);
+                const std::string video_path_utf8 = lfs::core::path_to_native_utf8(params.video_path);
 
                 if (avformat_open_input(&fmt_ctx, video_path_utf8.c_str(), nullptr,
                                         nullptr) < 0) {
@@ -1798,7 +1798,7 @@ namespace lfs::io {
                                                                                  : params.format == ImageFormat::PNG    ? ".png"
                                                                                  : params.format == ImageFormat::EXR    ? ".exr"
                                                                                                                         : ".jpg";
-                    return params.output_dir / (formatFrameFilenameStem(params.filename_pattern, output_number) + ext);
+                    return params.output_dir / lfs::core::utf8_to_path(formatFrameFilenameStem(params.filename_pattern, output_number) + ext);
                 };
 
                 const auto source_frame_for_time = [&](const double frame_time) {

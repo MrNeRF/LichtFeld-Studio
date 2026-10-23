@@ -10,6 +10,7 @@ vcpkg_from_github(
         gdk-pixbuf.patch
         symbol-exports.diff
         aom-reinitialization.patch
+        context-allocation.patch
 )
 
 vcpkg_find_acquire_program(PKGCONFIG)

@@ -1998,11 +1998,192 @@ namespace lfs::core::image_codecs {
     }
 
     namespace {
+        constexpr char kJpegXmp[] = "http://ns.adobe.com/xap/1.0/";
+        constexpr char kJpegExtendedXmp[] = "http://ns.adobe.com/xmp/extension/";
+        constexpr char kPngXmp[] = "XML:com.adobe.xmp";
+
+        struct XmpCollector {
+            SourceXmp& result;
+            const XmpLimits& limits;
+            size_t retained = 0;
+            std::optional<MetadataStatus> scan_status;
+            std::string scan_diagnostic;
+            bool supported_carrier = false;
+            bool canRetain(size_t size) {
+                if (result.blocks.size() >= limits.blocks || size > limits.block_bytes || size > limits.total_bytes - retained) {
+                    result.status = MetadataStatus::Limited;
+                    result.diagnostic = "XMP collection budget exhausted";
+                    return false;
+                }
+                return true;
+            }
+            void collectTiff(const SourceExif& exif) {
+                result.status = MetadataStatus::Absent;
+                result.scope = "tiff-libtiff-observed-tag700";
+                if (exif.tiff) {
+                    const auto& directories = exif.tiff->directories;
+                    for (size_t directory = 0; directory < directories.size(); ++directory) {
+                        const auto& tags = directories[directory].tags;
+                        for (size_t tag = 0; tag < tags.size(); ++tag) {
+                            if (tags[tag].id != TIFFTAG_XMLPACKET)
+                                continue;
+                            XmpBlock block;
+                            block.envelope = XmpEnvelope::TiffTag;
+                            block.tiff_tag = TiffXmpReference{directory, tag};
+                            const auto bytes = source_xmp_bytes(exif, block);
+                            if (!bytes) {
+                                if (result.status != MetadataStatus::Limited) {
+                                    result.status = MetadataStatus::Unsupported;
+                                    result.diagnostic = "TIFF XMP tag has no byte-preserving representation";
+                                }
+                                continue;
+                            }
+                            if (!canRetain(bytes->size()))
+                                continue;
+                            retained += bytes->size();
+                            if (bytes->empty()) {
+                                block.status = MetadataStatus::Malformed;
+                                block.diagnostic = "TIFF XMP tag has zero byte count";
+                                if (result.status != MetadataStatus::Limited)
+                                    result.status = MetadataStatus::Malformed;
+                                if (result.diagnostic.empty())
+                                    result.diagnostic = block.diagnostic;
+                            }
+                            result.blocks.push_back(std::move(block));
+                            if (result.status == MetadataStatus::Absent)
+                                result.status = MetadataStatus::Collected;
+                        }
+                    }
+                }
+                if (exif.status == MetadataStatus::Unsupported) {
+                    if (result.status != MetadataStatus::Limited)
+                        result.status = MetadataStatus::Unsupported;
+                    if (!result.diagnostic.empty() && !exif.diagnostic.empty())
+                        result.diagnostic += "; ";
+                    result.diagnostic += exif.diagnostic;
+                }
+            }
+            void append(std::vector<uint8_t> bytes, XmpEnvelope envelope, std::optional<bool> crc = std::nullopt) {
+                retained += bytes.size();
+                XmpBlock block;
+                block.bytes = std::move(bytes);
+                block.envelope = envelope;
+                block.crc_valid = crc;
+                auto malformed = [&](const char* message) {
+                    block.status = MetadataStatus::Malformed;
+                    block.diagnostic = message;
+                };
+                if (envelope == XmpEnvelope::JpegApp1) {
+                    block.payload_offset = sizeof(kJpegXmp);
+                } else if (envelope == XmpEnvelope::JpegExtendedApp1) {
+                    constexpr size_t header = sizeof(kJpegExtendedXmp) + 40;
+                    block.payload_offset = std::min(header, block.bytes.size());
+                    if (block.bytes.size() < header) {
+                        malformed("Truncated extended XMP header");
+                    } else {
+                        const auto* guid = block.bytes.data() + sizeof(kJpegExtendedXmp);
+                        if (!std::all_of(guid, guid + 32, [](uint8_t c) { return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'); }))
+                            malformed("Invalid extended XMP GUID");
+                        const auto u32 = [](const uint8_t* p) { return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | uint32_t(p[3]); };
+                        const auto extent = u32(guid + 32), offset = u32(guid + 36);
+                        if (!extent || offset > extent || block.bytes.size() - header > extent - offset)
+                            malformed("Invalid extended XMP segment range");
+                    }
+                } else {
+                    if (crc && !*crc)
+                        malformed("XMP iTXt CRC mismatch");
+                    size_t offset = sizeof(kPngXmp);
+                    if (block.bytes.size() < offset + 2) {
+                        malformed("Truncated XMP iTXt header");
+                    } else {
+                        const auto compressed = block.bytes[offset++];
+                        block.compressed = compressed == 1;
+                        const auto method = block.bytes[offset++];
+                        if (compressed > 1 || (compressed == 1 && method != 0)) {
+                            malformed("Invalid XMP iTXt compression fields");
+                        } else {
+                            for (int field = 0; field < 2; ++field) {
+                                while (offset < block.bytes.size() && block.bytes[offset])
+                                    ++offset;
+                                if (offset == block.bytes.size()) {
+                                    malformed("Unterminated XMP iTXt language or translated keyword");
+                                    break;
+                                }
+                                ++offset;
+                            }
+                            block.payload_offset = offset;
+                            if (block.status == MetadataStatus::Collected && compressed) {
+                                const size_t cap = std::min(limits.inflated_bytes, limits.total_bytes - retained);
+                                z_stream stream{};
+                                const int initialized = inflateInit(&stream);
+                                if (initialized == Z_MEM_ERROR)
+                                    throw std::bad_alloc();
+                                if (initialized != Z_OK) {
+                                    malformed("Cannot initialize XMP iTXt decompression");
+                                } else {
+                                    struct InflaterGuard {
+                                        z_stream& stream;
+                                        ~InflaterGuard() { inflateEnd(&stream); }
+                                    } guard{stream};
+                                    stream.next_in = block.bytes.data() + offset;
+                                    stream.avail_in = static_cast<uInt>(block.bytes.size() - offset);
+                                    std::array<uint8_t, 8192> scratch{};
+                                    std::vector<uint8_t> output;
+                                    for (;;) {
+                                        // The extra byte detects excess output, including at a zero limit.
+                                        const auto available = std::min(scratch.size(), cap - output.size() + 1);
+                                        stream.next_out = scratch.data();
+                                        stream.avail_out = static_cast<uInt>(available);
+                                        const auto input_before = stream.avail_in;
+                                        const int status = inflate(&stream, Z_NO_FLUSH);
+                                        const auto produced = available - stream.avail_out;
+                                        if (status == Z_MEM_ERROR)
+                                            throw std::bad_alloc();
+                                        if (produced > cap - output.size()) {
+                                            block.status = MetadataStatus::Limited;
+                                            block.diagnostic = "XMP inflated text budget exhausted";
+                                            break;
+                                        }
+                                        if (status != Z_OK && status != Z_STREAM_END) {
+                                            malformed("Invalid or trailing XMP iTXt compressed data");
+                                            break;
+                                        }
+                                        output.insert(output.end(), scratch.begin(), scratch.begin() + produced);
+                                        if (status == Z_STREAM_END) {
+                                            if (stream.avail_in) {
+                                                malformed("Invalid or trailing XMP iTXt compressed data");
+                                            } else {
+                                                retained += output.size();
+                                                block.inflated.emplace(output.begin(), output.end());
+                                            }
+                                            break;
+                                        }
+                                        if (!produced && stream.avail_in == input_before) {
+                                            malformed("Invalid or trailing XMP iTXt compressed data");
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (result.status == MetadataStatus::Absent)
+                    result.status = MetadataStatus::Collected;
+                if (block.status == MetadataStatus::Limited ||
+                    (block.status == MetadataStatus::Malformed && result.status != MetadataStatus::Limited))
+                    result.status = block.status;
+                if (result.diagnostic.empty() && !block.diagnostic.empty())
+                    result.diagnostic = block.diagnostic;
+                result.blocks.push_back(std::move(block));
+            }
+        };
+
         // libpng's eXIf accessor retains one value, while this archive must keep
         // duplicate original chunks and inspect both sides of IDAT without
         // inflating pixels. Only chunk framing and CRC are handled here; TIFF
         // interpretation remains in the existing media provider.
-        SourceExif read_png_exif(std::ifstream& input, const MetadataLimits& limits) {
+        SourceExif read_png_exif(std::ifstream& input, const MetadataLimits& limits, XmpCollector* xmp) {
             SourceExif result;
             result.scope = "png-chunks-through-iend";
             result.status = MetadataStatus::Absent;
@@ -2023,14 +2204,17 @@ namespace lfs::core::image_codecs {
             }
             size_t scanned = kPngSignature.size(), total = 0, chunks = 0;
             uint64_t position = kPngSignature.size();
-            bool idat = false, exif = false;
+            bool idat = false, exif = false, exif_stopped = false;
             auto fail = [&](MetadataStatus status, const char* text) {
-                if (result.status != MetadataStatus::Malformed || status == MetadataStatus::IoError)
-                    result.status = status;
-                if (result.diagnostic.find(text) == std::string::npos) {
-                    if (!result.diagnostic.empty())
-                        result.diagnostic += "; ";
-                    result.diagnostic += text;
+                // After the first omitted EXIF block, only the combined scan advances.
+                auto& state = exif_stopped ? *xmp->scan_status : result.status;
+                auto& diagnostic = exif_stopped ? xmp->scan_diagnostic : result.diagnostic;
+                if (state != MetadataStatus::Malformed || status == MetadataStatus::IoError)
+                    state = status;
+                if (diagnostic.find(text) == std::string::npos) {
+                    if (!diagnostic.empty())
+                        diagnostic += "; ";
+                    diagnostic += text;
                 }
             };
             auto read = [&](uint8_t* data, size_t size) {
@@ -2119,32 +2303,45 @@ namespace lfs::core::image_codecs {
                     idat = true;
                     continue;
                 }
-                if (is_exif && (result.blocks.size() >= limits.blocks || length > limits.block_bytes || length > limits.total_bytes - total)) {
+                if (is_exif && !exif_stopped && (result.blocks.size() >= limits.blocks || length > limits.block_bytes || length > limits.total_bytes - total)) {
                     fail(MetadataStatus::Limited, "EXIF collection budget exhausted");
-                    return result;
+                    if (!xmp)
+                        return result;
+                    xmp->scan_status = result.status;
+                    xmp->scan_diagnostic = result.diagnostic;
+                    exif_stopped = true;
                 }
                 // Charge data and CRC before allocating a retained block.
                 if (limits.png_scan_bytes - scanned < 4 || length > limits.png_scan_bytes - scanned - 4) {
                     fail(MetadataStatus::Limited, "PNG scan byte budget exhausted");
                     return result;
                 }
+                const bool retain_exif = is_exif && !exif_stopped;
                 ExifBlock block;
                 block.envelope = ExifEnvelope::PngExif;
-                if (is_exif)
+                if (retain_exif)
                     block.bytes.resize(length);
+                std::vector<uint8_t> xmp_bytes;
+                const bool possible_xmp = xmp && !std::memcmp(type, "iTXt", 4) && length >= sizeof(kPngXmp);
                 uLong crc = crc32_z(0, type, 4);
                 for (size_t offset = 0; offset < length;) {
                     const size_t count = std::min(length - offset, buffer.size());
-                    auto* destination = is_exif ? block.bytes.data() + offset : buffer.data();
+                    auto* destination = retain_exif ? block.bytes.data() + offset : buffer.data();
                     if (!read(destination, count))
                         return result;
                     crc = crc32_z(crc, destination, count);
+                    if (possible_xmp && offset == 0 && !std::memcmp(destination, kPngXmp, sizeof(kPngXmp)) && xmp->canRetain(length))
+                        xmp_bytes.resize(length);
+                    if (!xmp_bytes.empty())
+                        std::memcpy(xmp_bytes.data() + offset, destination, count);
                     offset += count;
                 }
                 std::array<uint8_t, 4> checksum{};
                 if (!read(checksum.data(), checksum.size()))
                     return result;
-                if (is_exif) {
+                if (!xmp_bytes.empty())
+                    xmp->append(std::move(xmp_bytes), XmpEnvelope::PngInternationalText, crc == u32(checksum.data()));
+                if (retain_exif) {
                     result.blocks.push_back(std::move(block));
                     total += length;
                     if (result.status == MetadataStatus::Absent)
@@ -2648,7 +2845,7 @@ namespace lfs::core::image_codecs {
 
     } // namespace
 
-    SourceExif read_source_exif(const std::filesystem::path& path, const MetadataLimits& limits) {
+    static SourceExif collect_source_exif(const std::filesystem::path& path, const MetadataLimits& limits, XmpCollector* xmp) {
         SourceExif result;
         if (!limits.block_bytes || !limits.total_bytes) {
             result.status = MetadataStatus::Limited;
@@ -2679,21 +2876,35 @@ namespace lfs::core::image_codecs {
                                     ((signature[0] == 'I' && signature[1] == 'I' && (signature[2] == 42 || signature[2] == 43) && signature[3] == 0) ||
                                      (signature[0] == 'M' && signature[1] == 'M' && signature[2] == 0 && (signature[3] == 42 || signature[3] == 43)));
         if (tiff_signature) {
+            if (xmp) {
+                xmp->supported_carrier = true;
+                xmp->result.status = MetadataStatus::Absent;
+                xmp->result.scope = "tiff-libtiff-observed-tag700";
+            }
             if (!limits.tiff_reads || limits.tiff_reads > 65536 || !limits.tiff_read_bytes || limits.tiff_read_bytes > 1024 * 1024 * 1024 ||
                 !limits.tiff_directories || limits.tiff_directories > 256 || !limits.tiff_entries || limits.tiff_entries > 65536 || !limits.tiff_value_bytes || limits.tiff_value_bytes > 64 * 1024 * 1024) {
                 result.status = MetadataStatus::Limited;
                 result.diagnostic = "Invalid TIFF collection limits";
                 return result;
             }
-            return read_tiff_source_metadata(input, limits);
+            auto observed = read_tiff_source_metadata(input, limits);
+            if (xmp)
+                xmp->collectTiff(observed);
+            return observed;
         }
         if (!limits.blocks || limits.blocks > 4096) {
             result.status = MetadataStatus::Limited;
             result.diagnostic = "Invalid EXIF block count limit";
             return result;
         }
-        if (is_heif(std::span(signature).first(signature_size)))
-            return read_heif_exif(path, limits);
+        if (is_heif(std::span(signature).first(signature_size))) {
+            if (!xmp)
+                return read_heif_exif(path, limits);
+            xmp->supported_carrier = true;
+            auto observed = read_heif_metadata(path, limits, xmp->limits);
+            xmp->result = std::move(observed.xmp);
+            return std::move(observed.exif);
+        }
         if (signature_size >= kPngSignature.size() && std::equal(kPngSignature.begin(), kPngSignature.end(), signature.begin())) {
             if (limits.png_scan_bytes < kPngSignature.size() || limits.png_scan_bytes > 1024 * 1024 * 1024 ||
                 !limits.png_chunks || limits.png_chunks > 65536) {
@@ -2701,7 +2912,12 @@ namespace lfs::core::image_codecs {
                 result.diagnostic = "Invalid PNG collection limits";
                 return result;
             }
-            return read_png_exif(input, limits);
+            if (xmp) {
+                xmp->supported_carrier = true;
+                xmp->result.status = MetadataStatus::Absent;
+                xmp->result.scope = "png-itxt-through-iend";
+            }
+            return read_png_exif(input, limits, xmp);
         }
         if (signature_size < 2 || signature[0] != 0xff || signature[1] != 0xd8) {
             result.status = MetadataStatus::Unsupported;
@@ -2709,6 +2925,11 @@ namespace lfs::core::image_codecs {
             return result;
         }
         result.scope = "jpeg-before-sos";
+        if (xmp) {
+            xmp->supported_carrier = true;
+            xmp->result.status = MetadataStatus::Absent;
+            xmp->result.scope = "jpeg-app1-before-sos";
+        }
         // Validate the JPEG-only window after detecting the source format;
         // unrelated collection budgets must not reject PNG or HEIF metadata.
         if (!limits.jpeg_header_bytes || limits.jpeg_header_bytes > 4 * 1024 * 1024) {
@@ -2773,8 +2994,16 @@ namespace lfs::core::image_codecs {
             result.diagnostic = state->exhausted ? "Truncated JPEG header" : state->error.message;
         }
         size_t total = 0;
+        bool exif_stopped = false;
         for (auto* marker = state->codec.marker_list; marker; marker = marker->next) {
-            if (marker->data_length < 6 || std::memcmp(marker->data, "Exif\0\0", 6))
+            if (xmp) {
+                const bool standard = marker->data_length >= sizeof(kJpegXmp) && !std::memcmp(marker->data, kJpegXmp, sizeof(kJpegXmp));
+                const bool extended = marker->data_length >= sizeof(kJpegExtendedXmp) && !std::memcmp(marker->data, kJpegExtendedXmp, sizeof(kJpegExtendedXmp));
+                if ((standard || extended) && xmp->canRetain(marker->data_length))
+                    xmp->append(std::vector<uint8_t>(marker->data, marker->data + marker->data_length),
+                                standard ? XmpEnvelope::JpegApp1 : XmpEnvelope::JpegExtendedApp1);
+            }
+            if (exif_stopped || marker->data_length < 6 || std::memcmp(marker->data, "Exif\0\0", 6))
                 continue;
             const size_t size = marker->data_length;
             if (result.blocks.size() >= limits.blocks || size > limits.block_bytes || size > limits.total_bytes - total) {
@@ -2782,7 +3011,11 @@ namespace lfs::core::image_codecs {
                     result.status = MetadataStatus::Limited;
                 if (!result.diagnostic.empty())
                     result.diagnostic += "; ";
-                result.diagnostic += "EXIF collection budget exhausted";
+                if (result.diagnostic.find("EXIF collection budget exhausted") == std::string::npos)
+                    result.diagnostic += "EXIF collection budget exhausted";
+                exif_stopped = true;
+                if (xmp)
+                    continue;
                 break;
             }
             ExifBlock block;
@@ -2791,6 +3024,63 @@ namespace lfs::core::image_codecs {
             total += size;
             if (result.status == MetadataStatus::Absent)
                 result.status = MetadataStatus::Collected;
+        }
+        return result;
+    }
+
+    std::optional<std::span<const uint8_t>> source_xmp_bytes(const SourceExif& exif, const XmpBlock& block) noexcept {
+        if (block.envelope != XmpEnvelope::TiffTag) {
+            if (block.tiff_tag || (block.envelope == XmpEnvelope::HeifMime) != block.heif_item.has_value())
+                return std::nullopt;
+            if (block.heif_item && (!block.heif_item->image_item || !block.heif_item->metadata_item ||
+                                    block.inflated || block.compressed || block.payload_offset || block.crc_valid))
+                return std::nullopt;
+            return std::span<const uint8_t>(block.bytes);
+        }
+        if (!block.tiff_tag || block.heif_item || !exif.tiff || !block.bytes.empty() || block.inflated || block.compressed || block.payload_offset || block.crc_valid)
+            return std::nullopt;
+        const auto reference = *block.tiff_tag;
+        const auto& directories = exif.tiff->directories;
+        if (reference.directory >= directories.size() || reference.tag >= directories[reference.directory].tags.size())
+            return std::nullopt;
+        const auto& tag = directories[reference.directory].tags[reference.tag];
+        if (tag.id != TIFFTAG_XMLPACKET || (tag.type != TIFF_BYTE && tag.type != TIFF_UNDEFINED) || tag.count != tag.bytes.size() ||
+            !tag.unsigned_values.empty() || !tag.signed_values.empty() || !tag.floating_values.empty())
+            return std::nullopt;
+        return std::span<const uint8_t>(tag.bytes);
+    }
+
+    SourceExif read_source_exif(const std::filesystem::path& path, const MetadataLimits& limits) {
+        return collect_source_exif(path, limits, nullptr);
+    }
+
+    SourceImageMetadata read_source_metadata(const std::filesystem::path& path, const MetadataLimits& limits, const XmpLimits& xmp_limits) {
+        SourceImageMetadata result;
+        if (!xmp_limits.blocks || xmp_limits.blocks > 4096 || !xmp_limits.block_bytes || xmp_limits.block_bytes > 16 * 1024 * 1024 ||
+            !xmp_limits.total_bytes || xmp_limits.total_bytes > 64 * 1024 * 1024 || xmp_limits.inflated_bytes > 16 * 1024 * 1024) {
+            result.xmp.status = MetadataStatus::Limited;
+            result.xmp.diagnostic = "Invalid XMP collection limits";
+            result.exif = read_source_exif(path, limits);
+            return result;
+        }
+        XmpCollector collector{result.xmp, xmp_limits};
+        result.exif = collect_source_exif(path, limits, &collector);
+        const auto scan_status = collector.scan_status.value_or(result.exif.status);
+        const auto& scan_diagnostic = collector.scan_status ? collector.scan_diagnostic : result.exif.diagnostic;
+        if (result.xmp.status == MetadataStatus::NotExamined) {
+            result.xmp.status = (scan_status == MetadataStatus::IoError || scan_status == MetadataStatus::Limited) ? scan_status : MetadataStatus::Unsupported;
+            result.xmp.diagnostic = (scan_status == MetadataStatus::IoError || scan_status == MetadataStatus::Limited) ? scan_diagnostic : "XMP collection supports JPEG APP1, PNG iTXt, observed TIFF tag 700 and HEIF primary-image MIME items";
+        } else if ((collector.supported_carrier || result.xmp.status != MetadataStatus::Unsupported) &&
+                   (scan_status == MetadataStatus::Limited || scan_status == MetadataStatus::Malformed || scan_status == MetadataStatus::IoError)) {
+            // Conservatively retain the enclosing scan's incomplete/invalid status.
+            // Individual blocks report carrier framing, never XML validity.
+            if (result.xmp.status != MetadataStatus::Limited || scan_status == MetadataStatus::IoError)
+                result.xmp.status = scan_status;
+            if (!scan_diagnostic.empty() && result.xmp.diagnostic.find(scan_diagnostic) == std::string::npos) {
+                if (!result.xmp.diagnostic.empty())
+                    result.xmp.diagnostic += "; ";
+                result.xmp.diagnostic += scan_diagnostic;
+            }
         }
         return result;
     }

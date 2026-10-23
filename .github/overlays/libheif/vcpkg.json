@@ -1,7 +1,7 @@
 {
   "name": "libheif",
   "version": "1.21.2",
-  "port-version": 2,
+  "port-version": 3,
   "description": "HEIF/AVIF with dav1d decoding and optional AOM AVIF encoding; HEVC disabled",
   "homepage": "http://www.libheif.org/",
   "license": "LGPL-3.0-only",

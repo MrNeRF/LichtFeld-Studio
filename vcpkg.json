@@ -11,6 +11,7 @@
         "avcodec",
         "avfilter",
         "avformat",
+        "aom",
         "dav1d",
         {
           "name": "nvcodec",

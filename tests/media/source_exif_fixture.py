@@ -24,6 +24,122 @@ def write_png(path, *, post_idat=False, duplicate=False, idat_chunks=1, damaged_
     return tiff
 
 
+def write_camera_metadata(path, *, carrier="png", little=True, big=False, padded=False, nul_padding=None,
+                          thumbnail=False, unknown_optics=False, unterminated_refs=False, invalid_offset=False):
+    """Independent byte-level camera/GPS fixture, including nested IFDs."""
+    if big and carrier != "tiff":
+        raise ValueError("EXIF envelopes use classic TIFF")
+    order = "<" if little else ">"
+    slot, count_width, entry_width = (8, 8, 20) if big else (4, 2, 12)
+    byte_order = "little" if little else "big"
+    integer = lambda n: n.to_bytes(slot, byte_order)
+    short = lambda n: struct.pack(order + "H", n)
+    long = lambda n: struct.pack(order + "I", n)
+    rational = lambda n, d: struct.pack(order + "II", n, d)
+    header_size = 16 if big else 8
+    directories = [
+        [(256, 4, 1, long(1)), (257, 4, 1, long(1)),
+         (258, 3, 3, short(8) * 3), (259, 3, 1, short(1)),
+         (262, 3, 1, short(2)), (271, 2, 12, b"Test Camera\0"),
+         (272, 2, 8, b"Model A\0"), (273, 16 if big else 4, 1, b""),
+         (274, 3, 1, short(6)), (277, 3, 1, short(3)),
+         (278, 4, 1, long(1)), (279, 4, 1, long(3)),
+         (0x0132, 2, 20, b"2024:02:29 12:34:56\0"),
+         (0x8769, 18 if big else 4, 1, b""),
+         (0x8825, 18 if big else 4, 1, b"")],
+        [(0x829a, 5, 1, rational(1, 125)),
+         (0x829d, 5, 1, rational(28, 10)),
+         (0x8827, 3, 1, short(200)), (0x9000, 7, 4, b"0232"),
+         (0x9003, 2, 20, b"2024:02:29 12:34:56\0"),
+         (0x9011, 2, 7, b"+02:30\0"),
+         (0x9101, 7, 4, b"\x01\x02\x03\0"),
+         (0x920a, 5, 1, rational(350, 10)),
+         (0x9291, 2, 7, b"000123\0"),
+         (0xa434, 2, 7, b"Lens A\0")],
+        [(0, 1, 4, b"\x02\x03\0\0"), (1, 2, 2, b"S\0"),
+         (2, 5, 3, rational(45, 1) + rational(30, 1) + rational(0, 1)),
+         (3, 2, 2, b"W\0"),
+         (4, 5, 3, rational(73, 1) + rational(15, 1) + rational(0, 1)),
+         (5, 1, 1, b"\x01"), (6, 5, 1, rational(125, 10)),
+         (7, 5, 3, rational(10, 1) + rational(4, 1) + rational(1, 2)),
+         (18, 2, 7, b"WGS-84\0"), (29, 2, 11, b"2024:02:29\0")]]
+    if unknown_optics:
+        directories[1] = [(id_, type_, count, rational(0, 10) if id_ in (0x829d, 0x920a) else value)
+                          for id_, type_, count, value in directories[1]]
+    if unterminated_refs:
+        directories[2] = [(id_, type_, 1, value[:1]) if id_ in (1, 3) else (id_, type_, count, value)
+                          for id_, type_, count, value in directories[2]]
+    if invalid_offset:
+        directories[1] = [(id_, type_, 6, value[:-1]) if id_ == 0x9011 else (id_, type_, count, value)
+                          for id_, type_, count, value in directories[1]]
+    if thumbnail:
+        secondary = [(id_, type_, count, value) for id_, type_, count, value in directories[0]
+                     if id_ not in (271, 272, 274, 0x0132, 0x8769, 0x8825)]
+        secondary += [(254, 4, 1, long(1)), (271, 2, 17, b"Thumbnail Camera\0"),
+                      (272, 2, 16, b"Thumbnail Model\0"), (274, 3, 1, short(1)),
+                      (0x0132, 2, 20, b"2000:01:01 00:00:00\0")]
+        directories.append(secondary)
+    if padded:
+        for index, tags in enumerate(directories):
+            for ordinal, (id_, type_, count, value) in enumerate(tags):
+                if id_ in (271, 272, 0xa434) and (nul_padding if nul_padding is not None else carrier != "tiff"):
+                    value += b"\0" * 8
+                elif id_ == 0x9291:
+                    value = value[:-1] + b"   \0"
+                else:
+                    continue
+                directories[index][ordinal] = (id_, type_, len(value), value)
+    offsets = []
+    next_offset = header_size
+    for tags in directories:
+        offsets.append(next_offset)
+        next_offset += count_width + entry_width * len(tags) + slot
+    payload = bytearray()
+    tables = bytearray()
+    pixel_slots = []
+    for directory, tags in enumerate(directories):
+        tables.extend(len(tags).to_bytes(count_width, byte_order))
+        for id_, type_, count, value in sorted(tags):
+            if directory == 0 and id_ in (0x8769, 0x8825):
+                value = integer(offsets[1 if id_ == 0x8769 else 2])
+            if id_ == 273:
+                pixel_slot = header_size + len(tables) + (12 if big else 8)
+                # All image directories refer to the same tiny RGB strip.
+                # Record each slot for filling after table/payload construction.
+                pixel_slots.append(pixel_slot)
+            tables.extend(struct.pack(order + "HH" + ("Q" if big else "I"), id_, type_, count))
+            if len(value) > slot:
+                payload.extend(bytes((-(next_offset + len(payload))) % (8 if big else 2)))
+                tables.extend(integer(next_offset + len(payload)))
+                payload.extend(value)
+            else:
+                tables.extend(value.ljust(slot, b"\0"))
+        tables.extend(integer(offsets[3]) if directory == 0 and thumbnail else bytes(slot))
+    header = (b"II" if little else b"MM") + short(43 if big else 42)
+    header += short(8) + short(0) + integer(header_size) if big else integer(header_size)
+    data = bytearray(header + tables + payload)
+    for pixel_slot in pixel_slots:
+        data[pixel_slot:pixel_slot + slot] = integer(len(data))
+    data.extend(b"\x14\x50\xa0")
+    if carrier == "tiff":
+        path.write_bytes(data)
+    elif carrier == "jpeg":
+        previous = write_jpeg(path)
+        base = path.read_bytes()
+        metadata = b"Exif\0\0" + data
+        path.write_bytes(base[:2] + b"\xff\xe1" + struct.pack(">H", len(metadata) + 2) + metadata + base[2 + 2 * (len(previous) + 4):])
+    elif carrier == "png":
+        previous = write_png(path)
+        base = path.read_bytes()
+        marker = b"eXIf" + previous
+        start = base.index(marker) - 4
+        replacement = struct.pack(">I", len(data)) + b"eXIf" + data
+        replacement += struct.pack(">I", zlib.crc32(b"eXIf" + data))
+        path.write_bytes(base[:start] + replacement + base[start + len(previous) + 12:])
+    else:
+        raise ValueError(carrier)
+
+
 def check_png(test, result, payload, *, count=1, status="collected"):
     test.assertEqual(result["status"], status)
     test.assertEqual(result["scope"], "png-chunks-through-iend")
@@ -85,7 +201,7 @@ def write_invalid_heif(path):
     path.write_bytes(original)
 
 
-def write_tiff(path, *, little=True, big=False, pages=1, pixel_offset=None, cycle=False, short_datetime=False):
+def write_tiff(path, *, little=True, big=False, pages=1, pixel_offset=None, cycle=False, short_datetime=False, xmp_packets=None, xmp_type=1):
     """Independent classic/BigTIFF producer; no libtiff writer is used."""
     order = "<" if little else ">"
     slot = 8 if big else 4
@@ -123,6 +239,9 @@ def write_tiff(path, *, little=True, big=False, pages=1, pixel_offset=None, cycl
                          (65009, 17, 2, struct.pack(order + "qq", -2**63, -1))])
         if short_datetime:
             tags.append((306, 3, 1, struct.pack(order + "H", 2)))
+        if xmp_packets is not None and xmp_packets[page] is not None:
+            packet = xmp_packets[page]
+            tags.append((700, xmp_type, len(packet) // {3: 2, 4: 4, 11: 4, 12: 8}.get(xmp_type, 1), packet))
         tags.sort(key=lambda tag: tag[0])
         count_width, entry_width = (8, 20) if big else (2, 12)
         tail = offset + count_width + entry_width * len(tags) + slot
@@ -200,7 +319,7 @@ def check_tiff(test, result, path, payload, *, big=False, little=True, pages=1):
 
 
 
-def write_tiff_graph(path, *, little=True, big=False, cycle=False, blobs=(), subimages=1, alpha=False):
+def write_tiff_graph(path, *, little=True, big=False, cycle=False, blobs=(), subimages=1, alpha=False, subimage_blobs=(), directory_tags=None):
     """Image -> EXIF/GPS/SubIFD, plus EXIF -> interoperability, all independent."""
     order = "<" if little else ">"
     byte_order = "little" if little else "big"
@@ -225,6 +344,7 @@ def write_tiff_graph(path, *, little=True, big=False, cycle=False, blobs=(), sub
     if cycle == "self-subimage":
         nodes[3] = base + [(330, pointer_type, 1, "subimage")]
     nodes[0].extend((id_, 1 if id_ in (700, 34377) else 7, len(value), value) for id_, value in blobs)
+    nodes[3] = nodes[3] + [(id_, 1 if id_ in (700, 34377) else 7, len(value), value) for id_, value in subimage_blobs]
     if alpha:
         nodes[0] = [tag for tag in nodes[0] if tag[0] not in (277, 279)]
         nodes[0].extend([(277, 3, 1, scalar(4, 2)), (279, 4, 1, scalar(4, 4)), (338, 3, 1, scalar(2, 2)),
@@ -232,6 +352,9 @@ def write_tiff_graph(path, *, little=True, big=False, cycle=False, blobs=(), sub
     nodes[0] = [(id_, type_, subimages if id_ == 330 else count, value)
                 for id_, type_, count, value in nodes[0]]
     names = ["image", "exif", "gps", "subimage", "interoperability"]
+    for kind, tags in (directory_tags or {}).items():
+        index = names.index(kind)
+        nodes[index] = nodes[index] + list(tags)
     header = (b"II" if little else b"MM") + scalar(43 if big else 42, 2)
     header += scalar(8, 2) + scalar(0, 2) + scalar(16, 8) if big else scalar(8, 4)
     data = bytearray(header)
@@ -285,3 +408,94 @@ def check_tiff_graph(test, result, path, maker):
             original = bytes.fromhex(span["bytes"])
             file.seek(span["offset"])
             test.assertEqual(original, file.read(len(original)))
+
+
+def write_heif_metadata(path, items=(), *, carrier="avif"):
+    """Attach independently constructed MIME/Exif items to existing encoded images.
+
+    Items specify data, optional content_type/encoding/type and image IDs.
+    The two-image fixtures have primary image 2; image 1 stays non-primary.
+    """
+    source = "multi.avif" if carrier == "avif" else "system-multi.heic"
+    data = (Path(__file__).resolve().parents[1] / "data/heif" / source).read_bytes()
+
+    def box(kind, payload):
+        return struct.pack(">I4s", len(payload) + 8, kind) + payload
+
+    def full(kind, version, payload):
+        return box(kind, bytes([version, 0, 0, 0]) + payload)
+
+    def children(start, end):
+        result = {}
+        while start < end:
+            size, kind = struct.unpack_from(">I4s", data, start)
+            assert size >= 8 and start + size <= end and kind not in result
+            result[kind] = data[start:start + size]
+            start += size
+        assert start == end
+        return result
+
+    top = children(0, len(data))
+    meta = top[b"meta"]
+    offset = data.index(meta)
+    old = children(offset + 12, offset + len(meta))
+    iloc = old[b"iloc"][8:]
+    assert iloc[:6] == bytes(4) + b"\x44\x40"
+    count = struct.unpack_from(">H", iloc, 6)[0]
+    entries = []
+    cursor = 8
+    for _ in range(count):
+        id_, reference, base, extents = struct.unpack_from(">HHIH", iloc, cursor)
+        assert reference == 0
+        cursor += 10
+        payload = bytearray()
+        for _ in range(extents):
+            start, length = struct.unpack_from(">II", iloc, cursor)
+            cursor += 8
+            part = data[base + start:base + start + length]
+            assert len(part) == length
+            payload.extend(part)
+        entries.append((id_, bytes(payload)))
+    assert cursor == len(iloc)
+    primary = struct.unpack_from(">H", old[b"pitm"], 12)[0]
+    assert primary == 2
+    info = old[b"iinf"]
+    assert info[8:12] == bytes(4)
+    info_count = struct.unpack_from(">H", info, 12)[0]
+    infe = info[14:]
+    references = old[b"iref"][12:]
+    ids = []
+    next_id = max(id_ for id_, _ in entries) + 1
+    for item in items:
+        id_ = next_id
+        next_id += 1
+        ids.append(id_)
+        kind = item.get("type", b"mime")
+        header = struct.pack(">HH4s", id_, 0, kind) + b"metadata\0"
+        if kind == b"mime":
+            header += item.get("content_type", "application/rdf+xml").encode() + b"\0"
+            header += item.get("encoding", "").encode() + b"\0"
+        infe += full(b"infe", 2, header)
+        entries.append((id_, item["data"]))
+        images = item.get("images", [primary])
+        if images:
+            references += box(b"cdsc", struct.pack(">HH", id_, len(images)) +
+                              b"".join(struct.pack(">H", image) for image in images))
+
+    def metadata(base):
+        locations = bytearray()
+        for id_, payload in entries:
+            locations.extend(struct.pack(">HHHII", id_, 0, 1, base, len(payload)))
+            base += len(payload)
+        replacement = {
+            b"iloc": full(b"iloc", 0, b"\x44\0" + struct.pack(">H", len(entries)) + locations),
+            b"iinf": full(b"iinf", 0, struct.pack(">H", info_count + len(items)) + infe),
+            b"iref": full(b"iref", 0, references),
+        }
+        return full(b"meta", 0, b"".join(replacement.get(kind, raw) for kind, raw in old.items()))
+
+    ftyp = top[b"ftyp"]
+    header = metadata(0)
+    header = metadata(len(ftyp) + len(header) + 8)
+    path.write_bytes(ftyp + header + box(b"mdat", b"".join(payload for _, payload in entries)))
+    return ids

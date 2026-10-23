@@ -83,13 +83,22 @@ namespace {
 
 nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
     using namespace lfs::media;
-    const auto path = lfs::core::utf8_to_path(request.at("output").get<std::string>());
+    auto path = lfs::core::utf8_to_path(request.at("output").get<std::string>());
+#ifdef __linux__
+    if (request.value("non_utf8_filename", false))
+        path = path.parent_path() / std::filesystem::path(std::string("encoded-\xff.mp4"));
+#endif
     VideoEncodeSession session;
     VideoEncodeOptions options{.width = 64, .height = 48, .framerate = 10, .crf = 18, .comment = "media session é 日本語"};
     options.width = request.value("width", options.width);
     options.height = request.value("height", options.height);
+    options.crf = request.value("crf", options.crf);
     if (request.value("hevc", false))
         options.codec = VideoEncodeCodec::HEVC;
+    if (request.value("av1", false))
+        options.codec = VideoEncodeCodec::AV1;
+    if (request.value("cuda", false))
+        options.preferred_backend = VideoEncodeBackend::Cuda;
     if (request.value("videotoolbox", false)) {
         options.preferred_backend = VideoEncodeBackend::VideoToolbox;
         options.matrix = ColorMatrix::Smpte170M;
@@ -177,7 +186,7 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
         throw std::runtime_error(std::string(opened.error().detail()));
     require(session.isOpen(), "session open");
     const auto backend = session.backend();
-    if (!request.value("videotoolbox", false))
+    if (!request.value("videotoolbox", false) || options.codec == VideoEncodeCodec::AV1)
         require(backend == VideoEncodeBackend::Software, "software session open");
     writer.expected_backend = backend;
     require(session.open(path, options).error().code() == lfs::ErrorCode::FailedPrecondition, "overlapping open rejected");
@@ -207,8 +216,10 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
     writer.reenter = &destination;
     writer.options = &options;
     writer.path = path;
-    for (int frame = 0; frame < 4; ++frame) {
-        writer.luma = 32 + frame * 32;
+    const int frames = request.value("frames", 4);
+    require(frames > 0 && frames <= 40, "bounded contract frame count");
+    for (int frame = 0; frame < frames; ++frame) {
+        writer.luma = 32 + (frame % 4) * 32;
         auto result = destination.writeFrame(writer);
         if (!result)
             throw std::runtime_error(std::string(result.error().detail()));
@@ -216,7 +227,12 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
     require(writer.reentrant_checked, "callback reentrancy exercised");
     require(destination.close().has_value() && !destination.isOpen() && destination.close().has_value(), "flush and repeat close");
     require(destination.writeFrame(writer).error().code() == lfs::ErrorCode::FailedPrecondition, "write after close rejected");
-    nlohmann::json report{{"success", true}, {"frames", 4}, {"writer_calls", writer.calls}, {"comment", options.comment}, {"backend", static_cast<int>(backend)}};
+    nlohmann::json report{{"success", true}, {"frames", frames}, {"writer_calls", writer.calls}, {"comment", options.comment}, {"backend", static_cast<int>(backend)}};
+#ifdef __linux__
+    if (request.value("non_utf8_filename", false)) {
+        require(std::filesystem::is_regular_file(path), "encoder writes the exact native filename");
+    }
+#endif
     if (request.value("verify_apple_recovery", false)) {
         require(backend == VideoEncodeBackend::VideoToolboxSoftware, "8K must use Apple's software encoder");
         auto small = options;

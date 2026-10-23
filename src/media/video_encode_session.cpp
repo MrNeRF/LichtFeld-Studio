@@ -5,11 +5,14 @@
 #include "core/path_utils.hpp"
 #include "media/video_output_extent.hpp"
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstring>
 #include <exception>
 #include <format>
 #include <string_view>
+#include <thread>
+#include <utility>
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -24,6 +27,19 @@ namespace lfs::media {
         constexpr int DEFAULT_FRAMERATE = 30;
         constexpr int NVENC_FRAME_POOL_SIZE = 4;
         constexpr int NVENC_QP_OFFSET = 3;
+        constexpr int nvencAv1Qp(int quality) {
+            // Empirical constant-QP alignment with libaom's adaptive CRF on
+            // rendered/detail clips. Their scales are not linearly equivalent;
+            // content still affects the quality difference between providers.
+            constexpr std::array<std::pair<int, int>, 6> points{{{0, 0}, {10, 18}, {18, 40}, {30, 85}, {40, 135}, {51, 205}}};
+            for (size_t i = 1; i < points.size(); ++i) {
+                const auto [x, y] = points[i - 1];
+                const auto [next_x, next_y] = points[i];
+                if (quality <= next_x)
+                    return y + ((quality - x) * (next_y - y) + (next_x - x) / 2) / (next_x - x);
+            }
+            return points.back().second;
+        }
         Result<void> encodeError(ErrorCode code, std::string text) {
             return Result<void>::failure(make_error({.code = code, .domain = ErrorDomain::IO, .detail = std::move(text), .detection = LFS_SOURCE_SITE_CURRENT()}));
         }
@@ -31,6 +47,10 @@ namespace lfs::media {
             char text[AV_ERROR_MAX_STRING_SIZE];
             av_strerror(code, text, sizeof(text));
             return text;
+        }
+        const char* codecName(VideoEncodeCodec codec) {
+            return codec == VideoEncodeCodec::AV1 ? "AV1" : codec == VideoEncodeCodec::HEVC ? "HEVC"
+                                                                                            : "H.264";
         }
         std::string codecOpenFailure(const AVCodec* codec, int width, int height, const char* error) {
             std::string reason = std::format("{} codec open failed for {}x{}: {}", codec->name, width, height, error);
@@ -106,11 +126,12 @@ namespace lfs::media {
                     const auto detail = hardware_open_error_.empty() ? "No requested native provider is available" : hardware_open_error_;
                     return encodeError(ErrorCode::Unavailable, std::format("H.265/HEVC encoding unavailable: {}. HEVC export requires the CUDA backend (NVENC) or macOS (VideoToolbox); no additional software encoder is configured", detail));
                 }
-                if (const auto result = initCpuEncoder(path, opts, avcodec_find_encoder(AV_CODEC_ID_H264)); !result) {
+                const auto* software = opts.codec == VideoEncodeCodec::AV1 ? avcodec_find_encoder_by_name("libaom-av1") : avcodec_find_encoder(AV_CODEC_ID_H264);
+                if (const auto result = initCpuEncoder(path, opts, software); !result) {
                     std::string detail(result.error().detail());
                     if (!hardware_open_error_.empty()) {
-                        detail = std::format("H.264 encoding is unavailable for {}x{}. Native provider: {}; H.264 fallback: {}",
-                                             opts.width, opts.height, hardware_open_error_, detail);
+                        detail = std::format("{} encoding is unavailable for {}x{}. Native provider: {}; {} fallback: {}",
+                                             codecName(opts.codec), opts.width, opts.height, hardware_open_error_, codecName(opts.codec), detail);
                     }
                     cleanup();
                     return encodeError(ErrorCode::Unavailable, std::move(detail));
@@ -190,7 +211,8 @@ namespace lfs::media {
 
     private:
         bool tryInitNvenc(const std::filesystem::path& path, const VideoEncodeOptions& opts) {
-            const AVCodec* const codec = avcodec_find_encoder_by_name(opts.codec == VideoEncodeCodec::HEVC ? "hevc_nvenc" : "h264_nvenc");
+            const AVCodec* const codec = avcodec_find_encoder_by_name(opts.codec == VideoEncodeCodec::AV1 ? "av1_nvenc" : opts.codec == VideoEncodeCodec::HEVC ? "hevc_nvenc"
+                                                                                                                                                               : "h264_nvenc");
             if (!codec) {
                 hardware_open_error_ = "Requested NVENC encoder is not present in this build";
                 LOG_DEBUG("NVENC not available");
@@ -242,12 +264,12 @@ namespace lfs::media {
                 cleanupHwContexts();
                 return false;
             };
-            // The public quality range is 0..51; the legacy +3 mapping must
-            // stay inside NVENC's 0..51 QP range at its upper end.
+            // Preserve the legacy H264/HEVC mapping.
+            const int qp = opts.codec == VideoEncodeCodec::AV1 ? nvencAv1Qp(opts.crf) : std::min(opts.crf + NVENC_QP_OFFSET, 51);
             if (!checked_option(av_opt_set(codec_ctx_->priv_data, "preset", "p4", 0), "preset") ||
                 !checked_option(av_opt_set(codec_ctx_->priv_data, "tune", "hq", 0), "tune") ||
                 !checked_option(av_opt_set(codec_ctx_->priv_data, "rc", "constqp", 0), "rc") ||
-                !checked_option(av_opt_set_int(codec_ctx_->priv_data, "qp", std::min(opts.crf + NVENC_QP_OFFSET, 51), 0), "qp"))
+                !checked_option(av_opt_set_int(codec_ctx_->priv_data, "qp", qp, 0), "qp"))
                 return false;
 
             if (fmt_ctx_->oformat->flags & AVFMT_GLOBALHEADER) {
@@ -303,6 +325,8 @@ namespace lfs::media {
             }
             if (opts.codec == VideoEncodeCodec::HEVC)
                 stream_->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
+            else if (opts.codec == VideoEncodeCodec::AV1)
+                stream_->codecpar->codec_tag = MKTAG('a', 'v', '0', '1');
             if (opts.spherical_video && !applySphericalMetadata(fmt_ctx_, stream_)) {
                 hardware_open_error_ = "Spherical video metadata setup failed";
                 cleanupHwContexts();
@@ -357,6 +381,10 @@ namespace lfs::media {
         // Both Apple encoders consume the same YUV420P planes. Prefer the media
         // engine, then Apple's software encoder for unsupported hardware extents.
         bool tryInitVideoToolbox(const std::filesystem::path& path, const VideoEncodeOptions& opts) {
+            if (opts.codec == VideoEncodeCodec::AV1) {
+                hardware_open_error_ = "FFmpeg 9 has no AV1 VideoToolbox encoder";
+                return false;
+            }
             const AVCodec* const codec = avcodec_find_encoder_by_name(opts.codec == VideoEncodeCodec::HEVC ? "hevc_videotoolbox" : "h264_videotoolbox");
             if (!codec) {
                 hardware_open_error_ = "Requested VideoToolbox encoder is not present in this build";
@@ -390,7 +418,7 @@ namespace lfs::media {
             }
 
             if (!codec) {
-                return encodeError(ErrorCode::Unavailable, "H.264 encoder not found");
+                return encodeError(ErrorCode::Unavailable, opts.codec == VideoEncodeCodec::AV1 ? "AV1 software encoder not present in this build (requires FFmpeg libaom-av1)" : "H.264 encoder not found");
             }
             const bool videotoolbox = std::string_view(codec->name).ends_with("_videotoolbox");
             const bool hardware = videotoolbox && !apple_software;
@@ -412,8 +440,9 @@ namespace lfs::media {
             codec_ctx_->framerate = AVRational{framerate_, 1};
             codec_ctx_->pix_fmt = AV_PIX_FMT_YUV420P;
             codec_ctx_->gop_size = framerate_;
-            codec_ctx_->max_b_frames = videotoolbox ? 0 : 2;
-            codec_ctx_->thread_count = 0;
+            const bool aom = opts.codec == VideoEncodeCodec::AV1;
+            codec_ctx_->max_b_frames = videotoolbox || aom ? 0 : 2;
+            codec_ctx_->thread_count = aom ? int(std::clamp(std::thread::hardware_concurrency(), 1u, 8u)) : 0;
             codec_ctx_->colorspace = static_cast<AVColorSpace>(opts.matrix);
             codec_ctx_->color_range = static_cast<AVColorRange>(opts.range);
 
@@ -421,7 +450,14 @@ namespace lfs::media {
             const int64_t crf_scale = 51 - opts.crf;
             codec_ctx_->bit_rate = std::max<int64_t>(
                 250'000, static_cast<int64_t>(width_) * height_ * framerate_ * crf_scale / 330);
-            if (videotoolbox) {
+            if (aom) {
+                // Explicit constant-quality AV1, not the legacy H264 bitrate map.
+                // Limit lookahead and per-call workers without adding a global pool.
+                codec_ctx_->bit_rate = 0;
+                for (const auto& [name, value] : {std::pair{"crf", opts.crf}, std::pair{"cpu-used", 8}, std::pair{"row-mt", 1}, std::pair{"lag-in-frames", 8}})
+                    if (const auto status = av_opt_set_int(codec_ctx_->priv_data, name, value, 0); status < 0)
+                        return encodeError(ErrorCode::Unavailable, std::format("AV1 libaom option '{}' failed: {}", name, avErrorText(status)));
+            } else if (videotoolbox) {
                 // Select explicitly so backend() and producer targets describe
                 // the actual encoder, including the Apple software fallback.
                 if (av_opt_set_int(codec_ctx_->priv_data, "allow_sw", apple_software, 0) < 0 ||
@@ -450,6 +486,8 @@ namespace lfs::media {
             }
             if (opts.codec == VideoEncodeCodec::HEVC)
                 stream_->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
+            else if (opts.codec == VideoEncodeCodec::AV1)
+                stream_->codecpar->codec_tag = MKTAG('a', 'v', '0', '1');
             if (opts.spherical_video && !applySphericalMetadata(fmt_ctx_, stream_))
                 return encodeError(ErrorCode::Unavailable, "Spherical video metadata setup failed");
             stream_->time_base = codec_ctx_->time_base;
@@ -492,7 +530,7 @@ namespace lfs::media {
 
             backend_ = videotoolbox ? (hardware ? VideoEncodeBackend::VideoToolbox : VideoEncodeBackend::VideoToolboxSoftware)
                                     : VideoEncodeBackend::Software;
-            LOG_INFO("{} {} ({}): {}x{} @ {} fps, bitrate {} bps", hardware ? "Hardware" : "Software", opts.codec == VideoEncodeCodec::HEVC ? "HEVC" : "H.264", codec->name,
+            LOG_INFO("{} {} ({}): {}x{} @ {} fps, bitrate {} bps", hardware ? "Hardware" : "Software", codecName(opts.codec), codec->name,
                      width_, height_, framerate_, codec_ctx_->bit_rate);
             return {};
         }
@@ -620,7 +658,7 @@ namespace lfs::media {
             return encodeError(ErrorCode::InvalidArgument, std::string(*error));
         if (auto error = io::video::videoEncodingRangeError(options.framerate, options.crf))
             return encodeError(ErrorCode::InvalidArgument, std::move(*error));
-        if (options.codec != VideoEncodeCodec::H264 && options.codec != VideoEncodeCodec::HEVC)
+        if (options.codec != VideoEncodeCodec::H264 && options.codec != VideoEncodeCodec::HEVC && options.codec != VideoEncodeCodec::AV1)
             return encodeError(ErrorCode::InvalidArgument, std::format("Unknown video codec (got {})", static_cast<int>(options.codec)));
         if (options.preferred_backend != VideoEncodeBackend::Software &&
             options.preferred_backend != VideoEncodeBackend::Cuda &&

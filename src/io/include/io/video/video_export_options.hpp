@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/provenance.hpp"
+#include "io/image_sequence_options.hpp"
 #include "io/video/video_reconstruction.hpp"
 #include "media/video_encode_codec.hpp"
 #include "media/video_output_extent.hpp"
@@ -73,15 +74,22 @@ namespace lfs::io::video {
         VideoReconstructionSelection reconstruction{};
         bool spherical_video = false;
         media::VideoEncodeCodec codec = media::VideoEncodeCodec::H264;
+        std::optional<TensorImageSequenceOptions> image_sequence;
     };
 
     [[nodiscard]] inline std::expected<void, std::string> validateVideoEncodingOptions(
         const VideoExportOptions& options) {
+        if (options.image_sequence) {
+            if (options.width <= 0 || options.height <= 0 || options.framerate <= 0 || options.framerate > 1000 ||
+                static_cast<uint64_t>(options.width) * static_cast<uint64_t>(options.height) > static_cast<uint64_t>(std::numeric_limits<int>::max() / 4))
+                return std::unexpected("Invalid image sequence dimensions or framerate");
+            return {};
+        }
         if (const auto error = videoOutputExtentError(options.width, options.height))
             return std::unexpected(std::string(*error));
         if (auto error = videoEncodingRangeError(options.framerate, options.crf))
             return std::unexpected(std::move(*error));
-        if (options.codec != media::VideoEncodeCodec::H264 && options.codec != media::VideoEncodeCodec::HEVC)
+        if (options.codec != media::VideoEncodeCodec::H264 && options.codec != media::VideoEncodeCodec::HEVC && options.codec != media::VideoEncodeCodec::AV1)
             return std::unexpected("Unknown video codec (got " + std::to_string(static_cast<int>(options.codec)) + ")");
 
         return {};

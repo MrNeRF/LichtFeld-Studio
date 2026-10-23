@@ -113,6 +113,7 @@ namespace lfs::io::video {
         int output_width = 0;
         int output_height = 0;
         VideoReconstructionProjection projection = VideoReconstructionProjection::Perspective;
+        bool require_even_extent = true;
     };
 
     enum class VideoReconstructionResolutionIssue : std::uint8_t {

@@ -26,6 +26,7 @@ namespace lfs::media {
             options_.output_directory.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos ||
             options_.filename_pattern.find('\0') != std::string::npos ||
             options_.first_source_frame_number < 0 ||
+            (options_.numbering != FrameFileNumbering::SourceFrame && options_.numbering != FrameFileNumbering::DeliveryIndex) ||
             (options_.format != FrameFileFormat::PNG && options_.format != FrameFileFormat::JPEG && options_.format != FrameFileFormat::EXR && options_.format != FrameFileFormat::TIFF16 && options_.format != FrameFileFormat::JXL && options_.format != FrameFileFormat::AVIF))
             return sinkError(ErrorCode::InvalidArgument, "Invalid file sink directory or format");
         if (options_.format == FrameFileFormat::EXR) {
@@ -77,17 +78,21 @@ namespace lfs::media {
         const auto height = static_cast<std::size_t>(frame.layout.height);
         if (row_bytes > std::numeric_limits<std::size_t>::max() / height)
             return sinkError(ErrorCode::InvalidArgument, "File sink packed buffer size overflows");
-        if (frame.info.legacy_source_frame < 1 || options_.first_source_frame_number < 0 ||
-            frame.info.legacy_source_frame - 1 > std::numeric_limits<int>::max() - options_.first_source_frame_number)
+        if (options_.numbering == FrameFileNumbering::SourceFrame && frame.info.legacy_source_frame < 1)
             return sinkError(ErrorCode::InvalidArgument, "File sink requires a positive source frame number");
-        const int output_frame_number = options_.first_source_frame_number + frame.info.legacy_source_frame - 1;
+        const auto frame_index = options_.numbering == FrameFileNumbering::DeliveryIndex
+                                     ? frame.info.delivery_index
+                                     : static_cast<uint64_t>(frame.info.legacy_source_frame - 1);
+        if (frame_index > static_cast<uint64_t>(std::numeric_limits<int>::max() - options_.first_source_frame_number))
+            return sinkError(ErrorCode::InvalidArgument, "File sink frame numbering overflows");
+        const int output_frame_number = options_.first_source_frame_number + static_cast<int>(frame_index);
         const auto extension = options_.format == FrameFileFormat::AVIF ? ".avif" : options_.format == FrameFileFormat::JXL  ? ".jxl"
                                                                                 : options_.format == FrameFileFormat::TIFF16 ? ".tif"
                                                                                 : options_.format == FrameFileFormat::PNG    ? ".png"
                                                                                 : options_.format == FrameFileFormat::EXR    ? ".exr"
                                                                                                                              : ".jpg";
         const auto filename = options_.output_directory /
-                              (io::formatFrameFilenameStem(options_.filename_pattern, output_frame_number) + extension);
+                              core::utf8_to_path(io::formatFrameFilenameStem(options_.filename_pattern, output_frame_number) + extension);
         if (!filenames_.insert(filename).second)
             return sinkError(ErrorCode::AlreadyExists, "Duplicate file sink filename");
         if (options_.format == FrameFileFormat::EXR)

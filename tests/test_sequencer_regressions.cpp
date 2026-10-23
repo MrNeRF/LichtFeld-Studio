@@ -60,6 +60,7 @@ namespace {
         EXPECT_TRUE(native.include_provenance);
         EXPECT_EQ(native.codec, "h264");
         EXPECT_EQ(state.videoExportRequest(1280, 720, 30, 18, "hevc.mp4", false, "hevc").codec, "hevc");
+        EXPECT_EQ(state.videoExportRequest(1280, 720, 30, 18, "av1.mp4", false, "av1").codec, "av1");
 
         state.reconstruction = {.backend_id = "missing", .preset_id = "quality", .fallback = lfs::io::video::VideoReconstructionFallback::Native};
         const auto request = state.videoExportRequest(1280, 720, 48, 22, "export.mp4", false);

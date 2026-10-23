@@ -145,6 +145,44 @@ class ExtractionContracts(unittest.TestCase):
             luma = pixels[index * 4608:index * 4608 + 3072]
             self.assertLessEqual(max(abs(value - (32 + index * 32)) for value in luma), 5)
 
+    def test_av1_cpu_session_flush_pts_color_metadata_and_recovery(self):
+        # More than the configured lookahead, with distinct luma and repeated
+        # ownership/rejection checks in the shared production C++ contract.
+        for use_apple, color_range, crf in ((False, 1, 18), (True, 2, 18), (False, 1, 0)):
+            with self.subTest(apple_requested=use_apple, color_range=color_range, crf=crf):
+                work = Path(tempfile.mkdtemp(prefix="av1-session-", dir=self.root))
+                video = work / "AV1 session é 日本語.MP4"
+                request = work / "encode.json"
+                request.write_text(json.dumps({"operation": "encode-session", "output": str(video),
+                                               "av1": True, "videotoolbox": use_apple, "frames": 24, "crf": crf,
+                                               "matrix": 1, "range": color_range, "spherical": True}), encoding="utf-8")
+                result = subprocess.run([str(RUNNER), str(request)], capture_output=True, timeout=90)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                report = json.loads(result.stdout)
+                self.assertTrue(report["success"])
+                self.assertEqual(report["backend"], 0)
+                self.assertEqual(report["writer_calls"], 28)
+                probe = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_frames",
+                                                           "-show_streams", "-show_format", "-of", "json", str(video)]))
+                stream = probe["streams"][0]
+                self.assertEqual((stream["codec_name"], stream["codec_tag_string"], stream["pix_fmt"]),
+                                 ("av1", "av01", "yuv420p"))
+                self.assertEqual((stream["width"], stream["height"]), (64, 48))
+                self.assertEqual(stream["color_space"], "bt709")
+                self.assertEqual(stream["color_range"], "tv" if color_range == 1 else "pc")
+                self.assertEqual(probe["format"]["tags"]["comment"], report["comment"])
+                spherical = next(item for item in stream["side_data_list"] if item["side_data_type"] == "Spherical Mapping")
+                self.assertEqual(spherical["projection"], "equirectangular")
+                self.assertEqual(len(probe["frames"]), 24)
+                for index, frame in enumerate(probe["frames"]):
+                    self.assertAlmostEqual(float(frame["best_effort_timestamp_time"]), index / 10)
+                raw = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(video), "-pix_fmt", "yuv420p",
+                                               "-f", "rawvideo", "-"], timeout=30)
+                self.assertEqual(len(raw), 24 * 4608)
+                for index in range(24):
+                    luma = raw[index * 4608:index * 4608 + 3072]
+                    self.assertLessEqual(max(abs(value - (32 + (index % 4) * 32)) for value in luma), 0 if crf == 0 else 5)
+
     def test_cpu_encode_session_preserves_explicit_color_options(self):
         work = Path(tempfile.mkdtemp(prefix="encode-color-", dir=self.root))
         video = work / "bt709.mp4"

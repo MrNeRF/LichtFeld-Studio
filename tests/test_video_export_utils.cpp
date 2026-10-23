@@ -855,9 +855,20 @@ TEST(VideoEncoderValidationTest, RejectsUnsafeOptionsBeforeCodecInitialization) 
     EXPECT_FALSE(encoder.isOpen());
 }
 
+TEST(VideoEncoderValidationTest, CodecIdsPreserveExistingValuesAndSelectAv1Explicitly) {
+    using lfs::media::VideoEncodeCodec;
+    EXPECT_EQ(static_cast<int>(VideoEncodeCodec::H264), 0);
+    EXPECT_EQ(static_cast<int>(VideoEncodeCodec::HEVC), 1);
+    EXPECT_EQ(lfs::media::videoEncodeCodecFromId("av1"), VideoEncodeCodec::AV1);
+    EXPECT_FALSE(lfs::media::videoEncodeCodecFromId("AV1"));
+    EXPECT_FALSE(lfs::media::videoEncodeCodecFromId("unknown"));
+}
+
 TEST(VideoEncoderValidationTest, RejectsInvalidCodecBeforeCodecInitialization) {
     lfs::io::video::VideoEncoder encoder;
     lfs::io::video::VideoExportOptions options;
+    options.codec = lfs::media::VideoEncodeCodec::AV1;
+    EXPECT_TRUE(lfs::io::video::validateVideoEncodingOptions(options));
     options.codec = static_cast<lfs::media::VideoEncodeCodec>(-1);
     const auto result = encoder.open("unused.mp4", options);
     ASSERT_FALSE(result.has_value());

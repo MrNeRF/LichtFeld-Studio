@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -89,6 +90,63 @@ namespace lfs::core::image_codecs {
         // and observed original ranges are represented separately.
         std::optional<TiffSourceMetadata> tiff;
     };
+    enum class XmpEnvelope { JpegApp1,
+                             JpegExtendedApp1,
+                             PngInternationalText,
+                             TiffTag,
+                             HeifMime };
+    struct XmpLimits {
+        std::size_t blocks = 64;
+        std::size_t block_bytes = 1024 * 1024;
+        // Aggregate retained envelopes/payloads, inflated PNG text and HEIF MIME strings.
+        std::size_t total_bytes = 4 * 1024 * 1024;
+        std::size_t inflated_bytes = 1024 * 1024;
+    };
+    struct TiffXmpReference {
+        std::size_t directory = 0;
+        std::size_t tag = 0;
+    };
+    struct HeifXmpItem {
+        std::uint32_t image_item = 0;
+        std::uint32_t metadata_item = 0;
+        std::string content_type;
+        std::string content_encoding;
+    };
+    struct XmpBlock {
+        XmpEnvelope envelope = XmpEnvelope::JpegApp1;
+        // Exact APP1/iTXt data, or the libheif-decoded MIME item payload.
+        // TIFF packets reference library-decoded bytes owned by SourceExif.
+        std::vector<std::uint8_t> bytes;
+        // Used only for compressed PNG text; originals remain unchanged.
+        std::optional<std::vector<std::uint8_t>> inflated;
+        std::size_t payload_offset = 0;
+        bool compressed = false;
+        MetadataStatus status = MetadataStatus::Collected;
+        std::string diagnostic;
+        // PNG chunk CRC; JPEG has no corresponding checksum.
+        std::optional<bool> crc_valid;
+        std::optional<TiffXmpReference> tiff_tag;
+        std::optional<HeifXmpItem> heif_item;
+    };
+    // Resolves retained bytes; an empty span is a valid empty packet.
+    // TIFF references borrow its library-decoded tag bytes; source ranges retain
+    // on-disk representations. HEIF owns provider-decoded bytes; JPEG/PNG own originals.
+    [[nodiscard]] LFS_IMAGE_CODECS_API std::optional<std::span<const std::uint8_t>> source_xmp_bytes(
+        const SourceExif&, const XmpBlock&) noexcept;
+    struct SourceXmp {
+        MetadataStatus status = MetadataStatus::NotExamined;
+        std::string scope;
+        std::string diagnostic;
+        std::vector<XmpBlock> blocks;
+    };
+    struct SourceImageMetadata {
+        SourceExif exif;
+        SourceXmp xmp;
+    };
+    // Shares the EXIF carrier scan. XMP remains opaque: no XML parsing, entity
+    // resolution, property interpretation or extended-JPEG reassembly.
+    [[nodiscard]] LFS_IMAGE_CODECS_API SourceImageMetadata read_source_metadata(
+        const std::filesystem::path&, const MetadataLimits& = {}, const XmpLimits& = {});
     // Explicit metadata-only operation. Does not validate or decode image pixels,
     // scan auxiliary HEIF images, change training EV, or normalize orientation.
     // Limits bound retained blocks/ranges and decoded TIFF values. TIFF library

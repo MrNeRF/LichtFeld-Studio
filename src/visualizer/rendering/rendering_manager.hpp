@@ -247,10 +247,12 @@ namespace lfs::vis {
             std::optional<bool> orthographic_override;
             std::optional<float> ortho_scale_override;
             ExportPostProcessMode mode = ExportPostProcessMode::Opaque;
+            bool equirectangular = false;
         };
         // Raw raster/tone output before UInt8, PPISP and environment post-process.
         // CPU Float32 HWC linear BT709/straight RGBA; must run on the viewer thread.
         [[nodiscard]] Result<core::Tensor> renderLinearImage(SceneManager*, const ExportImageRequest&);
+        [[nodiscard]] Result<core::Tensor> renderLinearImage(const core::SplatData&, SceneRenderState, const ExportImageRequest&);
         [[nodiscard]] std::expected<lfs::core::Tensor, std::string> renderExportImage(
             SceneManager* scene_manager, const ExportImageRequest& request);
 
@@ -789,6 +791,7 @@ namespace lfs::vis {
         [[nodiscard]] static PreviewImageReadbackConfig previewImageReadbackConfig(
             PreviewImageReadback readback,
             bool has_background_color_override);
+        [[nodiscard]] Result<core::Tensor> renderLinearImageImpl(SceneManager*, const core::SplatData*, SceneRenderState, const ExportImageRequest&);
         void clearViewportImageState(ViewRenderState& view, glm::ivec2 size = {0, 0},
                                      bool flip_y = false,
                                      glm::ivec2 alloc_size = {0, 0});

@@ -13,6 +13,7 @@ extern "C" {
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <new>
 #include <string_view>
 
 namespace lfs::media {
@@ -50,7 +51,10 @@ namespace lfs::media {
             bool expired = false;
             static int interrupt(void* opaque) noexcept {
                 auto& state = *static_cast<Deadline*>(opaque);
-                state.expired = std::chrono::steady_clock::now() - state.started >= state.timeout;
+                const auto elapsed = std::chrono::steady_clock::now() - state.started;
+                // Convert elapsed time down to milliseconds, not a caller-supplied
+                // timeout up to nanoseconds where large positive values overflow.
+                state.expired = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed) >= state.timeout;
                 return state.expired ? 1 : 0;
             }
         };
@@ -241,16 +245,20 @@ namespace lfs::media {
         if (path.empty() || path.native().find(std::filesystem::path::value_type{}) != std::string::npos || options.timeout.count() <= 0 ||
             (options.depth != ProbeDepth::Headers && options.depth != ProbeDepth::StreamInfo))
             return invalidOptions("Probe requires a valid path, depth and positive timeout");
-        const auto utf8 = core::path_to_utf8(path);
-        if (utf8.find('\0') != std::string::npos)
-            return invalidOptions("Probe path contains a null byte");
+        // Complete allocating path conversions before creating the FFmpeg context.
+        // The native-path NUL check above also covers the display representation.
+        std::string native;
+        try {
+            native = core::path_to_native_utf8(path);
+        } catch (const std::bad_alloc&) {
+            return failure(AVERROR(ENOMEM), "Prepare input path", false);
+        }
         Deadline deadline{std::chrono::steady_clock::now(), options.timeout};
         AVFormatContext* raw = avformat_alloc_context();
         if (!raw)
             return failure(AVERROR(ENOMEM), "Allocate input", false);
         auto close = [](AVFormatContext* context) { avformat_close_input(&context); };
         raw->interrupt_callback = {Deadline::interrupt, &deadline};
-        const auto native = core::path_to_native_utf8(path);
         const int opened = avformat_open_input(&raw, native.c_str(), nullptr, nullptr);
         std::unique_ptr<AVFormatContext, decltype(close)> context(raw, close);
         if (opened < 0)
@@ -260,8 +268,14 @@ namespace lfs::media {
             if (probed < 0)
                 return failure(probed, "Read stream info", deadline.expired);
         }
-        auto description = detail::describeContext(context.get());
-        description.stream_info_probed = options.depth == ProbeDepth::StreamInfo;
-        return description;
+        try {
+            auto description = detail::describeContext(context.get());
+            description.stream_info_probed = options.depth == ProbeDepth::StreamInfo;
+            if (options.collect_source_metadata)
+                detail::collectContextMetadata(context.get(), description, options.metadata_limits);
+            return description;
+        } catch (const std::bad_alloc&) {
+            return failure(AVERROR(ENOMEM), "Describe input metadata", false);
+        }
     }
 } // namespace lfs::media

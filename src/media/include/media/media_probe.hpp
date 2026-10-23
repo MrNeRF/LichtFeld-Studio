@@ -5,6 +5,7 @@
 #include "core/export.hpp"
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -63,6 +64,41 @@ namespace lfs::media {
         ColorDescription color;
         Orientation orientation;
     };
+    struct MetadataTextEntry {
+        // Demuxer-exposed bytes, not guaranteed UTF-8 or an original file span.
+        std::string key;
+        std::string value;
+    };
+    struct MetadataSideData {
+        // Numeric FFmpeg AVPacketSideDataType; not a portable vendor tag ID.
+        int type = 0;
+        std::vector<std::uint8_t> bytes;
+    };
+    struct StreamSourceMetadata {
+        int stream_index = -1;
+        std::vector<MetadataTextEntry> tags;
+        std::vector<MetadataSideData> coded_side_data;
+    };
+    struct MetadataProviderInfo {
+        std::string name;
+        std::string version;
+        std::uint32_t codec_api_version = 0;
+    };
+    struct ContainerSourceMetadata {
+        // Identifies the version-specific namespace/layout of coded side data.
+        std::optional<MetadataProviderInfo> provider;
+        // Limited describes this retained demuxer observation, not file damage.
+        bool limited = false;
+        std::vector<MetadataTextEntry> tags;
+        std::vector<StreamSourceMetadata> streams;
+    };
+    struct ContainerMetadataLimits {
+        std::size_t streams = 1024;
+        // Aggregate tags and coded side-data blocks across container/streams.
+        std::size_t records = 4096;
+        // Aggregate copied key/value bytes and coded side-data payload bytes.
+        std::size_t bytes = 8 * 1024 * 1024;
+    };
     struct MediaDescription {
         std::string container;
         // FFmpeg may derive properties during packet probing; this is not a CFR guarantee.
@@ -72,6 +108,8 @@ namespace lfs::media {
         std::vector<StreamDescription> streams;
         // First usable header video, matching the existing player/extractor.
         std::optional<int> selected_video_stream;
+        // Absent unless explicitly requested; no packet telemetry scan.
+        std::optional<ContainerSourceMetadata> source_metadata;
     };
     enum class ProbeDepth { Headers,
                             StreamInfo };
@@ -79,6 +117,8 @@ namespace lfs::media {
         ProbeDepth depth = ProbeDepth::StreamInfo;
         // Cooperative FFmpeg I/O interruption, not a hard wall-clock guarantee.
         std::chrono::milliseconds timeout{10000};
+        bool collect_source_metadata = false;
+        ContainerMetadataLimits metadata_limits;
     };
     // Metadata only: no image output, hardware context or application runtime.
     // StreamInfo may read packets and use FFmpeg's software codec probing.
