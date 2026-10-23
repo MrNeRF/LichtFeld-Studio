@@ -6,6 +6,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "gui/rml_status_bar.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "gui/status_bar_progress.hpp"
 #include "gui/status_bar_training.hpp"
 #include "visualizer/app_store.hpp"
 
@@ -367,6 +368,28 @@ namespace {
         StatusBarModel model_;
         lfs::vis::gui::RmlStatusBar status_bar_;
     };
+
+    TEST_F(StatusBarFitTest, PacmanFruitStaysBehindTheCharacterAndText) {
+        using namespace lfs::vis::gui;
+        model_.progress_pacman = true;
+        model_handle_.DirtyVariable("progress_pacman");
+        auto* markers = document_->GetElementById("progress-markers");
+        ASSERT_TRUE(markers);
+        for (const int current : {660, 870, 1020, 3000}) {
+            markers->SetInnerRML(buildProgressMarkersRml({690, 3000}, 3000, current, {}, ProgressMarkerStyle::Pacman));
+            context_->Update();
+            ASSERT_EQ(markers->GetNumChildren(), 2);
+            EXPECT_EQ(markers->GetChild(0)->GetTagName(), "img");
+            EXPECT_FLOAT_EQ(markers->GetChild(0)->GetComputedValues().opacity(), current >= 690 ? 0.0f : 1.0f);
+            EXPECT_FLOAT_EQ(markers->GetChild(1)->GetComputedValues().opacity(), current == 3000 ? 0.0f : 1.0f);
+            const auto marker_layer = markers->GetComputedValues().z_index().value;
+            EXPECT_LT(marker_layer, document_->GetElementById("pacman-figure")->GetComputedValues().z_index().value);
+            EXPECT_LT(marker_layer, document_->GetElementById("progress-text")->GetComputedValues().z_index().value);
+        }
+        markers->SetInnerRML(buildProgressMarkersRml({690}, 3000, 1020, {.hover_step = 690}, ProgressMarkerStyle::Pacman));
+        context_->Update();
+        EXPECT_FLOAT_EQ(markers->GetChild(0)->GetComputedValues().opacity(), 1.0f);
+    }
 
     TEST_F(StatusBarFitTest, TooltipHoverStartsAndClearsForBothFpsMetrics) {
         using lfs::vis::gui::RmlStatusBarTestAccess;

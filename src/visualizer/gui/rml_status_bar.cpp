@@ -19,6 +19,7 @@
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "gui/status_bar_mining.hpp"
 #include "gui/status_bar_pacman.hpp"
+#include "gui/status_bar_progress.hpp"
 #include "gui/status_bar_training.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_context.hpp"
@@ -162,89 +163,6 @@ namespace lfs::vis::gui {
             const float own_width =
                 children_width > 0.0f ? children_width : element->GetBox().GetSize().x;
             return own_width + overflow_width;
-        }
-
-        struct ProgressMarkerRenderState {
-            bool dragging = false;
-            bool adding = false;
-            size_t original_step = 0;
-            size_t preview_step = 0;
-            size_t hover_step = 0;
-        };
-
-        void appendProgressMarkerRml(std::string& markers,
-                                     const size_t step,
-                                     const int total_iterations,
-                                     const bool past,
-                                     const bool hovered,
-                                     const bool preview,
-                                     const bool miner) {
-            const float left_pct = std::clamp(
-                100.0f * static_cast<float>(step) / static_cast<float>(total_iterations),
-                0.5f,
-                99.5f);
-
-            std::string classes = "progress-marker";
-            if (past)
-                classes += " is-past";
-            if (hovered)
-                classes += " is-hovered";
-            if (preview)
-                classes += " is-preview";
-
-            if (miner) {
-                markers += std::format(
-                    "<img class=\"{}\" src=\"../icon/mining/{}\" style=\"left:{:.3f}%;\"/>",
-                    classes,
-                    past ? "gem-collected.png" : "gem.png",
-                    left_pct);
-            } else {
-                markers += std::format(
-                    "<div class=\"{}\" style=\"left:{:.3f}%;\"></div>",
-                    classes,
-                    left_pct);
-            }
-        }
-
-        std::string buildProgressMarkersRml(std::vector<size_t> save_steps,
-                                            const int total_iterations,
-                                            const int current_iteration,
-                                            const ProgressMarkerRenderState& state,
-                                            const bool miner) {
-            if (total_iterations <= 0)
-                return {};
-
-            std::ranges::sort(save_steps);
-            save_steps.erase(std::ranges::unique(save_steps).begin(), save_steps.end());
-
-            std::string markers;
-            markers.reserve((save_steps.size() + 1) * 136);
-            for (const size_t save_step : save_steps) {
-                if (save_step == 0 || save_step > static_cast<size_t>(total_iterations))
-                    continue;
-                if (state.dragging && !state.adding && save_step == state.original_step)
-                    continue;
-
-                appendProgressMarkerRml(markers,
-                                        save_step,
-                                        total_iterations,
-                                        save_step <= static_cast<size_t>(std::max(0, current_iteration)),
-                                        !state.dragging && save_step == state.hover_step,
-                                        false,
-                                        miner);
-            }
-
-            if (state.dragging && state.preview_step > 0 &&
-                state.preview_step <= static_cast<size_t>(total_iterations)) {
-                appendProgressMarkerRml(markers,
-                                        state.preview_step,
-                                        total_iterations,
-                                        false,
-                                        true,
-                                        true,
-                                        miner);
-            }
-            return markers;
         }
 
         struct FramebufferBlitRect {
@@ -1321,8 +1239,8 @@ namespace lfs::vis::gui {
             setModelBool("progress_miner", model_.progress_miner, style == "miner");
             setModelBool("progress_pacman", model_.progress_pacman, style == "pacman");
         }
-        // Keep the final Pac-Man frame visible when the run reaches 100%.
-        const bool completed = model_.progress_pacman && tm &&
+        // Keep the completed progress display consistent across all styles.
+        const bool completed = tm &&
                                training_state == TrainingState::Finished &&
                                tm->getStateMachine().getFinishReason() == FinishReason::Completed;
         const bool show_training = content_type == SceneManager::ContentType::Dataset &&
@@ -1413,8 +1331,10 @@ namespace lfs::vis::gui {
                 .preview_step = save_step_interaction_.preview_step,
                 .hover_step = save_step_interaction_.hover_step,
             };
-            setProgressMarkersRml(buildProgressMarkersRml(tm->getSaveSteps(), total, cur, marker_state,
-                                                          model_.progress_miner));
+            const auto marker_style = model_.progress_pacman  ? ProgressMarkerStyle::Pacman
+                                      : model_.progress_miner ? ProgressMarkerStyle::Miner
+                                                              : ProgressMarkerStyle::Classic;
+            setProgressMarkersRml(buildProgressMarkersRml(tm->getSaveSteps(), total, cur, marker_state, marker_style));
             setModelString("step_value", model_.step_value, std::format("{}/{}", lfs::core::format_count(cur), lfs::core::format_count(total)));
             setModelString("loss_value", model_.loss_value, std::format("{:.4f}", loss));
             setModelString("gaussians_value", model_.gaussians_value,

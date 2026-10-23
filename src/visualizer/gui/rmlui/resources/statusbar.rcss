@@ -592,25 +592,33 @@ body.fit-8 #fps-group { margin-left: 6dp; }
     text-align: left;
 }
 
-/* Cyan save-step handles stay distinct from the cream power pellets. */
+/* Checkpoints are collectible fruit beneath the character and percentage. */
+#progress-container.pacman #progress-markers {
+    z-index: 0;
+}
+
 #progress-container.pacman .progress-marker {
-    top: 4dp;
+    top: 0;
     bottom: auto;
-    height: 6dp;
-    z-index: 3;
-    border-radius: 4dp;
-    background-color: #b8eaff;
+    width: 14dp;
+    height: 14dp;
+    margin-left: -7dp;
+    border-radius: 0;
+    background-color: transparent;
 }
 
 #progress-container.pacman .progress-marker.is-past {
-    background-color: #526393;
+    opacity: 0;
 }
 
 #progress-container.pacman .progress-marker.is-hovered,
 #progress-container.pacman .progress-marker.is-preview {
-    top: 3dp;
-    height: 8dp;
-    background-color: #ffffff;
+    top: -1dp;
+    width: 16dp;
+    height: 16dp;
+    margin-left: -8dp;
+    opacity: 1;
+    background-color: transparent;
 }
 
 .pacman-item {

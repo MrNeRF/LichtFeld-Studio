@@ -14,10 +14,9 @@ namespace lfs::vis::gui::pacman {
     namespace {
         struct Encounter {
             float power_step;
-            float cherry_step;
             const char* ghost_color;
         };
-        constexpr std::array kEncounters{Encounter{0.20f, 0.49f, "red"}, Encounter{0.65f, 0.94f, "pink"}};
+        constexpr std::array kEncounters{Encounter{0.20f, "red"}, Encounter{0.65f, "pink"}};
         constexpr float kPowerDuration = 0.23f;
         constexpr float kGhostOffset = 0.15f;
     } // namespace
@@ -45,16 +44,12 @@ namespace lfs::vis::gui::pacman {
         };
         std::vector<std::pair<float, float>> gaps;
         const auto reserve = [&](float step, float radius) { gaps.emplace_back(step * travel + 7.0f, radius); };
-        for (const auto& [power_step, cherry_step, ghost_color] : kEncounters) {
+        for (const auto& [power_step, ghost_color] : kEncounters) {
             if (between(power_step - 0.16f, power_step)) {
                 frame.scenery_rml += std::format(
                     "<div class=\"pacman-power-pellet\" style=\"left:{:.2f}dp; opacity:{:.2f};\"></div>",
                     power_step * travel + 3.0f, tick % 2 == 0 ? 1.0f : 0.65f);
                 reserve(power_step, 12.0f);
-            }
-            if (between(cherry_step - 0.09f, cherry_step)) {
-                image("pacman-cherries", "cherries", cherry_step * travel);
-                reserve(cherry_step, 12.0f);
             }
             const float ghost_step = power_step + kGhostOffset;
             if (progress >= ghost_step) {

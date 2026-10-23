@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/status_bar_pacman.hpp"
+#include "gui/status_bar_progress.hpp"
 #include <gtest/gtest.h>
 #include <limits>
 #include <string_view>
@@ -40,10 +41,49 @@ namespace lfs::vis::gui::pacman {
         EXPECT_EQ(count(after.scenery_rml, "pacman-eyes"), 0);
     }
 
-    TEST(StatusBarPacman, CherriesAreCollectedAtTheirMilestones) {
-        EXPECT_EQ(count(buildFrame(0.48f, 360, 0).scenery_rml, "pacman-cherries"), 1);
-        EXPECT_EQ(count(buildFrame(0.49f, 360, 0).scenery_rml, "pacman-cherries"), 0);
-        EXPECT_EQ(count(buildFrame(0.94f, 360, 0).scenery_rml, "pacman-cherries"), 0);
+    TEST(StatusBarPacman, SceneryDoesNotInventCheckpoints) {
+        for (float progress : {0.0f, 0.23f, 0.48f, 0.65f, 0.94f, 1.0f})
+            EXPECT_EQ(count(buildFrame(progress, 360, 0).scenery_rml, "cherries"), 0);
+    }
+
+    TEST(StatusBarPacman, SaveStepsBecomeFruitAtTheirActualPositions) {
+        const auto markers = buildProgressMarkersRml({690, 2040, 3000}, 3000, 660, {}, ProgressMarkerStyle::Pacman);
+        EXPECT_EQ(count(markers, "../icon/pacman/cherries.png"), 3);
+        EXPECT_NE(markers.find("left:23.000%"), std::string::npos);
+        EXPECT_NE(markers.find("left:68.000%"), std::string::npos);
+        EXPECT_NE(markers.find("left:99.500%"), std::string::npos);
+        EXPECT_EQ(count(markers, "is-past"), 0);
+        EXPECT_TRUE(buildProgressMarkersRml({}, 3000, 660, {}, ProgressMarkerStyle::Pacman).empty());
+    }
+
+    TEST(StatusBarPacman, CollectedFruitKeepsItsHoverTargetForEditing) {
+        const auto markers = buildProgressMarkersRml({690, 2040}, 3000, 1020, {.hover_step = 690}, ProgressMarkerStyle::Pacman);
+        EXPECT_EQ(count(markers, "is-past"), 1);
+        EXPECT_NE(markers.find("progress-marker is-past is-hovered"), std::string::npos);
+        EXPECT_EQ(count(markers, "cherries.png"), 2);
+    }
+
+    TEST(StatusBarPacman, DraggingMovesTheFruitAndAddingKeepsExistingFruit) {
+        const ProgressMarkerRenderState moving{.dragging = true, .original_step = 2040, .preview_step = 2400};
+        const auto moved = buildProgressMarkersRml({690, 2040}, 3000, 660, moving, ProgressMarkerStyle::Pacman);
+        EXPECT_EQ(count(moved, "cherries.png"), 2);
+        EXPECT_EQ(moved.find("left:68.000%"), std::string::npos);
+        EXPECT_NE(moved.find("left:80.000%"), std::string::npos);
+        EXPECT_NE(moved.find("is-hovered is-preview"), std::string::npos);
+        auto adding = moving;
+        adding.adding = true;
+        const auto added = buildProgressMarkersRml({690, 2040}, 3000, 660, adding, ProgressMarkerStyle::Pacman);
+        EXPECT_EQ(count(added, "cherries.png"), 3);
+        EXPECT_NE(added.find("left:68.000%"), std::string::npos);
+    }
+
+    TEST(StatusBarPacman, OtherStylesKeepTheirCheckpointAppearance) {
+        const auto classic = buildProgressMarkersRml({690, 2040}, 3000, 1020, {}, ProgressMarkerStyle::Classic);
+        EXPECT_EQ(count(classic, "<div"), 2);
+        const auto miner = buildProgressMarkersRml({690, 2040}, 3000, 1020, {}, ProgressMarkerStyle::Miner);
+        EXPECT_EQ(count(miner, "gem-collected.png"), 1);
+        EXPECT_EQ(count(miner, "gem.png"), 1);
+        EXPECT_EQ(count(classic + miner, "cherries.png"), 0);
     }
 
     TEST(StatusBarPacman, EncountersStaySparseAtEveryWidth) {
@@ -53,7 +93,7 @@ namespace lfs::vis::gui::pacman {
                 const auto ghosts = count(frame.scenery_rml, "pacman-ghost");
                 const auto cherries = count(frame.scenery_rml, "pacman-cherries");
                 EXPECT_LE(ghosts, 1);
-                EXPECT_LE(cherries, 1);
+                EXPECT_EQ(cherries, 0);
                 EXPECT_LE(count(frame.scenery_rml, "pacman-power-pellet"), 1);
                 EXPECT_LE(ghosts + cherries, 1);
             }
