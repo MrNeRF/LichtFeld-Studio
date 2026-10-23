@@ -185,6 +185,13 @@ ownership of its input tree instead of copying it. Archive snapshots share the
 immutable payload. Optional surface normals use a direct indexed pass without
 constructing OpenMesh adjacency or per-vertex uniform colors.
 
+When all Gaussian supports already fit the sparse coordinate limit, preparation
+keeps their conservative bounds directly. It skips the optional per-splat overlap
+proofs that otherwise cost hundreds of millions of CPU BVH visits on large aerial
+scans. Empty padding still uses sparse storage. Supports outside the coordinate
+limit retain the original opacity-bound pruning path; all contributions inside
+the resulting grid are still evaluated.
+
 The earlier CPU baseline on a full 1,000,000-Gaussian Bicycle source dump, with
 5 cm cells and opacity `0.1`, produces **122,325,185 occupied cells** in
 **12.25 s**, using **147.4 MiB** CPU

@@ -265,6 +265,22 @@ TEST(CollisionSparse, WeakIsolatedAndDegenerateFarSupportsDoNotExpandBounds) {
         CollisionGaussian{{0, 0, 0}, glm::mat3(0.1f), 0.06f}};
     EXPECT_GT(generateCollision(combined, s).occupiedCount(), 0u);
 }
+TEST(CollisionSparse, ConservativeBoundsPreserveCombinedWeakSupportsAndEmptyRegions) {
+    CollisionSettings s;
+    s.voxel_size = .1f;
+    s.opacity = .1f;
+    const std::array source{
+        CollisionGaussian{{0, 0, 0}, glm::mat3(.1f), .06f},
+        CollisionGaussian{{0, 0, 0}, glm::mat3(.1f), .06f},
+        CollisionGaussian{{10000, 0, 0}, glm::mat3(.1f), .01f}};
+    const auto volume = generateCollision(source, s);
+    EXPECT_TRUE(volume.occupied(volume.cell({0, 0, 0})));
+    EXPECT_FALSE(volume.occupied(volume.cell({10000, 0, 0})));
+    EXPECT_FALSE(volume.occupied(volume.cell({5000, 0, 0})));
+    EXPECT_LT(volume.tree.size(), 10000u);
+    const auto foreground = generateCollision(std::span(source.data(), 2), s);
+    EXPECT_EQ(volume.occupiedCount(), foreground.occupiedCount());
+}
 TEST(CollisionSparse, PostprocessingMatchesDenseFloorExteriorAndCapsuleSemantics) {
     auto floor = grid({40, 20, 40});
     box(floor, {3, 8, 3}, {36, 8, 36});

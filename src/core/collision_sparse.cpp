@@ -248,110 +248,125 @@ namespace lfs::core::collision_detail {
             if (!finite(e) || !finite(g.center - e) || !finite(g.center + e))
                 throw std::invalid_argument("Gaussian collision support exceeds finite coordinate range");
             bounds.push_back({g.center - e, g.center + e, g.opacity});
+            lo = glm::min(lo, bounds.back().min);
+            hi = glm::max(hi, bounds.back().max);
         }
-        struct BvhNode {
-            glm::vec3 min, max;
-            size_t begin, end;
-            uint32_t left = 0, right = 0;
-        };
-        std::vector<uint32_t> order(bounds.size());
-        std::iota(order.begin(), order.end(), 0);
-        std::vector<BvhNode> bvh;
-        std::function<uint32_t(size_t, size_t)> buildBounds = [&](size_t begin, size_t end) {
-            check(stop);
-            const auto index = uint32_t(bvh.size());
-            glm::vec3 min(std::numeric_limits<float>::max()), max(-min);
-            for (size_t i = begin; i < end; ++i) {
-                min = glm::min(min, bounds[order[i]].min);
-                max = glm::max(max, bounds[order[i]].max);
-            }
-            bvh.push_back({min, max, begin, end});
-            if (end - begin > 16) {
-                auto delta = glm::dvec3(max) - glm::dvec3(min);
-                int axis = delta.x >= delta.y && delta.x >= delta.z ? 0 : delta.y >= delta.z ? 1
-                                                                                             : 2;
-                auto middle = begin + (end - begin) / 2;
-                std::nth_element(order.begin() + begin, order.begin() + middle, order.begin() + end,
-                                 [&](auto a, auto b) {
-                                     return double(bounds[a].min[axis]) + bounds[a].max[axis] <
-                                            double(bounds[b].min[axis]) + bounds[b].max[axis];
-                                 });
-                auto left = buildBounds(begin, middle), right = buildBounds(middle, end);
-                bvh[index].left = left;
-                bvh[index].right = right;
-            }
-            return index;
-        };
-        buildBounds(0, order.size());
-        // Each support proof is independent. Keep the final reduction ordered,
-        // but avoid a million serial BVH queries and std::function allocations.
-        std::vector<uint8_t> eligible(bounds.size());
-        std::atomic<size_t> cursor{0};
-        std::atomic<uint64_t> bound_work{0};
-        std::atomic<bool> failed{false};
-        std::exception_ptr failure;
-        std::mutex failure_mutex;
-        auto classify = [&] {
-            try {
-                uint64_t local_work = 0;
-                for (;;) {
-                    const auto begin = cursor.fetch_add(256, std::memory_order_relaxed);
-                    if (begin >= bounds.size() || failed.load(std::memory_order_relaxed))
-                        break;
-                    for (size_t row = begin; row < std::min(begin + 256, bounds.size()); ++row) {
-                        check(stop);
-                        const auto& bound = bounds[row];
-                        double upper = 0;
-                        auto accumulate = [&](auto&& self, uint32_t i) -> void {
-                            if (upper >= cutoff)
-                                return;
-                            if ((++local_work & 4095) == 0) {
-                                check(stop);
-                                if (bound_work.fetch_add(4096, std::memory_order_relaxed) + 4096 > 500'000'000)
-                                    throw std::runtime_error("Sparse opacity-bound work budget exceeded");
-                            }
-                            const auto& node = bvh[i];
-                            if (glm::any(glm::greaterThan(bound.min, node.max)) || glm::any(glm::lessThan(bound.max, node.min)))
-                                return;
-                            if (node.left) {
-                                self(self, node.left);
-                                self(self, node.right);
-                            } else {
-                                for (size_t j = node.begin; j < node.end && upper < cutoff; ++j) {
-                                    const auto& other = bounds[order[j]];
-                                    if (glm::all(glm::lessThanEqual(bound.min, other.max)) && glm::all(glm::greaterThanEqual(bound.max, other.min)))
-                                        upper += other.opacity + 8 * std::numeric_limits<float>::epsilon();
-                                }
-                            }
-                        };
-                        if (bound.opacity < cutoff)
-                            accumulate(accumulate, 0);
-                        eligible[row] = bound.opacity >= cutoff || upper >= cutoff;
-                    }
+        // This pass only tightens the world bounds; it never filters the
+        // Gaussians evaluated by the voxelizer. A sparse grid does not allocate
+        // its empty AABB, so overlap proofs buy nothing when all supports already
+        // fit the coordinate limit. Dense aerial scans otherwise spend hundreds
+        // of millions of BVH visits proving optional bounds before CUDA starts.
+        const auto support_origin = glm::floor(lo / settings.voxel_size) * settings.voxel_size - 2 * settings.voxel_size;
+        const auto support_dimensions = glm::ceil((glm::dvec3(hi) - glm::dvec3(support_origin)) / double(settings.voxel_size)) + 3.0;
+        const bool supports_fit = glm::all(glm::greaterThanEqual(support_dimensions, glm::dvec3(1))) &&
+                                  glm::all(glm::lessThanEqual(support_dimensions, glm::dvec3(1 << 21)));
+        if (!supports_fit) {
+            lo = glm::vec3(std::numeric_limits<float>::max());
+            hi = -lo;
+            struct BvhNode {
+                glm::vec3 min, max;
+                size_t begin, end;
+                uint32_t left = 0, right = 0;
+            };
+            std::vector<uint32_t> order(bounds.size());
+            std::iota(order.begin(), order.end(), 0);
+            std::vector<BvhNode> bvh;
+            std::function<uint32_t(size_t, size_t)> buildBounds = [&](size_t begin, size_t end) {
+                check(stop);
+                const auto index = uint32_t(bvh.size());
+                glm::vec3 min(std::numeric_limits<float>::max()), max(-min);
+                for (size_t i = begin; i < end; ++i) {
+                    min = glm::min(min, bounds[order[i]].min);
+                    max = glm::max(max, bounds[order[i]].max);
                 }
-                if (bound_work.fetch_add(local_work & 4095, std::memory_order_relaxed) + (local_work & 4095) > 500'000'000)
-                    throw std::runtime_error("Sparse opacity-bound work budget exceeded");
-            } catch (...) {
-                std::lock_guard lock(failure_mutex);
-                if (!failure)
-                    failure = std::current_exception();
-                failed.store(true, std::memory_order_relaxed);
+                bvh.push_back({min, max, begin, end});
+                if (end - begin > 16) {
+                    auto delta = glm::dvec3(max) - glm::dvec3(min);
+                    int axis = delta.x >= delta.y && delta.x >= delta.z ? 0 : delta.y >= delta.z ? 1
+                                                                                                 : 2;
+                    auto middle = begin + (end - begin) / 2;
+                    std::nth_element(order.begin() + begin, order.begin() + middle, order.begin() + end,
+                                     [&](auto a, auto b) {
+                                         return double(bounds[a].min[axis]) + bounds[a].max[axis] <
+                                                double(bounds[b].min[axis]) + bounds[b].max[axis];
+                                     });
+                    auto left = buildBounds(begin, middle), right = buildBounds(middle, end);
+                    bvh[index].left = left;
+                    bvh[index].right = right;
+                }
+                return index;
+            };
+            buildBounds(0, order.size());
+            // Each support proof is independent. Keep the final reduction ordered,
+            // but avoid a million serial BVH queries and std::function allocations.
+            std::vector<uint8_t> eligible(bounds.size());
+            std::atomic<size_t> cursor{0};
+            std::atomic<uint64_t> bound_work{0};
+            std::atomic<bool> failed{false};
+            std::exception_ptr failure;
+            std::mutex failure_mutex;
+            auto classify = [&] {
+                try {
+                    uint64_t local_work = 0;
+                    for (;;) {
+                        const auto begin = cursor.fetch_add(256, std::memory_order_relaxed);
+                        if (begin >= bounds.size() || failed.load(std::memory_order_relaxed))
+                            break;
+                        for (size_t row = begin; row < std::min(begin + 256, bounds.size()); ++row) {
+                            check(stop);
+                            const auto& bound = bounds[row];
+                            double upper = 0;
+                            auto accumulate = [&](auto&& self, uint32_t i) -> void {
+                                if (upper >= cutoff)
+                                    return;
+                                if ((++local_work & 4095) == 0) {
+                                    check(stop);
+                                    if (bound_work.fetch_add(4096, std::memory_order_relaxed) + 4096 > 500'000'000)
+                                        throw std::runtime_error("Sparse opacity-bound work budget exceeded");
+                                }
+                                const auto& node = bvh[i];
+                                if (glm::any(glm::greaterThan(bound.min, node.max)) || glm::any(glm::lessThan(bound.max, node.min)))
+                                    return;
+                                if (node.left) {
+                                    self(self, node.left);
+                                    self(self, node.right);
+                                } else {
+                                    for (size_t j = node.begin; j < node.end && upper < cutoff; ++j) {
+                                        const auto& other = bounds[order[j]];
+                                        if (glm::all(glm::lessThanEqual(bound.min, other.max)) && glm::all(glm::greaterThanEqual(bound.max, other.min)))
+                                            upper += other.opacity + 8 * std::numeric_limits<float>::epsilon();
+                                    }
+                                }
+                            };
+                            if (bound.opacity < cutoff)
+                                accumulate(accumulate, 0);
+                            eligible[row] = bound.opacity >= cutoff || upper >= cutoff;
+                        }
+                    }
+                    if (bound_work.fetch_add(local_work & 4095, std::memory_order_relaxed) + (local_work & 4095) > 500'000'000)
+                        throw std::runtime_error("Sparse opacity-bound work budget exceeded");
+                } catch (...) {
+                    std::lock_guard lock(failure_mutex);
+                    if (!failure)
+                        failure = std::current_exception();
+                    failed.store(true, std::memory_order_relaxed);
+                }
+            };
+            {
+                std::vector<std::jthread> workers;
+                const auto count = bounds.size() >= 4096 ? std::min(8u, std::max(1u, std::thread::hardware_concurrency())) : 1u;
+                for (unsigned i = 1; i < count; ++i)
+                    workers.emplace_back(classify);
+                classify();
             }
-        };
-        {
-            std::vector<std::jthread> workers;
-            const auto count = bounds.size() >= 4096 ? std::min(8u, std::max(1u, std::thread::hardware_concurrency())) : 1u;
-            for (unsigned i = 1; i < count; ++i)
-                workers.emplace_back(classify);
-            classify();
+            if (failure)
+                std::rethrow_exception(failure);
+            for (size_t i = 0; i < bounds.size(); ++i)
+                if (eligible[i]) {
+                    lo = glm::min(lo, bounds[i].min);
+                    hi = glm::max(hi, bounds[i].max);
+                }
         }
-        if (failure)
-            std::rethrow_exception(failure);
-        for (size_t i = 0; i < bounds.size(); ++i)
-            if (eligible[i]) {
-                lo = glm::min(lo, bounds[i].min);
-                hi = glm::max(hi, bounds[i].max);
-            }
         if (glm::any(glm::greaterThan(lo, hi)))
             throw std::runtime_error("No occupied voxels; lower opacity or voxel size");
         CollisionVolume volume;
