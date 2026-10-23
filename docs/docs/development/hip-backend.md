@@ -72,13 +72,18 @@ universal HIP modules and the matching optimized device profile. For example:
 ```sh
 cmake --preset windows-rocm-portable
 cmake --build --preset windows-rocm-portable
-cmake --install build-windows-rocm-portable --prefix dist-windows-rocm-portable
+cmake --install build-windows-rocm-portable --prefix build-windows-rocm-portable/dist
 ```
 
 Use the Linux preset names on Linux, or the `rocm-only` variants to omit CUDA.
 Set `LFS_HIP_ROOT` first. Local iterative host builds can explicitly add
 `-DLFS_FAST_COMPILE=ON`; compiler cache is inherited from the normal build preset.
 Native HIP kernels retain their optimized compilation flags.
+
+FSR retains its separate upstream opt-in. To include it as in the Windows
+nightly package, add `-DLFS_ENABLE_AMD_FSR3=ON` and point
+`LFS_AMD_FSR3_ROOT` at the existing FidelityFX SDK checkout. ROCm presets do
+not change the FSR defaults of existing presets.
 
 The four workflows `hip-windows.yml`, `hip-ubuntu.yml`,
 `hip-cuda-windows.yml` and `hip-cuda-ubuntu.yml` remain **workflow_dispatch only**.

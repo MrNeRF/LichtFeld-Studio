@@ -50,3 +50,26 @@ if(_status EQUAL 0 OR NOT _stderr MATCHES "HIP packaging requires")
     message(FATAL_ERROR "Incomplete SDK rejection did not report its missing roots: ${_stdout}${_stderr}")
 endif()
 message(STATUS "PASS conservative fallback and incomplete SDK rejection")
+# Execute the production custom target: list expansion at generation time must
+# not turn a semicolon-delimited -D argument into separate command arguments.
+set(_command_build "${TEST_ROOT}/package command build")
+execute_process(COMMAND "${CMAKE_COMMAND}" -S "${CMAKE_CURRENT_LIST_DIR}/stage"
+    -B "${_command_build}" -G Ninja "-DCMAKE_MAKE_PROGRAM=${TEST_NINJA}"
+    "-DTEST_SDK=${TEST_SDK}" RESULT_VARIABLE _configure_status)
+if(NOT _configure_status EQUAL 0)
+    message(FATAL_ERROR "Production HIP package fixture configuration failed")
+endif()
+foreach(name IN LISTS names)
+    file(REMOVE "${_command_build}/${name}")
+endforeach()
+execute_process(COMMAND "${CMAKE_COMMAND}" --build "${_command_build}"
+    --target lfs_hip_package RESULT_VARIABLE _build_status)
+if(NOT _build_status EQUAL 0)
+    message(FATAL_ERROR "Production HIP package target failed")
+endif()
+foreach(name IN LISTS names)
+    if(NOT EXISTS "${_command_build}/${name}")
+        message(FATAL_ERROR "Production package command omitted ${name}")
+    endif()
+endforeach()
+message(STATUS "PASS generated production package command preserves every runtime file")

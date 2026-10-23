@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 cmake_minimum_required(VERSION 3.30)
+if(DEFINED LFS_HIP_RUNTIME_MANIFEST)
+    file(READ "${LFS_HIP_RUNTIME_MANIFEST}" LFS_HIP_RUNTIME_FILES)
+endif()
 if(NOT LFS_HIP_RUNTIME_FILES OR NOT LFS_HIP_RUNTIME_DEST)
     message(FATAL_ERROR "HIP runtime staging requires files and a destination")
 endif()

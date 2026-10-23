@@ -29,4 +29,4 @@ endforeach()
 file(WRITE "${_sdk}/bin/unrelated.dll" "Not a runtime dependency\n")
 enable_testing()
 add_test(NAME hip_runtime_package COMMAND "${CMAKE_COMMAND}" "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}"
-    "-DTEST_SDK=${_sdk}" -P "${CMAKE_CURRENT_LIST_DIR}/verify.cmake")
+    "-DTEST_SDK=${_sdk}" "-DTEST_NINJA=${CMAKE_MAKE_PROGRAM}" -P "${CMAKE_CURRENT_LIST_DIR}/verify.cmake")

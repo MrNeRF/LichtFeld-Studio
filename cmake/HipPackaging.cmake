@@ -30,8 +30,10 @@ else()
         "${LFS_HIP_ROOT}/lib*/librocprofiler-register.so*"
         "${LFS_HIP_ROOT}/lib*/librocm_kpack.so*")
 endif()
+set(_hip_runtime_manifest "${CMAKE_CURRENT_BINARY_DIR}/hip-runtime-files.txt")
+file(WRITE "${_hip_runtime_manifest}" "${_hip_dependencies_runtime}")
 list(APPEND _hip_copy_commands COMMAND "${CMAKE_COMMAND}"
-    "-DLFS_HIP_RUNTIME_FILES=${_hip_dependencies_runtime}"
+    "-DLFS_HIP_RUNTIME_MANIFEST=${_hip_runtime_manifest}"
     "-DLFS_HIP_RUNTIME_DEST=${CMAKE_BINARY_DIR}"
     -P "${CMAKE_CURRENT_LIST_DIR}/StageHipRuntime.cmake")
 install(FILES ${_hip_dependencies_runtime} DESTINATION "${CMAKE_INSTALL_BINDIR}")
