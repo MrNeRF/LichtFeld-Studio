@@ -18,3 +18,8 @@ Relative dataset paths are resolved from the current working directory. COLMAP d
 flat layout and Transforms datasets are accepted. The project is updated in place; the source dataset is left on disk.
 
 Run `LichtFeld-Studio licht --help` for command usage.
+
+## Sharpen training images
+
+`--sharpen-amount` sharpens the training images as they are loaded. [Sharpen training images](features/sharpening.md)
+explains the kernels, the other `--sharpen-*` options and how sharpening affects evaluation.

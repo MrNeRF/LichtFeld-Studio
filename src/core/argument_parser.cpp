@@ -852,16 +852,16 @@ namespace {
             ::args::ValueFlag<int> min_track_length(dataset_group, "min_track_length", "Minimum point track length for COLMAP sparse point import; 0 disables filtering", {"min-track-length"});
             ::args::Flag no_cpu_cache(dataset_group, "no_cpu_cache", "Disable CPU memory caching (default: enabled)", {"no-cpu-cache"});
             ::args::Flag use_16bit(dataset_group, "use_16bit", "Train with 16-bit color images (HDR); caches losslessly as JPEG 2000 (default: 8-bit)", {"use-16bit"});
+            ::args::ValueFlag<float> sharpen_amount(dataset_group, "amount", "Sharpen training images once as they are loaded and cached, 0 to 5: 0 = off, 0.25-0.5 = subtle, 1 = strong. Only brightness is sharpened; evaluation and the GT view keep the original photos (default: 0)", {"sharpen-amount"});
             ::args::MapFlag<std::string, lfs::core::SharpenKernel> sharpen_kernel(dataset_group, "kernel",
-                                                                                  "Training image sharpening filter: usm, laplacian4, laplacian8 (default: usm)",
+                                                                                  "Sharpening filter used when --sharpen-amount is above 0: usm = unsharp mask with --sharpen-radius; laplacian4 / laplacian8 = 3x3 kernel over the 4 or 8 neighbours, much stronger per amount (default: usm)",
                                                                                   {"sharpen-kernel"},
                                                                                   std::unordered_map<std::string, lfs::core::SharpenKernel>{
                                                                                       {"usm", lfs::core::SharpenKernel::Usm},
                                                                                       {"laplacian4", lfs::core::SharpenKernel::Laplacian4},
                                                                                       {"laplacian8", lfs::core::SharpenKernel::Laplacian8}});
-            ::args::ValueFlag<float> sharpen_amount(dataset_group, "amount", "Sharpen training images (not evaluation images) with this strength, 0 to 5; 0 turns it off (default: 0)", {"sharpen-amount"});
-            ::args::ValueFlag<float> sharpen_radius(dataset_group, "px", "Blur sigma of the usm kernel in pixels of the resized image, 0.3 to 10 (default: 1)", {"sharpen-radius"});
-            ::args::ValueFlag<float> sharpen_threshold(dataset_group, "threshold", "Leave luma differences below this value (0 to 1) unsharpened (default: 0)", {"sharpen-threshold"});
+            ::args::ValueFlag<float> sharpen_radius(dataset_group, "px", "Unsharp mask blur radius (Gaussian sigma) in pixels of the resized training image, 0.3 to 10: small values sharpen fine detail, large values broader edges; usm only (default: 1)", {"sharpen-radius"});
+            ::args::ValueFlag<float> sharpen_threshold(dataset_group, "threshold", "Leave brightness differences below this value (0 to 1) unsharpened so flat areas and noise stay untouched; 0.01-0.02 suits noisy photos (default: 0)", {"sharpen-threshold"});
             ::args::Flag undistort(dataset_group, "undistort", lfs::core::args::optimization_cli_help("--undistort"), {"undistort"});
             ::args::MapFlag<std::string, std::string> centralize(dataset_group, "mode",
                                                                  "Centralize dataset origin: off, by_pointcloud, by_cameras (default: off)",
