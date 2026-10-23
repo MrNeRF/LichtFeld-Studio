@@ -25,3 +25,18 @@ if(NOT _content STREQUAL "One physical runtime payload\n")
     message(FATAL_ERROR "Runtime soname chain is broken")
 endif()
 message(STATUS "PASS soname aliases preserve links and one physical payload")
+
+# install(FILES) uses this same FILE installation primitive. Preserve all aliases
+# when the SDK's glob supplies the complete soname chain.
+file(GLOB _install_files "${TEST_ROOT}/source/libfixture.so*")
+file(INSTALL ${_install_files} DESTINATION "${TEST_ROOT}/install" TYPE FILE)
+foreach(name libfixture.so libfixture.so.1)
+    if(NOT IS_SYMLINK "${TEST_ROOT}/install/${name}")
+        message(FATAL_ERROR "Installed soname alias became a duplicate payload: ${name}")
+    endif()
+endforeach()
+file(READ "${TEST_ROOT}/install/libfixture.so" _installed_content)
+if(NOT _installed_content STREQUAL _content)
+    message(FATAL_ERROR "Installed runtime soname chain is broken")
+endif()
+message(STATUS "PASS installed runtime aliases and payload")

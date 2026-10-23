@@ -27,7 +27,8 @@ else()
     file(GLOB _hip_dependencies_runtime
         "${LFS_HIP_ROOT}/lib*/libamdhip64.so*" "${LFS_HIP_ROOT}/lib*/libamd_comgr.so*"
         "${LFS_HIP_ROOT}/lib*/libhiprtc*.so*" "${LFS_HIP_ROOT}/lib*/libhsa-runtime64.so*"
-        "${LFS_HIP_ROOT}/lib*/librocprofiler-register.so*")
+        "${LFS_HIP_ROOT}/lib*/librocprofiler-register.so*"
+        "${LFS_HIP_ROOT}/lib*/librocm_kpack.so*")
 endif()
 list(APPEND _hip_copy_commands COMMAND "${CMAKE_COMMAND}"
     "-DLFS_HIP_RUNTIME_FILES=${_hip_dependencies_runtime}"
