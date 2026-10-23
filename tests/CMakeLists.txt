@@ -2021,6 +2021,30 @@ add_test(NAME lichtfeld.decimate.perf
 set_tests_properties(lichtfeld.decimate.perf PROPERTIES
     LABELS "nightly;gpu" ENVIRONMENT "LFS_DECIMATE_PERF=1" TIMEOUT 60)
 
+# Focused Vulkan stochastic renderer contracts.
+if(TARGET lfs_vulkan_rasterizer)
+    add_executable(stochastic_tests test_stochastic_resampling.cpp)
+    target_compile_features(stochastic_tests PRIVATE cxx_std_23)
+    target_link_libraries(stochastic_tests PRIVATE lfs_vulkan_rasterizer lfs_core GTest::gtest_main)
+    get_target_property(_stochastic_shader_dir lfs_vulkan_rasterizer LFS_VULKAN_RASTERIZER_SPV_DIR)
+    target_compile_definitions(stochastic_tests PRIVATE
+        LFS_STOCHASTIC_TEST_SPIRV_DIR="${_stochastic_shader_dir}/generated")
+    add_test(NAME lichtfeld.stochastic COMMAND stochastic_tests)
+    set_tests_properties(lichtfeld.stochastic PROPERTIES LABELS "gpu" TIMEOUT 120)
+    # Test private history state without widening the Windows DLL exports.
+    add_executable(stochastic_viewport_tests
+        test_stochastic_viewport.cpp
+        test_frame_demand_ledger.cpp
+        test_render_settings_defaults.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/stochastic_viewport.cpp)
+    target_compile_features(stochastic_viewport_tests PRIVATE cxx_std_23)
+    target_include_directories(stochastic_viewport_tests PRIVATE
+        $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
+    target_link_libraries(stochastic_viewport_tests PRIVATE
+        lfs_visualizer lfs_vulkan_rasterizer lfs_core GTest::gtest_main)
+    add_test(NAME lichtfeld.stochastic_viewport COMMAND stochastic_viewport_tests)
+endif()
+
 # Focused CUDA renderer contracts.
 add_executable(gsplat_tests test_main.cpp test_gsplat_rasterizer.cpp)
 target_compile_features(gsplat_tests PRIVATE cxx_std_23)

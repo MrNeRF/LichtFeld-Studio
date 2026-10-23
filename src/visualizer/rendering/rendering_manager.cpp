@@ -661,6 +661,9 @@ namespace lfs::vis {
                                            : lfs::rendering::normalizeViewerRasterBackend(
                                                  settings_.raster_backend, settings_.gut);
             settings_.gut = lfs::rendering::isGutBackend(settings_.raster_backend);
+            settings_.transparency_mode = static_cast<lfs::rendering::GaussianTransparencyMode>(
+                std::clamp(static_cast<int>(settings_.transparency_mode), 0, 2));
+            settings_.stochastic_max_frames = std::clamp(settings_.stochastic_max_frames, 1, 1024);
             enforceProjectionBackend(settings_, true);
             sanitizeDepthViewSettings(settings_);
             sanitizeGTComparisonSettings(settings_);

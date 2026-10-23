@@ -325,6 +325,9 @@ namespace lfs::vis {
         float color_exposure = 1.0f;
         int color_tonemapping = 0;
         int splat_render_profile = 0; // 0: Studio, 1: standard portal
+        lfs::rendering::GaussianTransparencyMode transparency_mode =
+            lfs::rendering::GaussianTransparencyMode::AlphaBlend;
+        int stochastic_max_frames = lfs::rendering::DEFAULT_STOCHASTIC_REFINEMENT_FRAMES;
 
         // Background
         glm::vec3 background_color = glm::vec3(0.0f, 0.0f, 0.0f);

@@ -1,4 +1,11 @@
 {
+  "rendering_panel.steady_splats": "SteadySplats",
+  "main_panel.transparency_mode": "Transparency",
+  "main_panel.stochastic_max_frames": "Refinement frames",
+  "rendering_panel.alpha_blend": "Alpha blend",
+  "rendering_panel.stochastic": "Stochastic",
+  "tooltip.transparency_mode": "Alpha blend, basic stochastic accumulation, or SteadySplats spatial and temporal resampling. Stochastic modes apply to 3DGS without LOD. Outlines, rings, center markers, depth views, exact-depth tools, camera-frustum occlusion, and exports use alpha blending.",
+  "tooltip.stochastic_max_frames": "New frames to render after the camera or scene changes. Each frame is displayed immediately. Rendering stops when this limit is reached; camera input starts a fresh refinement window.",
   "common.reset_default_hint": "Double-click to restore the default: {value}",
   "main_panel.selection_outline_color": "Outline color",
   "main_panel.selection_outline_opacity": "Opacity",

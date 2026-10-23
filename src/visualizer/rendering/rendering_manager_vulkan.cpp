@@ -2433,6 +2433,7 @@ namespace lfs::vis {
 
         DirtyMask frame_dirty = dirty_mask_.exchange(0);
         if (vksplat_viewport_renderer_) {
+            vksplat_viewport_renderer_->invalidateStochasticHistory(frame_dirty);
             vksplat_viewport_renderer_->setCameraNavigating(
                 is_training && (frame_dirty & DirtyFlag::CAMERA) != 0);
         }
@@ -2836,6 +2837,9 @@ namespace lfs::vis {
             [&](const VksplatViewportRenderer::RenderResult& result) {
                 if (result.lod_streaming_active) {
                     requestRenderFollowUp();
+                }
+                if (result.stochastic_accumulation_active) {
+                    markDirty(DirtyFlag::CAMERA, FrameReason::StochasticAccumulation);
                 }
             };
         // Meshes draw over this panel after composition.
@@ -4751,6 +4755,7 @@ namespace lfs::vis {
 
                     const DirtyMask non_overlay_dirty = frame_dirty & ~DirtyFlag::SELECTION;
                     const bool can_rerender_selection_overlay =
+                        request.transparency_mode == lfs::rendering::GaussianTransparencyMode::AlphaBlend &&
                         // Object contour membership is classified during projection.
                         // Reusing its flags after a tree selection change retains
                         // the previous object's contour, including on deselection.

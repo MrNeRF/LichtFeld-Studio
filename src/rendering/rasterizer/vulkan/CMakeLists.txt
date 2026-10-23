@@ -7,6 +7,7 @@ add_library(lfs_vulkan_rasterizer STATIC
         src/buffer.cpp
         src/gs_pipeline.cpp
         src/gs_renderer.cpp
+        src/stochastic.cpp
         src/perf_timer.cpp
         src/vma_implementation.cpp
         # Phase 7A: shared bounded-wait + SubmissionState + VulkanDispatch seam.
@@ -40,6 +41,21 @@ set_target_properties(lfs_vulkan_rasterizer PROPERTIES
 target_compile_definitions(lfs_vulkan_rasterizer PRIVATE
         $<$<PLATFORM_ID:Windows>:NOMINMAX>
 )
+
+# Keep the optional sampler self-contained in installed/portable builds too.
+# Generate the initializer at configure time; the offline generator is not a
+# build dependency and no runtime texture loading or Python is required.
+set(_VULKAN_STBN_DATA "${CMAKE_CURRENT_SOURCE_DIR}/assets/stbn_128x128x64.bin")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_VULKAN_STBN_DATA}")
+file(SIZE "${_VULKAN_STBN_DATA}" _VULKAN_STBN_BYTES)
+if(NOT _VULKAN_STBN_BYTES EQUAL 1048576)
+        message(FATAL_ERROR "The scalar STBN volume must contain 128*128*64 bytes")
+endif()
+file(READ "${_VULKAN_STBN_DATA}" _VULKAN_STBN_HEX HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _VULKAN_STBN_INITIALIZER "${_VULKAN_STBN_HEX}")
+file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/stbn_data.inc"
+        CONTENT "@_VULKAN_STBN_INITIALIZER@" @ONLY)
+target_include_directories(lfs_vulkan_rasterizer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 
 set(LFS_VULKAN_RASTERIZER_SPV_DIR "${CMAKE_CURRENT_BINARY_DIR}/shader")
 set_property(TARGET lfs_vulkan_rasterizer PROPERTY
@@ -213,6 +229,8 @@ _vulkan_add_slang_shader(cumsum_add_block_offsets  cumsum.slang CUMSUM_PHASE=3)
 _vulkan_add_slang_shader(cumsum_single_pass        cumsum.slang CUMSUM_PHASE=0)
 _vulkan_add_slang_shader(radix_histogram_clear     radix_histogram_clear.slang)
 _vulkan_add_slang_shader(expected_depth_finalize   expected_depth_finalize.slang)
+_vulkan_add_slang_shader(stochastic_reuse          stochastic_reuse.slang)
+_vulkan_add_slang_shader(stochastic_resolve        stochastic_resolve.slang)
 _vulkan_add_slang_shader(selection_outline_coverage selection_outline_coverage.slang)
 _vulkan_add_slang_shader(selection_outline_resolve selection_outline_resolve.slang)
 _vulkan_add_slang_shader(selection_outline_seeds selection_outline_seeds.slang)
@@ -266,6 +284,8 @@ _vulkan_add_slang_shader(selection_polygon_rasterize selection_polygon_rasterize
 _vulkan_add_slang_shader(rasterize_forward               alphablend_shader.slang EXPORT_MODE=0)
 _vulkan_add_slang_shader(rasterize_forward_3dgut         alphablend_shader.slang EXPORT_MODE=0 LFS_3DGUT_RASTERIZE=1)
 _vulkan_add_slang_shader(rasterize_forward_plain         alphablend_shader.slang EXPORT_MODE=0 LFS_RASTER_OVERLAYS=0)
+_vulkan_add_slang_shader(rasterize_stochastic            alphablend_shader.slang EXPORT_MODE=0 LFS_STOCHASTIC_RASTER=1)
+_vulkan_add_slang_shader(rasterize_stochastic_plain      alphablend_shader.slang EXPORT_MODE=0 LFS_STOCHASTIC_RASTER=1 LFS_RASTER_OVERLAYS=0)
 _vulkan_add_slang_shader(rasterize_forward_3dgut_plain   alphablend_shader.slang EXPORT_MODE=0 LFS_3DGUT_RASTERIZE=1 LFS_RASTER_OVERLAYS=0)
 # Spark RAD scenes get their own 3DGUT variants so LOD-parent kernels stay out of the ordinary loop.
 _vulkan_add_slang_shader(rasterize_outline_gut_rad alphablend_shader.slang EXPORT_MODE=0 LFS_SELECTION_OUTLINE=1 LFS_3DGUT_RASTERIZE=1 LFS_SPARK_RAD_RASTER=1)
