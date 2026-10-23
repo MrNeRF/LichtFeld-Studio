@@ -31,6 +31,9 @@ TEST(CollisionJobStatus, FailuresGiveRecoveryAdviceAndDistinguishCancellation) {
     EXPECT_NE(collisionFailureInfo("CUDA: out of memory").advice.find("GPU"), std::string::npos);
     EXPECT_EQ(collisionFailureInfo("Invalid number: opacity").title, "Check the collision settings");
     EXPECT_EQ(collisionFailureInfo("No occupied voxels").title, "No collision cells found");
+    const auto filtered = collisionFailureInfo("Source cleanup excluded all splats; increase maximum splat area or choose Keep all splats");
+    EXPECT_EQ(filtered.title, "All source splats were filtered out");
+    EXPECT_NE(filtered.advice.find("splat area"), std::string::npos);
     EXPECT_FALSE(collisionFailureInfo("Unexpected failure").advice.empty());
 }
 namespace {
@@ -626,6 +629,7 @@ TEST(CollisionAuthoring, DisplaySettingsAndScalePersistWithLegacyDefaults) {
     CollisionSettings settings;
     settings.units_per_meter = 0.25f;
     settings.auto_resolution = true;
+    settings.max_gaussian_area = 12.5f;
     settings.floor_below_seed = true;
     EXPECT_EQ(nlohmann::json(settings).get<CollisionSettings>(), settings);
     auto legacy = nlohmann::json(settings);
@@ -633,11 +637,13 @@ TEST(CollisionAuthoring, DisplaySettingsAndScalePersistWithLegacyDefaults) {
     legacy.erase("floor_below_seed");
     legacy.erase("adaptive_filter");
     legacy.erase("auto_resolution");
+    legacy.erase("max_gaussian_area");
     const auto old = legacy.get<CollisionSettings>();
     EXPECT_EQ(old.units_per_meter, 1);
     EXPECT_FALSE(old.floor_below_seed);
     EXPECT_FALSE(old.adaptive_filter);
     EXPECT_FALSE(old.auto_resolution);
+    EXPECT_EQ(old.max_gaussian_area, 0);
     auto broken = nlohmann::json(display);
     broken["slice"] = -1;
     EXPECT_THROW(broken.get<CollisionDisplay>(), std::invalid_argument);
@@ -803,7 +809,7 @@ TEST(CollisionCluster, HierarchicalQueriesMatchDirectOccupiedCellReference) {
     EXPECT_THROW((void)collision_detail::selectCluster(source, coarse, {2, 1.2f, 2}, .1f, stop.get_token()), std::runtime_error);
 }
 
-TEST(CollisionAdaptive, RemovesOnlyExceptionalVolumeAndPreservesBroadThinAndRemoteSurfaces) {
+TEST(CollisionAdaptive, RemovesExceptionalVolumeAndAreaWhilePreservingRemoteSurfaces) {
     std::vector<CollisionGaussian> source;
     for (int i = 0; i < 256; ++i)
         source.push_back({{i * .1f, 0, 0}, glm::mat3(.1f), .5f});
@@ -812,8 +818,8 @@ TEST(CollisionAdaptive, RemovesOnlyExceptionalVolumeAndPreservesBroadThinAndRemo
     source.push_back({{100000, 0, 0}, glm::mat3(.1f), .5f});
     CollisionSettings s;
     const auto a = collision_detail::selectAdaptiveSource(source, s);
-    EXPECT_EQ(a.indices.size(), source.size() - 1);
-    EXPECT_EQ(a.indices[a.indices.size() - 2], 257u);
+    EXPECT_EQ(a.indices.size(), source.size() - 2);
+    EXPECT_EQ(a.oversized_indices, (std::vector<uint32_t>{256, 257}));
     EXPECT_EQ(a.indices.back(), 258u);
     for (auto& g : source) {
         g.center *= .001f;
@@ -981,4 +987,52 @@ TEST(CollisionPersistence, CompressedTopologyRoundTripsIrregularIndependentOccup
         const auto restored = j.get<CollisionVolume>();
         EXPECT_EQ(restored, v);
     }
+}
+
+TEST(CollisionAdaptive, AreaLimitFindsThinBroadSplatsWithoutMovingOrDeletingSource) {
+    std::vector<CollisionGaussian> source(32, {{0, 0, 0}, glm::mat3(.1f), .5f});
+    source.push_back({{4, 2, 8}, glm::mat3(10, 0, 0, 0, .000001f, 0, 0, 0, 10), .01f});
+    CollisionSettings s;
+    const auto selected = collision_detail::selectAdaptiveSource(source, s);
+    ASSERT_EQ(selected.oversized_indices, std::vector<uint32_t>{32});
+    EXPECT_EQ(selected.indices.size(), 32);
+    EXPECT_TRUE(std::isfinite(selected.area_limit));
+    EXPECT_LT(selected.area_limit, 3000);
+    EXPECT_EQ(source.back().center, glm::vec3(4, 2, 8));
+    EXPECT_EQ(source.size(), 33);
+    const auto rotation = glm::mat3(glm::rotate(glm::mat4(1), .73f, glm::normalize(glm::vec3(1, 2, 3))));
+    for (auto& g : source) {
+        g.center = rotation * g.center;
+        g.axes = rotation * g.axes;
+    }
+    const auto rotated = collision_detail::selectAdaptiveSource(source, s);
+    EXPECT_EQ(rotated.oversized_indices, selected.oversized_indices);
+    EXPECT_NEAR(rotated.area_limit, selected.area_limit, 1e-3);
+    for (auto& g : source) {
+        g.center *= .01f;
+        g.axes *= .01f;
+    }
+    s.units_per_meter = .01f;
+    const auto scaled = collision_detail::selectAdaptiveSource(source, s);
+    EXPECT_EQ(scaled.oversized_indices, selected.oversized_indices);
+    EXPECT_NEAR(scaled.area_limit, selected.area_limit * .0001, 1e-6);
+}
+TEST(CollisionAdaptive, CustomAreaCapWorksOnSmallSourcesAndKeepAllBypassesIt) {
+    std::array source{CollisionGaussian{{0, 0, 0}, glm::mat3(.01f), .9f},
+                      CollisionGaussian{{2, 0, 0}, glm::mat3(.2f, 0, 0, 0, .0001f, 0, 0, 0, .2f), .9f}};
+    CollisionSettings s;
+    s.max_gaussian_area = .1f;
+    const auto selected = collision_detail::selectAdaptiveSource(source, s);
+    EXPECT_EQ(selected.oversized_indices, std::vector<uint32_t>{1});
+    auto cleaned = generateCollision(source, s);
+    EXPECT_TRUE(cleaned.occupied(cleaned.cell(source[0].center)));
+    EXPECT_FALSE(cleaned.occupied(cleaned.cell(source[1].center)));
+    s.adaptive_filter = false;
+    auto all = generateCollision(source, s);
+    EXPECT_TRUE(all.occupied(all.cell(source[1].center)));
+    s.adaptive_filter = true;
+    s.max_gaussian_area = .000001f;
+    EXPECT_THROW((void)generateCollision(source, s), std::runtime_error);
+    s.max_gaussian_area = -1;
+    EXPECT_THROW(s.validate(), std::invalid_argument);
 }

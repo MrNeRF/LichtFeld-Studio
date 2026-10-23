@@ -26,13 +26,14 @@ namespace lfs::core {
     }
 
     inline void to_json(nlohmann::json& j, const CollisionSettings& s) {
-        j = {{"units_per_meter", s.units_per_meter}, {"preset", s.preset}, {"cluster", s.cluster}, {"adaptive_filter", s.adaptive_filter}, {"auto_resolution", s.auto_resolution}, {"cluster_resolution", s.cluster_resolution}, {"cluster_opacity", s.cluster_opacity}, {"cluster_min_contribution", s.cluster_min_contribution}, {"voxel_size", s.voxel_size}, {"opacity", s.opacity}, {"external_fill", s.external_fill}, {"external_size", s.external_size}, {"floor_below_seed", s.floor_below_seed}, {"floor_fill", s.floor_fill}, {"floor_size", s.floor_size}, {"carve_height", s.carve_height}, {"carve_radius", s.carve_radius}, {"shape", s.shape}, {"seed", {s.seed.x, s.seed.y, s.seed.z}}};
+        j = {{"units_per_meter", s.units_per_meter}, {"preset", s.preset}, {"cluster", s.cluster}, {"adaptive_filter", s.adaptive_filter}, {"auto_resolution", s.auto_resolution}, {"max_gaussian_area", s.max_gaussian_area}, {"cluster_resolution", s.cluster_resolution}, {"cluster_opacity", s.cluster_opacity}, {"cluster_min_contribution", s.cluster_min_contribution}, {"voxel_size", s.voxel_size}, {"opacity", s.opacity}, {"external_fill", s.external_fill}, {"external_size", s.external_size}, {"floor_below_seed", s.floor_below_seed}, {"floor_fill", s.floor_fill}, {"floor_size", s.floor_size}, {"carve_height", s.carve_height}, {"carve_radius", s.carve_radius}, {"shape", s.shape}, {"seed", {s.seed.x, s.seed.y, s.seed.z}}};
     }
     inline void from_json(const nlohmann::json& j, CollisionSettings& s) {
         s.units_per_meter = j.value("units_per_meter", 1.0f);
         j.at("preset").get_to(s.preset);
         j.at("cluster").get_to(s.cluster);
         s.auto_resolution = j.value("auto_resolution", false);
+        s.max_gaussian_area = j.value("max_gaussian_area", 0.0f);
         s.adaptive_filter = j.value("adaptive_filter", false); // Preserve legacy regeneration.
         j.at("cluster_resolution").get_to(s.cluster_resolution);
         j.at("cluster_opacity").get_to(s.cluster_opacity);

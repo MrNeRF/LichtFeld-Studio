@@ -26,6 +26,7 @@ namespace lfs::core {
         // connectivity rather than a scene-dependent opacity threshold.
         bool adaptive_filter = true;
         bool auto_resolution = false; // UI defaults to Auto; explicit API resolutions remain exact.
+        float max_gaussian_area = 0;  // Three-sigma footprint, scene units squared; zero selects a relative outlier fence.
         float cluster_resolution = 1.0f;
         float cluster_opacity = 0.999f;
         float cluster_min_contribution = 0.1f;

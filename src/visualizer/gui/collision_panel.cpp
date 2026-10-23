@@ -213,6 +213,7 @@ namespace lfs::vis::gui {
         set("cluster-resolution", settings_.cluster_resolution);
         set("cluster-opacity", settings_.cluster_opacity);
         set("cluster-min", settings_.cluster_min_contribution);
+        set("max-area", settings_.max_gaussian_area / (settings_.units_per_meter * settings_.units_per_meter));
         set("voxel-size", settings_.voxel_size / settings_.units_per_meter);
         set("opacity", settings_.opacity);
         check("external-fill", settings_.external_fill);
@@ -247,6 +248,7 @@ namespace lfs::vis::gui {
         s.cluster_resolution = number("cluster-resolution");
         s.cluster_opacity = number("cluster-opacity");
         s.cluster_min_contribution = number("cluster-min");
+        s.max_gaussian_area = number("max-area") * s.units_per_meter * s.units_per_meter;
         s.voxel_size = number("voxel-size") * s.units_per_meter;
         s.opacity = number("opacity");
         s.external_fill = checked("external-fill");
@@ -578,6 +580,7 @@ namespace lfs::vis::gui {
         const auto filter = value("filter-mode");
         document_->SetClass("collision-auto-resolution", checked("auto-resolution"));
         document_->SetClass("collision-strict", filter == "3");
+        document_->SetClass("collision-cleanup", filter == "1" || filter == "2");
         document_->SetClass("collision-seeded", filter == "2" || filter == "3");
         document_->GetElementById("scale-summary")->SetInnerRML(Rml::StringUtilities::EncodeRml(checked("auto-resolution") ? LOC("collision.auto_summary") : LOCF("collision.scale_summary", edge / units * 100, edge, units)));
         std::string pipeline = filter == "1" || filter == "2" ? std::string(LOC("collision.filter_cleanup")) + " · " + LOC("collision.voxelization") : LOC("collision.voxelization");

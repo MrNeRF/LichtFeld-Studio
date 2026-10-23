@@ -13,6 +13,8 @@ namespace lfs::core::collision_detail {
     float recommendCollisionVoxelSize(std::span<const CollisionGaussian> source, float units_per_meter, std::stop_token stop = {});
     struct AdaptiveSelection {
         std::vector<uint32_t> indices;
+        std::vector<uint32_t> oversized_indices;
+        double area_limit = 0;
         std::string note;
     };
     AdaptiveSelection selectAdaptiveSource(std::span<const CollisionGaussian> source,

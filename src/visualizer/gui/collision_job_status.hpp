@@ -57,6 +57,8 @@ namespace lfs::vis::gui {
         if (lower.find("out of memory") != std::string::npos || lower.find("bad_alloc") != std::string::npos)
             return {"Not enough memory for this collision operation",
                     "Try larger cells, a coarser optional triangle surface, or fewer visible source splats. Free GPU memory if the details name CUDA."};
+        if (lower.find("excluded all") != std::string::npos)
+            return {"All source splats were filtered out", "Increase Maximum splat area or choose Keep all splats, then generate again. The original splats and existing collider are unchanged."};
         if (lower.find("no occupied") != std::string::npos || lower.find("retained no") != std::string::npos)
             return {"No collision cells found",
                     "Lower the opacity threshold. If filtering is enabled, check its threshold and place the seed near the intended surface."};

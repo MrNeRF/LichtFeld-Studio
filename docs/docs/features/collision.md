@@ -17,7 +17,7 @@ The same surface-first setup works for rooms, outdoor scans and objects:
    custom value. Editing either turns Auto off. Custom resolution is never retried
    at a larger size silently. Calibrate **Scene units / metre** under Advanced if
    the reconstruction is not already metric.
-3. Start with **Surface cleanup**. It removes exceptional volumetric reconstruction
+3. Start with **Surface cleanup**. It removes exceptional volume and footprint-area
    outliers without selecting a central crop or dropping disconnected components.
    **Keep all splats** disables this statistical cleanup.
 4. Press **Generate**, inspect the boxes, then expand **Walk and edit** and choose
@@ -89,6 +89,10 @@ Voxelization samples the closest point in each voxel box to the Gaussian center,
 transforms that point into the rotated/scaled Gaussian frame, and sums extinction
 density before converting it to opacity (`1 - exp(-density)`). This follows the
 [upstream voxel sampler](https://github.com/playcanvas/splat-transform/blob/4f90012be983078010d631fa0572baa99d5c1965/src/lib/gpu/gpu-voxelization.ts).
+The `0.1` default thresholds the accumulated voxel opacity, not each individual
+splat's opacity. Several faint splats can jointly form a solid voxel. The optional
+strict cluster stage separately uses `0.999` coarse opacity and `0.1` minimum
+contribution, matching the published upstream defaults.
 Center-only sampling could miss sub-voxel sheets; the previous over-alpha
 accumulation also differed from upstream. Native sparse bounds and early exits
 use the same density threshold as the cell evaluator.
@@ -109,9 +113,25 @@ byte-identical upstream output.
 **Surface cleanup** uses far-out Tukey fences (Q3 + 3 IQR) in log Gaussian
 thickness and equivalent-volume radius, with at least an eightfold scale margin.
 A very thin sheet (thickness below one quarter of Q1) is exempt from the volume
-criterion; a long axis alone is not enough to reject it. Statistics are invariant
-to uniform scene scale and rotation. Fewer than 128 usable splats bypass this
-statistical rejection. This is a heuristic: unusual legitimate multi-scale
+criterion; a long axis alone is not enough to reject it. Fewer than 128 usable
+splats bypass the volume/thickness test.
+
+A separate footprint test catches very broad, thin splats that volume alone
+misses. The footprint estimate is the largest of the three transformed axis-pair
+three-sigma ellipse areas:
+`9 * pi * max(length(cross(axis_i, axis_j)))`. With at least 16 usable splats,
+the automatic cutoff is Q3 plus the larger of three IQRs or a 64-fold area margin
+in log space. Statistics are invariant to uniform scene scale and rotation.
+**Advanced > Source filtering > Max splat area (m²)** sets an explicit cutoff; `0`
+restores automatic detection. A custom cutoff also works on smaller sources.
+The limit applies to **Surface cleanup** and **Connected region**. Generation
+reports the oversized count and actual cutoff, and the native selection retains
+the excluded source indices. Source positions, opacity and visibility are untouched;
+this ignores oversized splats for collision rather than moving them out of view.
+If everything is excluded, the error suggests raising the limit or choosing
+**Keep all splats**, and the existing collider is preserved.
+
+This is a heuristic: unusual legitimate multi-scale
 geometry can be rejected, so the removed count is reported and **Keep all splats**
 is always available. Source splats are never modified.
 
@@ -361,6 +381,24 @@ training, GUI upload and optional triangle meshing:
   this is an optional region selection, not full-scene coverage.
 - Explicit 0.05 m exceeds the current 64M compressed-output-record budget on this
   entire aerial scan. It fails explicitly; custom detail is never coarsened.
+
+Those initial cleanup measurements predate footprint-area rejection. With the
+additional area test, the same full source completes Auto generation in
+**5.192 s** at **0.28 m**, producing **153,886,846** occupied cells and
+**631,785,700 bytes** occupancy, with **2.28 GiB** peak process RSS. It retains
+**4,997,159 / 5,000,000** splats: **2,838** oversized-area and **3** additional
+volume outliers are ignored. The automatic three-sigma area cutoff is
+**533.5 m²**. This changes the input selection and is not an identical-output
+speed comparison.
+
+The corresponding native GUI check completes generation in **4.649 s** and
+snapshot/preview adoption in **6.8 s**, with **153,886,796** occupied cells and
+**602.5 MiB** canonical occupancy. The existing collider UUID is retained; the
+Model stays visible at 5M splats and all 1,874 camera world transforms are unchanged.
+An intentionally tiny custom area limit also exercises the real UI failure path:
+all sources are excluded, the previous collider remains, and the panel offers
+specific recovery advice. The validation copy is then restored to automatic area
+detection; pristine training and alignment handoff files are untouched.
 
 GPU traversal uses bounded depth-first batches instead of a scene-wide frontier.
 Parent queues stay on-device; only occupancy records and small counters return.

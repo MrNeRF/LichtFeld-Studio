@@ -71,3 +71,6 @@ p { display: block; margin: 5dp 0; font-size: 12dp; line-height: 17dp; }
 .collision-auto { display: flex; align-items: center; gap: 4dp; }
 .collision-auto input[type="checkbox"] { width: 14dp; height: 14dp; margin: 0; }
 .collision-auto span { font-size: 11dp; }
+
+#area-control, #cluster-resolution-row { display: none; }
+.collision-cleanup #area-control, .collision-seeded #cluster-resolution-row { display: flex; }

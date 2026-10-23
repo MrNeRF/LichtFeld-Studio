@@ -65,7 +65,8 @@
   <p class="collision-note" id="filter-help">@tr:collision.filter_help</p>
   <button id="camera-seed" class="btn btn--secondary" data-tooltip="collision.tip_seed"><span>@tr:collision.camera_seed</span></button>
 
-  <div class="collision-row" data-tooltip="collision.tip_resolution"><span>@tr:collision.resolution</span><input id="cluster-resolution" type="text" value="1"/></div>
+  <div id="area-control" class="collision-row" data-tooltip="collision.tip_max_area"><label for="max-area">@tr:collision.max_area</label><input id="max-area" type="text" value="0"/></div>
+  <div id="cluster-resolution-row" class="collision-row" data-tooltip="collision.tip_resolution"><span>@tr:collision.resolution</span><input id="cluster-resolution" type="text" value="1"/></div>
   <div class="collision-row collision-strict-option" data-tooltip="collision.tip_opacity"><span>@tr:collision.opacity</span><input id="cluster-opacity" type="text" value="0.999"/></div>
   <div class="collision-row collision-strict-option" data-tooltip="collision.tip_contribution"><span>@tr:collision.contribution</span><input id="cluster-min" type="text" value="0.1"/></div>
   </div>

@@ -357,6 +357,7 @@ namespace lfs::core {
         positive(voxel_size, "Voxel size");
         positive(units_per_meter, "Scene units per metre");
         positive(cluster_resolution, "Cluster resolution");
+        positive(max_gaussian_area, "Maximum Gaussian area", true);
         probability(opacity, "Voxel opacity");
         probability(cluster_opacity, "Cluster opacity");
         positive(cluster_min_contribution, "Minimum cluster contribution", true);
@@ -561,13 +562,17 @@ namespace lfs::core {
             thickness.reserve(source.size());
             std::vector<float> volume;
             volume.reserve(source.size());
-            auto measure = [](const CollisionGaussian& g) {
+            std::vector<float> area_samples;
+            area_samples.reserve(source.size());
+            auto measure = [](const CollisionGaussian& g, double* projected_area = nullptr) {
                 // Minimum parallelepiped altitude: rotation invariant, and thin
                 // sheared/anisotropic sheets stay thin. A long axis alone is not
                 // evidence of a volumetric reconstruction outlier.
                 const double area = std::max({glm::length(glm::cross(glm::dvec3(g.axes[0]), glm::dvec3(g.axes[1]))),
                                               glm::length(glm::cross(glm::dvec3(g.axes[0]), glm::dvec3(g.axes[2]))),
                                               glm::length(glm::cross(glm::dvec3(g.axes[1]), glm::dvec3(g.axes[2])))});
+                if (projected_area)
+                    *projected_area = area;
                 return area > 0 ? float(std::abs(glm::determinant(glm::dmat3(g.axes))) / area) : 0.f;
             };
             for (size_t i = 0; i < source.size(); ++i) {
@@ -577,18 +582,20 @@ namespace lfs::core {
                 if (!finite(g.center) || !finite(g.axes[0]) || !finite(g.axes[1]) || !finite(g.axes[2]) ||
                     !std::isfinite(g.opacity) || g.opacity < 0 || g.opacity > 1)
                     throw std::invalid_argument("Invalid Gaussian in collision source");
-                const auto t = measure(g);
+                double area = 0;
+                const auto t = measure(g, &area);
                 if (t > 0 && g.opacity > 0) {
+                    area_samples.push_back(float(std::log(area)));
                     thickness.push_back(std::log(t));
                     volume.push_back(float(std::log(std::abs(glm::determinant(glm::dmat3(g.axes)))) / 3.));
                 }
             }
             // Far-out fences in log thickness and equivalent-volume radius,
             // with an eightfold minimum spread. Exceptionally thin sheets are
-            // exempt from volume rejection. No absolute metre cutoff is used;
-            // small fixtures bypass statistical rejection entirely.
+            // exempt from volume rejection. Small fixtures bypass these volume
+            // statistics; a separate area fence below also handles thin splats.
             float fence = std::numeric_limits<float>::infinity();
-            float volume_fence = fence, thin_guard = fence;
+            float volume_fence = fence, thin_guard = fence, area_fence = fence;
             if (thickness.size() >= 128) {
                 auto quantile = [&](size_t i) {
                     std::nth_element(thickness.begin(), thickness.begin() + i, thickness.end());
@@ -604,17 +611,35 @@ namespace lfs::core {
                 const auto volume_upper = volume[3 * volume.size() / 4];
                 volume_fence = volume_upper + std::max(3 * (volume_upper - volume_lower), float(std::log(8.)));
             }
+            if (area_samples.size() >= 16) {
+                std::nth_element(area_samples.begin(), area_samples.begin() + area_samples.size() / 4, area_samples.end());
+                const auto area_lower = area_samples[area_samples.size() / 4];
+                std::nth_element(area_samples.begin(), area_samples.begin() + 3 * area_samples.size() / 4, area_samples.end());
+                const auto area_upper = area_samples[3 * area_samples.size() / 4];
+                area_fence = area_upper + std::max(3 * (area_upper - area_lower), float(std::log(64.)));
+            }
+            result.area_limit = settings.max_gaussian_area > 0 ? settings.max_gaussian_area : std::exp(double(area_fence)) * 9 * std::numbers::pi;
+            size_t volume_outliers = 0;
             for (size_t i = 0; i < source.size(); ++i) {
                 if ((i & 4095) == 0)
                     checkpoint(stop);
-                const auto t = measure(source[i]);
+                double area = 0;
+                const auto t = measure(source[i], &area);
                 const auto log_t = t > 0 ? std::log(t) : -std::numeric_limits<float>::infinity();
                 const auto log_v = t > 0 ? std::log(std::abs(glm::determinant(glm::dmat3(source[i].axes)))) / 3. : -std::numeric_limits<double>::infinity();
+                if (area * 9 * std::numbers::pi > result.area_limit) {
+                    result.oversized_indices.push_back(uint32_t(i));
+                    continue;
+                }
                 if (log_t <= fence && !(log_v > volume_fence && log_t > thin_guard))
                     result.indices.push_back(uint32_t(i));
+                else
+                    ++volume_outliers;
             }
-            result.note = std::format("Surface cleanup kept {} / {} splats ({} volumetric scale outliers removed).",
-                                      result.indices.size(), source.size(), source.size() - result.indices.size());
+            result.note = std::format("Surface cleanup kept {} / {} splats: {} oversized-area and {} volume outliers excluded.",
+                                      result.indices.size(), source.size(), result.oversized_indices.size(), volume_outliers);
+            if (std::isfinite(result.area_limit))
+                result.note += std::format(" Area limit: {:.4g} m² ({}).", result.area_limit / (double(settings.units_per_meter) * settings.units_per_meter), settings.max_gaussian_area > 0 ? "custom" : "automatic");
             if (progress)
                 progress("Clustering cleanup: " + result.note);
             if (!settings.cluster || result.indices.empty()) {
@@ -897,6 +922,8 @@ namespace lfs::core {
                     filtered.push_back(gaussians[i]);
                 gaussians = filtered;
             }
+            if (gaussians.empty())
+                throw std::runtime_error("Source cleanup excluded all splats; increase maximum splat area or choose Keep all splats");
         }
         if (s.cluster && !s.adaptive_filter) {
             report("Clustering Gaussians");
