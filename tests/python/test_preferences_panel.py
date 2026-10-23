@@ -297,6 +297,8 @@ def preferences_panel_module(monkeypatch):
             SELECT_MODE_COLOR=SimpleNamespace(name="SELECT_MODE_COLOR", value=28),
             SELECT_MODE_BOX=SimpleNamespace(name="SELECT_MODE_BOX", value=29),
             SELECT_MODE_SPHERE=SimpleNamespace(name="SELECT_MODE_SPHERE", value=30),
+            APPLY_ALIGNMENT=SimpleNamespace(name="APPLY_ALIGNMENT", value=86),
+            REMOVE_LAST_POINT=SimpleNamespace(name="REMOVE_LAST_POINT", value=87),
             CONFIRM_POLYGON=SimpleNamespace(name="CONFIRM_POLYGON", value=31),
             CANCEL_POLYGON=SimpleNamespace(name="CANCEL_POLYGON", value=32),
             UNDO_POLYGON_VERTEX=SimpleNamespace(name="UNDO_POLYGON_VERTEX", value=33),
