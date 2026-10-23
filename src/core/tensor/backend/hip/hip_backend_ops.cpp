@@ -57,7 +57,7 @@ namespace lfs::core::internal {
         }
         void check(int status, const LfsHipError& error) {
             if (status)
-                throw std::runtime_error(std::string("HIP Tensor: ") + error.message + " (" + std::to_string(error.native_code) + ")");
+                throw HipBackendError(error.native_code, std::string("HIP Tensor: ") + error.message + " (" + std::to_string(error.native_code) + ")");
         }
         void queue(ExecContext context) {
             require(context.cuda_stream == nullptr, "HIP Tensor adapter accepts only its own default queue, never a CUDA stream");

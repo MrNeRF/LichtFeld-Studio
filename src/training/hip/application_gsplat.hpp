@@ -11,7 +11,7 @@ struct Work {
     Buffer radii,means2d,depths,conics,counts,prefix,colors,directions,offsets,last,grad_colors,grad_params,grad_sh;
     std::unique_ptr<Buffer> scratch;std::unique_ptr<Bins> bins;
     Work(uint64_t bytes,const LfsHipGsplatForward& p,hipStream_t q)
-        :budget{bytes},count(p.count),width(p.width),height(p.height),channels(p.channels),bases((p.active_degree+1)*(p.active_degree+1)),tile_w((width+15)/16),tile_h((height+15)/16),
+        :budget{bytes,q},count(p.count),width(p.width),height(p.height),channels(p.channels),bases((p.active_degree+1)*(p.active_degree+1)),tile_w((width+15)/16),tile_h((height+15)/16),
         radii(budget,multiply(count,8)),means2d(budget,multiply(count,8)),depths(budget,multiply(count,4)),conics(budget,multiply(count,12)),counts(budget,multiply(count,4)),prefix(budget,multiply(count,8)),colors(budget,multiply(count,channels*4)),directions(budget,multiply(count,12)),offsets(budget,multiply(size_t(tile_w)*tile_h+1,4)),last(budget,multiply(size_t(width)*height,4)),grad_colors(budget,multiply(count,channels*4)),grad_params(budget,multiply(count,11*4)),grad_sh(budget,multiply(count,bases*12)) {
         hip_check(hipcub::DeviceScan::InclusiveSum(nullptr,scan_bytes,CountIterator(counts.as<int32_t>(),Widen{}),prefix.as<int64_t>(),count,q),"Gsplat scan query");scratch=std::make_unique<Buffer>(budget,scan_bytes);
     }

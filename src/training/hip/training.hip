@@ -82,6 +82,11 @@ namespace {
     };
     struct Budget {
         uint64_t limit, live = 0, peak = 0;
+        hipStream_t queue;
+        int device=0;
+        explicit Budget(uint64_t bytes,hipStream_t producer) : limit(bytes),queue(producer) {
+            hip_check(hipGetDevice(&device),"HIP scratch device");
+        }
     };
     struct Buffer {
         Budget& budget;
@@ -90,6 +95,8 @@ namespace {
         size_t charged_bytes = 0;
         hipExternalMemory_t external = nullptr;
         bool owns_pointer = true;
+        void* tensor_owner = nullptr;
+        const LfsHipApplicationDispatch* allocator = nullptr;
         explicit Buffer(Budget& budget, size_t bytes, const LfsHipTrainSharedModel* shared = nullptr, const LfsHipTrainDeviceModel* device = nullptr)
             : budget(budget), bytes(bytes), charged_bytes(device ? device->allocation_bytes : shared ? shared->allocation_bytes
                                                                                                      : bytes) {
@@ -117,14 +124,31 @@ namespace {
 #else
                 throw Failure(LFS_HIP_TRAIN_INVALID, "Shared HIP model import currently requires Windows");
 #endif
-            } else if (bytes)
-                hip_check(hipMalloc(&pointer, bytes), "training allocation");
+            } else if (bytes) {
+                allocator=installed_dispatch.load(std::memory_order_acquire);
+                if(allocator) {
+                    uint64_t address=0;
+                    LfsHipError error{};
+                    if(allocator->allocate_scratch(allocator->user,budget.device,reinterpret_cast<uint64_t>(budget.queue),bytes,&address,&tensor_owner,&error))
+                        throw Failure(error.native_code==hipErrorOutOfMemory?LFS_HIP_TRAIN_RESOURCE_EXHAUSTED:LFS_HIP_TRAIN_GPU_ERROR,error.message);
+                    pointer=reinterpret_cast<void*>(static_cast<uintptr_t>(address));
+                } else {
+                    // Standalone SDK probes have no Core context. Application
+                    // modules always install the Tensor allocator before use.
+                    hip_check(hipMalloc(&pointer, bytes), "standalone training allocation");
+                }
+            }
             budget.live += charged_bytes;
             budget.peak = std::max(budget.peak, budget.live);
         }
         ~Buffer() {
-            if (pointer && owns_pointer)
-                (void)hipFree(pointer);
+            if (pointer && owns_pointer) {
+                if(tensor_owner) {
+                    const auto status=hipStreamSynchronize(budget.queue);
+                    if(status==hipSuccess)allocator->release_scratch(allocator->user,tensor_owner);
+                    else std::fprintf(stderr,"[error] HIP Tensor scratch retained after queue failure: %s\n",hipGetErrorString(status));
+                } else (void)hipFree(pointer);
+            }
             if (external)
                 (void)hipDestroyExternalMemory(external);
             budget.live -= charged_bytes;
@@ -140,11 +164,18 @@ namespace {
             std::swap(pointer, other.pointer);
             std::swap(bytes, other.bytes);
             std::swap(charged_bytes, other.charged_bytes);
+            std::swap(tensor_owner,other.tensor_owner);
+            std::swap(allocator,other.allocator);
         }
         void release_owned() {
             require(owns_pointer && !external, "Cannot release borrowed HIP storage");
-            if (pointer)
-                hip_check(hipFree(pointer), "release replaced HIP optimizer storage");
+            if (pointer) {
+                if(tensor_owner) {
+                    hip_check(hipStreamSynchronize(budget.queue),"release HIP Tensor scratch producer");
+                    allocator->release_scratch(allocator->user,tensor_owner);
+                    tensor_owner=nullptr;
+                } else hip_check(hipFree(pointer), "release replaced HIP optimizer storage");
+            }
             budget.live -= charged_bytes;
             pointer = nullptr;
             bytes = charged_bytes = 0;
@@ -639,7 +670,7 @@ struct LfsHipTraining {
     LfsHipTrainLoss loss{sizeof(LfsHipTrainLoss), LFS_HIP_LOSS_MSE, 0, 0};
 
     explicit LfsHipTraining(const LfsHipTrainConfig& config, const LfsHipTrainSharedModel* shared = nullptr, const LfsHipTrainModelLayout* external = nullptr, const LfsHipTrainDeviceModel* borrowed = nullptr)
-        : device(config.device_ordinal), count(config.gaussian_count), budget{config.allocation_budget_bytes}, layout(external ? external_layout(count, *external) : Layout(count)), optimizer_layout(count, 4), parameter(budget, multiply(layout.floats, 4), shared, borrowed), gradient(budget, multiply(optimizer_layout.floats, 4)), first(budget, gradient.bytes), second(budget, gradient.bytes), color(budget, multiply(count, 12)), radii(budget, multiply(count, 8)), means2d(budget, multiply(count, 8)), depths(budget, multiply(count, 4)), conics(budget, multiply(count, 12)), counts(budget, multiply(count, 4)), prefix(budget, multiply(count, 8)), invalid(budget, 4) {
+        : device(config.device_ordinal), count(config.gaussian_count), budget{config.allocation_budget_bytes,stream.value}, layout(external ? external_layout(count, *external) : Layout(count)), optimizer_layout(count, 4), parameter(budget, multiply(layout.floats, 4), shared, borrowed), gradient(budget, multiply(optimizer_layout.floats, 4)), first(budget, gradient.bytes), second(budget, gradient.bytes), color(budget, multiply(count, 12)), radii(budget, multiply(count, 8)), means2d(budget, multiply(count, 8)), depths(budget, multiply(count, 4)), conics(budget, multiply(count, 12)), counts(budget, multiply(count, 4)), prefix(budget, multiply(count, 8)), invalid(budget, 4) {
         hip_check(hipcub::DeviceScan::InclusiveSum(nullptr, scan_bytes,
                                                    CountIterator(counts.as<int32_t>(), Widen{}), prefix.as<int64_t>(), count, stream.value),
                   "scan query");
@@ -1070,10 +1101,11 @@ extern "C" {
 int lfs_hip_application_dispatch_install(const LfsHipApplicationDispatch* hooks,LfsHipError* error) {
     if(error)*error={};
     try {
-        require(hooks&&hooks->struct_bytes==sizeof(*hooks)&&hooks->begin&&hooks->end,"Invalid HIP dispatch hooks");
+        require(hooks&&hooks->struct_bytes==sizeof(*hooks)&&hooks->begin&&hooks->end&&hooks->allocate_scratch&&hooks->release_scratch,"Invalid HIP dispatch hooks");
         std::lock_guard lock(dispatch_install_mutex);
         if(auto* existing=installed_dispatch.load(std::memory_order_acquire)) {
-            require(existing->user==hooks->user&&existing->begin==hooks->begin&&existing->end==hooks->end,
+            require(existing->user==hooks->user&&existing->begin==hooks->begin&&existing->end==hooks->end&&
+                    existing->allocate_scratch==hooks->allocate_scratch&&existing->release_scratch==hooks->release_scratch,
                     "HIP dispatch hooks cannot change after installation");
         } else {
             dispatch_callbacks=*hooks;

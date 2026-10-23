@@ -6,10 +6,18 @@
 #include <string_view>
 #include <span>
 #include <vector>
+#include <stdexcept>
 #include "runtime_api.h"
 #include "device_identity_api.h"
 #include "external_memory_api.h"
 namespace lfs::core::internal {
+    // Preserve native failure information across Core's SDK-free boundary.
+    class HipBackendError : public std::runtime_error {
+    public:
+        int native_code;
+        HipBackendError(int code, const std::string& message)
+            : std::runtime_error(message), native_code(code) {}
+    };
     struct ExpressionCacheStats;
     LFS_CORE_API ExpressionCacheStats hip_expression_cache_stats();
     bool hip_backend_is_live() noexcept;

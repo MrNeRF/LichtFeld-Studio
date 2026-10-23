@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "training_session_fixture.hpp"
 #include "training/hip/session.hpp"
+#include "core/tensor/backend/hip/external_access.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include <core/tensor_backend.hpp>
 #include <algorithm>
@@ -35,6 +36,24 @@ int main(int argc, char** argv) try {
     require(!gpu_backend_live(GpuBackend::HIP),"Registry discovery initialized the HIP context");
     {
         const GpuBackendScope scope(GpuBackend::HIP);
+        // The private module must borrow Core-owned scratch rather than hide
+        // allocations from Tensor accounting. Failed allocations publish no
+        // owner/address and must not invalidate a previously acquired owner.
+        {
+            const auto before=gpu_backend_memory_info(GpuBackend::HIP).allocated_bytes;
+            uint64_t address=0;void* owner=nullptr;LfsHipError error{};
+            require(!internal::hip_tensor_scratch_allocate(nullptr,0,0,4096,&address,&owner,&error)&&address&&owner,
+                    "Core HIP scratch allocation failed");
+            const auto live=gpu_backend_memory_info(GpuBackend::HIP).allocated_bytes;
+            require(live>=before+4096,"HIP scratch is absent from Tensor accounting");
+            uint64_t rejected=123;void* rejected_owner=owner;
+            require(internal::hip_tensor_scratch_allocate(nullptr,-1,0,4096,&rejected,&rejected_owner,&error)&&
+                    !rejected&&!rejected_owner,"HIP scratch accepted a foreign device or published failure outputs");
+            require(gpu_backend_memory_info(GpuBackend::HIP).allocated_bytes==live,"Rejected HIP scratch changed live storage");
+            internal::hip_tensor_scratch_release(nullptr,owner);
+            require(gpu_backend_memory_info(GpuBackend::HIP).allocated_bytes==before,"Core HIP scratch owner did not release storage");
+            std::puts("PASS Tensor-owned scratch accounting, device rejection, failure rollback and release");
+        }
         using namespace hip_fixture;
         Fixture fixture;
         fixture.perturb();
@@ -53,6 +72,19 @@ int main(int argc, char** argv) try {
         auto result=table.fast->forward(saved,inputs,view,camera,absent,absent,options,outputs,screen_share);
         require(result.code==gpu_ops::RasterResult::Code::Success && result.has_work,"Real HIP TrainingOps forward failed");
         const auto initial=image.cpu().to_vector();
+        {
+            const auto before=gpu_backend_memory_info(GpuBackend::HIP).allocated_bytes;
+            const auto layout=training::hip::Session::model_layout(std::filesystem::absolute(argv[1]),n);
+            const LfsHipTrainConfig limited{sizeof(limited),0,n,layout.required_bytes+4};
+            bool exhausted=false;
+            try {training::hip::Session rejected(std::filesystem::absolute(argv[1]),limited,fixture.model());}
+            catch(const training::hip::TrainingError& e){exhausted=e.status==LFS_HIP_TRAIN_RESOURCE_EXHAUSTED;}
+            require(exhausted,"HIP scratch budget failure lost ResourceExhausted status");
+            require(gpu_backend_memory_info(GpuBackend::HIP).allocated_bytes==before,
+                    "Partial HIP scratch construction leaked Tensor storage");
+            require(image.cpu().to_vector()==initial,"Rejected scratch construction changed the live render");
+            std::puts("PASS partial workspace budget exhaustion preserves live tensors and releases Core scratch");
+        }
         const LfsHipTrainConfig config{sizeof(config),0,n,64*1024*1024};
         training::hip::Session reference(std::filesystem::absolute(argv[1]),config,fixture.model());
         reference.set_rasterizer(1); reference.set_optimizer(1); reference.set_frame(fixture.frame());

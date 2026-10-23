@@ -42,6 +42,12 @@ private:
 LFS_CORE_API HipExternalAccess& hip_external_access();
 LFS_CORE_API int hip_external_call_begin(void*, LfsHipError*) noexcept;
 LFS_CORE_API void hip_external_call_end(void*) noexcept;
+// Private application modules borrow addresses, while Core owns their scratch
+// as ordinary UInt8 Tensors. The caller must drain its producer queue before
+// releasing the opaque owner. A failed allocation publishes neither output.
+LFS_CORE_API int hip_tensor_scratch_allocate(void*, int device, uint64_t producer_queue, uint64_t bytes,
+                                           uint64_t* address, void** owner, LfsHipError*) noexcept;
+LFS_CORE_API void hip_tensor_scratch_release(void*, void* owner) noexcept;
 
 // Native Tensor entry points enqueue under this lock. Application kernels use
 // the same coordinator through the private module's C callbacks.

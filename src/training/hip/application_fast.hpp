@@ -16,7 +16,7 @@ struct LfsHipApplicationFast {
     LfsHipFastForward input{};
     bool live = false, poisoned = false, optimizer_submitted = false;
     LfsHipApplicationFast(int device, hipStream_t queue, uint64_t bytes)
-        : device(device), queue(queue), budget{bytes}, workspace(budget, queue) {}
+        : device(device), queue(queue), budget{bytes,queue}, workspace(budget, queue) {}
 };
 namespace {
     void trace_fast_camera(const LfsHipFastForward& input, hipStream_t queue) {

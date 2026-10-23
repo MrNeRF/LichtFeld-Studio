@@ -45,7 +45,9 @@ public:
             if (symbol<decltype(&lfs_hip_train_abi)>("lfs_hip_train_abi")() != 1)
                 throw std::runtime_error("HIP application training ABI mismatch");
             auto install=symbol<decltype(&lfs_hip_application_dispatch_install)>("lfs_hip_application_dispatch_install");
-            const LfsHipApplicationDispatch hooks{sizeof(LfsHipApplicationDispatch),nullptr,core::internal::hip_external_call_begin,core::internal::hip_external_call_end};
+            const LfsHipApplicationDispatch hooks{sizeof(LfsHipApplicationDispatch),nullptr,
+                core::internal::hip_external_call_begin,core::internal::hip_external_call_end,
+                core::internal::hip_tensor_scratch_allocate,core::internal::hip_tensor_scratch_release};
             LfsHipError error{};
             if(install(&hooks,&error))throw std::runtime_error(std::string("HIP dispatch hooks: ")+error.message);
             const auto utf8=path.u8string();
