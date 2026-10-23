@@ -502,6 +502,135 @@ namespace lfs::core {
         return false;
     }
 
+    namespace collision_detail {
+        ClusterSelection selectCluster(std::span<const CollisionGaussian> source, const CollisionVolume& coarse,
+                                       glm::vec3 requested_seed, float min_contribution, std::stop_token stop,
+                                       CollisionProgress progress) {
+            checkpoint(stop);
+            if (!finite(requested_seed))
+                throw std::invalid_argument("Non-finite cluster seed");
+            positive(min_contribution, "Minimum cluster contribution", true);
+            const auto size = coarse.settings.voxel_size;
+            const auto raw_cell = glm::floor((glm::dvec3(requested_seed) - glm::dvec3(coarse.origin)) / double(size));
+            const auto requested_cell = glm::clamp(raw_cell, glm::dvec3(0), glm::dvec3(coarse.dimensions - 1));
+            auto seed = glm::ivec3(requested_cell);
+            const bool snapped = raw_cell != requested_cell || !coarse.occupied(seed);
+            if (!coarse.occupied(seed)) {
+                const auto requested_cell = seed;
+                double best = std::numeric_limits<double>::max();
+                coarse.forEachSolidBox([&](auto lo, auto hi) {
+                    checkpoint(stop);
+                    const auto p = glm::clamp(requested_cell, lo, hi - 1);
+                    const auto delta = glm::dvec3(p) - glm::dvec3(requested_cell);
+                    const auto distance = glm::dot(delta, delta);
+                    if (distance < best) {
+                        best = distance;
+                        seed = p;
+                    }
+                });
+                if (best == std::numeric_limits<double>::max())
+                    throw std::runtime_error("Cluster opacity threshold produced no solid voxels");
+            }
+            // Use a compact coarse tree rather than a dense
+            // world grid. Flood visits face-connected adaptive leaves only.
+            auto tree = volumeTree(coarse, stop).flood(std::span(&seed, 1), true);
+            ClusterSelection result;
+            result.resolved_seed = snapped ? coarse.origin + (glm::vec3(seed) + 0.5f) * size : requested_seed;
+            tree.leaves([&](const Leaf& leaf) {
+                if (leaf.solid) {
+                    const auto d = glm::min(leaf.max(), tree.dimensions) - leaf.min;
+                    result.occupied_voxels += uint64_t(d.x) * d.y * d.z;
+                }
+            });
+            result.indices.reserve(source.size());
+            uint64_t work = 0;
+            for (size_t i = 0; i < source.size(); ++i) {
+                if ((i & 4095) == 0) {
+                    checkpoint(stop);
+                    if (progress)
+                        progress(std::format("Clustering splats: {}/{}", i, source.size()));
+                }
+                const auto& g = source[i];
+                // Upstream's fast path also preserves low-opacity and sub-voxel
+                // detail whose centers lie in the selected component.
+                const auto center_cell = glm::floor((glm::dvec3(g.center) - glm::dvec3(coarse.origin)) / double(size));
+                if (glm::all(glm::greaterThanEqual(center_cell, glm::dvec3(0))) &&
+                    glm::all(glm::lessThan(center_cell, glm::dvec3(tree.dimensions))) && tree.occupied(glm::ivec3(center_cell))) {
+                    result.indices.push_back(uint32_t(i));
+                    continue;
+                }
+                if (g.opacity < min_contribution || std::abs(glm::determinant(g.axes)) < 1e-20f)
+                    continue;
+                glm::dvec3 extent;
+                for (int a = 0; a < 3; ++a)
+                    extent[a] = 3 * glm::length(glm::dvec3(g.axes[0][a], g.axes[1][a], g.axes[2][a]));
+                const double aabb_voxels = std::max({extent.x, extent.y, extent.z}) > size ? (2 * extent.x / size) * (2 * extent.y / size) * (2 * extent.z / size) : 0;
+                const double required = std::max(1.0, std::ceil(aabb_voxels * 0.1));
+                if (required > double(result.occupied_voxels))
+                    continue;
+                const auto min = glm::clamp(glm::floor((glm::dvec3(g.center) - extent - glm::dvec3(coarse.origin)) / double(size)),
+                                            glm::dvec3(0), glm::dvec3(tree.dimensions));
+                const auto max = glm::clamp(glm::floor((glm::dvec3(g.center) + extent - glm::dvec3(coarse.origin)) / double(size)) + 1.0,
+                                            glm::dvec3(0), glm::dvec3(tree.dimensions));
+                const auto lo = glm::ivec3(min), hi = glm::ivec3(max);
+                const auto inverse = glm::inverse(g.axes);
+                const auto inv = glm::dmat3(inverse);
+                uint64_t hits = 0;
+                const auto needed = uint64_t(required);
+                const auto limit = min_contribution == 0 ? std::numeric_limits<double>::infinity() : -2 * std::log(double(min_contribution) / g.opacity);
+                // Query occupied tree regions directly. Empty world volume is
+                // never scanned; uniform qualifying regions count in one step.
+                auto visit = [&](auto&& self, uint32_t index, glm::ivec3 origin, int n) -> void {
+                    if (hits >= needed || tree.nodes[index] == 0)
+                        return;
+                    if ((++work & 4095) == 0)
+                        checkpoint(stop);
+                    if (work > max_work)
+                        throw std::runtime_error("Cluster query work budget exceeded");
+                    const auto a = glm::max(lo, origin), b = glm::min(hi, origin + n);
+                    if (glm::any(glm::greaterThanEqual(a, b)))
+                        return;
+                    const auto middle = glm::dvec3(coarse.origin) + (glm::dvec3(a) + glm::dvec3(b)) * (double(size) / 2);
+                    const auto half = glm::dvec3(b - a - 1) * (double(size) / 2);
+                    const auto error = (glm::abs(middle) + glm::abs(glm::dvec3(coarse.origin)) + glm::abs(glm::dvec3(g.center)) + 1.0) *
+                                       (8 * double(std::numeric_limits<float>::epsilon()));
+                    const auto q = inv * (middle - glm::dvec3(g.center));
+                    const auto h = half + error;
+                    const auto qr = glm::abs(inv[0]) * h.x + glm::abs(inv[1]) * h.y + glm::abs(inv[2]) * h.z;
+                    const auto near = glm::max(glm::abs(q) - qr, glm::dvec3(0));
+                    if (glm::dot(near, near) > limit)
+                        return;
+                    const auto value = tree.nodes[index];
+                    const auto far = glm::abs(q) + qr;
+                    if (value == 1 && glm::dot(far, far) < limit) {
+                        const auto d = b - a;
+                        hits += std::min(needed - hits, uint64_t(d.x) * d.y * d.z);
+                        return;
+                    }
+                    if (n == 1) {
+                        const auto point = coarse.origin + (glm::vec3(origin) + 0.5f) * size;
+                        const auto local = inverse * (point - g.center);
+                        if (g.opacity * std::exp(-0.5f * glm::dot(local, local)) >= min_contribution)
+                            ++hits;
+                        return;
+                    }
+                    const auto half_size = n / 2;
+                    for (int child = 0; child < 8 && hits < needed; ++child)
+                        self(self, value == 1 ? index : value - 2 + child,
+                             origin + glm::ivec3(child & 1, (child >> 1) & 1, child >> 2) * half_size, half_size);
+                };
+                visit(visit, 0, {}, tree.size);
+                if (hits >= needed)
+                    result.indices.push_back(uint32_t(i));
+            }
+            if (result.indices.empty())
+                throw std::runtime_error("Cluster seed/contribution threshold retained no Gaussians");
+            if (progress)
+                progress(std::format("Clustering splats: {}/{}", source.size(), source.size()));
+            return result;
+        }
+    } // namespace collision_detail
+
     CollisionVolume generateCollision(std::span<const CollisionGaussian> gaussians, CollisionSettings s,
                                       std::stop_token stop, CollisionProgress progress) {
         s.validate();
@@ -511,65 +640,37 @@ namespace lfs::core {
             throw std::runtime_error("Collision source exceeds 10 million Gaussians");
         auto report = [&](const char* text) { checkpoint(stop); if (progress) progress(text); };
         std::vector<CollisionGaussian> filtered;
+        std::string cluster_note;
         if (s.cluster) {
             report("Clustering Gaussians");
             auto coarse_settings = s;
             coarse_settings.voxel_size = s.cluster_resolution;
             coarse_settings.opacity = s.cluster_opacity;
-            auto coarse = collision_detail::voxelizeSparse(gaussians, coarse_settings, stop);
-            auto seed = glm::clamp(coarse.cell(s.seed), glm::ivec3(0), coarse.dimensions - 1);
-            if (!coarse.occupied(seed)) {
-                const auto requested_seed = seed;
-                float best = std::numeric_limits<float>::max();
-                bool found = false;
-                coarse.forEachSolidBox([&](auto lo, auto hi) {
-                    checkpoint(stop);
-                    auto p = glm::clamp(requested_seed, lo, hi - 1);
-                    auto delta = glm::vec3(p - requested_seed);
-                    float distance = glm::dot(delta, delta);
-                    if (coarse.occupied(p) && distance < best) {
-                        best = distance;
-                        seed = p;
-                        found = true;
-                    }
-                });
-                if (!found)
-                    throw std::runtime_error("Cluster opacity threshold produced no solid voxels");
+            auto coarse = collision_detail::voxelizeSparse(gaussians, coarse_settings, stop, [&](std::string text) {
+                if (progress)
+                    progress("Clustering coarse " + text);
+            });
+            report("Clustering connected component");
+            const auto selection = collision_detail::selectCluster(gaussians, coarse, s.seed, s.cluster_min_contribution, stop, progress);
+            cluster_note = std::format("Cluster filter kept {} / {} splats.", selection.indices.size(), gaussians.size());
+            const float seed_offset = glm::distance(selection.resolved_seed, s.seed);
+            if (seed_offset > 0)
+                cluster_note += std::format(" Seed snapped {:.3g} scene units to an occupied region; move the seed if the wrong region is selected.", seed_offset);
+            if (progress)
+                progress("Clustering complete: " + cluster_note);
+            if (selection.indices.size() != gaussians.size()) {
+                filtered.reserve(selection.indices.size());
+                for (auto i : selection.indices)
+                    filtered.push_back(gaussians[i]);
+                gaussians = filtered;
             }
-            auto region = collision_detail::volumeTree(coarse, stop).flood(std::span(&seed, 1), true);
-            uint64_t work = 0;
-            for (const auto& g : gaussians) {
-                checkpoint(stop);
-                if (g.opacity < s.cluster_min_contribution || std::abs(glm::determinant(g.axes)) < 1e-20f)
-                    continue;
-                auto inv = glm::inverse(g.axes);
-                glm::vec3 extent;
-                for (int a = 0; a < 3; ++a)
-                    extent[a] = 3 * glm::length(glm::vec3(g.axes[0][a], g.axes[1][a], g.axes[2][a]));
-                auto lo = glm::max(coarse.cell(g.center - extent), glm::ivec3(0));
-                auto hi = glm::min(coarse.cell(g.center + extent), coarse.dimensions - 1);
-                bool keep = false;
-                for (int z = lo.z; z <= hi.z && !keep; ++z)
-                    for (int y = lo.y; y <= hi.y && !keep; ++y)
-                        for (int x = lo.x; x <= hi.x && !keep; ++x) {
-                            if (++work > max_work)
-                                throw std::runtime_error("Cluster work limit reached");
-                            glm::ivec3 p(x, y, z);
-                            if (!region.occupied(p))
-                                continue;
-                            auto q = inv * (coarse.origin + (glm::vec3(p) + 0.5f) * s.cluster_resolution - g.center);
-                            keep = g.opacity * std::exp(-0.5f * glm::dot(q, q)) >= s.cluster_min_contribution;
-                        }
-                if (keep)
-                    filtered.push_back(g);
-            }
-            if (filtered.empty())
-                throw std::runtime_error("Cluster seed/contribution threshold retained no Gaussians");
-            gaussians = filtered;
         }
         report("Voxelizing rotated Gaussian ellipsoids");
         auto grid = collision_detail::voxelizeSparse(gaussians, s, stop, progress);
-        return processCollisionVolume(std::move(grid), stop, std::move(progress));
+        grid = processCollisionVolume(std::move(grid), stop, std::move(progress));
+        if (!cluster_note.empty())
+            grid.warning = cluster_note + (grid.warning.empty() ? "" : " " + grid.warning);
+        return grid;
     }
     CollisionVolume processCollisionVolume(CollisionVolume grid, std::stop_token stop, CollisionProgress progress) {
         if (!grid.tree.empty())

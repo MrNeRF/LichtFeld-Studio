@@ -5,6 +5,15 @@
 #include "core/collision.hpp"
 
 namespace lfs::core::collision_detail {
+    struct ClusterSelection {
+        std::vector<uint32_t> indices;
+        glm::vec3 resolved_seed;
+        uint64_t occupied_voxels = 0;
+    };
+    ClusterSelection selectCluster(std::span<const CollisionGaussian> source, const CollisionVolume& coarse,
+                                   glm::vec3 seed, float min_contribution, std::stop_token stop = {},
+                                   CollisionProgress progress = {});
+
     CollisionVolume voxelizeSparse(std::span<const CollisionGaussian> source, CollisionSettings settings,
                                    std::stop_token stop, CollisionProgress progress = {}, unsigned parallelism = 0);
     CollisionVolume processSparse(CollisionVolume volume, std::stop_token stop, CollisionProgress progress);

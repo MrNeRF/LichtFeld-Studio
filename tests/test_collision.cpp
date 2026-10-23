@@ -655,3 +655,83 @@ TEST(CollisionVoxelization, SurfaceDefaultDoesNotExtrudeLowCanopyIntoGround) {
     // Even the seed-height guard cannot recognize a low canopy as non-ground.
     EXPECT_TRUE(filled.occupied(filled.cell({1, 0, 0})));
 }
+
+TEST(CollisionCluster, CenterShortcutPreservesThinLowOpacityDetail) {
+    auto coarse = grid({12, 12, 12});
+    box(coarse, {4, 4, 4}, {4, 4, 4});
+    const std::array source{CollisionGaussian{{0.451f, 0.451f, 0.451f}, glm::mat3(0.0001f), 0.001f},
+                            CollisionGaussian{{0.9f, 0.9f, 0.9f}, glm::mat3(0.01f), 1}};
+    const auto selected = collision_detail::selectCluster(source, coarse, source[0].center, 0.1f);
+    EXPECT_EQ(selected.indices, (std::vector<uint32_t>{0}));
+    EXPECT_EQ(selected.occupied_voxels, 1u);
+}
+TEST(CollisionCluster, RejectsElongatedTailAndRetainsAttachedSmallSupports) {
+    auto coarse = grid({80, 20, 20});
+    box(coarse, {20, 5, 5}, {22, 15, 15});
+    const std::array source{CollisionGaussian{{2.05f, 0.95f, 0.95f}, glm::mat3(0.001f), 0.01f},
+                            CollisionGaussian{{4, 1, 1}, glm::mat3(1, 0, 0, 0, .1f, 0, 0, 0, .1f), 1},
+                            CollisionGaussian{{1.999f, 0.95f, 0.95f}, glm::mat3(.07f, 0, 0, 0, .05f, 0, 0, 0, .05f), 1}};
+    const auto selected = collision_detail::selectCluster(source, coarse, source[0].center, 0.1f);
+    EXPECT_EQ(selected.indices, (std::vector<uint32_t>{0, 2}));
+}
+TEST(CollisionCluster, SixConnectedFloodDoesNotJoinCornerTouchingComponents) {
+    auto coarse = grid();
+    coarse.solid[coarse.index({2, 2, 2})] = 1;
+    coarse.solid[coarse.index({3, 3, 3})] = 1;
+    const std::array source{CollisionGaussian{{.25f, .25f, .25f}, glm::mat3(.001f), 1},
+                            CollisionGaussian{{.35f, .35f, .35f}, glm::mat3(.001f), 1}};
+    EXPECT_EQ(collision_detail::selectCluster(source, coarse, source[0].center, .1f).indices,
+              (std::vector<uint32_t>{0}));
+    // Seed conversion is bounded before converting finite far coordinates to integers.
+    EXPECT_EQ(collision_detail::selectCluster(source, coarse, glm::vec3(1e30f), .1f).indices,
+              (std::vector<uint32_t>{1}));
+}
+TEST(CollisionCluster, HierarchicalQueriesMatchDirectOccupiedCellReference) {
+    auto coarse = grid({24, 16, 24}, 0.2f);
+    box(coarse, {4, 4, 4}, {18, 10, 18});
+    std::mt19937 rng(6172);
+    std::uniform_real_distribution<float> position(-1, 6), scale(.01f, 2), opacity(0, 1);
+    std::vector<CollisionGaussian> source;
+    source.push_back({{2, 1.2f, 2}, glm::mat3(.01f), .001f});
+    for (int i = 0; i < 250; ++i) {
+        auto axes = glm::mat3(glm::rotate(glm::mat4(1), position(rng), glm::normalize(glm::vec3(1, 2, 3))));
+        for (int a = 0; a < 3; ++a)
+            axes[a] *= scale(rng);
+        source.push_back({{position(rng), position(rng), position(rng)}, axes, opacity(rng)});
+    }
+    for (const float minimum : {0.f, .1f, .8f, 2.f}) {
+        std::vector<uint32_t> expected;
+        for (size_t i = 0; i < source.size(); ++i) {
+            const auto& g = source[i];
+            if (coarse.occupied(coarse.cell(g.center))) {
+                expected.push_back(uint32_t(i));
+                continue;
+            }
+            if (g.opacity < minimum)
+                continue;
+            glm::dvec3 extent;
+            for (int a = 0; a < 3; ++a)
+                extent[a] = 3 * glm::length(glm::dvec3(g.axes[0][a], g.axes[1][a], g.axes[2][a]));
+            const auto min = glm::ivec3(glm::floor((glm::dvec3(g.center) - extent) / double(coarse.settings.voxel_size)));
+            const auto max = glm::ivec3(glm::floor((glm::dvec3(g.center) + extent) / double(coarse.settings.voxel_size)));
+            const auto voxels = (2 * extent.x / coarse.settings.voxel_size) * (2 * extent.y / coarse.settings.voxel_size) * (2 * extent.z / coarse.settings.voxel_size);
+            const auto needed = std::max({extent.x, extent.y, extent.z}) > coarse.settings.voxel_size ? std::max(1.0, std::ceil(voxels * .1)) : 1.0;
+            uint64_t hits = 0;
+            for (int z = 0; z < coarse.dimensions.z; ++z)
+                for (int y = 0; y < coarse.dimensions.y; ++y)
+                    for (int x = 0; x < coarse.dimensions.x; ++x) {
+                        const glm::ivec3 p(x, y, z);
+                        if (!coarse.occupied(p) || glm::any(glm::lessThan(p, min)) || glm::any(glm::greaterThan(p, max)))
+                            continue;
+                        const auto q = glm::inverse(g.axes) * (coarse.origin + (glm::vec3(p) + .5f) * coarse.settings.voxel_size - g.center);
+                        hits += g.opacity * std::exp(-.5f * glm::dot(q, q)) >= minimum;
+                    }
+            if (hits >= needed)
+                expected.push_back(uint32_t(i));
+        }
+        EXPECT_EQ(collision_detail::selectCluster(source, coarse, {2, 1.2f, 2}, minimum).indices, expected) << minimum;
+    }
+    std::stop_source stop;
+    stop.request_stop();
+    EXPECT_THROW((void)collision_detail::selectCluster(source, coarse, {2, 1.2f, 2}, .1f, stop.get_token()), std::runtime_error);
+}
