@@ -230,6 +230,15 @@ namespace lfs::io::cuda {
 
         constexpr float scale = sizeof(T) == sizeof(float) ? 1.0f : sizeof(T) == 2 ? NORMALIZE_SCALE_U16
                                                                                    : NORMALIZE_SCALE_U8;
+        // All-zero samples decode to (-1,-1,-1), never a unit normal: the
+        // "no normal" fill some exporters write (GeosunPre). Emit the zero vector.
+        if (input[idx * 3] == T(0) && input[idx * 3 + 1] == T(0) && input[idx * 3 + 2] == T(0)) {
+#pragma unroll
+            for (int c = 0; c < 3; ++c) {
+                output[c * pixel_count + idx] = 0.0f;
+            }
+            return;
+        }
         float n[3];
 #pragma unroll
         for (int c = 0; c < 3; ++c) {

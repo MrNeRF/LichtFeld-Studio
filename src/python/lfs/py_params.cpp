@@ -1303,7 +1303,7 @@ namespace lfs::python {
                 "depth_loss_mode",
                 [](PyOptimizationParams& self) { return self.params().depth_loss_mode; },
                 [](PyOptimizationParams&, const std::string& v) { modify_params([v](auto& p) { p.depth_loss_mode = v; }); },
-                "Depth prior convention: 'ssi' (auto-detect), 'ssi-disparity', or 'ssi-depth'")
+                "Depth prior convention: 'ssi' (auto-detect), 'ssi-disparity', 'ssi-depth', or 'metric' (absolute depth, 16-bit in mm)")
             .def_prop_rw(
                 "depth_auto_generate",
                 [](PyOptimizationParams& self) { return self.params().depth_auto_generate; },

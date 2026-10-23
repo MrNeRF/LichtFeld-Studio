@@ -251,6 +251,7 @@
           <option value="ssi" data-tooltip="training.tooltip.opt.depth_loss_mode.ssi">{{label_depth_loss_ssi}}</option>
           <option value="ssi-disparity" data-tooltip="training.tooltip.opt.depth_loss_mode.ssi_disparity">{{label_depth_loss_ssi_disparity}}</option>
           <option value="ssi-depth" data-tooltip="training.tooltip.opt.depth_loss_mode.ssi_depth">{{label_depth_loss_ssi_depth}}</option>
+          <option value="metric" data-tooltip="training.tooltip.opt.depth_loss_mode.metric">{{label_depth_loss_metric}}</option>
         </select>
       </div>
       <div class="setting-row" data-for="row : pv_basic_depth_weight_rows" data-if="dep_depth_loss &amp;&amp; row.kind == 'checkbox'"

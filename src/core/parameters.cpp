@@ -1040,8 +1040,9 @@ namespace lfs::core {
             }
             if (ppisp_freeze_from_sidecar && !use_ppisp)
                 return "PPISP sidecar freeze requires PPISP enabled";
-            if (depth_loss_mode != "ssi" && depth_loss_mode != "ssi-disparity" && depth_loss_mode != "ssi-depth")
-                return "depth_loss_mode must be 'ssi', 'ssi-disparity', or 'ssi-depth'";
+            if (depth_loss_mode != "ssi" && depth_loss_mode != "ssi-disparity" && depth_loss_mode != "ssi-depth" &&
+                depth_loss_mode != "metric")
+                return "depth_loss_mode must be 'ssi', 'ssi-disparity', 'ssi-depth', or 'metric'";
             if (normal_loss_space != NormalLossSpace::Auto &&
                 normal_loss_space != NormalLossSpace::CameraOpenCV &&
                 normal_loss_space != NormalLossSpace::CameraOpenGL &&

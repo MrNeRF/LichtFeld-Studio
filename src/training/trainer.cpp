@@ -44,6 +44,7 @@
 #include "io/scene_chapter_adapter.hpp"
 #include "kernels/densification_kernels.hpp"
 #include "kernels/image_kernels.hpp"
+#include "las_prior_sidecar.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
@@ -468,6 +469,10 @@ namespace lfs::training {
         }
 
         constexpr float kDepthLossFinalScale = 0.02f;
+        // Metric priors (LiDAR) stay trustworthy late in training, so they decay far less.
+        constexpr float kMetricDepthLossFinalScale = 0.25f;
+        // Integer metric priors are millimetres (the common 16-bit PNG convention); float priors are metres.
+        constexpr float kMetricDepthIntegerUnitMetres = 0.001f;
         constexpr float kDepthLossGradientTermWeight = 1.0f;
 
         [[nodiscard]] kernels::DepthPriorType depth_prior_from_mode(const std::string_view mode) {
@@ -481,7 +486,21 @@ namespace lfs::training {
         }
 
         [[nodiscard]] bool depth_prior_mode_supported(const std::string_view mode) {
-            return mode == "ssi" || mode == "ssi-disparity" || mode == "ssi-depth";
+            return mode == "ssi" || mode == "ssi-disparity" || mode == "ssi-depth" || mode == "metric";
+        }
+
+        [[nodiscard]] bool depth_prior_mode_is_metric(const std::string_view mode) {
+            return mode == "metric";
+        }
+
+        [[nodiscard]] float depth_loss_final_scale(const std::string_view mode) {
+            return depth_prior_mode_is_metric(mode) ? kMetricDepthLossFinalScale : kDepthLossFinalScale;
+        }
+
+        // Prior samples decode to [0,1] for integer files, so one stored unit is
+        // quantization_step of a decoded value.
+        [[nodiscard]] float metric_depth_metres_per_decoded_unit(const float quantization_step) {
+            return quantization_step > 0.0f ? kMetricDepthIntegerUnitMetres / quantization_step : 1.0f;
         }
 
         [[nodiscard]] const char* depth_prior_name(const kernels::DepthPriorType prior) {
@@ -2456,6 +2475,30 @@ namespace lfs::training {
 
         depth_anchors_.clear();
         depth_anchor_fit_attempted_ = false;
+        if (depth_prior_mode_is_metric(params_.optimization.depth_loss_mode)) {
+            size_t eight_bit = 0;
+            for (const auto& cam : train_dataset_->get_cameras()) {
+                if (!cam || !cam->has_depth()) {
+                    continue;
+                }
+                const float step = cam->depth_prior_quantization_step();
+                if (step > 1.0f / 1000.0f) {
+                    ++eight_bit;
+                }
+                depth_anchors_[cam->uid()] =
+                    lfs::training::kernels::metric_depth_anchor(metric_depth_metres_per_decoded_unit(step));
+            }
+            depth_anchor_fit_attempted_ = true;
+            LOG_INFO("Depth anchors: metric priors for {} cameras (integer maps in mm, float maps in m)",
+                     depth_anchors_.size());
+            if (eight_bit > 0) {
+                LOG_WARN("Metric depth: {} depth maps are 8-bit and cannot hold millimetre depth; "
+                         "write 16-bit PNG (mm) or float TIFF/EXR (m)",
+                         eight_bit);
+            }
+            nvtxRangePop();
+            return;
+        }
         const auto configured_depth_prior = depth_prior_from_mode(params_.optimization.depth_loss_mode);
         resolved_depth_prior_ = configured_depth_prior;
         auto& model = strategy_->get_model();
@@ -7395,7 +7438,7 @@ namespace lfs::training {
                                         std::min(static_cast<float>(iter) / static_cast<float>(total_iterations), 1.0f);
                                     const float depth_weight_now =
                                         step_params.depth_loss_weight *
-                                        std::pow(kDepthLossFinalScale, depth_progress);
+                                        std::pow(depth_loss_final_scale(step_params.depth_loss_mode), depth_progress);
 
                                     if (!depth_loss_scalar_.is_valid()) {
                                         depth_loss_scalar_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
@@ -8901,6 +8944,15 @@ namespace lfs::training {
             }
 
             const bool alpha_available = scene_ && scene_->imagesHaveAlpha();
+            if (const auto las_priors = read_las_prior_sidecar(params_.dataset.data_path)) {
+                for (const auto& change : apply_las_prior_defaults(params_.optimization, *las_priors)) {
+                    LOG_INFO("LiDAR priors (supervision.json): {}", change);
+                }
+                if (las_priors->ray_distance && !params_.optimization.gut) {
+                    LOG_WARN("LiDAR depth maps hold ray distance, which only the GUT rasterizer renders for "
+                             "fisheye cameras; enable --gut or depth supervision will be biased off-axis");
+                }
+            }
             PipelinedAuxiliaryImageConfig aux_pipeline_config;
             if (params_.optimization.use_depth_loss &&
                 !depth_prior_mode_supported(params_.optimization.depth_loss_mode)) {
@@ -8928,9 +8980,11 @@ namespace lfs::training {
                     }
                 }
                 LOG_INFO("Depth loss enabled (mode={}, weight={}, exponential decay to {:.0f}% by end of training)",
-                         depth_prior_name(depth_prior_from_mode(params_.optimization.depth_loss_mode)),
+                         depth_prior_mode_is_metric(params_.optimization.depth_loss_mode)
+                             ? "metric"
+                             : depth_prior_name(depth_prior_from_mode(params_.optimization.depth_loss_mode)),
                          params_.optimization.depth_loss_weight,
-                         kDepthLossFinalScale * 100.0f);
+                         depth_loss_final_scale(params_.optimization.depth_loss_mode) * 100.0f);
                 if (cameras_with_depth == 0) {
                     LOG_WARN("Depth loss is enabled but none of the {} training cameras has a depth map — "
                              "the depth loss will be inactive. Depth files go in <dataset>/depths (or depth/) "

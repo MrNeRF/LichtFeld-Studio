@@ -316,7 +316,7 @@ namespace lfs::core {
             // Depth supervision
             bool use_depth_loss = false;         // Use dataset depth maps when available
             float depth_loss_weight = 2.0f;      // Depth supervision weight (decays over training)
-            std::string depth_loss_mode = "ssi"; // ssi (auto prior), ssi-disparity, or ssi-depth
+            std::string depth_loss_mode = "ssi"; // ssi (auto prior), ssi-disparity, ssi-depth, or metric
             bool depth_auto_generate = true;     // Generate missing/mismatched maps from images/ with MoGe-2
 
             // Normal supervision

@@ -127,6 +127,7 @@ set(TRAINING_NEW_SOURCES
         trainer.cpp
         trainer_popspa.cpp
         normal_auto_generate.cpp
+        las_prior_sidecar.cpp
         vram_ledger.cpp
         perf_bench.cpp
     training_setup.cpp

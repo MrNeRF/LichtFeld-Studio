@@ -386,7 +386,7 @@ namespace lfs::core::param {
             .all_strategies()
             .string_prop(&OptimizationParameters::depth_loss_mode,
                          "depth_loss_mode", "Depth Loss Mode", d.depth_loss_mode,
-                         "Depth prior convention: ssi (auto-detect), ssi-disparity, or ssi-depth")
+                         "Depth prior convention: ssi (auto-detect), ssi-disparity, ssi-depth, or metric (absolute depth, 16-bit in mm)")
             .all_strategies()
             .bool_prop(&OptimizationParameters::depth_auto_generate,
                        "depth_auto_generate", "Auto-generate Depth", d.depth_auto_generate,
