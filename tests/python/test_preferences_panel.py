@@ -1588,8 +1588,9 @@ def test_default_app_settings_preserve_registration_step(preferences_panel_modul
     assert calls == ["register", "open"]
 
 
-def test_marketplace_preferences_apply_and_reset_independently(preferences_panel_module):
+def test_marketplace_preferences_apply_and_reset_independently(preferences_panel_module, monkeypatch):
     module, state = preferences_panel_module
+    monkeypatch.setattr(module.shutil, "which", lambda _: "/usr/bin/git")
     panel = module.PreferencesPanel()
     panel._set_marketplace_preference("view", "card")
     panel._set_marketplace_preference("git_checkout", True)

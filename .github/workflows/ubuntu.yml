@@ -217,6 +217,9 @@ jobs:
           cmake --build build --target viewer_backend_contracts -j $(nproc)
           ctest --test-dir build --output-on-failure --no-tests=error -R '^ViewerBackendSelectionContracts$'
 
+      - name: Run shared SDK-independent GPU policy contracts
+        run: python3 tools/run_gpu_policy_cpu.py --application-build build
+
       - name: Run scene reconstruction CPU tests
         if: matrix.build_type == 'Release'
         run: |

@@ -236,6 +236,25 @@ Run it once on the same physical adapter and once with a distinct Vulkan adapter
 when available. Set `LFS_VK_VALIDATION=1` before startup to request validation layers;
 check that the layer is available and inspect errors as well as the exit status.
 
+### Shared policies on CPU-only runners
+
+Backend selection and restart behavior also run independently of HIP in
+`tests/gpu_policy`. The existing
+Windows, Linux and macOS build workflows run this SDK-independent suite using
+their configured compiler and GLM headers, with an isolated pytest environment.
+This covers five configurations: Windows Release/Debug, Linux Release/Debug,
+and macOS Release. It compiles the shared policy both with
+and without HIP declarations and runs synthetic CUDA/Vulkan/Metal/HIP device
+scenarios, dependency-exclusion policy, and the common Python preferences,
+rendering and keymap tests. The four manual HIP workflows include this same suite;
+their architecture, native identity, synchronization and telemetry contracts stay
+HIP-specific. Their manual triggers are unchanged.
+
+The Python cases use only pytest and source modules; the native extension is not
+loaded. These tests carry CPU labels and complement the existing application and
+backend-native suites. They do not replace real rendering, allocation or training
+checks, and their success must not be described as hardware validation.
+
 ### Secondary viewer consumers and memory telemetry
 
 Point-cloud rendering prepares Tensor uploads/conversions before acquiring the

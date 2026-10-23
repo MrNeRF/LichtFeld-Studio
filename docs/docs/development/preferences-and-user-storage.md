@@ -378,3 +378,15 @@ The Python adapter uses `ASSET_GALLERY_PRIMARY`, `ASSET_GALLERY_COPY_LINK`, and
 explicitly cleared bindings. Older native modules use the scoped defaults, with
 existing native collisions taking precedence. Preferences → Input → Key Bindings
 shows the defaults and exposes the native action rows when those actions exist.
+
+
+## CPU-only GPU preference contracts
+
+Shared backend/device selection, stable identity and restart-indicator policies
+are tested by the standalone [GPU policy CPU suite](hip-backend#shared-policies-on-cpu-only-runners).
+It compiles both conditional HIP layouts without linking any GPU runtime. The
+existing Windows/Linux/macOS build workflows also exercise the Python preference,
+rendering and keymap contracts with synthetic native-module stubs. These checks
+also run inside the four manual HIP build jobs. GPU execution remains in the
+backend-specific suites; a passing synthetic policy test does not establish
+native device availability or rendering/training correctness.

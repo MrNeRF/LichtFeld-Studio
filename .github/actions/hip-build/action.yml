@@ -23,7 +23,7 @@ runs:
         echo 'CXX=g++-14' >> "$GITHUB_ENV"
     - name: Install build tools
       shell: bash
-      run: python -m pip install cmake==4.4.0 ninja
+      run: python -m pip install cmake==4.4.0 ninja "pytest>=7,<10"
     - name: Cache ROCm development SDK
       id: sdk
       uses: actions/cache@v6

@@ -20,7 +20,7 @@ foreach(target hip_external_access_cpu hip_policy_cpu)
     add_test(NAME ${target} COMMAND ${target})
     set_tests_properties(${target} PROPERTIES LABELS "hip;cpu" TIMEOUT 30)
 endforeach()
-foreach(policy hip_architectures hip_offload_compression windows_system_library_exclusions)
+foreach(policy hip_architectures hip_offload_compression)
     add_test(NAME ${policy} COMMAND "${CMAKE_COMMAND}" "-DTEST_SDK=${TEST_SDK}"
         -P "${LFS_ROOT}/tests/cmake/${policy}.cmake")
     set_tests_properties(${policy} PROPERTIES LABELS "hip;cpu" TIMEOUT 30)
@@ -31,3 +31,5 @@ set_tests_properties(hip_reject_invalid_architecture PROPERTIES LABELS "hip;cpu"
 add_test(NAME hip_generators_cpu COMMAND "${Python3_EXECUTABLE}" -m unittest discover
     -s "${LFS_ROOT}/tools" -p test_hip_generators.py)
 set_tests_properties(hip_generators_cpu PROPERTIES LABELS "hip;cpu" TIMEOUT 120)
+
+add_subdirectory("${LFS_ROOT}/tests/gpu_policy" shared-gpu-policy)

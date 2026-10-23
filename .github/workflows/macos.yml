@@ -161,6 +161,10 @@ jobs:
             -E '^(lichtfeld_tests|VulkanDepthContracts)$' \
             --no-tests=error --output-on-failure
 
+      - name: Run shared SDK-independent GPU policy contracts
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: python3 tools/run_gpu_policy_cpu.py --application-build build-macos-release
+
       - name: Run shared Vulkan viewer contracts
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
