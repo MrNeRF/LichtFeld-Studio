@@ -138,11 +138,17 @@ jobs:
           restore-keys: vcpkg-tool-${{ runner.os }}-
 
       - name: Setup vcpkg
-        if: steps.cache-vcpkg-tool.outputs.cache-hit != 'true'
+        shell: pwsh
         run: |
-          cd ..
-          git clone https://github.com/microsoft/vcpkg.git
-          .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          # A restore-key match also supplies a checkout, despite cache-hit=false.
+          if (-not (Test-Path -LiteralPath "$env:VCPKG_ROOT/.git" -PathType Container)) {
+            git clone https://github.com/microsoft/vcpkg.git "$env:VCPKG_ROOT"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          if (-not (Test-Path -LiteralPath "$env:VCPKG_ROOT/vcpkg.exe" -PathType Leaf)) {
+            & "$env:VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
       - name: Cache vcpkg_installed
         uses: actions/cache@v6

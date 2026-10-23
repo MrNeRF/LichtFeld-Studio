@@ -105,11 +105,14 @@ jobs:
           restore-keys: vcpkg-tool-${{ runner.os }}-
 
       - name: Setup vcpkg
-        if: steps.cache-vcpkg-tool.outputs.cache-hit != 'true'
         run: |
-          cd ..
-          git clone https://github.com/microsoft/vcpkg.git
-          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+          # A restore-key match also supplies a checkout, despite cache-hit=false.
+          if [ ! -d "$VCPKG_ROOT/.git" ]; then
+            git clone https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          fi
+          if [ ! -x "$VCPKG_ROOT/vcpkg" ]; then
+            "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          fi
 
       - name: Configure vcpkg triplet
         run: |
