@@ -15,8 +15,8 @@ using namespace lfs::core;
 TEST(CollisionJobStatus, NamesCpuGpuAndFilterWorkWithoutParsingFailures) {
     using lfs::vis::gui::collisionTaskLabel;
     EXPECT_EQ(collisionTaskLabel("Voxelizing GPU: 0/100"), "Preparing Gaussian bounds on CPU");
-    EXPECT_EQ(collisionTaskLabel("Voxelizing GPU: 30/100"), "Finding potentially occupied regions on GPU");
-    EXPECT_EQ(collisionTaskLabel("Voxelizing GPU: 90/100"), "Evaluating collision cells on GPU");
+    EXPECT_EQ(collisionTaskLabel("Voxelizing GPU: 30/100"), "Evaluating sparse collision regions and cells on GPU");
+    EXPECT_EQ(collisionTaskLabel("Voxelizing GPU: 90/100"), "Evaluating sparse collision regions and cells on GPU");
     EXPECT_EQ(collisionTaskLabel("Voxelizing GPU: 97/100"), "Assembling sparse occupancy on CPU");
     EXPECT_EQ(collisionTaskLabel("Clustering coarse Voxelizing GPU: 0/100"), "Connected-region filter: Preparing Gaussian bounds on CPU");
     EXPECT_EQ(collisionTaskLabel("Voxelizing GPU: unknown"), "Voxelizing GPU: unknown");

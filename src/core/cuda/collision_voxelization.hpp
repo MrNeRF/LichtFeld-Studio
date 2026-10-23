@@ -19,6 +19,9 @@ namespace lfs::core::cuda {
         uint32_t left, right, begin, count;
     };
     struct CollisionBrick {
+        // Low 57 bits: Morton key in 4-cell units. High bits: log2(edge/4)
+        // for a proven uniform solid region (mask == UINT64_MAX).
+        static constexpr uint64_t key_mask = (uint64_t(1) << 57) - 1;
         uint64_t morton, mask;
     };
     std::vector<CollisionBrick> voxelizeCollisionBricks(

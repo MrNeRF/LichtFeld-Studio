@@ -17,13 +17,15 @@ namespace lfs::vis::gui {
             if (std::from_chars(number.data(), number.data() + number.size(), percent).ec == std::errc{}) {
                 if (percent < 15)
                     return "Preparing Gaussian bounds on CPU";
-                if (percent < 75)
-                    return "Finding potentially occupied regions on GPU";
                 if (percent < 97)
-                    return "Evaluating collision cells on GPU";
+                    return "Evaluating sparse collision regions and cells on GPU";
                 return "Assembling sparse occupancy on CPU";
             }
         }
+        if (text == "Clustering source cleanup")
+            return "Finding reconstruction outliers on CPU";
+        if (text.starts_with("Clustering source connectivity: "))
+            return "Connecting observed source cells on CPU: " + std::string(text.substr(32));
         if (text == "Clustering Gaussians")
             return "Preparing the connected-region filter";
         if (text == "Clustering connected component")

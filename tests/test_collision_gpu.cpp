@@ -43,6 +43,15 @@ namespace {
             same(generateCollision(source, s), generateCollision(source, s, {}, {}, voxelizeCollisionGpu));
         }
     }
+    TEST_F(CollisionGpu, UniformInteriorProofMatchesExactCellsAndPartialPadding) {
+        std::vector<CollisionGaussian> source;
+        for (int i = 0; i < 40; ++i)
+            source.push_back({{float(i % 3) * .03f, float(i % 5) * .02f, float(i % 7) * .01f}, glm::mat3(.4f), .2f});
+        CollisionSettings s;
+        s.voxel_size = .05f;
+        s.opacity = .5f;
+        same(generateCollision(source, s), generateCollision(source, s, {}, {}, voxelizeCollisionGpu));
+    }
     TEST_F(CollisionGpu, ThinSheetsAndDistantComponentsKeepCoverage) {
         CollisionSettings s;
         s.voxel_size = .1f;
@@ -86,7 +95,7 @@ namespace {
         const CollisionGaussian g{{0, 0, 0}, glm::mat3(.5f), 1};
         std::stop_source stop;
         EXPECT_THROW((void)voxelizeCollisionGpu(std::span(&g, 1), s, stop.get_token(), [&](const std::string& message) {
-                         if (message == "Voxelizing GPU: 75/100")
+                         if (message.starts_with("Voxelizing GPU: ") && std::stoi(message.substr(16)) > 15 && std::stoi(message.substr(16)) < 97)
                              stop.request_stop();
                      }),
                      std::runtime_error);

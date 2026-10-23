@@ -71,7 +71,7 @@ namespace lfs::core {
         report(.97f);
         // Only compact occupied 4^3 masks return to the host. Sorted prefixes
         // build the canonical Walk/archive tree directly, without per-voxel inserts.
-        std::sort(bricks.begin(), bricks.end(), [](auto a, auto b) { return a.morton < b.morton; });
+        std::sort(bricks.begin(), bricks.end(), [](auto a, auto b) { return (a.morton & cuda::CollisionBrick::key_mask) < (b.morton & cuda::CollisionBrick::key_mask); });
         auto allocate = [&] {
             if (tree.nodes.size() + 8 > CollisionVolume::max_tree_words)
                 throw std::runtime_error("Collision CPU tree budget exceeded");
@@ -107,6 +107,10 @@ namespace lfs::core {
             if (begin == end)
                 return;
             check();
+            if ((bricks[begin].morton >> 57) && (4 << (bricks[begin].morton >> 57)) == uint64_t(n)) {
+                tree.nodes[index] = 1;
+                return;
+            }
             if (n <= 4) {
                 maskTree(maskTree, index, {}, n, bricks[begin].mask);
                 return;

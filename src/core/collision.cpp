@@ -5,9 +5,11 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <format>
 #include <limits>
+#include <numbers>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
@@ -405,22 +407,30 @@ namespace lfs::core {
             collision_detail::Tree expected(dimensions);
             if (!solid.empty() || tree_size != expected.size || tree.size() > collision_detail::Tree::max_nodes)
                 throw std::invalid_argument("Invalid sparse collision volume payload");
-            std::vector<uint8_t> seen(tree.size());
-            size_t visited = 0;
-            std::function<void(uint32_t, int)> visit = [&](uint32_t i, int n) {
-                if (i >= tree.size() || seen[i]++)
-                    throw std::invalid_argument("Invalid sparse collision child reference");
-                ++visited;
+            if ((tree.size() - 1) % 8)
+                throw std::invalid_argument("Invalid sparse collision sibling blocks");
+            // Each canonical eight-child block has exactly one earlier parent.
+            // Forward references rule out cycles, and block levels check depth.
+            // One byte per block replaces one byte per node plus recursive calls.
+            std::vector<uint8_t> levels((tree.size() - 1) / 8);
+            size_t branches = 0;
+            const auto root_level = std::bit_width(unsigned(tree_size));
+            for (size_t i = 0; i < tree.size(); ++i) {
+                const auto level = i ? levels[(i - 1) / 8] : root_level;
+                if (!level)
+                    throw std::invalid_argument("Unreachable sparse collision nodes");
                 if (tree[i] <= 1)
-                    return;
-                auto base = tree[i] - 2;
-                if (n <= 1 || base <= i || uint64_t(base) + 8 > tree.size())
+                    continue;
+                const auto base = tree[i] - 2;
+                if (level <= 1 || base <= i || (base - 1) % 8 || uint64_t(base) + 8 > tree.size())
                     throw std::invalid_argument("Invalid sparse collision branch");
-                for (int a = 0; a < 8; ++a)
-                    visit(base + a, n / 2);
-            };
-            visit(0, tree_size);
-            if (visited != tree.size())
+                auto& child_level = levels[(base - 1) / 8];
+                if (child_level)
+                    throw std::invalid_argument("Invalid sparse collision child reference");
+                child_level = uint8_t(level - 1);
+                ++branches;
+            }
+            if (branches != levels.size())
                 throw std::invalid_argument("Unreachable sparse collision nodes");
             return;
         }

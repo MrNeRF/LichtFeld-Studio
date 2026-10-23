@@ -605,7 +605,18 @@ namespace lfs::core::collision_detail {
 
     CollisionVolume processSparse(CollisionVolume volume, std::stop_token stop, CollisionProgress progress) {
         volume.validate();
-        if (volume.occupiedCount() == 0)
+        auto any_solid = [&](auto&& self, uint32_t i, glm::ivec3 lo, int edge) -> bool {
+            if (volume.tree[i] == 0 || glm::any(glm::greaterThanEqual(lo, volume.dimensions)))
+                return false;
+            if (volume.tree[i] == 1)
+                return true;
+            for (int child = 0; child < 8; ++child)
+                if (self(self, volume.tree[i] - 2 + child,
+                         lo + glm::ivec3(child & 1, (child >> 1) & 1, child >> 2) * (edge / 2), edge / 2))
+                    return true;
+            return false;
+        };
+        if (!any_solid(any_solid, 0, {}, volume.tree_size))
             throw std::runtime_error("No occupied voxels; lower opacity or voxel size");
         auto report = [&](const char* text) { check(stop); if (progress) progress(text); };
         const auto& s = volume.settings;
