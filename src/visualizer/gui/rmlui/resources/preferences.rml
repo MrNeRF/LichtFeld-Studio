@@ -34,7 +34,7 @@
             <option value="cuda" data-if="tensor_cuda_available || tensor_backend == 'cuda'" data-attrif-disabled="!tensor_cuda_available">@tr:preferences.tensor_cuda</option>
             <option value="vulkan" data-if="tensor_vulkan_available || tensor_backend == 'vulkan'" data-attrif-disabled="!tensor_vulkan_available">@tr:preferences.tensor_vulkan</option>
             <option value="metal" data-if="tensor_metal_available || tensor_backend == 'metal'" data-attrif-disabled="!tensor_metal_available">@tr:preferences.tensor_metal</option>
-            <option value="hip" data-if="tensor_hip_compiled" data-attrif-disabled="!tensor_hip_available">ROCm / HIP</option>
+            <option value="hip" data-if="tensor_hip_compiled" data-attrif-disabled="!tensor_hip_available">@tr:preferences.tensor_hip</option>
           </select>
         </div>
         <div class="preferences-row" data-if="gpu_tensor_cuda">

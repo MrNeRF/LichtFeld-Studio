@@ -1139,6 +1139,7 @@
     "tensor_device": "Vulkan device",
     "tensor_device_hint": "Leave empty for automatic selection, or enter a device index or UUID. CUDA rendering must use the CUDA device.",
     "tensor_fp32_half": "Compute half precision in FP32",
+    "tensor_hip": "ROCm / HIP",
     "tensor_metal": "Metal",
     "tensor_no_atomic_float": "Use deterministic float accumulation",
     "tensor_restart": "뷰어 렌더러와 독립적으로 GPU 텐서 계산을 제어합니다. 변경 사항은 LichtFeld Studio를 다시 시작한 후 적용됩니다. 자동은 이 빌드와 GPU에 따라 CUDA, Metal 또는 Vulkan을 선택합니다.",
