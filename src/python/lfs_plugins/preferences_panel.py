@@ -67,6 +67,7 @@ class PreferencesPanel(Panel):
     PROGRESS_BAR_OPTIONS = (
         ("classic", "preferences.progress_bar_classic"),
         ("miner", "preferences.progress_bar_miner"),
+        ("tessle", "preferences.progress_bar_tessle"),
     )
 
     VIEWPORT_CHROME_OPTIONS = (
@@ -464,6 +465,7 @@ class PreferencesPanel(Panel):
 
     def on_unmount(self, doc):
         self._scene_state_binding.close()
+        self._rendering_defaults.unmount()
         self._portal_state_binding.close()
         self._scrub_fields.unmount()
         self._keymap.on_unmount()

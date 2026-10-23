@@ -32,6 +32,10 @@ namespace lfs::vis {
     class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
 } // namespace lfs::vis
 
+namespace lfs::vis::input {
+    class InputBindings;
+} // namespace lfs::vis::input
+
 namespace lfs::vis::gui {
 
     class GlobalContextMenu;
@@ -143,6 +147,13 @@ namespace lfs::vis::gui {
         // of the panel's enabled state (the owner syncs those).
         void setExternallyManaged(std::vector<std::string> editors);
 
+        // The tab step a key press asks for through the sidebar category actions: +1 or -1,
+        // 0 for a held-key repeat the binding does not repeat, nullopt for any other key.
+        // While a text field has focus only Ctrl or Cmd chords without Alt step, so keys
+        // that type into the field stay with it; Ctrl+Alt is AltGr on Windows.
+        [[nodiscard]] LFS_VIS_API static std::optional<int> sidebarCategoryStep(
+            const input::InputBindings& bindings, const FrameInputEvent& event, bool typing);
+
         [[nodiscard]] PropertiesEditor& properties() { return properties_; }
         [[nodiscard]] const PropertiesEditor& properties() const { return properties_; }
         [[nodiscard]] bool isEditorVisible(std::string_view editor) const;
@@ -172,6 +183,9 @@ namespace lfs::vis::gui {
         void rebuildChrome();
         void updateOverlay();
         void handleAction(int area, const std::string& action, float x, float y);
+        // Steps the properties tabs for the sidebar category actions while the pointer is
+        // over a properties area, before a focused field or another context takes the key.
+        bool interceptCategoryInput(const PanelInputState& input);
         void applyGesture(const screen::GestureCommand& command);
         void mutate(const std::function<void(screen::Screen&)>& fn);
         [[nodiscard]] bool pointerOverHeader(float x, float y) const;

@@ -850,6 +850,7 @@ namespace lfs::training {
         fused_erank_reg_loss_ = {};
         fused_dc_reg_loss_ = {};
         fused_sh_rest_reg_loss_ = {};
+        color_variance_loss_ = {};
         cropbox_view_reject_ = {};
         cropbox_score_reject_ = {};
         cropbox_roi_rows_ = {};
@@ -1757,13 +1758,22 @@ namespace lfs::training {
         cropbox_published_mode_.store(true, std::memory_order_release);
     }
 
-    void Trainer::refresh_cropbox_snapshot() {
+    std::optional<TrainingCropBoxGeometry> Trainer::current_cropbox() const {
         if (cropbox_published_mode_.load(std::memory_order_acquire)) {
             std::lock_guard lock(cropbox_publish_mutex_);
-            cropbox_ = cropbox_published_;
-            return;
+            return cropbox_published_;
         }
-        cropbox_ = scene_ ? resolve_training_cropbox_geom(*scene_) : std::nullopt;
+        return scene_ ? resolve_training_cropbox_geom(*scene_) : std::nullopt;
+    }
+
+    void Trainer::refresh_cropbox_snapshot() {
+        cropbox_ = current_cropbox();
+    }
+
+    std::optional<TrainingCropBoxGeometry> Trainer::export_cropbox() const {
+        if (!getParams().optimization.crop_to_cropbox)
+            return std::nullopt;
+        return current_cropbox();
     }
 
     namespace {
@@ -1821,6 +1831,29 @@ namespace lfs::training {
             centres_in_box(camera.cam_position().to(lfs::core::Device::GPU).reshape({1, 3}), cropbox_->world_to_cropbox),
             roi_box(*cropbox_), rejected, no_roi_rows);
         optimizer.set_crop_damping_mask(rejected);
+    }
+
+    void Trainer::crop_to_training_cropbox() {
+        refresh_cropbox_snapshot();
+        if (!cropbox_ || !strategy_) {
+            LOG_WARN("--crop: the training model has no active crop box, nothing is removed");
+            return;
+        }
+        std::unique_lock render_lock(render_mutex_);
+        std::unique_lock model_lock(model_access_mutex_);
+        waitForModelReaders();
+        const auto& model = strategy_->get_model();
+        if (model.size() == 0)
+            return;
+        const auto before = model.visible_count();
+        const auto outside = training_cropbox_crop_mask(model, *cropbox_);
+        LFS_ASSERT_MSG(outside && outside->numel() == model.size(), "crop selection must cover every splat");
+        // Removed through the strategy so the optimizer state shrinks with the model and the project stays resumable.
+        if (outside->sum_scalar() > 0)
+            strategy_->remove_gaussians(*outside);
+        // MCMC soft-deletes removed splats, so count the live ones.
+        LOG_INFO("Cropped the trained model to its crop box: {} of {} splats kept",
+                 strategy_->get_model().visible_count(), before);
     }
 
     bool Trainer::cropbox_contains_camera(const lfs::core::Camera& camera) const {
@@ -2580,6 +2613,7 @@ namespace lfs::training {
             dataset_config.resize_factor = params.dataset.resize_factor;
             dataset_config.max_width = params.dataset.max_width;
             dataset_config.test_every = params.dataset.test_every;
+            dataset_config.sharpen = params.dataset.loading_params.sharpen;
 
             // Get enabled cameras with images from the scene
             std::vector<std::shared_ptr<lfs::core::Camera>> source_cameras;
@@ -6219,6 +6253,13 @@ namespace lfs::training {
                 const bool normal_supervision_started = !in_popspa && normal_supervision_active(iter);
 
                 FastGSFusedExtraGradients fused_extra_gradients;
+                FastGSColorVarianceLoss color_variance;
+                if (run_fastgs_gaussian_backward && step_params.color_variance_weight_at(iter) > 0.0f) {
+                    if (!color_variance_loss_.is_valid())
+                        color_variance_loss_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
+                    color_variance_loss_.zero_();
+                    color_variance = {gt_image, color_variance_loss_, step_params.color_variance_weight_at(iter)};
+                }
                 if (fastgs_path && core::param::is_mrnf_strategy(params_.optimization.strategy) &&
                     params_.optimization.opacity_decay_rendered_only) {
                     auto support = strategy_->rendered_support_counts();
@@ -6650,6 +6691,9 @@ namespace lfs::training {
                             roi_surface_depth, roi_surface_alpha, roi_weight_map_, roi_params);
                         roi_weight = roi_weight_map_;
                         roi_weight.sync_to_stream(lfs::core::TensorExecutionTarget::current());
+                        // Color variance weights its pixels like the photometric loss.
+                        if (color_variance.weight > 0.0f)
+                            color_variance.pixel_weight = roi_weight;
                     }
 
                     current_phase = StepPhase::Loss;
@@ -7695,6 +7739,10 @@ namespace lfs::training {
                                             .sh_rest_reg_loss = fused_sh_rest_reg_loss_gpu,
                                             .impact_sum = fused_extra_gradients.impact_sum_out != nullptr ? impact_sum_scratch : none,
                                             .impact_peak = fused_extra_gradients.impact_peak_out != nullptr ? impact_peak_scratch : none,
+                                            .color_variance_weight = color_variance.weight,
+                                            .color_variance_target = color_variance.target,
+                                            .color_variance_loss = color_variance.loss,
+                                            .color_variance_pixel_weight = color_variance.pixel_weight,
                                         },
                                         densification_type);
                                     if (deferred_fast_count) {
@@ -7784,6 +7832,9 @@ namespace lfs::training {
                     // same OptBegin boundary at the start of the optimizer region.
                     PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::OptBegin, iter);
                     // Normal phase: regularization losses + optimizer steps for all components
+
+                    if (color_variance.loss.is_valid())
+                        loss_tensor_gpu = loss_tensor_gpu + color_variance.loss;
 
                     if (step_params.scale_reg_at(iter) > 0.0f) {
                         lfs::core::push_gpu_range("compute_scale_reg_loss");
@@ -9182,6 +9233,10 @@ namespace lfs::training {
             (user_stopped || terminal_error)
                 ? terminal_save_policy.on_stop_or_error
                 : terminal_save_policy.on_completion;
+        // Only a completed run is cropped: a stopped one saves every splat so it can resume, and its exports
+        // are cropped instead (export_cropbox()).
+        if (!terminal_error && !user_stopped && params_.optimization.crop_to_cropbox)
+            crop_to_training_cropbox();
         if (authorize_terminal_save &&
             terminal_project_path) {
             saving_model_.store(true, std::memory_order_release);

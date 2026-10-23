@@ -1305,9 +1305,11 @@ namespace lfs::io {
                 double source_frame_fps = untimed_stream ? video_fps : validFrameRate(video_stream->r_frame_rate);
                 if (source_frame_fps <= 0.0)
                     source_frame_fps = video_fps;
-                double video_duration = validDurationSeconds(fmt_ctx->duration, AVRational{1, AV_TIME_BASE});
+                // Audio can outlast the selected video. Sampling to the movie duration then asks the sparse
+                // decoder for frames beyond video EOF, so use the selected stream's duration when available.
+                double video_duration = validDurationSeconds(video_stream->duration, video_stream->time_base);
                 if (video_duration <= 0.0)
-                    video_duration = validDurationSeconds(video_stream->duration, video_stream->time_base);
+                    video_duration = validDurationSeconds(fmt_ctx->duration, AVRational{1, AV_TIME_BASE});
                 const double time_base = stream_time_base;
 
                 if ((src_width != video_stream->codecpar->width ||

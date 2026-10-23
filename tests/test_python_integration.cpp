@@ -25,6 +25,8 @@
 #include "core/tensor_completion.hpp"
 #include "gui/line_renderer.hpp"
 #include "io/loader.hpp"
+#include "io/project_document.hpp"
+#include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
 #include "python/gil.hpp"
 #include "python/python_buffer_analysis.hpp"
@@ -58,6 +60,7 @@
 #include <deque>
 #include <exception>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <future>
 #include <memory>
@@ -322,6 +325,12 @@ namespace {
         void projectWaitWrite() override {
             wait_thread = std::this_thread::get_id();
         }
+        lfs::Result<lfs::vis::ProjectTrainingSource> projectTrainingSource() override {
+            if (training_source)
+                return *training_source;
+            return lfs::vis::Visualizer::projectTrainingSource();
+        }
+        std::optional<lfs::vis::ProjectTrainingSource> training_source;
         std::thread::id poll_thread;
         std::thread::id wait_thread;
         int poll_calls = 0;
@@ -694,6 +703,72 @@ TEST_F(PythonIntegrationTest, PythonCameraTrainingSettersPostNotices) {
                   0);
     }
     EXPECT_EQ(posted, 2u);
+}
+
+TEST_F(PythonIntegrationTest, PythonTransientSplatsLeaveNoUndoHistory) {
+    struct PythonSceneContextReset {
+        ~PythonSceneContextReset() {
+            lfs::vis::op::undoHistory().clear();
+            lfs::python::set_scene_manager(nullptr);
+            lfs::python::set_application_scene(nullptr);
+        }
+    } reset;
+    lfs::vis::op::undoHistory().clear();
+
+    lfs::vis::SceneManager scene_manager;
+    auto& scene = scene_manager.getScene();
+    lfs::python::set_application_scene(&scene);
+    lfs::python::set_scene_manager(&scene_manager);
+
+    {
+        const lfs::python::GilAcquire gil;
+        ASSERT_EQ(PyRun_SimpleString(
+                      "import lichtfeld as lf\n"
+                      "def _add_test_splat(name, **kwargs):\n"
+                      "    zeros = lambda *shape: lf.Tensor.zeros(shape, device='cuda')\n"
+                      "    return lf.get_scene().add_splat(name, zeros(1, 3), zeros(1, 1, 3), zeros(1, 0, 3),\n"
+                      "                                    zeros(1, 3), zeros(1, 4), zeros(1, 1), **kwargs)\n"
+                      "assert _add_test_splat('preview', transient=True) >= 0\n"
+                      "lf.get_scene().set_training_model_node('preview')\n"),
+                  0);
+    }
+    const auto* preview = scene.getNode("preview");
+    ASSERT_NE(preview, nullptr);
+    EXPECT_TRUE(preview->transient);
+    EXPECT_EQ(scene.getTrainingModelNodeName(), "preview");
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+
+    // A bound preview stays out of the document, and it cannot take the
+    // place of a saved training model.
+    {
+        const lfs::python::GilAcquire gil;
+        ASSERT_EQ(PyRun_SimpleString(
+                      "assert _add_test_splat('kept') >= 0\n"
+                      "assert not lf.get_scene().set_node_transient('missing', True)\n"
+                      "def _raises(call):\n"
+                      "    try:\n"
+                      "        call()\n"
+                      "    except RuntimeError:\n"
+                      "        return True\n"
+                      "    return False\n"
+                      "assert _raises(lambda: lf.get_scene().set_node_transient('preview', False))\n"
+                      "lf.get_scene().set_training_model_node('kept')\n"
+                      "assert _raises(lambda: lf.get_scene().set_training_model_node('preview'))\n"
+                      "assert _raises(lambda: lf.get_scene().set_node_transient('kept', True))\n"
+                      "lf.get_scene().remove_node('preview')\n"),
+                  0);
+    }
+    const auto* kept = scene.getNode("kept");
+    ASSERT_NE(kept, nullptr);
+    EXPECT_FALSE(kept->transient);
+    EXPECT_EQ(scene.getNode("preview"), nullptr);
+    EXPECT_EQ(scene.getTrainingModelNodeName(), "kept");
+    ASSERT_EQ(lfs::vis::op::undoHistory().undoCount(), 2u);
+
+    // Undoing the binding does not need the preview it replaced.
+    EXPECT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_TRUE(scene.getTrainingModelNodeUuid().is_nil());
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
 }
 
 TEST_F(PythonIntegrationTest, SceneTimeCallbackSupportsSetTickClearAndUnsetTick) {
@@ -1556,6 +1631,56 @@ result_values = [1.0]
     EXPECT_EQ(actions, (std::vector<int>{7, -1, 13, -1, 7, -1}));
     EXPECT_EQ(action_threads, std::vector<std::thread::id>(6, viewer_thread));
     EXPECT_EQ(viewer.post_work_calls, 6);
+}
+
+// The binding writes the viewer's training source with the GIL released, calls the
+// progress callback, honours cancel, and runs inline when called on the viewer thread.
+TEST_F(PythonIntegrationTest, ProjectWriteTrainingCopyReportsProgressAndHonoursCancel) {
+    namespace licht = lfs::test::licht;
+    licht::TemporaryDirectory temporary;
+    const auto dataset = temporary.path / "dataset";
+    std::filesystem::create_directories(dataset / "images");
+    std::filesystem::create_directories(dataset / "sparse" / "0");
+    for (const auto* name : {"images/a.jpg", "sparse/0/cameras.bin", "sparse/0/images.bin", "sparse/0/points3D.bin"})
+        licht::write_file_bytes(dataset / name, licht::byte_vector(name));
+    auto parameters = licht::require_result(
+        licht::require_result(lfs::io::project::ProjectDocument::create(lfs::core::generate_uuid_v4()))
+            .parameters()
+            .snapshot());
+    parameters.dataset.images = "images";
+
+    TestVisualizer viewer;
+    viewer.training_source = lfs::vis::ProjectTrainingSource{.parameters = parameters, .dataset_root = dataset};
+    const ScopedVisualizer scoped_viewer(&viewer);
+    const auto script = [&](const std::string_view name) {
+        return std::format(R"PY(
+import lichtfeld as lf
+fractions = []
+copy = lf.project_write_training_copy("{0}/{1}.licht", progress=lambda value, message, out=fractions: out.append(value))
+canceled = 0.0
+try:
+    lf.project_write_training_copy("{0}/{1}-canceled.licht", cancel=lambda: True)
+except lf.Error as error:
+    canceled = 1.0 if error.code == "Cancelled" else 0.0
+result_shape = (3,)
+result_values = [float(copy.images_embedded), fractions[-1] if fractions else 0.0, canceled]
+)PY",
+                           temporary.path.generic_string(), name);
+    };
+
+    const auto posted = runPythonTensorSnippet(script("posted"));
+    EXPECT_EQ(posted.values, (std::vector<float>{1.0F, 1.0F, 1.0F}));
+    EXPECT_EQ(viewer.post_work_calls, 2);
+
+    viewer.on_viewer_thread = true;
+    const auto inline_on_viewer_thread = runPythonTensorSnippet(script("inline"));
+    EXPECT_EQ(inline_on_viewer_thread.values, (std::vector<float>{1.0F, 1.0F, 1.0F}));
+    EXPECT_EQ(viewer.post_work_calls, 2);
+
+    EXPECT_TRUE(std::filesystem::exists(temporary.path / "posted.licht"));
+    EXPECT_TRUE(std::filesystem::exists(temporary.path / "inline.licht"));
+    EXPECT_FALSE(std::filesystem::exists(temporary.path / "posted-canceled.licht"));
+    EXPECT_FALSE(std::filesystem::exists(temporary.path / "inline-canceled.licht"));
 }
 
 TEST_F(PythonIntegrationTest, CaptureViewportReleasesGilWhileWaitingForViewerThread) {

@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <ctime>
 #include <filesystem>
 #include <format>
@@ -699,6 +700,52 @@ namespace lfs::training {
             if (group.gradient.is_valid())
                 group.gradient.sync_to_stream(stream);
 
+        fast_lfs::rasterization::ColorVarianceLoss variance;
+        // Lives until the backward below is enqueued; freeing it then orders the kernel's read.
+        core::Tensor pixel_weight_sum;
+        if (!std::isfinite(adam.color_variance_weight) || adam.color_variance_weight < 0.0f)
+            throw std::runtime_error("Color variance weight must be finite and nonnegative");
+        if (adam.color_variance_weight > 0.0f) {
+            if (ctx.mip_filter)
+                throw std::runtime_error("Color variance does not yet support mip filtering");
+            const auto& target = adam.color_variance_target;
+            if (!target.is_valid() || target.shape() != grad_image.shape() ||
+                target.device() != core::Device::GPU || !target.is_contiguous() ||
+                (target.dtype() != core::DataType::Float32 && target.dtype() != core::DataType::UInt8)) {
+                throw std::runtime_error("Color variance target must be contiguous CUDA Float32 or UInt8 [3, H, W]");
+            }
+            const auto& loss = adam.color_variance_loss;
+            if (loss.is_valid() && (loss.numel() != 1 || loss.device() != core::Device::GPU ||
+                                    loss.dtype() != core::DataType::Float32 || !loss.is_contiguous())) {
+                throw std::runtime_error("Color variance loss must be a CUDA Float32 scalar");
+            }
+            const auto& pixel_weight = adam.color_variance_pixel_weight;
+            if (pixel_weight.is_valid()) {
+                if (pixel_weight.shape() != core::TensorShape{static_cast<size_t>(H), static_cast<size_t>(W)} ||
+                    pixel_weight.device() != core::Device::GPU || !pixel_weight.is_contiguous() ||
+                    pixel_weight.dtype() != core::DataType::Float32) {
+                    throw std::runtime_error("Color variance pixel weights must be contiguous CUDA Float32 [H, W]");
+                }
+                pixel_weight_sum = pixel_weight.sum();
+            }
+            core::pin_operands({&grad_image, &target, &loss, &pixel_weight, &pixel_weight_sum});
+            target.sync_to_stream(stream);
+            if (loss.is_valid())
+                loss.sync_to_stream(stream);
+            if (target.dtype() == core::DataType::UInt8)
+                variance.target_u8 = target.ptr<std::uint8_t>();
+            else
+                variance.target = target.ptr<float>();
+            variance.weight = adam.color_variance_weight;
+            if (pixel_weight.is_valid()) {
+                pixel_weight.sync_to_stream(stream);
+                pixel_weight_sum.sync_to_stream(stream);
+                variance.pixel_weight = pixel_weight.ptr<float>();
+                variance.pixel_weight_sum = pixel_weight_sum.ptr<float>();
+            }
+            variance.loss_out = loss.is_valid() ? core::Tensor(loss).ptr<float>() : nullptr;
+        }
+
         // The blend backward derives the background alpha gradient per pixel
         // from grad_image and the background; no [H, W] map is materialized.
         fast_lfs::rasterization::BackgroundAlphaGradient background_grad;
@@ -868,10 +915,11 @@ namespace lfs::training {
             edge_weight,
             edge_score,
             impact_sum,
-            impact_peak);
+            impact_peak,
+            variance);
         for (const core::Tensor* output : std::initializer_list<const core::Tensor*>{
                  &adam.rendered_count, &adam.erank_reg_loss, &adam.dc_reg_loss, &adam.sh_rest_reg_loss,
-                 &adam.impact_sum, &adam.impact_peak}) {
+                 &adam.impact_sum, &adam.impact_peak, &adam.color_variance_loss}) {
             if (output->is_valid()) {
                 output->record_stream(stream);
                 core::bridgeStreams(stream, output->stream());
@@ -1055,6 +1103,7 @@ namespace lfs::training {
     const lfs::gpu_ops::FastRasterOps& cuda_fast_ops() {
         static const lfs::gpu_ops::FastRasterOps ops{
             .create = fast_ops_create,
+            .color_variance = true,
             .forward = fast_ops_forward,
             .backward = fast_ops_backward,
             .release = fast_ops_release,

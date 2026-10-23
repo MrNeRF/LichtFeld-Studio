@@ -7,6 +7,7 @@
 #include "vulkan/fast_state.hpp"
 #include <array>
 #include <format>
+#include <stdexcept>
 
 namespace lfs::training::vulkan {
     namespace {
@@ -63,6 +64,9 @@ namespace lfs::training::vulkan {
     }
     void fast_backward(FastSaved& saved, const RenderGradients& gradient, Out densification, In error,
                        In edge, Out scores, const BackwardAdam& adam, DensificationType type) {
+        // Training setup rejects this before the first step (FastRasterOps::color_variance).
+        if (adam.color_variance_weight != 0.f)
+            throw std::invalid_argument("The Vulkan FastGS backward does not support the color variance loss");
         LFS_ASSERT_MSG(saved.backend != nullptr, "Fast backward requires a created state");
         auto& s = static_cast<FastState&>(*saved.backend);
         LFS_ASSERT_MSG(s.live, "Fast backward requires a live forward frame");

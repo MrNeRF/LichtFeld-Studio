@@ -9,6 +9,7 @@
 #include "gui/rml_status_bar.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
+#include "gui/status_bar_progress.hpp"
 #include "gui/status_bar_training.hpp"
 #include "rendering/viewport_artifact_service.hpp"
 #include "visualizer/app_store.hpp"
@@ -380,6 +381,9 @@ namespace {
             bound &= constructor.Bind("mode_color", &model_.mode_color);
             bound &= constructor.Bind("show_training", &model_.show_training);
             bound &= constructor.Bind("progress_miner", &model_.progress_miner);
+            bound &= constructor.Bind("progress_tessle", &model_.progress_tessle);
+            bound &= constructor.Bind("tessle_left", &model_.tessle_left);
+            bound &= constructor.Bind("tessle_sprite", &model_.tessle_sprite);
             bound &= constructor.Bind("miner_raised", &model_.miner_raised);
             bound &= constructor.Bind("miner_step_a", &model_.miner_step_a);
             bound &= constructor.Bind("miner_strike", &model_.miner_strike);
@@ -507,6 +511,28 @@ namespace {
         lfs::vis::gui::RmlStatusBarTestAccess::ModelState& model_ =
             lfs::vis::gui::RmlStatusBarTestAccess::model(status_bar_);
     };
+
+    TEST_F(StatusBarFitTest, TessleFruitStaysBehindTheCharacterAndText) {
+        using namespace lfs::vis::gui;
+        model_.progress_tessle = true;
+        model_handle_.DirtyVariable("progress_tessle");
+        auto* markers = document_->GetElementById("progress-markers");
+        ASSERT_TRUE(markers);
+        for (const int current : {660, 870, 1020, 3000}) {
+            markers->SetInnerRML(buildProgressMarkersRml({690, 3000}, 3000, current, {}, ProgressMarkerStyle::Tessle));
+            context_->Update();
+            ASSERT_EQ(markers->GetNumChildren(), 2);
+            EXPECT_EQ(markers->GetChild(0)->GetTagName(), "img");
+            EXPECT_FLOAT_EQ(markers->GetChild(0)->GetComputedValues().opacity(), current >= 690 ? 0.0f : 1.0f);
+            EXPECT_FLOAT_EQ(markers->GetChild(1)->GetComputedValues().opacity(), current == 3000 ? 0.0f : 1.0f);
+            const auto marker_layer = markers->GetComputedValues().z_index().value;
+            EXPECT_LT(marker_layer, document_->GetElementById("tessle-figure")->GetComputedValues().z_index().value);
+            EXPECT_LT(marker_layer, document_->GetElementById("progress-text")->GetComputedValues().z_index().value);
+        }
+        markers->SetInnerRML(buildProgressMarkersRml({690}, 3000, 1020, {.hover_step = 690}, ProgressMarkerStyle::Tessle));
+        context_->Update();
+        EXPECT_FLOAT_EQ(markers->GetChild(0)->GetComputedValues().opacity(), 1.0f);
+    }
 
     TEST_F(StatusBarFitTest, TooltipHoverStartsAndClearsForBothFpsMetrics) {
         using lfs::vis::gui::RmlStatusBarTestAccess;

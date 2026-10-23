@@ -148,6 +148,34 @@ TEST(TrainingOpsCapability, FastFamilyMatchesCompiledBackends) {
 #endif
 }
 
+// Fails if a backend without the color variance backward or the CUDA image loader starts
+// training with those options instead of refusing them.
+TEST(TrainingOpsCapability, CudaOnlyColorVarianceAndSharpeningAreRefusedElsewhere) {
+    using lfs::core::GpuBackend;
+    lfs::core::param::TrainingParameters plain;
+    plain.optimization.set_raster_backend(lfs::core::param::RasterBackendId::ThreeDGS);
+    const auto deps = lfs::training::training_loader_dependencies(plain);
+    ASSERT_NE(lfs::training::training_ops(GpuBackend::CUDA).fast, nullptr);
+    EXPECT_TRUE(lfs::training::training_ops(GpuBackend::CUDA).fast->color_variance);
+
+    auto variance = plain;
+    variance.optimization.color_variance_weight = 0.5f;
+    auto sharpen = plain;
+    sharpen.dataset.loading_params.sharpen.amount = 1.0f;
+    for (const auto* params : {&variance, &sharpen}) {
+        EXPECT_EQ(lfs::training::unavailable_training_reason(*params, GpuBackend::CUDA, deps),
+                  lfs::training::unavailable_training_reason(plain, GpuBackend::CUDA, deps));
+        for (const auto backend : {GpuBackend::Vulkan, GpuBackend::Metal}) {
+            const auto reason = lfs::training::unavailable_training_reason(*params, backend, deps);
+            ASSERT_TRUE(reason.has_value()) << lfs::core::gpu_backend_name(backend);
+            if (!lfs::training::unavailable_training_reason(plain, backend, deps)) {
+                EXPECT_NE(reason->find(params == &variance ? "color variance" : "sharpening"), std::string::npos)
+                    << *reason;
+            }
+        }
+    }
+}
+
 TEST_F(FastOpsRaster, ForwardRepeatsExactly) {
     auto reference = lfs::training::fast_rasterize_forward(*camera_, *splat_, bg_, 0, 0, 0, 0, false);
     ASSERT_TRUE(reference.has_value()) << std::string(reference.error().user_message());

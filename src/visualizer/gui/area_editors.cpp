@@ -265,6 +265,19 @@ namespace lfs::vis::gui {
         return true;
     }
 
+    bool PropertiesEditor::cycleTab(const int direction) {
+        syncTabs();
+        if (tabs_.empty() || direction == 0)
+            return false;
+        const auto current = std::find_if(tabs_.begin(), tabs_.end(),
+                                          [&](const PanelSummary& tab) { return tab.id == active_tab_; });
+        const int count = static_cast<int>(tabs_.size());
+        int index = current == tabs_.end() ? 0 : static_cast<int>(current - tabs_.begin());
+        index = ((index + direction) % count + count) % count;
+        setActiveTab(tabs_[static_cast<size_t>(index)].id);
+        return true;
+    }
+
     void PropertiesEditor::header(const AreaFrame&, const screen::Screen&, std::vector<HeaderItem>& items) const {
         syncTabs();
         const bool active_valid = std::any_of(tabs_.begin(), tabs_.end(),
@@ -285,9 +298,10 @@ namespace lfs::vis::gui {
         if (action.starts_with("tab:")) {
             setActiveTab(std::string(action.substr(4)));
         } else if (action.starts_with("close:")) {
-            const std::string id(action.substr(6));
-            PanelRegistry::instance().set_panel_enabled(id, false);
-            if (id == active_tab_)
+            // Closing a plugin's tab unloads the plugin, like Unload in the Plugin Marketplace.
+            // A disabled panel would stay disabled after the plugin is loaded again.
+            closed_tab_ = std::string(action.substr(6));
+            if (closed_tab_ == active_tab_)
                 active_tab_.clear();
         }
     }

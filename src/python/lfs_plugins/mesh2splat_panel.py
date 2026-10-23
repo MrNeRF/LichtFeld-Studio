@@ -10,6 +10,7 @@ import lichtfeld as lf
 
 from . import rml_widgets
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
+from .default_reset import LabelDefaultReset, values_match
 from .types import Panel
 from .panels import panel_class
 from .ui import RuntimeState, native_value as _native_store_value
@@ -45,11 +46,25 @@ class Mesh2SplatPanel(Panel):
         self._last_active = False
         self._error_text = ""
         self._reactive_unsubscribers = []
+        self._default_reset = LabelDefaultReset(self._reset_default, self._apply_reset)
         self._scrub_fields = ScrubFieldController(
             SCRUB_FIELD_DEFS,
             self._get_scrub_value,
             self._set_scrub_value,
         )
+
+    def _reset_default(self, prop):
+        if self._last_active:
+            return None
+        return {"gaussian_scale": 0.65, "quality": 0.5}.get(prop)
+
+    def _apply_reset(self, prop, value):
+        if self._reset_default(prop) is None:
+            return False
+        self._scrub_fields.prepare_reset(prop)
+        self._set_scrub_value(prop, value)
+        self._scrub_fields.sync_all()
+        return values_match(self._get_scrub_value(prop), value)
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("mesh2splat")
@@ -94,6 +109,7 @@ class Mesh2SplatPanel(Panel):
         self._refresh_scene_state(force=True)
         self._sync_conversion_state(force=True)
         self._scrub_fields.mount(doc)
+        self._default_reset.mount(doc)
         self._subscribe_reactive_state()
 
     def _subscribe_reactive_state(self):
@@ -140,6 +156,7 @@ class Mesh2SplatPanel(Panel):
         doc.remove_data_model("mesh2splat")
         self._handle = None
         self._scrub_fields.unmount()
+        self._default_reset.unmount()
 
     def on_scene_changed(self, doc):
         del doc

@@ -261,6 +261,10 @@ namespace lfs::io {
         // than on CPU worker threads.
         [[nodiscard]] static bool decodes_on_gpu(lfs::core::GpuBackend backend);
 
+        // True when the loader for `backend` can sharpen training images (LoadParams::sharpen).
+        // Only the CUDA loader has the sharpening kernels.
+        [[nodiscard]] static bool supports_sharpening(lfs::core::GpuBackend backend);
+
         // The JPEG decoder images for `backend` use, for run records.
         [[nodiscard]] static std::string_view jpeg_decoder(lfs::core::GpuBackend backend);
 

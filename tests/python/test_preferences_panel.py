@@ -415,6 +415,10 @@ def preferences_panel_module(monkeypatch):
             VIEW_FRAME_ALL=SimpleNamespace(name="VIEW_FRAME_ALL", value=94),
             TOGGLE_QUAD_VIEW=SimpleNamespace(name="TOGGLE_QUAD_VIEW", value=95),
             TOGGLE_MAXIMIZE_AREA=SimpleNamespace(name="TOGGLE_MAXIMIZE_AREA", value=96),
+            NEXT_SIDEBAR_CATEGORY=SimpleNamespace(name="NEXT_SIDEBAR_CATEGORY", value=105),
+            PREVIOUS_SIDEBAR_CATEGORY=SimpleNamespace(name="PREVIOUS_SIDEBAR_CATEGORY", value=106),
+            REMOVE_LAST_POINT=SimpleNamespace(name="REMOVE_LAST_POINT", value=107),
+            APPLY_ALIGNMENT=SimpleNamespace(name="APPLY_ALIGNMENT", value=108),
         ),
         get_available_profiles=lambda: ["Default"],
         get_current_profile=lambda: "Default",
@@ -1018,6 +1022,9 @@ def test_title_bar_close_listener_discards_unconfirmed_mcp_port(
             close_button if element_id == "close-btn" else None
         ),
         query_selector_all=lambda _selector: [],
+        add_event_listener=lambda *_: None,
+        set_attribute=lambda *_: None,
+        has_attribute=lambda *_: False,
     )
     monkeypatch.setattr(panel, "_dirty_expanded_sections", lambda: None)
     monkeypatch.setattr(panel, "_rebuild_records", lambda: None)
@@ -1295,6 +1302,15 @@ def test_preferences_close_retains_the_mounted_document(preferences_panel_module
     panel = module.PreferencesPanel()
 
     class Document:
+        def has_attribute(self, _name):
+            return False
+
+        def set_attribute(self, _name, _value):
+            pass
+
+        def add_event_listener(self, _name, _callback):
+            pass
+
         def get_element_by_id(self, _element_id):
             return None
 

@@ -101,8 +101,10 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ env.VCPKG_ROOT }}
-          key: vcpkg-tool-${{ runner.os }}-2026-02-21
-          restore-keys: vcpkg-tool-${{ runner.os }}-
+          # The vcpkg checkout must contain every pinned port version, so the key moves
+          # with the pins. No restore-keys: an older clone restored under a new key
+          # would make the clone below fail on the existing directory.
+          key: vcpkg-tool-${{ runner.os }}-2026-10-22
 
       - name: Setup vcpkg
         run: |
@@ -156,6 +158,7 @@ jobs:
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
             -DBUILD_FORMAT_TESTS=ON \
             -DBUILD_TEMPORAL_CPU_TESTS=${{ matrix.build_type == 'Release' && 'ON' || 'OFF' }} \
+            -DBUILD_SELECTION_OUTLINE_TESTS=ON \
             -DBUILD_PYTHON_STUBS=OFF \
             -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF \
             -DLFS_DEV_IMPORT_SOURCE_RESOURCES=OFF \
@@ -195,7 +198,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/cuda-driver-stub"
           ln -sf /usr/local/cuda/lib64/stubs/libcuda.so "$RUNNER_TEMP/cuda-driver-stub/libcuda.so.1"
           LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-            ctest --test-dir build --output-on-failure --no-tests=error -R '^(splat_drag_axes_contract|splat_transfer_contract|wayland_drag_contract|x11_drag_contract|file_transfer_progress_contract|native_modal_frame_contract)$'
+            ctest --test-dir build --output-on-failure --no-tests=error -R '^(selection_outline_contract|splat_drag_axes_contract|splat_transfer_contract|wayland_drag_contract|x11_drag_contract|file_transfer_progress_contract|native_modal_frame_contract)$'
 
       - name: Build and run CPU-only format tests
         run: |
@@ -237,6 +240,11 @@ jobs:
         run: |
           cmake --build build --target lichtfeld_frame_tests -j $(nproc)
           ctest --test-dir build --output-on-failure -R '^lichtfeld_frame_tests$'
+
+      - name: Build and run TLS distrust tests
+        run: |
+          cmake --build build --target lichtfeld_tls_distrust_tests -j $(nproc)
+          ctest --test-dir build --output-on-failure --no-tests=error -R '^lichtfeld_tls_distrust_tests$'
 
       - name: Install Python test dependencies
         run: |

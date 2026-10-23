@@ -72,6 +72,8 @@ namespace lfs::vis {
         ViewportSplitView split_view_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;
         std::string last_logged_vksplat_render_error_;
+        // The last full VkSplat render classified object outline membership.
+        bool last_vksplat_object_outline_ = false;
         StaleFrameGuard vksplat_stale_frame_guard_;
         DirtyMask parked_arena_retry_ = 0;
         // Over-budget navigation: render when the camera has rested.

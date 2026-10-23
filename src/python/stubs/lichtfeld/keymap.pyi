@@ -211,6 +211,14 @@ class Action(enum.Enum):
 
     TOGGLE_PYTHON_CONSOLE = 103
 
+    NEXT_SIDEBAR_CATEGORY = 105
+
+    PREVIOUS_SIDEBAR_CATEGORY = 106
+
+    REMOVE_LAST_POINT = 107
+
+    APPLY_ALIGNMENT = 108
+
 class ToolMode(enum.Enum):
     GLOBAL = 0
 

@@ -3320,6 +3320,10 @@ namespace lfs::vis {
                     // render while the drag is live so the reveal tracks the box.
                     const bool can_rerender_selection_overlay =
                         !frame_depth_window_drag_preview &&
+                        // Object contour membership is classified during projection.
+                        // Reusing its flags after a tree selection change retains
+                        // the previous object's contour, including on deselection.
+                        !request.overlay.markers.show_object_outline && !view_state.last_vksplat_object_outline_ &&
                         (frame_dirty & DirtyFlag::SELECTION) != 0 &&
                         (frame_dirty == DirtyFlag::SELECTION ||
                          (is_training && (non_overlay_dirty & ~DirtyFlag::SPLATS) == 0)) &&
@@ -3367,6 +3371,7 @@ namespace lfs::vis {
                         lfs::core::Tensor::trim_memory_pool();
                     }
                     if (render_result) {
+                        view_state.last_vksplat_object_outline_ = request.overlay.markers.show_object_outline;
                         noteImportRenderFrame(scene_manager->getScene().renderGeneration(), render_error);
                         view_state.last_logged_vksplat_render_error_.clear();
                         return publish_vksplat_result(*render_result);

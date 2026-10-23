@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include "gui/utils/native_file_drag.hpp"
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/EventListener.h>

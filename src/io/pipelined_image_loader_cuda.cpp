@@ -4,6 +4,7 @@
 #include "core/cuda/mask_normalization.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "cuda/image_format_kernels.cuh"
+#include "cuda/image_sharpen.hpp"
 #include "cuda/masked_image_fill.hpp"
 #include "pipelined_image_loader_ring.hpp"
 
@@ -325,7 +326,8 @@ namespace lfs::io {
         }
 
         [[nodiscard]] bool load_params_need_processing(const LoadParams& params) {
-            return params.resize_factor > 1 || params.max_width > 0 || params.undistort != nullptr;
+            return params.resize_factor > 1 || params.max_width > 0 || params.undistort != nullptr ||
+                   params.sharpen.enabled();
         }
 
         void convert_float_hwc_to_rgb(
@@ -417,6 +419,13 @@ namespace lfs::io {
                 throw std::runtime_error(std::string("undistortion failed: ") + cudaGetErrorString(status));
         }
 
+        // Runs after resize, undistortion and masked fill, so caches store the sharpened image.
+        void apply_requested_sharpen(lfs::core::Tensor& tensor, const LoadParams& params) {
+            if (params.sharpen.enabled())
+                tensor = sharpen_image(tensor, params.sharpen, !params.decode_float,
+                                       image_execution_stream(params.cuda_stream));
+        }
+
         lfs::core::Tensor process_mask(lfs::core::Tensor mask, const float threshold) {
             if (!mask.is_valid())
                 return {};
@@ -488,8 +497,10 @@ namespace lfs::io {
             if (!tensor.is_valid() || tensor.numel() == 0)
                 return {};
 
-            if (apply_processing)
+            if (apply_processing) {
                 apply_requested_undistort(tensor, params);
+                apply_requested_sharpen(tensor, params);
+            }
 
             return tensor;
         }
@@ -643,6 +654,7 @@ namespace lfs::io {
         }
 
         apply_requested_undistort(decoded, params);
+        apply_requested_sharpen(decoded, params);
         return decoded;
     }
 
@@ -1130,6 +1142,7 @@ namespace lfs::io {
 
                             if (decode_from_base_cache) {
                                 apply_requested_undistort(tensor, batch[i].params);
+                                apply_requested_sharpen(tensor, batch[i].params);
                                 write_derived_cache(*nvcodec, tensor, batch[i].cache_key,
                                                     batch[i].params.cuda_stream, batch[i].params);
                             }
@@ -1296,6 +1309,7 @@ namespace lfs::io {
                             rgb = rgb_hwc.permute({2, 0, 1}).contiguous();
                         }
                     }
+                    apply_requested_sharpen(rgb, item.params);
 
                     // Match the first load to the lossless alpha cache's 16-bit grid.
                     {
@@ -1689,6 +1703,7 @@ namespace lfs::io {
                         fill_masked_image(decoded_hwc, output_fill, sidecar_stream);
                         decoded = decoded_hwc.permute({2, 0, 1}).contiguous();
                     }
+                    apply_requested_sharpen(decoded, item.params);
 
                     if (is_nvcodec_available()) {
                         write_derived_cache(*nvcodec, decoded, item.cache_key, sidecar_stream, item.params);
@@ -1738,6 +1753,7 @@ namespace lfs::io {
                         } else {
                             lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(gpu_uint8, decoded, lfs::gpu_ops::ImageConversion::U8HWCToF32CHW, H, W, C, {});
                         }
+                        apply_requested_sharpen(decoded, item.params);
                         {
                             std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
                             if (auto it = pending_pairs_.find(item.sequence_id);
@@ -1780,6 +1796,10 @@ namespace lfs::io {
 
     bool PipelinedImageLoader::decodes_on_gpu(const lfs::core::GpuBackend backend) {
         return backend == lfs::core::GpuBackend::CUDA && lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA);
+    }
+
+    bool PipelinedImageLoader::supports_sharpening(const lfs::core::GpuBackend backend) {
+        return backend == lfs::core::GpuBackend::CUDA;
     }
 
     std::string_view PipelinedImageLoader::jpeg_decoder(const lfs::core::GpuBackend backend) {

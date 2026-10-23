@@ -396,6 +396,12 @@ namespace lfs::vis {
         // Ellipsoid (data stored in scene graph EllipsoidData, these are UI toggles only)
         bool show_ellipsoid = false;
         bool use_ellipsoid = false;
+        bool selection_outline = false;
+        float selection_outline_opacity = 1.0f;
+        float selection_outline_width = 2.0f;
+        float selection_outline_threshold = 0.5f;
+        bool selection_outline_holes = true;
+        glm::vec3 selection_outline_color{0.0f, 0.604f, 0.733f};
         bool desaturate_unselected = false;     // Desaturate unselected PLYs when one is selected
         bool desaturate_cropping = false;       // Desaturate outside crop box/ellipsoid instead of hiding
         bool crop_filter_for_selection = false; // Use crop box/ellipsoid as selection filter

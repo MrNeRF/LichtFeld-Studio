@@ -6505,6 +6505,16 @@ namespace lfs::vis::gui {
                 !screen_host_.gestureActive();
             const bool pointer_free = !block_underlay_input && !float_blocks_pointer && !viewport_pointer_captured;
             screen_host_.processInput(panel_input, pointer_free);
+            // Unload after the input dispatch returns: unloading unregisters the plugin's panels.
+            if (const auto id = screen_host_.properties().takeClosedTab(); !id.empty()) {
+                if (viewer_)
+                    viewer_->projectMarkSessionChapterCommitted("GUIL");
+                if (focus_panel_name_ == id)
+                    focus_panel_name_.clear();
+                const auto unload = python::bridge().unload_panel_plugin;
+                if (!unload || !unload(id.c_str()))
+                    LOG_WARN("Closing panel tab '{}' did not unload its plugin", id);
+            }
             screen_host_.draw(ctx, draw_ctx, panel_input, ui_layout_changed || block_underlay_input,
                               panel_animation_demand);
             viewport_layout_ = activeViewportLayout(screen);

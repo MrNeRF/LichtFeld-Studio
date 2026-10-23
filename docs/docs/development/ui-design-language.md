@@ -133,6 +133,23 @@ design when it does.
 | Context menu | A command list attached to an item or viewport location | Global context-menu resource or `begin_context_menu()` | Asset actions and viewport commands |
 | Viewport overlay | Contextual, low-chrome information or manipulation directly over the 3D view | `VIEWPORT_OVERLAY`; do not use it as a substitute for a settings window | Selection/gizmo overlays |
 
+### Properties area category tabs
+
+Rendering, Training, and plugins registered in `MAIN_PANEL_TAB` are tabs in the
+header of a Properties area. When they overflow, the header scrolls to the active
+tab and the picker lists every tab.
+
+- Click a tab to select its panel.
+- Next/Previous Sidebar Category are keymap actions under Preferences > Input.
+  Their defaults are Ctrl+Tab and Ctrl+Shift+Tab; both wrap. They apply while the
+  pointer is over a Properties area, including when its content has focus. While
+  a text field has focus, only bindings with Ctrl or Cmd and no Alt switch
+  categories; other keys type into the field.
+- Top-level plugin tabs have a close button; built-in tabs cannot be closed.
+  Closing a plugin tab unloads its plugin, the same as Unload in the Plugin
+  Marketplace, so all of the plugin's panels go away. Loading the plugin again
+  from the Marketplace brings its tabs back.
+
 ### Docked panels
 
 A docked panel is part of the application's continuous workspace. It should not

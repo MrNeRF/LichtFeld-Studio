@@ -13,11 +13,15 @@
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "gui/screen_host_logic.hpp"
+#include "input/input_bindings.hpp"
+#include "input/input_controller.hpp"
+#include "input/sdl_key_mapping.hpp"
 #include "internal/resource_paths.hpp"
 #include "screen/view3d_space.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Elements/ElementFormControlSelect.h>
+#include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_scancode.h>
 #include <algorithm>
 #include <cassert>
@@ -554,13 +558,68 @@ namespace lfs::vis::gui {
         layout(work_, ui_scale_);
     }
 
+    std::optional<int> ScreenHost::sidebarCategoryStep(const input::InputBindings& bindings,
+                                                       const FrameInputEvent& event, const bool typing) {
+        if (event.kind != FrameInputEventKind::KeyDown || (event.dispatch && event.dispatch->consumed) ||
+            (event.modifiers & SDL_KMOD_MODE))
+            return std::nullopt;
+        if (typing && (!(event.modifiers & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) || (event.modifiers & SDL_KMOD_ALT)))
+            return std::nullopt;
+        bool repeats = false;
+        const auto printed = SDL_GetKeyFromScancode(event.scancode, event.modifiers & SDL_KMOD_SHIFT, false);
+        const auto unshifted = SDL_GetKeyFromScancode(event.scancode, SDL_KMOD_NONE, false);
+        const auto action = bindings.getActionForShortcut(
+            input::ToolMode::GLOBAL,
+            input::sdlScancodeToAppKey(event.scancode),
+            input::sdlShortcutKeyToAppKey(event.scancode, event.keycode),
+            input::sdlModsToAppMods(event.modifiers),
+            input::sdlPrintedKeyToAppKey(printed),
+            (event.modifiers & SDL_KMOD_SHIFT) && printed != unshifted, &repeats);
+        if (action != input::Action::NEXT_SIDEBAR_CATEGORY && action != input::Action::PREVIOUS_SIDEBAR_CATEGORY)
+            return std::nullopt;
+        if (event.repeat && !repeats)
+            return 0;
+        return action == input::Action::NEXT_SIDEBAR_CATEGORY ? 1 : -1;
+    }
+
+    bool ScreenHost::interceptCategoryInput(const PanelInputState& input) {
+        if (gestures_.active())
+            return false;
+        const auto* const frame = area(areaAt(input.mouse_x, input.mouse_y));
+        if (!frame || frame->editor != screen::editors::kProperties)
+            return false;
+        if (PanelRegistry::instance().isPositionOverFloatingPanel(input.mouse_x, input.mouse_y) ||
+            (services_.rml && services_.rml->activeOverlayOccludesContext(chrome_context_, input.mouse_x,
+                                                                          input.mouse_y)))
+            return false;
+        const auto* const controller = InputController::instance();
+        if (!controller || controller->getBindings().isCapturing())
+            return false;
+        const bool typing = guiFocusState().want_text_input || (services_.rml && services_.rml->wantsTextInput());
+        bool handled = false;
+        for (const auto& event : input.input_events) {
+            const auto step = sidebarCategoryStep(controller->getBindings(), event, typing);
+            if (!step)
+                continue;
+            if (*step != 0 && properties_.cycleTab(*step))
+                chrome_dirty_ = true;
+            if (event.dispatch)
+                event.dispatch->consumed = true;
+            handled = true;
+        }
+        return handled;
+    }
+
     void ScreenHost::processInput(const PanelInputState& input, const bool pointer_free) {
         if (services_.rml && chrome_context_ &&
-            services_.rml->routeInput(chrome_context_, input, [this, pointer_free](const PanelInputState& event) {
-                processInput(event, services_.pointer_available
-                                        ? services_.pointer_available(event.mouse_x, event.mouse_y)
-                                        : pointer_free);
-            }))
+            services_.rml->routeInput(
+                chrome_context_, input,
+                [this, pointer_free](const PanelInputState& event) {
+                    processInput(event, services_.pointer_available
+                                            ? services_.pointer_available(event.mouse_x, event.mouse_y)
+                                            : pointer_free);
+                },
+                false, {}, [this](const PanelInputState& event) { return interceptCategoryInput(event); }))
             return;
         const float x = input.mouse_x;
         const float y = input.mouse_y;

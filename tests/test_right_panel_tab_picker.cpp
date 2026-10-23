@@ -1,13 +1,19 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "gui/panel_registry.hpp"
 #include "gui/rmlui/elements/form_control_layout.hpp"
 #include "gui/screen_host.hpp"
+#include "input/input_bindings.hpp"
+#include "keymap_history_helpers.hpp"
 #include "screen/screen_service.hpp"
 
 #include <RmlUi/Core.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -294,6 +300,98 @@ namespace {
             context->Update();
         }
         EXPECT_EQ(log.errors, std::vector<std::string>{});
+    }
+
+    // Fails if the sidebar category keys stop following the key map, step on a held key whose
+    // binding does not repeat, or take keys that type into a focused text field.
+    class SidebarCategoryKeys : public lfs::vis::input::test::KeymapTest {};
+
+    TEST_F(SidebarCategoryKeys, FollowTheKeyMapAndLeaveTypedKeysToFields) {
+        using lfs::vis::FrameInputEvent;
+        using lfs::vis::FrameInputEventKind;
+        namespace input = lfs::vis::input;
+        input::InputBindings bindings;
+        const auto press = [](const SDL_Scancode scancode, const SDL_Keycode keycode, const SDL_Keymod mods,
+                              const bool repeat = false) {
+            return FrameInputEvent{.kind = FrameInputEventKind::KeyDown,
+                                   .scancode = scancode,
+                                   .keycode = keycode,
+                                   .modifiers = mods,
+                                   .repeat = repeat};
+        };
+        const auto ctrl_tab = press(SDL_SCANCODE_TAB, SDLK_TAB, SDL_KMOD_LCTRL);
+        EXPECT_EQ(ScreenHost::sidebarCategoryStep(bindings, ctrl_tab, false), 1);
+        EXPECT_EQ(ScreenHost::sidebarCategoryStep(bindings, press(SDL_SCANCODE_TAB, SDLK_TAB, SDL_KMOD_LCTRL | SDL_KMOD_LSHIFT), false), -1);
+        EXPECT_FALSE(ScreenHost::sidebarCategoryStep(bindings, press(SDL_SCANCODE_TAB, SDLK_TAB, SDL_KMOD_NONE), false));
+        // A Ctrl chord still steps while a field has focus.
+        EXPECT_EQ(ScreenHost::sidebarCategoryStep(bindings, ctrl_tab, true), 1);
+        // A held key is consumed without stepping unless its binding repeats.
+        EXPECT_EQ(ScreenHost::sidebarCategoryStep(bindings, press(SDL_SCANCODE_TAB, SDLK_TAB, SDL_KMOD_LCTRL, true), false), 0);
+        lfs::vis::InputEventDispatch consumed;
+        consumed.consumed = true;
+        auto handled = ctrl_tab;
+        handled.dispatch = &consumed;
+        EXPECT_FALSE(ScreenHost::sidebarCategoryStep(bindings, handled, false));
+
+        bindings.setBinding(input::ToolMode::GLOBAL, input::Action::NEXT_SIDEBAR_CATEGORY,
+                            input::KeyTrigger{input::KEY_N});
+        const auto n = press(SDL_SCANCODE_N, SDLK_N, SDL_KMOD_NONE);
+        EXPECT_FALSE(ScreenHost::sidebarCategoryStep(bindings, ctrl_tab, false));
+        EXPECT_EQ(ScreenHost::sidebarCategoryStep(bindings, n, false), 1);
+        // N types into a focused field instead.
+        EXPECT_FALSE(ScreenHost::sidebarCategoryStep(bindings, n, true));
+    }
+
+    // Fails if cycling stops wrapping, or if closing a tab disables its panel instead of handing
+    // the tab to the owner, which unloads the plugin once the input dispatch returns.
+    TEST(PropertiesEditorTabs, CycleWrapsAndClosedTabsGoToTheOwner) {
+        class Panel final : public IPanel {
+            void draw(const PanelDrawContext&) override {}
+        };
+        static constexpr std::array ids{"test.sidebar_cycle_a", "test.sidebar_cycle_b", "test.sidebar_cycle_c"};
+        auto& registry = PanelRegistry::instance();
+        for (const char* id : ids) {
+            PanelInfo info;
+            info.id = id;
+            info.label = id;
+            info.space = PanelSpace::MainPanelTab;
+            info.tab_closeable = true;
+            info.panel = std::make_shared<Panel>();
+            ASSERT_TRUE(registry.register_panel(std::move(info)));
+        }
+        struct Unregister {
+            ~Unregister() {
+                for (const char* id : ids)
+                    PanelRegistry::instance().unregister_panel(id);
+            }
+        } unregister;
+        const auto tabs = registry.get_panels_for_space(PanelSpace::MainPanelTab);
+        ASSERT_GE(tabs.size(), ids.size());
+        const auto index_of = [&](const std::string& id) {
+            return static_cast<int>(std::ranges::find(tabs, id, &PanelSummary::id) - tabs.begin());
+        };
+        const int count = static_cast<int>(tabs.size());
+
+        PropertiesEditor editor;
+        editor.setActiveTab(ids[0]);
+        const int start = index_of(ids[0]);
+        ASSERT_TRUE(editor.cycleTab(1));
+        EXPECT_EQ(editor.activeTab(), tabs[static_cast<size_t>((start + 1) % count)].id);
+        ASSERT_TRUE(editor.cycleTab(-1));
+        EXPECT_EQ(editor.activeTab(), ids[0]);
+        editor.setActiveTab(tabs.front().id);
+        ASSERT_TRUE(editor.cycleTab(-1));
+        EXPECT_EQ(editor.activeTab(), tabs.back().id);
+        EXPECT_FALSE(editor.cycleTab(0));
+
+        lfs::vis::screen::ScreenService screens;
+        editor.setActiveTab(ids[1]);
+        editor.headerAction(AreaFrame{}, screens.screen(), std::string("close:") + ids[1], 0.0f, 0.0f);
+        EXPECT_EQ(editor.takeClosedTab(), ids[1]);
+        EXPECT_TRUE(editor.takeClosedTab().empty());
+        EXPECT_TRUE(editor.activeTab().empty());
+        EXPECT_TRUE(std::ranges::any_of(registry.get_panels_for_space(PanelSpace::MainPanelTab),
+                                        [&](const PanelSummary& tab) { return tab.id == ids[1]; }));
     }
 
 } // namespace

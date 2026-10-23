@@ -56,7 +56,7 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] bool knownProgressBarStyle(std::string_view style) {
-            return style == "classic" || style == "miner";
+            return style == "classic" || style == "miner" || style == "tessle";
         }
 
         [[nodiscard]] bool knownViewportChromeStyle(std::string_view style) {
@@ -568,6 +568,12 @@ namespace lfs::vis {
         values["show_grid"] = settings.show_grid;
         values["show_camera_frustums"] = settings.show_camera_frustums;
         values["desaturate_unselected"] = settings.desaturate_unselected;
+        values["selection_outline"] = settings.selection_outline;
+        values["selection_outline_opacity"] = settings.selection_outline_opacity;
+        values["selection_outline_width"] = settings.selection_outline_width;
+        values["selection_outline_threshold"] = settings.selection_outline_threshold;
+        values["selection_outline_holes"] = settings.selection_outline_holes;
+        values["selection_outline_color"] = {settings.selection_outline_color.r, settings.selection_outline_color.g, settings.selection_outline_color.b};
         values["desaturate_cropping"] = settings.desaturate_cropping;
         values["hide_outside_depth_box"] = settings.depth_filter_viz_mode == 2;
         values["axes_size"] = settings.axes_size;
@@ -607,6 +613,11 @@ namespace lfs::vis {
             if (!it->is_boolean())
                 return invalid("show_camera_frustums");
             candidate.show_camera_frustums = it->get<bool>();
+        }
+        if (const auto it = values.find("selection_outline"); it != values.end()) {
+            if (!it->is_boolean())
+                return invalid("selection_outline");
+            candidate.selection_outline = it->get<bool>();
         }
         if (const auto it = values.find("desaturate_unselected"); it != values.end()) {
             if (!it->is_boolean())
@@ -687,6 +698,51 @@ namespace lfs::vis {
                 candidate.selection_color_center_marker[static_cast<int>(i)] = static_cast<float>(value);
             }
         }
+        if (const auto it = values.find("selection_outline_color"); it != values.end()) {
+            if (!it->is_array() || it->size() != 3)
+                return invalid("selection_outline_color");
+            for (size_t i = 0; i < 3; ++i) {
+                if (!(*it)[i].is_number())
+                    return invalid("selection_outline_color");
+                const double value = (*it)[i].get<double>();
+                if (!std::isfinite(value) || value < 0 || value > 1)
+                    return invalid("selection_outline_color");
+                candidate.selection_outline_color[static_cast<int>(i)] = static_cast<float>(value);
+            }
+        }
+        if (const auto it = values.find("selection_outline_opacity"); it != values.end()) {
+            if (!it->is_number())
+                return invalid("selection_outline_opacity");
+            const double value = it->get<double>();
+            if (!std::isfinite(value) || value < 0 || value > 1)
+                return invalid("selection_outline_opacity");
+            candidate.selection_outline_opacity = static_cast<float>(value);
+        }
+
+        if (const auto it = values.find("selection_outline_width"); it != values.end()) {
+            if (!it->is_number())
+                return invalid("selection_outline_width");
+            const double value = it->get<double>();
+            if (!std::isfinite(value) || value < 1 || value > 12)
+                return invalid("selection_outline_width");
+            candidate.selection_outline_width = static_cast<float>(value);
+        }
+
+        if (const auto it = values.find("selection_outline_threshold"); it != values.end()) {
+            if (!it->is_number())
+                return invalid("selection_outline_threshold");
+            const double value = it->get<double>();
+            if (!std::isfinite(value) || value < 0.05 || value > 0.95)
+                return invalid("selection_outline_threshold");
+            candidate.selection_outline_threshold = static_cast<float>(value);
+        }
+
+        if (const auto it = values.find("selection_outline_holes"); it != values.end()) {
+            if (!it->is_boolean())
+                return invalid("selection_outline_holes");
+            candidate.selection_outline_holes = it->get<bool>();
+        }
+
         settings = std::move(candidate);
         return {};
     }
@@ -1788,6 +1844,24 @@ namespace lfs::vis {
     }
     std::filesystem::path projectLocationPreferenceRaw() {
         return UserPreferences::instance().projectLocationPreference();
+    }
+    std::filesystem::path resolvedProjectLocationPreference() {
+        const auto raw = projectLocationPreferenceRaw();
+        if (raw.empty())
+            return {};
+        const auto expanded = expandLeadingTilde(raw);
+        std::error_code error;
+        const auto absolute = std::filesystem::absolute(expanded, error);
+        return error || !expanded.is_absolute() ? std::filesystem::path{}
+                                                : absolute.lexically_normal();
+    }
+    lfs::Status probeProjectLocation(const std::filesystem::path& path) {
+        if (auto probed = validateWritableDirectory(
+                path, "project_location", "The project location",
+                ".lfs-project-write-probe-");
+            !probed)
+            return lfs::Status::failure(std::move(probed).error());
+        return {};
     }
     void clearProjectLocationPreference() {
         UserPreferences::instance().clearProjectLocation();

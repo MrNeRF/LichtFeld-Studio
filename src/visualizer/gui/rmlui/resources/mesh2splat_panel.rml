@@ -26,7 +26,7 @@
     <span class="m2s-section-title text-accent">@tr:mesh2splat.sampling_density_header</span>
 
     <div class="setting-row setting-row--aligned">
-      <span class="setting-row__label-col">@tr:mesh2splat.gaussian_scale</span>
+      <span class="setting-row__label-col" data-reset-prop="gaussian_scale">@tr:mesh2splat.gaussian_scale</span>
       <div class="setting-row__control-col setting-row__control-col--slider">
         <input id="gaussian-scale-slider"
                type="range"
@@ -41,7 +41,7 @@
     <span class="m2s-help text-muted">@tr:mesh2splat.tooltip_gaussian_scale</span>
 
     <div class="setting-row setting-row--aligned">
-      <span class="setting-row__label-col">@tr:mesh2splat.sampling_density</span>
+      <span class="setting-row__label-col" data-reset-prop="quality">@tr:mesh2splat.sampling_density</span>
       <div class="setting-row__control-col setting-row__control-col--slider">
         <input id="quality-slider"
                type="range"

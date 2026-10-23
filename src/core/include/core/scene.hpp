@@ -190,6 +190,9 @@ namespace lfs::core {
         // splats): it cannot be trained or edited in place. Runtime only.
         bool model_streamed = false;
         bool point_cloud_source = false;
+        // Shown in the viewer but never saved to the project, e.g. a preview
+        // that its owner fetches again when the project is opened.
+        bool transient = false;
         PayloadHydrationState payload_hydration =
             PayloadHydrationState::NotApplicable;
         std::optional<GeoreferencePose> georef_pose;

@@ -184,6 +184,8 @@ namespace lfs::vis {
             std::string expected_project_uuid = {}) override;
         lfs::Result<ProjectWritePoll>
         projectPollWrite() override;
+        lfs::Result<ProjectTrainingSource>
+        projectTrainingSource() override;
         bool consumeProjectSaveStarted() override;
         bool consumeProjectCreateSucceeded() override;
         bool projectCreatePending() const override;
@@ -328,6 +330,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_DirectSplatLoadRejectsActiveTrainingWithoutConsent_Test;
         friend class VisualizerImplResetTest_DirectSplatLoadWithoutActiveTrainingStillReplacesScene_Test;
         friend class VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
+        friend class VisualizerImplResetTest_ProjectSaveLeavesTransientNodesOut_Test;
         friend class VisualizerImplResetTest_AsyncTrainingBindReturnsBeforeSlowWriteAndCoalescesStarts_Test;
         friend class VisualizerImplResetTest_AsyncTrainingBindFailureDoesNotStart_Test;
         friend class VisualizerImplResetTest_AsyncTrainingBindCloseDoesNotStart_Test;
@@ -362,7 +365,12 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_ProjectCreateOnDirtyForwardsOverwriteAuthorization_Test;
         friend class VisualizerImplResetTest_StartupScansLegacyWorkingTmpDirectory_Test;
         friend class VisualizerImplResetTest_StartupPruneNeverTouchesProjectLocation_Test;
-        friend class VisualizerImplResetTest_ScratchDirectoryIsFixedUnderRootRegardlessOfPreferences_Test;
+        friend class VisualizerImplResetTest_ScratchDirectoryFollowsProjectLocationPreference_Test;
+        friend class VisualizerImplResetTest_ScratchDirectoryFallsBackToRootWhenProjectLocationUnusable_Test;
+        friend class VisualizerImplResetTest_StartupRecoveryScansRootAndProjectLocationScratch_Test;
+        friend class VisualizerImplResetTest_UntitledAutosaveDiskFullToastNamesFolder_Test;
+        friend class VisualizerImplResetTest_AutosaveDiskFullToastShowsOncePerFailureStreak_Test;
+        friend class VisualizerImplResetTest_ScratchLocationProbeRunsOffCallingThread_Test;
         friend class VisualizerImplResetTest_ProjectCreateWhileTrainingPromptsWithCreatePath_Test;
         friend class VisualizerImplResetTest_ProjectCreateStopTrainingDefersWithoutBinding_Test;
         friend class VisualizerImplResetTest_DeferredCreateLateCollisionDropsQueuedLoads_Test;
@@ -398,6 +406,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
         friend class VisualizerImplResetTest_CleanProjectWorksAfterFirstSaveWithoutReopen_Test;
         friend class VisualizerImplResetTest_AsyncCaptureKeepsNewerSceneDirty_Test;
+        friend class PayloadRecaptureTest;
         friend class VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
         friend class VisualizerImplResetTest_RecoveredProjectSwitchDeletesTempOnlyAfterReplacement_Test;
         friend class VisualizerImplResetTest_FailedNewProjectKeepsRecoveredSessionTemp_Test;

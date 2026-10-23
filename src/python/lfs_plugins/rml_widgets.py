@@ -199,6 +199,13 @@ class EscapeRevertController:
         """
         self._capture_binding(str(key))
 
+    def rebase(self, keys):
+        """A committed external reset becomes the new Escape baseline."""
+        for key in keys:
+            binding = self._bindings.get(str(key))
+            if binding is not None and binding.snapshot is not None:
+                binding.snapshot = binding.capture()
+
     def is_editing(self, key):
         binding = self._bindings.get(str(key))
         return binding is not None and binding.snapshot is not None

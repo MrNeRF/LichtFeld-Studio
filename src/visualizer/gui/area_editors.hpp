@@ -125,6 +125,11 @@ namespace lfs::vis::gui {
         void setActiveTab(std::string id);
         // Focuses a tab by id or label (used by "show panel" requests).
         bool focusTab(std::string_view id_or_label);
+        // Steps the active tab by `direction` (+1 next, -1 previous) and wraps around.
+        bool cycleTab(int direction);
+        // The tab closed from its header since the last call. Closing a plugin's tab
+        // unloads the plugin, which the owner does once the input dispatch returns.
+        [[nodiscard]] std::string takeClosedTab() { return std::exchange(closed_tab_, {}); }
         [[nodiscard]] float scroll() const { return scroll_; }
         void setScroll(float value) { scroll_ = value; }
 
@@ -133,6 +138,7 @@ namespace lfs::vis::gui {
 
         mutable std::vector<PanelSummary> tabs_;
         std::string active_tab_;
+        std::string closed_tab_;
         float scroll_ = 0.0f;
         float content_height_ = 0.0f;
     };

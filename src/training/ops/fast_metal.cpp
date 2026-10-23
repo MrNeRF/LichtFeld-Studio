@@ -714,6 +714,9 @@ namespace lfs::training {
         void backward(lfs::gpu_ops::FastSaved& saved, const lfs::gpu_ops::RenderGradients& gradients,
                       Tensor& densification, const Tensor& error_map, const Tensor& edge_map, Tensor& edge_scores,
                       const lfs::gpu_ops::BackwardAdam& adam, const DensificationType densification_type) {
+            // Training setup rejects this before the first step (FastRasterOps::color_variance).
+            if (adam.color_variance_weight != 0.f)
+                throw std::invalid_argument("The Metal FastGS backward does not support the color variance loss");
             auto& s = state_of(saved);
             const Frame f = std::exchange(s.frame, {});
             if (!f.live)

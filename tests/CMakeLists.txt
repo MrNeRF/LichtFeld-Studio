@@ -410,6 +410,8 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
     endif()
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
+        test_keymap_upgrade.cpp
+        test_keymap_default_contract.cpp
         test_align_transform.cpp
         test_orthographic_zoom.cpp
         test_zoom_toward_cursor.cpp
@@ -506,6 +508,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         GTest::gtest_main
         Zep::Zep
         SDL3::SDL3
+        ZLIB::ZLIB
     )
     if(APPLE)
         # On macOS the visualizer resolves CPython from the host process. The app
@@ -719,6 +722,7 @@ set_tests_properties(lichtfeld.sdl_coordinates PROPERTIES LABELS "fast;cpu;input
 # unreferenced function sections before resolution. Keep the dependency-heavy
 # chapter coverage in the non-Windows composition.
 set(LICHT_FORMAT_WINDOWS_FILES
+    test_property_defaults.cpp
     test_atomic_output.cpp
     test_project_save_as_paths.cpp
     test_native_fs.cpp
@@ -885,6 +889,22 @@ add_test(NAME lichtfeld_frame_tests
 set_tests_properties(lichtfeld_frame_tests PROPERTIES
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     LABELS "fast;frame"
+    TIMEOUT 30
+)
+
+add_executable(lichtfeld_tls_distrust_tests test_tls_distrust.cpp)
+target_include_directories(lichtfeld_tls_distrust_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/core/include)
+target_link_libraries(lichtfeld_tls_distrust_tests PRIVATE GTest::gtest_main OpenSSL::SSL OpenSSL::Crypto)
+set_target_properties(lichtfeld_tls_distrust_tests PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+add_test(NAME lichtfeld_tls_distrust_tests
+    COMMAND $<TARGET_FILE:lichtfeld_tls_distrust_tests> --gtest_color=no
+)
+set_tests_properties(lichtfeld_tls_distrust_tests PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    LABELS "fast;security"
     TIMEOUT 30
 )
 
@@ -1241,6 +1261,7 @@ set(TEST_FILES
     test_mcmc_tensor_ops.cpp
     test_training_cropbox_mask.cpp
     test_training_parameters.cpp
+    test_property_defaults.cpp
     test_tensor_index_select_uint8.cpp
     test_tensor_cuda_byte_image.cpp
     test_image_tensor.cpp
@@ -1289,6 +1310,7 @@ set(TEST_FILES
     test_selection_chapter.cpp
     test_project_document.cpp
     test_project_thumbnail_sources.cpp
+    test_project_training_copy.cpp
     test_gallery_scene_publication.cpp
     test_project_lifecycle.cpp
     test_p8_compatibility.cpp
@@ -1367,6 +1389,7 @@ set(TEST_FILES
     test_tensor_kernels_6c_elem.cpp
     test_tensor_lazy_stateful_ops.cpp
     test_fastgs_kernels.cpp
+    test_color_variance.cpp
     fastgs_visibility_readback_cuda.cu
     test_fastgs_fuzz.cpp
     test_fastgs_tile_culling_boundary.cpp
@@ -1439,6 +1462,7 @@ set(TEST_FILES
     test_pipelined_loader_backends.cpp
     test_pipelined_loader_ledger.cpp
     test_pipelined_loader_sidecar_jpeg2k.cpp
+    test_image_sharpen.cpp
     test_operator_return_value.cpp
     test_sdl_rml_key_mapping.cpp
     test_rml_path_utils.cpp
@@ -1527,6 +1551,7 @@ set(TEST_FILES
     test_menu_bar_title.cpp
     test_guide_segment_clipping.cpp
     test_status_bar_mining.cpp
+    test_status_bar_tessle.cpp
     test_right_panel_tab_picker.cpp
     test_rotated_sh_correctness.cpp
     test_splat_raw_payload.cpp
@@ -2156,6 +2181,7 @@ endif()
 # Keep every Python tier explicit so new modules cannot silently drift out of
 # the curated suite.
 set(LFS_PYTHON_FAST_TESTS
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_default_reset.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_ci_format_push.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_ci_retry_configure.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_gallery_storage.py
@@ -2782,6 +2808,17 @@ set_tests_properties(lichtfeld.decimate.perf PROPERTIES
     LABELS "nightly;gpu" ENVIRONMENT "LFS_DECIMATE_PERF=1" TIMEOUT 60)
 
 # Focused CUDA renderer contracts.
+add_executable(color_variance_tests test_main.cpp test_color_variance.cpp fast_raster_test_helpers.cpp)
+target_compile_features(color_variance_tests PRIVATE cxx_std_23)
+target_include_directories(color_variance_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/training ${CUDAToolkit_INCLUDE_DIRS})
+target_link_libraries(color_variance_tests PRIVATE lfs_training lfs_core GTest::gtest CUDA::cudart)
+if(COMMAND lfs_enable_fast_cxx_compile)
+    lfs_enable_fast_cxx_compile(color_variance_tests)
+endif()
+add_test(NAME ColorVarianceContracts COMMAND color_variance_tests)
+set_tests_properties(ColorVarianceContracts PROPERTIES LABELS "fast;gpu" TIMEOUT 120)
+
 add_executable(gsplat_tests test_main.cpp test_gsplat_rasterizer.cpp fast_raster_test_helpers.cpp tensor_hardening_cuda_utils.cu)
 target_compile_features(gsplat_tests PRIVATE cxx_std_23)
 target_include_directories(gsplat_tests PRIVATE

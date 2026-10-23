@@ -3,7 +3,11 @@
 
 #include "lfs/training/ops/registry.hpp"
 
+#include "core/gpu_backend_fwd.hpp"
 #include "core/parameters.hpp"
+#include "io/pipelined_image_loader.hpp"
+
+#include <format>
 
 namespace lfs::training {
     namespace {
@@ -105,10 +109,24 @@ namespace lfs::training {
         const TrainingOps& ops = training_ops(backend);
         const FamilySet required = required_training_families(resolved, input_dependencies);
         const auto missing = missing_training_families(ops, required);
-        if (missing.empty()) {
-            return std::nullopt;
+        if (!missing.empty()) {
+            return training_unavailable_message(backend, missing);
         }
-        return training_unavailable_message(backend, missing);
+        // Options that live inside a family's kernels rather than in a family of their own.
+        const auto& opt = resolved.optimization;
+        if (opt.color_variance_weight > 0.f && opt.raster_backend() != RasterBackendId::ThreeDGUT &&
+            (ops.fast == nullptr || !ops.fast->color_variance)) {
+            return std::format("{} training does not support the color variance loss. "
+                               "Set the color variance weight to 0 or train with the CUDA backend.",
+                               core::gpu_backend_name(backend));
+        }
+        if (resolved.dataset.loading_params.sharpen.enabled() &&
+            !lfs::io::PipelinedImageLoader::supports_sharpening(backend)) {
+            return std::format("{} training does not support sharpening training images. "
+                               "Set the sharpen amount to 0 or train with the CUDA backend.",
+                               core::gpu_backend_name(backend));
+        }
+        return std::nullopt;
     }
 
     std::optional<std::string> unavailable_training_family(

@@ -206,7 +206,11 @@ namespace lfs::python {
             .value("TOGGLE_MAXIMIZE_AREA", Action::TOGGLE_MAXIMIZE_AREA)
             .value("TOGGLE_NODE_EDITOR", Action::TOGGLE_NODE_EDITOR)
             .value("DEPTH_WINDOW_DRAG", Action::DEPTH_WINDOW_DRAG)
-            .value("TOGGLE_PYTHON_CONSOLE", Action::TOGGLE_PYTHON_CONSOLE);
+            .value("TOGGLE_PYTHON_CONSOLE", Action::TOGGLE_PYTHON_CONSOLE)
+            .value("NEXT_SIDEBAR_CATEGORY", Action::NEXT_SIDEBAR_CATEGORY)
+            .value("PREVIOUS_SIDEBAR_CATEGORY", Action::PREVIOUS_SIDEBAR_CATEGORY)
+            .value("REMOVE_LAST_POINT", Action::REMOVE_LAST_POINT)
+            .value("APPLY_ALIGNMENT", Action::APPLY_ALIGNMENT);
 
         // Expose ToolMode enum
         nb::enum_<ToolMode>(keymap, "ToolMode")

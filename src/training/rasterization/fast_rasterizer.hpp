@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/tensor.hpp"
 #include "optimizer/adam_optimizer.hpp"
 
 namespace lfs::training {
@@ -32,6 +33,15 @@ namespace lfs::training {
         float* edge_score_out = nullptr;
         float* impact_sum_out = nullptr;
         float* impact_peak_out = nullptr;
+    };
+
+    struct FastGSColorVarianceLoss {
+        lfs::core::Tensor target;
+        lfs::core::Tensor loss; // Optional caller-zeroed CUDA float32 scalar.
+        float weight = 0.0f;
+        // Optional CUDA Float32 [H, W] pixel weights, such as the crop box ROI. The loss
+        // then takes their weighted mean over the pixels, like the photometric loss.
+        lfs::core::Tensor pixel_weight;
     };
 
 } // namespace lfs::training

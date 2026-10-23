@@ -23,6 +23,7 @@
 
 namespace lfs::vis {
     class VisualizerImpl;
+    class CropVolumeSourceTest_GizmoEditsAreSavedAsSceneState_Test;
 
     namespace gui {
 
@@ -102,7 +103,7 @@ namespace lfs::vis {
             [[nodiscard]] std::optional<ViewportGizmoPress> viewportGizmoPress() const;
             // What the axis widget shows under the pointer: -1 off every sphere,
             // otherwise the view and hovered marker, so a change needs a redraw.
-            [[nodiscard]] int viewportGizmoHover(double x, double y) const;
+            [[nodiscard]] LFS_VIS_API int viewportGizmoHover(double x, double y) const;
             [[nodiscard]] bool isPositionInViewportGizmo(double x, double y) const;
             [[nodiscard]] ToolType getCurrentToolMode() const;
 
@@ -116,6 +117,7 @@ namespace lfs::vis {
             [[nodiscard]] bool isPieMenuOpen() const { return pie_menu_.isOpen(); }
 
         private:
+            friend class lfs::vis::CropVolumeSourceTest_GizmoEditsAreSavedAsSceneState_Test;
             struct ToolStateStamp {
                 bool valid = false;
                 bool ui_hidden = false;
@@ -257,7 +259,7 @@ namespace lfs::vis {
             [[nodiscard]] bool isSelectionVolumeMode() const;
             [[nodiscard]] bool isVolumeGizmoToolActive() const;
             [[nodiscard]] std::optional<core::NodeId> selectedCropTargetNodeId() const;
-            [[nodiscard]] bool ensureCropToolState();
+            [[nodiscard]] LFS_VIS_API bool ensureCropToolState();
             [[nodiscard]] bool syncCropToolStateFromNode(core::NodeId target_id, core::NodeId volume_node_id, bool* changed = nullptr);
             [[nodiscard]] bool persistActiveCropToolToNode(bool enable);
             void scaleCropToolTransform(const glm::vec3& total_scale);

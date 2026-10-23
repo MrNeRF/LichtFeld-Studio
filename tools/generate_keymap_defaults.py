@@ -45,6 +45,9 @@ v32 6537262420834b1a7ff1a705cc2d6aa39b96c490
 v33 2a1cc48bd73e6011a2ad20065b3079bebd2e783b
 v33_master 76f632b973bb7dbd477f48a265f4f68c8a5d8803
 v34 8a938b44bf6ec366d714df4e29a54ad422ed4977
+v34_master f3a2b375b7162e1eff44f6413b46f32854b5386a
+v35 f1dd826eb975dba7430ae0b654143ccff3dda138
+v35_master ae160b1f0ebe73a610418fe99f14284586f471dd
 '''
 SOURCES = dict(row.split() for row in SOURCE_ROWS.splitlines() if row.strip())
 VERSION_OVERRIDES = {"v30": 30}  # v30 changed storage only; defaults match v29_master.

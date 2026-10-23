@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
@@ -536,6 +537,8 @@ namespace lfs::vis {
         std::optional<core::Tensor> modifier_preview_selection_;
         std::uint64_t modifier_preview_generation_ = 0;
         mutable std::uint64_t cached_render_modifier_preview_generation_ = 0;
+
+        lfs::event::ScopedHandler event_handlers_;
     };
 
 } // namespace lfs::vis

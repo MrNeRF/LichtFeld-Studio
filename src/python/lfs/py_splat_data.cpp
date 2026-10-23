@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "py_splat_data.hpp"
+#include "core/scene.hpp"
 #include <nanobind/stl/optional.h>
 #include <stdexcept>
 #include <string_view>
@@ -109,6 +110,12 @@ namespace lfs::python {
         auto sh0 = data_->sh0_raw();
         const int n = static_cast<int>(rgb.shape()[0]);
         sh0.copy_(sh0_values.reshape({n, 1, 3}));
+        notify_changed();
+    }
+
+    void PySplatData::notify_changed() const {
+        if (scene_)
+            scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
     }
 
     // Soft deletion
@@ -121,11 +128,13 @@ namespace lfs::python {
 
     PyTensor PySplatData::soft_delete(const PyTensor& mask) {
         core::Tensor newly_deleted = data_->soft_delete(mask.tensor());
+        notify_changed();
         return PyTensor(std::move(newly_deleted), true);
     }
 
     void PySplatData::undelete(const PyTensor& mask) {
         data_->undelete(mask.tensor());
+        notify_changed();
     }
 
     void PySplatData::reserve_capacity(const size_t capacity) {

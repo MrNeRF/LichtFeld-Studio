@@ -260,6 +260,62 @@ signals rather than native store fields. For a current poll/snapshot use
 
 Old Python UI hooks still compile, but hook registration is deprecated for external plugins. Use retained RML data models plus `RuntimeState` subscriptions for new UI.
 
+### Label double-click resets
+
+Retained panels can opt into the shared reset helper. Existing plugins keep their
+current behavior unless they mount a controller; there is no required plugin
+migration or checker.
+
+```python
+from lfs_plugins.default_reset import LabelDefaultReset
+
+# Keep one controller per panel instance. These are your panel's own callbacks.
+self._default_reset = LabelDefaultReset(self._reset_default, self._apply_reset)
+
+# In on_mount(doc), after binding the panel model:
+self._default_reset.mount(doc)
+
+# In on_unmount():
+self._default_reset.unmount()
+```
+
+Mark the label and its existing row in the panel's RML:
+
+```html
+<div class="setting-row" data-reset-row="true">
+    <span class="prop-label" data-reset-prop="samples">Samples</span>
+    <input type="number" data-value="samples" />
+</div>
+```
+
+`_reset_default(name)` returns a default in the control's value representation,
+or `None` if reset is unavailable. Zero, `False` and empty strings are valid
+values. Python `EnumProperty.default` is an identifier, not an option index.
+Native rendering settings expose the resolved value in
+`settings.prop_info(name)["builtin_default"]`; native enum descriptors and their
+`default_identifier` use the same value-based resolution. Optimization parameters
+provide `params.builtin_default(name)` for method/capacity/step-dependent defaults.
+A reset must not use an edited current value as its default.
+
+`_apply_reset(name, value)` must recheck runtime and method locks, use the panel's
+existing validated setter, discard stale text/scrub drafts and synchronize its
+model. Return exactly `True` only after accepting the change. The helper checks
+disabled/read-only/hidden controls and ancestors, but that does not replace the
+panel's runtime checks. It never bypasses a training lock.
+
+A primary-button double-click on a label resets its value. Double-clicking the
+input retains its existing behavior. The helper delegates listeners at the
+mounted document, supports dynamically created rows, shows a translated reset
+hint and briefly animates paint properties on the label and input after success.
+It does not change layout or add a renderer pass. Unknown defaults and rejected
+changes produce no success animation.
+
+Registry-backed rows with standard label classes can infer a simple bound
+property, but the panel's default resolver must explicitly accept it. Explicit
+`data-reset-prop` annotations are preferable for custom or compound controls.
+Paths, commands and unrelated forms should remain outside the reset resolver's
+allowlist.
+
 ### Panel spaces
 
 `MAIN_PANEL_TAB`, `SIDE_PANEL`, `VIEWPORT_OVERLAY`, `SCENE_HEADER`,

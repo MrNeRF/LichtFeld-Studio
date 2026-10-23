@@ -155,6 +155,8 @@ namespace lfs::io {
                                               const LoadParams& params,
                                               const bool decode_16bit,
                                               const bool alpha_is_transparency) {
+            if (params.sharpen.enabled())
+                throw std::invalid_argument("Sharpening training images needs the CUDA image loader");
             const auto rgba = load_rgba_image_cpu_decoded(path, params.undistort ? 1 : params.resize_factor,
                                                           params.undistort ? 0 : params.max_width, nullptr,
                                                           decode_16bit, !alpha_is_transparency);
@@ -338,6 +340,9 @@ namespace lfs::io {
         const LoadParams& params,
         lfs::core::TensorUpload& upload,
         const std::vector<uint8_t>* const encoded) {
+        // Sharpening runs in the CUDA loader only; training setup rejects it on other backends.
+        if (params.sharpen.enabled())
+            throw std::invalid_argument("Sharpening training images needs the CUDA image loader");
         {
             std::lock_guard stats_lock(stats_mutex_);
             ++stats_.cpu_decode_calls;

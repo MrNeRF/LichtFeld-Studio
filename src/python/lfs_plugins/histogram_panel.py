@@ -19,6 +19,7 @@ from . import rml_widgets as w
 from .types import Panel
 from .panels import panel_class
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
+from .default_reset import LabelDefaultReset, values_match
 from .ui import RuntimeState
 
 __lfs_panel_classes__ = ["HistogramPanel"]
@@ -231,6 +232,7 @@ class HistogramPanel(Panel):
         self._compare_y_sorted_sample: tuple[int, list[float]] | None = None
         self._static_bin_records_value: list[dict[str, object]] | None = None
         self._finish_histogram_init()
+        self._default_reset = LabelDefaultReset(self._reset_default, self._apply_reset)
         self._scrub_fields = ScrubFieldController(
             {
                 "histogram_bin_count": ScrubFieldSpec(MIN_HISTOGRAM_BIN_COUNT, MAX_HISTOGRAM_BIN_COUNT, 1, "%d", int),
@@ -370,6 +372,19 @@ class HistogramPanel(Panel):
     def poll(cls, context):
         return histogram_mode_available(context)
 
+    def _reset_default(self, prop):
+        return {"histogram_bin_count": DEFAULT_HISTOGRAM_BIN_COUNT,
+                "compare_x_bin_count": DEFAULT_COMPARE_X_BIN_COUNT,
+                "compare_y_bin_count": DEFAULT_COMPARE_Y_BIN_COUNT}.get(prop)
+
+    def _apply_reset(self, prop, value):
+        if self._reset_default(prop) is None:
+            return False
+        self._scrub_fields.prepare_reset(prop)
+        self._set_bin_scrub_value(prop, value)
+        self._scrub_fields.sync_all()
+        return values_match(self._get_bin_scrub_value(prop), value)
+
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("histogram_panel")
         if model is None:
@@ -485,6 +500,7 @@ class HistogramPanel(Panel):
         self._compare_chart_el = doc.get_element_by_id("compare-cells")
         self._sync_panel_space_state()
         self._scrub_fields.mount(doc)
+        self._default_reset.mount(doc)
         if self._chart_el:
             self._chart_el.add_event_listener("mousedown", self._on_chart_mousedown)
             self._chart_el.add_event_listener("mousescroll", self._on_chart_mousescroll)
@@ -585,6 +601,7 @@ class HistogramPanel(Panel):
 
     def on_unmount(self, doc):
         self._scrub_fields.unmount()
+        self._default_reset.unmount()
         self._metric_select_geometry_key = None
         self._cancel_histogram_compute()
         self._unsubscribe_reactive_state()

@@ -68,7 +68,8 @@ namespace lfs::training {
         const FastGSFusedExtraGradients& fused_extra_gradients,
         const lfs::core::Tensor& grad_depth,
         const lfs::core::Tensor& grad_normal,
-        const bool defer_optimizer_step) {
+        const bool defer_optimizer_step,
+        const FastGSColorVarianceLoss& color_variance) {
         const auto& ops = cuda_fast_ops();
         const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
         const auto prepared = defer_optimizer_step
@@ -120,6 +121,10 @@ namespace lfs::training {
                     .sh_rest_reg_loss = device_f32(fused_extra_gradients.sh_rest_reg_loss_out, {1}),
                     .impact_sum = device_f32(fused_extra_gradients.impact_sum_out, {static_cast<size_t>(gaussian_model.size())}),
                     .impact_peak = device_f32(fused_extra_gradients.impact_peak_out, {static_cast<size_t>(gaussian_model.size())}),
+                    .color_variance_weight = color_variance.weight,
+                    .color_variance_target = color_variance.target,
+                    .color_variance_loss = color_variance.loss,
+                    .color_variance_pixel_weight = color_variance.pixel_weight,
                 },
                 densification_type);
             if (!defer_optimizer_step && fastgs_adam_enabled(prepared)) {

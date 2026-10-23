@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/exportable_storage.hpp"
@@ -202,7 +204,7 @@ namespace lfs::vis {
             lfs::core::Tensor& destination,
             int destination_x,
             int destination_y) const;
-        [[nodiscard]] std::expected<float, std::string> sampleDepthAtPixel(
+        [[nodiscard]] LFS_VIS_API std::expected<float, std::string> sampleDepthAtPixel(
             VulkanContext& context,
             const DepthSampleRequest& request) const;
 

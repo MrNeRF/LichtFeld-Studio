@@ -3,7 +3,7 @@
 """Plugin data structures."""
 
 from dataclasses import dataclass, field
-from _lfs_path_io import Path
+from _lfs_path_io import Path, walk
 from typing import Any, Iterator, List, Optional
 from enum import Enum
 import re
@@ -66,13 +66,17 @@ class PluginInstance:
     file_mtimes: dict = field(default_factory=dict)
     sys_paths: List[str] = field(default_factory=list)
     localization_tokens: List[int] = field(default_factory=list)
+    needs_restart: bool = False
 
 
 def iter_plugin_watch_files(plugin_path: Path) -> Iterator[Path]:
     """Yield source files whose changes require a plugin reload."""
-    for py_file in plugin_path.rglob("*.py"):
-        if ".venv" not in py_file.parts:
-            yield py_file
+    # Prune .venv and __pycache__ instead of scanning their contents on every poll.
+    for root, dirs, files in walk(plugin_path):
+        dirs[:] = [name for name in dirs if name not in (".venv", "__pycache__")]
+        for filename in files:
+            if filename.endswith(".py"):
+                yield Path(root) / filename
 
     locales_dir = plugin_path / "locales"
     if locales_dir.is_dir():

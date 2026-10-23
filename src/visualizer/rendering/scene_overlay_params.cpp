@@ -3,6 +3,7 @@
 #include "scene_overlay_params.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include <algorithm>
+#include <cmath>
 #include <format>
 namespace lfs::vis {
     namespace {
@@ -156,8 +157,8 @@ namespace lfs::vis {
                           MarkerFlags,
                           glm::vec4(request.overlay.markers.show_rings ? 1.0f : 0.0f,
                                     request.overlay.markers.show_center_markers ? 1.0f : 0.0f,
-                                    0.0f,
-                                    0.0f));
+                                    request.overlay.markers.show_object_outline ? 1.0f : 0.0f,
+                                    std::isfinite(request.overlay.markers.outline_threshold) ? std::clamp(request.overlay.markers.outline_threshold, 0.05f, 0.95f) : 0.5f));
                 const bool cursor_selection_enabled =
                     !request.overlay.cursor.saturation_preview &&
                     request.overlay.cursor.enabled &&

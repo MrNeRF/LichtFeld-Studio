@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <format>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -221,7 +222,19 @@ namespace lfs::io {
         }
 
         [[nodiscard]] bool load_params_need_processing(const LoadParams& params) {
-            return params.resize_factor > 1 || params.max_width > 0 || params.undistort != nullptr;
+            return params.resize_factor > 1 || params.max_width > 0 || params.undistort != nullptr ||
+                   params.sharpen.enabled();
+        }
+
+        // Radius only changes the usm result.
+        std::string sharpen_cache_suffix(const lfs::core::SharpenParams& sharpen) {
+            if (!sharpen.enabled())
+                return {};
+            auto suffix = std::format("_sharpen_{}_a{}_t{}", lfs::core::sharpen_kernel_name(sharpen.kernel),
+                                      sharpen.amount, sharpen.threshold);
+            if (sharpen.kernel == lfs::core::SharpenKernel::Usm)
+                suffix += std::format("_r{}", sharpen.radius);
+            return suffix;
         }
 
         [[nodiscard]] bool is_regular_file_no_throw(const std::filesystem::path& path) {
@@ -734,14 +747,14 @@ namespace lfs::io {
                 << undistort_cache_hash(params, decodes_16bit(params), 0x726762ULL);
             if (params.decode_float)
                 key << "_f32";
-            return key.str();
+            return key.str() + sharpen_cache_suffix(params.sharpen);
         }
         auto key = lfs::core::path_to_utf8(path) + ":rf" + std::to_string(params.resize_factor) + "_mw" + std::to_string(params.max_width);
         if (decodes_16bit(params))
             key += "_16b";
         if (params.decode_float)
             key += "_f32";
-        return key;
+        return key + sharpen_cache_suffix(params.sharpen);
     }
 
     std::string PipelinedImageLoader::make_mask_cache_key(

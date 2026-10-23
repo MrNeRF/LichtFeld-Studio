@@ -62,7 +62,8 @@ namespace lfs::training {
         const FastGSFusedExtraGradients& fused_extra_gradients = {},
         const lfs::core::Tensor& grad_depth = {},
         const lfs::core::Tensor& grad_normal = {},
-        bool defer_optimizer_step = false);
+        bool defer_optimizer_step = false,
+        const FastGSColorVarianceLoss& color_variance = {});
 
     inline RenderOutput fast_rasterize(
         lfs::core::Camera& camera, lfs::core::SplatData& model, lfs::core::Tensor& bg_color) {

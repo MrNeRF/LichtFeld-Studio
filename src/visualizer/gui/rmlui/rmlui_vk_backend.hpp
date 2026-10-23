@@ -109,7 +109,7 @@ public:
                                         VkImageView depth_stencil_image_view,
                                         std::size_t frame_slot);
     LFS_VIS_API void EndExternalFrame();
-    void ResetContextRenderState();
+    LFS_VIS_API void ResetContextRenderState();
     LFS_VIS_API void SetContextOffset(float offset_x, float offset_y);
     LFS_VIS_API void SetContextClipRect(float x1, float y1, float x2, float y2);
     void RenderTextureQuad(Rml::TextureHandle texture, float x, float y, float w, float h);
@@ -153,9 +153,9 @@ public:
     /// Called by RmlUi when it wants to compile geometry it believes will be static for the forseeable future.
     Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex> vertices, Rml::Span<const int> indices) override;
     /// Called by RmlUi when it wants to render application-compiled geometry.
-    void RenderGeometry(Rml::CompiledGeometryHandle handle, Rml::Vector2f translation, Rml::TextureHandle texture) override;
+    LFS_VIS_API void RenderGeometry(Rml::CompiledGeometryHandle handle, Rml::Vector2f translation, Rml::TextureHandle texture) override;
     /// Called by RmlUi when it wants to release application-compiled geometry.
-    void ReleaseGeometry(Rml::CompiledGeometryHandle geometry) override;
+    LFS_VIS_API void ReleaseGeometry(Rml::CompiledGeometryHandle geometry) override;
 
     /// Called by RmlUi when a texture is required by the library.
     Rml::TextureHandle LoadTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source) override;
@@ -178,7 +178,7 @@ public:
     /// Called by RmlUi when it wants to enable or disable the clip mask.
     void EnableClipMask(bool enable) override;
     /// Called by RmlUi when it wants to set or modify the contents of the clip mask.
-    void RenderToClipMask(Rml::ClipMaskOperation operation, Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation) override;
+    LFS_VIS_API void RenderToClipMask(Rml::ClipMaskOperation operation, Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation) override;
 
     /// Called by RmlUi when it wants to render to an offscreen layer. The layer is in render-target
     /// coordinates (origin 0,0): the context offset and clip do not apply inside it.

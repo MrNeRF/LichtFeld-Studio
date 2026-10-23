@@ -147,6 +147,13 @@ namespace lfs::core::param {
             .ui_step(0.01)
             .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
             .all_strategies()
+            .bool_prop(&OptimizationParameters::crop_to_cropbox,
+                       "crop_to_cropbox", "Crop to ROI at end", d.crop_to_cropbox,
+                       "With an active crop box, removes every splat outside it when training completes and leaves them out of every export. Stopping keeps every splat so the run can resume")
+            .locale("training.advanced.crop_to_cropbox")
+            .tooltip("training.tooltip.crop_to_cropbox")
+            .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
+            .all_strategies()
             .float_prop(&OptimizationParameters::cropbox_growth_inside,
                         "cropbox_growth_inside", "ROI growth inside", d.cropbox_growth_inside, 0.0f, 1.0f,
                         "Share of new splats placed inside the active crop box")
@@ -162,6 +169,24 @@ namespace lfs::core::param {
                         "lambda_dssim", "DSSIM Weight", d.lambda_dssim, 0.0f, 1.0f,
                         "Weight for structural similarity loss")
             .json_required()
+            .all_strategies()
+            .float_prop(&OptimizationParameters::color_variance_weight,
+                        "color_variance_weight", "Color Variance Weight", d.color_variance_weight, 0.0f, 8.0f,
+                        "Reduces noise in stochastic rendering by aligning visible splat colors; 0 disables")
+            .locale("training.losses.color_variance_weight")
+            .tooltip("training.tooltip.color_variance_weight")
+            .precision(3)
+            .ui_step(0.01)
+            .flags(PROP_ADVANCED)
+            .all_strategies()
+            .size_prop(&OptimizationParameters::color_variance_warmup_iters,
+                       "color_variance_warmup_iters", "Color Variance Warm-up", d.color_variance_warmup_iters, 0, 1000000,
+                       "Completed training iterations before color variance starts")
+            .locale("training.losses.color_variance_warmup_iters")
+            .tooltip("training.tooltip.color_variance_warmup_iters")
+            .precision(0)
+            .ui_step(1000)
+            .flags(PROP_ADVANCED)
             .all_strategies()
             .float_prop(&OptimizationParameters::opacity_reg,
                         "opacity_reg", "Opacity Reg", d.opacity_reg, 0.0f, 1.0f,

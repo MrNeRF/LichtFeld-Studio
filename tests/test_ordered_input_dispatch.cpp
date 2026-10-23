@@ -664,7 +664,7 @@ namespace lfs::vis {
             host.forwardInput(x, y);
             host.setInput(nullptr);
         }
-        void registerInputFloat() {
+        void registerInputFloat(float x = 100.f) {
             class Panel final : public gui::IPanel {
                 void draw(const gui::PanelDrawContext&) override {}
                 gui::PanelRenderCapabilities renderCapabilities() const override { return {.direct = true}; }
@@ -679,17 +679,17 @@ namespace lfs::vis {
                 .id = "test.input_float",
                 .space = gui::PanelSpace::Floating,
                 .enabled = true,
-                .float_x = 100.f,
+                .float_x = x,
                 .float_y = 60.f,
                 .float_user_height = 100.f,
                 .float_last_bounds_valid = true,
-                .float_last_x = 100.f,
+                .float_last_x = x,
                 .float_last_y = 60.f,
                 .float_last_w = 180.f,
                 .float_last_h = 100.f,
                 .float_auto_center = false,
             }});
-            ASSERT_TRUE(gui::PanelRegistry::instance().isPositionOverFloatingPanel(140, 100));
+            ASSERT_TRUE(gui::PanelRegistry::instance().isPositionOverFloatingPanel(x + 40, 100));
         }
         static constexpr std::array kPropertiesTabs{"test.tab_first", "test.tab_second", "test.tab_third",
                                                     "test.tab_fourth"};
@@ -2907,6 +2907,65 @@ namespace lfs::vis {
         EXPECT_NE(overlay_context->GetFocusElement(), overlay_select);
         click(60, 180);
         EXPECT_FALSE(overlay_select->IsSelectBoxVisible());
+    }
+
+    // Fails if Ctrl+Tab over a properties area stops cycling its tabs through the key map, or
+    // cycles them while the pointer is over another area.
+    TEST_F(WindowInputDispatchTest, SidebarCategoryKeysCycleThePropertiesTabsUnderThePointer) {
+        // The screen reads the key map through the application's input controller.
+        controller_->initialize();
+        ASSERT_EQ(InputController::instance(), controller_.get());
+        const auto properties = drawOverflowingPropertiesTabs();
+        ASSERT_TRUE(properties.valid());
+        const auto* const area = gui_->screenHost().area(properties);
+        ASSERT_NE(area, nullptr);
+        const auto tabs = gui::PanelRegistry::instance().get_panels_for_space(gui::PanelSpace::MainPanelTab);
+        ASSERT_GE(tabs.size(), 2u);
+        const auto stepped = [&](const std::string& from, const int direction) {
+            const int count = static_cast<int>(tabs.size());
+            const int index = static_cast<int>(std::ranges::find(tabs, from, &gui::PanelSummary::id) - tabs.begin());
+            return tabs[static_cast<size_t>(((index + direction) % count + count) % count)].id;
+        };
+        const auto hover = [&](const float x, const float y) {
+            gui::PanelInputState input;
+            input.mouse_x = x;
+            input.mouse_y = y;
+            manager().beginFrameCursorTracking();
+            gui_->screenHost().processInput(input, true);
+            const gui::UIContext ui{.viewer = viewer_.get(), .editor = &viewer_->getEditorContext()};
+            gui_->screenHost().draw(ui, {.ui = &ui}, input, false, {});
+        };
+        const auto category_key = [&](const SDL_Keymod mods) {
+            SDL_Event event{};
+            event.type = SDL_EVENT_KEY_DOWN;
+            event.key.windowID = SDL_GetWindowID(window_->getWindow());
+            event.key.scancode = SDL_SCANCODE_TAB;
+            event.key.key = SDLK_TAB;
+            event.key.mod = mods;
+            const bool consumed = manager().dispatchInputEvent(event).consumed;
+            event.type = SDL_EVENT_KEY_UP;
+            (void)manager().dispatchInputEvent(event);
+            return consumed;
+        };
+        auto& editor = gui_->screenHost().properties();
+        const std::string first = tabs.front().id;
+        editor.setActiveTab(first);
+        hover(area->content.x + area->content.w * 0.5f, area->content.y + area->content.h * 0.5f);
+        EXPECT_TRUE(category_key(SDL_KMOD_LCTRL));
+        EXPECT_EQ(editor.activeTab(), stepped(first, 1));
+        EXPECT_TRUE(category_key(static_cast<SDL_Keymod>(SDL_KMOD_LCTRL | SDL_KMOD_LSHIFT)));
+        EXPECT_EQ(editor.activeTab(), first);
+        EXPECT_TRUE(category_key(static_cast<SDL_Keymod>(SDL_KMOD_LCTRL | SDL_KMOD_LSHIFT)));
+        EXPECT_EQ(editor.activeTab(), stepped(first, -1));
+
+        const auto other = std::ranges::find_if(gui_->screenHost().areas(), [](const gui::AreaFrame& frame) {
+            return frame.editor != screen::editors::kProperties && !frame.content.empty();
+        });
+        ASSERT_NE(other, gui_->screenHost().areas().end());
+        const auto before = editor.activeTab();
+        hover(other->content.x + other->content.w * 0.5f, other->content.y + other->content.h * 0.5f);
+        EXPECT_FALSE(category_key(SDL_KMOD_LCTRL));
+        EXPECT_EQ(editor.activeTab(), before);
     }
 
     // Fails if a pointer event drops the open tab picker list from the overlay record, so the
