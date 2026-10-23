@@ -380,7 +380,7 @@ TEST(CollisionSparse, PersistenceRejectsMalformedTopologyAndCoordinateOverflow) 
     box(g, {3, 3, 3}, {8, 8, 8});
     auto v = sparse(g);
     auto j = nlohmann::json(v);
-    EXPECT_EQ(j.at("version"), 2);
+    EXPECT_EQ(j.at("version"), 3);
     EXPECT_EQ(j.get<CollisionVolume>(), v);
     j["occupancy_tree"] = "3";
     EXPECT_THROW((void)j.get<CollisionVolume>(), std::invalid_argument);
@@ -914,6 +914,48 @@ TEST(CollisionAdaptive, TransparentAndDegenerateSplatsCannotBridgeSourceRegions)
     EXPECT_EQ(collision_detail::selectAdaptiveSource(source, s).indices, std::vector<uint32_t>{0});
 }
 
+TEST(CollisionPersistence, CompressedTopologyKeepsLegacyReaderAndRejectsMalformedRuns) {
+    auto dense = grid({12, 9, 11});
+    box(dense, {2, 2, 2}, {10, 7, 9});
+    auto v = sparse(dense);
+    v.warning = "Cleanup retained count and resolved size survive reopening.";
+    auto j = nlohmann::json(v);
+    EXPECT_EQ(j.at("version"), 3);
+    EXPECT_EQ(j.get<CollisionVolume>(), v);
+    std::string tags((v.tree.size() + 1) / 2, '0');
+    constexpr char hex[] = "0123456789abcdef";
+    for (size_t i = 0; i < tags.size(); ++i)
+        tags[i] = hex[std::min(v.tree[i * 2], 2u) | ((i * 2 + 1 < v.tree.size() ? std::min(v.tree[i * 2 + 1], 2u) : 0u) << 2)];
+    auto legacy = j;
+    legacy["version"] = 2;
+    legacy["occupancy_tree"] = tags;
+    EXPECT_EQ(legacy.get<CollisionVolume>(), v);
+    CollisionVolume single;
+    single.dimensions = {4, 4, 4};
+    single.tree_size = 4;
+    single.tree = {1};
+    auto one = nlohmann::json(single);
+    for (const auto* malformed : {"", "0", "!", "a", "B9", "AA"}) {
+        auto bad = one;
+        bad["occupancy_tree"] = malformed;
+        EXPECT_THROW((void)bad.get<CollisionVolume>(), std::invalid_argument) << malformed;
+    }
+    // Valid forward references need not have been allocated in DFS order.
+    CollisionVolume reordered;
+    reordered.dimensions = {4, 4, 4};
+    reordered.tree_size = 4;
+    reordered.tree.resize(25, 0);
+    reordered.tree[0] = 3;
+    reordered.tree[1] = 19;
+    reordered.tree[2] = 11;
+    reordered.tree[17] = 1;
+    reordered.tree[16] = 1;
+    const auto restored = nlohmann::json(reordered).get<CollisionVolume>();
+    for (int z = 0; z < 4; ++z)
+        for (int y = 0; y < 4; ++y)
+            for (int x = 0; x < 4; ++x)
+                EXPECT_EQ(reordered.occupied({x, y, z}), restored.occupied({x, y, z}));
+}
 TEST(CollisionSparse, PostprocessingDoesNotCountOccupiedPaddingAsSceneGeometry) {
     CollisionVolume v;
     v.dimensions = {1, 3, 3};
@@ -926,4 +968,17 @@ TEST(CollisionSparse, PostprocessingDoesNotCountOccupiedPaddingAsSceneGeometry) 
     EXPECT_THROW((void)processCollisionVolume(v), std::runtime_error);
     v.tree[1] = 1;
     EXPECT_NO_THROW((void)processCollisionVolume(v));
+}
+TEST(CollisionPersistence, CompressedTopologyRoundTripsIrregularIndependentOccupancy) {
+    std::mt19937 rng(45011);
+    for (int round = 0; round < 8; ++round) {
+        auto dense = grid({11, 9, 13});
+        for (auto& cell : dense.solid)
+            cell = (rng() % 5) < 2;
+        auto v = sparse(dense);
+        const auto j = nlohmann::json(v);
+        EXPECT_LE(j.at("occupancy_tree").get_ref<const std::string&>().size(), (v.tree.size() + 2) / 3);
+        const auto restored = j.get<CollisionVolume>();
+        EXPECT_EQ(restored, v);
+    }
 }

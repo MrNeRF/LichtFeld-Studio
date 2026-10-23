@@ -54,14 +54,55 @@ namespace lfs::core {
     inline void to_json(nlohmann::json& j, const CollisionVolume& v) {
         v.validate();
         if (!v.tree.empty()) {
-            std::string tags((v.tree.size() + 1) / 2, '0');
-            constexpr char hex[] = "0123456789abcdef";
-            for (size_t i = 0; i < tags.size(); ++i) {
-                auto first = std::min(v.tree[i * 2], uint32_t(2));
-                auto second = i * 2 + 1 < v.tree.size() ? std::min(v.tree[i * 2 + 1], uint32_t(2)) : 0;
-                tags[i] = hex[first | (second << 2)];
-            }
-            j = {{"version", 2}, {"settings", v.settings}, {"origin", {v.origin.x, v.origin.y, v.origin.z}}, {"dimensions", {v.dimensions.x, v.dimensions.y, v.dimensions.z}}, {"tree_size", v.tree_size}, {"tree_nodes", v.tree.size()}, {"occupancy_tree", tags}, {"show_voxels", v.show_voxels}};
+            // Preorder ternary tags: three nodes per safe ASCII literal, plus
+            // short repeat tokens. No pointer array, hex expansion or intermediate
+            // decoded topology copy is stored in the project JSON chapter.
+            constexpr std::string_view alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZa";
+            std::string tags;
+            tags.reserve((v.tree.size() + 2) / 3);
+            int group = 0, factor = 1, last = -1;
+            size_t run = 0;
+            auto flush = [&] {
+                if (!run)
+                    return;
+                tags.push_back(alphabet[last]);
+                for (auto remaining = run - 1; remaining;) {
+                    if (remaining >= 3) {
+                        const auto repeated = std::min(remaining, size_t(12));
+                        tags.push_back(char('0' + repeated - 3));
+                        remaining -= repeated;
+                    } else {
+                        tags.append(remaining, alphabet[last]);
+                        break;
+                    }
+                }
+            };
+            auto emit_group = [&](int value) {
+                if (last != value) {
+                    flush();
+                    last = value;
+                    run = 0;
+                }
+                ++run;
+            };
+            auto visit = [&](auto&& self, uint32_t index) -> void {
+                const auto value = std::min(v.tree[index], uint32_t(2));
+                group += int(value) * factor;
+                factor *= 3;
+                if (factor == 27) {
+                    emit_group(group);
+                    group = 0;
+                    factor = 1;
+                }
+                if (value == 2)
+                    for (int child = 0; child < 8; ++child)
+                        self(self, v.tree[index] - 2 + child);
+            };
+            visit(visit, 0);
+            if (factor != 1)
+                emit_group(group);
+            flush();
+            j = {{"version", 3}, {"settings", v.settings}, {"origin", {v.origin.x, v.origin.y, v.origin.z}}, {"dimensions", {v.dimensions.x, v.dimensions.y, v.dimensions.z}}, {"tree_size", v.tree_size}, {"tree_nodes", v.tree.size()}, {"occupancy_tree", std::move(tags)}, {"show_voxels", v.show_voxels}, {"warning", v.warning}};
             return;
         }
         std::vector<uint32_t> runs;
@@ -76,11 +117,12 @@ namespace lfs::core {
             ++count;
         }
         runs.push_back(count);
-        j = {{"version", 1}, {"settings", v.settings}, {"origin", {v.origin.x, v.origin.y, v.origin.z}}, {"dimensions", {v.dimensions.x, v.dimensions.y, v.dimensions.z}}, {"occupancy_rle", runs}, {"show_voxels", v.show_voxels}};
+        j = {{"version", 1}, {"settings", v.settings}, {"origin", {v.origin.x, v.origin.y, v.origin.z}}, {"dimensions", {v.dimensions.x, v.dimensions.y, v.dimensions.z}}, {"occupancy_rle", runs}, {"show_voxels", v.show_voxels}, {"warning", v.warning}};
     }
     inline void from_json(const nlohmann::json& j, CollisionVolume& v) {
+        v.warning = j.value("warning", std::string{});
         const auto version = j.at("version").get<int>();
-        if (version != 1 && version != 2)
+        if (version != 1 && version != 2 && version != 3)
             throw std::invalid_argument("Unsupported collision payload version");
         j.at("settings").get_to(v.settings);
         auto origin = j.at("origin").get<std::array<float, 3>>();
@@ -90,42 +132,94 @@ namespace lfs::core {
         v.tree.clear();
         v.tree_size = 0;
         v.solid.clear();
-        if (version == 2) {
+        if (version == 2 || version == 3) {
             const auto count = j.at("tree_nodes").get<int64_t>();
             if (count <= 0 || uint64_t(count) > CollisionVolume::max_tree_words)
                 throw std::invalid_argument("Sparse collision payload exceeds node memory limit");
             const auto& tags = j.at("occupancy_tree").get_ref<const std::string&>();
-            if (tags.size() != (size_t(count) + 1) / 2)
-                throw std::invalid_argument("Invalid sparse collision topology length");
-            v.tree.resize(size_t(count));
-            for (size_t i = 0; i < tags.size(); ++i) {
-                auto position = std::string_view("0123456789abcdef").find(tags[i]);
-                if (position == std::string_view::npos || (position & 3) == 3 || (position >> 2) == 3)
-                    throw std::invalid_argument("Invalid sparse collision topology tag");
-                v.tree[i * 2] = position & 3;
-                if (i * 2 + 1 < v.tree.size())
-                    v.tree[i * 2 + 1] = position >> 2;
-                else if (position >> 2)
-                    throw std::invalid_argument("Invalid sparse collision topology padding");
-            }
             j.at("tree_size").get_to(v.tree_size);
-            size_t next = 1;
-            std::function<void(uint32_t, int)> restore = [&](uint32_t i, int edge) {
-                if (v.tree[i] != 2)
-                    return;
-                if (edge <= 1 || next + 8 > v.tree.size())
-                    throw std::invalid_argument("Invalid sparse collision topology");
-                const auto base = uint32_t(next);
-                next += 8;
-                v.tree[i] = base + 2;
-                for (int child = 0; child < 8; ++child)
-                    restore(base + child, edge / 2);
-            };
             if (v.tree_size <= 0 || v.tree_size > (1 << 21) || (v.tree_size & (v.tree_size - 1)))
                 throw std::invalid_argument("Invalid sparse collision root size");
-            restore(0, v.tree_size);
-            if (next != v.tree.size())
-                throw std::invalid_argument("Unreachable sparse collision topology");
+            if (version == 3) {
+                if (tags.empty() || tags.size() > (size_t(count) + 2) / 3 || size_t(count) > tags.size() * 36)
+                    throw std::invalid_argument("Invalid compressed collision topology length");
+                v.tree.resize(size_t(count));
+                constexpr std::string_view alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZa";
+                size_t cursor = 0, next = 1, decoded = 0;
+                int group = 0, trits = 0, repeats = 0, last = -1;
+                auto tag = [&] {
+                    if (++decoded > size_t(count))
+                        throw std::invalid_argument("Collision topology exceeds node count");
+                    if (!trits) {
+                        if (repeats) {
+                            group = last;
+                            --repeats;
+                        } else {
+                            if (cursor == tags.size())
+                                throw std::invalid_argument("Truncated collision topology");
+                            const auto c = tags[cursor++];
+                            const auto value = alphabet.find(c);
+                            if (value != std::string_view::npos)
+                                group = last = int(value);
+                            else if (c >= '0' && c <= '9' && last >= 0) {
+                                group = last;
+                                repeats = c - '0' + 2;
+                            } else
+                                throw std::invalid_argument("Invalid compressed collision topology token");
+                        }
+                        trits = 3;
+                    }
+                    const auto value = uint32_t(group % 3);
+                    group /= 3;
+                    --trits;
+                    return value;
+                };
+                auto restore = [&](auto&& self, uint32_t i, int edge) -> void {
+                    const auto value = tag();
+                    v.tree[i] = value;
+                    if (value != 2)
+                        return;
+                    if (edge <= 1 || next + 8 > v.tree.size())
+                        throw std::invalid_argument("Invalid compressed collision topology");
+                    const auto base = uint32_t(next);
+                    next += 8;
+                    v.tree[i] = base + 2;
+                    for (int child = 0; child < 8; ++child)
+                        self(self, base + child, edge / 2);
+                };
+                restore(restore, 0, v.tree_size);
+                if (next != v.tree.size() || decoded != v.tree.size() || cursor != tags.size() || repeats || group)
+                    throw std::invalid_argument("Invalid compressed collision topology padding or count");
+            } else {
+                if (tags.size() != (size_t(count) + 1) / 2)
+                    throw std::invalid_argument("Invalid sparse collision topology length");
+                v.tree.resize(size_t(count));
+                for (size_t i = 0; i < tags.size(); ++i) {
+                    const auto position = std::string_view("0123456789abcdef").find(tags[i]);
+                    if (position == std::string_view::npos || (position & 3) == 3 || (position >> 2) == 3)
+                        throw std::invalid_argument("Invalid sparse collision topology tag");
+                    v.tree[i * 2] = position & 3;
+                    if (i * 2 + 1 < v.tree.size())
+                        v.tree[i * 2 + 1] = position >> 2;
+                    else if (position >> 2)
+                        throw std::invalid_argument("Invalid sparse collision topology padding");
+                }
+                size_t next = 1;
+                auto restore = [&](auto&& self, uint32_t i, int edge) -> void {
+                    if (v.tree[i] != 2)
+                        return;
+                    if (edge <= 1 || next + 8 > v.tree.size())
+                        throw std::invalid_argument("Invalid sparse collision topology");
+                    const auto base = uint32_t(next);
+                    next += 8;
+                    v.tree[i] = base + 2;
+                    for (int child = 0; child < 8; ++child)
+                        self(self, base + child, edge / 2);
+                };
+                restore(restore, 0, v.tree_size);
+                if (next != v.tree.size())
+                    throw std::invalid_argument("Unreachable sparse collision topology");
+            }
             j.at("show_voxels").get_to(v.show_voxels);
             v.validate();
             return;
