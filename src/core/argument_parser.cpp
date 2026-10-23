@@ -81,6 +81,9 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--depth-loss-weight", "depth_loss_weight", Float},
             OptimizationCliBinding{"--depth-loss-mode", "depth_loss_mode", String},
             OptimizationCliBinding{"--no-depth-auto-generate", "depth_auto_generate", Bool, true},
+            OptimizationCliBinding{"--free-space-weight", "free_space_weight", Float},
+            OptimizationCliBinding{"--free-space-margin", "free_space_margin", Float},
+            OptimizationCliBinding{"--free-space-margin-rel", "free_space_margin_rel", Float},
             OptimizationCliBinding{"--use-normal-loss", "use_normal_loss", Bool},
             OptimizationCliBinding{"--no-normal-auto-generate", "normal_auto_generate", Bool, true},
             OptimizationCliBinding{"--normal-loss-weight", "normal_loss_weight", Float},
@@ -881,6 +884,9 @@ namespace {
             ::args::ValueFlag<float> depth_loss_weight(mask_group, "depth_loss_weight", lfs::core::args::optimization_cli_help("--depth-loss-weight"), {"depth-loss-weight"});
             ::args::ValueFlag<std::string> depth_loss_mode(mask_group, "depth_loss_mode", lfs::core::args::optimization_cli_help("--depth-loss-mode"), {"depth-loss-mode"});
             ::args::Flag no_depth_auto_generate(mask_group, "no_depth_auto_generate", lfs::core::args::optimization_cli_help("--no-depth-auto-generate"), {"no-depth-auto-generate"});
+            ::args::ValueFlag<float> free_space_weight(mask_group, "weight", lfs::core::args::optimization_cli_help("--free-space-weight"), {"free-space-weight"});
+            ::args::ValueFlag<float> free_space_margin(mask_group, "metres", lfs::core::args::optimization_cli_help("--free-space-margin"), {"free-space-margin"});
+            ::args::ValueFlag<float> free_space_margin_rel(mask_group, "fraction", lfs::core::args::optimization_cli_help("--free-space-margin-rel"), {"free-space-margin-rel"});
             ::args::Flag use_normal_loss(mask_group, "use_normal_loss", lfs::core::args::optimization_cli_help("--use-normal-loss"), {"use-normal-loss"});
             ::args::Flag no_normal_auto_generate(mask_group, "no_normal_auto_generate", lfs::core::args::optimization_cli_help("--no-normal-auto-generate"), {"no-normal-auto-generate"});
             ::args::ValueFlag<float> normal_loss_weight(mask_group, "normal_loss_weight", lfs::core::args::optimization_cli_help("--normal-loss-weight"), {"normal-loss-weight"});
@@ -1573,6 +1579,9 @@ namespace {
                                         mask_mode_val = cli_option_present({"--mask-mode"}) ? std::optional<lfs::core::param::MaskMode>(::args::get(mask_mode)) : std::optional<lfs::core::param::MaskMode>(),
                                         depth_loss_weight_val = cli_option_present({"--depth-loss-weight"}) ? std::optional<float>(::args::get(depth_loss_weight)) : std::optional<float>(),
                                         depth_loss_mode_val = cli_option_present({"--depth-loss-mode"}) ? std::optional<std::string>(::args::get(depth_loss_mode)) : std::optional<std::string>(),
+                                        free_space_weight_val = cli_option_present({"--free-space-weight"}) ? std::optional<float>(::args::get(free_space_weight)) : std::optional<float>(),
+                                        free_space_margin_val = cli_option_present({"--free-space-margin"}) ? std::optional<float>(::args::get(free_space_margin)) : std::optional<float>(),
+                                        free_space_margin_rel_val = cli_option_present({"--free-space-margin-rel"}) ? std::optional<float>(::args::get(free_space_margin_rel)) : std::optional<float>(),
                                         normal_loss_weight_val = cli_option_present({"--normal-loss-weight"}) ? std::optional<float>(::args::get(normal_loss_weight)) : std::optional<float>(),
                                         normal_consistency_weight_val = cli_option_present({"--normal-consistency-weight"}) ? std::optional<float>(::args::get(normal_consistency_weight)) : std::optional<float>(),
                                         normal_flatten_weight_val = cli_option_present({"--normal-flatten-weight"}) ? std::optional<float>(::args::get(normal_flatten_weight)) : std::optional<float>(),
@@ -1834,6 +1843,9 @@ namespace {
                 }
                 if (no_depth_auto_generate_flag)
                     opt.depth_auto_generate = false;
+                setVal(free_space_weight_val, opt.free_space_weight);
+                setVal(free_space_margin_val, opt.free_space_margin);
+                setVal(free_space_margin_rel_val, opt.free_space_margin_rel);
                 setFlag(use_normal_loss_flag, opt.use_normal_loss);
                 if (no_normal_auto_generate_flag)
                     opt.normal_auto_generate = false;
@@ -1933,6 +1945,9 @@ namespace {
                 note_opt("use_depth_loss", use_depth_loss_flag);
                 note_opt("depth_loss_weight", depth_loss_weight_val.has_value());
                 note_opt("depth_loss_mode", depth_loss_mode_val.has_value());
+                note_opt("free_space_weight", free_space_weight_val.has_value());
+                note_opt("free_space_margin", free_space_margin_val.has_value());
+                note_opt("free_space_margin_rel", free_space_margin_rel_val.has_value());
                 note_opt("use_normal_loss", use_normal_loss_flag);
                 note_opt("normal_loss_weight", normal_loss_weight_val.has_value());
                 note_opt("normal_consistency_weight", normal_consistency_weight_val.has_value());

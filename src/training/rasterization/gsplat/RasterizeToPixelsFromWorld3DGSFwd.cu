@@ -7,6 +7,7 @@
 
 #include "Cameras.cuh"
 #include "Common.h"
+#include "FreeSpace.h"
 #include "FromWorldRay.cuh"
 #include "Rasterization.h"
 #include "Utils.cuh"
@@ -55,7 +56,8 @@ namespace gsplat_lfs {
         scalar_t* __restrict__ render_colors,     // [C, CDIM, image_height, image_width]
         scalar_t* __restrict__ render_alphas,     // [C, image_height, image_width, 1]
         int32_t* __restrict__ last_ids,           // [C, image_height, image_width]
-        const TileRange tiles) {
+        const TileRange tiles,
+        const FreeSpaceRender free_space) {
         // each thread draws one pixel, but also timeshares caching gaussians in a
         // shared tile
 
@@ -74,6 +76,10 @@ namespace gsplat_lfs {
         render_colors += cid * image_height * image_width * CDIM;
         render_alphas += cid * image_height * image_width;
         last_ids += cid * image_height * image_width;
+        float* const T_front_out =
+            free_space.T_front != nullptr && free_space.gt_depth != nullptr
+                ? free_space.T_front + cid * image_height * image_width
+                : nullptr;
         if (backgrounds != nullptr) {
             backgrounds += cid * CDIM;
         }
@@ -114,6 +120,8 @@ namespace gsplat_lfs {
                 }
                 render_colors[chw_pix(k, pix_id, image_height, image_width)] = bg_val;
             }
+            if (T_front_out != nullptr)
+                T_front_out[pix_id] = 1.0f;
             return;
         }
 
@@ -142,6 +150,11 @@ namespace gsplat_lfs {
         float T = 1.0f;
         // index of most recent gaussian to write to this thread's pixel
         uint32_t cur_idx = 0;
+        // transmittance of the splats in front of the scan surface
+        float T_front = 1.0f;
+        const float free_limit = T_front_out != nullptr && inside
+                                     ? free_space.limit(cid, j, i, image_width, image_height)
+                                     : 0.0f;
 
         // collect and process batches of gaussians
         // each thread loads one gaussian at a time before rasterizing its
@@ -246,6 +259,9 @@ namespace gsplat_lfs {
                     }
                 }
                 cur_idx = batch_start + t;
+                if (free_limit > 0.0f && rgbs_batch[t * CDIM + free_space.depth_channel] < free_limit) {
+                    T_front *= 1.0f - alpha;
+                }
 
                 T = next_T;
             }
@@ -271,8 +287,18 @@ namespace gsplat_lfs {
             }
             // index in bin of last gaussian in this pixel
             last_ids[pix_id] = static_cast<int32_t>(cur_idx);
+            if (T_front_out != nullptr)
+                T_front_out[pix_id] = T_front;
         }
     }
+
+    namespace {
+        __global__ void fill_ones_kernel(float* out, const uint32_t n) {
+            const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+            if (i < n)
+                out[i] = 1.0f;
+        }
+    } // namespace
 
     ////////////////////////////////////////////////////////////////
     // Launch Function
@@ -308,8 +334,12 @@ namespace gsplat_lfs {
         float* renders,
         float* alphas,
         int32_t* last_ids,
-        cudaStream_t stream, TileRange tiles) {
+        cudaStream_t stream, TileRange tiles,
+        const FreeSpaceRender& free_space_in) {
         const bool packed = false; // Only support non-packed for now
+        // The free-space test reads the splat depth from a render channel.
+        const FreeSpaceRender free_space =
+            free_space_in.depth_channel < CDIM ? free_space_in : FreeSpaceRender{};
         const uint32_t tile_width = (image_width + tile_size - 1) / tile_size;
         const uint32_t tile_height = (image_height + tile_size - 1) / tile_size;
 
@@ -343,6 +373,11 @@ namespace gsplat_lfs {
                 cudaMemsetAsync(last_ids, 0,
                                 C * image_height * image_width * sizeof(int32_t), stream),
                 "gsplat empty-forward last-id clear");
+            if (free_space.T_front != nullptr) {
+                fill_ones_kernel<<<(C * image_height * image_width + 255) / 256, 256, 0, stream>>>(
+                    free_space.T_front, C * image_height * image_width);
+                LFS_CUDA_LAUNCH_CHECK(stream, "gsplat empty-forward T_front fill");
+            }
             return;
         }
 
@@ -380,7 +415,7 @@ namespace gsplat_lfs {
                 flatten_ids,
                 renders,
                 alphas,
-                last_ids, tiles);
+                last_ids, tiles, free_space);
             LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.rasterize_to_pixels_fwd");
         };
 
@@ -433,7 +468,8 @@ namespace gsplat_lfs {
         float* renders,                                                        \
         float* alphas,                                                         \
         int32_t* last_ids,                                                     \
-        cudaStream_t stream, TileRange tiles);
+        cudaStream_t stream, TileRange tiles,                                  \
+        const FreeSpaceRender& free_space);
 
     __INS__(1)
     __INS__(2)

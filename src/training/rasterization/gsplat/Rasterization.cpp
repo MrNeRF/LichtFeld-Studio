@@ -47,7 +47,8 @@ namespace gsplat_lfs {
         float* renders,
         float* alphas,
         int32_t* last_ids,
-        cudaStream_t stream, TileRange tiles) {
+        cudaStream_t stream, TileRange tiles,
+        const FreeSpaceRender& free_space) {
         gsplat_lfs::debug_validate_cuda_pointer(means, "means");
         gsplat_lfs::debug_validate_cuda_pointer(quats, "quats");
         gsplat_lfs::debug_validate_cuda_pointer(scales, "scales");
@@ -67,7 +68,7 @@ namespace gsplat_lfs {
             ut_params, rs_type,                                      \
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,     \
             tile_offsets, flatten_ids,                               \
-            renders, alphas, last_ids, stream, tiles);               \
+            renders, alphas, last_ids, stream, tiles, free_space);   \
         break;
 
         switch (channels) {
@@ -141,7 +142,8 @@ namespace gsplat_lfs {
         const float* densification_error_map,
         const float* edge_weight_map,
         float* edge_score_out,
-        cudaStream_t stream, TileRange tiles) {
+        cudaStream_t stream, TileRange tiles,
+        const FreeSpaceRender& free_space) {
         gsplat_lfs::debug_validate_cuda_pointer(means, "means");
         gsplat_lfs::debug_validate_cuda_pointer(quats, "quats");
         gsplat_lfs::debug_validate_cuda_pointer(scales, "scales");
@@ -172,7 +174,8 @@ namespace gsplat_lfs {
             v_render_colors, v_render_alphas,                        \
             v_means, v_quats, v_scales, v_colors, v_opacities,       \
             densification_info, densification_error_map,             \
-            edge_weight_map, edge_score_out, stream, tiles);         \
+            edge_weight_map, edge_score_out, stream, tiles,          \
+            free_space);                                             \
         break;
 
         switch (channels) {
@@ -241,7 +244,8 @@ namespace gsplat_lfs {
         const float* tangential_coeffs,
         const float* thin_prism_coeffs,
         RasterizeWithSHResult& result,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        const FreeSpaceRender& free_space) {
         gsplat_lfs::debug_validate_cuda_pointer(means, "means");
         gsplat_lfs::debug_validate_cuda_pointer(quats, "quats");
         gsplat_lfs::debug_validate_cuda_pointer(scales, "scales");
@@ -318,7 +322,7 @@ namespace gsplat_lfs {
                 radial_coeffs, tangential_coeffs, thin_prism_coeffs,
                 result.tile_offsets, result.flatten_ids,
                 result.render_colors, result.render_alphas, result.last_ids,
-                stream, tiles);
+                stream, tiles, free_space);
         };
         result.n_isects = whole.n_isects;
         result.batches.clear();
@@ -410,7 +414,8 @@ namespace gsplat_lfs {
         const float* edge_weight_map,
         float* edge_score_out,
         cudaStream_t stream,
-        const std::vector<TileBatch>& batches, int32_t* tiles_per_gauss) {
+        const std::vector<TileBatch>& batches, int32_t* tiles_per_gauss,
+        const FreeSpaceRender& free_space) {
         // Determine output channels
         uint32_t channels = 3;
         if (render_mode == 1 || render_mode == 2) {
@@ -452,7 +457,7 @@ namespace gsplat_lfs {
                 v_means, v_quats, v_scales, v_colors, v_opacities,
                 densification_info, densification_error_map,
                 edge_weight_map, edge_score_out,
-                stream, tiles);
+                stream, tiles, free_space);
         };
         if (batches.empty()) {
             render_backward({});

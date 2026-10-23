@@ -2202,3 +2202,143 @@ TEST_F(GsplatRasterizerTest, ExpectedRadialDepthBehindCameraHasCorrectGradients)
         }
     }
 }
+
+TEST_F(GsplatRasterizerTest, FreeSpaceLossAveragesOverScannedPixels) {
+    constexpr uint32_t w = 8, h = 4;
+    std::vector<float> scan(w * h), t_front(w * h);
+    double sum = 0.0;
+    int scanned = 0;
+    for (uint32_t i = 0; i < w * h; ++i) {
+        scan[i] = i % w < 6 ? 1000.f + i : 0.f;
+        t_front[i] = 1.f - 0.01f * static_cast<float>(i);
+        if (scan[i] > 0.f) {
+            sum += 1.0 - t_front[i];
+            ++scanned;
+        }
+    }
+    auto gt = Tensor::from_vector(scan, {h, w}, Device::CUDA);
+    auto tf = Tensor::from_vector(t_front, {h, w}, Device::CUDA);
+    auto grad = Tensor::empty({h, w}, Device::CUDA);
+    auto loss = Tensor::empty({1}, Device::CUDA);
+    auto partials = Tensor::empty({gsplat_lfs::free_space_partial_count(w * h)}, Device::CUDA);
+    gsplat_lfs::FreeSpaceRender free_space;
+    free_space.gt_depth = gt.ptr<float>();
+    free_space.T_front = tf.ptr<float>();
+    free_space.gt_w = w;
+    free_space.gt_h = h;
+    free_space.unit = 0.001f;
+    constexpr float weight = 0.05f;
+    gsplat_lfs::free_space_loss(free_space, w, h, weight, grad.ptr<float>(), loss.ptr<float>(),
+                                partials.ptr<float>(), nullptr);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    EXPECT_NEAR(loss.cpu().ptr<float>()[0], weight * sum / scanned, 1e-6f);
+    const auto g = grad.cpu();
+    for (uint32_t i = 0; i < w * h; ++i)
+        EXPECT_FLOAT_EQ(g.ptr<float>()[i], scan[i] > 0.f ? -weight / scanned : 0.f) << i;
+}
+
+TEST_F(GsplatRasterizerTest, FreeSpaceTransmittanceCountsOnlySplatsBeforeTheScan) {
+    constexpr size_t w = 64, h = 48;
+    auto R = Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f}, {3, 3}, Device::CUDA);
+    Camera camera(R, Tensor::zeros({3}, Device::CUDA), 28.f, 28.f, w / 2.f, h / 2.f,
+                  Tensor::zeros({4}, Device::CPU), Tensor::zeros({4}, Device::CPU),
+                  lfs::core::CameraModelType::FISHEYE, "free_space", "", {}, w, h, 0);
+    // A floater 2 m out in front of a wall 5 m out.
+    auto means = Tensor::from_vector({.1f, .05f, 2.f, 0.f, 0.f, 5.f}, {2, 3}, Device::CUDA);
+    auto rotation = Tensor::from_vector({1.f, .1f, .2f, .05f, 1.f, 0.f, 0.f, 0.f}, {2, 4}, Device::CUDA);
+    auto scales = Tensor::from_vector({-.8f, -.9f, -2.f, .3f, .3f, -2.f}, {2, 3}, Device::CUDA);
+    SplatData splat(0, means, Tensor::full({2, 1, 3}, .5f, Device::CUDA),
+                    Tensor::zeros({2, 0, 3}, Device::CUDA), scales, rotation,
+                    Tensor::from_vector({0.f, 2.f}, {2}, Device::CUDA), 1.f);
+    auto bg = Tensor::full({3}, .25f, Device::CUDA);
+
+    // Scan depth 5 m (file unit mm) on the left 40 columns, none on the rest.
+    std::vector<float> scan(w * h);
+    for (size_t i = 0; i < w * h; ++i)
+        scan[i] = i % w < 40 ? 5000.f : 0.f;
+    auto gt = Tensor::from_vector(scan, {h, w}, Device::CUDA);
+    auto t_front = Tensor::empty({h, w}, Device::CUDA);
+    gsplat_lfs::FreeSpaceRender free_space;
+    free_space.gt_depth = gt.ptr<float>();
+    free_space.T_front = t_front.ptr<float>();
+    free_space.gt_w = w;
+    free_space.gt_h = h;
+    free_space.unit = 0.001f;
+    free_space.margin = 0.5f;
+    free_space.margin_rel = 0.02f;
+
+    const auto render = [&] {
+        auto r = gsplat_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, 1.f, false,
+                                          GsplatRenderMode::RGB_D, true, {}, free_space);
+        EXPECT_TRUE(r.has_value());
+        return r;
+    };
+
+    auto r = render();
+    ASSERT_TRUE(r.has_value());
+    const auto tf = t_front.cpu();
+    const auto alpha = r->first.alpha.cpu();
+    std::vector<float> weights(w * h, 0.f);
+    int scanned = 0, hazy = 0;
+    for (size_t i = 0; i < w * h; ++i) {
+        const float t = tf.ptr<float>()[i];
+        if (scan[i] == 0.f) {
+            EXPECT_EQ(t, 1.f) << i;
+            continue;
+        }
+        // The wall is behind the limit, so T_front only sees the floater.
+        EXPECT_GE(t, 1.f - alpha.ptr<float>()[i] - 1e-5f) << i;
+        weights[i] = 1.f;
+        ++scanned;
+        hazy += t < .9f;
+    }
+    EXPECT_GT(hazy, 10);
+    for (auto& weight : weights)
+        weight /= scanned;
+
+    // objective = sum(weights * (1 - T_front)), so dT_front = -weights.
+    std::vector<float> v_t_front(weights);
+    for (auto& v : v_t_front)
+        v = -v;
+    auto grad_t_front = Tensor::from_vector(v_t_front, {h, w}, Device::CUDA);
+    AdamConfig cfg;
+    cfg.initial_capacity = 2;
+    AdamOptimizer opt(splat, cfg);
+    opt.allocate_gradients(2);
+    gsplat_rasterize_backward(r->second, Tensor::zeros_like(r->first.image), Tensor::zeros_like(r->first.alpha),
+                              splat, opt, {}, {}, {}, {}, {}, 0.f, grad_t_front);
+    const auto go = opt.get_grad(ParamType::Opacity).cpu();
+    const auto gm = opt.get_grad(ParamType::Means).cpu();
+    EXPECT_EQ(go.ptr<float>()[1], 0.f);
+
+    const auto objective = [&] {
+        auto out = render();
+        double sum = 0.0;
+        if (out) {
+            const auto t = t_front.cpu();
+            for (size_t i = 0; i < w * h; ++i)
+                sum += weights[i] * (1.0 - t.ptr<float>()[i]);
+            release_ctx_arena(out->second);
+        }
+        return sum;
+    };
+    const auto check = [&](Tensor& param, const size_t j, const float analytic) {
+        float original = 0.f;
+        ASSERT_EQ(cudaMemcpy(&original, param.ptr<float>() + j, sizeof(float), cudaMemcpyDeviceToHost), cudaSuccess);
+        const float eps = 1e-3f;
+        float v = original + eps;
+        ASSERT_EQ(cudaMemcpy(param.ptr<float>() + j, &v, sizeof(float), cudaMemcpyHostToDevice), cudaSuccess);
+        const double plus = objective();
+        v = original - eps;
+        ASSERT_EQ(cudaMemcpy(param.ptr<float>() + j, &v, sizeof(float), cudaMemcpyHostToDevice), cudaSuccess);
+        const double minus = objective();
+        ASSERT_EQ(cudaMemcpy(param.ptr<float>() + j, &original, sizeof(float), cudaMemcpyHostToDevice), cudaSuccess);
+        const double numeric = (plus - minus) / (2.0 * eps);
+        EXPECT_NEAR(analytic, numeric, 1e-4 + 2e-2 * std::abs(numeric)) << j;
+    };
+    // More floater opacity means less light through to the scan.
+    EXPECT_GT(go.ptr<float>()[0], 0.f);
+    check(splat.opacity_raw(), 0, go.ptr<float>()[0]);
+    for (size_t c = 0; c < 3; ++c)
+        check(splat.means(), c, gm.ptr<float>()[c]);
+}

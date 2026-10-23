@@ -5,6 +5,7 @@
 #pragma once
 
 #include "Common.h"
+#include "FreeSpace.h"
 #include "TileBatch.h"
 #include <cstdint>
 #include <cuda_runtime.h>
@@ -50,7 +51,8 @@ namespace gsplat_lfs {
         float* renders,    // [C, CDIM, image_height, image_width]
         float* alphas,     // [C, image_height, image_width, 1]
         int32_t* last_ids, // [C, image_height, image_width]
-        cudaStream_t stream = nullptr, TileRange tiles = {});
+        cudaStream_t stream = nullptr, TileRange tiles = {},
+        const FreeSpaceRender& free_space = {});
 
     /////////////////////////////////////////////////
     // rasterize_to_pixels_from_world_3dgs - Backward
@@ -103,7 +105,8 @@ namespace gsplat_lfs {
         const float* densification_error_map, // [H, W] or nullptr
         const float* edge_weight_map,         // [H, W] or nullptr
         float* edge_score_out,                // [N] or nullptr
-        cudaStream_t stream = nullptr, TileRange tiles = {});
+        cudaStream_t stream = nullptr, TileRange tiles = {},
+        const FreeSpaceRender& free_space = {});
 
     /////////////////////////////////////////////////
     // rasterize_to_indices_3dgs

@@ -964,6 +964,10 @@ namespace lfs::training {
         core::Tensor depth_loss_grad_;
         core::Tensor depth_loss_grad_alpha_;
         core::Tensor depth_loss_partials_;
+        core::Tensor free_space_T_front_;
+        core::Tensor free_space_grad_;
+        core::Tensor free_space_scalar_;
+        core::Tensor free_space_partials_;
         core::Tensor normal_loss_scalar_;
         core::Tensor normal_loss_grad_;
         core::Tensor normal_loss_partials_;

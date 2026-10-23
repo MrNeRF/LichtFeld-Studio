@@ -117,7 +117,8 @@ namespace lfs::training {
         bool antialiased,
         GsplatRenderMode render_mode,
         bool use_gut,
-        const core::Tensor& bg_image) {
+        const core::Tensor& bg_image,
+        const gsplat_lfs::FreeSpaceRender& free_space_in) {
 
         // Begin arena frame for memory allocation
         auto& arena = core::GlobalArenaManager::instance().get_arena();
@@ -399,6 +400,13 @@ namespace lfs::training {
                 channels = 8;
             }
 
+            // The free-space test needs the splat depth channel and the whole image.
+            gsplat_lfs::FreeSpaceRender free_space;
+            if (free_space_in.enabled() && channels != 3 && tile_width == 0 && tile_height == 0) {
+                free_space = free_space_in;
+                free_space.depth_channel = channels == 1 ? 0 : 3;
+            }
+
             // Geometry has zero background; only RGB contributes background color.
             core::Tensor feature_bg, feature_bg_image;
             if (channels != 3) {
@@ -561,7 +569,8 @@ namespace lfs::training {
                 tangential_ptr,
                 thin_prism_ptr,
                 result,
-                fwd_stream);
+                fwd_stream,
+                free_space);
             // isect_ids / flatten_ids are borrowed from the TLS VMM cache —
             // never transfer ownership or free on error paths.
 
@@ -691,6 +700,7 @@ namespace lfs::training {
             ctx.render_tile_y_offset = tile_y_offset;
             ctx.render_tile_width = tile_width;
             ctx.render_tile_height = tile_height;
+            ctx.free_space = free_space;
 
             return std::pair{render_output, ctx};
         } catch (const lfs::Exception& exception) {
@@ -721,7 +731,8 @@ namespace lfs::training {
         core::Tensor edge_score_out,
         const core::Tensor& grad_depth,
         const core::Tensor& grad_normal,
-        float flatten_weight) {
+        float flatten_weight,
+        const core::Tensor& grad_T_front) {
 
         // Get arena for temporary allocations
         auto& arena = core::GlobalArenaManager::instance().get_arena();
@@ -738,7 +749,7 @@ namespace lfs::training {
         try {
             // A caller may produce loss gradients on a different stream from
             // the saved forward context. Order every raw-pointer read explicitly.
-            for (const auto* gradient : {&grad_image, &grad_alpha, &grad_depth, &grad_normal}) {
+            for (const auto* gradient : {&grad_image, &grad_alpha, &grad_depth, &grad_normal, &grad_T_front}) {
                 if (gradient->is_valid() && gradient->numel() > 0) {
                     gradient->sync_to_stream(stream);
                 }
@@ -892,6 +903,16 @@ namespace lfs::training {
             float* const edge_score_out_ptr =
                 edge_scoring ? edge_score_out.ptr<float>() : nullptr;
 
+            gsplat_lfs::FreeSpaceRender free_space;
+            if (ctx.free_space.enabled() && grad_T_front.is_valid() &&
+                grad_T_front.numel() == static_cast<size_t>(H) * W) {
+                LFS_ASSERT_MSG(grad_T_front.is_contiguous() && grad_T_front.device() == core::Device::CUDA,
+                               "T_front gradient must be a contiguous CUDA tensor");
+                core::pin_operands({&grad_T_front});
+                free_space = ctx.free_space;
+                free_space.v_T_front = grad_T_front.ptr<float>();
+            }
+
             // Call backward with raw pointers
             gsplat_lfs::rasterize_from_world_with_sh_bwd(
                 ctx.means.ptr<float>(),
@@ -950,7 +971,7 @@ namespace lfs::training {
                 pixel_error_map_ptr,
                 edge_weight_map_ptr,
                 edge_score_out_ptr,
-                stream, ctx.batches, ctx.tiles_per_gauss_ptr);
+                stream, ctx.batches, ctx.tiles_per_gauss_ptr, free_space);
 
             gsplat_lfs::flatten_scale_grad(ctx.scales.ptr<float>(), v_scales_ptr, N, flatten_weight, stream);
 

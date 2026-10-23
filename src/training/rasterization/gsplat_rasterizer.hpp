@@ -9,6 +9,7 @@
 #include "core/error.hpp"
 #include "core/splat_data.hpp"
 #include "gsplat/Common.h"
+#include "gsplat/FreeSpace.h"
 #include "gsplat/TileBatch.h"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/render_output.hpp"
@@ -112,6 +113,9 @@ namespace lfs::training {
 
         // Background image for per-pixel blending (optional, empty = use bg_color)
         lfs::core::Tensor bg_image;
+
+        // T_front render in front of a laser scan (disabled = gt_depth null)
+        gsplat_lfs::FreeSpaceRender free_space;
     };
 
     // Accumulates FP64 removal energy into aligned CUDA UInt8 [N, sizeof(double)] storage.
@@ -120,6 +124,7 @@ namespace lfs::training {
 
     // Forward pass with optional tiling (tile_width/height=0 = full image)
     // bg_image is optional - if provided, uses per-pixel background blending instead of solid color
+    // free_space renders T_front (full image only; needs a render mode with depth)
     std::expected<std::pair<RenderOutput, GsplatRasterizeContext>, std::string> gsplat_rasterize_forward(
         lfs::core::Camera& viewpoint_camera,
         lfs::core::SplatData& gaussian_model,
@@ -132,7 +137,8 @@ namespace lfs::training {
         bool antialiased = false,
         GsplatRenderMode render_mode = GsplatRenderMode::RGB,
         bool use_gut = false,
-        const lfs::core::Tensor& bg_image = {});
+        const lfs::core::Tensor& bg_image = {},
+        const gsplat_lfs::FreeSpaceRender& free_space = {});
 
     // Explicit backward pass - computes gradients and accumulates into optimizer
     void gsplat_rasterize_backward(
@@ -146,7 +152,8 @@ namespace lfs::training {
         lfs::core::Tensor edge_score_out = {},
         const lfs::core::Tensor& grad_depth = {},
         const lfs::core::Tensor& grad_normal = {},
-        float flatten_weight = 0.f);
+        float flatten_weight = 0.f,
+        const lfs::core::Tensor& grad_T_front = {});
 
     // Release per-thread renderer caches before the owning CUDA stream is torn down.
     bool release_gsplat_rasterizer_thread_local_caches() noexcept;
