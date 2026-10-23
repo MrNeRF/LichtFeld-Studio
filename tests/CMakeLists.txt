@@ -43,6 +43,12 @@ target_link_libraries(lichtfeld_collision_tests PRIVATE GTest::gtest_main glm::g
 add_test(NAME lichtfeld.collision COMMAND lichtfeld_collision_tests)
 set_tests_properties(lichtfeld.collision PROPERTIES LABELS "cpu;collision;navigation" TIMEOUT 60)
 
+if(TARGET lfs_core)
+    add_executable(bench_collision_queries EXCLUDE_FROM_ALL bench_collision_queries.cpp)
+    target_compile_features(bench_collision_queries PRIVATE cxx_std_23)
+    target_link_libraries(bench_collision_queries PRIVATE lfs_core nlohmann_json::nlohmann_json)
+endif()
+
 # Deliberately no executable opt-in: exercise extended-path I/O independently
 # of the user's/runner's LongPathsEnabled registry policy.
 if(WIN32 AND (BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS))
@@ -138,12 +144,17 @@ if(BUILD_VISUALIZER_TESTS)
     add_test(NAME lichtfeld.collision_scene COMMAND lichtfeld_collision_scene_tests)
     set_tests_properties(lichtfeld.collision_scene PROPERTIES LABELS "cpu;collision;scene" TIMEOUT 120
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    add_executable(lichtfeld_collision_gpu_tests test_collision_gpu.cpp)
+    target_compile_features(lichtfeld_collision_gpu_tests PRIVATE cxx_std_23)
+    target_link_libraries(lichtfeld_collision_gpu_tests PRIVATE lfs_core GTest::gtest_main CUDA::cudart)
+    add_test(NAME lichtfeld.collision_gpu COMMAND lichtfeld_collision_gpu_tests)
+    set_tests_properties(lichtfeld.collision_gpu PROPERTIES LABELS "gpu;collision" TIMEOUT 120 WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     add_executable(lichtfeld_collision_overlay_tests test_collision_overlay.cpp)
     target_compile_features(lichtfeld_collision_overlay_tests PRIVATE cxx_std_23)
     target_include_directories(lichtfeld_collision_overlay_tests PRIVATE
         $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
     target_link_libraries(lichtfeld_collision_overlay_tests PRIVATE
-        lfs_visualizer lfs_core GTest::gtest_main SDL3::SDL3)
+        lfs_visualizer lfs_core lfs_io GTest::gtest_main SDL3::SDL3)
     add_test(NAME lichtfeld.collision_overlay COMMAND lichtfeld_collision_overlay_tests)
     set_tests_properties(lichtfeld.collision_overlay PROPERTIES LABELS "gpu;collision;rendering" TIMEOUT 120
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})

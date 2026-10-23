@@ -580,8 +580,11 @@ TEST(WalkCollision, SparseCapsuleTraversalMatchesDenseForRotatedSegments) {
 }
 
 TEST(CollisionAuthoring, DisplaySettingsAndScalePersistWithLegacyDefaults) {
-    CollisionDisplay display{.preview = true, .surface_ready = false, .opacity = 0.3f, .slice = 0.6f, .surface_stride = 4};
+    CollisionDisplay display{.preview = true, .sharp = true, .surface_ready = false, .opacity = 0.3f, .slice = 0.6f, .surface_stride = 4};
     EXPECT_EQ(nlohmann::json(display).get<CollisionDisplay>(), display);
+    auto legacy_display = nlohmann::json(display);
+    legacy_display.erase("sharp");
+    EXPECT_TRUE(legacy_display.get<CollisionDisplay>().sharp);
     CollisionSettings settings;
     settings.units_per_meter = 0.25f;
     settings.floor_below_seed = true;
@@ -595,6 +598,27 @@ TEST(CollisionAuthoring, DisplaySettingsAndScalePersistWithLegacyDefaults) {
     auto broken = nlohmann::json(display);
     broken["slice"] = -1;
     EXPECT_THROW(broken.get<CollisionDisplay>(), std::invalid_argument);
+}
+
+TEST(CollisionWalk, AxisAlignedCapsulesRespectFaceAndCornerTangency) {
+    CollisionVolume v;
+    v.settings.voxel_size = 1;
+    v.dimensions = {1, 1, 1};
+    v.solid = {1};
+    for (int axis = 0; axis < 3; ++axis) {
+        glm::vec3 up(0);
+        up[axis] = 1;
+        glm::vec3 feet(.5f);
+        feet[axis] = -2;
+        EXPECT_TRUE(v.capsuleIntersects(feet, up, 4, .25f));
+        const int side = (axis + 1) % 3;
+        feet[side] = 1.25f;
+        EXPECT_FALSE(v.capsuleIntersects(feet, up, 4, .25f));
+        feet[side] = 1.249f;
+        EXPECT_TRUE(v.capsuleIntersects(feet, up, 4, .25f));
+        feet[(axis + 2) % 3] = 1.249f;
+        EXPECT_FALSE(v.capsuleIntersects(feet, up, 4, .25f));
+    }
 }
 
 TEST(CollisionVoxelization, ParallelBricksMatchSerialIncludingPartialBoundaryCells) {
