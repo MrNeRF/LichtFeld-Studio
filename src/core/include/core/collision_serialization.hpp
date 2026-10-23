@@ -8,10 +8,11 @@
 
 namespace lfs::core {
     inline void to_json(nlohmann::json& j, const CollisionDisplay& d) {
-        j = {{"preview", d.preview}, {"surface_ready", d.surface_ready}, {"opacity", d.opacity}, {"slice", d.slice}, {"surface_stride", d.surface_stride}, {"surface_shape", d.surface_shape}};
+        j = {{"preview", d.preview}, {"sharp", d.sharp}, {"surface_ready", d.surface_ready}, {"opacity", d.opacity}, {"slice", d.slice}, {"surface_stride", d.surface_stride}, {"surface_shape", d.surface_shape}};
     }
     inline void from_json(const nlohmann::json& j, CollisionDisplay& d) {
         d.preview = j.value("preview", true);
+        d.sharp = j.value("sharp", true);
         d.surface_ready = j.value("surface_ready", true);
         d.opacity = j.value("opacity", 1.0f);
         d.slice = j.value("slice", 1.0f);

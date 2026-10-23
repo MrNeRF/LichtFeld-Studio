@@ -62,6 +62,7 @@ namespace lfs::core {
     // occupancy payload. Scrubbing the preview must not copy/re-upload that data.
     struct CollisionDisplay {
         bool preview = true;
+        bool sharp = true;         // Optional 2x2-pixel preview never changes Walk accuracy.
         bool surface_ready = true; // Existing projects already contain a surface.
         float opacity = 1.0f;
         float slice = 1.0f;
@@ -109,9 +110,15 @@ namespace lfs::core {
         [[nodiscard]] CollisionVolume coarsened(int stride, std::stop_token stop = {}) const;
     };
 
-    [[nodiscard]] LFS_CORE_API CollisionVolume generateCollision(
+    using CollisionVoxelizer = CollisionVolume (*)(std::span<const CollisionGaussian>, CollisionSettings,
+                                                   std::stop_token, CollisionProgress);
+    [[nodiscard]] LFS_CORE_API CollisionVolume voxelizeCollisionGpu(
         std::span<const CollisionGaussian> gaussians, CollisionSettings settings,
         std::stop_token stop = {}, CollisionProgress progress = {});
+
+    [[nodiscard]] LFS_CORE_API CollisionVolume generateCollision(
+        std::span<const CollisionGaussian> gaussians, CollisionSettings settings,
+        std::stop_token stop = {}, CollisionProgress progress = {}, CollisionVoxelizer voxelizer = nullptr);
     [[nodiscard]] LFS_CORE_API CollisionVolume processCollisionVolume(
         CollisionVolume volume, std::stop_token stop = {}, CollisionProgress progress = {});
 

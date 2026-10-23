@@ -14,6 +14,20 @@ namespace lfs::core::collision_detail {
                                    glm::vec3 seed, float min_contribution, std::stop_token stop = {},
                                    CollisionProgress progress = {});
 
+    struct PreparedGaussian {
+        glm::vec3 center;
+        glm::mat3 inverse;
+        glm::vec3 extent;
+        float opacity;
+        glm::ivec3 min, max;
+    };
+    struct PreparedCollision {
+        CollisionVolume volume;
+        std::vector<PreparedGaussian> gaussians;
+    };
+    PreparedCollision prepareCollision(std::span<const CollisionGaussian> source, CollisionSettings settings,
+                                       std::stop_token stop);
+
     CollisionVolume voxelizeSparse(std::span<const CollisionGaussian> source, CollisionSettings settings,
                                    std::stop_token stop, CollisionProgress progress = {}, unsigned parallelism = 0);
     CollisionVolume processSparse(CollisionVolume volume, std::stop_token stop, CollisionProgress progress);

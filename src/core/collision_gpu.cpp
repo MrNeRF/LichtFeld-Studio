@@ -1,0 +1,130 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "collision_sparse.hpp"
+#include "cuda/collision_voxelization.hpp"
+#include <algorithm>
+#include <bit>
+#include <cmath>
+#include <format>
+#include <limits>
+
+namespace lfs::core {
+    CollisionVolume voxelizeCollisionGpu(std::span<const CollisionGaussian> source, CollisionSettings settings,
+                                         std::stop_token stop, CollisionProgress progress) {
+        settings.validate();
+        if (source.empty() || source.size() > 10'000'000)
+            throw std::invalid_argument("Invalid collision source count");
+        auto check = [&] {
+            if (stop.stop_requested())
+                throw std::runtime_error("Collision generation cancelled");
+        };
+        auto report = [&](float value) {
+            check();
+            if (progress)
+                progress(std::format("Voxelizing GPU: {}/100", int(value * 100)));
+        };
+        report(0);
+        auto input = collision_detail::prepareCollision(source, settings, stop);
+        auto& gs = input.gaussians;
+        using Node = cuda::CollisionBvhNode;
+        std::vector<Node> nodes;
+        nodes.reserve(gs.size() / 4 + 1);
+        auto build = [&](auto&& self, size_t begin, size_t end) -> uint32_t {
+            check();
+            const auto index = uint32_t(nodes.size());
+            glm::ivec3 low(std::numeric_limits<int>::max()), high(std::numeric_limits<int>::min());
+            for (auto i = begin; i < end; ++i) {
+                low = glm::min(low, gs[i].min);
+                high = glm::max(high, gs[i].max);
+            }
+            nodes.push_back({{low.x, low.y, low.z}, {high.x, high.y, high.z}, 0, 0, uint32_t(begin), uint32_t(end - begin)});
+            if (end - begin > 8) {
+                auto d = high - low;
+                int axis = d.x >= d.y && d.x >= d.z ? 0 : d.y >= d.z ? 1
+                                                                     : 2;
+                auto middle = begin + (end - begin) / 2;
+                std::nth_element(gs.begin() + begin, gs.begin() + middle, gs.begin() + end, [&](const auto& a, const auto& b) {
+                    return int64_t(a.min[axis]) + a.max[axis] < int64_t(b.min[axis]) + b.max[axis];
+                });
+                auto left = self(self, begin, middle), right = self(self, middle, end);
+                nodes[index].left = left;
+                nodes[index].right = right;
+                nodes[index].count = 0;
+            }
+            return index;
+        };
+        build(build, 0, gs.size());
+        report(.15f);
+        auto volume = std::move(input.volume);
+        collision_detail::Tree tree(volume.dimensions, stop);
+        static_assert(sizeof(collision_detail::PreparedGaussian) == sizeof(cuda::CollisionGaussianGpu));
+        static_assert(offsetof(collision_detail::PreparedGaussian, inverse) == offsetof(cuda::CollisionGaussianGpu, inverse));
+        static_assert(offsetof(collision_detail::PreparedGaussian, min) == offsetof(cuda::CollisionGaussianGpu, min));
+        auto bricks = cuda::voxelizeCollisionBricks(
+            {reinterpret_cast<const cuda::CollisionGaussianGpu*>(gs.data()), gs.size()}, nodes, tree.size,
+            {volume.dimensions.x, volume.dimensions.y, volume.dimensions.z}, {volume.origin.x, volume.origin.y, volume.origin.z},
+            settings.voxel_size, -std::log1p(-double(settings.opacity)), stop, report);
+        if (bricks.empty())
+            throw std::runtime_error("No occupied voxels; lower opacity or voxel size");
+        // Only compact occupied 4^3 masks return to the host. Sorted prefixes
+        // build the canonical Walk/archive tree directly, without per-voxel inserts.
+        std::sort(bricks.begin(), bricks.end(), [](auto a, auto b) { return a.morton < b.morton; });
+        auto allocate = [&] {
+            if (tree.nodes.size() + 8 > CollisionVolume::max_tree_words)
+                throw std::runtime_error("Collision CPU tree budget exceeded");
+            auto base = uint32_t(tree.nodes.size());
+            tree.nodes.resize(tree.nodes.size() + 8);
+            return base;
+        };
+        auto merge = [&](uint32_t index, uint32_t base) {
+            auto first = tree.nodes[base];
+            if (first <= 1 && std::all_of(tree.nodes.begin() + base, tree.nodes.begin() + base + 8, [&](auto v) { return v == first; })) {
+                tree.nodes[index] = first;
+                tree.nodes.resize(base);
+            }
+        };
+        auto maskTree = [&](auto&& self, uint32_t index, glm::ivec3 p, int n, uint64_t mask) -> void {
+            uint64_t region = 0;
+            for (int z = p.z; z < p.z + n; ++z)
+                for (int y = p.y; y < p.y + n; ++y)
+                    for (int x = p.x; x < p.x + n; ++x)
+                        region |= uint64_t(1) << (x + 4 * y + 16 * z);
+            if (!(mask & region))
+                return;
+            if ((mask & region) == region) {
+                tree.nodes[index] = 1;
+                return;
+            }
+            const auto base = allocate();
+            tree.nodes[index] = base + 2;
+            for (int c = 0; c < 8; ++c)
+                self(self, base + c, p + glm::ivec3(c & 1, (c >> 1) & 1, c >> 2) * (n / 2), n / 2, mask);
+        };
+        auto assemble = [&](auto&& self, uint32_t index, int n, size_t begin, size_t end) -> void {
+            if (begin == end)
+                return;
+            check();
+            if (n <= 4) {
+                maskTree(maskTree, index, {}, n, bricks[begin].mask);
+                return;
+            }
+            const auto base = allocate();
+            tree.nodes[index] = base + 2;
+            const int shift = 3 * (std::countr_zero(unsigned(n)) - 3);
+            for (int c = 0; c < 8; ++c) {
+                auto next = begin;
+                while (next < end && ((bricks[next].morton >> shift) & 7) == uint64_t(c))
+                    ++next;
+                self(self, base + c, n / 2, begin, next);
+                begin = next;
+            }
+            merge(index, base);
+        };
+        assemble(assemble, 0, tree.size, 0, bricks.size());
+        volume.tree = std::move(tree.nodes);
+        volume.tree_size = tree.size;
+        volume.validate();
+        report(1);
+        return volume;
+    }
+} // namespace lfs::core

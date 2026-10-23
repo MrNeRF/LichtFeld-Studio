@@ -432,10 +432,21 @@ namespace lfs::core {
     bool CollisionVolume::capsuleIntersects(glm::vec3 feet, glm::vec3 up, float height, float radius) const {
         const glm::vec3 a = feet + up * radius, b = feet + up * (height - radius);
         const auto delta = b - a;
+        const auto segment_lo = glm::min(a, b), segment_hi = glm::max(a, b);
+        const bool axis_aligned = (delta.x == 0 && delta.z == 0) ||
+                                  (delta.x == 0 && delta.y == 0) ||
+                                  (delta.y == 0 && delta.z == 0);
         // Segment/AABB distance is piecewise quadratic. Evaluate its exact
         // minimum on intervals split at the six box-plane crossings, instead
         // of twenty ternary-search iterations for every occupied voxel.
         auto intersectsBox = [&](glm::vec3 lo, glm::vec3 hi) {
+            const auto separation = glm::max(glm::max(lo - segment_hi, segment_lo - hi), glm::vec3(0));
+            if (glm::dot(separation, separation) >= radius * radius)
+                return false;
+            // For a segment parallel to any box axis this lower bound is the
+            // exact distance. The normal Walk capsule needs no plane sorting.
+            if (axis_aligned)
+                return true;
             std::array<float, 8> times{0, 1};
             int count = 2;
             for (int axis = 0; axis < 3; ++axis) {
@@ -632,13 +643,16 @@ namespace lfs::core {
     } // namespace collision_detail
 
     CollisionVolume generateCollision(std::span<const CollisionGaussian> gaussians, CollisionSettings s,
-                                      std::stop_token stop, CollisionProgress progress) {
+                                      std::stop_token stop, CollisionProgress progress, CollisionVoxelizer backend) {
         s.validate();
         if (gaussians.empty())
             throw std::invalid_argument("No source Gaussians");
         if (gaussians.size() > 10'000'000)
             throw std::runtime_error("Collision source exceeds 10 million Gaussians");
         auto report = [&](const char* text) { checkpoint(stop); if (progress) progress(text); };
+        auto voxelize = [&](std::span<const CollisionGaussian> source, CollisionSettings options, CollisionProgress report) {
+            return backend ? backend(source, options, stop, std::move(report)) : collision_detail::voxelizeSparse(source, options, stop, std::move(report));
+        };
         std::vector<CollisionGaussian> filtered;
         std::string cluster_note;
         if (s.cluster) {
@@ -646,7 +660,7 @@ namespace lfs::core {
             auto coarse_settings = s;
             coarse_settings.voxel_size = s.cluster_resolution;
             coarse_settings.opacity = s.cluster_opacity;
-            auto coarse = collision_detail::voxelizeSparse(gaussians, coarse_settings, stop, [&](std::string text) {
+            auto coarse = voxelize(gaussians, coarse_settings, [&](std::string text) {
                 if (progress)
                     progress("Clustering coarse " + text);
             });
@@ -666,7 +680,7 @@ namespace lfs::core {
             }
         }
         report("Voxelizing rotated Gaussian ellipsoids");
-        auto grid = collision_detail::voxelizeSparse(gaussians, s, stop, progress);
+        auto grid = voxelize(gaussians, s, progress);
         grid = processCollisionVolume(std::move(grid), stop, std::move(progress));
         if (!cluster_note.empty())
             grid.warning = cluster_note + (grid.warning.empty() ? "" : " " + grid.warning);

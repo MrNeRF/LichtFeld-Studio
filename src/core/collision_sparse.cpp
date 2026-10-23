@@ -226,11 +226,8 @@ namespace lfs::core::collision_detail {
         }
     } // namespace
 
-    CollisionVolume voxelizeSparse(std::span<const CollisionGaussian> source, CollisionSettings settings,
-                                   std::stop_token stop, CollisionProgress progress, unsigned parallelism) {
-        // Match voxel-volume sampling used by splat-transform: contributions
-        // add as extinction density, with opacity = 1-exp(-density).
-        // A voxel intersects thin splats even when its center misses them.
+    PreparedCollision prepareCollision(std::span<const CollisionGaussian> source, CollisionSettings settings,
+                                       std::stop_token stop) {
         const double cutoff = -std::log1p(-double(settings.opacity));
         struct Bounds {
             glm::vec3 min, max;
@@ -286,41 +283,75 @@ namespace lfs::core::collision_detail {
             return index;
         };
         buildBounds(0, order.size());
-        uint64_t bound_work = 0;
-        for (const auto& bound : bounds) {
-            check(stop);
-            double upper = 0;
-            std::function<void(uint32_t)> accumulate = [&](uint32_t i) {
-                if (upper >= cutoff)
-                    return;
-                if ((++bound_work & 4095) == 0)
-                    check(stop);
-                if (bound_work > 500'000'000)
-                    throw std::runtime_error("Sparse opacity-bound work budget exceeded");
-                const auto& node = bvh[i];
-                if (glm::any(glm::greaterThan(bound.min, node.max)) || glm::any(glm::lessThan(bound.max, node.min)))
-                    return;
-                if (node.left) {
-                    accumulate(node.left);
-                    accumulate(node.right);
-                } else {
-                    for (size_t j = node.begin; j < node.end && upper < cutoff; ++j) {
-                        const auto& other = bounds[order[j]];
-                        if (glm::all(glm::lessThanEqual(bound.min, other.max)) &&
-                            glm::all(glm::greaterThanEqual(bound.max, other.min)))
-                            upper += other.opacity + 8 * std::numeric_limits<float>::epsilon();
+        // Each support proof is independent. Keep the final reduction ordered,
+        // but avoid a million serial BVH queries and std::function allocations.
+        std::vector<uint8_t> eligible(bounds.size());
+        std::atomic<size_t> cursor{0};
+        std::atomic<uint64_t> bound_work{0};
+        std::atomic<bool> failed{false};
+        std::exception_ptr failure;
+        std::mutex failure_mutex;
+        auto classify = [&] {
+            try {
+                uint64_t local_work = 0;
+                for (;;) {
+                    const auto begin = cursor.fetch_add(256, std::memory_order_relaxed);
+                    if (begin >= bounds.size() || failed.load(std::memory_order_relaxed))
+                        break;
+                    for (size_t row = begin; row < std::min(begin + 256, bounds.size()); ++row) {
+                        check(stop);
+                        const auto& bound = bounds[row];
+                        double upper = 0;
+                        auto accumulate = [&](auto&& self, uint32_t i) -> void {
+                            if (upper >= cutoff)
+                                return;
+                            if ((++local_work & 4095) == 0) {
+                                check(stop);
+                                if (bound_work.fetch_add(4096, std::memory_order_relaxed) + 4096 > 500'000'000)
+                                    throw std::runtime_error("Sparse opacity-bound work budget exceeded");
+                            }
+                            const auto& node = bvh[i];
+                            if (glm::any(glm::greaterThan(bound.min, node.max)) || glm::any(glm::lessThan(bound.max, node.min)))
+                                return;
+                            if (node.left) {
+                                self(self, node.left);
+                                self(self, node.right);
+                            } else {
+                                for (size_t j = node.begin; j < node.end && upper < cutoff; ++j) {
+                                    const auto& other = bounds[order[j]];
+                                    if (glm::all(glm::lessThanEqual(bound.min, other.max)) && glm::all(glm::greaterThanEqual(bound.max, other.min)))
+                                        upper += other.opacity + 8 * std::numeric_limits<float>::epsilon();
+                                }
+                            }
+                        };
+                        if (bound.opacity < cutoff)
+                            accumulate(accumulate, 0);
+                        eligible[row] = bound.opacity >= cutoff || upper >= cutoff;
                     }
                 }
-            };
-            // A weak isolated support cannot change occupancy, but remains in
-            // the evaluator wherever another support can produce a solid cell.
-            if (bound.opacity < cutoff)
-                accumulate(0);
-            if (bound.opacity >= cutoff || upper >= cutoff) {
-                lo = glm::min(lo, bound.min);
-                hi = glm::max(hi, bound.max);
+                if (bound_work.fetch_add(local_work & 4095, std::memory_order_relaxed) + (local_work & 4095) > 500'000'000)
+                    throw std::runtime_error("Sparse opacity-bound work budget exceeded");
+            } catch (...) {
+                std::lock_guard lock(failure_mutex);
+                if (!failure)
+                    failure = std::current_exception();
+                failed.store(true, std::memory_order_relaxed);
             }
+        };
+        {
+            std::vector<std::jthread> workers;
+            const auto count = bounds.size() >= 4096 ? std::min(8u, std::max(1u, std::thread::hardware_concurrency())) : 1u;
+            for (unsigned i = 1; i < count; ++i)
+                workers.emplace_back(classify);
+            classify();
         }
+        if (failure)
+            std::rethrow_exception(failure);
+        for (size_t i = 0; i < bounds.size(); ++i)
+            if (eligible[i]) {
+                lo = glm::min(lo, bounds[i].min);
+                hi = glm::max(hi, bounds[i].max);
+            }
         if (glm::any(glm::greaterThan(lo, hi)))
             throw std::runtime_error("No occupied voxels; lower opacity or voxel size");
         CollisionVolume volume;
@@ -333,15 +364,7 @@ namespace lfs::core::collision_detail {
             !std::isfinite(dims.x) || !std::isfinite(dims.y) || !std::isfinite(dims.z))
             throw std::runtime_error("Sparse collision coordinate range exceeded (maximum 2^21 cells per axis)");
         volume.dimensions = glm::ivec3(dims);
-        Tree tree(volume.dimensions, stop);
-        struct Prepared {
-            glm::vec3 center;
-            glm::mat3 inverse;
-            glm::vec3 extent;
-            float opacity;
-            glm::ivec3 min, max;
-        };
-        std::vector<Prepared> prepared;
+        std::vector<PreparedGaussian> prepared;
         prepared.reserve(source.size());
         size_t bound_index = 0;
         const auto world_max = glm::dvec3(volume.origin) + glm::dvec3(volume.dimensions) * double(size);
@@ -365,6 +388,17 @@ namespace lfs::core::collision_detail {
                                              glm::ivec3(0), volume.dimensions);
             prepared.push_back({g.center, glm::inverse(g.axes), extent(g), g.opacity, cell_min, cell_max});
         }
+        return {std::move(volume), std::move(prepared)};
+    }
+
+    CollisionVolume voxelizeSparse(std::span<const CollisionGaussian> source, CollisionSettings settings,
+                                   std::stop_token stop, CollisionProgress progress, unsigned parallelism) {
+        const double cutoff = -std::log1p(-double(settings.opacity));
+        auto input = prepareCollision(source, settings, stop);
+        auto volume = std::move(input.volume);
+        const auto& prepared = input.gaussians;
+        const float size = settings.voxel_size;
+        Tree tree(volume.dimensions, stop);
         std::vector<uint32_t> all(prepared.size());
         std::iota(all.begin(), all.end(), 0);
 

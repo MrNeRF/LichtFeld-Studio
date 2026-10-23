@@ -1,0 +1,29 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+#pragma once
+#include <array>
+#include <cstdint>
+#include <functional>
+#include <span>
+#include <stop_token>
+#include <vector>
+
+namespace lfs::core::cuda {
+    // Plain layout shared with PreparedGaussian; uploaded once without repacking.
+    struct CollisionGaussianGpu {
+        float center[3], inverse[9], extent[3], opacity;
+        int min[3], max[3];
+    };
+    struct CollisionBvhNode {
+        int min[3], max[3];
+        uint32_t left, right, begin, count;
+    };
+    struct CollisionBrick {
+        uint64_t morton, mask;
+    };
+    std::vector<CollisionBrick> voxelizeCollisionBricks(
+        std::span<const CollisionGaussianGpu> gaussians, std::span<const CollisionBvhNode> nodes,
+        int root_size, std::array<int, 3> dimensions, std::array<float, 3> origin,
+        float voxel_size, double cutoff, std::stop_token stop,
+        const std::function<void(float)>& progress);
+} // namespace lfs::core::cuda
