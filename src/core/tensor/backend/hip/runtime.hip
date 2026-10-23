@@ -2461,10 +2461,10 @@ int lfs_hip_warp_rgb(LfsHipContext* context, LfsHipView input, uint32_t dtype,
             const int end = std::min(lens->dst_height, y + rows);
             const dim3 block(16, 16), grid((lens->dst_width + 15) / 16, (end - y + 15) / 16);
             if (dtype == LFS_HIP_U8)
-                hipLaunchKernelGGL((hip_lens::undistort_image_kernel<uint8_t>), grid, block, 0, context->stream,
+                hipLaunchKernelGGL((hip_lens::undistort_image_kernel<uint8_t, 3>), grid, block, 0, context->stream,
                                    reinterpret_cast<const uint8_t*>(source), destination, 3, y, end, quadrature, *lens);
             else
-                hipLaunchKernelGGL((hip_lens::undistort_image_kernel<float>), grid, block, 0, context->stream,
+                hipLaunchKernelGGL((hip_lens::undistort_image_kernel<float, 3>), grid, block, 0, context->stream,
                                    reinterpret_cast<const float*>(source), destination, 3, y, end, quadrature, *lens);
             check(hipGetLastError());
         }

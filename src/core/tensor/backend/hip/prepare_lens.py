@@ -84,6 +84,21 @@ for axis in ("x","y"):
     area=area.replace(old,f"fmaf(dn{axis}, params.src_f{axis}, params.src_c{axis}) - PIXEL_CENTER_OFFSET")
 area=area.replace("                    if (mode == AreaFilterMode::DEPTH)","                    if (!isfinite(sx) || !isfinite(sy) || fabsf(sx)>1073741824.f || fabsf(sy)>1073741824.f) continue;\n                    if (mode == AreaFilterMode::DEPTH)")
 constants = source[source.index("        constexpr int BLOCK_DIM"):source.index("        using detail::apply_distortion;")]
+# Keep RGB channels compile-time constant in the native path. Dynamic channel
+# indexing otherwise prevents scalarization of the four-element accumulators.
+# The default instantiation retains the general 1/2/4-channel implementation.
+rgb_kernel = "template <typename T>\n        __global__ void __launch_bounds__(BLOCK_DIM* BLOCK_DIM)\n            undistort_image_kernel("
+if sampling.count(rgb_kernel) != 1:
+    raise RuntimeError("Review changed forward RGB kernel template")
+sampling = sampling.replace(rgb_kernel, rgb_kernel.replace("typename T>", "typename T, int Channels = 0>"))
+rgb_start = sampling.index("            undistort_image_kernel(")
+rgb_body = sampling.index("{", rgb_start)
+signature = sampling[rgb_start:rgb_body]
+if signature.count("const int channels,") != 1:
+    raise RuntimeError("Review changed forward RGB channel parameter")
+sampling = sampling[:rgb_start] + signature.replace("const int channels,", "const int runtime_channels,") + sampling[rgb_body:]
+rgb_body = sampling.index("{", rgb_start)
+sampling = sampling[:rgb_body + 1] + "\n            const int channels = Channels ? Channels : runtime_channels;" + sampling[rgb_body + 1:]
 text = """// Generated from the repository's CUDA lens math. Do not edit.
 #include "../../../cuda/undistort/distortion_model.cuh"
 namespace hip_lens {
