@@ -55,7 +55,7 @@ TEST(CollisionScene, ArchiveRestoresGeneratedMeshAndVolumeWithDeferredHydration)
     auto* node = scene.getNodeById(id);
     const auto uuid = node->uuid;
     node->collision = g;
-    node->collision_display = {.preview = true, .surface_ready = false, .opacity = 0.45f, .slice = 0.8f, .surface_stride = 8};
+    node->collision_display = {.preview = true, .sharp = false, .surface_ready = false, .opacity = 0.45f, .slice = 0.8f, .surface_stride = 8};
     const auto display = node->collision_display;
     node->payload_diverged = true;
     node->visible = false;

@@ -2,13 +2,23 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/collision.hpp"
 #include "core/mesh_data.hpp"
+#include "core/scene.hpp"
+#include "io/project_document.hpp"
+#include "io/scene_chapter_adapter.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "rendering/mesh_offscreen_renderer.hpp"
 #include "rendering/passes/vulkan_mesh_pass.hpp"
 #include "window/vulkan_context.hpp"
 #include <SDL3/SDL.h>
 #include <array>
+#include <chrono>
+#include <cstdlib>
+#include <fstream>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
+#include <iostream>
+#include <nlohmann/json.hpp>
+#include <random>
 
 namespace {
     class CollisionOverlay : public ::testing::Test {
@@ -70,6 +80,142 @@ namespace {
             return {pixels[center], pixels[4096 + center], pixels[8192 + center]};
         }
     };
+
+    // Opt-in production-volume benchmark; regular regressions remain tiny.
+    TEST_F(CollisionOverlay, ProductionVolumeBenchmark) {
+        const char* path = std::getenv("LFS_COLLISION_BENCHMARK_PROJECT");
+        if (!path)
+            GTEST_SKIP() << "Set LFS_COLLISION_BENCHMARK_PROJECT for a production-volume benchmark";
+        renderer.setGpuTimingEnabled(true);
+        auto document = lfs::io::project::ProjectDocument::open(path, {.defer_geometry_payloads = true});
+        ASSERT_TRUE(document);
+        lfs::core::Scene scene;
+        auto shell = lfs::io::project::stage_scene_shell(document->scene_graph(), scene);
+        ASSERT_TRUE(shell);
+        auto retired = scene.commitRestoreStage(std::move(*shell));
+        const lfs::core::SceneNode* collider = nullptr;
+        for (const auto* node : scene.getNodes())
+            if (node->collision) {
+                collider = node;
+                break;
+            }
+        ASSERT_NE(collider, nullptr);
+        auto bounds = collider->collision->boundsMesh();
+        geometry->vertices = lfs::core::Tensor::from_vector(bounds.vertices, {bounds.vertices.size() / 3, 3}, lfs::core::Device::CPU);
+        geometry->indices = lfs::core::Tensor::from_vector(bounds.indices, {bounds.indices.size() / 3, 3}, lfs::core::Device::CPU);
+        auto draw = item();
+        draw.collision_volume = collider->collision.get();
+        draw.collision_sharp = std::getenv("LFS_COLLISION_BENCHMARK_FAST") == nullptr;
+        draw.model = lfs::rendering::dataWorldTransformToVisualizerWorld(scene.getWorldTransform(collider->id));
+        const auto projection = glm::perspective(glm::radians(60.0f), 1920.f / 1080, .01f, 1000.f);
+        lfs::vis::VulkanMeshPassParams params;
+        params.camera_position = {-5, 3, -5};
+        if (const char* view = std::getenv("LFS_COLLISION_BENCHMARK_VIEW")) {
+            if (std::string_view(view) == "walk")
+                params.camera_position = {0, 1, -3};
+            else if (std::string_view(view) == "closeup")
+                params.camera_position = {-1, 1, -1};
+        }
+        params.view_projection = projection * glm::lookAt(params.camera_position, glm::vec3(0), glm::vec3(0, 1, 0));
+        params.items = {draw};
+        if (const char* prefix = std::getenv("LFS_COLLISION_BENCHMARK_EXPORT")) {
+            const auto& v = *draw.collision_volume;
+            auto write = [&](const char* suffix, const auto& values) {
+                std::ofstream file(std::string(prefix) + suffix, std::ios::binary);
+                file.write(reinterpret_cast<const char*>(values.data()), values.size() * sizeof(values[0]));
+            };
+            write(".gpu.bin", v.gpuOccupancy());
+            write(".tree.bin", v.tree);
+            const auto inverse = glm::inverse(params.view_projection * draw.model);
+            const auto camera = glm::vec3(glm::inverse(draw.model) * glm::vec4(params.camera_position, 1));
+            nlohmann::json metadata{
+                {"dimensions", {v.dimensions.x, v.dimensions.y, v.dimensions.z}},
+                {"origin", {v.origin.x, v.origin.y, v.origin.z}},
+                {"voxel_size", v.settings.voxel_size},
+                {"root_size", v.tree_size},
+                {"inverse_vp", std::vector<float>(&inverse[0][0], &inverse[0][0] + 16)},
+                {"camera", {camera.x, camera.y, camera.z}},
+                {"inside", v.occupied(v.cell(camera))},
+                {"width", 1920},
+                {"height", 1080}};
+            std::ofstream(std::string(prefix) + ".json") << metadata.dump(2);
+        }
+        for (int i = 0; i < 10; ++i)
+            ASSERT_TRUE(renderer.render(*context, params, projection, 1920, 1080));
+        ASSERT_GT(renderer.lastGpuMilliseconds(), 0) << "GPU timestamps are unavailable";
+        std::vector<double> times, gpu_times;
+        for (int i = 0; i < 30; ++i) {
+            const auto start = std::chrono::steady_clock::now();
+            ASSERT_TRUE(renderer.render(*context, params, projection, 1920, 1080));
+            times.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+            gpu_times.push_back(renderer.lastGpuMilliseconds());
+        }
+        if (const char* output = std::getenv("LFS_COLLISION_BENCHMARK_IMAGE")) {
+            auto frame = renderer.render(*context, params, projection, 1920, 1080);
+            ASSERT_TRUE(frame);
+            std::ofstream file(output, std::ios::binary);
+            const auto rgba = frame->rgba.to_vector();
+            file.write(reinterpret_cast<const char*>(rgba.data()), rgba.size() * sizeof(float));
+        }
+        std::sort(times.begin(), times.end());
+        std::sort(gpu_times.begin(), gpu_times.end());
+        std::cout << "COLLISION_BENCHMARK project=" << path << " eye=" << params.camera_position.x << "," << params.camera_position.y << "," << params.camera_position.z << " resolution=1920x1080 median_ms=" << times[times.size() / 2] << " p90_ms=" << times[27] << " fast_requested=" << !draw.collision_sharp << " vrs_supported=" << context->hasFragmentShadingRate() << " gpu_median_ms=" << gpu_times[gpu_times.size() / 2] << " gpu_p90_ms=" << gpu_times[27] << std::endl;
+    }
+
+    TEST_F(CollisionOverlay, CornerCrossingsMatchIndependentRayBoxCoverage) {
+        volume.settings.voxel_size = .05f;
+        volume.origin = {-.371f, -.413f, -.397f};
+        volume.dimensions = {16, 16, 16};
+        volume.solid.assign(4096, 0);
+        std::mt19937 random(181);
+        for (auto& cell : volume.solid)
+            cell = random() % 5 == 0;
+        for (const auto eye : {glm::vec3(1.3f, .7f, 1.3f), glm::vec3(-1.1f, .3f, -1.1f)}) {
+            const auto projection = glm::perspective(glm::radians(60.0f), 1.f, .01f, 100.f);
+            lfs::vis::VulkanMeshPassParams params;
+            params.camera_position = eye;
+            params.view_projection = projection * glm::lookAt(eye, glm::vec3(0), glm::vec3(0, 1, 0));
+            params.items = {item()};
+            const auto frame = renderer.render(*context, params, projection, 64, 64);
+            ASSERT_TRUE(frame);
+            const auto inverse = glm::inverse(params.view_projection);
+            const auto* pixels = frame->rgba.ptr<float>();
+            for (int y = 0; y < 64; ++y)
+                for (int x = 0; x < 64; ++x) {
+                    const float nx = (x + .5f) / 32 - 1, ny = 1 - (y + .5f) / 32;
+                    const auto near = inverse * glm::vec4(nx, ny, 0, 1), far = inverse * glm::vec4(nx, ny, 1, 1);
+                    const glm::dvec3 ro = glm::vec3(near) / near.w;
+                    const auto rd = glm::normalize(glm::dvec3(glm::vec3(far) / far.w) - ro);
+                    bool expected = false;
+                    for (int z = 0; z < 16 && !expected; ++z)
+                        for (int b = 0; b < 16 && !expected; ++b)
+                            for (int a = 0; a < 16 && !expected; ++a) {
+                                if (!volume.occupied({a, b, z}))
+                                    continue;
+                                const glm::dvec3 lo = volume.origin + glm::vec3(a, b, z) * volume.settings.voxel_size;
+                                const glm::dvec3 hi = volume.origin + glm::vec3(a + 1, b + 1, z + 1) * volume.settings.voxel_size;
+                                const auto first = (lo - ro) / rd, last = (hi - ro) / rd;
+                                const auto enter = glm::min(first, last), exit = glm::max(first, last);
+                                expected = std::max({0.0, enter.x, enter.y, enter.z}) < std::min({exit.x, exit.y, exit.z});
+                            }
+                    EXPECT_EQ(pixels[y * 64 + x] > 0, expected) << x << "," << y;
+                }
+        }
+    }
+
+    TEST_F(CollisionOverlay, OffscreenAndEyePlaneBoundsAreConservative) {
+        auto behind = item();
+        behind.model = glm::translate(glm::mat4(1), {0, 0, 20});
+        EXPECT_LT(glm::length(render({.25f, .25f, 5}, {0, 0, -1}, {behind})), .001f);
+        auto lateral = item();
+        lateral.model = glm::translate(glm::mat4(1), {100, 0, 0});
+        EXPECT_LT(glm::length(render({.25f, .25f, 5}, {0, 0, -1}, {lateral})), .001f);
+        auto fast = item();
+        fast.collision_sharp = false;
+        const auto orange = render({.25f, .25f, .25f}, {0, 0, -1}, {fast});
+        EXPECT_GT(orange.r, .1f);
+        EXPECT_NEAR(orange.g, orange.r * .35f, .001f);
+    }
 
     TEST_F(CollisionOverlay, CompletelySolidVolumeShowsOrangeBoundingExitInEveryDirection) {
         for (const auto direction : std::array{
