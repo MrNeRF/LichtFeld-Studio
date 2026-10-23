@@ -147,6 +147,13 @@ namespace lfs::core::param {
             .ui_step(0.01)
             .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
             .all_strategies()
+            .bool_prop(&OptimizationParameters::crop_to_cropbox,
+                       "crop_to_cropbox", "Crop to ROI at end", d.crop_to_cropbox,
+                       "With an active crop box, removes every splat outside it when training ends, so the saved project and the exports hold only the region of interest")
+            .locale("training.advanced.crop_to_cropbox")
+            .tooltip("training.tooltip.crop_to_cropbox")
+            .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
+            .all_strategies()
             .float_prop(&OptimizationParameters::cropbox_growth_inside,
                         "cropbox_growth_inside", "ROI growth inside", d.cropbox_growth_inside, 0.0f, 1.0f,
                         "Share of new splats placed inside the active crop box")

@@ -183,6 +183,10 @@ class Action(enum.Enum):
 
     TOGGLE_PYTHON_CONSOLE = 90
 
+    NEXT_SIDEBAR_CATEGORY = 92
+
+    PREVIOUS_SIDEBAR_CATEGORY = 93
+
     UNGROUP_SELECTED_SCENE_NODE = 86
 
 class ToolMode(enum.Enum):

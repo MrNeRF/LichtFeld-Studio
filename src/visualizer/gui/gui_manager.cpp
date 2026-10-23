@@ -4538,16 +4538,7 @@ namespace lfs::vis::gui {
             panel_layout_.setActiveTab(id);
         };
         rml_right_panel_.on_tab_closed = [this](const std::string& id) {
-            if (id.empty())
-                return;
-            if (viewer_) {
-                viewer_->projectMarkSessionChapterCommitted("GUIL");
-            }
-            PanelRegistry::instance().set_panel_enabled(id, false);
-            if (panel_layout_.getActiveTab() == id)
-                panel_layout_.setActiveTab({});
-            if (focus_panel_name_ == id)
-                focus_panel_name_.clear();
+            closed_plugin_tab_ = id;
         };
         rml_right_panel_.on_splitter_height = [this](float height, float panel_height) {
             viewer_->getRenderingManager()->setViewportResizeActive(true);
@@ -6337,7 +6328,7 @@ namespace lfs::vis::gui {
             const float rpw = panel_layout_.getRightPanelWidth();
             const float ph = screen.work_size.y;
             const float splitter_h = PanelLayoutManager::SPLITTER_H * current_ui_scale_;
-            const float tab_bar_h = PanelLayoutManager::TAB_BAR_H * current_ui_scale_;
+            const float tab_bar_w = PanelLayoutManager::RIGHT_TAB_BAR_W * current_ui_scale_;
             const float avail_h = ph - 16.0f;
             const float scene_h = panel_layout_.scenePanelHeight(avail_h, current_ui_scale_);
 
@@ -6371,7 +6362,8 @@ namespace lfs::vis::gui {
             const float content_x = rp_layout.pos.x + RIGHT_PANEL_PAD;
             const float content_top = screen.work_pos.y + RIGHT_PANEL_PAD;
             const float content_w = rpw - 2.0f * RIGHT_PANEL_PAD;
-            const float tab_content_y = content_top + scene_h + splitter_h + tab_bar_h;
+            const float tab_content_y = content_top + scene_h + splitter_h +
+                                        PanelLayoutManager::RIGHT_PANEL_SECTION_GAP * current_ui_scale_;
             const float tab_content_h = std::max(0.0f, content_top + avail_h - tab_content_y);
             right_panel_pointer_over_scene_header =
                 !pointer_over_right_panel_edge &&
@@ -6381,8 +6373,8 @@ namespace lfs::vis::gui {
             right_panel_pointer_over_active_tab =
                 !pointer_over_right_panel_edge &&
                 pointInRect(panel_input.mouse_x, panel_input.mouse_y,
-                            glm::vec2{content_x, tab_content_y},
-                            glm::vec2{content_w, tab_content_h});
+                            glm::vec2{content_x + tab_bar_w, tab_content_y},
+                            glm::vec2{std::max(0.0f, content_w - tab_bar_w), tab_content_h});
 
             if ((float_blocks_rp || viewport_pointer_captured) &&
                 !rml_right_panel_.isResizeInteractionActive()) {
@@ -6401,6 +6393,19 @@ namespace lfs::vis::gui {
                 rml_right_panel_.processInput(rp_layout, masked_input);
             } else {
                 rml_right_panel_.processInput(rp_layout, panel_input);
+            }
+
+            // Unload after the click dispatch returns: unloading unregisters the plugin's panels.
+            if (const auto id = std::exchange(closed_plugin_tab_, {}); !id.empty()) {
+                if (viewer_)
+                    viewer_->projectMarkSessionChapterCommitted("GUIL");
+                if (panel_layout_.getActiveTab() == id)
+                    panel_layout_.setActiveTab({});
+                if (focus_panel_name_ == id)
+                    focus_panel_name_.clear();
+                const auto unload = python::bridge().unload_panel_plugin;
+                if (!unload || !unload(id.c_str()))
+                    LOG_WARN("Closing sidebar tab '{}' did not unload its plugin", id);
             }
 
             if (rml_right_panel_.wantsInput() && !float_blocks_rp && !viewport_pointer_captured)
@@ -8633,17 +8638,17 @@ namespace lfs::vis::gui {
 
         constexpr float kPanelPad = 8.0f;
         constexpr float kPreloadMaxHeight = 100000.0f;
-        const float content_w = panel_layout_.getRightPanelWidth() - 2.0f * kPanelPad;
+        const float content_w = panel_layout_.getRightPanelWidth() - 2.0f * kPanelPad -
+                                PanelLayoutManager::RIGHT_TAB_BAR_W * dpi;
         if (content_w <= 0.0f) {
             return;
         }
 
         const float splitter_h = PanelLayoutManager::SPLITTER_H * dpi;
-        const float tab_bar_h = PanelLayoutManager::TAB_BAR_H * dpi;
         const float avail_h = panel_h - 2.0f * kPanelPad;
         const float scene_h = panel_layout_.scenePanelHeight(avail_h, dpi);
         const float content_top = kPanelPad;
-        const float tab_content_y = content_top + scene_h + splitter_h + tab_bar_h;
+        const float tab_content_y = content_top + scene_h + splitter_h + PanelLayoutManager::RIGHT_PANEL_SECTION_GAP * dpi;
         const float tab_content_h =
             std::max(0.0f, content_top + avail_h - tab_content_y);
         const float clip_y_min = tab_content_y;

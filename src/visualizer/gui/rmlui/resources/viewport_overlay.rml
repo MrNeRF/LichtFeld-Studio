@@ -293,6 +293,16 @@
                         <span class="slider-value">{{cropbox_growth_inside_percent}}</span>
                     </div>
                 </div>
+                <div class="setting-row crop-roi-setting-row"
+                     data-tooltip="tooltip.crop_to_cropbox">
+                    <span class="setting-row__label-col">{{label_crop_to_cropbox}}</span>
+                    <div class="setting-row__control-col">
+                        <input id="primary-crop-to-cropbox"
+                               type="checkbox"
+                               data-checked="crop_to_cropbox"
+                               data-attrif-disabled="!crop_roi_params_available" />
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -566,6 +576,16 @@
                                data-value="cropbox_growth_inside"
                                data-attrif-disabled="!crop_roi_params_available" />
                         <span class="slider-value">{{cropbox_growth_inside_percent}}</span>
+                    </div>
+                </div>
+                <div class="setting-row crop-roi-setting-row"
+                     data-tooltip="tooltip.crop_to_cropbox">
+                    <span class="setting-row__label-col">{{label_crop_to_cropbox}}</span>
+                    <div class="setting-row__control-col">
+                        <input id="secondary-crop-to-cropbox"
+                               type="checkbox"
+                               data-checked="crop_to_cropbox"
+                               data-attrif-disabled="!crop_roi_params_available" />
                     </div>
                 </div>
             </div>

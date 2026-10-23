@@ -967,7 +967,7 @@ namespace lfs::python {
                    cam.tangential_distortion().numel() != 0 ||
                    cam.camera_model_type() != core::CameraModelType::PINHOLE;
         }
-    }
+    } // namespace
 
     bool PyScene::has_active_distorted_cameras() const {
         if (!scene_) {

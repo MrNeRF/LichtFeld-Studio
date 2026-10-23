@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include "core/error.hpp"
 #include "core/exportable_storage.hpp"
 #include "core/splat_data.hpp"
@@ -146,7 +148,7 @@ namespace lfs::vis {
         VksplatViewportRenderer(const VksplatViewportRenderer&) = delete;
         VksplatViewportRenderer& operator=(const VksplatViewportRenderer&) = delete;
 
-        [[nodiscard]] std::expected<RenderResult, std::string> render(
+        [[nodiscard]] LFS_VIS_API std::expected<RenderResult, std::string> render(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
             const lfs::rendering::ViewportRenderRequest& request,
@@ -223,10 +225,10 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba(
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Main) const;
-        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgb8(
+        [[nodiscard]] LFS_VIS_API std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgb8(
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Main) const;
-        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba8(
+        [[nodiscard]] LFS_VIS_API std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba8(
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Main) const;
         // Reads the most recent render's raw per-pixel linear depth (the
@@ -252,7 +254,7 @@ namespace lfs::vis {
             lfs::core::Tensor& destination,
             int destination_x,
             int destination_y) const;
-        [[nodiscard]] std::expected<float, std::string> sampleDepthAtPixel(
+        [[nodiscard]] LFS_VIS_API std::expected<float, std::string> sampleDepthAtPixel(
             VulkanContext& context,
             const DepthSampleRequest& request) const;
 
@@ -285,7 +287,7 @@ namespace lfs::vis {
         [[nodiscard]] std::uint64_t readbackRingFullWaitCount() const;
         [[nodiscard]] std::uint64_t readbackCellPinWaitCount() const;
 
-        [[nodiscard]] std::expected<lfs::core::Tensor, std::string> buildSelectionMask(
+        [[nodiscard]] LFS_VIS_API std::expected<lfs::core::Tensor, std::string> buildSelectionMask(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
             const SelectionMaskRequest& request,

@@ -78,7 +78,7 @@ namespace lfs::vis::input {
             publishKeymapNotice(lfs::ErrorCode::InvalidArgument, std::move(message));
         }
 
-        constexpr int PROFILE_VERSION = 33; // Store changes to individual defaults.
+        constexpr int PROFILE_VERSION = 34; // Add rebindable sidebar category navigation.
 
         [[nodiscard]] std::optional<Binding> parseStoredBinding(const nlohmann::json& value);
         [[nodiscard]] std::string triggerIdentity(const Binding& binding);
@@ -139,7 +139,7 @@ namespace lfs::vis::input {
 
         static_assert(kLatestHistoricalProfileVersion == PROFILE_VERSION - 1,
                       "Snapshot the previous keymap defaults before bumping PROFILE_VERSION");
-        constexpr Action LAST_ACTION = Action::CAMERA_RESTORE_HOME;
+        constexpr Action LAST_ACTION = Action::PREVIOUS_SIDEBAR_CATEGORY;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -2050,6 +2050,10 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_8, MODIFIER_CTRL}, Action::SELECT_MODE_SPHERE, "Sphere"},
             {KeyTrigger{KEY_ESCAPE, MODIFIER_NONE}, Action::CANCEL_POLYGON, "Cancel"},
             // UI
+            {KeyTrigger{KEY_TAB, MODIFIER_CTRL}, Action::NEXT_SIDEBAR_CATEGORY,
+             getActionName(Action::NEXT_SIDEBAR_CATEGORY)},
+            {KeyTrigger{KEY_TAB, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::PREVIOUS_SIDEBAR_CATEGORY,
+             getActionName(Action::PREVIOUS_SIDEBAR_CATEGORY)},
             {KeyTrigger{KEY_F12, MODIFIER_NONE}, Action::TOGGLE_UI, "Hide UI"},
             {KeyTrigger{KEY_F11, MODIFIER_NONE}, Action::TOGGLE_FULLSCREEN, "Fullscreen"},
             {KeyTrigger{KEY_F10, MODIFIER_NONE}, Action::TOGGLE_PERFORMANCE_HUD, "Performance HUD"},
@@ -2231,6 +2235,8 @@ namespace lfs::vis::input {
         case Action::TOOL_ALIGN: return "Align Tool";
         case Action::PIE_MENU: return "Pie Menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "Zoom Histogram at Cursor";
+        case Action::NEXT_SIDEBAR_CATEGORY: return "Next Sidebar Category";
+        case Action::PREVIOUS_SIDEBAR_CATEGORY: return "Previous Sidebar Category";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "Toggle Camera Frustums";
         case Action::OPEN_PREFERENCES: return "Open Preferences";
         case Action::TOGGLE_MCP_SERVER: return "Toggle MCP Server";
@@ -2327,6 +2333,8 @@ namespace lfs::vis::input {
         case Action::TOOL_ALIGN: return "tool_align";
         case Action::PIE_MENU: return "pie_menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "histogram_zoom_marked";
+        case Action::NEXT_SIDEBAR_CATEGORY: return "next_sidebar_category";
+        case Action::PREVIOUS_SIDEBAR_CATEGORY: return "previous_sidebar_category";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "toggle_camera_frustums";
         case Action::OPEN_PREFERENCES: return "open_preferences";
         case Action::TOGGLE_MCP_SERVER: return "toggle_mcp_server";
@@ -3084,6 +3092,8 @@ namespace lfs::vis::input {
             return d_node_rect;
 
         case Action::TOGGLE_UI:
+        case Action::NEXT_SIDEBAR_CATEGORY:
+        case Action::PREVIOUS_SIDEBAR_CATEGORY:
         case Action::TOGGLE_FULLSCREEN:
         case Action::TOGGLE_PERFORMANCE_HUD:
         case Action::OPEN_PREFERENCES:

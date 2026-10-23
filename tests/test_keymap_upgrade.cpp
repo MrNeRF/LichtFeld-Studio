@@ -59,6 +59,37 @@ namespace lfs::vis::input {
                    "python3 tools/generate_keymap_defaults.py --record-previous HEAD";
         }
 
+        TEST_F(KeymapTest, SidebarCategoriesUpgradeAndPreserveRebindingAndRemoval) {
+            const auto path = fs::temp_directory_path() / "lfs_keymap_sidebar_upgrade.json";
+            auto old = test::historicalSavedProfile("v33");
+            std::erase_if(old["bindings"].get_ref<json::array_t&>(), [](const json& binding) {
+                return binding.value("action", -1) == static_cast<int>(Action::TOGGLE_UI);
+            });
+            test::writeProfile(path, old);
+            InputBindings upgraded;
+            ASSERT_TRUE(upgraded.loadProfileFromFile(path));
+            EXPECT_EQ(upgraded.getActionForKey(ToolMode::GLOBAL, KEY_TAB, MODIFIER_CTRL),
+                      Action::NEXT_SIDEBAR_CATEGORY);
+            EXPECT_EQ(upgraded.getActionForKey(ToolMode::GLOBAL, KEY_TAB, MODIFIER_CTRL | MODIFIER_SHIFT),
+                      Action::PREVIOUS_SIDEBAR_CATEGORY);
+            EXPECT_EQ(upgraded.getActionForScroll(ToolMode::GLOBAL, MODIFIER_CTRL),
+                      Action::HISTOGRAM_ZOOM_MARKED);
+            EXPECT_EQ(upgraded.getActionForScroll(ToolMode::SELECTION, MODIFIER_CTRL),
+                      Action::BRUSH_RESIZE);
+            upgraded.setBinding(ToolMode::GLOBAL, Action::NEXT_SIDEBAR_CATEGORY, KeyTrigger{KEY_F8});
+            upgraded.clearBinding(ToolMode::GLOBAL, Action::PREVIOUS_SIDEBAR_CATEGORY);
+            ASSERT_TRUE(upgraded.saveProfileToFile(path));
+            InputBindings reloaded;
+            ASSERT_TRUE(reloaded.loadProfileFromFile(path));
+            EXPECT_EQ(reloaded.getActionForKey(ToolMode::GLOBAL, KEY_F8, 0),
+                      Action::NEXT_SIDEBAR_CATEGORY);
+            EXPECT_EQ(reloaded.getActionForKey(ToolMode::GLOBAL, KEY_TAB, MODIFIER_CTRL), Action::NONE);
+            EXPECT_EQ(reloaded.getActionForKey(ToolMode::GLOBAL, KEY_TAB, MODIFIER_CTRL | MODIFIER_SHIFT),
+                      Action::NONE);
+            EXPECT_FALSE(reloaded.getTriggerForAction(Action::TOGGLE_UI));
+            fs::remove(path);
+        }
+
         TEST_F(KeymapTest, StaleFullListDoesNotOverrideFutureDefaults) {
             const fs::path path = fs::temp_directory_path() / "lfs_keymap_future_defaults.json";
             InputBindings current;

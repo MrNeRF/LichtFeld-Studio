@@ -49,26 +49,26 @@ namespace lfs::vis {
         public:
             LFS_VIS_API explicit GizmoManager(VisualizerImpl* viewer);
 
-            void setupEvents();
+            LFS_VIS_API void setupEvents();
             LFS_VIS_API void updateToolState(const UIContext& ctx, bool ui_hidden);
 
-            void renderNodeTransformGizmo(const UIContext& ctx, const ViewportLayout& viewport);
-            void renderCropBoxGizmo(const UIContext& ctx, const ViewportLayout& viewport);
-            void renderEllipsoidGizmo(const UIContext& ctx, const ViewportLayout& viewport);
-            void renderViewportGizmo(const ViewportLayout& viewport);
+            LFS_VIS_API void renderNodeTransformGizmo(const UIContext& ctx, const ViewportLayout& viewport);
+            LFS_VIS_API void renderCropBoxGizmo(const UIContext& ctx, const ViewportLayout& viewport);
+            LFS_VIS_API void renderEllipsoidGizmo(const UIContext& ctx, const ViewportLayout& viewport);
+            LFS_VIS_API void renderViewportGizmo(const ViewportLayout& viewport);
             void updateCropFlash();
-            void deactivateAllTools();
+            LFS_VIS_API void deactivateAllTools();
             bool cancelActiveNodeTransformDrag();
             bool cancelActiveGizmoDrag();
-            void setSelectionSubMode(SelectionSubMode mode);
-            void setSelectionVolumeFromDrag(SelectionSubMode mode,
-                                            SelectionMode apply_mode,
-                                            uint64_t source_generation,
-                                            const glm::vec3& center_world,
-                                            float radius);
+            LFS_VIS_API void setSelectionSubMode(SelectionSubMode mode);
+            LFS_VIS_API void setSelectionVolumeFromDrag(SelectionSubMode mode,
+                                                        SelectionMode apply_mode,
+                                                        uint64_t source_generation,
+                                                        const glm::vec3& center_world,
+                                                        float radius);
 
             [[nodiscard]] TransformSpace getTransformSpace() const { return transform_space_; }
-            void setTransformSpace(TransformSpace space);
+            LFS_VIS_API void setTransformSpace(TransformSpace space);
             [[nodiscard]] GizmoOperation getOperation() const {
                 return current_operation_;
             }
@@ -77,7 +77,7 @@ namespace lfs::vis {
                 node_gizmo_operation_ = operation;
             }
             [[nodiscard]] PivotMode getPivotMode() const { return pivot_mode_; }
-            void setPivotMode(PivotMode mode);
+            LFS_VIS_API void setPivotMode(PivotMode mode);
             [[nodiscard]] MultiTransformMode getMultiTransformMode() const { return multi_transform_mode_; }
             void setMultiTransformMode(MultiTransformMode mode);
             [[nodiscard]] SelectionSubMode getSelectionSubMode() const { return selection_mode_; }
@@ -102,7 +102,7 @@ namespace lfs::vis {
             [[nodiscard]] std::optional<ViewportGizmoPress> viewportGizmoPress() const;
             // What the axis widget shows under the pointer: -1 off every sphere,
             // otherwise the panel and hovered marker, so a change needs a redraw.
-            [[nodiscard]] int viewportGizmoHover(double x, double y) const;
+            [[nodiscard]] LFS_VIS_API int viewportGizmoHover(double x, double y) const;
             [[nodiscard]] bool isPositionInViewportGizmo(double x, double y) const;
             [[nodiscard]] ToolType getCurrentToolMode() const;
 
@@ -254,7 +254,7 @@ namespace lfs::vis {
             [[nodiscard]] bool isSelectionVolumeMode() const;
             [[nodiscard]] bool isVolumeGizmoToolActive() const;
             [[nodiscard]] std::optional<core::NodeId> selectedCropTargetNodeId() const;
-            [[nodiscard]] bool ensureCropToolState();
+            [[nodiscard]] LFS_VIS_API bool ensureCropToolState();
             [[nodiscard]] bool syncCropToolStateFromNode(core::NodeId target_id, core::NodeId volume_node_id, bool* changed = nullptr);
             [[nodiscard]] bool persistActiveCropToolToNode(bool enable);
             void scaleCropToolTransform(const glm::vec3& total_scale);

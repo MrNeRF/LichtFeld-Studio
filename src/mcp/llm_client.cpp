@@ -6,6 +6,8 @@
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "httplib/httplib.h"
 
+#include "core/tls_distrust.hpp"
+
 #include <nlohmann/json.hpp>
 
 #include <cstdlib>
@@ -207,6 +209,10 @@ namespace lfs::mcp {
             }
 
             httplib::Client client(url);
+            client.set_server_certificate_verifier([](SSL* ssl) {
+                return lfs::core::peer_chain_has_distrusted_ca(ssl) ? httplib::SSLVerifierResponse::CertificateRejected
+                                                                    : httplib::SSLVerifierResponse::NoDecisionMade;
+            });
             client.set_connection_timeout(30);
             client.set_read_timeout(120);
 

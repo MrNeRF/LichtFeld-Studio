@@ -1,11 +1,34 @@
 /* Theme-dependent right panel chrome. */
 
 #tab-bar {
-    @{chrome.right_panel_decor};
+    background-color: transparent;
+}
+
+.tab-nav {
+    background-color: @{right_panel.tab_nav_bg};
+    color: @{text_dim};
+}
+
+.tab-nav:hover,
+.tab-nav:focus-visible {
+    background-color: @{right_panel.tab_nav_hover};
+    color: @{text};
+}
+
+.tab-nav:disabled {
+    background-color: transparent;
+    color: @{right_panel.tab_nav_disabled};
+}
+
+.tab-close { color: @{text_dim}; }
+.tab-close:hover,
+.tab-close:focus-visible {
+    background-color: @{right_panel.tab_hover};
+    color: @{text};
 }
 
 #splitter {
-    background-color: @{right_panel.splitter_bg};
+    background-color: transparent;
 }
 
 #splitter:hover {
@@ -17,15 +40,9 @@
 }
 
 .tab {
-    background-color: transparent;
+    background-color: @{alpha(surface_bright,0.36)};
     color: @{text_dim};
-    @{right_panel.tab_shape};
     border-color: @{right_panel.tab_border};
-    border-bottom-color: @{right_panel.tab_bottom_border};
-}
-
-.tab-label {
-    @{right_panel.tab_label_shape};
 }
 
 .tab:hover {
@@ -36,48 +53,18 @@
     @{right_panel.tab_hover_decor};
     color: @{text};
     border-color: @{right_panel.tab_active_border};
-    border-bottom-color: @{right_panel.tab_active_bottom_border};
+    border-left-color: @{right_panel.tab_focus_border};
 }
 
 .tab.active {
-    @{right_panel.tab_active_decor};
+    decorator: none;
+    background-color: transparent;
     color: @{text};
     border-color: @{right_panel.tab_active_border};
-    border-bottom-color: @{right_panel.tab_active_bottom_border};
 }
 
-.tab-close {
-    color: @{text_dim};
-}
-
-.tab-close:hover,
-.tab-close:focus-visible {
-    background-color: @{right_panel.tab_hover};
-    color: @{text};
-}
-
-.tab-nav {
-    background-color: @{right_panel.tab_nav_bg};
-    color: @{text_dim};
-}
-
-.tab-nav:hover {
-    background-color: @{right_panel.tab_nav_hover};
-    color: @{text};
-}
-
-.tab-nav.disabled,
-.tab-nav.disabled:hover {
-    background-color: transparent;
-    color: @{right_panel.tab_nav_disabled};
-    opacity: 0.55;
-}
 #left-border {
     @{chrome.right_panel_edge_shape};
-}
-
-#tab-separator {
-    @{chrome.right_panel_separator_decor};
 }
 
 #resize-handle:hover,
@@ -88,3 +75,8 @@
 #resize-handle.dragging {
     background-color: @{right_panel.resize_active};
 }
+
+.tab-edge { background-color: @{right_panel.tab_active_border}; }
+#splitter-grip { background-color: @{border}; }
+#splitter:hover #splitter-grip,
+#splitter.dragging #splitter-grip { background-color: @{text}; }

@@ -59,7 +59,7 @@ namespace {
             EXPECT_EQ(stored.get()->user_message(), expected);
             EXPECT_EQ(lfs::format_for_developer(result.error()).find("messages.err_"), std::string::npos);
             const auto wire = lfs::core::to_wire_envelope(result.error());
-            EXPECT_EQ(wire["message"], expected);
+            EXPECT_EQ(wire["message"].get<std::string>(), expected);
             EXPECT_EQ(wire.dump().find("messages.err_"), std::string::npos);
             std::string_view key;
             for (const auto& field : result.error().frames().front().fields.entries()) {

@@ -2031,6 +2031,39 @@ namespace lfs::training {
         optimizer.set_crop_damping_mask(rejected);
     }
 
+    void Trainer::crop_to_training_cropbox() {
+        refresh_cropbox_snapshot();
+        if (!cropbox_ || !strategy_) {
+            LOG_WARN("--crop: the training model has no active crop box, nothing is removed");
+            return;
+        }
+        std::unique_lock render_lock(render_mutex_);
+        std::unique_lock model_lock(model_access_mutex_);
+        waitForModelReaders();
+        const auto& model = strategy_->get_model();
+        const size_t before = model.size();
+        if (before == 0)
+            return;
+        const glm::mat4& m2b = cropbox_->model_to_cropbox;
+        const auto rotation_t = lfs::core::Tensor::from_vector(
+            {m2b[0][0], m2b[0][1], m2b[0][2], m2b[1][0], m2b[1][1], m2b[1][2], m2b[2][0], m2b[2][1], m2b[2][2]},
+            {3, 3}, lfs::core::Device::CUDA);
+        const auto translation = lfs::core::Tensor::from_vector(
+            {m2b[3][0], m2b[3][1], m2b[3][2]}, {1, 3}, lfs::core::Device::CUDA);
+        const auto lo = lfs::core::Tensor::from_vector(
+            {cropbox_->min.x, cropbox_->min.y, cropbox_->min.z}, {1, 3}, lfs::core::Device::CUDA);
+        const auto hi = lfs::core::Tensor::from_vector(
+            {cropbox_->max.x, cropbox_->max.y, cropbox_->max.z}, {1, 3}, lfs::core::Device::CUDA);
+        const auto in_box = model.get_means().matmul(rotation_t) + translation;
+        const auto inside = (in_box.ge(lo) && in_box.le(hi)).all(1);
+        LFS_ASSERT_MSG(inside.numel() == model.size(), "crop selection must cover every splat");
+        const auto outside = cropbox_->inverse ? inside : inside.logical_not();
+        // Removed through the strategy so the optimizer state shrinks with the model and the project stays resumable.
+        if (outside.sum_scalar() > 0)
+            strategy_->remove_gaussians(outside);
+        LOG_INFO("Cropped the trained model to its crop box: {} of {} splats kept", strategy_->get_model().size(), before);
+    }
+
     bool Trainer::cropbox_contains_camera(const lfs::core::Camera& camera) const {
         if (!cropbox_)
             return false;
@@ -9422,6 +9455,8 @@ namespace lfs::training {
             (user_stopped || terminal_error)
                 ? terminal_save_policy.on_stop_or_error
                 : terminal_save_policy.on_completion;
+        if (!terminal_error && params_.optimization.crop_to_cropbox)
+            crop_to_training_cropbox();
         if (authorize_terminal_save &&
             terminal_project_path) {
             saving_model_.store(true, std::memory_order_release);

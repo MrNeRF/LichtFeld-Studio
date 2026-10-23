@@ -25,7 +25,11 @@
 #include "gui/import_error.hpp"
 #include "gui/rml_sequencer_overlay.hpp"
 #include "gui/scene_tree_session.hpp"
+// Python's Windows headers define PLATFORM, also used as a localization key.
+#pragma push_macro("PLATFORM")
+#undef PLATFORM
 #include "gui/string_keys.hpp"
+#pragma pop_macro("PLATFORM")
 #include "input/input_controller.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
