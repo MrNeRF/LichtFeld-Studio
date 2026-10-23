@@ -23,3 +23,9 @@ Run `LichtFeld-Studio licht --help` for command usage.
 
 `--sharpen-amount` sharpens the training images as they are loaded. [Sharpen training images](features/sharpening.md)
 explains the kernels, the other `--sharpen-*` options and how sharpening affects evaluation.
+
+## Train a region of interest
+
+`--cropbox` limits training to a box, and `--crop` removes everything outside it when training completes and from
+exports. [Train a region of interest](features/region-of-interest.md) describes the box, the ROI training options and
+tiled training.

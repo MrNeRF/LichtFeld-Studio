@@ -1718,7 +1718,24 @@ namespace lfs::training {
                 return lfs::Status::failure(std::move(kept).error());
             without_frozen = std::move(*kept);
         }
-        const auto& model = without_frozen ? *without_frozen : trained;
+        const auto& unfrozen = without_frozen ? *without_frozen : trained;
+        // A stopped run keeps every splat so it can resume; its exports still hold only the crop box.
+        std::optional<lfs::core::SplatData> cropped;
+        if (const auto cropbox = trainer.export_cropbox()) {
+            cropped = crop_copy_to_training_cropbox(unfrozen, *cropbox);
+            if (cropped && cropped->size() == 0) {
+                return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::FailedPrecondition,
+                    .domain = lfs::ErrorDomain::Training,
+                    .user_message = "Final export failed: no splat lies inside the crop box.",
+                    .detail = "--crop leaves no rows to export",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
+            }
+            if (cropped)
+                LOG_INFO("Exporting the splats inside the crop box: {} of {}", cropped->size(), unfrozen.visible_count());
+        }
+        const auto& model = cropped ? *cropped : unfrozen;
         const std::filesystem::path out_dir = params.dataset.output_path;
         const std::string stem = params.dataset.output_name.empty()
                                      ? std::format("splat_{}", trainer.get_current_iteration())

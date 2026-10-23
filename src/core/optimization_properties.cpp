@@ -149,7 +149,7 @@ namespace lfs::core::param {
             .all_strategies()
             .bool_prop(&OptimizationParameters::crop_to_cropbox,
                        "crop_to_cropbox", "Crop to ROI at end", d.crop_to_cropbox,
-                       "With an active crop box, removes every splat outside it when training ends, so the saved project and the exports hold only the region of interest")
+                       "With an active crop box, removes every splat outside it when training completes and leaves them out of every export. Stopping keeps every splat so the run can resume")
             .locale("training.advanced.crop_to_cropbox")
             .tooltip("training.tooltip.crop_to_cropbox")
             .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)

@@ -1794,6 +1794,8 @@ namespace lfs::vis::gui {
         }
 
         const auto& scene = scene_manager->getScene();
+        const auto* const trainer_manager = scene_manager->getTrainerManager();
+        const auto export_crop = trainer_manager ? trainer_manager->exportCropBox() : std::nullopt;
         std::vector<ExportSplatSource> splats;
         splats.reserve(node_names.size());
         for (const auto& name : node_names) {
@@ -1806,7 +1808,8 @@ namespace lfs::vis::gui {
                 }
                 splats.push_back(ExportSplatSource{
                     .data = node->model.get(),
-                    .transform = scene_coords::nodeDataWorldTransform(scene, node->id)});
+                    .transform = scene_coords::nodeDataWorldTransform(scene, node->id),
+                    .crop = node->uuid == scene.getTrainingModelNodeUuid() ? export_crop : std::nullopt});
             }
         }
         if (splats.empty()) {
@@ -2208,10 +2211,20 @@ namespace lfs::vis::gui {
                     if (!cancelled) {
                         std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>> merge_inputs;
                         merge_inputs.reserve(splats.size());
+                        // Cropped copies; the scene model stays whole so a stopped run can resume.
+                        std::deque<lfs::core::SplatData> cropped;
                         for (const auto& source : splats) {
-                            if (source.data) {
-                                merge_inputs.emplace_back(source.data, source.transform);
+                            if (!source.data)
+                                continue;
+                            const lfs::core::SplatData* data = source.data;
+                            if (source.crop) {
+                                if (auto kept = lfs::training::crop_copy_to_training_cropbox(*data, *source.crop)) {
+                                    if (kept->size() == 0)
+                                        continue;
+                                    data = &cropped.emplace_back(std::move(*kept));
+                                }
                             }
+                            merge_inputs.emplace_back(data, source.transform);
                         }
 
                         const auto storage_mode = borrow_single_identity
@@ -3316,7 +3329,7 @@ namespace lfs::vis::gui {
                              mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, width, height, sequence_uuid, sequence_frame = sequence_uuid ? sequence_frames[frame] : 0,
                              cam_state = frame_states[frame],
                              clip_time = lfs::io::video::videoExportSampleTime(frame, export_options.framerate)]() mutable
-                            -> std::expected<lfs::core::Tensor, std::string> {
+                                -> std::expected<lfs::core::Tensor, std::string> {
                                 if (sequence_uuid) {
                                     auto& sequencer_ui = viewer->getGuiManager()->sequencerUI();
                                     const auto* current = sequencer_ui.controller().plySequence();

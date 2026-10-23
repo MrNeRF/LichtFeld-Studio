@@ -1981,13 +1981,22 @@ namespace lfs::training {
         cropbox_published_mode_.store(true, std::memory_order_release);
     }
 
-    void Trainer::refresh_cropbox_snapshot() {
+    std::optional<TrainingCropBoxGeometry> Trainer::current_cropbox() const {
         if (cropbox_published_mode_.load(std::memory_order_acquire)) {
             std::lock_guard lock(cropbox_publish_mutex_);
-            cropbox_ = cropbox_published_;
-            return;
+            return cropbox_published_;
         }
-        cropbox_ = scene_ ? resolve_training_cropbox_geom(*scene_) : std::nullopt;
+        return scene_ ? resolve_training_cropbox_geom(*scene_) : std::nullopt;
+    }
+
+    void Trainer::refresh_cropbox_snapshot() {
+        cropbox_ = current_cropbox();
+    }
+
+    std::optional<TrainingCropBoxGeometry> Trainer::export_cropbox() const {
+        if (!getParams().optimization.crop_to_cropbox)
+            return std::nullopt;
+        return current_cropbox();
     }
 
     namespace {
@@ -2041,27 +2050,17 @@ namespace lfs::training {
         std::unique_lock model_lock(model_access_mutex_);
         waitForModelReaders();
         const auto& model = strategy_->get_model();
-        const size_t before = model.size();
-        if (before == 0)
+        if (model.size() == 0)
             return;
-        const glm::mat4& m2b = cropbox_->model_to_cropbox;
-        const auto rotation_t = lfs::core::Tensor::from_vector(
-            {m2b[0][0], m2b[0][1], m2b[0][2], m2b[1][0], m2b[1][1], m2b[1][2], m2b[2][0], m2b[2][1], m2b[2][2]},
-            {3, 3}, lfs::core::Device::CUDA);
-        const auto translation = lfs::core::Tensor::from_vector(
-            {m2b[3][0], m2b[3][1], m2b[3][2]}, {1, 3}, lfs::core::Device::CUDA);
-        const auto lo = lfs::core::Tensor::from_vector(
-            {cropbox_->min.x, cropbox_->min.y, cropbox_->min.z}, {1, 3}, lfs::core::Device::CUDA);
-        const auto hi = lfs::core::Tensor::from_vector(
-            {cropbox_->max.x, cropbox_->max.y, cropbox_->max.z}, {1, 3}, lfs::core::Device::CUDA);
-        const auto in_box = model.get_means().matmul(rotation_t) + translation;
-        const auto inside = (in_box.ge(lo) && in_box.le(hi)).all(1);
-        LFS_ASSERT_MSG(inside.numel() == model.size(), "crop selection must cover every splat");
-        const auto outside = cropbox_->inverse ? inside : inside.logical_not();
+        const auto before = model.visible_count();
+        const auto outside = training_cropbox_crop_mask(model, *cropbox_);
+        LFS_ASSERT_MSG(outside && outside->numel() == model.size(), "crop selection must cover every splat");
         // Removed through the strategy so the optimizer state shrinks with the model and the project stays resumable.
-        if (outside.sum_scalar() > 0)
-            strategy_->remove_gaussians(outside);
-        LOG_INFO("Cropped the trained model to its crop box: {} of {} splats kept", strategy_->get_model().size(), before);
+        if (outside->sum_scalar() > 0)
+            strategy_->remove_gaussians(*outside);
+        // MCMC soft-deletes removed splats, so count the live ones.
+        LOG_INFO("Cropped the trained model to its crop box: {} of {} splats kept",
+                 strategy_->get_model().visible_count(), before);
     }
 
     bool Trainer::cropbox_contains_camera(const lfs::core::Camera& camera) const {
@@ -9456,7 +9455,9 @@ namespace lfs::training {
             (user_stopped || terminal_error)
                 ? terminal_save_policy.on_stop_or_error
                 : terminal_save_policy.on_completion;
-        if (!terminal_error && params_.optimization.crop_to_cropbox)
+        // Only a completed run is cropped: a stopped one saves every splat so it can resume, and its exports
+        // are cropped instead (export_cropbox()).
+        if (!terminal_error && !user_stopped && params_.optimization.crop_to_cropbox)
             crop_to_training_cropbox();
         if (authorize_terminal_save &&
             terminal_project_path) {

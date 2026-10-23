@@ -1289,8 +1289,8 @@ namespace {
             }
             if (crop && !params.cropbox && !params.resume_checkpoint && !params.resume_project)
                 return std::unexpected(
-                    "--crop removes the splats outside the training crop box when training ends: it needs --cropbox, "
-                    "or a resumed project that has a crop box");
+                    "--crop removes the splats outside the training crop box when training completes and when exporting: "
+                    "it needs --cropbox, or a resumed project that has a crop box");
 
             auto add_splat_freeze = parse_add_splat_freeze_modifiers(args);
             if (!add_splat_freeze) {

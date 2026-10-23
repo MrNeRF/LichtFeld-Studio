@@ -83,6 +83,8 @@ namespace lfs::training {
     /// Write `--export` formats next to project.licht after a terminal project
     /// save. No-op when `params.export_formats` is empty. Frozen --add-splat rows
     /// are left out when --exclude-export was given or restored from the checkpoint.
+    /// With --crop, the files hold only the splats inside the training crop box,
+    /// also after a stop, which leaves the model whole.
     [[nodiscard]] lfs::Status export_final_splats(
         const Trainer& trainer,
         const lfs::core::param::TrainingParameters& params);
