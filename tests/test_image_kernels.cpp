@@ -295,7 +295,7 @@ TEST_F(ImageKernelsTest, LanczosReadsOnlyWrittenCoefficientsOnRealImage) {
     constexpr int KERNEL_SIZE = 3;
     const int H = static_cast<int>(image.shape()[1]);
     const int W = static_cast<int>(image.shape()[2]);
-    const auto gray = image.slice(0, 0, 1).reshape({static_cast<size_t>(H), static_cast<size_t>(W)}).contiguous();
+    const auto gray = image.slice(0, 0, 1).reshape({H, W}).contiguous();
     const auto hwc = image.permute({1, 2, 0}).contiguous();
     for (int output_h = H / 4; output_h < H; ++output_h) {
         const int output_w = static_cast<int>(std::lround(static_cast<double>(W) * output_h / H));

@@ -335,30 +335,28 @@ namespace lfs::vis::op {
             return OperatorResult::PASS_THROUGH;
         }
 
-        if (event->type == ModalEvent::Type::KEY) {
-            const auto* ke = event->as<KeyEvent>();
-            if (!ke || ke->action != lfs::vis::input::ACTION_PRESS) {
+        // Keys arrive as key map actions, so every control follows the user's bindings.
+        if (event->type == ModalEvent::Type::ACTION) {
+            const auto* action = event->as<ActionEvent>();
+            if (!action) {
                 return OperatorResult::PASS_THROUGH;
             }
 
-            if (ke->key == lfs::vis::input::KEY_ESCAPE) {
+            switch (action->action) {
+            case lfs::vis::input::Action::CANCEL_POLYGON:
                 return OperatorResult::CANCELLED;
-            }
 
-            if (ke->key == lfs::vis::input::KEY_BACKSPACE) {
+            case lfs::vis::input::Action::REMOVE_LAST_POINT:
                 restorePreview(ctx);
                 removeLastPoint();
                 return OperatorResult::RUNNING_MODAL;
-            }
 
-            if (ke->key == lfs::vis::input::KEY_DELETE) {
+            case lfs::vis::input::Action::DELETE_SELECTED:
                 restorePreview(ctx);
                 removeSelectedPoint();
                 return OperatorResult::RUNNING_MODAL;
-            }
 
-            if (ke->key == lfs::vis::input::KEY_ENTER ||
-                ke->key == lfs::vis::input::KEY_KP_ENTER) {
+            case lfs::vis::input::Action::APPLY_ALIGNMENT:
                 if (picked_points_.size() != 3) {
                     return OperatorResult::RUNNING_MODAL;
                 }
@@ -367,9 +365,10 @@ namespace lfs::vis::op {
                     return OperatorResult::FINISHED;
                 }
                 return OperatorResult::RUNNING_MODAL;
-            }
 
-            return OperatorResult::PASS_THROUGH;
+            default:
+                return OperatorResult::PASS_THROUGH;
+            }
         }
 
         return OperatorResult::PASS_THROUGH;

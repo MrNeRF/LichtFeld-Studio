@@ -56,6 +56,7 @@ struct SDL_Cursor;
 namespace lfs::vis {
     class OrthographicZoomTest;
     class WindowInputDispatchTest;
+    class SidebarInputDispatchTest;
     class VisualizerImpl;
     class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
     class WindowManager;
@@ -264,6 +265,7 @@ namespace lfs::vis {
             std::string import_render_error_;
             std::unique_ptr<VulkanImportErrorScope> import_error_capture_;
             friend class lfs::vis::WindowInputDispatchTest;
+            friend class lfs::vis::SidebarInputDispatchTest;
             friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
             friend class lfs::vis::VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
@@ -449,6 +451,7 @@ namespace lfs::vis {
             GizmoManager gizmo_manager_;
 
             std::string focus_panel_name_;
+            std::string closed_plugin_tab_;
             bool ui_hidden_ = false;
 
             // Font storage

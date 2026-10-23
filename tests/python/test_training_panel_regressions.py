@@ -52,7 +52,7 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
     locale_dir = project_root / "src" / "visualizer" / "gui" / "resources" / "locales"
 
     for locale_path in locale_dir.glob("*.json"):
-        data = json.loads(locale_path.read_text())
+        data = json.loads(locale_path.read_text(encoding="utf-8"))
         assert data["training"]["options.strategy.igs_plus"] == "IGS+"
         assert "refinement.grow_until_iter" in data["training"]
         assert "tooltip.grow_until_iter" in data["training"]
@@ -2219,7 +2219,7 @@ def test_camera_guidance_locales_use_gui_options():
     locales = list(locale_dir.glob("*.json"))
     assert len(locales) == 10
     for path in locales:
-        messages = json.loads(path.read_text())["messages"]
+        messages = json.loads(path.read_text(encoding="utf-8"))["messages"]
         for key in ("err_distorted_images", "err_non_pinhole"):
             assert "--gut" not in messages[key], path.name
             assert "--undistort" not in messages[key], path.name

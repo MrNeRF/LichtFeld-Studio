@@ -575,7 +575,9 @@ namespace lfs::vis::gui {
                 data.enabled = true;
             scene.setCropBoxData(node->id, data);
             sm->setNodeTransform(node->name, *local_transform);
-            scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+            // Crop volumes are scene-graph state. MODEL_CHANGED would mark the splat
+            // payload dirty and make every following save capture the whole model.
+            scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
             if (rm)
                 rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
 
@@ -600,7 +602,7 @@ namespace lfs::vis::gui {
             data.enabled = true;
         scene.setEllipsoidData(node->id, data);
         sm->setNodeTransform(node->name, *local_transform);
-        scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
         if (rm)
             rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
 

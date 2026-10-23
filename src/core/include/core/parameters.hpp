@@ -6,6 +6,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "core/image_sharpen.hpp"
 #include "core/mesh2splat.hpp"
 #include "core/path_utils.hpp"
 
@@ -261,6 +262,9 @@ namespace lfs::core {
             // With an active crop box: share of new splats placed inside it (0..1). 0 = auto: growth
             // follows the ROI-weighted error with no fixed split.
             float cropbox_growth_inside = 0.0f;
+            // With an active crop box: the splats outside it are removed when training completes and left out
+            // of every export. A stopped run keeps them so it can resume.
+            bool crop_to_cropbox = false;
             float lambda_dssim = 0.2f;
             // SteadySplats Eq. 30: weighted RGB squared distance to the training target.
             float color_variance_weight = 0.0f;
@@ -474,6 +478,8 @@ namespace lfs::core {
         // The PLY of a splat:<file> spec, whose rendered coverage selects the evaluated pixels.
         [[nodiscard]] LFS_CORE_API std::optional<std::string_view> eval_mask_splat_file(std::string_view spec);
         [[nodiscard]] LFS_CORE_API std::optional<std::array<float, 6>> parse_eval_mask_box(std::string_view spec);
+        // Three finite numbers rx,ry,rz, as --cropbox-rotation takes them.
+        [[nodiscard]] LFS_CORE_API std::optional<std::array<float, 3>> parse_cropbox_rotation(std::string_view spec);
         [[nodiscard]] LFS_CORE_API std::string normalize_eval_mask(std::string_view spec);
         // The sets of an eval_mask_report list in order, the first being the headline set; empty for an empty list.
         [[nodiscard]] LFS_CORE_API lfs::Result<std::vector<EvalPixelSet>> parse_eval_pixel_sets(std::string_view list);
@@ -485,6 +491,8 @@ namespace lfs::core {
             bool print_cache_status = true;
             int print_status_freq_num = 500; // every print_status_freq_num calls for load print cache status
             bool use_16bit_color = false;
+            // Training images only; evaluation and the GT view load the photos unchanged.
+            SharpenParams sharpen;
             nlohmann::json to_json() const;
             static LoadingParams from_json(const nlohmann::json& j);
         };
@@ -588,6 +596,13 @@ namespace lfs::core {
 
             // Optional splat file for initialization (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)
             std::optional<std::string> init_path = std::nullopt;
+
+            // Region of interest: an enabled crop box on the training model, min x, y, z then max x, y, z in the
+            // dataset's coordinates. --cropbox-loss-weight and --cropbox-lr-scale set how much the rest still counts.
+            std::optional<std::array<float, 6>> cropbox = std::nullopt;
+            // Turns the --cropbox box about its centre by X, Y, Z degrees about the dataset's axes, as Rx * Ry * Rz.
+            // Unset keeps the box axis-aligned with its corners stored as given.
+            std::optional<std::array<float, 3>> cropbox_rotation = std::nullopt;
 
             // Optional trained splats to append to the training model before optimizer initialization
             std::vector<std::filesystem::path> add_splat_paths;

@@ -12,6 +12,7 @@ add_library(lfs_io_cuda STATIC
         cuda/image_format_kernels.cuh
         cuda/image_format_kernels.cu
         cuda/masked_image_fill.cu
+        cuda/image_sharpen.cu
 )
 
 target_include_directories(lfs_io_cuda

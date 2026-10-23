@@ -75,6 +75,10 @@ class KeymapBindingsSection:
         "crop_box": [
             lf.keymap.Action.APPLY_CROP_BOX,
         ],
+        "align": [
+            lf.keymap.Action.APPLY_ALIGNMENT,
+            lf.keymap.Action.REMOVE_LAST_POINT,
+        ],
         "node_picking": [
             lf.keymap.Action.NODE_PICK,
             lf.keymap.Action.NODE_RECT_SELECT,
@@ -109,6 +113,8 @@ class KeymapBindingsSection:
             lf.keymap.Action.PIE_MENU,
         ],
         "ui_global": [
+            lf.keymap.Action.NEXT_SIDEBAR_CATEGORY,
+            lf.keymap.Action.PREVIOUS_SIDEBAR_CATEGORY,
             lf.keymap.Action.TOGGLE_UI,
             lf.keymap.Action.TOGGLE_FULLSCREEN,
             lf.keymap.Action.OPEN_PREFERENCES,
@@ -513,6 +519,11 @@ class KeymapBindingsSection:
             self._append_binding_section(
                 rows, tr("input_settings.section.crop_box"),
                 self.BINDING_SECTIONS["crop_box"], mode)
+
+        if mode == lf.keymap.ToolMode.ALIGN:
+            self._append_binding_section(
+                rows, tr("input_settings.section.align"),
+                self.BINDING_SECTIONS["align"], mode)
 
         if mode in self.SCENE_NODE_MODES:
             self._append_binding_section(

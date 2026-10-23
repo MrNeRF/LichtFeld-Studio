@@ -335,6 +335,8 @@ namespace lfs::training {
         // training thread never reads scene nodes while they are being edited. Without a
         // publisher (headless) the trainer reads the scene itself at each step.
         void setCropBoxSnapshot(std::optional<TrainingCropBoxGeometry> geometry);
+        // With crop_to_cropbox on, the training crop box that exports of the trained model are cropped to.
+        [[nodiscard]] std::optional<TrainingCropBoxGeometry> export_cropbox() const;
         void set_lpips_weights_path(std::optional<std::filesystem::path> path);
         void setSplatTensorAllocator(lfs::core::SplatTensorAllocator allocator) {
             splat_tensor_allocator_ = std::move(allocator);
@@ -664,6 +666,8 @@ namespace lfs::training {
             AdamOptimizer& optimizer,
             const lfs::core::param::OptimizationParameters& opt_params);
 
+        // The crop box from the published snapshot or the scene.
+        [[nodiscard]] std::optional<TrainingCropBoxGeometry> current_cropbox() const;
         // Crop box for this step, from the published snapshot or the scene.
         void refresh_cropbox_snapshot();
         // Adam steps of splats that this view does not see inside, in front of or behind the
@@ -678,6 +682,8 @@ namespace lfs::training {
         void install_cropbox_score_damping(
             lfs::core::SplatData& model,
             AdamOptimizer& optimizer);
+        // Removes the splats outside the training crop box (inside it when inverse).
+        void crop_to_training_cropbox();
         // Whether the camera stands inside the crop box (host pose, no device read).
         [[nodiscard]] bool cropbox_contains_camera(const lfs::core::Camera& camera) const;
         [[nodiscard]] bool morton_reorder_due(int iter) const;

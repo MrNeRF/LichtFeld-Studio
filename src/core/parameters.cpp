@@ -265,9 +265,17 @@ namespace lfs::core {
                         if (loading.contains(key) && !loading.at(key).is_boolean())
                             return std::format("Invalid type for dataset.loading_params.{}; expected boolean", key);
                     }
-                    for (const auto key : {"min_cpu_free_memory_ratio", "min_cpu_free_GB"}) {
+                    for (const auto key : {"min_cpu_free_memory_ratio", "min_cpu_free_GB", "sharpen_amount",
+                                           "sharpen_radius", "sharpen_threshold"}) {
                         if (loading.contains(key) && !loading.at(key).is_number())
                             return std::format("Invalid type for dataset.loading_params.{}; expected number", key);
+                    }
+                    if (loading.contains("sharpen_kernel")) {
+                        const auto& kernel = loading.at("sharpen_kernel");
+                        if (!kernel.is_string() || !sharpen_kernel_from_string(kernel.get<std::string>()))
+                            return std::format("Invalid value {} for dataset.loading_params.sharpen_kernel; expected "
+                                               "usm, laplacian4 or laplacian8",
+                                               kernel.dump());
                     }
                     if (loading.contains("print_status_freq_num") && !is_json_int32(loading.at("print_status_freq_num")))
                         return "Invalid type for dataset.loading_params.print_status_freq_num; expected integer";
@@ -559,13 +567,15 @@ namespace lfs::core {
             const auto apply = [ratio](const size_t v) {
                 return static_cast<size_t>(std::lround(static_cast<float>(v) * ratio));
             };
+            // Intervals must stay at least one step, or a short --iter run fails validation.
+            const auto apply_interval = [&apply](const size_t v) { return std::max<size_t>(1, apply(v)); };
             iterations = apply(iterations);
             start_refine = apply(start_refine);
             stop_refine = apply(stop_refine);
-            reset_every = apply(reset_every);
-            refine_every = apply(refine_every);
+            reset_every = apply_interval(reset_every);
+            refine_every = apply_interval(refine_every);
             morton_reorder_interval = apply(morton_reorder_interval);
-            sh_degree_interval = apply(sh_degree_interval);
+            sh_degree_interval = apply_interval(sh_degree_interval);
             grow_until_iter = apply(grow_until_iter);
             color_variance_warmup_iters = apply(color_variance_warmup_iters);
 
@@ -697,6 +707,10 @@ namespace lfs::core {
                     return std::nullopt;
             }
             return box;
+        }
+
+        std::optional<std::array<float, 3>> parse_cropbox_rotation(const std::string_view spec) {
+            return parse_float_list<3>(spec);
         }
 
         bool is_eval_mask_depth(const std::string_view spec) {
@@ -1237,6 +1251,15 @@ namespace lfs::core {
             if (loading_params.print_status_freq_num <= 0)
                 return std::format("print_status_freq_num must be positive (got {})",
                                    loading_params.print_status_freq_num);
+            const auto& sharpen = loading_params.sharpen;
+            if (!std::isfinite(sharpen.amount) || sharpen.amount < 0.0f || sharpen.amount > kMaxSharpenAmount)
+                return std::format("sharpen_amount must be finite and within [0, {}] (got {})", kMaxSharpenAmount,
+                                   sharpen.amount);
+            if (!std::isfinite(sharpen.radius) || sharpen.radius < kMinSharpenRadius || sharpen.radius > kMaxSharpenRadius)
+                return std::format("sharpen_radius must be finite and within [{}, {}] (got {})", kMinSharpenRadius,
+                                   kMaxSharpenRadius, sharpen.radius);
+            if (!std::isfinite(sharpen.threshold) || sharpen.threshold < 0.0f || sharpen.threshold > 1.0f)
+                return std::format("sharpen_threshold must be finite and within [0, 1] (got {})", sharpen.threshold);
             return {};
         }
 
@@ -1534,6 +1557,10 @@ namespace lfs::core {
                 json["dataset"] = params.dataset.to_json();
                 json["server"] = params.server.to_json();
                 json["optimization"] = opt_copy.to_json();
+                if (params.cropbox)
+                    json["cropbox"] = *params.cropbox;
+                if (params.cropbox_rotation)
+                    json["cropbox_rotation"] = *params.cropbox_rotation;
 
                 const auto now = std::chrono::system_clock::now();
                 const auto time_t_val = std::chrono::system_clock::to_time_t(now);
@@ -1586,6 +1613,19 @@ namespace lfs::core {
             } else if (j.contains("use_8bit_color")) {
                 params.use_16bit_color = !j["use_8bit_color"].get<bool>();
             }
+            if (j.contains("sharpen_kernel")) {
+                const auto name = j["sharpen_kernel"].get<std::string>();
+                if (const auto kernel = sharpen_kernel_from_string(name))
+                    params.sharpen.kernel = *kernel;
+                else
+                    LOG_WARN("Unknown sharpen kernel '{}' in loading parameters; using usm", name);
+            }
+            if (j.contains("sharpen_amount"))
+                params.sharpen.amount = j["sharpen_amount"].get<float>();
+            if (j.contains("sharpen_radius"))
+                params.sharpen.radius = j["sharpen_radius"].get<float>();
+            if (j.contains("sharpen_threshold"))
+                params.sharpen.threshold = j["sharpen_threshold"].get<float>();
 
             return params;
         }
@@ -1598,6 +1638,10 @@ namespace lfs::core {
             loading_json["print_cache_status"] = print_cache_status;
             loading_json["print_status_freq_num"] = print_status_freq_num;
             loading_json["use_16bit_color"] = use_16bit_color;
+            loading_json["sharpen_kernel"] = std::string(sharpen_kernel_name(sharpen.kernel));
+            loading_json["sharpen_amount"] = sharpen.amount;
+            loading_json["sharpen_radius"] = sharpen.radius;
+            loading_json["sharpen_threshold"] = sharpen.threshold;
 
             return loading_json;
         }

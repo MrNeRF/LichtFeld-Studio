@@ -667,6 +667,20 @@ namespace {
         EXPECT_NE(params.validate().find("cropbox_loss_weight"), std::string::npos);
     }
 
+    // Catches a short schedule (e.g. --iter 30) rounding an interval to zero, which validation rejects.
+    TEST(ParameterValidationTest, ShortScheduleKeepsIntervalsAtLeastOneStep) {
+        for (auto params : {lfs::core::param::OptimizationParameters::mcmc_defaults(),
+                            lfs::core::param::OptimizationParameters::mrnf_defaults(),
+                            lfs::core::param::OptimizationParameters::igs_plus_defaults()}) {
+            params.scale_steps(3.0f / static_cast<float>(params.iterations));
+            EXPECT_EQ(params.iterations, 3u);
+            EXPECT_EQ(params.refine_every, 1u);
+            EXPECT_EQ(params.reset_every, 1u);
+            EXPECT_EQ(params.sh_degree_interval, 1u);
+            EXPECT_TRUE(params.validate().empty()) << params.validate();
+        }
+    }
+
     TEST(ParameterValidationTest, CropBoxLrScaleJsonIsBackwardCompatible) {
         lfs::core::param::OptimizationParameters params;
         params.cropbox_lr_scale = 0.35f;

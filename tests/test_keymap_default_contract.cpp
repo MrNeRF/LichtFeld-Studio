@@ -77,6 +77,10 @@ namespace lfs::vis::input {
                 EXPECT_EQ(bindings.getActionForScroll(mode, MODIFIER_NONE), Action::CAMERA_ZOOM);
                 EXPECT_EQ(bindings.getActionForKey(mode, KEY_Z, MODIFIER_CTRL), Action::UNDO);
                 EXPECT_EQ(bindings.getActionForKey(mode, KEY_Y, MODIFIER_CTRL), Action::REDO);
+                EXPECT_EQ(bindings.getActionForKey(mode, KEY_TAB, MODIFIER_CTRL),
+                          Action::NEXT_SIDEBAR_CATEGORY);
+                EXPECT_EQ(bindings.getActionForKey(mode, KEY_TAB, MODIFIER_CTRL | MODIFIER_SHIFT),
+                          Action::PREVIOUS_SIDEBAR_CATEGORY);
                 EXPECT_EQ(bindings.getActionForKey(mode, KEY_ESCAPE, MODIFIER_NONE),
                           Action::CANCEL_POLYGON);
                 if (mode == ToolMode::SELECTION)
@@ -124,7 +128,7 @@ namespace lfs::vis::input {
                 ++locale_count;
                 const auto locale = nlohmann::json::parse(std::ifstream(entry.path()));
                 const auto& labels = locale.at("input_settings");
-                for (int i = 0; i <= static_cast<int>(Action::TOGGLE_PYTHON_CONSOLE); ++i) {
+                for (int i = 0; i <= static_cast<int>(Action::PREVIOUS_SIDEBAR_CATEGORY); ++i) {
                     const auto action = static_cast<Action>(i);
                     const auto name = actionNameKey(action);
                     if (name.empty())

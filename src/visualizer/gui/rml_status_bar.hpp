@@ -197,7 +197,6 @@ namespace lfs::vis::gui {
         MiningSceneState mining_scene_;
         std::string mining_wall_rml_;
         std::string mining_debris_rml_;
-        bool progress_miner_pref_ = false;
         std::chrono::steady_clock::time_point progress_style_checked_at_{};
 
         struct ModelState {
@@ -207,6 +206,9 @@ namespace lfs::vis::gui {
             std::string mode_color;
             bool show_training = false;
             bool progress_miner = false;
+            bool progress_tessle = false;
+            std::string tessle_left = "0dp";
+            std::string tessle_sprite = "../icon/tessle/open.png";
             bool miner_raised = false;
             bool miner_step_a = false;
             bool miner_strike = false;
@@ -305,7 +307,6 @@ namespace lfs::vis::gui {
         static constexpr auto kIdleRefreshInterval = std::chrono::milliseconds(200);
         static constexpr auto kBusyRefreshInterval = std::chrono::milliseconds(100);
         static constexpr auto kAnimatedRefreshInterval = std::chrono::milliseconds(16);
-        static constexpr auto kMiningRefreshInterval = std::chrono::milliseconds(33);
         static constexpr auto kGpuRefreshInterval = std::chrono::milliseconds(500);
     };
 

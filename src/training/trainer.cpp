@@ -1982,13 +1982,22 @@ namespace lfs::training {
         cropbox_published_mode_.store(true, std::memory_order_release);
     }
 
-    void Trainer::refresh_cropbox_snapshot() {
+    std::optional<TrainingCropBoxGeometry> Trainer::current_cropbox() const {
         if (cropbox_published_mode_.load(std::memory_order_acquire)) {
             std::lock_guard lock(cropbox_publish_mutex_);
-            cropbox_ = cropbox_published_;
-            return;
+            return cropbox_published_;
         }
-        cropbox_ = scene_ ? resolve_training_cropbox_geom(*scene_) : std::nullopt;
+        return scene_ ? resolve_training_cropbox_geom(*scene_) : std::nullopt;
+    }
+
+    void Trainer::refresh_cropbox_snapshot() {
+        cropbox_ = current_cropbox();
+    }
+
+    std::optional<TrainingCropBoxGeometry> Trainer::export_cropbox() const {
+        if (!getParams().optimization.crop_to_cropbox)
+            return std::nullopt;
+        return current_cropbox();
     }
 
     namespace {
@@ -2030,6 +2039,29 @@ namespace lfs::training {
             camera.cam_position_ptr(), cropbox_->min, cropbox_->max, cropbox_->inverse,
             deleted_rows(model), rejected.ptr<bool>(), lfs::core::getCurrentCUDAStream());
         optimizer.set_crop_damping_mask(rejected);
+    }
+
+    void Trainer::crop_to_training_cropbox() {
+        refresh_cropbox_snapshot();
+        if (!cropbox_ || !strategy_) {
+            LOG_WARN("--crop: the training model has no active crop box, nothing is removed");
+            return;
+        }
+        std::unique_lock render_lock(render_mutex_);
+        std::unique_lock model_lock(model_access_mutex_);
+        waitForModelReaders();
+        const auto& model = strategy_->get_model();
+        if (model.size() == 0)
+            return;
+        const auto before = model.visible_count();
+        const auto outside = training_cropbox_crop_mask(model, *cropbox_);
+        LFS_ASSERT_MSG(outside && outside->numel() == model.size(), "crop selection must cover every splat");
+        // Removed through the strategy so the optimizer state shrinks with the model and the project stays resumable.
+        if (outside->sum_scalar() > 0)
+            strategy_->remove_gaussians(*outside);
+        // MCMC soft-deletes removed splats, so count the live ones.
+        LOG_INFO("Cropped the trained model to its crop box: {} of {} splats kept",
+                 strategy_->get_model().visible_count(), before);
     }
 
     bool Trainer::cropbox_contains_camera(const lfs::core::Camera& camera) const {
@@ -2877,6 +2909,7 @@ namespace lfs::training {
             dataset_config.resize_factor = params.dataset.resize_factor;
             dataset_config.max_width = params.dataset.max_width;
             dataset_config.test_every = params.dataset.test_every;
+            dataset_config.sharpen = params.dataset.loading_params.sharpen;
 
             // Get enabled cameras with images from the scene
             std::vector<std::shared_ptr<lfs::core::Camera>> source_cameras;
@@ -9441,6 +9474,10 @@ namespace lfs::training {
             (user_stopped || terminal_error)
                 ? terminal_save_policy.on_stop_or_error
                 : terminal_save_policy.on_completion;
+        // Only a completed run is cropped: a stopped one saves every splat so it can resume, and its exports
+        // are cropped instead (export_cropbox()).
+        if (!terminal_error && !user_stopped && params_.optimization.crop_to_cropbox)
+            crop_to_training_cropbox();
         if (authorize_terminal_save &&
             terminal_project_path) {
             saving_model_.store(true, std::memory_order_release);
