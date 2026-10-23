@@ -15,6 +15,7 @@
 using lfs::core::param::apply_explicit_training_overrides;
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -1689,6 +1690,41 @@ TEST(ArgumentParserTest, TrainingRejectsOutOfRangeNumericFlags) {
         static_cast<int>(zero_warmup_argv.size()), zero_warmup_argv.data());
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_EQ((*parsed)->optimization.perf_bench_warmup, 0);
+}
+
+// Sharpen flags reach LoadingParams and the --resume overlay; out-of-range values and unknown kernels are rejected.
+TEST(ArgumentParserTest, SharpenFlagsLandInLoadingParamsAndRejectOutOfRangeValues) {
+    const auto data_path = make_test_path("lfs_arg_parser_sharpen_data");
+    const auto output_path = make_test_path("lfs_arg_parser_sharpen_output");
+    const auto parse = [&](const std::vector<std::string>& extra) {
+        std::vector<std::string> args{"LichtFeld-Studio", "--headless", "--data-path", data_path, "--output-path", output_path};
+        args.insert(args.end(), extra.begin(), extra.end());
+        std::vector<const char*> argv;
+        for (const auto& arg : args)
+            argv.push_back(arg.c_str());
+        return lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+    };
+
+    auto parsed = parse({"--sharpen-kernel", "laplacian8", "--sharpen-amount", "1.5", "--sharpen-threshold", "0.02"});
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    const auto& sharpen = (*parsed)->dataset.loading_params.sharpen;
+    EXPECT_EQ(sharpen.kernel, lfs::core::SharpenKernel::Laplacian8);
+    EXPECT_FLOAT_EQ(sharpen.amount, 1.5f);
+    EXPECT_FLOAT_EQ(sharpen.radius, 1.0f);
+    EXPECT_FLOAT_EQ(sharpen.threshold, 0.02f);
+    const auto overlay = nlohmann::json::parse((*parsed)->overrides.dataset_json);
+    EXPECT_EQ(overlay["loading_params"]["sharpen_kernel"], "laplacian8");
+    EXPECT_FLOAT_EQ(overlay["loading_params"]["sharpen_amount"].get<float>(), 1.5f);
+    EXPECT_FALSE(overlay["loading_params"].contains("sharpen_radius"));
+
+    for (const auto& [flag, value, field] : {std::array<std::string, 3>{"--sharpen-amount", "5.5", "sharpen_amount"},
+                                             std::array<std::string, 3>{"--sharpen-radius", "0.1", "sharpen_radius"},
+                                             std::array<std::string, 3>{"--sharpen-threshold", "1.5", "sharpen_threshold"},
+                                             std::array<std::string, 3>{"--sharpen-kernel", "box", "'box'"}}) {
+        const auto rejected = parse({flag, value});
+        ASSERT_FALSE(rejected.has_value()) << flag;
+        EXPECT_NE(rejected.error().find(field), std::string::npos) << rejected.error();
+    }
 }
 
 TEST(ArgumentParserTest, NegativeShDegreeIntervalReportsSuppliedValue) {

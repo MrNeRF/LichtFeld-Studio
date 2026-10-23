@@ -2809,6 +2809,34 @@ class DatasetParams:
     def use_16bit_color(self, arg: bool, /) -> None: ...
 
     @property
+    def sharpen_kernel(self) -> str:
+        """Training image sharpening filter: 'usm', 'laplacian4' or 'laplacian8'"""
+
+    @sharpen_kernel.setter
+    def sharpen_kernel(self, arg: str, /) -> None: ...
+
+    @property
+    def sharpen_amount(self) -> float:
+        """Strength of training image sharpening, 0 to 5; 0 turns it off"""
+
+    @sharpen_amount.setter
+    def sharpen_amount(self, arg: float, /) -> None: ...
+
+    @property
+    def sharpen_radius(self) -> float:
+        """Blur sigma of the usm kernel in pixels of the resized image, 0.3 to 10"""
+
+    @sharpen_radius.setter
+    def sharpen_radius(self, arg: float, /) -> None: ...
+
+    @property
+    def sharpen_threshold(self) -> float:
+        """Luma differences below this value (0 to 1) stay unsharpened"""
+
+    @sharpen_threshold.setter
+    def sharpen_threshold(self, arg: float, /) -> None: ...
+
+    @property
     def centralize_dataset(self) -> str:
         """
         Dataset centralization mode used for the last load: 'off', 'by_pointcloud', 'by_cameras'

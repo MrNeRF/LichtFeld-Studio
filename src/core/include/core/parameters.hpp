@@ -6,6 +6,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "core/image_sharpen.hpp"
 #include "core/mesh2splat.hpp"
 #include "core/path_utils.hpp"
 
@@ -484,6 +485,8 @@ namespace lfs::core {
             bool print_cache_status = true;
             int print_status_freq_num = 500; // every print_status_freq_num calls for load print cache status
             bool use_16bit_color = false;
+            // Training images only; evaluation and the GT view load the photos unchanged.
+            SharpenParams sharpen;
             nlohmann::json to_json() const;
             static LoadingParams from_json(const nlohmann::json& j);
         };

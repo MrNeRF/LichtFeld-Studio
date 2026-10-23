@@ -852,6 +852,16 @@ namespace {
             ::args::ValueFlag<int> min_track_length(dataset_group, "min_track_length", "Minimum point track length for COLMAP sparse point import; 0 disables filtering", {"min-track-length"});
             ::args::Flag no_cpu_cache(dataset_group, "no_cpu_cache", "Disable CPU memory caching (default: enabled)", {"no-cpu-cache"});
             ::args::Flag use_16bit(dataset_group, "use_16bit", "Train with 16-bit color images (HDR); caches losslessly as JPEG 2000 (default: 8-bit)", {"use-16bit"});
+            ::args::MapFlag<std::string, lfs::core::SharpenKernel> sharpen_kernel(dataset_group, "kernel",
+                                                                                  "Training image sharpening filter: usm, laplacian4, laplacian8 (default: usm)",
+                                                                                  {"sharpen-kernel"},
+                                                                                  std::unordered_map<std::string, lfs::core::SharpenKernel>{
+                                                                                      {"usm", lfs::core::SharpenKernel::Usm},
+                                                                                      {"laplacian4", lfs::core::SharpenKernel::Laplacian4},
+                                                                                      {"laplacian8", lfs::core::SharpenKernel::Laplacian8}});
+            ::args::ValueFlag<float> sharpen_amount(dataset_group, "amount", "Sharpen training images (not evaluation images) with this strength, 0 to 5; 0 turns it off (default: 0)", {"sharpen-amount"});
+            ::args::ValueFlag<float> sharpen_radius(dataset_group, "px", "Blur sigma of the usm kernel in pixels of the resized image, 0.3 to 10 (default: 1)", {"sharpen-radius"});
+            ::args::ValueFlag<float> sharpen_threshold(dataset_group, "threshold", "Leave luma differences below this value (0 to 1) unsharpened (default: 0)", {"sharpen-threshold"});
             ::args::Flag undistort(dataset_group, "undistort", lfs::core::args::optimization_cli_help("--undistort"), {"undistort"});
             ::args::MapFlag<std::string, std::string> centralize(dataset_group, "mode",
                                                                  "Centralize dataset origin: off, by_pointcloud, by_cameras (default: off)",
@@ -1536,6 +1546,10 @@ namespace {
                                         min_track_length_val = cli_option_present({"--min-track-length"}) ? std::optional<int>(::args::get(min_track_length)) : std::optional<int>(),
                                         no_cpu_cache_flag = static_cast<bool>(no_cpu_cache),
                                         use_16bit_flag = static_cast<bool>(use_16bit),
+                                        sharpen_kernel_val = cli_option_present({"--sharpen-kernel"}) ? std::optional<lfs::core::SharpenKernel>(::args::get(sharpen_kernel)) : std::optional<lfs::core::SharpenKernel>(),
+                                        sharpen_amount_val = cli_option_present({"--sharpen-amount"}) ? std::optional<float>(::args::get(sharpen_amount)) : std::optional<float>(),
+                                        sharpen_radius_val = cli_option_present({"--sharpen-radius"}) ? std::optional<float>(::args::get(sharpen_radius)) : std::optional<float>(),
+                                        sharpen_threshold_val = cli_option_present({"--sharpen-threshold"}) ? std::optional<float>(::args::get(sharpen_threshold)) : std::optional<float>(),
                                         tcp_server_connection_port_val = tcp_server_connection_port ? std::optional<int>(::args::get(tcp_server_connection_port)) : std::optional<int>(),
                                         tcp_broadcast_connection_port_val = tcp_broadcast_connection_port ? std::optional<int>(::args::get(tcp_broadcast_connection_port)) : std::optional<int>(),
                                         tcp_connection_flag = bool(tcp_connection),
@@ -1703,6 +1717,13 @@ namespace {
                 if (no_cpu_cache_flag)
                     ds.loading_params.use_cpu_memory = false;
                 setFlag(use_16bit_flag, ds.loading_params.use_16bit_color);
+                setVal(sharpen_kernel_val, ds.loading_params.sharpen.kernel);
+                setVal(sharpen_amount_val, ds.loading_params.sharpen.amount);
+                setVal(sharpen_radius_val, ds.loading_params.sharpen.radius);
+                setVal(sharpen_threshold_val, ds.loading_params.sharpen.threshold);
+                if (sharpen_radius_val && ds.loading_params.sharpen.kernel != lfs::core::SharpenKernel::Usm)
+                    LOG_WARN("--sharpen-radius only applies to the usm kernel; {} ignores it",
+                             lfs::core::sharpen_kernel_name(ds.loading_params.sharpen.kernel));
                 setVal(max_cap_val, opt.max_cap);
                 setVal(tcp_server_connection_port_val, svs.tcp_server_connection_port);
                 setVal(tcp_broadcast_connection_port_val, svs.tcp_broadcast_connection_port);
@@ -1956,7 +1977,9 @@ namespace {
                             params.overrides.optimization_json, cli_opt.dump());
                     }
                 }
-                if (!ds_keys.empty()) {
+                const bool sharpen_given = sharpen_kernel_val || sharpen_amount_val || sharpen_radius_val ||
+                                           sharpen_threshold_val;
+                if (!ds_keys.empty() || sharpen_given) {
                     const auto serialized = ds.to_json();
                     nlohmann::json cli_ds;
                     for (const char* key : ds_keys) {
@@ -1969,6 +1992,15 @@ namespace {
                         cli_ds["loading_params"]["use_cpu_memory"] = false;
                     if (use_16bit_flag)
                         cli_ds["loading_params"]["use_16bit_color"] = true;
+                    const auto& loading = serialized["loading_params"];
+                    if (sharpen_kernel_val)
+                        cli_ds["loading_params"]["sharpen_kernel"] = loading["sharpen_kernel"];
+                    if (sharpen_amount_val)
+                        cli_ds["loading_params"]["sharpen_amount"] = loading["sharpen_amount"];
+                    if (sharpen_radius_val)
+                        cli_ds["loading_params"]["sharpen_radius"] = loading["sharpen_radius"];
+                    if (sharpen_threshold_val)
+                        cli_ds["loading_params"]["sharpen_threshold"] = loading["sharpen_threshold"];
                     if (!cli_ds.empty()) {
                         lfs::core::param::merge_explicit_json_overlay(
                             params.overrides.dataset_json, cli_ds.dump());

@@ -284,7 +284,8 @@ loss-graph {
     display: block;
 }
 
-.mask-settings-group {
+.mask-settings-group,
+.sharpen-settings-group {
     margin: 3dp 0 6dp 8dp;
     padding: 2dp 0 2dp 8dp;
     border-left-width: 1dp;

@@ -2909,6 +2909,7 @@ namespace lfs::training {
             dataset_config.resize_factor = params.dataset.resize_factor;
             dataset_config.max_width = params.dataset.max_width;
             dataset_config.test_every = params.dataset.test_every;
+            dataset_config.sharpen = params.dataset.loading_params.sharpen;
 
             // Get enabled cameras with images from the scene
             std::vector<std::shared_ptr<lfs::core::Camera>> source_cameras;
