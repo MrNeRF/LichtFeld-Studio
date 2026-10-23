@@ -708,6 +708,7 @@ set(TEST_FILES
     test_checkpoint_resume.cpp
     test_evaluation_split.cpp
     test_component_config_serialization.cpp
+    test_rolling_shutter.cpp
     test_training_snapshot_service.cpp
     test_atomic_output.cpp
     test_geometry_payload.cpp

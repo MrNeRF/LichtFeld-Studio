@@ -331,7 +331,10 @@ namespace gsplat_lfs {
         const float* thin_prism_coeffs, // optional
         // outputs (result struct with pre-allocated buffers)
         RasterizeWithSHResult& result,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        // Rolling shutter: the reference camera for view directions and per-splat
+        // depth/normal features. nullptr uses viewmats0.
+        const float* reference_viewmats = nullptr);
 
     void rasterize_from_world_with_sh_bwd(
         // Gaussian parameters
@@ -397,6 +400,7 @@ namespace gsplat_lfs {
         const float* edge_weight_map,         // [H, W] or nullptr
         float* edge_score_out,                // [N] or nullptr
         cudaStream_t stream = nullptr,
-        const std::vector<TileBatch>& batches = {}, int32_t* tiles_per_gauss = nullptr);
+        const std::vector<TileBatch>& batches = {}, int32_t* tiles_per_gauss = nullptr,
+        const float* reference_viewmats = nullptr); // as in the forward
 
 } // namespace gsplat_lfs

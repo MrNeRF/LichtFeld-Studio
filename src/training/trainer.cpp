@@ -9,6 +9,7 @@
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
 #include "components/ppisp_file.hpp"
+#include "components/rolling_shutter.hpp"
 #include "control/command_api.hpp"
 #include "control/control_boundary.hpp"
 #include "core/assert.hpp"
@@ -1236,6 +1237,38 @@ namespace lfs::training {
         } catch (const std::exception& e) {
             return std::unexpected(std::format("Failed to init bilateral grid: {}", e.what()));
         }
+    }
+
+    std::expected<void, std::string> Trainer::initialize_rolling_shutter(
+        const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
+        clear_rolling_shutter(cameras);
+        auto table = read_rolling_shutter(params_.dataset.data_path);
+        if (!table) {
+            return std::unexpected(table.error());
+        }
+        if (!*table) {
+            return {};
+        }
+        // The readout runs along the source pixels, so only the GUT rasterizer on the
+        // original images can render it.
+        if (!params_.optimization.gut) {
+            LOG_WARN("{} found but GUT is disabled; training treats the photos as global shutter",
+                     ROLLING_SHUTTER_SIDECAR);
+            return {};
+        }
+        if (params_.optimization.undistort) {
+            LOG_WARN("{} found but Undistort is enabled; undistorted images have no readout lines, "
+                     "training treats them as global shutter",
+                     ROLLING_SHUTTER_SIDECAR);
+            return {};
+        }
+        if (auto attached = attach_rolling_shutter(**table, cameras); !attached) {
+            clear_rolling_shutter(cameras);
+            return std::unexpected(attached.error());
+        }
+        LOG_INFO("Rolling shutter: {} cameras render with the {} readout motion from {}",
+                 cameras.size(), (*table)->readout_rows ? "row" : "column", ROLLING_SHUTTER_SIDECAR);
+        return {};
     }
 
     std::expected<void, std::string> Trainer::initialize_ppisp() {
@@ -2974,6 +3007,10 @@ namespace lfs::training {
                 }
             } else {
                 return std::unexpected("No camera source available");
+            }
+
+            if (auto result = initialize_rolling_shutter(source_cameras); !result) {
+                return std::unexpected(result.error());
             }
 
             train_frame_scale_ = camera_derived_frame_scale(source_cameras);

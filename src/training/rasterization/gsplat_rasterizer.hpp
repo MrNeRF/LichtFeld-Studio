@@ -69,6 +69,12 @@ namespace lfs::training {
         const float* K_ptr = nullptr;       // [C, 3, 3]
         lfs::core::Tensor K_tensor;         // Keeps K_ptr alive
 
+        // Rolling shutter: world-to-camera of the first and last readout line of the
+        // render window. viewmat_ptr stays the reference (mid-readout) pose.
+        const float* shutter_viewmats_ptr = nullptr; // [2, 4, 4] or nullptr
+        ShutterType shutter_type = ShutterType::GLOBAL;
+        lfs::core::Tensor shutter_viewmats; // Keeps shutter_viewmats_ptr alive
+
         // Distortion coefficients
         const float* radial_ptr = nullptr;
         const float* tangential_ptr = nullptr;

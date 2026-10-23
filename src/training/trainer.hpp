@@ -693,6 +693,8 @@ namespace lfs::training {
 
         std::expected<void, std::string> initialize_bilateral_grid();
         std::expected<void, std::string> initialize_ppisp();
+        std::expected<void, std::string> initialize_rolling_shutter(
+            const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras);
         std::expected<void, std::string> initialize_ppisp_controller();
         std::expected<void, std::string> apply_ppisp_sidecar_if_configured();
         std::expected<PPISPFileMetadata, std::string> build_ppisp_sidecar_metadata() const;
