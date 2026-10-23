@@ -91,7 +91,7 @@ add_custom_command(OUTPUT "${_tensor_generated}/hip_export.hpp"
         "${_point_source}/include/core/rounded_math.slangh" "${LFS_HIP_CORE_SLANGC}" VERBATIM)
 add_custom_command(OUTPUT "${_library}"
     COMMAND "${_compiler}" -x hip -std=c++20 -O3 -shared
-        ${_platform_flags}
+        ${_platform_flags} ${LFS_HIP_COMPRESSION_FLAGS}
         "-DLFS_HIP_COMPILED_ARCH=\"${LFS_HIP_COMPILED_ARCHITECTURES}\""
         "-I${_tensor_generated}" "-I${CMAKE_CURRENT_SOURCE_DIR}" "-I${CMAKE_CURRENT_SOURCE_DIR}/../../../include" -DLFS_HIP_RUNTIME_EXPORTS ${LFS_HIP_OFFLOAD_FLAGS}
         "--hip-path=${LFS_HIP_ROOT}"

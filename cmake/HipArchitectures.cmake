@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 include_guard(GLOBAL)
+include("${CMAKE_CURRENT_LIST_DIR}/HipOffloadCompression.cmake")
 
 function(lfs_hip_architectures)
     option(LFS_HIP_PORTABLE "Build HIP code for all declared wave32 architectures" OFF)
@@ -25,6 +26,13 @@ function(lfs_hip_architectures)
         endif()
         list(APPEND _flags "--offload-arch=${_architecture}")
     endforeach()
+    if(CMAKE_HOST_WIN32)
+        set(_compiler "${LFS_HIP_ROOT}/lib/llvm/bin/clang++.exe")
+    else()
+        set(_compiler "${LFS_HIP_ROOT}/lib/llvm/bin/clang++")
+    endif()
+    lfs_hip_offload_compression_flags(_compression_flags "${_compiler}")
+    set(LFS_HIP_COMPRESSION_FLAGS "${_compression_flags}" PARENT_SCOPE)
     list(JOIN _architectures "," _identity)
     set(LFS_HIP_EFFECTIVE_ARCHITECTURES "${_architectures}" PARENT_SCOPE)
     set(LFS_HIP_COMPILED_ARCHITECTURES "${_identity}" PARENT_SCOPE)

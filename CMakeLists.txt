@@ -2044,6 +2044,14 @@ if(BUILD_PORTABLE)
     if(APPLE)
         list(APPEND _POST_EXCLUDE [[/System/Library/.*]])
     endif()
+    if(WIN32 AND LFS_HIP_RUNTIME AND NOT "$ENV{SystemRoot}" STREQUAL "")
+        include(cmake/WindowsSystemLibraryExclusions.cmake)
+        lfs_windows_system_library_regex(_hip_system_library_regex "$ENV{SystemRoot}")
+        # Keep dependencies under build-windows/deps-windows and similar paths.
+        # Scope this packaging correction to the opt-in HIP distribution.
+        list(REMOVE_ITEM _POST_EXCLUDE [[.*[Ss]ystem32.*]] [[.*[Ww]indows.*]])
+        list(APPEND _POST_EXCLUDE "${_hip_system_library_regex}")
+    endif()
 
     # Search directories for runtime dependencies (quoted for paths with spaces on Windows)
     set(_RUNTIME_SEARCH_DIRS

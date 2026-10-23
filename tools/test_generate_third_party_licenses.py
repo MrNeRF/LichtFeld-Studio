@@ -3,11 +3,50 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
-from generate_third_party_licenses import ffmpeg_details, license_id_from_text, validate_coverage
+import generate_third_party_licenses as notices
+from generate_third_party_licenses import ffmpeg_details, installed_ports, license_id_from_text, validate_coverage
 
 
 class ThirdPartyNoticeCoverageTest(unittest.TestCase):
+    def test_license_references_stay_local_and_preserve_full_notices(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            triplet = root / "triplet"
+            port = triplet / "share" / "sample"
+            source = root / "vcpkg" / "buildtrees" / "sample" / "src" / "revision"
+            (port / "licenses").mkdir(parents=True)
+            source.mkdir(parents=True)
+            (port / "vcpkg.spdx.json").write_text(json.dumps({"packages": [
+                {"SPDXID": "SPDXRef-port", "name": "sample", "licenseDeclared": "MIT"}
+            ]}), encoding="utf-8")
+            (port / "copyright").write_text(
+                "See https://example.invalid/licenses/LICENSE.remote and licenses/COPYING "
+                "and ../LICENSE.outside", encoding="utf-8")
+            local_notice = "Full local COPYING body"
+            source_notice = "Full source LICENSE.remote body"
+            outside_notice = "This out-of-tree notice must not be opened"
+            (port / "licenses" / "COPYING").write_text(local_notice, encoding="utf-8")
+            (source / "LICENSE.remote").write_text(source_notice, encoding="utf-8")
+            (port.parent / "LICENSE.outside").write_text(outside_notice, encoding="utf-8")
+            original_read = notices.read_text
+            accessed = []
+
+            def local_read(path):
+                self.assertTrue(path.is_relative_to(port) or path.is_relative_to(source), path)
+                self.assertNotIn("..", path.parts)
+                accessed.append(path)
+                return original_read(path)
+
+            with patch.object(notices, "read_text", side_effect=local_read):
+                components = installed_ports(triplet, root / "vcpkg")
+            self.assertEqual(len(components), 1)
+            self.assertIn(local_notice, components[0]["text"])
+            self.assertIn(source_notice, components[0]["text"])
+            self.assertNotIn(outside_notice, components[0]["text"])
+            self.assertTrue(accessed)
+
     def test_conditional_ffmpeg_features_use_installed_status_for_license(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

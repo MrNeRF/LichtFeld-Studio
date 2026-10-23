@@ -9,7 +9,7 @@ import re
 import subprocess
 import sys
 from collections import defaultdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 NVIDIA_CUDA_RUNTIME_COMPONENTS = {
     "cudart": ("NVIDIA CUDA Runtime", "CUDA Runtime"),
@@ -102,8 +102,14 @@ def installed_ports(triplet_dir: Path, vcpkg_root: Path | None = None) -> list[d
             references = re.findall(r"(?i)([A-Za-z0-9_./+-]*(?:LICENSE|COPYING|NOTICE|PATENTS)[A-Za-z0-9_.+-]*)", text)
             source_root = vcpkg_root / "buildtrees" / name / "src"
             for reference in references:
-                basename = Path(reference).name
-                candidates = [metadata.parent / reference]
+                # A URL captured by the filename regex can start with // and
+                # become a Windows UNC path. Resolve notices locally only;
+                # retain basename lookup for URL and out-of-tree references.
+                relative = PurePosixPath(reference.replace("\\", "/"))
+                basename = relative.name
+                candidates = [metadata.parent / basename]
+                if not relative.is_absolute() and ".." not in relative.parts and ":" not in reference:
+                    candidates.insert(0, metadata.parent.joinpath(*relative.parts))
                 if source_root.exists():
                     candidates.extend(source_root.glob(f"**/{basename}"))
                 for candidate in candidates:

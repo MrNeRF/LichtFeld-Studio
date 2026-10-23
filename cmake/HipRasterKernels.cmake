@@ -63,7 +63,7 @@ function(lfs_hip_raster_objects include_output objects_output)
             list(TRANSFORM _unit_inputs PREPEND "${_generated}/")
             add_custom_command(OUTPUT "${_object}"
                 COMMAND "${_compiler}" -x hip -std=c++20 -O3 ${_platform_flags}
-                    ${LFS_HIP_OFFLOAD_FLAGS} "--hip-path=${LFS_HIP_ROOT}"
+                    ${LFS_HIP_OFFLOAD_FLAGS} ${LFS_HIP_COMPRESSION_FLAGS} "--hip-path=${LFS_HIP_ROOT}"
                     "-I${_generated}" "-I${LFS_HIP_GLM_INCLUDE_DIR}"
                     -c "${_generated}/${_unit}.hip" -o "${_object}"
                 DEPENDS ${_unit_inputs} ${_headers} "${_generated}/${_unit}.hip" "${_compiler}"

@@ -34,7 +34,7 @@ function(lfs_hip_mask_objects include_output objects_output)
         set(_object "${_generated}/${_unit}.${_extension}")
         add_custom_command(OUTPUT "${_object}"
             COMMAND "${_compiler}" -x hip -std=c++20 -O3 -DNDEBUG ${_platform_flags}
-                ${LFS_HIP_OFFLOAD_FLAGS} "--hip-path=${LFS_HIP_ROOT}"
+                ${LFS_HIP_OFFLOAD_FLAGS} ${LFS_HIP_COMPRESSION_FLAGS} "--hip-path=${LFS_HIP_ROOT}"
                 "-I${_generated}" "-I${_color_include}" "-I${_root}/src/training/hip" "-I${_root}/src/core/include"
                 -c "${_generated}/${_unit}.cu" -o "${_object}"
             DEPENDS ${_outputs} lfs_hip_color_kernels "${_root}/src/training/hip/application_masks_api.h"

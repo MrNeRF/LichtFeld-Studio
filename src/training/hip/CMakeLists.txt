@@ -205,7 +205,7 @@ endif()
 add_custom_command(OUTPUT "${module}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<PATH:GET_PARENT_PATH,${module}>"
     COMMAND "${_compiler}" -x hip -std=c++20 -O3 -shared ${_platform_flags} ${_fast_flags}
-        -DLFS_HIP_TRAIN_EXPORTS ${offload_flags} "--hip-path=${LFS_HIP_ROOT}"
+        -DLFS_HIP_TRAIN_EXPORTS ${LFS_HIP_COMPRESSION_FLAGS} ${offload_flags} "--hip-path=${LFS_HIP_ROOT}"
         "-DLFS_HIP_COMPILED_ARCH=\"${architectures}\""
         "-DLFS_HIP_MODULE_SET_ID=\"${_module_set_id}\""
         "-I${_raster_include}" "-I${LFS_HIP_GLM_INCLUDE_DIR}"

@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+# SPDX-License-Identifier: GPL-3.0-or-later
+cmake_minimum_required(VERSION 3.30)
+include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/HipArchitectures.cmake")
+set(LFS_HIP_OFFLOAD_COMPRESSION OFF)
+lfs_hip_offload_compression_flags(disabled "/nonexistent/compiler")
+if(disabled)
+    message(FATAL_ERROR "Disabled compression changed the compiler flags")
+endif()
+set(LFS_HIP_PORTABLE ON)
+lfs_hip_architectures()
+set(original_architectures "${LFS_HIP_EFFECTIVE_ARCHITECTURES}")
+set(original_offloads "${LFS_HIP_OFFLOAD_FLAGS}")
+if(TEST_SDK)
+    set(LFS_HIP_ROOT "${TEST_SDK}")
+    set(LFS_HIP_OFFLOAD_COMPRESSION ON)
+    lfs_hip_architectures()
+    if(NOT LFS_HIP_COMPRESSION_FLAGS STREQUAL "--offload-compress" OR
+            NOT LFS_HIP_EFFECTIVE_ARCHITECTURES STREQUAL original_architectures OR
+            NOT LFS_HIP_OFFLOAD_FLAGS STREQUAL original_offloads)
+        message(FATAL_ERROR "Compression changed target coverage or failed to enable")
+    endif()
+endif()
+if(TEST_UNSUPPORTED)
+    set(LFS_HIP_OFFLOAD_COMPRESSION ON)
+    lfs_hip_offload_compression_flags(unsupported "${CMAKE_COMMAND}")
+endif()
+message(STATUS "PASS HIP offload compression policy and unchanged portable targets")

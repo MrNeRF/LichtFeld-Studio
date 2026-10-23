@@ -374,16 +374,22 @@ bounds. Consumer read/write tests remain in `lfs_hip_viewer_interop_contract`.
 
 The current universal package contains an uncompressed device-code image for
 each declared target, plus a complete optimized `gfx1150` training module.
-Distribution-size work is outstanding; the large package is not an optimized
-release-size baseline. Benchmark reports and measured artifact sizes belong in
+The opt-in device-code compression path is implemented; universal package size
+and complete install validation remain outstanding. The large existing package
+is not an optimized release-size baseline. Benchmark reports and measured artifact sizes belong in
 external development records, not in source commits.
 
-1. **Native offload compression:** the installed SDK compiler advertises
-   `--offload-compress`. Apply it to the relevant HIP device bundles, verify
-   actual compression of the final artifacts, and test generic/profile loading,
-   fallback and HIPRTC on Windows and Linux. Measure disk size, initialization
-   time, host-memory peak and training correctness; a recognized compiler flag
-   alone is not validation. Do not recompress prebuilt SDK DLLs with this flag.
+1. **Native offload compression:** `LFS_HIP_OFFLOAD_COMPRESSION=ON` applies
+   `--offload-compress` to the Core runtime, every raster/color/mask/FastGS object,
+   and generic/profile training modules. Default OFF preserves existing builds.
+   Configuration rejects a selected compiler without support. Target lists,
+   tuning and math flags are unchanged. Isolated Windows SDK builds pass native
+   contracts, exact image comparisons, cold/warm HIPRTC and short application
+   strategy tests with compressed modules. A multiarchitecture/profile configure
+   check verifies all generated compiler/linker commands; it is not execution on
+   other GPUs. Before default enablement, validate the complete universal package,
+   generic/profile fallback, Linux runtime, startup/memory and final training
+   quality. Do not recompress prebuilt SDK DLLs with this compiler flag.
 2. **Remove profile duplication:** inspect host/device sections and determine
    how much common rasterization, utility and training code the generic and
    optimized modules duplicate. Separate only the specialized kernels if this
@@ -404,12 +410,16 @@ external development records, not in source commits.
    cold-start compilation. Optional download moves these bytes out of the base
    package but does not remove their installed cost for HIP users. Do not assume
    a compatible copy comes with the graphics driver.
-6. **Packaging correctness:** the generic Windows library-exclusion regex can
-   exclude build/dependency directories whose names contain `windows`. Validate
-   recursive PE imports, loader search directories and Python DLL placement with
-   a reduced PATH. Fix the actual packaging rule before relying on manual DLL
-   completion for repeatable distributions. License-reference extraction must
-   not open web URLs as Windows UNC paths; preserve full local license coverage.
+6. **Packaging correctness:** opt-in Windows HIP portable builds use an anchored,
+   case-insensitive match of the actual `SystemRoot`, including mixed path
+   separators, instead of excluding every path containing `windows`/`System32`.
+   Other build modes retain their existing dependency filters. License-reference
+   extraction resolves local paths/basenames only, including references found in
+   URLs, and retains complete local notice bodies. Preserve these regressions.
+   Validate the complete install, recursive PE imports, Python DLL placement,
+   explicitly bundled SDK dependencies and SDK notices with a reduced PATH.
+   The OS dependency resolver may find a driver runtime in System32; do not use
+   that result to remove the matching SDK DLL explicitly staged for the package.
 
 For each candidate compare the same feature set, target list and build type.
 Record uncompressed installed bytes and compressed download bytes separately.
