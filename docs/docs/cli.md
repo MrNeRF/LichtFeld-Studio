@@ -26,6 +26,6 @@ explains the kernels, the other `--sharpen-*` options and how sharpening affects
 
 ## Train a region of interest
 
-`--cropbox` limits training to a box, and `--crop` removes everything outside it when training completes and from
-exports. [Train a region of interest](features/region-of-interest.md) describes the box, the ROI training options and
-tiled training.
+`--cropbox` limits training to a box, `--cropbox-rotation` turns it, and `--crop` removes everything outside it when
+training completes and from exports. [Train a region of interest](features/region-of-interest.md) describes the box and
+its rotation, the ROI training options and tiled training.
