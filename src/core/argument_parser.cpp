@@ -2932,22 +2932,27 @@ dataset options work as in training; see the Evaluation page of the docs.
             std::print("{}", parser.Help());
             return core_args::HelpMode{};
         } catch (const ::args::ParseError& e) {
-            return std::unexpected(std::format("{}\n\n{}", e.what(), parser.Help()));
+            error = std::format("{}\n\n{}", e.what(), parser.Help());
+            return std::nullopt;
         }
 
         std::string log_level_error;
-        if (!log_level.apply(log_level_error))
-            return std::unexpected(log_level_error);
+        if (!log_level.apply(log_level_error)) {
+            error = std::move(log_level_error);
+            return std::nullopt;
+        }
 
         param::BatchTrainingParameters params;
         if (config) {
             params.config_file = lfs::core::utf8_to_path(::args::get(config));
             if (!lfs::core::native_fs::exists(params.config_file)) {
-                return std::unexpected(std::format("Config file not found: {}", lfs::core::path_to_utf8(params.config_file)));
+                error = std::format("Config file not found: {}", lfs::core::path_to_utf8(params.config_file));
+                return std::nullopt;
             }
             auto loaded = param::read_batch_training_parameters_from_json(params.config_file, params);
             if (!loaded) {
-                return std::unexpected(std::format("Error reading batch config: {}", loaded.error().user_message()));
+                error = std::format("Error reading batch config: {}", loaded.error().user_message());
+                return std::nullopt;
             }
             params = std::move(*loaded);
         }
@@ -3016,7 +3021,7 @@ dataset options work as in training; see the Evaluation page of the docs.
             for (const auto& a : validate_args) {
                 validate_argv.push_back(a.c_str());
             }
-            auto val_res = parse_args_and_params(static_cast<int>(validate_argv.size()), validate_argv.data());
+            auto val_res = lfs::core::args::parse_args_and_params(static_cast<int>(validate_argv.size()), validate_argv.data());
             if (!val_res) {
                 error = std::format("Invalid training argument: {}", val_res.error());
                 return std::nullopt;
