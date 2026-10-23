@@ -371,26 +371,7 @@ namespace lfs::media {
                 builder.result.limited = true;
                 return std::move(builder.result);
             }
-            bool image_index_complete = catalog.indexStatus() == MetadataIndexStatus::Complete;
-            if (!image_index_complete) {
-                // XMP references follow EXIF/TIFF. Omitting only those opaque
-                // blocks must not invalidate already complete camera operands.
-                auto indexed = static_cast<std::size_t>(std::count_if(catalog.records().begin(), catalog.records().end(), [](const auto& reference) {
-                    return std::holds_alternative<ExifEntryReference>(reference) || std::holds_alternative<TiffTagReference>(reference);
-                }));
-                const auto consume = [&](std::size_t count) {
-                    if (count > indexed)
-                        return false;
-                    indexed -= count;
-                    return true;
-                };
-                image_index_complete = std::all_of(catalog.imageExif().interpretations.begin(), catalog.imageExif().interpretations.end(),
-                                                   [&](const auto& block) { return consume(block.entries.size()); });
-                if (image_index_complete && catalog.imageExif().original.tiff)
-                    image_index_complete = std::all_of(catalog.imageExif().original.tiff->directories.begin(), catalog.imageExif().original.tiff->directories.end(),
-                                                       [&](const auto& directory) { return consume(directory.tags.size()); });
-                image_index_complete = image_index_complete && indexed == 0;
-            }
+            const bool image_index_complete = catalog.imageExifIndexStatus() == MetadataIndexStatus::Complete;
             std::map<GroupKey, Group> groups;
             for (const auto& reference : catalog.records()) {
                 if (const auto* position = std::get_if<ExifEntryReference>(&reference)) {

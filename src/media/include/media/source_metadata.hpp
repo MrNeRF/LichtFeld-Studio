@@ -69,6 +69,8 @@ namespace lfs::media {
         [[nodiscard]] LFS_MEDIA_API const core::image_codecs::SourceXmp& imageXmp() const noexcept;
         [[nodiscard]] LFS_MEDIA_API const std::optional<MediaDescription>& container() const noexcept;
         [[nodiscard]] LFS_MEDIA_API MetadataIndexStatus indexStatus() const noexcept;
+        // Completeness of references to collected EXIF/TIFF values, independent of XMP.
+        [[nodiscard]] LFS_MEDIA_API MetadataIndexStatus imageExifIndexStatus() const noexcept;
         [[nodiscard]] LFS_MEDIA_API const std::vector<SourceMetadataReference>& records() const noexcept;
         [[nodiscard]] LFS_MEDIA_API std::optional<MetadataRecordHandle> bind(SourceMetadataReference) const;
         [[nodiscard]] LFS_MEDIA_API std::optional<MetadataRecordView> resolve(const MetadataRecordHandle&) const noexcept;

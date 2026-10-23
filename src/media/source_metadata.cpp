@@ -16,6 +16,7 @@ namespace lfs::media {
         core::image_codecs::SourceXmp image_xmp;
         std::optional<MediaDescription> container;
         MetadataIndexStatus index_status = MetadataIndexStatus::Complete;
+        MetadataIndexStatus image_exif_index_status = MetadataIndexStatus::Complete;
         std::vector<SourceMetadataReference> records;
     };
     const std::optional<MetadataSourceLocator>& SourceMetadataCatalog::sourceLocator() const noexcept {
@@ -39,6 +40,9 @@ namespace lfs::media {
     }
     MetadataIndexStatus SourceMetadataCatalog::indexStatus() const noexcept {
         return storage_ ? storage_->index_status : MetadataIndexStatus::Complete;
+    }
+    MetadataIndexStatus SourceMetadataCatalog::imageExifIndexStatus() const noexcept {
+        return storage_ ? storage_->image_exif_index_status : MetadataIndexStatus::Complete;
     }
     const std::vector<SourceMetadataReference>& SourceMetadataCatalog::records() const noexcept {
         static const std::vector<SourceMetadataReference> empty;
@@ -235,16 +239,20 @@ namespace lfs::media {
             for (std::size_t block = 0; block < result.image_exif.interpretations.size(); ++block) {
                 const auto& interpretation = result.image_exif.interpretations[block];
                 for (std::size_t entry = 0; entry < interpretation.entries.size(); ++entry) {
-                    if (!append(ExifEntryReference{block, entry}))
+                    if (!append(ExifEntryReference{block, entry})) {
+                        result.image_exif_index_status = MetadataIndexStatus::Limited;
                         return SourceMetadataCatalog(std::move(staged));
+                    }
                 }
             }
             if (result.image_exif.original.tiff) {
                 const auto& directories = result.image_exif.original.tiff->directories;
                 for (std::size_t directory = 0; directory < directories.size(); ++directory) {
                     for (std::size_t tag = 0; tag < directories[directory].tags.size(); ++tag) {
-                        if (!append(TiffTagReference{directory, tag}))
+                        if (!append(TiffTagReference{directory, tag})) {
+                            result.image_exif_index_status = MetadataIndexStatus::Limited;
                             return SourceMetadataCatalog(std::move(staged));
+                        }
                     }
                 }
             }

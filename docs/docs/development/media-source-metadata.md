@@ -310,3 +310,7 @@ This increment does not collect XMP from TIFF, HEIF/AVIF, JPEG XL, WebP, EXR, vi
 Storage references: [Adobe XMP specifications, Part 3](https://developer.adobe.com/xmp/docs/xmp-specifications/) and [PNG iTXt specification](https://www.w3.org/TR/png-3/#11iTXt). A future increment should add qualified carrier support and namespace-aware interpretation when it has a concrete consumer, then vendor adapters, export/sidecar preservation and dataset integration. It must not infer broad vendor telemetry support from opaque packet retention.
 
 When the shared reference index omits only XMP blocks, already fully indexed EXIF/TIFF camera operands remain usable. The overall catalog/summary still reports its index limit. Actual missing EXIF/TIFF references retain the conservative incomplete-directory behavior. A regression case covers both sides of this boundary.
+
+`SourceMetadataCatalog::imageExifIndexStatus()` records whether every collected EXIF/TIFF value was indexed. It is independent of the overall index status and of collection/parsing status. Omitting only trailing XMP references keeps this sub-index complete; camera summaries use that recorded state directly.
+
+When combined PNG collection continues after its first EXIF retention omission, the EXIF snapshot freezes both its retained prefix and its status/diagnostic at the same point as `source-exif`. Later carrier errors or scan exhaustion remain visible in the XMP scan status, while intact XMP packets can still be retained.

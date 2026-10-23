@@ -2006,6 +2006,8 @@ namespace lfs::core::image_codecs {
             SourceXmp& result;
             const XmpLimits& limits;
             size_t retained = 0;
+            std::optional<MetadataStatus> scan_status;
+            std::string scan_diagnostic;
             bool canRetain(size_t size) {
                 if (result.blocks.size() >= limits.blocks || size > limits.block_bytes || size > limits.total_bytes - retained) {
                     result.status = MetadataStatus::Limited;
@@ -2157,12 +2159,15 @@ namespace lfs::core::image_codecs {
             uint64_t position = kPngSignature.size();
             bool idat = false, exif = false, exif_stopped = false;
             auto fail = [&](MetadataStatus status, const char* text) {
-                if (result.status != MetadataStatus::Malformed || status == MetadataStatus::IoError)
-                    result.status = status;
-                if (result.diagnostic.find(text) == std::string::npos) {
-                    if (!result.diagnostic.empty())
-                        result.diagnostic += "; ";
-                    result.diagnostic += text;
+                // After the first omitted EXIF block, only the combined scan advances.
+                auto& state = exif_stopped ? *xmp->scan_status : result.status;
+                auto& diagnostic = exif_stopped ? xmp->scan_diagnostic : result.diagnostic;
+                if (state != MetadataStatus::Malformed || status == MetadataStatus::IoError)
+                    state = status;
+                if (diagnostic.find(text) == std::string::npos) {
+                    if (!diagnostic.empty())
+                        diagnostic += "; ";
+                    diagnostic += text;
                 }
             };
             auto read = [&](uint8_t* data, size_t size) {
@@ -2255,6 +2260,8 @@ namespace lfs::core::image_codecs {
                     fail(MetadataStatus::Limited, "EXIF collection budget exhausted");
                     if (!xmp)
                         return result;
+                    xmp->scan_status = result.status;
+                    xmp->scan_diagnostic = result.diagnostic;
                     exif_stopped = true;
                 }
                 // Charge data and CRC before allocating a retained block.
@@ -2978,19 +2985,21 @@ namespace lfs::core::image_codecs {
         }
         XmpCollector collector{result.xmp, xmp_limits};
         result.exif = collect_source_exif(path, limits, &collector);
+        const auto scan_status = collector.scan_status.value_or(result.exif.status);
+        const auto& scan_diagnostic = collector.scan_status ? collector.scan_diagnostic : result.exif.diagnostic;
         if (result.xmp.status == MetadataStatus::NotExamined) {
-            result.xmp.status = (result.exif.status == MetadataStatus::IoError || result.exif.status == MetadataStatus::Limited) ? result.exif.status : MetadataStatus::Unsupported;
-            result.xmp.diagnostic = (result.exif.status == MetadataStatus::IoError || result.exif.status == MetadataStatus::Limited) ? result.exif.diagnostic : "XMP collection supports JPEG APP1 and PNG iTXt";
+            result.xmp.status = (scan_status == MetadataStatus::IoError || scan_status == MetadataStatus::Limited) ? scan_status : MetadataStatus::Unsupported;
+            result.xmp.diagnostic = (scan_status == MetadataStatus::IoError || scan_status == MetadataStatus::Limited) ? scan_diagnostic : "XMP collection supports JPEG APP1 and PNG iTXt";
         } else if (result.xmp.status != MetadataStatus::Unsupported &&
-                   (result.exif.status == MetadataStatus::Limited || result.exif.status == MetadataStatus::Malformed || result.exif.status == MetadataStatus::IoError)) {
+                   (scan_status == MetadataStatus::Limited || scan_status == MetadataStatus::Malformed || scan_status == MetadataStatus::IoError)) {
             // Conservatively retain the enclosing scan's incomplete/invalid status.
             // Individual blocks report carrier framing, never XML validity.
-            if (result.xmp.status != MetadataStatus::Limited || result.exif.status == MetadataStatus::IoError)
-                result.xmp.status = result.exif.status;
-            if (!result.exif.diagnostic.empty() && result.xmp.diagnostic.find(result.exif.diagnostic) == std::string::npos) {
+            if (result.xmp.status != MetadataStatus::Limited || scan_status == MetadataStatus::IoError)
+                result.xmp.status = scan_status;
+            if (!scan_diagnostic.empty() && result.xmp.diagnostic.find(scan_diagnostic) == std::string::npos) {
                 if (!result.xmp.diagnostic.empty())
                     result.xmp.diagnostic += "; ";
-                result.xmp.diagnostic += result.exif.diagnostic;
+                result.xmp.diagnostic += scan_diagnostic;
             }
         }
         return result;

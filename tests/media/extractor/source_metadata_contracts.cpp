@@ -167,7 +167,8 @@ int runSourceMetadataContracts() {
             "XMP serialization preserves binary originals and duplicate ordinals");
     auto limited_xmp = catalogSourceMetadata({}, {.records = 0}, std::nullopt, with_xmp->imageXmp());
     require(limited_xmp && limited_xmp->indexStatus() == MetadataIndexStatus::Limited &&
-                limited_xmp->records().empty() && limited_xmp->imageXmp().blocks.size() == 2,
+                limited_xmp->records().empty() && limited_xmp->imageXmp().blocks.size() == 2 &&
+                limited_xmp->imageExifIndexStatus() == MetadataIndexStatus::Complete,
             "XMP retention is independent of the reference index budget");
     auto kept_xmp = *with_xmp;
     with_xmp = SourceMetadataCatalog{};
@@ -217,10 +218,20 @@ int runSourceMetadataContracts() {
         auto limited = catalogSourceMetadata(description(), {.records = count});
         require(bool(limited) && limited->records().size() == std::min(count, std::size_t{4}), "reference limit enforced at exact boundary");
         require((limited->indexStatus() == MetadataIndexStatus::Limited) == (count < 4), "limit reported only when an entry is omitted");
+        require(limited->imageExifIndexStatus() == limited->indexStatus(), "omitting an EXIF or TIFF reference marks the image sub-index limited");
         require(limited->imageExif().interpretations[0].entries.size() == 2 &&
                     limited->imageExif().original.tiff->directories[0].tags.size() == 2,
                 "limited index never truncates already collected values");
     }
+    auto xmp_tail = catalogSourceMetadata(description(), {.records = 4}, std::nullopt, kept_xmp.imageXmp());
+    require(xmp_tail && xmp_tail->indexStatus() == MetadataIndexStatus::Limited &&
+                xmp_tail->imageExifIndexStatus() == MetadataIndexStatus::Complete,
+            "XMP-only index omission preserves complete EXIF/TIFF sub-index status");
+    auto copied_index = *xmp_tail;
+    auto moved_index = std::move(copied_index);
+    require(moved_index.imageExifIndexStatus() == MetadataIndexStatus::Complete &&
+                SourceMetadataCatalog{}.imageExifIndexStatus() == MetadataIndexStatus::Complete,
+            "sub-index status follows immutable ownership and an empty catalog is complete");
     auto no_data = catalogSourceMetadata({}, {.records = 0});
     require(bool(no_data) && no_data->indexStatus() == MetadataIndexStatus::Complete,
             "empty unexamined source is not falsely reported limited or collected");

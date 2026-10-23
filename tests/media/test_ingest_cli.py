@@ -240,6 +240,38 @@ class IngestCLI(unittest.TestCase):
         self.assertEqual(result["image_xmp"]["status"], "limited")
         self.assertEqual(result["image_xmp"]["blocks"], [])
 
+    def test_source_metadata_png_exif_status_freezes_after_omission(self):
+        path = self.root / "exif-frozen.png"
+        source_exif_fixture.write_png(path, include_exif=False)
+        original = path.read_bytes()
+        def chunk(kind, data, bad_crc=False):
+            return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) ^ int(bad_crc))
+        packet = b"XML:com.adobe.xmp\0\0\0\0\0<after/>"
+        large = chunk(b"eXIf", b"x" * (1536 * 1024))
+        small = chunk(b"eXIf", b"II*\0")
+        for damage, expected, diagnostic in [
+                (chunk(b"tEXt", b"key\0value", True), "malformed", "CRC mismatch"),
+                (b"\0\0\0", "malformed", "Truncated"),
+                (chunk(b"tEXt", b"k\0v"), "limited", "EXIF collection budget exhausted")]:
+            with self.subTest(expected=expected, diagnostic=diagnostic):
+                path.write_bytes(original[:33] + large + small + chunk(b"iTXt", packet) + damage +
+                                 (b"" if damage == bytes(3) else original[33:]))
+                exif, _ = self.invoke("source-exif", path)
+                result, _ = self.invoke("source-metadata", path)
+                self.assertEqual(result["metadata"]["image_exif"], exif["exif"])
+                self.assertEqual(exif["exif"]["status"], "limited")
+                self.assertEqual(exif["exif"]["blocks"], [])
+                xmp = result["metadata"]["image_xmp"]
+                self.assertEqual(xmp["status"], expected, xmp)
+                self.assertIn(diagnostic, xmp["diagnostic"])
+                self.assertEqual(bytes.fromhex(xmp["blocks"][0]["payload_bytes"]), b"<after/>")
+        # Actual scan exhaustion is reported separately from the frozen EXIF result.
+        path.write_bytes(original[:33] + large + small + chunk(b"iTXt", packet) + original[33:])
+        result = self._xmp_limited(path, exif_block_bytes=16, collection_limits={"png_chunks": 2})
+        self.assertEqual(result["image_exif"], result["legacy_exif"])
+        self.assertIn("PNG non-IDAT chunk count", result["image_xmp"]["diagnostic"])
+        self.assertNotIn("PNG non-IDAT", result["image_exif"]["diagnostic"])
+
     def test_source_metadata_xmp_budgets_and_absence(self):
         path = self.root / "xmp-budget.jpeg"
         envelope = b"http://ns.adobe.com/xap/1.0/\0" + b"x" * 31
