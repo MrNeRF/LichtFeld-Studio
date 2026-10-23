@@ -222,8 +222,9 @@ namespace lfs::training::kernels {
                 return;
             }
 
+            // A non-positive anchor floor (metric anchors) keeps the render-derived floor.
             bool valid = finals[slots::kValid] > 0.5f &&
-                         anchor_floor > 0.0f &&
+                         (anchor_floor > 0.0f || anchor_model == 1) &&
                          isfinite(anchor_scale) &&
                          isfinite(anchor_shift);
             const double sum_alpha = finals[slots::kSumAlpha];
@@ -237,7 +238,7 @@ namespace lfs::training::kernels {
                 sigma_p = sqrt(fmax(var_p, kMinVariance));
             }
 
-            if (valid) {
+            if (valid && anchor_floor > 0.0f) {
                 finals[slots::kFloor] = anchor_floor;
             }
 

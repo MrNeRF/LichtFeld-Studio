@@ -54,6 +54,8 @@ namespace lfs::training::kernels {
     // Per-camera alignment of the depth prior against sparse anchor points
     // (COLMAP / init point cloud), fitted once at startup. Keeps the target
     // depth absolute and multi-view consistent instead of chasing the render.
+    // A depth-space anchor with floor 0 uses the render-derived floor; metric
+    // priors use that with a fixed unit scale and zero shift.
     struct DepthAnchor {
         bool valid = false;
         int model = 0; // 0 = disparity-space fit, 1 = depth-space fit
@@ -117,6 +119,19 @@ namespace lfs::training::kernels {
     // CPU half of fit_depth_anchor: robust affine fits over collected samples.
     // Pure host work — safe to run across a worker thread pool.
     [[nodiscard]] DepthAnchor fit_depth_anchor_from_samples(const std::vector<float2>& pairs);
+
+    // Fixed alignment for absolute priors: target metres = prior * metres_per_unit.
+    [[nodiscard]] inline DepthAnchor metric_depth_anchor(const float metres_per_unit) {
+        DepthAnchor anchor;
+        anchor.valid = metres_per_unit > 0.0f;
+        anchor.model = 1;
+        anchor.scale = metres_per_unit;
+        anchor.shift = 0.0f;
+        anchor.floor = 0.0f;
+        anchor.corr = 1.0f;
+        anchor.depth = {anchor.valid, metres_per_unit, 0.0f, 1.0f, 0};
+        return anchor;
+    }
 
     [[nodiscard]] size_t depth_loss_partial_count(size_t num_pixels);
 

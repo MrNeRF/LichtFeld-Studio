@@ -1608,7 +1608,7 @@ TEST(ArgumentParserTest, TrainingRejectsLegacyDepthLossAlias) {
 
     auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_FALSE(parsed.has_value());
-    EXPECT_NE(parsed.error().find("depth_loss_mode must be 'ssi', 'ssi-disparity', or 'ssi-depth'"), std::string::npos);
+    EXPECT_NE(parsed.error().find("depth_loss_mode must be 'ssi', 'ssi-disparity', 'ssi-depth', or 'metric'"), std::string::npos);
 }
 
 TEST(ArgumentParserTest, TrainingParsesExplicitNormalLossOptions) {

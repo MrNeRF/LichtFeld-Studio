@@ -922,6 +922,9 @@ namespace lfs::core {
             }
         }
 
+        // All-zero samples are the "no normal" fill (GeosunPre), not (-1,-1,-1).
+        const Tensor normal_present = normal.max(0, true).gt(0.0f).to(DataType::Float32);
+
         // Decode vectors before validity-aware resampling and normalization.
         normal = normal.mul(2.0f).sub(1.0f);
 
@@ -956,6 +959,10 @@ namespace lfs::core {
                 LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "normal upload sync");
             }
         }
+        normal = normal.mul(normal_present.device() == normal.device()
+                                ? normal_present
+                                : normal_present.to(normal.device(), _stream))
+                     .contiguous();
 
         if (_undistort_prepared && apply_undistortion) {
             const auto scaled = prepare_undistort_params(
