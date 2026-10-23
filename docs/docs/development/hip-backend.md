@@ -255,6 +255,20 @@ loaded. These tests carry CPU labels and complement the existing application and
 backend-native suites. They do not replace real rendering, allocation or training
 checks, and their success must not be described as hardware validation.
 
+### Regression checks for existing backends
+
+Changes to shared integration code also require a standard application build with
+`LFS_TENSOR_HIP=OFF` and `LFS_HIP_RUNTIME=OFF`. The standalone CPU policy suite
+compiles only its selected headers; it cannot detect missing HIP guards in other
+Core translation units. Short native training checks should include refinement,
+project save and resume on the existing CUDA, Metal and Vulkan paths.
+
+The MRNF auxiliary-growth regression round-trips a mask through the Tensor
+archive before requesting model growth. It checks that a restored mask larger
+than the current model reservation retains its logical suffix and contents.
+CUDA telemetry can retain an optional Windows DXGI process budget while still
+reporting device-wide memory; that reading does not select HIP/Vulkan budget mode.
+
 ### Secondary viewer consumers and memory telemetry
 
 Point-cloud rendering prepares Tensor uploads/conversions before acquiring the

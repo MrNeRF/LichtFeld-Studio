@@ -96,7 +96,14 @@ TEST(ViewerGpuMemory, CudaStatusKeepsDeviceUsageAndItsOptionalUtilizationReading
     EXPECT_GT(status.total, 0u);
     EXPECT_LE(status.total_used, status.total);
     EXPECT_FALSE(status.uses_process_budget);
+#ifdef _WIN32
+    // CUDA keeps whole-device accounting but may also publish the existing
+    // DXGI process budget. That optional reading is not a HIP/Vulkan budget mode.
+    if (status.process_budget > 0)
+        EXPECT_TRUE(status.process_valid);
+#else
     EXPECT_EQ(status.process_budget, 0u);
+#endif
     EXPECT_EQ(status.process_budget_used, 0u);
     if (status.gpu_utilization_valid) {
         EXPECT_GE(status.gpu_utilization_percent, 0.0f);

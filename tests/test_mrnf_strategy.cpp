@@ -38,6 +38,7 @@ class MRNFStrategyTest_GrowthExchangeCosineQuotaAtStartMiddleAndEnd_Test;
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_serialization.hpp"
 #include "cuda_backend_test.hpp"
 #include "io/formats/ply.hpp"
 #include "io/project_document.hpp"
@@ -1106,6 +1107,26 @@ TEST_F(MRNFStrategyTest, DirectAuxiliaryGrowthPreservesPrefix) {
         }
     };
     expect_prefix(strategy._refine_weight_max, 1.25f);
+
+    // A checkpoint can retain a max-cap mask beyond the model's current
+    // reservation. Deserialized storage has no spare capacity metadata;
+    // growing the model must preserve that logical suffix as well as live rows.
+    constexpr size_t checkpoint_rows = grown_points + 8;
+    auto checkpoint_mask = Tensor::zeros({checkpoint_rows}, Device::GPU, DataType::Bool);
+    checkpoint_mask.slice(0, checkpoint_rows - 1, checkpoint_rows).fill_(1.0f);
+    const auto expected_mask = checkpoint_mask.cpu().to_vector_bool();
+    std::stringstream checkpoint;
+    checkpoint << checkpoint_mask;
+    checkpoint.seekg(0);
+    TensorArchiveReader reader(checkpoint);
+    reader.read_tensor(strategy._free_mask);
+    strategy._free_mask = strategy._free_mask.gpu();
+    ASSERT_EQ(strategy._free_mask.numel(), checkpoint_rows);
+    ASSERT_LT(strategy._free_mask.capacity(), grown_points);
+    ASSERT_NO_THROW(strategy.ensure_auxiliary_capacity_for_growth(grown_points));
+    EXPECT_EQ(strategy._free_mask.numel(), checkpoint_rows);
+    EXPECT_GE(strategy._free_mask.capacity(), checkpoint_rows);
+    EXPECT_EQ(strategy._free_mask.cpu().to_vector_bool(), expected_mask);
 }
 
 TEST_F(MRNFStrategyTest, GrowAndSplitUsesIgsPlusSplitRule) {
