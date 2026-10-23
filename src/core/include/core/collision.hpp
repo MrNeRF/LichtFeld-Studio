@@ -22,6 +22,10 @@ namespace lfs::core {
     struct LFS_CORE_API CollisionSettings {
         CollisionPreset preset = CollisionPreset::Outdoor;
         bool cluster = false;
+        // Scale-invariant reconstruction cleanup; seeded clustering uses source
+        // connectivity rather than a scene-dependent opacity threshold.
+        bool adaptive_filter = true;
+        bool auto_resolution = false; // UI defaults to Auto; explicit API resolutions remain exact.
         float cluster_resolution = 1.0f;
         float cluster_opacity = 0.999f;
         float cluster_min_contribution = 0.1f;

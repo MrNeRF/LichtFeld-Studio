@@ -10,6 +10,14 @@ namespace lfs::core::collision_detail {
         glm::vec3 resolved_seed;
         uint64_t occupied_voxels = 0;
     };
+    float recommendCollisionVoxelSize(std::span<const CollisionGaussian> source, float units_per_meter, std::stop_token stop = {});
+    struct AdaptiveSelection {
+        std::vector<uint32_t> indices;
+        std::string note;
+    };
+    AdaptiveSelection selectAdaptiveSource(std::span<const CollisionGaussian> source,
+                                           const CollisionSettings& settings, std::stop_token stop = {},
+                                           CollisionProgress progress = {});
     ClusterSelection selectCluster(std::span<const CollisionGaussian> source, const CollisionVolume& coarse,
                                    glm::vec3 seed, float min_contribution, std::stop_token stop = {},
                                    CollisionProgress progress = {});
