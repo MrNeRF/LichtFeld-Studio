@@ -35,14 +35,16 @@ int main() try {
     {
         const GpuBackendScope scope(GpuBackend::HIP);
         constexpr size_t h=7,w=9,n=h*w;
-        for(unsigned code=0;code<16;++code) {
+        for(unsigned code=0;code<16;++code) for(bool typed_u16:{false,true}) {
             const unsigned c=(code==11 || code==13)?1:(code==14 || code==15)?4:3;const size_t count=n*c;
             const bool in16=code==1 || code==3 || code==7 || code==9 || code==15;
+            if(typed_u16 && !in16)continue;
             const bool in32=code==2 || code==4 || code==5 || code==10 || code==12;
             const bool out16=code==2,out8=code==8 || code==9 || code==10;
             std::vector<uint8_t> bytes(count);std::vector<uint16_t> shorts(count);std::vector<float> floats(count);
             for(size_t i=0;i<count;++i){bytes[i]=uint8_t(i*71);shorts[i]=uint16_t(i*577);floats[i]=float(int((i*73)%313)-20)/271;}
             auto source=in32?Tensor::from_vector(floats,{count},Device::GPU):in16?Tensor::from_blob(shorts.data(),{count*2},Device::CPU,DataType::UInt8).to(Device::GPU):Tensor::from_blob(bytes.data(),{count},Device::CPU,DataType::UInt8).to(Device::GPU);
+            if(typed_u16)source=Tensor::from_blob(shorts.data(),{count},Device::CPU,DataType::Float16).to(Device::GPU);
             auto destination=Tensor::empty({count*(out16?2:1)},Device::GPU,out16 || out8?DataType::UInt8:DataType::Float32);
             ops->convert(source,destination,static_cast<gpu_ops::ImageConversion>(code),h,w,c,{});
             auto cpu=destination.cpu();const auto* b=static_cast<const uint8_t*>(cpu.data_ptr());const auto* f=static_cast<const float*>(cpu.data_ptr());

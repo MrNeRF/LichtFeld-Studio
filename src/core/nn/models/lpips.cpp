@@ -181,7 +181,12 @@ namespace lfs::core::nn::models {
         if (height <= 0 || width <= 0)
             return 0;
         const std::size_t pixels = static_cast<std::size_t>(height) * static_cast<std::size_t>(width);
-        const std::size_t bytes_per_pixel = compute_ == DataType::Float16 && gpu_backend_of(weights_.begin()->second) == GpuBackend::CUDA
+        const bool hip_half = compute_ == DataType::Float16 && dispatch_ &&
+                              gpu_backend_of(weights_.begin()->second) == GpuBackend::HIP;
+        // HIP runs the half-precision shared-feature path, not the exact
+        // float32 arena. Using the latter's estimate creates unnecessarily
+        // small tiles and repeatedly evaluates their large VGG halos.
+        const std::size_t bytes_per_pixel = hip_half ? kFastBytesPerPixel : compute_ == DataType::Float16 && gpu_backend_of(weights_.begin()->second) == GpuBackend::CUDA
                                                 ? kFastBytesPerPixel
                                                 : kExactBytesPerPixel;
         const auto untiled_bytes = compute_ == DataType::Float16 && gpu_backend_of(weights_.begin()->second) == GpuBackend::CUDA
@@ -226,6 +231,13 @@ namespace lfs::core::nn::models {
             for (int block = 1; block < kBlocks; ++block)
                 mask_bytes += allocation_size(static_cast<std::size_t>(height >> block) *
                                               static_cast<std::size_t>(width >> block) * sizeof(float));
+        }
+        if (compute_ == DataType::Float16 && dispatch_ &&
+            gpu_backend_of(weights_.begin()->second) == GpuBackend::HIP) {
+            // Conservative bound: three shared half feature buffers (384
+            // bytes/pixel), two RGB float crops (24), and reduction scores.
+            return crop_h * crop_w * kFastBytesPerPixel +
+                   kBlocks * sizeof(float) + mask_bytes;
         }
         if (compute_ == DataType::Float32 || gpu_backend_of(weights_.begin()->second) != GpuBackend::CUDA) {
             std::size_t bytes = crop_h * crop_w * kExactBytesPerPixel + mask_bytes;

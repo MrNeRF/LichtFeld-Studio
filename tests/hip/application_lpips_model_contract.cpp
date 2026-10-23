@@ -20,6 +20,10 @@ std::array<float,3> evaluate(GpuBackend backend,const std::filesystem::path& wei
     auto loaded=nn::models::Lpips::load(weights,Device::GPU,DataType::Float16,nn::models::InputScaling::Identity,64ull<<20);
     if(!loaded)throw std::runtime_error(format_for_developer(loaded.error()));
     const auto* ops=training::training_ops(backend).lpips;require(ops!=nullptr,"LPIPS application family is missing");loaded->set_dispatch(*ops);
+    if(backend==GpuBackend::HIP) {
+        require(loaded->tile_size_for(240,320)>16,"HIP half LPIPS still budgets the float32 arena");
+        require(loaded->estimated_peak_bytes(240,320)<=64ull<<20,"HIP LPIPS tile exceeds its activation budget");
+    }
     const auto check=[](const Result<float>& result){if(!result)throw std::runtime_error(format_for_developer(result.error()));require(std::isfinite(*result),"LPIPS full model produced a nonfinite score");return *result;};
     const float self=check(loaded->forward(x,x)),different=check(loaded->forward(x,y)),reverse=check(loaded->forward(y,x)),warm=check(loaded->forward(x,y));
     require(std::abs(self)<1e-7f && different>1e-5f,"LPIPS full model identity/contrast invariant failed");

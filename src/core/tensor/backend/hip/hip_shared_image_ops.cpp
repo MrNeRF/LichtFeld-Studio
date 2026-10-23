@@ -45,12 +45,19 @@ void convert(const Tensor& source,Tensor& destination,ImageConversion conversion
     case ImageConversion::U8HWCToF32CHW:case ImageConversion::U8HWToF32HW:case ImageConversion::MaskU8HWToF32HW:
     case ImageConversion::NormalPriorU8:case ImageConversion::U8HWCToF32CHWExactMaskAlpha:break;
     case ImageConversion::U16HWCToF32CHW:case ImageConversion::U16HWCToF32HWC:case ImageConversion::NormalPriorU16:
-    case ImageConversion::U16HWCToF32CHWExactMaskAlpha:input_bytes=total*2;break;
+    case ImageConversion::U16HWCToF32CHWExactMaskAlpha:
+        // Shared CPU image uploads carry raw uint16 samples in Float16
+        // storage (there is no UInt16 tensor dtype). This is a byte-preserving
+        // container, not a numeric half-to-float conversion.
+        input=source.dtype()==DataType::Float16?DataType::Float16:DataType::UInt8;
+        input_bytes=total*2;break;
     case ImageConversion::F32HWCToU16HWC:input=DataType::Float32;input_bytes=total*4;output=DataType::UInt8;output_bytes=total*2;break;
     case ImageConversion::NormalCHWToJ2KHWC:case ImageConversion::J2KHWCToNormalCHW:case ImageConversion::NormalPriorF32:
         input=DataType::Float32;input_bytes=total*4;break;
     case ImageConversion::U8HWCToU8CHW:output=DataType::UInt8;output_bytes=total;break;
-    case ImageConversion::U16HWCToU8CHW:input_bytes=total*2;output=DataType::UInt8;output_bytes=total;break;
+    case ImageConversion::U16HWCToU8CHW:
+        input=source.dtype()==DataType::Float16?DataType::Float16:DataType::UInt8;
+        input_bytes=total*2;output=DataType::UInt8;output_bytes=total;break;
     case ImageConversion::F32CHWToU8CHW:input=DataType::Float32;input_bytes=total*4;output=DataType::UInt8;output_bytes=total;break;
     default:throw std::invalid_argument("Unknown HIP image conversion");
     }
