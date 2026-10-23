@@ -553,10 +553,10 @@ body.fit-8 #fps-group { margin-left: 6dp; }
 
 /* Tessle eats leaf snacks along the training track. */
 #progress-container.tessle {
-    background-color: #142824;
+    background-color: #1d1f22;
     border-radius: 2dp;
     decorator: none;
-    border-bottom: 1dp #41665c;
+    border-bottom: 1dp #45494d;
     box-sizing: border-box;
 }
 
@@ -585,8 +585,8 @@ body.fit-8 #fps-group { margin-left: 6dp; }
     width: auto;
     padding: 0 3dp;
     line-height: 14dp;
-    color: #e3f2ea;
-    background-color: #142824;
+    color: #e4e6e9;
+    background-color: #1d1f22;
     text-align: left;
 }
 
