@@ -206,9 +206,9 @@ namespace lfs::vis::gui {
             std::string mode_color;
             bool show_training = false;
             bool progress_miner = false;
-            bool progress_pacman = false;
-            std::string pacman_left = "0dp";
-            std::string pacman_sprite = "../icon/pacman/open.png";
+            bool progress_tessle = false;
+            std::string tessle_left = "0dp";
+            std::string tessle_sprite = "../icon/tessle/open.png";
             bool miner_raised = false;
             bool miner_step_a = false;
             bool miner_strike = false;

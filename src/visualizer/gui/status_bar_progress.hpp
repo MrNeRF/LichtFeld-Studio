@@ -11,7 +11,7 @@
 namespace lfs::vis::gui {
     enum class ProgressMarkerStyle { Classic,
                                      Miner,
-                                     Pacman };
+                                     Tessle };
 
     struct ProgressMarkerRenderState {
         bool dragging = false;

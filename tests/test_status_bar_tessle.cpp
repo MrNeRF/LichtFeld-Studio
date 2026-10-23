@@ -1,13 +1,13 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "gui/status_bar_pacman.hpp"
 #include "gui/status_bar_progress.hpp"
+#include "gui/status_bar_tessle.hpp"
 #include <gtest/gtest.h>
 #include <limits>
 #include <string_view>
 
-namespace lfs::vis::gui::pacman {
+namespace lfs::vis::gui::tessle {
     namespace {
         size_t count(std::string_view text, std::string_view needle) {
             size_t result = 0;
@@ -17,67 +17,67 @@ namespace lfs::vis::gui::pacman {
         }
     } // namespace
 
-    TEST(StatusBarPacman, PowerPelletActivatesBothChasesAndExpires) {
+    TEST(StatusBarTessle, PowerPelletActivatesBothChasesAndExpires) {
         for (const float step : {0.20f, 0.65f}) {
             const auto before = buildFrame(step - 0.001f, 360, 200);
             const auto powered = buildFrame(step, 360, 200);
             EXPECT_FALSE(before.powered);
             EXPECT_TRUE(powered.powered);
-            EXPECT_EQ(count(before.scenery_rml, "pacman-power-pellet"),
-                      count(powered.scenery_rml, "pacman-power-pellet") + 1);
+            EXPECT_EQ(count(before.scenery_rml, "tessle-power-pellet"),
+                      count(powered.scenery_rml, "tessle-power-pellet") + 1);
             EXPECT_NE(powered.sprite.find("power-open.png"), std::string::npos);
-            EXPECT_EQ(count(powered.scenery_rml, "/frightened.png"), 1);
+            EXPECT_EQ(count(powered.scenery_rml, "/powered-drone.png"), 1);
             EXPECT_FALSE(buildFrame(step + 0.231f, 360, 200).powered);
         }
     }
 
-    TEST(StatusBarPacman, EatenGhostRetreatsAsEyesThenDisappears) {
+    TEST(StatusBarTessle, CollectedDroneRetreatsAsCoreThenDisappears) {
         const auto before = buildFrame(0.349f, 360, 200);
         const auto eaten = buildFrame(0.351f, 360, 200);
         const auto after = buildFrame(0.389f, 360, 200);
-        EXPECT_EQ(count(before.scenery_rml, "pacman-ghost"), 1);
-        EXPECT_EQ(count(eaten.scenery_rml, "pacman-ghost"), 0);
-        EXPECT_EQ(count(eaten.scenery_rml, "pacman-eyes"), 1);
-        EXPECT_EQ(count(after.scenery_rml, "pacman-eyes"), 0);
+        EXPECT_EQ(count(before.scenery_rml, "tessle-drone"), 1);
+        EXPECT_EQ(count(eaten.scenery_rml, "tessle-drone"), 0);
+        EXPECT_EQ(count(eaten.scenery_rml, "tessle-core"), 1);
+        EXPECT_EQ(count(after.scenery_rml, "tessle-core"), 0);
     }
 
-    TEST(StatusBarPacman, SceneryDoesNotInventCheckpoints) {
+    TEST(StatusBarTessle, SceneryDoesNotInventCheckpoints) {
         for (float progress : {0.0f, 0.23f, 0.48f, 0.65f, 0.94f, 1.0f})
             EXPECT_EQ(count(buildFrame(progress, 360, 0).scenery_rml, "cherries"), 0);
     }
 
-    TEST(StatusBarPacman, SaveStepsBecomeFruitAtTheirActualPositions) {
-        const auto markers = buildProgressMarkersRml({690, 2040, 3000}, 3000, 660, {}, ProgressMarkerStyle::Pacman);
-        EXPECT_EQ(count(markers, "../icon/pacman/cherries.png"), 3);
+    TEST(StatusBarTessle, SaveStepsBecomeFruitAtTheirActualPositions) {
+        const auto markers = buildProgressMarkersRml({690, 2040, 3000}, 3000, 660, {}, ProgressMarkerStyle::Tessle);
+        EXPECT_EQ(count(markers, "../icon/tessle/cherries.png"), 3);
         EXPECT_NE(markers.find("left:23.000%"), std::string::npos);
         EXPECT_NE(markers.find("left:68.000%"), std::string::npos);
         EXPECT_NE(markers.find("left:99.500%"), std::string::npos);
         EXPECT_EQ(count(markers, "is-past"), 0);
-        EXPECT_TRUE(buildProgressMarkersRml({}, 3000, 660, {}, ProgressMarkerStyle::Pacman).empty());
+        EXPECT_TRUE(buildProgressMarkersRml({}, 3000, 660, {}, ProgressMarkerStyle::Tessle).empty());
     }
 
-    TEST(StatusBarPacman, CollectedFruitKeepsItsHoverTargetForEditing) {
-        const auto markers = buildProgressMarkersRml({690, 2040}, 3000, 1020, {.hover_step = 690}, ProgressMarkerStyle::Pacman);
+    TEST(StatusBarTessle, CollectedFruitKeepsItsHoverTargetForEditing) {
+        const auto markers = buildProgressMarkersRml({690, 2040}, 3000, 1020, {.hover_step = 690}, ProgressMarkerStyle::Tessle);
         EXPECT_EQ(count(markers, "is-past"), 1);
         EXPECT_NE(markers.find("progress-marker is-past is-hovered"), std::string::npos);
         EXPECT_EQ(count(markers, "cherries.png"), 2);
     }
 
-    TEST(StatusBarPacman, DraggingMovesTheFruitAndAddingKeepsExistingFruit) {
+    TEST(StatusBarTessle, DraggingMovesTheFruitAndAddingKeepsExistingFruit) {
         const ProgressMarkerRenderState moving{.dragging = true, .original_step = 2040, .preview_step = 2400};
-        const auto moved = buildProgressMarkersRml({690, 2040}, 3000, 660, moving, ProgressMarkerStyle::Pacman);
+        const auto moved = buildProgressMarkersRml({690, 2040}, 3000, 660, moving, ProgressMarkerStyle::Tessle);
         EXPECT_EQ(count(moved, "cherries.png"), 2);
         EXPECT_EQ(moved.find("left:68.000%"), std::string::npos);
         EXPECT_NE(moved.find("left:80.000%"), std::string::npos);
         EXPECT_NE(moved.find("is-hovered is-preview"), std::string::npos);
         auto adding = moving;
         adding.adding = true;
-        const auto added = buildProgressMarkersRml({690, 2040}, 3000, 660, adding, ProgressMarkerStyle::Pacman);
+        const auto added = buildProgressMarkersRml({690, 2040}, 3000, 660, adding, ProgressMarkerStyle::Tessle);
         EXPECT_EQ(count(added, "cherries.png"), 3);
         EXPECT_NE(added.find("left:68.000%"), std::string::npos);
     }
 
-    TEST(StatusBarPacman, OtherStylesKeepTheirCheckpointAppearance) {
+    TEST(StatusBarTessle, OtherStylesKeepTheirCheckpointAppearance) {
         const auto classic = buildProgressMarkersRml({690, 2040}, 3000, 1020, {}, ProgressMarkerStyle::Classic);
         EXPECT_EQ(count(classic, "<div"), 2);
         const auto miner = buildProgressMarkersRml({690, 2040}, 3000, 1020, {}, ProgressMarkerStyle::Miner);
@@ -86,16 +86,16 @@ namespace lfs::vis::gui::pacman {
         EXPECT_EQ(count(classic + miner, "cherries.png"), 0);
     }
 
-    TEST(StatusBarPacman, EncountersStaySparseAtEveryWidth) {
+    TEST(StatusBarTessle, EncountersStaySparseAtEveryWidth) {
         for (const float width : {140.0f, 220.0f, 360.0f}) {
             for (int step = 0; step <= 1000; ++step) {
                 const auto frame = buildFrame(step / 1000.0f, width, 200);
-                const auto ghosts = count(frame.scenery_rml, "pacman-ghost");
-                const auto cherries = count(frame.scenery_rml, "pacman-cherries");
-                EXPECT_LE(ghosts, 1);
+                const auto drones = count(frame.scenery_rml, "tessle-drone");
+                const auto cherries = count(frame.scenery_rml, "tessle-cherries");
+                EXPECT_LE(drones, 1);
                 EXPECT_EQ(cherries, 0);
-                EXPECT_LE(count(frame.scenery_rml, "pacman-power-pellet"), 1);
-                EXPECT_LE(ghosts + cherries, 1);
+                EXPECT_LE(count(frame.scenery_rml, "tessle-power-pellet"), 1);
+                EXPECT_LE(drones + cherries, 1);
             }
         }
         const auto complete = buildFrame(1.0f, 140, 0);
@@ -104,7 +104,7 @@ namespace lfs::vis::gui::pacman {
         EXPECT_FALSE(complete.powered);
     }
 
-    TEST(StatusBarPacman, InvalidGeometryAndProgressCannotEscapeTheTrack) {
+    TEST(StatusBarTessle, InvalidGeometryAndProgressCannotEscapeTheTrack) {
         for (const float width : {-10.0f, 0.0f, 14.0f, std::numeric_limits<float>::infinity()}) {
             const auto frame = buildFrame(1.0f, width, 0);
             EXPECT_FLOAT_EQ(frame.left_dp, 0.0f);
@@ -114,4 +114,4 @@ namespace lfs::vis::gui::pacman {
         EXPECT_FLOAT_EQ(buildFrame(2.0f, 360, 0).left_dp, 346.0f);
         EXPECT_FLOAT_EQ(buildFrame(std::numeric_limits<float>::quiet_NaN(), 360, 0).left_dp, 0.0f);
     }
-} // namespace lfs::vis::gui::pacman
+} // namespace lfs::vis::gui::tessle

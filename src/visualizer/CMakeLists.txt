@@ -97,7 +97,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/perf_sampler.cpp
         gui/rml_status_bar.cpp
         gui/status_bar_mining.cpp
-        gui/status_bar_pacman.cpp
+        gui/status_bar_tessle.cpp
         gui/status_bar_progress.cpp
         gui/gpu_memory_query.cpp
         gui/line_renderer.cpp

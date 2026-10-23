@@ -931,7 +931,7 @@ set(TEST_FILES
     test_menu_bar_title.cpp
     test_guide_segment_clipping.cpp
     test_status_bar_mining.cpp
-    test_status_bar_pacman.cpp
+    test_status_bar_tessle.cpp
     test_right_panel_tabs.cpp
     test_rotated_sh_correctness.cpp
     test_splat_raw_payload.cpp

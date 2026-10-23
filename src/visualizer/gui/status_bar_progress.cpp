@@ -33,9 +33,9 @@ namespace lfs::vis::gui {
                     classes,
                     past ? "gem-collected.png" : "gem.png",
                     left_pct);
-            } else if (style == ProgressMarkerStyle::Pacman) {
+            } else if (style == ProgressMarkerStyle::Tessle) {
                 markers += std::format(
-                    "<img class=\"{}\" src=\"../icon/pacman/cherries.png\" style=\"left:{:.3f}%;\"/>",
+                    "<img class=\"{}\" src=\"../icon/tessle/cherries.png\" style=\"left:{:.3f}%;\"/>",
                     classes, left_pct);
             } else {
                 markers += std::format(

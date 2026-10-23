@@ -551,30 +551,28 @@ body.fit-8 #mcp-compact { display: block; }
 body.fit-8 #mcp-chip { margin-right: 4dp; padding: 0 3dp; }
 body.fit-8 #fps-group { margin-left: 6dp; }
 
-/* Arcade track: the remaining pellets are eaten at the training frontier. */
-#progress-container.pacman {
-    background-color: #080c20;
-    border-radius: 5dp;
+/* Tessle clears data chips along the training track. */
+#progress-container.tessle {
+    background-color: #111c1d;
+    border-radius: 2dp;
     decorator: none;
-    border-top: 1dp #3855d6;
-    border-bottom: 1dp #3855d6;
+    border-bottom: 1dp #41665c;
     box-sizing: border-box;
 }
 
-#progress-container.pacman #progress-fill {
+#progress-container.tessle #progress-fill {
     visibility: hidden;
 }
 
-.pacman-pellet {
+.tessle-pellet {
     position: absolute;
-    top: 5dp;
-    width: 3dp;
-    height: 3dp;
-    border-radius: 2dp;
-    background-color: #ffdfaa;
+    top: 6dp;
+    width: 2dp;
+    height: 2dp;
+    background-color: #b6e6d6;
 }
 
-#pacman-figure {
+#tessle-figure {
     position: absolute;
     top: 0;
     width: 14dp;
@@ -583,21 +581,21 @@ body.fit-8 #fps-group { margin-left: 6dp; }
     z-index: 2;
 }
 
-#progress-text.progress-text--pacman {
+#progress-text.progress-text--tessle {
     width: auto;
     padding: 0 3dp;
     line-height: 14dp;
-    color: #fff3bd;
-    background-color: #080c20;
+    color: #e3f2ea;
+    background-color: #111c1d;
     text-align: left;
 }
 
 /* Checkpoints are collectible fruit beneath the character and percentage. */
-#progress-container.pacman #progress-markers {
+#progress-container.tessle #progress-markers {
     z-index: 0;
 }
 
-#progress-container.pacman .progress-marker {
+#progress-container.tessle .progress-marker {
     top: 0;
     bottom: auto;
     width: 14dp;
@@ -607,12 +605,12 @@ body.fit-8 #fps-group { margin-left: 6dp; }
     background-color: transparent;
 }
 
-#progress-container.pacman .progress-marker.is-past {
+#progress-container.tessle .progress-marker.is-past {
     opacity: 0;
 }
 
-#progress-container.pacman .progress-marker.is-hovered,
-#progress-container.pacman .progress-marker.is-preview {
+#progress-container.tessle .progress-marker.is-hovered,
+#progress-container.tessle .progress-marker.is-preview {
     top: -1dp;
     width: 16dp;
     height: 16dp;
@@ -621,7 +619,7 @@ body.fit-8 #fps-group { margin-left: 6dp; }
     background-color: transparent;
 }
 
-.pacman-item {
+.tessle-item {
     position: absolute;
     top: 0;
     width: 14dp;
@@ -629,11 +627,11 @@ body.fit-8 #fps-group { margin-left: 6dp; }
     pointer-events: none;
 }
 
-.pacman-power-pellet {
+.tessle-power-pellet {
     position: absolute;
     top: 3dp;
     width: 8dp;
     height: 8dp;
     border-radius: 4dp;
-    background-color: #fff3bd;
+    background-color: #e3f2ea;
 }

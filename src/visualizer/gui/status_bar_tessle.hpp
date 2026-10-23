@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <string>
 
-namespace lfs::vis::gui::pacman {
+namespace lfs::vis::gui::tessle {
 
     struct Frame {
         float left_dp = 0.0f;
@@ -19,4 +19,4 @@ namespace lfs::vis::gui::pacman {
     // Animation time is training elapsed time, so pausing freezes the entire scene.
     [[nodiscard]] LFS_VIS_API Frame buildFrame(float progress, float bar_dp, int64_t animation_ms);
 
-} // namespace lfs::vis::gui::pacman
+} // namespace lfs::vis::gui::tessle

@@ -18,8 +18,8 @@
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "gui/status_bar_mining.hpp"
-#include "gui/status_bar_pacman.hpp"
 #include "gui/status_bar_progress.hpp"
+#include "gui/status_bar_tessle.hpp"
 #include "gui/status_bar_training.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_context.hpp"
@@ -305,9 +305,9 @@ namespace lfs::vis::gui {
         ctor.Bind("mode_color", &model_.mode_color);
         ctor.Bind("show_training", &model_.show_training);
         ctor.Bind("progress_miner", &model_.progress_miner);
-        ctor.Bind("progress_pacman", &model_.progress_pacman);
-        ctor.Bind("pacman_left", &model_.pacman_left);
-        ctor.Bind("pacman_sprite", &model_.pacman_sprite);
+        ctor.Bind("progress_tessle", &model_.progress_tessle);
+        ctor.Bind("tessle_left", &model_.tessle_left);
+        ctor.Bind("tessle_sprite", &model_.tessle_sprite);
         ctor.Bind("miner_raised", &model_.miner_raised);
         ctor.Bind("miner_step_a", &model_.miner_step_a);
         ctor.Bind("miner_strike", &model_.miner_strike);
@@ -1237,7 +1237,7 @@ namespace lfs::vis::gui {
             progress_style_checked_at_ = now;
             const auto style = loadProgressBarStylePreference();
             setModelBool("progress_miner", model_.progress_miner, style == "miner");
-            setModelBool("progress_pacman", model_.progress_pacman, style == "pacman");
+            setModelBool("progress_tessle", model_.progress_tessle, style == "tessle");
         }
         // Keep the completed progress display consistent across all styles.
         const bool completed = tm &&
@@ -1302,15 +1302,15 @@ namespace lfs::vis::gui {
                 }
             }
             float text_left_dp = 0.0f;
-            if (model_.progress_pacman) {
-                const auto frame = pacman::buildFrame(progress, bar_dp, static_cast<int64_t>(elapsed * 1000.0f));
+            if (model_.progress_tessle) {
+                const auto frame = tessle::buildFrame(progress, bar_dp, static_cast<int64_t>(elapsed * 1000.0f));
                 // Prefer the cleared trail, leaving the pellets ahead unobstructed.
                 const float desired = frame.left_dp >= text_width_dp + 8.0f
                                           ? frame.left_dp - text_width_dp - 8.0f
                                           : frame.left_dp + 18.0f;
                 text_left_dp = std::clamp(desired, 0.0f, std::max(0.0f, bar_dp - text_width_dp - 6.0f));
-                setModelString("pacman_left", model_.pacman_left, std::format("{:.2f}dp", frame.left_dp));
-                setModelString("pacman_sprite", model_.pacman_sprite, frame.sprite);
+                setModelString("tessle_left", model_.tessle_left, std::format("{:.2f}dp", frame.left_dp));
+                setModelString("tessle_sprite", model_.tessle_sprite, frame.sprite);
                 setProgressWallRml(frame.scenery_rml);
                 setProgressDebrisRml("");
                 mining_scene_ = {};
@@ -1331,7 +1331,7 @@ namespace lfs::vis::gui {
                 .preview_step = save_step_interaction_.preview_step,
                 .hover_step = save_step_interaction_.hover_step,
             };
-            const auto marker_style = model_.progress_pacman  ? ProgressMarkerStyle::Pacman
+            const auto marker_style = model_.progress_tessle  ? ProgressMarkerStyle::Tessle
                                       : model_.progress_miner ? ProgressMarkerStyle::Miner
                                                               : ProgressMarkerStyle::Classic;
             setProgressMarkersRml(buildProgressMarkersRml(tm->getSaveSteps(), total, cur, marker_state, marker_style));
@@ -1550,7 +1550,7 @@ namespace lfs::vis::gui {
             (model_.show_gpu_model ? uint32_t{1} << 7 : 0);
 
         // Freeze themed progress animations while training is paused.
-        const bool progress_animation_visible = (model_.progress_miner || model_.progress_pacman) && show_training &&
+        const bool progress_animation_visible = (model_.progress_miner || model_.progress_tessle) && show_training &&
                                                 training_state == TrainingState::Running;
         model_animation_active_ = wasd_visible || zoom_visible || status_msg.visible ||
                                   progress_animation_visible;
