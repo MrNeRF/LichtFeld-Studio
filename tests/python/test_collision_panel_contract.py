@@ -32,7 +32,10 @@ def test_collapsible_headers_match_their_initial_visible_state():
         assert ("is-expanded" in header.attrib.get("class", "").split()) == expanded
 
 
-def test_progress_and_errors_stay_visible_when_settings_are_collapsed():
+def test_generation_controls_and_progress_are_outside_optional_settings():
     document = ET.parse(GUI / "rmlui/resources/collision.rml").getroot()
-    setup = next(element for element in document.iter() if element.attrib.get("id") == "setup")
-    assert not {element.attrib.get("id") for element in setup.iter()} & {"job-progress", "collision-error"}
+    advanced = next(element for element in document.iter() if element.attrib.get("id") == "advanced")
+    assert not {element.attrib.get("id") for element in advanced.iter()} & {
+        "job-progress", "collision-error", "voxel-size", "detail", "opacity", "filter-mode", "generate", "cancel"
+    }
+    assert sum(element.attrib.get("id") == "voxel-size" for element in document.iter()) == 1
