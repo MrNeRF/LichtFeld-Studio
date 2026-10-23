@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Prepare private FastGS rasterization and math sources for HIP wave32.
+"""Prepare private FastGS rasterization and math sources for HIP.
 
 Original CUDA files are preserved. This isolated fixed-topology rasterizer
 does not register the main application's Tensor backend or training strategies.
@@ -101,13 +101,15 @@ struct LfsHipFastTiming {
 
 WAVE = r'''#pragma once
 #include <hip/hip_runtime.h>
+#include "logical_subgroup32.hpp"
 #include <type_traits>
 #ifdef LFS_HIP_FAST_WAVE_REDUCE
 extern "C" __device__ __attribute__((const)) float __ockl_wfred_add_f32(float);
 #endif
-// Only full-mask collectives are routed here. The caller must admit wave32;
-// divergent/member masks retain HIP's synchronization semantics unchanged.
+// Full logical-tile collectives preserve the original wave32 implementation.
+// On wave64, membership and ballots are local to each 32-lane half.
 template<class T> __device__ inline T lfs_fast_wave_shuffle(T value, int lane, int width = 32) {
+    if (warpSize == 64) return lfs::hip::logical32::shuffle(0xffffffffull, value, lane, width);
 #ifdef LFS_HIP_FAST_NATIVE_WAVE
     return __shfl(value, lane, width);
 #else
@@ -115,6 +117,7 @@ template<class T> __device__ inline T lfs_fast_wave_shuffle(T value, int lane, i
 #endif
 }
 template<class T> __device__ inline T lfs_fast_wave_shuffle_up(T value, unsigned lane, int width = 32) {
+    if (warpSize == 64) return lfs::hip::logical32::shuffle_up(0xffffffffull, value, lane, width);
 #ifdef LFS_HIP_FAST_NATIVE_WAVE
     return __shfl_up(value, lane, width);
 #else
@@ -122,6 +125,7 @@ template<class T> __device__ inline T lfs_fast_wave_shuffle_up(T value, unsigned
 #endif
 }
 template<class T> __device__ inline T lfs_fast_wave_shuffle_xor(T value, int lane, int width = 32) {
+    if (warpSize == 64) return lfs::hip::logical32::shuffle_xor(0xffffffffull, value, lane, width);
 #ifdef LFS_HIP_FAST_NATIVE_WAVE
     return __shfl_xor(value, lane, width);
 #else
@@ -129,6 +133,7 @@ template<class T> __device__ inline T lfs_fast_wave_shuffle_xor(T value, int lan
 #endif
 }
 __device__ inline unsigned long long lfs_fast_wave_ballot(int predicate) {
+    if (warpSize == 64) return lfs::hip::logical32::ballot(0xffffffffull, predicate);
 #ifdef LFS_HIP_FAST_NATIVE_WAVE
     return __ballot(predicate);
 #else
@@ -593,7 +598,7 @@ hipError_t lfs_fast_full_sort_pairs(void* temporary, size_t& bytes,
             text = text.replace(anchor, anchor + '''
 #ifdef LFS_HIP_FAST_WAVE_REDUCE
             if constexpr (std::is_same_v<T, float>)
-                return __ockl_wfred_add_f32(val);
+                if (warpSize == 32) return __ockl_wfred_add_f32(val);
 #endif
 ''')
         if relative.endswith("kernels_backward.cuh"):
@@ -629,8 +634,8 @@ hipError_t lfs_fast_full_sort_pairs(void* temporary, size_t& bytes,
             text = compact_sort_forward(text)
         guard = """
 #if defined(__HIP_DEVICE_COMPILE__)
-#if defined(__AMDGCN_WAVEFRONT_SIZE__) && __AMDGCN_WAVEFRONT_SIZE__ != 32
-#error "The private FastGS HIP port currently requires wave32"
+#if defined(__AMDGCN_WAVEFRONT_SIZE__) && __AMDGCN_WAVEFRONT_SIZE__ != 32 && __AMDGCN_WAVEFRONT_SIZE__ != 64
+#error "HIP FastGS requires a physical wave32 or wave64"
 #endif
 #endif
 """
@@ -641,6 +646,10 @@ hipError_t lfs_fast_full_sort_pairs(void* temporary, size_t& bytes,
     target = output / "hip_fast_diagnostics.hpp"
     if not target.exists() or target.read_text(encoding="utf-8") != DIAGNOSTICS:
         target.write_text(DIAGNOSTICS, encoding="utf-8")
+    subgroup = (Path(__file__).parent / "logical_subgroup32.hpp").read_text(encoding="utf-8")
+    target = output / "logical_subgroup32.hpp"
+    if not target.exists() or target.read_text(encoding="utf-8") != subgroup:
+        target.write_text(subgroup, encoding="utf-8")
     target = output / "hip_fast_wave.hpp"
     if not target.exists() or target.read_text(encoding="utf-8") != WAVE:
         target.write_text(WAVE, encoding="utf-8")

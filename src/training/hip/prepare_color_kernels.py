@@ -15,6 +15,8 @@ def write(name,text):
     path.parent.mkdir(parents=True,exist_ok=True)
     if not path.exists() or path.read_text(encoding='utf-8')!=text:path.write_text(text,encoding='utf-8')
 
+write("logical_subgroup32.hpp", (Path(__file__).parent / "logical_subgroup32.hpp").read_text(encoding="utf-8"))
+
 def padded_affine_backward(text):
     """Emit both HIP LDS layouts; the selected device controls host dispatch.
 
@@ -84,6 +86,12 @@ for name in FILES:
     text=re.sub(r'\bcuda(\w+)',r'hip\1',text)
     text=text.replace('__CUDA_ARCH__','__HIP_DEVICE_COMPILE__').replace('__CUDACC__','__HIPCC__')
     text=re.sub(r'\b0xffffffff[uU]?\b','0x00000000ffffffffull',text)
+    if name == 'warp_reduce.cuh':
+        text = text.replace('#pragma once', '#pragma once\n#include "logical_subgroup32.hpp"', 1)
+        for intrinsic, helper in (("__shfl_sync", "shuffle"), ("__shfl_xor_sync", "shuffle_xor"),
+                                  ("__shfl_up_sync", "shuffle_up"), ("__shfl_down_sync", "shuffle_down"),
+                                  ("__ballot_sync", "ballot"), ("__syncwarp", "sync")):
+            text = text.replace(intrinsic + "(", "lfs::hip::logical32::" + helper + "(")
     if name=='ppisp_math.cuh':
         # HIP already defines the vector arithmetic. Keep matrix overloads.
         removed=[0]

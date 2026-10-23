@@ -32,7 +32,7 @@ namespace {
 int main(int argc,char** argv) try {
     using namespace lfs;
     using namespace core;
-    if(argc<7) throw std::invalid_argument("Arguments: dataset output steps max_width max_gaussians SH_degree_plus_one [resume_project] [--exercise-mutations] [--exercise-lifecycle] [--require-frozen] [--stop-after=N] [--strategy=mcmc|mrnf|igs+] [--appearance] [--profile] [--float-targets]");
+    if(argc<7) throw std::invalid_argument("Arguments: dataset output steps max_width max_gaussians SH_degree_plus_one [resume_project] [--exercise-mutations] [--exercise-lifecycle] [--require-frozen] [--stop-after=N] [--strategy=mcmc|mrnf|igs+] [--appearance] [--profile] [--float-targets] [--rasterizer=3dgs|3dgut]");
     bool exercise_mutations=false;
     bool exercise_lifecycle=false;
     bool require_frozen=false;
@@ -41,6 +41,7 @@ int main(int argc,char** argv) try {
     bool profile=false;
     bool float_targets=false;
     bool verify_preview=false;
+    bool gut=false;
     std::string strategy(param::kStrategyMCMC);
     std::optional<std::filesystem::path> resume;
     for(int i=7;i<argc;++i) {
@@ -52,6 +53,9 @@ int main(int argc,char** argv) try {
         else if(std::string_view(argv[i])=="--profile")profile=true;
         else if(std::string_view(argv[i])=="--float-targets")float_targets=true;
         else if(std::string_view(argv[i])=="--verify-preview")verify_preview=true;
+        else if(std::string_view(argv[i])=="--rasterizer=3dgut")gut=true;
+        else if(std::string_view(argv[i])=="--rasterizer=3dgs")gut=false;
+        else if(std::string_view(argv[i]).starts_with("--rasterizer="))throw std::invalid_argument("Unknown test rasterizer");
         else if(std::string_view(argv[i]).starts_with("--strategy=")) {
             const auto requested=std::string_view(argv[i]).substr(11);
             if(!param::is_valid_strategy_name(requested))throw std::invalid_argument("Unknown test strategy");
@@ -83,6 +87,7 @@ int main(int argc,char** argv) try {
     params.optimization.sh_degree=int(positive(argv[6]))-1;
     if(params.optimization.sh_degree>3)throw std::invalid_argument("SH degree must be 0 through 3");
     params.optimization.strategy=strategy;
+    params.optimization.gut=gut;
     params.optimization.use_bilateral_grid=appearance;
     params.optimization.use_ppisp=appearance;
     params.optimization.undistort=true;
@@ -150,6 +155,9 @@ int main(int argc,char** argv) try {
         training::grant_headless_project_saves(*owner,params);
     }
     auto& trainer=*owner;
+    if(trainer.getParams().optimization.gut!=gut)
+        throw std::runtime_error("Real trainer rasterizer differs from requested test path");
+    std::printf("APPLICATION HIP: verified rasterizer %s\n",gut?"3DGUT":"FastGS");
     auto& model=trainer.get_strategy_mutable().get_model();
     if(exercise_lifecycle) {
         if(model.size()<32)throw std::runtime_error("Lifecycle fixture requires at least 32 initial Gaussians");

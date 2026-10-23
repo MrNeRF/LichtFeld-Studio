@@ -8,8 +8,8 @@ function(lfs_hip_color_objects include_output objects_output)
     set(_names bilateral_grid.cuh bilateral_grid_forward.cu bilateral_grid_backward.cu bilateral_grid_tv.cu
         memory_ops.cuh warp_reduce.cuh ppisp_math.cuh ppisp_math_bwd.cuh ppisp.cuh ppisp.cu
         depth_loss.hpp depth_loss.cu normal_loss.hpp normal_loss.cu normal_consistency_loss.hpp normal_consistency_loss.cu)
-    set(_inputs)
-    set(_outputs)
+    set(_inputs "${_root}/src/training/hip/logical_subgroup32.hpp")
+    set(_outputs "${_generated}/logical_subgroup32.hpp")
     foreach(_name IN LISTS _names)
         list(APPEND _inputs "${_root}/src/training/kernels/${_name}")
         list(APPEND _outputs "${_generated}/${_name}")
@@ -35,10 +35,10 @@ function(lfs_hip_color_objects include_output objects_output)
         set(_object "${_generated}/${_unit}.${_extension}")
         add_custom_command(OUTPUT "${_object}"
             COMMAND "${_compiler}" -x hip -std=c++20 -O3 -DNDEBUG ${_platform_flags}
-                ${LFS_HIP_OFFLOAD_FLAGS} ${LFS_HIP_COMPRESSION_FLAGS} "--hip-path=${LFS_HIP_ROOT}"
+                ${LFS_HIP_OFFLOAD_FLAGS} ${LFS_HIP_COMPRESSION_FLAGS} ${LFS_HIP_TEST_WAVE_FLAGS} "--hip-path=${LFS_HIP_ROOT}"
                 "-I${_generated}" "-I${_raster_include}" "-I${LFS_HIP_GLM_INCLUDE_DIR}"
                 -c "${_generated}/${_unit}.cu" -o "${_object}"
-            DEPENDS ${_outputs} lfs_hip_raster_kernels "${_compiler}" VERBATIM)
+            DEPENDS ${LFS_HIP_TEST_RUNTIME_DEPENDS} ${_outputs} lfs_hip_raster_kernels "${_compiler}" VERBATIM)
         list(APPEND _objects "${_object}")
     endforeach()
     add_custom_target(lfs_hip_color_kernels DEPENDS "${_generated}/prepared.stamp" ${_objects})

@@ -22,7 +22,7 @@ Use separate build directories for different target/profile configurations.
 
 ## Portable builds
 
-`LFS_HIP_PORTABLE=ON` includes the declared wave32 targets in the generic runtime
+`LFS_HIP_PORTABLE=ON` includes the declared wave32 and wave64 targets in the generic runtime
 and training modules. `LFS_HIP_ARCHITECTURES` can explicitly restrict the target
 list, for example `-DLFS_HIP_ARCHITECTURES="gfx1103;gfx1150"`. An explicit list
 takes precedence over the portable default. Unsupported targets fail configure.
@@ -71,11 +71,34 @@ its global-atomic fallback and shared-histogram partial-tile cases.
 
 ## Support boundaries
 
-The trainer currently requires wave32. Portable builds cover RDNA target IDs
-declared in `cmake/HipArchitectures.cmake`; GCN/CDNA wave64 targets are rejected.
+The trainer accepts physical wave32 and wave64 while preserving logical 32-lane
+tiles in the rasterizers. Portable builds cover the RDNA and GCN/CDNA target IDs
+declared in `cmake/HipArchitectures.cmake`. FastGS and 3DGUT both use the native
+HIP training adapter, including checkpoint and resume.
 Compiling a target is not a claim of runtime or numerical validation on that
 hardware. GPU/driver availability remains subject to the selected SDK and OS.
 The tested device profile is `gfx1150`; other targets use conservative kernels.
+Wave64 target admission is a portability path, not a claim of validation on every
+GCN/CDNA board. Physical wave64 kernel tests on RDNA exercise subgroup semantics;
+they do not replace tests on native wave64 hardware.
+
+For SDK-only development, `cmake/hip-native` accepts
+`LFS_HIP_TEST_WAVE_SIZE=32` or `64`. This option is absent from normal application
+builds. A forced wave64 test on RDNA requires `LFS_HIP_VALIDATED_TUNING=OFF`
+and `LFS_HIP_ARCH_PROFILES=OFF`. It uses conservative rocPRIM device primitives
+and a private copy of rocPRIM headers to align host dispatch with the forced
+physical wave. The installed SDK is never modified. The adaptation checks its
+source anchor and rejects an unreviewed SDK layout. No test override or adapted
+header is needed for normal GCN/CDNA compilation.
+
+`tests/hip/logical_subgroup_contract.hip` takes the expected physical wave size
+as its sole argument. Run the matching binary for each wave size; it checks
+independent 32-lane halves, masks, ballots, shuffles, divergence, cooperative
+tiles, partial blocks and multidimensional thread layouts. Application tests
+must additionally cover FastGS and 3DGUT gradients, sorting, indexing, image
+preparation, real training and checkpoint resume. The trainer fixture accepts
+`--rasterizer=3dgs` or `--rasterizer=3dgut`; short mutation checks are correctness
+tests and must not be presented as performance benchmarks.
 
 The profile's native FP32 atomics are restricted to session-owned backward
 helper gradients allocated by `FastFrame`. Model storage ownership does not

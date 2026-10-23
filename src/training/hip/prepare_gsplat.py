@@ -20,6 +20,7 @@ def write_if_changed(path: Path, text: str, *, encoding: str = "utf-8") -> None:
 
 def prepare(source: Path, output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
+    write_if_changed(output / "logical_subgroup32.hpp", (Path(__file__).parent / "logical_subgroup32.hpp").read_text(encoding="utf-8"))
     names = ["Cameras.h", "Cameras.cuh", "FromWorldRay.cuh", "Rasterization.h",
              "TileBatch.h", "Utils.cuh", "RasterizeToPixelsFromWorld3DGSFwd.cu",
              "RasterizeToPixelsFromWorld3DGSBwd.cu", "Projection.h", "Intersect.h",
@@ -32,7 +33,7 @@ def prepare(source: Path, output: Path) -> None:
     write_if_changed(output / "Common.h",
         common[:common.index("#pragma once")] + "#pragma once\n"
         '#include <hip/hip_runtime.h>\n#include <glm/gtc/type_ptr.hpp>\n'
-        + enums + "namespace gsplat_lfs {\n" + types, encoding="utf-8")
+        + '#include "logical_subgroup32.hpp"\n' + enums + "namespace gsplat_lfs {\n" + types, encoding="utf-8")
     names += ["PopScores.h", "PopScores.cu"]
     for name in names:
         text = (source / name).read_text(encoding="utf-8")
@@ -46,9 +47,12 @@ def prepare(source: Path, output: Path) -> None:
         text = text.replace("#include <cooperative_groups.h>", "#include <hip/hip_cooperative_groups.h>")
         text = text.replace("#include <cooperative_groups/reduce.h>", "#include <hip/hip_cooperative_groups.h>")
         text = re.sub(r"\bcuda(\w+)", r"hip\1", text)
-        # This experiment is explicitly wave32-only. HIP sync intrinsics
-        # require a 64-bit mask even when the active hardware wave has 32 lanes.
+        # Preserve CUDA's logical 32-lane tiles on either HIP wave size.
         text = text.replace("0xffffffffu", "0x00000000ffffffffull")
+        for intrinsic, helper in (("__shfl_sync", "shuffle"), ("__shfl_xor_sync", "shuffle_xor"),
+                                  ("__shfl_up_sync", "shuffle_up"), ("__shfl_down_sync", "shuffle_down"),
+                                  ("__ballot_sync", "ballot"), ("__syncwarp", "sync")):
+            text = text.replace(intrinsic + "(", "lfs::hip::logical32::" + helper + "(")
         text = text.replace("cg::reduce(", "lfs_hip_reduce(")
         text = re.sub(r"^#pragma nv_diag_.*$", "", text, flags=re.MULTILINE)
         if name == "RasterizeToPixelsFromWorld3DGSBwd.cu":

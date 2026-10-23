@@ -16,13 +16,13 @@ function(lfs_hip_raster_objects include_output objects_output)
         list(APPEND _names PopScores.h PopScores.cu)
         set(_inputs ${_names})
         list(TRANSFORM _inputs PREPEND "${_source}/")
-        set(_outputs ${_names} hip_check.hpp)
+        set(_outputs ${_names} hip_check.hpp logical_subgroup32.hpp)
         list(TRANSFORM _outputs PREPEND "${_generated}/")
         add_custom_command(OUTPUT "${_generated}/prepared.stamp"
             BYPRODUCTS ${_outputs}
             COMMAND "${Python3_EXECUTABLE}" "${_generator}" --source "${_source}" --output "${_generated}"
             COMMAND "${CMAKE_COMMAND}" -E touch "${_generated}/prepared.stamp"
-            DEPENDS "${_generator}" ${_inputs} VERBATIM)
+            DEPENDS "${_generator}" "${_root}/src/training/hip/logical_subgroup32.hpp" ${_inputs} VERBATIM)
         file(MAKE_DIRECTORY "${_generated}")
         file(GENERATE OUTPUT "${_generated}/raster.hip" CONTENT
             "#include \"RasterizeToPixelsFromWorld3DGSFwd.cu\"\n#include \"RasterizeToPixelsFromWorld3DGSBwd.cu\"\n")
@@ -63,10 +63,10 @@ function(lfs_hip_raster_objects include_output objects_output)
             list(TRANSFORM _unit_inputs PREPEND "${_generated}/")
             add_custom_command(OUTPUT "${_object}"
                 COMMAND "${_compiler}" -x hip -std=c++20 -O3 ${_platform_flags}
-                    ${LFS_HIP_OFFLOAD_FLAGS} ${LFS_HIP_COMPRESSION_FLAGS} "--hip-path=${LFS_HIP_ROOT}"
+                    ${LFS_HIP_OFFLOAD_FLAGS} ${LFS_HIP_COMPRESSION_FLAGS} ${LFS_HIP_TEST_WAVE_FLAGS} "--hip-path=${LFS_HIP_ROOT}"
                     "-I${_generated}" "-I${LFS_HIP_GLM_INCLUDE_DIR}"
                     -c "${_generated}/${_unit}.hip" -o "${_object}"
-                DEPENDS ${_unit_inputs} ${_headers} "${_generated}/${_unit}.hip" "${_compiler}"
+                DEPENDS ${LFS_HIP_TEST_RUNTIME_DEPENDS} ${_unit_inputs} ${_headers} "${_generated}/${_unit}.hip" "${_compiler}"
                     "${LFS_HIP_ROOT}/include/hip/hip_runtime.h" VERBATIM)
             list(APPEND _objects "${_object}")
         endforeach()

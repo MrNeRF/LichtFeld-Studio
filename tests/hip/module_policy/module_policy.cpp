@@ -29,7 +29,8 @@ int main(int argc,char** argv)try {
         require(hip_profile_module(generic,bad)==generic,"Invalid architecture became a path");
     require(lfs_hip_has_architecture("gfx1103,gfx1150","gfx1150:xnack-"),"Fat target list rejected supported ISA");
     require(!lfs_hip_has_architecture("gfx1103,gfx1150","gfx110"),"Target prefix incorrectly matched");
-    require(!lfs_hip_has_architecture("gfx1103,gfx1150","gfx942"),"Wave64 target incorrectly admitted");
+    require(!lfs_hip_has_architecture("gfx1103,gfx1150","gfx942"),"Undeclared target incorrectly admitted");
+    require(lfs_hip_has_architecture("gfx90a,gfx942,gfx1150","gfx942:xnack-"),"Declared wave64 target rejected");
     require(hip_executable_directory().is_absolute(),"Cannot locate executable for relocation");
     using lfs::training::hip::photo_plane_backward_enabled;
     require(photo_plane_backward_enabled(2,false,1,3,1440,1920,"gfx1150",false),"Measured float profile was not admitted");

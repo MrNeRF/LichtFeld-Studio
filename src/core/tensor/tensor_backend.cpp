@@ -104,8 +104,8 @@ namespace lfs::core {
                 const auto architecture=std::string_view(device.architecture).substr(0,device.architecture.find(':'));
                 if(architecture!=identity.compiled_architecture)
                     device.tensor_unavailable_reason="HIP runtime was compiled for "+std::string(identity.compiled_architecture)+", device architecture is "+device.architecture;
-                else if(info.warp_size!=32)
-                    device.tensor_unavailable_reason="This HIP training build requires wave32";
+                else if(info.warp_size!=32 && info.warp_size!=64)
+                    device.tensor_unavailable_reason="This HIP training build requires wave32 or wave64";
                 device.rendering_unavailable_reason="HIP is a tensor backend; use Vulkan for rendering";
                 result.push_back(std::move(device));
             }

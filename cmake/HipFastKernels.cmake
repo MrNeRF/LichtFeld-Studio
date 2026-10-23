@@ -22,6 +22,9 @@ function(lfs_hip_fast_objects include_output objects_output)
         set(LFS_HIP_VALIDATED_TUNING OFF)
         set(LFS_HIP_VALIDATED_TUNING OFF PARENT_SCOPE)
     endif()
+    if(LFS_HIP_TEST_WAVE_SIZE STREQUAL "64" AND LFS_HIP_VALIDATED_TUNING)
+        message(FATAL_ERROR "Forced wave64 tests require LFS_HIP_VALIDATED_TUNING=OFF; wave32 profile options are not wave64 validation")
+    endif()
     if(LFS_HIP_VALIDATED_TUNING AND NOT LFS_HIP_EFFECTIVE_ARCHITECTURES STREQUAL "gfx1150")
         message(FATAL_ERROR "The validated HIP tuning profile currently targets gfx1150; use LFS_HIP_VALIDATED_TUNING=OFF for other architectures")
     endif()
@@ -98,7 +101,7 @@ function(lfs_hip_fast_objects include_output objects_output)
         get_filename_component(_root "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/.." ABSOLUTE)
         set(_generator "${_root}/src/training/hip/prepare_fast.py")
         set(_generated "${CMAKE_CURRENT_BINARY_DIR}/hip-fast-generated${_suffix}")
-        set(_inputs src/training/kernels/warp_reduce.cuh src/training/kernels/effective_rank.cuh
+        set(_inputs src/training/hip/logical_subgroup32.hpp src/training/kernels/warp_reduce.cuh src/training/kernels/effective_rank.cuh
             src/training/kernels/joint_adam_codec.cuh src/training/include/lfs/training/mean_step_scale.cuh
             src/training/include/lfs/training/screen_share.cuh src/core/include/core/sh_value_codec.cuh
             src/training/include/lfs/training/ops/domain_types.hpp)
@@ -199,9 +202,9 @@ function(lfs_hip_fast_objects include_output objects_output)
             set(_object "${_generated}/${_unit}.${_extension}")
             add_custom_command(OUTPUT "${_object}"
                 COMMAND "${_compiler}" -x hip -std=c++20 -O3 -DNDEBUG ${_platform_flags} ${_wave_flags}
-                    ${LFS_HIP_OFFLOAD_FLAGS} ${LFS_HIP_COMPRESSION_FLAGS} "--hip-path=${LFS_HIP_ROOT}"
+                    ${LFS_HIP_OFFLOAD_FLAGS} ${LFS_HIP_COMPRESSION_FLAGS} ${LFS_HIP_TEST_WAVE_FLAGS} "--hip-path=${LFS_HIP_ROOT}"
                     "-I${_generated}" -c "${_generated}/${_unit}.cu" -o "${_object}"
-                DEPENDS ${_outputs} "${_compiler}" VERBATIM)
+                DEPENDS ${LFS_HIP_TEST_RUNTIME_DEPENDS} ${_outputs} "${_compiler}" VERBATIM)
             list(APPEND _objects "${_object}")
         endforeach()
         add_custom_target(${_target} DEPENDS "${_generated}/prepared.stamp" ${_objects})

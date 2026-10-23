@@ -1128,7 +1128,7 @@ static int create_session(const LfsHipTrainConfig* config, const LfsHipTrainMode
         DeviceScope selected(config->device_ordinal);
         hipDeviceProp_t properties{};
         hip_check(hipGetDeviceProperties(&properties, config->device_ordinal), "HIP training properties");
-        require(properties.warpSize == 32, "HIP training currently requires wave32 hardware");
+        require(properties.warpSize == 32 || properties.warpSize == 64, "HIP training requires wave32 or wave64 hardware");
         const std::string_view architecture(properties.gcnArchName);
         require(lfs_hip_has_architecture(LFS_HIP_COMPILED_ARCH, architecture),
                 "HIP training module was compiled for a different GPU architecture");
