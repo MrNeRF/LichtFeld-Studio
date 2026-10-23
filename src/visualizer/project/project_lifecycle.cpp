@@ -10950,6 +10950,8 @@ namespace lfs::vis::project {
                     try {
                         check->status = probe(location);
                     } catch (...) {
+                        // LFS-CENSUS-OK(empty-catch): a detached worker must not throw; the typed
+                        // failure is logged by settleScratchLocationCheck.
                         check->status = lfs::Status::failure(lifecycleError(
                             lfs::ErrorCode::Unavailable,
                             "The project location could not be checked.",

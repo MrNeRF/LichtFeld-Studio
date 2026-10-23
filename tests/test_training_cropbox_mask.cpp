@@ -141,7 +141,7 @@ namespace {
         params.cropbox = box;
         params.cropbox_rotation = rotation;
         const auto applied = lfs::training::applyTrainingCropBox(params, scene);
-        EXPECT_TRUE(applied.has_value()) << (applied ? "" : applied.error());
+        EXPECT_TRUE(applied) << (applied ? std::string_view{} : applied.error().user_message());
         return model_ptr;
     }
 

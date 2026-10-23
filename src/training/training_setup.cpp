@@ -1328,7 +1328,7 @@ namespace lfs::training {
         return {};
     }
 
-    std::expected<void, std::string> applyTrainingCropBox(
+    lfs::Status applyTrainingCropBox(
         const lfs::core::param::TrainingParameters& params,
         lfs::core::Scene& scene) {
         if (!params.cropbox) {
@@ -1336,14 +1336,24 @@ namespace lfs::training {
         }
         const auto* model = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
         if (!model) {
-            return std::unexpected("--cropbox needs the training model in the scene");
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = "--cropbox needs the training model in the scene",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
         }
         lfs::core::NodeId cropbox_id = scene.getCropBoxForSplat(model->id);
         if (cropbox_id == lfs::core::NULL_NODE) {
             cropbox_id = scene.addCropBox("Model_cropbox", model->id);
         }
         if (cropbox_id == lfs::core::NULL_NODE) {
-            return std::unexpected("Failed to add the --cropbox region of interest to the training model");
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Internal,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = "Failed to add the --cropbox region of interest to the training model",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
         }
         const auto& box = *params.cropbox;
         lfs::core::CropBoxData data = scene.getCropBoxData(cropbox_id) ? *scene.getCropBoxData(cropbox_id)
@@ -1384,7 +1394,10 @@ namespace lfs::training {
         if (auto installed = installTrainingModel(scene, std::move(**prepared)); !installed) {
             return installed;
         }
-        return applyTrainingCropBox(params, scene);
+        if (auto applied = applyTrainingCropBox(params, scene); !applied) {
+            return std::unexpected(std::string(applied.error().user_message()));
+        }
+        return {};
     }
 
     std::expected<void, std::string> validateDatasetPath(

@@ -159,7 +159,7 @@ namespace lfs::training {
 
     /// Give the training model the enabled --cropbox crop box, turned by --cropbox-rotation about its centre.
     /// Does nothing without --cropbox.
-    [[nodiscard]] std::expected<void, std::string> applyTrainingCropBox(
+    [[nodiscard]] lfs::Status applyTrainingCropBox(
         const lfs::core::param::TrainingParameters& params,
         lfs::core::Scene& scene);
 
