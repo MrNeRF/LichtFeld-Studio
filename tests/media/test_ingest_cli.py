@@ -390,11 +390,15 @@ class IngestCLI(unittest.TestCase):
             xmp = self._xmp_limited(path, inflated_bytes=budget)["image_xmp"]
             self.assertEqual(xmp["status"], "limited" if budget == 8191 else "collected", xmp)
             self.assertEqual(bytes.fromhex(xmp["blocks"][0]["bytes"]), b"first")
-            self.assertEqual(len(xmp["blocks"]), 1 if budget == 8191 else 3)
+            self.assertEqual([bytes.fromhex(b["bytes"]) for b in xmp["blocks"]],
+                             [b"first"] if budget == 8191 else [b"first", b"x" * 8192, b"later"])
+            self.assertTrue(all(b["bytes"] == b["payload_bytes"] for b in xmp["blocks"]))
         self._xmp_jxl(path, [(b"xml ", b"one"), (b"xml ", b"two")])
         for budget in (5, 6):
             xmp = self._xmp_limited(path, total_bytes=budget)["image_xmp"]
-            self.assertEqual(len(xmp["blocks"]), 1 if budget == 5 else 2)
+            self.assertEqual(xmp["status"], "limited" if budget == 5 else "collected", xmp)
+            self.assertEqual([bytes.fromhex(b["bytes"]) for b in xmp["blocks"]],
+                             [b"one"] if budget == 5 else [b"one", b"two"])
         xmp = self._xmp_limited(path, blocks=1)["image_xmp"]
         self.assertEqual(xmp["status"], "limited")
         self.assertEqual(len(xmp["blocks"]), 1)
@@ -421,7 +425,9 @@ class IngestCLI(unittest.TestCase):
             result, _ = self.invoke("source-metadata", path)
             self.assertEqual(result["metadata"]["image_xmp"]["status"], "collected", result)
             self.assertEqual(bytes.fromhex(result["metadata"]["image_xmp"]["blocks"][0]["bytes"]), packet)
-        for box in (struct.pack(">I4sQ", 1, b"xml ", 15), struct.pack(">I4s", 7, b"xml ")):
+        for box in (struct.pack(">I4sQ", 1, b"xml ", 15), struct.pack(">I4s", 7, b"xml "),
+                    struct.pack(">I4sQ", 1, b"xml ", (1 << 64) - 1),
+                    struct.pack(">I4sQ", 1, b"xml ", (1 << 64) - len(original))):
             path.write_bytes(original + box)
             result, _ = self.invoke("source-metadata", path)
             self.assertEqual(result["metadata"]["image_xmp"]["status"], "malformed")
@@ -448,6 +454,57 @@ class IngestCLI(unittest.TestCase):
         self.assertEqual(self._xmp_limited(path, blocks=1)["image_xmp"]["status"], "collected")
         self._xmp_jxl(path, [(b"brob", b"xml " + bytes.fromhex("8b03803c786d702f3e00ff03"))])
         self.assertEqual(self._xmp_limited(path, inflated_bytes=0)["image_xmp"]["status"], "limited")
+
+    def test_source_metadata_xmp_jxl_external_entities_stay_opaque(self):
+        marker = self.root / "entity-marker.txt"
+        marker.write_bytes(b"external entity must stay unread")
+        packet = ('<!DOCTYPE x [<!ENTITY e SYSTEM "' + marker.as_uri() + '">]><x>&e;</x>').encode()
+        path = self.root / "opaque-entity.jxl"
+        self._xmp_jxl(path, [(b"xml ", packet)])
+        watch = None
+        if sys.platform.startswith("linux"):
+            libc = ctypes.CDLL(None, use_errno=True)
+            libc.inotify_init1.argtypes = [ctypes.c_int]
+            libc.inotify_init1.restype = ctypes.c_int
+            libc.inotify_add_watch.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
+            libc.inotify_add_watch.restype = ctypes.c_int
+            watch = libc.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
+            self.assertGreaterEqual(watch, 0)
+            self.addCleanup(os.close, watch)
+            self.assertGreaterEqual(libc.inotify_add_watch(watch, os.fsencode(marker), 0x21), 0)
+        result, _ = self.invoke("source-metadata", path)
+        xmp = result["metadata"]["image_xmp"]
+        self.assertEqual(xmp["status"], "collected", xmp)
+        self.assertEqual([bytes.fromhex(b["bytes"]) for b in xmp["blocks"]], [packet])
+        if watch is not None:
+            with self.assertRaises(BlockingIOError):
+                os.read(watch, 4096)
+
+    def test_source_metadata_xmp_jxl_high_expansion(self):
+        path = self.root / "expansion.jxl"
+        # Independently encoded Brotli: 4 MiB of b"x", without a test-time Brotli dependency.
+        compressed = bytes.fromhex("9bffff3ff825f0e2b14020f7fe07")
+        self._xmp_jxl(path, [(b"xml ", b"prefix"), (b"brob", b"xml " + compressed)], [(b"xml ", b"tail")])
+        result = self._xmp_limited(path, inflated_bytes=4096)
+        xmp = result["image_xmp"]
+        self.assertEqual(xmp["status"], "limited", xmp)
+        self.assertEqual([bytes.fromhex(b["bytes"]) for b in xmp["blocks"]], [b"prefix"])
+        result = self._xmp_limited(path, block_bytes=4 << 20, inflated_bytes=4 << 20, total_bytes=(4 << 20) + 10)
+        xmp = result["image_xmp"]
+        self.assertEqual(xmp["status"], "collected", xmp)
+        self.assertEqual([bytes.fromhex(b["bytes"]) for b in xmp["blocks"]], [b"prefix", b"x" * (4 << 20), b"tail"])
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Sparse-file regression uses Linux filesystem semantics")
+    def test_source_metadata_xmp_jxl_encoded_size_ceiling(self):
+        path = self.root / "sparse-limit.jxl"
+        self._xmp_jxl(path)
+        with path.open("r+b") as stream:
+            stream.truncate((2 << 30) + 1)
+        result, _ = self.invoke("source-metadata", path)
+        xmp = result["metadata"]["image_xmp"]
+        self.assertEqual(xmp["status"], "limited", xmp)
+        self.assertIn("encoded-input limit", xmp["diagnostic"])
+        self.assertEqual(xmp["blocks"], [])
 
     def test_source_metadata_xmp_heif_primary_items(self):
         packet = b'<x xmlns="urn:unknown">\0\xff</x>'
@@ -483,30 +540,88 @@ class IngestCLI(unittest.TestCase):
                 self.assertEqual(path.stat().st_mtime_ns, stamp)
 
     def test_source_metadata_xmp_heif_provider_compression_policy(self):
-        path = self.root / "compressed-xmp.avif"
         packet = b"<opaque/>" * 1024 + b"\0\xff"
-        deflater = zlib.compressobj(wbits=-15)
-        deflated = deflater.compress(packet) + deflater.flush()
-        for encoding, compressed in [("compress_zlib", zlib.compress(packet)),
-                                     ("deflate", deflated)]:
-            with self.subTest(encoding=encoding):
-                source_exif_fixture.write_heif_metadata(path, [{"data": compressed, "encoding": encoding}])
-                legacy, _ = self.invoke("source-exif", path)
-                result, _ = self.invoke("source-metadata", path)
-                self.assertEqual(result["metadata"]["image_exif"], legacy["exif"])
-                xmp = result["metadata"]["image_xmp"]
-                if legacy["exif"]["status"] == "malformed":
-                    self.assertIn("Unsupported header compression method", legacy["exif"]["diagnostic"])
-                    self.assertEqual(xmp["status"], "malformed")
-                    self.assertIn(legacy["exif"]["diagnostic"], xmp["diagnostic"])
-                    self.assertEqual(xmp["blocks"], [])
-                    continue
-                self.assertEqual(xmp["status"], "collected", xmp)
-                block, = xmp["blocks"]
-                self.assertEqual(block["heif_item"]["content_encoding"], encoding)
-                self.assertEqual(bytes.fromhex(block["bytes"]), packet)
-                self.assertEqual(block["bytes"], block["payload_bytes"])
-                self.assertFalse(block["compressed"])
+        exif = self.root / "compressed-exif.png"
+        source_exif_fixture.write_png(exif)
+        png = exif.read_bytes()
+        offset = 8
+        while png[offset + 4:offset + 8] != b"eXIf":
+            offset += 12 + struct.unpack_from(">I", png, offset)[0]
+        size = struct.unpack_from(">I", png, offset)[0]
+        exif_payload = png[offset + 8:offset + 8 + size]
+        for carrier in ("avif", "heic"):
+            path = self.root / ("compressed-xmp." + carrier)
+            source_exif_fixture.write_heif_metadata(path, carrier=carrier)
+            baseline, _ = self.invoke("source-exif", path)
+            baseline_exif = [bytes.fromhex(b["bytes"]) for b in baseline["exif"]["blocks"]]
+            for encoding, window in (("compress_zlib", 15), ("deflate", -15)):
+                with self.subTest(carrier=carrier, encoding=encoding):
+                    compressor = zlib.compressobj(wbits=window)
+                    compressed = compressor.compress(packet) + compressor.flush()
+                    source_exif_fixture.write_heif_metadata(path, [
+                        {"type": b"Exif", "data": bytes(4) + exif_payload},
+                        {"data": compressed, "encoding": encoding}, {"data": b"later"}], carrier=carrier)
+                    original, stamp = path.read_bytes(), path.stat().st_mtime_ns
+                    legacy, _ = self.invoke("source-exif", path)
+                    result, _ = self.invoke("source-metadata", path)
+                    self.assertEqual(result["metadata"]["image_exif"], legacy["exif"])
+                    self.assertEqual(legacy["exif"]["status"], "collected", legacy)
+                    self.assertEqual([bytes.fromhex(b["bytes"]) for b in legacy["exif"]["blocks"]], baseline_exif + [bytes(4) + exif_payload])
+                    xmp = result["metadata"]["image_xmp"]
+                    self.assertEqual(xmp["status"], "collected", xmp)
+                    self.assertEqual([bytes.fromhex(b["bytes"]) for b in xmp["blocks"]], [packet, b"later"])
+                    self.assertEqual(xmp["blocks"][0]["heif_item"]["content_encoding"], encoding)
+                    self.assertTrue(all(b["bytes"] == b["payload_bytes"] and not b["compressed"] for b in xmp["blocks"]))
+                    self.assertEqual(path.read_bytes(), original)
+                    self.assertEqual(path.stat().st_mtime_ns, stamp)
+                    for damaged in (compressed[:-1], b"broken", compressed + b"tail"):
+                        source_exif_fixture.write_heif_metadata(path, [{"data": damaged, "encoding": encoding}], carrier=carrier)
+                        result, _ = self.invoke("source-metadata", path)
+                        self.assertEqual(result["metadata"]["image_xmp"]["status"], "malformed", result)
+
+    def test_source_metadata_xmp_heif_inflate_bounds(self):
+        path = self.root / "inflate-limit.avif"
+        for window, encoding in ((15, "compress_zlib"), (-15, "deflate")):
+            for size in (0, (16 << 20), (16 << 20) + 1):
+                with self.subTest(encoding=encoding, size=size):
+                    compressor = zlib.compressobj(wbits=window)
+                    data = compressor.compress(b"x" * size) + compressor.flush()
+                    source_exif_fixture.write_heif_metadata(path, [{"data": data, "encoding": encoding}, {"data": b"tail"}])
+                    result, _ = self.invoke("source-metadata", path)
+                    xmp = result["metadata"]["image_xmp"]
+                    if size > (16 << 20):
+                        self.assertEqual(xmp["status"], "malformed", xmp)
+                        self.assertIn("decompression output limit", xmp["diagnostic"])
+                        self.assertEqual(xmp["blocks"], [])
+                    elif size:
+                        # Provider accepts the exact boundary; default collector skips it and keeps the next item.
+                        self.assertEqual(xmp["status"], "limited", xmp)
+                        self.assertEqual([bytes.fromhex(b["bytes"]) for b in xmp["blocks"]], [b"tail"])
+                    else:
+                        self.assertEqual(xmp["status"], "collected", xmp)
+                        self.assertEqual([bytes.fromhex(b["bytes"]) for b in xmp["blocks"]], [b"", b"tail"])
+
+    def test_source_metadata_xmp_heif_inflate_aggregate(self):
+        path = self.root / "inflate-aggregate.avif"
+        for window, encoding in ((15, "compress_zlib"), (-15, "deflate")):
+            compressor = zlib.compressobj(wbits=window)
+            compressed = compressor.compress(b"x" * (16 << 20)) + compressor.flush()
+            for extra in (b"", b"x"):
+                with self.subTest(encoding=encoding, extra=len(extra)):
+                    compressor = zlib.compressobj(wbits=window)
+                    last = compressor.compress(extra) + compressor.flush()
+                    items = [{"data": compressed, "encoding": encoding}] * 4
+                    items += [{"data": last, "encoding": encoding}, {"data": b"tail"}]
+                    source_exif_fixture.write_heif_metadata(path, items)
+                    result, _ = self.invoke("source-metadata", path)
+                    xmp = result["metadata"]["image_xmp"]
+                    if extra:
+                        self.assertEqual(xmp["status"], "malformed", xmp)
+                        self.assertIn("decompression aggregate limit", xmp["diagnostic"])
+                        self.assertEqual(xmp["blocks"], [])
+                    else:
+                        self.assertEqual(xmp["status"], "limited", xmp)
+                        self.assertEqual([bytes.fromhex(b["bytes"]) for b in xmp["blocks"]], [b"", b"tail"])
 
     def test_source_metadata_xmp_heif_limits_and_absence(self):
         path = self.root / "limited-xmp.avif"

@@ -11,6 +11,7 @@ vcpkg_from_github(
         symbol-exports.diff
         aom-reinitialization.patch
         context-allocation.patch
+        metadata-inflate.patch
 )
 
 vcpkg_find_acquire_program(PKGCONFIG)
@@ -23,6 +24,9 @@ vcpkg_cmake_configure(
     OPTIONS
         ${FEATURE_OPTIONS}
         -DBUILD_TESTING=OFF
+        -DWITH_HEADER_COMPRESSION=ON
+        -DCMAKE_REQUIRE_FIND_PACKAGE_ZLIB=ON
+        -DCMAKE_DISABLE_FIND_PACKAGE_Brotli=ON
         -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF
         -DPLUGIN_DIRECTORY=  # empty
         -DWITH_DAV1D=ON
@@ -73,6 +77,10 @@ vcpkg_cmake_configure(
 vcpkg_cmake_install()
 vcpkg_copy_pdbs()
 vcpkg_cmake_config_fixup(CONFIG_PATH "lib/cmake/libheif")
+set(heif_config "${CURRENT_PACKAGES_DIR}/share/libheif/libheif-config.cmake")
+file(READ "${heif_config}" heif_config_text)
+file(WRITE "${heif_config}"
+    "include(CMakeFindDependencyMacro)\nfind_dependency(ZLIB)\n${heif_config_text}")
 if("avif-encode" IN_LIST FEATURES)
     # Static exports refer to AOM::aom. Keep dependency discovery with the
     # provider package so every consumer gets a complete imported target.
