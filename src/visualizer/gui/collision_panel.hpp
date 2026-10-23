@@ -31,7 +31,7 @@ namespace lfs::vis::gui {
         void buildSurface();
         void updateDisplay();
         void updateSummary();
-        void applyPreset();
+        void resetSurfaceSettings();
         void adoptResult();
         void loadSettings(const core::SceneNode& node);
         void writeInputs();

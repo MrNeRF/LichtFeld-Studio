@@ -157,7 +157,6 @@ namespace lfs::vis::gui {
         for (auto [id, n] : {std::pair{"overlay-opacity-value", display_.opacity}, {"cutaway-value", display_.slice}})
             document_->GetElementById(id)->SetInnerRML(std::format("{:.0f}%", n * 100));
         setValue("surface-stride", std::to_string(display_.surface_stride));
-        setValue("preset", std::to_string(int(settings_.preset)));
         setValue("shape", std::to_string(int(display_.surface_ready ? display_.surface_shape : settings_.shape)));
         check("cluster", settings_.cluster);
         set("cluster-resolution", settings_.cluster_resolution);
@@ -342,9 +341,18 @@ namespace lfs::vis::gui {
                     std::lock_guard lock(mutex_);
                     int phase = 0;
                     float fraction = 0;
-                    if (text.starts_with("Clustering"))
+                    if (text.starts_with("Clustering")) {
                         phase = 1;
-                    else if (text.starts_with("Voxelizing")) {
+                        if (text.starts_with("Clustering coarse Voxelizing regions: "))
+                            fraction = 0.35f * float(std::stoi(text.substr(text.find(": ") + 2))) / 8;
+                        else if (text.starts_with("Clustering connected"))
+                            fraction = 0.4f;
+                        else if (text.starts_with("Clustering splats: ")) {
+                            const auto slash = text.find('/');
+                            fraction = 0.5f + 0.5f * float(std::stoull(text.substr(text.find(": ") + 2))) / std::stoull(text.substr(slash + 1));
+                        } else if (text.starts_with("Clustering complete"))
+                            fraction = 1;
+                    } else if (text.starts_with("Voxelizing")) {
                         phase = 1 + s.cluster;
                         if (text.starts_with("Voxelizing regions: ")) {
                             auto start = text.find(": ") + 2;
@@ -456,16 +464,14 @@ namespace lfs::vis::gui {
         loadSettings(*node);
         result_.reset();
     }
-    void CollisionPanel::applyPreset() {
-        settings_ = readInputs();
-        const auto preset = value("preset");
-        settings_.applyPreset(preset == "0" ? core::CollisionPreset::Indoor : preset == "2" ? core::CollisionPreset::Object
-                                                                                            : core::CollisionPreset::Outdoor);
+    void CollisionPanel::resetSurfaceSettings() {
+        const auto previous = readInputs();
+        settings_ = {};
+        settings_.units_per_meter = previous.units_per_meter;
+        settings_.applyPreset(core::CollisionPreset::Outdoor);
+        settings_.seed = previous.seed;
+        settings_.voxel_size = previous.voxel_size;
         settings_.floor_below_seed = true;
-        settings_.voxel_size = number("detail") * settings_.units_per_meter;
-        settings_.external_size = settings_.floor_size = 1.6f * settings_.units_per_meter;
-        settings_.cluster_resolution = settings_.units_per_meter;
-        settings_.carve_radius = 0.2f * settings_.units_per_meter;
         world_seed_ = settings_.seed;
         writeInputs();
     }
@@ -473,6 +479,14 @@ namespace lfs::vis::gui {
         const float units = number("units-per-meter");
         const float edge = number("voxel-size");
         document_->GetElementById("scale-summary")->SetInnerRML(Rml::StringUtilities::EncodeRml(LOCF("collision.scale_summary", edge / units * 100, edge, units)));
+        std::string pipeline = LOC("collision.voxelization");
+        for (const auto& [enabled, key] : {std::pair{checked("cluster"), "collision.cluster_filter"},
+                                           {checked("external-fill"), "collision.external"},
+                                           {checked("floor-fill"), "collision.floor"},
+                                           {number("carve-height") > 0, "collision.capsule_carve"}})
+            if (enabled)
+                pipeline += " · " + std::string(LOC(key));
+        document_->GetElementById("pipeline-summary")->SetInnerRML(Rml::StringUtilities::EncodeRml(LOCF("collision.pipeline", pipeline)));
         host_.markContentDirty();
     }
     void CollisionPanel::updateDisplay() {
@@ -556,13 +570,10 @@ namespace lfs::vis::gui {
             return;
         try {
             if (event.GetType() == "change") {
-                if (id == "preset")
-                    applyPreset();
-                else if (id == "overlay-opacity" || id == "cutaway")
+                if (id == "overlay-opacity" || id == "cutaway")
                     updateDisplay();
                 else if (id == "detail") {
                     setValue("voxel-size", std::format("{:.6g}", number("detail") * number("units-per-meter")));
-                    updateSummary();
                 } else if (id == "units-per-meter") {
                     const float units = number("units-per-meter");
                     if (!(units > 0))
@@ -571,8 +582,8 @@ namespace lfs::vis::gui {
                     for (const auto* field : {"voxel-size", "cluster-resolution", "external-size", "floor-size", "carve-height", "carve-radius", "walk-height", "walk-radius", "walk-speed", "walk-step"})
                         setValue(field, std::format("{:.6g}", number(field) * ratio));
                     settings_.units_per_meter = units;
-                    updateSummary();
                 }
+                updateSummary();
                 return;
             }
             if (id == "advanced-toggle") {
@@ -589,8 +600,8 @@ namespace lfs::vis::gui {
             else if (id == "cancel") {
                 worker_.request_stop();
                 status("Cancelling collision generation");
-            } else if (id == "apply-preset") {
-                applyPreset();
+            } else if (id == "reset-surface") {
+                resetSurfaceSettings();
             } else if (id == "camera-seed") {
                 if (auto* input = InputController::instance()) {
                     auto p = lfs::rendering::visualizerWorldPointFromDataWorld(input->cameraPosition());

@@ -4,12 +4,13 @@
   <link type="text/rcss" href="rendering.rcss"/>
 </head>
 <body template="floating-window">
+  <p>@tr:collision.shared_setup</p>
   <p><span>@tr:collision.target</span> <span id="collision-target">@tr:collision.new_node</span></p>
-  <div class="collision-row" data-tooltip="collision.tip_preset"><span>@tr:collision.scene_type</span><select id="preset"><option value="0">@tr:collision.indoor</option><option value="1" selected="selected">@tr:collision.outdoor</option><option value="2">@tr:collision.object</option></select></div>
   <div class="collision-row" data-tooltip="collision.tip_units"><span>@tr:collision.units</span><input id="units-per-meter" type="text" value="1"/></div>
   <div class="collision-row" data-tooltip="collision.tip_detail"><span>@tr:collision.detail</span><input id="detail" type="range" min="0.01" max="0.25" step="0.005" value="0.05"/></div>
   <p id="scale-summary"></p>
-  <div class="collision-row" data-tooltip="collision.tip_floor"><span>@tr:collision.floor</span><input id="floor-fill" type="checkbox"/></div>
+  <div class="collision-row" data-tooltip="collision.tip_cluster"><span>@tr:collision.cluster_enable</span><input id="cluster" type="checkbox"/></div>
+  <p id="pipeline-summary"></p>
   <div class="collision-actions">
     <button id="camera-seed" class="btn btn--secondary" data-tooltip="collision.tip_seed">@tr:collision.camera_seed</button>
     <button id="generate" class="btn btn--primary">@tr:collision.generate</button>
@@ -30,7 +31,6 @@
   <button id="advanced-toggle" class="btn btn--secondary">@tr:collision.advanced</button>
   <div id="advanced" style="display: none;">
   <h3>@tr:collision.cluster_filter</h3>
-  <div class="collision-row" data-tooltip="collision.tip_cluster"><span>@tr:collision.cluster_enable</span><input id="cluster" type="checkbox"/></div>
   <div class="collision-row" data-tooltip="collision.tip_resolution"><span>@tr:collision.resolution</span><input id="cluster-resolution" type="text" value="1"/></div>
   <div class="collision-row" data-tooltip="collision.tip_opacity"><span>@tr:collision.opacity</span><input id="cluster-opacity" type="text" value="0.999"/></div>
   <div class="collision-row" data-tooltip="collision.tip_contribution"><span>@tr:collision.contribution</span><input id="cluster-min" type="text" value="0.1"/></div>
@@ -39,6 +39,7 @@
   <div class="collision-row" data-tooltip="collision.tip_opacity"><span>@tr:collision.opacity</span><input id="opacity" type="text" value="0.1"/></div>
   <div class="collision-row" data-tooltip="collision.tip_shape"><span>@tr:collision.shape</span><select id="shape"><option value="0" selected="selected">@tr:collision.smooth</option><option value="1">@tr:collision.faces</option></select></div>
   <h3>@tr:collision.fill_carve</h3>
+  <div class="collision-row" data-tooltip="collision.tip_floor"><span>@tr:collision.floor</span><input id="floor-fill" type="checkbox"/></div>
   <div class="collision-row" data-tooltip="collision.tip_external"><span>@tr:collision.external</span><input id="external-fill" type="checkbox"/></div>
   <div class="collision-row" data-tooltip="collision.tip_external"><span>@tr:collision.external_size</span><input id="external-size" type="text" value="1.6"/></div>
   <div class="collision-row" data-tooltip="collision.tip_ground_guard"><span>@tr:collision.ground_guard</span><input id="floor-below-seed" type="checkbox" checked="checked"/></div>
@@ -50,7 +51,7 @@
   <div class="collision-row"><span>X</span><input id="seed-x" type="text" value="0"/></div>
   <div class="collision-row"><span>Y</span><input id="seed-y" type="text" value="0"/></div>
   <div class="collision-row"><span>Z</span><input id="seed-z" type="text" value="0"/></div>
-  <button id="apply-preset" class="btn btn--secondary">@tr:collision.apply_preset</button>
+  <button id="reset-surface" class="btn btn--secondary" data-tooltip="collision.tip_reset_surface">@tr:collision.reset_surface</button>
   <h3>@tr:collision.surface</h3>
   <p>@tr:collision.surface_help</p>
   <div class="collision-row"><span>@tr:collision.surface_detail</span><select id="surface-stride"><option value="1">@tr:collision.surface_exact</option><option value="2">2×</option><option value="4" selected="selected">4×</option><option value="8">8×</option><option value="16">16×</option></select></div>
