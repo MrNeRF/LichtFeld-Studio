@@ -449,6 +449,42 @@ class IngestCLI(unittest.TestCase):
                     for tag in directory["tags"] if tag["id"] == 700]
         self.assertEqual([block["bytes"] for block in metadata["image_xmp"]["blocks"]], observed)
 
+    def test_source_metadata_xmp_tiff_main_ifd_numeric_types(self):
+        path = self.root / "xmp-numeric.tif"
+        for little in [True, False]:
+            order = "<" if little else ">"
+            for big in [False, True]:
+                for type_, encoded, payload in [
+                        (3, struct.pack(order + "4H", 60, 63, 120, 112), b"<?xp"),
+                        (4, struct.pack(order + "4I", 60, 63, 120, 112), b"<?xp"),
+                        (3, struct.pack(order + "4H", 60, 256, 120, 112), None),
+                        (11, struct.pack(order + "4f", 60, 63, 120, 112), None),
+                        (12, struct.pack(order + "4d", 60, 63, 120, 112), None)]:
+                    with self.subTest(little=little, big=big, type=type_, payload=payload):
+                        source_exif_fixture.write_tiff(path, little=little, big=big,
+                            xmp_packets=[encoded], xmp_type=type_)
+                        original, modified = path.read_bytes(), path.stat().st_mtime_ns
+                        legacy, _ = self.invoke("source-exif", path)
+                        result, _ = self.invoke("source-metadata", path)
+                        metadata = result["metadata"]
+                        self.assertEqual(metadata["image_exif"], legacy["exif"])
+                        xmp = metadata["image_xmp"]
+                        if payload is None:
+                            self.assertEqual(metadata["image_exif"]["status"], "malformed")
+                            self.assertEqual(xmp["status"], "malformed")
+                            self.assertIn("tag ignored", xmp["diagnostic"].lower())
+                            self.assertEqual(xmp["blocks"], [])
+                        else:
+                            self.assertEqual(xmp["status"], "collected")
+                            self.assertEqual(len(xmp["blocks"]), 1)
+                            block = xmp["blocks"][0]
+                            self.assertEqual(bytes.fromhex(block["payload_bytes"]), payload)
+                            ref = block["tiff_tag"]
+                            tag = metadata["image_exif"]["tiff"]["directories"][ref["directory"]]["tags"][ref["tag"]]
+                            self.assertEqual(tag["type"], 1)
+                        self.assertEqual(path.read_bytes(), original)
+                        self.assertEqual(path.stat().st_mtime_ns, modified)
+
     def test_source_metadata_xmp_tiff_child_byte_representations(self):
         path = self.root / "xmp-child.tif"
         packet = b"<child/>\0\xff"

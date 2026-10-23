@@ -241,7 +241,7 @@ def write_tiff(path, *, little=True, big=False, pages=1, pixel_offset=None, cycl
             tags.append((306, 3, 1, struct.pack(order + "H", 2)))
         if xmp_packets is not None and xmp_packets[page] is not None:
             packet = xmp_packets[page]
-            tags.append((700, xmp_type, len(packet) // (2 if xmp_type == 3 else 1), packet))
+            tags.append((700, xmp_type, len(packet) // {3: 2, 4: 4, 11: 4, 12: 8}.get(xmp_type, 1), packet))
         tags.sort(key=lambda tag: tag[0])
         count_width, entry_width = (8, 20) if big else (2, 12)
         tail = offset + count_width + entry_width * len(tags) + slot
