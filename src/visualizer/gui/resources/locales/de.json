@@ -6,6 +6,8 @@
   "collision.tip_reset_surface": "Disable clustering, filling and carving. Keep the current scene scale, cell size and seed. Existing collision data changes only after regeneration.",
   "collision.pipeline": "Next generation: {}",
   "collision.capsule_carve": "Capsule carving",
+  "collision.sharp": "Sharp box preview",
+  "collision.tip_sharp": "Off uses faster 2×2-pixel shading where supported. On traces every pixel for sharper edges. This only changes the preview: collision cells and Walk retain full detail.",
   "collision.title": "Collision",
   "collision.sources": "Sources: all visible, loaded splat nodes; deleted splats are excluded. Stop training before generating.",
   "collision.target": "Target:",
