@@ -138,7 +138,7 @@ set_tests_properties(lichtfeld.file_dialog_paths PROPERTIES LABELS "fast;cpu;io"
 # CPU-only visualizer tests (no LibTorch)
 # =============================================================================
 if(BUILD_VISUALIZER_TESTS)
-    add_executable(lichtfeld_collision_scene_tests test_collision_scene.cpp)
+    add_executable(lichtfeld_collision_scene_tests test_collision_scene.cpp test_collision_export.cpp)
     target_compile_features(lichtfeld_collision_scene_tests PRIVATE cxx_std_23)
     target_include_directories(lichtfeld_collision_scene_tests PRIVATE
         $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
