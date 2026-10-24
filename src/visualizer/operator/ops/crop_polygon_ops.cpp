@@ -16,7 +16,6 @@
 #include "selection/selection_service.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "visualizer/gui_capabilities.hpp"
-#include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
 #include <array>
 
@@ -217,24 +216,25 @@ namespace lfs::vis::op {
             return false;
 
         if (!plane_) {
-            const auto* const rm = services().renderingOrNull();
-            const auto world = rm ? SelectionService::resolveViewerWorldPoint(*rm, view->viewport, view->panel,
-                                                                              view->info, screen_point)
-                                  : std::nullopt;
-            const glm::vec3 forward = rendering::cameraForward(view->viewport.camera.R);
-            plane_ = world ? crop_polygon::makePlane(forward, *world) : std::nullopt;
-            if (!plane_)
-                return false;
-            camera_right_ = rendering::cameraRight(view->viewport.camera.R);
-            camera_distance_ = std::abs(glm::dot(*world - view->viewport.camera.t, plane_->normal));
-            points_.push_back(*world);
-        } else {
-            const auto ray = pixelRay(*view);
-            const auto hit = ray ? crop_polygon::intersect(*ray, *plane_) : std::nullopt;
-            if (!hit)
-                return false;
-            points_.push_back(*hit);
+            const auto& camera = view->viewport.camera;
+            const glm::vec3 forward = rendering::cameraForward(camera.R);
+            std::optional<glm::vec3> first_click;
+            if (!crop_polygon::pivotIsInFront(camera.t, forward, camera.pivot)) {
+                if (const auto* const rm = services().renderingOrNull())
+                    first_click = SelectionService::resolveViewerWorldPoint(*rm, view->viewport, view->panel,
+                                                                            view->info, screen_point);
+            }
+            plane_ = crop_polygon::makeDrawingPlane(camera.t, forward, camera.pivot, first_click);
+            camera_right_ = rendering::cameraRight(camera.R);
         }
+        const auto ray = plane_ ? pixelRay(*view) : std::nullopt;
+        const auto hit = ray ? crop_polygon::intersect(*ray, *plane_) : std::nullopt;
+        if (!hit) {
+            if (points_.empty())
+                plane_.reset();
+            return false;
+        }
+        points_.push_back(*hit);
         cursor_ = points_.back();
         publishDraft();
         return false;
@@ -259,17 +259,7 @@ namespace lfs::vis::op {
         if (!plane_ || points_.size() < crop_polygon::kMinVertices)
             return false;
 
-        // The default extrusion cuts through the whole model along the view direction.
-        std::vector<glm::vec3> corners;
-        glm::vec3 lo, hi;
-        if (scene.getNodeBounds(target_node_id_, lo, hi)) {
-            const glm::mat4 to_world = scene_coords::nodeVisualizerWorldTransform(scene, target_node_id_);
-            for (int i = 0; i < 8; ++i) {
-                const glm::vec3 corner((i & 1) ? hi.x : lo.x, (i & 2) ? hi.y : lo.y, (i & 4) ? hi.z : lo.z);
-                corners.emplace_back(to_world * glm::vec4(corner, 1.0f));
-            }
-        }
-        const auto frame = crop_polygon::buildFrame(points_, *plane_, camera_right_, corners, camera_distance_);
+        const auto frame = crop_polygon::buildFrame(points_, *plane_, camera_right_);
         if (!frame) {
             LOG_WARN("Crop polygon outline is degenerate; add or remove vertices");
             return false;

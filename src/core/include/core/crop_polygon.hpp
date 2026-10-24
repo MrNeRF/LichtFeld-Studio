@@ -21,8 +21,6 @@ namespace lfs::core::crop_polygon {
     inline constexpr std::size_t kMinVertices = 3;
     inline constexpr std::size_t kMaxVertices = 64;
     inline constexpr float kMinHalfDepth = 1e-4f;
-    // Extrusion margin so the default prism also keeps splats exactly on the bounds.
-    inline constexpr float kDefaultDepthPadding = 0.01f;
 
     // 3..64 finite vertices, at least three of them distinct, with non-zero area.
     [[nodiscard]] inline bool isValidOutline(const std::span<const glm::vec2> vertices) {
@@ -96,9 +94,23 @@ namespace lfs::core::crop_polygon {
         float half_depth = kMinHalfDepth;
     };
 
-    // Plane through the first click, facing the camera forward direction.
+    // Plane through `point`, facing the camera forward direction.
     [[nodiscard]] LFS_CORE_API std::optional<Plane> makePlane(const glm::vec3& camera_forward,
                                                               const glm::vec3& point);
+
+    // True when the camera's orbit pivot is finite and lies in front of the camera.
+    [[nodiscard]] LFS_CORE_API bool pivotIsInFront(const glm::vec3& camera_position,
+                                                   const glm::vec3& camera_forward,
+                                                   const glm::vec3& pivot);
+
+    // Drawing plane fixed at the first click. Outlines usually start at an
+    // object's silhouette, where the click hits the background, so the plane
+    // goes through the orbit pivot when it is in front of the camera and only
+    // falls back to the world point under the first click.
+    [[nodiscard]] LFS_CORE_API std::optional<Plane> makeDrawingPlane(const glm::vec3& camera_position,
+                                                                     const glm::vec3& camera_forward,
+                                                                     const glm::vec3& pivot,
+                                                                     const std::optional<glm::vec3>& first_click_point);
 
     // Ray from two unprojections of the same pixel at different depths. This is
     // exact for perspective and orthographic cameras alike.
@@ -109,13 +121,12 @@ namespace lfs::core::crop_polygon {
     [[nodiscard]] LFS_CORE_API std::optional<glm::vec3> intersect(const Ray& ray, const Plane& plane);
 
     // Node frame for a closed outline drawn on `plane`. The origin is the centre
-    // of the outline's in-plane AABB, shifted along the normal so the prism
-    // covers `bounds_corners` (padded). Without corners the prism is centred on
-    // the plane with `fallback_half_depth`.
+    // of the outline's in-plane AABB, on the plane. The default half depth is the
+    // larger in-plane half extent, so the prism starts roughly cube-like around
+    // the plane and the user extrudes it with the cap handles. Covering the
+    // parent's bounds instead spans the whole scene on real captures.
     [[nodiscard]] LFS_CORE_API std::optional<Frame> buildFrame(std::span<const glm::vec3> world_points,
                                                                const Plane& plane,
-                                                               const glm::vec3& camera_right,
-                                                               std::span<const glm::vec3> bounds_corners,
-                                                               float fallback_half_depth);
+                                                               const glm::vec3& camera_right);
 
 } // namespace lfs::core::crop_polygon

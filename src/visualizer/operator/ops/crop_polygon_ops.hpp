@@ -38,7 +38,6 @@ namespace lfs::vis::op {
         core::NodeId target_node_id_ = core::NULL_NODE;
         std::optional<core::crop_polygon::Plane> plane_;
         glm::vec3 camera_right_{1.0f, 0.0f, 0.0f};
-        float camera_distance_ = 1.0f;
         std::vector<glm::vec3> points_;
         std::optional<glm::vec3> cursor_;
     };

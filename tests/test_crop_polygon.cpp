@@ -10,10 +10,10 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
-#include <array>
 #include <cmath>
 #include <glm/gtc/matrix_transform.hpp>
 #include <limits>
+#include <optional>
 #include <vector>
 
 namespace {
@@ -68,6 +68,29 @@ namespace {
         EXPECT_FALSE(cp::makePlane({0.0f, 0.0f, 1.0f}, glm::vec3(std::numeric_limits<float>::infinity())));
     }
 
+    // The first click usually lands on the background behind an object's
+    // silhouette, so the plane goes through the orbit pivot when it can.
+    TEST(CropPolygonGeometryTest, DrawingPlaneUsesThePivotInFrontElseTheFirstClick) {
+        const glm::vec3 eye(1.0f, 2.0f, 10.0f);
+        const glm::vec3 forward(0.0f, 0.0f, -2.0f);
+        const glm::vec3 click(1.5f, 2.0f, -40.0f);
+
+        const auto pivot_plane = cp::makeDrawingPlane(eye, forward, {0.0f, 0.0f, 3.0f}, click);
+        ASSERT_TRUE(pivot_plane);
+        expectNear(pivot_plane->point, {0.0f, 0.0f, 3.0f});
+        expectNear(pivot_plane->normal, {0.0f, 0.0f, -1.0f});
+
+        for (const glm::vec3 pivot : {glm::vec3(0.0f, 0.0f, 12.0f), glm::vec3(5.0f, 0.0f, 10.0f),
+                                      glm::vec3(std::numeric_limits<float>::quiet_NaN())}) {
+            EXPECT_FALSE(cp::pivotIsInFront(eye, forward, pivot));
+            const auto fallback = cp::makeDrawingPlane(eye, forward, pivot, click);
+            ASSERT_TRUE(fallback);
+            expectNear(fallback->point, click);
+            EXPECT_FALSE(cp::makeDrawingPlane(eye, forward, pivot, std::nullopt));
+        }
+        EXPECT_TRUE(cp::pivotIsInFront(eye, forward, {0.0f, 0.0f, 3.0f}));
+    }
+
     // The draw operator builds each ray from two unprojections of the clicked
     // pixel; both projections must hit the plane where the pixel shows it.
     TEST(CropPolygonGeometryTest, PixelRaysHitThePlaneInPerspectiveAndOrthographic) {
@@ -112,7 +135,7 @@ namespace {
         for (const glm::vec2& v : kLShape)
             world.push_back(origin + right * (v.x + 7.0f) + down * (v.y - 3.0f));
 
-        const auto frame = cp::buildFrame(world, *plane, right + forward * 0.25f, {}, 2.5f);
+        const auto frame = cp::buildFrame(world, *plane, right + forward * 0.25f);
         ASSERT_TRUE(frame);
         const glm::mat3 axes(frame->world_from_local);
         for (int i = 0; i < 3; ++i) {
@@ -134,27 +157,21 @@ namespace {
         }
         EXPECT_NEAR(lo.x + hi.x, 0.0f, 1e-4f);
         EXPECT_NEAR(lo.y + hi.y, 0.0f, 1e-4f);
-        // Without bounds the prism is centred on the drawing plane.
-        EXPECT_FLOAT_EQ(frame->half_depth, 2.5f);
         EXPECT_NEAR(glm::dot(glm::vec3(frame->world_from_local[3]) - origin, forward), 0.0f, 1e-4f);
     }
 
-    TEST(CropPolygonGeometryTest, DefaultDepthCoversTheBoundsSymmetrically) {
+    // Covering the parent's bounds spans the whole scene on real captures; the
+    // default prism is as deep as the outline is wide, centred on the plane.
+    TEST(CropPolygonGeometryTest, DefaultDepthIsTheLargerOutlineHalfExtent) {
         const glm::vec3 forward(0.0f, 0.0f, -1.0f);
         const auto plane = cp::makePlane(forward, glm::vec3(0.0f, 0.0f, 10.0f));
         ASSERT_TRUE(plane);
-        const std::vector<glm::vec3> world{{-1, -1, 10}, {1, -1, 10}, {1, 1, 10}, {-1, 1, 10}};
-        std::array<glm::vec3, 8> corners{};
-        for (int i = 0; i < 8; ++i)
-            corners[i] = {(i & 1) ? 4.0f : -4.0f, (i & 2) ? 3.0f : -3.0f, (i & 4) ? 2.0f : -6.0f};
+        const std::vector<glm::vec3> world{{-2, -1, 10}, {4, -1, 10}, {4, 1, 10}, {-2, 1, 10}};
 
-        const auto frame = cp::buildFrame(world, *plane, {1.0f, 0.0f, 0.0f}, corners, 1.0f);
+        const auto frame = cp::buildFrame(world, *plane, {1.0f, 0.0f, 0.0f});
         ASSERT_TRUE(frame);
-        EXPECT_NEAR(frame->half_depth, 4.0f * (1.0f + cp::kDefaultDepthPadding), 1e-5f);
-        expectNear(glm::vec3(frame->world_from_local[3]), {0.0f, 0.0f, -2.0f});
-        const glm::mat4 local_from_world = glm::inverse(frame->world_from_local);
-        for (const auto& corner : corners)
-            EXPECT_LE(std::abs((local_from_world * glm::vec4(corner, 1.0f)).z), frame->half_depth);
+        EXPECT_FLOAT_EQ(frame->half_depth, 3.0f);
+        expectNear(glm::vec3(frame->world_from_local[3]), {1.0f, 0.0f, 10.0f});
     }
 
     bool cudaAvailable() {
