@@ -89,3 +89,68 @@ Explicit architecture selection allows compilation on machines without an AMD
 GPU, including WSL or CI runners. The native module does not load Python or
 PyTorch, but still requires the SDK shared libraries installed in that environment.
 This is a developer setup, not a redistributable runtime bundle.
+
+The Ubuntu workflow includes a separate `HIP native compile (CPU runner)` job.
+It installs Python 3.12, CMake 4.4.0 and the SDK pinned in `ci-requirements.txt`,
+then builds the compressed portable module for all declared architectures and
+runs only the CPU configuration/module-ABI tests. GPU visibility is disabled,
+GPU tests remain off, and no application, CUDA toolkit, submodules or driver
+installation is required. The pip download cache avoids downloading the SDK
+again when the runner can restore it. This compile check follows the existing
+Ubuntu workflow triggers; it is not a full HIP application or GPU training job.
+
+## Owned asynchronous transfers
+
+Contexts can create reusable pinned staging slots for asynchronous upload,
+readback and queue markers. A staged upload copies the caller's input into
+module-owned host storage before returning, so the original input can immediately
+be reused. A readback snapshots device data on the same context queue. Subsequent
+operations on that queue remain ordered with both transfers.
+
+`readback_wait` waits for completion without consuming it; `readback_poll` reports
+readiness and consumes a completed snapshot. Passing a null destination discards
+the snapshot. A non-null destination must provide its writable size through
+`destination_bytes`; insufficient space fails without writing or consuming the
+snapshot, allowing a retry with a larger buffer. Host subranges may overlap the
+staging allocation: both upload snapshotting and poll use overlap-safe copies.
+A slot remains busy until completion is consumed, even after a
+successful wait. Slots that have allocated data storage cannot be reused as
+zero-byte queue markers; dedicated markers can be re-recorded to track newer
+work on the same queue.
+
+For packed readback, reserve a host slot and append device ranges on the same
+queue. Both append bounds and the poll copy size use the requested reservation,
+not the capacity retained from an earlier, larger transfer. The returned host
+address is borrowed: wait before reading it, and do not keep it across capacity
+growth or slot destruction. No host pointer may be retained across context or
+slot destruction.
+
+Destroy staging slots before their context. Context destruction fails while
+slots remain registered, preserving the context for cleanup and retry. Slot
+destruction drains pending transfers before releasing events or pinned storage;
+if cleanup fails, retry destruction rather than reusing the partially cleaned
+slot. A failed event recording retains the pending transfer and falls back to
+stream completion checks, so pinned memory is not freed while a copy may use it.
+
+An actual copy-submission failure is latched separately from event-recording
+failure: wait and poll keep returning the copy error and never present old or
+partial staging bytes as a successful snapshot. Once the queue has completed,
+`readback_poll(context, slot, nullptr, 0, ...)` consumes that failed result but
+still returns the error with `ready=0`. The slot may then be reused. Packed
+appends cannot continue after a failed copy until the failed result is discarded.
+
+Growing an idle staging slot can discard its previous contents and cached
+allocation before attempting the replacement allocation. Failure does not retain
+the old capacity, but the slot remains owned and can be retried or destroyed.
+All these operations stay behind the private Tensor runtime boundary; they do
+not register a backend or change the application's image-loading path.
+
+With GPU tests explicitly enabled, the build also creates a separate
+`lfs_hip_runtime_faults` module and registers `HipNative.FaultRecovery`. Its
+test-only forced-include header simulates individual SDK failures for copies,
+pinned allocation/release, event creation/recording/destruction and stream
+drainage. The tests check recovery, preservation of valid copies after event
+errors, rejection of invalid snapshots and balanced resource counts. The normal
+runtime contains none of these injection entry points; CPU-only builds do not
+build the instrumented module. These tests exercise API error handling on a
+real device, not physical device-loss or GPU-hang recovery.

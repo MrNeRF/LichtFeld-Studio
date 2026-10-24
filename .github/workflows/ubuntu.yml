@@ -14,6 +14,54 @@ on:
   workflow_dispatch:
 
 jobs:
+  hip-native-compile:
+    name: HIP native compile (CPU runner)
+    if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      HIP_VISIBLE_DEVICES: '-1'
+      ROCR_VISIBLE_DEVICES: '-1'
+      CUDA_VISIBLE_DEVICES: ''
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Set up Python and SDK download cache
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: cmake/hip-native/ci-requirements.txt
+
+      - name: Install native build tools
+        run: |
+          python -m pip install --index-url https://pypi.org/simple 'cmake==4.4.0'
+          sudo apt-get update
+          sudo apt-get install -y g++ ninja-build
+
+      - name: Install pinned ROCm development SDK
+        run: python -m pip install -r cmake/hip-native/ci-requirements.txt
+
+      - name: Compile native HIP module for all declared targets
+        run: |
+          sdk_root="$(rocm-sdk path --root)"
+          cmake -S cmake/hip-native -B "$RUNNER_TEMP/hip-native-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLFS_HIP_ROOT="$sdk_root" \
+            -DLFS_HIP_PORTABLE=ON \
+            -DLFS_HIP_OFFLOAD_COMPRESSION=ON \
+            -DLFS_HIP_NATIVE_GPU_TESTS=OFF \
+            -DPython3_EXECUTABLE="$(command -v python)"
+          cmake --build "$RUNNER_TEMP/hip-native-build" --parallel 2
+
+      - name: Check configuration and module ABI without a GPU
+        run: |
+          ctest --test-dir "$RUNNER_TEMP/hip-native-build" \
+            --output-on-failure --no-tests=error -L cpu
+
   build-ubuntu:
     if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
     runs-on: ubuntu-24.04

@@ -34,3 +34,26 @@ add_custom_command(OUTPUT "${_library}"
     VERBATIM)
 add_custom_target(lfs_hip_runtime_build ALL DEPENDS "${_library}")
 set(LFS_HIP_RUNTIME_LIBRARY "${_library}" PARENT_SCOPE)
+
+if(LFS_HIP_NATIVE_GPU_TESTS)
+    get_filename_component(_root "${CMAKE_CURRENT_SOURCE_DIR}/../../../../.." ABSOLUTE)
+    set(_fault_header "${_root}/tests/hip/runtime_faults.hpp")
+    get_filename_component(_runtime_directory "${_library}" DIRECTORY)
+    if(WIN32)
+        set(_fault_library "${_runtime_directory}/lfs_hip_runtime_faults.dll")
+    else()
+        set(_fault_library "${_runtime_directory}/liblfs_hip_runtime_faults.so")
+    endif()
+    add_custom_command(OUTPUT "${_fault_library}"
+        COMMAND "${_compiler}" -x hip -std=c++20 -O3 -shared
+            ${_platform_flags} ${LFS_HIP_COMPRESSION_FLAGS}
+            "-DLFS_HIP_COMPILED_ARCH=\"${LFS_HIP_COMPILED_ARCHITECTURES}\""
+            -DLFS_HIP_RUNTIME_EXPORTS ${LFS_HIP_OFFLOAD_FLAGS}
+            "--hip-path=${LFS_HIP_ROOT}" "-I${CMAKE_CURRENT_SOURCE_DIR}"
+            -include "${_fault_header}" "${CMAKE_CURRENT_SOURCE_DIR}/runtime.hip" -o "${_fault_library}"
+        DEPENDS runtime.hip runtime_api.h architecture_runtime.hpp "${_fault_header}"
+            "${_compiler}" "${LFS_HIP_ROOT}/include/hip/hip_runtime.h"
+        VERBATIM)
+    add_custom_target(lfs_hip_runtime_faults ALL DEPENDS "${_fault_library}")
+    set(LFS_HIP_FAULT_LIBRARY "${_fault_library}" PARENT_SCOPE)
+endif()

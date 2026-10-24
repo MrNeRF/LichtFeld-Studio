@@ -95,6 +95,14 @@ class HipConfiguration(unittest.TestCase):
         self.assertIn("setUpClass", result.stderr)
         self.assertIn("FAILED", result.stderr)
 
+    def test_cpu_abi_mode_rejects_gpu_fault_mode_before_loading(self):
+        result = subprocess.run([
+            sys.executable, str(ROOT / "tests/hip/test_native_runtime.py"),
+            "missing-module.dll", "--abi-only", "--faults"],
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("mutually exclusive", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
