@@ -18,6 +18,12 @@ namespace lfs::vis {
 
     using namespace lfs::core::events;
 
+    void TrainerManager::syncCropBox() {}
+
+    std::optional<lfs::training::TrainingCropBoxGeometry> TrainerManager::exportCropBox() const {
+        return std::nullopt;
+    }
+
     bool TrainerManager::canPerform(const TrainingAction action) const {
         return action == TrainingAction::LoadDataset || action == TrainingAction::LoadCheckpoint ||
                action == TrainingAction::Reset || action == TrainingAction::ClearScene ||
