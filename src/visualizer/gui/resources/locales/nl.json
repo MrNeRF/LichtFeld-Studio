@@ -1,4 +1,10 @@
 {
+  "collision.walk_unavailable": "Enable a loaded voxel collision node in the scene graph to use Walk.",
+  "collision.controls_walk": "Walk",
+  "collision.controls_help": "Walk mode shows live player settings. Outside Walk, selecting one voxel collider shows its preview settings. Drag to scrub or click to type.",
+  "collision.controls_target_help": "Choose the voxel collider to inspect. Triangle surfaces have their own scene entries.",
+  "collision.controls_locked": "Locked",
+  "collision.controls_hidden": "Hidden in viewport",
   "collision.export_select": "Select a collision node using File → Export → Collision… or its right-click menu.",
   "menu.file.export_collision": "Collision…",
   "collision.opacity_short": "Opacity",
