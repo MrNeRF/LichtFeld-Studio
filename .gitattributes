@@ -19,6 +19,3 @@ tests/data/heif/*.icc binary
 
 # Unified-diff prefixes are not source indentation.
 .github/overlays/rmlui/*.patch whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
-
-# Preserve context whitespace in the JPEG XL provider patches.
-.github/overlays/libjxl/*.patch whitespace=-blank-at-eol,-blank-at-eof
