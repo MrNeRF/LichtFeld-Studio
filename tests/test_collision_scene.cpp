@@ -7,6 +7,7 @@
 #include "core/services.hpp"
 #include "input/input_bindings.hpp"
 #include "input/input_controller.hpp"
+#include "input/input_router.hpp"
 #include "input/key_codes.hpp"
 #include "io/project_document.hpp"
 #include "io/scene_chapter_adapter.hpp"
@@ -325,4 +326,73 @@ TEST(CollisionScene, DisplayScrubsAvoidGaussianCacheInvalidation) {
     EXPECT_EQ(composite, initial_composite + 1);
     EXPECT_GT(scene.renderGeneration(), generation);
     EXPECT_EQ(node->collision->tree.data(), occupancy);
+}
+
+TEST(CollisionWalkController, SmoothedEyeDoesNotTeleportOrReplaceBodyAndKeepsAnimationAlive) {
+    using namespace lfs::core;
+    lfs::vis::input::InputBindings::setPersistenceEnabled(false);
+    lfs::vis::SceneManager manager;
+    lfs::vis::RenderingManager rendering;
+    lfs::vis::services().set(&manager);
+    lfs::vis::services().set(&rendering);
+    struct Cleanup {
+        ~Cleanup() {
+            lfs::vis::services().clear();
+            lfs::vis::input::InputBindings::setPersistenceEnabled(true);
+        }
+    } cleanup;
+    auto g = std::make_shared<CollisionVolume>();
+    g->settings.voxel_size = .05f;
+    g->dimensions = {60, 60, 60};
+    g->solid.resize(60 * 60 * 60);
+    for (int z = 0; z < 60; ++z)
+        for (int x = 0; x < 60; ++x) {
+            g->solid[g->index({x, 0, z})] = 1;
+            g->solid[g->index({x, 1, z})] = 1;
+            if (z >= 20 && z < 30)
+                g->solid[g->index({x, 2, z})] = 1;
+        }
+    const auto id = manager.getScene().addMesh("Walk bump", mesh(*g));
+    manager.getScene().getNodeById(id)->collision = g;
+    manager.getScene().setNodeTransform(id, glm::scale(glm::mat4(1), glm::vec3(1, -1, -1)));
+    Viewport viewport;
+    viewport.camera.t = {1, 1.9f, 2};
+    viewport.camera.R = glm::mat3(1);
+    lfs::vis::InputController input(nullptr, viewport);
+    input.initialize();
+    lfs::vis::input::InputRouter router;
+    router.setInputController(&input);
+    input.setInputRouter(&router);
+    router.focusViewportKeyboard();
+    using Mode = lfs::vis::InputController::CameraNavigationMode;
+    input.setCameraNavigationMode(Mode::Walk);
+    ASSERT_EQ(input.cameraNavigationMode(), Mode::Walk);
+    // Physical events work without polling SDL's keyboard in this windowless fixture.
+    input.handleKey(lfs::vis::input::KEY_W, lfs::vis::input::KEY_UNKNOWN, 0, lfs::vis::input::ACTION_PRESS, 0);
+    bool climbed = false;
+    for (int i = 0; i < 50; ++i) {
+        const auto previous = viewport.camera.t;
+        input.update(1.f / 60);
+        ASSERT_EQ(input.cameraNavigationMode(), Mode::Walk) << input.walkError();
+        EXPECT_LT(viewport.camera.t.y - previous.y, .02f);
+        if (viewport.camera.t.y > 1.9005f) {
+            climbed = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(climbed) << "eye=" << viewport.camera.t.x << "," << viewport.camera.t.y << "," << viewport.camera.t.z
+                         << " up=" << viewport.camera.navigationUp().y << " error=" << input.walkError();
+    input.handleKey(lfs::vis::input::KEY_W, lfs::vis::input::KEY_UNKNOWN, 0, lfs::vis::input::ACTION_RELEASE, 0);
+    EXPECT_TRUE(input.needsCameraAnimationFrame());
+    const auto released = viewport.camera.t;
+    for (int i = 0; i < 120; ++i) {
+        input.update(1.f / 60);
+        ASSERT_EQ(input.cameraNavigationMode(), Mode::Walk) << input.walkError();
+    }
+    EXPECT_GT(viewport.camera.t.y, released.y);
+    EXPECT_NEAR(viewport.camera.t.z, released.z, .0001f);
+    EXPECT_FALSE(input.needsCameraAnimationFrame());
+    viewport.camera.t.x += .5f;
+    input.update(1.f / 60);
+    EXPECT_EQ(input.cameraNavigationMode(), Mode::FPV);
 }

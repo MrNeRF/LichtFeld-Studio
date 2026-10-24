@@ -1036,3 +1036,143 @@ TEST(CollisionAdaptive, CustomAreaCapWorksOnSmallSourcesAndKeepAllBypassesIt) {
     s.max_gaussian_area = -1;
     EXPECT_THROW(s.validate(), std::invalid_argument);
 }
+
+TEST(WalkGrounding, SmallBumpUsesMinimumLiftAndCameraSettlesAtDifferentFrameRates) {
+    auto g = grid({160, 60, 40}, .05f);
+    box(g, {0, 0, 0}, {159, 1, 39});
+    box(g, {40, 2, 0}, {49, 2, 39});
+    WalkSettings s;
+    for (int fps : {30, 60, 144}) {
+        WalkState body{.eye = {1, 1.9f, 1}, .grounded = true};
+        WalkCameraState camera{.eye = body.eye, .body_eye = body.eye};
+        float max_body_rise = 0, max_camera_rise = 0, peak = body.eye.y;
+        for (int i = 0; i < fps * 4; ++i) {
+            const float old_body = body.eye.y, old_camera = camera.eye.y;
+            advanceWalk(body, s, {0, 1, 0}, {1, 0, 0}, 1.f / fps, query(g));
+            advanceWalkCamera(camera, body, s, {0, 1, 0}, 1.f / fps, query(g));
+            max_body_rise = std::max(max_body_rise, body.eye.y - old_body);
+            max_camera_rise = std::max(max_camera_rise, camera.eye.y - old_camera);
+            peak = std::max(peak, body.eye.y);
+            EXPECT_TRUE(body.grounded);
+            ASSERT_FALSE(g.capsuleIntersects(body.eye - glm::vec3(0, s.height, 0), {0, 1, 0}, s.height, s.radius));
+            ASSERT_FALSE(g.capsuleIntersects(camera.eye - glm::vec3(0, 2 * s.radius, 0), {0, 1, 0}, 2 * s.radius, s.radius));
+        }
+        EXPECT_GT(body.eye.x, 4.9f);
+        EXPECT_LE(max_body_rise, .051f);
+        EXPECT_LT(max_camera_rise, .025f);
+        EXPECT_NEAR(peak, 1.95f, .001f);
+        EXPECT_NEAR(body.eye.y, 1.9f, .001f);
+        EXPECT_NEAR(camera.eye.y, body.eye.y, .001f);
+        EXPECT_EQ(camera.height_offset, 0);
+    }
+}
+TEST(WalkGrounding, MinimumStepFitsUnderCeilingButCannotPassThroughItOrTallWalls) {
+    auto g = grid({80, 50, 30}, .05f);
+    box(g, {0, 0, 0}, {79, 1, 29});
+    box(g, {20, 2, 0}, {29, 2, 29});  // 5 cm step
+    box(g, {0, 24, 0}, {79, 24, 29}); // 1.2 m ceiling
+    WalkSettings s;
+    s.height = 1;
+    s.radius = .15f;
+    s.step_height = .3f; // Maximum lift would hit the ceiling; the actual step fits.
+    WalkState body{.eye = {.6f, 1.1f, .6f}, .grounded = true};
+    for (int i = 0; i < 120; ++i) {
+        advanceWalk(body, s, {0, 1, 0}, {.8f, 0, 0}, 1.f / 60, query(g));
+        ASSERT_FALSE(g.capsuleIntersects(body.eye - glm::vec3(0, s.height, 0), {0, 1, 0}, s.height, s.radius));
+        EXPECT_LT(body.eye.y, 1.16f);
+    }
+    EXPECT_GT(body.eye.x, 2);
+    box(g, {20, 3, 0}, {29, 4, 29}); // This taller step no longer fits below the ceiling.
+    body = {.eye = {.6f, 1.1f, .6f}, .grounded = true};
+    for (int i = 0; i < 120; ++i)
+        advanceWalk(body, s, {0, 1, 0}, {.8f, 0, 0}, 1.f / 60, query(g));
+    EXPECT_LT(body.eye.x, 1);
+    box(g, {20, 2, 0}, {20, 23, 29});
+    body = {.eye = {.6f, 1.1f, .6f}, .grounded = true};
+    for (int i = 0; i < 120; ++i)
+        advanceWalk(body, s, {0, 1, 0}, {.8f, 0, 0}, 1.f / 60, query(g));
+    EXPECT_LE(body.eye.x, .851f);
+}
+TEST(WalkGrounding, DescendingStairsStaySupportedButLargeLedgesFall) {
+    auto g = grid({160, 60, 40}, .05f);
+    box(g, {0, 0, 0}, {159, 1, 39});
+    box(g, {0, 2, 0}, {29, 4, 39});
+    box(g, {30, 2, 0}, {39, 3, 39});
+    box(g, {40, 2, 0}, {49, 2, 39});
+    WalkSettings s;
+    WalkState body{.eye = {1, 2.05f, 1}, .grounded = true};
+    for (int i = 0; i < 180; ++i) {
+        advanceWalk(body, s, {0, 1, 0}, {1, 0, 0}, 1.f / 60, query(g));
+        EXPECT_TRUE(body.grounded);
+        ASSERT_FALSE(g.capsuleIntersects(body.eye - glm::vec3(0, s.height, 0), {0, 1, 0}, s.height, s.radius));
+    }
+    EXPECT_NEAR(body.eye.y, 1.9f, .001f);
+    auto ledge = grid({160, 80, 40}, .05f);
+    box(ledge, {0, 0, 0}, {159, 1, 39});
+    box(ledge, {0, 2, 0}, {29, 11, 39}); // 50 cm drop exceeds the step budget.
+    body = {.eye = {1, 2.4f, 1}, .grounded = true};
+    bool fell = false;
+    for (int i = 0; i < 180; ++i) {
+        advanceWalk(body, s, {0, 1, 0}, {1, 0, 0}, 1.f / 60, query(ledge));
+        fell |= !body.grounded && body.vertical_velocity < 0;
+        ASSERT_FALSE(ledge.capsuleIntersects(body.eye - glm::vec3(0, s.height, 0), {0, 1, 0}, s.height, s.radius));
+    }
+    EXPECT_TRUE(fell);
+    EXPECT_TRUE(body.grounded);
+    EXPECT_NEAR(body.eye.y, 1.9f, .001f);
+}
+TEST(WalkGrounding, MotionAndSmoothingRespectSceneScaleAndZUp) {
+    auto g = grid({100, 60, 40}, .05f);
+    box(g, {0, 0, 0}, {99, 1, 39});
+    box(g, {30, 2, 0}, {39, 2, 39});
+    const auto rotation = glm::mat3(glm::rotate(glm::mat4(1), glm::half_pi<float>(), glm::vec3(1, 0, 0)));
+    for (float scale : {.01f, 1.f, 10.f}) {
+        auto s = WalkSettings{};
+        s.units_per_meter = scale;
+        s.height *= scale;
+        s.radius *= scale;
+        s.speed *= scale;
+        s.step_height *= scale;
+        s.gravity *= scale;
+        const auto up = rotation * glm::vec3(0, 1, 0);
+        auto blocked = [&](glm::vec3 feet, glm::vec3 u, float h, float r) {
+            return g.capsuleIntersects(glm::transpose(rotation) * feet / scale, glm::transpose(rotation) * u, h / scale, r / scale);
+        };
+        WalkState body{.eye = rotation * glm::vec3(.7f, 1.9f, 1) * scale, .grounded = true};
+        WalkCameraState camera{.eye = body.eye, .body_eye = body.eye};
+        float peak = 0;
+        for (int i = 0; i < 180; ++i) {
+            advanceWalk(body, s, up, rotation * glm::vec3(1, 0, 0) * scale, 1.f / 60, blocked);
+            advanceWalkCamera(camera, body, s, up, 1.f / 60, blocked);
+            peak = std::max(peak, glm::dot(body.eye, up) / scale);
+            ASSERT_FALSE(blocked(body.eye - up * s.height, up, s.height, s.radius));
+        }
+        EXPECT_NEAR(peak, 1.95f, .002f);
+        EXPECT_NEAR(glm::dot(body.eye, up) / scale, 1.9f, .002f);
+        EXPECT_NEAR(glm::length(camera.eye - body.eye) / scale, 0, .002f);
+    }
+}
+TEST(WalkCamera, SmoothingIsIndependentOfBodyAndTimeStepAndCannotClipOverhangs) {
+    WalkSettings s;
+    auto clear = [](auto, auto, auto, auto) { return false; };
+    for (int fps : {30, 60, 144}) {
+        WalkState body{.eye = {1, 1.95f, 1}, .grounded = true};
+        WalkCameraState camera{.eye = {1, 1.9f, 1}, .body_eye = {1, 1.9f, 1}};
+        advanceWalkCamera(camera, body, s, {0, 1, 0}, 1.f / fps, clear);
+        EXPECT_LT(camera.eye.y, body.eye.y);
+        EXPECT_EQ(body.eye.y, 1.95f);
+        for (int i = 1; i < fps; ++i)
+            advanceWalkCamera(camera, body, s, {0, 1, 0}, 1.f / fps, clear);
+        EXPECT_NEAR(camera.eye.y, body.eye.y, .0001f);
+        EXPECT_EQ(camera.height_offset, 0);
+    }
+    auto g = grid({40, 40, 40}, .05f);
+    box(g, {0, 0, 0}, {39, 1, 39});
+    box(g, {0, 40 - 1, 0}, {39, 40 - 1, 39}); // Ceiling starts at 1.95 m.
+    WalkState body{.eye = {1, 1.9f, 1}, .grounded = true};
+    WalkCameraState camera{.eye = {1, 2.1f, 1}, .body_eye = {1, 2.1f, 1}};
+    advanceWalkCamera(camera, body, s, {0, 1, 0}, 1.f / 60, query(g));
+    EXPECT_LE(camera.eye.y, 1.9501f);
+    EXPECT_FALSE(g.capsuleIntersects(camera.eye - glm::vec3(0, 2 * s.radius, 0), {0, 1, 0}, 2 * s.radius, s.radius));
+    EXPECT_EQ(body.eye.y, 1.9f);
+}
