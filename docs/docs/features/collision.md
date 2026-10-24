@@ -396,29 +396,20 @@ benchmarks. Neither benchmark retrains or modifies a project.
 ## Walk testing
 
 Use the walking-person **Walk Camera (collision)** toolbar button.
-It is disabled until at least one visible, loaded voxel collider is available;
-hidden parents and invalid transforms also prevent entry. Triangle surface nodes
-do not enable Walk. Capsule placement is checked when entering.
+Load a voxel collision box or a generated collision surface to enable it.
+Visibility and parent visibility affect rendering only. Walk uses loaded collision
+payloads, including hidden nodes. Placement is checked when entering.
 
-A compact settings card appears automatically at the top of the viewport:
+The Rendering panel has one collapsible **Collision** header with separate **Walk**
+and **Voxel boxes** subsections. Walk contains its enable checkbox and four player
+scrubs. Voxel boxes contains the collider selector, opacity and cutaway scrubs.
+These controls use the same scrub controller as the other Rendering settings.
+There are no collision settings overlays at the top of the viewport.
 
-- In **Walk**, it shows head height, capsule radius, speed and step height.
-- Outside Walk, select one voxel collider to show its opacity and cutaway scrubs.
-  The card's dropdown switches between voxel colliders. Hidden and locked states
-  are shown explicitly, and locked preview settings cannot be changed.
-- Other selections hide the card. Export controls take temporary priority over
-  it, and competing selection/transform settings are hidden while it is visible.
-
-The card and authoring window share native values and update each other live.
-No voxel or triangle data is copied to populate these controls. Camera-mode changes
-request a document refresh directly rather than polling. Unsafe capsule changes
-leave the body unchanged and show the reason in the card.
-
-A visible, loaded collision node and free player capsule are required. The panel
+A loaded collision payload and free player capsule are required. The panel
 applies calibrated defaults of 1.8 m eye height, 0.2 m radius, 2.5 m/s speed and
-0.25 m step height. **Walk and edit** contains only those four numeric scrubs.
-Drag to change values live, or click, type and press Enter. Shift scrubs more
-precisely; Ctrl scrubs faster. Height changes preserve foot position, with a small
+0.25 m step height. The Rendering panel contains those four numeric scrubs.
+Height changes preserve foot position, with a small
 contact tolerance, and unsafe capsule expansions are rejected without leaving Walk.
 Section help is available through tooltips.
 
