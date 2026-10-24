@@ -9,6 +9,7 @@
 
 set(LFS_CORE_CUDA_SOURCES
     memory_arena.cu
+    collision_voxelization.cu
     exportable_storage.cpp
     lanczos_resize/lanczos_resize.cu
     undistort/undistort.cu

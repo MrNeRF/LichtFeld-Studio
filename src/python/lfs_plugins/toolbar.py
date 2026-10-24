@@ -1228,6 +1228,7 @@ class _UtilityToolbarController:
         ("world", "trackball", "toolbar.free_orbit_camera", "Free Orbit Camera"),
         ("camera-fpv", "fpv", "toolbar.fly_camera", "Fly Camera"),
         ("drone", "drone", "toolbar.drone_camera", "Drone Camera"),
+        ("walk", "walk", "toolbar.walk_camera", "Walk Camera (collision)"),
     )
     _PRIMARY_ACTIONS = {
         "home": "CAMERA_RESET_HOME",
@@ -1272,6 +1273,7 @@ class _UtilityToolbarController:
                 tooltip_key=tooltip_key,
                 tooltip_text=label,
                 selected=camera_mode == mode_id,
+                enabled=mode_id != "walk" or bool(getattr(lf, "has_walk_collision", lambda: False)()),
             )
             for icon_name, mode_id, tooltip_key, label in self._CAMERA_MODE_SPECS
         ]
@@ -1363,6 +1365,8 @@ class _UtilityToolbarController:
         import lichtfeld as lf
 
         if action == "set_camera_navigation_mode":
+            if value == "walk" and not getattr(lf, "has_walk_collision", lambda: False)():
+                return
             lf.set_camera_navigation_mode(value)
             return
         if action == "home":
@@ -1989,6 +1993,7 @@ class _ViewportToolbarController:
             self._crop_roi_settings_open,
             tool_ids,
             str(call("orbit", lf.get_camera_navigation_mode)).lower() if hasattr(lf, "get_camera_navigation_mode") else "orbit",
+            bool(call(False, getattr(lf, "has_walk_collision", None))),
             self._viewport_export_controls.visible,
             self._gt_compare_controls._gt_compare_active(),
             self._depth_view_controls._depth_view_active(),

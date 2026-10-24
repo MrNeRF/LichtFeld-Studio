@@ -351,6 +351,9 @@ namespace lfs::io::project {
                     .line_width = node.cropbox->line_width,
                 };
             }
+            if (node.collision)
+                result.collision = node.collision;
+            result.collision_display = node.collision_display;
             if (node.ellipsoid) {
                 result.ellipsoid = EllipsoidRecord{
                     .radii = {node.ellipsoid->radii.x, node.ellipsoid->radii.y,
@@ -723,6 +726,7 @@ namespace lfs::io::project {
                     .model = nullptr,
                     .point_cloud = nullptr,
                     .mesh = nullptr,
+                    .collision = nullptr,
                     .cropbox = nullptr,
                     .ellipsoid = nullptr,
                     .camera = nullptr,
@@ -741,6 +745,9 @@ namespace lfs::io::project {
                                        record.georef_pose->translation[2]),
                     };
                 }
+                if (record.collision)
+                    desc.collision = record.collision;
+                desc.collision_display = record.collision_display;
                 if (record.cropbox) {
                     desc.cropbox = std::make_unique<lfs::core::CropBoxData>(
                         lfs::core::CropBoxData{

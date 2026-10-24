@@ -32,7 +32,7 @@ def test_file_menu_groups_preserve_existing_operators(monkeypatch):
     ]
     exports = submenus["tr:menu.file.export_menu"]
     assert [item["operator_id"].split(".")[-1] for item in exports] == [
-        "ExportOperator", "ExportConfigOperator",
+        "ExportOperator", "ExportCollisionOperator", "ExportConfigOperator",
     ]
     maintenance = submenus["tr:menu.file.project_maintenance"]
     assert [item["operator_id"].split(".")[-1] for item in maintenance if "operator_id" in item] == [

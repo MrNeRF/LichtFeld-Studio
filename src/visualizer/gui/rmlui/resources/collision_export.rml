@@ -1,0 +1,18 @@
+<rml>
+<head><link type="text/template" href="floating_window.rml"/></head>
+<body template="floating-window">
+  <div id="export-scroll">
+    <div class="export-actions">
+      <button id="export-voxels" class="btn btn--primary" data-tooltip="collision.export_voxels_help"><span>@tr:collision.export_voxels</span></button>
+      <button id="export-glb" class="btn btn--secondary" data-tooltip="collision.export_glb_help"><span>@tr:collision.export_glb</span></button>
+    </div>
+    <div id="export-job" style="display: none;">
+      <p id="export-stage"/>
+      <div id="export-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="export-progress-fill"/></div>
+      <div class="export-job-footer"><p id="export-time"/><button id="export-cancel" class="btn btn--secondary"><span>@tr:collision.cancel_generation</span></button></div>
+    </div>
+    <p id="export-status"/>
+    <p id="export-error" style="display: none;"/>
+  </div>
+</body>
+</rml>

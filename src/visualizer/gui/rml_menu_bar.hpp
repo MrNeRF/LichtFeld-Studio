@@ -77,6 +77,7 @@ namespace lfs::vis::gui {
         std::string tooltip_key;
         std::string tooltip_text;
         bool selected = false;
+        bool enabled = true;
         bool operator==(const MenuToolbarButtonView&) const = default;
     };
 
@@ -239,7 +240,7 @@ namespace lfs::vis::gui {
         std::vector<MenuToolbarButtonView> camera_buttons_;
         std::vector<MenuToolbarButtonView> render_buttons_;
         std::vector<MenuToolbarButtonView> projection_buttons_;
-        std::array<std::string, 4> navigation_tooltips_;
+        std::array<std::string, 5> navigation_tooltips_;
         std::uint64_t navigation_tooltip_language_generation_ = 0;
         bool has_navigation_tooltip_language_generation_ = false;
         int active_index_ = -1;

@@ -393,6 +393,19 @@ class ExportOperator(Operator):
         return {"FINISHED"}
 
 
+class ExportCollisionOperator(Operator):
+    label = "menu.file.export_collision"
+    description = "Export collision as SuperSplat voxels or a GLB surface"
+
+    def execute(self, context) -> set:
+        try:
+            lf.ui.open_collision_export()
+        except RuntimeError as exc:
+            lf.ui.message_dialog(lf.ui.tr(self.label), str(exc), "error")
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
 class ExportConfigOperator(Operator):
     label = "menu.file.export_config"
     description = "Export the current configuration"
@@ -945,6 +958,7 @@ class FileMenu:
             ),
             menu_submenu(lf.ui.tr("menu.file.export_menu"), [
                 menu_operator(ExportOperator, label=lf.ui.tr("menu.file.export_scene")),
+                menu_operator(ExportCollisionOperator),
                 menu_operator(ExportConfigOperator, label=lf.ui.tr("menu.file.configuration")),
             ]),
             menu_submenu(
@@ -997,6 +1011,7 @@ _operator_classes = [
     ImportCheckpointOperator,
     ImportConfigOperator,
     ExportOperator,
+    ExportCollisionOperator,
     ExportConfigOperator,
     Mesh2SplatOperator,
     ExtractVideoFramesOperator,

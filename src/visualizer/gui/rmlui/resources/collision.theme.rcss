@@ -1,0 +1,16 @@
+.collision-row input[type="text"], .collision-row select {
+    background-color: @{surface_bright}; color: @{text}; border-color: @{border};
+    border-radius: @{num(size.frame_rounding)}dp;
+}
+.collision-row input[type="text"]:hover, .collision-row select:hover { border-color: @{alpha(primary, 0.5)}; }
+.collision-row input[type="text"]:focus, .collision-row select:focus { border-color: @{primary}; }
+.collision-primary-actions, .collision-section-header { border-color: @{border}; }
+.collision-actions .btn { border-radius: @{num(size.frame_rounding)}dp; }
+#collision-scroll scrollbarvertical sliderbar { background-color: @{alpha(text_dim, 0.55)}; }
+#collision-scroll scrollbarvertical sliderbar:hover { background-color: @{primary}; }
+#job-progress { background-color: @{surface_bright}; }
+#generation-progress { background-color: @{border}; }
+#generation-progress-fill { background-color: @{primary}; }
+#job-progress.is-failed #generation-progress-fill { background-color: @{error}; }
+#collision-error { border-color: @{error}; }
+.collision-intro > img { image-color: @{primary}; }

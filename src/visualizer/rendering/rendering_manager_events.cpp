@@ -38,7 +38,8 @@ namespace lfs::vis {
                 dirty |= DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY | DirtyFlag::SPLIT_VIEW;
             }
             if (hasSceneMutation(flags, Mutation::TRANSFORM_CHANGED) ||
-                hasSceneMutation(flags, Mutation::NODE_REPARENTED)) {
+                hasSceneMutation(flags, Mutation::NODE_REPARENTED) ||
+                hasSceneMutation(flags, Mutation::DISPLAY_CHANGED)) {
                 dirty |= DirtyFlag::MESH | DirtyFlag::OVERLAY;
             }
             if (hasSceneMutation(flags, Mutation::SELECTION_CHANGED)) {

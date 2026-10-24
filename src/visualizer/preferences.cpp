@@ -44,7 +44,7 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] bool knownCameraMode(const std::string& mode) {
-            return mode == "orbit" || mode == "trackball" || mode == "fpv" || mode == "drone";
+            return mode == "orbit" || mode == "trackball" || mode == "fpv" || mode == "drone" || mode == "walk";
         }
 
         [[nodiscard]] bool knownProgressBarStyle(std::string_view style) {

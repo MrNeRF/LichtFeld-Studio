@@ -6,6 +6,7 @@
 
 #include "core/animatable_property.hpp"
 #include "core/camera.hpp"
+#include "core/collision.hpp"
 #include "core/export.hpp"
 #include "core/mesh_data.hpp"
 #include "core/splat_data.hpp"
@@ -166,6 +167,8 @@ namespace lfs::core {
         std::unique_ptr<lfs::core::SplatData> model;
         std::shared_ptr<lfs::core::PointCloud> point_cloud;
         std::shared_ptr<lfs::core::MeshData> mesh;
+        std::shared_ptr<const CollisionVolume> collision;
+        CollisionDisplay collision_display;
         std::unique_ptr<CropBoxData> cropbox;
         std::unique_ptr<EllipsoidData> ellipsoid;
         std::unique_ptr<KeyframeData> keyframe;
@@ -258,6 +261,8 @@ namespace lfs::core {
             std::unique_ptr<lfs::core::SplatData> model;
             std::shared_ptr<lfs::core::PointCloud> point_cloud;
             std::shared_ptr<lfs::core::MeshData> mesh;
+            std::shared_ptr<const CollisionVolume> collision;
+            CollisionDisplay collision_display;
             std::unique_ptr<CropBoxData> cropbox;
             std::unique_ptr<EllipsoidData> ellipsoid;
             std::shared_ptr<lfs::core::Camera> camera;
@@ -296,6 +301,7 @@ namespace lfs::core {
             SELECTION_CHANGED = 1 << 7,
             CLEARED = 1 << 8,
             CAMERA_TRAINING_CHANGED = 1 << 9,
+            DISPLAY_CHANGED = 1 << 10,
         };
 
         void notifyMutation(MutationType type);
@@ -555,11 +561,20 @@ namespace lfs::core {
         // inactive SH and deletion masks; safe for subsequent worker-side IO.
         [[nodiscard]] std::vector<SplatSnapshot> snapshotVisibleSplats() const;
 
+        struct SplatGeometrySnapshot {
+            Tensor means, scaling, rotation, opacity, deleted;
+            glm::mat4 world_transform{1};
+            size_t size = 0;
+        };
+        // Only immutable CPU geometry/log-parameters: no SH, optimizer or color copies.
+        [[nodiscard]] std::vector<SplatGeometrySnapshot> snapshotVisibleSplatGeometry() const;
+
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> getVisibleSelectionIndices() const;
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> getVisibleSelectionMask() const;
         [[nodiscard]] uint64_t renderGeneration() const noexcept {
             return render_generation_.load(std::memory_order_acquire);
         }
+        [[nodiscard]] uint64_t graphEpoch() const noexcept { return graph_epoch_; }
         [[nodiscard]] uint64_t selectionGeneration() const noexcept { return selection_generation_; }
 
         // Install before publishing a live scene to workers. Detached and restore
@@ -588,6 +603,13 @@ namespace lfs::core {
             glm::mat4 transform;
             NodeId node_id = NULL_NODE;
             bool is_selected = false;
+            bool collision_voxel_boxes = false;
+            const CollisionVolume* collision_volume = nullptr;
+            CollisionDisplay collision_display;
+            // Keep frame snapshots valid when authoring replaces/deletes a node
+            // after scene collection but before rendering consumes the snapshot.
+            std::shared_ptr<const MeshData> mesh_owner;
+            std::shared_ptr<const CollisionVolume> collision_owner;
         };
         [[nodiscard]] std::vector<VisibleMesh> getVisibleMeshes() const;
 
@@ -857,6 +879,7 @@ namespace lfs::core {
         mutable uint64_t consolidated_generation_ = 0;
         bool preserve_source_models_ = false;
         mutable std::atomic<uint64_t> render_generation_{0};
+        uint64_t graph_epoch_ = 0;
         RenderInvalidationCallback render_invalidation_callback_ = nullptr;
         RenderInvalidationCallback transform_invalidation_callback_ = nullptr;
         std::atomic<uint64_t> bounds_generation_{1};

@@ -646,6 +646,8 @@ namespace lfs::vis {
             }
             VulkanMeshDrawItem item{};
             item.mesh = mesh.mesh;
+            item.mesh_owner = mesh.mesh_owner;
+            item.collision_owner = mesh.collision_owner;
             item.model = mesh.transform;
             item.light_dir = headlight_dir;
             item.camera_relative_light = true;
@@ -655,9 +657,17 @@ namespace lfs::vis {
             item.is_emphasized = mesh.is_selected;
             item.dim_non_emphasized = dim_non_emphasized;
             item.wireframe_overlay = settings.mesh_wireframe;
+            item.collision_voxel_boxes = mesh.collision_voxel_boxes;
+            item.collision_volume = mesh.collision_volume;
+            item.collision_opacity = mesh.collision_display.opacity;
+            item.collision_sharp = mesh.collision_display.sharp;
+            item.collision_slice = mesh.collision_display.slice;
             item.wireframe_color = settings.mesh_wireframe_color;
             item.wireframe_width = settings.mesh_wireframe_width;
             item.shadow_enabled = settings.mesh_shadow_enabled;
+            if (item.collision_voxel_boxes) {
+                item.shadow_enabled = false;
+            }
             item.shadow_map_resolution = settings.mesh_shadow_resolution;
             items.push_back(item);
         }

@@ -110,11 +110,15 @@ namespace lfs::vis {
 
         VulkanMeshPass mesh_pass;
         bool initialized = false;
+        bool gpu_timing_enabled = false;
 
         VkCommandPool command_pool = VK_NULL_HANDLE;
         VkCommandBuffer command_buffer = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
         bool submission_in_flight = false;
+        VkQueryPool timer_pool = VK_NULL_HANDLE;
+        double gpu_milliseconds = 0;
+        double timestamp_period = 0;
 
         VkImage color_image = VK_NULL_HANDLE;
         VmaAllocation color_allocation = VK_NULL_HANDLE;
@@ -194,6 +198,16 @@ namespace lfs::vis {
             requested_context.setDebugObjectName(
                 VK_OBJECT_TYPE_FENCE, fence, "mesh.offscreen.fence");
 
+            VkPhysicalDeviceProperties props{};
+            vkGetPhysicalDeviceProperties(requested_context.physicalDevice(), &props);
+            if (gpu_timing_enabled && props.limits.timestampComputeAndGraphics) {
+                VkQueryPoolCreateInfo query{};
+                query.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+                query.queryType = VK_QUERY_TYPE_TIMESTAMP;
+                query.queryCount = 2;
+                if (vkCreateQueryPool(device, &query, nullptr, &timer_pool) == VK_SUCCESS)
+                    timestamp_period = props.limits.timestampPeriod;
+            }
             initialized = true;
             return {};
         }
@@ -241,6 +255,9 @@ namespace lfs::vis {
 
             mesh_pass.shutdown();
             destroyTargets();
+            if (timer_pool != VK_NULL_HANDLE)
+                vkDestroyQueryPool(device, timer_pool, nullptr);
+            timer_pool = VK_NULL_HANDLE;
 
             if (device != VK_NULL_HANDLE && fence != VK_NULL_HANDLE) {
                 vkDestroyFence(device, fence, nullptr);
@@ -489,9 +506,15 @@ namespace lfs::vis {
             rendering_info.colorAttachmentCount = 1;
             rendering_info.pColorAttachments = &color_attachment;
             rendering_info.pDepthAttachment = &depth_attachment;
+            if (timer_pool != VK_NULL_HANDLE) {
+                vkCmdResetQueryPool(command_buffer, timer_pool, 0, 2);
+                vkCmdWriteTimestamp2(command_buffer, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, timer_pool, 0);
+            }
             vkCmdBeginRendering(command_buffer, &rendering_info);
             mesh_pass.record(command_buffer, render_area, params);
             vkCmdEndRendering(command_buffer);
+            if (timer_pool != VK_NULL_HANDLE)
+                vkCmdWriteTimestamp2(command_buffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, timer_pool, 1);
 
             context->imageBarriers().transitionImage(
                 command_buffer,
@@ -567,6 +590,11 @@ namespace lfs::vis {
                 return vkUnexpected("vkWaitForFences(mesh offscreen)", result);
             }
             submission_in_flight = false;
+            if (timer_pool != VK_NULL_HANDLE) {
+                uint64_t ticks[2]{};
+                if (vkGetQueryPoolResults(device, timer_pool, 0, 2, sizeof(ticks), ticks, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
+                    gpu_milliseconds = double(ticks[1] - ticks[0]) * timestamp_period / 1e6;
+            }
 
             const auto count = static_cast<std::size_t>(pixel_count);
             std::vector<float> rgba(4u * count);
@@ -640,6 +668,18 @@ namespace lfs::vis {
         } catch (...) {
             return std::unexpected("Mesh offscreen rendering threw an unknown exception");
         }
+    }
+
+    void MeshOffscreenRenderer::setGpuTimingEnabled(bool enabled) {
+        if (!impl_)
+            impl_ = std::make_unique<Impl>();
+        if (impl_->initialized && enabled != impl_->gpu_timing_enabled)
+            throw std::logic_error("Set GPU timing before the first offscreen render");
+        impl_->gpu_timing_enabled = enabled;
+    }
+
+    double MeshOffscreenRenderer::lastGpuMilliseconds() const {
+        return impl_ ? impl_->gpu_milliseconds : 0;
     }
 
     void MeshOffscreenRenderer::shutdown() {

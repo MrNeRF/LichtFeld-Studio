@@ -1165,6 +1165,7 @@ namespace lfs::vis::gui {
             snapshot.name = node->name;
             snapshot.visible = static_cast<bool>(node->visible);
             snapshot.locked = static_cast<bool>(node->locked);
+            snapshot.collision = node->collision && !node->collision_display.surface_ready;
             snapshot.has_children = !node->children.empty();
             snapshot.training_enabled = node->training_enabled;
             snapshot.camera_uid = node->camera_uid;
@@ -1185,6 +1186,10 @@ namespace lfs::vis::gui {
                                      : node->name;
                 break;
             case core::NodeType::MESH:
+                if (node->collision && !node->collision_display.surface_ready) {
+                    snapshot.label = std::format("{}  ({})", node->name, LOC("collision.voxel_surface"));
+                    break;
+                }
                 snapshot.label = (node->mesh)
                                      ? std::format("{}  ({}V / {}F)", node->name,
                                                    lfs::core::format_count(node->mesh->vertex_count()),
@@ -1719,7 +1724,7 @@ namespace lfs::vis::gui {
         setCachedClass(slot.training_toggle_icon, "training-mixed", row.training_mixed);
         setCachedProperty(slot.training_mixed_mark, "display", row.training_mixed ? "block" : "none");
 
-        const std::string_view icon_sprite = typeIconSprite(row.type);
+        const std::string_view icon_sprite = snapshot.collision ? "icon-collision" : typeIconSprite(row.type);
         const std::string_view unicode = unicodeIcon(row.type);
         setCachedTypeClass(slot.type_icon, typeClass(row.type));
         setCachedTypeClass(slot.unicode_icon, typeClass(row.type));
@@ -2744,7 +2749,7 @@ namespace lfs::vis::gui {
         const auto it = node_snapshots_.find(node_id);
         if (it == node_snapshots_.end())
             return;
-        setCachedAttribute(drag_ghost_icon_, "sprite", std::string(typeIconSprite(it->second.type)));
+        setCachedAttribute(drag_ghost_icon_, "sprite", it->second.collision ? "icon-collision" : std::string(typeIconSprite(it->second.type)));
         setCachedInnerRml(drag_ghost_name_, encode(it->second.name));
         setCachedProperty(drag_ghost_badge_, "display", drag_node_ids_.size() > 1 ? "inline" : "none");
         setCachedInnerRml(drag_ghost_badge_, drag_node_ids_.size() > 1
@@ -3112,6 +3117,10 @@ namespace lfs::vis::gui {
         if (node->type == core::NodeType::SPLAT) {
             items.push_back(makeAction(tr("export.export") + "...",
                                        prefixedAction(std::format("export_splat:{}", node_id)), !items.empty()));
+        }
+        if (node->collision || (node->type == core::NodeType::MESH && node->mesh)) {
+            items.push_back(makeAction(tr("export.export") + "...",
+                                       prefixedAction(std::format("export_collision:{}", node_id)), !items.empty()));
         }
         if (selected_ids_.size() > 1) {
             items.push_back(makeAction(tr("scene.select_hierarchy"),
@@ -3547,6 +3556,16 @@ namespace lfs::vis::gui {
                 }
             };
             gui->enqueueModal(std::move(request));
+        } else if (kind == "export_collision" && parts.size() >= 2) {
+            core::NodeId id = core::NULL_NODE;
+            if (!parseNodeId(parts[1], id))
+                return;
+            const auto* node = scene->getNodeById(id);
+            if (!node || (!node->collision && !node->mesh))
+                return;
+            scene_manager->selectNode(id);
+            requestCollisionExport(node->uuid);
+            PanelRegistry::instance().set_panel_enabled("native.collision_export", true);
         } else if (kind == "export_splat" && parts.size() >= 2) {
             core::NodeId id = core::NULL_NODE;
             if (!parseNodeId(parts[1], id))

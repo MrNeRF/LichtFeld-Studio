@@ -1202,7 +1202,8 @@ namespace lfs::vis::gui {
             markRenderNeeded(RenderReason::Keyboard);
         }
         if (external_mouse_capture && !point_interactive && !hovered_interactive_ &&
-            !vram_drag_capture && !toolbar_drag_capture && !has_interactive_button_event) {
+            !vram_drag_capture && !toolbar_drag_capture && !has_interactive_button_event &&
+            !(keyboard_event && rml_input::hasFocusedKeyboardTarget(focused_before))) {
             tooltip_.setHover({}, nullptr);
             return;
         }

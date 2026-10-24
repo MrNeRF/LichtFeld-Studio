@@ -266,6 +266,8 @@ namespace lfs::core {
         if (restore_staging_) {
             return;
         }
+        if (type == MutationType::CLEARED)
+            ++graph_epoch_;
         pending_mutations_ |= static_cast<uint32_t>(type);
 
         if (type == MutationType::NODE_ADDED ||
@@ -284,6 +286,11 @@ namespace lfs::core {
         }
 
         switch (type) {
+        case MutationType::DISPLAY_CHANGED:
+            // Reuse the non-splat invalidation path: display scrubs change
+            // compositing, not Gaussian geometry or its cached rasterization.
+            publishRenderInvalidation(true);
+            break;
         case MutationType::TRANSFORM_CHANGED:
             invalidateTransformCache();
             break;
@@ -1965,7 +1972,8 @@ namespace lfs::core {
         std::vector<VisibleMesh> result;
         for (const auto& node : nodes_) {
             if (node->type == NodeType::MESH && isNodeEffectivelyVisible(node->id) && node->mesh) {
-                result.push_back({node->mesh.get(), getWorldTransform(node->id), node->id});
+                result.push_back({node->mesh.get(), getWorldTransform(node->id), node->id, false,
+                                  node->collision && node->collision_display.preview, node->collision.get(), node->collision_display, node->mesh, node->collision});
             }
         }
         return result;
@@ -2613,6 +2621,56 @@ namespace lfs::core {
             if (copied_cuda)
                 (void)cudaDeviceSynchronize();
             throw;
+        }
+        return result;
+    }
+
+    std::vector<Scene::SplatGeometrySnapshot> Scene::snapshotVisibleSplatGeometry() const {
+        std::optional<std::shared_lock<std::shared_mutex>> live_lock;
+        if (auto* mutex = liveModelMutex(); mutex && live_model_lock_depth() == 0)
+            live_lock.emplace(*mutex);
+        noteLiveModelLockAcquired();
+        struct Guard {
+            const Scene& scene;
+            ~Guard() { scene.noteLiveModelLockReleased(); }
+        } guard{*this};
+        const auto visible = getVisibleSplatNodeSlots();
+        const auto* combined = consolidated_ ? getCombinedModel() : nullptr;
+        if (consolidated_ && !combined)
+            throw std::runtime_error("The consolidated scene is not ready to capture.");
+        std::vector<size_t> offsets;
+        size_t offset = 0;
+        for (const auto& slot : consolidated_node_slots_) {
+            offsets.push_back(offset);
+            offset += slot.gaussian_count;
+        }
+        std::vector<SplatGeometrySnapshot> result;
+        result.reserve(visible.size());
+        for (const auto& slot : visible) {
+            const auto* model = combined ? combined : slot.node->model.get();
+            size_t first = combined ? offsets[slot.slot_index] : 0;
+            size_t count = combined ? consolidated_node_slots_[slot.slot_index].gaussian_count : size_t(model->size());
+            std::shared_ptr<SplatData> leaves;
+            if (model->lod_tree && model->lod_tree->has_tree()) {
+                SplatSnapshot snapshot{std::make_shared<SplatData>(model->clone()), getWorldTransform(slot.node->id),
+                                       first, count, model->get_active_sh_degree()};
+                leaves = snapshot.materialize();
+                model = leaves.get();
+                first = 0;
+                count = model->size();
+            }
+            auto capture = [&](const Tensor& tensor) {
+                if (!tensor.is_valid())
+                    return Tensor{};
+                auto rows = tensor.slice(0, first, first + count);
+                // CPU .to() aliases storage; clone only that case. CUDA -> CPU
+                // already owns its transfer buffer and settles before returning.
+                return rows.device() == Device::CPU ? rows.contiguous().clone()
+                                                    : rows.to(Device::CPU).contiguous();
+            };
+            result.push_back({capture(model->means_raw()), capture(model->scaling_raw()),
+                              capture(model->rotation_raw()), capture(model->opacity_raw()),
+                              capture(model->deleted()), getWorldTransform(slot.node->id), count});
         }
         return result;
     }
@@ -4493,6 +4551,8 @@ namespace lfs::core {
                 return NULL_NODE;
             }
             node->mesh = std::move(desc.mesh);
+            node->collision = std::move(desc.collision);
+            node->collision_display = desc.collision_display;
             break;
         case NodeType::CROPBOX:
             if (!desc.cropbox) {
@@ -4668,6 +4728,7 @@ namespace lfs::core {
         pending_mutations_ = 0;
         transaction_depth_ = 0;
         ++camera_list_generation_;
+        ++graph_epoch_;
         return staged;
     }
 
@@ -4738,6 +4799,8 @@ namespace lfs::core {
                 if (has_payload) {
                     live->mesh =
                         std::move(staged_node->mesh);
+                    live->collision = std::move(staged_node->collision);
+                    live->collision_display = staged_node->collision_display;
                     live->gaussian_count.store(
                         static_cast<std::size_t>(
                             live->mesh->vertex_count()),
@@ -5023,6 +5086,8 @@ namespace lfs::core {
                 new_node->visible.setQuiet(src_visible);
                 new_node->locked.setQuiet(src_locked);
                 new_node->point_cloud_source = getNodeById(src_id)->point_cloud_source;
+                new_node->collision = getNodeById(src_id)->collision;
+                new_node->collision_display = getNodeById(src_id)->collision_display;
                 new_node->transform_dirty = true;
             }
 

@@ -2,12 +2,15 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "gui/panel_registry.hpp"
 #include "gui/utils/splat_export_request.hpp"
 #include "py_ui.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer/core/services.hpp"
 #include "visualizer/post_work_utils.hpp"
 #include "visualizer/preferences.hpp"
+#include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/theme/theme.hpp"
 #include "visualizer/visualizer.hpp"
 
@@ -153,6 +156,30 @@ namespace lfs::python {
         m.def("set_remember_camera_view_snap", &lfs::vis::setRememberCameraViewSnapPreference,
               nb::arg("enabled"), "Enable or disable camera view snap persistence");
         m.def("take_splat_export_request", &lfs::vis::gui::takeSplatExportRequest);
+        m.def("open_collision_export", [] { invoke_on_viewer_thread([] {
+                                                auto* manager = vis::services().sceneOrNull();
+                                                if (!manager)
+                                                    throw std::runtime_error("Open a scene and generate collision before exporting it.");
+                                                const auto& scene = manager->getScene();
+                                                const core::SceneNode* target = nullptr;
+                                                auto choose = [&](const core::SceneNode* node) {
+                                                    if (!node || (!node->collision && !node->mesh))
+                                                        return;
+                                                    if (target)
+                                                        throw std::runtime_error("Select one collision node in the scene graph to export.");
+                                                    target = node;
+                                                };
+                                                for (auto id : manager->getSelectedNodeIds())
+                                                    choose(scene.getNodeById(id));
+                                                if (!target)
+                                                    for (const auto* node : scene.getNodes())
+                                                        if (node->collision)
+                                                            choose(node);
+                                                if (!target)
+                                                    throw std::runtime_error("No collision node exists. Generate one in Tools > Collision first.");
+                                                vis::gui::requestCollisionExport(target->uuid);
+                                                vis::gui::PanelRegistry::instance().set_panel_enabled("native.collision_export", true);
+                                            }); }, "Open collision export for the selected collider, or the scene's only collider. Multiple colliders require a selection.");
         m.def("get_splat_drag_preferences", []() {
             const auto s = lfs::vis::UserPreferences::instance().splatDrag();
             nb::dict result;

@@ -450,6 +450,8 @@ namespace lfs::vis {
             cmd::GoToCamView::when([this](const auto& e) { handleGoToCamView(e); });
 
         reset_camera_handler_id_ = cmd::ResetCamera::when([this](const auto&) {
+            if (camera_navigation_mode_ == CameraNavigationMode::Walk)
+                setCameraNavigationMode(CameraNavigationMode::FPV);
             resetViewportToHome(viewport_, viewport_);
             publishCameraMove();
             if (auto* const viewer = lfs::python::get_visualizer()) {
@@ -459,6 +461,8 @@ namespace lfs::vis {
 
         dataset_load_completed_handler_id_ = state::DatasetLoadCompleted::when([this](const auto& e) {
             if (e.success) {
+                if (camera_navigation_mode_ == CameraNavigationMode::Walk)
+                    setCameraNavigationMode(CameraNavigationMode::FPV);
                 resetViewportToHome(viewport_, viewport_);
                 publishCameraMove();
             }
@@ -610,6 +614,7 @@ namespace lfs::vis {
         case CameraNavigationMode::Trackball: return "trackball";
         case CameraNavigationMode::FPV: return "fpv";
         case CameraNavigationMode::Drone: return "drone";
+        case CameraNavigationMode::Walk: return "walk";
         }
         return "orbit";
     }
@@ -624,14 +629,121 @@ namespace lfs::vis {
             return CameraNavigationMode::FPV;
         if (name == "drone")
             return CameraNavigationMode::Drone;
+        if (name == "walk")
+            return CameraNavigationMode::Walk;
         return std::nullopt;
+    }
+
+    bool InputController::hasWalkCollision() const {
+        const auto* sm = services().sceneOrNull();
+        if (!sm)
+            return false;
+        const auto& scene = sm->getScene();
+        bool found = false;
+        for (const auto* node : scene.getNodes()) {
+            if (!node->collision || !node->mesh)
+                continue;
+            const auto det = glm::determinant(glm::mat3(scene.getWorldTransform(node->id)));
+            if (!std::isfinite(det) || std::abs(det) < 1e-10f)
+                continue;
+            found = true;
+        }
+        return found;
+    }
+
+    core::CapsuleQuery InputController::walkCollisionQuery() const {
+        struct Collider {
+            std::shared_ptr<const core::CollisionVolume> volume;
+            glm::mat4 transform;
+        };
+        std::vector<Collider> colliders;
+        if (auto* sm = services().sceneOrNull()) {
+            auto& scene = sm->getScene();
+            for (const auto* node : scene.getNodes()) {
+                if (!node->collision || !node->mesh)
+                    continue;
+                auto transform = lfs::rendering::dataWorldTransformToVisualizerWorld(scene.getWorldTransform(node->id));
+                const auto det = glm::determinant(glm::mat3(transform));
+                if (!std::isfinite(det) || std::abs(det) < 1e-10f)
+                    continue;
+                if (std::any_of(colliders.begin(), colliders.end(), [&](const auto& existing) {
+                        return existing.volume == node->collision && existing.transform == transform;
+                    }))
+                    continue;
+                colliders.push_back({node->collision, transform});
+            }
+        }
+        if (colliders.empty())
+            throw std::runtime_error("Load a collision box or collision surface to enable Walk mode");
+        return [colliders = std::move(colliders)](glm::vec3 feet, glm::vec3 up, float height, float radius) {
+            for (const auto& collider : colliders) {
+                if (core::transformedCapsuleIntersects(*collider.volume, collider.transform, feet, up, height, radius))
+                    return true;
+            }
+            return false;
+        };
+    }
+
+    void InputController::setWalkSettings(core::WalkSettings settings) {
+        settings.validate();
+        if (camera_navigation_mode_ == CameraNavigationMode::Walk) {
+            auto& viewport = activeKeyboardViewport();
+            auto& camera = viewport.camera;
+            const auto up = camera.navigationUp();
+            const auto feet = walk_state_.eye - up * walk_settings_.height;
+            const auto query = walkCollisionQuery();
+            auto eye = feet + up * settings.height;
+            const auto fits = [&](glm::vec3 candidate) { return !query(candidate - up * settings.height, up, settings.height, settings.radius); };
+            if (!fits(eye)) {
+                // Reconstructing feet from a different head height can round a
+                // resting capsule a few ulps into its support. Use the solver's
+                // small contact tolerance, while still checking the full capsule.
+                eye += up * std::min(.0001f * settings.units_per_meter, settings.radius * .001f);
+                if (!fits(eye))
+                    throw std::runtime_error("The requested Walk capsule does not fit here. Move into free space or reduce head height/radius.");
+            }
+            const auto before = camera.t;
+            walk_state_.eye = eye;
+            walk_camera_ = {.eye = walk_state_.eye, .body_eye = walk_state_.eye};
+            camera.t = walk_state_.eye;
+            camera.pivot += camera.t - before;
+            onCameraMovementStart();
+            publishCameraMove(&viewport);
+        }
+        walk_settings_ = settings;
+        walk_error_.clear();
+        auto& generation = app_store().render_settings_generation;
+        generation.set(generation.get() + 1);
+        python::request_redraw();
     }
 
     void InputController::setCameraNavigationMode(const CameraNavigationMode mode) {
         if (camera_navigation_mode_ == mode)
             return;
+        if (mode == CameraNavigationMode::Walk) {
+            try {
+                walk_settings_.validate();
+                auto& camera = activeKeyboardViewport().camera;
+                auto query = walkCollisionQuery();
+                if (query(camera.t - camera.navigationUp() * walk_settings_.height,
+                          camera.navigationUp(), walk_settings_.height, walk_settings_.radius))
+                    throw std::runtime_error("Walk capsule does not fit here; move the camera into free space first");
+                walk_state_ = {.eye = camera.t};
+                walk_camera_ = {.eye = camera.t, .body_eye = camera.t};
+                walk_error_.clear();
+            } catch (const std::exception& error) {
+                walk_error_ = error.what();
+                LOG_ERROR("Cannot enter walk mode: {}", walk_error_);
+                if (auto* gui = services().guiOrNull())
+                    gui->enqueueToast({.title = "Cannot enter walk mode", .message = walk_error_});
+                return;
+            }
+        }
 
-        clearViewportDragState();
+        const bool walk_transition = mode == CameraNavigationMode::Walk ||
+                                     camera_navigation_mode_ == CameraNavigationMode::Walk;
+        if (walk_transition)
+            clearViewportDragState();
         const bool leaving_drone = camera_navigation_mode_ == CameraNavigationMode::Drone;
         camera_navigation_mode_ = mode;
         // The pivot is left untouched: orbit modes work with any pivot and FPV
@@ -656,6 +768,12 @@ namespace lfs::vis {
             keyboard_viewport.camera.enterDrone();
             publishCameraMove(&keyboard_viewport);
         }
+        if (walk_transition) {
+            clearWasdMomentumViewport();
+            activeKeyboardViewport().camera.clearTransientMotion();
+        }
+        auto& generation = app_store().render_settings_generation;
+        generation.set(generation.get() + 1);
         python::request_redraw();
     }
 
@@ -666,6 +784,8 @@ namespace lfs::vis {
     }
 
     void InputController::setNavigationUpAxis(const NavigationUpAxis axis, const bool align_grid) {
+        if (camera_navigation_mode_ == CameraNavigationMode::Walk)
+            setCameraNavigationMode(CameraNavigationMode::FPV);
         clearViewportDragState();
         clearWasdMomentumViewport();
         orbit_coast_viewport_ = nullptr;
@@ -1097,6 +1217,8 @@ namespace lfs::vis {
 
             switch (bound_action) {
             case input::Action::CAMERA_PAN:
+                if (camera_navigation_mode_ == CameraNavigationMode::Walk)
+                    break;
                 if (const auto interaction = resolvePanelInteraction(x, y); interaction && interaction->valid()) {
                     const int context_camera_id =
                         is_right_button && services().renderingOrNull()
@@ -1130,6 +1252,7 @@ namespace lfs::vis {
                     focusSplitPanel(interaction->panel);
 
                     if (camera_navigation_mode_ == CameraNavigationMode::FPV ||
+                        camera_navigation_mode_ == CameraNavigationMode::Walk ||
                         camera_navigation_mode_ == CameraNavigationMode::Drone) {
                         float pivot_distance = glm::length(
                             interaction->viewport->camera.getPivot() - interaction->viewport->camera.t);
@@ -1150,6 +1273,8 @@ namespace lfs::vis {
                 break;
 
             case input::Action::CAMERA_SET_PIVOT: {
+                if (camera_navigation_mode_ == CameraNavigationMode::Walk)
+                    break;
                 const auto interaction = resolvePanelInteraction(x, y);
                 if (!interaction || !interaction->valid()) {
                     break;
@@ -1727,6 +1852,12 @@ namespace lfs::vis {
             return;
         }
 
+        // Never dolly (or change orthographic scale) around the physical capsule.
+        // RmlUI receives its own wheel events, so panel scrolling still works.
+        if (camera_navigation_mode_ == CameraNavigationMode::Walk &&
+            bindings_.getActionForScroll(getCurrentToolMode(), getModifierKeys(), held_keys_) == input::Action::CAMERA_ZOOM)
+            return;
+
         float fx, fy;
         input::mouseStateInPixels(window_, &fx, &fy);
         double mouse_x = fx, mouse_y = fy;
@@ -1766,6 +1897,8 @@ namespace lfs::vis {
                 selection_tool_->setBrushRadius(selection_tool_->getBrushRadius() * scale);
                 return;
             }
+            if (camera_navigation_mode_ == CameraNavigationMode::Walk)
+                return;
         }
 
         if (drag_mode_ == DragMode::Gizmo || drag_mode_ == DragMode::Splitter)
@@ -1833,6 +1966,11 @@ namespace lfs::vis {
 
     void InputController::handleKey(const int physical_key, const int logical_key,
                                     const int scancode, int action, int mods, const bool owned_release, const bool gui_consumed) {
+        if (camera_navigation_mode_ == CameraNavigationMode::Walk &&
+            action == input::ACTION_PRESS && logical_key == input::KEY_ESCAPE) {
+            setCameraNavigationMode(CameraNavigationMode::FPV);
+            return;
+        }
         // Clear before any GUI/modal early return, including owned key releases.
         if (action == input::ACTION_RELEASE)
             camera_browse_repeat_.release(physical_key);
@@ -2485,6 +2623,23 @@ namespace lfs::vis {
     }
 
     void InputController::update(float delta_time) {
+        if (camera_navigation_mode_ == CameraNavigationMode::Walk) {
+            auto& camera = activeKeyboardViewport().camera;
+            if (glm::length(camera.t - walk_camera_.eye) > 1e-4f) {
+                // Python, camera browsing, gizmos and restored views may teleport
+                // the eye. Such external moves leave walk, never bypass its solver.
+                setCameraNavigationMode(CameraNavigationMode::FPV);
+            } else {
+                camera_browse_repeat_.stop();
+                camera.clearTransientMotion();
+                if (orbit_coast_viewport_)
+                    orbit_coast_viewport_->camera.clearOrbitMomentum();
+                if (pan_coast_viewport_)
+                    pan_coast_viewport_->camera.clearPanMomentum();
+                orbit_coast_viewport_ = nullptr;
+                pan_coast_viewport_ = nullptr;
+            }
+        }
         updateCameraBrowseRepeat();
         decayHeldDragMomentum();
         // Refresh once per input frame; mouse-move events can then query the
@@ -2685,7 +2840,39 @@ namespace lfs::vis {
         const float movement_speed_bonus =
             (keys_active && (getModifierKeys() & input::KEYMOD_SHIFT) != 0) ? kWasdShiftSpeedBonus : 0.0f;
 
-        if (camera_navigation_mode_ == CameraNavigationMode::Drone) {
+        if (camera_navigation_mode_ == CameraNavigationMode::Walk) {
+            try {
+                auto& camera = active_movement_viewport->camera;
+                auto up = camera.navigationUp();
+                auto tangent = core::walkTangentFrame(lfs::rendering::cameraForward(camera.R), camera.R[0], up);
+                auto forward = -tangent[2], right = tangent[0];
+                glm::vec3 direction(0);
+                if (keys_active) {
+                    direction = forward * float(keys_movement_[0] - keys_movement_[2]) +
+                                right * float(keys_movement_[3] - keys_movement_[1]);
+                    if (glm::length(direction) > 1e-5f)
+                        direction = glm::normalize(direction);
+                }
+                auto query = walkCollisionQuery();
+                if (query(walk_state_.eye - up * walk_settings_.height, up, walk_settings_.height, walk_settings_.radius))
+                    throw std::runtime_error("Walk stopped: collision geometry moved into the player capsule");
+                auto before = camera.t;
+                core::advanceWalk(walk_state_, walk_settings_, up,
+                                  direction * walk_settings_.speed * (movement_speed_bonus > 0 ? 2.0f : 1.0f),
+                                  delta_time, query);
+                core::advanceWalkCamera(walk_camera_, walk_state_, walk_settings_, up, delta_time, query);
+                camera.t = walk_camera_.eye;
+                camera.pivot += camera.t - before;
+                if (glm::length(camera.t - before) > 1e-7f) {
+                    onCameraMovementStart();
+                    publishCameraMove(active_movement_viewport);
+                }
+            } catch (const std::exception& error) {
+                walk_error_ = error.what();
+                LOG_ERROR("Walk stopped: {}", walk_error_);
+                setCameraNavigationMode(CameraNavigationMode::FPV);
+            }
+        } else if (camera_navigation_mode_ == CameraNavigationMode::Drone) {
             // The drone must keep integrating with no keys held: braking,
             // leveling and mouse-look smoothing all settle through
             // advanceDrone until hasDroneMotion() reaches false.
@@ -2954,6 +3141,8 @@ namespace lfs::vis {
     }
 
     void InputController::handleGoToCamView(const lfs::core::events::cmd::GoToCamView& event) {
+        if (camera_navigation_mode_ == CameraNavigationMode::Walk)
+            setCameraNavigationMode(CameraNavigationMode::FPV);
         LOG_TIMER_TRACE("HandleGoToCamView");
         auto& target_viewport = activeKeyboardViewport();
 
@@ -3094,6 +3283,8 @@ namespace lfs::vis {
     }
 
     bool InputController::handleFocusSelection(Viewport& target_viewport) {
+        if (camera_navigation_mode_ == CameraNavigationMode::Walk)
+            setCameraNavigationMode(CameraNavigationMode::FPV);
         if (!tool_context_)
             return false;
         auto* const sm = tool_context_->getSceneManager();
@@ -3200,6 +3391,8 @@ namespace lfs::vis {
     }
 
     void InputController::goHome() {
+        if (camera_navigation_mode_ == CameraNavigationMode::Walk)
+            setCameraNavigationMode(CameraNavigationMode::FPV);
         auto& target = activeKeyboardViewport();
         resetViewportToHome(target, viewport_);
         publishCameraMove(&target);
@@ -3218,6 +3411,8 @@ namespace lfs::vis {
     }
 
     void InputController::resetHome() {
+        if (camera_navigation_mode_ == CameraNavigationMode::Walk)
+            setCameraNavigationMode(CameraNavigationMode::FPV);
         auto& target = activeKeyboardViewport();
         target.camera.resetHomePosition();
         resetViewportToHome(target, viewport_);
@@ -3373,6 +3568,8 @@ namespace lfs::vis {
     void InputController::beginPanDrag(const PanelInteractionState& interaction, const int button,
                                        const double x, const double y) {
         LOG_PERF("InputController::beginPanDrag button={} pos=({},{})", button, x, y);
+        if (camera_navigation_mode_ == CameraNavigationMode::Walk)
+            return;
         const float current_time = static_cast<float>(SDL_GetTicks() / 1000.0f);
         interaction.viewport->camera.finishGlide();
         interaction.viewport->camera.setSceneExtent(sceneExtent());

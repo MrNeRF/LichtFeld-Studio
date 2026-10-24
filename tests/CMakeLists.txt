@@ -35,6 +35,23 @@ endif()
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
+add_executable(lichtfeld_collision_tests test_collision.cpp ../src/core/collision.cpp ../src/core/collision_sparse.cpp)
+target_compile_features(lichtfeld_collision_tests PRIVATE cxx_std_23)
+target_compile_definitions(lichtfeld_collision_tests PRIVATE LFS_STATIC_BUILD)
+target_include_directories(lichtfeld_collision_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/core/include)
+target_link_libraries(lichtfeld_collision_tests PRIVATE GTest::gtest_main glm::glm nlohmann_json::nlohmann_json)
+add_test(NAME lichtfeld.collision COMMAND lichtfeld_collision_tests)
+set_tests_properties(lichtfeld.collision PROPERTIES LABELS "cpu;collision;navigation" TIMEOUT 60)
+
+if(TARGET lfs_core)
+    add_executable(bench_collision_generation EXCLUDE_FROM_ALL bench_collision_generation.cpp)
+    target_compile_features(bench_collision_generation PRIVATE cxx_std_23)
+    target_link_libraries(bench_collision_generation PRIVATE lfs_core nlohmann_json::nlohmann_json)
+    add_executable(bench_collision_queries EXCLUDE_FROM_ALL bench_collision_queries.cpp)
+    target_compile_features(bench_collision_queries PRIVATE cxx_std_23)
+    target_link_libraries(bench_collision_queries PRIVATE lfs_core nlohmann_json::nlohmann_json)
+endif()
+
 # Deliberately no executable opt-in: exercise extended-path I/O independently
 # of the user's/runner's LongPathsEnabled registry policy.
 if(WIN32 AND (BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS))
@@ -121,6 +138,29 @@ set_tests_properties(lichtfeld.file_dialog_paths PROPERTIES LABELS "fast;cpu;io"
 # CPU-only visualizer tests (no LibTorch)
 # =============================================================================
 if(BUILD_VISUALIZER_TESTS)
+    add_executable(lichtfeld_collision_scene_tests test_collision_scene.cpp test_collision_export.cpp)
+    target_compile_features(lichtfeld_collision_scene_tests PRIVATE cxx_std_23)
+    target_include_directories(lichtfeld_collision_scene_tests PRIVATE
+        $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
+    target_link_libraries(lichtfeld_collision_scene_tests PRIVATE
+        lfs_io lfs_visualizer lfs_core lfs_python_runtime GTest::gtest_main Zep::Zep SDL3::SDL3)
+    add_test(NAME lichtfeld.collision_scene COMMAND lichtfeld_collision_scene_tests)
+    set_tests_properties(lichtfeld.collision_scene PROPERTIES LABELS "cpu;collision;scene" TIMEOUT 120
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    add_executable(lichtfeld_collision_gpu_tests test_collision_gpu.cpp)
+    target_compile_features(lichtfeld_collision_gpu_tests PRIVATE cxx_std_23)
+    target_link_libraries(lichtfeld_collision_gpu_tests PRIVATE lfs_core GTest::gtest_main CUDA::cudart)
+    add_test(NAME lichtfeld.collision_gpu COMMAND lichtfeld_collision_gpu_tests)
+    set_tests_properties(lichtfeld.collision_gpu PROPERTIES LABELS "gpu;collision" TIMEOUT 120 WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    add_executable(lichtfeld_collision_overlay_tests test_collision_overlay.cpp)
+    target_compile_features(lichtfeld_collision_overlay_tests PRIVATE cxx_std_23)
+    target_include_directories(lichtfeld_collision_overlay_tests PRIVATE
+        $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
+    target_link_libraries(lichtfeld_collision_overlay_tests PRIVATE
+        lfs_visualizer lfs_core GTest::gtest_main SDL3::SDL3)
+    add_test(NAME lichtfeld.collision_overlay COMMAND lichtfeld_collision_overlay_tests)
+    set_tests_properties(lichtfeld.collision_overlay PROPERTIES LABELS "gpu;collision;rendering" TIMEOUT 120
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     # The focused menu-bar suite exercises no GPU code. Windows CI installs
     # the CUDA toolkit but has no display driver, so defer loading nvcuda.dll
     # until a driver API is actually called. Normal application builds retain
@@ -351,6 +391,8 @@ endif()
 # unreferenced function sections before resolution. Keep the dependency-heavy
 # chapter coverage in the non-Windows composition.
 set(LICHT_FORMAT_WINDOWS_FILES
+    ${CMAKE_SOURCE_DIR}/src/core/collision.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/collision_sparse.cpp
     test_property_defaults.cpp
     test_atomic_output.cpp
     test_project_save_as_paths.cpp
@@ -445,6 +487,7 @@ target_link_libraries(lichtfeld_format_tests PRIVATE
     xxHash::xxhash
     zstd::libzstd
     Threads::Threads
+    glm::glm
 )
 if(NOT WIN32)
     target_link_libraries(lichtfeld_format_tests PRIVATE OpenSSL::Crypto)

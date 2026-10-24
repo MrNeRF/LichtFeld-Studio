@@ -189,3 +189,5 @@ body {
     margin: 4dp 0 8dp;
 }
 .rendering-default-actions .btn { flex: 0 1 auto; white-space: normal; }
+
+.collision-readonly { opacity: .45; pointer-events: none; }

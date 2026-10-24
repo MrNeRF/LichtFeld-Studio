@@ -641,11 +641,33 @@ def reset_home() -> None:
 
 def get_camera_navigation_mode() -> str:
     """
-    Get the active camera navigation mode ('orbit', 'trackball', 'fpv', or 'drone')
+    Get the active camera navigation mode ('orbit', 'trackball', 'fpv', 'drone', or 'walk')
     """
 
 def set_camera_navigation_mode(mode: str) -> None:
-    """Set the active camera navigation mode"""
+    """
+    Set the active camera navigation mode. Walk requires a visible collision node and a free capsule at the camera; otherwise raises RuntimeError.
+    """
+
+def has_walk_collision() -> bool:
+    """
+    Whether loaded colliders are available for Walk; does not test the current capsule placement.
+    """
+
+def get_collision_controls() -> dict:
+    """
+    Lightweight context and metre-based Walk settings for the viewport card; never copies voxel or mesh payloads.
+    """
+
+def set_walk_settings(*, height: float, radius: float, speed: float, step: float) -> None:
+    """
+    Apply metre-based Walk settings live, preserving feet and rejecting unsafe capsule changes.
+    """
+
+def set_collision_preview(uuid: str, *, opacity: float, cutaway: float) -> None:
+    """
+    Change a voxel collider's live preview; occupancy and Walk are unchanged.
+    """
 
 def get_new_project_navigation_up_axis() -> str:
     """Get the navigation vertical used only for new projects"""

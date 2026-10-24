@@ -929,6 +929,8 @@ namespace lfs::vis::op {
             if (capture_payload && node.mesh) {
                 snapshot.payload_device = node.mesh->vertices.device();
                 snapshot.mesh = cloneMeshData(*node.mesh);
+                snapshot.collision = node.collision;
+                snapshot.collision_display = node.collision_display;
             }
             if (capture_payload && node.cropbox) {
                 snapshot.cropbox = std::make_unique<lfs::core::CropBoxData>(*node.cropbox);
@@ -1251,6 +1253,8 @@ namespace lfs::vis::op {
                         if (snapshot.mesh) {
                             desc.mesh = cloneMeshData(*snapshot.mesh);
                         }
+                        desc.collision = snapshot.collision;
+                        desc.collision_display = snapshot.collision_display;
                         break;
                     case lfs::core::NodeType::CROPBOX:
                         if (!snapshot.cropbox) {
@@ -1371,6 +1375,8 @@ namespace lfs::vis::op {
 
         size_t estimateSnapshotBytes(const SceneGraphNodeSnapshot& snapshot) {
             size_t total = 0;
+            if (snapshot.collision)
+                total += sizeof(core::CollisionVolume) + snapshot.collision->solid.size() + snapshot.collision->tree.size() * sizeof(uint32_t);
             if (snapshot.selection_slice) {
                 total += tensorBytes(*snapshot.selection_slice);
             }
@@ -1446,6 +1452,8 @@ namespace lfs::vis::op {
             if (snapshot.mesh) {
                 total += estimateMeshMemory(*snapshot.mesh);
             }
+            if (snapshot.collision)
+                total.cpu_bytes += sizeof(core::CollisionVolume) + snapshot.collision->solid.size() + snapshot.collision->tree.size() * sizeof(uint32_t);
             if (snapshot.cropbox) {
                 total.cpu_bytes += sizeof(*snapshot.cropbox);
             }
@@ -1579,6 +1587,8 @@ namespace lfs::vis::op {
             case lfs::core::NodeType::MESH:
                 if (snapshot.mesh) {
                     node.mesh = cloneMeshData(*snapshot.mesh);
+                    node.collision = snapshot.collision;
+                    node.collision_display = snapshot.collision_display;
                     scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
                 }
                 break;
@@ -1642,6 +1652,7 @@ namespace lfs::vis::op {
                     existing->model.reset();
                     existing->point_cloud.reset();
                     existing->mesh.reset();
+                    existing->collision.reset();
                     existing->cropbox.reset();
                     existing->ellipsoid.reset();
                     existing->camera.reset();
@@ -2257,6 +2268,8 @@ namespace lfs::vis::op {
         if (other.mesh) {
             mesh = cloneMeshData(*other.mesh);
         }
+        collision = other.collision;
+        collision_display = other.collision_display;
         if (other.cropbox) {
             cropbox = std::make_unique<lfs::core::CropBoxData>(*other.cropbox);
         }

@@ -5,11 +5,13 @@
 
 #pragma once
 
+#include "core/collision.hpp"
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
 #include "core/uuid.hpp"
 #include "io/json_chapter_dom.hpp"
+#include <tuple>
 
 #include <array>
 #include <cstddef>
@@ -439,8 +441,14 @@ namespace lfs::io::project {
         std::optional<CropBoxRecord> cropbox = std::nullopt;
         std::optional<EllipsoidRecord> ellipsoid = std::nullopt;
         std::optional<CameraRecord> camera = std::nullopt;
+        std::shared_ptr<const lfs::core::CollisionVolume> collision;
+        lfs::core::CollisionDisplay collision_display;
 
-        friend bool operator==(const SceneNodeRecord&, const SceneNodeRecord&) = default;
+        friend bool operator==(const SceneNodeRecord& a, const SceneNodeRecord& b) {
+            const bool same_collision = a.collision == b.collision ||
+                                        (a.collision && b.collision && *a.collision == *b.collision);
+            return same_collision && std::tie(a.uuid, a.type, a.name, a.parent_uuid, a.child_order, a.local_transform, a.visible, a.locked, a.training_enabled, a.payload_diverged, a.point_cloud_source, a.georef_pose, a.payload, a.cropbox, a.ellipsoid, a.camera, a.collision_display) == std::tie(b.uuid, b.type, b.name, b.parent_uuid, b.child_order, b.local_transform, b.visible, b.locked, b.training_enabled, b.payload_diverged, b.point_cloud_source, b.georef_pose, b.payload, b.cropbox, b.ellipsoid, b.camera, b.collision_display);
+        }
     };
 
     class LFS_IO_API SceneGraphChapter {

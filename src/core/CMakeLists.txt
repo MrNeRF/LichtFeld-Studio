@@ -79,6 +79,10 @@ set(CORE_SOURCES
         animatable_property.cpp
         argument_parser.cpp
         camera.cpp
+        collision.cpp
+        collision_sparse.cpp
+        collision_source.cpp
+        collision_gpu.cpp
         checkpoint_format.cpp
         image_loader.cpp
         cuda_version.cpp

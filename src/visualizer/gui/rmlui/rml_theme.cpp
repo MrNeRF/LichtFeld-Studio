@@ -1104,6 +1104,7 @@ namespace lfs::vis::gui::rml_theme {
                 "    icon-trash:            48px 48px 24px 24px;\n"
                 "    icon-unlocked:         72px 48px 24px 24px;\n"
                 "    icon-visible:          96px 48px 24px 24px;\n"
+                "    icon-collision:        120px 48px 24px 24px;\n"
                 "}}\n\n",
                 atlas);
             result += std::format(

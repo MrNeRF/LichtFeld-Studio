@@ -2815,7 +2815,14 @@ namespace lfs::vis {
         supported_conditional_rendering.sType =
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CONDITIONAL_RENDERING_FEATURES_EXT;
 
+        const bool fragment_rate_available = extensionAvailable(available_extensions, VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
+        VkPhysicalDeviceFragmentShadingRateFeaturesKHR supported_fragment_rate{};
+        supported_fragment_rate.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR;
         void* opt_supported_head = nullptr;
+        if (fragment_rate_available) {
+            supported_fragment_rate.pNext = opt_supported_head;
+            opt_supported_head = &supported_fragment_rate;
+        }
         if (swapchain_maintenance1_available) {
             supported_swapchain_maintenance1.pNext = opt_supported_head;
             opt_supported_head = &supported_swapchain_maintenance1;
@@ -2937,6 +2944,29 @@ namespace lfs::vis {
             enabled_chain_head = &conditional_rendering_features;
         }
 
+        VkPhysicalDeviceFragmentShadingRateFeaturesKHR fragment_rate_features{};
+        fragment_rate_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR;
+        has_fragment_shading_rate_ = false;
+        if (fragment_rate_available && supported_fragment_rate.pipelineFragmentShadingRate) {
+            auto get_rates = reinterpret_cast<PFN_vkGetPhysicalDeviceFragmentShadingRatesKHR>(vkGetInstanceProcAddr(instance_, "vkGetPhysicalDeviceFragmentShadingRatesKHR"));
+            uint32_t count = 0;
+            if (get_rates && get_rates(physical_device_, &count, nullptr) == VK_SUCCESS) {
+                std::vector<VkPhysicalDeviceFragmentShadingRateKHR> rates(count);
+                for (auto& rate : rates)
+                    rate.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_KHR;
+                if (get_rates(physical_device_, &count, rates.data()) == VK_SUCCESS)
+                    for (const auto& rate : rates)
+                        if (rate.fragmentSize.width == 2 && rate.fragmentSize.height == 2 && (rate.sampleCounts & VK_SAMPLE_COUNT_1_BIT))
+                            has_fragment_shading_rate_ = true;
+            }
+        }
+        if (has_fragment_shading_rate_) {
+            appendUniqueExtension(extensions, VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
+            fragment_rate_features.pipelineFragmentShadingRate = VK_TRUE;
+            fragment_rate_features.pNext = enabled_chain_head;
+            enabled_chain_head = &fragment_rate_features;
+        }
+
         // 16-bit storage for the fp16 splat raster path (half4 partials,
         // half-packed staging). Features are enabled when the device supports them;
         // runtime float16 capability is probed via VulkanGSRenderer::supportsFloat16Storage().
@@ -2983,6 +3013,11 @@ namespace lfs::vis {
             return setVkFailure(std::format("vkCreateDevice failed: {}", vkResultToString(result)), result);
         }
 
+        if (has_fragment_shading_rate_) {
+            vk_cmd_fragment_shading_rate_ = reinterpret_cast<PFN_vkCmdSetFragmentShadingRateKHR>(vkGetDeviceProcAddr(device_, "vkCmdSetFragmentShadingRateKHR"));
+            if (!vk_cmd_fragment_shading_rate_)
+                return fail("Fragment shading rate command unavailable");
+        }
         if (debug_utils_enabled_) {
             debug_name_writer_.initialize(device_);
             if (!debug_name_writer_.enabled()) {
@@ -3693,8 +3728,8 @@ namespace lfs::vis {
         // exporter's handle. A stale handle must assert instead of being hidden
         // by the VUID-01742 suppression below.
         {
-            struct stat st_src {};
-            struct stat st_dup {};
+            struct stat st_src{};
+            struct stat st_dup{};
             const int st_src_rc = ::fstat(handle, &st_src);
             const int st_dup_rc = ::fstat(dup_fd, &st_dup);
             int kcmp_rc = 0;

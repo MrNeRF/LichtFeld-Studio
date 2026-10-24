@@ -130,6 +130,7 @@ namespace lfs::vis::gui {
             bool locked = false;
             bool draggable = false;
             bool has_mask = false;
+            bool collision = false;
             bool can_delete = false;
             bool delete_enabled = false;
             bool can_rename = false;
