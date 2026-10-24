@@ -22,14 +22,24 @@ endif()
 if(NOT EXISTS "${_compiler}" OR NOT EXISTS "${LFS_HIP_ROOT}/include/hip/hip_runtime.h")
     message(FATAL_ERROR "LFS_HIP_ROOT must identify a complete ROCm development SDK")
 endif()
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(_pointwise_source "${CMAKE_CURRENT_SOURCE_DIR}/../../../include/core/detail")
+set(_pointwise_generated "${CMAKE_CURRENT_BINARY_DIR}/pointwise-generated")
+set(_pointwise_outputs "${_pointwise_generated}/hip_pointwise_functors.hpp"
+    "${_pointwise_generated}/hip_pointwise_f32.inc" "${_pointwise_generated}/hip_pointwise_f16.inc")
+add_custom_command(OUTPUT ${_pointwise_outputs}
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/prepare_pointwise.py"
+        --source "${_pointwise_source}" --output "${_pointwise_generated}"
+    DEPENDS prepare_pointwise.py "${_pointwise_source}/tensor_functors.hpp" "${_pointwise_source}/pointwise_ops.def"
+    VERBATIM)
 add_custom_command(OUTPUT "${_library}"
     COMMAND "${_compiler}" -x hip -std=c++20 -O3 -shared
         ${_platform_flags} ${LFS_HIP_COMPRESSION_FLAGS}
         "-DLFS_HIP_COMPILED_ARCH=\"${LFS_HIP_COMPILED_ARCHITECTURES}\""
-        -DLFS_HIP_RUNTIME_EXPORTS ${LFS_HIP_OFFLOAD_FLAGS}
+        -DLFS_HIP_RUNTIME_EXPORTS "-I${_pointwise_generated}" ${LFS_HIP_OFFLOAD_FLAGS}
         "--hip-path=${LFS_HIP_ROOT}"
         "${CMAKE_CURRENT_SOURCE_DIR}/runtime.hip" -o "${_library}"
-    DEPENDS runtime.hip runtime_api.h architecture_runtime.hpp
+    DEPENDS runtime.hip runtime_api.h architecture_runtime.hpp ${_pointwise_outputs}
         "${_compiler}" "${LFS_HIP_ROOT}/include/hip/hip_runtime.h"
     VERBATIM)
 add_custom_target(lfs_hip_runtime_build ALL DEPENDS "${_library}")
@@ -48,10 +58,10 @@ if(LFS_HIP_NATIVE_GPU_TESTS)
         COMMAND "${_compiler}" -x hip -std=c++20 -O3 -shared
             ${_platform_flags} ${LFS_HIP_COMPRESSION_FLAGS}
             "-DLFS_HIP_COMPILED_ARCH=\"${LFS_HIP_COMPILED_ARCHITECTURES}\""
-            -DLFS_HIP_RUNTIME_EXPORTS ${LFS_HIP_OFFLOAD_FLAGS}
+            -DLFS_HIP_RUNTIME_EXPORTS "-I${_pointwise_generated}" ${LFS_HIP_OFFLOAD_FLAGS}
             "--hip-path=${LFS_HIP_ROOT}" "-I${CMAKE_CURRENT_SOURCE_DIR}"
             -include "${_fault_header}" "${CMAKE_CURRENT_SOURCE_DIR}/runtime.hip" -o "${_fault_library}"
-        DEPENDS runtime.hip runtime_api.h architecture_runtime.hpp "${_fault_header}"
+        DEPENDS runtime.hip runtime_api.h architecture_runtime.hpp "${_fault_header}" ${_pointwise_outputs}
             "${_compiler}" "${LFS_HIP_ROOT}/include/hip/hip_runtime.h"
         VERBATIM)
     add_custom_target(lfs_hip_runtime_faults ALL DEPENDS "${_fault_library}")

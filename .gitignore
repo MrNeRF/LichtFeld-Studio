@@ -111,3 +111,4 @@ src/rendering/rasterizer/vulkan/shader/radix_sort/*.spv
 
 # Maintained native HIP boundary regressions.
 !tests/hip/test_native_runtime.py
+!src/core/tensor/backend/hip/prepare_pointwise.py

@@ -168,3 +168,29 @@ errors, rejection of invalid snapshots and balanced resource counts. The normal
 runtime contains none of these injection entry points; CPU-only builds do not
 build the instrumented module. These tests exercise API error handling on a
 real device, not physical device-loss or GPU-hang recovery.
+
+## Native contiguous pointwise operators
+
+The private runtime also provides FP32 and FP16 pointwise operations from the
+shared `pointwise_ops.def` catalog, plus FP32 arange, device copy and byte fill.
+Predicates write byte booleans for either floating input type. Views carry a
+context-owned buffer and a byte offset; the runtime validates ownership, complete
+extents, element alignment and overlapping ranges before launching a kernel.
+Same-type pointwise operations allow exact in-place views; shifted overlap and
+predicate outputs overlapping their floating input are rejected. Device copy
+permits identical source/destination as a no-op and rejects shifted overlap.
+
+The build generates HIP dispatch and a HIP-adapted copy of the shared functors
+inside the build directory. It does not edit CUDA, Metal, Vulkan or host sources.
+The generator rejects malformed, empty or duplicate catalog entries, unsupported
+scalar forms and changes to the explicit ReLU signed-zero adaptation, so future
+catalog changes cannot silently omit an operation. CPU generator regressions
+run without the SDK and are included in the existing Python fast suite.
+
+The GPU contract compares every catalog operation in both storage types to
+independent scalar expectations over 513 elements, checks byte predicates and
+output canaries, and exercises invalid views, exact in-place updates, NaN and
+signed-zero behavior. Floating comparisons use bounded tolerances, not a claim
+of bitwise equality between different devices or mathematical libraries.
+Layout/broadcast operators, reductions, integer arithmetic, fused expression
+chains and the public application Tensor adapter remain separate work.

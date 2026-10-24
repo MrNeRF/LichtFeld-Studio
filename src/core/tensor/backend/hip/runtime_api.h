@@ -94,6 +94,28 @@ LFS_HIP_API int lfs_hip_readback_destroy(LfsHipContext*, LfsHipReadback*, LfsHip
 LFS_HIP_API int lfs_hip_fill_f32(LfsHipContext* context, LfsHipBuffer* buffer, size_t offset, size_t count, float value, LfsHipError* error);
 LFS_HIP_API int lfs_hip_affine_f32(LfsHipContext* context, const LfsHipBuffer* input, LfsHipBuffer* output, size_t count, float scale, float bias, LfsHipError* error);
 
+/* Contiguous, context-owned views. Offsets and extents are bytes. Predicate
+ * results are byte booleans, independently of the floating input storage.
+ * Exact same-type input/output aliasing is supported; shifted overlap or
+ * overlapping predicate output is rejected before a kernel is enqueued. */
+typedef struct LfsHipView {
+    LfsHipBuffer* buffer;
+    size_t offset;
+} LfsHipView;
+enum LfsHipPointwiseOp {
+#define LFS_POINTWISE_OP(Id, FunctorType, Name) LFS_HIP_OP_##Id,
+#include "../../../include/core/detail/pointwise_ops.def"
+#undef LFS_POINTWISE_OP
+    LFS_HIP_OP_COUNT
+};
+LFS_HIP_API int lfs_hip_pointwise_f32(LfsHipContext*, uint32_t operation, LfsHipView lhs, LfsHipView rhs, LfsHipView output, size_t count, float scalar, LfsHipError*);
+LFS_HIP_API int lfs_hip_pointwise_f16(LfsHipContext*, uint32_t operation, LfsHipView lhs, LfsHipView rhs, LfsHipView output, size_t count, float scalar, LfsHipError*);
+LFS_HIP_API int lfs_hip_arange_f32(LfsHipContext*, LfsHipView output, size_t count, float start, float step, LfsHipError*);
+/* Device copies enqueue on the same context queue. Identical source/destination
+ * is a no-op; shifted overlapping ranges are rejected. */
+LFS_HIP_API int lfs_hip_copy(LfsHipContext*, LfsHipView source, LfsHipView destination, size_t bytes, LfsHipError*);
+LFS_HIP_API int lfs_hip_memset(LfsHipContext*, LfsHipView destination, size_t bytes, uint8_t value, LfsHipError*);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif
