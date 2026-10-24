@@ -359,6 +359,25 @@ applies calibrated defaults of 1.8 m eye height, 0.2 m radius, 2.5 m/s speed and
 - Gravity grounds the capsule; walls slide and low obstacles can be stepped over.
 - **Escape** or **Exit walk** returns to fly mode.
 
+Step height is a maximum climb, not a fixed upward jump. Walk searches for the
+minimum lift that clears the lower capsule, sweeps the full body upward and
+forward, then settles onto support. Ground following snaps down only to support
+within the step budget; larger ledges use gravity. Partial wall travel and vertical
+contacts are refined to keep the capsule clear of walls and thin ceilings.
+
+The displayed eye follows grounded height changes with a critically damped offset,
+independently of the physical collision body. Horizontal movement and airborne
+falling continue to follow the body. Camera settling keeps redraw active after
+movement keys are released, and an upper-cap clearance sweep limits the eye offset
+under overhangs. These behaviours respect navigation up and Scene units / metre;
+they do not add hover clearance or manufacture a floor over missing collision.
+
+In a native 60 FPS regression with a 5 cm raised floor patch, the previous 25 cm
+step setting caused a 24.73 cm single-frame camera rise. Minimum stepping limits
+the physical peak to the actual 5 cm patch (maximum frame rise 1.25 cm), while the
+displayed eye's maximum frame rise is 4.93 mm. This is a synthetic motion regression,
+not a full-scene performance or surface reconstruction measurement.
+
 Pan, zoom and pivot glides are disabled while walking. Home, focus, camera browsing
 and external teleports leave Walk. Hidden colliders do not collide. Anisotropic
 scale/shear uses conservative capsule clearance. Walk tests the voxel volume,
