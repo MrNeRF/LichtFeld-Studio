@@ -35,6 +35,11 @@ namespace lfs::vis::gui {
         void adoptResult();
         void loadSettings(const core::SceneNode& node);
         void writeInputs();
+        void writeWalkInputs();
+        void applyControlChange(const std::string& id);
+        void syncScrubs();
+        bool scrubEvent(Rml::Event& event);
+        void commitScrub(const std::string& id, float value);
         core::CollisionSettings readInputs() const;
         float number(const char* id) const;
         bool checked(const char* id) const;
@@ -53,7 +58,11 @@ namespace lfs::vis::gui {
         core::CollisionSettings settings_;
         core::CollisionDisplay display_;
         bool updating_ = false;
+        std::string drag_scrub_, edit_scrub_;
+        float scrub_start_x_ = 0, scrub_last_x_ = 0, scrub_value_ = 0, scrub_before_ = 0;
+        bool scrub_dragged_ = false;
         std::string last_stats_;
+        std::string shown_walk_error_;
         std::weak_ptr<const core::CollisionVolume> counted_volume_;
         uint64_t occupied_count_ = 0;
         glm::vec3 world_seed_{0};
@@ -80,6 +89,7 @@ namespace lfs::vis::gui {
             uint64_t graph_epoch = 0;
             core::CollisionDisplay display;
             std::string stats;
+            bool surface_only = false;
         };
         std::optional<Result> result_;
     };

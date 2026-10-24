@@ -15,6 +15,7 @@
 #include "scene/scene_manager.hpp"
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Elements/ElementFormControl.h>
+#include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <SDL3/SDL_clipboard.h>
 #include <algorithm>
 #include <charconv>
@@ -23,6 +24,7 @@
 #include <format>
 #include <glm/gtc/quaternion.hpp>
 #include <stdexcept>
+#include <utility>
 
 namespace lfs::vis::gui {
     namespace {
@@ -106,13 +108,19 @@ namespace lfs::vis::gui {
         if (document_) {
             document_->RemoveEventListener("click", this);
             document_->RemoveEventListener("change", this);
+            for (const auto* type : {"mousedown", "mousemove", "mouseup", "keydown", "blur"})
+                document_->RemoveEventListener(type, this, true);
         }
     }
     void CollisionPanel::reloadRmlResources() {
         if (document_) {
             document_->RemoveEventListener("click", this);
             document_->RemoveEventListener("change", this);
+            for (const auto* type : {"mousedown", "mousemove", "mouseup", "keydown", "blur"})
+                document_->RemoveEventListener(type, this, true);
         }
+        drag_scrub_.clear();
+        edit_scrub_.clear();
         document_ = nullptr;
         if (!busy_) {
             job_outcome_.clear();
@@ -191,6 +199,186 @@ namespace lfs::vis::gui {
         document_->GetElementById("collision-status")->SetClass("is-error", !info.cancelled);
         host_.markContentDirty();
     }
+    void CollisionPanel::writeWalkInputs() {
+        if (auto* input = InputController::instance()) {
+            const auto& w = input->walkSettings();
+            for (auto [id, n] : {std::pair{"walk-height", w.height}, {"walk-radius", w.radius}, {"walk-speed", w.speed}, {"walk-step", w.step_height}})
+                setValue(id, std::format("{:.6g}", n / w.units_per_meter));
+        }
+    }
+    void CollisionPanel::syncScrubs() {
+        for (const auto* id : {"voxel-size", "opacity", "overlay-opacity", "cutaway", "walk-height", "walk-radius", "walk-speed", "walk-step"}) {
+            if (edit_scrub_ == id)
+                continue;
+            auto* field = document_->GetElementById(std::string(id) + "-scrub");
+            if (std::string_view(id) == "voxel-size")
+                field->SetAttribute("data-max", std::max(1.0f, number(id) * 2));
+            if (std::string_view(id) == "walk-height")
+                field->SetAttribute("data-min", std::max(.05f, number("walk-radius") * 2));
+            if (std::string_view(id) == "walk-radius")
+                field->SetAttribute("data-max", number("walk-height") / 2);
+            if (std::string_view(id) == "walk-step")
+                field->SetAttribute("data-max", number("walk-height"));
+            const float n = number(id), lo = field->GetAttribute<float>("data-min", 0), hi = std::max(field->GetAttribute<float>("data-max", 1), n);
+            document_->GetElementById(std::string(id) + "-fill")->SetProperty("width", std::format("{:.2f}%", hi > lo ? std::clamp((n - lo) / (hi - lo), 0.0f, 1.0f) * 100 : 0));
+            const auto caption = std::format("{:.4g}{}", n, field->GetAttribute<Rml::String>("data-suffix", ""));
+            auto* display = document_->GetElementById(std::string(id) + "-display");
+            display->SetInnerRML(Rml::StringUtilities::EncodeRml(caption));
+            field->SetAttribute("aria-valuenow", n);
+        }
+        host_.markContentDirty();
+    }
+    void CollisionPanel::applyControlChange(const std::string& id) {
+        if (id == "overlay-opacity" || id == "cutaway" || id == "sharp-preview") {
+            updateDisplay();
+        } else if (id.starts_with("walk-") || id == "units-per-meter") {
+            auto* input = InputController::instance();
+            if (!input)
+                throw std::runtime_error("No Walk camera controller");
+            const float units = number("units-per-meter");
+            auto s = input->walkSettings();
+            s.units_per_meter = units;
+            s.gravity = 9.81f * units;
+            s.height = number("walk-height") * units;
+            s.radius = number("walk-radius") * units;
+            s.speed = number("walk-speed") * units;
+            s.step_height = number("walk-step") * units;
+            try {
+                input->setWalkSettings(s);
+            } catch (...) {
+                writeWalkInputs();
+                syncScrubs();
+                throw;
+            }
+            if (id == "units-per-meter") {
+                const auto ratio = units / settings_.units_per_meter;
+                for (const auto* field : {"cluster-resolution", "external-size", "floor-size", "carve-height", "carve-radius"})
+                    setValue(field, std::format("{:.6g}", number(field) * ratio));
+                settings_.units_per_meter = units;
+            }
+            clearError();
+        } else if (id == "voxel-size" || id == "opacity") {
+            (void)readInputs();
+            if (id == "voxel-size")
+                document_->GetElementById("auto-resolution")->RemoveAttribute("checked");
+        }
+        syncScrubs();
+        updateSummary();
+    }
+    void CollisionPanel::commitScrub(const std::string& id, float n) {
+        const auto before = value(id.c_str());
+        updating_ = true;
+        setValue(id.c_str(), std::format("{:.6g}", n));
+        updating_ = false;
+        try {
+            applyControlChange(id);
+        } catch (...) {
+            setValue(id.c_str(), before);
+            syncScrubs();
+            throw;
+        }
+    }
+    bool CollisionPanel::scrubEvent(Rml::Event& event) {
+        auto* field = event.GetTargetElement();
+        while (field && !field->HasAttribute("data-scrub"))
+            field = field->GetParentNode();
+        const auto type = event.GetType();
+        auto beginEdit = [&](const std::string& id) {
+            edit_scrub_ = id;
+            scrub_before_ = number(id.c_str());
+            auto* box = document_->GetElementById(id + "-scrub");
+            box->SetClass("is-editing", true);
+            auto* input = dynamic_cast<Rml::ElementFormControlInput*>(document_->GetElementById(id));
+            input->Focus();
+            input->Select();
+            host_.markContentDirty();
+        };
+        auto endEdit = [&](bool commit, bool focus) {
+            const auto id = edit_scrub_;
+            const float n = commit ? number(id.c_str()) : scrub_before_;
+            edit_scrub_.clear();
+            document_->GetElementById(id + "-scrub")->SetClass("is-editing", false);
+            setValue(id.c_str(), std::format("{:.6g}", scrub_before_));
+            if (commit)
+                commitScrub(id, n);
+            else
+                syncScrubs();
+            if (focus)
+                document_->Focus();
+        };
+        if (!edit_scrub_.empty() && event.GetTargetElement() == document_->GetElementById(edit_scrub_)) {
+            if (type == "blur" || type == "change") {
+                endEdit(true, type == "change");
+                return true;
+            }
+            if (type == "keydown") {
+                const auto key = event.GetParameter<int>("key_identifier", 0);
+                if (key == Rml::Input::KI_RETURN || key == Rml::Input::KI_NUMPADENTER || key == Rml::Input::KI_ESCAPE) {
+                    endEdit(key != Rml::Input::KI_ESCAPE, true);
+                    event.StopPropagation();
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (!drag_scrub_.empty() && type == "mousemove") {
+            const float x = event.GetParameter<float>("mouse_x", scrub_last_x_);
+            if (!scrub_dragged_ && std::abs(x - scrub_start_x_) < 4)
+                return true;
+            auto* box = document_->GetElementById(drag_scrub_ + "-scrub");
+            scrub_dragged_ = true;
+            box->SetClass("is-dragging", true);
+            const float factor = event.GetParameter<int>("shift_key", 0) ? .1f : event.GetParameter<int>("ctrl_key", 0) ? 10.0f
+                                                                                                                        : 1.0f;
+            const float step = box->GetAttribute<float>("data-step", .01f);
+            scrub_value_ += (x - scrub_last_x_) * step * factor;
+            scrub_last_x_ = x;
+            scrub_value_ = std::clamp(scrub_value_, box->GetAttribute<float>("data-min", 0), std::max(box->GetAttribute<float>("data-max", 1), number(drag_scrub_.c_str())));
+            const auto snapped = std::clamp(std::round(scrub_value_ / step) * step,
+                                            box->GetAttribute<float>("data-min", 0),
+                                            std::max(box->GetAttribute<float>("data-max", 1), number(drag_scrub_.c_str())));
+            commitScrub(drag_scrub_, snapped);
+            event.StopPropagation();
+            return true;
+        }
+        if (!drag_scrub_.empty() && type == "mouseup" && event.GetParameter<int>("button", 0) == 0) {
+            const auto id = std::exchange(drag_scrub_, {});
+            document_->GetElementById(id + "-scrub")->SetClass("is-dragging", false);
+            if (!scrub_dragged_)
+                beginEdit(id);
+            else
+                document_->Focus();
+            event.StopPropagation();
+            return true;
+        }
+        if (field && edit_scrub_.empty()) {
+            const auto id = field->GetAttribute<Rml::String>("data-scrub", "");
+            if (type == "mousedown" && event.GetParameter<int>("button", 0) == 0) {
+                drag_scrub_ = id;
+                scrub_dragged_ = false;
+                scrub_start_x_ = scrub_last_x_ = event.GetParameter<float>("mouse_x", 0);
+                scrub_value_ = scrub_before_ = number(id.c_str());
+                field->Focus();
+                event.StopPropagation();
+                return true;
+            }
+            if (type == "keydown") {
+                const auto key = event.GetParameter<int>("key_identifier", 0);
+                if (key == Rml::Input::KI_RETURN || key == Rml::Input::KI_SPACE) {
+                    beginEdit(id);
+                    event.StopPropagation();
+                    return true;
+                }
+                if (key == Rml::Input::KI_LEFT || key == Rml::Input::KI_RIGHT || key == Rml::Input::KI_UP || key == Rml::Input::KI_DOWN) {
+                    const float sign = key == Rml::Input::KI_LEFT || key == Rml::Input::KI_DOWN ? -1 : 1;
+                    commitScrub(id, std::clamp(number(id.c_str()) + sign * field->GetAttribute<float>("data-step", .01f), field->GetAttribute<float>("data-min", 0), std::max(field->GetAttribute<float>("data-max", 1), number(id.c_str()))));
+                    event.StopPropagation();
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
     void CollisionPanel::writeInputs() {
         updating_ = true;
         auto set = [&](const char* id, float n) { setValue(id, std::format("{:.6g}", n)); };
@@ -202,12 +390,8 @@ namespace lfs::vis::gui {
                 el->RemoveAttribute("checked");
         };
         setValue("units-per-meter", std::format("{:.6g}", settings_.units_per_meter));
-        document_->GetElementById("detail")->SetAttribute("max", std::max(.25f, 2 * settings_.voxel_size / settings_.units_per_meter));
-        setValue("detail", std::to_string(settings_.voxel_size / settings_.units_per_meter));
-        setValue("overlay-opacity", std::to_string(display_.opacity));
-        setValue("cutaway", std::to_string(display_.slice));
-        for (auto [id, n] : {std::pair{"overlay-opacity-value", display_.opacity}, {"cutaway-value", display_.slice}})
-            document_->GetElementById(id)->SetInnerRML(std::format("{:.0f}%", n * 100));
+        setValue("overlay-opacity", std::to_string(display_.opacity * 100));
+        setValue("cutaway", std::to_string(display_.slice * 100));
         setValue("surface-stride", std::to_string(display_.surface_stride));
         setValue("shape", std::to_string(int(display_.surface_ready ? display_.surface_shape : settings_.shape)));
         setValue("filter-mode", settings_.adaptive_filter ? (settings_.cluster ? "2" : "1") : (settings_.cluster ? "3" : "0"));
@@ -229,15 +413,9 @@ namespace lfs::vis::gui {
         set("seed-x", world_seed_.x);
         set("seed-y", world_seed_.y);
         set("seed-z", world_seed_.z);
-        if (auto* input = InputController::instance()) {
-            const auto& w = input->walkSettings();
-            const auto ratio = settings_.units_per_meter / w.units_per_meter;
-            set("walk-height", w.height * ratio);
-            set("walk-radius", w.radius * ratio);
-            set("walk-speed", w.speed * ratio);
-            set("walk-step", w.step_height * ratio);
-        }
+        writeWalkInputs();
         updating_ = false;
+        syncScrubs();
         updateSummary();
         host_.markContentDirty();
     }
@@ -272,7 +450,6 @@ namespace lfs::vis::gui {
         display_ = node.collision_display;
         world_seed_ = glm::vec3(scene_->getWorldTransform(node.id) * glm::vec4(settings_.seed, 1));
         writeInputs();
-        document_->GetElementById("collision-target")->SetInnerRML(Rml::StringUtilities::EncodeRml(node.name));
         if (counted_volume_.lock() != node.collision) {
             occupied_count_ = node.collision->occupiedCount();
             counted_volume_ = node.collision;
@@ -296,6 +473,8 @@ namespace lfs::vis::gui {
             document_->GetElementById("collision-icon")->SetAttribute("src", rml_theme::pathToRmlImageSource(lfs::vis::getAssetPath("icon/scene/collision.png")));
             document_->AddEventListener("click", this);
             document_->AddEventListener("change", this);
+            for (const auto* type : {"mousedown", "mousemove", "mouseup", "keydown", "blur"})
+                document_->AddEventListener(type, this, true);
             if (auto* title = document_->GetElementById("title-text"))
                 title->SetInnerRML(Rml::StringUtilities::EncodeRml(LOC("collision.title")));
             if (auto* input = InputController::instance(); target_.is_nil() && input)
@@ -313,7 +492,6 @@ namespace lfs::vis::gui {
             if (!node) {
                 target_ = {};
                 last_stats_.clear();
-                document_->GetElementById("collision-target")->SetInnerRML(Rml::StringUtilities::EncodeRml(LOC("collision.new_node")));
                 status(LOC("collision.initial_status"));
             } else if (node->collision && counted_volume_.lock() != node->collision) {
                 // A project reload can restore the same UUID with a different
@@ -354,8 +532,18 @@ namespace lfs::vis::gui {
                     control->RemoveAttribute("disabled");
             }
         }
-        if (auto* input = InputController::instance(); input && !input->walkError().empty() && !busy_)
-            status(input->walkError());
+        if (auto* input = InputController::instance(); input && !busy_ && input->walkError() != shown_walk_error_) {
+            const bool recovering = !shown_walk_error_.empty();
+            shown_walk_error_ = input->walkError();
+            if (!shown_walk_error_.empty())
+                status(shown_walk_error_);
+            else if (recovering) {
+                if (const auto* node = scene_->getNodeByUuid(target_); node && node->collision)
+                    loadSettings(*node);
+                else
+                    status(LOC("collision.initial_status"));
+            }
+        }
         return true;
     }
     void CollisionPanel::start(bool new_node) {
@@ -531,6 +719,32 @@ namespace lfs::vis::gui {
             result_.reset();
             return;
         }
+        if (result_->surface_only) {
+            if (!node || node->locked.get()) {
+                finishJob("discarded");
+                status("Surface result discarded: source collision is missing or locked");
+                result_.reset();
+                return;
+            }
+            const auto parent_id = node->parent_id;
+            const auto id = scene_->addMesh(node->name + " surface", result_->mesh, parent_id);
+            auto* surface = scene_->getNodeById(id);
+            if (!surface)
+                throw std::runtime_error("Could not create collision surface node");
+            const auto parent = parent_id == core::NULL_NODE ? glm::mat4(1) : scene_->getWorldTransform(parent_id);
+            surface->local_transform = glm::inverse(parent) * result_->world_transform;
+            scene_->markTransformDirty(id);
+            scene_->markPayloadDiverged(id);
+            node->collision_display.surface_stride = result_->display.surface_stride;
+            node->collision_display.surface_shape = result_->display.surface_shape;
+            scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+            if (auto* manager = services().sceneOrNull())
+                manager->selectNode(id);
+            finishJob("completed");
+            status(surface->name + ": " + result_->stats);
+            result_.reset();
+            return;
+        }
         const auto centroid = result_->mesh->vertices.mean({0}, false).to_vector();
         if (!node) {
             auto id = scene_->addMesh("Collision", result_->mesh);
@@ -599,10 +813,10 @@ namespace lfs::vis::gui {
     }
     void CollisionPanel::updateDisplay() {
         display_.sharp = checked("sharp-preview");
-        display_.opacity = std::clamp(number("overlay-opacity"), 0.0f, 1.0f);
-        display_.slice = std::clamp(number("cutaway"), 0.0f, 1.0f);
-        for (auto [id, n] : {std::pair{"overlay-opacity-value", display_.opacity}, {"cutaway-value", display_.slice}})
-            document_->GetElementById(id)->SetInnerRML(std::format("{:.0f}%", n * 100));
+        display_.opacity = std::clamp(number("overlay-opacity") / 100, 0.0f, 1.0f);
+        display_.slice = std::clamp(number("cutaway") / 100, 0.0f, 1.0f);
+        setValue("overlay-opacity", std::format("{:.6g}", display_.opacity * 100));
+        setValue("cutaway", std::format("{:.6g}", display_.slice * 100));
         if (auto* node = scene_->getNodeByUuid(target_); !busy_ && node && node->collision && !node->locked.get()) {
             node->collision_display.sharp = display_.sharp;
             node->collision_display.opacity = display_.opacity;
@@ -670,7 +884,7 @@ namespace lfs::vis::gui {
                                          std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count(),
                                          volume->settings.voxel_size * display.surface_stride);
                 std::lock_guard lock(mutex_);
-                result_ = Result{volume, mesh, transform, {}, target, generation, epoch, display, stats};
+                result_ = Result{volume, mesh, transform, {}, target, generation, epoch, display, stats, true};
             } catch (const std::exception& error) {
                 std::lock_guard lock(mutex_);
                 error_ = error.what();
@@ -680,6 +894,17 @@ namespace lfs::vis::gui {
         });
     }
     void CollisionPanel::ProcessEvent(Rml::Event& event) {
+        if (updating_)
+            return;
+        try {
+            if (scrubEvent(event))
+                return;
+        } catch (const std::exception& error) {
+            showError(error.what());
+            return;
+        }
+        if (event.GetType() != "click" && event.GetType() != "change")
+            return;
         auto* el = event.GetTargetElement();
         while (el && el->GetId().empty())
             el = el->GetParentNode();
@@ -705,25 +930,7 @@ namespace lfs::vis::gui {
                 return;
             }
             if (event.GetType() == "change") {
-                if (id == "overlay-opacity" || id == "cutaway" || id == "sharp-preview")
-                    updateDisplay();
-                else if (id == "detail") {
-                    setValue("voxel-size", value("detail"));
-                    document_->GetElementById("auto-resolution")->RemoveAttribute("checked");
-                } else if (id == "voxel-size") {
-                    document_->GetElementById("detail")->SetAttribute("max", std::max(.25f, 2 * number("voxel-size")));
-                    setValue("detail", value("voxel-size"));
-                    document_->GetElementById("auto-resolution")->RemoveAttribute("checked");
-                } else if (id == "units-per-meter") {
-                    const float units = number("units-per-meter");
-                    if (!(units > 0))
-                        throw std::invalid_argument("Scene units per metre must be positive");
-                    const auto ratio = units / settings_.units_per_meter;
-                    for (const auto* field : {"cluster-resolution", "external-size", "floor-size", "carve-height", "carve-radius", "walk-height", "walk-radius", "walk-speed", "walk-step"})
-                        setValue(field, std::format("{:.6g}", number(field) * ratio));
-                    settings_.units_per_meter = units;
-                }
-                updateSummary();
+                applyControlChange(id);
                 return;
             }
             if (id == "generate")
@@ -745,35 +952,6 @@ namespace lfs::vis::gui {
                     setValue("seed-y", std::format("{:.6g}", p.y));
                     setValue("seed-z", std::format("{:.6g}", p.z));
                 }
-            } else if (id == "walk" || id == "exit-walk") {
-                if (auto* input = InputController::instance()) {
-                    if (id == "exit-walk")
-                        input->setCameraNavigationMode(InputController::CameraNavigationMode::FPV);
-                    else {
-                        auto s = input->walkSettings();
-                        s.height = number("walk-height");
-                        s.units_per_meter = number("units-per-meter");
-                        s.gravity = 9.81f * s.units_per_meter;
-                        s.radius = number("walk-radius");
-                        s.speed = number("walk-speed");
-                        s.step_height = number("walk-step");
-                        input->setWalkSettings(s);
-                        input->setCameraNavigationMode(InputController::CameraNavigationMode::Walk);
-                        status(input->walkError().empty() ? "Walk: WASD, drag to look, Shift to run, Esc to exit" : input->walkError());
-                    }
-                }
-            } else if (id == "edit-splats") {
-                if (auto* input = InputController::instance())
-                    input->setCameraNavigationMode(InputController::CameraNavigationMode::FPV);
-                std::vector<core::NodeId> ids;
-                for (const auto* node : scene_->getNodes())
-                    if (node->model && scene_->isNodeEffectivelyVisible(node->id))
-                        ids.push_back(node->id);
-                if (auto* manager = services().sceneOrNull())
-                    manager->selectNodesById(ids);
-                if (auto* node = scene_->getNodeByUuid(target_); node && !node->locked.get())
-                    node->visible = false;
-                status("Collision hidden for source editing. Use native selection, Delete, crop and transforms (undo supported), then Regenerate.");
             } else if (id == "show-voxels" || id == "show-mesh") {
                 if (busy_)
                     throw std::runtime_error("Wait for generation before changing visualization");
@@ -782,9 +960,7 @@ namespace lfs::vis::gui {
                     throw std::runtime_error("Select a collision node first");
                 if (node->locked.get())
                     throw std::runtime_error("Collision target is locked");
-                if (id == "show-mesh" && (!node->collision_display.surface_ready ||
-                                          node->collision_display.surface_stride != std::stoi(value("surface-stride")) ||
-                                          readInputs().shape != node->collision_display.surface_shape)) {
+                if (id == "show-mesh") {
                     buildSurface();
                 } else {
                     node->collision_display.preview = id == "show-voxels";

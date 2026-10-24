@@ -3118,7 +3118,7 @@ namespace lfs::vis::gui {
             items.push_back(makeAction(tr("export.export") + "...",
                                        prefixedAction(std::format("export_splat:{}", node_id)), !items.empty()));
         }
-        if (node->collision) {
+        if (node->collision || (node->type == core::NodeType::MESH && node->mesh)) {
             items.push_back(makeAction(tr("export.export") + "...",
                                        prefixedAction(std::format("export_collision:{}", node_id)), !items.empty()));
         }
@@ -3561,7 +3561,7 @@ namespace lfs::vis::gui {
             if (!parseNodeId(parts[1], id))
                 return;
             const auto* node = scene->getNodeById(id);
-            if (!node || !node->collision)
+            if (!node || (!node->collision && !node->mesh))
                 return;
             scene_manager->selectNode(id);
             requestCollisionExport(node->uuid);
