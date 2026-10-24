@@ -142,9 +142,15 @@ namespace lfs::core::internal {
 
         [[nodiscard]] uint64_t reserve_timeline_value();
         void submit(VkCommandBuffer command, uint64_t signal_value);
+#ifdef __APPLE__
+        void submit(VkCommandBuffer command, uint64_t signal_value, VkFence completion);
+#endif
         // Waits for an earlier value on the context timeline, then signals signal_value.
         // wait_value == 0 or wait_value >= signal_value submits without a wait.
         void submit_after(VkCommandBuffer command, uint64_t wait_value, uint64_t signal_value);
+#ifdef __APPLE__
+        void submit_after(VkCommandBuffer command, uint64_t wait_value, uint64_t signal_value, VkFence completion);
+#endif
         void submit_external_wait(VkSemaphore semaphore, uint64_t value, uint64_t signal_value);
         // Empty submit: wait for the context timeline (when earlier than signal_value)
         // and for one external timeline semaphore, then signal signal_value.
@@ -166,6 +172,9 @@ namespace lfs::core::internal {
             std::lock_guard lock(queue_mutex_);
             if (completed_timeline() < submitted_timeline())
                 return false;
+#ifdef __APPLE__
+            wait_tensor_queue_idle_locked();
+#endif
             wait_consumer_queue_idle_locked();
             release();
             return true;
@@ -175,6 +184,9 @@ namespace lfs::core::internal {
         void run_after_queue_idle(Release&& release) {
             std::lock_guard lock(queue_mutex_);
             wait(submitted_timeline());
+#ifdef __APPLE__
+            wait_tensor_queue_idle_locked();
+#endif
             wait_consumer_queue_idle_locked();
             release();
         }
@@ -237,6 +249,9 @@ namespace lfs::core::internal {
         std::mutex* consumer_queue_mutex_ = nullptr;
         void publish_submitted_locked(uint64_t signal_value);
         void wait_consumer_queue_idle_locked();
+#ifdef __APPLE__
+        void wait_tensor_queue_idle_locked();
+#endif
         std::mutex shutdown_mutex_;
         std::mutex shutdown_release_mutex_;
         std::vector<std::function<void()>> shutdown_releases_;
