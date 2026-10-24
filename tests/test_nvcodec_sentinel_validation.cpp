@@ -186,6 +186,9 @@ TEST(NvCodecAvailabilityTest, AvailableExactlyWhenADatasetJpegDecodesOnTheGpu) {
         GTEST_SKIP() << "no dataset with images_4 JPEGs under data/";
     }
 
+    // nvImageCodec decodes into CUDA memory, as in the CUDA image loaders.
+    const lfs::test::DefaultGpuBackendForTesting cuda(lfs::core::GpuBackend::CUDA);
+    ASSERT_TRUE(cuda.switched());
     bool decoded = false;
     try {
         lfs::io::NvCodecImageLoader loader({.enable_fallback = false, .decoder_pool_size = 1});
