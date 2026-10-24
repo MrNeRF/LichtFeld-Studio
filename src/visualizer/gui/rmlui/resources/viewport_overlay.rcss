@@ -451,7 +451,6 @@ body {
 
 /* Shared bars span both panels; keep them below the axes and centered tool rails. */
 #viewport-content.split-view #depth-view-block,
-#viewport-content.split-view #collision-controls-block,
 #viewport-content.split-view .viewport-selection-overlay,
 #viewport-content.split-view .viewport-transform-overlay {
     top: auto;
@@ -464,18 +463,6 @@ body {
     align-items: center;
 }
 
-.collision-quick-panel { max-width: 760dp; padding: 7dp 10dp; gap: 6dp; }
-.collision-quick-header { display: flex; align-items: center; gap: 6dp; font-size: 12dp; min-height: 22dp; }
-.collision-quick-icon { width: 18dp; height: 18dp; }
-.collision-quick-target { width: 200dp; height: 24dp; }
-.collision-quick-status { opacity: .65; font-size: 11dp; }
-.collision-quick-fields { display: flex; flex-wrap: wrap; gap: 8dp; }
-.collision-quick-field { display: flex; align-items: center; gap: 6dp; font-size: 11dp; }
-.collision-quick-field > .scrub-field { width: 100dp; height: 25dp; min-width: 72dp; }
-.collision-quick-field .scrub-field-display { font-size: 11dp; line-height: 25dp; padding: 0 6dp; }
-.collision-quick-field .scrub-field-input { width: 100%; height: 25dp; box-sizing: border-box; }
-.collision-quick-fields.readonly { opacity: .45; pointer-events: none; }
-.collision-quick-error { max-width: 680dp; margin: 0; font-size: 11dp; }
 
 .viewport-transform-meta.viewport-depth-meta {
     min-width: 0;

@@ -3049,6 +3049,7 @@ NB_MODULE(lichtfeld, m) {
             return state;
         const auto& w = controller->walkSettings();
         state["walking"] = controller->cameraNavigationMode() == lfs::vis::InputController::CameraNavigationMode::Walk;
+        state["available"] = controller->hasWalkCollision();
         state["height"] = w.height / w.units_per_meter;
         state["radius"] = w.radius / w.units_per_meter;
         state["speed"] = w.speed / w.units_per_meter;
@@ -3059,7 +3060,7 @@ NB_MODULE(lichtfeld, m) {
             const auto& scene = sm->getScene();
             const auto ids = sm->getSelectedNodeIds();
             for (const auto* node : scene.getNodes()) {
-                if (!node->collision || !node->mesh)
+                if (!node->collision || !node->mesh || node->collision_display.surface_ready)
                     continue;
                 nb::dict target;
                 target["uuid"] = node->uuid.to_string();

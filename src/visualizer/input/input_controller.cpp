@@ -712,8 +712,8 @@ namespace lfs::vis {
         }
         walk_settings_ = settings;
         walk_error_.clear();
-        if (auto* gui = services().guiOrNull())
-            gui->requestViewportOverlaySync();
+        auto& generation = app_store().render_settings_generation;
+        generation.set(generation.get() + 1);
         python::request_redraw();
     }
 
@@ -772,8 +772,8 @@ namespace lfs::vis {
             clearWasdMomentumViewport();
             activeKeyboardViewport().camera.clearTransientMotion();
         }
-        if (auto* gui = services().guiOrNull())
-            gui->requestViewportOverlaySync();
+        auto& generation = app_store().render_settings_generation;
+        generation.set(generation.get() + 1);
         python::request_redraw();
     }
 

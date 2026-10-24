@@ -31,6 +31,55 @@
         </label>
       </div>
     </div>
+    <div class="section-header text-accent" id="hdr-collision" data-event-click="toggle_section('collision')">
+      <span class="section-arrow text-accent" id="arrow-collision">▶</span><span class="text-accent">@tr:collision.title</span>
+    </div>
+    <div class="section-content" id="sec-collision">
+      <div class="section-header" id="hdr-collision-walk" data-event-click="toggle_section('collision_walk')">
+        <span class="section-arrow is-expanded" id="arrow-collision-walk">▶</span><span>@tr:collision.controls_walk</span>
+      </div>
+      <div class="section-content" id="sec-collision-walk">
+        <div class="setting-row setting-row--aligned" data-tooltip="collision.walk_unavailable">
+          <span class="setting-row__label-col">@tr:collision.walk_mode</span>
+          <label class="setting-row__control-col setting-row__control-col--checkbox"><input type="checkbox" data-checked="collision_controls_walk" data-attrif-disabled="!collision_walk_available"/></label>
+        </div>
+        <p class="text-disabled" data-class-hidden="collision_walk_available">@tr:collision.walk_unavailable</p>
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">@tr:collision.head_height</span>
+          <div class="setting-row__control-col setting-row__control-col--slider"><input class="setting-slider" type="range" data-value="collision_walk_height"/></div>
+        </div>
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">@tr:collision.player_radius</span>
+          <div class="setting-row__control-col setting-row__control-col--slider"><input class="setting-slider" type="range" data-value="collision_walk_radius"/></div>
+        </div>
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">@tr:collision.speed</span>
+          <div class="setting-row__control-col setting-row__control-col--slider"><input class="setting-slider" type="range" data-value="collision_walk_speed"/></div>
+        </div>
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">@tr:collision.step_height</span>
+          <div class="setting-row__control-col setting-row__control-col--slider"><input class="setting-slider" type="range" data-value="collision_walk_step"/></div>
+        </div>
+      </div>
+      <div class="section-header" id="hdr-collision-voxels" data-event-click="toggle_section('collision_voxels')">
+        <span class="section-arrow is-expanded" id="arrow-collision-voxels">▶</span><span>@tr:collision.voxel_surface</span>
+      </div>
+      <div class="section-content" id="sec-collision-voxels">
+        <div class="setting-row setting-row--aligned"><span class="setting-row__label-col">@tr:collision.node</span>
+          <div class="setting-row__control-col setting-row__control-col--fill"><select data-value="collision_controls_target" data-attrif-disabled="!collision_targets_available"><option data-for="target : collision_controls_targets" data-attr-value="target.uuid">{{target.name}}</option></select></div>
+        </div>
+        <p class="text-disabled">{{collision_controls_status}}</p>
+        <div class="setting-row setting-row--aligned" data-class-collision-readonly="!collision_controls_editable">
+          <span class="setting-row__label-col">@tr:collision.opacity_short</span>
+          <div class="setting-row__control-col setting-row__control-col--slider"><input class="setting-slider" type="range" data-value="collision_preview_opacity"/></div>
+        </div>
+        <div class="setting-row setting-row--aligned" data-class-collision-readonly="!collision_controls_editable">
+          <span class="setting-row__label-col">@tr:collision.cutaway</span>
+          <div class="setting-row__control-col setting-row__control-col--slider"><input class="setting-slider" type="range" data-value="collision_preview_cutaway"/></div>
+        </div>
+      </div>
+      <p class="text-error" data-class-hidden="collision_controls_error == ''">{{collision_controls_error}}</p>
+    </div>
     <div class="section-header text-accent" id="hdr-quality" data-event-click="toggle_section('quality')">
       <span class="section-arrow text-accent" id="arrow-quality">▶</span>
       <span class="text-accent">{{label_hdr_quality}}</span>

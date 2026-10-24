@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Contextual viewport controls; native occupancy and meshes stay in place."""
+"""Collision sections for the Rendering panel."""
 
 import lichtfeld as lf
 
@@ -18,20 +18,21 @@ _SPECS = {
 }
 
 
-class CollisionControlsController:
+class CollisionRenderingControls:
     def __init__(self):
         self._handle = None
         self._state = {}
-        self._context = None
+        self._target_uuid = ""
         self._signature = None
         self._error = ""
         self._targets = []
-        self.visible = False
         self._scrubs = ScrubFieldController(_SPECS, self._get_value, self._set_value)
 
     def bind_model(self, model):
-        model.bind_func("collision_controls_walk", lambda: bool(self._state.get("walking")))
-        model.bind_func("collision_controls_editable", lambda: not self._state.get("target", {}).get("locked", False))
+        model.bind("collision_controls_walk", lambda: bool(self._state.get("walking")), self._set_walk_enabled)
+        model.bind_func("collision_walk_available", lambda: bool(self._state.get("available")))
+        model.bind_func("collision_targets_available", lambda: bool(self._targets))
+        model.bind_func("collision_controls_editable", lambda: bool(self._state.get("target")) and not self._state["target"].get("locked", False))
         model.bind_func("collision_controls_error", lambda: self._error)
         model.bind_func("collision_controls_status", self._status)
         model.bind("collision_controls_target", lambda: (self._state.get("target") or {}).get("uuid", ""), self._select_target)
@@ -41,56 +42,54 @@ class CollisionControlsController:
         self._handle = model.get_handle()
 
     def mount(self, doc):
-        self._context = None
+        self._target_uuid = ""
         self._signature = None
         self._targets = []
-        self.visible = False
         self._scrubs.mount(doc)
 
     def unmount(self):
         self._scrubs.unmount()
         self._handle = None
-        self.visible = False
-        self._context = None
+        self._target_uuid = ""
         self._signature = None
 
     def update(self, doc):
         getter = getattr(lf, "get_collision_controls", None)
         state = getter() if callable(getter) else {}
-        # Normalize optional target once; the rest of the card can use a mapping.
-        state["target"] = state.get("target") or {}
-        context = "walk" if state.get("walking") else state["target"].get("uuid")
-        if context != self._context:
-            # Cancel drafts before changing their target. A draft must never be
-            # committed to a newly selected collider or a different camera mode.
-            for prop in _SPECS:
+        targets = state.get("targets", [])
+        target = state.get("target") or next((t for t in targets if t["uuid"] == self._target_uuid), None)
+        if target is None and targets:
+            target = targets[0]
+        uuid = target["uuid"] if target else ""
+        if uuid != self._target_uuid:
+            for prop in ("collision_preview_opacity", "collision_preview_cutaway"):
                 self._scrubs.prepare_reset(prop)
-            self._context = context
             self._error = ""
+        self._target_uuid = uuid
+        state["target"] = target or {}
         self._state = state
-        self.visible = bool(context)
-        wrap = doc.get_element_by_id("collision-controls-block")
-        if wrap:
-            wrap.set_class("hidden", not self.visible)
-        signature = (context, repr(state), self._error, RuntimeState.language_generation.value)
+        signature = (repr(state), self._error, RuntimeState.language_generation.value)
         if signature == self._signature:
             return None
         self._signature = signature
-        targets = [{"uuid": t["uuid"], "name": t["name"]} for t in state.get("targets", [])]
-        if targets != self._targets:
-            self._targets = targets
+        records = [{"uuid": t["uuid"], "name": t["name"]} for t in targets]
+        if records != self._targets:
+            self._targets = records
             if self._handle:
-                self._handle.update_record_list("collision_controls_targets", targets)
+                self._handle.update_record_list("collision_controls_targets", records)
         height = float(state.get("height", 1.8))
         radius = float(state.get("radius", .2))
         self._scrubs.set_spec("collision_walk_height", ScrubFieldSpec(max(.05, 2 * radius), max(3, height), .01, "%.2f m"))
         self._scrubs.set_spec("collision_walk_radius", ScrubFieldSpec(.01, height / 2, .005, "%.3f m"))
         self._scrubs.set_spec("collision_walk_step", ScrubFieldSpec(0, height, .005, "%.3f m"))
         self._scrubs.sync_all()
+        editable = bool(target) and not target.get("locked")
+        for prop in ("collision_preview_opacity", "collision_preview_cutaway"):
+            self._scrubs.set_enabled(prop, editable)
         if self._handle:
-            for field in (*_SPECS, "collision_controls_walk", "collision_controls_editable", "collision_controls_target", "collision_controls_error", "collision_controls_status"):
+            for field in (*_SPECS, "collision_controls_walk", "collision_walk_available", "collision_targets_available", "collision_controls_editable", "collision_controls_target", "collision_controls_error", "collision_controls_status"):
                 self._handle.dirty(field)
-        return "context"
+        return "settings"
 
     def _get_value(self, prop):
         if prop.startswith("collision_walk_"):
@@ -125,8 +124,22 @@ class CollisionControlsController:
             # Native validation leaves the actual body/display unchanged.
             self._error = str(exc)
         self._signature = None
+        self._request_update()
+
+    def _request_update(self):
         if self._handle:
+            from .rml_widgets import request_model_update
             self._handle.dirty("collision_controls_error")
+            request_model_update(self._handle)
+
+    def _set_walk_enabled(self, enabled):
+        try:
+            lf.set_camera_navigation_mode("walk" if enabled else "fpv")
+            self._error = ""
+        except RuntimeError as exc:
+            self._error = str(exc)
+        self._signature = None
+        self._request_update()
 
     def _select_target(self, uuid):
         # Resolve the UUID against current state, rather than a stale display name.
@@ -137,8 +150,8 @@ class CollisionControlsController:
 
     def _status(self):
         target = self._state.get("target") or {}
-        if self._state.get("walking"):
-            return ""
+        if not target:
+            return lf.ui.tr("collision.preview_unavailable")
         if target.get("locked"):
             return lf.ui.tr("collision.controls_locked")
         if not target.get("visible", True):

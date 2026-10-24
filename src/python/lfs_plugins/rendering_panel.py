@@ -154,6 +154,7 @@ COLOR_PROPS = [
 ]
 
 SECTION_NAMES = (
+    "collision", "collision_walk", "collision_voxels",
     "viewport",
     "quality",
     "quality_advanced",
@@ -273,6 +274,7 @@ def _color_channel_field(prop_id, suffix):
 
 
 RENDERING_INITIALLY_COLLAPSED = {
+    "collision",
     "viewport", "environment", "quality_advanced", "lod_advanced",
     "lod",
     "selection",
@@ -307,6 +309,9 @@ class RenderingPanel(Panel):
     update_policy = "dirty"
 
     def __init__(self):
+        from .collision_rendering import CollisionRenderingControls
+        self._collision = CollisionRenderingControls()
+        self._was_walking = False
         self._handle = None
         self._color_edit_prop = None
         self._color_edit_group = None
@@ -389,6 +394,7 @@ class RenderingPanel(Panel):
             el.add_event_listener("change", self._on_color_text_change)
             el.add_event_listener("blur", self._on_color_text_blur)
         self._scrub_fields.mount(doc)
+        self._collision.mount(doc)
         self._default_reset.mount(doc)
         self._selection_groups.mount(doc)
         self._sync_section_states()
@@ -598,6 +604,7 @@ class RenderingPanel(Panel):
         model.bind_event("picker_change", self._on_picker_change)
         model.bind_event("browse_environment_map", self._on_browse_environment_map)
         self._selection_groups.bind(model)
+        self._collision.bind_model(model)
 
         self._handle = model.get_handle()
         self._selection_groups.attach(self._handle)
@@ -647,6 +654,12 @@ class RenderingPanel(Panel):
             return False
 
         dirty = False
+        dirty |= bool(self._collision.update(doc))
+        walking = bool(self._collision._state.get("walking"))
+        if walking and not self._was_walking:
+            self._collapsed.difference_update({"collision", "collision_walk"})
+            self._sync_section_states()
+        self._was_walking = walking
         if not getattr(s, "selection_outline", False) and self._color_edit_prop == "selection_outline_color":
             self._hide_picker()
             dirty = True
@@ -888,6 +901,7 @@ class RenderingPanel(Panel):
         return dirty
 
     def on_unmount(self, doc):
+        self._collision.unmount()
         self._unsubscribe_reactive_state()
         self._selection_groups.unmount()
         doc.remove_data_model("rendering")

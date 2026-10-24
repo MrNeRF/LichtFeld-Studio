@@ -736,7 +736,6 @@ namespace lfs::vis::gui {
                                            8.0f * std::max(rml_context_->GetDensityIndependentPixelRatio(), 0.01f);
         bool changed = false;
         for (const char* const id : {"transform-block",
-                                     "collision-controls-block",
                                      "selection-block",
                                      "depth-view-block",
                                      "gt-compare-mode-block",

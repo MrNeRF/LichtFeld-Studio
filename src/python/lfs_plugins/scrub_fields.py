@@ -101,6 +101,16 @@ class ScrubFieldController:
             return True
         return self._sync_field(state)
 
+    def set_enabled(self, prop: str, enabled: bool) -> None:
+        state = self._fields.get(prop)
+        if state is None:
+            return
+        for element in (state.field, state.input_el):
+            if enabled:
+                element.remove_attribute("disabled")
+            else:
+                element.set_attribute("disabled", "disabled")
+
     def sync_all(self) -> bool:
         if self._doc is None:
             return False
@@ -197,7 +207,7 @@ class ScrubFieldController:
 
     def _on_field_keydown(self, prop: str, event) -> None:
         state = self._fields.get(prop)
-        if state is None or state.editing:
+        if state is None or state.editing or state.field.get_attribute("disabled", ""):
             return
         key = int(event.get_parameter("key_identifier", "0"))
         if key not in (KI_RETURN, KI_SPACE):
@@ -209,7 +219,7 @@ class ScrubFieldController:
 
     def _on_field_mousedown(self, prop: str, event) -> None:
         state = self._fields.get(prop)
-        if state is None or state.editing:
+        if state is None or state.editing or state.field.get_attribute("disabled", ""):
             return
         if int(event.get_parameter("button", "0")) != 0:
             return

@@ -108,8 +108,6 @@
     box-shadow: @{viewport.toolbar_shadow};
 }
 
-.collision-quick-error { color: @{error}; }
-
 .viewport-export-status {
     background-color: @{toolbar.background};
     border-color: @{overlay.border};
