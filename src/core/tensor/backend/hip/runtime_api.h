@@ -8,7 +8,10 @@
 /* Private, versioned C boundary: no CUDA/HIP headers or C++ ownership cross it.
  * Calls on one context must be serialized by the host. Buffers belong to their
  * context; destruction drains its queue before releasing live allocations.
- * A nonzero result leaves details in the caller-owned error buffer. */
+ * Contexts must remain alive throughout their calls. Successfully released
+ * handles are invalid and must not be reused, even if their address recurs.
+ * A nonzero result leaves details in the optional caller-owned error buffer;
+ * success clears it. native_code is a HIP error code, or -1 for a host exception. */
 #if defined(__HIP_DEVICE_COMPILE__)
 #define LFS_HIP_API
 #elif defined(_WIN32)
@@ -51,6 +54,8 @@ LFS_HIP_API int lfs_hip_context_destroy(LfsHipContext* context, LfsHipError* err
 /* Blocking transfers: the caller may reuse host storage on successful return. */
 LFS_HIP_API int lfs_hip_upload(LfsHipContext* context, LfsHipBuffer* buffer, size_t offset, const void* host, size_t bytes, LfsHipError* error);
 LFS_HIP_API int lfs_hip_download(LfsHipContext* context, const LfsHipBuffer* buffer, size_t offset, void* host, size_t bytes, LfsHipError* error);
+/* Enqueued operations: synchronize or use a blocking transfer before consuming
+ * results on the host. Immediate launch checks do not imply GPU completion. */
 LFS_HIP_API int lfs_hip_fill_f32(LfsHipContext* context, LfsHipBuffer* buffer, size_t offset, size_t count, float value, LfsHipError* error);
 LFS_HIP_API int lfs_hip_affine_f32(LfsHipContext* context, const LfsHipBuffer* input, LfsHipBuffer* output, size_t count, float scale, float bias, LfsHipError* error);
 

@@ -16,8 +16,10 @@ set_tests_properties(HipNative.Configuration PROPERTIES
 # GPU execution is explicit; merely configuring or compiling needs no AMD GPU.
 option(LFS_HIP_NATIVE_GPU_TESTS "Register SDK-only HIP GPU boundary tests" OFF)
 if(LFS_HIP_NATIVE_GPU_TESTS)
+    set(LFS_HIP_NATIVE_TEST_DEVICE "0" CACHE STRING "HIP ordinal for explicit native GPU tests")
     add_test(NAME HipNative.RuntimeBoundary
         COMMAND "${Python3_EXECUTABLE}" "${_root}/tests/hip/test_native_runtime.py"
-            "${LFS_HIP_RUNTIME_LIBRARY}" --runtime-dir "${LFS_HIP_ROOT}/bin")
+            "${LFS_HIP_RUNTIME_LIBRARY}" --runtime-dir "${LFS_HIP_ROOT}/bin"
+            --device "${LFS_HIP_NATIVE_TEST_DEVICE}")
     set_tests_properties(HipNative.RuntimeBoundary PROPERTIES LABELS "hip;gpu" TIMEOUT 120)
 endif()

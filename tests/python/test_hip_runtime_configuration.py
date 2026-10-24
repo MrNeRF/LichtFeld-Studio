@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -14,14 +15,16 @@ CMAKE = os.environ.get("CMAKE_COMMAND") or shutil.which("cmake")
 
 
 class HipConfiguration(unittest.TestCase):
-    def configure(self, settings, expected=None):
+    def configure(self, settings, expected=None, *,
+                  module="cmake/HipArchitectures.cmake", invoke="lfs_hip_architectures()"):
         self.assertIsNotNone(CMAKE, "CMake is required for configuration tests")
         with tempfile.TemporaryDirectory() as temporary:
             script = Path(temporary) / "targets.cmake"
             script.write_text(
                 'cmake_minimum_required(VERSION 3.30)\n'
-                f'include("{(ROOT / "cmake/HipArchitectures.cmake").as_posix()}")\n'
-                + settings + '\nlfs_hip_architectures()\n'
+                + settings + '\n'
+                f'include("{(ROOT / module).as_posix()}")\n'
+                + invoke + '\n'
                 'message(STATUS "TARGETS=${LFS_HIP_COMPILED_ARCHITECTURES}")\n'
                 'message(STATUS "FLAGS=${LFS_HIP_OFFLOAD_FLAGS}")\n',
                 encoding="utf-8")
@@ -61,6 +64,27 @@ class HipConfiguration(unittest.TestCase):
             'set(LFS_HIP_ARCHITECTURE gfx1150)\n'
             'set(LFS_HIP_ROOT "${CMAKE_CURRENT_LIST_DIR}/missing-sdk")\n'
             'set(LFS_HIP_OFFLOAD_COMPRESSION ON)'))
+
+    def test_cross_compilation_is_rejected_before_sdk_discovery(self):
+        self.assertIn("does not support cross-compilation", self.configure(
+            'set(CMAKE_CROSSCOMPILING TRUE)\nset(CMAKE_SYSTEM_NAME Linux)',
+            module="src/core/tensor/backend/hip/CMakeLists.txt", invoke=""))
+
+    def test_unsupported_platform_is_rejected_before_sdk_discovery(self):
+        self.assertIn("supports Windows and Linux", self.configure(
+            'set(CMAKE_SYSTEM_NAME FreeBSD)',
+            module="src/core/tensor/backend/hip/CMakeLists.txt", invoke=""))
+
+    def test_native_cli_rejects_invalid_ordinals_before_loading(self):
+        for device in (-1, 2147483648, 4294967296):
+            with self.subTest(device=device):
+                result = subprocess.run([
+                    sys.executable, str(ROOT / "tests/hip/test_native_runtime.py"),
+                    "missing-module.dll", "--device", str(device),
+                    "--runtime-dir", "missing-sdk-directory"],
+                    capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("ordinal in 0..2147483647", result.stderr)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,10 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Independent of the application and its CXX/CUDA compiler configuration.
-if(APPLE)
+if(CMAKE_CROSSCOMPILING)
+    message(FATAL_ERROR "The native HIP runtime does not support cross-compilation")
+endif()
+if(NOT CMAKE_SYSTEM_NAME MATCHES "^(Windows|Linux)$")
     message(FATAL_ERROR "The native HIP runtime supports Windows and Linux")
 endif()
 set(LFS_HIP_ROOT "" CACHE PATH "Explicit ROCm development SDK root")

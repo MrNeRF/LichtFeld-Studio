@@ -168,8 +168,8 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--runtime-dir", type=Path)
     options = parser.parse_args()
-    if options.device < 0:
-        parser.error("--device must be nonnegative")
+    if not 0 <= options.device <= 2147483647:
+        parser.error("--device must be an ordinal in 0..2147483647")
     directory = None
     if options.runtime_dir and os.name == "nt":
         directory = os.add_dll_directory(str(options.runtime_dir.resolve()))
