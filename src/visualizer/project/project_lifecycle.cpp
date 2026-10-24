@@ -1507,6 +1507,7 @@ namespace lfs::vis::project {
                     .run = [this, epoch, document] {
                         if (epoch_.load(std::memory_order_acquire) != epoch || document_ != document)
                             return;
+#if LFS_BUILD_TRAINER
                         if (auto* manager = viewer_.getSceneManager();
                             manager && manager->appearanceUsesTrainingViewport()) {
                             // Finish any viewport use before releasing the stored copy.
@@ -1515,6 +1516,7 @@ namespace lfs::vis::project {
                             completion.wait();
                             manager->clearAppearanceModel();
                         }
+#endif
                     },
                     .cancel = {},
                 });
@@ -7475,6 +7477,7 @@ namespace lfs::vis::project {
                     !set) {
                     return set;
                 }
+#if LFS_BUILD_TRAINER
                 if (const auto* trainer = viewer_.getTrainer()) {
                     if (auto captured = captureTrainingInitialization(
                             staged_project, staged_references, project_root, scene, trainer->getParams().init_path);
@@ -7482,6 +7485,7 @@ namespace lfs::vis::project {
                         return captured;
                     }
                 }
+#endif
                 if (!sameBytes(
                         document_->project()
                             .to_bytes(),
@@ -10145,6 +10149,7 @@ namespace lfs::vis::project {
         lfs::training::absolutize_dataset_path_for_snapshot(dataset_path);
         snapshot->dataset.data_path = dataset_path;
         std::optional<lfs::io::project::TrainingProjectInitialization> initialization;
+#if LFS_BUILD_TRAINER
         if (const auto* trainer = viewer_.getTrainer()) {
             if (const auto& init_path = trainer->getParams().init_path; init_path && !init_path->empty()) {
                 const auto& scene = viewer_.getScene();
@@ -10159,6 +10164,7 @@ namespace lfs::vis::project {
                 }
             }
         }
+#endif
         return ProjectTrainingSource{
             .parameters = std::move(*snapshot),
             .dataset_root = std::move(dataset_path),

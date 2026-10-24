@@ -1536,8 +1536,12 @@ namespace lfs::vis {
         if (!trainer_mgr) {
             return;
         }
+#if LFS_BUILD_TRAINER
         const auto* const trainer = trainer_mgr->getTrainer();
         const bool training_session_initialized = trainer && trainer->isInitialized();
+#else
+        constexpr bool training_session_initialized = false;
+#endif
 
         const auto settings = settingsForView(view);
         if (!splitViewUsesGTComparison(settings.split_view_mode) ||

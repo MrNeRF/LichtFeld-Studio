@@ -16,6 +16,7 @@
 #include "core/point_cloud.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
+#include "lfs/training/depth_camera_projection.hpp"
 #if LFS_BUILD_TRAINER
 #include "depth_anchor_cache.hpp"
 #include "lfs/training/ops/registry.hpp"

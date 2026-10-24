@@ -5,7 +5,9 @@
 #include "html_viewer_export.hpp"
 #include "core/training_manager.hpp"
 #include "io/exporter.hpp"
+#if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
+#endif
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
@@ -34,6 +36,7 @@ namespace lfs::vis::gui {
         }
 
         std::optional<lfs::core::param::OptimizationParameters> opt_params;
+#if LFS_BUILD_TRAINER
         if (auto* tm = services().trainerOrNull(); tm && tm->hasTrainer()) {
             if (auto* trainer = tm->getTrainer()) {
                 opt_params = trainer->getParams().optimization;
@@ -41,6 +44,11 @@ namespace lfs::vis::gui {
         } else if (auto* pm = services().paramsOrNull(); pm && pm->isLoaded()) {
             opt_params = pm->getActiveParams();
         }
+#else
+        if (auto* pm = services().paramsOrNull(); pm && pm->isLoaded()) {
+            opt_params = pm->getActiveParams();
+        }
+#endif
 
         return resolve_html_export_background_color(viewport_bg, opt_params);
     }

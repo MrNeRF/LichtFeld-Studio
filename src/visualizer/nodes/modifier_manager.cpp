@@ -15,13 +15,17 @@
 #include "core/splat_data_transform.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_completion.hpp"
+#if LFS_BUILD_TRAINER
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/sh_value_storage.hpp"
+#endif
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "scene/scene_manager.hpp"
+#if LFS_BUILD_TRAINER
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/trainer.hpp"
+#endif
 #include "visualizer/core/training_manager.hpp"
 
 #include <algorithm>
@@ -1463,8 +1467,13 @@ namespace lfs::vis {
         const auto found = std::ranges::find(modifiers->modifiers, modifier_name, &Modifier::name);
         if (found == modifiers->modifiers.end())
             return std::unexpected(ModifierError{"Modifier does not exist"});
+#if LFS_BUILD_TRAINER
         const bool training_model = scene_manager_->getContentType() == SceneManager::ContentType::Dataset &&
                                     node_uuid == scene.getTrainingModelNodeUuid();
+#else
+        // Without the trainer no session holds the model in place; it applies like any splat.
+        constexpr bool training_model = false;
+#endif
         auto* trainer_manager = scene_manager_->getTrainerManager();
         if (training_model)
             waitForTrainingBoundary();
@@ -1496,6 +1505,7 @@ namespace lfs::vis {
             *scene_manager_, {node->id}, options);
         op::TransactionGuard transaction("node.apply_modifier");
         if (training_model) {
+#if LFS_BUILD_TRAINER
             auto& destination = *node->model;
             auto* trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
             std::unique_lock<std::shared_mutex> render_lock;
@@ -1533,6 +1543,7 @@ namespace lfs::vis {
             scene.clearNodeEvaluatedPayload(node->id);
             scene.markPayloadDiverged(node->id);
             scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+#endif
         } else if (node->type == core::NodeType::SPLAT) {
             auto baked = std::make_unique<core::SplatData>(prepared.splats->readOnlySnapshot());
             // Later edits that rebuild tensors must stay in renderer storage.

@@ -17,6 +17,8 @@ add_library(lfs_preprocessing STATIC
 target_include_directories(lfs_preprocessing
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        # lens_priors.hpp uses the header-only depth camera types, also without the trainer.
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/training/include>
         $<INSTALL_INTERFACE:include>
     PRIVATE
         ${CMAKE_SOURCE_DIR}/src

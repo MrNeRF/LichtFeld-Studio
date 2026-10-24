@@ -11,12 +11,22 @@
 #include "project/training_session_internal.hpp"
 #include "visualizer/visualizer_impl.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace lfs::vis {
     using namespace training_session_detail;
 
     using namespace lfs::core::events;
+
+    // No heap trim worker runs without the trainer.
+    void training_memory_detail::shutdownHeapTrimWorker() noexcept {}
+
+    void TrainerManager::syncCropBox() {}
+
+    std::optional<lfs::training::TrainingCropBoxGeometry> TrainerManager::exportCropBox() const {
+        return std::nullopt;
+    }
 
     bool TrainerManager::canPerform(const TrainingAction action) const {
         return action == TrainingAction::LoadDataset || action == TrainingAction::LoadCheckpoint ||
@@ -190,6 +200,23 @@ namespace lfs::vis {
     bool TrainerManager::hasLiveTrainingThread() const { return false; }
     bool TrainerManager::isModelChanging() const { return isRunning(); }
     bool TrainerManager::isPausedAtCheckpointBaseline() const { return false; }
+    bool TrainerManager::hasInitializedTrainer() const { return false; }
+    bool TrainerManager::isDatasetEditable() const { return true; }
+    bool TrainerManager::canChangeStrategy(std::string_view) const { return true; }
+    bool TrainerManager::rejectsIterationLimit(const std::size_t iterations) const {
+        return isPaused() &&
+               iterations <= static_cast<std::size_t>(std::max(0, getCurrentIteration()));
+    }
+    lfs::core::param::DatasetConfig& TrainerManager::getEditableDatasetParams() {
+        if (auto* const param_mgr = services().paramsOrNull())
+            return param_mgr->getDatasetConfig();
+        return pending_dataset_params_;
+    }
+    const lfs::core::param::DatasetConfig& TrainerManager::getEditableDatasetParams() const {
+        if (const auto* const param_mgr = services().paramsOrNull())
+            return param_mgr->getDatasetConfig();
+        return pending_dataset_params_;
+    }
     void TrainerManager::applyRestoredCheckpointPresentation() {}
 
 } // namespace lfs::vis

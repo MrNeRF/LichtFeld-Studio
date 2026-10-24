@@ -12,6 +12,7 @@
 #include "core/parameters.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "io/session_chapters.hpp"
+#include "training/training_cropbox_mask.hpp"
 #if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
 #endif

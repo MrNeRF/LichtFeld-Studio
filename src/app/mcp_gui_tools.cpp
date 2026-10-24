@@ -2092,10 +2092,12 @@ namespace lfs::app {
 
             const auto& scene = scene_manager.getScene();
             auto borrow_plan = make_borrow_single_identity_export_plan(scene_manager, node_names, format);
+#if LFS_BUILD_TRAINER
             const auto* const trainer_manager = scene_manager.getTrainerManager();
             const auto export_crop = trainer_manager ? trainer_manager->exportCropBox() : std::nullopt;
             // A cropped copy of the training model; the scene model stays whole so a stopped run can resume.
             std::optional<core::SplatData> cropped;
+#endif
             std::vector<std::pair<const core::SplatData*, glm::mat4>> splats;
             std::vector<std::shared_ptr<const core::SplatData>> evaluated_owners;
             splats.reserve(node_names.size());
@@ -2114,12 +2116,14 @@ namespace lfs::app {
                     }
                     const auto evaluated = apply_modifiers ? node->evaluated_model : nullptr;
                     const core::SplatData* data = evaluated ? evaluated.get() : node->model.get();
+#if LFS_BUILD_TRAINER
                     if (export_crop && node->uuid == scene.getTrainingModelNodeUuid() &&
                         (cropped = training::crop_copy_to_training_cropbox(*data, *export_crop))) {
                         if (cropped->size() == 0)
                             continue;
                         data = &*cropped;
                     }
+#endif
                     splats.emplace_back(data, vis::scene_coords::nodeDataWorldTransform(scene, node->id));
                     if (evaluated)
                         evaluated_owners.push_back(evaluated);
@@ -2950,10 +2954,12 @@ namespace lfs::app {
 
                         // A cropped copy with "Crop to ROI at end" on; the model stays whole so a stopped run can resume.
                         std::optional<core::SplatData> cropped;
+#if LFS_BUILD_TRAINER
                         const auto* const trainer_manager =
                             viewer->getSceneManager() ? viewer->getSceneManager()->getTrainerManager() : nullptr;
                         if (const auto crop = trainer_manager ? trainer_manager->exportCropBox() : std::nullopt)
                             cropped = training::crop_copy_to_training_cropbox(*model, *crop);
+#endif
                         if (cropped && cropped->size() == 0)
                             return std::unexpected("No splat lies inside the crop box");
 

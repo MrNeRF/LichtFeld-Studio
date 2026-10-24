@@ -757,8 +757,12 @@ namespace lfs::python {
         const auto* tm = get_trainer_manager();
         if (!tm || !tm->hasTrainer())
             return {};
+#if LFS_BUILD_TRAINER
         const auto* trainer = tm->getTrainer();
         return trainer ? trainer->getParams().init_path.value_or(std::string{}) : std::string{};
+#else
+        return {};
+#endif
     }
 
     core::param::DatasetConfig& PyDatasetConfig::params() {

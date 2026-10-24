@@ -91,25 +91,6 @@ namespace lfs::training {
 
     } // namespace
 
-    kernels::DepthCameraProjection depth_camera_projection(const lfs::core::Camera& cam) {
-        kernels::DepthCameraProjection p;
-        if (cam.is_undistort_prepared())
-            return p;
-        p.model = static_cast<int>(cam.camera_model_type());
-        auto copy = [](const lfs::core::Tensor& tensor, float* out, size_t count) {
-            if (!tensor.is_valid() || !tensor.numel())
-                return;
-            const auto host = tensor.cpu().contiguous();
-            std::copy_n(host.ptr<float>(), std::min(count, host.numel()), out);
-        };
-        copy(cam.radial_distortion(), p.radial, 6);
-        if (cam.camera_model_type() == lfs::core::CameraModelType::THIN_PRISM_FISHEYE)
-            copy(cam.tangential_distortion(), p.thin_prism, 4);
-        else
-            copy(cam.tangential_distortion(), p.tangential, 2);
-        return p;
-    }
-
     RawDepthAnchorMap computeRawDepthAnchors(
         const lfs::gpu_ops::GeometryLossOps& geometry,
         const lfs::core::Tensor& means_in,

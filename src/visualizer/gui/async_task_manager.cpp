@@ -2329,6 +2329,7 @@ namespace lfs::vis::gui {
                             if (!source.data)
                                 continue;
                             const lfs::core::SplatData* data = source.data;
+#if LFS_BUILD_TRAINER
                             if (source.crop) {
                                 if (auto kept = lfs::training::crop_copy_to_training_cropbox(*data, *source.crop)) {
                                     if (kept->size() == 0)
@@ -2336,6 +2337,7 @@ namespace lfs::vis::gui {
                                     data = &cropped.emplace_back(std::move(*kept));
                                 }
                             }
+#endif
                             merge_inputs.emplace_back(data, source.transform);
                         }
 
