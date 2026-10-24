@@ -29,14 +29,28 @@ bool cacheSolid = false;
 uint traversalPath[22];
 int traversalLevel;
 
+bool sampleBrick(ivec3 cell, out ivec3 leafMin, out ivec3 leafMax) {
+    ivec3 local = cell - cacheMin;
+    // A packed 4^3 brick still contains eight 2^3 regions. Prove uniformity
+    // directly from its mask, without loading another hierarchy or visiting
+    // every empty cell along a ray through a sparse surface brick.
+    uint regionMask = 0x00330033u << uint((local.x & 2) + 4 * (local.y & 2));
+    uint region = cacheMask[uint(local.z) >> 1u] & regionMask;
+    if (region == 0u || region == regionMask) {
+        leafMin = cacheMin + (local & ~ivec3(1));
+        leafMax = leafMin + 2;
+        return region != 0u;
+    }
+    uint bit = uint(local.x + 4 * local.y + 16 * local.z);
+    leafMin = cell;
+    leafMax = cell + 1;
+    return (cacheMask[bit >> 5u] & (1u << (bit & 31u))) != 0u;
+}
+
 bool sampleCell(ivec3 cell, out ivec3 leafMin, out ivec3 leafMax) {
     if (cacheSize > 0 && all(greaterThanEqual(cell, cacheMin)) && all(lessThan(cell, cacheMin + cacheSize))) {
-        if (cacheMixed) {
-            ivec3 local = cell - cacheMin;
-            uint bit = uint(local.x + 4 * local.y + 16 * local.z);
-            leafMin = cell; leafMax = cell + 1;
-            return (cacheMask[bit >> 5u] & (1u << (bit & 31u))) != 0u;
-        }
+        if (cacheMixed)
+            return sampleBrick(cell, leafMin, leafMax);
         leafMin = cacheMin;
         leafMax = min(cacheMin + cacheSize, ivec3(push.dimensionsFlags.xyz));
         return cacheSolid;
@@ -58,13 +72,9 @@ bool sampleCell(ivec3 cell, out ivec3 leafMin, out ivec3 leafMax) {
     cacheMixed = (cells[index] & 0x80000000u) != 0u;
     cacheSolid = cells[index] != 0u;
     if (cacheMixed) {
-        ivec3 local = cell - leafMin;
-        uint bit = uint(local.x + 4 * local.y + 16 * local.z);
         uint base = cells[index] & 0x7fffffffu;
         cacheMask = uvec2(cells[base], cells[base + 1u]);
-        leafMin = cell;
-        leafMax = cell + 1;
-        return (cacheMask[bit >> 5u] & (1u << (bit & 31u))) != 0u;
+        return sampleBrick(cell, leafMin, leafMax);
     }
     leafMax = min(leafMin + size, ivec3(push.dimensionsFlags.xyz));
     return cells[index] != 0u;

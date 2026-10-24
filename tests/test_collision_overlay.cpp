@@ -190,6 +190,12 @@ namespace {
         std::mt19937 random(181);
         for (auto& cell : volume.solid)
             cell = random() % 5 == 0;
+        // Force uniform empty/solid 2^3 regions inside mixed packed bricks in
+        // both mask words; the other half retains random single-cell detail.
+        for (int z = 0; z < 16; ++z)
+            for (int y = 0; y < 16; ++y)
+                for (int x = 0; x < 8; ++x)
+                    volume.solid[volume.index({x, y, z})] = (x / 2 + y / 2 + z / 2) % 3 == 0;
         for (const auto eye : {glm::vec3(1.3f, .7f, 1.3f), glm::vec3(-1.1f, .3f, -1.1f)}) {
             const auto projection = glm::perspective(glm::radians(60.0f), 1.f, .01f, 100.f);
             lfs::vis::VulkanMeshPassParams params;
