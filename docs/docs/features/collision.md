@@ -167,7 +167,7 @@ byte-identical (9,872,885 cells). Extraction saves 672 MiB of output capacity, n
 whole-process RSS. Rendering measures only the warmed overlay GPU pass; first-frame
 wall time remains 121–125 ms. These are not whole-viewport FPS. Coverage differs
 at one of 6,220,800 pixels across the views from grid-boundary rounding. See
-[the native benchmark guide](../../../../tests/benchmarks/collision/README.md)
+[the native benchmark guide](../../../tests/benchmarks/collision/README.md)
 for repeatable inputs and timing boundaries.
 
 Upstream references: [collision recommendations](https://developer.playcanvas.com/user-manual/supersplat/studio/collision/),
