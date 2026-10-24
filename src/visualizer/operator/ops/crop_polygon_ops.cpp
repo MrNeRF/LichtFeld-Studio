@@ -118,13 +118,74 @@ namespace lfs::vis::op {
         return node && node->type == core::NodeType::SPLAT;
     }
 
-    OperatorResult CropPolygonDrawOperator::invoke(OperatorContext& /*ctx*/, OperatorProperties& props) {
+    OperatorResult CropPolygonDrawOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {
         target_node_id_ = static_cast<core::NodeId>(props.get_or<int>("target_node_id", -1));
         plane_.reset();
         points_.clear();
         cursor_.reset();
         clearDraft();
+
+        // Remember what entering the drawing changes, so a cancel restores it.
+        auto& scene_manager = ctx.scene();
+        const auto& scene = scene_manager.getScene();
+        auto* const editor = services().editorOrNull();
+        start_ = StartState{
+            .selection = scene_manager.getSelectedNodeIds(),
+            .volume_visibility = {},
+            .active_tool = UnifiedToolRegistry::instance().getActiveTool(),
+            .editor_operator = editor ? editor->getActiveOperator() : std::string{},
+            .editor_gizmo = editor ? editor->getGizmoType() : std::string{},
+        };
+        if (const auto* const target = scene.getNodeById(target_node_id_)) {
+            for (const core::NodeId child_id : target->children) {
+                const auto* const child = scene.getNodeById(child_id);
+                if (child && (child->type == core::NodeType::CROPBOX || child->type == core::NodeType::ELLIPSOID ||
+                              child->type == core::NodeType::CROP_POLYGON))
+                    start_.volume_visibility.emplace_back(child_id, child->visible.get());
+            }
+        }
+
+        // Selecting the splat hides its other crop volume, so no gizmo competes for the clicks.
+        if (start_.selection != std::vector<core::NodeId>{target_node_id_})
+            scene_manager.selectNode(target_node_id_);
+        if (editor)
+            editor->setActiveOperator(kCropToolId, "translate");
+        UnifiedToolRegistry::instance().setActiveTool(kCropToolId);
+        if (auto* const gui = services().guiOrNull())
+            gui->gizmo().setCropToolShape("polygon");
         return OperatorResult::RUNNING_MODAL;
+    }
+
+    OperatorResult CropPolygonDrawOperator::cancelByUser(OperatorContext& ctx) {
+        clearDraft();
+        auto& scene_manager = ctx.scene();
+        const auto& scene = scene_manager.getScene();
+        for (const auto& [id, visible] : start_.volume_visibility) {
+            const auto* const node = scene.getNodeById(id);
+            if (node && node->visible.get() != visible)
+                scene_manager.setNodeVisibilityTransient(id, visible);
+        }
+        // Reselecting a crop volume reenters the crop tool on its shape.
+        if (scene_manager.getSelectedNodeIds() != start_.selection) {
+            if (start_.selection.empty())
+                scene_manager.clearSelection();
+            else if (start_.selection.size() == 1)
+                scene_manager.selectNode(start_.selection.front());
+            else
+                scene_manager.selectNodesById(start_.selection);
+        }
+        auto& registry = UnifiedToolRegistry::instance();
+        if (start_.active_tool.empty())
+            registry.clearActiveTool();
+        else
+            registry.setActiveTool(start_.active_tool);
+        if (auto* const editor = services().editorOrNull()) {
+            if (start_.editor_operator.empty())
+                editor->clearActiveOperator();
+            else
+                editor->setActiveOperator(start_.editor_operator, start_.editor_gizmo);
+        }
+        return OperatorResult::CANCELLED;
     }
 
     OperatorResult CropPolygonDrawOperator::modal(OperatorContext& ctx, OperatorProperties& /*props*/) {
@@ -167,7 +228,7 @@ namespace lfs::vis::op {
                 return OperatorResult::RUNNING_MODAL;
             case input::Action::UNDO_POLYGON_VERTEX:
                 if (points_.empty())
-                    return OperatorResult::CANCELLED;
+                    return cancelByUser(ctx);
                 points_.pop_back();
                 if (points_.empty()) {
                     plane_.reset(); // The next click fixes a new plane.
@@ -176,7 +237,7 @@ namespace lfs::vis::op {
                 publishDraft();
                 return OperatorResult::RUNNING_MODAL;
             case input::Action::CANCEL_POLYGON:
-                return OperatorResult::CANCELLED;
+                return cancelByUser(ctx);
             default:
                 return OperatorResult::PASS_THROUGH;
             }

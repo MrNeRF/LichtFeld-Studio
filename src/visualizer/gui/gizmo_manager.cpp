@@ -1106,11 +1106,8 @@ namespace lfs::vis::gui {
             return;
         }
 
-        // Selecting the splat hides its other crop volume, so no gizmo competes for the clicks.
-        if (sm->getSelectedNodeIds() != std::vector<core::NodeId>{*target_id})
-            sm->selectNode(*target_id);
+        // The draw operator enters the polygon tool itself and restores the scene on cancel.
         python::cancel_active_operator();
-        activate();
         op::OperatorProperties props;
         props.set("target_node_id", static_cast<int>(*target_id));
         if (op::operators().invoke(op::BuiltinOp::CropPolygonDraw, &props).status != op::OperatorResult::RUNNING_MODAL)

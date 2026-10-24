@@ -45,6 +45,7 @@
 #include "io/splat_chapter.hpp"
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
+#include "operator/operator_registry.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
@@ -2642,6 +2643,43 @@ contract["check_selection_submode_follows_native_mode"](lf)
                 }
             }
         }
+    }
+
+    // Drawing hides the splat's crop box so its gizmo cannot take the clicks;
+    // cancelling must hand the box, the selection and the tool back unchanged.
+    TEST_F(VisualizerImplResetTest, CancelledCropPolygonDrawRestoresTheVolumeSelectionAndTool) {
+        VisualizerImpl viewer(projectOptions());
+        auto& scene = viewer.getScene();
+        auto* manager = viewer.getSceneManager();
+        auto& gizmo = viewer.getGuiManager()->gizmo();
+        const auto target = scene.addSplat("target", lfs::test::licht::make_splat(4));
+        const auto box = scene.addCropBox("target_cropbox", target);
+        manager->selectNode(box);
+        ASSERT_EQ(UnifiedToolRegistry::instance().getActiveTool(), "builtin.cropbox");
+        ASSERT_EQ(gizmo.cropToolShape(), "box");
+        ASSERT_TRUE(scene.getNodeById(box)->visible.get());
+
+        for (const auto action : {input::Action::CANCEL_POLYGON, input::Action::UNDO_POLYGON_VERTEX}) {
+            SCOPED_TRACE(static_cast<int>(action));
+            // The toolbar picks the shape before it starts the drawing.
+            gizmo.setCropToolShape("polygon");
+            gizmo.activateCropPolygonTool();
+            ASSERT_EQ(op::operators().activeModalId(), op::to_string(op::BuiltinOp::CropPolygonDraw));
+            EXPECT_FALSE(scene.getNodeById(box)->visible.get());
+            EXPECT_EQ(manager->getSelectedNodeIds(), std::vector<lfs::core::NodeId>{target});
+
+            op::ModalEvent event{};
+            event.type = op::ModalEvent::Type::ACTION;
+            event.data = op::ActionEvent{action, 0, {0.0, 0.0}};
+            EXPECT_EQ(op::operators().dispatchModalEvent(event), op::OperatorResult::CANCELLED);
+            EXPECT_FALSE(op::operators().hasModalOperator());
+            EXPECT_TRUE(scene.getNodeById(box)->visible.get());
+            EXPECT_EQ(manager->getSelectedNodeIds(), std::vector<lfs::core::NodeId>{box});
+            EXPECT_EQ(UnifiedToolRegistry::instance().getActiveTool(), "builtin.cropbox");
+            EXPECT_EQ(gizmo.cropToolShape(), "box");
+        }
+        UnifiedToolRegistry::instance().setActiveTool("");
+        op::undoHistory().clear();
     }
 
     TEST_F(VisualizerImplResetTest, CropToolRejectsUnrepresentableParentTransformWithoutMutation) {

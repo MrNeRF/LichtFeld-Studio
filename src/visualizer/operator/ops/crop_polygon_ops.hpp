@@ -10,6 +10,8 @@
 #include "operator/operator.hpp"
 #include <glm/glm.hpp>
 #include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace lfs::vis::op {
@@ -27,6 +29,16 @@ namespace lfs::vis::op {
         void cancel(OperatorContext& ctx) override;
 
     private:
+        struct StartState {
+            std::vector<core::NodeId> selection;
+            std::vector<std::pair<core::NodeId, bool>> volume_visibility;
+            std::string active_tool;
+            std::string editor_operator;
+            std::string editor_gizmo;
+        };
+
+        // Cancel, Escape or undoing past the first vertex: leave the scene and tools as they were.
+        [[nodiscard]] OperatorResult cancelByUser(OperatorContext& ctx);
         // Returns true when the click closed the outline.
         [[nodiscard]] bool addVertex(glm::vec2 screen_point);
         void updateCursor(glm::vec2 screen_point);
@@ -38,6 +50,7 @@ namespace lfs::vis::op {
         core::NodeId target_node_id_ = core::NULL_NODE;
         std::optional<core::crop_polygon::Plane> plane_;
         glm::vec3 camera_right_{1.0f, 0.0f, 0.0f};
+        StartState start_;
         std::vector<glm::vec3> points_;
         std::optional<glm::vec3> cursor_;
     };
