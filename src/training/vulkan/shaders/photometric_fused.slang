@@ -186,12 +186,15 @@ void fusedFilter(Params p, uint group, uint lane, uint groupCount) {
                         float ml = fusedInput[3][center - d], mr = fusedInput[3][center + d];
                         float wl = ml * weights[d], wr = mr * weights[d];
                         sums[6] = fma(ml + mr, weights[d], sums[6]);
-                        sums[0] += al * wl + ar * wr;
-                        sums[1] += rl * wl + rr * wr;
-                        sums[2] += (rl * rl) * wl + (rr * rr) * wr;
-                        sums[3] += tl * wl + tr * wr;
-                        sums[4] += (tl * tl) * wl + (tr * tr) * wr;
-                        sums[5] += (rl * tl) * wl + (rr * tr) * wr;
+                        // Keep each weighted sample fused with its accumulator.
+                        // Separately rounding the pair before accumulation amplifies
+                        // error when normalized moments form the SSIM covariance.
+                        sums[0] = fma(al, wl, fma(ar, wr, sums[0]));
+                        sums[1] = fma(rl, wl, fma(rr, wr, sums[1]));
+                        sums[2] = fma(rl * rl, wl, fma(rr * rr, wr, sums[2]));
+                        sums[3] = fma(tl, wl, fma(tr, wr, sums[3]));
+                        sums[4] = fma(tl * tl, wl, fma(tr * tr, wr, sums[4]));
+                        sums[5] = fma(rl * tl, wl, fma(rr * tr, wr, sums[5]));
                     } else {
                         sums[0] = fma(al + ar, weights[d], sums[0]);
                         sums[1] = fma(rl + rr, weights[d], sums[1]);
