@@ -32,7 +32,6 @@
     height: 28dp; min-height: 28dp; padding: 0 10dp; font-size: 12dp;
 }
 #collision-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; tab-index: auto; padding: 0 12dp 8dp; }
-.collision-summary { padding: 8dp 10dp; margin-top: 10dp; border-radius: 5dp; }
 p { display: block; margin: 5dp 0; font-size: 12dp; line-height: 17dp; }
 .collision-row { display: flex; align-items: center; gap: 8dp; margin: 6dp 0; }
 .collision-row > span, .collision-row > label { flex: 1; min-width: 0; font-size: 12dp; }
@@ -54,24 +53,17 @@ p { display: block; margin: 5dp 0; font-size: 12dp; line-height: 17dp; }
 .collision-strict .collision-strict-option { display: flex; }
 #camera-seed { display: none; }
 .collision-seeded #camera-seed { display: inline-flex; }
-#scale-summary, #pipeline-summary, .collision-note { font-size: 11dp; }
-#collision-status { margin: 8dp 0; }
 #progress-stage { font-weight: bold; }
 #job-progress { margin: 8dp 0; padding: 8dp; border-radius: 4dp; }
 #generation-progress { display: block; width: 100%; height: 8dp; }
 #generation-progress-fill { display: block; width: 0%; height: 100%; }
-#progress-task { font-size: 11dp; }
-#job-progress .collision-note { display: none; }
-#job-progress.is-running .collision-note { display: block; }
 #collision-error { padding: 8dp; border-width: 1dp; border-radius: 4dp; }
-#collision-status.is-error { font-weight: bold; }
 #error-context, #error-details { font-size: 11dp; }
 #error-details { white-space: pre-wrap; }
 .collision-actions .btn { min-width: 80dp; flex-shrink: 0; white-space: nowrap; }
 .collision-actions .btn span { line-height: 16dp; white-space: nowrap; }
 .collision-primary-actions #generate-new { display: none; }
 .collision-targeted .collision-primary-actions #generate-new { display: inline-flex; }
-.collision-summary p > span:first-child { margin-right: 4dp; }
 .collision-field-title { display: flex; align-items: center; justify-content: space-between; gap: 8dp; }
 .collision-auto { display: flex; align-items: center; gap: 4dp; }
 .collision-auto input[type="checkbox"] { width: 14dp; height: 14dp; margin: 0; }
@@ -91,3 +83,5 @@ p { display: block; margin: 5dp 0; font-size: 12dp; line-height: 17dp; }
 .collision-row .scrub-field-display { pointer-events: none; }
 .collision-row .scrub-field-fill { pointer-events: none; }
 .collision-field-title .collision-auto { margin-right: 4dp; }
+
+.collision-progress-heading { display: flex; align-items: center; justify-content: space-between; gap: 8dp; margin-bottom: 6dp; font-size: 12dp; }

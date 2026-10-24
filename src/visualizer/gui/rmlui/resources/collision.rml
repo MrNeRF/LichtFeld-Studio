@@ -17,38 +17,20 @@
     <button id="generate-new" class="btn btn--ghost"><span>@tr:collision.generate_new</span></button>
   </div>
   <div id="collision-scroll" tabindex="0">
-  <div class="collision-summary"><p id="scale-summary"/><p id="pipeline-summary"/></div>
   <div id="job-progress" style="display: none;">
-    <p id="progress-stage"/>
+    <div class="collision-progress-heading"><span id="progress-stage"/><span id="progress-percent"/></div>
     <div id="generation-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="generation-progress-fill"/></div>
-    <p id="progress-time"/>
-    <p id="progress-task"/>
-    <p class="collision-note">@tr:collision.progress_note</p>
   </div>
-  <p id="collision-status">@tr:collision.initial_status</p>
   <div id="collision-error" style="display: none;">
     <p id="error-advice"/>
     <button id="error-toggle" class="section-header collision-section-header is-expanded" data-collision-section="error-details-section" aria-expanded="true"><span class="section-arrow">▶</span><span>@tr:collision.error_details</span></button>
     <div id="error-details-section" class="collision-section"><p id="error-context"/><p id="error-details"/><button id="copy-error" class="btn btn--secondary"><span>@tr:collision.copy_details</span></button></div>
-  </div>
-  <button id="inspect-toggle" data-tooltip="collision.inspect_help" class="section-header collision-section-header is-expanded" data-collision-section="inspect" aria-expanded="true"><span class="section-arrow">▶</span><span>@tr:collision.inspect</span></button>
-  <div id="inspect" class="collision-section">
-  <div class="collision-row" data-tooltip="collision.inspect_help"><label for="overlay-opacity">@tr:collision.overlay_strength</label><div class="scrub-field" id="overlay-opacity-scrub" tabindex="0" data-scrub="overlay-opacity" data-min="0" data-max="100" data-step="1" data-suffix="%"><div id="overlay-opacity-fill" class="scrub-field-fill"/><span id="overlay-opacity-display" class="scrub-field-display"/><input id="overlay-opacity" class="scrub-field-input" type="text" value="100"/></div></div>
-  <div class="collision-row" data-tooltip="collision.tip_cutaway"><label for="cutaway">@tr:collision.cutaway</label><div class="scrub-field" id="cutaway-scrub" tabindex="0" data-scrub="cutaway" data-min="0" data-max="100" data-step=".1" data-suffix="%"><div id="cutaway-fill" class="scrub-field-fill"/><span id="cutaway-display" class="scrub-field-display"/><input id="cutaway" class="scrub-field-input" type="text" value="100"/></div></div>
-  </div>
-  <button id="walk-section-toggle" data-tooltip="collision.walk_hint" class="section-header collision-section-header" data-collision-section="walk-section" aria-expanded="false"><span class="section-arrow">▶</span><span>@tr:collision.walk_section</span></button>
-  <div id="walk-section" class="collision-section collapsed">
-  <div class="collision-row" data-tooltip="collision.tip_player"><span>@tr:collision.head_height</span><div class="scrub-field" id="walk-height-scrub" tabindex="0" data-scrub="walk-height" data-min=".05" data-max="10" data-step=".01" data-suffix=" m"><div id="walk-height-fill" class="scrub-field-fill"/><span id="walk-height-display" class="scrub-field-display"/><input id="walk-height" class="scrub-field-input" type="text" value="1.8"/></div></div>
-  <div class="collision-row" data-tooltip="collision.tip_player"><span>@tr:collision.player_radius</span><div class="scrub-field" id="walk-radius-scrub" tabindex="0" data-scrub="walk-radius" data-min=".01" data-max="5" data-step=".005" data-suffix=" m"><div id="walk-radius-fill" class="scrub-field-fill"/><span id="walk-radius-display" class="scrub-field-display"/><input id="walk-radius" class="scrub-field-input" type="text" value="0.2"/></div></div>
-  <div class="collision-row" data-tooltip="collision.tip_speed"><span>@tr:collision.speed</span><div class="scrub-field" id="walk-speed-scrub" tabindex="0" data-scrub="walk-speed" data-min=".01" data-max="50" data-step=".025" data-suffix=" m/s"><div id="walk-speed-fill" class="scrub-field-fill"/><span id="walk-speed-display" class="scrub-field-display"/><input id="walk-speed" class="scrub-field-input" type="text" value="2.5"/></div></div>
-  <div class="collision-row" data-tooltip="collision.tip_step"><span>@tr:collision.step_height</span><div class="scrub-field" id="walk-step-scrub" tabindex="0" data-scrub="walk-step" data-min="0" data-max="2" data-step=".005" data-suffix=" m"><div id="walk-step-fill" class="scrub-field-fill"/><span id="walk-step-display" class="scrub-field-display"/><input id="walk-step" class="scrub-field-input" type="text" value="0.25"/></div></div>
   </div>
   <button id="advanced-toggle" data-tooltip="collision.shared_setup" class="section-header collision-section-header" data-collision-section="advanced" aria-expanded="false"><span class="section-arrow">▶</span><span>@tr:collision.advanced</span></button>
   <div id="advanced" class="collision-section collapsed">
   <div class="collision-row" data-tooltip="collision.tip_units"><label for="units-per-meter">@tr:collision.units</label><input id="units-per-meter" type="text" value="1"/></div>
   <button id="reset-surface" class="btn btn--ghost" data-tooltip="collision.tip_reset_surface"><span>@tr:collision.reset_surface</span></button>
 
-  <div class="collision-row" data-tooltip="collision.tip_sharp"><span>@tr:collision.sharp</span><input id="sharp-preview" type="checkbox"/></div>
   <button id="filter-options-toggle" data-tooltip="collision.filter_help" class="section-header collision-section-header" data-collision-section="filter-options" aria-expanded="false"><span class="section-arrow">▶</span><span>@tr:collision.cluster_filter</span></button>
   <div id="filter-options" class="collision-section collapsed">
   <button id="camera-seed" class="btn btn--secondary" data-tooltip="collision.tip_seed"><span>@tr:collision.camera_seed</span></button>

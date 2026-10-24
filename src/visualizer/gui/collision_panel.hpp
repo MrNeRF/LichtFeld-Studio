@@ -29,13 +29,11 @@ namespace lfs::vis::gui {
         bool prepare(const PanelDrawContext& ctx);
         void start(bool new_node);
         void buildSurface();
-        void updateDisplay();
-        void updateSummary();
+        void syncGenerationControls();
         void resetSurfaceSettings();
         void adoptResult();
         void loadSettings(const core::SceneNode& node);
         void writeInputs();
-        void writeWalkInputs();
         void applyControlChange(const std::string& id);
         void syncScrubs();
         bool scrubEvent(Rml::Event& event);
@@ -61,10 +59,7 @@ namespace lfs::vis::gui {
         std::string drag_scrub_, edit_scrub_;
         float scrub_start_x_ = 0, scrub_last_x_ = 0, scrub_value_ = 0, scrub_before_ = 0;
         bool scrub_dragged_ = false;
-        std::string last_stats_;
-        std::string shown_walk_error_;
-        std::weak_ptr<const core::CollisionVolume> counted_volume_;
-        uint64_t occupied_count_ = 0;
+        std::weak_ptr<const core::CollisionVolume> loaded_volume_;
         glm::vec3 world_seed_{0};
         std::jthread worker_;
         std::atomic<bool> busy_{false};

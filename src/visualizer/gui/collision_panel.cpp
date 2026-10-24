@@ -150,33 +150,26 @@ namespace lfs::vis::gui {
             control->SetValue(v);
     }
     void CollisionPanel::status(std::string text) {
-        auto* el = document_->GetElementById("collision-status");
-        auto encoded = Rml::StringUtilities::EncodeRml(text);
-        if (el->GetInnerRML() != encoded) {
-            el->SetInnerRML(encoded);
-            host_.markContentDirty();
-        }
+        LOG_DEBUG("Collision: {}", text);
     }
     void CollisionPanel::clearError() {
         error_report_.clear();
         document_->GetElementById("collision-error")->SetProperty("display", "none");
-        document_->GetElementById("collision-status")->SetClass("is-error", false);
     }
     void CollisionPanel::finishJob(std::string outcome) {
         job_outcome_ = std::move(outcome);
         job_graph_epoch_ = scene_ ? scene_->graphEpoch() : 0;
         if (job_outcome_ == "completed")
             progress_value_ = 1;
-        document_->GetElementById("progress-stage")->SetInnerRML(Rml::StringUtilities::EncodeRml(job_title_ + " — " + job_outcome_));
+        document_->GetElementById("progress-stage")->SetInnerRML(Rml::StringUtilities::EncodeRml(job_title_ + ": " + job_outcome_));
         updateProgressBar();
-        document_->GetElementById("progress-time")->SetInnerRML(LOCF("collision.progress_finished", std::chrono::duration<double>(std::chrono::steady_clock::now() - job_started_).count()));
-        document_->GetElementById("progress-task")->SetInnerRML("");
         host_.markContentDirty();
     }
     void CollisionPanel::updateProgressBar() {
         const float percent = std::clamp(progress_value_, 0.0f, 1.0f) * 100;
         document_->GetElementById("generation-progress")->SetAttribute("aria-valuenow", percent);
         document_->GetElementById("generation-progress-fill")->SetProperty("width", std::format("{:.2f}%", percent));
+        document_->GetElementById("progress-percent")->SetInnerRML(std::format("{:.0f}%", percent));
     }
     void CollisionPanel::showError(std::string message, bool failed_job) {
         const auto info = collisionFailureInfo(message);
@@ -196,29 +189,14 @@ namespace lfs::vis::gui {
         set("error-details", message);
         error_report_ = info.title + "\n" + info.advice + "\n" + context + "\n" + message;
         document_->GetElementById("collision-error")->SetProperty("display", "block");
-        document_->GetElementById("collision-status")->SetClass("is-error", !info.cancelled);
         host_.markContentDirty();
     }
-    void CollisionPanel::writeWalkInputs() {
-        if (auto* input = InputController::instance()) {
-            const auto& w = input->walkSettings();
-            for (auto [id, n] : {std::pair{"walk-height", w.height}, {"walk-radius", w.radius}, {"walk-speed", w.speed}, {"walk-step", w.step_height}})
-                setValue(id, std::format("{:.6g}", n / w.units_per_meter));
-        }
-    }
     void CollisionPanel::syncScrubs() {
-        for (const auto* id : {"voxel-size", "opacity", "overlay-opacity", "cutaway", "walk-height", "walk-radius", "walk-speed", "walk-step"}) {
+        for (const auto* id : {"voxel-size", "opacity"}) {
             if (edit_scrub_ == id)
                 continue;
             auto* field = document_->GetElementById(std::string(id) + "-scrub");
-            if (std::string_view(id) == "voxel-size")
-                field->SetAttribute("data-max", std::max(1.0f, number(id) * 2));
-            if (std::string_view(id) == "walk-height")
-                field->SetAttribute("data-min", std::max(.05f, number("walk-radius") * 2));
-            if (std::string_view(id) == "walk-radius")
-                field->SetAttribute("data-max", number("walk-height") / 2);
-            if (std::string_view(id) == "walk-step")
-                field->SetAttribute("data-max", number("walk-height"));
+            field->SetAttribute("data-max", std::max(field->GetAttribute<float>("data-max", 1), number(id)));
             const float n = number(id), lo = field->GetAttribute<float>("data-min", 0), hi = std::max(field->GetAttribute<float>("data-max", 1), n);
             document_->GetElementById(std::string(id) + "-fill")->SetProperty("width", std::format("{:.2f}%", hi > lo ? std::clamp((n - lo) / (hi - lo), 0.0f, 1.0f) * 100 : 0));
             const auto caption = std::format("{:.4g}{}", n, field->GetAttribute<Rml::String>("data-suffix", ""));
@@ -229,41 +207,31 @@ namespace lfs::vis::gui {
         host_.markContentDirty();
     }
     void CollisionPanel::applyControlChange(const std::string& id) {
-        if (id == "overlay-opacity" || id == "cutaway" || id == "sharp-preview") {
-            updateDisplay();
-        } else if (id.starts_with("walk-") || id == "units-per-meter") {
-            auto* input = InputController::instance();
-            if (!input)
-                throw std::runtime_error("No Walk camera controller");
+        if (id == "units-per-meter") {
             const float units = number("units-per-meter");
-            auto s = input->walkSettings();
-            s.units_per_meter = units;
-            s.gravity = 9.81f * units;
-            s.height = number("walk-height") * units;
-            s.radius = number("walk-radius") * units;
-            s.speed = number("walk-speed") * units;
-            s.step_height = number("walk-step") * units;
-            try {
-                input->setWalkSettings(s);
-            } catch (...) {
-                writeWalkInputs();
-                syncScrubs();
-                throw;
+            if (!(units > 0))
+                throw std::invalid_argument("Scene units per metre must be positive");
+            const auto ratio = units / settings_.units_per_meter;
+            if (auto* input = InputController::instance()) {
+                auto w = input->walkSettings();
+                w.height *= ratio;
+                w.radius *= ratio;
+                w.speed *= ratio;
+                w.step_height *= ratio;
+                w.units_per_meter = units;
+                w.gravity = 9.81f * units;
+                input->setWalkSettings(w);
             }
-            if (id == "units-per-meter") {
-                const auto ratio = units / settings_.units_per_meter;
-                for (const auto* field : {"cluster-resolution", "external-size", "floor-size", "carve-height", "carve-radius"})
-                    setValue(field, std::format("{:.6g}", number(field) * ratio));
-                settings_.units_per_meter = units;
-            }
-            clearError();
+            for (const auto* field : {"cluster-resolution", "external-size", "floor-size", "carve-height", "carve-radius"})
+                setValue(field, std::format("{:.6g}", number(field) * ratio));
+            settings_.units_per_meter = units;
         } else if (id == "voxel-size" || id == "opacity") {
             (void)readInputs();
             if (id == "voxel-size")
                 document_->GetElementById("auto-resolution")->RemoveAttribute("checked");
         }
         syncScrubs();
-        updateSummary();
+        syncGenerationControls();
     }
     void CollisionPanel::commitScrub(const std::string& id, float n) {
         const auto before = value(id.c_str());
@@ -328,10 +296,11 @@ namespace lfs::vis::gui {
             auto* box = document_->GetElementById(drag_scrub_ + "-scrub");
             scrub_dragged_ = true;
             box->SetClass("is-dragging", true);
-            const float factor = event.GetParameter<int>("shift_key", 0) ? .1f : event.GetParameter<int>("ctrl_key", 0) ? 10.0f
-                                                                                                                        : 1.0f;
+            const float factor = event.GetParameter<int>("shift_key", 0) || event.GetParameter<int>("ctrl_key", 0) ? 10.0f : 1.0f;
             const float step = box->GetAttribute<float>("data-step", .01f);
-            scrub_value_ += (x - scrub_last_x_) * step * factor;
+            const auto lo = box->GetAttribute<float>("data-min", 0), hi = box->GetAttribute<float>("data-max", 1);
+            const auto width = std::max(box->GetBox().GetSize(Rml::BoxArea::Border).x, 1.0f);
+            scrub_value_ += (x - scrub_last_x_) * (hi - lo) / width * factor;
             scrub_last_x_ = x;
             scrub_value_ = std::clamp(scrub_value_, box->GetAttribute<float>("data-min", 0), std::max(box->GetAttribute<float>("data-max", 1), number(drag_scrub_.c_str())));
             const auto snapped = std::clamp(std::round(scrub_value_ / step) * step,
@@ -390,12 +359,9 @@ namespace lfs::vis::gui {
                 el->RemoveAttribute("checked");
         };
         setValue("units-per-meter", std::format("{:.6g}", settings_.units_per_meter));
-        setValue("overlay-opacity", std::to_string(display_.opacity * 100));
-        setValue("cutaway", std::to_string(display_.slice * 100));
         setValue("surface-stride", std::to_string(display_.surface_stride));
         setValue("shape", std::to_string(int(display_.surface_ready ? display_.surface_shape : settings_.shape)));
         setValue("filter-mode", settings_.adaptive_filter ? (settings_.cluster ? "2" : "1") : (settings_.cluster ? "3" : "0"));
-        check("sharp-preview", display_.sharp);
         check("auto-resolution", settings_.auto_resolution);
         set("cluster-resolution", settings_.cluster_resolution);
         set("cluster-opacity", settings_.cluster_opacity);
@@ -413,10 +379,9 @@ namespace lfs::vis::gui {
         set("seed-x", world_seed_.x);
         set("seed-y", world_seed_.y);
         set("seed-z", world_seed_.z);
-        writeWalkInputs();
         updating_ = false;
         syncScrubs();
-        updateSummary();
+        syncGenerationControls();
         host_.markContentDirty();
     }
     core::CollisionSettings CollisionPanel::readInputs() const {
@@ -450,15 +415,7 @@ namespace lfs::vis::gui {
         display_ = node.collision_display;
         world_seed_ = glm::vec3(scene_->getWorldTransform(node.id) * glm::vec4(settings_.seed, 1));
         writeInputs();
-        if (counted_volume_.lock() != node.collision) {
-            occupied_count_ = node.collision->occupiedCount();
-            counted_volume_ = node.collision;
-        }
-        status(std::format("{} occupied cells · {:.3g} cm cells. {}. {} {}",
-                           core::format_count(occupied_count_), settings_.voxel_size / settings_.units_per_meter * 100,
-                           display_.surface_ready ? std::format("{} surface triangles", core::format_count(node.mesh ? node.mesh->face_count() : 0))
-                                                  : "Ready for Walk — no triangle surface needed",
-                           last_stats_, node.collision->warning));
+        loaded_volume_ = node.collision;
     }
     bool CollisionPanel::prepare(const PanelDrawContext& ctx) {
         scene_ = ctx.scene;
@@ -491,60 +448,29 @@ namespace lfs::vis::gui {
             auto* node = scene_->getNodeByUuid(target_);
             if (!node) {
                 target_ = {};
-                last_stats_.clear();
                 status(LOC("collision.initial_status"));
-            } else if (node->collision && counted_volume_.lock() != node->collision) {
+            } else if (node->collision && loaded_volume_.lock() != node->collision) {
                 // A project reload can restore the same UUID with a different
                 // payload and display state. UUID equality is not a cache key.
-                last_stats_.clear();
                 loadSettings(*node);
             }
         }
         if (auto* manager = services().sceneOrNull(); manager && !busy_) {
             auto ids = manager->getSelectedNodeIds();
             if (ids.size() == 1)
-                if (auto* node = scene_->getNodeById(ids[0]); node && node->collision && node->uuid != target_) {
-                    last_stats_.clear();
+                if (auto* node = scene_->getNodeById(ids[0]); node && node->collision && !node->collision_display.surface_ready && node->uuid != target_) {
                     loadSettings(*node);
                 }
         }
-        // The viewport card and authoring window edit the same native values.
-        // Refresh external changes without overwriting an active draft/drag.
-        if (!busy_ && edit_scrub_.empty() && drag_scrub_.empty()) {
-            bool changed = false;
-            updating_ = true;
-            const auto sync = [&](const char* id, float n) {
-                const auto text = std::format("{:.6g}", n);
-                if (value(id) != text) {
-                    setValue(id, text);
-                    changed = true;
-                }
-            };
-            if (const auto* input = InputController::instance()) {
-                const auto& w = input->walkSettings();
-                sync("walk-height", w.height / w.units_per_meter);
-                sync("walk-radius", w.radius / w.units_per_meter);
-                sync("walk-speed", w.speed / w.units_per_meter);
-                sync("walk-step", w.step_height / w.units_per_meter);
-            }
-            if (const auto* node = scene_->getNodeByUuid(target_); node && node->collision) {
-                display_.opacity = node->collision_display.opacity;
-                display_.slice = node->collision_display.slice;
-                sync("overlay-opacity", display_.opacity * 100);
-                sync("cutaway", display_.slice * 100);
-            }
-            updating_ = false;
-            if (changed)
-                syncScrubs();
-        }
+        if (!busy_)
+            if (const auto* node = scene_->getNodeByUuid(target_); node && node->collision)
+                display_ = node->collision_display;
         const auto now = std::chrono::steady_clock::now();
         if (busy_ && now >= next_progress_ui_) {
             std::lock_guard lock(mutex_);
             status(job_title_ + "…");
             document_->GetElementById("progress-stage")->SetInnerRML(Rml::StringUtilities::EncodeRml(collisionTaskLabel(progress_)));
             updateProgressBar();
-            document_->GetElementById("progress-time")->SetInnerRML(LOCF("collision.progress_work", progress_step_ + 1, progress_total_, progress_value_ * 100, std::chrono::duration<double>(now - job_started_).count()));
-            document_->GetElementById("progress-task")->SetInnerRML(LOCF("collision.progress_activity", std::chrono::duration<double>(now - progress_updated_).count()));
             next_progress_ui_ = now + std::chrono::milliseconds(100);
             host_.markContentDirty();
         }
@@ -559,18 +485,6 @@ namespace lfs::vis::gui {
                     control->SetAttribute("disabled", "disabled");
                 else
                     control->RemoveAttribute("disabled");
-            }
-        }
-        if (auto* input = InputController::instance(); input && !busy_ && input->walkError() != shown_walk_error_) {
-            const bool recovering = !shown_walk_error_.empty();
-            shown_walk_error_ = input->walkError();
-            if (!shown_walk_error_.empty())
-                status(shown_walk_error_);
-            else if (recovering) {
-                if (const auto* node = scene_->getNodeByUuid(target_); node && node->collision)
-                    loadSettings(*node);
-                else
-                    status(LOC("collision.initial_status"));
             }
         }
         return true;
@@ -800,7 +714,6 @@ namespace lfs::vis::gui {
         node->collision_display = result_->display;
         node->collision_display.opacity = display_.opacity;
         node->collision_display.slice = display_.slice;
-        last_stats_ = result_->stats;
         node->visible = true;
         scene_->markPayloadDiverged(node->id);
         scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
@@ -823,37 +736,12 @@ namespace lfs::vis::gui {
         world_seed_ = settings_.seed;
         writeInputs();
     }
-    void CollisionPanel::updateSummary() {
-        const float units = number("units-per-meter");
-        const float edge = number("voxel-size") * units;
+    void CollisionPanel::syncGenerationControls() {
         const auto filter = value("filter-mode");
         document_->SetClass("collision-auto-resolution", checked("auto-resolution"));
         document_->SetClass("collision-strict", filter == "3");
         document_->SetClass("collision-cleanup", filter == "1" || filter == "2");
         document_->SetClass("collision-seeded", filter == "2" || filter == "3");
-        document_->GetElementById("scale-summary")->SetInnerRML(Rml::StringUtilities::EncodeRml(checked("auto-resolution") ? LOC("collision.auto_summary") : LOCF("collision.scale_summary", edge / units * 100, edge, units)));
-        std::string pipeline = filter == "1" || filter == "2" ? std::string(LOC("collision.filter_cleanup")) + " · " + LOC("collision.voxelization") : LOC("collision.voxelization");
-        for (const auto& [enabled, key] : {std::pair{filter == "2" || filter == "3", "collision.cluster_filter"},
-                                           {checked("external-fill"), "collision.external"},
-                                           {checked("floor-fill"), "collision.floor"},
-                                           {number("carve-height") > 0, "collision.capsule_carve"}})
-            if (enabled)
-                pipeline += " · " + std::string(LOC(key));
-        document_->GetElementById("pipeline-summary")->SetInnerRML(Rml::StringUtilities::EncodeRml(LOCF("collision.pipeline", pipeline)));
-        host_.markContentDirty();
-    }
-    void CollisionPanel::updateDisplay() {
-        display_.sharp = checked("sharp-preview");
-        display_.opacity = std::clamp(number("overlay-opacity") / 100, 0.0f, 1.0f);
-        display_.slice = std::clamp(number("cutaway") / 100, 0.0f, 1.0f);
-        setValue("overlay-opacity", std::format("{:.6g}", display_.opacity * 100));
-        setValue("cutaway", std::format("{:.6g}", display_.slice * 100));
-        if (auto* node = scene_->getNodeByUuid(target_); !busy_ && node && node->collision && !node->locked.get()) {
-            node->collision_display.sharp = display_.sharp;
-            node->collision_display.opacity = display_.opacity;
-            node->collision_display.slice = display_.slice;
-            scene_->notifyMutation(core::Scene::MutationType::DISPLAY_CHANGED);
-        }
         host_.markContentDirty();
     }
     void CollisionPanel::buildSurface() {

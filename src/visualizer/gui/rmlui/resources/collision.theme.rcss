@@ -8,7 +8,6 @@
 .collision-field input[type="text"]:focus, .collision-field select:focus,
 .collision-row input[type="text"]:focus, .collision-row select:focus { border-color: @{primary}; }
 .collision-primary-actions, .collision-section-header { border-color: @{border}; }
-.collision-field label, #scale-summary, #pipeline-summary, .collision-note, #progress-time, #progress-task { color: @{text_dim}; }
 .collision-actions .btn { border-radius: @{num(size.frame_rounding)}dp; }
 #collision-scroll scrollbarvertical sliderbar { background-color: @{alpha(text_dim, 0.55)}; }
 #collision-scroll scrollbarvertical sliderbar:hover { background-color: @{primary}; }
@@ -17,6 +16,4 @@
 #generation-progress-fill { background-color: @{primary}; }
 #job-progress.is-failed #generation-progress-fill { background-color: @{error}; }
 #collision-error { border-color: @{error}; }
-#collision-status.is-error { color: @{error}; }
 .collision-intro > img { image-color: @{primary}; }
-.collision-summary { background-color: @{surface_bright}; }
