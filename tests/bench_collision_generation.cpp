@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
         static_assert(sizeof(CollisionGaussian) == 13 * sizeof(float));
         std::ifstream input(argv[1], std::ios::binary | std::ios::ate);
         if (!input || input.tellg() <= 0 || uint64_t(input.tellg()) % sizeof(CollisionGaussian) ||
-            uint64_t(input.tellg()) / sizeof(CollisionGaussian) > 10'000'000)
+            uint64_t(input.tellg()) / sizeof(CollisionGaussian) > CollisionGaussian::max_count)
             throw std::runtime_error("Invalid native Gaussian snapshot");
         std::vector<CollisionGaussian> source(size_t(input.tellg()) / sizeof(CollisionGaussian));
         input.seekg(0);

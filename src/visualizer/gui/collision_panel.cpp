@@ -86,8 +86,8 @@ namespace lfs::vis::gui {
                         throw std::runtime_error("Collision generation cancelled");
                     if (deleted.is_valid() && deleted.ptr<bool>()[i])
                         continue;
-                    if (result.size() >= 10'000'000)
-                        throw std::runtime_error("Collision source exceeds 10 million Gaussians; hide or isolate source nodes");
+                    if (result.size() >= core::CollisionGaussian::max_count)
+                        throw std::runtime_error("Collision source exceeds 32 million Gaussians; hide or isolate source nodes");
                     auto q = glm::normalize(glm::quat(r[i * 4], r[i * 4 + 1], r[i * 4 + 2], r[i * 4 + 3]));
                     auto axes = glm::mat3_cast(q);
                     for (int a = 0; a < 3; ++a)
@@ -496,8 +496,8 @@ namespace lfs::vis::gui {
             throw std::runtime_error("Stop training before taking a collision snapshot");
         if (!scene_)
             throw std::runtime_error("No scene");
-        if (scene_->getVisibleGaussianCount() > 10'000'000)
-            throw std::runtime_error("Collision source exceeds 10 million Gaussians; isolate source nodes first");
+        if (scene_->getVisibleGaussianCount() > core::CollisionGaussian::max_count)
+            throw std::runtime_error("Collision source exceeds 32 million Gaussians; isolate source nodes first");
         settings_ = readInputs();
         clearError();
         world_seed_ = settings_.seed;

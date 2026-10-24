@@ -12,7 +12,7 @@ namespace lfs::core {
     CollisionVolume voxelizeCollisionGpu(std::span<const CollisionGaussian> source, CollisionSettings settings,
                                          std::stop_token stop, CollisionProgress progress) {
         settings.validate();
-        if (source.empty() || source.size() > 10'000'000)
+        if (source.empty() || source.size() > CollisionGaussian::max_count)
             throw std::invalid_argument("Invalid collision source count");
         auto check = [&] {
             if (stop.stop_requested())

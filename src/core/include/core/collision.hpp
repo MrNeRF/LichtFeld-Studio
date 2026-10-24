@@ -51,6 +51,8 @@ namespace lfs::core {
 
     // axes maps a unit sphere to the Gaussian's rotated/scaled one-sigma ellipsoid.
     struct CollisionGaussian {
+        // Bound source snapshots independently of sparse occupancy/output budgets.
+        static constexpr size_t max_count = 32'000'000;
         glm::vec3 center;
         glm::mat3 axes;
         float opacity;

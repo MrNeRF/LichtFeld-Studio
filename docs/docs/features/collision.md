@@ -330,7 +330,7 @@ Versions 1 (dense RLE) and 2 (sparse hex tags) remain readable. This avoids the
 old two-nodes-per-hex-character expansion that exceeded the JSON chapter limit
 on large scans. Cleanup notes and resolved automatic settings survive reload. The CPU
 reference evaluates 8³ bricks; CUDA evaluates 4³ bricks. GPU traversal uses uniform regions and packed 4-cubed leaf
-masks. Finite limits apply to actual allocated work: 10 million source Gaussians,
+masks. Finite limits apply to actual allocated work: 32 million source Gaussians,
 512,000,001 CPU tree words (about 1.91 GiB), 8 million floor columns,
 32,000,001 floor-height nodes, 64 million surface vertices and 384 million indices.
 Grid axes are limited to 2^21 cells. CUDA uses at most 1,048,576 child regions per

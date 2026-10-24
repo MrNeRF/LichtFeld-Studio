@@ -904,8 +904,8 @@ namespace lfs::core {
         s.validate();
         if (gaussians.empty())
             throw std::invalid_argument("No source Gaussians");
-        if (gaussians.size() > 10'000'000)
-            throw std::runtime_error("Collision source exceeds 10 million Gaussians");
+        if (gaussians.size() > CollisionGaussian::max_count)
+            throw std::runtime_error("Collision source exceeds 32 million Gaussians");
         auto report = [&](const char* text) { checkpoint(stop); if (progress) progress(text); };
         auto voxelize = [&](std::span<const CollisionGaussian> source, CollisionSettings options, CollisionProgress report) {
             return backend ? backend(source, options, stop, std::move(report)) : collision_detail::voxelizeSparse(source, options, stop, std::move(report));
