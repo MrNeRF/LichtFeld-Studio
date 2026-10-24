@@ -1,0 +1,54 @@
+# Native HIP runtime foundation
+
+This independent developer project builds a private HIP module without configuring
+the application, changing its C++ compiler, or requiring CUDA or PyTorch. It does
+not register an application Tensor backend or enable training. Standard application
+builds do not traverse this project and retain their existing configuration.
+
+With CMake 3.30 or newer, Ninja, Python 3 and a complete ROCm development SDK:
+
+```sh
+cmake -S cmake/hip-native -B build-hip-native -G Ninja \
+  -DLFS_HIP_ROOT=/absolute/path/to/rocm-sdk \
+  -DLFS_HIP_ARCHITECTURE=gfx1150
+cmake --build build-hip-native
+```
+
+The SDK must provide `include/hip` and `lib/llvm/bin/clang++` (`clang++.exe` on
+Windows). SDK package and HIP API version numbers are separate identifiers.
+The foundation was exercised with SDK 10.1.0 on Windows and gfx1150 hardware;
+other targets still need hardware qualification. `LFS_HIP_ARCHITECTURES` accepts
+an explicit semicolon-separated target list. Context creation rejects a GPU whose
+architecture has no matching compiled code object. Wave size is reported by the
+driver; the smoke kernels do not assume wave32 or wave64. Compression is optional
+and fails configuration if explicitly requested from an unsupported compiler.
+
+GPU execution is opt-in and requires a compatible device and installed driver:
+
+```sh
+cmake -S cmake/hip-native -B build-hip-native -DLFS_HIP_NATIVE_GPU_TESTS=ON
+cmake --build build-hip-native
+ctest --test-dir build-hip-native --output-on-failure
+```
+
+The test uses an absolute module path and, on Windows, an explicit SDK DLL directory
+kept alive for the duration of the test. It does not modify PATH or the process-wide
+DLL search policy. This developer setup does not package SDK libraries. Application
+loading and distribution integration are separate work.
+
+The private versioned C ABI exposes inventory, contexts, owned buffers, blocking
+host transfers, synchronization, fill and affine smoke kernels. No HIP types or C++
+exceptions cross the ABI. Calls on one context must be serialized by the caller;
+contexts and handles must remain valid until their destruction succeeds. Buffer
+ownership and ranges are checked before use. Context destruction drains queued
+work and frees remaining buffers; a driver cleanup failure retains the context for
+an explicit retry. Errors use caller-owned storage and never trigger CPU fallback.
+
+The mathematical smoke checks cover non-aligned lengths and exact FP32 values;
+they are not performance benchmarks or training-quality claims. Public Tensor
+contracts, advanced operators, HIPRTC, renderer interop and trainer integration
+belong to later changes. CPU-only configuration regressions can run without an SDK:
+
+```sh
+python tests/python/test_hip_runtime_configuration.py
+```
