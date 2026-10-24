@@ -100,12 +100,18 @@ namespace {
             p.optimization.mask_mode = mode;
             EXPECT_TRUE(required_training_families(p, {}).test(static_cast<size_t>(Family::Masks)));
         }
-        for (int i = 0; i < 3; ++i) {
+        for (int i = 0; i < 2; ++i) {
             p.optimization.scale_reg = i == 0 ? 0.1f : 0.f;
             p.optimization.opacity_reg = i == 1 ? 0.1f : 0.f;
-            p.optimization.enable_sparsity = i == 2;
             EXPECT_TRUE(required_training_families(p, {}).test(static_cast<size_t>(Family::ExtraLoss)));
         }
+        // Sparsity is POPSpa, which runs on its own family instead of the extra losses.
+        p.optimization.scale_reg = 0.f;
+        p.optimization.opacity_reg = 0.f;
+        EXPECT_FALSE(required_training_families(p, {}).test(static_cast<size_t>(Family::Popspa)));
+        p.optimization.enable_sparsity = true;
+        EXPECT_TRUE(required_training_families(p, {}).test(static_cast<size_t>(Family::Popspa)));
+        EXPECT_FALSE(required_training_families(p, {}).test(static_cast<size_t>(Family::ExtraLoss)));
         FamilySet families;
         families.set(static_cast<size_t>(Family::Masks));
         families.set(static_cast<size_t>(Family::ExtraLoss));
