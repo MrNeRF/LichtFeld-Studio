@@ -56,7 +56,7 @@ namespace lfs::core::image_codecs {
         size_t max_threads = 0;
     };
 
-    [[nodiscard]] SourceXmp read_jxl_xmp(const std::filesystem::path&, const XmpLimits&);
+    [[nodiscard]] SourceImageMetadata read_jxl_metadata(const std::filesystem::path&, const MetadataLimits&, const XmpLimits*);
 
     LFS_IMAGE_CODECS_API bool is_jxl(std::span<const uint8_t>);
     LFS_IMAGE_CODECS_API bool probe_jxl(const std::filesystem::path&, Probe&, std::string&, const JxlDecodeLimits& = {});

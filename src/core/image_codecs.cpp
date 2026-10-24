@@ -2919,13 +2919,21 @@ namespace lfs::core::image_codecs {
             }
             return read_png_exif(input, limits, xmp);
         }
-        if (xmp && is_jxl(std::span(signature).first(signature_size))) {
-            xmp->supported_carrier = true;
-            xmp->result = read_jxl_xmp(path, xmp->limits);
+        if (is_jxl(std::span(signature).first(signature_size))) {
+            auto observed = read_jxl_metadata(path, limits, xmp ? &xmp->limits : nullptr);
+            if (xmp) {
+                xmp->supported_carrier = true;
+                // The shared JXL scan already reports enclosing failures to both
+                // carriers. EXIF-specific quota exhaustion must not limit XML.
+                xmp->scan_status = observed.xmp.status;
+                xmp->scan_diagnostic = observed.xmp.diagnostic;
+                xmp->result = std::move(observed.xmp);
+            }
+            return std::move(observed.exif);
         }
         if (signature_size < 2 || signature[0] != 0xff || signature[1] != 0xd8) {
             result.status = MetadataStatus::Unsupported;
-            result.diagnostic = "EXIF collection supports JPEG, PNG, TIFF and HEIF sources";
+            result.diagnostic = "EXIF collection supports JPEG, PNG, TIFF, HEIF and JPEG XL sources";
             return result;
         }
         result.scope = "jpeg-before-sos";

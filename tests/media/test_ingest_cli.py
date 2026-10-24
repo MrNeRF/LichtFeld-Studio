@@ -345,6 +345,172 @@ class IngestCLI(unittest.TestCase):
                          b"".join(box(kind, data) for kind, data in before) + box(b"jxlc", codestream) +
                          b"".join(box(kind, data) for kind, data in after))
 
+    def test_source_metadata_exif_jxl_envelopes_and_facts(self):
+        path = self.root / "EXIF JPEG XL \u00e9 \u65e5\u672c\u8a9e.jxl"
+        fixture = self.root / "camera-jxl.png"
+        for little in (False, True):
+            source_exif_fixture.write_camera_metadata(fixture, little=little)
+            data = fixture.read_bytes()
+            start = data.index(b"eXIf")
+            tiff = data[start + 4:start + 4 + struct.unpack(">I", data[start - 4:start])[0]]
+            envelope = struct.pack(">I", 3) + b"pad" + tiff
+            self._xmp_jxl(path, [(b"Exif", envelope), (b"xml ", b"<opaque/>")], [(b"Exif", envelope)])
+            original, stamp = path.read_bytes(), path.stat().st_mtime_ns
+            legacy, _ = self.invoke("source-exif", path)
+            result, _ = self.invoke("source-metadata", path)
+            metadata = result["metadata"]
+            self.assertEqual(metadata["image_exif"], legacy["exif"])
+            exif = metadata["image_exif"]
+            self.assertEqual(exif["status"], "collected", exif)
+            self.assertEqual(exif["scope"], "jxl-container-exif")
+            self.assertEqual(len(exif["blocks"]), 2)
+            for block in exif["blocks"]:
+                self.assertEqual(block["envelope"], "jxl_offset")
+                self.assertEqual(block["representation"], "libjxl_decoded_bytes")
+                self.assertEqual(bytes.fromhex(block["bytes"]), envelope)
+                self.assertEqual(block["interpretation"]["status"], "parsed")
+                self.assertFalse(block["jxl_box"]["brotli_compressed"])
+            reference, _ = self.invoke("source-metadata", fixture)
+            # Compare every occurrence, including compound inputs and its source block.
+            expected = []
+            for ordinal in range(2):
+                for fact in reference["summary"]["facts"]:
+                    duplicate = json.loads(json.dumps(fact))
+                    for source in [duplicate["source"], *duplicate["inputs"]]:
+                        self.assertEqual(source["kind"], "exif_entry")
+                        source["block"] = ordinal
+                    expected.append(duplicate)
+            self.assertCountEqual(result["summary"]["facts"], expected)
+            self.assertEqual([block["jxl_box"]["ordinal"] for block in exif["blocks"]], [2, 5])
+            self.assertEqual(metadata["image_xmp"]["blocks"][0]["jxl_box"]["ordinal"], 3)
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(path.stat().st_mtime_ns, stamp)
+        # Independent Brotli fixture: four-byte zero offset and a little-endian orientation IFD.
+        compressed = bytes.fromhex("1b1d00000471633b82982dd1d44c4a60f12503273dfc9f790164538216")
+        decoded = bytes.fromhex("0000000049492a0008000000010012010300010000000600000000000000")
+        self._xmp_jxl(path, [(b"brob", b"Exif" + compressed)])
+        result, _ = self.invoke("source-metadata", path)
+        block = result["metadata"]["image_exif"]["blocks"][0]
+        self.assertEqual(bytes.fromhex(block["bytes"]), decoded)
+        self.assertTrue(block["jxl_box"]["brotli_compressed"])
+        self.assertEqual(block["interpretation"]["status"], "parsed")
+        self.assertEqual(block["interpretation"]["entries"][0]["unsigned_values"], [6])
+        self._xmp_jxl(path, [(b"Exif", b""), (b"Exif", bytes.fromhex("ffffffff"))])
+        result, _ = self.invoke("source-metadata", path)
+        self.assertEqual(result["metadata"]["image_exif"]["status"], "collected")
+        self.assertEqual(len(result["metadata"]["image_exif"]["blocks"]), 2)
+        self.assertTrue(all(b["interpretation"]["status"] == "malformed" for b in result["metadata"]["image_exif"]["blocks"]))
+
+    def test_source_metadata_exif_jxl_independent_quotas(self):
+        def collection_only(exif):
+            return {**exif, "blocks": [{k: v for k, v in block.items() if k != "interpretation"}
+                                      for block in exif["blocks"]]}
+        path = self.root / "exif-quotas.jxl"
+        compressed = bytes.fromhex("1bff1f0024f0e2b140722f0000")  # Brotli 8192 b"x" bytes.
+        self._xmp_jxl(path, [(b"Exif", b"first"), (b"brob", b"Exif" + compressed)], [(b"xml ", b"later"), (b"Exif", b"last")])
+        for budget in (8191, 8192, 8193):
+            result = self._xmp_limited(path, collection_limits={"block_bytes": budget})
+            exif = result["image_exif"]
+            self.assertEqual(collection_only(exif), collection_only(result["legacy_exif"]))
+            self.assertEqual(exif["status"], "limited" if budget == 8191 else "collected", exif)
+            self.assertEqual([bytes.fromhex(b["bytes"]) for b in exif["blocks"]],
+                             [b"first"] if budget == 8191 else [b"first", b"x" * 8192, b"last"])
+            self.assertEqual(result["image_xmp"]["status"], "collected")
+            self.assertEqual(bytes.fromhex(result["image_xmp"]["blocks"][0]["bytes"]), b"later")
+            if budget >= 8192:
+                self.assertTrue(exif["blocks"][1]["jxl_box"]["brotli_compressed"])
+        self._xmp_jxl(path, [(b"xml ", b"first"), (b"brob", b"xml " + compressed)], [(b"Exif", b"later")])
+        result = self._xmp_limited(path, inflated_bytes=8191)
+        self.assertEqual(result["image_xmp"]["status"], "limited")
+        self.assertEqual(result["image_exif"]["status"], "collected")
+        self.assertEqual(bytes.fromhex(result["image_exif"]["blocks"][0]["bytes"]), b"later")
+        self._xmp_jxl(path, [(b"Exif", b"one"), (b"Exif", b"two")], [(b"xml ", b"last")])
+        result = self._xmp_limited(path, collection_limits={"blocks": 1})
+        self.assertEqual(collection_only(result["image_exif"]), collection_only(result["legacy_exif"]))
+        self.assertEqual(result["image_exif"]["status"], "limited")
+        self.assertEqual(result["image_xmp"]["status"], "collected")
+        self._xmp_jxl(path, [(b"Exif", b"x" * 129), (b"Exif", b"last"), (b"xml ", b"last")])
+        result = self._xmp_limited(path, collection_limits={"block_bytes": 128})
+        self.assertEqual(result["image_exif"]["status"], "limited")
+        self.assertEqual([bytes.fromhex(b["bytes"]) for b in result["image_exif"]["blocks"]], [b"last"])
+        self.assertEqual(result["image_xmp"]["status"], "collected")
+
+        self._xmp_jxl(path, [(b"Exif", b"one"), (b"Exif", b"two")], [(b"xml ", b"tail")])
+        for budget in (5, 6):
+            result = self._xmp_limited(path, collection_limits={"total_bytes": budget})
+            self.assertEqual(result["image_exif"]["status"], "limited" if budget == 5 else "collected")
+            self.assertEqual(len(result["image_exif"]["blocks"]), 1 if budget == 5 else 2)
+            self.assertEqual(result["image_xmp"]["status"], "collected")
+        result = self._xmp_limited(path, collection_limits={"block_bytes": (16 << 20) + 1})
+        self.assertEqual(result["image_exif"]["status"], "limited")
+        self.assertEqual(result["image_exif"]["blocks"], [])
+        self.assertEqual(result["image_xmp"]["status"], "collected")
+
+    def test_source_metadata_exif_jxl_damage_and_scan_boundaries(self):
+        path = self.root / "damaged-exif.jxl"
+        compressed = bytes.fromhex("1bff1f0024f0e2b140722f0000")
+        for bad in (b"broken", compressed[:-1]):
+            self._xmp_jxl(path, [(b"Exif", b"prefix"), (b"brob", b"Exif" + bad)])
+            result, _ = self.invoke("source-metadata", path)
+            exif = result["metadata"]["image_exif"]
+            self.assertEqual(exif["status"], "malformed", exif)
+            self.assertEqual([bytes.fromhex(b["bytes"]) for b in exif["blocks"]], [b"prefix"])
+        # A carrier stopped at its quota does not claim later malformed boxes were examined.
+        self._xmp_jxl(path, [(b"Exif", b"one"), (b"Exif", b"two")], [(b"xml ", b"last")])
+        path.write_bytes(path.read_bytes() + struct.pack(">I4s", 7, b"junk"))
+        result = self._xmp_limited(path, collection_limits={"blocks": 1})
+        self.assertEqual(result["image_exif"]["status"], "limited")
+        self.assertEqual(result["image_xmp"]["status"], "malformed")
+        self.assertEqual([bytes.fromhex(b["bytes"]) for b in result["image_xmp"]["blocks"]], [b"last"])
+        self._xmp_jxl(path)
+        original = path.read_bytes()
+        envelope = bytes(4) + b"II" + struct.pack("<HIH", 42, 8, 0) + bytes(4)
+        for box in (struct.pack(">I4sQ", 1, b"Exif", len(envelope) + 16) + envelope,
+                    struct.pack(">I4s", 0, b"Exif") + envelope):
+            path.write_bytes(original + box)
+            result, _ = self.invoke("source-metadata", path)
+            exif = result["metadata"]["image_exif"]
+            self.assertEqual(exif["status"], "collected", exif)
+            self.assertEqual(bytes.fromhex(exif["blocks"][0]["bytes"]), envelope)
+        self._xmp_jxl(path, [(b"brob", b"Exif" + bytes.fromhex("9bffff3ff825f0e2b14020f7fe07"))], [(b"xml ", b"tail")])
+        result = self._xmp_limited(path, collection_limits={"block_bytes": 4096})
+        self.assertEqual(result["image_exif"]["status"], "limited")
+        self.assertEqual(result["image_exif"]["blocks"], [])
+        self.assertEqual(result["image_xmp"]["status"], "collected")
+        self.assertEqual(bytes.fromhex(result["image_xmp"]["blocks"][0]["bytes"]), b"tail")
+        for count in (4092, 4094):
+            self._xmp_jxl(path, [(b"junk", b"")] * count)
+            result, _ = self.invoke("source-metadata", path)
+            self.assertEqual(result["metadata"]["image_exif"]["status"], "absent" if count == 4092 else "limited")
+        path.write_bytes((ROOT / "tests/data/jxl/rgb8.jxl").read_bytes())
+        result, _ = self.invoke("source-metadata", path)
+        self.assertEqual(result["metadata"]["image_exif"]["status"], "absent")
+
+    def test_source_metadata_jxl_completed_boxes_survive_bad_next_header(self):
+        path = self.root / "complete-box-before-error.jxl"
+        exif = bytes.fromhex("0000000049492a0008000000010012010300010000000600000000000000")
+        cases = [
+            (b"Exif", exif, bytes.fromhex("1b1d00000471633b82982dd1d44c4a60f12503273dfc9f790164538216"), "image_exif"),
+            (b"xml ", b"<xmp/>\x00\xff", bytes.fromhex("8b03803c786d702f3e00ff03"), "image_xmp"),
+        ]
+        for kind, decoded, brotli, carrier in cases:
+            for compressed in (False, True):
+                for tail in (struct.pack(">I4s", 7, b"junk"), struct.pack(">I4sI", 1, b"junk", 0)):
+                    with self.subTest(kind=kind, compressed=compressed, tail=tail):
+                        self._xmp_jxl(path, after=[(b"brob", kind + brotli)] if compressed else [(kind, decoded)])
+                        path.write_bytes(path.read_bytes() + tail)
+                        result, _ = self.invoke("source-metadata", path)
+                        observed = result["metadata"][carrier]
+                        self.assertEqual(observed["status"], "malformed", observed)
+                        self.assertEqual(len(observed["blocks"]), 1)
+                        block = observed["blocks"][0]
+                        self.assertEqual(bytes.fromhex(block["bytes"]), decoded)
+                        self.assertEqual(block["jxl_box"], {"ordinal": 3, "brotli_compressed": compressed})
+                        if carrier == "image_exif":
+                            self.assertEqual(block["interpretation"]["status"], "parsed")
+                            legacy, _ = self.invoke("source-exif", path)
+                            self.assertEqual(legacy["exif"], observed)
+
     def test_source_metadata_xmp_jxl_boxes_and_legacy(self):
         path = self.root / "XMP JPEG XL \u00e9 \u65e5\u672c\u8a9e.jxl"
         packet = b'<x xmlns="urn:unknown">\x00\xff</x>'
@@ -505,6 +671,8 @@ class IngestCLI(unittest.TestCase):
         self.assertEqual(xmp["status"], "limited", xmp)
         self.assertIn("encoded-input limit", xmp["diagnostic"])
         self.assertEqual(xmp["blocks"], [])
+        self.assertEqual(result["metadata"]["image_exif"]["status"], "limited")
+        self.assertEqual(result["metadata"]["image_exif"]["blocks"], [])
 
     def test_source_metadata_xmp_heif_primary_items(self):
         packet = b'<x xmlns="urn:unknown">\0\xff</x>'
