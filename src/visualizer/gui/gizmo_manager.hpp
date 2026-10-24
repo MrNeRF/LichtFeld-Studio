@@ -258,7 +258,7 @@ namespace lfs::vis {
             [[nodiscard]] std::optional<core::NodeId> selectedCropTargetNodeId() const;
             [[nodiscard]] LFS_VIS_API bool ensureCropToolState();
             [[nodiscard]] bool syncCropToolStateFromNode(core::NodeId target_id, core::NodeId volume_node_id, bool* changed = nullptr);
-            [[nodiscard]] bool persistActiveCropToolToNode(bool enable);
+            [[nodiscard]] LFS_VIS_API bool persistActiveCropToolToNode(bool enable);
             void scaleCropToolTransform(const glm::vec3& total_scale);
             void updateCropToolOverlayState();
             void clearCropToolOverlayState();
