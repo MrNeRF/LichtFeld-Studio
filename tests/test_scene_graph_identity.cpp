@@ -14,6 +14,7 @@
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/formats/colmap.hpp"
 #include "lfs/py_scene.hpp"
 #include "operation/undo_history.hpp"
@@ -579,6 +580,9 @@ TEST_F(SceneGraphIdentityTest, OrdinaryMoveStillRejectsSingularDestinationWithou
 }
 
 TEST_F(SceneGraphIdentityTest, MergeAllocationFailureReportsErrorAndPreservesScene) {
+    // The allocation probe injects failures into CUDA device allocations only.
+    const lfs::test::DefaultGpuBackendForTesting cuda(lfs::core::GpuBackend::CUDA);
+    ASSERT_TRUE(cuda.switched());
     auto& scene = scene_manager_->getScene();
     const auto group_id = scene.addGroup("group");
     const auto first_id = scene.addSplat("first", make_test_splat({1.f, 2.f, 3.f}), group_id);
