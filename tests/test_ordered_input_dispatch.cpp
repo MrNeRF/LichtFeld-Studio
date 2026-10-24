@@ -1869,34 +1869,40 @@ namespace lfs::vis {
         gizmo.setOperation(gui::GizmoOperation::Scale);
         gizmo.setTransformSpace(TransformSpace::World);
         gui::UIContext ui{.viewer = viewer_.get(), .editor = &viewer_->getEditorContext()};
-        const gui::ViewportLayout layout{.pos = {0.0f, 0.0f}, .size = {400.0f, 300.0f}};
+        const gui::ViewportLayout layout{.view = viewer_->activeView().id, .pos = {0.0f, 0.0f}, .size = {400.0f, 300.0f}};
+        setGizmoViewportLayout(layout);
+        const auto render_frame = [&] {
+            gui::beginScaleGizmoFrame();
+            gui::beginBoundsGizmoFrame();
+            gizmo.renderCropBoxGizmo(ui, layout);
+        };
         gizmo.updateToolState(ui, false);
         auto& frame = frameInput();
         bool found = false;
         for (int y = 105; y <= 195 && !found; ++y) {
             frame.mouse_x = 290.0f;
             frame.mouse_y = static_cast<float>(y);
-            gizmo.renderCropBoxGizmo(ui, layout);
+            render_frame();
             found = gui::isScaleGizmoHovered();
         }
         ASSERT_TRUE(found);
         const glm::vec2 start(frame.mouse_x, frame.mouse_y);
         const auto x_scale = [&] { return glm::length(glm::vec3(scene.getWorldTransform(volume)[0])); };
         frame.mouse_down[0] = frame.mouse_clicked[0] = true;
-        gizmo.renderCropBoxGizmo(ui, layout);
+        render_frame();
         ASSERT_TRUE(gui::isScaleGizmoActive());
         frame.mouse_clicked[0] = false;
         // Past the centre the gizmo factor bottoms out at 1 %, far below the 0.001 floor here.
         const glm::vec2 past_center = start - glm::normalize(start - glm::vec2(200.0f, 150.0f)) * 200.0f;
         frame.mouse_x = past_center.x;
         frame.mouse_y = past_center.y;
-        gizmo.renderCropBoxGizmo(ui, layout);
+        render_frame();
         frame.mouse_x = start.x;
         frame.mouse_y = start.y;
-        gizmo.renderCropBoxGizmo(ui, layout);
+        render_frame();
         frame.mouse_down[0] = false;
         frame.mouse_released[0] = true;
-        gizmo.renderCropBoxGizmo(ui, layout);
+        render_frame();
         frame.mouse_released[0] = false;
         // Chaining per-frame deltas onto the clamped transform would end at 0.1 instead.
         EXPECT_NEAR(x_scale(), 0.05f, 1e-5f);
@@ -1924,7 +1930,13 @@ namespace lfs::vis {
         gizmo.setCropToolShape("ellipsoid");
         gizmo.setOperation(gui::GizmoOperation::Scale);
         gui::UIContext ui{.viewer = viewer_.get(), .editor = &viewer_->getEditorContext()};
-        const gui::ViewportLayout layout{.pos = {0.0f, 0.0f}, .size = {400.0f, 300.0f}};
+        const gui::ViewportLayout layout{.view = viewer_->activeView().id, .pos = {0.0f, 0.0f}, .size = {400.0f, 300.0f}};
+        setGizmoViewportLayout(layout);
+        const auto render_frame = [&] {
+            gui::beginScaleGizmoFrame();
+            gui::beginBoundsGizmoFrame();
+            gizmo.renderEllipsoidGizmo(ui, layout);
+        };
         gizmo.updateToolState(ui, false);
         const auto original = sm.getNodeTransform(scene.getNodeById(volume)->name);
         auto& frame = frameInput();
@@ -1932,19 +1944,19 @@ namespace lfs::vis {
         for (int y = 105; y <= 195 && !found; ++y) {
             frame.mouse_x = 290.0f;
             frame.mouse_y = static_cast<float>(y);
-            gizmo.renderEllipsoidGizmo(ui, layout);
+            render_frame();
             found = gui::isScaleGizmoHovered();
         }
         ASSERT_TRUE(found);
         frame.mouse_down[0] = frame.mouse_clicked[0] = true;
-        gizmo.renderEllipsoidGizmo(ui, layout);
+        render_frame();
         ASSERT_TRUE(gui::isScaleGizmoActive());
         frame.mouse_clicked[0] = false;
         frame.mouse_x += 24.0f;
-        gizmo.renderEllipsoidGizmo(ui, layout);
+        render_frame();
         frame.mouse_down[0] = false;
         frame.mouse_released[0] = true;
-        gizmo.renderEllipsoidGizmo(ui, layout);
+        render_frame();
         frame.mouse_released[0] = false;
         const auto* node = scene.getNodeById(volume);
         EXPECT_EQ(node->ellipsoid->radii, data.radii);
@@ -1960,15 +1972,15 @@ namespace lfs::vis {
             frame.mouse_x = start.x;
             frame.mouse_y = start.y;
             frame.mouse_down[0] = frame.mouse_clicked[0] = true;
-            gizmo.renderEllipsoidGizmo(ui, layout);
+            render_frame();
             ASSERT_TRUE(gui::isScaleGizmoActive());
             frame.mouse_clicked[0] = false;
             frame.mouse_x = end.x;
             frame.mouse_y = end.y;
-            gizmo.renderEllipsoidGizmo(ui, layout);
+            render_frame();
             frame.mouse_down[0] = false;
             frame.mouse_released[0] = true;
-            gizmo.renderEllipsoidGizmo(ui, layout);
+            render_frame();
             frame.mouse_released[0] = false;
         }
         const glm::mat4 world = scene.getWorldTransform(volume);
