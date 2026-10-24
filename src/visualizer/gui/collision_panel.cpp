@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "gui/collision_panel.hpp"
+#include "core/collision_source.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/number_format.hpp"
@@ -63,40 +64,6 @@ namespace lfs::vis::gui {
             material.base_color = {0.1f, 0.65f, 0.8f, 1.0f};
             mesh->materials.push_back(material);
             return mesh;
-        }
-        std::vector<core::CollisionGaussian> extract(
-            const std::vector<core::Scene::SplatGeometrySnapshot>& snapshots, glm::mat4 world_to_grid,
-            std::stop_token stop) {
-            std::vector<core::CollisionGaussian> result;
-            for (const auto& snapshot : snapshots) {
-                if (stop.stop_requested())
-                    throw std::runtime_error("Collision generation cancelled");
-                const auto& means = snapshot.means;
-                const auto& scaling = snapshot.scaling;
-                const auto& rotation = snapshot.rotation;
-                const auto& opacity = snapshot.opacity;
-                const auto& deleted = snapshot.deleted;
-                const auto* m = means.ptr<float>();
-                const auto* s = scaling.ptr<float>();
-                const auto* r = rotation.ptr<float>();
-                const auto* o = opacity.ptr<float>();
-                const auto transform = world_to_grid * snapshot.world_transform;
-                for (size_t i = 0; i < snapshot.size; ++i) {
-                    if ((i & 4095) == 0 && stop.stop_requested())
-                        throw std::runtime_error("Collision generation cancelled");
-                    if (deleted.is_valid() && deleted.ptr<bool>()[i])
-                        continue;
-                    if (result.size() >= core::CollisionGaussian::max_count)
-                        throw std::runtime_error("Collision source exceeds 32 million Gaussians; hide or isolate source nodes");
-                    auto q = glm::normalize(glm::quat(r[i * 4], r[i * 4 + 1], r[i * 4 + 2], r[i * 4 + 3]));
-                    auto axes = glm::mat3_cast(q);
-                    for (int a = 0; a < 3; ++a)
-                        axes[a] *= std::exp(s[i * 3 + a]);
-                    result.push_back({glm::vec3(transform * glm::vec4(m[i * 3], m[i * 3 + 1], m[i * 3 + 2], 1)),
-                                      glm::mat3(transform) * axes, 1.0f / (1.0f + std::exp(-o[i]))});
-                }
-            }
-            return result;
         }
     } // namespace
     CollisionPanel::CollisionPanel(RmlUIManager* manager)
@@ -598,7 +565,7 @@ namespace lfs::vis::gui {
                     progress_ = stop.stop_requested() ? "Cancelling — waiting for the current batch to finish" : std::move(text);
                 };
                 report("Reading Gaussian snapshot");
-                auto gaussians = extract(snapshots, world_to_grid, stop);
+                auto gaussians = core::extractCollisionSource(snapshots, world_to_grid, stop);
                 snapshots.clear(); // Release snapshot buffers before allocating occupancy.
                 const auto begin = std::chrono::steady_clock::now();
                 auto volume = std::make_shared<core::CollisionVolume>(

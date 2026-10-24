@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/collision.hpp"
+#include "core/collision_source.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/events.hpp"
 #include "core/scene.hpp"
@@ -45,6 +46,51 @@ namespace {
         return result;
     }
 } // namespace
+
+TEST(CollisionSource, ParallelExtractionPreservesTransformsDeletionAndStableOrder) {
+    std::vector<Scene::SplatGeometrySnapshot> snapshots;
+    for (size_t n : {size_t(8201), size_t(17)}) {
+        Scene::SplatGeometrySnapshot source;
+        source.size = n;
+        source.means = Tensor::zeros({n, 3}, Device::CPU);
+        source.scaling = Tensor::full({n, 3}, std::log(.2f), Device::CPU);
+        source.rotation = Tensor::zeros({n, 4}, Device::CPU);
+        source.opacity = Tensor::zeros({n, 1}, Device::CPU);
+        source.deleted = Tensor::zeros({n}, Device::CPU, DataType::Bool);
+        for (size_t i = 0; i < n; ++i) {
+            source.means.ptr<float>()[i * 3] = float(i);
+            source.rotation.ptr<float>()[i * 4] = 2; // Deliberately not normalized.
+            source.deleted.ptr<bool>()[i] = i % 7 == 0;
+        }
+        source.world_transform = glm::translate(glm::mat4(1), {3, 4, 5});
+        snapshots.push_back(std::move(source));
+    }
+    const auto frame = glm::scale(glm::mat4(1), {1, -1, -1});
+    const auto serial = extractCollisionSource(snapshots, frame, {}, 1);
+    const auto parallel = extractCollisionSource(snapshots, frame, {}, 8);
+    size_t index = 0;
+    for (const auto& source : snapshots)
+        for (size_t i = 0; i < source.size; ++i) {
+            if (i % 7 == 0)
+                continue;
+            ASSERT_LT(index, parallel.size());
+            EXPECT_EQ(parallel[index].center, glm::vec3(float(i) + 3, -4, -5));
+            EXPECT_FLOAT_EQ(parallel[index].opacity, .5f);
+            for (int axis = 0; axis < 3; ++axis) {
+                EXPECT_EQ(serial[index].axes[axis], parallel[index].axes[axis]);
+                EXPECT_FLOAT_EQ(parallel[index].axes[axis][axis], axis == 0 ? .2f : -.2f);
+            }
+            ++index;
+        }
+    EXPECT_EQ(index, parallel.size());
+    EXPECT_EQ(serial.size(), parallel.size());
+    std::stop_source stop;
+    stop.request_stop();
+    EXPECT_THROW((void)extractCollisionSource(snapshots, frame, stop.get_token()), std::runtime_error);
+    snapshots[0].scaling = Tensor{};
+    EXPECT_THROW((void)extractCollisionSource(snapshots, frame), std::invalid_argument);
+}
+
 TEST(CollisionScene, ArchiveRestoresGeneratedSurfaceAndVolumeWithDeferredHydration) {
     Scene scene;
     auto boxes = std::make_shared<CollisionVolume>(*volume());

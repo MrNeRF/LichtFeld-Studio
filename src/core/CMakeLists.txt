@@ -81,6 +81,7 @@ set(CORE_SOURCES
         camera.cpp
         collision.cpp
         collision_sparse.cpp
+        collision_source.cpp
         collision_gpu.cpp
         checkpoint_format.cpp
         image_loader.cpp
