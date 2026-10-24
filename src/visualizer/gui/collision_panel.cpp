@@ -508,6 +508,35 @@ namespace lfs::vis::gui {
                     loadSettings(*node);
                 }
         }
+        // The viewport card and authoring window edit the same native values.
+        // Refresh external changes without overwriting an active draft/drag.
+        if (!busy_ && edit_scrub_.empty() && drag_scrub_.empty()) {
+            bool changed = false;
+            updating_ = true;
+            const auto sync = [&](const char* id, float n) {
+                const auto text = std::format("{:.6g}", n);
+                if (value(id) != text) {
+                    setValue(id, text);
+                    changed = true;
+                }
+            };
+            if (const auto* input = InputController::instance()) {
+                const auto& w = input->walkSettings();
+                sync("walk-height", w.height / w.units_per_meter);
+                sync("walk-radius", w.radius / w.units_per_meter);
+                sync("walk-speed", w.speed / w.units_per_meter);
+                sync("walk-step", w.step_height / w.units_per_meter);
+            }
+            if (const auto* node = scene_->getNodeByUuid(target_); node && node->collision) {
+                display_.opacity = node->collision_display.opacity;
+                display_.slice = node->collision_display.slice;
+                sync("overlay-opacity", display_.opacity * 100);
+                sync("cutaway", display_.slice * 100);
+            }
+            updating_ = false;
+            if (changed)
+                syncScrubs();
+        }
         const auto now = std::chrono::steady_clock::now();
         if (busy_ && now >= next_progress_ui_) {
             std::lock_guard lock(mutex_);

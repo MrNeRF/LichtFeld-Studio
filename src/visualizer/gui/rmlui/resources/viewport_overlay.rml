@@ -795,6 +795,31 @@
         </div>
     </div>
 
+    <div id="collision-controls-block" class="viewport-depth-overlay hidden">
+        <div class="viewport-transform-panel collision-quick-panel" data-tooltip="collision.controls_help">
+            <div class="collision-quick-header">
+                <img class="collision-quick-icon" data-class-hidden="!collision_controls_walk" src="../icon/walk.png"/>
+                <span data-class-hidden="!collision_controls_walk">@tr:collision.controls_walk</span>
+                <img class="collision-quick-icon" data-class-hidden="collision_controls_walk" src="../icon/scene/collision.png"/>
+                <select class="collision-quick-target" data-class-hidden="collision_controls_walk" data-value="collision_controls_target" data-tooltip="collision.controls_target_help">
+                    <option data-for="target : collision_controls_targets" data-attr-value="target.uuid">{{target.name}}</option>
+                </select>
+                <span class="collision-quick-status">{{collision_controls_status}}</span>
+            </div>
+            <div class="collision-quick-fields" data-class-hidden="!collision_controls_walk">
+                <div class="collision-quick-field" data-tooltip="collision.tip_player"><span>@tr:collision.head_height</span><input class="setting-slider" type="range" data-value="collision_walk_height"/></div>
+                <div class="collision-quick-field" data-tooltip="collision.tip_player"><span>@tr:collision.player_radius</span><input class="setting-slider" type="range" data-value="collision_walk_radius"/></div>
+                <div class="collision-quick-field" data-tooltip="collision.tip_speed"><span>@tr:collision.speed</span><input class="setting-slider" type="range" data-value="collision_walk_speed"/></div>
+                <div class="collision-quick-field" data-tooltip="collision.tip_step"><span>@tr:collision.step_height</span><input class="setting-slider" type="range" data-value="collision_walk_step"/></div>
+            </div>
+            <div class="collision-quick-fields" data-class-hidden="collision_controls_walk" data-class-readonly="!collision_controls_editable">
+                <div class="collision-quick-field" data-tooltip="collision.inspect_help"><span>@tr:collision.overlay_strength</span><input class="setting-slider" type="range" data-value="collision_preview_opacity"/></div>
+                <div class="collision-quick-field" data-tooltip="collision.tip_cutaway"><span>@tr:collision.cutaway</span><input class="setting-slider" type="range" data-value="collision_preview_cutaway"/></div>
+            </div>
+            <p class="collision-quick-error" data-class-hidden="collision_controls_error == ''">{{collision_controls_error}}</p>
+        </div>
+    </div>
+
     <div id="depth-view-block" class="viewport-depth-overlay hidden">
         <div class="viewport-transform-panel viewport-depth-panel" data-tooltip="tooltip.depth_view_panel">
             <div class="viewport-transform-header viewport-depth-header">

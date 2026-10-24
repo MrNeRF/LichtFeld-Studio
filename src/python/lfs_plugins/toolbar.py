@@ -7,6 +7,7 @@ from _lfs_path_io import Path
 from urllib.parse import quote
 
 from .depth_view_controls import DepthViewControlsController
+from .collision_controls import CollisionControlsController
 from .gt_compare_controls import GTCompareControlsController
 from .histogram_support import histogram_mode_available
 from .selection_controls import SelectionControlsController
@@ -1273,6 +1274,7 @@ class _UtilityToolbarController:
                 tooltip_key=tooltip_key,
                 tooltip_text=label,
                 selected=camera_mode == mode_id,
+                enabled=mode_id != "walk" or bool(getattr(lf, "has_walk_collision", lambda: False)()),
             )
             for icon_name, mode_id, tooltip_key, label in self._CAMERA_MODE_SPECS
         ]
@@ -1364,6 +1366,8 @@ class _UtilityToolbarController:
         import lichtfeld as lf
 
         if action == "set_camera_navigation_mode":
+            if value == "walk" and not getattr(lf, "has_walk_collision", lambda: False)():
+                return
             lf.set_camera_navigation_mode(value)
             return
         if action == "home":
@@ -1458,6 +1462,7 @@ class _ViewportToolbarController:
         self._gizmo = _GizmoToolbarController()
         self._gt_compare_controls = GTCompareControlsController()
         self._depth_view_controls = DepthViewControlsController()
+        self._collision_controls = CollisionControlsController()
         self._viewport_export_controls = ViewportExportControlsController(
             self._on_viewport_export_visibility_changed
         )
@@ -1492,6 +1497,7 @@ class _ViewportToolbarController:
         self._gizmo.reset()
         self._gt_compare_controls.unmount()
         self._depth_view_controls.unmount()
+        self._collision_controls.unmount()
         self._viewport_export_controls.unmount()
         self._selection_controls.unmount()
         self._transform_controls.unmount()
@@ -1556,6 +1562,7 @@ class _ViewportToolbarController:
         model.bind_event("toolbar_action", self._on_toolbar_action)
         self._gt_compare_controls.bind_model(model)
         self._depth_view_controls.bind_model(model)
+        self._collision_controls.bind_model(model)
         self._viewport_export_controls.bind_model(model)
         self._selection_controls.bind_model(model)
         self._transform_controls.bind_model(model)
@@ -1581,6 +1588,7 @@ class _ViewportToolbarController:
             self._mounted_doc_key = mount_key
             self._gt_compare_controls.mount(doc)
             self._depth_view_controls.mount(doc)
+            self._collision_controls.mount(doc)
             self._viewport_export_controls.mount(doc)
             self._record_cache = {name: None for name in self._RECORD_FIELDS}
             self._last_toolbar_signature = None
@@ -1600,7 +1608,16 @@ class _ViewportToolbarController:
             viewport_export_dirty = self._viewport_export_controls.update(doc)
             if viewport_export_dirty:
                 dirty_sources.append(f"viewport_export_controls:{viewport_export_dirty}")
+            collision_dirty = self._collision_controls.update(doc)
+            if collision_dirty:
+                dirty_sources.append(f"collision_controls:{collision_dirty}")
             if self._viewport_export_controls.visible:
+                self._hide_tool_overlay(doc, "collision-controls-block")
+                self._hide_tool_overlay(doc, "gt-compare-mode-block")
+                self._hide_tool_overlay(doc, "depth-view-block")
+                self._hide_tool_overlay(doc, "selection-block")
+                self._hide_tool_overlay(doc, "transform-block")
+            elif self._collision_controls.visible:
                 self._hide_tool_overlay(doc, "gt-compare-mode-block")
                 self._hide_tool_overlay(doc, "depth-view-block")
                 self._hide_tool_overlay(doc, "selection-block")
@@ -1634,7 +1651,14 @@ class _ViewportToolbarController:
         self._gt_compare_controls.update(doc)
         self._depth_view_controls.update(doc)
         self._viewport_export_controls.update(doc)
+        self._collision_controls.update(doc)
         if self._viewport_export_controls.visible:
+            self._hide_tool_overlay(doc, "collision-controls-block")
+            self._hide_tool_overlay(doc, "gt-compare-mode-block")
+            self._hide_tool_overlay(doc, "depth-view-block")
+            self._hide_tool_overlay(doc, "selection-block")
+            self._hide_tool_overlay(doc, "transform-block")
+        elif self._collision_controls.visible:
             self._hide_tool_overlay(doc, "gt-compare-mode-block")
             self._hide_tool_overlay(doc, "depth-view-block")
             self._hide_tool_overlay(doc, "selection-block")
@@ -1990,6 +2014,7 @@ class _ViewportToolbarController:
             self._crop_roi_settings_open,
             tool_ids,
             str(call("orbit", lf.get_camera_navigation_mode)).lower() if hasattr(lf, "get_camera_navigation_mode") else "orbit",
+            bool(call(False, getattr(lf, "has_walk_collision", None))),
             self._viewport_export_controls.visible,
             self._gt_compare_controls._gt_compare_active(),
             self._depth_view_controls._depth_view_active(),

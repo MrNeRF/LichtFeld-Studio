@@ -434,6 +434,8 @@ body {
     cursor: pointer;
 }
 
+.menu-toolbar-btn.disabled { opacity: .35; cursor: default; }
+
 .menu-item.disabled {
     cursor: default;
 }

@@ -736,6 +736,7 @@ namespace lfs::vis::gui {
                                            8.0f * std::max(rml_context_->GetDensityIndependentPixelRatio(), 0.01f);
         bool changed = false;
         for (const char* const id : {"transform-block",
+                                     "collision-controls-block",
                                      "selection-block",
                                      "depth-view-block",
                                      "gt-compare-mode-block",
@@ -1202,7 +1203,8 @@ namespace lfs::vis::gui {
             markRenderNeeded(RenderReason::Keyboard);
         }
         if (external_mouse_capture && !point_interactive && !hovered_interactive_ &&
-            !vram_drag_capture && !toolbar_drag_capture && !has_interactive_button_event) {
+            !vram_drag_capture && !toolbar_drag_capture && !has_interactive_button_event &&
+            !(keyboard_event && rml_input::hasFocusedKeyboardTarget(focused_before))) {
             tooltip_.setHover({}, nullptr);
             return;
         }

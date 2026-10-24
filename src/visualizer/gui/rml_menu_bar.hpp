@@ -77,6 +77,7 @@ namespace lfs::vis::gui {
         std::string tooltip_key;
         std::string tooltip_text;
         bool selected = false;
+        bool enabled = true;
         bool operator==(const MenuToolbarButtonView&) const = default;
     };
 
