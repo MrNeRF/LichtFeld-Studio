@@ -151,7 +151,7 @@ namespace lfs::vis::gui {
         // 0 for a held-key repeat the binding does not repeat, nullopt for any other key.
         // While a text field has focus only Ctrl or Cmd chords without Alt step, so keys
         // that type into the field stay with it; Ctrl+Alt is AltGr on Windows.
-        [[nodiscard]] LFS_VIS_API static std::optional<int> sidebarCategoryStep(
+        [[nodiscard]] static std::optional<int> sidebarCategoryStep(
             const input::InputBindings& bindings, const FrameInputEvent& event, bool typing);
 
         [[nodiscard]] PropertiesEditor& properties() { return properties_; }
