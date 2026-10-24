@@ -281,6 +281,7 @@ class _GizmoToolbarController:
     _PIVOT_IDS = {"origin": 0, "bounds": 1}
     _CROP_OBJECT_SHAPES = ("box", "ellipsoid", "polygon")
     _CROP_SHAPE_NODE_TYPES = {"box": "CROPBOX", "ellipsoid": "ELLIPSOID", "polygon": "CROP_POLYGON"}
+    _CROP_ROI_ACCESSORS = {"CROPBOX": "cropbox", "CROP_POLYGON": "crop_polygon"}
     _CROP_TRANSFORM_GIZMOS = ("translate", "rotate", "scale")
     _SELECTION_VOLUME_MODES = {"box", "sphere"}
 
@@ -714,11 +715,13 @@ class _GizmoToolbarController:
                         return None
                     visited.add(node_id)
 
-                if self._node_type_name(node) == "CROPBOX":
-                    get_cropbox = getattr(node, "cropbox", None)
-                    cropbox = get_cropbox() if callable(get_cropbox) else None
-                    if cropbox is not None:
-                        return node, cropbox
+                # The training region is the model's crop box or crop polygon.
+                accessor = self._CROP_ROI_ACCESSORS.get(self._node_type_name(node))
+                if accessor:
+                    get_volume = getattr(node, accessor, None)
+                    volume = get_volume() if callable(get_volume) else None
+                    if volume is not None:
+                        return node, volume
 
                 for child_id in getattr(node, "children", []) or []:
                     child = self._scene_node_by_id(scene, child_id)
@@ -746,15 +749,16 @@ class _GizmoToolbarController:
         resolved = self._resolve_selected_cropbox()
         if resolved is None:
             return []
-        _node, cropbox = resolved
+        node, cropbox = resolved
+        polygon = self._node_type_name(node) == "CROP_POLYGON"
         return [
             _button_record(
                 "crop-enabled",
                 "crop_toggle_enabled",
                 "",
                 _icon_src("scene/visible"),
-                tooltip_key="toolbar.enable_crop_box",
-                tooltip_text="Enable Crop Box",
+                tooltip_key="toolbar.enable_crop_polygon" if polygon else "toolbar.enable_crop_box",
+                tooltip_text="Enable Crop Polygon" if polygon else "Enable Crop Box",
                 selected=bool(cropbox.enabled),
             )
         ]
@@ -1179,8 +1183,9 @@ class _GizmoToolbarController:
             if resolved is None:
                 return
             node, cropbox = resolved
+            polygon = self._node_type_name(node) == "CROP_POLYGON"
             lf.ui.ops.invoke(
-                "crop_box.set",
+                "crop_polygon.set" if polygon else "crop_box.set",
                 node=str(node.name),
                 enabled=not bool(cropbox.enabled),
             )

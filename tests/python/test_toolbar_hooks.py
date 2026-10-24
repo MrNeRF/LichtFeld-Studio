@@ -1228,6 +1228,59 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
     assert growth_percent() == "Auto"
 
 
+def test_crop_roi_controls_and_enable_toggle_serve_a_crop_polygon(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    operator_calls = []
+    polygon = SimpleNamespace(enabled=True)
+    polygon_node = SimpleNamespace(
+        id=8,
+        name="Model_crop_polygon",
+        type=SimpleNamespace(name="CROP_POLYGON"),
+        children=(),
+        crop_polygon=lambda: polygon,
+    )
+    model_node = SimpleNamespace(id=7, name="Model", type=SimpleNamespace(name="SPLAT"), children=(8,))
+    nodes = {7: model_node, 8: polygon_node}
+    scene = SimpleNamespace(
+        get_node=lambda name: next((node for node in nodes.values() if node.name == name), None),
+        get_node_by_id=nodes.get,
+    )
+    params = SimpleNamespace(
+        cropbox_lr_scale=0.2,
+        cropbox_loss_weight=0.3,
+        cropbox_growth_inside=0.5,
+        has_params=lambda: True,
+        get=lambda name: False,
+    )
+
+    def invoke(operator_id, **kwargs):
+        operator_calls.append((operator_id, kwargs))
+        polygon.enabled = kwargs["enabled"]
+
+    monkeypatch.setattr(lf_stub, "optimization_params", lambda: params, raising=False)
+    monkeypatch.setattr(lf_stub, "get_scene", lambda: scene, raising=False)
+    monkeypatch.setattr(lf_stub, "get_selected_node_names", lambda: ["Model"], raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_content_type", lambda: "dataset", raising=False)
+    monkeypatch.setattr(lf_stub.ui, "ops", SimpleNamespace(invoke=invoke), raising=False)
+
+    controller = module._GizmoToolbarController()
+    # The selected training model's polygon is its region of interest, like a crop box.
+    assert controller.cropbox_toolbar_signature() == ("Model_crop_polygon", True, True, 0.2, 0.3, 0.5, False)
+    assert controller._build_crop_settings_records(False)[0]["button_id"] == "crop-roi-settings"
+    enable = controller._build_crop_enable_records()[0]
+    assert (enable["tooltip_key"], enable["tooltip_text"], enable["selected"]) == (
+        "toolbar.enable_crop_polygon",
+        "Enable Crop Polygon",
+        True,
+    )
+
+    controller.dispatch("crop_toggle_enabled", "")
+
+    assert operator_calls == [("crop_polygon.set", {"node": "Model_crop_polygon", "enabled": False})]
+    assert controller._build_crop_enable_records()[0]["selected"] is False
+
+
 @pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1, 0.8, False)])
 def test_crop_roi_unavailable_state_preserves_last_display_values(toolbar_module, signature):
     module, *_ = toolbar_module

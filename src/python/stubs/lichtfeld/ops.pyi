@@ -57,6 +57,8 @@ class BuiltinOp(enum.Enum):
 
     CropPolygonDraw = 20
 
+    CropPolygonSet = 21
+
 class BuiltinTool(enum.Enum):
     Select = 0
 

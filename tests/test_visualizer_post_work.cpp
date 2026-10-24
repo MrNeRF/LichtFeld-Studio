@@ -3007,6 +3007,34 @@ assert lf.ui.ops.invoke("crop_box.set", node="{}", enabled=False).finished
         EXPECT_TRUE(viewer.getScene().getNodeById(*cropbox_id)->cropbox->enabled);
     }
 
+    // Catches the toolbar's enable toggle for a crop polygon doing nothing: lf.ui.ops.invoke must hand its keyword
+    // arguments to the C++ crop_polygon.set operator, which flips the flag in one undo step.
+    TEST_F(CropVolumeSourceTest, PythonOpsInvokeTogglesCropPolygonEnabledWithUndo) {
+        ASSERT_TRUE(lfs::python::ensure_initialized());
+        VisualizerImpl viewer(projectOptions());
+        const auto splat_id = open(viewer);
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        const auto polygon_id = cap::createCropPolygon(
+            *viewer.getSceneManager(), viewer.getRenderingManager(), splat_id,
+            lfs::core::CropPolygonData{.vertices = {{-1.0f, -1.0f}, {1.0f, -1.0f}, {0.0f, 1.0f}}, .half_depth = 1.0f},
+            glm::mat4(1.0f));
+        ASSERT_TRUE(polygon_id);
+        const auto& polygon = *viewer.getScene().getNodeById(*polygon_id)->crop_polygon;
+        ASSERT_TRUE(polygon.enabled);
+        {
+            const lfs::python::GilAcquire gil;
+            const auto script = std::format(R"PY(
+import lichtfeld as lf
+assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
+)PY",
+                                            viewer.getScene().getNodeById(*polygon_id)->name);
+            EXPECT_EQ(PyRun_SimpleString(script.c_str()), 0);
+        }
+        EXPECT_FALSE(polygon.enabled);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_TRUE(viewer.getScene().getNodeById(*polygon_id)->crop_polygon->enabled);
+    }
+
     TEST_F(CropVolumeSourceTest, CropBoxUndoRedoMarksProjectModified) {
         VisualizerImpl viewer(projectOptions());
         const auto splat_id = open(viewer);

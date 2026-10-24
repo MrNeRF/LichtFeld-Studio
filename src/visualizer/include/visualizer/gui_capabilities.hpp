@@ -79,6 +79,14 @@ namespace lfs::vis::cap {
         bool use = false;
     };
 
+    struct LFS_VIS_API CropPolygonUpdate {
+        std::optional<float> half_depth;
+        bool has_inverse = false;
+        bool inverse = false;
+        bool has_enabled = false;
+        bool enabled = false;
+    };
+
     [[nodiscard]] LFS_VIS_API bool isTransformableNodeType(core::NodeType type);
     // Node types the 3-point align operator can transform (not the broader transformable set).
     [[nodiscard]] LFS_VIS_API bool isAlignTransformTargetType(core::NodeType type);
@@ -194,6 +202,17 @@ namespace lfs::vis::cap {
         SceneManager& scene_manager,
         RenderingManager* rendering_manager,
         core::NodeId ellipsoid_id);
+
+    // The named crop polygon or the one under the named node; without a name, the selected one.
+    [[nodiscard]] LFS_VIS_API lfs::Result<core::NodeId> resolveCropPolygonId(
+        const SceneManager& scene_manager,
+        const std::optional<std::string>& requested_node);
+    // Sets the polygon's depth, inverse or enabled flag in one history entry; the outline stays as drawn.
+    [[nodiscard]] LFS_VIS_API lfs::Status updateCropPolygon(
+        SceneManager& scene_manager,
+        RenderingManager* rendering_manager,
+        core::NodeId polygon_id,
+        const CropPolygonUpdate& update);
 
     // Adds an enabled polygon under a splat in one history entry, replacing the
     // splat's existing crop box, ellipsoid or polygon.

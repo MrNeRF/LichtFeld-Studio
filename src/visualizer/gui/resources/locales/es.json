@@ -1218,6 +1218,7 @@
     "align_3point": "Alineación de 3 puntos",
     "crop_box": "Caja de recorte",
     "enable_crop_box": "Activar caja de recorte",
+    "enable_crop_polygon": "Activar polígono de recorte",
     "crop_roi_settings": "Ajustes de ROI de recorte",
     "rejected_splat_lr_scale": "Escala de LR de splats rechazados",
     "outside_roi_loss_weight": "Peso de pérdida fuera de la ROI",

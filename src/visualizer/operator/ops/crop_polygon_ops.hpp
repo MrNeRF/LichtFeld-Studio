@@ -55,6 +55,17 @@ namespace lfs::vis::op {
         std::optional<glm::vec3> cursor_;
     };
 
+    // Sets a crop polygon's depth, inverse or enabled flag; node names the polygon or its splat and
+    // defaults to the selection.
+    class LFS_VIS_API CropPolygonSetOperator : public Operator {
+    public:
+        static LFS_LOCAL_SYMBOL const OperatorDescriptor DESCRIPTOR;
+
+        [[nodiscard]] const OperatorDescriptor& descriptor() const override { return DESCRIPTOR; }
+        [[nodiscard]] bool poll(const OperatorContext& ctx, const OperatorProperties* props = nullptr) const override;
+        OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
+    };
+
     void registerCropPolygonOperators();
     void unregisterCropPolygonOperators();
 

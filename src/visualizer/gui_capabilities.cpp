@@ -2083,4 +2083,63 @@ namespace lfs::vis::cap {
         return polygon_id;
     }
 
+    lfs::Result<core::NodeId> resolveCropPolygonId(const SceneManager& scene_manager,
+                                                   const std::optional<std::string>& requested_node) {
+        const auto& scene = scene_manager.getScene();
+        if (!requested_node) {
+            const core::NodeId polygon_id = scene_manager.getSelectedNodeCropPolygonId();
+            if (polygon_id == core::NULL_NODE)
+                return crop_polygon_error(lfs::ErrorCode::NotFound,
+                                          "No crop polygon specified and no crop polygon selected");
+            return polygon_id;
+        }
+
+        const auto* const node = scene.getNode(*requested_node);
+        if (!node)
+            return crop_polygon_error(lfs::ErrorCode::NotFound, "Node not found: " + *requested_node);
+        if (node->type == core::NodeType::CROP_POLYGON && node->crop_polygon)
+            return node->id;
+        if (const core::NodeId polygon_id = scene.getCropPolygonForSplat(node->id); polygon_id != core::NULL_NODE)
+            return polygon_id;
+        return crop_polygon_error(lfs::ErrorCode::NotFound, "Node has no crop polygon: " + *requested_node);
+    }
+
+    lfs::Status updateCropPolygon(SceneManager& scene_manager,
+                                  RenderingManager* rendering_manager,
+                                  const core::NodeId polygon_id,
+                                  const CropPolygonUpdate& update) {
+        auto& scene = scene_manager.getScene();
+        const auto* const polygon_node = scene.getNodeById(polygon_id);
+        if (!polygon_node || polygon_node->type != core::NodeType::CROP_POLYGON || !polygon_node->crop_polygon)
+            return lfs::Status::failure(crop_polygon_error(lfs::ErrorCode::NotFound, "Invalid crop polygon target"));
+
+        const auto before = *polygon_node->crop_polygon;
+        auto updated = before;
+        if (update.half_depth)
+            updated.half_depth = *update.half_depth;
+        if (update.has_inverse)
+            updated.inverse = update.inverse;
+        if (update.has_enabled)
+            updated.enabled = update.enabled;
+        if (!core::crop_polygon::isValidHalfDepth(updated.half_depth))
+            return lfs::Status::failure(crop_polygon_error(lfs::ErrorCode::InvalidArgument,
+                                                           "Crop polygon half depth must be positive and finite"));
+
+        const std::string name = polygon_node->name;
+        const glm::mat4 transform = scene_manager.getNodeTransform(name);
+        const bool show = polygon_node->visible;
+        if (!scene.setCropPolygonData(polygon_id, updated))
+            return lfs::Status::failure(crop_polygon_error(lfs::ErrorCode::InvalidArgument, "Invalid crop polygon data"));
+        // Crop polygon data is scene-graph state; a data-only edit must still mark the project modified.
+        scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
+        if (rendering_manager)
+            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY,
+                                         lfs::vis::FrameReason::SceneChange);
+
+        auto entry = std::make_unique<vis::op::CropPolygonUndoEntry>(scene_manager, name, before, transform, show);
+        if (entry->hasChanges())
+            vis::op::undoHistory().push(std::move(entry));
+        return {};
+    }
+
 } // namespace lfs::vis::cap

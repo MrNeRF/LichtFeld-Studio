@@ -46,7 +46,8 @@ namespace lfs::python {
             .value("EllipsoidSet", vis::op::BuiltinOp::EllipsoidSet)
             .value("EllipsoidFit", vis::op::BuiltinOp::EllipsoidFit)
             .value("EllipsoidReset", vis::op::BuiltinOp::EllipsoidReset)
-            .value("CropPolygonDraw", vis::op::BuiltinOp::CropPolygonDraw);
+            .value("CropPolygonDraw", vis::op::BuiltinOp::CropPolygonDraw)
+            .value("CropPolygonSet", vis::op::BuiltinOp::CropPolygonSet);
 
         nb::enum_<vis::op::BuiltinTool>(ops, "BuiltinTool")
             .value("Select", vis::op::BuiltinTool::Select)

@@ -4,6 +4,7 @@
 
 #include "crop_polygon_ops.hpp"
 #include "core/logger.hpp"
+#include "core/property_registry.hpp"
 #include "core/services.hpp"
 #include "core/transform_utils.hpp"
 #include "gui/gui_manager.hpp"
@@ -371,13 +372,76 @@ namespace lfs::vis::op {
         }
     }
 
+    namespace {
+        [[nodiscard]] std::optional<std::string> optionalNodeProp(const OperatorProperties* props) {
+            if (props) {
+                if (const auto value = props->get<std::string>("node"); value && !value->empty())
+                    return *value;
+            }
+            return std::nullopt;
+        }
+
+        [[nodiscard]] bool hasCropPolygonUpdateFields(const OperatorProperties* props) {
+            return props && (props->has("half_depth") || props->has("inverse") || props->has("enabled"));
+        }
+    } // namespace
+
+    const OperatorDescriptor CropPolygonSetOperator::DESCRIPTOR = {
+        .builtin_id = BuiltinOp::CropPolygonSet,
+        .python_class_id = {},
+        .label = "Set Crop Polygon",
+        .description = "Update a crop polygon's depth, inversion or enabled state",
+        .icon = "",
+        .shortcut = "",
+        .flags = OperatorFlags::REGISTER | OperatorFlags::UNDO,
+        .source = OperatorSource::CPP,
+        .poll_deps = PollDependency::SCENE | PollDependency::SELECTION,
+    };
+
+    bool CropPolygonSetOperator::poll(const OperatorContext& ctx, const OperatorProperties* props) const {
+        return hasCropPolygonUpdateFields(props) && cap::resolveCropPolygonId(ctx.scene(), optionalNodeProp(props));
+    }
+
+    OperatorResult CropPolygonSetOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {
+        const auto polygon_id = cap::resolveCropPolygonId(ctx.scene(), optionalNodeProp(&props));
+        if (!polygon_id || !hasCropPolygonUpdateFields(&props))
+            return OperatorResult::CANCELLED;
+
+        cap::CropPolygonUpdate update;
+        if (props.has("half_depth"))
+            update.half_depth = props.get_or<float>("half_depth", 0.0f);
+        if (props.has("inverse")) {
+            update.has_inverse = true;
+            update.inverse = props.get_or<bool>("inverse", false);
+        }
+        if (props.has("enabled")) {
+            update.has_enabled = true;
+            update.enabled = props.get_or<bool>("enabled", false);
+        }
+        if (!cap::updateCropPolygon(ctx.scene(), services().renderingOrNull(), *polygon_id, update))
+            return OperatorResult::CANCELLED;
+        return OperatorResult::FINISHED;
+    }
+
     void registerCropPolygonOperators() {
+        core::prop::PropertyRegistry::instance().register_operator_args(
+            CropPolygonSetOperator::DESCRIPTOR.id(),
+            {
+                core::prop::arg_string("node", "Optional crop polygon node or parent node name; defaults to the current selected crop polygon"),
+                core::prop::arg_float("half_depth", "Optional half extrusion depth along the polygon's local z axis"),
+                core::prop::arg_bool("inverse", "Invert the crop volume"),
+                core::prop::arg_bool("enabled", "Enable crop filtering for this crop polygon"),
+            });
         operators().registerOperator(BuiltinOp::CropPolygonDraw, CropPolygonDrawOperator::DESCRIPTOR,
                                      [] { return std::make_unique<CropPolygonDrawOperator>(); });
+        operators().registerOperator(BuiltinOp::CropPolygonSet, CropPolygonSetOperator::DESCRIPTOR,
+                                     [] { return std::make_unique<CropPolygonSetOperator>(); });
     }
 
     void unregisterCropPolygonOperators() {
+        operators().unregisterOperator(BuiltinOp::CropPolygonSet);
         operators().unregisterOperator(BuiltinOp::CropPolygonDraw);
+        core::prop::PropertyRegistry::instance().unregister_operator_args(CropPolygonSetOperator::DESCRIPTOR.id());
     }
 
 } // namespace lfs::vis::op

@@ -1229,6 +1229,7 @@
     "align_3point": "3-Point Align",
     "crop_box": "Crop Box",
     "enable_crop_box": "Enable Crop Box",
+    "enable_crop_polygon": "Enable Crop Polygon",
     "crop_roi_settings": "Crop ROI Settings",
     "rejected_splat_lr_scale": "Rejected splat LR scale",
     "outside_roi_loss_weight": "Outside ROI loss weight",
