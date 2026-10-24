@@ -520,6 +520,35 @@ class TensorFaultRecovery(TensorOperations):
             self.assertEqual(self.read(context, source, 4), [0, 1, 2, 3])
             self.checked("sort_pairs", context, source, indices, 1, 4, 1, 0)
 
+    def test_workspace_growth_failure_preserves_inputs_and_can_retry(self):
+        for fault in (7, 9, 8):
+            with self.subTest(fault=fault), self.resources() as context:
+                small = self.tensor(context, [3, 1, 2, 0])
+                small_indices = self.tensor(context, [0] * 4, 3)
+                self.checked("sort_pairs", context, small, small_indices, 1, 4, 1, 0)
+                count = 65537
+                original = list(range(count, 0, -1))
+                large = self.tensor(context, original)
+                indices = self.tensor(context, [0] * count, 3)
+                self.fail_once(fault)
+                error = Error()
+                self.assertNotEqual(self.calls["sort_pairs"](context, large, indices, 1, count, 1, 0, c.byref(error)), 0)
+                self.assertEqual(self.read(context, large, count), original)
+                self.checked("sort_pairs", context, large, indices, 1, count, 1, 0)
+                self.assertEqual(self.read(context, large, count), list(range(1, count + 1)))
+
+    def test_context_destroy_free_failure_retains_ownership_for_retry(self):
+        context = c.c_void_p()
+        self.checked("context_create", native.options.device, c.byref(context))
+        try:
+            self.tensor(context, [1, 2, 3])
+            self.fail_once(9)
+            error = Error()
+            self.assertNotEqual(self.calls["context_destroy"](context, c.byref(error)), 0)
+        finally:
+            self.fail_once(0)
+            self.checked("context_destroy", context)
+
     def test_scalar_read_drain_failure_preserves_host_output(self):
         with self.resources() as context:
             source = self.tensor(context, [1, 2, 3])
