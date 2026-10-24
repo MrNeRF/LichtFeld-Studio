@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "io/nvcodec_image_loader.hpp"
 
@@ -16,6 +17,9 @@ TEST(Jpeg2kExplicitLayout, RoundTripsNarrowChw) {
     int devices = 0;
     ASSERT_EQ(cudaGetDeviceCount(&devices), cudaSuccess);
     ASSERT_GT(devices, 0);
+    // nvImageCodec and the layout kernel write CUDA memory.
+    const lfs::test::DefaultGpuBackendForTesting cuda(lfs::core::GpuBackend::CUDA);
+    ASSERT_TRUE(cuda.switched());
     lfs::io::NvCodecImageLoader::Options options;
     options.decoder_pool_size = 1;
     lfs::io::NvCodecImageLoader loader(options);

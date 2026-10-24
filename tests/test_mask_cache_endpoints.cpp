@@ -3,6 +3,7 @@
 #include "core/cuda/mask_normalization.cuh"
 #include "core/cuda/mask_normalization.hpp"
 #include "core/image_io.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "licht_test_support.hpp"
 #include "mask_test_utils.hpp"
@@ -14,14 +15,12 @@
 namespace {
     using namespace lfs::core;
     constexpr size_t width = 129, height = 97;
-    class MaskCacheEndpoints : public ::testing::Test {
+    class MaskCacheEndpoints : public lfs::test::CudaBackendTest {
     protected:
         lfs::test::licht::TemporaryDirectory temp{"mask-cache-endpoints"};
         std::vector<uint8_t> values;
         void SetUp() override {
-            int count = 0;
-            if (cudaGetDeviceCount(&count) != cudaSuccess || !count)
-                GTEST_SKIP() << "CUDA unavailable";
+            LFS_CUDA_BACKEND_OR_RETURN();
             constexpr uint8_t bands[]{0, 1, 63, 127, 128, 129, 200, 249, 250, 251, 254, 255};
             values.resize(width * height);
             for (size_t y = 0; y < height; ++y)
