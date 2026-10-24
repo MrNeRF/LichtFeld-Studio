@@ -182,7 +182,7 @@ TEST_F(RoiWeightMapTest, RotatedTranslatedCameraUsesWorldSpaceRays) {
 
 // Catches a lens-distorted GUT camera weighting pixels through pinhole rays instead of its own rays
 // (fisheye pixels near the rim see a different part of the scene than the pinhole formula says).
-TEST(RoiWeightMapTest, CameraRaysReplaceThePinholeRays) {
+TEST_F(RoiWeightMapTest, CameraRaysReplaceThePinholeRays) {
     constexpr int width = 9;
     constexpr int height = 7;
     constexpr float outside_weight = 0.2f;
@@ -222,7 +222,7 @@ TEST(RoiWeightMapTest, CameraRaysReplaceThePinholeRays) {
 // Catches in-box floaters seen from cameras standing inside the box: every ray of such a camera
 // starts in the box, so the ray test would count the far background as ROI. The surface the pixel
 // shows decides instead; pixels without a surface count as outside.
-TEST(RoiWeightMapTest, CameraInsideTheBoxWeighsPixelsByTheSurfaceTheyShow) {
+TEST_F(RoiWeightMapTest, CameraInsideTheBoxWeighsPixelsByTheSurfaceTheyShow) {
     constexpr int width = 4;
     constexpr int height = 1;
     constexpr float outside_weight = 0.1f;
