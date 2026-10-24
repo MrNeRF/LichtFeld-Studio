@@ -67,9 +67,8 @@ namespace lfs::vis::gui {
         std::mutex mutex_;
         std::string progress_;
         float progress_value_ = 0;
-        int progress_step_ = 0, progress_total_ = 1;
+        int progress_total_ = 1;
         std::chrono::steady_clock::time_point job_started_;
-        std::chrono::steady_clock::time_point progress_updated_;
         std::chrono::steady_clock::time_point next_progress_ui_;
         std::string job_title_, job_context_, job_outcome_, error_report_;
         uint64_t job_graph_epoch_ = 0;
@@ -83,7 +82,6 @@ namespace lfs::vis::gui {
             uint64_t scene_generation = 0;
             uint64_t graph_epoch = 0;
             core::CollisionDisplay display;
-            std::string stats;
             bool surface_only = false;
         };
         std::optional<Result> result_;

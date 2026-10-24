@@ -118,20 +118,6 @@ TEST(CollisionSettings, PresetsDomainsAndBounds) {
     g.dimensions = {16'000'000, 2, 1};
     EXPECT_THROW(g.validate(), std::runtime_error);
 }
-TEST(CollisionVolume, PreviewPackingPreservesEveryCellAndClearsPadding) {
-    auto g = grid({7, 5, 3});
-    for (size_t i = 0; i < g.solid.size(); ++i)
-        g.solid[i] = i % 3 == 0;
-    g.solid[31] = g.solid[32] = g.solid.back() = 1;
-    const auto packed = g.packedOccupancy();
-    ASSERT_EQ(packed.size(), 4u);
-    for (size_t i = 0; i < packed.size() * 32; ++i)
-        EXPECT_EQ(bool(packed[i / 32] & (uint32_t(1) << (i % 32))),
-                  i < g.solid.size() && bool(g.solid[i]))
-            << i;
-    g.solid.pop_back();
-    EXPECT_THROW((void)g.packedOccupancy(), std::invalid_argument);
-}
 TEST(CollisionVoxelization, RotationScaleAndCombinedOpacity) {
     CollisionSettings s;
     s.applyPreset(CollisionPreset::Object);

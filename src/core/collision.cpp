@@ -1069,18 +1069,6 @@ namespace lfs::core {
         return grid;
     }
 
-    std::vector<uint32_t> CollisionVolume::packedOccupancy() const {
-        validate();
-        const auto count = cellCount(dimensions);
-        std::vector<uint32_t> result((count + 31) / 32, 0);
-        eachCell(*this, {}, [&](auto p) {
-            if (occupied(p)) {
-                const auto i = index(p);
-                result[i / 32] |= uint32_t(1) << (i % 32);
-            }
-        });
-        return result;
-    }
     std::vector<uint32_t> CollisionVolume::octreeOccupancy() const {
         validate();
         return collision_detail::volumeTree(*this).nodes;

@@ -104,7 +104,6 @@ namespace lfs::core {
         [[nodiscard]] bool capsuleIntersects(glm::vec3 feet, glm::vec3 up,
                                              float height, float radius) const;
         void validate() const;
-        [[nodiscard]] std::vector<uint32_t> packedOccupancy() const;
         [[nodiscard]] std::vector<uint32_t> octreeOccupancy() const;
         [[nodiscard]] std::vector<uint32_t> gpuOccupancy() const;
         [[nodiscard]] uint64_t occupiedCount() const;

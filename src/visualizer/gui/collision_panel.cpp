@@ -504,7 +504,6 @@ namespace lfs::vis::gui {
         busy_ = true;
         document_->GetElementById("collision-scroll")->SetScrollTop(0);
         job_started_ = std::chrono::steady_clock::now();
-        progress_updated_ = job_started_;
         next_progress_ui_ = {};
         job_outcome_ = "running";
         job_graph_epoch_ = scene_->graphEpoch();
@@ -514,14 +513,12 @@ namespace lfs::vis::gui {
         if (s.auto_resolution)
             job_context_ += " Automatic resolution enabled; displayed cell size is the previous/minimum value.";
         progress_value_ = 0;
-        progress_step_ = 0;
         progress_total_ = 3 + (s.cluster || s.adaptive_filter) + s.external_fill + s.floor_fill + (s.carve_height > 0);
         worker_ = std::jthread([this, snapshots = std::move(snapshots), sources = std::move(sources),
                                 s, grid_to_world, world_to_grid, target, display, scene_generation, graph_epoch](std::stop_token stop) mutable {
             try {
                 auto report = [&](std::string text) {
                     std::lock_guard lock(mutex_);
-                    progress_updated_ = std::chrono::steady_clock::now();
                     if (text.starts_with("Voxelizing Auto cell size:"))
                         job_context_ += " " + text.substr(11);
                     int phase = 0;
@@ -560,7 +557,6 @@ namespace lfs::vis::gui {
                         phase = 2 + (s.cluster || s.adaptive_filter) + s.external_fill + s.floor_fill;
                     else if (text.starts_with("Finalizing"))
                         phase = progress_total_ - 1;
-                    progress_step_ = phase;
                     progress_value_ = std::max(progress_value_, (phase + fraction) / progress_total_);
                     progress_ = stop.stop_requested() ? "Cancelling — waiting for the current batch to finish" : std::move(text);
                 };
@@ -576,8 +572,6 @@ namespace lfs::vis::gui {
                 // Scene graph uses a tiny bounds carrier; preview and Walk read
                 // occupancy directly. Build a physical surface only on request.
                 auto mesh = makeMesh(volume->boundsMesh());
-                const auto stats = std::format("{:.2f}s generation; {:.1f} MiB occupancy",
-                                               std::chrono::duration<double>(voxelized - begin).count(), volume->tree.size() * 4.0 / (1024 * 1024));
                 LOG_INFO("Collision generation: source={}, voxel_size={}, opacity={}, occupied={}, tree_nodes={}, generation_ms={}, mesh_ms={}",
                          gaussians.size(), volume->settings.voxel_size, s.opacity, volume->occupiedCount(), volume->tree.size(),
                          std::chrono::duration_cast<std::chrono::milliseconds>(voxelized - begin).count(),
@@ -585,7 +579,7 @@ namespace lfs::vis::gui {
                 if (stop.stop_requested())
                     throw std::runtime_error("Collision generation cancelled");
                 std::lock_guard lock(mutex_);
-                result_ = Result{std::move(volume), std::move(mesh), grid_to_world, sources, target, scene_generation, graph_epoch, display, stats};
+                result_ = Result{std::move(volume), std::move(mesh), grid_to_world, sources, target, scene_generation, graph_epoch, display};
             } catch (const std::exception& error) {
                 std::lock_guard lock(mutex_);
                 error_ = error.what();
@@ -653,7 +647,6 @@ namespace lfs::vis::gui {
             if (auto* manager = services().sceneOrNull())
                 manager->selectNode(id);
             finishJob("completed");
-            status(surface->name + ": " + result_->stats);
             result_.reset();
             return;
         }
@@ -737,23 +730,18 @@ namespace lfs::vis::gui {
         document_->GetElementById("collision-scroll")->SetScrollTop(0);
         done_ = false;
         job_started_ = std::chrono::steady_clock::now();
-        progress_updated_ = job_started_;
         next_progress_ui_ = {};
         job_outcome_ = "running";
         job_graph_epoch_ = scene_->graphEpoch();
         job_title_ = LOC("collision.building_surface");
         job_context_ = std::format("Surface resolution {}×; source collision cell {:.4g} scene units.", display.surface_stride, volume->settings.voxel_size);
         progress_value_ = 0;
-        progress_step_ = 0;
         progress_total_ = 3;
         worker_ = std::jthread([this, volume, display, shape, transform, generation, epoch, target](std::stop_token stop) {
             try {
-                const auto begin = std::chrono::steady_clock::now();
                 auto report = [&](std::string text) {
                     std::lock_guard lock(mutex_);
-                    progress_updated_ = std::chrono::steady_clock::now();
                     progress_ = std::move(text);
-                    progress_step_ = 1;
                     progress_value_ = 1.0f / 3;
                 };
                 report("Preparing surface resolution");
@@ -761,16 +749,11 @@ namespace lfs::vis::gui {
                 {
                     std::lock_guard lock(mutex_);
                     progress_ = "Computing surface normals";
-                    progress_updated_ = std::chrono::steady_clock::now();
-                    progress_step_ = 2;
                     progress_value_ = 2.0f / 3;
                 }
                 auto mesh = makeMesh(std::move(surface), stop);
-                auto stats = std::format("{:.2f}s surface; {:.3g} scene-unit surface cells; original voxels retained for Walk",
-                                         std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count(),
-                                         volume->settings.voxel_size * display.surface_stride);
                 std::lock_guard lock(mutex_);
-                result_ = Result{volume, mesh, transform, {}, target, generation, epoch, display, stats, true};
+                result_ = Result{volume, mesh, transform, {}, target, generation, epoch, display, true};
             } catch (const std::exception& error) {
                 std::lock_guard lock(mutex_);
                 error_ = error.what();
@@ -827,7 +810,6 @@ namespace lfs::vis::gui {
                 worker_.request_stop();
                 std::lock_guard lock(mutex_);
                 progress_ = "Cancelling — waiting for the current batch to finish";
-                progress_updated_ = std::chrono::steady_clock::now();
                 status("Cancelling collision generation");
             } else if (id == "reset-surface") {
                 resetSurfaceSettings();
