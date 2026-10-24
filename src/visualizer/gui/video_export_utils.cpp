@@ -162,6 +162,22 @@ namespace lfs::vis::gui {
             }
         }
 
+        const lfs::core::NodeId selected_polygon_id = scene_manager.getSelectedNodeCropPolygonId();
+        snapshot.crop_polygons.reserve(render_state.crop_polygons.size());
+        for (const auto& polygon : render_state.crop_polygons) {
+            if (!polygon.data)
+                continue;
+            if (polygon.node_id == selected_polygon_id)
+                snapshot.selected_crop_polygon_index = static_cast<int>(snapshot.crop_polygons.size());
+            snapshot.crop_polygons.push_back(VideoExportCropPolygonSnapshot{
+                .node_id = polygon.node_id,
+                .parent_splat_id = polygon.parent_splat_id,
+                .parent_node_index = scene.getVisibleNodeIndex(polygon.parent_splat_id),
+                .data = *polygon.data,
+                .world_transform = polygon.world_transform,
+            });
+        }
+
         if (!snapshot.hasRenderableContent()) {
             return std::unexpected(std::string(LOC(lichtfeld::Strings::Runtime::VIDEO_NO_RENDERABLE_CONTENT)));
         }

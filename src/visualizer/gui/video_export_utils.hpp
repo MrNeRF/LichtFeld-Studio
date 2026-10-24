@@ -17,9 +17,15 @@
 #include <optional>
 #include <vector>
 
+namespace lfs::rendering {
+    struct PointCloudFilterState;
+}
+
 namespace lfs::vis {
     class SceneManager;
-}
+    struct RenderSettings;
+    struct SceneRenderState;
+} // namespace lfs::vis
 
 namespace lfs::vis::gui {
 
@@ -51,6 +57,14 @@ namespace lfs::vis::gui {
         glm::mat4 world_transform{1.0f};
     };
 
+    struct VideoExportCropPolygonSnapshot {
+        lfs::core::NodeId node_id = lfs::core::NULL_NODE;
+        lfs::core::NodeId parent_splat_id = lfs::core::NULL_NODE;
+        int parent_node_index = -1;
+        lfs::core::CropPolygonData data;
+        glm::mat4 world_transform{1.0f};
+    };
+
     struct VideoExportSceneSnapshot {
         std::shared_ptr<lfs::core::SplatData> combined_model;
         // Valid only during the viewer-thread render that captured it.
@@ -68,6 +82,9 @@ namespace lfs::vis::gui {
         std::vector<VideoExportCropBoxSnapshot> cropboxes;
         int selected_cropbox_index = -1;
         std::optional<VideoExportEllipsoidSnapshot> active_ellipsoid;
+        // Every crop polygon filters its own splat; point clouds take the selected one, else the only enabled one.
+        std::vector<VideoExportCropPolygonSnapshot> crop_polygons;
+        int selected_crop_polygon_index = -1;
 
         [[nodiscard]] bool hasRenderableContent() const {
             return (gaussianModel() && gaussianModel()->size() > 0) ||
@@ -89,6 +106,15 @@ namespace lfs::vis::gui {
     LFS_VIS_API std::expected<VideoExportSceneSnapshot, std::string> captureVideoExportSceneSnapshot(
         const lfs::vis::SceneManager& scene_manager,
         VideoExportCapture capture = VideoExportCapture::Owned);
+
+    // The crop volume of exported point-cloud frames: the selected or only enabled crop box, else the
+    // active ellipsoid, else the selected or only enabled crop polygon.
+    LFS_VIS_API void applyVideoExportPointCloudFilters(lfs::rendering::PointCloudFilterState& filters,
+                                                       const VideoExportSceneSnapshot& snapshot,
+                                                       const lfs::vis::RenderSettings& render_settings);
+
+    // The scene state exported splat frames render with, crop volumes included. It points into the snapshot.
+    LFS_VIS_API lfs::vis::SceneRenderState makeVideoExportGaussianSceneState(const VideoExportSceneSnapshot& snapshot);
 
     LFS_VIS_API void refreshVideoExportMeshTransforms(
         VideoExportSceneSnapshot& snapshot,
