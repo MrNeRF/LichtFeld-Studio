@@ -6580,12 +6580,16 @@ namespace lfs::vis::gui {
                 gt_metrics_config.visible = true;
                 gt_metrics_config.show_ssim =
                     settings.camera_metrics_mode == RenderSettings::CameraMetricsMode::PSNRSSIM;
+#if LFS_BUILD_TRAINER
                 const auto* const trainer_manager = viewer_ ? viewer_->getTrainerManager() : nullptr;
                 const auto* const trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
                 if (!trainer || !trainer->isInitialized()) {
                     gt_metrics_config.metrics_status =
                         AppStore::CameraMetricsStatus::NeedsInitializedTrainingSession;
                 }
+#else
+                gt_metrics_config.metrics_status = AppStore::CameraMetricsStatus::NeedsInitializedTrainingSession;
+#endif
 
                 const auto content_bounds = rendering->getContentBounds(rendering->activeViewId(), glm::ivec2(
                                                                                                        std::max(static_cast<int>(viewport_layout_.size.x), 0),

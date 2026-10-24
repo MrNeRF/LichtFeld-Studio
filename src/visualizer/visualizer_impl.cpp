@@ -1,10 +1,11 @@
-#if LFS_BUILD_TRAINER
-#include "rendering/scene_renderer_factory.hpp"
-#include "training/trainer.hpp"
-#endif
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#include "rendering/scene_renderer_factory.hpp"
+#if LFS_BUILD_TRAINER
+#include "training/trainer.hpp"
+#endif
 
 #include "core/animatable_property.hpp"
 #include "core/crash_handler.hpp"
