@@ -3,6 +3,7 @@
 #pragma once
 #include "media/source_metadata.hpp"
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -24,6 +25,25 @@ namespace lfs::media {
                               Metres,
                               Millimetres };
     using MetadataScalar = std::variant<std::int64_t, double, ExifRational, std::string>;
+    struct XmpPropertyLocation {
+        std::string namespace_uri;
+        std::string name;
+        std::size_t description = 0;
+        std::size_t ordinal = 0;
+    };
+    struct XmpFactProvenance {
+        XmpPropertyLocation property;
+        std::vector<XmpPropertyLocation> inputs;
+    };
+    enum class XmpPacketState { Parsed,
+                                Malformed,
+                                Unsupported,
+                                Limited };
+    struct XmpPacketInterpretation {
+        MetadataRecordHandle source;
+        XmpPacketState state = XmpPacketState::Parsed;
+        std::string diagnostic;
+    };
     struct MetadataFact {
         MetadataRecordHandle source;
         std::string semantic;
@@ -37,6 +57,8 @@ namespace lfs::media {
         std::string diagnostic;
         // Duplicate semantic occurrences in one directory are not resolved here.
         bool ambiguous = false;
+        // Allocate property provenance only for XMP facts; copies share it.
+        std::shared_ptr<const XmpFactProvenance> xmp;
     };
     enum class MetadataSummaryScope { StreamProperties,
                                       ImageProperties };
@@ -44,6 +66,7 @@ namespace lfs::media {
         bool limited = false;
         std::vector<MetadataFact> facts;
         MetadataSummaryScope scope = MetadataSummaryScope::StreamProperties;
+        std::vector<XmpPacketInterpretation> xmp_packets;
     };
     // Projects existing stream properties to typed, static facts with provenance.
     // Raw entries stay available; absence never becomes a fabricated zero value.

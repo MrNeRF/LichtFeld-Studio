@@ -5,7 +5,7 @@ get_filename_component(_media_root "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 
 add_library(lfs_media SHARED
     media_ingest.cpp media_backends.cpp hdr_renderer.cpp decoded_video_frame.cpp
-    media_probe.cpp probe_source_metadata.cpp source_exif.cpp source_metadata.cpp metadata_observation.cpp image_metadata_summary.cpp frame_sink.cpp file_frame_sink.cpp resumable_file_sink.cpp image_output.cpp image_sequence.cpp linear_frame.cpp
+    media_probe.cpp probe_source_metadata.cpp xmp_metadata.cpp source_exif.cpp source_metadata.cpp metadata_observation.cpp image_metadata_summary.cpp frame_sink.cpp file_frame_sink.cpp resumable_file_sink.cpp image_output.cpp image_sequence.cpp linear_frame.cpp
     video_frame_extractor.cpp video_player.cpp video_encode_session.cpp hdr_tonemap.cpp
     ../io/video/video_metadata.cpp)
 target_compile_definitions(lfs_media PRIVATE LFS_MEDIA_EXPORTS)
@@ -18,8 +18,10 @@ target_include_directories(lfs_media SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})
 if(LFS_HAS_CUDA)
     target_include_directories(lfs_media SYSTEM PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
 endif()
+find_package(expat 2.9.0 CONFIG REQUIRED)
+
 target_link_libraries(lfs_media PUBLIC lfs_error
-    PRIVATE lfs_image_codecs lfs_file_io lfs_logger TBB::tbb OpenSSL::Crypto)
+    PRIVATE lfs_image_codecs lfs_file_io lfs_logger TBB::tbb OpenSSL::Crypto expat::expat)
 target_link_libraries(lfs_media PRIVATE ${FFMPEG_LIBRARIES})
 # Static third-party objects do not obey this target's C++ visibility preset.
 # Export the media namespace only, including in stripped portable builds.

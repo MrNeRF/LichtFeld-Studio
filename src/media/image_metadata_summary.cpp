@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "media/metadata_observation.hpp"
+#include "xmp_metadata.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -487,6 +488,7 @@ namespace lfs::media {
                         return std::move(builder.result);
                 }
             }
+            appendXmpMetadata(catalog, builder.result, max_facts, max_text_bytes, builder.charged);
             return std::move(builder.result);
         } catch (const std::bad_alloc&) {
             return make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "Image metadata summary allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()});
