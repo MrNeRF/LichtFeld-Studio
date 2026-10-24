@@ -116,6 +116,91 @@ LFS_HIP_API int lfs_hip_arange_f32(LfsHipContext*, LfsHipView output, size_t cou
 LFS_HIP_API int lfs_hip_copy(LfsHipContext*, LfsHipView source, LfsHipView destination, size_t bytes, LfsHipError*);
 LFS_HIP_API int lfs_hip_memset(LfsHipContext*, LfsHipView destination, size_t bytes, uint8_t value, LfsHipError*);
 
+typedef struct LfsHipMemoryInfo {
+    uint64_t total_bytes, free_bytes, owned_bytes, workspace_bytes;
+} LfsHipMemoryInfo;
+typedef struct LfsHipChainOp {
+    uint32_t op;
+    float scalar;
+    LfsHipView rhs;
+} LfsHipChainOp;
+typedef struct LfsHipChain {
+    uint32_t count;
+    LfsHipChainOp ops[16];
+} LfsHipChain;
+typedef struct LfsHipLayout {
+    uint32_t rank;
+    uint64_t dims[8], strides[8], elements;
+} LfsHipLayout;
+typedef struct LfsHipLayoutCopy {
+    LfsHipView input, output;
+    LfsHipLayout input_layout, output_layout;
+    uint32_t element_bytes;
+} LfsHipLayoutCopy;
+typedef struct LfsHipRandom {
+    uint32_t kind;
+    uint64_t seed;
+    size_t count;
+    float first, second;
+    int32_t low, high;
+} LfsHipRandom;
+enum LfsHipReduceOp { LFS_HIP_REDUCE_SUM,
+                      LFS_HIP_REDUCE_MEAN,
+                      LFS_HIP_REDUCE_MIN,
+                      LFS_HIP_REDUCE_MAX,
+                      LFS_HIP_REDUCE_HAS_NAN,
+                      LFS_HIP_REDUCE_HAS_INF };
+enum LfsHipDtype { LFS_HIP_F32 = 0,
+                   LFS_HIP_F16 = 1,
+                   LFS_HIP_I32 = 2,
+                   LFS_HIP_I64 = 3,
+                   LFS_HIP_U8 = 4,
+                   LFS_HIP_BOOL = 5,
+                   LFS_HIP_U32 = 6 };
+enum LfsHipRandomKind { LFS_HIP_RANDOM_UNIFORM,
+                        LFS_HIP_RANDOM_BERNOULLI,
+                        LFS_HIP_RANDOM_INTEGER,
+                        LFS_HIP_RANDOM_NORMAL };
+enum { LFS_HIP_REDUCTION_WORKSPACE_FLOATS = 4097 };
+enum { LFS_HIP_ERROR_INVALID_INDEX = -2 };
+LFS_HIP_API int lfs_hip_boolean_pointwise(LfsHipContext*, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, size_t count, float scalar, LfsHipError*);
+LFS_HIP_API int lfs_hip_clamp_i32(LfsHipContext*, LfsHipView data, size_t count, int32_t minimum, int32_t maximum, LfsHipError*);
+LFS_HIP_API int lfs_hip_scalar_left_typed(LfsHipContext*, uint32_t op, LfsHipView lhs, LfsHipView output, size_t count, float scalar, uint32_t dtype, LfsHipError*);
+LFS_HIP_API int lfs_hip_broadcast_typed(LfsHipContext*, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, const LfsHipLayout* lhs_layout, const LfsHipLayout* rhs_layout, const LfsHipLayout* output_layout, uint32_t input_dtype, uint32_t output_element_bytes, LfsHipError*);
+LFS_HIP_API int lfs_hip_broadcast_f32(LfsHipContext*, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, const LfsHipLayout* lhs_layout, const LfsHipLayout* rhs_layout, const LfsHipLayout* output_layout, uint32_t output_element_bytes, LfsHipError*);
+LFS_HIP_API int lfs_hip_reduce_f32(LfsHipContext*, LfsHipView input, size_t count, uint32_t operation, float* output, LfsHipError*);
+LFS_HIP_API int lfs_hip_copy_layouts(LfsHipContext*, const LfsHipLayoutCopy*, size_t count, LfsHipError*);
+LFS_HIP_API int lfs_hip_select(LfsHipContext*, LfsHipView input, LfsHipView mask, LfsHipView output, uint32_t dtype, uint32_t kind, size_t count, size_t capacity, uint64_t* selected, LfsHipError*);
+LFS_HIP_API int lfs_hip_masked_scatter(LfsHipContext*, LfsHipView output, LfsHipView mask, LfsHipView source,
+                                       uint32_t dtype, size_t count, size_t selected_count, LfsHipError*);
+LFS_HIP_API int lfs_hip_sort_pairs(LfsHipContext*, LfsHipView values, LfsHipView indices, size_t outer, size_t dimension, size_t inner, uint32_t descending, LfsHipError*);
+LFS_HIP_API int lfs_hip_cumsum(LfsHipContext*, LfsHipView data, uint32_t dtype, const LfsHipLayout*, uint32_t axis, LfsHipError*);
+LFS_HIP_API int lfs_hip_trim_workspace(LfsHipContext*, LfsHipError*);
+LFS_HIP_API int lfs_hip_memory_info(LfsHipContext*, LfsHipMemoryInfo*, LfsHipError*);
+LFS_HIP_API int lfs_hip_chain_f32(LfsHipContext*, LfsHipView input, LfsHipView output, size_t count, const LfsHipChain*, LfsHipError*);
+LFS_HIP_API int lfs_hip_strided_scatter(LfsHipContext*, LfsHipView input, LfsHipView output, const LfsHipLayout*, uint32_t element_bytes, uint32_t int32_to_float32, LfsHipError*);
+LFS_HIP_API int lfs_hip_strided_copy(LfsHipContext*, LfsHipView input, LfsHipView output, const LfsHipLayout*, uint32_t element_bytes, LfsHipError*);
+LFS_HIP_API int lfs_hip_random(LfsHipContext*, LfsHipView output, const LfsHipRandom*, LfsHipError*);
+LFS_HIP_API int lfs_hip_count_nonzero(LfsHipContext*, LfsHipView input, uint32_t dtype, size_t count, uint64_t* result, LfsHipError*);
+LFS_HIP_API int lfs_hip_convert(LfsHipContext*, LfsHipView input, uint32_t input_dtype, LfsHipView output, uint32_t output_dtype, size_t count, LfsHipError*);
+LFS_HIP_API int lfs_hip_index_cast(LfsHipContext*, LfsHipView input, LfsHipView output, size_t count, size_t extent, LfsHipError*);
+LFS_HIP_API int lfs_hip_index_update(LfsHipContext*, LfsHipView output, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, LfsHipView source, const LfsHipLayout* output_layout, uint32_t dim, size_t index_count, uint32_t add, LfsHipError*);
+LFS_HIP_API int lfs_hip_index_fill(LfsHipContext*, LfsHipView output, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, const LfsHipLayout* output_layout, uint32_t dim, size_t index_count, uint64_t value_bits, LfsHipError*);
+LFS_HIP_API int lfs_hip_gather_unary_f32(LfsHipContext*, LfsHipView input, LfsHipView indices, uint32_t index_dtype,
+                                         LfsHipView output, size_t input_size, size_t index_count, uint32_t operation, LfsHipError*);
+LFS_HIP_API int lfs_hip_index_put_f32(LfsHipContext*, LfsHipView output, LfsHipView indices, uint32_t index_dtype,
+                                      LfsHipView values, size_t output_size, size_t index_count, LfsHipError*);
+LFS_HIP_API int lfs_hip_gather(LfsHipContext*, LfsHipView input, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, LfsHipView output, const LfsHipLayout* input_layout, const LfsHipLayout* index_layout, uint32_t dim, uint32_t boundary_mode, uint32_t index_select, LfsHipError*);
+LFS_HIP_API int lfs_hip_reduce_layout_f32(LfsHipContext*, LfsHipView input, LfsHipView output, const LfsHipLayout*, uint32_t axes_mask, uint32_t operation, LfsHipError*);
+LFS_HIP_API int lfs_hip_fill_layout_bits(LfsHipContext*, LfsHipView output, const LfsHipLayout*, uint32_t element_bytes, uint64_t value_bits, LfsHipError*);
+LFS_HIP_API int lfs_hip_fill_strided_f32(LfsHipContext*, LfsHipView output, const LfsHipLayout*, float value, LfsHipError*);
+LFS_HIP_API int lfs_hip_chain_reduce_f32(LfsHipContext*, LfsHipView input, LfsHipView output, size_t segments, size_t segment_size, const LfsHipChain*, uint32_t operation, LfsHipError*);
+LFS_HIP_API int lfs_hip_arg_extreme_f32(LfsHipContext*, LfsHipView input, LfsHipView values, LfsHipView indices,
+                                        size_t outer, size_t reduced, size_t inner, uint32_t maximum,
+                                        size_t* workspace_growth_bytes, LfsHipError*);
+LFS_HIP_API int lfs_hip_cdist_f32(LfsHipContext*, LfsHipView lhs, LfsHipView rhs, LfsHipView output,
+                                  size_t lhs_rows, size_t rhs_rows, size_t columns, float p, LfsHipError*);
+
 #ifdef __cplusplus
-} // extern "C"
+}
 #endif

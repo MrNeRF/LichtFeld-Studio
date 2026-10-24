@@ -4,15 +4,20 @@
 #include "hip_pointwise_functors.hpp"
 #include "runtime_api.h"
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <exception>
 #include <hip/hip_fp16.h>
 #include <hip/hip_runtime.h>
+#include <hipcub/hipcub.hpp>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <type_traits>
 #include <unordered_set>
+#include <vector>
 
 struct LfsHipBuffer {
     void* data = nullptr;
@@ -31,6 +36,11 @@ struct LfsHipContext {
     hipStream_t stream = nullptr;
     std::unordered_set<LfsHipBuffer*> buffers;
     std::unordered_set<LfsHipReadback*> readbacks;
+    float* reduction_workspace = nullptr;
+    void* scan_workspace = nullptr;
+    size_t scan_workspace_bytes = 0;
+    void* sort_workspace = nullptr;
+    size_t sort_workspace_bytes = 0;
 };
 
 namespace {
@@ -38,6 +48,10 @@ namespace {
         hipError_t code;
         explicit HipFailure(hipError_t value) : code(value) {}
         const char* what() const noexcept override { return hipGetErrorString(code); }
+    };
+
+    struct InvalidIndex : std::invalid_argument {
+        using std::invalid_argument::invalid_argument;
     };
 
     void check(hipError_t status) {
@@ -55,6 +69,11 @@ namespace {
         } catch (const HipFailure& failure) {
             if (error) {
                 error->native_code = static_cast<int32_t>(failure.code);
+                std::snprintf(error->message, sizeof(error->message), "%s", failure.what());
+            }
+        } catch (const InvalidIndex& failure) {
+            if (error) {
+                error->native_code = LFS_HIP_ERROR_INVALID_INDEX;
                 std::snprintf(error->message, sizeof(error->message), "%s", failure.what());
             }
         } catch (const std::exception& failure) {
@@ -282,6 +301,20 @@ int lfs_hip_context_destroy(LfsHipContext* context, LfsHipError* error) {
             release_buffer_resources(buffer);
             context->buffers.erase(buffer);
             delete buffer;
+        }
+        if (context->reduction_workspace) {
+            check(hipFree(context->reduction_workspace));
+            context->reduction_workspace = nullptr;
+        }
+        if (context->scan_workspace) {
+            check(hipFree(context->scan_workspace));
+            context->scan_workspace = nullptr;
+            context->scan_workspace_bytes = 0;
+        }
+        if (context->sort_workspace) {
+            check(hipFree(context->sort_workspace));
+            context->sort_workspace = nullptr;
+            context->sort_workspace_bytes = 0;
         }
         check(hipStreamDestroy(context->stream));
         delete context;
@@ -596,3 +629,5 @@ int lfs_hip_arange_f32(LfsHipContext* context, LfsHipView dst, size_t count, flo
 }
 
 } // extern "C"
+
+#include "tensor_ops_runtime.hpp"

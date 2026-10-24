@@ -69,7 +69,7 @@ class HipPointwiseGeneration(unittest.TestCase):
         command = [sys.executable, str(SCRIPT), "--source", str(self.source), "--output", str(output)]
         subprocess.run(command, check=True, capture_output=True, timeout=30)
         timestamps = {path.name: path.stat().st_mtime_ns for path in output.iterdir()}
-        self.assertEqual(len(timestamps), 3)
+        self.assertEqual(len(timestamps), 8)
         subprocess.run(command, check=True, capture_output=True, timeout=30)
         self.assertEqual({path.name: path.stat().st_mtime_ns for path in output.iterdir()}, timestamps)
 

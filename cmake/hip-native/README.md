@@ -192,5 +192,31 @@ independent scalar expectations over 513 elements, checks byte predicates and
 output canaries, and exercises invalid views, exact in-place updates, NaN and
 signed-zero behavior. Floating comparisons use bounded tolerances, not a claim
 of bitwise equality between different devices or mathematical libraries.
-Layout/broadcast operators, reductions, integer arithmetic, fused expression
-chains and the public application Tensor adapter remain separate work.
+
+## Generic native Tensor operators
+
+The private C boundary additionally implements typed conversion, integer and
+boolean arithmetic, scalar-left and broadcast expressions, strided layouts and
+batched copies, global and axis reductions, arg extrema, fused chains, indexing,
+gather/scatter, masks, stable sort, scans, random generation, FP32 matrix
+multiplication and pairwise distances. Dtypes are FP32, FP16, Int32, Int64,
+UInt8, Bool and UInt32; individual entry points validate their supported subset.
+Integer comparisons preserve Int64 precision rather than converting to float.
+Sort preserves input payload bits and stable ordering of NaNs and signed zeros.
+
+Temporary workspaces belong to a context. Growth drains previous operations and
+releases disposable storage before replacing it; failed releases retain ownership
+for retry. `trim_workspace` releases reduction, scan and sort storage without
+releasing Tensor buffers. Host scalar results drain the stream before a blocking
+copy so a synchronization failure cannot leave a queued write to expired storage.
+Allocation and SDK failures are reported through the private error boundary.
+
+`HipNative.TensorModuleBoundary` binds all operator exports on CPU runners without
+querying a GPU. Explicit GPU tests compare operators with independent CPU
+references, including invalid descriptors, output preservation, precision, empty
+axes and numeric edge cases. The separate instrumented module checks allocation,
+workspace release and synchronization failures and balanced resources.
+
+This is native implementation infrastructure: the public application Tensor
+adapter, backend registration and training integration remain separate work.
+No CUDA, Metal or Vulkan implementation is replaced or modified.

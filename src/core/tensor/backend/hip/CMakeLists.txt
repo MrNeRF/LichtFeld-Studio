@@ -26,7 +26,11 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(_pointwise_source "${CMAKE_CURRENT_SOURCE_DIR}/../../../include/core/detail")
 set(_pointwise_generated "${CMAKE_CURRENT_BINARY_DIR}/pointwise-generated")
 set(_pointwise_outputs "${_pointwise_generated}/hip_pointwise_functors.hpp"
-    "${_pointwise_generated}/hip_pointwise_f32.inc" "${_pointwise_generated}/hip_pointwise_f16.inc")
+    "${_pointwise_generated}/hip_pointwise_f32.inc" "${_pointwise_generated}/hip_pointwise_f16.inc"
+    "${_pointwise_generated}/hip_pointwise_flags.inc" "${_pointwise_generated}/hip_pointwise_eval.inc"
+    "${_pointwise_generated}/hip_pointwise_broadcast.inc" "${_pointwise_generated}/hip_pointwise_half_broadcast.inc"
+    "${_pointwise_generated}/hip_pointwise_scalar_left.inc")
+file(GLOB _runtime_headers CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*_runtime.hpp" "${CMAKE_CURRENT_SOURCE_DIR}/*_api.h")
 add_custom_command(OUTPUT ${_pointwise_outputs}
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/prepare_pointwise.py"
         --source "${_pointwise_source}" --output "${_pointwise_generated}"
@@ -39,7 +43,7 @@ add_custom_command(OUTPUT "${_library}"
         -DLFS_HIP_RUNTIME_EXPORTS "-I${_pointwise_generated}" ${LFS_HIP_OFFLOAD_FLAGS}
         "--hip-path=${LFS_HIP_ROOT}"
         "${CMAKE_CURRENT_SOURCE_DIR}/runtime.hip" -o "${_library}"
-    DEPENDS runtime.hip runtime_api.h architecture_runtime.hpp ${_pointwise_outputs}
+    DEPENDS runtime.hip runtime_api.h architecture_runtime.hpp ${_pointwise_outputs} ${_runtime_headers}
         "${_compiler}" "${LFS_HIP_ROOT}/include/hip/hip_runtime.h"
     VERBATIM)
 add_custom_target(lfs_hip_runtime_build ALL DEPENDS "${_library}")
@@ -61,7 +65,7 @@ if(LFS_HIP_NATIVE_GPU_TESTS)
             -DLFS_HIP_RUNTIME_EXPORTS "-I${_pointwise_generated}" ${LFS_HIP_OFFLOAD_FLAGS}
             "--hip-path=${LFS_HIP_ROOT}" "-I${CMAKE_CURRENT_SOURCE_DIR}"
             -include "${_fault_header}" "${CMAKE_CURRENT_SOURCE_DIR}/runtime.hip" -o "${_fault_library}"
-        DEPENDS runtime.hip runtime_api.h architecture_runtime.hpp "${_fault_header}" ${_pointwise_outputs}
+        DEPENDS runtime.hip runtime_api.h architecture_runtime.hpp "${_fault_header}" ${_pointwise_outputs} ${_runtime_headers}
             "${_compiler}" "${LFS_HIP_ROOT}/include/hip/hip_runtime.h"
         VERBATIM)
     add_custom_target(lfs_hip_runtime_faults ALL DEPENDS "${_fault_library}")
