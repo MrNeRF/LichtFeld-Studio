@@ -45,6 +45,22 @@ namespace {
         result->compute_normals();
         return result;
     }
+    class CollisionWalkController : public ::testing::Test {
+    protected:
+        lfs::vis::SceneManager manager;
+        lfs::vis::RenderingManager rendering;
+        bool persistence = true;
+        void SetUp() override {
+            persistence = lfs::vis::input::InputBindings::isPersistenceEnabled();
+            lfs::vis::input::InputBindings::setPersistenceEnabled(false);
+            lfs::vis::services().set(&manager);
+            lfs::vis::services().set(&rendering);
+        }
+        void TearDown() override {
+            lfs::vis::services().clear();
+            lfs::vis::input::InputBindings::setPersistenceEnabled(persistence);
+        }
+    };
 } // namespace
 
 TEST(CollisionSource, ParallelExtractionPreservesTransformsDeletionAndStableOrder) {
@@ -221,18 +237,7 @@ TEST(CollisionScene, GraphEpochChangesAcrossReloadWithSameUuids) {
     EXPECT_GT(scene.graphEpoch(), epoch);
     EXPECT_NE(scene.getNodeByUuid(uuid), nullptr);
 }
-TEST(CollisionWalkController, RejectsMissingCollisionAndExitsOnTeleportResetOrEscape) {
-    lfs::vis::input::InputBindings::setPersistenceEnabled(false);
-    lfs::vis::SceneManager manager;
-    lfs::vis::RenderingManager rendering;
-    lfs::vis::services().set(&manager);
-    lfs::vis::services().set(&rendering);
-    struct Cleanup {
-        ~Cleanup() {
-            lfs::vis::services().clear();
-            lfs::vis::input::InputBindings::setPersistenceEnabled(true);
-        }
-    } cleanup;
+TEST_F(CollisionWalkController, RejectsMissingCollisionAndExitsOnTeleportResetOrEscape) {
     Viewport viewport;
     viewport.camera.t = {1, 1.9f, -1};
     lfs::vis::InputController input(nullptr, viewport);
@@ -264,12 +269,7 @@ TEST(CollisionWalkController, RejectsMissingCollisionAndExitsOnTeleportResetOrEs
     EXPECT_EQ(input.cameraNavigationMode(), Mode::FPV);
 }
 
-TEST(CollisionWalkController, LoadedSurfacesEnableWalkIndependentlyOfVisibility) {
-    lfs::vis::SceneManager manager;
-    lfs::vis::services().set(&manager);
-    struct Cleanup {
-        ~Cleanup() { lfs::vis::services().clear(); }
-    } cleanup;
+TEST_F(CollisionWalkController, LoadedSurfacesEnableWalkIndependentlyOfVisibility) {
     Viewport viewport;
     lfs::vis::InputController input(nullptr, viewport);
     EXPECT_FALSE(input.hasWalkCollision());
@@ -302,18 +302,7 @@ TEST(CollisionWalkController, LoadedSurfacesEnableWalkIndependentlyOfVisibility)
     EXPECT_FALSE(input.hasWalkCollision());
 }
 
-TEST(CollisionWalkController, LiveCapsuleChangesKeepFeetGroundedRejectCeilingsAndIgnoreZoom) {
-    lfs::vis::input::InputBindings::setPersistenceEnabled(false);
-    lfs::vis::SceneManager manager;
-    lfs::vis::RenderingManager rendering;
-    lfs::vis::services().set(&manager);
-    lfs::vis::services().set(&rendering);
-    struct Cleanup {
-        ~Cleanup() {
-            lfs::vis::services().clear();
-            lfs::vis::input::InputBindings::setPersistenceEnabled(true);
-        }
-    } cleanup;
+TEST_F(CollisionWalkController, LiveCapsuleChangesKeepFeetGroundedRejectCeilingsAndIgnoreZoom) {
     auto g = std::make_shared<CollisionVolume>(*volume());
     g->solid.assign(27'000, 0);
     g->tree.clear();
@@ -474,19 +463,8 @@ TEST(CollisionScene, DisplayScrubsAvoidGaussianCacheInvalidation) {
     EXPECT_EQ(node->collision->tree.data(), occupancy);
 }
 
-TEST(CollisionWalkController, SmoothedEyeDoesNotTeleportOrReplaceBodyAndKeepsAnimationAlive) {
+TEST_F(CollisionWalkController, SmoothedEyeDoesNotTeleportOrReplaceBodyAndKeepsAnimationAlive) {
     using namespace lfs::core;
-    lfs::vis::input::InputBindings::setPersistenceEnabled(false);
-    lfs::vis::SceneManager manager;
-    lfs::vis::RenderingManager rendering;
-    lfs::vis::services().set(&manager);
-    lfs::vis::services().set(&rendering);
-    struct Cleanup {
-        ~Cleanup() {
-            lfs::vis::services().clear();
-            lfs::vis::input::InputBindings::setPersistenceEnabled(true);
-        }
-    } cleanup;
     auto g = std::make_shared<CollisionVolume>();
     g->settings.voxel_size = .05f;
     g->dimensions = {60, 60, 60};

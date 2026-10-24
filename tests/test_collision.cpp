@@ -571,38 +571,28 @@ TEST(CollisionPipeline, GroundGuardKeepsCanopyButDoesNotExtrudeItDownward) {
     original.settings.floor_size = 0;
     original.settings.floor_below_seed = true;
     original.settings.seed = {0.4f, 1.8f, 0.4f};
-    auto sparse = original;
-    sparse.tree = sparse.octreeOccupancy();
-    sparse.tree_size = 64;
-    sparse.solid.clear();
     const auto dense_result = processCollisionVolume(original);
-    const auto sparse_result = processCollisionVolume(std::move(sparse));
+    const auto sparse_result = processCollisionVolume(sparse(original));
     EXPECT_TRUE(sparse_result.occupied({3, 0, 3}));
     EXPECT_TRUE(sparse_result.occupied({13, 30, 13}));
     EXPECT_FALSE(sparse_result.occupied({13, 0, 13}));
     EXPECT_TRUE(sparse_result.occupied({8, 12, 8}));
     EXPECT_FALSE(sparse_result.occupied({8, 0, 8}));
-    for (int z = 0; z < 20; ++z)
-        for (int y = 0; y < 40; ++y)
-            for (int x = 0; x < 20; ++x)
-                EXPECT_EQ(dense_result.occupied({x, y, z}), sparse_result.occupied({x, y, z}));
+    sameOccupancy(dense_result, sparse_result);
 }
 
 TEST(WalkCollision, SparseCapsuleTraversalMatchesDenseForRotatedSegments) {
     auto dense = grid({17, 17, 17});
     box(dense, {2, 2, 2}, {5, 8, 5});
     box(dense, {10, 9, 10}, {13, 12, 13});
-    auto sparse = dense;
-    sparse.tree = sparse.octreeOccupancy();
-    sparse.tree_size = 32;
-    sparse.solid.clear();
+    const auto sparse_volume = sparse(dense);
     std::mt19937 generator(81741);
     std::uniform_real_distribution<float> position(-0.3f, 1.9f), direction(-1, 1);
     for (int i = 0; i < 200; ++i) {
         const glm::vec3 feet(position(generator), position(generator), position(generator));
         const auto up = glm::normalize(glm::vec3(direction(generator), direction(generator), direction(generator)));
         EXPECT_EQ(dense.capsuleIntersects(feet, up, 0.8f, 0.12f),
-                  sparse.capsuleIntersects(feet, up, 0.8f, 0.12f));
+                  sparse_volume.capsuleIntersects(feet, up, 0.8f, 0.12f));
     }
 }
 
@@ -665,13 +655,8 @@ TEST(CollisionVoxelization, ParallelBricksMatchSerialIncludingPartialBoundaryCel
     settings.voxel_size = 0.07f;
     const auto serial = collision_detail::voxelizeSparse(source, settings, {}, {}, 1);
     const auto parallel = collision_detail::voxelizeSparse(source, settings, {}, {}, 4);
-    ASSERT_EQ(serial.dimensions, parallel.dimensions);
     ASSERT_EQ(serial.origin, parallel.origin);
-    EXPECT_EQ(serial.occupiedCount(), parallel.occupiedCount());
-    for (int z = 0; z < serial.dimensions.z; ++z)
-        for (int y = 0; y < serial.dimensions.y; ++y)
-            for (int x = 0; x < serial.dimensions.x; ++x)
-                ASSERT_EQ(serial.occupied({x, y, z}), parallel.occupied({x, y, z}));
+    sameOccupancy(serial, parallel);
 }
 
 TEST(CollisionVoxelization, ThinSurfaceBetweenVoxelCentersRemainsCollidable) {
@@ -943,10 +928,7 @@ TEST(CollisionPersistence, CompressedTopologyKeepsLegacyReaderAndRejectsMalforme
     reordered.tree[17] = 1;
     reordered.tree[16] = 1;
     const auto restored = nlohmann::json(reordered).get<CollisionVolume>();
-    for (int z = 0; z < 4; ++z)
-        for (int y = 0; y < 4; ++y)
-            for (int x = 0; x < 4; ++x)
-                EXPECT_EQ(reordered.occupied({x, y, z}), restored.occupied({x, y, z}));
+    sameOccupancy(reordered, restored);
 }
 TEST(CollisionSparse, PostprocessingDoesNotCountOccupiedPaddingAsSceneGeometry) {
     CollisionVolume v;
