@@ -3676,6 +3676,7 @@ NB_MODULE(lichtfeld, m) {
                     case lfs::core::NodeType::PLY_SEQUENCE: type_name = "PLY_SEQUENCE"; break;
                     case lfs::core::NodeType::CROPBOX: type_name = "CROPBOX"; break;
                     case lfs::core::NodeType::ELLIPSOID: type_name = "ELLIPSOID"; break;
+                    case lfs::core::NodeType::CROP_POLYGON: type_name = "CROP_POLYGON"; break;
                     case lfs::core::NodeType::DATASET: type_name = "DATASET"; break;
                     case lfs::core::NodeType::CAMERA_GROUP: type_name = "CAMERA_GROUP"; break;
                     case lfs::core::NodeType::CAMERA: type_name = "CAMERA"; break;

@@ -118,6 +118,25 @@ namespace lfs::python {
                 .build();
         }
 
+        void register_crop_polygon_properties() {
+            using namespace lfs::core::prop;
+            PropertyGroupBuilder<core::CropPolygonData>("crop_polygon", "Crop Polygon")
+                .float_prop(&core::CropPolygonData::half_depth, "half_depth", "Half Depth", 1.0f,
+                            core::crop_polygon::kMinHalfDepth, 1.0e6f,
+                            "Half the extrusion depth along the local z axis")
+                .bool_prop(&core::CropPolygonData::inverse, "inverse", "Invert", false,
+                           "Invert crop logic")
+                .bool_prop(&core::CropPolygonData::enabled, "enabled", "Enabled", true,
+                           "Enable crop filtering")
+                .color3_prop(&core::CropPolygonData::color, "color", "Color", glm::vec3(1.0f, 1.0f, 0.0f),
+                             "Visualization color")
+                .float_prop(&core::CropPolygonData::line_width, "line_width", "Line Width", 2.0f, 0.1f,
+                            10.0f, "Border line width")
+                .float_prop(&core::CropPolygonData::flash_intensity, "flash_intensity", "Flash", 0.0f,
+                            0.0f, 1.0f, "Flash effect intensity")
+                .build();
+        }
+
     } // namespace
 
     // Helper to convert glm::mat4 to nb::tuple (row-major for NumPy compatibility)
@@ -499,6 +518,14 @@ namespace lfs::python {
             return std::nullopt;
         }
         return PyEllipsoid(live.ellipsoid.get());
+    }
+
+    std::optional<PyCropPolygon> PySceneNode::crop_polygon() {
+        auto& live = node();
+        if (live.type != core::NodeType::CROP_POLYGON || !live.crop_polygon) {
+            return std::nullopt;
+        }
+        return PyCropPolygon(live.crop_polygon.get());
     }
 
     std::optional<PyKeyframeData> PySceneNode::keyframe_data() {
@@ -1436,6 +1463,7 @@ namespace lfs::python {
         register_scene_node_properties();
         register_cropbox_properties();
         register_ellipsoid_properties();
+        register_crop_polygon_properties();
 
         // NodeType enum
         nb::enum_<core::NodeType>(m, "NodeType")
@@ -1452,7 +1480,8 @@ namespace lfs::python {
             .value("IMAGE", core::NodeType::IMAGE)
             .value("MESH", core::NodeType::MESH)
             .value("KEYFRAME_GROUP", core::NodeType::KEYFRAME_GROUP)
-            .value("KEYFRAME", core::NodeType::KEYFRAME);
+            .value("KEYFRAME", core::NodeType::KEYFRAME)
+            .value("CROP_POLYGON", core::NodeType::CROP_POLYGON);
 
         nb::class_<PyMeshInfo>(m, "MeshInfo")
             .def_prop_ro("vertex_count", &PyMeshInfo::vertex_count)
@@ -1522,6 +1551,30 @@ namespace lfs::python {
                 })
             .def("__dir__", &PyEllipsoid::python_dir, "List available attributes");
 
+        nb::class_<PyCropPolygon>(m, "CropPolygon")
+            .def_prop_ro("__property_group__", &PyCropPolygon::property_group, "Property group name for introspection")
+            .def_prop_ro("vertices", &PyCropPolygon::vertices, "Outline vertices (x, y) in the node's local XY plane")
+            .def("get", &PyCropPolygon::get, nb::arg("name"), "Get property value by name")
+            .def("set", &PyCropPolygon::set, nb::arg("name"), nb::arg("value"), "Set property value by name")
+            .def("prop_info", &PyCropPolygon::prop_info, nb::arg("name"), "Get metadata for a property")
+            .def(
+                "__getattr__",
+                [](PyCropPolygon& self, const std::string& name) -> nb::object {
+                    if (!self.has_prop(name)) {
+                        throw nb::attribute_error(("CropPolygon has no attribute '" + name + "'").c_str());
+                    }
+                    return self.prop_getattr(name);
+                })
+            .def(
+                "__setattr__",
+                [](PyCropPolygon& self, const std::string& name, nb::object value) {
+                    if (!self.has_prop(name)) {
+                        throw nb::attribute_error(("Cannot set attribute '" + name + "'").c_str());
+                    }
+                    self.prop_setattr(name, value);
+                })
+            .def("__dir__", &PyCropPolygon::python_dir, "List available attributes");
+
         // PointCloud class
         nb::class_<PyPointCloud>(m, "PointCloud",
                                  "Point-cloud data owned by a load result or referenced by scene node identity.\n\n"
@@ -1576,6 +1629,7 @@ namespace lfs::python {
             .def("mesh", &PySceneNode::mesh, "Get MeshInfo for MESH nodes (None otherwise)")
             .def("cropbox", &PySceneNode::cropbox, "Get CropBox for CROPBOX nodes (None otherwise)")
             .def("ellipsoid", &PySceneNode::ellipsoid, "Get Ellipsoid for ELLIPSOID nodes (None otherwise)")
+            .def("crop_polygon", &PySceneNode::crop_polygon, "Get CropPolygon for CROP_POLYGON nodes (None otherwise)")
             .def("keyframe_data", &PySceneNode::keyframe_data, "Get KeyframeData for KEYFRAME nodes (None otherwise)")
             // Camera specific (read-only)
             .def_prop_ro("camera_uid", &PySceneNode::camera_uid, "Camera unique identifier")

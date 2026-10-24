@@ -11,7 +11,7 @@ from __future__ import annotations
 from .definition import ToolDef, SubmodeDef, PivotModeDef
 
 
-_CROP_VOLUME_TYPES = {"CROPBOX", "ELLIPSOID"}
+_CROP_VOLUME_TYPES = {"CROPBOX", "ELLIPSOID", "CROP_POLYGON"}
 _CROPBOX_TARGET_TYPES = {"SPLAT", "POINTCLOUD"} | _CROP_VOLUME_TYPES
 
 

@@ -2334,7 +2334,7 @@ def apply_cropbox() -> None:
     """Apply the selected cropbox"""
 
 def set_crop_tool_shape(shape: str) -> None:
-    """Set the active crop tool shape: box or ellipsoid"""
+    """Set the active crop tool shape: box, ellipsoid, or polygon"""
 
 def get_crop_tool_shape() -> str:
     """Get the active crop tool shape"""
@@ -2350,6 +2350,11 @@ def get_crop_tool_operation() -> str:
 def apply_crop_tool() -> None:
     """
     Apply the active crop tool primitive through the node-backed crop command path
+    """
+
+def start_crop_polygon() -> None:
+    """
+    Edit the selected splat's crop polygon, or start drawing one on a camera-facing plane
     """
 
 def can_apply_align() -> bool:

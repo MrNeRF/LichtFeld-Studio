@@ -1225,6 +1225,7 @@
     "crop_to_roi_at_end": "结束时裁剪到 ROI",
     "roi_growth_auto": "自动",
     "ellipsoid": "椭球体",
+    "crop_polygon": "裁剪多边形",
     "brush_selection": "画笔选择",
     "rect_selection": "矩形选择",
     "polygon_selection": "多边形选择",

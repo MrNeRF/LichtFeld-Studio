@@ -1236,6 +1236,7 @@
     "crop_to_roi_at_end": "Crop to ROI at end",
     "roi_growth_auto": "Auto",
     "ellipsoid": "Ellipsoid",
+    "crop_polygon": "Crop Polygon",
     "brush_selection": "Brush selection",
     "rect_selection": "Rectangle selection",
     "polygon_selection": "Polygon selection",

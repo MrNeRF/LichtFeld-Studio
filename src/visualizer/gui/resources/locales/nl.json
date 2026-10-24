@@ -1225,6 +1225,7 @@
     "crop_to_roi_at_end": "Aan het eind bijsnijden tot ROI",
     "roi_growth_auto": "Auto",
     "ellipsoid": "Ellipsoïde",
+    "crop_polygon": "Bijsnijpolygoon",
     "brush_selection": "Penseel selectie",
     "rect_selection": "Rechthoek selectie",
     "polygon_selection": "Polygoon selectie",

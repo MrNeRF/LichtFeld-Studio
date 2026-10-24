@@ -1225,6 +1225,7 @@
     "crop_to_roi_at_end": "終了時に ROI へクロップ",
     "roi_growth_auto": "自動",
     "ellipsoid": "楕円体",
+    "crop_polygon": "クロップポリゴン",
     "brush_selection": "ブラシ選択",
     "rect_selection": "矩形選択",
     "polygon_selection": "ポリゴン選択",

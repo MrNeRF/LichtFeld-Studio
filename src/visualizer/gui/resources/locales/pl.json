@@ -1225,6 +1225,7 @@
     "crop_to_roi_at_end": "Przytnij do ROI na końcu",
     "roi_growth_auto": "Auto",
     "ellipsoid": "Elipsoida",
+    "crop_polygon": "Wielokąt Przycinania",
     "brush_selection": "Zaznaczenie pędzlem",
     "rect_selection": "Zaznaczenie prostokątne",
     "polygon_selection": "Zaznaczenie wielokąta",

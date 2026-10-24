@@ -1225,6 +1225,7 @@
     "crop_to_roi_at_end": "종료 시 ROI로 자르기",
     "roi_growth_auto": "자동",
     "ellipsoid": "타원체",
+    "crop_polygon": "자르기 다각형",
     "brush_selection": "브러시 선택",
     "rect_selection": "사각형 선택",
     "polygon_selection": "다각형 선택",

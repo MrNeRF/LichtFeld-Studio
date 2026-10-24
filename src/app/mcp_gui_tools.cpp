@@ -534,6 +534,8 @@ namespace lfs::app {
                 return "crop_box";
             case core::NodeType::ELLIPSOID:
                 return "ellipsoid";
+            case core::NodeType::CROP_POLYGON:
+                return "crop_polygon";
             case core::NodeType::DATASET:
                 return "dataset";
             case core::NodeType::CAMERA_GROUP:

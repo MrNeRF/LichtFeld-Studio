@@ -279,7 +279,8 @@ class _GizmoToolbarController:
     _TRANSFORM_SPACE_IDS = {"local": 0, "world": 1}
     _MULTI_TRANSFORM_MODE_IDS = {"selection": 0, "individual": 1}
     _PIVOT_IDS = {"origin": 0, "bounds": 1}
-    _CROP_OBJECT_SHAPES = ("box", "ellipsoid")
+    _CROP_OBJECT_SHAPES = ("box", "ellipsoid", "polygon")
+    _CROP_SHAPE_NODE_TYPES = {"box": "CROPBOX", "ellipsoid": "ELLIPSOID", "polygon": "CROP_POLYGON"}
     _CROP_TRANSFORM_GIZMOS = ("translate", "rotate", "scale")
     _SELECTION_VOLUME_MODES = {"box", "sphere"}
 
@@ -600,7 +601,7 @@ class _GizmoToolbarController:
         get_scene = getattr(lf, "get_scene", None)
         scene = get_scene() if callable(get_scene) else None
         node = scene.get_node(selected_nodes[0]) if scene else None
-        expected_type = "CROPBOX" if self._active_crop_shape() == "box" else "ELLIPSOID"
+        expected_type = self._CROP_SHAPE_NODE_TYPES.get(self._active_crop_shape(), "CROPBOX")
         return node is not None and self._node_type_name(node) == expected_type
 
     def _build_crop_object_records(self, active_tool_id):
@@ -625,6 +626,16 @@ class _GizmoToolbarController:
                 tooltip_key="toolbar.ellipsoid",
                 tooltip_text="Ellipsoid",
                 selected=active and active_shape == "ellipsoid",
+                enabled=active,
+            ),
+            _button_record(
+                "crop-object-polygon",
+                "crop_object",
+                "polygon",
+                _icon_src("polygon"),
+                tooltip_key="toolbar.crop_polygon",
+                tooltip_text="Crop Polygon",
+                selected=active and active_shape == "polygon",
                 enabled=active,
             ),
         ]
@@ -821,6 +832,8 @@ class _GizmoToolbarController:
 
     def _build_crop_action_records(self, active_tool_id):
         active = active_tool_id == self._CROP_TOOL_ID
+        # A drawn polygon has no fit or reset; it keeps its outline.
+        reshapable = active and self._active_crop_shape() != "polygon"
         return [
             _button_record(
                 "crop-fit",
@@ -829,7 +842,7 @@ class _GizmoToolbarController:
                 _icon_src("arrows-maximize"),
                 tooltip_key="scene.fit_to_scene",
                 tooltip_text="Fit to Scene",
-                enabled=active,
+                enabled=reshapable,
             ),
             _button_record(
                 "crop-trim",
@@ -838,7 +851,7 @@ class _GizmoToolbarController:
                 _icon_src("arrows-minimize"),
                 tooltip_key="scene.fit_to_scene_trimmed",
                 tooltip_text="Fit to Scene (Trimmed)",
-                enabled=active,
+                enabled=reshapable,
             ),
             _button_record(
                 "crop-reset",
@@ -847,7 +860,7 @@ class _GizmoToolbarController:
                 _icon_src("reset"),
                 tooltip_key="scene.reset_crop",
                 tooltip_text="Reset",
-                enabled=active,
+                enabled=reshapable,
             ),
             _button_record(
                 "crop-apply",
@@ -908,6 +921,8 @@ class _GizmoToolbarController:
                     return "ellipsoid"
                 if type_name == "CROPBOX":
                     return "box"
+                if type_name == "CROP_POLYGON":
+                    return "polygon"
                 for child_id in getattr(node, "children", []) or []:
                     child = self._scene_node_by_id(scene, child_id)
                     if child is None:
@@ -960,6 +975,11 @@ class _GizmoToolbarController:
             add_ellipsoid = getattr(lf.ui, "add_ellipsoid", None)
             if callable(add_ellipsoid):
                 add_ellipsoid(selected[0])
+        elif shape == "polygon" and selected:
+            # Edits the selected splat's polygon, or starts drawing one.
+            start_crop_polygon = getattr(lf.ui, "start_crop_polygon", None)
+            if callable(start_crop_polygon):
+                start_crop_polygon()
 
         lf.ui.set_active_operator(self._CROP_TOOL_ID, gizmo_type)
 

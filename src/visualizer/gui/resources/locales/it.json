@@ -1238,6 +1238,7 @@
     "crop_to_roi_at_end": "Ritaglia alla ROI alla fine",
     "roi_growth_auto": "Auto",
     "ellipsoid": "Ellissoide",
+    "crop_polygon": "Poligono di Ritaglio",
     "brush_selection": "Selezione pennello",
     "rect_selection": "Selezione rettangolo",
     "polygon_selection": "Selezione poligono",
