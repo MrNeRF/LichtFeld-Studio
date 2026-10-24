@@ -204,6 +204,23 @@ namespace {
         document_->RemoveEventListener("keydown", &listener, true);
     }
 
+    TEST_F(ViewportDepthLayoutTest, FocusedTextReceivesTypingWhileAnotherPanelCapturesThePointer) {
+        layout(false);
+        auto* field = panel()->AppendChild(document_->CreateElement("input"));
+        field->SetAttribute("type", "text");
+        context_->Update();
+        ASSERT_TRUE(field->Focus());
+        lfs::vis::gui::guiFocusState() = {};
+        lfs::vis::gui::guiFocusState().want_capture_mouse = true;
+        lfs::vis::gui::PanelInputState input{};
+        input.mouse_x = 800;
+        input.mouse_y = 500;
+        input.input_events.push_back({.kind = lfs::vis::FrameInputEventKind::Text, .text = "3.75"});
+        overlay_.processInput(input);
+        EXPECT_EQ(field->GetAttribute<Rml::String>("value", ""), "3.75");
+        EXPECT_TRUE(lfs::vis::gui::guiFocusState().want_text_input);
+    }
+
     TEST_F(ViewportDepthLayoutTest, SplitDepthBarLeavesAxisMarkersReachable) {
         for (const float scale : {1.0f, 1.5f, 2.0f}) {
             SCOPED_TRACE(scale);

@@ -219,6 +219,43 @@ TEST(CollisionWalkController, RejectsMissingCollisionAndExitsOnTeleportResetOrEs
     EXPECT_EQ(input.cameraNavigationMode(), Mode::FPV);
 }
 
+TEST(CollisionWalkController, AvailabilityTracksVisibilityHydrationAndTransforms) {
+    lfs::vis::SceneManager manager;
+    lfs::vis::services().set(&manager);
+    struct Cleanup {
+        ~Cleanup() { lfs::vis::services().clear(); }
+    } cleanup;
+    Viewport viewport;
+    lfs::vis::InputController input(nullptr, viewport);
+    EXPECT_FALSE(input.hasWalkCollision());
+    auto& scene = manager.getScene();
+    const auto g = volume();
+    const auto geometry = mesh(*g);
+    const auto group = scene.addGroup("parent");
+    const auto id = scene.addMesh("collision", geometry, group);
+    auto* node = scene.getNodeById(id);
+    EXPECT_FALSE(input.hasWalkCollision()); // Ordinary surfaces are not colliders.
+    node->collision = g;
+    EXPECT_TRUE(input.hasWalkCollision());
+    node->visible = false;
+    EXPECT_FALSE(input.hasWalkCollision());
+    node->visible = true;
+    scene.getNodeById(group)->visible = false;
+    EXPECT_FALSE(input.hasWalkCollision());
+    scene.getNodeById(group)->visible = true;
+    node->mesh.reset();
+    EXPECT_FALSE(input.hasWalkCollision()); // Deferred hydration is not ready yet.
+    node->mesh = geometry;
+    EXPECT_TRUE(input.hasWalkCollision());
+    scene.setNodeTransform(group, glm::scale(glm::mat4(1), glm::vec3(0, 1, 1)));
+    EXPECT_FALSE(input.hasWalkCollision());
+    scene.setNodeTransform(group, glm::mat4(1));
+    node->locked = true;
+    EXPECT_TRUE(input.hasWalkCollision()); // Edit locks do not disable physics.
+    scene.removeNode("collision", false);
+    EXPECT_FALSE(input.hasWalkCollision());
+}
+
 TEST(CollisionWalkController, LiveCapsuleChangesKeepFeetGroundedRejectCeilingsAndIgnoreZoom) {
     lfs::vis::input::InputBindings::setPersistenceEnabled(false);
     lfs::vis::SceneManager manager;
