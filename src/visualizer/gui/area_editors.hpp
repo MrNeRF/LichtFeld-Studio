@@ -114,6 +114,10 @@ namespace lfs::vis::gui {
 
     class LFS_VIS_API PropertiesEditor final : public AreaEditor {
     public:
+        // The screen chrome draws the Tab header items as a vertical rail this many dp wide
+        // at the left of the content (screen_chrome.rcss); the panels draw to its right.
+        static constexpr float kTabRailDp = 32.0f;
+
         void header(const AreaFrame& area, const screen::Screen& screen,
                     std::vector<HeaderItem>& items) const override;
         void headerAction(const AreaFrame& area, screen::Screen& screen, std::string_view action, float x,

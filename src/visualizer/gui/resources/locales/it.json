@@ -2907,7 +2907,8 @@
     "selection_depth_offset_x": "X",
     "selection_depth_offset_y": "Y",
     "selection_depth_size": "Dimensione",
-    "all_panel_tabs": "Tutti i pannelli"
+    "scroll_panel_tabs_up": "Scorri le schede dei pannelli verso l'alto",
+    "scroll_panel_tabs_down": "Scorri le schede dei pannelli verso il basso"
   },
   "runtime": {
     "environment_map_failed": "Impossibile leggere la mappa ambiente «{}». È stato mantenuto l’ambiente precedente.",

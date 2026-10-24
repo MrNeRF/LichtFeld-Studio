@@ -20,28 +20,19 @@
                     <img class="editor-icon" data-attr-src="area.editor_icon"/>
                     <div class="editor-caret"></div>
                 </div>
-                <div class="header-items" data-attr-id="area.items_dom_id">
+                <div class="header-items">
                     <div class="hitem" data-for="item : area.items"
-                         data-class-menu="item.kind == 0" data-class-tab="item.kind == 1"
+                         data-class-menu="item.kind == 0"
                          data-class-toggle="item.kind == 2" data-class-button="item.kind == 3"
                          data-class-label="item.kind == 4" data-class-active="item.active"
-                         data-class-closeable="item.closeable" data-class-has-icon="item.icon != ''"
+                         data-class-has-icon="item.icon != ''"
                          data-attr-title="item.tooltip"
                          data-event-click="area_action(area.id, item.id)">
                         <img class="hitem-icon" data-if="item.icon != ''" data-attr-src="item.icon"/>
                         <span class="hitem-label" data-if="item.label != ''">{{ item.label }}</span>
                         <div class="hitem-caret" data-if="item.kind == 0"></div>
-                        <button class="tab-close" data-if="item.closeable"
-                                data-event-click="close_tab(area.id, item.id)">&#215;</button>
                     </div>
                 </div>
-                <select class="tab-picker" data-if="area.show_tab_picker"
-                        data-attr-id="area.picker_dom_id"
-                        data-value="area.active_tab"
-                        data-event-change="pick_tab"
-                        data-tooltip="ui.all_panel_tabs">
-                    <option data-for="tab : area.tabs" data-attr-value="tab.id">{{ tab.label }}</option>
-                </select>
                 <div class="header-right">
                     <div class="hitem" data-for="item : area.right_items"
                          data-class-menu="item.kind == 0" data-class-toggle="item.kind == 2"
@@ -56,6 +47,27 @@
                 </div>
             </div>
             <div class="view-label" data-if="area.is_view">{{ area.view_label }}</div>
+            <!-- Category tabs of a Properties area; ScreenHost::syncTabRails sizes them. -->
+            <div class="tab-rail" data-if="area.is_properties" data-attr-id="area.rail_id"
+                 data-style-top="area.header_height">
+                <div class="tab-strip">
+                    <!-- Bindings stay off the data-for element, as for the areas. -->
+                    <div class="tab-slot" data-for="tab : area.tabs">
+                        <div class="tab" data-attr-id="tab.dom_id" data-class-active="tab.active"
+                             data-attr-title="tab.tooltip" data-event-click="area_action(area.id, tab.id)">
+                            <span class="tab-label">{{ tab.label }}</span>
+                            <button class="tab-close" data-if="tab.closeable" data-tooltip="common.close"
+                                    data-event-click="close_tab(area.id, tab.id)">&#215;</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="tab-edge tab-edge-before"></div>
+                <div class="tab-edge tab-edge-after"></div>
+                <button class="tab-nav tab-scroll-up" data-tooltip="ui.scroll_panel_tabs_up"
+                        data-event-click="scroll_tabs(-1)">&#9650;</button>
+                <button class="tab-nav tab-scroll-down" data-tooltip="ui.scroll_panel_tabs_down"
+                        data-event-click="scroll_tabs(1)">&#9660;</button>
+            </div>
         </div>
     </div>
 </body>

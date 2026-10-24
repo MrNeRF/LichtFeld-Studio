@@ -320,9 +320,10 @@ namespace lfs::vis::gui {
         }
 
         const auto& c = ctx.area.content;
-        const float pad = 8.0f * lfs::python::get_shared_dpi_scale();
-        const float x = c.x + pad;
-        const float w = std::max(0.0f, c.w - 2.0f * pad);
+        const float scale = lfs::python::get_shared_dpi_scale();
+        const float pad = 8.0f * scale;
+        const float x = c.x + kTabRailDp * scale;
+        const float w = std::max(0.0f, c.right() - pad - x);
         const float top = c.y + pad * 0.5f;
         const float h = std::max(0.0f, c.bottom() - top);
         const PanelInputState input = panelInput(ctx.input);
@@ -349,7 +350,8 @@ namespace lfs::vis::gui {
                                                     ctx.draw);
             scroll_limit = std::max(0.0f, main_h + child_h - h);
         }
-        if (contains(c, input.mouse_x, input.mouse_y) && input.mouse_wheel != 0.0f)
+        // The wheel over the tab rail scrolls the tabs instead.
+        if (contains(c, input.mouse_x, input.mouse_y) && input.mouse_x >= x && input.mouse_wheel != 0.0f)
             scroll_ -= input.mouse_wheel * kWheelStep;
         scroll_ = std::clamp(scroll_, 0.0f, scroll_limit);
 

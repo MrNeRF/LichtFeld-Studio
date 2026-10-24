@@ -57,52 +57,6 @@ namespace {
         }
     };
 
-    TEST_P(RmlFormControlLayoutTest, PanelPickerKeepsAllPluginTabsReachable) {
-        std::string markup = "<div class='area properties' style='position:absolute;left:0;top:0;width:240dp;height:320dp'>"
-                             "<div class='area-header' style='height:28dp'><div class='editor-switch'></div>"
-                             "<div class='header-items' id='tabs'>";
-        for (int i = 0; i < 40; ++i)
-            markup += "<div class='hitem tab'><span class='hitem-label'>Plugin " + std::to_string(i) + "</span></div>";
-        markup += "</div><select id='tab-picker' class='tab-picker'>";
-        for (int i = 0; i < 40; ++i)
-            markup += "<option value='plugin-" + std::to_string(i) + "'>Plugin " + std::to_string(i) + "</option>";
-        markup += "</select><div class='header-right'><div class='hitem button'></div></div></div></div>";
-        auto* doc = load(markup);
-        ASSERT_NE(doc, nullptr);
-        std::string css = "body { font-family: Inter; margin: 0; }";
-        std::ifstream file(std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/rmlui/resources/screen_chrome.rcss");
-        css.append(std::istreambuf_iterator<char>(file), {});
-        doc->SetStyleSheetContainer(Rml::Factory::InstanceStyleSheetString(css));
-        context->Update();
-        auto* tabs = doc->GetElementById("tabs");
-        ASSERT_NE(tabs, nullptr);
-        ASSERT_EQ(tabs->GetNumChildren(), 40);
-        float tabs_width = 0.0f;
-        for (int i = 0; i < tabs->GetNumChildren(); ++i)
-            tabs_width += tabs->GetChild(i)->GetBox().GetSize(Rml::BoxArea::Border).x;
-        EXPECT_GT(tabs_width, tabs->GetClientWidth() + 1.0f);
-        EXPECT_GT(tabs->GetChild(0)->GetBox().GetSize(Rml::BoxArea::Border).x, 36.0f * GetParam());
-        auto* picker = dynamic_cast<Rml::ElementFormControlSelect*>(doc->GetElementById("tab-picker"));
-        ASSERT_NE(picker, nullptr);
-        EXPECT_EQ(picker->GetNumOptions(), 40);
-        const auto picker_size = picker->GetBox().GetSize(Rml::BoxArea::Border);
-        EXPECT_NEAR(picker_size.x, 28 * GetParam(), 0.5f);
-        EXPECT_GE(picker_size.y, 27.9f * GetParam());
-        const auto picker_left = picker->GetAbsoluteOffset(Rml::BoxArea::Border).x;
-        const auto tabs_right = tabs->GetAbsoluteOffset(Rml::BoxArea::Border).x + tabs->GetClientWidth();
-        EXPECT_GE(picker_left + 1.0f, tabs_right);
-        picker->Focus();
-        picker->Click();
-        context->Update();
-        context->Render();
-        for (int i = 0; i < 39; ++i)
-            context->ProcessKeyDown(Rml::Input::KI_DOWN, 0);
-        EXPECT_EQ(picker->GetValue(), "plugin-39");
-        for (int i = 0; i < 39; ++i)
-            context->ProcessKeyDown(Rml::Input::KI_UP, 0);
-        EXPECT_EQ(picker->GetValue(), "plugin-0");
-    }
-
     TEST_P(RmlFormControlLayoutTest, IntrinsicBoxesKeepTheEstablishedLayoutAtEveryScale) {
         auto* doc = load("<input id='range' type='range'/><input id='vertical' type='range' orientation='vertical'/>"
                          "<input id='checkbox' type='checkbox'/><input id='radio' type='radio'/>"

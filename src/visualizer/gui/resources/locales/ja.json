@@ -2894,7 +2894,8 @@
     "selection_depth_offset_x": "X",
     "selection_depth_offset_y": "Y",
     "selection_depth_size": "サイズ",
-    "all_panel_tabs": "すべてのパネル"
+    "scroll_panel_tabs_up": "パネルタブを上にスクロール",
+    "scroll_panel_tabs_down": "パネルタブを下にスクロール"
   },
   "runtime": {
     "environment_map_failed": "環境マップ「{}」を読み込めませんでした。前の環境を保持しました。",

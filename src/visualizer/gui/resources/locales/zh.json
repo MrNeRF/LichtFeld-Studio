@@ -2894,7 +2894,8 @@
     "selection_depth_offset_x": "X",
     "selection_depth_offset_y": "Y",
     "selection_depth_size": "大小",
-    "all_panel_tabs": "所有面板"
+    "scroll_panel_tabs_up": "向上滚动面板标签",
+    "scroll_panel_tabs_down": "向下滚动面板标签"
   },
   "runtime": {
     "environment_map_failed": "无法读取环境贴图“{}”。已保留之前的环境。",

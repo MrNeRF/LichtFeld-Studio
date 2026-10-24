@@ -2894,7 +2894,8 @@
     "selection_depth_offset_x": "X",
     "selection_depth_offset_y": "Y",
     "selection_depth_size": "Rozmiar",
-    "all_panel_tabs": "Wszystkie panele"
+    "scroll_panel_tabs_up": "Przewiń karty paneli w górę",
+    "scroll_panel_tabs_down": "Przewiń karty paneli w dół"
   },
   "runtime": {
     "environment_map_failed": "Nie można odczytać mapy środowiska „{}”. Zachowano poprzednie środowisko.",

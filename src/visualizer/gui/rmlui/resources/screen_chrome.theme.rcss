@@ -80,20 +80,6 @@
     background-color: @{alpha(primary,0.32)};
 }
 
-.hitem.tab {
-    background-color: transparent;
-    border-bottom-color: transparent;
-}
-
-.hitem.tab.active {
-    background-color: @{alpha(primary,0.10)};
-    border-bottom-color: @{primary};
-}
-
-.hitem.tab.active .hitem-label {
-    color: @{text};
-}
-
 .view-label {
     color: #b8b8b8;
     font-effect: shadow(1dp 1dp #000000d0);
@@ -101,19 +87,40 @@
     border-radius: @{num(size.frame_rounding)}dp;
 }
 
-.tab-picker {
-    background-color: @{blend(surface,background,0.35)};
-    border-radius: 4dp;
+.tab {
+    background-color: @{alpha(surface_bright,0.36)};
+    border-color: @{alpha(border,0.42)};
+    color: @{text_dim};
 }
 
-.tab-picker selectbox {
-    background-color: @{background};
-    border-width: 1dp;
-    border-color: @{border};
-}
-
-.tab-picker option {
+.tab:hover {
+    background-color: @{alpha(surface_bright,0.5)};
     color: @{text};
+}
+
+.tab.active {
+    background-color: transparent;
+    border-color: @{alpha(primary,0.55)};
+    color: @{text};
+}
+
+.tab-edge {
+    background-color: @{alpha(primary,0.55)};
+}
+
+.tab-nav {
+    background-color: @{alpha(surface_bright,0.2)};
+    color: @{text_dim};
+}
+
+.tab-nav:hover {
+    background-color: @{alpha(surface_bright,0.55)};
+    color: @{text};
+}
+
+.tab-nav[disabled] {
+    background-color: transparent;
+    color: @{alpha(text_dim,0.35)};
 }
 
 .tab-close {

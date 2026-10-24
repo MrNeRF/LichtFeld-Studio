@@ -428,7 +428,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         test_guide_segment_clipping.cpp
 
         test_viewport_depth_layout.cpp
-        test_right_panel_tab_picker.cpp
+        test_properties_tab_rail.cpp
         test_preferences_migration.cpp
         test_scene_upscaler_registry.cpp
         test_screen_layout.cpp
@@ -1557,7 +1557,7 @@ set(TEST_FILES
     test_guide_segment_clipping.cpp
     test_status_bar_mining.cpp
     test_status_bar_tessle.cpp
-    test_right_panel_tab_picker.cpp
+    test_properties_tab_rail.cpp
     test_rotated_sh_correctness.cpp
     test_splat_raw_payload.cpp
     test_tensor_stream.cpp

@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -39,7 +40,7 @@ namespace lfs::vis::input {
 namespace lfs::vis::gui {
 
     class GlobalContextMenu;
-    class PropertiesTabPickerTestAccess;
+    class PropertiesTabRailTestAccess;
 
     // Chrome data bound to the screen documents.
     struct ChromeItem {
@@ -67,12 +68,9 @@ namespace lfs::vis::gui {
         bool hovered = false;
         bool active = false;
         bool maximized = false;
-        bool show_tab_picker = false;
         Rml::String view_label;
-        Rml::String active_tab;
-        Rml::String items_dom_id;
-        Rml::String picker_dom_id;
-        std::vector<ChromeItem> tabs;
+        Rml::String rail_id;
+        std::vector<ChromeItem> tabs; // Tab header items, drawn as the category rail
 
         bool operator==(const ChromeArea&) const = default;
     };
@@ -170,15 +168,15 @@ namespace lfs::vis::gui {
 
     private:
         friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
-        friend class PropertiesTabPickerTestAccess;
+        friend class PropertiesTabRailTestAccess;
 
         AreaEditor& editorFor(std::string_view editor);
         void bindChromeModel(Rml::Context* context);
-        void reconcileTabPickerSelection();
-        bool updateTabPickerOverflow();
-        void revealActivePropertiesTab(Rml::Element* items) const;
-        [[nodiscard]] std::optional<screen::Rect> tabPickerPopupLocal() const;
-        [[nodiscard]] bool tabPickerPopupContains(float x, float y) const;
+        // Sizes the category rail tabs to their rotated labels, shows the scroll buttons when
+        // they overflow, keeps a moved active tab in view and opens the rail edge beside it.
+        void syncTabRails();
+        bool layoutTabRail(const ChromeArea& area, Rml::Element* rail);
+        [[nodiscard]] bool pointerOverTabRail(float x, float y) const;
         void syncPanelEditors();
         void rebuildChrome();
         void updateOverlay();
@@ -229,10 +227,10 @@ namespace lfs::vis::gui {
         CachedUiContextRender chrome_cache_;
         bool chrome_dirty_ = true;
         bool chrome_pointer_inside_ = false;
-        bool syncing_tab_picker_ = false;
-        Rml::String properties_tab_selected_;
-        std::optional<screen::Rect> tab_picker_popup_;
-        std::function<void(const std::string&)> on_tab_picked_;
+        bool tab_rails_dirty_ = true;
+        // The active tab, its top and height in the strip, and the strip height the rail last
+        // scrolled into view. The user's own scrolling keeps its offset until one changes.
+        std::tuple<Rml::String, float, float, float> tab_rail_revealed_{};
         struct PendingAction {
             int area = 0;
             std::string action;
