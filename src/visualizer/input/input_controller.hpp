@@ -174,7 +174,8 @@ namespace lfs::vis {
             const bool drone_settling =
                 (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasDroneMotion()) ||
                 keyboard_camera.hasDroneMotion();
-            return (camera_navigation_mode_ == CameraNavigationMode::Walk && !walk_state_.grounded) ||
+            return (camera_navigation_mode_ == CameraNavigationMode::Walk &&
+                    (!walk_state_.grounded || walk_camera_.height_offset != 0 || walk_camera_.offset_velocity != 0)) ||
                    camera_browse_repeat_.active() || movement_active || orbit_coasting || pan_coasting ||
                    keyboard_camera.isGliding() || wasd_coasting || drone_settling;
         }
@@ -214,6 +215,7 @@ namespace lfs::vis {
     private:
         core::WalkSettings walk_settings_;
         core::WalkState walk_state_;
+        core::WalkCameraState walk_camera_;
         std::string walk_error_;
         [[nodiscard]] core::CapsuleQuery walkCollisionQuery() const;
         struct PanelInteractionState {

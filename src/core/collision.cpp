@@ -1540,63 +1540,182 @@ namespace lfs::core {
                           normalized_up * local_radius;
         return volume.capsuleIntersects(local_feet, normalized_up, local_height, local_radius);
     }
+    namespace {
+        struct WalkSweep {
+            glm::vec3 position;
+            bool hit = false;
+        };
+        // Sample at a fraction of capsule radius, then refine the first contact.
+        // Used for lift, travel and settling so thin ceilings are never skipped by
+        // a direct step-height teleport.
+        template <class Hit>
+        WalkSweep sweepWalk(glm::vec3 start, glm::vec3 delta, float spacing, float tolerance, const Hit& hit) {
+            const float length = glm::length(delta);
+            if (length == 0)
+                return {start};
+            const int count = std::max(1, int(std::ceil(length / spacing)));
+            float clear = 0;
+            for (int i = 1; i <= count; ++i) {
+                float contact = float(i) / count;
+                if (hit(start + delta * contact)) {
+                    for (int j = 0; j < 16 && (contact - clear) * length > tolerance; ++j) {
+                        const float middle = (clear + contact) * .5f;
+                        if (hit(start + delta * middle))
+                            contact = middle;
+                        else
+                            clear = middle;
+                    }
+                    return {start + delta * clear, true};
+                }
+                clear = contact;
+            }
+            return {start + delta};
+        }
+    } // namespace
+
     void advanceWalk(WalkState& state, const WalkSettings& s, glm::vec3 up,
                      glm::vec3 velocity, float dt, const CapsuleQuery& blocked) {
         s.validate();
-        if (!finite(state.eye) || !finite(up) || !finite(velocity) || !std::isfinite(dt) || dt < 0)
+        if (!finite(state.eye) || !finite(up) || !finite(velocity) || !std::isfinite(state.vertical_velocity) || !std::isfinite(dt) || dt < 0)
             throw std::invalid_argument("Invalid walk integration input");
         if (glm::length(up) < 1e-6f)
             throw std::invalid_argument("Walk up axis must be nonzero");
+        if (dt == 0)
+            return;
         up = glm::normalize(up);
         dt = std::min(dt, 0.1f);
         velocity -= up * glm::dot(velocity, up);
         auto feet = state.eye - up * s.height;
+        const float spacing = std::min(0.02f * s.units_per_meter, s.radius / 3);
+        const float tolerance = std::min(0.0001f * s.units_per_meter, s.radius * .001f);
         const int steps = std::clamp(int(std::ceil((glm::length(velocity) * dt +
                                                     std::abs(state.vertical_velocity) * dt + s.gravity * dt * dt) /
-                                                   std::min(0.02f * s.units_per_meter, s.radius / 3))),
+                                                   spacing)),
                                      1, 1024);
-        float tick = dt / steps;
+        const float tick = dt / steps;
         auto hit = [&](glm::vec3 p) { return blocked(p, up, s.height, s.radius); };
-        for (int step = 0; step < steps; ++step) {
-            auto displacement = velocity * tick;
-            if (!hit(feet + displacement)) {
-                feet += displacement;
-            } else {
-                bool can_step = state.grounded && s.step_height > 0;
-                if (can_step) {
-                    const int lift_steps = std::max(1, int(std::ceil(s.step_height / std::min(0.02f * s.units_per_meter, s.radius / 3))));
-                    for (int lift = 1; lift <= lift_steps; ++lift)
-                        if (hit(feet + up * (s.step_height * lift / lift_steps))) {
-                            can_step = false;
-                            break;
-                        }
-                    if (can_step && hit(feet + up * s.step_height + displacement))
-                        can_step = false;
+        auto sweep = [&](glm::vec3 p, glm::vec3 delta) { return sweepWalk(p, delta, spacing, tolerance, hit); };
+        auto tryStep = [&](glm::vec3 displacement) {
+            if (!state.grounded || s.step_height == 0)
+                return false;
+            // Find the first height where the lower cap clears the riser. Using
+            // the lower cap here avoids rejecting a small step just because a
+            // low ceiling prevents lifting the entire body by the maximum budget.
+            auto footHit = [&](float lift) {
+                return blocked(feet + displacement + up * lift, up, 2 * s.radius, s.radius);
+            };
+            if (!footHit(0))
+                return false;
+            const int count = std::max(1, int(std::ceil(s.step_height / spacing)));
+            float low = 0;
+            for (int i = 1; i <= count; ++i) {
+                float high = s.step_height * i / count;
+                if (footHit(high)) {
+                    low = high;
+                    continue;
                 }
-                if (can_step) {
-                    feet += up * s.step_height + displacement;
-                } else {
-                    // Projected world-axis components provide stable wall sliding for
-                    // both navigation up axes without introducing a physics dependency.
-                    for (int a = 0; a < 3; ++a) {
-                        glm::vec3 d(0);
-                        d[a] = displacement[a];
-                        d -= up * glm::dot(d, up);
-                        if (!hit(feet + d))
-                            feet += d;
-                    }
+                for (int j = 0; j < 16 && high - low > tolerance; ++j) {
+                    float middle = (low + high) * .5f;
+                    if (footHit(middle))
+                        low = middle;
+                    else
+                        high = middle;
+                }
+                const auto lift = sweep(feet, up * high);
+                if (lift.hit)
+                    return false;
+                const auto travel = sweep(lift.position, displacement);
+                if (travel.hit)
+                    return false;
+                const auto support = sweep(travel.position, -up * (high + 2 * tolerance));
+                if (!support.hit)
+                    return false;
+                feet = support.position;
+                state.vertical_velocity = 0;
+                return true;
+            }
+            return false;
+        };
+        for (int step = 0; step < steps; ++step) {
+            const bool was_grounded = state.grounded;
+            const auto displacement = velocity * tick;
+            const auto destination = feet + displacement;
+            const auto travel = sweep(feet, displacement);
+            if (!travel.hit) {
+                feet = travel.position;
+            } else if (!tryStep(displacement)) {
+                feet = travel.position;
+                const auto remaining = destination - feet;
+                // Slide the remaining projected axis components independently.
+                // Every component is swept, including partial travel to a wall.
+                for (int a = 0; a < 3; ++a) {
+                    glm::vec3 d(0);
+                    d[a] = remaining[a];
+                    d -= up * glm::dot(d, up);
+                    feet = sweep(feet, d).position;
+                }
+            }
+            // Follow small downward steps only while supported. No floor within
+            // the step budget means a real ledge: retain the pose and start falling.
+            if (was_grounded && state.vertical_velocity <= 0) {
+                const auto support = sweep(feet, -up * std::max(s.step_height, 2 * tolerance));
+                if (support.hit) {
+                    feet = support.position;
+                    state.grounded = true;
+                    state.vertical_velocity = 0;
+                    continue;
                 }
             }
             state.vertical_velocity -= s.gravity * tick;
-            auto vertical = up * state.vertical_velocity * tick;
-            if (!hit(feet + vertical)) {
-                feet += vertical;
-                state.grounded = false;
-            } else {
-                state.grounded = state.vertical_velocity <= 0;
+            const auto vertical = sweep(feet, up * state.vertical_velocity * tick);
+            feet = vertical.position;
+            state.grounded = vertical.hit && state.vertical_velocity <= 0;
+            if (vertical.hit)
                 state.vertical_velocity = 0;
-            }
         }
         state.eye = feet + up * s.height;
+    }
+
+    void advanceWalkCamera(WalkCameraState& camera, const WalkState& body, const WalkSettings& s,
+                           glm::vec3 up, float dt, const CapsuleQuery& blocked) {
+        s.validate();
+        if (!finite(camera.eye) || !finite(camera.body_eye) || !finite(body.eye) || !finite(up) ||
+            !std::isfinite(camera.height_offset) || !std::isfinite(camera.offset_velocity) ||
+            !std::isfinite(dt) || dt < 0 || glm::length(up) < 1e-6f)
+            throw std::invalid_argument("Invalid walk camera input");
+        up = glm::normalize(up);
+        dt = std::min(dt, .1f);
+        // Cancel only grounded height changes, not ballistic falling. Then decay
+        // the presentation offset with an analytic critically damped spring.
+        if (body.grounded)
+            camera.height_offset += glm::dot(camera.body_eye - body.eye, up);
+        constexpr float omega = 20;
+        const float c = camera.offset_velocity + omega * camera.height_offset;
+        const float decay = std::exp(-omega * dt);
+        camera.height_offset = (camera.height_offset + c * dt) * decay;
+        camera.offset_velocity = (camera.offset_velocity - omega * c * dt) * decay;
+        const float limit = std::min(s.step_height, s.height * .25f);
+        const float offset = std::clamp(camera.height_offset, -limit, limit);
+        if (offset != camera.height_offset)
+            camera.offset_velocity = 0;
+        camera.height_offset = offset;
+        const float spacing = std::min(.02f * s.units_per_meter, s.radius / 3);
+        const float tolerance = std::min(.0001f * s.units_per_meter, s.radius * .001f);
+        auto headHit = [&](glm::vec3 eye) {
+            return blocked(eye - up * (2 * s.radius), up, 2 * s.radius, s.radius);
+        };
+        // The camera may lag above the physical head on a downward step. Sweep
+        // its upper-cap proxy from the safe body pose and clamp at any overhang.
+        const auto allowed = sweepWalk(body.eye, up * offset, spacing, tolerance, headHit);
+        if (allowed.hit) {
+            camera.height_offset = glm::dot(allowed.position - body.eye, up);
+            camera.offset_velocity = 0;
+        }
+        if (std::abs(camera.height_offset) < tolerance && std::abs(camera.offset_velocity) < tolerance * omega) {
+            camera.height_offset = 0;
+            camera.offset_velocity = 0;
+        }
+        camera.body_eye = body.eye;
+        camera.eye = body.eye + up * camera.height_offset;
     }
 } // namespace lfs::core

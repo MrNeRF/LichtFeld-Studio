@@ -138,9 +138,17 @@ namespace lfs::core {
     };
 
     struct WalkState {
+        // Physical capsule top. Presentation smoothing must never feed this back.
         glm::vec3 eye{0};
         float vertical_velocity = 0;
         bool grounded = false;
+    };
+
+    struct WalkCameraState {
+        glm::vec3 eye{0};
+        glm::vec3 body_eye{0};
+        float height_offset = 0;
+        float offset_velocity = 0;
     };
 
     // The callback tests a world-space capsule against all active collision nodes.
@@ -152,4 +160,7 @@ namespace lfs::core {
     LFS_CORE_API void advanceWalk(WalkState& state, const WalkSettings& settings,
                                   glm::vec3 up, glm::vec3 desired_velocity, float dt,
                                   const CapsuleQuery& blocked);
+    LFS_CORE_API void advanceWalkCamera(WalkCameraState& camera, const WalkState& body,
+                                        const WalkSettings& settings, glm::vec3 up, float dt,
+                                        const CapsuleQuery& blocked);
 } // namespace lfs::core

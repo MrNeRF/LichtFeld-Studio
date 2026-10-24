@@ -674,6 +674,7 @@ namespace lfs::vis {
                           camera.navigationUp(), walk_settings_.height, walk_settings_.radius))
                     throw std::runtime_error("Walk capsule does not fit here; move the camera into free space first");
                 walk_state_ = {.eye = camera.t};
+                walk_camera_ = {.eye = camera.t, .body_eye = camera.t};
                 walk_error_.clear();
             } catch (const std::exception& error) {
                 walk_error_ = error.what();
@@ -2561,7 +2562,7 @@ namespace lfs::vis {
     void InputController::update(float delta_time) {
         if (camera_navigation_mode_ == CameraNavigationMode::Walk) {
             auto& camera = activeKeyboardViewport().camera;
-            if (glm::length(camera.t - walk_state_.eye) > 1e-4f) {
+            if (glm::length(camera.t - walk_camera_.eye) > 1e-4f) {
                 // Python, camera browsing, gizmos and restored views may teleport
                 // the eye. Such external moves leave walk, never bypass its solver.
                 setCameraNavigationMode(CameraNavigationMode::FPV);
@@ -2790,14 +2791,14 @@ namespace lfs::vis {
                         direction = glm::normalize(direction);
                 }
                 auto query = walkCollisionQuery();
-                walk_state_.eye = camera.t;
-                if (query(camera.t - up * walk_settings_.height, up, walk_settings_.height, walk_settings_.radius))
+                if (query(walk_state_.eye - up * walk_settings_.height, up, walk_settings_.height, walk_settings_.radius))
                     throw std::runtime_error("Walk stopped: collision geometry moved into the player capsule");
                 auto before = camera.t;
                 core::advanceWalk(walk_state_, walk_settings_, up,
                                   direction * walk_settings_.speed * (movement_speed_bonus > 0 ? 2.0f : 1.0f),
                                   delta_time, query);
-                camera.t = walk_state_.eye;
+                core::advanceWalkCamera(walk_camera_, walk_state_, walk_settings_, up, delta_time, query);
+                camera.t = walk_camera_.eye;
                 camera.pivot += camera.t - before;
                 if (glm::length(camera.t - before) > 1e-7f) {
                     onCameraMovementStart();
