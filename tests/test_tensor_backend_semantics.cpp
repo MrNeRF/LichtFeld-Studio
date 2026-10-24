@@ -11,6 +11,7 @@
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_upload.hpp"
+#include "tensor_backend_contract.hpp"
 
 #include <gtest/gtest.h>
 
@@ -60,23 +61,8 @@ namespace {
         GTEST_FLAG_SET(death_test_style, style);
     }
 
-    struct Target {
-        const char* name;
-        std::optional<GpuBackend> backend;
-    };
-
-    class TensorBackendSemantics : public testing::TestWithParam<Target> {
+    class TensorBackendSemantics : public lfs::test::TensorBackendContract {
     protected:
-        void SetUp() override {
-            if (const auto backend = GetParam().backend) {
-                if (!lfs::core::gpu_backend_available(*backend))
-                    GTEST_SKIP() << GetParam().name << " device unavailable";
-                scope_.emplace(*backend);
-            }
-        }
-
-        Device device() const { return GetParam().backend ? Device::GPU : Device::CPU; }
-
         // A tensor of `dtype` holding `values`, on the backend under test.
         template <typename T>
         Tensor make(const DataType dtype, const std::vector<size_t>& shape, const std::vector<T>& values) const {
@@ -95,8 +81,6 @@ namespace {
                 std::memcpy(values.data(), cpu.data_ptr(), cpu.bytes());
             return values;
         }
-
-        std::optional<lfs::core::GpuBackendScope> scope_;
     };
 
     void expect_floats(const std::vector<float>& got, const std::vector<float>& want) {
@@ -317,8 +301,7 @@ namespace {
     }
 
     INSTANTIATE_TEST_SUITE_P(Backends, TensorBackendSemantics,
-                             testing::Values(Target{"CPU", std::nullopt}, Target{"Metal", GpuBackend::Metal},
-                                             Target{"Vulkan", GpuBackend::Vulkan}, Target{"CUDA", GpuBackend::CUDA}),
-                             [](const auto& info) { return std::string(info.param.name); });
+                             testing::ValuesIn(lfs::test::tensor_backend_targets()),
+                             lfs::test::tensor_backend_parameter_name);
 
 } // namespace
