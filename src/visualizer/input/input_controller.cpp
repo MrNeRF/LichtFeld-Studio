@@ -662,6 +662,37 @@ namespace lfs::vis {
         };
     }
 
+    void InputController::setWalkSettings(core::WalkSettings settings) {
+        settings.validate();
+        if (camera_navigation_mode_ == CameraNavigationMode::Walk) {
+            auto& viewport = activeKeyboardViewport();
+            auto& camera = viewport.camera;
+            const auto up = camera.navigationUp();
+            const auto feet = walk_state_.eye - up * walk_settings_.height;
+            const auto query = walkCollisionQuery();
+            auto eye = feet + up * settings.height;
+            const auto fits = [&](glm::vec3 candidate) { return !query(candidate - up * settings.height, up, settings.height, settings.radius); };
+            if (!fits(eye)) {
+                // Reconstructing feet from a different head height can round a
+                // resting capsule a few ulps into its support. Use the solver's
+                // small contact tolerance, while still checking the full capsule.
+                eye += up * std::min(.0001f * settings.units_per_meter, settings.radius * .001f);
+                if (!fits(eye))
+                    throw std::runtime_error("The requested Walk capsule does not fit here. Move into free space or reduce head height/radius.");
+            }
+            const auto before = camera.t;
+            walk_state_.eye = eye;
+            walk_camera_ = {.eye = walk_state_.eye, .body_eye = walk_state_.eye};
+            camera.t = walk_state_.eye;
+            camera.pivot += camera.t - before;
+            onCameraMovementStart();
+            publishCameraMove(&viewport);
+        }
+        walk_settings_ = settings;
+        walk_error_.clear();
+        python::request_redraw();
+    }
+
     void InputController::setCameraNavigationMode(const CameraNavigationMode mode) {
         if (camera_navigation_mode_ == mode)
             return;
@@ -1794,6 +1825,12 @@ namespace lfs::vis {
             bindings_.captureScroll(getModifierKeys(), chord_key);
             return;
         }
+
+        // Never dolly (or change orthographic scale) around the physical capsule.
+        // RmlUI receives its own wheel events, so panel scrolling still works.
+        if (camera_navigation_mode_ == CameraNavigationMode::Walk &&
+            bindings_.getActionForScroll(getCurrentToolMode(), getModifierKeys(), held_keys_) == input::Action::CAMERA_ZOOM)
+            return;
 
         float fx, fy;
         input::mouseStateInPixels(window_, &fx, &fy);

@@ -119,10 +119,7 @@ namespace lfs::vis {
         void setCameraNavigationMode(CameraNavigationMode mode);
         [[nodiscard]] glm::vec3 cameraPosition() const { return activeKeyboardViewport().camera.t; }
         [[nodiscard]] const core::WalkSettings& walkSettings() const { return walk_settings_; }
-        void setWalkSettings(core::WalkSettings settings) {
-            settings.validate();
-            walk_settings_ = settings;
-        }
+        void setWalkSettings(core::WalkSettings settings);
         [[nodiscard]] const std::string& walkError() const { return walk_error_; }
         void applyNavigationSpeedPreferences(float zoom_speed, float navigation_speed);
         NavigationUpAxis navigationUpAxis() const { return viewport_.camera.navigationUpAxis(); }

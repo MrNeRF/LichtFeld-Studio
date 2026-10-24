@@ -219,6 +219,68 @@ TEST(CollisionWalkController, RejectsMissingCollisionAndExitsOnTeleportResetOrEs
     EXPECT_EQ(input.cameraNavigationMode(), Mode::FPV);
 }
 
+TEST(CollisionWalkController, LiveCapsuleChangesKeepFeetGroundedRejectCeilingsAndIgnoreZoom) {
+    lfs::vis::input::InputBindings::setPersistenceEnabled(false);
+    lfs::vis::SceneManager manager;
+    lfs::vis::RenderingManager rendering;
+    lfs::vis::services().set(&manager);
+    lfs::vis::services().set(&rendering);
+    struct Cleanup {
+        ~Cleanup() {
+            lfs::vis::services().clear();
+            lfs::vis::input::InputBindings::setPersistenceEnabled(true);
+        }
+    } cleanup;
+    auto g = std::make_shared<CollisionVolume>(*volume());
+    g->solid.assign(27'000, 0);
+    g->tree.clear();
+    g->tree_size = 0;
+    for (int z = 0; z < 30; ++z)
+        for (int x = 0; x < 30; ++x) {
+            g->solid[g->index({x, 0, z})] = 1;
+            g->solid[g->index({x, 25, z})] = 1;
+        }
+    const auto id = manager.getScene().addMesh("floor and ceiling", mesh(*g));
+    manager.getScene().getNodeById(id)->collision = g;
+    manager.getScene().setNodeTransform(id, glm::scale(glm::mat4(1), glm::vec3(1, -1, -1)));
+    Viewport viewport;
+    viewport.camera.t = {1, 1.9f, 1};
+    lfs::vis::InputController input(nullptr, viewport);
+    input.initialize();
+    using Mode = lfs::vis::InputController::CameraNavigationMode;
+    input.setCameraNavigationMode(Mode::Walk);
+    ASSERT_EQ(input.cameraNavigationMode(), Mode::Walk);
+    auto settings = input.walkSettings();
+    settings.height = 2.1f;
+    settings.radius = .15f;
+    settings.speed = 4;
+    settings.step_height = .35f;
+    input.setWalkSettings(settings);
+    EXPECT_NEAR(viewport.camera.t.y, 2.2f, .0002f); // includes the solver's contact skin
+    EXPECT_FLOAT_EQ(input.walkSettings().radius, .15f);
+    EXPECT_FLOAT_EQ(input.walkSettings().speed, 4);
+    EXPECT_FLOAT_EQ(input.walkSettings().step_height, .35f);
+    const auto resized = viewport.camera.t;
+    input.handleScroll(0, 5);
+    input.handleScroll(0, -5);
+    EXPECT_EQ(viewport.camera.t, resized);
+    input.update(.01f);
+    EXPECT_EQ(input.cameraNavigationMode(), Mode::Walk);
+    EXPECT_NEAR(viewport.camera.t.y - settings.height, .1f, .001f);
+    const auto safe_eye = viewport.camera.t;
+    settings.height = 2.7f;
+    EXPECT_THROW(input.setWalkSettings(settings), std::runtime_error);
+    EXPECT_FLOAT_EQ(input.walkSettings().height, 2.1f);
+    EXPECT_EQ(viewport.camera.t, safe_eye);
+    EXPECT_EQ(input.cameraNavigationMode(), Mode::Walk);
+    settings.height = 1.4f;
+    settings.radius = .1f;
+    input.setWalkSettings(settings);
+    input.update(.01f);
+    EXPECT_NEAR(viewport.camera.t.y - settings.height, .1f, .001f);
+    EXPECT_EQ(input.cameraNavigationMode(), Mode::Walk);
+}
+
 TEST(CollisionScene, PreviewControlsShareOccupancyAndSurviveSceneLifecycle) {
     Scene scene;
     const auto g = volume();
