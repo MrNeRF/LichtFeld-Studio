@@ -351,18 +351,21 @@ TEST(CollisionSparse, BatchedFloorPreservesUnevenHeightsHolesAndPadding) {
 TEST(CollisionSparse, FacesAndSmoothRemainWatertightAcrossChunkAndBrickSeams) {
     auto g = grid({70, 12, 70});
     box(g, {1, 1, 1}, {68, 10, 68}, true);
+    uint64_t faces = 0;
+    for (int z = 0; z < g.dimensions.z; ++z)
+        for (int y = 0; y < g.dimensions.y; ++y)
+            for (int x = 0; x < g.dimensions.x; ++x)
+                if (g.occupied({x, y, z}))
+                    for (auto normal : {glm::ivec3(1, 0, 0), glm::ivec3(-1, 0, 0), glm::ivec3(0, 1, 0),
+                                        glm::ivec3(0, -1, 0), glm::ivec3(0, 0, 1), glm::ivec3(0, 0, -1)})
+                        faces += !g.occupied(glm::ivec3(x, y, z) + normal);
     g = sparse(std::move(g));
     EXPECT_TRUE(g.occupied({31, 1, 31}));
     EXPECT_FALSE(g.occupied({32, 2, 32}));
-    watertight(g.mesh(CollisionShape::Faces));
+    const auto mesh = g.mesh(CollisionShape::Faces);
+    watertight(mesh);
     watertight(g.mesh(CollisionShape::Smooth));
-    uint64_t faces = 0;
-    g.forEachBoundaryFace([&](auto p, auto n) {
-        ASSERT_TRUE(g.occupied(p));
-        ASSERT_FALSE(g.occupied(p + n));
-        ++faces;
-    });
-    EXPECT_EQ(faces * 6, g.mesh(CollisionShape::Faces).indices.size());
+    EXPECT_EQ(faces * 6, mesh.indices.size());
 }
 TEST(CollisionSparse, PersistenceRejectsMalformedTopologyAndCoordinateOverflow) {
     auto g = grid();

@@ -1154,48 +1154,6 @@ namespace lfs::core {
         });
         return count;
     }
-    void CollisionVolume::forEachBoundaryFace(const std::function<void(glm::ivec3, glm::ivec3)>& fn,
-                                              std::stop_token stop) const {
-        const auto occupancy = collision_detail::volumeTree(*this, stop);
-        uint64_t work = 0;
-        occupancy.leaves([&](const collision_detail::Leaf& l) {
-            checkpoint(stop);
-            if (!l.solid)
-                return;
-            auto end = glm::min(l.max(), dimensions);
-            for (auto normal : directions) {
-                int axis = normal.x ? 0 : normal.y ? 1
-                                                   : 2;
-                int u = (axis + 1) % 3, v = (axis + 2) % 3;
-                auto emit = [&](auto lo, auto hi) {
-                    for (int b = lo[v]; b < hi[v]; ++b) {
-                        checkpoint(stop);
-                        for (int a = lo[u]; a < hi[u]; ++a) {
-                            if (++work > 32'000'000)
-                                throw std::runtime_error("Collision surface work budget exceeded");
-                            glm::ivec3 p = l.min;
-                            p[axis] = normal[axis] > 0 ? end[axis] - 1 : l.min[axis];
-                            p[u] = a;
-                            p[v] = b;
-                            fn(p, normal);
-                        }
-                    }
-                };
-                auto lo = l.min, hi = end;
-                lo[axis] = normal[axis] > 0 ? end[axis] : l.min[axis] - 1;
-                hi[axis] = lo[axis] + 1;
-                if (lo[axis] < 0 || lo[axis] >= dimensions[axis]) {
-                    emit(l.min, end);
-                } else {
-                    occupancy.visit(lo, hi, [&](const collision_detail::Leaf& neighbor) {
-                        if (!neighbor.solid)
-                            emit(glm::max(lo, neighbor.min), glm::min(hi, neighbor.max()));
-                    });
-                }
-            }
-        });
-    }
-
     CollisionMesh CollisionVolume::mesh(CollisionShape shape, std::stop_token stop, CollisionProgress progress) const {
         validate();
         CollisionMesh result, output;
