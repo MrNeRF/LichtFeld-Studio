@@ -88,7 +88,7 @@ already exist:
 git clone --recurse-submodules https://github.com/MrNeRF/LichtFeld-Studio.git
 cd LichtFeld-Studio
 git clone https://github.com/microsoft/vcpkg.git ../vcpkg
-git -C ../vcpkg checkout dc1232a6e05dcc49703091e83743e3b4df9b9b7c
+git -C ../vcpkg checkout a35a4bc4b5beb29c20cd8653f7d2248010de1223
 ../vcpkg/bootstrap-vcpkg.sh -disableMetrics
 export VCPKG_ROOT="$(cd ../vcpkg && pwd)"
 ```
