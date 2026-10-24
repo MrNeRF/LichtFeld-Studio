@@ -39,7 +39,7 @@ source edits or a project change invalidate an in-flight result.
 
 The popup follows the Logging utility window: one compact settings toolbar and
 one generation action bar, with a scrollable body. Cell size, opacity and source
-filtering appear once. **Inspect collision**, **Walk and edit**, **Save and export**, and **Advanced**
+filtering appear once. **Inspect collision**, **Walk and edit**, and **Advanced**
 are collapsible. Scale, filter tuning, filling, seed and triangle-surface options
 live under Advanced. Progress and error reports are outside those sections.
 
@@ -57,7 +57,7 @@ capsule carving needs enough clearance there. The navigation up-axis is respecte
 ## Saving and exporting
 
 Collision nodes have a distinct subdivided-cube icon in the scene graph. Right-click
-one and choose **Export…** to open its **Save and export** section, also available
+one and choose **Export…** to open the separate **Export collision** window, also available
 from **File → Export → Collision…**. The File menu uses the selected
 collision node, or automatically chooses the scene's only collider; select one
 explicitly when the scene contains several. Exporting uses
@@ -73,7 +73,9 @@ details. It does not regenerate occupancy or change the scene.
   both files, and upload the pair alongside your splat.
 - **Export surface (.glb)…** writes a standard triangle GLB. If a surface is already
   built, that surface is exported. Otherwise the exporter builds the optional
-  surface using **Advanced → Triangle surface** shape and resolution multiplier.
+  surface using the node's saved surface settings (4× cell size by default).
+  To choose another detail or shape, build the surface under **Advanced → Triangle
+  surface** before exporting.
   No normals, GPU upload or scene-node replacement is needed for that export.
 
 Both exports bake the complete node/parent world transform and the PlayCanvas PLY
