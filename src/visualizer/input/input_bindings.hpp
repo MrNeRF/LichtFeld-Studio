@@ -160,6 +160,7 @@ namespace lfs::vis::input {
         PREVIOUS_SIDEBAR_CATEGORY,
         REMOVE_LAST_POINT,
         APPLY_ALIGNMENT,
+        TOOL_SCALE_DISTANCE,
     };
 
     enum class ShortcutScope : uint8_t {

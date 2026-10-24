@@ -1207,7 +1207,8 @@
     "scale": "Schalen",
     "mirror": "Spiegelen",
     "crop": "Bijsnijden",
-    "align": "Uitlijnen"
+    "align": "Uitlijnen",
+    "scale_distance": "Afstand schalen"
   },
   "toolbar": {
     "selection": "Selectie",
@@ -1274,7 +1275,13 @@
     "resize_bounds": "Grenzen Aanpassen",
     "reset_default": "Reset naar Standaard",
     "fullscreen": "Volledig Scherm",
-    "toggle_ui": "Schakel UI"
+    "toggle_ui": "Schakel UI",
+    "scale_distance": "Afstand schalen",
+    "scale_distance_tool": "Afstand schalen",
+    "scale_distance_measured": "Gemeten:",
+    "scale_distance_set": "Afstand instellen:",
+    "scale_distance_apply": "Schaling bevestigen",
+    "scale_distance_reset": "Punten resetten"
   },
   "transform": {
     "node": "Node: %s",
@@ -1808,6 +1815,7 @@
     "action.tool_scale": "Schaalgereedschap",
     "action.tool_mirror": "Spiegelgereedschap",
     "action.tool_align": "Uitlijngereedschap",
+    "action.tool_scale_distance": "Afstand-schaalgereedschap",
     "action.pie_menu": "Cirkelmenu",
     "action.group_selected_scene_nodes": "Geselecteerde sceneknooppunten groeperen",
     "action.ungroup_selected_scene_node": "Geselecteerd sceneknooppunt degroeperen",
@@ -3348,5 +3356,15 @@
   "preferences.drag_rejected_node": "Exporteren niet mogelijk: {}. Er zijn geen bestanden overgedragen. Raadpleeg het logboek voor details.",
   "preferences.drag_title": "Splats overdragen",
   "preferences.drag_pause": "Pauzeer de training voordat u splats sleept.",
-  "preferences.drag_failed": "Exporteren van splats mislukt. Zie het toepassingslogboek voor details."
+  "preferences.drag_failed": "Exporteren van splats mislukt. Zie het toepassingslogboek voor details.",
+  "scale_distance": {
+    "click_1st": "Klik 1e punt",
+    "click_2nd": "Klik 2e punt",
+    "points_count": "Punten: {}/2",
+    "hint_picking": "Klik: punt plaatsen/selecteren. Marker slepen: verplaatsen. {0}: selectie. {1}: annuleren.",
+    "hint_review": "Voer doelafstand in op werkbalk en klik op Bevestigen. Sleep punten om aan te passen. {0}: annuleren.",
+    "status_invalid_distance": "Afstand moet groter zijn dan nul.",
+    "status_no_surface": "Geen oppervlak onder de cursor.",
+    "status_no_target": "Geen transformeerbaar doel om te schalen."
+  }
 }

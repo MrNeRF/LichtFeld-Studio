@@ -55,6 +55,8 @@ class BuiltinOp(enum.Enum):
 
     EllipsoidReset = 19
 
+    ScaleDistancePickPoint = 20
+
 class BuiltinTool(enum.Enum):
     Select = 0
 
@@ -67,6 +69,8 @@ class BuiltinTool(enum.Enum):
     Mirror = 4
 
     Align = 5
+
+    ScaleDistance = 6
 
 class OperatorFlags(enum.Flag):
     NONE = 0

@@ -36,6 +36,8 @@ namespace lfs::vis::op {
         EllipsoidFit,
         EllipsoidReset,
 
+        ScaleDistancePickPoint,
+
         _Count
     };
 
@@ -46,6 +48,7 @@ namespace lfs::vis::op {
         Scale,
         Mirror,
         Align,
+        ScaleDistance,
 
         _Count
     };

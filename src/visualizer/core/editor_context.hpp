@@ -41,7 +41,8 @@ namespace lfs::vis {
         Rotate,
         Scale,
         Mirror,
-        Align
+        Align,
+        ScaleDistance
     };
 
     // Selection sub-modes (for selection tool)

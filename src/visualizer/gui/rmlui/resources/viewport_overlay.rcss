@@ -2204,7 +2204,8 @@ body {
 }
 
 /* Leave room for the tool strip and corner axis control in each pane. */
-.toolbar-hcenter.align-active {
+.toolbar-hcenter.align-active,
+.toolbar-hcenter.scale-distance-active {
     padding-left: 44dp;
     padding-right: 121dp;
     box-sizing: border-box;
@@ -2228,6 +2229,48 @@ body {
 .align-button-label {
     white-space: nowrap;
     font-size: 13dp;
+}
+
+/* Scale distance toolbar styling */
+.toolbar-hcenter .scale-distance-toolbar {
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6dp;
+    padding: 4dp 10dp;
+}
+
+.scale-distance-title {
+    font-size: 13dp;
+    font-weight: bold;
+    white-space: nowrap;
+    align-self: center;
+}
+
+.scale-distance-label {
+    font-size: 13dp;
+    white-space: nowrap;
+    align-self: center;
+}
+
+.scale-distance-value {
+    font-size: 13dp;
+    font-weight: bold;
+    white-space: nowrap;
+    min-width: 44dp;
+    align-self: center;
+}
+
+.scale-distance-input {
+    width: 68dp;
+    min-width: 68dp;
+    height: 24dp;
+    min-height: 24dp;
+    padding: 2dp 6dp;
+    line-height: 18dp;
+    font-size: 13dp;
+    box-sizing: border-box;
+    text-align: right;
 }
 
 /* Depth keeps its controls inside the reserved span, including narrow views. */

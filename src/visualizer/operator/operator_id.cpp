@@ -36,6 +36,7 @@ namespace lfs::vis::op {
             {"ellipsoid.set", "Set Ellipsoid"},
             {"ellipsoid.fit", "Fit Ellipsoid"},
             {"ellipsoid.reset", "Reset Ellipsoid"},
+            {"scale_distance.pick_point", "Scale by Distance"},
         }};
 
         struct ToolInfo {
@@ -50,6 +51,7 @@ namespace lfs::vis::op {
             {"builtin.scale", "Scale"},
             {"builtin.mirror", "Mirror"},
             {"builtin.align", "Align"},
+            {"builtin.scale_distance", "Scale Distance"},
         }};
 
     } // namespace
