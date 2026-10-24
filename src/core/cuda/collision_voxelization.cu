@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "collision_voxelization.hpp"
+#include "core/cuda/morton.cuh"
 #include <algorithm>
 #include <cmath>
 #include <cuda_runtime.h>
@@ -102,15 +103,7 @@ namespace lfs::core::cuda {
             }
             return false;
         }
-        __device__ uint64_t morton(Region p) {
-            uint64_t result = 0;
-            for (int bit = 0; bit < 19; ++bit) {
-                result |= uint64_t((p.x >> 2 >> bit) & 1) << (3 * bit);
-                result |= uint64_t((p.y >> 2 >> bit) & 1) << (3 * bit + 1);
-                result |= uint64_t((p.z >> 2 >> bit) & 1) << (3 * bit + 2);
-            }
-            return result;
-        }
+        static_assert(morton_encode((1u << 19) - 1, (1u << 19) - 1, (1u << 19) - 1) == (uint64_t(1) << 57) - 1);
         __device__ bool certain(Region p, int n, const Grid grid,
                                 const CollisionGaussianGpu* gs, const CollisionBvhNode* nodes) {
             // Never mark padding solid: clipped root regions keep exact bounds.
@@ -187,7 +180,7 @@ namespace lfs::core::cuda {
                     int exponent = 0;
                     for (int edge = half; edge > 4; edge /= 2)
                         ++exponent;
-                    solids[row] = {morton(p) | (uint64_t(exponent) << 57), ~uint64_t(0)};
+                    solids[row] = {morton_encode(p.x >> 2, p.y >> 2, p.z >> 2) | (uint64_t(exponent) << 57), ~uint64_t(0)};
                 }
                 return;
             }
@@ -247,7 +240,7 @@ namespace lfs::core::cuda {
             __syncthreads();
             if (lane == 0 && (masks[0] | masks[1])) {
                 const auto row = atomicAdd(count, 1u);
-                output[row] = {morton(tile), uint64_t(masks[0]) | (uint64_t(masks[1]) << 32)};
+                output[row] = {morton_encode(tile.x >> 2, tile.y >> 2, tile.z >> 2), uint64_t(masks[0]) | (uint64_t(masks[1]) << 32)};
             }
         }
     } // namespace
