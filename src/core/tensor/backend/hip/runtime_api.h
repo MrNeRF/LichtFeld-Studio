@@ -79,7 +79,7 @@ LFS_HIP_API int lfs_hip_readback_append(LfsHipContext*, LfsHipReadback*, const L
 LFS_HIP_API int lfs_hip_readback_wait(LfsHipContext*, LfsHipReadback*, LfsHipError*);
 /* Poll does not block. destination_bytes must describe the writable destination
  * extent; an insufficient extent fails without consuming the snapshot.
- * Completion is consumed only on success with ready=1; idle slots return 0.
+ * A valid snapshot is consumed only on success with ready=1; idle slots return 0.
  * wait alone does not consume completion or permit staging reuse. A copy error
  * stays latched: wait/poll report it and never return a successful snapshot.
  * Once drained, poll(nullptr, 0) discards a failed result, returning that error
