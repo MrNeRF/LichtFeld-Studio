@@ -522,3 +522,94 @@ cameras present, Auto still enabled at 0.28 m, and the cleanup count preserved.
 The prior hex encoding produced an 87,110,676-byte JSON chapter that exceeded the
 64 MiB reader limit; the version-3 encoding reopens successfully under that same
 limit. The pristine training project, trained PLY and aligned handoff are unchanged.
+
+## Twenty-million-Gaussian Garden tuning
+
+Garden (Mip-NeRF 360) was trained from its original COLMAP initialization using
+`images_4`, MRNF defaults, SH degree 0, a 20M cap and 30,000 iterations. Training
+finished in **921.126 s** with exactly **20,000,000 Gaussians**. The separate
+`garden-collision-20m.licht` reopens and hydrates the full model, its collider and
+all **185 cameras**; all **189 original scene records** are unchanged. The pristine
+training project and PLY are preserved. Validation uses native archive APIs and
+offscreen Vulkan; GUI instances stay closed.
+
+Measurements use an i9-14900K / RTX 4090, driver 615.78.08. The baseline is the
+capacity-only change plus instrumentation at `cfa026e74`, before the algorithm
+optimizations below. Both paths read the same frozen 13-float source snapshot.
+Generation uses Auto + Surface cleanup, opacity 0.1, with clustering/filling/carving
+off. Auto resolves **0.05 scene units**; this does not establish a metric scene
+scale. All 20M sources are considered; cleanup excludes 13 oversized-area outliers.
+There is no crop, ROI, component selection or resolution change between trials.
+
+| Measurement | Baseline | Tuned |
+| --- | ---: | ---: |
+| Source extraction, median of 3 trials | 0.5904 s | 0.1237 s |
+| Generation, median of 3 alternating trials | 8.5922 s | 4.1027 s |
+| Extraction output capacity | 1,744,830,464 bytes | 1,040,000,000 bytes |
+| Generation peak RSS, largest of 3 runs | 3.748 GiB | 3.747 GiB |
+
+Extraction timings include allocation and geometry conversion, with PLY loading
+(0.322 s) and the owned CPU snapshot transfer (0.186 s) measured separately. The
+reference and parallel records differ by at most 8.72e-7 in this run due to float
+operation contraction. Generation comparisons use the identical frozen reference
+snapshot, excluding parsing, source extraction, volume serialization and GUI work.
+The capacity reduction saves about **672 MiB** of output capacity; it is not a
+40% reduction in whole-process RSS.
+
+All six generation runs produce **9,872,885 occupied cells**, dimensions
+**1975 x 1684 x 1799**, and **50,120,676 bytes** of canonical occupancy. The exported
+baseline/tuned volumes have identical SHA-256
+`93fc7f6f78daeaf35fa71d23c9ccc419b7ebee519d6e437eacec9c0c814f576a`.
+Packed rendering occupancy uses **5,985,188 bytes**.
+
+The improvements preserve the existing field evaluator:
+
+- Source extraction uses stable prefix offsets and one exact output allocation,
+  with bounded parallel work over owned geometry snapshots. It avoids geometric
+  vector growth and copies no SH, color or optimizer data.
+- The median-split Gaussian BVH allocates its exact preorder layout once and builds
+  disjoint subtrees in parallel, preserving partition/leaf ordering.
+- Each subtree caches the maximum of its Gaussians' smallest projected support
+  extents. If this cannot meet the existing whole-cube support test, the
+  uniform-solid proof skips that subtree. This skips an unsuccessful proof search,
+  not collision cells: exact cell evaluation remains the fallback. The bound
+  reuses inactive descriptor words, retaining the 40-byte node footprint.
+
+Separate Nsight traces identify the expensive GPU stage: sparse subdivision
+falls from **2708.34 ms to 41.79 ms**, while leaf evaluation takes **211.84 ms
+and 223.58 ms** respectively. Combined kernel time falls from **2.920 s to
+0.265 s**. These are single profiled traces; the unprofiled alternating generation
+trials above are the end-to-end comparison. CPU preparation, cleanup, assembly and
+transfers remain part of generation.
+
+### Full-resolution box overlay
+
+Each view uses identical occupancy/camera inputs, 1920x1080, full pixel shading,
+ten warmups and thirty GPU timestamps per trial. Native baseline/tuned trials
+alternate order; values below are medians of three trial medians. The SuperSplat
+column runs the same pinned unchanged WGSL and Node Dawn/Vulkan harness documented
+above, also for three trials.
+
+| View | Native baseline | Native tuned | SuperSplat |
+| --- | ---: | ---: | ---: |
+| Overview | 0.958 ms | 0.861 ms | 1.595 ms |
+| Walk-height camera | 0.760 ms | 0.691 ms | 1.357 ms |
+| Close-up | 0.746 ms | 0.676 ms | 1.126 ms |
+
+Native box rendering takes **9–10% less GPU time** than its baseline here, and
+**1.67–1.96x faster** than the pinned upstream pass. These are overlay-pass
+timings, excluding splat rendering, upload, compilation and CPU readback; they
+are not complete application FPS or a universal speed guarantee. First-frame
+wall times, which include packing/upload, pipeline work and readback, remain
+about **121–125 ms** and are recorded separately.
+
+The renderer identifies uniform 2-cubed regions directly inside each packed
+4-cubed brick and skips them without extra hierarchy loads. Cell size, occupancy
+and shading resolution stay unchanged. Compared with the baseline, hit coverage
+differs at **one of 6,220,800 pixels** across these views; ten pixels have RGB
+differences above 0.01 at grid boundaries. Independent ray/box coverage regressions
+exercise both uniform subregions and random fine detail.
+
+The deterministic 1,000-capsule benchmark measures **0.530 microseconds/query**
+(median of thirty batches). This retains the existing query distribution and
+boolean semantics; it is not equivalent to upstream's penetration resolver.
