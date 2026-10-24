@@ -3,6 +3,7 @@
 #include "core/camera.hpp"
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
+#include "core/tensor_backend.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "licht_test_support.hpp"
@@ -35,6 +36,7 @@ namespace {
         }
         auto config() {
             lfs::io::PipelinedLoaderConfig c;
+            c.backend = lfs::core::default_gpu_backend();
             c.prefetch_count = 1;
             c.output_queue_size = 2;
             c.jpeg_batch_size = 1;

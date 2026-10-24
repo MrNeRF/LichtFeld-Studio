@@ -4,11 +4,11 @@
 #include "core/camera.hpp"
 #include "core/cuda/mask_normalization.hpp"
 #include "core/image_loader.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/cache_image_loader.hpp"
 #include "licht_test_support.hpp"
 #include "mask_test_utils.hpp"
 
-#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -23,12 +23,10 @@ namespace {
     constexpr size_t width = 64;
     constexpr size_t height = 48;
 
-    class CameraMaskThreshold : public ::testing::Test {
+    class CameraMaskThreshold : public lfs::test::CudaBackendTest {
     protected:
         void SetUp() override {
-            int count = 0;
-            if (cudaGetDeviceCount(&count) != cudaSuccess || count == 0)
-                GTEST_SKIP() << "CUDA unavailable";
+            LFS_CUDA_BACKEND_OR_RETURN();
             lfs::io::CacheLoader::getInstance(false);
             set_image_loader([](const ImageLoadParams& p) {
                 return lfs::io::CacheLoader::getInstance().load_cached_image(

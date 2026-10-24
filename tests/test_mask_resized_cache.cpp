@@ -4,6 +4,7 @@
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "licht_test_support.hpp"
@@ -11,7 +12,6 @@
 #include <bit>
 #include <cmath>
 #include <cstdlib>
-#include <cuda_runtime.h>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -19,13 +19,11 @@
 namespace {
     using namespace lfs::core;
     constexpr size_t width = 129, height = 97;
-    class MaskResizedCache : public ::testing::Test {
+    class MaskResizedCache : public lfs::test::CudaBackendTest {
     protected:
         lfs::test::licht::TemporaryDirectory temp{"mask-resized-cache"};
         void SetUp() override {
-            int count = 0;
-            if (cudaGetDeviceCount(&count) != cudaSuccess || !count)
-                GTEST_SKIP() << "CUDA unavailable";
+            LFS_CUDA_BACKEND_OR_RETURN();
             // The loader is a process singleton that an earlier test's trainer may have switched to CPU
             // caching; its cache would keep serving the first mask.png after this test rewrites it.
             auto& cache = lfs::io::CacheLoader::getInstance(false);
