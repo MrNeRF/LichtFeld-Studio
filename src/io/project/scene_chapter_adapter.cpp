@@ -92,6 +92,8 @@ namespace lfs::io::project {
                 return "mesh";
             case PLY_SEQUENCE:
                 return "ply_sequence";
+            case CROP_POLYGON:
+                return "crop_polygon";
             case KEYFRAME_GROUP:
             case KEYFRAME:
                 return std::nullopt;
@@ -137,6 +139,9 @@ namespace lfs::io::project {
             }
             if (value == "ply_sequence") {
                 return PLY_SEQUENCE;
+            }
+            if (value == "crop_polygon") {
+                return CROP_POLYGON;
             }
             return std::nullopt;
         }
@@ -326,6 +331,7 @@ namespace lfs::io::project {
                 .cropbox = std::nullopt,
                 .ellipsoid = std::nullopt,
                 .camera = std::nullopt,
+                .crop_polygon = std::nullopt,
             };
             std::copy_n(glm::value_ptr(node.local_transform.get()), 16,
                         result.local_transform.begin());
@@ -361,6 +367,22 @@ namespace lfs::io::project {
                               node.ellipsoid->color.z},
                     .line_width = node.ellipsoid->line_width,
                 };
+            }
+            if (node.crop_polygon) {
+                CropPolygonRecord record{
+                    .vertices = {},
+                    .half_depth = node.crop_polygon->half_depth,
+                    .inverse = node.crop_polygon->inverse,
+                    .enabled = node.crop_polygon->enabled,
+                    .color = {node.crop_polygon->color.x, node.crop_polygon->color.y,
+                              node.crop_polygon->color.z},
+                    .line_width = node.crop_polygon->line_width,
+                };
+                record.vertices.reserve(node.crop_polygon->vertices.size());
+                for (const glm::vec2& vertex : node.crop_polygon->vertices) {
+                    record.vertices.push_back({vertex.x, vertex.y});
+                }
+                result.crop_polygon = std::move(record);
             }
             if (node.camera) {
                 if (node.camera->has_in_memory_mask()) {
@@ -665,6 +687,8 @@ namespace lfs::io::project {
                     *type == lfs::core::NodeType::CROPBOX;
                 const bool is_ellipsoid =
                     *type == lfs::core::NodeType::ELLIPSOID;
+                const bool is_crop_polygon =
+                    *type == lfs::core::NodeType::CROP_POLYGON;
                 const bool is_camera =
                     *type == lfs::core::NodeType::CAMERA;
                 const bool is_geometry =
@@ -673,6 +697,7 @@ namespace lfs::io::project {
                     *type == lfs::core::NodeType::MESH;
                 if (record.cropbox.has_value() != is_cropbox ||
                     record.ellipsoid.has_value() != is_ellipsoid ||
+                    record.crop_polygon.has_value() != is_crop_polygon ||
                     record.camera.has_value() != is_camera ||
                     record.payload.has_value() != is_geometry) {
                     return fail<void>(
@@ -680,7 +705,7 @@ namespace lfs::io::project {
                         "A scene node has mismatched type-specific state.",
                         std::format(
                             "SCNG node {} type '{}' has an absent or extraneous "
-                            "payload/cropbox/ellipsoid/camera record",
+                            "payload/cropbox/ellipsoid/crop_polygon/camera record",
                             record.uuid.to_string(), record.type),
                         record.uuid);
                 }
@@ -727,6 +752,7 @@ namespace lfs::io::project {
                     .ellipsoid = nullptr,
                     .camera = nullptr,
                     .keyframe = nullptr,
+                    .crop_polygon = nullptr,
                 };
                 if (record.georef_pose) {
                     desc.georef_pose = lfs::core::GeoreferencePose{
@@ -773,6 +799,21 @@ namespace lfs::io::project {
                             .line_width = record.ellipsoid->line_width,
                             .flash_intensity = 0.0f,
                         });
+                }
+                if (record.crop_polygon) {
+                    auto data = std::make_unique<lfs::core::CropPolygonData>();
+                    data->vertices.reserve(record.crop_polygon->vertices.size());
+                    for (const auto& vertex : record.crop_polygon->vertices) {
+                        data->vertices.emplace_back(vertex[0], vertex[1]);
+                    }
+                    data->half_depth = record.crop_polygon->half_depth;
+                    data->inverse = record.crop_polygon->inverse;
+                    data->enabled = record.crop_polygon->enabled;
+                    data->color = glm::vec3(record.crop_polygon->color[0],
+                                            record.crop_polygon->color[1],
+                                            record.crop_polygon->color[2]);
+                    data->line_width = record.crop_polygon->line_width;
+                    desc.crop_polygon = std::move(data);
                 }
                 if (record.camera) {
                     try {

@@ -382,6 +382,18 @@ namespace lfs::io::project {
         friend bool operator==(const EllipsoidRecord&, const EllipsoidRecord&) = default;
     };
 
+    struct CropPolygonRecord {
+        // Outline in the node's local XY plane; 3 to 64 finite vertices.
+        std::vector<std::array<float, 2>> vertices;
+        float half_depth = 1.0f;
+        bool inverse = false;
+        bool enabled = true;
+        std::array<float, 3> color{1.0f, 1.0f, 0.0f};
+        float line_width = 2.0f;
+
+        friend bool operator==(const CropPolygonRecord&, const CropPolygonRecord&) = default;
+    };
+
     // Camera calibration in SCNG is always the source (pre-rectification) calibration
     // that belongs to the stored distortion model; rectified calibration is derived runtime state.
     struct CameraRecord {
@@ -439,6 +451,7 @@ namespace lfs::io::project {
         std::optional<CropBoxRecord> cropbox = std::nullopt;
         std::optional<EllipsoidRecord> ellipsoid = std::nullopt;
         std::optional<CameraRecord> camera = std::nullopt;
+        std::optional<CropPolygonRecord> crop_polygon = std::nullopt;
 
         friend bool operator==(const SceneNodeRecord&, const SceneNodeRecord&) = default;
     };

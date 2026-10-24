@@ -52,6 +52,16 @@ namespace lfs::vis::op {
                    lhs.flash_intensity == rhs.flash_intensity;
         }
 
+        bool cropPolygonsEqual(const lfs::core::CropPolygonData& lhs, const lfs::core::CropPolygonData& rhs) {
+            return lhs.vertices == rhs.vertices &&
+                   lhs.half_depth == rhs.half_depth &&
+                   lhs.inverse == rhs.inverse &&
+                   lhs.enabled == rhs.enabled &&
+                   lhs.color == rhs.color &&
+                   lhs.line_width == rhs.line_width &&
+                   lhs.flash_intensity == rhs.flash_intensity;
+        }
+
         std::string propertyUndoLabel(const std::string& property_path) {
             if (property_path.ends_with(".transform")) {
                 return "Set Transform";
@@ -74,6 +84,9 @@ namespace lfs::vis::op {
             }
             if (property_path.contains("ellipsoid")) {
                 return "ellipsoid";
+            }
+            if (property_path.contains("crop_polygon")) {
+                return "crop_polygon";
             }
             return "property";
         }
@@ -128,7 +141,8 @@ namespace lfs::vis::op {
             if (property_path.ends_with(".locked")) {
                 return DirtyFlag::OVERLAY;
             }
-            if (property_path.contains("crop_box") || property_path.contains("ellipsoid")) {
+            if (property_path.contains("crop_box") || property_path.contains("ellipsoid") ||
+                property_path.contains("crop_polygon")) {
                 return DirtyFlag::SPLATS | DirtyFlag::OVERLAY;
             }
             if (property_path.contains("scene_node")) {
@@ -936,6 +950,9 @@ namespace lfs::vis::op {
             if (capture_payload && node.ellipsoid) {
                 snapshot.ellipsoid = std::make_unique<lfs::core::EllipsoidData>(*node.ellipsoid);
             }
+            if (capture_payload && node.crop_polygon) {
+                snapshot.crop_polygon = std::make_unique<lfs::core::CropPolygonData>(*node.crop_polygon);
+            }
             if (capture_payload && node.keyframe) {
                 snapshot.keyframe = std::make_unique<lfs::core::KeyframeData>(*node.keyframe);
             }
@@ -1046,6 +1063,12 @@ namespace lfs::vis::op {
                 if (!snapshot.ellipsoid) {
                     throw HistoryCorruptionError(
                         "Cannot restore ellipsoid node '" + snapshot.name + "': payload is missing");
+                }
+                break;
+            case lfs::core::NodeType::CROP_POLYGON:
+                if (!snapshot.crop_polygon) {
+                    throw HistoryCorruptionError(
+                        "Cannot restore crop polygon node '" + snapshot.name + "': payload is missing");
                 }
                 break;
             case lfs::core::NodeType::CAMERA:
@@ -1266,6 +1289,13 @@ namespace lfs::vis::op {
                         }
                         desc.ellipsoid = std::make_unique<lfs::core::EllipsoidData>(*snapshot.ellipsoid);
                         break;
+                    case lfs::core::NodeType::CROP_POLYGON:
+                        if (!snapshot.crop_polygon) {
+                            throw HistoryCorruptionError(
+                                "Cannot restore crop polygon node '" + snapshot.name + "': payload is missing");
+                        }
+                        desc.crop_polygon = std::make_unique<lfs::core::CropPolygonData>(*snapshot.crop_polygon);
+                        break;
                     case lfs::core::NodeType::CAMERA:
                         if (!snapshot.camera) {
                             throw HistoryCorruptionError(
@@ -1408,6 +1438,10 @@ namespace lfs::vis::op {
             if (snapshot.ellipsoid) {
                 total += sizeof(*snapshot.ellipsoid);
             }
+            if (snapshot.crop_polygon) {
+                total += sizeof(*snapshot.crop_polygon) +
+                         snapshot.crop_polygon->vertices.size() * sizeof(glm::vec2);
+            }
             if (snapshot.keyframe) {
                 total += sizeof(*snapshot.keyframe);
             }
@@ -1451,6 +1485,10 @@ namespace lfs::vis::op {
             }
             if (snapshot.ellipsoid) {
                 total.cpu_bytes += sizeof(*snapshot.ellipsoid);
+            }
+            if (snapshot.crop_polygon) {
+                total.cpu_bytes += sizeof(*snapshot.crop_polygon) +
+                                   snapshot.crop_polygon->vertices.size() * sizeof(glm::vec2);
             }
             if (snapshot.keyframe) {
                 total.cpu_bytes += sizeof(*snapshot.keyframe);
@@ -1595,6 +1633,12 @@ namespace lfs::vis::op {
                     scene.notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
                 }
                 break;
+            case lfs::core::NodeType::CROP_POLYGON:
+                if (snapshot.crop_polygon) {
+                    node.crop_polygon = std::make_unique<lfs::core::CropPolygonData>(*snapshot.crop_polygon);
+                    scene.notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
+                }
+                break;
             case lfs::core::NodeType::CAMERA:
                 if (snapshot.camera) {
                     node.camera = restoreCamera(*snapshot.camera);
@@ -1644,6 +1688,7 @@ namespace lfs::vis::op {
                     existing->mesh.reset();
                     existing->cropbox.reset();
                     existing->ellipsoid.reset();
+                    existing->crop_polygon.reset();
                     existing->camera.reset();
                     existing->keyframe.reset();
                     existing->camera_uid = -1;
@@ -2262,6 +2307,9 @@ namespace lfs::vis::op {
         }
         if (other.ellipsoid) {
             ellipsoid = std::make_unique<lfs::core::EllipsoidData>(*other.ellipsoid);
+        }
+        if (other.crop_polygon) {
+            crop_polygon = std::make_unique<lfs::core::CropPolygonData>(*other.crop_polygon);
         }
         if (other.keyframe) {
             keyframe = std::make_unique<lfs::core::KeyframeData>(*other.keyframe);
@@ -3301,6 +3349,83 @@ namespace lfs::vis::op {
     }
 
     DirtyMask EllipsoidUndoEntry::dirtyFlags() const {
+        return DirtyFlag::SPLATS | DirtyFlag::OVERLAY;
+    }
+
+    CropPolygonUndoEntry::CropPolygonUndoEntry(SceneManager& scene,
+                                               std::string node_name,
+                                               lfs::core::CropPolygonData before,
+                                               glm::mat4 transform_before,
+                                               const bool show_before)
+        : scene_(scene),
+          node_name_(std::move(node_name)),
+          before_(std::move(before)),
+          transform_before_(transform_before),
+          show_before_(show_before) {
+        if (const auto* node = scene_.getScene().getNode(node_name_)) {
+            node_uuid_ = node->uuid;
+        }
+        expected_topology_ = captureTopologyProof(scene_.getScene());
+        captureAfter();
+    }
+
+    void CropPolygonUndoEntry::captureAfter() {
+        const auto* node = scene_.getScene().getNode(node_name_);
+        if (!node || !node->crop_polygon) {
+            LOG_WARN("Crop polygon node '{}' removed during undo capture", node_name_);
+            after_ = before_;
+            transform_after_ = transform_before_;
+            show_after_ = show_before_;
+            return;
+        }
+        after_ = *node->crop_polygon;
+        transform_after_ = scene_.getNodeTransform(node_name_);
+        show_after_ = node->visible;
+    }
+
+    void CropPolygonUndoEntry::apply(const lfs::core::CropPolygonData& data, const glm::mat4& transform,
+                                     const bool show) {
+        requireTopologyProof(scene_.getScene(), expected_topology_, name());
+        auto* node = scene_.getScene().getNodeByUuid(node_uuid_);
+        if (!node || !node->crop_polygon) {
+            throw HistoryCorruptionError("Cannot replay crop polygon history after its node changed");
+        }
+        *node->crop_polygon = data;
+        scene_.getScene().notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
+        scene_.setNodeTransform(node->name, transform);
+        scene_.setNodeVisibility(node->id, show);
+        expected_topology_ = captureTopologyProof(scene_.getScene());
+    }
+
+    void CropPolygonUndoEntry::undo() {
+        apply(before_, transform_before_, show_before_);
+    }
+
+    void CropPolygonUndoEntry::redo() {
+        apply(after_, transform_after_, show_after_);
+    }
+
+    bool CropPolygonUndoEntry::hasChanges() const {
+        return !cropPolygonsEqual(before_, after_) ||
+               transform_before_ != transform_after_ ||
+               show_before_ != show_after_;
+    }
+
+    UndoMetadata CropPolygonUndoEntry::metadata() const {
+        return UndoMetadata{
+            .id = "crop_polygon.transform",
+            .label = "Crop Polygon Transform",
+            .source = "ui",
+            .scope = "crop_polygon",
+        };
+    }
+
+    size_t CropPolygonUndoEntry::estimatedBytes() const {
+        return sizeof(*this) + node_name_.size() +
+               (before_.vertices.size() + after_.vertices.size()) * sizeof(glm::vec2);
+    }
+
+    DirtyMask CropPolygonUndoEntry::dirtyFlags() const {
         return DirtyFlag::SPLATS | DirtyFlag::OVERLAY;
     }
 

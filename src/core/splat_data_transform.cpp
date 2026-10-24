@@ -8,6 +8,7 @@
 #include "core/cuda/splat_transform.hpp"
 #include "core/logger.hpp"
 #include "core/point_cloud.hpp"
+#include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "geometry/bounding_box.hpp"
@@ -683,6 +684,60 @@ namespace lfs::core {
         const auto dist_sq = x * x + y * y + z * z;
         const auto inside_mask = dist_sq <= 1.0f;
         const auto delete_mask = inverse ? inside_mask : inside_mask.logical_not();
+        const int points_to_delete = delete_mask.sum_scalar();
+
+        if (points_to_delete == 0) {
+            return Tensor();
+        }
+
+        return splat_data.soft_delete(delete_mask);
+    }
+
+    Tensor soft_crop_by_polygon(SplatData& splat_data,
+                                const glm::mat4& world_to_local,
+                                const CropPolygonData& polygon) {
+        LOG_TIMER("soft_crop_by_polygon");
+
+        const auto& means = splat_data.means();
+        if (!means.is_valid() || means.size(0) == 0 ||
+            !crop_polygon::isValidOutline(polygon.vertices) ||
+            !crop_polygon::isValidHalfDepth(polygon.half_depth)) {
+            return Tensor();
+        }
+
+        const size_t num_points = static_cast<size_t>(means.size(0));
+        const auto device = means.device();
+
+        const auto transform_tensor = Tensor::from_vector(
+            {world_to_local[0][0], world_to_local[1][0], world_to_local[2][0], world_to_local[3][0],
+             world_to_local[0][1], world_to_local[1][1], world_to_local[2][1], world_to_local[3][1],
+             world_to_local[0][2], world_to_local[1][2], world_to_local[2][2], world_to_local[3][2],
+             world_to_local[0][3], world_to_local[1][3], world_to_local[2][3], world_to_local[3][3]},
+            {4, 4}, device);
+
+        const auto ones = Tensor::ones({num_points, 1}, device);
+        const auto local_pos = transform_tensor.mm(means.cat(ones, 1).t()).t();
+        const auto x = local_pos.slice(1, 0, 1).squeeze(1);
+        const auto y = local_pos.slice(1, 1, 2).squeeze(1);
+        const auto z = local_pos.slice(1, 2, 3).squeeze(1);
+
+        // Even-odd rule, vectorised over points with one pass per edge.
+        auto crossings = Tensor::zeros({num_points}, device, DataType::Bool);
+        const auto& vertices = polygon.vertices;
+        for (size_t i = 0, j = vertices.size() - 1; i < vertices.size(); j = i++) {
+            const glm::vec2 a = vertices[i];
+            const glm::vec2 b = vertices[j];
+            if (a.y == b.y)
+                continue; // A horizontal edge never straddles a scanline.
+            const float slope = (b.x - a.x) / (b.y - a.y);
+            const auto straddles = (y < a.y).logical_xor(y < b.y);
+            crossings = crossings.logical_xor(straddles.logical_and(x < (y - a.y) * slope + a.x));
+        }
+
+        const auto inside_mask = (z <= polygon.half_depth)
+                                     .logical_and(z >= -polygon.half_depth)
+                                     .logical_and(crossings);
+        const auto delete_mask = polygon.inverse ? inside_mask : inside_mask.logical_not();
         const int points_to_delete = delete_mask.sum_scalar();
 
         if (points_to_delete == 0) {

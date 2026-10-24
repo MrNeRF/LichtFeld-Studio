@@ -6,6 +6,7 @@
 
 #include "core/animatable_property.hpp"
 #include "core/camera.hpp"
+#include "core/crop_polygon.hpp"
 #include "core/export.hpp"
 #include "core/mesh_data.hpp"
 #include "core/splat_data.hpp"
@@ -58,11 +59,15 @@ namespace lfs::core {
         MESH,           // Triangle mesh (imported via Assimp, processed via OpenMesh)
         KEYFRAME_GROUP, // Container for keyframe nodes (camera animation)
         KEYFRAME,       // Individual camera animation keyframe
-        PLY_SEQUENCE    // Container for ordered PLY sequence frames
+        PLY_SEQUENCE,   // Container for ordered PLY sequence frames
+        CROP_POLYGON    // Extruded polygon crop volume (child of SPLAT)
     };
 
     [[nodiscard]] inline bool isSceneNodeParentCompatible(const NodeType parent,
                                                           const NodeType child) {
+        // The polygon crop is splat-only: point clouds hold one volume on the GPU.
+        if (child == NodeType::CROP_POLYGON)
+            return parent == NodeType::SPLAT;
         const bool group_like = parent == NodeType::GROUP ||
                                 parent == NodeType::DATASET ||
                                 parent == NodeType::CAMERA_GROUP ||
@@ -94,6 +99,21 @@ namespace lfs::core {
         glm::vec3 radii{1.0f, 1.0f, 1.0f};
         bool inverse = false;
         bool enabled = false;
+        glm::vec3 color{1.0f, 1.0f, 0.0f};
+        float line_width = 2.0f;
+        float flash_intensity = 0.0f;
+    };
+
+    inline constexpr std::size_t kMaxCropPolygonVertices = crop_polygon::kMaxVertices;
+
+    // Outline in the node's local XY plane, extruded over local z in
+    // [-half_depth, half_depth]. Writers keep the outline's AABB centred on
+    // the origin, so the prism's local box is centred at 0 like the ellipsoid.
+    struct CropPolygonData {
+        std::vector<glm::vec2> vertices;
+        float half_depth = 1.0f;
+        bool inverse = false;
+        bool enabled = true;
         glm::vec3 color{1.0f, 1.0f, 0.0f};
         float line_width = 2.0f;
         float flash_intensity = 0.0f;
@@ -168,6 +188,7 @@ namespace lfs::core {
         std::shared_ptr<lfs::core::MeshData> mesh;
         std::unique_ptr<CropBoxData> cropbox;
         std::unique_ptr<EllipsoidData> ellipsoid;
+        std::unique_ptr<CropPolygonData> crop_polygon;
         std::unique_ptr<KeyframeData> keyframe;
         std::atomic<size_t> gaussian_count{0};
         glm::vec3 centroid{0.0f};
@@ -262,6 +283,7 @@ namespace lfs::core {
             std::unique_ptr<EllipsoidData> ellipsoid;
             std::shared_ptr<lfs::core::Camera> camera;
             std::unique_ptr<KeyframeData> keyframe;
+            std::unique_ptr<CropPolygonData> crop_polygon;
         };
 
         struct RestoreSelectionState {
@@ -353,6 +375,9 @@ namespace lfs::core {
         NodeId addMesh(const std::string& name, std::shared_ptr<lfs::core::MeshData> mesh_data, NodeId parent = NULL_NODE, Uuid* inserted_uuid = nullptr);
         NodeId addCropBox(const std::string& name, NodeId parent_id);
         NodeId addEllipsoid(const std::string& name, NodeId parent_id);
+        // Returns the existing polygon of parent_id, or NULL_NODE for an invalid outline.
+        NodeId addCropPolygon(const std::string& name, NodeId parent_id, CropPolygonData data,
+                              const glm::mat4& local_transform = glm::mat4(1.0f));
         NodeId addDataset(const std::string& name);
         NodeId addCameraGroup(const std::string& name, NodeId parent, size_t camera_count);
         NodeId addCamera(const std::string& name, NodeId parent, std::shared_ptr<lfs::core::Camera> camera);
@@ -435,6 +460,24 @@ namespace lfs::core {
             bool parent_effectively_visible = false;
         };
         [[nodiscard]] std::vector<RenderableEllipsoid> getRenderableEllipsoids() const;
+
+        [[nodiscard]] NodeId getCropPolygonForSplat(NodeId splat_id) const;
+        [[nodiscard]] CropPolygonData* getCropPolygonData(NodeId polygon_id);
+        [[nodiscard]] const CropPolygonData* getCropPolygonData(NodeId polygon_id) const;
+        // Rejects an invalid outline or half depth and keeps the current data.
+        bool setCropPolygonData(NodeId polygon_id, const CropPolygonData& data);
+
+        struct RenderableCropPolygon {
+            NodeId node_id = NULL_NODE;
+            NodeId parent_splat_id = NULL_NODE;
+            int parent_node_index = -1;
+            const CropPolygonData* data = nullptr;
+            glm::mat4 world_transform{1.0f};
+            glm::mat4 local_transform{1.0f};
+            bool effectively_visible = false;
+            bool parent_effectively_visible = false;
+        };
+        [[nodiscard]] std::vector<RenderableCropPolygon> getRenderableCropPolygons() const;
 
         const lfs::core::SplatData* getCombinedModel() const;
         // Like getCombinedModel, but never serves the previous geometry while a worker rebuilds it:

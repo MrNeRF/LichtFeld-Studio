@@ -2041,7 +2041,7 @@ namespace lfs::vis::project {
                 {"VIEW", "tools.transform_space", strings({"local", "world"}), "local"},
                 {"VIEW", "tools.pivot_mode", strings({"origin", "bounds_center"}), "origin"},
                 {"VIEW", "tools.multi_transform_mode", strings({"selection", "individual"}), "selection"},
-                {"VIEW", "tools.crop_shape", strings({"box", "ellipsoid"}), "box"},
+                {"VIEW", "tools.crop_shape", strings({"box", "ellipsoid", "polygon"}), "box"},
                 {"VIEW", "tools.crop_operation", strings({"translate", "rotate", "scale"}), "translate"},
                 {"SEQR", "loop_mode", strings({"once", "loop", "ping_pong"}), "once"},
                 {"SEQR", "preferences.preset", string_parser([](const std::string_view value) {

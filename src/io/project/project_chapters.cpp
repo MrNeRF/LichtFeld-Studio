@@ -4,6 +4,7 @@
  */
 
 #include "io/project_chapters.hpp"
+#include "core/crop_polygon.hpp"
 #include "core/native_fs.hpp"
 
 #include "core/path_utils.hpp"
@@ -2434,6 +2435,92 @@ namespace lfs::io::project {
             };
         }
 
+        lfs::Result<CropPolygonRecord> parse_crop_polygon(
+            const Json& value, const std::string_view field) {
+            if (auto valid = require_object(value, "SCNG", field); !valid) {
+                return std::move(valid).error();
+            }
+            const auto vertices_member = value.find("vertices");
+            const auto color_member = value.find("color");
+            if (vertices_member == value.end() || color_member == value.end() ||
+                !vertices_member->is_array()) {
+                return fail<CropPolygonRecord>(
+                    lfs::ErrorCode::DataLoss, "A scene crop polygon is incomplete.",
+                    std::format("SCNG.{} is missing vertices or color", field), "SCNG",
+                    field);
+            }
+            if (vertices_member->size() < lfs::core::crop_polygon::kMinVertices ||
+                vertices_member->size() > lfs::core::crop_polygon::kMaxVertices) {
+                return fail<CropPolygonRecord>(
+                    lfs::ErrorCode::DataLoss, "A scene crop polygon is invalid.",
+                    std::format("SCNG.{}.vertices has {} entries, expected 3 to {}", field,
+                                vertices_member->size(), lfs::core::crop_polygon::kMaxVertices),
+                    "SCNG", field);
+            }
+            CropPolygonRecord result;
+            std::vector<glm::vec2> outline;
+            outline.reserve(vertices_member->size());
+            for (std::size_t i = 0; i < vertices_member->size(); ++i) {
+                auto vertex = fixed_array<float, 2>((*vertices_member)[i], "SCNG",
+                                                    std::format("{}.vertices[{}]", field, i));
+                if (!vertex) {
+                    return std::move(vertex).error();
+                }
+                result.vertices.push_back(*vertex);
+                outline.emplace_back((*vertex)[0], (*vertex)[1]);
+            }
+            auto color = fixed_array<float, 3>(*color_member, "SCNG",
+                                               std::format("{}.color", field));
+            auto half_depth = required<float>(value, "half_depth", "SCNG", field);
+            auto inverse = required<bool>(value, "inverse", "SCNG", field);
+            auto enabled = required<bool>(value, "enabled", "SCNG", field);
+            auto line_width = required<float>(value, "line_width", "SCNG", field);
+            if (!color) {
+                return std::move(color).error();
+            }
+            if (!half_depth) {
+                return std::move(half_depth).error();
+            }
+            if (!inverse) {
+                return std::move(inverse).error();
+            }
+            if (!enabled) {
+                return std::move(enabled).error();
+            }
+            if (!line_width) {
+                return std::move(line_width).error();
+            }
+            if (!std::isfinite(*line_width) || *line_width <= 0.0f ||
+                !lfs::core::crop_polygon::isValidHalfDepth(*half_depth) ||
+                !lfs::core::crop_polygon::isValidOutline(outline)) {
+                return fail<CropPolygonRecord>(
+                    lfs::ErrorCode::DataLoss, "A scene crop polygon is invalid.",
+                    std::format("SCNG.{} has a degenerate outline, depth, or line width", field),
+                    "SCNG", field);
+            }
+            result.half_depth = *half_depth;
+            result.inverse = *inverse;
+            result.enabled = *enabled;
+            result.color = *color;
+            result.line_width = *line_width;
+            return result;
+        }
+
+        Json crop_polygon_json(const CropPolygonRecord& value) {
+            Json vertices = Json::array();
+            for (const auto& vertex : value.vertices) {
+                vertices.push_back(json_array(vertex));
+            }
+            return Json{
+                {"vertices", std::move(vertices)},
+                {"half_depth", value.half_depth},
+                {"inverse", value.inverse},
+                {"enabled", value.enabled},
+                {"color", json_array(value.color)},
+                {"line_width", value.line_width},
+            };
+        }
+
         lfs::Result<std::vector<float>> finite_float_vector(
             const Json& object, const std::string_view key,
             const std::string_view field, const std::size_t maximum_size) {
@@ -2656,6 +2743,7 @@ namespace lfs::io::project {
                 .cropbox = std::nullopt,
                 .ellipsoid = std::nullopt,
                 .camera = std::nullopt,
+                .crop_polygon = std::nullopt,
             };
             if (JsonChapterDom::read_json_ref(element, "point_cloud_source")) {
                 auto point_source = JsonChapterDom::read<bool>(element, "point_cloud_source");
@@ -2730,6 +2818,15 @@ namespace lfs::io::project {
                     return std::move(parsed).error();
                 }
                 result.ellipsoid = std::move(*parsed);
+            }
+            if (const Json* crop_polygon =
+                    JsonChapterDom::read_json_ref(element, "crop_polygon");
+                crop_polygon) {
+                auto parsed = parse_crop_polygon(*crop_polygon, "nodes.crop_polygon");
+                if (!parsed) {
+                    return std::move(parsed).error();
+                }
+                result.crop_polygon = std::move(*parsed);
             }
             if (const Json* camera =
                     JsonChapterDom::read_json_ref(element, "camera");
@@ -2938,6 +3035,11 @@ namespace lfs::io::project {
             element["ellipsoid"] = ellipsoid_json(*value.ellipsoid);
         } else {
             element.erase("ellipsoid");
+        }
+        if (value.crop_polygon) {
+            element["crop_polygon"] = crop_polygon_json(*value.crop_polygon);
+        } else {
+            element.erase("crop_polygon");
         }
         if (value.camera) {
             element["camera"] = camera_json(*value.camera);

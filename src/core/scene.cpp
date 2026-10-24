@@ -4356,6 +4356,40 @@ namespace lfs::core {
         return id;
     }
 
+    NodeId Scene::addCropPolygon(const std::string& name, const NodeId parent_id, CropPolygonData data,
+                                 const glm::mat4& local_transform) {
+        const auto* parent = getNodeById(parent_id);
+        if (!parent) {
+            LOG_WARN("Cannot add crop polygon '{}': parent id {} does not exist", name, parent_id);
+            return NULL_NODE;
+        }
+        if (!isSceneNodeParentCompatible(parent->type, NodeType::CROP_POLYGON)) {
+            LOG_WARN("Cannot add crop polygon '{}': parent is not a splat", name);
+            return NULL_NODE;
+        }
+        if (const NodeId existing = getCropPolygonForSplat(parent_id); existing != NULL_NODE) {
+            return existing;
+        }
+        if (!crop_polygon::isValidOutline(data.vertices) || !crop_polygon::isValidHalfDepth(data.half_depth)) {
+            LOG_WARN("Cannot add crop polygon '{}': the outline or depth is degenerate", name);
+            return NULL_NODE;
+        }
+
+        const std::string unique_name = makeUniqueNodeName(name_to_id_, name);
+
+        auto node = std::make_unique<SceneNode>();
+        node->parent_id = parent_id;
+        node->type = NodeType::CROP_POLYGON;
+        node->name = unique_name;
+        node->crop_polygon = std::make_unique<CropPolygonData>(std::move(data));
+        node->local_transform = local_transform;
+
+        const NodeId id = insertNode(std::move(node));
+        if (id != NULL_NODE)
+            LOG_DEBUG("Added crop polygon node '{}' (id={}) as child of node id={}", unique_name, id, parent_id);
+        return id;
+    }
+
     NodeId Scene::addDataset(const std::string& name) {
         auto node = std::make_unique<SceneNode>();
         node->parent_id = NULL_NODE;
@@ -4507,6 +4541,18 @@ namespace lfs::core {
                 return NULL_NODE;
             }
             node->ellipsoid = std::move(desc.ellipsoid);
+            break;
+        case NodeType::CROP_POLYGON:
+            if (!desc.crop_polygon) {
+                LOG_ERROR("Cannot restore crop polygon node '{}': payload is missing", node->name);
+                return NULL_NODE;
+            }
+            if (!crop_polygon::isValidOutline(desc.crop_polygon->vertices) ||
+                !crop_polygon::isValidHalfDepth(desc.crop_polygon->half_depth)) {
+                LOG_ERROR("Cannot restore crop polygon node '{}': the outline or depth is degenerate", node->name);
+                return NULL_NODE;
+            }
+            node->crop_polygon = std::move(desc.crop_polygon);
             break;
         case NodeType::CAMERA:
             if (!desc.camera) {
@@ -4976,6 +5022,9 @@ namespace lfs::core {
                         }
                     }
                 }
+            } else if (src_type == NodeType::CROP_POLYGON) {
+                // Drawn in a camera plane for one splat; duplicates start without it.
+                return NULL_NODE;
             } else if (src_type == NodeType::POINTCLOUD && src->point_cloud) {
                 auto cloned = std::make_shared<PointCloud>(*src->point_cloud);
                 for (auto member : {&PointCloud::means, &PointCloud::colors, &PointCloud::normals,
@@ -5935,7 +5984,8 @@ namespace lfs::core {
 
         for (const NodeId child_id : node->children) {
             const auto* child_node = getNodeById(child_id);
-            if (child_node && (child_node->type == NodeType::CROPBOX || child_node->type == NodeType::ELLIPSOID))
+            if (child_node && (child_node->type == NodeType::CROPBOX || child_node->type == NodeType::ELLIPSOID ||
+                               child_node->type == NodeType::CROP_POLYGON))
                 continue;
 
             glm::vec3 child_min, child_max;
@@ -6127,6 +6177,75 @@ namespace lfs::core {
             rel.effectively_visible = effectively_visible;
             rel.parent_effectively_visible = parent_effectively_visible;
             result.push_back(rel);
+        }
+
+        return result;
+    }
+
+    NodeId Scene::getCropPolygonForSplat(const NodeId splat_id) const {
+        const auto* splat = splat_id == NULL_NODE ? nullptr : getNodeById(splat_id);
+        if (!splat) {
+            return NULL_NODE;
+        }
+
+        for (const NodeId child_id : splat->children) {
+            const auto* child = getNodeById(child_id);
+            if (child && child->type == NodeType::CROP_POLYGON) {
+                return child_id;
+            }
+        }
+        return NULL_NODE;
+    }
+
+    CropPolygonData* Scene::getCropPolygonData(const NodeId polygon_id) {
+        auto* node = getNodeById(polygon_id);
+        if (!node || node->type != NodeType::CROP_POLYGON) {
+            return nullptr;
+        }
+        return node->crop_polygon.get();
+    }
+
+    const CropPolygonData* Scene::getCropPolygonData(const NodeId polygon_id) const {
+        const auto* node = getNodeById(polygon_id);
+        if (!node || node->type != NodeType::CROP_POLYGON) {
+            return nullptr;
+        }
+        return node->crop_polygon.get();
+    }
+
+    bool Scene::setCropPolygonData(const NodeId polygon_id, const CropPolygonData& data) {
+        auto* node = getNodeById(polygon_id);
+        if (!node || node->type != NodeType::CROP_POLYGON || !node->crop_polygon) {
+            return false;
+        }
+        if (!crop_polygon::isValidOutline(data.vertices) || !crop_polygon::isValidHalfDepth(data.half_depth)) {
+            LOG_WARN("Rejected invalid crop polygon data for '{}'", node->name);
+            return false;
+        }
+        *node->crop_polygon = data;
+        return true;
+    }
+
+    std::vector<Scene::RenderableCropPolygon> Scene::getRenderableCropPolygons() const {
+        std::vector<RenderableCropPolygon> result;
+
+        for (const auto& node : nodes_) {
+            if (node->type != NodeType::CROP_POLYGON || !node->crop_polygon)
+                continue;
+            const bool effectively_visible = isNodeEffectivelyVisible(node->id);
+            if (!effectively_visible && !node->crop_polygon->enabled)
+                continue;
+
+            result.push_back(RenderableCropPolygon{
+                .node_id = node->id,
+                .parent_splat_id = node->parent_id,
+                .parent_node_index = getVisibleNodeIndex(node->parent_id),
+                .data = node->crop_polygon.get(),
+                .world_transform = getWorldTransform(node->id),
+                .local_transform = node->local_transform.get(),
+                .effectively_visible = effectively_visible,
+                .parent_effectively_visible = isNodeEffectivelyVisible(node->parent_id),
+            });
         }
 
         return result;
