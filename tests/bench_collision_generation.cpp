@@ -38,7 +38,7 @@ int main(int argc, char** argv) {
         const auto start = std::chrono::steady_clock::now();
         auto elapsed = [&] { return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(); };
         try {
-            auto volume = generateCollision(source, settings, {}, [&](const auto& stage) { std::cout << nlohmann::json{{"seconds", elapsed()}, {"stage", stage}}.dump() << std::endl; }, voxelizeCollisionGpu);
+            auto volume = generateCollision(source, settings, {}, [&](float value, const auto& stage) { std::cout << nlohmann::json{{"seconds", elapsed()}, {"progress", value}, {"stage", stage}}.dump() << std::endl; }, voxelizeCollisionGpu);
             std::cout << nlohmann::json{{"generation_s", elapsed()}, {"source", source.size()}, {"cell_size", volume.settings.voxel_size}, {"occupied", volume.occupiedCount()}, {"cpu_tree_bytes", volume.tree.size() * 4}, {"dimensions", {volume.dimensions.x, volume.dimensions.y, volume.dimensions.z}}, {"note", volume.warning}}.dump() << std::endl;
             // Export is deliberately outside the reported generation interval.
             if (const auto* path = std::getenv("LFS_COLLISION_BENCHMARK_VOLUME")) {

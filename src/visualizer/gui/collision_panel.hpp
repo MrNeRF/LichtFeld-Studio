@@ -67,7 +67,6 @@ namespace lfs::vis::gui {
         std::mutex mutex_;
         std::string progress_;
         float progress_value_ = 0;
-        int progress_total_ = 1;
         std::chrono::steady_clock::time_point job_started_;
         std::chrono::steady_clock::time_point next_progress_ui_;
         std::string job_title_, job_context_, job_outcome_, error_report_;

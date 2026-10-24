@@ -13,6 +13,7 @@
 #include "io/collision_export.hpp"
 #include "python/python_runtime.hpp"
 #include <RmlUi/Core.h>
+#include <algorithm>
 #include <format>
 
 namespace lfs::vis::gui {
@@ -96,7 +97,7 @@ namespace lfs::vis::gui {
         if (busy_ && now >= next_update_) {
             std::lock_guard lock(mutex_);
             document_->GetElementById("export-job")->SetProperty("display", "block");
-            text("export-stage", collisionTaskLabel(progress_));
+            text("export-stage", progress_);
             text("export-time", LOCF("collision.progress_finished", std::chrono::duration<double>(now - started_).count()));
             document_->GetElementById("export-progress-fill")->SetProperty("width", std::format("{:.0f}%", progress_value_ * 100));
             document_->GetElementById("export-progress")->SetAttribute("aria-valuenow", progress_value_ * 100);
@@ -168,9 +169,9 @@ namespace lfs::vis::gui {
         document_->GetElementById("export-job")->SetProperty("display", "block");
         worker_ = std::jthread([this, voxels, path, volume, mesh, transform, stride, shape](std::stop_token stop) {
             try {
-                auto report = [&](std::string message) {
+                auto report = [&](float value, std::string message) {
                     std::lock_guard lock(mutex_);
-                    progress_value_ = message.starts_with("Writing") ? 2.0f / 3 : 1.0f / 3;
+                    progress_value_ = std::max(progress_value_, std::clamp(value, 0.f, 1.f));
                     progress_ = std::move(message);
                 };
                 if (voxels)
@@ -180,9 +181,10 @@ namespace lfs::vis::gui {
                     const auto indices = mesh->indices.to(core::Device::CPU).contiguous();
                     io::exportCollisionGlb({vertices.ptr<float>(), vertices.numel()}, {indices.ptr<int32_t>(), indices.numel()}, transform, path, stop, report);
                 } else {
-                    report("Building export surface at " + std::to_string(stride) + "x cell size");
-                    const auto surface = stride == 1 ? volume->mesh(shape, stop, report) : volume->coarsened(stride, stop).mesh(shape, stop, report);
-                    io::exportCollisionGlb(surface.vertices, surface.indices, transform, path, stop, report);
+                    report(0, "Building export surface at " + std::to_string(stride) + "x cell size");
+                    auto surface_progress = core::collisionProgressRange(report, 0, .6f);
+                    const auto surface = stride == 1 ? volume->mesh(shape, stop, surface_progress) : volume->coarsened(stride, stop).mesh(shape, stop, surface_progress);
+                    io::exportCollisionGlb(surface.vertices, surface.indices, transform, path, stop, core::collisionProgressRange(report, .6f, 1));
                 }
             } catch (const std::exception& e) {
                 std::lock_guard lock(mutex_);

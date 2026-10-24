@@ -147,7 +147,7 @@ namespace lfs::vis::gui {
             document_->GetElementById(id)->SetInnerRML(Rml::StringUtilities::EncodeRml(text));
         };
         const auto context = failed_job
-                                 ? std::format("{} · Failed step: {} · {:.1f}s elapsed. {}", job_title_, collisionTaskLabel(progress_),
+                                 ? std::format("{} · Failed step: {} · {:.1f}s elapsed. {}", job_title_, progress_,
                                                std::chrono::duration<double>(std::chrono::steady_clock::now() - job_started_).count(), job_context_)
                                  : "The requested action was not applied.";
         set("error-advice", info.advice);
@@ -435,7 +435,7 @@ namespace lfs::vis::gui {
         if (busy_ && now >= next_progress_ui_) {
             std::lock_guard lock(mutex_);
             status(job_title_ + "…");
-            document_->GetElementById("progress-stage")->SetInnerRML(Rml::StringUtilities::EncodeRml(collisionTaskLabel(progress_)));
+            document_->GetElementById("progress-stage")->SetInnerRML(Rml::StringUtilities::EncodeRml(progress_));
             updateProgressBar();
             next_progress_ui_ = now + std::chrono::milliseconds(100);
             host_.markContentDirty();
@@ -511,62 +511,23 @@ namespace lfs::vis::gui {
         if (s.auto_resolution)
             job_context_ += " Automatic resolution enabled; displayed cell size is the previous/minimum value.";
         progress_value_ = 0;
-        progress_total_ = 3 + (s.cluster || s.adaptive_filter) + s.external_fill + s.floor_fill + (s.carve_height > 0);
         worker_ = std::jthread([this, snapshots = std::move(snapshots), sources = std::move(sources),
                                 s, grid_to_world, world_to_grid, target, display, scene_generation, graph_epoch](std::stop_token stop) mutable {
             try {
-                auto report = [&](std::string text) {
+                auto report = [&](float value, std::string text) {
                     std::lock_guard lock(mutex_);
-                    if (text.starts_with("Voxelizing Auto cell size:"))
-                        job_context_ += " " + text.substr(11);
-                    int phase = 0;
-                    float fraction = 0;
-                    if (text.starts_with("Clustering")) {
-                        phase = 1;
-                        if (text.starts_with("Clustering coarse Voxelizing GPU: "))
-                            fraction = 0.35f * float(std::stoi(text.substr(text.find(": ") + 2))) / 100;
-                        else if (text.starts_with("Clustering coarse Voxelizing regions: "))
-                            fraction = 0.35f * float(std::stoi(text.substr(text.find(": ") + 2))) / 8;
-                        else if (text.starts_with("Clustering connected"))
-                            fraction = 0.4f;
-                        else if (text.starts_with("Clustering splats: ")) {
-                            const auto slash = text.find('/');
-                            fraction = 0.5f + 0.5f * float(std::stoull(text.substr(text.find(": ") + 2))) / std::stoull(text.substr(slash + 1));
-                        } else if (text.starts_with("Clustering source connectivity: ")) {
-                            const auto slash = text.find('/');
-                            fraction = 0.3f + 0.6f * float(std::stoull(text.substr(text.find(": ") + 2))) / std::max(1ull, std::stoull(text.substr(slash + 1)));
-                        } else if (text.starts_with("Clustering cleanup:"))
-                            fraction = s.cluster ? 0.3f : 1.f;
-                        else if (text.starts_with("Clustering complete"))
-                            fraction = 1;
-                    } else if (text.starts_with("Voxelizing")) {
-                        phase = 1 + (s.cluster || s.adaptive_filter);
-                        if (text.starts_with("Voxelizing GPU: "))
-                            fraction = float(std::stoi(text.substr(text.find(": ") + 2))) / 100;
-                        else if (text.starts_with("Voxelizing regions: ")) {
-                            auto start = text.find(": ") + 2;
-                            fraction = float(std::stoi(text.substr(start))) / 8;
-                        }
-                    } else if (text.starts_with("Sealing"))
-                        phase = 2 + (s.cluster || s.adaptive_filter);
-                    else if (text.starts_with("Filling"))
-                        phase = 2 + (s.cluster || s.adaptive_filter) + s.external_fill;
-                    else if (text.starts_with("Flooding"))
-                        phase = 2 + (s.cluster || s.adaptive_filter) + s.external_fill + s.floor_fill;
-                    else if (text.starts_with("Finalizing"))
-                        phase = progress_total_ - 1;
-                    progress_value_ = std::max(progress_value_, (phase + fraction) / progress_total_);
-                    progress_ = stop.stop_requested() ? "Cancelling — waiting for the current batch to finish" : std::move(text);
+                    progress_value_ = std::max(progress_value_, std::clamp(value, 0.f, 1.f));
+                    progress_ = stop.stop_requested() ? "Cancelling: waiting for the current batch to finish" : std::move(text);
                 };
-                report("Reading Gaussian snapshot");
+                report(0, "Reading source positions, scales, rotations and opacity");
                 auto gaussians = core::extractCollisionSource(snapshots, world_to_grid, stop);
                 snapshots.clear(); // Release snapshot buffers before allocating occupancy.
                 const auto begin = std::chrono::steady_clock::now();
                 auto volume = std::make_shared<core::CollisionVolume>(
-                    core::generateCollision(gaussians, s, stop, report, core::voxelizeCollisionGpu));
+                    core::generateCollision(gaussians, s, stop, core::collisionProgressRange(report, .05f, .95f), core::voxelizeCollisionGpu));
                 const auto voxelized = std::chrono::steady_clock::now();
                 volume->show_voxels = true;
-                report("Finalizing viewport preview");
+                report(.95f, "Finalizing viewport preview");
                 // Scene graph uses a tiny bounds carrier; preview and Walk read
                 // occupancy directly. Build a physical surface only on request.
                 auto mesh = makeMesh(volume->boundsMesh());
@@ -733,21 +694,17 @@ namespace lfs::vis::gui {
         job_title_ = LOC("collision.building_surface");
         job_context_ = std::format("Surface resolution {}×; source collision cell {:.4g} scene units.", display.surface_stride, volume->settings.voxel_size);
         progress_value_ = 0;
-        progress_total_ = 3;
         worker_ = std::jthread([this, volume, display, shape, transform, generation, epoch, target](std::stop_token stop) {
             try {
-                auto report = [&](std::string text) {
+                auto report = [&](float value, std::string text) {
                     std::lock_guard lock(mutex_);
                     progress_ = std::move(text);
-                    progress_value_ = 1.0f / 3;
+                    progress_value_ = std::max(progress_value_, std::clamp(value, 0.f, 1.f));
                 };
-                report("Preparing surface resolution");
-                auto surface = display.surface_stride == 1 ? volume->mesh(shape, stop, report) : volume->coarsened(display.surface_stride, stop).mesh(shape, stop, report);
-                {
-                    std::lock_guard lock(mutex_);
-                    progress_ = "Computing surface normals";
-                    progress_value_ = 2.0f / 3;
-                }
+                report(0, "Preparing surface resolution");
+                auto surface_progress = core::collisionProgressRange(report, .05f, .85f);
+                auto surface = display.surface_stride == 1 ? volume->mesh(shape, stop, surface_progress) : volume->coarsened(display.surface_stride, stop).mesh(shape, stop, surface_progress);
+                report(.85f, "Computing surface normals");
                 auto mesh = makeMesh(std::move(surface), stop);
                 std::lock_guard lock(mutex_);
                 result_ = Result{volume, mesh, transform, {}, target, generation, epoch, display, true};

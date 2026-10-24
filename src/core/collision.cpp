@@ -633,7 +633,7 @@ namespace lfs::core {
             if (std::isfinite(result.area_limit))
                 result.note += std::format(" Area limit: {:.4g} m² ({}).", result.area_limit / (double(settings.units_per_meter) * settings.units_per_meter), settings.max_gaussian_area > 0 ? "custom" : "automatic");
             if (progress)
-                progress("Clustering cleanup: " + result.note);
+                progress(settings.cluster ? .3f : 1.f, "Source cleanup: " + result.note);
             if (!settings.cluster || result.indices.empty()) {
                 if (result.indices.size() == source.size())
                     result.note.clear();
@@ -694,7 +694,7 @@ namespace lfs::core {
                 if ((i & 4095) == 0) {
                     checkpoint(stop);
                     if (progress)
-                        progress(std::format("Clustering source connectivity: {}/{}", i, cells.size()));
+                        progress(.3f + .6f * float(i) / cells.size(), "Connecting observed source cells on CPU");
                 }
                 const auto p = cells[i].p;
                 for (int z = -1; z <= 1; ++z)
@@ -759,7 +759,7 @@ namespace lfs::core {
             result.indices.resize(kept);
             result.note += std::format(" Connected source region kept {} / {} splats at {:.4g} scene-unit spacing; final voxel size is unchanged.", kept, source.size(), size);
             if (progress)
-                progress("Clustering complete: " + result.note);
+                progress(1, "Source filtering complete: " + result.note);
             return result;
         }
 
@@ -808,7 +808,7 @@ namespace lfs::core {
                 if ((i & 4095) == 0) {
                     checkpoint(stop);
                     if (progress)
-                        progress(std::format("Clustering splats: {}/{}", i, source.size()));
+                        progress(float(i) / source.size(), "Selecting contributing splats");
                 }
                 const auto& g = source[i];
                 // Upstream's fast path also preserves low-opacity and sub-voxel
@@ -886,7 +886,7 @@ namespace lfs::core {
             if (result.indices.empty())
                 throw std::runtime_error("Cluster seed/contribution threshold retained no Gaussians");
             if (progress)
-                progress(std::format("Clustering splats: {}/{}", source.size(), source.size()));
+                progress(1, "Contributing splats selected");
             return result;
         }
     } // namespace collision_detail
@@ -898,15 +898,16 @@ namespace lfs::core {
             throw std::invalid_argument("No source Gaussians");
         if (gaussians.size() > CollisionGaussian::max_count)
             throw std::runtime_error("Collision source exceeds 32 million Gaussians");
-        auto report = [&](const char* text) { checkpoint(stop); if (progress) progress(text); };
+        auto report = [&](float value, std::string text) { checkpoint(stop); if (progress) progress(value, std::move(text)); checkpoint(stop); };
+        const float filtered_end = (s.cluster || s.adaptive_filter) ? .2f : 0.f;
         auto voxelize = [&](std::span<const CollisionGaussian> source, CollisionSettings options, CollisionProgress report) {
             return backend ? backend(source, options, stop, std::move(report)) : collision_detail::voxelizeSparse(source, options, stop, std::move(report));
         };
         std::vector<CollisionGaussian> filtered;
         std::string cluster_note;
         if (s.adaptive_filter) {
-            report("Clustering source cleanup");
-            auto selection = collision_detail::selectAdaptiveSource(gaussians, s, stop, progress);
+            report(0, "Finding reconstruction outliers on CPU");
+            auto selection = collision_detail::selectAdaptiveSource(gaussians, s, stop, collisionProgressRange(progress, 0, filtered_end));
             cluster_note = std::move(selection.note);
             if (selection.indices.size() != gaussians.size()) {
                 filtered.reserve(selection.indices.size());
@@ -918,22 +919,21 @@ namespace lfs::core {
                 throw std::runtime_error("Source cleanup excluded all splats; increase maximum splat area or choose Keep all splats");
         }
         if (s.cluster && !s.adaptive_filter) {
-            report("Clustering Gaussians");
+            report(0, "Preparing connected-region filter");
             auto coarse_settings = s;
             coarse_settings.voxel_size = s.cluster_resolution;
             coarse_settings.opacity = s.cluster_opacity;
-            auto coarse = voxelize(gaussians, coarse_settings, [&](std::string text) {
-                if (progress)
-                    progress("Clustering coarse " + text);
+            auto coarse = voxelize(gaussians, coarse_settings, [&](float value, std::string text) {
+                report(value * .1f, "Connected-region filter: " + text);
             });
-            report("Clustering connected component");
-            const auto selection = collision_detail::selectCluster(gaussians, coarse, s.seed, s.cluster_min_contribution, stop, progress);
+            report(.1f, "Finding the occupied region nearest the seed");
+            const auto selection = collision_detail::selectCluster(gaussians, coarse, s.seed, s.cluster_min_contribution, stop, collisionProgressRange(progress, .1f, filtered_end));
             cluster_note = std::format("Cluster filter kept {} / {} splats.", selection.indices.size(), gaussians.size());
             const float seed_offset = glm::distance(selection.resolved_seed, s.seed);
             if (seed_offset > 0)
                 cluster_note += std::format(" Seed snapped {:.3g} scene units to an occupied region; move the seed if the wrong region is selected.", seed_offset);
             if (progress)
-                progress("Clustering complete: " + cluster_note);
+                progress(filtered_end, "Source filtering complete: " + cluster_note);
             if (selection.indices.size() != gaussians.size()) {
                 filtered.reserve(selection.indices.size());
                 for (auto i : selection.indices)
@@ -948,11 +948,12 @@ namespace lfs::core {
                 cluster_note += " ";
             cluster_note += note;
             if (progress)
-                progress("Voxelizing " + note);
+                progress(filtered_end, note);
         }
-        report("Voxelizing rotated Gaussian ellipsoids");
-        auto grid = voxelize(gaussians, s, progress);
-        grid = processCollisionVolume(std::move(grid), stop, std::move(progress));
+        report(filtered_end, "Preparing full-resolution collision cells");
+        auto grid = voxelize(gaussians, s, collisionProgressRange(progress, filtered_end, .85f));
+        grid = processCollisionVolume(std::move(grid), stop, collisionProgressRange(progress, .85f, 1));
+        checkpoint(stop);
         if (!cluster_note.empty())
             grid.warning = cluster_note + (grid.warning.empty() ? "" : " " + grid.warning);
         return grid;
@@ -962,7 +963,9 @@ namespace lfs::core {
             return collision_detail::processSparse(std::move(grid), stop, std::move(progress));
         grid.validate();
         auto s = grid.settings;
-        auto report = [&](const char* text) { checkpoint(stop); if (progress) progress(text); };
+        const int stages = s.external_fill + s.floor_fill + (s.carve_height > 0);
+        int phase = 0;
+        auto report = [&](const char* text) { checkpoint(stop); if (progress) progress(stages ? float(phase++) / stages : 1, text); checkpoint(stop); };
         if (std::none_of(grid.solid.begin(), grid.solid.end(), [](auto v) { return v != 0; }))
             throw std::runtime_error("No occupied voxels; lower opacity or voxel size");
         if (s.external_fill) {
@@ -1057,7 +1060,7 @@ namespace lfs::core {
                 grid.solid[i] = grid.solid[i] || !navigable[i];
         }
         grid.validate();
-        report("Building collision surface");
+        report("Collision occupancy ready");
         return grid;
     }
 
@@ -1139,6 +1142,8 @@ namespace lfs::core {
     }
     CollisionMesh CollisionVolume::mesh(CollisionShape shape, std::stop_token stop, CollisionProgress progress) const {
         validate();
+        if (progress)
+            progress(0, "Building collision surface");
         CollisionMesh result, output;
         std::vector<std::array<int32_t, 3>> keys;
         std::unordered_map<std::array<int32_t, 3>, int32_t, GridPointHash> seams;
@@ -1164,14 +1169,15 @@ namespace lfs::core {
             result.indices.insert(result.indices.end(), {a, b, c});
         };
         uint64_t work = 0, chunks = 0;
-        std::function<void(glm::ivec3, int)> build = [&](glm::ivec3 lo, int n) {
+        std::function<void(glm::ivec3, int, float, float)> build = [&](glm::ivec3 lo, int n, float start, float end) {
             checkpoint(stop);
             const auto halo = shape == CollisionShape::Faces ? glm::ivec3(1) : glm::ivec3(0);
             if (occupancy.uniform(lo - halo, lo + n + 1) >= 0)
                 return;
             if (n > 32) {
                 for (int child = 0; child < 8; ++child)
-                    build(lo + glm::ivec3(child & 1, (child >> 1) & 1, child >> 2) * (n / 2), n / 2);
+                    build(lo + glm::ivec3(child & 1, (child >> 1) & 1, child >> 2) * (n / 2), n / 2,
+                          start + (end - start) * child / 8, start + (end - start) * (child + 1) / 8);
                 return;
             }
             work += uint64_t(n) * n * n;
@@ -1348,12 +1354,15 @@ namespace lfs::core {
             vertices.clear();
             keys.clear();
             if (progress && (++chunks == 1 || chunks % 32 == 0))
-                progress(std::format("Surface: {} chunks, {} triangles", chunks, output.indices.size() / 3));
+                progress(end, std::format("Surface: {} chunks, {} triangles", chunks, output.indices.size() / 3));
         };
         int root_size = 1;
         while (root_size < std::max({dimensions.x, dimensions.y, dimensions.z}) + 1)
             root_size *= 2;
-        build(glm::ivec3(-1), root_size);
+        build(glm::ivec3(-1), root_size, 0, 1);
+        if (progress)
+            progress(1, "Collision surface ready");
+        checkpoint(stop);
         return output;
     }
 

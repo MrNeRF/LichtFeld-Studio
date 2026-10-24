@@ -3,44 +3,10 @@
 #pragma once
 #include <algorithm>
 #include <cctype>
-#include <charconv>
 #include <string>
 #include <string_view>
 
 namespace lfs::vis::gui {
-    inline std::string collisionTaskLabel(std::string_view text) {
-        if (text.starts_with("Clustering coarse "))
-            return "Connected-region filter: " + collisionTaskLabel(text.substr(18));
-        if (text.starts_with("Voxelizing GPU: ")) {
-            int percent = 0;
-            const auto number = text.substr(16);
-            if (std::from_chars(number.data(), number.data() + number.size(), percent).ec == std::errc{}) {
-                if (percent < 15)
-                    return "Preparing Gaussian bounds on CPU";
-                if (percent < 97)
-                    return "Evaluating sparse collision regions and cells on GPU";
-                return "Assembling sparse occupancy on CPU";
-            }
-        }
-        if (text == "Clustering source cleanup")
-            return "Finding reconstruction outliers on CPU";
-        if (text.starts_with("Clustering source connectivity: "))
-            return "Connecting observed source cells on CPU: " + std::string(text.substr(32));
-        if (text == "Clustering Gaussians")
-            return "Preparing the connected-region filter";
-        if (text == "Clustering connected component")
-            return "Finding the occupied region nearest the seed";
-        if (text.starts_with("Clustering splats: "))
-            return "Selecting contributing splats: " + std::string(text.substr(19));
-        if (text == "Reading Gaussian snapshot")
-            return "Reading source positions, scales, rotations and opacity";
-        if (text == "Voxelizing acceleration structure (CPU)")
-            return "Building the Gaussian search structure on CPU";
-        if (text == "Voxelizing rotated Gaussian ellipsoids")
-            return "Preparing full-resolution collision cells";
-        return std::string(text);
-    }
-
     struct CollisionFailureInfo {
         std::string title;
         std::string advice;

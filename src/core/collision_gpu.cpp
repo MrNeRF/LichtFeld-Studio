@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
-#include <format>
 #include <limits>
 
 namespace lfs::core {
@@ -19,18 +18,13 @@ namespace lfs::core {
             if (stop.stop_requested())
                 throw std::runtime_error("Collision generation cancelled");
         };
-        auto report = [&](float value) {
-            check();
-            if (progress)
-                progress(std::format("Voxelizing GPU: {}/100", int(value * 100)));
-        };
-        report(0);
+        auto report = [&](float value, std::string stage) { check(); if (progress) progress(value, std::move(stage)); check(); };
+        report(0, "Preparing Gaussian bounds on CPU");
         auto input = collision_detail::prepareCollision(source, settings, stop);
-        if (progress)
-            progress("Voxelizing acceleration structure (CPU)");
+        report(.1f, "Building the Gaussian search structure on CPU");
         auto& gs = input.gaussians;
         auto bvh = collision_detail::buildCollisionBvh(std::span(gs), stop);
-        report(.15f);
+        report(.15f, "Evaluating sparse collision regions and cells on GPU");
         auto volume = std::move(input.volume);
         collision_detail::Tree tree(volume.dimensions, stop);
         static_assert(sizeof(collision_detail::PreparedGaussian) == sizeof(cuda::CollisionGaussianGpu));
@@ -39,17 +33,15 @@ namespace lfs::core {
         auto bricks = cuda::voxelizeCollisionBricks(
             {reinterpret_cast<const cuda::CollisionGaussianGpu*>(gs.data()), gs.size()}, bvh.view(), tree.size,
             {volume.dimensions.x, volume.dimensions.y, volume.dimensions.z}, {volume.origin.x, volume.origin.y, volume.origin.z},
-            settings.voxel_size, -std::log1p(-double(settings.opacity)), stop, report);
+            settings.voxel_size, -std::log1p(-double(settings.opacity)), stop,
+            [&](float value) { report(value, "Evaluating sparse collision regions and cells on GPU"); });
         if (bricks.empty())
             throw std::runtime_error("No occupied voxels; lower opacity or voxel size");
-        report(.97f);
-        if (progress)
-            progress("Voxelizing sorting occupied bricks (CPU)");
+        report(.97f, "Sorting occupied bricks on CPU");
         // Only compact occupied 4^3 masks return to the host. Sorted prefixes
         // build the canonical Walk/archive tree directly, without per-voxel inserts.
         std::sort(bricks.begin(), bricks.end(), [](auto a, auto b) { return (a.morton & cuda::CollisionBrick::key_mask) < (b.morton & cuda::CollisionBrick::key_mask); });
-        if (progress)
-            progress("Voxelizing assembling occupancy (CPU)");
+        report(.98f, "Assembling sparse occupancy on CPU");
         auto allocate = [&] {
             if (tree.nodes.size() + 8 > CollisionVolume::max_tree_words)
                 throw std::runtime_error("Collision CPU tree budget exceeded");
@@ -108,10 +100,9 @@ namespace lfs::core {
         assemble(assemble, 0, tree.size, 0, bricks.size());
         volume.tree = std::move(tree.nodes);
         volume.tree_size = tree.size;
-        if (progress)
-            progress("Voxelizing validating occupancy (CPU)");
+        report(.99f, "Validating sparse occupancy on CPU");
         volume.validate();
-        report(1);
+        report(1, "GPU collision cells ready");
         return volume;
     }
 } // namespace lfs::core

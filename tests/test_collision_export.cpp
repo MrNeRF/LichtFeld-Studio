@@ -137,8 +137,8 @@ TEST_F(CollisionExport, CancellationKeepsPriorFilesAndCleansTemporaryPayloads) {
         std::ofstream(dir / "scene.voxel.bin") << "old bin";
     }
     std::stop_source stop;
-    EXPECT_THROW(io::exportCollisionVoxels(v, glm::mat4(1), dir / "scene.voxel.json", stop.get_token(), [&](const auto& label) {
-                     if (label.starts_with("Writing"))
+    EXPECT_THROW(io::exportCollisionVoxels(v, glm::mat4(1), dir / "scene.voxel.json", stop.get_token(), [&](float value, const auto&) {
+                     if (value >= .8f)
                          stop.request_stop();
                  }),
                  std::runtime_error);
@@ -146,6 +146,33 @@ TEST_F(CollisionExport, CancellationKeepsPriorFilesAndCleansTemporaryPayloads) {
     std::getline(std::ifstream(dir / "scene.voxel.json"), content);
     EXPECT_EQ(content, "old json");
     EXPECT_EQ(std::distance(std::filesystem::directory_iterator(dir), std::filesystem::directory_iterator{}), 2);
+}
+TEST_F(CollisionExport, ProgressIsMonotonicAndGlbCancellationPreservesPriorOutput) {
+    const auto v = volume();
+    const auto surface = v.boundsMesh();
+    float previous = 0;
+    auto report = [&](float value, const auto& stage) {
+        EXPECT_GE(value, previous);
+        EXPECT_LE(value, 1);
+        EXPECT_FALSE(stage.empty());
+        previous = value;
+    };
+    io::exportCollisionVoxels(v, glm::mat4(1), dir / "scene.voxel.json", {}, report);
+    EXPECT_FLOAT_EQ(previous, 1);
+    previous = 0;
+    io::exportCollisionGlb(surface.vertices, surface.indices, glm::mat4(1), dir / "scene.glb", {}, report);
+    EXPECT_FLOAT_EQ(previous, 1);
+    std::ofstream(dir / "scene.glb") << "prior surface";
+    std::stop_source stop;
+    EXPECT_THROW(io::exportCollisionGlb(surface.vertices, surface.indices, glm::mat4(1), dir / "scene.glb", stop.get_token(), [&](float value, auto) {
+                     if (value >= .5f)
+                         stop.request_stop();
+                 }),
+                 std::runtime_error);
+    std::string prior;
+    std::getline(std::ifstream(dir / "scene.glb"), prior);
+    EXPECT_EQ(prior, "prior surface");
+    EXPECT_EQ(std::distance(std::filesystem::directory_iterator(dir), std::filesystem::directory_iterator{}), 3);
 }
 TEST_F(CollisionExport, OverwritePublishesBothFilesAndInvalidDestinationKeepsThePriorPair) {
     auto v = volume();

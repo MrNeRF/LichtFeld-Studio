@@ -111,6 +111,8 @@ namespace lfs::io {
                                const std::filesystem::path& path, std::stop_token stop, core::CollisionProgress progress) {
         check(stop);
         v.validate();
+        if (progress)
+            progress(0, "Preparing SuperSplat export");
         if (!path.filename().string().ends_with(".voxel.json"))
             throw std::runtime_error("SuperSplat collision metadata must end in .voxel.json");
         auto binary = path;
@@ -155,13 +157,13 @@ namespace lfs::io {
             glm::ivec3 min;
         };
         std::vector<Pending> level{{0, 0, edge, {0, 0, 0}}}, next;
-        uint32_t interiors = 0, mixed = 0;
+        uint32_t interiors = 0, mixed = 0, levels = 0;
         const bool small = std::max({v.dimensions.x, v.dimensions.y, v.dimensions.z}) <= 4;
         if (!v.occupiedCount())
             level.clear(), nodes.clear();
         while (!level.empty()) {
             if (progress)
-                progress("Packing SuperSplat octree — " + std::to_string(nodes.size()) + " nodes");
+                progress(.7f * levels++ / (depth + 1), "Packing SuperSplat octree: " + std::to_string(nodes.size()) + " nodes");
             next.clear();
             for (const auto& p : level) {
                 check(stop);
@@ -239,7 +241,7 @@ namespace lfs::io {
         Json meta{{"version", "1.1"}, {"asset", {{"generator", "LichtFeld Studio"}}}, {"gridBounds", {{"min", xyz(lo)}, {"max", xyz(hi)}}}, {"sceneBounds", {{"min", xyz(scene_lo)}, {"max", xyz(scene_hi)}}}, {"voxelResolution", scale * v.settings.voxel_size}, {"leafSize", 4}, {"treeDepth", depth}, {"numInteriorNodes", interiors}, {"numMixedLeaves", mixed}, {"nodeCount", nodes.size()}, {"leafDataCount", leaves.size()}};
         Temporary bin_tmp(binary), json_tmp(path);
         if (progress)
-            progress("Writing SuperSplat voxel pair");
+            progress(.8f, "Writing SuperSplat voxel pair");
         {
             auto out = output(bin_tmp.path);
             words(out, nodes, stop);
@@ -251,11 +253,15 @@ namespace lfs::io {
         }
         check(stop);
         publish({{&bin_tmp, binary}, {&json_tmp, path}});
+        if (progress)
+            progress(1, "SuperSplat export complete");
     }
 
     void exportCollisionGlb(std::span<const float> vertices, std::span<const int32_t> indices, const glm::mat4& data_world,
                             const std::filesystem::path& path, std::stop_token stop, core::CollisionProgress progress) {
         check(stop);
+        if (progress)
+            progress(0, "Preparing collision GLB surface");
         if (vertices.empty() || indices.empty() || vertices.size() % 3 || indices.size() % 3)
             throw std::runtime_error("Build a collision surface before exporting GLB");
         const auto transform = playcanvas(data_world);
@@ -291,7 +297,7 @@ namespace lfs::io {
         word(out, uint32_t(vertices_bytes + indices_bytes));
         word(out, 0x004e4942);
         if (progress)
-            progress("Writing collision GLB surface");
+            progress(.5f, "Writing collision GLB surface");
         for (size_t i = 0; i < vertices.size(); i += 3) {
             if ((i & 4095) == 0)
                 check(stop);
@@ -310,5 +316,7 @@ namespace lfs::io {
         out.close();
         check(stop);
         publish({{&temp, path}});
+        if (progress)
+            progress(1, "GLB export complete");
     }
 } // namespace lfs::io

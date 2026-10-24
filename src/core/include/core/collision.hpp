@@ -9,6 +9,7 @@
 #include <span>
 #include <stop_token>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace lfs::core {
@@ -100,7 +101,14 @@ namespace lfs::core {
     } // namespace collision_detail
 
     // Immutable once attached to a scene node. Coordinates are node-local, +Y up.
-    using CollisionProgress = std::function<void(std::string)>;
+    using CollisionProgress = std::function<void(float, std::string)>;
+    inline CollisionProgress collisionProgressRange(CollisionProgress callback, float start, float end) {
+        if (!callback)
+            return {};
+        return [callback = std::move(callback), start, end](float value, std::string stage) {
+            callback(start + (end - start) * value, std::move(stage));
+        };
+    }
 
     struct LFS_CORE_API CollisionVolume {
         static constexpr size_t max_cells = 16'000'000;

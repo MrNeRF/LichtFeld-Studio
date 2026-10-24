@@ -102,7 +102,14 @@ namespace {
             CollisionSettings s;
             s.voxel_size = .1f;
             s.opacity = threshold;
-            same(generateCollision(source, s), generateCollision(source, s, {}, {}, voxelizeCollisionGpu));
+            float previous = 0;
+            const auto gpu = generateCollision(source, s, {}, [&](float value, const auto& stage) {
+                EXPECT_GE(value, previous);
+                EXPECT_LE(value, 1);
+                EXPECT_FALSE(stage.empty());
+                previous = value; }, voxelizeCollisionGpu);
+            EXPECT_FLOAT_EQ(previous, 1);
+            same(generateCollision(source, s), gpu);
         }
     }
     TEST_F(CollisionGpu, UniformInteriorProofMatchesExactCellsAndPartialPadding) {
@@ -156,8 +163,8 @@ namespace {
         s.voxel_size = .02f;
         const CollisionGaussian g{{0, 0, 0}, glm::mat3(.5f), 1};
         std::stop_source stop;
-        EXPECT_THROW((void)voxelizeCollisionGpu(std::span(&g, 1), s, stop.get_token(), [&](const std::string& message) {
-                         if (message.starts_with("Voxelizing GPU: ") && std::stoi(message.substr(16)) > 15 && std::stoi(message.substr(16)) < 97)
+        EXPECT_THROW((void)voxelizeCollisionGpu(std::span(&g, 1), s, stop.get_token(), [&](float value, const std::string&) {
+                         if (value > .15f && value < .97f)
                              stop.request_stop();
                      }),
                      std::runtime_error);

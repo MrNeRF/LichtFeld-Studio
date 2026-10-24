@@ -390,6 +390,8 @@ namespace lfs::core::collision_detail {
 
     CollisionVolume voxelizeSparse(std::span<const CollisionGaussian> source, CollisionSettings settings,
                                    std::stop_token stop, CollisionProgress progress, unsigned parallelism) {
+        if (progress)
+            progress(0, "Preparing Gaussian bounds on CPU");
         const double cutoff = -std::log1p(-double(settings.opacity));
         auto input = prepareCollision(source, settings, stop);
         auto volume = std::move(input.volume);
@@ -548,7 +550,7 @@ namespace lfs::core::collision_detail {
                     branches[octant] = buildBranch(int(octant));
                     if (progress) {
                         std::lock_guard lock(progress_mutex);
-                        progress(std::format("Voxelizing regions: {}/8", ++completed));
+                        progress(.1f + .9f * ++completed / 8, "Evaluating sparse collision regions on CPU");
                     } }, context);
             });
             tree.nodes.assign(9, 0);
@@ -567,6 +569,9 @@ namespace lfs::core::collision_detail {
         }
         volume.tree_size = tree.size;
         volume.tree = std::move(tree.nodes);
+        if (progress)
+            progress(1, "CPU collision cells ready");
+        check(stop);
         return volume;
     }
 
@@ -585,10 +590,14 @@ namespace lfs::core::collision_detail {
         };
         if (!any_solid(any_solid, 0, {}, volume.tree_size))
             throw std::runtime_error("No occupied voxels; lower opacity or voxel size");
-        auto report = [&](const char* text) { check(stop); if (progress) progress(text); };
         const auto& s = volume.settings;
-        if (!s.external_fill && !s.floor_fill && s.carve_height == 0)
+        const int stages = s.external_fill + s.floor_fill + (s.carve_height > 0);
+        int phase = 0;
+        auto report = [&](const char* text) { check(stop); if (progress) progress(stages ? float(phase++) / stages : 1, text); check(stop); };
+        if (!stages) {
+            report("Collision occupancy ready");
             return volume;
+        }
         Tree tree(volume.dimensions, stop);
         tree.nodes = std::move(volume.tree);
         if (s.external_fill) {

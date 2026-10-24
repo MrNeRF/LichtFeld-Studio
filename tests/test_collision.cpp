@@ -12,15 +12,17 @@
 #include <random>
 
 using namespace lfs::core;
-TEST(CollisionJobStatus, NamesCpuGpuAndFilterWorkWithoutParsingFailures) {
-    using lfs::vis::gui::collisionTaskLabel;
-    EXPECT_EQ(collisionTaskLabel("Voxelizing GPU: 0/100"), "Preparing Gaussian bounds on CPU");
-    EXPECT_EQ(collisionTaskLabel("Voxelizing GPU: 30/100"), "Evaluating sparse collision regions and cells on GPU");
-    EXPECT_EQ(collisionTaskLabel("Voxelizing GPU: 90/100"), "Evaluating sparse collision regions and cells on GPU");
-    EXPECT_EQ(collisionTaskLabel("Voxelizing GPU: 97/100"), "Assembling sparse occupancy on CPU");
-    EXPECT_EQ(collisionTaskLabel("Clustering coarse Voxelizing GPU: 0/100"), "Connected-region filter: Preparing Gaussian bounds on CPU");
-    EXPECT_EQ(collisionTaskLabel("Voxelizing GPU: unknown"), "Voxelizing GPU: unknown");
-    EXPECT_EQ(collisionTaskLabel("Surface: 100 chunks, 2000 triangles"), "Surface: 100 chunks, 2000 triangles");
+TEST(CollisionProgress, NestedRangesPreserveFractionsAndStageLabels) {
+    float value = -1;
+    std::string stage;
+    auto report = [&](float p, std::string text) { value = p; stage = std::move(text); };
+    const auto nested = collisionProgressRange(collisionProgressRange(report, .2f, .8f), .25f, .75f);
+    nested(0, "Preparing");
+    EXPECT_FLOAT_EQ(value, .35f);
+    nested(1, "Ready");
+    EXPECT_FLOAT_EQ(value, .65f);
+    EXPECT_EQ(stage, "Ready");
+    EXPECT_FALSE(collisionProgressRange({}, 0, 1));
 }
 TEST(CollisionJobStatus, FailuresGiveRecoveryAdviceAndDistinguishCancellation) {
     using lfs::vis::gui::collisionFailureInfo;
@@ -92,12 +94,81 @@ namespace {
             EXPECT_EQ(counts.second, 0) << edge.first << "," << edge.second;
         }
     }
+    auto recordProgress(std::vector<float>& values) {
+        return [&values](float value, const std::string& stage) {
+            EXPECT_GE(value, values.empty() ? 0 : values.back());
+            EXPECT_LE(value, 1);
+            EXPECT_FALSE(stage.empty());
+            values.push_back(value);
+        };
+    }
     CapsuleQuery query(const CollisionVolume& g) {
         return [&g](glm::vec3 feet, glm::vec3 up, float height, float radius) {
             return g.capsuleIntersects(feet, up, height, radius);
         };
     }
 } // namespace
+TEST(CollisionProgress, GenerationReportsMonotonicFractionsAcrossFilterModes) {
+    std::vector<CollisionGaussian> source;
+    for (int i = 0; i < 96; ++i)
+        source.push_back({{float(i % 8) * .04f, 0, float(i / 8) * .04f}, glm::mat3(.04f), .8f});
+    source.push_back({{5, 0, 0}, glm::mat3(.05f), .7f});
+    for (unsigned mode = 0; mode < 4; ++mode)
+        for (bool automatic : {false, true}) {
+            CollisionSettings s;
+            s.adaptive_filter = mode == 1 || mode == 2;
+            s.cluster = mode >= 2;
+            s.cluster_resolution = .2f;
+            s.cluster_opacity = .1f;
+            s.cluster_min_contribution = .01f;
+            s.voxel_size = .1f;
+            s.auto_resolution = automatic;
+            s.seed = {.1f, .1f, .1f};
+            std::vector<float> values;
+            const auto result = generateCollision(source, s, {}, recordProgress(values));
+            ASSERT_FALSE(values.empty());
+            EXPECT_FLOAT_EQ(values.front(), 0);
+            EXPECT_FLOAT_EQ(values.back(), 1);
+            EXPECT_GT(result.occupiedCount(), 0u);
+        }
+}
+TEST(CollisionProgress, PostprocessingAndSurfaceProgressRespectCancellation) {
+    auto checkJob = [](auto operation) {
+        std::vector<float> values;
+        operation(std::stop_token{}, recordProgress(values));
+        ASSERT_FALSE(values.empty());
+        EXPECT_FLOAT_EQ(values.back(), 1);
+        for (float cancel_at : {0.f, .5f, 1.f}) {
+            std::stop_source stop;
+            EXPECT_THROW(operation(stop.get_token(), [&](float value, auto) {
+                             if (value >= cancel_at)
+                                 stop.request_stop();
+                         }),
+                         std::runtime_error);
+            EXPECT_TRUE(stop.stop_requested());
+        }
+    };
+    for (unsigned mask = 0; mask < 8; ++mask)
+        for (bool compressed : {false, true}) {
+            auto v = grid({40, 40, 40});
+            box(v, {2, 2, 2}, {37, 37, 37}, true);
+            v.settings.seed = {2, 2, 2};
+            v.settings.external_fill = mask & 1;
+            v.settings.external_size = .2f;
+            v.settings.floor_fill = mask & 2;
+            v.settings.floor_size = .2f;
+            v.settings.carve_height = mask & 4 ? .8f : 0;
+            v.settings.carve_radius = .1f;
+            if (compressed)
+                v = sparse(std::move(v));
+            checkJob([&](auto stop, auto report) { (void)processCollisionVolume(v, stop, report); });
+        }
+    auto v = grid({35, 12, 35});
+    box(v, {1, 1, 1}, {33, 10, 33}, true);
+    v = sparse(std::move(v));
+    for (auto shape : {CollisionShape::Faces, CollisionShape::Smooth})
+        checkJob([&](auto stop, auto report) { EXPECT_FALSE(v.mesh(shape, stop, report).indices.empty()); });
+}
 TEST(CollisionSettings, PresetsDomainsAndBounds) {
     CollisionSettings s;
     s.applyPreset(CollisionPreset::Indoor);
@@ -324,7 +395,7 @@ TEST(CollisionSparse, ExternalLeakAndCancelledProcessingNeverProduceSuccess) {
     sameOccupancy(input, result);
     EXPECT_FALSE(result.warning.empty());
     std::stop_source stop;
-    EXPECT_THROW((void)processCollisionVolume(input, stop.get_token(), [&](auto) { stop.request_stop(); }), std::runtime_error);
+    EXPECT_THROW((void)processCollisionVolume(input, stop.get_token(), [&](float, auto) { stop.request_stop(); }), std::runtime_error);
 }
 TEST(CollisionSparse, BatchedFloorPreservesUnevenHeightsHolesAndPadding) {
     auto input = grid({67, 43, 73});
@@ -342,7 +413,7 @@ TEST(CollisionSparse, BatchedFloorPreservesUnevenHeightsHolesAndPadding) {
     sameOccupancy(processCollisionVolume(input), result);
     sameOccupancy(result, nlohmann::json(result).get<CollisionVolume>());
     std::stop_source stop;
-    EXPECT_THROW((void)processCollisionVolume(sparse(input), stop.get_token(), [&](auto stage) {
+    EXPECT_THROW((void)processCollisionVolume(sparse(input), stop.get_token(), [&](float, auto stage) {
                      if (stage == "Filling sparse ground columns")
                          stop.request_stop();
                  }),
@@ -685,13 +756,13 @@ TEST(CollisionVoxelization, ParallelBricksMatchSerialIncludingPartialBoundaryCel
     ASSERT_EQ(serial.origin, parallel.origin);
     sameOccupancy(serial, parallel);
     try {
-        (void)collision_detail::voxelizeSparse(source, settings, {}, [](auto) { throw std::runtime_error("worker callback failure"); }, 4);
+        (void)collision_detail::voxelizeSparse(source, settings, {}, [](float value, auto) { if (value > 0) throw std::runtime_error("worker callback failure"); }, 4);
         FAIL() << "Expected worker callback failure";
     } catch (const std::runtime_error& error) {
         EXPECT_STREQ(error.what(), "worker callback failure");
     }
     std::stop_source stop;
-    EXPECT_THROW((void)collision_detail::voxelizeSparse(source, settings, stop.get_token(), [&](auto) { stop.request_stop(); }, 4), std::runtime_error);
+    EXPECT_THROW((void)collision_detail::voxelizeSparse(source, settings, stop.get_token(), [&](float value, auto) { if (value > .1f && value < 1) stop.request_stop(); }, 4), std::runtime_error);
     EXPECT_TRUE(stop.stop_requested());
     sameOccupancy(serial, collision_detail::voxelizeSparse(source, settings, {}, {}, 4));
 }
