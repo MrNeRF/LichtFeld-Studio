@@ -39,7 +39,7 @@ source edits or a project change invalidate an in-flight result.
 
 The popup follows the Logging utility window: one compact settings toolbar and
 one generation action bar, with a scrollable body. Cell size, opacity and source
-filtering appear once. **Inspect collision**, **Walk and edit**, and **Advanced**
+filtering appear once. **Inspect collision**, **Walk and edit**, **Save and export**, and **Advanced**
 are collapsible. Scale, filter tuning, filling, seed and triangle-surface options
 live under Advanced. Progress and error reports are outside those sections.
 
@@ -53,6 +53,44 @@ The initial seed comes from the camera, in data-world XYZ. **Use camera position
 under Advanced filtering refreshes it. Keep it at standing eye height above the desired floor. Strict clustering
 chooses the nearest coarse component; exterior filling needs an enclosed seed;
 capsule carving needs enough clearance there. The navigation up-axis is respected.
+
+## Saving and exporting
+
+Collision nodes have a distinct subdivided-cube icon in the scene graph. Right-click
+one and choose **Export…** to open its **Save and export** section. Exporting uses
+an immutable payload snapshot on a worker, with progress, cancellation and error
+details. It does not regenerate occupancy or change the scene.
+
+- **Save your `.licht` project** to embed the collision occupancy, generation
+  settings, preview controls and node transform. No external sidecar is required
+  when reopening a project; deferred hydration preserves the collider too.
+- **Export for SuperSplat…** writes a version 1.1 `.voxel.json` / `.voxel.bin`
+  pair directly from occupancy. It does not build triangles or round-trip through
+  GPU buffers. In SuperSplat Studio, open **Assets → Collision → Upload**, select
+  both files, and upload the pair alongside your splat.
+- **Export surface (.glb)…** writes a standard triangle GLB. If a surface is already
+  built, that surface is exported. Otherwise the exporter builds the optional
+  surface using **Advanced → Triangle surface** shape and resolution multiplier.
+  No normals, GPU upload or scene-node replacement is needed for that export.
+
+Both exports bake the complete node/parent world transform and the PlayCanvas PLY
+import rotation (`Rz(180°)`). Export your splats with the same world transforms so
+the pair aligns. Scene units are preserved; SuperSplat recommends one unit per
+metre for walking. GLB accepts arbitrary affine transforms and corrects reflected
+triangle winding. The voxel format has no transform field: export preserves exact
+cells for axis permutations/reflections, translation and uniform scale. A rotated,
+sheared or nonuniformly scaled grid fails explicitly, with guidance to align the
+scene and regenerate or use GLB; it is never silently resampled.
+
+The format's 24-bit node and leaf indices are checked before writing. If the export
+exceeds them, increase collision cell size and regenerate. Temporary files are
+removed on failure/cancellation. Replacing a pair requires confirmation for both
+companions, publishes metadata last, and restores prior files on a publication
+failure. As in SuperSplat, navigation outside the exported grid is treated as solid
+by its viewer; LFS Walk retains its own existing out-of-grid behavior.
+
+References: [SuperSplat collision uploads](https://developer.playcanvas.com/user-manual/supersplat/studio/collision/)
+and the [voxel format specification](https://developer.playcanvas.com/user-manual/splat-transform/voxel-format/).
 
 ## Advanced controls
 
