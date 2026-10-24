@@ -703,3 +703,80 @@ TEST(TrainingCropBoxMask, CliCropBoxRotationRoundTripsThroughTheProject) {
         EXPECT_NEAR(components.translation.z, -2.5f, 1e-5f);
     }
 }
+
+namespace {
+
+    // An L outline: the square [-1, 1]^2 without its (0, 1) x (0, 1) quarter, the notch.
+    const std::vector<glm::vec2> kLOutline{{-1.0f, -1.0f}, {1.0f, -1.0f}, {1.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 1.0f}, {-1.0f, 1.0f}};
+
+    // A training model with an L crop polygon over |z| <= 0.5, moved to x = 10 by its node transform.
+    lfs::core::SplatData* add_training_model_with_l_crop_polygon(lfs::core::Scene& scene, const bool inverse) {
+        auto model = make_test_splat({10.5f, -0.5f, 0.0f, // bottom arm
+                                      10.5f, 0.5f, 0.0f,  // the notch
+                                      9.5f, 0.5f, 0.25f,  // upper arm
+                                      9.5f, -0.5f, 0.75f, // above the slab
+                                      12.0f, 0.0f, 0.0f}, // beside the outline
+                                     lfs::core::Device::CUDA);
+        auto* const model_ptr = model.get();
+        const auto model_id = scene.addSplat("Model", std::move(model));
+        scene.setTrainingModelNode("Model");
+        EXPECT_NE(scene.addCropPolygon("Model_crop_polygon", model_id,
+                                       lfs::core::CropPolygonData{.vertices = kLOutline, .half_depth = 0.5f, .inverse = inverse},
+                                       glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 0.0f, 0.0f))),
+                  lfs::core::NULL_NODE);
+        return model_ptr;
+    }
+
+} // namespace
+
+// Catches a crop polygon on the training model that is ignored, or cropped by its bounding box or without its slab.
+TEST(TrainingCropBoxMask, CropPolygonRemovesRowsOutsideTheConcaveOutlineAndSlab) {
+    for (const bool inverse : {false, true}) {
+        SCOPED_TRACE(inverse ? "inverse" : "normal");
+        lfs::core::Scene scene;
+        auto* const model = add_training_model_with_l_crop_polygon(scene, inverse);
+
+        const auto geometry = lfs::training::resolve_training_cropbox_geom(scene);
+        ASSERT_TRUE(geometry.has_value());
+        EXPECT_TRUE(geometry->is_polygon());
+        expect_vec3_eq(geometry->min, {-1.0f, -1.0f, -0.5f});
+        expect_vec3_eq(geometry->max, {1.0f, 1.0f, 0.5f});
+        EXPECT_FALSE(lfs::training::training_crop_region_contains(*geometry, {0.5f, 0.5f, 0.0f}));
+        EXPECT_TRUE(lfs::training::training_crop_region_contains(*geometry, {-0.5f, 0.5f, 0.0f}));
+
+        const auto remove_mask = lfs::training::compute_training_cropbox_remove_mask(scene, *model);
+        ASSERT_TRUE(remove_mask.has_value());
+        const std::vector<bool> outside{false, true, false, true, true};
+        std::vector<bool> expected = outside;
+        if (inverse)
+            expected.flip();
+        EXPECT_EQ(remove_mask->to(lfs::core::Device::CPU).to_vector_bool(), expected);
+    }
+
+    lfs::core::Scene disabled;
+    add_training_model_with_l_crop_polygon(disabled, false);
+    const auto* const model_node = disabled.getNode("Model");
+    auto data = *disabled.getCropPolygonData(disabled.getCropPolygonForSplat(model_node->id));
+    data.enabled = false;
+    disabled.setCropPolygonData(disabled.getCropPolygonForSplat(model_node->id), data);
+    EXPECT_FALSE(lfs::training::resolve_training_cropbox_geom(disabled).has_value());
+}
+
+// Catches an export or crop at end that keeps the notch of a concave crop polygon or changes the model it copies.
+TEST(TrainingCropBoxMask, ExportCopyAndCropMaskFollowTheCropPolygon) {
+    lfs::core::Scene scene;
+    auto* const model = add_training_model_with_l_crop_polygon(scene, false);
+    const auto geometry = lfs::training::resolve_training_cropbox_geom(scene);
+    ASSERT_TRUE(geometry.has_value());
+    const auto means_before = model->means().to(lfs::core::Device::CPU).to_vector();
+
+    const auto crop = lfs::training::training_cropbox_crop_mask(*model, *geometry);
+    ASSERT_TRUE(crop.has_value());
+    EXPECT_EQ(crop->to(lfs::core::Device::CPU).to_vector_bool(), (std::vector<bool>{false, true, false, true, true}));
+
+    const auto copy = lfs::training::crop_copy_to_training_cropbox(*model, *geometry);
+    ASSERT_TRUE(copy.has_value());
+    EXPECT_EQ(copy->means().to(lfs::core::Device::CPU).to_vector(),
+              (std::vector<float>{10.5f, -0.5f, 0.0f, 9.5f, 0.5f, 0.25f}));
+    EXPECT_EQ(model->means().to(lfs::core::Device::CPU).to_vector(), means_before);
+}

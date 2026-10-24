@@ -1764,7 +1764,7 @@ namespace lfs::training {
                 return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
                     .code = lfs::ErrorCode::FailedPrecondition,
                     .domain = lfs::ErrorDomain::Training,
-                    .user_message = "Final export failed: no splat lies inside the crop box.",
+                    .user_message = "Final export failed: no splat lies inside the crop box or polygon.",
                     .detail = "--crop leaves no rows to export",
                     .detection = LFS_SOURCE_SITE_CURRENT(),
                 }));

@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <iostream>
 #include <iterator>
@@ -3117,6 +3118,35 @@ namespace {
         scene.setNodeTransform(cropbox_id, glm::mat4{1.0f});
     }
 
+    // A crop polygon on the training model over half of add_half_training_cropbox's box: the triangle under its
+    // diagonal, centred on its node like a drawn polygon, so cropping to its bounds would keep too much.
+    void add_half_training_crop_polygon(lfs::core::Scene& scene) {
+        const auto* node = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
+        ASSERT_NE(node, nullptr);
+        ASSERT_NE(node->model, nullptr);
+        const auto means = node->model->means().to(lfs::core::Device::CPU).to_vector();
+        glm::vec3 lo(std::numeric_limits<float>::max());
+        glm::vec3 hi(std::numeric_limits<float>::lowest());
+        std::vector<float> xs;
+        for (size_t i = 0; i + 2 < means.size(); i += 3) {
+            const glm::vec3 mean(means[i], means[i + 1], means[i + 2]);
+            lo = glm::min(lo, mean);
+            hi = glm::max(hi, mean);
+            xs.push_back(mean.x);
+        }
+        std::ranges::nth_element(xs, xs.begin() + xs.size() / 2);
+        const glm::vec3 min = lo - 1.0f;
+        const glm::vec3 max{xs[xs.size() / 2], hi.y + 1.0f, hi.z + 1.0f};
+        const glm::vec3 centre = (min + max) * 0.5f;
+        const glm::vec2 half = glm::vec2(max - min) * 0.5f;
+        lfs::core::CropPolygonData polygon{
+            .vertices = {{-half.x, -half.y}, {half.x, -half.y}, {-half.x, half.y}},
+            .half_depth = (max.z - min.z) * 0.5f};
+        ASSERT_NE(scene.addCropPolygon("Model_crop_polygon", node->id, std::move(polygon),
+                                       glm::translate(glm::mat4{1.0f}, centre)),
+                  lfs::core::NULL_NODE);
+    }
+
     size_t ply_vertex_count(const std::filesystem::path& path) {
         std::ifstream in(path, std::ios::binary);
         constexpr std::string_view prefix = "element vertex ";
@@ -3230,6 +3260,36 @@ namespace {
 
             std::filesystem::remove_all(output_path, ec);
         }
+    }
+
+    // Catches --crop ignoring a crop polygon on the training model: a completed run keeps only the splats in it.
+    TEST_F(ProjectCheckpointTrainerInstall, CropToCropPolygonCropsACompletedRun) {
+        const auto output_path = std::filesystem::temp_directory_path() / "lfs_test_crop_polygon_on_completion";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+
+        auto params = make_tiny_headless_params(output_path, 4);
+        params.optimization.crop_to_cropbox = true;
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        ASSERT_NO_FATAL_FAILURE(add_half_training_crop_polygon(scene));
+        const size_t initial = scene.getTrainingModel()->visible_count();
+        auto trainer = std::make_unique<lfs::training::Trainer>(scene);
+        ASSERT_TRUE(trainer->initialize(params));
+        lfs::training::grant_headless_project_saves(*trainer, params);
+        auto train = trainer->train();
+        ASSERT_TRUE(train) << lfs::format_for_developer(train.error());
+
+        const auto& model = trainer->get_strategy().get_model();
+        const auto outside = lfs::training::compute_training_cropbox_remove_mask(scene, model);
+        ASSERT_TRUE(outside);
+        EXPECT_LT(static_cast<size_t>(model.visible_count()), initial);
+        EXPECT_EQ(outside->sum_scalar(), 0);
+        trainer->shutdown();
+        std::filesystem::remove_all(output_path, ec);
     }
 
     TEST_F(ProjectCheckpointTrainerInstall,

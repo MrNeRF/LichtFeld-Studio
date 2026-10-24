@@ -2054,6 +2054,12 @@ namespace lfs::training {
                        ? deleted.ptr<bool>()
                        : nullptr;
         }
+
+        lfs::training::kernels::RoiPolygon roi_polygon(const TrainingCropBoxGeometry& region) {
+            return {.vertices = region.polygon.data(),
+                    .count = static_cast<int>(region.polygon.size()),
+                    .half_depth = region.max.z};
+        }
     } // namespace
 
     void Trainer::install_cropbox_view_damping(
@@ -2071,17 +2077,24 @@ namespace lfs::training {
         const auto means = model.get_means().contiguous();
         const auto scales = model.scaling_raw().contiguous();
         auto rejected = bool_rows(cropbox_view_reject_, n);
-        lfs::training::kernels::launch_roi_view_reject_mask(
-            means.ptr<float>(), scales.ptr<float>(), n, cropbox_->model_to_cropbox, cropbox_->world_to_cropbox,
-            camera.cam_position_ptr(), cropbox_->min, cropbox_->max, cropbox_->inverse,
-            deleted_rows(model), rejected.ptr<bool>(), lfs::core::getCurrentCUDAStream());
+        if (cropbox_->is_polygon()) {
+            lfs::training::kernels::launch_roi_view_reject_mask(
+                means.ptr<float>(), scales.ptr<float>(), n, cropbox_->model_to_cropbox, cropbox_->world_to_cropbox,
+                camera.cam_position_ptr(), roi_polygon(*cropbox_), cropbox_->inverse,
+                deleted_rows(model), rejected.ptr<bool>(), lfs::core::getCurrentCUDAStream());
+        } else {
+            lfs::training::kernels::launch_roi_view_reject_mask(
+                means.ptr<float>(), scales.ptr<float>(), n, cropbox_->model_to_cropbox, cropbox_->world_to_cropbox,
+                camera.cam_position_ptr(), cropbox_->min, cropbox_->max, cropbox_->inverse,
+                deleted_rows(model), rejected.ptr<bool>(), lfs::core::getCurrentCUDAStream());
+        }
         optimizer.set_crop_damping_mask(rejected);
     }
 
     void Trainer::crop_to_training_cropbox() {
         refresh_cropbox_snapshot();
         if (!cropbox_ || !strategy_) {
-            LOG_WARN("--crop: the training model has no active crop box, nothing is removed");
+            LOG_WARN("--crop: the training model has no active crop box or polygon, nothing is removed");
             return;
         }
         std::unique_lock render_lock(render_mutex_);
@@ -2097,8 +2110,8 @@ namespace lfs::training {
         if (outside->sum_scalar() > 0)
             strategy_->remove_gaussians(*outside);
         // MCMC soft-deletes removed splats, so count the live ones.
-        LOG_INFO("Cropped the trained model to its crop box: {} of {} splats kept",
-                 strategy_->get_model().visible_count(), before);
+        LOG_INFO("Cropped the trained model to its crop {}: {} of {} splats kept",
+                 cropbox_->is_polygon() ? "polygon" : "box", strategy_->get_model().visible_count(), before);
     }
 
     bool Trainer::cropbox_contains_camera(const lfs::core::Camera& camera) const {
@@ -2115,8 +2128,7 @@ namespace lfs::training {
         const glm::vec3 centre(-(r[0] * t[0] + r[3] * t[1] + r[6] * t[2]),
                                -(r[1] * t[0] + r[4] * t[1] + r[7] * t[2]),
                                -(r[2] * t[0] + r[5] * t[1] + r[8] * t[2]));
-        const glm::vec3 p = glm::vec3(cropbox_->world_to_cropbox * glm::vec4(centre, 1.0f));
-        return glm::all(glm::greaterThanEqual(p, cropbox_->min)) && glm::all(glm::lessThanEqual(p, cropbox_->max));
+        return training_crop_region_contains(*cropbox_, glm::vec3(cropbox_->world_to_cropbox * glm::vec4(centre, 1.0f)));
     }
 
     void Trainer::install_cropbox_score_damping(
@@ -2156,11 +2168,19 @@ namespace lfs::training {
         const auto scales = model.scaling_raw().contiguous();
         auto rejected = bool_rows(cropbox_score_reject_, n);
         auto in_roi = bool_rows(cropbox_roi_rows_, n);
-        lfs::training::kernels::launch_roi_relevance_reject_mask(
-            means.ptr<float>(), scales.ptr<float>(), n, cropbox_->model_to_cropbox, cropbox_camera_centres_.ptr<float>(),
-            static_cast<int>(cropbox_camera_centres_.size(0)), cropbox_->min, cropbox_->max,
-            cropbox_->inverse, deleted_rows(model), rejected.ptr<bool>(), in_roi.ptr<bool>(),
-            lfs::core::getCurrentCUDAStream());
+        if (cropbox_->is_polygon()) {
+            lfs::training::kernels::launch_roi_relevance_reject_mask(
+                means.ptr<float>(), scales.ptr<float>(), n, cropbox_->model_to_cropbox,
+                cropbox_camera_centres_.ptr<float>(), static_cast<int>(cropbox_camera_centres_.size(0)),
+                roi_polygon(*cropbox_), cropbox_->inverse, deleted_rows(model), rejected.ptr<bool>(),
+                in_roi.ptr<bool>(), lfs::core::getCurrentCUDAStream());
+        } else {
+            lfs::training::kernels::launch_roi_relevance_reject_mask(
+                means.ptr<float>(), scales.ptr<float>(), n, cropbox_->model_to_cropbox, cropbox_camera_centres_.ptr<float>(),
+                static_cast<int>(cropbox_camera_centres_.size(0)), cropbox_->min, cropbox_->max,
+                cropbox_->inverse, deleted_rows(model), rejected.ptr<bool>(), in_roi.ptr<bool>(),
+                lfs::core::getCurrentCUDAStream());
+        }
         optimizer.set_crop_score_mask(scale == 1.0f ? lfs::core::Tensor{} : rejected);
         optimizer.set_crop_roi_rows(growth_inside > 0.0f ? in_roi : lfs::core::Tensor{}, growth_inside);
     }
@@ -3233,7 +3253,8 @@ namespace lfs::training {
                                  cloud->means.shape()[0], (*splat)[0], (*splat)[1]);
                     } else if (lfs::core::param::is_eval_mask_cropbox(params_.optimization.eval_mask)) {
                         const auto cropbox = scene_ ? lfs::training::resolve_training_cropbox_geom(*scene_) : std::nullopt;
-                        if (!cropbox)
+                        // A crop polygon trains as the ROI, but the evaluation mask stays box-only.
+                        if (!cropbox || cropbox->is_polygon())
                             return std::unexpected("Evaluation mask 'cropbox' needs an enabled crop box on the training model");
                         evaluator_->set_eval_mesh(lfs::training::make_evaluation_box(
                             lfs::training::training_cropbox_model_corners(*cropbox), cropbox->inverse));
@@ -6999,25 +7020,46 @@ namespace lfs::training {
                                                                lfs::core::DataType::Float32);
                             if (map.stream() != roi_stream)
                                 map.set_stream(roi_stream);
-                            lfs::training::kernels::launch_roi_weight_map(
-                                cam->world_view_transform_ptr(),
-                                cam->cam_position_ptr(),
-                                fx,
-                                fy,
-                                cx,
-                                cy,
-                                output.width,
-                                output.height,
-                                cropbox_->world_to_cropbox,
-                                cropbox_->min,
-                                cropbox_->max,
-                                cropbox_->inverse,
-                                outside_weight,
-                                roi_rays,
-                                roi_surface ? roi_surface_depth.ptr<float>() : nullptr,
-                                roi_surface ? roi_surface_alpha.ptr<float>() : nullptr,
-                                map.ptr<float>(),
-                                roi_stream);
+                            if (cropbox_->is_polygon()) {
+                                lfs::training::kernels::launch_roi_weight_map(
+                                    cam->world_view_transform_ptr(),
+                                    cam->cam_position_ptr(),
+                                    fx,
+                                    fy,
+                                    cx,
+                                    cy,
+                                    output.width,
+                                    output.height,
+                                    cropbox_->world_to_cropbox,
+                                    roi_polygon(*cropbox_),
+                                    cropbox_->inverse,
+                                    outside_weight,
+                                    roi_rays,
+                                    roi_surface ? roi_surface_depth.ptr<float>() : nullptr,
+                                    roi_surface ? roi_surface_alpha.ptr<float>() : nullptr,
+                                    map.ptr<float>(),
+                                    roi_stream);
+                            } else {
+                                lfs::training::kernels::launch_roi_weight_map(
+                                    cam->world_view_transform_ptr(),
+                                    cam->cam_position_ptr(),
+                                    fx,
+                                    fy,
+                                    cx,
+                                    cy,
+                                    output.width,
+                                    output.height,
+                                    cropbox_->world_to_cropbox,
+                                    cropbox_->min,
+                                    cropbox_->max,
+                                    cropbox_->inverse,
+                                    outside_weight,
+                                    roi_rays,
+                                    roi_surface ? roi_surface_depth.ptr<float>() : nullptr,
+                                    roi_surface ? roi_surface_alpha.ptr<float>() : nullptr,
+                                    map.ptr<float>(),
+                                    roi_stream);
+                            }
                             map.sync_to_stream(lfs::core::getCurrentCUDAStream());
                         };
                         if (roi_loss_weighting) {

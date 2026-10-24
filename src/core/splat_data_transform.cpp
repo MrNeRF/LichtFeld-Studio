@@ -503,6 +503,49 @@ namespace lfs::core {
         return inside_both.all(std::span<const int>(reduce_dims), false);
     }
 
+    Tensor compute_crop_polygon_mask(const Tensor& means,
+                                     const std::span<const glm::vec2> vertices,
+                                     const float half_depth,
+                                     const glm::mat4& points_to_polygon) {
+        LFS_ASSERT_MSG(means.is_valid(), "crop polygon means must be valid");
+        LFS_ASSERT_MSG(means.dtype() == DataType::Float32, "crop polygon means must be Float32");
+        LFS_ASSERT_MSG(means.ndim() == 2, "crop polygon means must be a 2D tensor");
+        LFS_ASSERT_MSG(means.size(1) >= 3, "crop polygon means must have at least three columns");
+        LFS_ASSERT_MSG(crop_polygon::isValidOutline(vertices) && crop_polygon::isValidHalfDepth(half_depth),
+                       "crop polygon outline and depth must be valid");
+
+        const size_t num_points = static_cast<size_t>(means.size(0));
+        const auto device = means.device();
+        const auto rotation = Tensor::from_vector(
+            {points_to_polygon[0][0], points_to_polygon[1][0], points_to_polygon[2][0],
+             points_to_polygon[0][1], points_to_polygon[1][1], points_to_polygon[2][1],
+             points_to_polygon[0][2], points_to_polygon[1][2], points_to_polygon[2][2]},
+            {3, 3},
+            device);
+        const auto translation = Tensor::from_vector(
+            {points_to_polygon[3][0], points_to_polygon[3][1], points_to_polygon[3][2]},
+            {1, 3},
+            device);
+        const auto local_pos = means.slice(1, 0, 3).mm(rotation.t()).add(translation);
+        const auto x = local_pos.slice(1, 0, 1).squeeze(1);
+        const auto y = local_pos.slice(1, 1, 2).squeeze(1);
+        const auto z = local_pos.slice(1, 2, 3).squeeze(1);
+
+        // Even-odd rule, vectorised over points with one pass per edge.
+        auto crossings = Tensor::zeros({num_points}, device, DataType::Bool);
+        for (size_t i = 0, j = vertices.size() - 1; i < vertices.size(); j = i++) {
+            const glm::vec2 a = vertices[i];
+            const glm::vec2 b = vertices[j];
+            if (a.y == b.y)
+                continue; // A horizontal edge never straddles a scanline.
+            const float slope = (b.x - a.x) / (b.y - a.y);
+            const auto straddles = (y < a.y).logical_xor(y < b.y);
+            crossings = crossings.logical_xor(straddles.logical_and(x < (y - a.y) * slope + a.x));
+        }
+
+        return (z <= half_depth).logical_and(z >= -half_depth).logical_and(crossings);
+    }
+
     static Tensor compute_cropbox_mask(const Tensor& means,
                                        const lfs::geometry::BoundingBox& bounding_box) {
         const glm::mat4 points_to_cropbox = bounding_box.hasFullTransform()
@@ -705,38 +748,7 @@ namespace lfs::core {
             return Tensor();
         }
 
-        const size_t num_points = static_cast<size_t>(means.size(0));
-        const auto device = means.device();
-
-        const auto transform_tensor = Tensor::from_vector(
-            {world_to_local[0][0], world_to_local[1][0], world_to_local[2][0], world_to_local[3][0],
-             world_to_local[0][1], world_to_local[1][1], world_to_local[2][1], world_to_local[3][1],
-             world_to_local[0][2], world_to_local[1][2], world_to_local[2][2], world_to_local[3][2],
-             world_to_local[0][3], world_to_local[1][3], world_to_local[2][3], world_to_local[3][3]},
-            {4, 4}, device);
-
-        const auto ones = Tensor::ones({num_points, 1}, device);
-        const auto local_pos = transform_tensor.mm(means.cat(ones, 1).t()).t();
-        const auto x = local_pos.slice(1, 0, 1).squeeze(1);
-        const auto y = local_pos.slice(1, 1, 2).squeeze(1);
-        const auto z = local_pos.slice(1, 2, 3).squeeze(1);
-
-        // Even-odd rule, vectorised over points with one pass per edge.
-        auto crossings = Tensor::zeros({num_points}, device, DataType::Bool);
-        const auto& vertices = polygon.vertices;
-        for (size_t i = 0, j = vertices.size() - 1; i < vertices.size(); j = i++) {
-            const glm::vec2 a = vertices[i];
-            const glm::vec2 b = vertices[j];
-            if (a.y == b.y)
-                continue; // A horizontal edge never straddles a scanline.
-            const float slope = (b.x - a.x) / (b.y - a.y);
-            const auto straddles = (y < a.y).logical_xor(y < b.y);
-            crossings = crossings.logical_xor(straddles.logical_and(x < (y - a.y) * slope + a.x));
-        }
-
-        const auto inside_mask = (z <= polygon.half_depth)
-                                     .logical_and(z >= -polygon.half_depth)
-                                     .logical_and(crossings);
+        const auto inside_mask = compute_crop_polygon_mask(means, polygon.vertices, polygon.half_depth, world_to_local);
         const auto delete_mask = polygon.inverse ? inside_mask : inside_mask.logical_not();
         const int points_to_delete = delete_mask.sum_scalar();
 

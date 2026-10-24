@@ -2817,7 +2817,7 @@ namespace lfs::app {
                         if (const auto crop = trainer_manager ? trainer_manager->exportCropBox() : std::nullopt)
                             cropped = training::crop_copy_to_training_cropbox(*model, *crop);
                         if (cropped && cropped->size() == 0)
-                            return std::unexpected("No splat lies inside the crop box");
+                            return std::unexpected("No splat lies inside the crop box or polygon");
 
                         io::PlySaveOptions options{.output_path = path, .binary = true, .provenance = stamp};
                         auto result = io::save_ply(cropped ? *cropped : *model, options);

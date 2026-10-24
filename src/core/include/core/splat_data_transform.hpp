@@ -9,6 +9,7 @@
 #include <expected>
 #include <glm/glm.hpp>
 #include <memory>
+#include <span>
 #include <string>
 
 namespace lfs::geometry {
@@ -35,6 +36,13 @@ namespace lfs::core {
                                              const glm::vec3& crop_min,
                                              const glm::vec3& crop_max,
                                              const glm::mat4& points_to_cropbox);
+
+    // Rows of means (first three columns) inside the extruded polygon: |z| <= half_depth in the
+    // polygon frame and the even-odd rule over the outline, the test crop_polygon::containsPoint makes.
+    LFS_CORE_API Tensor compute_crop_polygon_mask(const Tensor& means,
+                                                  std::span<const glm::vec2> vertices,
+                                                  float half_depth,
+                                                  const glm::mat4& points_to_polygon);
 
     /**
      * @brief Crop SplatData by a bounding box (creates new filtered copy)

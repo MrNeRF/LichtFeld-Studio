@@ -200,3 +200,46 @@ TEST(PersistentMasksTest, DisabledCropboxInstallsNothing) {
     EXPECT_FALSE(opt.crop_damping_mask().is_valid());
     EXPECT_FALSE(opt.crop_score_mask().is_valid());
 }
+
+// Catches crop polygon damping or camera tests that use the outline's bounds: the splat in the notch of an L
+// trains damped, and a camera standing in the notch is not inside the region.
+TEST(PersistentMasksTest, CropPolygonViewDampingAndCameraTestFollowTheOutline) {
+    Scene scene;
+    // Trainer(scene) requires cameras (hasTrainingData).
+    const auto cameras = scene.addGroup("Cameras");
+    const auto train_group = scene.addCameraGroup("Training", cameras, 1);
+    scene.addCamera("camera.png", train_group, make_test_camera());
+
+    auto model = make_splat(4);
+    // In the bottom arm of the L at z = 10, in its notch, behind the bottom arm, beside the L.
+    model->means() = Tensor::from_vector({0.5f, -0.5f, 10.0f, 0.5f, 0.5f, 10.0f, 0.5f, -0.5f, 20.0f, 5.0f, 0.0f, 10.0f},
+                                         {size_t{4}, size_t{3}}, Device::CUDA);
+    model->scaling_raw() = Tensor::from_vector(std::vector<float>(12, std::log(0.01f)), {size_t{4}, size_t{3}}, Device::CUDA);
+    auto* model_ptr = model.get();
+    const auto model_id = scene.addSplat("Model", std::move(model));
+    scene.setTrainingModelNode("Model");
+    const std::vector<glm::vec2> outline{{-1.0f, -1.0f}, {1.0f, -1.0f}, {1.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 1.0f}, {-1.0f, 1.0f}};
+    ASSERT_NE(scene.addCropPolygon("Model_crop_polygon", model_id, CropPolygonData{.vertices = outline, .half_depth = 0.5f},
+                                   glm::translate(glm::mat4(1.f), glm::vec3(0.f, 0.f, 10.f))),
+              NULL_NODE);
+
+    Trainer trainer(scene);
+    TrainerCropboxMaskTestAccess::set_cropbox_lr_scale(trainer, 0.1f);
+    AdamConfig cfg{.lr = 0.001f};
+    AdamOptimizer opt(*model_ptr, cfg);
+    const auto camera = make_test_camera();
+    TrainerCropboxMaskTestAccess::refresh(trainer);
+    TrainerCropboxMaskTestAccess::install_view(trainer, *model_ptr, opt, *camera);
+    ASSERT_TRUE(opt.crop_damping_mask().is_valid());
+    const auto values = opt.crop_damping_mask().to(DataType::Float32).cpu().to_vector();
+    EXPECT_EQ(std::vector<bool>(values.begin(), values.end()), (std::vector<bool>{false, true, false, true}));
+    EXPECT_FALSE(TrainerCropboxMaskTestAccess::contains_camera(trainer, *camera));
+
+    // The camera in the bottom arm, then in the notch.
+    scene.setNodeTransform("Model_crop_polygon", glm::translate(glm::mat4(1.f), glm::vec3(-0.5f, 0.5f, 0.f)));
+    TrainerCropboxMaskTestAccess::refresh(trainer);
+    EXPECT_TRUE(TrainerCropboxMaskTestAccess::contains_camera(trainer, *camera));
+    scene.setNodeTransform("Model_crop_polygon", glm::translate(glm::mat4(1.f), glm::vec3(-0.5f, -0.5f, 0.f)));
+    TrainerCropboxMaskTestAccess::refresh(trainer);
+    EXPECT_FALSE(TrainerCropboxMaskTestAccess::contains_camera(trainer, *camera));
+}
