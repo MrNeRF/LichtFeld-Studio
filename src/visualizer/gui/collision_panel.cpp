@@ -23,7 +23,6 @@
 #include <chrono>
 #include <cmath>
 #include <format>
-#include <glm/gtc/quaternion.hpp>
 #include <stdexcept>
 #include <utility>
 
@@ -443,7 +442,6 @@ namespace lfs::vis::gui {
         }
         document_->GetElementById("job-progress")->SetProperty("display", job_outcome_.empty() ? "none" : "block");
         document_->GetElementById("job-progress")->SetClass("is-failed", job_outcome_ == "failed");
-        document_->GetElementById("job-progress")->SetClass("is-running", bool(busy_));
         for (const auto* id : {"generate", "generate-new", "cancel"}) {
             auto* control = document_->GetElementById(id);
             const bool disabled = std::string_view(id) == "cancel" ? !busy_ || worker_.get_stop_token().stop_requested() : bool(busy_);
@@ -698,7 +696,6 @@ namespace lfs::vis::gui {
     }
     void CollisionPanel::syncGenerationControls() {
         const auto filter = value("filter-mode");
-        document_->SetClass("collision-auto-resolution", checked("auto-resolution"));
         document_->SetClass("collision-strict", filter == "3");
         document_->SetClass("collision-cleanup", filter == "1" || filter == "2");
         document_->SetClass("collision-seeded", filter == "2" || filter == "3");

@@ -11,20 +11,10 @@
     padding: 8dp 12dp; flex-shrink: 0; min-width: 0;
 }
 .collision-toolbar { gap: 12dp; }
-.collision-field { display: flex; flex-direction: column; gap: 5dp; min-width: 0; }
-.collision-field label { font-size: 11dp; line-height: 14dp; }
-.collision-cell-field { flex: 1 1 200dp; }
-.collision-alpha-field { width: 70dp; }
-.collision-filter-field { flex: 1 1 160dp; }
-.collision-cell-input { display: flex; align-items: center; gap: 8dp; }
-.collision-cell-input input[type="text"] { width: 64dp; flex-shrink: 0; }
-.collision-cell-input input[type="range"] { flex: 1; min-width: 60dp; }
-.collision-field input[type="text"], .collision-field select,
 .collision-row input[type="text"], .collision-row select {
     box-sizing: border-box; width: 100%; height: 28dp; min-height: 28dp;
     padding: 5dp 10dp; border-width: 1dp; font-size: 12dp; line-height: 16dp;
 }
-.collision-cell-input input[type="text"] { width: 64dp; }
 .collision-primary-actions { border-bottom-width: 1dp; padding-top: 0; align-items: center; }
 .collision-action-spacer { flex: 1; }
 .collision-actions .btn, .collision-section > .btn {
@@ -37,8 +27,6 @@ p { display: block; margin: 5dp 0; font-size: 12dp; line-height: 17dp; }
 .collision-row > span, .collision-row > label { flex: 1; min-width: 0; font-size: 12dp; }
 .collision-row input[type="text"], .collision-row select { width: 130dp; flex-shrink: 0; }
 .collision-row input[type="checkbox"] { width: 16dp; height: 16dp; flex-shrink: 0; }
-.collision-row input[type="range"] { width: 130dp; }
-.collision-row .collision-value { flex: 0 0 38dp; text-align: right; font-size: 11dp; }
 .collision-section .collision-actions { padding: 6dp 0; }
 .collision-section.collapsed { display: none; }
 .collision-section-header {

@@ -623,10 +623,7 @@ namespace lfs::core::collision_detail {
         if (!s.external_fill && !s.floor_fill && s.carve_height == 0)
             return volume;
         Tree tree(volume.dimensions, stop);
-        if (!volume.tree.empty())
-            tree.nodes = std::move(volume.tree);
-        else
-            tree = volumeTree(volume, stop);
+        tree.nodes = std::move(volume.tree);
         if (s.external_fill) {
             report("Sealing sparse exterior");
             const int radius = int(std::min(std::ceil(double(s.external_size) / (2 * s.voxel_size)), double(tree.size)));

@@ -38,7 +38,7 @@ namespace lfs::vis::gui {
         std::jthread worker_;
         std::atomic<bool> busy_{false}, done_{false};
         std::mutex mutex_;
-        std::string progress_, error_, destination_, exported_path_;
+        std::string progress_, error_, destination_;
         float progress_value_ = 0;
         std::chrono::steady_clock::time_point started_, next_update_;
     };

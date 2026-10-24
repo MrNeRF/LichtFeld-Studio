@@ -264,29 +264,25 @@ namespace lfs::io {
 
     void exportCollisionGlb(std::span<const float> vertices, std::span<const int32_t> indices, const glm::mat4& data_world,
                             const std::filesystem::path& path, std::stop_token stop, core::CollisionProgress progress) {
-        struct {
-            std::span<const float> vertices;
-            std::span<const int32_t> indices;
-        } mesh{vertices, indices};
         check(stop);
-        if (mesh.vertices.empty() || mesh.indices.empty() || mesh.vertices.size() % 3 || mesh.indices.size() % 3)
+        if (vertices.empty() || indices.empty() || vertices.size() % 3 || indices.size() % 3)
             throw std::runtime_error("Build a collision surface before exporting GLB");
         const auto transform = playcanvas(data_world);
-        const uint64_t vertices_bytes = mesh.vertices.size() * sizeof(float), indices_bytes = mesh.indices.size() * sizeof(uint32_t);
+        const uint64_t vertices_bytes = vertices.size() * sizeof(float), indices_bytes = indices.size() * sizeof(uint32_t);
         glm::vec3 lo(std::numeric_limits<float>::max()), hi(-lo);
-        for (size_t i = 0; i < mesh.vertices.size(); i += 3) {
+        for (size_t i = 0; i < vertices.size(); i += 3) {
             check(stop);
-            const auto p = glm::vec3(transform * glm::vec4(mesh.vertices[i], mesh.vertices[i + 1], mesh.vertices[i + 2], 1));
+            const auto p = glm::vec3(transform * glm::vec4(vertices[i], vertices[i + 1], vertices[i + 2], 1));
             for (int k = 0; k < 3; ++k)
                 if (!std::isfinite(p[k]))
                     throw std::runtime_error("Non-finite collision surface vertex");
             lo = glm::min(lo, p);
             hi = glm::max(hi, p);
         }
-        for (auto i : mesh.indices)
-            if (i < 0 || size_t(i) >= mesh.vertices.size() / 3)
+        for (auto i : indices)
+            if (i < 0 || size_t(i) >= vertices.size() / 3)
                 throw std::runtime_error("Invalid collision surface index");
-        Json gltf{{"asset", {{"version", "2.0"}, {"generator", "LichtFeld Studio"}}}, {"scene", 0}, {"scenes", Json::array({{{"nodes", {0}}}})}, {"nodes", Json::array({{{"mesh", 0}, {"name", "Collision"}}})}, {"meshes", Json::array({{{"primitives", Json::array({{{"attributes", {{"POSITION", 0}}}, {"indices", 1}, {"mode", 4}}})}}})}, {"buffers", Json::array({{{"byteLength", vertices_bytes + indices_bytes}}})}, {"bufferViews", Json::array({{{"buffer", 0}, {"byteOffset", 0}, {"byteLength", vertices_bytes}, {"target", 34962}}, {{"buffer", 0}, {"byteOffset", vertices_bytes}, {"byteLength", indices_bytes}, {"target", 34963}}})}, {"accessors", Json::array({{{"bufferView", 0}, {"componentType", 5126}, {"count", mesh.vertices.size() / 3}, {"type", "VEC3"}, {"min", xyz(lo)}, {"max", xyz(hi)}}, {{"bufferView", 1}, {"componentType", 5125}, {"count", mesh.indices.size()}, {"type", "SCALAR"}}})}};
+        Json gltf{{"asset", {{"version", "2.0"}, {"generator", "LichtFeld Studio"}}}, {"scene", 0}, {"scenes", Json::array({{{"nodes", {0}}}})}, {"nodes", Json::array({{{"mesh", 0}, {"name", "Collision"}}})}, {"meshes", Json::array({{{"primitives", Json::array({{{"attributes", {{"POSITION", 0}}}, {"indices", 1}, {"mode", 4}}})}}})}, {"buffers", Json::array({{{"byteLength", vertices_bytes + indices_bytes}}})}, {"bufferViews", Json::array({{{"buffer", 0}, {"byteOffset", 0}, {"byteLength", vertices_bytes}, {"target", 34962}}, {{"buffer", 0}, {"byteOffset", vertices_bytes}, {"byteLength", indices_bytes}, {"target", 34963}}})}, {"accessors", Json::array({{{"bufferView", 0}, {"componentType", 5126}, {"count", vertices.size() / 3}, {"type", "VEC3"}, {"min", xyz(lo)}, {"max", xyz(hi)}}, {{"bufferView", 1}, {"componentType", 5125}, {"count", indices.size()}, {"type", "SCALAR"}}})}};
         auto json = gltf.dump();
         while (json.size() % 4)
             json += ' ';
@@ -305,20 +301,20 @@ namespace lfs::io {
         word(out, 0x004e4942);
         if (progress)
             progress("Writing collision GLB surface");
-        for (size_t i = 0; i < mesh.vertices.size(); i += 3) {
+        for (size_t i = 0; i < vertices.size(); i += 3) {
             if ((i & 4095) == 0)
                 check(stop);
-            const auto p = glm::vec3(transform * glm::vec4(mesh.vertices[i], mesh.vertices[i + 1], mesh.vertices[i + 2], 1));
+            const auto p = glm::vec3(transform * glm::vec4(vertices[i], vertices[i + 1], vertices[i + 2], 1));
             for (int k = 0; k < 3; ++k)
                 word(out, std::bit_cast<uint32_t>(p[k]));
         }
         const bool flip = glm::determinant(glm::mat3(transform)) < 0;
-        for (size_t i = 0; i < mesh.indices.size(); i += 3) {
+        for (size_t i = 0; i < indices.size(); i += 3) {
             if ((i & 4095) == 0)
                 check(stop);
-            word(out, mesh.indices[i]);
-            word(out, mesh.indices[i + (flip ? 2 : 1)]);
-            word(out, mesh.indices[i + (flip ? 1 : 2)]);
+            word(out, indices[i]);
+            word(out, indices[i + (flip ? 2 : 1)]);
+            word(out, indices[i + (flip ? 1 : 2)]);
         }
         out.close();
         check(stop);

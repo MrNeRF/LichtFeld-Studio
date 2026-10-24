@@ -64,7 +64,7 @@ namespace lfs::vis::gui {
                 showError(error_);
             else {
                 progress_value_ = 1;
-                text("export-status", LOCF("collision.export_complete", exported_path_));
+                text("export-status", LOCF("collision.export_complete", destination_));
             }
             text("export-stage", progress_);
             text("export-time", LOCF("collision.progress_finished", std::chrono::duration<double>(std::chrono::steady_clock::now() - started_).count()));
@@ -155,7 +155,6 @@ namespace lfs::vis::gui {
         {
             std::lock_guard lock(mutex_);
             error_.clear();
-            exported_path_.clear();
             destination_ = core::path_to_utf8(path);
             progress_ = voxels ? "Packing SuperSplat voxel pair" : "Preparing collision surface";
             progress_value_ = 0;
@@ -185,8 +184,6 @@ namespace lfs::vis::gui {
                     const auto surface = stride == 1 ? volume->mesh(shape, stop, report) : volume->coarsened(stride, stop).mesh(shape, stop, report);
                     io::exportCollisionGlb(surface.vertices, surface.indices, transform, path, stop, report);
                 }
-                std::lock_guard lock(mutex_);
-                exported_path_ = core::path_to_utf8(path);
             } catch (const std::exception& e) {
                 std::lock_guard lock(mutex_);
                 error_ = e.what();
