@@ -2934,6 +2934,31 @@ contract["check_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(restored->local_transform.get(), edited_transform);
     }
 
+    // Catches the toolbar's crop box enable toggle doing nothing: lf.ui.ops.invoke must hand its keyword arguments
+    // to the C++ crop_box.set operator, which flips the flag in one undo step.
+    TEST_F(CropVolumeSourceTest, PythonOpsInvokeTogglesCropBoxEnabledWithUndo) {
+        ASSERT_TRUE(lfs::python::ensure_initialized());
+        VisualizerImpl viewer(projectOptions());
+        const auto splat_id = open(viewer);
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        const auto cropbox_id = cap::ensureCropBox(*viewer.getSceneManager(), viewer.getRenderingManager(), splat_id);
+        ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+        const auto* const node = viewer.getScene().getNodeById(*cropbox_id);
+        ASSERT_TRUE(node->cropbox->enabled);
+        {
+            const lfs::python::GilAcquire gil;
+            const auto script = std::format(R"PY(
+import lichtfeld as lf
+assert lf.ui.ops.invoke("crop_box.set", node="{}", enabled=False).finished
+)PY",
+                                            node->name);
+            EXPECT_EQ(PyRun_SimpleString(script.c_str()), 0);
+        }
+        EXPECT_FALSE(viewer.getScene().getNodeById(*cropbox_id)->cropbox->enabled);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_TRUE(viewer.getScene().getNodeById(*cropbox_id)->cropbox->enabled);
+    }
+
     TEST_F(CropVolumeSourceTest, CropBoxUndoRedoMarksProjectModified) {
         VisualizerImpl viewer(projectOptions());
         const auto splat_id = open(viewer);

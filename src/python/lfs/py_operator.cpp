@@ -80,8 +80,12 @@ namespace lfs::python {
 
                 nb::object instance = get_python_operator_instance(id);
                 std::vector<std::string> set_kwargs;
+                // Builtin C++ operators take their arguments as properties.
+                const bool python_operator = instance.is_valid() && !instance.is_none();
+                const bool builtin = !python_operator && vis::op::builtin_op_from_string(id).has_value();
+                auto builtin_props = builtin ? builtin_operator_properties(id, kwargs) : vis::op::OperatorProperties{};
                 if (kwargs && nb::len(kwargs) > 0) {
-                    if (instance.is_valid() && !instance.is_none()) {
+                    if (python_operator) {
                         for (auto [key, value] : kwargs) {
                             std::string key_str = nb::cast<std::string>(key);
                             nb::setattr(instance, key_str.c_str(), value);
@@ -90,7 +94,7 @@ namespace lfs::python {
                     }
                 }
 
-                auto result = registry.invoke(id);
+                auto result = registry.invoke(id, builtin ? &builtin_props : nullptr);
 
                 std::string status_str;
                 switch (result.status) {
