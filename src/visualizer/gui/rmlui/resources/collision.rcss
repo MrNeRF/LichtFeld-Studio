@@ -1,6 +1,15 @@
 /* Match the Logging utility window: compact fields, one action bar, inset scroll. */
 #content-wrap { padding: 0 8dp 8dp; overflow: hidden; min-width: 0; min-height: 0; }
 #content { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.collision-intro { display: flex; align-items: center; gap: 10dp; padding: 10dp 12dp 2dp; flex-shrink: 0; }
+.collision-intro > img { width: 26dp; height: 26dp; flex-shrink: 0; }
+.collision-intro > div { flex: 1; min-width: 0; }
+.collision-intro p { margin: 0 0 3dp; }
+.collision-intro-title { font-size: 14dp; font-weight: bold; }
+.collision-export-option { padding: 8dp 10dp; margin: 7dp 0; border-width: 1dp; border-radius: 5dp; }
+.collision-export-option .btn { height: 30dp; padding: 0 10dp; margin-bottom: 3dp; }
+.collision-export-option p { margin: 3dp 0; }
+.collision-save-note { padding: 6dp 0; }
 .collision-toolbar, .collision-actions {
     display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8dp;
     padding: 8dp 12dp; flex-shrink: 0; min-width: 0;
@@ -27,7 +36,7 @@
     height: 28dp; min-height: 28dp; padding: 0 10dp; font-size: 12dp;
 }
 #collision-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; tab-index: auto; padding: 0 12dp 8dp; }
-.collision-summary { padding: 6dp 0; }
+.collision-summary { padding: 8dp 10dp; margin-top: 10dp; border-radius: 5dp; }
 p { display: block; margin: 5dp 0; font-size: 12dp; line-height: 17dp; }
 .collision-row { display: flex; align-items: center; gap: 8dp; margin: 6dp 0; }
 .collision-row > span, .collision-row > label { flex: 1; min-width: 0; font-size: 12dp; }

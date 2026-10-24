@@ -18,3 +18,7 @@
 #job-progress.is-failed #generation-progress-fill { background-color: @{error}; }
 #collision-error { border-color: @{error}; }
 #collision-status.is-error { color: @{error}; }
+.collision-intro > img { image-color: @{primary}; }
+.collision-export-option { border-color: @{border}; }
+.collision-summary { background-color: @{surface_bright}; }
+.collision-save-note { color: @{text_dim}; }

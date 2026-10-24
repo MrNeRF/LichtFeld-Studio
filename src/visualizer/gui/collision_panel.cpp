@@ -3,10 +3,18 @@
 #include "gui/collision_panel.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
+#include "core/number_format.hpp"
+#include "core/path_utils.hpp"
 #include "core/services.hpp"
 #include "gui/collision_job_status.hpp"
+#include "gui/gui_manager.hpp"
+#include "gui/rmlui/rml_theme.hpp"
 #include "gui/ui_context.hpp"
+#include "gui/utils/native_file_dialog.hpp"
+#include "gui/utils/splat_export_request.hpp"
 #include "input/input_controller.hpp"
+#include "internal/resource_paths.hpp"
+#include "io/collision_export.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "scene/scene_manager.hpp"
@@ -274,10 +282,10 @@ namespace lfs::vis::gui {
             occupied_count_ = node.collision->occupiedCount();
             counted_volume_ = node.collision;
         }
-        status(std::format("{} occupied voxels; {}. {} {}",
-                           occupied_count_,
-                           display_.surface_ready ? std::format("{} surface triangles", node.mesh ? node.mesh->face_count() : 0)
-                                                  : "voxel preview ready — no triangle mesh needed for Walk",
+        status(std::format("{} occupied cells · {:.3g} cm cells. {}. {} {}",
+                           core::format_count(occupied_count_), settings_.voxel_size / settings_.units_per_meter * 100,
+                           display_.surface_ready ? std::format("{} surface triangles", core::format_count(node.mesh ? node.mesh->face_count() : 0))
+                                                  : "Ready for Walk — no triangle surface needed",
                            last_stats_, node.collision->warning));
     }
     bool CollisionPanel::prepare(const PanelDrawContext& ctx) {
@@ -290,6 +298,7 @@ namespace lfs::vis::gui {
             if (target_.is_nil())
                 settings_.auto_resolution = true;
             document_ = host_.getDocument();
+            document_->GetElementById("collision-icon")->SetAttribute("src", rml_theme::pathToRmlImageSource(lfs::vis::getAssetPath("icon/scene/collision.png")));
             document_->AddEventListener("click", this);
             document_->AddEventListener("change", this);
             if (auto* title = document_->GetElementById("title-text"))
@@ -299,6 +308,17 @@ namespace lfs::vis::gui {
             writeInputs();
         }
         adoptResult();
+        if (!busy_) {
+            const auto requested = takeCollisionExportRequest();
+            if (const auto* node = scene_->getNodeByUuid(requested); node && node->collision) {
+                loadSettings(*node);
+                document_->GetElementById("export-section")->SetClass("collapsed", false);
+                document_->GetElementById("export-toggle")->SetClass("is-expanded", true);
+                document_->GetElementById("export-toggle")->SetAttribute("aria-expanded", "true");
+                scroll_to_export_ = true;
+                host_.markContentDirty();
+            }
+        }
         document_->SetClass("collision-targeted", !target_.is_nil());
         if (!busy_ && !job_outcome_.empty() && job_graph_epoch_ != scene_->graphEpoch()) {
             job_outcome_.clear();
@@ -340,9 +360,11 @@ namespace lfs::vis::gui {
         document_->GetElementById("job-progress")->SetProperty("display", job_outcome_.empty() ? "none" : "block");
         document_->GetElementById("job-progress")->SetClass("is-failed", job_outcome_ == "failed");
         document_->GetElementById("job-progress")->SetClass("is-running", bool(busy_));
-        for (const auto* id : {"generate", "generate-new", "cancel"}) {
+        for (const auto* id : {"generate", "generate-new", "cancel", "export-voxels", "export-glb"}) {
             auto* control = document_->GetElementById(id);
-            const bool disabled = std::string_view(id) == "cancel" ? !busy_ || worker_.get_stop_token().stop_requested() : bool(busy_);
+            const bool exporting = std::string_view(id).starts_with("export-");
+            const auto* target = scene_->getNodeByUuid(target_);
+            const bool disabled = std::string_view(id) == "cancel" ? !busy_ || worker_.get_stop_token().stop_requested() : bool(busy_) || (exporting && (!target || !target->collision));
             if (disabled != control->HasAttribute("disabled")) {
                 if (disabled)
                     control->SetAttribute("disabled", "disabled");
@@ -502,6 +524,12 @@ namespace lfs::vis::gui {
         if (!error_.empty()) {
             LOG_ERROR("Collision generation: {}", error_);
             showError(error_, true);
+            return;
+        }
+        if (!exported_path_.empty()) {
+            finishJob("completed");
+            status(LOCF("collision.export_complete", exported_path_));
+            exported_path_.clear();
             return;
         }
         if (!result_)
@@ -675,6 +703,107 @@ namespace lfs::vis::gui {
             python::request_redraw();
         });
     }
+    void CollisionPanel::chooseExport(bool voxels) {
+        if (busy_)
+            throw std::runtime_error("Wait for the current collision operation to finish");
+        const auto* node = scene_->getNodeByUuid(target_);
+        if (!node || !node->collision)
+            throw std::runtime_error("Select a collision node to export");
+        auto path = voxels ? SaveJsonFileDialog("scene.voxel.json") : SaveGlbFileDialog("scene.collision.glb");
+        if (path.empty())
+            return;
+        if (voxels && !path.filename().string().ends_with(".voxel.json")) {
+            path.replace_extension();
+            path += ".voxel.json";
+        }
+        auto bin = path;
+        bin.replace_extension(".bin");
+        if (std::filesystem::exists(path) || (voxels && std::filesystem::exists(bin))) {
+            core::ModalRequest request;
+            request.title = LOC("collision.export_section");
+            request.style = core::ModalStyle::Warning;
+            request.body_rml = "<p>" + Rml::StringUtilities::EncodeRml(LOCF("collision.export_overwrite", core::path_to_utf8(path))) + "</p>";
+            request.buttons = {{LOC("common.cancel"), "secondary"}, {LOC("export.overwrite"), "warning"}};
+            const auto target = target_;
+            const auto payload = node->collision;
+            request.on_result = [this, voxels, path, target, payload](const core::ModalResult& result) {
+                if (result.button_label == LOC("export.overwrite")) {
+                    try {
+                        const auto* current = scene_->getNodeByUuid(target);
+                        if (target_ != target || !current || current->collision != payload)
+                            throw std::runtime_error("Collision changed while confirming export. Select the intended node and export again.");
+                        startExport(voxels, path);
+                    } catch (const std::exception& e) { showError(e.what()); }
+                }
+            };
+            services().guiOrNull()->enqueueModal(std::move(request));
+        } else {
+            startExport(voxels, std::move(path));
+        }
+    }
+    void CollisionPanel::startExport(bool voxels, std::filesystem::path path) {
+        if (busy_)
+            throw std::runtime_error("Wait for the current collision operation to finish");
+        const auto* node = scene_->getNodeByUuid(target_);
+        if (!node || !node->collision)
+            throw std::runtime_error("Collision node no longer exists");
+        auto volume = node->collision;
+        auto mesh = node->collision_display.surface_ready ? node->mesh : nullptr;
+        auto transform = scene_->getWorldTransform(node->id);
+        const auto stride = std::stoi(value("surface-stride"));
+        const auto shape = readInputs().shape;
+        clearError();
+        {
+            std::lock_guard lock(mutex_);
+            result_.reset();
+            error_.clear();
+            exported_path_.clear();
+            progress_ = voxels ? "Packing SuperSplat voxel pair" : "Preparing collision surface";
+        }
+        busy_ = true;
+        done_ = false;
+        job_started_ = progress_updated_ = std::chrono::steady_clock::now();
+        next_progress_ui_ = {};
+        job_outcome_ = "running";
+        job_graph_epoch_ = scene_->graphEpoch();
+        job_title_ = LOC("collision.exporting");
+        job_context_ = core::path_to_utf8(path);
+        progress_value_ = 0;
+        progress_step_ = 0;
+        progress_total_ = 3;
+        worker_ = std::jthread([this, voxels, path, volume, mesh, transform, stride, shape](std::stop_token stop) {
+            try {
+                auto report = [&](std::string text) {
+                    std::lock_guard lock(mutex_);
+                    progress_step_ = text.starts_with("Writing") ? 2 : 1;
+                    progress_value_ = float(progress_step_) / 3;
+                    progress_ = std::move(text);
+                    progress_updated_ = std::chrono::steady_clock::now();
+                };
+                if (voxels) {
+                    io::exportCollisionVoxels(*volume, transform, path, stop, report);
+                } else {
+                    core::CollisionMesh surface;
+                    if (mesh) {
+                        const auto vertices = mesh->vertices.to(core::Device::CPU).contiguous();
+                        const auto indices = mesh->indices.to(core::Device::CPU).contiguous();
+                        io::exportCollisionGlb({vertices.ptr<float>(), vertices.numel()}, {indices.ptr<int32_t>(), indices.numel()}, transform, path, stop, report);
+                    } else {
+                        report("Building export surface at " + std::to_string(stride) + "x cell size");
+                        surface = stride == 1 ? volume->mesh(shape, stop, report) : volume->coarsened(stride, stop).mesh(shape, stop, report);
+                        io::exportCollisionGlb(surface.vertices, surface.indices, transform, path, stop, report);
+                    }
+                }
+                std::lock_guard lock(mutex_);
+                exported_path_ = core::path_to_utf8(path);
+            } catch (const std::exception& e) {
+                std::lock_guard lock(mutex_);
+                error_ = e.what();
+            }
+            done_.store(true, std::memory_order_release);
+            python::request_redraw();
+        });
+    }
     void CollisionPanel::ProcessEvent(Rml::Event& event) {
         auto* el = event.GetTargetElement();
         while (el && el->GetId().empty())
@@ -692,6 +821,8 @@ namespace lfs::vis::gui {
                     content->SetClass("collapsed", !expanded);
                     el->SetClass("is-expanded", expanded);
                     el->SetAttribute("aria-expanded", expanded ? "true" : "false");
+                    if (id == "export-toggle" && expanded)
+                        scroll_to_export_ = true;
                     host_.markContentDirty();
                 }
                 return;
@@ -724,6 +855,8 @@ namespace lfs::vis::gui {
             }
             if (id == "generate")
                 start(false);
+            else if (id == "export-voxels" || id == "export-glb")
+                chooseExport(id == "export-voxels");
             else if (id == "generate-new")
                 start(true);
             else if (id == "cancel") {
@@ -794,9 +927,22 @@ namespace lfs::vis::gui {
             showError(error.what());
         }
     }
+    void CollisionPanel::revealExport() {
+        if (!scroll_to_export_)
+            return;
+        // Run after the host has laid out the newly expanded section, including
+        // the preload/measure passes used by floating windows.
+        auto* scroll = document_->GetElementById("collision-scroll");
+        auto* header = document_->GetElementById("export-toggle");
+        scroll->SetScrollTop(scroll->GetScrollTop() + header->GetAbsoluteOffset(Rml::BoxArea::Border).y - scroll->GetAbsoluteOffset(Rml::BoxArea::Border).y);
+        scroll_to_export_ = false;
+        host_.markContentDirty();
+    }
     void CollisionPanel::draw(const PanelDrawContext& ctx) {
-        if (prepare(ctx))
+        if (prepare(ctx)) {
             host_.draw(ctx);
+            revealExport();
+        }
     }
     void CollisionPanel::preload(const PanelDrawContext& ctx) { prepare(ctx); }
     PanelDirectRenderResult CollisionPanel::renderDirect(const PanelDirectRenderRequest& r, const PanelDrawContext& ctx) {
@@ -807,8 +953,10 @@ namespace lfs::vis::gui {
         if (prepare(ctx)) {
             if (r.mode == PanelDirectRenderMode::Preload)
                 host_.prepareDirect(r.width, r.height);
-            else if (r.mode != PanelDirectRenderMode::Measure)
+            else if (r.mode != PanelDirectRenderMode::Measure) {
                 host_.drawDirect(r.x, r.y, r.width, r.height);
+                revealExport();
+            }
         }
         host_.setInput(nullptr);
         host_.setInputClipY(-1, -1);

@@ -7,6 +7,7 @@ namespace lfs::vis::gui {
     namespace {
         std::mutex request_mutex;
         std::vector<std::string> requested_node;
+        core::Uuid requested_collision;
     } // namespace
     void requestSplatExport(std::vector<std::string> name) {
         std::scoped_lock lock(request_mutex);
@@ -15,5 +16,13 @@ namespace lfs::vis::gui {
     std::vector<std::string> takeSplatExportRequest() {
         std::scoped_lock lock(request_mutex);
         return std::exchange(requested_node, {});
+    }
+    void requestCollisionExport(core::Uuid node) {
+        std::scoped_lock lock(request_mutex);
+        requested_collision = node;
+    }
+    core::Uuid takeCollisionExportRequest() {
+        std::scoped_lock lock(request_mutex);
+        return std::exchange(requested_collision, {});
     }
 } // namespace lfs::vis::gui

@@ -4,11 +4,12 @@
 
 </head>
 <body template="floating-window">
+  <div class="collision-intro"><img id="collision-icon"/><div><p class="collision-intro-title">@tr:collision.intro_title</p><p class="collision-note">@tr:collision.intro_help</p></div></div>
   <div class="collision-toolbar">
     <div class="collision-field collision-cell-field" data-tooltip="collision.tip_detail"><div class="collision-field-title"><label for="voxel-size">@tr:collision.detail</label><label class="collision-auto" data-tooltip="collision.tip_auto"><input id="auto-resolution" type="checkbox" checked="checked"/><span>@tr:collision.auto</span></label></div>
       <div class="collision-cell-input"><input id="voxel-size" type="text" value="0.05"/><input id="detail" type="range" min="0.01" max="0.25" step="0.005" value="0.05"/></div>
     </div>
-    <div class="collision-field collision-alpha-field" data-tooltip="collision.tip_opacity"><label for="opacity">@tr:collision.opacity</label><input id="opacity" type="text" value="0.1"/></div>
+    <div class="collision-field collision-alpha-field" data-tooltip="collision.tip_opacity"><label for="opacity">@tr:collision.opacity_short</label><input id="opacity" type="text" value="0.1"/></div>
     <div class="collision-field collision-filter-field" data-tooltip="collision.tip_filter_mode"><label for="filter-mode">@tr:collision.filter_mode</label><select id="filter-mode">
       <option value="1" selected="selected">@tr:collision.filter_cleanup</option><option value="2">@tr:collision.filter_connected</option><option value="0">@tr:collision.filter_none</option><option value="3">@tr:collision.filter_strict</option>
     </select></div>
@@ -36,7 +37,7 @@
   </div>
   <button id="inspect-toggle" class="section-header collision-section-header is-expanded" data-collision-section="inspect" aria-expanded="true"><span class="section-arrow">▶</span><span>@tr:collision.inspect</span></button>
   <div id="inspect" class="collision-section">
-
+  <p class="collision-note">@tr:collision.inspect_help</p>
   <div class="collision-row collision-scrub"><span>@tr:collision.overlay_strength</span><input id="overlay-opacity" type="range" min="0" max="1" step="0.01" value="1"/><span id="overlay-opacity-value" class="collision-value">100%</span></div>
   <div class="collision-row collision-scrub" data-tooltip="collision.tip_cutaway"><span>@tr:collision.cutaway</span><input id="cutaway" type="range" min="0" max="1" step="0.001" value="1"/><span id="cutaway-value" class="collision-value">100%</span></div>
   </div>
@@ -52,6 +53,13 @@
   <div class="collision-row" data-tooltip="collision.tip_player"><span>@tr:collision.player_radius</span><input id="walk-radius" type="text" value="0.2"/></div>
   <div class="collision-row" data-tooltip="collision.tip_speed"><span>@tr:collision.speed</span><input id="walk-speed" type="text" value="2.5"/></div>
   <div class="collision-row" data-tooltip="collision.tip_step"><span>@tr:collision.step_height</span><input id="walk-step" type="text" value="0.25"/></div>
+  </div>
+  <button id="export-toggle" class="section-header collision-section-header" data-collision-section="export-section" aria-expanded="false"><span class="section-arrow">▶</span><span>@tr:collision.export_section</span></button>
+  <div id="export-section" class="collision-section collapsed">
+    <p class="collision-save-note">@tr:collision.project_storage</p>
+    <div class="collision-export-option"><button id="export-voxels" class="btn btn--primary"><span>@tr:collision.export_voxels</span></button><p class="collision-note">@tr:collision.export_voxels_help</p></div>
+    <div class="collision-export-option"><button id="export-glb" class="btn btn--secondary"><span>@tr:collision.export_glb</span></button><p class="collision-note">@tr:collision.export_glb_help</p></div>
+    <p class="collision-note">@tr:collision.export_coordinates</p>
   </div>
   <button id="advanced-toggle" class="section-header collision-section-header" data-collision-section="advanced" aria-expanded="false"><span class="section-arrow">▶</span><span>@tr:collision.advanced</span></button>
   <div id="advanced" class="collision-section collapsed">
