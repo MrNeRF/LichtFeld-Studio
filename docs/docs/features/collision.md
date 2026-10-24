@@ -13,15 +13,17 @@ The same surface-first setup works for rooms, outdoor scans and objects:
 1. Leave **Auto** enabled for a practical starting resolution based on the visible
    Gaussian surface footprint and source count. Large aerial scans need larger
    cells than small object scans. The resolved size is reported after generation.
-2. Use the single **Cell size (metres)** field or its adjacent scrubber for an exact
-   custom value. Editing either turns Auto off. Custom resolution is never retried
+2. Drag the **Cell size (metres)** numeric scrub or click it to type an exact
+   custom value. Editing turns Auto off. Opacity is another numeric scrub below
+   cell size and defaults to `0.1`. Custom resolution is never retried
    at a larger size silently. Calibrate **Scene units / metre** under Advanced if
    the reconstruction is not already metric.
 3. Start with **Surface cleanup**. It removes exceptional volume and footprint-area
    outliers without selecting a central crop or dropping disconnected components.
    **Keep all splats** disables this statistical cleanup.
-4. Press **Generate**, inspect the boxes, then expand **Walk and edit** and choose
-   **Enter walk**. **Overlay strength** and **Cutaway height** reveal inner surfaces.
+4. Press **Generate**, inspect the boxes, then choose **Walk Camera** from the
+   viewport camera toolbar. **Overlay strength** and **Cutaway height** are numeric
+   scrubs that reveal inner surfaces.
    Select an existing collider to regenerate it, or choose **New collider** for a
    separate node.
 
@@ -249,13 +251,14 @@ Turning it off requests hardware 2×2 fragment shading where supported, with a
 full-resolution fallback elsewhere. This softens edges without changing any
 collision cells or Walk queries. Opacity, cutaway and sharpness are live controls.
 
-Use **Build / show surface** under Advanced only when a triangle surface is needed.
+Use **Build surface node** under Advanced only when a triangle surface is needed.
 The default `4×` surface multiplier conservatively combines occupied cells into a
 coarser grid before meshing. All components remain represented, but fine gaps can
 close. `1×` retains the original voxel detail and can produce a very large mesh.
-Changing the multiplier or shape rebuilds the optional surface on request;
-switching back to an already-built surface reuses it. **Voxel boxes** restores the
-original-resolution preview. Walk always uses the original occupancy.
+Each build creates a separate, ordinary triangle mesh node with its own transform,
+visibility and mesh icon. The voxel collision node and occupancy stay intact.
+The surface can be selected and exported as GLB through its own right-click menu;
+the voxel node exports the SuperSplat pair. Walk always uses the original occupancy.
 
 Each Collision is an independent scene node with transforms, parenting,
 visibility, duplication, deletion and deletion undo. The fast voxel-only node has
@@ -263,9 +266,9 @@ a tiny bounds carrier, not an extracted physical surface. Build a surface before
 using its mesh geometry. `.licht` projects retain occupancy, settings, display
 controls and any explicitly built surface, including deferred hydration. Legacy
 dense and sparse collision projects remain readable.
-Individual voxel/face editing is not implemented. **Edit source splats** exits
-Walk, hides the collider and selects visible source splats. Use the normal native
-selection, delete, crop and transform tools, then regenerate the same node.
+Individual voxel/face editing is not implemented. Exit Walk using the camera
+toolbar or Escape, hide the collider and select the source splats. Use the normal
+native selection, delete, crop and transform tools, then regenerate the same node.
 **Generate new node** retains existing colliders.
 
 ## Performance and limits
@@ -392,15 +395,20 @@ benchmarks. Neither benchmark retrains or modifies a project.
 
 ## Walk testing
 
-Use **Enter walk** in the panel or the **Walk Camera (collision)** toolbar button.
+Use the walking-person **Walk Camera (collision)** toolbar button.
 A visible, loaded collision node and free player capsule are required. The panel
 applies calibrated defaults of 1.8 m eye height, 0.2 m radius, 2.5 m/s speed and
-0.25 m step height; these remain editable in Advanced.
+0.25 m step height. **Walk and edit** contains only those four numeric scrubs.
+Drag to change values live, or click, type and press Enter. Shift scrubs more
+precisely; Ctrl scrubs faster. Height changes preserve foot position, with a small
+contact tolerance, and unsafe capsule expansions are rejected without leaving Walk.
+Section help is available through tooltips.
 
 - **WASD** moves horizontally; **Shift** runs.
 - Use the normal camera look drag to turn.
 - Gravity grounds the capsule; walls slide and low obstacles can be stepped over.
-- **Escape** or **Exit walk** returns to fly mode.
+- **Escape** or another camera mode returns to fly mode.
+- Wheel zoom is disabled while walking; scrolling inside panels still works.
 
 Step height is a maximum climb, not a fixed upward jump. Walk searches for the
 minimum lift that clears the lower capsule, sweeps the full body upward and
