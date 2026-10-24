@@ -112,6 +112,11 @@ endif()
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
+# Shared tensor contracts are available without the full LibTorch comparison suite.
+if(BUILD_TESTS OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS)
+    include(${CMAKE_CURRENT_LIST_DIR}/TensorOperationContracts.cmake)
+endif()
+
 # Deliberately no executable opt-in: exercise extended-path I/O independently
 # of the user's/runner's LongPathsEnabled registry policy.
 if(WIN32 AND (BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS))
