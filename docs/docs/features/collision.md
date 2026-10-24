@@ -57,7 +57,10 @@ capsule carving needs enough clearance there. The navigation up-axis is respecte
 ## Saving and exporting
 
 Collision nodes have a distinct subdivided-cube icon in the scene graph. Right-click
-one and choose **Export…** to open its **Save and export** section. Exporting uses
+one and choose **Export…** to open its **Save and export** section, also available
+from **File → Export → Collision…**. The File menu uses the selected
+collision node, or automatically chooses the scene's only collider; select one
+explicitly when the scene contains several. Exporting uses
 an immutable payload snapshot on a worker, with progress, cancellation and error
 details. It does not regenerate occupancy or change the scene.
 

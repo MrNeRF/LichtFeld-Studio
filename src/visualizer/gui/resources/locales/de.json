@@ -1,4 +1,5 @@
 {
+  "menu.file.export_collision": "Collision…",
   "collision.opacity_short": "Opacity",
   "collision.intro_title": "Collision surfaces",
   "collision.intro_help": "Generate from visible splats, inspect the boxes, then try Walk.",

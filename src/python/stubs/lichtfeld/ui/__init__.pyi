@@ -231,6 +231,11 @@ def set_remember_camera_view_snap(enabled: bool) -> None:
 
 def take_splat_export_request() -> list[str]: ...
 
+def open_collision_export() -> None:
+    """
+    Open collision export for the selected collider, or the scene's only collider. Multiple colliders require a selection.
+    """
+
 def get_splat_drag_preferences() -> dict: ...
 
 def set_splat_drag_preferences(arg: dict, /) -> None: ...
