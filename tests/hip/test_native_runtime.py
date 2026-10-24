@@ -167,6 +167,8 @@ if __name__ == "__main__":
     parser.add_argument("module", type=Path)
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--runtime-dir", type=Path)
+    parser.add_argument("--abi-only", action="store_true",
+                        help="Check module ABI and null arguments without GPU queries or kernels")
     options = parser.parse_args()
     if not 0 <= options.device <= 2147483647:
         parser.error("--device must be an ordinal in 0..2147483647")
@@ -174,7 +176,8 @@ if __name__ == "__main__":
     if options.runtime_dir and os.name == "nt":
         directory = os.add_dll_directory(str(options.runtime_dir.resolve()))
     try:
-        unittest.main(argv=[__file__])
+        tests = ["RuntimeContract.test_abi", "RuntimeContract.test_invalid_arguments_clear_outputs"] if options.abi_only else None
+        unittest.main(argv=[__file__], defaultTest=tests)
     finally:
         if directory is not None:
             directory.close()

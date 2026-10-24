@@ -12,6 +12,10 @@ add_test(NAME HipNative.Configuration
     COMMAND "${Python3_EXECUTABLE}" "${_root}/tests/python/test_hip_runtime_configuration.py")
 set_tests_properties(HipNative.Configuration PROPERTIES
     ENVIRONMENT "CMAKE_COMMAND=${CMAKE_COMMAND}" LABELS "cpu;hip" TIMEOUT 60)
+add_test(NAME HipNative.ModuleBoundary
+    COMMAND "${Python3_EXECUTABLE}" "${_root}/tests/hip/test_native_runtime.py"
+        "${LFS_HIP_RUNTIME_LIBRARY}" --runtime-dir "${LFS_HIP_ROOT}/bin" --abi-only)
+set_tests_properties(HipNative.ModuleBoundary PROPERTIES LABELS "cpu;hip" TIMEOUT 30)
 
 # GPU execution is explicit; merely configuring or compiling needs no AMD GPU.
 option(LFS_HIP_NATIVE_GPU_TESTS "Register SDK-only HIP GPU boundary tests" OFF)

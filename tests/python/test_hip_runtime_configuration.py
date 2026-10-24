@@ -86,6 +86,15 @@ class HipConfiguration(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
                 self.assertIn("ordinal in 0..2147483647", result.stderr)
 
+    def test_abi_only_requires_the_native_module(self):
+        result = subprocess.run([
+            sys.executable, str(ROOT / "tests/hip/test_native_runtime.py"),
+            "missing-module.dll", "--abi-only"], capture_output=True, text=True, timeout=30)
+        # A setUpClass failure can also produce a distinct no-tests exit status.
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("setUpClass", result.stderr)
+        self.assertIn("FAILED", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

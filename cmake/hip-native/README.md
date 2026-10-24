@@ -16,8 +16,9 @@ cmake --build build-hip-native
 
 The SDK must provide `include/hip` and `lib/llvm/bin/clang++` (`clang++.exe` on
 Windows). SDK package and HIP API version numbers are separate identifiers.
-The foundation was exercised with SDK 10.1.0 on Windows and gfx1150 hardware;
-other targets still need hardware qualification. `LFS_HIP_ARCHITECTURES` accepts
+SDK 10.1.0 is the development reference. GPU execution was exercised on Windows
+with gfx1150 hardware; other targets still need hardware qualification.
+`LFS_HIP_ARCHITECTURES` accepts
 an explicit semicolon-separated target list. The declared targets are not a
 hardware support matrix: the selected SDK compiler and installed driver must
 support the requested devices. This project supports native Windows and Linux
@@ -25,6 +26,11 @@ builds and rejects cross-compilation. Context creation rejects a GPU whose
 architecture has no matching compiled code object. Wave size is reported by the
 driver; the smoke kernels do not assume wave32 or wave64. Compression is optional
 and fails configuration if explicitly requested from an unsupported compiler.
+
+After building, `ctest --test-dir build-hip-native --output-on-failure` runs CPU
+configuration checks and loads the module to verify its ABI and rejection of null
+arguments. These checks require the SDK runtime dependencies, but do not query
+devices or launch kernels. A missing module or dependency is a failure, not a skip.
 
 GPU execution is opt-in and requires a compatible device and installed driver:
 
@@ -63,3 +69,23 @@ belong to later changes. CPU-only configuration regressions can run without an S
 ```sh
 python tests/python/test_hip_runtime_configuration.py
 ```
+
+On Linux, the SDK can be installed into an isolated development environment using
+[AMD's installation instructions](https://rocm.docs.amd.com/en/develop/install/rocm.html):
+
+```sh
+python3 -m venv /path/to/hip-sdk-env
+. /path/to/hip-sdk-env/bin/activate
+python -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ 'rocm[devel]==10.1.0'
+cmake -S cmake/hip-native -B build-hip-native -G Ninja \
+  -DLFS_HIP_ROOT="$(rocm-sdk path --root)" \
+  -DLFS_HIP_ARCHITECTURE=gfx1150
+cmake --build build-hip-native
+ctest --test-dir build-hip-native --output-on-failure
+```
+
+Linux compilation also needs the host C++ standard-library development headers.
+Explicit architecture selection allows compilation on machines without an AMD
+GPU, including WSL or CI runners. The native module does not load Python or
+PyTorch, but still requires the SDK shared libraries installed in that environment.
+This is a developer setup, not a redistributable runtime bundle.
