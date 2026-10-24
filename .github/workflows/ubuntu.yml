@@ -193,6 +193,14 @@ jobs:
         # The default app build also builds this isolated, SDL-free test executable.
         run: ctest --test-dir build --output-on-failure --no-tests=error -R '^lichtfeld\.sdl_coordinates$'
 
+      - name: Run shared tensor operation CPU contracts
+        run: |
+          cmake --build build --target tensor_operation_contracts --parallel 2
+          mkdir -p "$RUNNER_TEMP/cuda-driver-stub"
+          ln -sf /usr/local/cuda/lib64/stubs/libcuda.so "$RUNNER_TEMP/cuda-driver-stub/libcuda.so.1"
+          LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            ctest --test-dir build --output-on-failure --no-tests=error -R '^TensorOperationContracts[.]CPU$'
+
       - name: Run splat drag contracts
         run: |
           mkdir -p "$RUNNER_TEMP/cuda-driver-stub"
