@@ -31,6 +31,7 @@
 #include <filesystem>
 #include <functional>
 #include <future>
+#include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <memory>
 #include <mutex>
@@ -521,6 +522,46 @@ TEST_F(TrainingSceneInitConcurrencyTest, PrepareFromInitSplatKeepsTheCropbox) {
     EXPECT_TRUE((*prepared)->preserved_cropbox_data.enabled);
     EXPECT_EQ((*prepared)->preserved_cropbox_data.min, glm::vec3(-100.0f));
     EXPECT_EQ((*prepared)->preserved_cropbox_data.max, glm::vec3(100.0f));
+}
+
+// Catches a crop polygon on the dataset point cloud that training drops: the model takes it over like the crop box,
+// so the polygon region of interest applies once training starts.
+TEST_F(TrainingSceneInitConcurrencyTest, PrepareAndInstallCarryTheCropPolygon) {
+    lfs::core::Scene scene;
+    const auto dataset = scene.addDataset("Dataset");
+    const auto cameras = scene.addCameraGroup("Training (1)", dataset, 1);
+    ASSERT_NE(scene.addCamera("cam_0001.png", cameras, make_test_camera()), lfs::core::NULL_NODE);
+    const auto pc = scene.addPointCloud("PointCloud", make_test_point_cloud(8), dataset);
+    ASSERT_NE(pc, lfs::core::NULL_NODE);
+    const lfs::core::CropPolygonData polygon{
+        .vertices = {{-1.0f, -1.0f}, {1.0f, -1.0f}, {0.0f, 1.0f}},
+        .half_depth = 2.0f,
+        .inverse = true};
+    const glm::mat4 local = glm::translate(glm::mat4(1.0f), glm::vec3(0.5f, 0.0f, 0.0f));
+    ASSERT_NE(scene.addCropPolygon("PointCloud_crop_polygon", pc, polygon, local), lfs::core::NULL_NODE);
+
+    lfs::core::param::TrainingParameters params;
+    params.optimization.sh_degree = 0;
+    params.optimization.max_cap = 16;
+    params.optimization.random = false;
+    auto prepared = lfs::training::prepareTrainingModel(params, scene);
+    ASSERT_TRUE(prepared) << prepared.error();
+    ASSERT_TRUE(prepared->has_value());
+    ASSERT_TRUE((*prepared)->preserved_crop_polygon.has_value());
+    EXPECT_EQ((*prepared)->preserved_crop_polygon_transform, local);
+
+    ASSERT_TRUE(lfs::training::installTrainingModel(scene, std::move(**prepared)));
+    const auto* model = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
+    ASSERT_NE(model, nullptr);
+    const auto polygon_id = scene.getCropPolygonForSplat(model->id);
+    ASSERT_NE(polygon_id, lfs::core::NULL_NODE);
+    EXPECT_EQ(scene.getCropPolygonData(polygon_id)->vertices, polygon.vertices);
+    EXPECT_FLOAT_EQ(scene.getCropPolygonData(polygon_id)->half_depth, polygon.half_depth);
+    EXPECT_TRUE(scene.getCropPolygonData(polygon_id)->inverse);
+    EXPECT_EQ(scene.getNodeById(polygon_id)->local_transform.get(), local);
+    const auto region = lfs::training::resolve_training_cropbox_geom(scene);
+    ASSERT_TRUE(region.has_value());
+    EXPECT_TRUE(region->is_polygon());
 }
 
 TEST_F(TrainingSceneInitConcurrencyTest, StopTrainingReturnsWhileWorkerWaitsForOwner) {

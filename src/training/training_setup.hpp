@@ -38,6 +38,9 @@ namespace lfs::training {
         bool has_preserved_cropbox = false;
         lfs::core::CropBoxData preserved_cropbox_data{};
         glm::mat4 preserved_cropbox_transform{1.0f};
+        // The point cloud's crop polygon, carried to the model like its crop box.
+        std::optional<lfs::core::CropPolygonData> preserved_crop_polygon;
+        glm::mat4 preserved_crop_polygon_transform{1.0f};
     };
 
     /// Owner-thread snapshot of the graph inputs initializeTrainingModel needs.
@@ -50,6 +53,8 @@ namespace lfs::training {
         lfs::core::CropBoxData preserved_cropbox_data{};
         glm::mat4 preserved_cropbox_transform{1.0f};
         bool has_preserved_cropbox = false;
+        std::optional<lfs::core::CropPolygonData> preserved_crop_polygon;
+        glm::mat4 preserved_crop_polygon_transform{1.0f};
         lfs::core::SplatData* training_model = nullptr;
         lfs::core::Tensor scene_center;
         glm::vec3 training_data_origin{0.0f};
