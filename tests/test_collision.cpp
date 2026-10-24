@@ -684,8 +684,29 @@ TEST(CollisionVoxelization, ParallelBricksMatchSerialIncludingPartialBoundaryCel
     const auto parallel = collision_detail::voxelizeSparse(source, settings, {}, {}, 4);
     ASSERT_EQ(serial.origin, parallel.origin);
     sameOccupancy(serial, parallel);
+    try {
+        (void)collision_detail::voxelizeSparse(source, settings, {}, [](auto) { throw std::runtime_error("worker callback failure"); }, 4);
+        FAIL() << "Expected worker callback failure";
+    } catch (const std::runtime_error& error) {
+        EXPECT_STREQ(error.what(), "worker callback failure");
+    }
+    std::stop_source stop;
+    EXPECT_THROW((void)collision_detail::voxelizeSparse(source, settings, stop.get_token(), [&](auto) { stop.request_stop(); }, 4), std::runtime_error);
+    EXPECT_TRUE(stop.stop_requested());
+    sameOccupancy(serial, collision_detail::voxelizeSparse(source, settings, {}, {}, 4));
 }
 
+TEST(CollisionVoxelization, ParallelBoundsKeepOverlappingWeakSupportAndRejectDistantOutliers) {
+    CollisionSettings settings;
+    settings.voxel_size = .1f;
+    std::vector<CollisionGaussian> source(4096, {{0, 0, 0}, glm::mat3(.02f), .001f});
+    const auto reference = collision_detail::prepareCollision(source, settings, {});
+    source.push_back({{1e8f, 0, 0}, glm::mat3(.02f), .001f});
+    const auto result = collision_detail::prepareCollision(source, settings, {});
+    EXPECT_EQ(result.volume.origin, reference.volume.origin);
+    EXPECT_EQ(result.volume.dimensions, reference.volume.dimensions);
+    EXPECT_EQ(result.gaussians.size(), reference.gaussians.size());
+}
 TEST(CollisionVoxelization, ThinSurfaceBetweenVoxelCentersRemainsCollidable) {
     CollisionSettings s;
     s.voxel_size = 0.1f;

@@ -8,6 +8,9 @@
 #include <memory>
 #include <mutex>
 #include <numeric>
+#include <tbb/parallel_for.h>
+#include <tbb/task_arena.h>
+#include <tbb/task_group.h>
 #include <thread>
 #include <unordered_map>
 
@@ -300,67 +303,46 @@ namespace lfs::core::collision_detail {
             // Each support proof is independent. Keep the final reduction ordered,
             // but avoid a million serial BVH queries and std::function allocations.
             std::vector<uint8_t> eligible(bounds.size());
-            std::atomic<size_t> cursor{0};
             std::atomic<uint64_t> bound_work{0};
-            std::atomic<bool> failed{false};
-            std::exception_ptr failure;
-            std::mutex failure_mutex;
-            auto classify = [&] {
-                try {
+            tbb::task_group_context context(tbb::task_group_context::isolated);
+            const auto count = bounds.size() >= 4096 ? std::min(8u, std::max(1u, std::thread::hardware_concurrency())) : 1u;
+            tbb::task_arena arena(count);
+            arena.execute([&] {
+                tbb::parallel_for(size_t(0), (bounds.size() + 255) / 256, [&](size_t batch) {
                     uint64_t local_work = 0;
-                    for (;;) {
-                        const auto begin = cursor.fetch_add(256, std::memory_order_relaxed);
-                        if (begin >= bounds.size() || failed.load(std::memory_order_relaxed))
-                            break;
-                        for (size_t row = begin; row < std::min(begin + 256, bounds.size()); ++row) {
+                    for (size_t row = batch * 256; row < std::min((batch + 1) * 256, bounds.size()); ++row) {
+                        check(stop);
+                    const auto& bound = bounds[row];
+                    double upper = 0;
+                    auto accumulate = [&](auto&& self, uint32_t i) -> void {
+                        if (upper >= cutoff || context.is_group_execution_cancelled())
+                            return;
+                        if ((++local_work & 4095) == 0) {
                             check(stop);
-                            const auto& bound = bounds[row];
-                            double upper = 0;
-                            auto accumulate = [&](auto&& self, uint32_t i) -> void {
-                                if (upper >= cutoff)
-                                    return;
-                                if ((++local_work & 4095) == 0) {
-                                    check(stop);
-                                    if (bound_work.fetch_add(4096, std::memory_order_relaxed) + 4096 > 500'000'000)
-                                        throw std::runtime_error("Sparse opacity-bound work budget exceeded");
-                                }
-                                const auto& node = bvh[i];
-                                if (glm::any(glm::greaterThan(bound.min, node.max)) || glm::any(glm::lessThan(bound.max, node.min)))
-                                    return;
-                                if (node.left) {
-                                    self(self, node.left);
-                                    self(self, node.right);
-                                } else {
-                                    for (size_t j = node.begin; j < node.end && upper < cutoff; ++j) {
-                                        const auto& other = bounds[order[j]];
-                                        if (glm::all(glm::lessThanEqual(bound.min, other.max)) && glm::all(glm::greaterThanEqual(bound.max, other.min)))
-                                            upper += other.opacity + 8 * std::numeric_limits<float>::epsilon();
-                                    }
-                                }
-                            };
-                            if (bound.opacity < cutoff)
-                                accumulate(accumulate, 0);
-                            eligible[row] = bound.opacity >= cutoff || upper >= cutoff;
+                            if (bound_work.fetch_add(4096, std::memory_order_relaxed) + 4096 > 500'000'000)
+                                throw std::runtime_error("Sparse opacity-bound work budget exceeded");
                         }
+                        const auto& node = bvh[i];
+                        if (glm::any(glm::greaterThan(bound.min, node.max)) || glm::any(glm::lessThan(bound.max, node.min)))
+                            return;
+                        if (node.left) {
+                            self(self, node.left);
+                            self(self, node.right);
+                        } else {
+                            for (size_t j = node.begin; j < node.end && upper < cutoff; ++j) {
+                                const auto& other = bounds[order[j]];
+                                if (glm::all(glm::lessThanEqual(bound.min, other.max)) && glm::all(glm::greaterThanEqual(bound.max, other.min)))
+                                    upper += other.opacity + 8 * std::numeric_limits<float>::epsilon();
+                            }
+                        }
+                    };
+                    if (bound.opacity < cutoff)
+                        accumulate(accumulate, 0);
+                    eligible[row] = bound.opacity >= cutoff || upper >= cutoff;
                     }
                     if (bound_work.fetch_add(local_work & 4095, std::memory_order_relaxed) + (local_work & 4095) > 500'000'000)
-                        throw std::runtime_error("Sparse opacity-bound work budget exceeded");
-                } catch (...) {
-                    std::lock_guard lock(failure_mutex);
-                    if (!failure)
-                        failure = std::current_exception();
-                    failed.store(true, std::memory_order_relaxed);
-                }
-            };
-            {
-                std::vector<std::jthread> workers;
-                const auto count = bounds.size() >= 4096 ? std::min(8u, std::max(1u, std::thread::hardware_concurrency())) : 1u;
-                for (unsigned i = 1; i < count; ++i)
-                    workers.emplace_back(classify);
-                classify();
-            }
-            if (failure)
-                std::rethrow_exception(failure);
+                        throw std::runtime_error("Sparse opacity-bound work budget exceeded"); }, context);
+            });
             for (size_t i = 0; i < bounds.size(); ++i)
                 if (eligible[i]) {
                     lo = glm::min(lo, bounds[i].min);
@@ -420,7 +402,7 @@ namespace lfs::core::collision_detail {
         const auto available = parallelism ? parallelism : std::max(1u, std::thread::hardware_concurrency());
         const unsigned workers = source.size() >= 4096 && tree.size > 8 ? std::min(available, 8u) : 1;
         std::atomic<size_t> allocated{workers > 1 ? 9u : 1u};
-        std::atomic<bool> failed{false};
+        tbb::task_group_context context(tbb::task_group_context::isolated);
         std::atomic<uint64_t> shared_work{0};
         auto buildBranch = [&](int octant) {
             Tree tree(volume.dimensions, stop);
@@ -444,7 +426,7 @@ namespace lfs::core::collision_detail {
             std::function<void(uint32_t, glm::ivec3, int, const std::vector<uint32_t>&)> build;
             build = [&](uint32_t node, glm::ivec3 lo, int n, const std::vector<uint32_t>& candidates) {
                 check(stop);
-                if (failed.load(std::memory_order_relaxed))
+                if (context.is_group_execution_cancelled())
                     throw std::runtime_error("Collision generation cancelled after worker failure");
                 auto hi = glm::min(lo + n, volume.dimensions);
                 if (glm::any(glm::greaterThanEqual(lo, hi)))
@@ -558,32 +540,17 @@ namespace lfs::core::collision_detail {
             tree.nodes = buildBranch(-1);
         } else {
             std::array<std::vector<uint32_t>, 8> branches;
-            std::atomic<unsigned> next{0}, completed{0};
-            std::mutex error_mutex, progress_mutex;
-            std::exception_ptr error;
-            {
-                std::vector<std::jthread> pool;
-                for (unsigned worker = 0; worker < workers; ++worker)
-                    pool.emplace_back([&] {
-                        try {
-                            for (unsigned octant; (octant = next.fetch_add(1)) < 8 && !failed.load();) {
-                                branches[octant] = buildBranch(int(octant));
-                                const auto done = completed.fetch_add(1) + 1;
-                                if (progress) {
-                                    std::lock_guard lock(progress_mutex);
-                                    progress(std::format("Voxelizing regions: {}/8", done));
-                                }
-                            }
-                        } catch (...) {
-                            std::lock_guard lock(error_mutex);
-                            if (!error)
-                                error = std::current_exception();
-                            failed = true;
-                        }
-                    });
-            }
-            if (error)
-                std::rethrow_exception(error);
+            unsigned completed = 0;
+            std::mutex progress_mutex;
+            tbb::task_arena arena(workers);
+            arena.execute([&] {
+                tbb::parallel_for(0u, 8u, [&](unsigned octant) {
+                    branches[octant] = buildBranch(int(octant));
+                    if (progress) {
+                        std::lock_guard lock(progress_mutex);
+                        progress(std::format("Voxelizing regions: {}/8", ++completed));
+                    } }, context);
+            });
             tree.nodes.assign(9, 0);
             tree.nodes[0] = 3;
             tree.nodes.reserve(allocated.load());

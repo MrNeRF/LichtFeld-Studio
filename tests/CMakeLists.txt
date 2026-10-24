@@ -34,12 +34,13 @@ endif()
 
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
+find_package(TBB REQUIRED)
 
 add_executable(lichtfeld_collision_tests test_collision.cpp ../src/core/collision.cpp ../src/core/collision_sparse.cpp)
 target_compile_features(lichtfeld_collision_tests PRIVATE cxx_std_23)
 target_compile_definitions(lichtfeld_collision_tests PRIVATE LFS_STATIC_BUILD)
 target_include_directories(lichtfeld_collision_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/core/include)
-target_link_libraries(lichtfeld_collision_tests PRIVATE GTest::gtest_main glm::glm nlohmann_json::nlohmann_json)
+target_link_libraries(lichtfeld_collision_tests PRIVATE GTest::gtest_main glm::glm nlohmann_json::nlohmann_json TBB::tbb)
 add_test(NAME lichtfeld.collision COMMAND lichtfeld_collision_tests)
 set_tests_properties(lichtfeld.collision PROPERTIES LABELS "cpu;collision;navigation" TIMEOUT 60)
 
@@ -482,6 +483,7 @@ else()
     )
 endif()
 target_link_libraries(lichtfeld_format_tests PRIVATE
+    TBB::tbb
     GTest::gtest_main
     nlohmann_json::nlohmann_json
     xxHash::xxhash
