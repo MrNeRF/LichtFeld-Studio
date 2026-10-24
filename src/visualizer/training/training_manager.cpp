@@ -71,6 +71,21 @@ namespace lfs::vis {
     using namespace training_session_detail;
 
     namespace {
+        // The CUDA reuse cache keeps a smaller budget while a session holds training memory.
+        bool holdsTrainingCache(const TrainingState state) {
+            return state == TrainingState::Starting || state == TrainingState::Running ||
+                   state == TrainingState::Paused || state == TrainingState::Stopping;
+        }
+
+        void setTrainingCacheActive(const bool active) {
+#if LFS_HAS_CUDA
+            if (lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::CUDA)
+                lfs::core::SizeBucketedPool::instance().set_training_active(active);
+#else
+            (void)active;
+#endif
+        }
+
 #ifdef __GLIBC__
         std::atomic<training_memory_detail::ClearTrainerTrimHook> clear_trainer_trim_hook{nullptr};
 
@@ -709,17 +724,7 @@ namespace lfs::vis {
 
     void TrainerManager::setupStateMachineCallbacks() {
         state_machine_.setStateChangeCallback([this](TrainingState, TrainingState new_state) {
-            const bool training_cache_active =
-                new_state == TrainingState::Starting ||
-                new_state == TrainingState::Running ||
-                new_state == TrainingState::Paused ||
-                new_state == TrainingState::Stopping;
-#if LFS_HAS_CUDA
-            if (lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::CUDA)
-                lfs::core::SizeBucketedPool::instance().set_training_active(training_cache_active);
-#else
-            (void)training_cache_active;
-#endif
+            setTrainingCacheActive(holdsTrainingCache(new_state));
 
             if (new_state == TrainingState::Starting) {
                 auto& store = app_store();
@@ -774,6 +779,9 @@ namespace lfs::vis {
         if (trainer_) {
             lfs::training::CommandCenter::instance().reset_snapshot();
         }
+        // A manager destroyed mid-session must not leave the process-wide pool in training mode.
+        if (holdsTrainingCache(state_machine_.getState()))
+            setTrainingCacheActive(false);
     }
 
     void TrainerManager::setTrainer(std::unique_ptr<lfs::training::Trainer> trainer) {

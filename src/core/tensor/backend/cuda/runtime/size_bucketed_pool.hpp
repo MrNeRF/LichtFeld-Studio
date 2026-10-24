@@ -344,6 +344,10 @@ namespace lfs::core {
             }
         }
 
+        [[nodiscard]] bool training_active() const {
+            return training_active_.load(std::memory_order_acquire);
+        }
+
         // Calculate waste percentage for a given size
         static double get_waste_percentage(size_t bytes) {
             size_t bucket = get_bucket_size(bytes);

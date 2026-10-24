@@ -5,6 +5,7 @@
 #include "core/tensor/backend/cuda/runtime/gpu_slab_allocator.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "core/tensor/backend/cuda/runtime/size_bucketed_pool.hpp"
+#include "core/training_manager.hpp"
 #include "cuda_backend_test.hpp"
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -104,6 +105,22 @@ TEST_F(AllocatorPolicyCudaTest, OversizedSingletonDoesNotEscapeBucketCacheBudget
     EXPECT_EQ(pool.stats().bytes_cached.load(std::memory_order_relaxed), 0u);
     pool.trim_cache();
     pool.set_cache_budget_for_testing(0);
+}
+
+// Fails if a trainer manager destroyed while paused leaves the pool in training mode: everything
+// after it would run with the smaller training reuse cache.
+TEST_F(AllocatorPolicyCudaTest, DestroyedPausedTrainerManagerRestoresCacheMode) {
+    auto& pool = SizeBucketedPool::instance();
+    ASSERT_FALSE(pool.training_active());
+    {
+        lfs::vis::TrainerManager manager;
+        auto& machine = const_cast<lfs::vis::TrainingStateMachine&>(manager.getStateMachine());
+        for (const auto state : {lfs::vis::TrainingState::Ready, lfs::vis::TrainingState::Starting,
+                                 lfs::vis::TrainingState::Running, lfs::vis::TrainingState::Paused})
+            ASSERT_TRUE(machine.transitionTo(state));
+        EXPECT_TRUE(pool.training_active());
+    }
+    EXPECT_FALSE(pool.training_active());
 }
 
 TEST_F(AllocatorPolicyCudaTest, LiveBucketWasteTracksOnlyOutstandingAllocations) {
