@@ -3,6 +3,7 @@
 """Regression checks for the SDK-only C boundary; no application or Torch import."""
 import argparse
 import ctypes as c
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import unittest
@@ -48,6 +49,15 @@ class RuntimeContract(unittest.TestCase):
             "download": ([pointer, pointer, c.c_size_t, pointer, c.c_size_t, error], c.c_int),
             "affine_f32": ([pointer, pointer, pointer, c.c_size_t, c.c_float, c.c_float, error], c.c_int),
             "fill_f32": ([pointer, pointer, c.c_size_t, c.c_size_t, c.c_float, error], c.c_int),
+            "readback_create": ([pointer, c.POINTER(pointer), error], c.c_int),
+            "readback_enqueue": ([pointer, pointer, pointer, c.c_size_t, c.c_size_t, error], c.c_int),
+            "staged_upload": ([pointer, pointer, pointer, c.c_size_t, pointer, c.c_size_t, error], c.c_int),
+            "marker_record": ([pointer, pointer, error], c.c_int),
+            "readback_reserve": ([pointer, pointer, c.c_size_t, c.POINTER(c.c_uint64), error], c.c_int),
+            "readback_append": ([pointer, pointer, pointer, c.c_size_t, c.c_size_t, c.c_size_t, error], c.c_int),
+            "readback_wait": ([pointer, pointer, error], c.c_int),
+            "readback_poll": ([pointer, pointer, pointer, c.POINTER(c.c_int32), error], c.c_int),
+            "readback_destroy": ([pointer, pointer, error], c.c_int),
         }
         cls.calls = {name: bind(cls.dll, name, args, result)
                      for name, (args, result) in signatures.items()}
@@ -160,6 +170,112 @@ class RuntimeContract(unittest.TestCase):
             options.device, None, c.byref(error)), 0)
         self.assertNotEqual(self.calls["device_count"](None, c.byref(error)), 0)
         self.assertNotEqual(self.calls["context_destroy"](None, None), 0)
+        slot = c.c_void_p(1)
+        self.assertNotEqual(self.calls["readback_create"](None, c.byref(slot), c.byref(error)), 0)
+        self.assertIsNone(slot.value)
+        ready = c.c_int32(7)
+        self.assertNotEqual(self.calls["readback_poll"](None, None, None, c.byref(ready), c.byref(error)), 0)
+        self.assertEqual(ready.value, 0)
+
+    @contextmanager
+    def staging_resources(self, size=4096, slots=2):
+        context, buffer = c.c_void_p(), c.c_void_p()
+        created = []
+        self.checked("context_create", options.device, c.byref(context))
+        try:
+            self.checked("buffer_allocate", context, size, c.byref(buffer))
+            for _ in range(slots):
+                slot = c.c_void_p()
+                self.checked("readback_create", context, c.byref(slot))
+                created.append(slot)
+            yield context, buffer, created
+        finally:
+            for slot in reversed(created):
+                self.checked("readback_destroy", context, slot)
+            self.checked("context_destroy", context)
+
+    def consume(self, context, slot, destination=None):
+        self.checked("readback_wait", context, slot)
+        ready = c.c_int32()
+        self.checked("readback_poll", context, slot, destination, c.byref(ready))
+        self.assertEqual(ready.value, 1)
+        self.checked("readback_poll", context, slot, None, c.byref(ready))
+        self.assertEqual(ready.value, 0)
+
+    def test_staged_upload_owns_snapshot_and_preserves_order(self):
+        with self.staging_resources() as (context, buffer, slots):
+            upload, download = slots
+            for count in (1, 513, 17):
+                values = (c.c_float * count)(*(float(i) for i in range(count)))
+                self.checked("staged_upload", context, upload, buffer, 0, values, c.sizeof(values))
+                # The caller can immediately reuse its original pageable memory.
+                values[:] = [-999] * count
+                self.checked("affine_f32", context, buffer, buffer, count, 2, -3)
+                self.checked("readback_enqueue", context, download, buffer, 0, c.sizeof(values))
+                actual = (c.c_float * count)()
+                self.consume(context, download, actual)
+                self.consume(context, upload)
+                self.assertEqual(list(actual), [2 * float(i) - 3 for i in range(count)])
+
+    def test_staging_ownership_pending_and_teardown(self):
+        with self.staging_resources(slots=1) as (context, buffer, slots):
+            slot = slots[0]
+            other = c.c_void_p()
+            self.checked("context_create", options.device, c.byref(other))
+            try:
+                error = Error()
+                self.assertNotEqual(self.calls["readback_destroy"](other, slot, c.byref(error)), 0)
+                self.assertNotEqual(self.calls["context_destroy"](context, c.byref(error)), 0)
+                self.checked("fill_f32", context, buffer, 0, 8, 7)
+                self.checked("readback_enqueue", context, slot, buffer, 0, 32)
+                self.assertNotEqual(self.calls["readback_enqueue"](context, slot, buffer, 0, 32, c.byref(error)), 0)
+                self.checked("readback_wait", context, slot)
+                self.assertNotEqual(self.calls["readback_enqueue"](context, slot, buffer, 0, 32, c.byref(error)), 0)
+                host = c.c_uint64(123)
+                self.assertNotEqual(self.calls["readback_reserve"](context, slot, 64, c.byref(host), c.byref(error)), 0)
+                self.assertEqual(host.value, 0)
+                self.assertNotEqual(self.calls["marker_record"](context, slot, c.byref(error)), 0)
+                actual = (c.c_float * 8)()
+                self.consume(context, slot, actual)
+                self.assertEqual(list(actual), [7] * 8)
+                # Exit with a pending transfer: slot destruction must drain it.
+                self.checked("readback_enqueue", context, slot, buffer, 0, 32)
+            finally:
+                self.checked("context_destroy", other)
+
+    def test_packed_readback_respects_reservation_after_shrinking(self):
+        with self.staging_resources(slots=1) as (context, buffer, slots):
+            slot = slots[0]
+            self.checked("fill_f32", context, buffer, 0, 16, 3)
+            host = c.c_uint64()
+            for size in (128, 16, 64):
+                self.checked("readback_reserve", context, slot, size, c.byref(host))
+                self.assertNotEqual(host.value, 0)
+                error = Error()
+                self.assertNotEqual(self.calls["readback_append"](context, slot, buffer, 0, 4, size, c.byref(error)), 0)
+                self.checked("readback_append", context, slot, buffer, 0, 4, 0)
+                self.checked("readback_append", context, slot, buffer, 4, 4, size - 4)
+                actual = (c.c_ubyte * (size + 16))(*([0xA5] * (size + 16)))
+                self.consume(context, slot, actual)
+                self.assertEqual(bytes(actual[size:]), bytes([0xA5] * 16))
+                self.assertEqual(c.c_float.from_buffer(actual).value, 3)
+                self.assertEqual(c.c_float.from_buffer(actual, size - 4).value, 3)
+                self.assertEqual(bytes(actual[4:size - 4]), bytes(size - 8))
+
+    def test_empty_transfers_and_reusable_markers(self):
+        with self.staging_resources(slots=1) as (context, buffer, slots):
+            marker = slots[0]
+            for _ in range(3):
+                self.checked("fill_f32", context, buffer, 0, 1, 5)
+                self.checked("marker_record", context, marker)
+                self.checked("marker_record", context, marker)
+                self.consume(context, marker)
+            self.checked("staged_upload", context, marker, None, 0, None, 0)
+            self.consume(context, marker)
+            self.checked("readback_enqueue", context, marker, None, 0, 0)
+            self.consume(context, marker)
+            error = Error()
+            self.assertNotEqual(self.calls["readback_enqueue"](context, marker, None, 1, 0, c.byref(error)), 0)
 
 
 if __name__ == "__main__":

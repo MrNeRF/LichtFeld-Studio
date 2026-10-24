@@ -89,3 +89,38 @@ Explicit architecture selection allows compilation on machines without an AMD
 GPU, including WSL or CI runners. The native module does not load Python or
 PyTorch, but still requires the SDK shared libraries installed in that environment.
 This is a developer setup, not a redistributable runtime bundle.
+
+## Owned asynchronous transfers
+
+Contexts can create reusable pinned staging slots for asynchronous upload,
+readback and queue markers. A staged upload copies the caller's input into
+module-owned host storage before returning, so the original input can immediately
+be reused. A readback snapshots device data on the same context queue. Subsequent
+operations on that queue remain ordered with both transfers.
+
+`readback_wait` waits for completion without consuming it; `readback_poll` reports
+readiness and consumes a completed snapshot. Passing a null destination discards
+the snapshot. A non-null destination must provide enough space for the requested
+transfer bytes. A slot remains busy until completion is consumed, even after a
+successful wait. Transfer slots cannot be reused as zero-byte queue markers;
+dedicated markers can be re-recorded to track newer work on the same queue.
+
+For packed readback, reserve a host slot and append device ranges on the same
+queue. Both append bounds and the poll copy size use the requested reservation,
+not the capacity retained from an earlier, larger transfer. The returned host
+address is borrowed: wait before reading it, and do not keep it across capacity
+growth or slot destruction. No host pointer may be retained across context or
+slot destruction.
+
+Destroy staging slots before their context. Context destruction fails while
+slots remain registered, preserving the context for cleanup and retry. Slot
+destruction drains pending transfers before releasing events or pinned storage;
+if cleanup fails, retry destruction rather than reusing the partially cleaned
+slot. A failed event recording retains the pending transfer and falls back to
+stream completion checks, so pinned memory is not freed while a copy may use it.
+
+Growing an idle staging slot can discard its previous contents and cached
+allocation before attempting the replacement allocation. Failure does not retain
+the old capacity, but the slot remains owned and can be retried or destroyed.
+All these operations stay behind the private Tensor runtime boundary; they do
+not register a backend or change the application's image-loading path.
