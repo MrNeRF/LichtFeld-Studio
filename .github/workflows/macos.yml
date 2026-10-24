@@ -127,7 +127,7 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           cmake --build build-macos-release --target tensor_operation_contracts --parallel 2
-          ctest --test-dir build-macos-release --output-on-failure --no-tests=error -R '^TensorOperationContracts[.]CPU$'
+          ctest --test-dir build-macos-release --output-on-failure --no-tests=error -R '^TensorOperationContracts[.](CPU|Runner)$'
 
       - name: Check native Finder drag-and-drop event bridge (no GPU)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}

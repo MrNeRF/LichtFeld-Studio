@@ -37,7 +37,25 @@ foreach(_backend IN LISTS _tensor_contract_backends)
     set_tests_properties(TensorOperationContracts.${_backend} PROPERTIES
         LABELS "gpu;tensor" TIMEOUT 180)
     list(APPEND _tensor_contract_tests TensorOperationContracts.${_backend})
+    add_test(NAME TensorOperationContracts.Runner.${_backend}
+        COMMAND ${CMAKE_COMMAND} "-DRUNNER=$<TARGET_FILE:tensor_operation_contracts>"
+        "-DBACKEND=${_backend}" -DCASE=required-backend
+        -P ${CMAKE_CURRENT_LIST_DIR}/cmake/test_tensor_contract_runner.cmake)
+    set_tests_properties(TensorOperationContracts.Runner.${_backend} PROPERTIES
+        LABELS "gpu;tensor;runner" TIMEOUT 30)
+    list(APPEND _tensor_contract_tests TensorOperationContracts.Runner.${_backend})
 endforeach()
+
+set(_tensor_listing_backend "")
+if(_tensor_contract_backends)
+    list(GET _tensor_contract_backends 0 _tensor_listing_backend)
+endif()
+add_test(NAME TensorOperationContracts.Runner
+    COMMAND ${CMAKE_COMMAND} "-DRUNNER=$<TARGET_FILE:tensor_operation_contracts>"
+    "-DBACKEND=${_tensor_listing_backend}"
+    -P ${CMAKE_CURRENT_LIST_DIR}/cmake/test_tensor_contract_runner.cmake)
+set_tests_properties(TensorOperationContracts.Runner PROPERTIES LABELS "cpu;tensor;runner" TIMEOUT 120)
+list(APPEND _tensor_contract_tests TensorOperationContracts.Runner)
 
 if(WIN32)
     # Test EXEs need not share Core's output directory. Resolve both Release

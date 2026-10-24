@@ -199,7 +199,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/cuda-driver-stub"
           ln -sf /usr/local/cuda/lib64/stubs/libcuda.so "$RUNNER_TEMP/cuda-driver-stub/libcuda.so.1"
           LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-            ctest --test-dir build --output-on-failure --no-tests=error -R '^TensorOperationContracts[.]CPU$'
+            ctest --test-dir build --output-on-failure --no-tests=error -R '^TensorOperationContracts[.](CPU|Runner)$'
 
       - name: Run splat drag contracts
         run: |
