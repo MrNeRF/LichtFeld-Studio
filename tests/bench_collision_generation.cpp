@@ -1,7 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/collision.hpp"
+#include "core/collision_serialization.hpp"
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <nlohmann/json.hpp>
@@ -38,6 +40,13 @@ int main(int argc, char** argv) {
         try {
             auto volume = generateCollision(source, settings, {}, [&](const auto& stage) { std::cout << nlohmann::json{{"seconds", elapsed()}, {"stage", stage}}.dump() << std::endl; }, voxelizeCollisionGpu);
             std::cout << nlohmann::json{{"generation_s", elapsed()}, {"source", source.size()}, {"cell_size", volume.settings.voxel_size}, {"occupied", volume.occupiedCount()}, {"cpu_tree_bytes", volume.tree.size() * 4}, {"dimensions", {volume.dimensions.x, volume.dimensions.y, volume.dimensions.z}}, {"note", volume.warning}}.dump() << std::endl;
+            // Export is deliberately outside the reported generation interval.
+            if (const auto* path = std::getenv("LFS_COLLISION_BENCHMARK_VOLUME")) {
+                std::ofstream output(path);
+                output << nlohmann::json(volume);
+                if (!output)
+                    throw std::runtime_error("Could not write collision benchmark volume");
+            }
         } catch (const std::exception& e) {
             std::cout << nlohmann::json{{"failure_s", elapsed()}, {"error", e.what()}}.dump() << std::endl;
             return 1;

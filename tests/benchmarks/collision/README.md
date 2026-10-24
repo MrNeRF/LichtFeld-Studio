@@ -24,7 +24,23 @@ eye `(-5,3,-5)`, target origin, vertical FOV 60°. Optional
 The benchmark uses 1920×1080, ten warmups and thirty samples. `gpu_median_ms` and
 `gpu_p90_ms` exclude upload, compilation and CPU image readback. `median_ms`
 includes readback and conversion and must not be compared to upstream GPU time.
+`first_frame_ms` includes the first packing/upload, pipeline work and readback;
+report it separately from steady-state GPU rendering.
 Keep other GPU workloads idle and compare the same GPU and driver.
+
+To measure generation and rendering without repeatedly loading a large Gaussian
+model, export an immutable volume from the native snapshot benchmark:
+
+```sh
+LFS_COLLISION_BENCHMARK_VOLUME=/tmp/collision-volume.json \
+build-collision/tests/bench_collision_generation snapshot.f32 0.05 auto
+LFS_COLLISION_BENCHMARK_VOLUME=/tmp/collision-volume.json \
+build-collision/tests/lichtfeld_collision_overlay_tests --gtest_filter='*ProductionVolumeBenchmark'
+```
+
+Volume serialization is outside the reported generation interval. This JSON path
+uses identity coordinates: the snapshot must already be in the intended viewing
+frame. The project path above retains the collider's saved world transform.
 
 Run SuperSplat's pinned, unmodified WGSL against those exact inputs:
 

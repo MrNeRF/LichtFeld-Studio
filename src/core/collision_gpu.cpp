@@ -69,9 +69,13 @@ namespace lfs::core {
         if (bricks.empty())
             throw std::runtime_error("No occupied voxels; lower opacity or voxel size");
         report(.97f);
+        if (progress)
+            progress("Voxelizing sorting occupied bricks (CPU)");
         // Only compact occupied 4^3 masks return to the host. Sorted prefixes
         // build the canonical Walk/archive tree directly, without per-voxel inserts.
         std::sort(bricks.begin(), bricks.end(), [](auto a, auto b) { return (a.morton & cuda::CollisionBrick::key_mask) < (b.morton & cuda::CollisionBrick::key_mask); });
+        if (progress)
+            progress("Voxelizing assembling occupancy (CPU)");
         auto allocate = [&] {
             if (tree.nodes.size() + 8 > CollisionVolume::max_tree_words)
                 throw std::runtime_error("Collision CPU tree budget exceeded");
@@ -130,6 +134,8 @@ namespace lfs::core {
         assemble(assemble, 0, tree.size, 0, bricks.size());
         volume.tree = std::move(tree.nodes);
         volume.tree_size = tree.size;
+        if (progress)
+            progress("Voxelizing validating occupancy (CPU)");
         volume.validate();
         report(1);
         return volume;
