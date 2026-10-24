@@ -675,6 +675,17 @@ namespace lfs::vis {
                                     int parent_node_index) {
             viewport_overlay_service_.setEllipsoid(active, radii, world_transform, affects_render, parent_node_index);
         }
+        void setCropPolygonGizmoState(bool active, const std::vector<glm::vec2>& vertices, float half_depth,
+                                      const glm::mat4& world_transform, bool affects_render,
+                                      int parent_node_index) {
+            viewport_overlay_service_.setCropPolygon(active, vertices, half_depth, world_transform, affects_render,
+                                                     parent_node_index);
+        }
+        void setCropPolygonGizmoActive(bool active) { viewport_overlay_service_.setCropPolygonActive(active); }
+        // Polygon outline being drawn (visualizer world); empty clears the preview.
+        void setCropPolygonDraft(std::vector<glm::vec3> points, std::optional<glm::vec3> cursor) {
+            viewport_overlay_service_.setCropPolygonDraft(std::move(points), cursor);
+        }
         void setCropboxGizmoActive(bool active) { viewport_overlay_service_.setCropboxActive(active); }
         void setEllipsoidGizmoActive(bool active) { viewport_overlay_service_.setEllipsoidActive(active); }
         [[nodiscard]] GizmoState getGizmoState() const { return viewport_overlay_service_.makeFrameGizmoState(); }

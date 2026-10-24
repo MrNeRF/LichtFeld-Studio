@@ -204,6 +204,9 @@ namespace lfs::vis {
         const core::EllipsoidData* getSelectedNodeEllipsoid() const;
         core::NodeId getActiveSelectionEllipsoidId() const;
 
+        // The selected crop polygon, or the one attached to the selected splat.
+        core::NodeId getSelectedNodeCropPolygonId() const;
+
         std::expected<void, std::string> loadDataset(const std::filesystem::path& path,
                                                      const lfs::core::param::TrainingParameters& params);
 
@@ -380,6 +383,7 @@ namespace lfs::vis {
         void loadPPISPCompanion(const std::filesystem::path& ppisp_path);
         void handleCropActivePly(const lfs::geometry::BoundingBox& crop_box, bool inverse, core::NodeId target_node_id = core::NULL_NODE);
         void handleCropByEllipsoid(const glm::mat4& world_transform, const glm::vec3& radii, bool inverse, core::NodeId target_node_id = core::NULL_NODE);
+        void handleCropByPolygon(const glm::mat4& world_transform, const core::CropPolygonData& polygon, core::NodeId target_node_id);
         void handleRenamePly(const lfs::core::events::cmd::RenamePLY& event);
         void handleAddCropBox(std::string node_name);
         void handleAddCropBox(core::NodeId node_id);

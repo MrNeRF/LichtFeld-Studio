@@ -410,6 +410,8 @@ namespace lfs::vis {
                 return "CropBox";
             case core::NodeType::ELLIPSOID:
                 return "Ellipsoid";
+            case core::NodeType::CROP_POLYGON:
+                return "CropPolygon";
             case core::NodeType::IMAGE_GROUP:
                 return "ImageGroup";
             case core::NodeType::IMAGE:
@@ -735,6 +737,14 @@ namespace lfs::vis {
 
         event_handlers_.subscribe<cmd::CropPLYEllipsoid>([this](const auto& cmd) {
             handleCropByEllipsoid(cmd.world_transform, cmd.radii, cmd.inverse, cmd.target_node_id);
+        });
+
+        event_handlers_.subscribe<cmd::CropPLYPolygon>([this](const auto& cmd) {
+            core::CropPolygonData polygon;
+            polygon.vertices = cmd.vertices;
+            polygon.half_depth = cmd.half_depth;
+            polygon.inverse = cmd.inverse;
+            handleCropByPolygon(cmd.world_transform, polygon, cmd.target_node_id);
         });
 
         event_handlers_.subscribe<cmd::FitCropBoxToScene>([this](const auto& cmd) {
@@ -1783,7 +1793,8 @@ namespace lfs::vis {
         const core::NodeId removed_parent_id = node_to_remove->parent_id;
         const core::NodeType removed_type = node_to_remove->type;
         const bool removed_selected_crop_volume =
-            (removed_type == core::NodeType::CROPBOX || removed_type == core::NodeType::ELLIPSOID) &&
+            (removed_type == core::NodeType::CROPBOX || removed_type == core::NodeType::ELLIPSOID ||
+             removed_type == core::NodeType::CROP_POLYGON) &&
             selection_.isNodeSelected(id);
         bool removes_camera_nodes = false;
         bool removes_scene_model_resources =
@@ -3089,6 +3100,20 @@ namespace lfs::vis {
         return single_id;
     }
 
+    core::NodeId SceneManager::getSelectedNodeCropPolygonId() const {
+        std::shared_lock slock(selection_.mutex());
+        const auto& ids = selection_.selectedNodeIds();
+        if (ids.empty())
+            return core::NULL_NODE;
+
+        const auto* node = scene_.getNodeById(*ids.begin());
+        if (!node)
+            return core::NULL_NODE;
+        if (node->type == core::NodeType::CROP_POLYGON)
+            return node->id;
+        return node->type == core::NodeType::SPLAT ? scene_.getCropPolygonForSplat(node->id) : core::NULL_NODE;
+    }
+
     void SceneManager::syncDatasetCameraFrustumsToRenderSettings() {
         auto* rm = services().renderingOrNull();
         if (!rm || scene_.getAllCameras().empty())
@@ -3848,6 +3873,10 @@ namespace lfs::vis {
         for (auto& ellipsoid : state.ellipsoids) {
             ellipsoid.world_transform = rendering::dataWorldTransformToVisualizerWorld(ellipsoid.world_transform);
         }
+        state.crop_polygons = scene_.getRenderableCropPolygons();
+        for (auto& polygon : state.crop_polygons) {
+            polygon.world_transform = rendering::dataWorldTransformToVisualizerWorld(polygon.world_transform);
+        }
 
         // Read selection-dependent state
         {
@@ -3990,7 +4019,8 @@ namespace lfs::vis {
             if (!selected)
                 return;
 
-            if (selected->type == core::NodeType::CROPBOX || selected->type == core::NodeType::ELLIPSOID) {
+            if (selected->type == core::NodeType::CROPBOX || selected->type == core::NodeType::ELLIPSOID ||
+                selected->type == core::NodeType::CROP_POLYGON) {
                 selected = scene_.getNodeById(selected->parent_id);
                 if (!selected)
                     return;
@@ -4186,7 +4216,8 @@ namespace lfs::vis {
             if (!selected)
                 return;
 
-            if (selected->type == core::NodeType::CROPBOX || selected->type == core::NodeType::ELLIPSOID) {
+            if (selected->type == core::NodeType::CROPBOX || selected->type == core::NodeType::ELLIPSOID ||
+                selected->type == core::NodeType::CROP_POLYGON) {
                 selected = scene_.getNodeById(selected->parent_id);
                 if (!selected)
                     return;
@@ -4327,6 +4358,55 @@ namespace lfs::vis {
             } catch (const std::exception& e) {
                 LOG_ERROR("Failed to ellipsoid crop '{}': {}", node_name, e.what());
             }
+        }
+
+        snapshot->captureAfter();
+        op::pushSceneSnapshotIfChanged(std::move(snapshot));
+
+        scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+    }
+
+    void SceneManager::handleCropByPolygon(const glm::mat4& world_transform,
+                                           const core::CropPolygonData& polygon,
+                                           const core::NodeId target_node_id) {
+        // Splat-only: the polygon never attaches to a point cloud.
+        const auto* target = scene_.getNodeById(target_node_id);
+        if (target && target->type == core::NodeType::CROP_POLYGON)
+            target = scene_.getNodeById(target->parent_id);
+        if (!target || target->type != core::NodeType::SPLAT || !target->model)
+            return;
+        if (!canApplyCropToNode(target->id))
+            return;
+
+        const std::string node_name = target->name;
+        changeContentType(ContentType::SplatFiles);
+
+        auto snapshot = std::make_unique<op::SceneSnapshot>(*this, "Crop Polygon");
+        snapshot->captureTopology();
+
+        auto* node = scene_.getMutableNode(node_name);
+        try {
+            const size_t original_visible = node->model->visible_count();
+            const glm::mat4 world_to_local =
+                glm::inverse(world_transform) * scene_coords::nodeDataWorldTransform(scene_, node->id);
+            const auto applied_mask = lfs::core::soft_crop_by_polygon(*node->model, world_to_local, polygon);
+            const size_t new_visible = node->model->visible_count();
+            LOG_INFO("Polygon cropped '{}': {} -> {} visible", node_name, original_visible, new_visible);
+            if (applied_mask.is_valid() && new_visible != original_visible) {
+                scene_.markPayloadDiverged(node->id);
+                state::PLYAdded{
+                    .name = node_name,
+                    .uuid = node->uuid,
+                    .node_gaussians = new_visible,
+                    .total_gaussians = scene_.getTotalGaussianCount(),
+                    .is_visible = true,
+                    .parent_name = "",
+                    .is_group = false,
+                    .node_type = static_cast<int>(core::NodeType::SPLAT)}
+                    .emit();
+            }
+        } catch (const std::exception& e) {
+            LOG_ERROR("Failed to polygon crop '{}': {}", node_name, e.what());
         }
 
         snapshot->captureAfter();
@@ -5220,7 +5300,10 @@ namespace lfs::vis {
         if (!target)
             return;
         const core::NodeId parent_id =
-            (target->type == core::NodeType::CROPBOX || target->type == core::NodeType::ELLIPSOID) ? target->parent_id : node_id;
+            (target->type == core::NodeType::CROPBOX || target->type == core::NodeType::ELLIPSOID ||
+             target->type == core::NodeType::CROP_POLYGON)
+                ? target->parent_id
+                : node_id;
 
         auto cropbox_id = cap::ensureCropBox(*this, services().renderingOrNull(), parent_id);
         if (!cropbox_id) {
@@ -5258,7 +5341,10 @@ namespace lfs::vis {
         if (!target)
             return;
         const core::NodeId parent_id =
-            (target->type == core::NodeType::CROPBOX || target->type == core::NodeType::ELLIPSOID) ? target->parent_id : node_id;
+            (target->type == core::NodeType::CROPBOX || target->type == core::NodeType::ELLIPSOID ||
+             target->type == core::NodeType::CROP_POLYGON)
+                ? target->parent_id
+                : node_id;
 
         auto ellipsoid_id = cap::ensureEllipsoid(*this, services().renderingOrNull(), parent_id);
         if (!ellipsoid_id) {
@@ -5726,7 +5812,8 @@ namespace lfs::vis {
                     continue;
                 if (node->type == core::NodeType::SPLAT && node->model)
                     nodes.push_back(node);
-                else if (node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID)
+                else if (node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID ||
+                         node->type == core::NodeType::CROP_POLYGON)
                     pending.push_back(node->parent_id);
                 else
                     pending.insert(pending.end(), node->children.begin(), node->children.end());
@@ -5998,7 +6085,8 @@ namespace lfs::vis {
             std::shared_lock slock(selection_.mutex());
             for (const auto node_id : selection_.selectedNodeIds()) {
                 const auto* node = scene_.getNodeById(node_id);
-                if (node && (node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID)) {
+                if (node && (node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID ||
+                             node->type == core::NodeType::CROP_POLYGON)) {
                     return true;
                 }
             }

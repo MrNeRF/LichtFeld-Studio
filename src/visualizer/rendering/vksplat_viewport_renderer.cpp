@@ -29,6 +29,7 @@
 #include "rendering/vulkan_wait.hpp"
 #include "viewport/vksplat_compose.comp.spv.h"
 #include "vksplat_input_packer.hpp"
+#include "vksplat_overlay_params.hpp"
 #include "vksplat_shared_scratch_install.hpp"
 #include "vulkan_external_tensor.hpp"
 #include "window/vulkan_result.hpp"
@@ -1182,34 +1183,7 @@ namespace lfs::vis {
             }
         }
 
-        enum OverlayParamIndex : std::size_t {
-            CropFlags = 0,
-            CropMin = 1,
-            CropMax = 2,
-            CropTransform = 3,
-            EllipsoidFlags = 7,
-            EllipsoidRadii = 8,
-            EllipsoidTransform = 9,
-            ViewFlags = 13,
-            ViewMin = 14,
-            ViewMax = 15,
-            ViewTransform = 16,
-            EmphasisFlags = 20,
-            CursorFlags = 21,
-            MarkerFlags = 22,
-            SelectionCursor = 23,
-            SelectionFlags = 24,
-            VisibilityFlags = 25,
-            CropExtraBase = 26,
-            CropParamStride = 7,
-            CropExtraCount = 15,
-            EllipsoidExtraBase = CropExtraBase + CropParamStride * CropExtraCount,
-            EllipsoidParamStride = 5,
-            EllipsoidExtraCount = 15,
-            ParamCount = EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount,
-        };
-        static_assert(EllipsoidFlags + EllipsoidParamStride <= ViewFlags);
-        static_assert(EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount == ParamCount);
+        using namespace vksplat_overlay;
 
         [[nodiscard]] bool hasTransformIndices(const std::shared_ptr<Tensor>& tensor,
                                                const std::size_t num_splats) {
@@ -1581,6 +1555,30 @@ namespace lfs::vis {
                     }
                 } else if (request.filters.ellipsoid_region) {
                     write_ellipsoid(*request.filters.ellipsoid_region, EllipsoidFlags);
+                }
+
+                std::size_t polygon_slot = 0;
+                for (const auto& polygon : request.filters.crop_polygon_regions) {
+                    const auto& vertices = polygon.bounds.vertices;
+                    if (polygon_slot >= CropPolygonCount ||
+                        vertices.size() < lfs::core::crop_polygon::kMinVertices ||
+                        vertices.size() > lfs::core::crop_polygon::kMaxVertices) {
+                        continue;
+                    }
+                    const std::size_t flags_index = CropPolygonBase + polygon_slot++ * CropPolygonParamStride;
+                    writeVec4(dst,
+                              flags_index,
+                              glm::vec4(1.0f,
+                                        polygon.inverse ? 1.0f : 0.0f,
+                                        polygon.desaturate ? 1.0f : 0.0f,
+                                        static_cast<float>(polygon.parent_node_index)));
+                    writeVec4(dst, flags_index + CropPolygonParams,
+                              glm::vec4(polygon.bounds.half_depth, static_cast<float>(vertices.size()), 0.0f, 0.0f));
+                    writeMat4Rows(dst, flags_index + CropPolygonTransform, polygon.bounds.transform);
+                    for (std::size_t i = 0; i < vertices.size(); i += 2) {
+                        const glm::vec2 next = i + 1 < vertices.size() ? vertices[i + 1] : glm::vec2(0.0f);
+                        writeVec4(dst, flags_index + CropPolygonVertices + i / 2, glm::vec4(vertices[i], next));
+                    }
                 }
 
                 if (request.filters.view_volume) {
@@ -4566,11 +4564,15 @@ namespace lfs::vis {
             request.filters.crop_region.has_value() && request.filters.crop_region->desaturate;
         const bool ellipsoid_dims =
             request.filters.ellipsoid_region.has_value() && request.filters.ellipsoid_region->desaturate;
+        const bool polygon_dims =
+            std::any_of(request.filters.crop_polygon_regions.begin(), request.filters.crop_polygon_regions.end(),
+                        [](const auto& polygon) { return polygon.desaturate; });
         const bool raster_overlays_active =
             selection_enabled ||
             preview_enabled ||
             crop_dims ||
             ellipsoid_dims ||
+            polygon_dims ||
             emphasis.dim_non_emphasized ||
             emphasis.focused_gaussian_id >= 0 ||
             request.overlay.cursor.enabled ||
@@ -9639,6 +9641,7 @@ namespace lfs::vis {
                                                  request.scene.node_visibility_mask.size() <= 1u &&
                                                  !request.filters.crop_region && !request.filters.ellipsoid_region &&
                                                  request.filters.crop_regions.empty() && request.filters.ellipsoid_regions.empty() &&
+                                                 request.filters.crop_polygon_regions.empty() &&
                                                  !request.filters.view_volume;
                 if (higs_active) {
                     renderer_.executeMacroDepthWaves(
@@ -9798,6 +9801,17 @@ namespace lfs::vis {
             .lod_page_generation = lod_page_generation,
             .lod_streaming_active = lod_streaming_active || lod_feedback_active,
         };
+    }
+
+    std::vector<float> vksplat_overlay::buildParams(const lfs::rendering::ViewportRenderRequest& request,
+                                                    const bool selection_enabled,
+                                                    const bool preview_enabled,
+                                                    const bool transform_indices_enabled,
+                                                    const std::size_t node_mask_count,
+                                                    const bool node_visibility_cull) {
+        return buildOverlayParamsCpuFloats(request, selection_enabled, preview_enabled, transform_indices_enabled,
+                                           node_mask_count, node_visibility_cull)
+            .value_or(std::vector<float>{});
     }
 
 } // namespace lfs::vis
