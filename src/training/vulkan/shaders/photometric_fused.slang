@@ -131,12 +131,17 @@ static const uint tileFields = PHOTO_MOMENTS != 0 ? ((operation >> 3u) >= 4 ? 7 
 groupshared float verticalTile[tileFields][416];
 static const uint inputFields = PHOTO_MOMENTS != 0 && (operation >> 3u) < 4 ? 3 : 4;
 groupshared float fusedInput[inputFields][676];
+// One past the last tile whose mask window held a value other than one.
+groupshared uint weightedTileEnd;
 void fusedFilter(Params p, uint group, uint lane, uint groupCount) {
     uint columns = (p.width + 15) / 16, rows = (p.height + 15) / 16;
     uint tiles = columns * rows * p.batch * p.channels, pixels = p.width * p.height;
     static const bool moments = PHOTO_MOMENTS != 0;
     uint fields = moments ? (masked(p) ? 7 : 6) : decoupled(p) ? 4
                                              : 3;
+    if (lane == 0)
+        weightedTileEnd = 0;
+    GroupMemoryBarrierWithGroupSync();
     for (uint tile = group; tile < tiles; tile += groupCount) {
         uint base = (tile / (columns * rows)) * pixels;
         int ox = int((tile % columns) * 16), oy = int(((tile / columns) % rows) * 16);
@@ -145,33 +150,40 @@ void fusedFilter(Params p, uint group, uint lane, uint groupCount) {
             uint anchorX = min(uint(ox + 8), p.width - 1), anchorY = min(uint(oy + 8), p.height - 1);
             invMaskScale = 1.0f / max(1.0f, maskAt(p, anchorY * p.width + anchorX));
         }
+        bool partialSupport = false;
         for (uint j = lane; j < 676; j += 256) {
             int x = ox + int(j % 26) - 5, y = oy + int(j / 26) - 5;
             if (moments) {
                 fusedInput[0][j] = moment(p, base, x, y, 0);
                 fusedInput[1][j] = decoupled(p) ? moment(p, base, x, y, 1) : fusedInput[0][j];
                 fusedInput[2][j] = moment(p, base, x, y, 3);
-                if (masked(p))
-                    fusedInput[3][j] = (x >= 0 && y >= 0 && x < int(p.width) && y < int(p.height)
-                                            ? maskAt(p, uint(y) * p.width + uint(x)) : 1.0f) * invMaskScale;
+                if (masked(p)) {
+                    float weight = (x >= 0 && y >= 0 && x < int(p.width) && y < int(p.height)
+                                        ? maskAt(p, uint(y) * p.width + uint(x)) : 1.0f) * invMaskScale;
+                    fusedInput[3][j] = weight;
+                    partialSupport = partialSupport || weight != 1.0f;
+                }
             } else {
                 [loop] for (uint f = 0; f < 4; ++f) if (f < fields) fusedInput[f][j] = partial(p, base, x, y, f);
             }
         }
+        if (moments && masked(p) && WaveActiveAnyTrue(partialSupport) && WaveIsFirstLane())
+            InterlockedMax(weightedTileEnd, tile + 1);
         GroupMemoryBarrierWithGroupSync();
+        // A tile whose whole window has mask one keeps the unmasked rounding and mass one.
+        const bool weighted = moments && masked(p) && weightedTileEnd == tile + 1;
         for (uint j = lane; j < 416; j += 256) {
             uint center = (j / 16) * 26 + (j % 16) + 5;
             float sums[7] = {0, 0, 0, 0, 0, 0, 0};
-            if (moments && masked(p))
+            if (weighted)
                 sums[6] = fusedInput[3][center] * weights[0];
             [loop] for (uint d = 1; d <= 5; ++d) {
                 if (moments) {
                     float al = fusedInput[0][center - d], ar = fusedInput[0][center + d];
                     float rl = fusedInput[1][center - d], rr = fusedInput[1][center + d];
                     float tl = fusedInput[2][center - d], tr = fusedInput[2][center + d];
-                    float ml = masked(p) ? fusedInput[3][center - d] : 1.0f;
-                    float mr = masked(p) ? fusedInput[3][center + d] : 1.0f;
-                    if (masked(p)) {
+                    if (weighted) {
+                        float ml = fusedInput[3][center - d], mr = fusedInput[3][center + d];
                         float wl = ml * weights[d], wr = mr * weights[d];
                         sums[6] = fma(ml + mr, weights[d], sums[6]);
                         sums[0] += al * wl + ar * wr;
@@ -215,16 +227,16 @@ void fusedFilter(Params p, uint group, uint lane, uint groupCount) {
                     m[1] = m[0];
                     continue;
                 }
-                float sum = moments && masked(p) && f == 6
+                float sum = weighted && f == 6
                                 ? verticalTile[f][center] * weights[0] : 0;
                 [loop] for (uint d = 1; d <= 5; ++d) sum = fma(verticalTile[f][center - d * 16] + verticalTile[f][center + d * 16], weights[d], sum);
-                m[f] = moments && masked(p) && f == 6
+                m[f] = weighted && f == 6
                            ? sum : fma(verticalTile[f][center], weights[0], sum);
             }
             uint i = base + uint(y) * p.width + uint(x);
             if (moments) {
-                float invMass = masked(p) ? (m[6] >= 1.0e-30f ? 1.0f / m[6] : 0.0f) : 1.0f;
-                if (masked(p))
+                float invMass = weighted ? (m[6] >= 1.0e-30f ? 1.0f / m[6] : 0.0f) : 1.0f;
+                if (weighted)
                     for (uint f = 0; f < 6; ++f) m[f] *= invMass;
                 float centerWeight = masked(p) ? fusedInput[3][lane / 16 * 26 + lane % 16 + 135] : 1.0f;
                 finishMoments(p, i, m, centerWeight * invMass);
