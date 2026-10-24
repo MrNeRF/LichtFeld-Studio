@@ -144,6 +144,33 @@ namespace {
         }
     }
 
+    // Catches a live point-cloud crop polygon that the Vulkan pass ignores or crops by its bounds: of an L outline the
+    // points in its arms stay; the point in its notch and the point past its slab go, and inverse swaps them.
+    TEST_F(PointCloudVulkanProjectionTest, CropPolygonKeepsOnlyPointsInsideThePrism) {
+        // Two arm points at z = -4, the notch point, and a point over the upper arm but past the slab.
+        points({0.5f, -0.5f, -4.0f, -0.5f, 0.5f, -4.0f, 0.5f, 0.5f, -4.0f, -0.5f, -0.5f, -7.0f},
+               {1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 0});
+        projection(true);
+        const std::vector<glm::vec2> outline{{-1.0f, -1.0f}, {1.0f, -1.0f}, {1.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 1.0f}, {-1.0f, 1.0f}};
+        const std::array<glm::ivec2, 4> pixels{{{136, 72}, {120, 56}, {136, 56}, {120, 72}}};
+        const std::array<glm::vec3, 4> rgb{{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}, {1, 1, 0}}};
+        for (const bool inverse : {false, true}) {
+            SCOPED_TRACE(inverse ? "inverse" : "normal");
+            request.crop_polygon = Renderer::CropPolygon{
+                .to_local = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 4.0f)),
+                .vertices = outline,
+                .half_depth = 1.0f,
+                .inverse = inverse};
+            ASSERT_TRUE(renderer->render(*context, request));
+            const auto image = renderer->readOutputImage(*context);
+            ASSERT_TRUE(image);
+            for (std::size_t i = 0; i < pixels.size(); ++i) {
+                const bool kept = (i < 2) != inverse;
+                expectColor(**image, pixels[i], kept ? rgb[i] : glm::vec3(0.0f));
+            }
+        }
+    }
+
     TEST_F(PointCloudVulkanProjectionTest, PerspectiveAndOrthographicKeepColorAndDepth) {
         points({0, 1, -4, 0, -1, -4, 1, 0, -4, -1, 0, -4, 3, 0, 3},
                {1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 0, 1, 0, 1});

@@ -20,6 +20,7 @@
 #include "operation/undo_history.hpp"
 #include "operator/operator_id.hpp"
 #include "operator/operator_registry.hpp"
+#include "operator/ops/crop_polygon_ops.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
@@ -1081,8 +1082,8 @@ namespace lfs::vis::gui {
         if (!sm || !target_id)
             return;
         const auto* const target = sm->getScene().getNodeById(*target_id);
-        if (!target || target->type != core::NodeType::SPLAT) {
-            LOG_WARN("Crop polygons can only be drawn for splat nodes");
+        if (!target || !op::isCropPolygonTarget(target->type)) {
+            LOG_WARN("Crop polygons can only be drawn for splat or point cloud nodes");
             return;
         }
 

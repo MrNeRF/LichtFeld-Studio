@@ -266,6 +266,7 @@ namespace lfs::rendering {
     struct PointCloudFilterState {
         std::optional<BoundingBox> crop_box;
         std::optional<Ellipsoid> crop_ellipsoid;
+        std::optional<CropPolygon> crop_polygon;
         bool crop_inverse = false;
         bool crop_desaturate = false;
     };

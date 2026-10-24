@@ -121,6 +121,33 @@ namespace lfs::rendering::pcraster {
                     }
                     desaturate = true;
                 }
+            } else if (params.has_crop_polygon) {
+                const auto& polygon = params.crop_polygon;
+                const float* T = polygon.to_local;
+                const float lx = matMulRow(T, 0, x, y, z, 1.0f);
+                const float ly = matMulRow(T, 1, x, y, z, 1.0f);
+                const float lz = matMulRow(T, 2, x, y, z, 1.0f);
+                // |z| <= half depth and the even-odd rule over the outline, as in soft_crop_by_polygon.
+                bool inside = fabsf(lz) <= polygon.half_depth && polygon.count >= 3;
+                if (inside) {
+                    bool crossing = false;
+                    for (int i = 0, j = polygon.count - 1; i < polygon.count; j = i++) {
+                        const float ax = polygon.vertices[2 * i];
+                        const float ay = polygon.vertices[2 * i + 1];
+                        const float bx = polygon.vertices[2 * j];
+                        const float by = polygon.vertices[2 * j + 1];
+                        if ((ay > ly) != (by > ly) && lx < (bx - ax) * (ly - ay) / (by - ay) + ax)
+                            crossing = !crossing;
+                    }
+                    inside = crossing;
+                }
+                const bool visible = polygon.inverse ? !inside : inside;
+                if (!visible) {
+                    if (!polygon.desaturate) {
+                        return;
+                    }
+                    desaturate = true;
+                }
             }
 
             const float* V = params.view;

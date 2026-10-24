@@ -60,14 +60,14 @@ namespace lfs::core {
         KEYFRAME_GROUP, // Container for keyframe nodes (camera animation)
         KEYFRAME,       // Individual camera animation keyframe
         PLY_SEQUENCE,   // Container for ordered PLY sequence frames
-        CROP_POLYGON    // Extruded polygon crop volume (child of SPLAT)
+        CROP_POLYGON    // Extruded polygon crop volume (child of SPLAT or POINTCLOUD)
     };
 
     [[nodiscard]] inline bool isSceneNodeParentCompatible(const NodeType parent,
                                                           const NodeType child) {
-        // The polygon crop is splat-only: point clouds hold one volume on the GPU.
+        // Crop polygons attach to splats and point clouds only, like the other crop volumes.
         if (child == NodeType::CROP_POLYGON)
-            return parent == NodeType::SPLAT;
+            return parent == NodeType::SPLAT || parent == NodeType::POINTCLOUD;
         const bool group_like = parent == NodeType::GROUP ||
                                 parent == NodeType::DATASET ||
                                 parent == NodeType::CAMERA_GROUP ||

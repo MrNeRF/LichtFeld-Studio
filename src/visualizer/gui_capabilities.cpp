@@ -2028,9 +2028,9 @@ namespace lfs::vis::cap {
         const auto* const parent = scene.getNodeById(parent_id);
         if (!parent)
             return crop_polygon_error(lfs::ErrorCode::NotFound, "Target node not found");
-        if (parent->type != core::NodeType::SPLAT)
+        if (parent->type != core::NodeType::SPLAT && parent->type != core::NodeType::POINTCLOUD)
             return crop_polygon_error(lfs::ErrorCode::InvalidArgument,
-                                      "Crop polygons can only be attached to splat nodes");
+                                      "Crop polygons can only be attached to splat or point cloud nodes");
         if (!core::crop_polygon::isValidOutline(data.vertices) ||
             !core::crop_polygon::isValidHalfDepth(data.half_depth))
             return crop_polygon_error(lfs::ErrorCode::InvalidArgument,

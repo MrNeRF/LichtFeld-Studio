@@ -4364,7 +4364,7 @@ namespace lfs::core {
             return NULL_NODE;
         }
         if (!isSceneNodeParentCompatible(parent->type, NodeType::CROP_POLYGON)) {
-            LOG_WARN("Cannot add crop polygon '{}': parent is not a splat", name);
+            LOG_WARN("Cannot add crop polygon '{}': parent is not a splat or point cloud", name);
             return NULL_NODE;
         }
         if (const NodeId existing = getCropPolygonForSplat(parent_id); existing != NULL_NODE) {

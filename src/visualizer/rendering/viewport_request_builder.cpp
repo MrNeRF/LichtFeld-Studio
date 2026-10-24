@@ -248,6 +248,28 @@ namespace lfs::vis {
             }
             return singleEnabledEllipsoid(ellipsoids);
         }
+        [[nodiscard]] const lfs::core::Scene::RenderableCropPolygon* activePointCloudCropPolygonFilter(
+            const FrameContext& ctx) {
+            const core::NodeId selected_polygon_id =
+                ctx.scene_manager ? ctx.scene_manager->getSelectedNodeCropPolygonId() : core::NULL_NODE;
+            const lfs::core::Scene::RenderableCropPolygon* single = nullptr;
+            bool several = false;
+            for (const auto& polygon : ctx.scene_state.crop_polygons) {
+                if (!polygon.data || !polygon.data->enabled)
+                    continue;
+                if (selected_polygon_id != core::NULL_NODE && polygon.node_id == selected_polygon_id)
+                    return &polygon;
+                if (!polygon.parent_effectively_visible)
+                    continue;
+                several = several || single;
+                single = &polygon;
+            }
+
+            if ((ctx.scene_manager && ctx.scene_manager->hasSelectedNode()) || several) {
+                return nullptr;
+            }
+            return single;
+        }
         void upsertScopedCropBox(std::vector<lfs::rendering::GaussianScopedBoxFilter>& filters,
                                  lfs::rendering::GaussianScopedBoxFilter filter) {
             if (filter.parent_node_index < 0) {
@@ -301,6 +323,7 @@ namespace lfs::vis {
                     .max = ctx.gizmo.cropbox_max,
                     .transform = glm::inverse(ctx.gizmo.cropbox_transform)};
                 filters.crop_ellipsoid.reset();
+                filters.crop_polygon.reset();
                 filters.crop_inverse = false;
                 filters.crop_desaturate = ctx.settings.desaturate_cropping;
                 return;
@@ -311,7 +334,23 @@ namespace lfs::vis {
                     .radii = ctx.gizmo.ellipsoid_radii,
                     .transform = glm::inverse(ctx.gizmo.ellipsoid_transform)};
                 filters.crop_box.reset();
+                filters.crop_polygon.reset();
                 filters.crop_inverse = false;
+                filters.crop_desaturate = ctx.settings.desaturate_cropping;
+                return;
+            }
+
+            const auto* const polygon = activePointCloudCropPolygonFilter(ctx);
+            // The crop tool previews its pending transform; the polygon keeps its own inverse, as for splats.
+            if (ctx.gizmo.crop_polygon_active && ctx.gizmo.crop_polygon_affects_render &&
+                !ctx.gizmo.crop_polygon_vertices.empty()) {
+                filters.crop_polygon = lfs::rendering::CropPolygon{
+                    .vertices = ctx.gizmo.crop_polygon_vertices,
+                    .half_depth = ctx.gizmo.crop_polygon_half_depth,
+                    .transform = glm::inverse(ctx.gizmo.crop_polygon_transform)};
+                filters.crop_box.reset();
+                filters.crop_ellipsoid.reset();
+                filters.crop_inverse = polygon && polygon->data->inverse;
                 filters.crop_desaturate = ctx.settings.desaturate_cropping;
                 return;
             }
@@ -322,21 +361,33 @@ namespace lfs::vis {
                     .max = cb->data->max,
                     .transform = glm::inverse(cb->world_transform)};
                 filters.crop_ellipsoid.reset();
+                filters.crop_polygon.reset();
                 filters.crop_inverse = cb->data->inverse;
                 filters.crop_desaturate = ctx.settings.desaturate_cropping;
                 return;
             }
 
-            const auto* const el = activePointCloudEllipsoidFilter(ctx);
-            if (!el) {
+            if (const auto* const el = activePointCloudEllipsoidFilter(ctx)) {
+                filters.crop_ellipsoid = lfs::rendering::Ellipsoid{
+                    .radii = el->data->radii,
+                    .transform = glm::inverse(el->world_transform)};
+                filters.crop_box.reset();
+                filters.crop_polygon.reset();
+                filters.crop_inverse = el->data->inverse;
+                filters.crop_desaturate = ctx.settings.desaturate_cropping;
                 return;
             }
 
-            filters.crop_ellipsoid = lfs::rendering::Ellipsoid{
-                .radii = el->data->radii,
-                .transform = glm::inverse(el->world_transform)};
+            if (!polygon) {
+                return;
+            }
+            filters.crop_polygon = lfs::rendering::CropPolygon{
+                .vertices = polygon->data->vertices,
+                .half_depth = polygon->data->half_depth,
+                .transform = glm::inverse(polygon->world_transform)};
             filters.crop_box.reset();
-            filters.crop_inverse = el->data->inverse;
+            filters.crop_ellipsoid.reset();
+            filters.crop_inverse = polygon->data->inverse;
             filters.crop_desaturate = ctx.settings.desaturate_cropping;
         }
 

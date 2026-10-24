@@ -116,7 +116,7 @@ namespace lfs::vis::op {
     bool CropPolygonDrawOperator::poll(const OperatorContext& ctx, const OperatorProperties* props) const {
         const auto target = props ? props->get_or<int>("target_node_id", -1) : -1;
         const auto* const node = ctx.scene().getScene().getNodeById(static_cast<core::NodeId>(target));
-        return node && node->type == core::NodeType::SPLAT;
+        return node && isCropPolygonTarget(node->type);
     }
 
     OperatorResult CropPolygonDrawOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {
@@ -192,7 +192,7 @@ namespace lfs::vis::op {
     OperatorResult CropPolygonDrawOperator::modal(OperatorContext& ctx, OperatorProperties& /*props*/) {
         // Leaving the polygon crop tool or losing the target ends the drawing.
         const auto* const target = ctx.scene().getScene().getNodeById(target_node_id_);
-        if (!polygonCropToolActive() || !target || target->type != core::NodeType::SPLAT)
+        if (!polygonCropToolActive() || !target || !isCropPolygonTarget(target->type))
             return OperatorResult::CANCELLED;
 
         const auto* event = ctx.event();

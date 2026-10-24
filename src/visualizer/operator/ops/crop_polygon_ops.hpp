@@ -66,6 +66,11 @@ namespace lfs::vis::op {
         OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
     };
 
+    // Node types a crop polygon can be drawn for.
+    [[nodiscard]] inline bool isCropPolygonTarget(const core::NodeType type) {
+        return core::isSceneNodeParentCompatible(type, core::NodeType::CROP_POLYGON);
+    }
+
     void registerCropPolygonOperators();
     void unregisterCropPolygonOperators();
 

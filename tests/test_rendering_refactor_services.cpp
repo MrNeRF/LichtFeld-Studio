@@ -2850,7 +2850,6 @@ namespace lfs::vis {
     TEST_F(SceneManagerRenderStateTest, CropPolygonSceneApiValidatesAndStaysOutOfBoundsAndDuplicates) {
         core::Scene scene;
         const auto splat = scene.addSplat("Model", makeTwoPointTestSplat(0.0f, 2.0f));
-        const auto cloud = scene.addPointCloud("Cloud", makeTestPointCloud());
         glm::vec3 lo_before, hi_before;
         ASSERT_TRUE(scene.getNodeBounds(splat, lo_before, hi_before));
 
@@ -2858,7 +2857,8 @@ namespace lfs::vis {
         auto degenerate = data;
         degenerate.vertices = {{0.0f, 0.0f}, {1.0f, 1.0f}, {2.0f, 2.0f}};
         EXPECT_EQ(scene.addCropPolygon("Collinear", splat, degenerate), core::NULL_NODE);
-        EXPECT_EQ(scene.addCropPolygon("Cloud polygon", cloud, data), core::NULL_NODE);
+        const auto group = scene.addGroup("Group");
+        EXPECT_EQ(scene.addCropPolygon("Group polygon", group, data), core::NULL_NODE);
 
         const glm::mat4 far_away = glm::scale(glm::translate(glm::mat4(1.0f), glm::vec3(50.0f, 0.0f, 0.0f)),
                                               glm::vec3(10.0f));
@@ -2908,7 +2908,7 @@ namespace lfs::vis {
         };
         EXPECT_EQ(restore(nullptr, splat), core::NULL_NODE);
         EXPECT_EQ(restore(std::make_unique<core::CropPolygonData>(degenerate), splat), core::NULL_NODE);
-        EXPECT_EQ(restore(std::make_unique<core::CropPolygonData>(changed), cloud), core::NULL_NODE);
+        EXPECT_EQ(restore(std::make_unique<core::CropPolygonData>(changed), group), core::NULL_NODE);
         const auto restored = restore(std::make_unique<core::CropPolygonData>(changed), splat);
         ASSERT_NE(restored, core::NULL_NODE);
         EXPECT_FLOAT_EQ(scene.getCropPolygonData(restored)->half_depth, 2.0f);
@@ -2957,7 +2957,89 @@ namespace lfs::vis {
         }
 
         const auto cloud = scene.addPointCloud("Cloud", makeTestPointCloud());
-        EXPECT_FALSE(cap::createCropPolygon(manager, nullptr, cloud, data, glm::mat4(1.0f)));
+        EXPECT_TRUE(cap::createCropPolygon(manager, nullptr, cloud, data, glm::mat4(1.0f)));
+        EXPECT_NE(scene.getCropPolygonForSplat(cloud), core::NULL_NODE);
+    }
+
+    // Catches a crop polygon on a point cloud that the point-cloud request leaves out, or keeps when disabled.
+    TEST_F(SceneManagerRenderStateTest, PointCloudRequestCarriesTheSelectedCropPolygon) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto cloud = scene.addPointCloud("Cloud", makeTestPointCloud());
+        auto data = makeCropPolygonData();
+        data.inverse = true;
+        const auto polygon = cap::createCropPolygon(manager, nullptr, cloud, data,
+                                                    glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)));
+        ASSERT_TRUE(polygon) << polygon.error().user_message();
+        manager.selectNode(*polygon);
+
+        Viewport viewport(640, 480);
+        RenderSettings settings;
+        settings.desaturate_cropping = true;
+        const auto request_for = [&](const SceneRenderState& scene_state) {
+            const FrameContext ctx{
+                .viewport = viewport,
+                .scene_manager = &manager,
+                .scene_state = scene_state,
+                .settings = settings,
+                .render_size = {640, 480},
+            };
+            return buildPointCloudRenderRequest(ctx, {640, 480}, scene_state.model_transforms);
+        };
+        const auto scene_state = manager.buildRenderState();
+        ASSERT_EQ(scene_state.crop_polygons.size(), 1u);
+        const auto request = request_for(scene_state);
+        ASSERT_TRUE(request.filters.crop_polygon.has_value());
+        EXPECT_FALSE(request.filters.crop_box.has_value());
+        EXPECT_FALSE(request.filters.crop_ellipsoid.has_value());
+        EXPECT_EQ(request.filters.crop_polygon->vertices, data.vertices);
+        EXPECT_FLOAT_EQ(request.filters.crop_polygon->half_depth, data.half_depth);
+        EXPECT_EQ(request.filters.crop_polygon->transform, glm::inverse(scene_state.crop_polygons.front().world_transform));
+        EXPECT_TRUE(request.filters.crop_inverse);
+        EXPECT_TRUE(request.filters.crop_desaturate);
+
+        scene.getCropPolygonData(*polygon)->enabled = false;
+        EXPECT_FALSE(request_for(manager.buildRenderState()).filters.crop_polygon.has_value());
+    }
+
+    // Catches a polygon apply that skips point clouds or cannot be undone: the cloud keeps only the points in the
+    // prism, the polygon stops filtering it like an applied crop box, and one undo restores both.
+    TEST_F(SceneManagerRenderStateTest, CropPolygonApplyFiltersAPointCloudInOneUndoStep) {
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        // In the bottom arm of an L, in its notch, above its slab, in its upper arm.
+        const std::vector<float> means{0.5f, -0.5f, 0.0f, 0.5f, 0.5f, 0.0f, -0.5f, -0.5f, 2.0f, -0.5f, 0.5f, 0.0f};
+        const auto cloud = scene.addPointCloud(
+            "Cloud", std::make_shared<lfs::core::PointCloud>(Tensor::from_vector(means, {size_t{4}, size_t{3}}, Device::CPU),
+                                                             Tensor::zeros({size_t{4}, size_t{3}}, Device::CPU)));
+        core::CropPolygonData data;
+        data.vertices = {{-1.0f, -1.0f}, {1.0f, -1.0f}, {1.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 1.0f}, {-1.0f, 1.0f}};
+        data.half_depth = 0.5f;
+        const auto polygon = cap::createCropPolygon(manager, nullptr, cloud, data, glm::mat4(1.0f));
+        ASSERT_TRUE(polygon) << polygon.error().user_message();
+        op::undoHistory().clear();
+
+        lfs::core::events::cmd::CropPLYPolygon{
+            .world_transform = scene_coords::nodeDataWorldTransform(scene, *polygon),
+            .vertices = data.vertices,
+            .half_depth = data.half_depth,
+            .inverse = false,
+            .target_node_id = cloud}
+            .emit();
+        const auto points = [&] { return scene.getNodeById(cloud)->point_cloud->means.cpu().to_vector(); };
+        EXPECT_EQ(points(), (std::vector<float>{0.5f, -0.5f, 0.0f, -0.5f, 0.5f, 0.0f}));
+        EXPECT_FALSE(scene.getCropPolygonData(*polygon)->enabled);
+        EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_EQ(points(), means);
+        const auto restored = scene.getCropPolygonForSplat(cloud);
+        ASSERT_NE(restored, core::NULL_NODE);
+        EXPECT_TRUE(scene.getCropPolygonData(restored)->enabled);
+        ASSERT_TRUE(op::undoHistory().redo().success);
+        EXPECT_EQ(points().size(), 6u);
     }
 
     TEST_F(SceneManagerRenderStateTest, ViewportRequestCarriesEnabledCropPolygonsAndTheLiveTransform) {

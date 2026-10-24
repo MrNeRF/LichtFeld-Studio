@@ -1072,6 +1072,13 @@ namespace lfs::vis {
                 .radii = ellipsoid->radii,
                 .inverse = pc_request.filters.crop_inverse,
                 .desaturate = pc_request.filters.crop_desaturate};
+        } else if (const auto& polygon = pc_request.filters.crop_polygon) {
+            vk_req.crop_polygon = PointCloudVulkanRenderer::CropPolygon{
+                .to_local = polygon->transform,
+                .vertices = polygon->vertices,
+                .half_depth = polygon->half_depth,
+                .inverse = pc_request.filters.crop_inverse,
+                .desaturate = pc_request.filters.crop_desaturate};
         }
         vk_req.view = view;
         vk_req.view_projection = clip_y_flip * projection * view;

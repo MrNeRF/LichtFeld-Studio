@@ -980,7 +980,7 @@ class _GizmoToolbarController:
             if callable(add_ellipsoid):
                 add_ellipsoid(selected[0])
         elif shape == "polygon" and selected:
-            # Edits the selected splat's polygon, or starts drawing one.
+            # Edits the selected splat's or point cloud's polygon, or starts drawing one.
             start_crop_polygon = getattr(lf.ui, "start_crop_polygon", None)
             if callable(start_crop_polygon):
                 start_crop_polygon()

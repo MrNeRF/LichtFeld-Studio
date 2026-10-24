@@ -3111,7 +3111,9 @@ namespace lfs::vis {
             return core::NULL_NODE;
         if (node->type == core::NodeType::CROP_POLYGON)
             return node->id;
-        return node->type == core::NodeType::SPLAT ? scene_.getCropPolygonForSplat(node->id) : core::NULL_NODE;
+        return node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD
+                   ? scene_.getCropPolygonForSplat(node->id)
+                   : core::NULL_NODE;
     }
 
     void SceneManager::syncDatasetCameraFrustumsToRenderSettings() {
@@ -4369,10 +4371,13 @@ namespace lfs::vis {
     void SceneManager::handleCropByPolygon(const glm::mat4& world_transform,
                                            const core::CropPolygonData& polygon,
                                            const core::NodeId target_node_id) {
-        // Splat-only: the polygon never attaches to a point cloud.
         const auto* target = scene_.getNodeById(target_node_id);
         if (target && target->type == core::NodeType::CROP_POLYGON)
             target = scene_.getNodeById(target->parent_id);
+        if (target && target->type == core::NodeType::POINTCLOUD) {
+            cropPointCloudByPolygon(target->id, world_transform, polygon);
+            return;
+        }
         if (!target || target->type != core::NodeType::SPLAT || !target->model)
             return;
         if (!canApplyCropToNode(target->id))
@@ -4413,6 +4418,57 @@ namespace lfs::vis {
         op::pushSceneSnapshotIfChanged(std::move(snapshot));
 
         scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+    }
+
+    void SceneManager::cropPointCloudByPolygon(const core::NodeId node_id,
+                                               const glm::mat4& world_transform,
+                                               const core::CropPolygonData& polygon) {
+        const auto* target = scene_.getNodeById(node_id);
+        if (!target || !target->point_cloud || target->point_cloud->size() == 0 ||
+            !core::crop_polygon::isValidOutline(polygon.vertices) ||
+            !core::crop_polygon::isValidHalfDepth(polygon.half_depth))
+            return;
+
+        // A hard filter like the box and ellipsoid crops of point clouds. One history entry
+        // restores the points and the polygon the crop disables.
+        const std::string node_name = target->name;
+        const op::SceneGraphCaptureOptions history_options{
+            .mode = op::SceneGraphCaptureMode::FULL,
+            .include_selected_nodes = false,
+            .include_scene_context = false,
+        };
+        auto history_before = op::SceneGraphPatchEntry::captureState(*this, {node_name}, history_options);
+
+        auto* node = scene_.getMutableNode(node_name);
+        const auto& means = node->point_cloud->means;
+        const size_t num_points = node->point_cloud->size();
+        const glm::mat4 points_to_polygon =
+            glm::inverse(world_transform) * scene_coords::nodeDataWorldTransform(scene_, node->id);
+        auto mask = lfs::core::compute_crop_polygon_mask(means, polygon.vertices, polygon.half_depth, points_to_polygon);
+        if (polygon.inverse)
+            mask = mask.logical_not();
+        const auto indices = mask.nonzero().squeeze(1);
+        const size_t filtered_count = indices.size(0);
+        if (filtered_count == 0 || filtered_count == num_points)
+            return;
+
+        node->point_cloud = std::make_shared<lfs::core::PointCloud>(
+            means.index_select(0, indices), node->point_cloud->colors.index_select(0, indices));
+        node->gaussian_count.store(filtered_count, std::memory_order_release);
+        scene_.markPayloadDiverged(node->id);
+        LOG_INFO("Polygon cropped PointCloud '{}': {} -> {} points", node_name, num_points, filtered_count);
+
+        // Like the crop box, the polygon stops filtering the cloud it cropped.
+        if (auto* const data = scene_.getCropPolygonData(scene_.getCropPolygonForSplat(node->id)))
+            data->enabled = false;
+
+        op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
+            *this, "Crop Polygon", std::move(history_before),
+            op::SceneGraphPatchEntry::captureState(*this, {node_name}, history_options)));
+        scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        if (services().renderingOrNull())
+            services().renderingOrNull()->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY,
+                                                    lfs::vis::FrameReason::SceneChange);
     }
 
     size_t SceneManager::applyDeleted() {

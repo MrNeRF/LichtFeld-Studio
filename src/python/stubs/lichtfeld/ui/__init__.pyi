@@ -2354,7 +2354,7 @@ def apply_crop_tool() -> None:
 
 def start_crop_polygon() -> None:
     """
-    Edit the selected splat's crop polygon, or start drawing one on a camera-facing plane
+    Edit the selected splat's or point cloud's crop polygon, or start drawing one on a camera-facing plane
     """
 
 def can_apply_align() -> bool:
