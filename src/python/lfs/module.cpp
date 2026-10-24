@@ -410,7 +410,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -3039,6 +3039,68 @@ NB_MODULE(lichtfeld, m) {
             }
         },
         nb::arg("mode"), "Set the active camera navigation mode. Walk requires a visible collision node and a free capsule at the camera; otherwise raises RuntimeError.");
+    m.def("has_walk_collision", [] {
+        const auto* controller = lfs::vis::InputController::instance();
+        return controller && controller->hasWalkCollision(); }, "Whether visible, loaded colliders are available for Walk; does not test the current capsule placement.");
+    m.def("get_collision_controls", [] {
+        nb::dict state;
+        const auto* controller = lfs::vis::InputController::instance();
+        if (!controller)
+            return state;
+        const auto& w = controller->walkSettings();
+        state["walking"] = controller->cameraNavigationMode() == lfs::vis::InputController::CameraNavigationMode::Walk;
+        state["height"] = w.height / w.units_per_meter;
+        state["radius"] = w.radius / w.units_per_meter;
+        state["speed"] = w.speed / w.units_per_meter;
+        state["step"] = w.step_height / w.units_per_meter;
+        state["target"] = nb::none();
+        nb::list targets;
+        if (const auto* sm = lfs::python::get_scene_manager()) {
+            const auto& scene = sm->getScene();
+            const auto ids = sm->getSelectedNodeIds();
+            for (const auto* node : scene.getNodes()) {
+                if (!node->collision || !node->mesh)
+                    continue;
+                nb::dict target;
+                target["uuid"] = node->uuid.to_string();
+                target["name"] = node->name;
+                target["opacity"] = node->collision_display.opacity;
+                target["cutaway"] = node->collision_display.slice;
+                target["locked"] = node->locked.get();
+                target["visible"] = scene.isNodeEffectivelyVisible(node->id);
+                targets.append(target);
+                if (ids.size() == 1 && ids[0] == node->id)
+                    state["target"] = target;
+            }
+        }
+        state["targets"] = targets;
+        return state; }, "Lightweight context and metre-based Walk settings for the viewport card; never copies voxel or mesh payloads.");
+    m.def("set_walk_settings", [](float height, float radius, float speed, float step) {
+        auto* controller = lfs::vis::InputController::instance();
+        if (!controller)
+            throw std::runtime_error("No Walk camera controller");
+        auto w = controller->walkSettings();
+        w.height = height * w.units_per_meter;
+        w.radius = radius * w.units_per_meter;
+        w.speed = speed * w.units_per_meter;
+        w.step_height = step * w.units_per_meter;
+        controller->setWalkSettings(w); }, nb::kw_only(), nb::arg("height"), nb::arg("radius"), nb::arg("speed"), nb::arg("step"), "Apply metre-based Walk settings live, preserving feet and rejecting unsafe capsule changes.");
+    m.def("set_collision_preview", [](const std::string& uuid, float opacity, float cutaway) {
+        const auto id = lfs::core::Uuid::from_string(uuid);
+        auto* sm = lfs::python::get_scene_manager();
+        auto* node = sm && id ? sm->getScene().getNodeByUuid(*id) : nullptr;
+        if (!node || !node->collision || !node->mesh)
+            throw std::runtime_error("The voxel collider is no longer loaded");
+        if (node->locked.get())
+            throw std::runtime_error("Unlock the collision node before changing its preview");
+        if (!std::isfinite(opacity) || !std::isfinite(cutaway) || opacity < 0 || opacity > 1 || cutaway < 0 || cutaway > 1)
+            throw std::invalid_argument("Collision opacity and cutaway must be between 0 and 1");
+        if (node->collision_display.opacity != opacity || node->collision_display.slice != cutaway) {
+            node->collision_display.opacity = opacity;
+            node->collision_display.slice = cutaway;
+            sm->getScene().notifyMutation(lfs::core::Scene::MutationType::DISPLAY_CHANGED);
+            lfs::python::request_redraw();
+        } }, nb::arg("uuid"), nb::kw_only(), nb::arg("opacity"), nb::arg("cutaway"), "Change a voxel collider's live preview; occupancy and Walk are unchanged.");
     m.def("get_new_project_navigation_up_axis", [] { return lfs::vis::UserPreferences::instance().newProjectNavigationUpAxis(); }, "Get the navigation vertical used only for new projects");
     m.def("get_new_project_align_grid", [] { return lfs::vis::UserPreferences::instance().alignNewProjectGrid(); }, "Get whether new projects start with a grid perpendicular to their navigation vertical");
     m.def("set_new_project_navigation_defaults", [](const std::string& axis, bool align_grid) { lfs::vis::UserPreferences::instance().setNewProjectNavigation(axis, align_grid); }, nb::arg("axis"), nb::arg("align_grid"), "Set new-project defaults without modifying the current project");

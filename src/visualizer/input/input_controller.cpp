@@ -634,6 +634,23 @@ namespace lfs::vis {
         return std::nullopt;
     }
 
+    bool InputController::hasWalkCollision() const {
+        const auto* sm = services().sceneOrNull();
+        if (!sm)
+            return false;
+        const auto& scene = sm->getScene();
+        bool found = false;
+        for (const auto* node : scene.getNodes()) {
+            if (!node->collision || !node->mesh || !scene.isNodeEffectivelyVisible(node->id))
+                continue;
+            const auto det = glm::determinant(glm::mat3(scene.getWorldTransform(node->id)));
+            if (!std::isfinite(det) || std::abs(det) < 1e-10f)
+                return false;
+            found = true;
+        }
+        return found;
+    }
+
     core::CapsuleQuery InputController::walkCollisionQuery() const {
         struct Collider {
             std::shared_ptr<const core::CollisionVolume> volume;
@@ -646,7 +663,8 @@ namespace lfs::vis {
                 if (!node->collision || !node->mesh || !scene.isNodeEffectivelyVisible(node->id))
                     continue;
                 auto transform = lfs::rendering::dataWorldTransformToVisualizerWorld(scene.getWorldTransform(node->id));
-                if (std::abs(glm::determinant(glm::mat3(transform))) < 1e-10f)
+                const auto det = glm::determinant(glm::mat3(transform));
+                if (!std::isfinite(det) || std::abs(det) < 1e-10f)
                     throw std::runtime_error("A visible collision node has a singular transform");
                 colliders.push_back({node->collision, transform});
             }
@@ -690,6 +708,8 @@ namespace lfs::vis {
         }
         walk_settings_ = settings;
         walk_error_.clear();
+        if (auto* gui = services().guiOrNull())
+            gui->requestViewportOverlaySync();
         python::request_redraw();
     }
 
@@ -748,6 +768,8 @@ namespace lfs::vis {
             clearWasdMomentumViewport();
             activeKeyboardViewport().camera.clearTransientMotion();
         }
+        if (auto* gui = services().guiOrNull())
+            gui->requestViewportOverlaySync();
         python::request_redraw();
     }
 
