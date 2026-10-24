@@ -24,9 +24,9 @@ class Doc:
 @pytest.fixture
 def controls(monkeypatch):
     _install_stub_modules(monkeypatch)
-    module = import_module("lfs_plugins.collision_controls")
+    module = import_module("lfs_plugins.collision_rendering")
     target = dict(uuid="a", name="First", opacity=.4, cutaway=1., locked=False, visible=True)
-    state = dict(walking=False, height=1.8, radius=.2, speed=2.5, step=.25, target=None, targets=[target])
+    state = dict(available=True, walking=False, height=1.8, radius=.2, speed=2.5, step=.25, target=None, targets=[target])
     writes, selections = [], []
 
     def write_walk(**values):
@@ -45,28 +45,27 @@ def controls(monkeypatch):
         set_collision_preview=write_preview, select_node=selections.append,
         ui=SimpleNamespace(tr=lambda key: key),
     ))
-    panel = module.CollisionControlsController()
+    panel = module.CollisionRenderingControls()
     panel.mount(Doc())
     return panel, state, target, writes, selections
 
 
-def test_card_follows_mode_and_single_selected_collider(controls):
+def test_rendering_controls_keep_the_collider_without_a_scene_selection(controls):
     panel, state, target, _, _ = controls
     panel.update(Doc())
-    assert not panel.visible
-    state["target"] = target
-    assert panel.update(Doc())
-    assert panel.visible and panel._context == "a"
+    assert panel._target_uuid == "a"
     assert panel.update(Doc()) is None
     state["walking"] = True
     panel.update(Doc())
-    assert panel.visible and panel._context == "walk"
+    assert panel._state["walking"]
     state["target"] = None
     panel.update(Doc())
-    assert panel.visible
+    assert panel._target_uuid == "a"
     state["walking"] = False
+    state["targets"] = []
+    state["available"] = False
     panel.update(Doc())
-    assert not panel.visible
+    assert not panel._state["target"] and not panel._state["available"]
 
 
 def test_preview_edit_uses_uuid_and_percentages(controls):
@@ -97,11 +96,11 @@ def test_context_change_cancels_drafts_before_target_swap(controls, monkeypatch)
     state["target"] = target
     panel.update(Doc())
     cancelled = []
-    monkeypatch.setattr(panel._scrubs, "prepare_reset", lambda prop: cancelled.append((prop, panel._context)))
+    monkeypatch.setattr(panel._scrubs, "prepare_reset", lambda prop: cancelled.append((prop, panel._target_uuid)))
     state["target"] = dict(target, uuid="b", name="Second")
     state["targets"] = [state["target"]]
     panel.update(Doc())
-    assert len(cancelled) == 6 and all(old == "a" for _, old in cancelled)
+    assert len(cancelled) == 2 and all(old == "a" for _, old in cancelled)
     assert writes == []
     panel._set_value("collision_preview_cutaway", 20)
     assert writes[-1] == ("b", {"opacity": .4, "cutaway": .2})
@@ -116,7 +115,7 @@ def test_locked_and_hidden_colliders_remain_explicit(controls):
     assert "locked" in panel._status()
     state["target"] = dict(target, visible=False)
     panel.update(Doc())
-    assert panel.visible and "hidden" in panel._status()
+    assert panel._state["target"] and "hidden" in panel._status()
 
 
 def test_dropdown_resolves_fresh_name_and_ignores_deleted_uuid(controls):
