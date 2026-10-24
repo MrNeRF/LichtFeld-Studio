@@ -12,7 +12,7 @@ The same surface-first setup works for rooms, outdoor scans and objects:
 
 1. Leave **Auto** enabled for a practical starting resolution based on the visible
    Gaussian surface footprint and source count. Large aerial scans need larger
-   cells than small object scans. The resolved size is reported after generation.
+   cells than small object scans. The resolved size appears in the cell-size field.
 2. Drag the **Cell size (metres)** numeric scrub or click it to type an exact
    custom value. Editing turns Auto off. Opacity is another numeric scrub below
    cell size and defaults to `0.1`. Custom resolution is never retried
@@ -22,32 +22,32 @@ The same surface-first setup works for rooms, outdoor scans and objects:
    outliers without selecting a central crop or dropping disconnected components.
    **Keep all splats** disables this statistical cleanup.
 4. Press **Generate**, inspect the boxes, then choose **Walk Camera** from the
-   viewport camera toolbar. **Overlay strength** and **Cutaway height** are numeric
-   scrubs that reveal inner surfaces.
+   viewport camera toolbar. Open **Rendering > Collision > Voxel boxes** for
+   the opacity and cutaway scrubs that reveal inner surfaces.
    Select an existing collider to regenerate it, or choose **New collider** for a
    separate node.
 
-**Next generation** shows the current source-filter, filling and carving settings. To restore the
-shared surface-only setup, choose **Reset to surface collision** under Advanced.
+To restore the shared surface-only setup, choose **Reset to surface collision**
+under Advanced.
 This keeps the scale, cell size and seed; regenerate to apply it. No Indoor/Outdoor
 choice or automatic scene classification is required.
 
 The normal generation path builds full-resolution voxel collision and its preview.
 It does **not** build a triangle surface: neither the preview nor Walk needs one.
-A progress bar shows completed stages and voxelization regions, the current task,
-and elapsed time. Stages have different costs; the bar is not a time estimate.
+A progress bar shows the current stage and its completion percentage. Stages
+have different costs; the bar is not a time estimate.
 **Cancel** leaves the existing collider intact. Source snapshots own their data;
 source edits or a project change invalidate an in-flight result.
 
 The popup follows the Logging utility window: one compact settings toolbar and
 one generation action bar, with a scrollable body. Cell size, opacity and source
-filtering appear once. **Inspect collision**, **Walk and edit**, and **Advanced**
-are collapsible. Scale, filter tuning, filling, seed and triangle-surface options
-live under Advanced. Progress and error reports are outside those sections.
+filtering appear once. Scale, filter tuning, filling, seed and triangle-surface
+options live under the collapsible **Advanced** header. Walk and voxel-preview
+controls live under **Collision** in the right-hand Rendering panel. Progress and
+error reports remain outside Advanced.
 
-Progress names the current CPU or GPU task and shows the work-stage count,
-percentage, elapsed time and time since the last progress update. Completed,
-cancelled and failed operations retain their final status. A failure includes
+Progress names the current CPU or GPU stage and shows its percentage. Completed,
+cancelled and failed operations retain their final stage. A failure includes
 recovery advice and expandable **Error details** with the failed task, source
 count, relevant settings and exact diagnostic. **Copy details** copies that report.
 
@@ -246,17 +246,19 @@ Cutaway clips the upper part of the volume along its local up-axis. These contro
 and the selected display mode persist per node. Intersecting nodes composite
 independently, so their blended appearance remains draw-order dependent.
 
-**Sharp box preview** under Advanced is on by default and traces every pixel.
-Turning it off requests hardware 2×2 fragment shading where supported, with a
-full-resolution fallback elsewhere. This softens edges without changing any
-collision cells or Walk queries. Opacity, cutaway and sharpness are live controls.
+The default preview traces every pixel. Saved previews with reduced sharpness
+request hardware 2×2 fragment shading where supported, with a full-resolution
+fallback elsewhere. This softens edges without changing collision cells or Walk
+queries. Opacity and cutaway are live controls.
 
 Use **Build surface node** under Advanced only when a triangle surface is needed.
 The default `4×` surface multiplier conservatively combines occupied cells into a
 coarser grid before meshing. All components remain represented, but fine gaps can
 close. `1×` retains the original voxel detail and can produce a very large mesh.
 Each build creates a separate, ordinary triangle mesh node with its own transform,
-visibility and mesh icon. The voxel collision node and occupancy stay intact.
+visibility and mesh icon. It also retains the original immutable collision
+occupancy for Walk, including after the voxel node is removed. The voxel collision
+node stays intact when a surface is built.
 The surface can be selected and exported as GLB through its own right-click menu;
 the voxel node exports the SuperSplat pair. Walk always uses the original occupancy.
 
@@ -439,7 +441,7 @@ displayed eye's maximum frame rise is 4.93 mm. This is a synthetic motion regres
 not a full-scene performance or surface reconstruction measurement.
 
 Pan, zoom and pivot glides are disabled while walking. Home, focus, camera browsing
-and external teleports leave Walk. Hidden colliders do not collide. Anisotropic
+and external teleports leave Walk. Hiding a collider affects rendering only. Anisotropic
 scale/shear uses conservative capsule clearance. Walk tests the voxel volume,
 so it can be more conservative than the optional smooth surface. Capsule queries
 skip sparse empty regions and use exact segment/box distance, rather than scanning

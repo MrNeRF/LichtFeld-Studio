@@ -141,3 +141,32 @@ def test_edits_preserve_native_changes_since_last_card_refresh(controls):
     state["targets"][0]["cutaway"] = .3
     panel._set_value("collision_preview_opacity", 50)
     assert writes[-1] == ("a", {"opacity": .5, "cutaway": .3})
+
+
+def test_surface_only_scene_keeps_walk_available_without_voxel_preview(controls):
+    panel, state, _, _, _ = controls
+    state.update(available=True, targets=[], target=None)
+    panel.update(Doc())
+    assert panel._state["available"]
+    assert not panel._state["target"] and not panel._targets
+    assert "preview_unavailable" in panel._status()
+
+
+def test_walk_checkbox_reports_native_rejection_and_can_leave_walk(controls, monkeypatch):
+    panel, state, _, _, _ = controls
+    panel.update(Doc())
+    module = import_module("lfs_plugins.collision_rendering")
+    modes = []
+
+    def set_mode(mode):
+        modes.append(mode)
+        if mode == "walk":
+            raise RuntimeError("Load a collision box or collision surface to enable Walk mode")
+        state["walking"] = False
+
+    monkeypatch.setattr(module.lf, "set_camera_navigation_mode", set_mode, raising=False)
+    panel._set_walk_enabled(True)
+    assert "Load a collision" in panel._error
+    assert not panel._state["walking"]
+    panel._set_walk_enabled(False)
+    assert modes == ["walk", "fpv"] and panel._error == ""
