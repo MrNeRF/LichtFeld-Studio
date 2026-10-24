@@ -26,4 +26,13 @@ namespace lfs::training::kernels {
         float weight,
         GradientResidualWorkspace& workspace);
 
+    // Forward-only: the weighted residual loss without its gradient, for reporting it over
+    // part of the image such as the crop box region.
+    LFS_CUDA_API lfs::core::Tensor gradient_residual_loss(
+        const lfs::core::Tensor& image,
+        const lfs::core::Tensor& target,
+        const lfs::core::Tensor& pixel_weight,
+        float weight,
+        GradientResidualWorkspace& workspace);
+
 } // namespace lfs::training::kernels

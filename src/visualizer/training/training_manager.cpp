@@ -2810,6 +2810,9 @@ namespace lfs::vis {
     bool TrainerManager::canChangeStrategy(const std::string_view strategy) const {
         if (!trainer_)
             return true;
+        // A finished run cannot continue: Start resets to a fresh trainer that takes the edited preset.
+        if (isFinished())
+            return true;
         const auto canonical = core::param::canonical_strategy_name(strategy);
         if (trainer_->isInitialized())
             return canonical == trainer_->get_strategy().strategy_type();

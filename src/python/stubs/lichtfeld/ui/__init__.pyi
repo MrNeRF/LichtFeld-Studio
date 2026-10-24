@@ -242,10 +242,10 @@ def set_scene_graph_selection_markers(enabled: bool) -> None:
     """Show or hide Scene Graph selection markers"""
 
 def get_progress_bar_style() -> str:
-    """Return the status bar progress style (classic or miner)"""
+    """Return the status bar progress style (classic, miner, or tessle)"""
 
 def set_progress_bar_style(style: str) -> None:
-    """Set the status bar progress style (classic or miner)"""
+    """Set the status bar progress style (classic, miner, or tessle)"""
 
 def get_viewport_chrome_style() -> str:
     """Return the viewport controls style (solid, translucent, or frosted)"""

@@ -16,7 +16,7 @@ The Preferences panel currently exposes:
 - language;
 - project location for new projects and the Asset Manager Default folder;
 - application theme and UI scale;
-- status bar progress bar style (`status_bar_progress_style`: `classic` or `miner`);
+- status bar progress bar style (`status_bar_progress_style`: `classic`, `miner`, or `tessle`);
 - viewport control style (`viewport_chrome_style`: `solid`, `translucent`, or `frosted`);
 - left viewport toolbar position (`viewport_toolbar_position`: `top`, `centered`, or `free`);
 - viewport scene reconstruction backend and backend-specific preset;

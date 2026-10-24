@@ -48,7 +48,7 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] bool knownProgressBarStyle(std::string_view style) {
-            return style == "classic" || style == "miner";
+            return style == "classic" || style == "miner" || style == "tessle";
         }
 
         [[nodiscard]] bool knownViewportChromeStyle(std::string_view style) {

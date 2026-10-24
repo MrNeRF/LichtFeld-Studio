@@ -266,6 +266,9 @@ namespace lfs::core {
             // of every export. A stopped run keeps them so it can resume.
             bool crop_to_cropbox = false;
             float lambda_dssim = 0.2f;
+            // SteadySplats Eq. 30: weighted RGB squared distance to the training target.
+            float color_variance_weight = 0.0f;
+            size_t color_variance_warmup_iters = 0;
             float min_opacity = 0.005f;
             size_t refine_every = 100;
             size_t start_refine = 500;
@@ -437,6 +440,7 @@ namespace lfs::core {
             void apply_step_scaling();
             void remove_step_scaling();
             [[nodiscard]] int resolved_total_iterations() const;
+            [[nodiscard]] float color_variance_weight_at(int iteration) const;
             [[nodiscard]] bool normal_supervision_active(int iter) const;
             [[nodiscard]] float scale_reg_at(int iter) const;
             void resolve_mrnf_capacity_defaults();
@@ -474,6 +478,8 @@ namespace lfs::core {
         // The PLY of a splat:<file> spec, whose rendered coverage selects the evaluated pixels.
         [[nodiscard]] LFS_CORE_API std::optional<std::string_view> eval_mask_splat_file(std::string_view spec);
         [[nodiscard]] LFS_CORE_API std::optional<std::array<float, 6>> parse_eval_mask_box(std::string_view spec);
+        // Three finite numbers rx,ry,rz, as --cropbox-rotation takes them.
+        [[nodiscard]] LFS_CORE_API std::optional<std::array<float, 3>> parse_cropbox_rotation(std::string_view spec);
         [[nodiscard]] LFS_CORE_API std::string normalize_eval_mask(std::string_view spec);
         // The sets of an eval_mask_report list in order, the first being the headline set; empty for an empty list.
         [[nodiscard]] LFS_CORE_API lfs::Result<std::vector<EvalPixelSet>> parse_eval_pixel_sets(std::string_view list);
@@ -594,6 +600,9 @@ namespace lfs::core {
             // Region of interest: an enabled crop box on the training model, min x, y, z then max x, y, z in the
             // dataset's coordinates. --cropbox-loss-weight and --cropbox-lr-scale set how much the rest still counts.
             std::optional<std::array<float, 6>> cropbox = std::nullopt;
+            // Turns the --cropbox box about its centre by X, Y, Z degrees about the dataset's axes, as Rx * Ry * Rz.
+            // Unset keeps the box axis-aligned with its corners stored as given.
+            std::optional<std::array<float, 3>> cropbox_rotation = std::nullopt;
 
             // Optional trained splats to append to the training model before optimizer initialization
             std::vector<std::filesystem::path> add_splat_paths;

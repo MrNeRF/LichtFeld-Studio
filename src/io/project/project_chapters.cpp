@@ -3986,11 +3986,47 @@ namespace lfs::io::project {
             std::move(*result), parameters);
     }
 
+    void resolve_parameter_path_references(
+        const ReferencesChapter& references,
+        const std::filesystem::path& project_root,
+        ParameterManagerSnapshot& snapshot) {
+        using Role = std::pair<
+            lfs::core::param::OptimizationParameters*,
+            const ParameterManagerSnapshot::ReferenceBindings*>;
+        const std::array roles{
+            Role{&snapshot.mcmc_session, &snapshot.mcmc_session_references},
+            Role{&snapshot.mrnf_session, &snapshot.mrnf_session_references},
+            Role{&snapshot.igs_session, &snapshot.igs_session_references},
+            Role{&snapshot.mcmc_current, &snapshot.mcmc_current_references},
+            Role{&snapshot.mrnf_current, &snapshot.mrnf_current_references},
+            Role{&snapshot.igs_current, &snapshot.igs_current_references},
+        };
+        for (const auto& [params, bindings] : roles) {
+            if (bindings->background_image_reference) {
+                if (auto resolved = resolve_path_reference(
+                        references, project_root, *bindings->background_image_reference,
+                        params->bg_image_path)) {
+                    params->bg_image_path = *resolved;
+                }
+            }
+            if (bindings->ppisp_reference) {
+                if (auto resolved = resolve_path_reference(
+                        references, project_root, *bindings->ppisp_reference,
+                        params->ppisp_sidecar_path)) {
+                    params->ppisp_sidecar_path = *resolved;
+                }
+            }
+        }
+    }
+
     void adopt_project_training_parameters(
         lfs::core::param::TrainingParameters& params,
         ParameterManagerSnapshot snapshot,
         std::filesystem::path dataset_root,
-        std::string images_folder) {
+        std::string images_folder,
+        const ReferencesChapter& references,
+        const std::filesystem::path& project_root) {
+        resolve_parameter_path_references(references, project_root, snapshot);
 
         // Take the stored options and supply the resolved and command-line locations.
         auto dataset = std::move(snapshot.dataset);

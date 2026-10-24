@@ -2886,6 +2886,88 @@ namespace lfs::training::kernels {
         return {loss_scalar, ctx};
     }
 
+    void masked_fused_l1_ssim_value(
+        const lfs::core::Tensor& corrected_input,
+        const lfs::core::Tensor& raw_input,
+        const lfs::core::Tensor& target_input,
+        const lfs::core::Tensor& mask_input,
+        float ssim_weight,
+        MaskedL1SSIMValueWorkspace& workspace,
+        const float denominator) {
+        LFS_ASSERT(std::isfinite(denominator) && denominator >= 0.0f);
+        constexpr float C1 = 0.01f * 0.01f;
+        constexpr float C2 = 0.03f * 0.03f;
+
+        validate_loss_weight(ssim_weight);
+        auto prepared_images = prepare_loss_images(corrected_input, target_input);
+        auto& corrected = prepared_images.prediction;
+        auto& target = prepared_images.target;
+        const bool decoupled = raw_input.is_valid() && raw_input.numel() > 0;
+        lfs::core::Tensor raw;
+        if (decoupled) {
+            raw = prepare_loss_prediction(raw_input, "Raw loss image");
+            LFS_ASSERT_MSG(raw.shape() == corrected.shape(), "Raw and corrected loss images must match");
+        }
+        auto mask_2d = prepare_loss_mask(mask_input, corrected);
+
+        const int N = static_cast<int>(corrected.shape()[0]);
+        const int C = static_cast<int>(corrected.shape()[1]);
+        const int H = static_cast<int>(corrected.shape()[2]);
+        const int W = static_cast<int>(corrected.shape()[3]);
+
+        const lfs::core::TensorShape map_shape{static_cast<size_t>(N), 1, static_cast<size_t>(H),
+                                               static_cast<size_t>(W)};
+        if (!workspace.ssim_map.is_valid() || workspace.ssim_map.shape() != map_shape) {
+            workspace.ssim_map = lfs::core::Tensor::empty(map_shape, lfs::core::Device::CUDA);
+            workspace.reduction_temp = lfs::core::Tensor::empty({2048}, lfs::core::Device::CUDA);
+            workspace.loss = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+            workspace.mask_sum = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+        }
+
+        const dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, N);
+        const dim3 block(BLOCK_X, BLOCK_Y);
+        const auto stream = lfs::core::getCurrentCUDAStream();
+        dispatch_target_ptr(target, [&](auto* target_ptr) {
+            using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(target_ptr)>>;
+            dispatch_mask_ptr(mask_2d, [&](auto* mask_ptr) {
+                using MaskT = std::remove_cv_t<std::remove_pointer_t<decltype(mask_ptr)>>;
+                // Null partials and cs_map: the kernels write only the SSIM map.
+                if (decoupled) {
+                    maskedDecoupledFusedL1SSIMForwardCUDA<TargetT, MaskT><<<grid, block, 0, stream>>>(
+                        H, W, C, C1, C2, ssim_weight,
+                        corrected.ptr<float>(), raw.ptr<float>(), target_ptr, mask_ptr,
+                        nullptr, nullptr, nullptr, nullptr,
+                        workspace.ssim_map.ptr<float>(),
+                        nullptr);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.masked_decoupled_fused_l1_value");
+                } else {
+                    maskedFusedL1SSIMForwardCUDA<TargetT, MaskT><<<grid, block, 0, stream>>>(
+                        H, W, C, C1, C2,
+                        corrected.ptr<float>(), target_ptr, mask_ptr,
+                        nullptr, nullptr, nullptr,
+                        workspace.ssim_map.ptr<float>(),
+                        nullptr);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.masked_fused_l1_value");
+                }
+
+                launch_masked_fused_l1_ssim_mean_device(
+                    corrected.ptr<float>(),
+                    target_ptr,
+                    workspace.ssim_map.ptr<float>(),
+                    mask_ptr,
+                    ssim_weight,
+                    workspace.reduction_temp.ptr<float>(),
+                    workspace.loss.ptr<float>(),
+                    workspace.mask_sum.ptr<float>(),
+                    N, C, H, W,
+                    stream, denominator);
+            });
+        });
+        // A fixed denominator skips the mask sum; it is the normalization then.
+        if (denominator > 0.0f)
+            workspace.mask_sum.fill_(denominator, stream);
+    }
+
     lfs::core::Tensor masked_fused_l1_ssim_backward(
         const MaskedFusedL1SSIMContext& ctx,
         MaskedFusedL1SSIMWorkspace& workspace) {

@@ -6907,6 +6907,81 @@ namespace {
     }
 #endif
 
+    TEST(ProjectDocumentTest, HeadlessAdoptionResolvesCurrentPresetPathReferences) {
+        TemporaryDirectory temporary;
+        const auto project_path = temporary.path / "training.licht";
+        const auto dataset = temporary.path / "dataset";
+        fs::create_directories(dataset / "images");
+        write_solid_png(dataset / "images" / "frame.png", 1, 1);
+        std::ofstream(dataset / "transforms.json") << R"({
+            "w":1,"h":1,"fl_x":1,"fl_y":1,"cx":0.5,"cy":0.5,
+            "frames":[{"file_path":"images/frame.png","transform_matrix":
+                [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]}]})";
+        const auto background = temporary.path / "background.png";
+        const auto sidecar = temporary.path / "appearance.ppisp";
+        write_solid_png(background, 1, 1);
+        write_file_bytes(sidecar, lfs::test::licht::byte_vector("generated-sidecar"));
+
+        auto document = make_empty_document(fixed_uuid(2390), 100);
+        bind_dataset(*document, dataset);
+        auto snapshot = require_result(document->parameters().snapshot());
+        snapshot.active_strategy = "mcmc";
+        snapshot.mcmc_current.bg_image_path = background;
+        snapshot.mcmc_current.ppisp_sidecar_path = sidecar;
+        snapshot.mcmc_current_references.background_image_reference = require_result(
+            upsert_path_reference(document->edit_references(), temporary.path, background,
+                                  "presets.mcmc.current.background_image", "background_image"));
+        snapshot.mcmc_current_references.ppisp_reference = require_result(
+            upsert_path_reference(document->edit_references(), temporary.path, sidecar,
+                                  "presets.mcmc.current.ppisp_sidecar", "ppisp_sidecar"));
+        require_status(document->edit_parameters().set_snapshot(snapshot));
+        (void)require_result(document->save(project_path, save_options(2391, 200)));
+
+        auto reopened = require_result_ptr(ProjectDocument::open(project_path));
+        snapshot = require_result(reopened->parameters().snapshot());
+        ASSERT_TRUE(snapshot.mcmc_current.bg_image_path.empty());
+        ASSERT_TRUE(snapshot.mcmc_current.ppisp_sidecar_path.empty());
+        lfs::core::param::TrainingParameters params;
+        params.dataset_project = project_path;
+        params.optimization.headless = true;
+        const auto adopt = [&](const fs::path& root) {
+            adopt_project_training_parameters(params, snapshot, dataset, "images",
+                                              reopened->references(), root);
+        };
+        adopt(project_path.parent_path());
+
+        // Headless adoption used to drop the background image and PPISP sidecar stored in REFS.
+        EXPECT_EQ(params.optimization.bg_image_path, background);
+        EXPECT_EQ(params.optimization.ppisp_sidecar_path, sidecar);
+        EXPECT_EQ(params.optimization.strategy, "mcmc");
+        EXPECT_TRUE(params.optimization.headless);
+
+        const auto relocated = temporary.path / "relocated";
+        fs::create_directories(relocated);
+        fs::copy_file(background, relocated / background.filename());
+        fs::copy_file(sidecar, relocated / sidecar.filename());
+        adopt(relocated);
+        EXPECT_EQ(params.optimization.bg_image_path, relocated / background.filename());
+        EXPECT_EQ(params.optimization.ppisp_sidecar_path, relocated / sidecar.filename());
+
+        write_file_bytes(relocated / background.filename(), lfs::test::licht::byte_vector("mismatch"));
+        fs::remove(relocated / sidecar.filename());
+        adopt(relocated);
+        EXPECT_EQ(params.optimization.bg_image_path, background);
+        EXPECT_EQ(params.optimization.ppisp_sidecar_path, sidecar);
+
+        fs::remove(background);
+        fs::remove(sidecar);
+        adopt(relocated);
+        EXPECT_EQ(params.optimization.bg_image_path, relocated / background.filename());
+        EXPECT_EQ(params.optimization.ppisp_sidecar_path, relocated / sidecar.filename());
+
+        params.overrides.optimization_json = R"({"bg_image_path":"cli-background.png","ppisp_sidecar_path":"cli.ppisp"})";
+        adopt(relocated);
+        EXPECT_EQ(params.optimization.bg_image_path, fs::path("cli-background.png"));
+        EXPECT_EQ(params.optimization.ppisp_sidecar_path, fs::path("cli.ppisp"));
+    }
+
     TEST(ProjectDocumentTest, EmbeddedDatasetRoundTripAndCompaction) {
         TemporaryDirectory temporary;
         const auto dataset = temporary.path / "dataset";

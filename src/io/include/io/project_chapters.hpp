@@ -542,6 +542,11 @@ namespace lfs::io::project {
         }
     };
 
+    LFS_IO_API void resolve_parameter_path_references(
+        const ReferencesChapter& references,
+        const std::filesystem::path& project_root,
+        ParameterManagerSnapshot& snapshot);
+
     // Merge an untrained project's PRMS snapshot into the launch parameters
     // of a headless run. Stored dataset and active-strategy optimization
     // values replace the CLI defaults, the headless/auto_train/no_splash
@@ -552,7 +557,9 @@ namespace lfs::io::project {
         lfs::core::param::TrainingParameters& params,
         ParameterManagerSnapshot snapshot,
         std::filesystem::path dataset_root,
-        std::string images_folder);
+        std::string images_folder,
+        const ReferencesChapter& references,
+        const std::filesystem::path& project_root);
 
     class LFS_IO_API ParametersChapter {
     public:

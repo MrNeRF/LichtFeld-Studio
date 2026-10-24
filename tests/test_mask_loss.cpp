@@ -770,3 +770,40 @@ TEST_P(TrainerMaskSupervisionTest, MeasureWarmLossUpdates) {
 }
 
 INSTANTIATE_TEST_SUITE_P(LossBranches, TrainerMaskSupervisionTest, ::testing::Values(0, 1, 2));
+
+// The crop box loss report evaluates the masked L1/D-SSIM forward-only. It must equal the
+// training forwards over the same pixels, plain and decoupled, with and without a fixed
+// denominator, and report a normalization below one pixel when no pixel counts, which is how
+// the trainer skips views that miss the box.
+TEST_F(MaskLossTest, ForwardOnlyMaskedValueMatchesTheTrainingForward) {
+    constexpr size_t C = 3, H = 48, W = 64;
+    const auto rendered = Tensor::rand({C, H, W}, Device::CUDA);
+    const auto raw = Tensor::rand({C, H, W}, Device::CUDA);
+    const auto target = Tensor::rand({C, H, W}, Device::CUDA);
+    const auto target_u8 = (target * 255.0f).to(DataType::UInt8);
+    const auto region = create_binary_mask(H, W, 0.3f);
+
+    for (const auto* gt : {&target, &target_u8}) {
+        for (const float denominator : {0.0f, 1234.5f}) {
+            SCOPED_TRACE(::testing::Message() << "u8=" << (gt == &target_u8) << " denominator=" << denominator);
+            lfs::training::kernels::MaskedFusedL1SSIMWorkspace training;
+            auto [training_loss, context] = lfs::training::kernels::masked_fused_l1_ssim_forward(
+                rendered, *gt, region, 0.2f, training, denominator);
+            lfs::training::kernels::MaskedL1SSIMValueWorkspace value;
+            lfs::training::kernels::masked_fused_l1_ssim_value(rendered, {}, *gt, region, 0.2f, value, denominator);
+            EXPECT_EQ(value.loss.cpu().item<float>(), training_loss.cpu().item<float>());
+            EXPECT_EQ(value.mask_sum.cpu().item<float>(), context.mask_sum_value);
+
+            lfs::training::kernels::MaskedDecoupledFusedL1SSIMWorkspace decoupled;
+            auto [decoupled_loss, decoupled_context] = lfs::training::kernels::masked_decoupled_fused_l1_ssim_forward(
+                rendered, raw, *gt, region, 0.2f, decoupled, denominator);
+            lfs::training::kernels::masked_fused_l1_ssim_value(rendered, raw, *gt, region, 0.2f, value, denominator);
+            EXPECT_EQ(value.loss.cpu().item<float>(), decoupled_loss.cpu().item<float>());
+        }
+    }
+
+    lfs::training::kernels::MaskedL1SSIMValueWorkspace empty;
+    lfs::training::kernels::masked_fused_l1_ssim_value(rendered, {}, target, Tensor::zeros({H, W}, Device::CUDA),
+                                                       0.2f, empty);
+    EXPECT_LT(empty.mask_sum.cpu().item<float>(), 1.0f);
+}

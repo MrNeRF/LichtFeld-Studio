@@ -941,7 +941,7 @@ namespace {
         params.dataset.output_path_explicit = true;
         params.overrides.dataset_json = R"({"images":"images","test_every":4})";
 
-        adopt_project_training_parameters(params, snapshot, "/data/scene", "images_4");
+        adopt_project_training_parameters(params, snapshot, "/data/scene", "images_4", {}, {});
 
         // Stored strategy, iterations and loading settings win over CLI defaults.
         EXPECT_EQ(params.optimization.strategy, "mcmc");

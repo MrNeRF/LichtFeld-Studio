@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
@@ -468,6 +469,8 @@ namespace lfs::vis {
         mutable const lfs::core::SplatData* cached_render_model_ = nullptr;
         mutable ContentType cached_render_content_type_ = ContentType::Empty;
         mutable bool cached_render_metadata_only_ = false;
+
+        lfs::event::ScopedHandler event_handlers_;
     };
 
 } // namespace lfs::vis
