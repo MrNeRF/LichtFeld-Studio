@@ -3,10 +3,6 @@
 #include "core/collision.hpp"
 #include "core/collision_serialization.hpp"
 #include "core/mesh_data.hpp"
-#include "core/scene.hpp"
-#include "io/project_document.hpp"
-#include "io/scene_chapter_adapter.hpp"
-#include "rendering/coordinate_conventions.hpp"
 #include "rendering/mesh_offscreen_renderer.hpp"
 #include "rendering/passes/vulkan_mesh_pass.hpp"
 #include "window/vulkan_context.hpp"
@@ -84,45 +80,19 @@ namespace {
 
     // Opt-in production-volume benchmark; regular regressions remain tiny.
     TEST_F(CollisionOverlay, ProductionVolumeBenchmark) {
-        const char* path = std::getenv("LFS_COLLISION_BENCHMARK_PROJECT");
-        const char* volume_path = std::getenv("LFS_COLLISION_BENCHMARK_VOLUME");
-        if (!path && !volume_path)
-            GTEST_SKIP() << "Set LFS_COLLISION_BENCHMARK_PROJECT or LFS_COLLISION_BENCHMARK_VOLUME";
+        const char* path = std::getenv("LFS_COLLISION_BENCHMARK_VOLUME");
+        if (!path)
+            GTEST_SKIP() << "Set LFS_COLLISION_BENCHMARK_VOLUME to a native volume JSON";
         renderer.setGpuTimingEnabled(true);
-        lfs::core::Scene scene;
-        const lfs::core::CollisionVolume* benchmark_volume = &volume;
-        glm::mat4 model(1);
-        if (path) {
-            auto document = lfs::io::project::ProjectDocument::open(path, {.defer_geometry_payloads = true});
-            ASSERT_TRUE(document);
-            auto shell = lfs::io::project::stage_scene_shell(document->scene_graph(), scene);
-            ASSERT_TRUE(shell);
-            auto retired = scene.commitRestoreStage(std::move(*shell));
-            const lfs::core::SceneNode* collider = nullptr;
-            for (const auto* node : scene.getNodes()) {
-                if (node->collision) {
-                    collider = node;
-                    break;
-                }
-            }
-            ASSERT_NE(collider, nullptr);
-            benchmark_volume = collider->collision.get();
-            model = lfs::rendering::dataWorldTransformToVisualizerWorld(scene.getWorldTransform(collider->id));
-        } else {
-            std::ifstream input(volume_path);
-            ASSERT_TRUE(input);
-            nlohmann::json saved;
-            input >> saved;
-            volume = saved.get<lfs::core::CollisionVolume>();
-            path = volume_path;
-        }
-        auto bounds = benchmark_volume->boundsMesh();
+        std::ifstream input(path);
+        ASSERT_TRUE(input);
+        nlohmann::json saved;
+        input >> saved;
+        volume = saved.get<lfs::core::CollisionVolume>();
+        auto bounds = volume.boundsMesh();
         geometry->vertices = lfs::core::Tensor::from_vector(bounds.vertices, {bounds.vertices.size() / 3, 3}, lfs::core::Device::CPU);
         geometry->indices = lfs::core::Tensor::from_vector(bounds.indices, {bounds.indices.size() / 3, 3}, lfs::core::Device::CPU);
         auto draw = item();
-        draw.collision_volume = benchmark_volume;
-        draw.collision_sharp = std::getenv("LFS_COLLISION_BENCHMARK_FAST") == nullptr;
-        draw.model = model;
         const auto projection = glm::perspective(glm::radians(60.0f), 1920.f / 1080, .01f, 1000.f);
         lfs::vis::VulkanMeshPassParams params;
         params.camera_position = {-5, 3, -5};
@@ -134,28 +104,6 @@ namespace {
         }
         params.view_projection = projection * glm::lookAt(params.camera_position, glm::vec3(0), glm::vec3(0, 1, 0));
         params.items = {draw};
-        if (const char* prefix = std::getenv("LFS_COLLISION_BENCHMARK_EXPORT")) {
-            const auto& v = *draw.collision_volume;
-            auto write = [&](const char* suffix, const auto& values) {
-                std::ofstream file(std::string(prefix) + suffix, std::ios::binary);
-                file.write(reinterpret_cast<const char*>(values.data()), values.size() * sizeof(values[0]));
-            };
-            write(".gpu.bin", v.gpuOccupancy());
-            write(".tree.bin", v.tree);
-            const auto inverse = glm::inverse(params.view_projection * draw.model);
-            const auto camera = glm::vec3(glm::inverse(draw.model) * glm::vec4(params.camera_position, 1));
-            nlohmann::json metadata{
-                {"dimensions", {v.dimensions.x, v.dimensions.y, v.dimensions.z}},
-                {"origin", {v.origin.x, v.origin.y, v.origin.z}},
-                {"voxel_size", v.settings.voxel_size},
-                {"root_size", v.tree_size},
-                {"inverse_vp", std::vector<float>(&inverse[0][0], &inverse[0][0] + 16)},
-                {"camera", {camera.x, camera.y, camera.z}},
-                {"inside", v.occupied(v.cell(camera))},
-                {"width", 1920},
-                {"height", 1080}};
-            std::ofstream(std::string(prefix) + ".json") << metadata.dump(2);
-        }
         // Includes initial packing, upload, pipeline work and CPU readback.
         const auto cold_start = std::chrono::steady_clock::now();
         ASSERT_TRUE(renderer.render(*context, params, projection, 1920, 1080));
@@ -179,7 +127,7 @@ namespace {
         }
         std::sort(times.begin(), times.end());
         std::sort(gpu_times.begin(), gpu_times.end());
-        std::cout << "COLLISION_BENCHMARK project=" << path << " eye=" << params.camera_position.x << "," << params.camera_position.y << "," << params.camera_position.z << " resolution=1920x1080 first_frame_ms=" << first_frame_ms << " median_ms=" << times[times.size() / 2] << " p90_ms=" << times[27] << " fast_requested=" << !draw.collision_sharp << " vrs_supported=" << context->hasFragmentShadingRate() << " gpu_median_ms=" << gpu_times[gpu_times.size() / 2] << " gpu_p90_ms=" << gpu_times[27] << std::endl;
+        std::cout << "COLLISION_BENCHMARK project=" << path << " eye=" << params.camera_position.x << "," << params.camera_position.y << "," << params.camera_position.z << " resolution=1920x1080 first_frame_ms=" << first_frame_ms << " median_ms=" << times[times.size() / 2] << " p90_ms=" << times[27] << " gpu_median_ms=" << gpu_times[gpu_times.size() / 2] << " gpu_p90_ms=" << gpu_times[27] << std::endl;
     }
 
     TEST_F(CollisionOverlay, CornerCrossingsMatchIndependentRayBoxCoverage) {
