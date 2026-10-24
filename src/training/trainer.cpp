@@ -1663,7 +1663,8 @@ namespace lfs::training {
     core::Tensor Trainer::report_region_image_loss(
         const core::Tensor& corrected, const core::Tensor& raw, const core::Tensor& target,
         const core::Tensor& mask, const core::Tensor& region, const core::Tensor& structure_map,
-        const core::param::OptimizationParameters& params, const int iteration) {
+        const core::param::OptimizationParameters& params, const int iteration,
+        const core::Tensor& mask_regularization_loss) {
         using core::param::MaskMode;
         const auto mode = params.mask_mode;
         const bool user_masks_photometric =
@@ -1691,7 +1692,9 @@ namespace lfs::training {
             loss = loss + kernels::gradient_residual_loss(image, target, base_weight, params.gradient_loss_weight,
                                                           roi_report_residual_);
         }
-        return loss;
+        // Mask penalties keep their training weights, like the other regularizers. They were
+        // included in the image loss being replaced, but are not part of the forward-only RGB loss.
+        return mask_regularization_loss.is_valid() ? loss + mask_regularization_loss : loss;
     }
 
     // Compute photometric loss AND gradient manually
@@ -1866,7 +1869,7 @@ namespace lfs::training {
                 static_cast<int>(gt_image.shape()[2]), opt_params.lambda_dssim > 0.0f);
         }
 
-        Tensor loss, grad_corrected, grad_alpha;
+        Tensor loss, grad_corrected, grad_alpha, mask_regularization_loss;
         std::optional<lfs::training::kernels::DecoupledRawGradient> raw_gradient;
         std::optional<RawGradientResidual> raw_residual;
         const bool use_decoupled_appearance_loss =
@@ -1929,6 +1932,7 @@ namespace lfs::training {
                     mode == param::MaskMode::SegmentAndIgnore);
                 grad_alpha = penalty.grad_alpha;
                 loss = loss + penalty.loss;
+                mask_regularization_loss = penalty.loss;
             }
         } else {
             auto fallback = compute_photometric_loss_with_gradient(corrected, gt_image, opt_params, raw_rendered, iteration);
@@ -1961,6 +1965,7 @@ namespace lfs::training {
                 ALPHA_CONSISTENCY_WEIGHT);
             loss = loss + alpha_term.loss;
             grad_alpha = alpha_term.grad_alpha;
+            mask_regularization_loss = alpha_term.loss;
         }
 
         if (photometric_weight.is_valid())
@@ -1973,7 +1978,8 @@ namespace lfs::training {
             .raw_gradient = raw_gradient,
             .raw_residual = raw_residual,
             .grad_alpha = grad_alpha,
-            .normal_pixel_weight = user_masks_photometric && normal_terms_on ? base_photometric_weight : Tensor{}};
+            .normal_pixel_weight = user_masks_photometric && normal_terms_on ? base_photometric_weight : Tensor{},
+            .mask_regularization_loss = mask_regularization_loss};
     }
 
     // Returns GPU tensor for loss - NO SYNC!
@@ -7073,6 +7079,7 @@ namespace lfs::training {
                         PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::LossBegin, iter);
                         lfs::core::Tensor tile_loss;
                         lfs::core::Tensor tile_grad;
+                        lfs::core::Tensor tile_mask_regularization_loss;
 
                         {
                             LFS_VRAM_SCOPE("train.photometric_loss");
@@ -7121,6 +7128,7 @@ namespace lfs::training {
                                 }
                                 tile_loss = result->loss;
                                 tile_grad = result->grad_corrected;
+                                tile_mask_regularization_loss = result->mask_regularization_loss;
                             } else {
                                 auto result = compute_photometric_loss_with_gradient(
                                     corrected_image, gt_tile, step_params, raw_loss_input, iter);
@@ -7144,7 +7152,7 @@ namespace lfs::training {
                             if (roi_report_weight.is_valid()) {
                                 region_image_loss = report_region_image_loss(
                                     corrected_image, raw_loss_input, gt_tile, mask, roi_report_weight, structure_map,
-                                    step_params, iter);
+                                    step_params, iter, tile_mask_regularization_loss);
                                 reported_image_loss = tile_loss;
                             }
                         }
@@ -7252,6 +7260,7 @@ namespace lfs::training {
                         PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::LossBegin, iter);
                         lfs::core::Tensor tile_loss;
                         lfs::core::Tensor tile_grad;
+                        lfs::core::Tensor tile_mask_regularization_loss;
                         std::optional<lfs::training::kernels::DecoupledRawGradient> tile_raw_gradient;
                         std::optional<RawGradientResidual> tile_raw_residual;
                         lfs::core::Tensor tile_grad_alpha;
@@ -7372,6 +7381,7 @@ namespace lfs::training {
                                 tile_raw_gradient = result->raw_gradient;
                                 tile_raw_residual = result->raw_residual;
                                 tile_grad_alpha = result->grad_alpha;
+                                tile_mask_regularization_loss = result->mask_regularization_loss;
                                 normal_terms_weight = result->normal_pixel_weight;
                             } else {
                                 auto result = compute_photometric_loss_with_gradient(
@@ -7397,7 +7407,7 @@ namespace lfs::training {
                             if (roi_report_weight.is_valid()) {
                                 region_image_loss = report_region_image_loss(
                                     corrected_image, raw_loss_input, gt_tile, mask_tile, roi_report_weight,
-                                    structure_map, step_params, iter);
+                                    structure_map, step_params, iter, tile_mask_regularization_loss);
                                 reported_image_loss = tile_loss;
                             }
                         }
