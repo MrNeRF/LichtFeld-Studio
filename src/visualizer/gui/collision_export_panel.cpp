@@ -82,9 +82,8 @@ namespace lfs::vis::gui {
             }
         }
         const auto* node = scene_->getNodeByUuid(target_);
-        text("export-target", node && node->collision ? node->name : LOC("collision.export_select"));
         for (const auto* id : {"export-voxels", "export-glb", "export-cancel"}) {
-            const bool disabled = std::string_view(id) == "export-cancel" ? !busy_ || worker_.get_stop_token().stop_requested() : bool(busy_) || !node || !node->collision;
+            const bool disabled = std::string_view(id) == "export-cancel" ? !busy_ || worker_.get_stop_token().stop_requested() : bool(busy_) || !node || (std::string_view(id) == "export-voxels" ? !node->collision : !node->collision && !node->mesh);
             auto* el = document_->GetElementById(id);
             if (disabled != el->HasAttribute("disabled")) {
                 if (disabled)
@@ -109,7 +108,7 @@ namespace lfs::vis::gui {
         if (busy_)
             throw std::runtime_error("Wait for the current collision export to finish");
         const auto* node = scene_->getNodeByUuid(target_);
-        if (!node || !node->collision)
+        if (!node || (voxels ? !node->collision : !node->collision && !node->mesh))
             throw std::runtime_error("Select a collision node to export");
         auto path = voxels ? SaveJsonFileDialog("scene.voxel.json") : SaveGlbFileDialog("scene.collision.glb");
         if (path.empty())
@@ -128,11 +127,12 @@ namespace lfs::vis::gui {
             request.buttons = {{LOC("common.cancel"), "secondary"}, {LOC("export.overwrite"), "warning"}};
             const auto target = target_;
             const auto payload = node->collision;
-            request.on_result = [this, voxels, path, target, payload](const core::ModalResult& result) {
+            const auto geometry = node->mesh;
+            request.on_result = [this, voxels, path, target, payload, geometry](const core::ModalResult& result) {
                 if (result.button_label == LOC("export.overwrite"))
                     try {
                         const auto* current = scene_->getNodeByUuid(target);
-                        if (target_ != target || !current || current->collision != payload)
+                        if (target_ != target || !current || current->collision != payload || (!payload && current->mesh != geometry))
                             throw std::runtime_error("Collision changed while confirming export. Select the intended node and export again.");
                         startExport(voxels, path);
                     } catch (const std::exception& e) { showError(e.what()); }
@@ -145,10 +145,10 @@ namespace lfs::vis::gui {
         if (busy_)
             throw std::runtime_error("Wait for the current collision export to finish");
         const auto* node = scene_->getNodeByUuid(target_);
-        if (!node || !node->collision)
+        if (!node || (voxels ? !node->collision : !node->collision && !node->mesh))
             throw std::runtime_error("Collision node no longer exists");
         const auto volume = node->collision;
-        const auto mesh = node->collision_display.surface_ready ? node->mesh : nullptr;
+        const auto mesh = !node->collision || node->collision_display.surface_ready ? node->mesh : nullptr;
         const auto transform = scene_->getWorldTransform(node->id);
         const auto stride = node->collision_display.surface_stride;
         const auto shape = node->collision_display.surface_shape;
