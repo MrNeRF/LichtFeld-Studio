@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "collision_sparse.hpp"
+#include "collision_bvh.hpp"
 #include "cuda/collision_voxelization.hpp"
 #include <algorithm>
 #include <bit>
@@ -28,34 +29,7 @@ namespace lfs::core {
         if (progress)
             progress("Voxelizing acceleration structure (CPU)");
         auto& gs = input.gaussians;
-        using Node = cuda::CollisionBvhNode;
-        std::vector<Node> nodes;
-        nodes.reserve(gs.size() / 4 + 1);
-        auto build = [&](auto&& self, size_t begin, size_t end) -> uint32_t {
-            check();
-            const auto index = uint32_t(nodes.size());
-            glm::ivec3 low(std::numeric_limits<int>::max()), high(std::numeric_limits<int>::min());
-            for (auto i = begin; i < end; ++i) {
-                low = glm::min(low, gs[i].min);
-                high = glm::max(high, gs[i].max);
-            }
-            nodes.push_back({{low.x, low.y, low.z}, {high.x, high.y, high.z}, 0, 0, uint32_t(begin), uint32_t(end - begin)});
-            if (end - begin > 8) {
-                auto d = high - low;
-                int axis = d.x >= d.y && d.x >= d.z ? 0 : d.y >= d.z ? 1
-                                                                     : 2;
-                auto middle = begin + (end - begin) / 2;
-                std::nth_element(gs.begin() + begin, gs.begin() + middle, gs.begin() + end, [&](const auto& a, const auto& b) {
-                    return int64_t(a.min[axis]) + a.max[axis] < int64_t(b.min[axis]) + b.max[axis];
-                });
-                auto left = self(self, begin, middle), right = self(self, middle, end);
-                nodes[index].left = left;
-                nodes[index].right = right;
-                nodes[index].count = 0;
-            }
-            return index;
-        };
-        build(build, 0, gs.size());
+        auto bvh = collision_detail::buildCollisionBvh(std::span(gs), stop);
         report(.15f);
         auto volume = std::move(input.volume);
         collision_detail::Tree tree(volume.dimensions, stop);
@@ -63,7 +37,7 @@ namespace lfs::core {
         static_assert(offsetof(collision_detail::PreparedGaussian, inverse) == offsetof(cuda::CollisionGaussianGpu, inverse));
         static_assert(offsetof(collision_detail::PreparedGaussian, min) == offsetof(cuda::CollisionGaussianGpu, min));
         auto bricks = cuda::voxelizeCollisionBricks(
-            {reinterpret_cast<const cuda::CollisionGaussianGpu*>(gs.data()), gs.size()}, nodes, tree.size,
+            {reinterpret_cast<const cuda::CollisionGaussianGpu*>(gs.data()), gs.size()}, bvh.view(), tree.size,
             {volume.dimensions.x, volume.dimensions.y, volume.dimensions.z}, {volume.origin.x, volume.origin.y, volume.origin.z},
             settings.voxel_size, -std::log1p(-double(settings.opacity)), stop, report);
         if (bricks.empty())

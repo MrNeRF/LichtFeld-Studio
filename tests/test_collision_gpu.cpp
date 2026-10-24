@@ -1,11 +1,64 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/collision.hpp"
+#include "../src/core/collision_bvh.hpp"
+#include <cstring>
 #include <cuda_runtime.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <random>
 using namespace lfs::core;
+
+TEST(CollisionBvh, ExactBalancedNodeCountsAndParallelLayout) {
+    auto count = [](auto&& self, size_t n) -> size_t {
+        return n <= 8 ? 1 : 1 + self(self, n / 2) + self(self, n - n / 2);
+    };
+    for (size_t n = 1; n < 2048; ++n)
+        ASSERT_EQ(collision_detail::collisionBvhNodeCount(n), count(count, n)) << n;
+    std::mt19937 random(7731);
+    for (const size_t n : {9, 1024, 65537, 300000}) {
+        std::vector<cuda::CollisionGaussianGpu> serial(n);
+        for (auto& gaussian : serial)
+            for (int axis = 0; axis < 3; ++axis) {
+                gaussian.min[axis] = int(random() % 10000) - 5000;
+                gaussian.max[axis] = gaussian.min[axis] + 1 + random() % 100;
+            }
+        auto parallel = serial;
+        const auto a = collision_detail::buildCollisionBvh(std::span(serial), {}, 1);
+        const auto b = collision_detail::buildCollisionBvh(std::span(parallel), {}, 8);
+        ASSERT_EQ(a.size, count(count, n));
+        ASSERT_EQ(a.size, b.size);
+        EXPECT_EQ(std::memcmp(a.nodes.get(), b.nodes.get(), a.size * sizeof(cuda::CollisionBvhNode)), 0);
+        EXPECT_EQ(std::memcmp(serial.data(), parallel.data(), serial.size() * sizeof(serial[0])), 0);
+        // Every leaf owns each source exactly once and bounds all its supports.
+        std::vector<unsigned> visited(n);
+        for (const auto& node : b.view()) {
+            if (!node.count) {
+                ASSERT_LT(node.left, b.size);
+                ASSERT_LT(node.right, b.size);
+                continue;
+            }
+            ASSERT_LE(node.begin + node.count, n);
+            for (size_t i = node.begin; i < node.begin + node.count; ++i) {
+                ++visited[i];
+                for (int axis = 0; axis < 3; ++axis) {
+                    EXPECT_LE(node.min[axis], parallel[i].min[axis]);
+                    EXPECT_GE(node.max[axis], parallel[i].max[axis]);
+                }
+            }
+        }
+        EXPECT_TRUE(std::all_of(visited.begin(), visited.end(), [](auto visits) { return visits == 1; }));
+    }
+}
+
+TEST(CollisionBvh, CancellationAndEmptyInputFailBeforeAllocation) {
+    std::vector<cuda::CollisionGaussianGpu> source(100);
+    std::stop_source stop;
+    stop.request_stop();
+    EXPECT_THROW(collision_detail::buildCollisionBvh(std::span(source), stop.get_token()), std::runtime_error);
+    EXPECT_THROW(collision_detail::buildCollisionBvh(std::span<cuda::CollisionGaussianGpu>()), std::invalid_argument);
+}
+
 namespace {
     class CollisionGpu : public ::testing::Test {
         void SetUp() override {
