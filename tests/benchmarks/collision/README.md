@@ -42,6 +42,23 @@ Volume serialization is outside the reported generation interval. This JSON path
 uses identity coordinates: the snapshot must already be in the intended viewing
 frame. The project path above retains the collider's saved world transform.
 
+`bench_collision_source` compares the original scalar extraction loop with the
+parallel native extractor on the same PLY geometry. It records loading and CPU
+snapshot transfer separately, reports three extraction trials, output capacities
+and maximum record error, and writes the scalar reference as `snapshot.f32`.
+The snapshot uses LFS's data-to-visualizer Y/Z flip; SH/color are excluded.
+
+```sh
+cmake --build build-collision --target bench_collision_source bench_collision_project
+build-collision/tests/bench_collision_source trained.ply snapshot.f32
+build-collision/tests/bench_collision_project trained.licht /tmp/collision-volume.json collision.licht
+```
+
+The project helper is for that same world-frame snapshot. It adds the volume to a
+new project, preserves every original node/camera record, and reopens and hydrates
+the result using native archive APIs. It refuses an existing destination, copies
+clean source payloads without rewriting the trained input, and requires no GUI.
+
 Run SuperSplat's pinned, unmodified WGSL against those exact inputs:
 
 ```sh
