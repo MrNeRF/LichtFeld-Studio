@@ -108,3 +108,6 @@ src/rendering/rasterizer/vulkan/shader/radix_sort/*.spv
 
 !tests/media/test_ingest_cli.py
 !tests/media/test_ingest_package.py
+
+# Maintained native HIP boundary regressions.
+!tests/hip/test_native_runtime.py
