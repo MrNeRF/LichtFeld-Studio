@@ -102,8 +102,9 @@ operations on that queue remain ordered with both transfers.
 readiness and consumes a completed snapshot. Passing a null destination discards
 the snapshot. A non-null destination must provide enough space for the requested
 transfer bytes. A slot remains busy until completion is consumed, even after a
-successful wait. Transfer slots cannot be reused as zero-byte queue markers;
-dedicated markers can be re-recorded to track newer work on the same queue.
+successful wait. Slots that have allocated data storage cannot be reused as
+zero-byte queue markers; dedicated markers can be re-recorded to track newer
+work on the same queue.
 
 For packed readback, reserve a host slot and append device ranges on the same
 queue. Both append bounds and the poll copy size use the requested reservation,
