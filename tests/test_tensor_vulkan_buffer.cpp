@@ -188,6 +188,27 @@ namespace {
         EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), baseline);
     }
 
+    TEST_F(TensorVulkanBufferQuery, RepeatedTrimPreservesLiveStorageDuringSubmissionRetirement) {
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        const Tensor live = Tensor::ones({4096}, Device::GPU);
+        ASSERT_FLOAT_EQ(live.sum_scalar(), 4096.0f);
+        Tensor::trim_memory_pool();
+        const auto baseline = internal::vulkan_live_vma_objects_for_testing();
+        for (size_t iteration = 0; iteration < 64; ++iteration) {
+            {
+                const size_t count = 4096 + iteration * 256;
+                const Tensor temporary = Tensor::ones({count}, Device::GPU);
+                // Readback observes execution completion. On MoltenVK this may
+                // precede retirement of Metal's references to the allocation.
+                ASSERT_FLOAT_EQ(temporary.sum_scalar(), static_cast<float>(count));
+            }
+            Tensor::trim_memory_pool();
+            ASSERT_FLOAT_EQ(live.sum_scalar(), 4096.0f);
+        }
+        Tensor::trim_memory_pool();
+        EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), baseline);
+    }
+
     TEST_F(TensorVulkanBufferQuery, CudaAndCpuTensorsReturnNullopt) {
         if (gpu_backend_available(GpuBackend::CUDA)) {
             GpuBackendScope cuda_scope(GpuBackend::CUDA);

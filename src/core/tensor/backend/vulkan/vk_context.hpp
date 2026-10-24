@@ -172,6 +172,9 @@ namespace lfs::core::internal {
             std::lock_guard lock(queue_mutex_);
             if (completed_timeline() < submitted_timeline())
                 return false;
+#ifdef __APPLE__
+            wait_tensor_queue_idle_locked();
+#endif
             wait_consumer_queue_idle_locked();
             release();
             return true;
@@ -181,6 +184,9 @@ namespace lfs::core::internal {
         void run_after_queue_idle(Release&& release) {
             std::lock_guard lock(queue_mutex_);
             wait(submitted_timeline());
+#ifdef __APPLE__
+            wait_tensor_queue_idle_locked();
+#endif
             wait_consumer_queue_idle_locked();
             release();
         }
@@ -243,6 +249,9 @@ namespace lfs::core::internal {
         std::mutex* consumer_queue_mutex_ = nullptr;
         void publish_submitted_locked(uint64_t signal_value);
         void wait_consumer_queue_idle_locked();
+#ifdef __APPLE__
+        void wait_tensor_queue_idle_locked();
+#endif
         std::mutex shutdown_mutex_;
         std::mutex shutdown_release_mutex_;
         std::vector<std::function<void()>> shutdown_releases_;

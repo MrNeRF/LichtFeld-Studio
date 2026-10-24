@@ -1020,6 +1020,17 @@ namespace lfs::core::internal {
         publish_submitted_locked(signal_value);
     }
 
+#ifdef __APPLE__
+    void VulkanContext::wait_tensor_queue_idle_locked() {
+        // A completed timeline does not guarantee that MoltenVK has retired
+        // Metal's command-buffer references. Before destroying device memory,
+        // wait for the queue itself while queue_mutex_ prevents new submits.
+        // Do not enter the recorder registry here: memory collection can run
+        // while its mutex is held, and recorder fences are recycled there.
+        vk_check(this, lfs::rendering::vk_queue_wait_idle_synced(queue_), "vkQueueWaitIdle(tensor queue)");
+    }
+#endif
+
     void VulkanContext::wait_consumer_queue_idle_locked() {
         if (consumer_queue_ == VK_NULL_HANDLE)
             return;
