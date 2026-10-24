@@ -93,6 +93,8 @@ namespace {
             {
                 const CUDAStreamGuard stream_scope(stream);
                 Tensor output = Tensor::zeros({1024}, Device::GPU);
+                // A kernel's first launch loads its module, which waits for the gated stream.
+                output.fill_(1.0f);
                 ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
                 const Tensor* warmup[] = {&output};
                 std::make_shared<TensorCompletion>(warmup)->wait();
@@ -127,6 +129,8 @@ namespace {
         {
             const CUDAStreamGuard stream_scope(captured);
             Tensor output = Tensor::zeros({1024}, Device::GPU);
+            // A kernel's first launch loads its module, which waits for the gated stream.
+            output.fill_(1.0f);
             ASSERT_EQ(cudaStreamSynchronize(captured), cudaSuccess);
             {
                 lfs::test::CudaStreamGate gate;
