@@ -1735,5 +1735,198 @@ namespace lfs::core {
             return dataset;
         }
 
+        std::expected<BatchTrainingParameters, lfs::Error> read_batch_training_parameters_from_json(
+            const std::filesystem::path& path,
+            const BatchTrainingParameters& defaults) {
+            auto json_result = read_json_file(path);
+            if (!json_result) {
+                return std::unexpected(config_import_error(std::move(json_result.error()), path));
+            }
+
+            const auto& j = *json_result;
+            BatchTrainingParameters params = defaults;
+            params.config_file = path;
+
+            auto parse_job_item = [&](const nlohmann::json& job_json) -> std::expected<BatchJobItem, lfs::Error> {
+                if (!job_json.is_object()) {
+                    return std::unexpected(config_import_error("Batch job entry must be a JSON object", path));
+                }
+
+                BatchJobItem item;
+                // Accept dataset, dataset_path, or path
+                if (job_json.contains("dataset")) {
+                    item.dataset_path = utf8_to_path(job_json["dataset"].get<std::string>());
+                } else if (job_json.contains("dataset_path")) {
+                    item.dataset_path = utf8_to_path(job_json["dataset_path"].get<std::string>());
+                } else if (job_json.contains("path")) {
+                    item.dataset_path = utf8_to_path(job_json["path"].get<std::string>());
+                } else {
+                    return std::unexpected(config_import_error("Batch job missing 'dataset' or 'path' field", path));
+                }
+
+                if (item.dataset_path.is_relative() && path.has_parent_path()) {
+                    auto candidate = path.parent_path() / item.dataset_path;
+                    if (lfs::core::native_fs::exists(candidate)) {
+                        item.dataset_path = candidate;
+                    }
+                }
+
+                if (job_json.contains("name") && job_json["name"].is_string()) {
+                    item.name = job_json["name"].get<std::string>();
+                }
+                if (job_json.contains("output") && job_json["output"].is_string()) {
+                    item.output_path = utf8_to_path(job_json["output"].get<std::string>());
+                } else if (job_json.contains("output_path") && job_json["output_path"].is_string()) {
+                    item.output_path = utf8_to_path(job_json["output_path"].get<std::string>());
+                }
+
+                if (job_json.contains("config") && job_json["config"].is_string()) {
+                    item.config_file = utf8_to_path(job_json["config"].get<std::string>());
+                    if (item.config_file->is_relative() && path.has_parent_path()) {
+                        auto candidate = path.parent_path() / *item.config_file;
+                        if (lfs::core::native_fs::exists(candidate)) {
+                            item.config_file = candidate;
+                        }
+                    }
+                }
+
+                if (job_json.contains("extra_args") && job_json["extra_args"].is_array()) {
+                    for (const auto& arg : job_json["extra_args"]) {
+                        if (arg.is_string()) {
+                            item.extra_args.push_back(arg.get<std::string>());
+                        }
+                    }
+                } else if (job_json.contains("args") && job_json["args"].is_array()) {
+                    for (const auto& arg : job_json["args"]) {
+                        if (arg.is_string()) {
+                            item.extra_args.push_back(arg.get<std::string>());
+                        }
+                    }
+                }
+
+                if (job_json.contains("strategy") && job_json["strategy"].is_string()) {
+                    item.extra_args.push_back("--strategy");
+                    item.extra_args.push_back(job_json["strategy"].get<std::string>());
+                }
+                if (job_json.contains("iterations") && job_json["iterations"].is_number_integer()) {
+                    item.extra_args.push_back("--iter");
+                    item.extra_args.push_back(std::to_string(job_json["iterations"].get<int64_t>()));
+                } else if (job_json.contains("iter") && job_json["iter"].is_number_integer()) {
+                    item.extra_args.push_back("--iter");
+                    item.extra_args.push_back(std::to_string(job_json["iter"].get<int64_t>()));
+                }
+                if (job_json.contains("export") && job_json["export"].is_string()) {
+                    item.extra_args.push_back("--export");
+                    item.extra_args.push_back(job_json["export"].get<std::string>());
+                }
+                if (job_json.contains("use_depth_loss") && job_json["use_depth_loss"].is_boolean() && job_json["use_depth_loss"].get<bool>()) {
+                    item.extra_args.push_back("--use-depth-loss");
+                }
+                if (job_json.contains("use_normal_loss") && job_json["use_normal_loss"].is_boolean() && job_json["use_normal_loss"].get<bool>()) {
+                    item.extra_args.push_back("--use-normal-loss");
+                }
+                if (job_json.contains("bilateral_grid") && job_json["bilateral_grid"].is_boolean() && job_json["bilateral_grid"].get<bool>()) {
+                    item.extra_args.push_back("--bilateral-grid");
+                }
+                if (job_json.contains("undistort") && job_json["undistort"].is_boolean() && job_json["undistort"].get<bool>()) {
+                    item.extra_args.push_back("--undistort");
+                }
+
+                return item;
+            };
+
+            if (j.is_array()) {
+                for (const auto& item_json : j) {
+                    auto job = parse_job_item(item_json);
+                    if (!job)
+                        return std::unexpected(job.error());
+                    params.jobs.push_back(std::move(*job));
+                }
+                return params;
+            }
+
+            if (!j.is_object()) {
+                return std::unexpected(config_import_error("Batch configuration must be a JSON object or array", path));
+            }
+
+            if (j.contains("output_dir") && j["output_dir"].is_string()) {
+                params.output_dir = utf8_to_path(j["output_dir"].get<std::string>());
+            }
+            if (j.contains("continue_on_failure") && j["continue_on_failure"].is_boolean()) {
+                params.continue_on_failure = j["continue_on_failure"].get<bool>();
+            }
+            if (j.contains("recursive") && j["recursive"].is_boolean()) {
+                params.recursive = j["recursive"].get<bool>();
+            }
+            if (j.contains("dry_run") && j["dry_run"].is_boolean()) {
+                params.dry_run = j["dry_run"].get<bool>();
+            }
+            if (j.contains("timeout_minutes") && j["timeout_minutes"].is_number_integer()) {
+                params.timeout_minutes = static_cast<int>(j["timeout_minutes"].get<int64_t>());
+            }
+            if (j.contains("summary_file") && j["summary_file"].is_string()) {
+                params.summary_file = utf8_to_path(j["summary_file"].get<std::string>());
+            }
+            if (j.contains("report_file") && j["report_file"].is_string()) {
+                params.report_file = utf8_to_path(j["report_file"].get<std::string>());
+            }
+
+            if (j.contains("defaults") && j["defaults"].is_object()) {
+                const auto& def = j["defaults"];
+                if (def.contains("strategy") && def["strategy"].is_string()) {
+                    params.shared_args.push_back("--strategy");
+                    params.shared_args.push_back(def["strategy"].get<std::string>());
+                }
+                if (def.contains("iterations") && def["iterations"].is_number_integer()) {
+                    params.shared_args.push_back("--iter");
+                    params.shared_args.push_back(std::to_string(def["iterations"].get<int64_t>()));
+                } else if (def.contains("iter") && def["iter"].is_number_integer()) {
+                    params.shared_args.push_back("--iter");
+                    params.shared_args.push_back(std::to_string(def["iter"].get<int64_t>()));
+                }
+                if (def.contains("export") && def["export"].is_string()) {
+                    params.shared_args.push_back("--export");
+                    params.shared_args.push_back(def["export"].get<std::string>());
+                }
+                if (def.contains("use_depth_loss") && def["use_depth_loss"].is_boolean() && def["use_depth_loss"].get<bool>()) {
+                    params.shared_args.push_back("--use-depth-loss");
+                }
+                if (def.contains("use_normal_loss") && def["use_normal_loss"].is_boolean() && def["use_normal_loss"].get<bool>()) {
+                    params.shared_args.push_back("--use-normal-loss");
+                }
+                if (def.contains("bilateral_grid") && def["bilateral_grid"].is_boolean() && def["bilateral_grid"].get<bool>()) {
+                    params.shared_args.push_back("--bilateral-grid");
+                }
+                if (def.contains("undistort") && def["undistort"].is_boolean() && def["undistort"].get<bool>()) {
+                    params.shared_args.push_back("--undistort");
+                }
+                if (def.contains("args") && def["args"].is_array()) {
+                    for (const auto& a : def["args"]) {
+                        if (a.is_string()) {
+                            params.shared_args.push_back(a.get<std::string>());
+                        }
+                    }
+                }
+            }
+
+            if (j.contains("jobs") && j["jobs"].is_array()) {
+                for (const auto& item_json : j["jobs"]) {
+                    auto job = parse_job_item(item_json);
+                    if (!job)
+                        return std::unexpected(job.error());
+                    params.jobs.push_back(std::move(*job));
+                }
+            } else if (j.contains("datasets") && j["datasets"].is_array()) {
+                for (const auto& item_json : j["datasets"]) {
+                    auto job = parse_job_item(item_json);
+                    if (!job)
+                        return std::unexpected(job.error());
+                    params.jobs.push_back(std::move(*job));
+                }
+            }
+
+            return params;
+        }
+
     } // namespace param
 } // namespace lfs::core

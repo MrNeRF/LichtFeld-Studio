@@ -69,9 +69,12 @@ namespace lfs::core::args {
         std::filesystem::path project_path;
         std::optional<std::filesystem::path> dataset_path;
     };
+    struct BatchTrainingMode {
+        param::BatchTrainingParameters params;
+    };
 
     using ParsedArgs = std::variant<TrainingMode, ConvertMode, Mesh2SplatMode, PreprocessMode, CompareMode, HelpMode,
-                                    VersionMode, WarmupMode, PluginMode, LichtMode>;
+                                    VersionMode, WarmupMode, PluginMode, LichtMode, BatchTrainingMode>;
 
     LFS_CORE_API std::expected<ParsedArgs, std::string> parse_args(int argc, const char* const argv[]);
 

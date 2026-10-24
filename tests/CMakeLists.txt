@@ -995,6 +995,7 @@ list(APPEND TEST_FILES test_png_parallel_writer.cpp)
 list(APPEND TEST_FILES test_rad_gpu_encode.cpp)
 list(APPEND TEST_FILES test_rad_meta_sidecar.cpp)
 list(APPEND TEST_FILES test_rad_spark_paging.cpp)
+list(APPEND TEST_FILES test_batch_trainer.cpp)
 
 # Keep the source manifest strict: a stale entry should fail configuration
 # instead of silently dropping coverage from the executable.
@@ -1014,6 +1015,7 @@ list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/app/licht_command.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter_output_paths.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter_overwrite.cpp
+    ${CMAKE_SOURCE_DIR}/src/app/batch_trainer.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_params.cpp
 )
 

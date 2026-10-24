@@ -261,6 +261,19 @@ namespace lfs::core::native_fs {
 #endif
     }
 
+    inline bool entry_is_directory([[maybe_unused]] const std::filesystem::path& root,
+                                   const std::filesystem::directory_entry& entry) {
+#ifdef _WIN32
+        try {
+            return entry.is_directory();
+        } catch (const std::filesystem::filesystem_error& error) {
+            throw std::filesystem::filesystem_error("is_directory", entry_path(root, entry.path()), error.code());
+        }
+#else
+        return entry.is_directory();
+#endif
+    }
+
     inline std::filesystem::file_status entry_symlink_status([[maybe_unused]] const std::filesystem::path& root,
                                                              const std::filesystem::directory_entry& entry) {
 #ifdef _WIN32
