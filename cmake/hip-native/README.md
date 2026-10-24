@@ -202,6 +202,26 @@ gather/scatter, masks, stable sort, scans, random generation, FP32 matrix
 multiplication and pairwise distances. Dtypes are FP32, FP16, Int32, Int64,
 UInt8, Bool and UInt32; individual entry points validate their supported subset.
 Integer comparisons preserve Int64 precision rather than converting to float.
+
+| Operator family | Native storage support |
+| --- | --- |
+| Catalog pointwise, scalar-left, fused chains | FP32/FP16 pointwise and scalar-left; FP32 chains |
+| Typed conversion and layout copy/fill | All seven dtypes |
+| Broadcast and conditional selection | Floating, integer and boolean storage; operation-specific validation |
+| Global scalar reduction and arg extrema | FP32; extrema indices use Int64 |
+| Axis reduction | FP32/FP16 and integer/boolean subsets; output type is validated |
+| Gather, selection, masks and index copy/fill | Typed storage; index arrays use Int32 or Int64 |
+| Indexed addition | FP32 or Int32 |
+| Cumulative sum | FP32, Int32, Int64, UInt32 |
+| Stable sort | FP32 values and Int64 indices |
+| Random | FP32 uniform/normal/Bernoulli; Int32 integer draws |
+| Matrix multiplication and pairwise distance | FP32 |
+
+Unsupported combinations fail explicitly rather than running a CPU fallback.
+Floating reductions and indexed atomic addition may differ in rounding order
+between devices. RNG seeds are reproducible for this implementation; no claim
+is made that another backend produces the same seeded sequence.
+
 Sort preserves input payload bits and stable ordering of NaNs and signed zeros.
 
 Temporary workspaces belong to a context. Growth drains previous operations and
