@@ -3041,7 +3041,7 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("mode"), "Set the active camera navigation mode. Walk requires a visible collision node and a free capsule at the camera; otherwise raises RuntimeError.");
     m.def("has_walk_collision", [] {
         const auto* controller = lfs::vis::InputController::instance();
-        return controller && controller->hasWalkCollision(); }, "Whether visible, loaded colliders are available for Walk; does not test the current capsule placement.");
+        return controller && controller->hasWalkCollision(); }, "Whether loaded colliders are available for Walk; does not test the current capsule placement.");
     m.def("get_collision_controls", [] {
         nb::dict state;
         const auto* controller = lfs::vis::InputController::instance();

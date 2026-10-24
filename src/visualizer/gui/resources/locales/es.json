@@ -1,5 +1,5 @@
 {
-  "collision.walk_unavailable": "Enable a loaded voxel collision node in the scene graph to use Walk.",
+  "collision.walk_unavailable": "Load a collision box or collision surface to enable Walk mode.",
   "collision.controls_walk": "Walk",
   "collision.controls_help": "Walk mode shows live player settings. Outside Walk, selecting one voxel collider shows its preview settings. Drag to scrub or click to type.",
   "collision.controls_target_help": "Choose the voxel collider to inspect. Triangle surfaces have their own scene entries.",

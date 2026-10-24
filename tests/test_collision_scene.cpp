@@ -45,7 +45,7 @@ namespace {
         return result;
     }
 } // namespace
-TEST(CollisionScene, ArchiveRestoresGeneratedMeshAndVolumeWithDeferredHydration) {
+TEST(CollisionScene, ArchiveRestoresGeneratedSurfaceAndVolumeWithDeferredHydration) {
     Scene scene;
     auto boxes = std::make_shared<CollisionVolume>(*volume());
     boxes->show_voxels = true;
@@ -56,7 +56,7 @@ TEST(CollisionScene, ArchiveRestoresGeneratedMeshAndVolumeWithDeferredHydration)
     auto* node = scene.getNodeById(id);
     const auto uuid = node->uuid;
     node->collision = g;
-    node->collision_display = {.preview = true, .sharp = false, .surface_ready = false, .opacity = 0.45f, .slice = 0.8f, .surface_stride = 8};
+    node->collision_display = {.preview = false, .sharp = false, .surface_ready = true, .opacity = 0.45f, .slice = 0.8f, .surface_stride = 8};
     const auto display = node->collision_display;
     node->payload_diverged = true;
     node->visible = false;
@@ -134,10 +134,9 @@ TEST(CollisionScene, ArchiveRestoresGeneratedMeshAndVolumeWithDeferredHydration)
     ASSERT_EQ(state.meshes.size(), 1u);
     auto draws = lfs::vis::buildViewportMeshDrawItems(state, {}, {0, 0, 1});
     ASSERT_EQ(draws.size(), 1u);
-    EXPECT_TRUE(draws[0].collision_voxel_boxes);
+    EXPECT_FALSE(draws[0].collision_voxel_boxes);
     EXPECT_EQ(draws[0].collision_volume, loaded->collision.get());
     EXPECT_EQ(draws[0].collision_volume->gpuOccupancy(), g->gpuOccupancy());
-    EXPECT_FALSE(draws[0].shadow_enabled);
     EXPECT_EQ(draws[0].model, world);
 }
 TEST(CollisionScene, DuplicateAndDeleteUndoPreserveCollisionPayload) {
@@ -219,7 +218,7 @@ TEST(CollisionWalkController, RejectsMissingCollisionAndExitsOnTeleportResetOrEs
     EXPECT_EQ(input.cameraNavigationMode(), Mode::FPV);
 }
 
-TEST(CollisionWalkController, AvailabilityTracksVisibilityHydrationAndTransforms) {
+TEST(CollisionWalkController, LoadedSurfacesEnableWalkIndependentlyOfVisibility) {
     lfs::vis::SceneManager manager;
     lfs::vis::services().set(&manager);
     struct Cleanup {
@@ -238,10 +237,11 @@ TEST(CollisionWalkController, AvailabilityTracksVisibilityHydrationAndTransforms
     node->collision = g;
     EXPECT_TRUE(input.hasWalkCollision());
     node->visible = false;
-    EXPECT_FALSE(input.hasWalkCollision());
+    node->collision_display = {.preview = false, .surface_ready = true};
+    EXPECT_TRUE(input.hasWalkCollision());
     node->visible = true;
     scene.getNodeById(group)->visible = false;
-    EXPECT_FALSE(input.hasWalkCollision());
+    EXPECT_TRUE(input.hasWalkCollision());
     scene.getNodeById(group)->visible = true;
     node->mesh.reset();
     EXPECT_FALSE(input.hasWalkCollision()); // Deferred hydration is not ready yet.
@@ -279,6 +279,7 @@ TEST(CollisionWalkController, LiveCapsuleChangesKeepFeetGroundedRejectCeilingsAn
         }
     const auto id = manager.getScene().addMesh("floor and ceiling", mesh(*g));
     manager.getScene().getNodeById(id)->collision = g;
+    manager.getScene().getNodeById(id)->visible = false;
     manager.getScene().setNodeTransform(id, glm::scale(glm::mat4(1), glm::vec3(1, -1, -1)));
     Viewport viewport;
     viewport.camera.t = {1, 1.9f, 1};

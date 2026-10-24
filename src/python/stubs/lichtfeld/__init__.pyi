@@ -651,7 +651,7 @@ def set_camera_navigation_mode(mode: str) -> None:
 
 def has_walk_collision() -> bool:
     """
-    Whether visible, loaded colliders are available for Walk; does not test the current capsule placement.
+    Whether loaded colliders are available for Walk; does not test the current capsule placement.
     """
 
 def get_collision_controls() -> dict:

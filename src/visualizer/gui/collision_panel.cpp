@@ -762,6 +762,8 @@ namespace lfs::vis::gui {
                 throw std::runtime_error("Could not create collision surface node");
             const auto parent = parent_id == core::NULL_NODE ? glm::mat4(1) : scene_->getWorldTransform(parent_id);
             surface->local_transform = glm::inverse(parent) * result_->world_transform;
+            surface->collision = result_->volume;
+            surface->collision_display = result_->display;
             scene_->markTransformDirty(id);
             scene_->markPayloadDiverged(id);
             node->collision_display.surface_stride = result_->display.surface_stride;

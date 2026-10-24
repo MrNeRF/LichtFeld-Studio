@@ -1165,7 +1165,7 @@ namespace lfs::vis::gui {
             snapshot.name = node->name;
             snapshot.visible = static_cast<bool>(node->visible);
             snapshot.locked = static_cast<bool>(node->locked);
-            snapshot.collision = bool(node->collision);
+            snapshot.collision = node->collision && !node->collision_display.surface_ready;
             snapshot.has_children = !node->children.empty();
             snapshot.training_enabled = node->training_enabled;
             snapshot.camera_uid = node->camera_uid;

@@ -641,11 +641,11 @@ namespace lfs::vis {
         const auto& scene = sm->getScene();
         bool found = false;
         for (const auto* node : scene.getNodes()) {
-            if (!node->collision || !node->mesh || !scene.isNodeEffectivelyVisible(node->id))
+            if (!node->collision || !node->mesh)
                 continue;
             const auto det = glm::determinant(glm::mat3(scene.getWorldTransform(node->id)));
             if (!std::isfinite(det) || std::abs(det) < 1e-10f)
-                return false;
+                continue;
             found = true;
         }
         return found;
@@ -660,17 +660,21 @@ namespace lfs::vis {
         if (auto* sm = services().sceneOrNull()) {
             auto& scene = sm->getScene();
             for (const auto* node : scene.getNodes()) {
-                if (!node->collision || !node->mesh || !scene.isNodeEffectivelyVisible(node->id))
+                if (!node->collision || !node->mesh)
                     continue;
                 auto transform = lfs::rendering::dataWorldTransformToVisualizerWorld(scene.getWorldTransform(node->id));
                 const auto det = glm::determinant(glm::mat3(transform));
                 if (!std::isfinite(det) || std::abs(det) < 1e-10f)
-                    throw std::runtime_error("A visible collision node has a singular transform");
+                    continue;
+                if (std::any_of(colliders.begin(), colliders.end(), [&](const auto& existing) {
+                        return existing.volume == node->collision && existing.transform == transform;
+                    }))
+                    continue;
                 colliders.push_back({node->collision, transform});
             }
         }
         if (colliders.empty())
-            throw std::runtime_error("Walk requires at least one visible, loaded collision node");
+            throw std::runtime_error("Load a collision box or collision surface to enable Walk mode");
         return [colliders = std::move(colliders)](glm::vec3 feet, glm::vec3 up, float height, float radius) {
             for (const auto& collider : colliders) {
                 if (core::transformedCapsuleIntersects(*collider.volume, collider.transform, feet, up, height, radius))
