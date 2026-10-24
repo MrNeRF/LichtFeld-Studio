@@ -439,6 +439,18 @@ class TensorOperations(native.RuntimeContract):
             self.checked("index_cast", context, indices, cast, 2, 6)
             self.assertEqual(self.read(context, cast, 2, 2), [2, 0])
 
+    def test_indexed_add_accumulates_duplicate_indices(self):
+        with self.resources() as context:
+            for dtype in (0, 2):
+                with self.subTest(dtype=dtype):
+                    destination = self.tensor(context, [0] * 6, dtype)
+                    indices = self.tensor(context, [2, 2, 0], 2)
+                    values = self.tensor(context, [1, 2, 3, 4, 5, 6], dtype)
+                    shape = layout([2, 3])
+                    self.checked("index_update", context, destination, dtype, indices, 2,
+                                 values, c.byref(shape), 1, 3, 1)
+                    self.assertEqual(self.read(context, destination, 6, dtype), [3, 0, 3, 6, 0, 9])
+
     def test_random_reproducibility_bounds_and_distribution(self):
         with self.resources() as context:
             count = 4097
