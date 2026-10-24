@@ -90,6 +90,15 @@ GPU, including WSL or CI runners. The native module does not load Python or
 PyTorch, but still requires the SDK shared libraries installed in that environment.
 This is a developer setup, not a redistributable runtime bundle.
 
+The Ubuntu workflow includes a separate `HIP native compile (CPU runner)` job.
+It installs Python 3.12, CMake 4.4.0 and the SDK pinned in `ci-requirements.txt`,
+then builds the compressed portable module for all declared architectures and
+runs only the CPU configuration/module-ABI tests. GPU visibility is disabled,
+GPU tests remain off, and no application, CUDA toolkit, submodules or driver
+installation is required. The pip download cache avoids downloading the SDK
+again when the runner can restore it. This compile check follows the existing
+Ubuntu workflow triggers; it is not a full HIP application or GPU training job.
+
 ## Owned asynchronous transfers
 
 Contexts can create reusable pinned staging slots for asynchronous upload,

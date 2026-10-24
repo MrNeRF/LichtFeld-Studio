@@ -1,0 +1,3 @@
+# The SDK version is independent of the HIP API/runtime version.
+--index-url https://stable.repo.amd.com/rocm/whl-next/
+rocm[devel]==10.1.0
