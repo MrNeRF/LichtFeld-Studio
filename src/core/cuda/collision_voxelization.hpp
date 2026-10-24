@@ -16,6 +16,9 @@ namespace lfs::core::cuda {
     };
     struct CollisionBvhNode {
         int min[3], max[3];
+        // Unused traversal slots retain float bits for max(min(extent.xyz)):
+        // interior: begin; leaf: left. This adds a support bound without growing
+        // the descriptor or its GPU transfer/cache footprint.
         uint32_t left, right, begin, count;
     };
     struct CollisionBrick {

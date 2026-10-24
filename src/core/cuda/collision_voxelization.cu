@@ -121,9 +121,17 @@ namespace lfs::core::cuda {
             int top = 0;
             stack[top++] = 0;
             float lower = 0;
+            const float minimum_support = (float(n) * grid.size * .5f) * .99999f;
             while (top) {
                 const auto node = nodes[stack[--top]];
                 if (!overlaps(node, p, n))
+                    continue;
+                // Every contributing Gaussian must support the whole cube on
+                // all three axes. A smaller subtree-wide maximum proves that
+                // this lower-bound search cannot contribute, even before the
+                // more selective centre/rotation tests. The margin only makes
+                // rejection less aggressive near floating-point boundaries.
+                if (__uint_as_float(node.count ? node.left : node.begin) < minimum_support)
                     continue;
                 if (!node.count) {
                     stack[top++] = node.left;

@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "core/collision.hpp"
 #include "../src/core/collision_bvh.hpp"
+#include "core/collision.hpp"
 #include <cstring>
 #include <cuda_runtime.h>
 #include <glm/gtc/matrix_transform.hpp>
@@ -22,6 +22,7 @@ TEST(CollisionBvh, ExactBalancedNodeCountsAndParallelLayout) {
             for (int axis = 0; axis < 3; ++axis) {
                 gaussian.min[axis] = int(random() % 10000) - 5000;
                 gaussian.max[axis] = gaussian.min[axis] + 1 + random() % 100;
+                gaussian.extent[axis] = float(random() % 1000) * .01f;
             }
         auto parallel = serial;
         const auto a = collision_detail::buildCollisionBvh(std::span(serial), {}, 1);
@@ -36,16 +37,24 @@ TEST(CollisionBvh, ExactBalancedNodeCountsAndParallelLayout) {
             if (!node.count) {
                 ASSERT_LT(node.left, b.size);
                 ASSERT_LT(node.right, b.size);
+                auto support = [&](uint32_t child) {
+                    const auto& c = b.nodes[child];
+                    return std::bit_cast<float>(c.count ? c.left : c.begin);
+                };
+                EXPECT_EQ(std::bit_cast<float>(node.begin), std::max(support(node.left), support(node.right)));
                 continue;
             }
             ASSERT_LE(node.begin + node.count, n);
+            float expected_support = 0;
             for (size_t i = node.begin; i < node.begin + node.count; ++i) {
                 ++visited[i];
+                expected_support = std::max(expected_support, std::min({parallel[i].extent[0], parallel[i].extent[1], parallel[i].extent[2]}));
                 for (int axis = 0; axis < 3; ++axis) {
                     EXPECT_LE(node.min[axis], parallel[i].min[axis]);
                     EXPECT_GE(node.max[axis], parallel[i].max[axis]);
                 }
             }
+            EXPECT_EQ(std::bit_cast<float>(node.left), expected_support);
         }
         EXPECT_TRUE(std::all_of(visited.begin(), visited.end(), [](auto visits) { return visits == 1; }));
     }

@@ -56,8 +56,13 @@ namespace lfs::core::collision_detail {
             node.left = node.right = 0;
             node.begin = uint32_t(begin);
             node.count = uint32_t(end - begin);
-            if (end - begin <= 8)
+            if (end - begin <= 8) {
+                float support = 0;
+                for (size_t i = begin; i < end; ++i)
+                    support = std::max(support, std::min({gaussians[i].extent[0], gaussians[i].extent[1], gaussians[i].extent[2]}));
+                node.left = std::bit_cast<uint32_t>(support);
                 return;
+            }
             int axis = 0;
             for (int a = 1; a < 3; ++a)
                 if (int64_t(node.max[a]) - node.min[a] > int64_t(node.max[axis]) - node.min[axis])
@@ -77,6 +82,11 @@ namespace lfs::core::collision_detail {
                 self(self, node.left, begin, middle, depth + 1);
                 self(self, node.right, middle, end, depth + 1);
             }
+            auto support = [&](uint32_t child) {
+                const auto& n = result.nodes[child];
+                return std::bit_cast<float>(n.count ? n.left : n.begin);
+            };
+            node.begin = std::bit_cast<uint32_t>(std::max(support(node.left), support(node.right)));
         };
         tbb::task_arena arena(workers);
         arena.execute([&] { build(build, 0, 0, gaussians.size(), 0); });

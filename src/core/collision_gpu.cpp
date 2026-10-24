@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "collision_sparse.hpp"
 #include "collision_bvh.hpp"
+#include "collision_sparse.hpp"
 #include "cuda/collision_voxelization.hpp"
 #include <algorithm>
 #include <bit>
