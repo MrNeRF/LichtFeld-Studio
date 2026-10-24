@@ -97,6 +97,9 @@ namespace lfs::vis {
             LFS_VIS_API void deleteActiveCropToolVolume();
             // Polygon button: edit the selected splat's or point cloud's polygon, or start drawing one.
             LFS_VIS_API void activateCropPolygonTool();
+            // Fit or reset the selected crop polygon, or the selected splat's or point cloud's.
+            LFS_VIS_API void fitSelectedCropPolygon(bool use_percentile);
+            LFS_VIS_API void resetSelectedCropPolygon();
             [[nodiscard]] bool isViewportGizmoDragging() const { return viewport_gizmo_dragging_; }
             // The panel whose axis widget is pressed or dragged, and the pressed marker (-1 for the sphere).
             struct ViewportGizmoPress {

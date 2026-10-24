@@ -11,6 +11,7 @@
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "gui/volume_guide_visibility.hpp"
 #include "io/cache_image_loader.hpp"
@@ -51,6 +52,7 @@
 #include <fstream>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
+#include <limits>
 #include <memory>
 #include <thread>
 #include <type_traits>
@@ -3040,6 +3042,123 @@ namespace lfs::vis {
         EXPECT_TRUE(scene.getCropPolygonData(restored)->enabled);
         ASSERT_TRUE(op::undoHistory().redo().success);
         EXPECT_EQ(points().size(), 6u);
+    }
+
+    namespace {
+        // 200 points in [-1, 1]^3 around (2, 0, 2) and one outlier far out on +x,
+        // so the trimmed bounds differ from the full ones.
+        std::unique_ptr<core::SplatData> makeCropPolygonFitSplat() {
+            using core::DataType;
+            using core::Device;
+            using core::Tensor;
+            constexpr size_t count = 201;
+            std::vector<float> means;
+            means.reserve(count * 3);
+            for (size_t i = 0; i + 1 < count; ++i) {
+                const float t = static_cast<float>(i) / static_cast<float>(count - 2);
+                means.insert(means.end(), {2.0f + std::cos(t * 37.0f), std::sin(t * 23.0f), 2.0f + (2.0f * t - 1.0f)});
+            }
+            means.insert(means.end(), {40.0f, 0.0f, 2.0f});
+            std::vector<float> rotation(count * 4, 0.0f);
+            for (size_t i = 0; i < count; ++i)
+                rotation[i * 4] = 1.0f;
+            return std::make_unique<core::SplatData>(
+                0, Tensor::from_vector(means, {count, size_t{3}}, Device::CPU),
+                Tensor::zeros({count, size_t{1}, size_t{3}}, Device::CPU, DataType::Float32),
+                Tensor::zeros({count, size_t{0}, size_t{3}}, Device::CPU, DataType::Float32),
+                Tensor::zeros({count, size_t{3}}, Device::CPU, DataType::Float32),
+                Tensor::from_vector(rotation, {count, size_t{4}}, Device::CPU),
+                Tensor::zeros({count, size_t{1}}, Device::CPU, DataType::Float32), 1.0f);
+        }
+
+        glm::vec3 columnLengths(const glm::mat4& m) {
+            return {glm::length(glm::vec3(m[0])), glm::length(glm::vec3(m[1])), glm::length(glm::vec3(m[2]))};
+        }
+    } // namespace
+
+    // Fit keeps the outline and the rotation and stretches each local axis so the
+    // prism's box is the bounds seen from the unscaled polygon frame; Reset goes
+    // back to scale 1 in place. Each is one undo step.
+    TEST_F(SceneManagerRenderStateTest, CropPolygonFitTrimAndResetKeepOutlineAndRotation) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto parent = scene.addSplat("Model", makeCropPolygonFitSplat());
+        const auto data = makeCropPolygonData();
+        const glm::mat4 drawn =
+            glm::scale(glm::rotate(glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, -2.0f, 0.5f)),
+                                   glm::radians(30.0f), glm::normalize(glm::vec3(1.0f, 1.0f, 0.0f))),
+                       glm::vec3(2.0f, 0.5f, 3.0f));
+        const auto polygon = scene.addCropPolygon("Model_crop_polygon", parent, data, drawn);
+        ASSERT_NE(polygon, core::NULL_NODE);
+        op::undoHistory().clear();
+
+        const glm::mat3 rotation(glm::normalize(glm::vec3(drawn[0])), glm::normalize(glm::vec3(drawn[1])),
+                                 glm::normalize(glm::vec3(drawn[2])));
+        const glm::vec3 prism_half(core::crop_polygon::outlineHalfExtents(data.vertices), data.half_depth);
+        const auto transform = [&] { return scene.getNodeById(polygon)->local_transform.get(); };
+        const auto expectFittedTo = [&](const bool trimmed) {
+            glm::vec3 lo_bounds, hi_bounds;
+            ASSERT_TRUE(core::compute_bounds(*scene.getNodeById(parent)->model, lo_bounds, hi_bounds, 0.0f, trimmed));
+            glm::vec3 lo(std::numeric_limits<float>::max());
+            glm::vec3 hi(std::numeric_limits<float>::lowest());
+            for (int corner = 0; corner < 8; ++corner) {
+                const glm::vec3 point(corner & 1 ? hi_bounds.x : lo_bounds.x, corner & 2 ? hi_bounds.y : lo_bounds.y,
+                                      corner & 4 ? hi_bounds.z : lo_bounds.z);
+                const glm::vec3 local = glm::transpose(rotation) * (point - glm::vec3(drawn[3]));
+                lo = glm::min(lo, local);
+                hi = glm::max(hi, local);
+            }
+            const glm::mat4 fitted = transform();
+            for (int axis = 0; axis < 3; ++axis) {
+                EXPECT_NEAR(glm::dot(glm::normalize(glm::vec3(fitted[axis])), rotation[axis]), 1.0f, 1e-5f);
+                EXPECT_NEAR(columnLengths(fitted)[axis] * prism_half[axis], (hi[axis] - lo[axis]) * 0.5f, 1e-3f);
+            }
+            const glm::vec3 centre = glm::transpose(rotation) * (glm::vec3(fitted[3]) - glm::vec3(drawn[3]));
+            for (int axis = 0; axis < 3; ++axis)
+                EXPECT_NEAR(centre[axis], (lo[axis] + hi[axis]) * 0.5f, 1e-3f);
+            EXPECT_EQ(scene.getCropPolygonData(polygon)->vertices, data.vertices);
+            EXPECT_EQ(scene.getCropPolygonData(polygon)->half_depth, data.half_depth);
+        };
+
+        ASSERT_TRUE(cap::fitCropPolygonToParent(manager, nullptr, polygon, false));
+        expectFittedTo(false);
+        const glm::mat4 full = transform();
+        EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_EQ(transform(), drawn);
+        ASSERT_TRUE(op::undoHistory().redo().success);
+        EXPECT_EQ(transform(), full);
+
+        ASSERT_TRUE(cap::fitCropPolygonToParent(manager, nullptr, polygon, true));
+        expectFittedTo(true);
+        EXPECT_LT(columnLengths(transform()).x * prism_half.x, columnLengths(full).x * prism_half.x * 0.5f);
+        EXPECT_EQ(op::undoHistory().undoCount(), 2u);
+
+        const glm::mat4 trimmed = transform();
+        ASSERT_TRUE(cap::resetCropPolygon(manager, nullptr, polygon));
+        const glm::mat4 reset = transform();
+        for (int axis = 0; axis < 3; ++axis) {
+            EXPECT_NEAR(columnLengths(reset)[axis], 1.0f, 1e-5f);
+            EXPECT_NEAR(glm::dot(glm::vec3(reset[axis]), rotation[axis]), 1.0f, 1e-5f);
+        }
+        EXPECT_EQ(reset[3], trimmed[3]);
+        EXPECT_EQ(op::undoHistory().undoCount(), 3u);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_EQ(transform(), trimmed);
+        EXPECT_EQ(scene.getCropPolygonData(polygon)->vertices, data.vertices);
+
+        // The polygon functions refuse other node types.
+        const auto cloud = scene.addPointCloud("Cloud", makeTestPointCloud());
+        EXPECT_FALSE(cap::fitCropPolygonToParent(manager, nullptr, cloud, false));
+        EXPECT_FALSE(cap::resetCropPolygon(manager, nullptr, parent));
+
+        // A point cloud's polygon fits to the cloud's bounds, x in [0, 1].
+        const auto cloud_polygon = scene.addCropPolygon("Cloud_crop_polygon", cloud, data);
+        ASSERT_NE(cloud_polygon, core::NULL_NODE);
+        ASSERT_TRUE(cap::fitCropPolygonToParent(manager, nullptr, cloud_polygon, false));
+        const glm::mat4 cloud_fit = scene.getNodeById(cloud_polygon)->local_transform.get();
+        EXPECT_NEAR(cloud_fit[3].x, 0.5f, 1e-5f);
+        EXPECT_NEAR(columnLengths(cloud_fit).x * prism_half.x, 0.5f, 1e-5f);
     }
 
     TEST_F(SceneManagerRenderStateTest, ViewportRequestCarriesEnabledCropPolygonsAndTheLiveTransform) {

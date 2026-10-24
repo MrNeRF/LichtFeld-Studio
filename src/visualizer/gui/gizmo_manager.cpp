@@ -1115,6 +1115,25 @@ namespace lfs::vis::gui {
             LOG_WARN("Cannot start drawing a crop polygon");
     }
 
+    void GizmoManager::fitSelectedCropPolygon(const bool use_percentile) {
+        auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
+        const core::NodeId polygon_id = sm ? sm->getSelectedNodeCropPolygonId() : core::NULL_NODE;
+        if (polygon_id == core::NULL_NODE)
+            return;
+        if (auto result = cap::fitCropPolygonToParent(*sm, viewer_->getRenderingManager(), polygon_id, use_percentile);
+            !result)
+            LOG_WARN("Failed to fit crop polygon: {}", result.error().user_message());
+    }
+
+    void GizmoManager::resetSelectedCropPolygon() {
+        auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
+        const core::NodeId polygon_id = sm ? sm->getSelectedNodeCropPolygonId() : core::NULL_NODE;
+        if (polygon_id == core::NULL_NODE)
+            return;
+        if (auto result = cap::resetCropPolygon(*sm, viewer_->getRenderingManager(), polygon_id); !result)
+            LOG_WARN("Failed to reset crop polygon: {}", result.error().user_message());
+    }
+
     void GizmoManager::setupEvents() {
         using namespace lfs::core::events;
 
@@ -1408,19 +1427,30 @@ namespace lfs::vis::gui {
                 return;
             }
 
-            auto cropbox_id = cap::resolveCropBoxId(*sm, std::nullopt);
-            if (!cropbox_id)
+            if (auto cropbox_id = cap::resolveCropBoxId(*sm, std::nullopt)) {
+                const auto* node = sm->getScene().getNodeById(*cropbox_id);
+                if (!node || !node->cropbox)
+                    return;
+
+                cap::CropBoxUpdate update;
+                update.has_inverse = true;
+                update.inverse = !node->cropbox->inverse;
+                if (auto result = cap::updateCropBox(*sm, viewer_->getRenderingManager(), *cropbox_id, update); !result) {
+                    LOG_WARN("Failed to toggle crop inverse: {}", result.error());
+                }
+                return;
+            }
+
+            const auto ellipsoid_id = cap::resolveEllipsoidId(*sm, std::nullopt);
+            const auto* const ellipsoid_node = ellipsoid_id ? sm->getScene().getNodeById(*ellipsoid_id) : nullptr;
+            if (!ellipsoid_node || !ellipsoid_node->ellipsoid)
                 return;
 
-            const auto* node = sm->getScene().getNodeById(*cropbox_id);
-            if (!node || !node->cropbox)
-                return;
-
-            cap::CropBoxUpdate update;
+            cap::EllipsoidUpdate update;
             update.has_inverse = true;
-            update.inverse = !node->cropbox->inverse;
-            if (auto result = cap::updateCropBox(*sm, viewer_->getRenderingManager(), *cropbox_id, update); !result) {
-                LOG_WARN("Failed to toggle crop inverse: {}", result.error());
+            update.inverse = !ellipsoid_node->ellipsoid->inverse;
+            if (auto result = cap::updateEllipsoid(*sm, viewer_->getRenderingManager(), *ellipsoid_id, update); !result) {
+                LOG_WARN("Failed to toggle ellipsoid inverse: {}", result.error());
             }
         });
 
@@ -3870,7 +3900,9 @@ namespace lfs::vis::gui {
         using namespace lfs::core::events;
 
         auto* sm = viewer_->getSceneManager();
-        const bool is_cropbox = sm && sm->getSelectedNodeType() == core::NodeType::CROPBOX;
+        const auto selected_type = sm ? sm->getSelectedNodeType() : core::NodeType::SPLAT;
+        const bool is_cropbox = selected_type == core::NodeType::CROPBOX;
+        const bool is_polygon = selected_type == core::NodeType::CROP_POLYGON;
 
         if (action_id == "crop.translate") {
             current_operation_ = GizmoOperation::Translate;
@@ -3881,35 +3913,27 @@ namespace lfs::vis::gui {
         } else if (action_id == "crop.apply") {
             if (is_cropbox)
                 cmd::ApplyCropBox{}.emit();
+            else if (is_polygon)
+                cmd::ApplyCropPolygon{}.emit();
             else
                 cmd::ApplyEllipsoid{}.emit();
-        } else if (action_id == "crop.fit") {
+        } else if (action_id == "crop.fit" || action_id == "crop.fit_trim") {
+            const bool use_percentile = action_id == "crop.fit_trim";
             if (is_cropbox) {
                 auto cropbox_id = cap::resolveCropBoxId(*sm, std::nullopt);
                 if (!cropbox_id)
                     return;
-                if (auto result = cap::fitCropBoxToParent(*sm, viewer_->getRenderingManager(), *cropbox_id, false);
+                if (auto result =
+                        cap::fitCropBoxToParent(*sm, viewer_->getRenderingManager(), *cropbox_id, use_percentile);
                     !result) {
                     LOG_WARN("Failed to fit cropbox: {}", result.error());
                 }
+            } else if (is_polygon) {
+                fitSelectedCropPolygon(use_percentile);
             } else {
-                cmd::FitEllipsoidToScene{.use_percentile = false}.emit();
-            }
-        } else if (action_id == "crop.fit_trim") {
-            if (is_cropbox) {
-                auto cropbox_id = cap::resolveCropBoxId(*sm, std::nullopt);
-                if (!cropbox_id)
-                    return;
-                if (auto result = cap::fitCropBoxToParent(*sm, viewer_->getRenderingManager(), *cropbox_id, true);
-                    !result) {
-                    LOG_WARN("Failed to trim-fit cropbox: {}", result.error());
-                }
-            } else {
-                cmd::FitEllipsoidToScene{.use_percentile = true}.emit();
+                cmd::FitEllipsoidToScene{.use_percentile = use_percentile}.emit();
             }
         } else if (action_id == "crop.invert") {
-            if (!is_cropbox)
-                return;
             cmd::ToggleCropInverse{}.emit();
         } else if (action_id == "crop.reset") {
             if (is_cropbox) {
@@ -3919,14 +3943,17 @@ namespace lfs::vis::gui {
                 if (auto result = cap::resetCropBox(*sm, viewer_->getRenderingManager(), *cropbox_id); !result) {
                     LOG_WARN("Failed to reset cropbox: {}", result.error());
                 }
+            } else if (is_polygon) {
+                resetSelectedCropPolygon();
             } else {
                 cmd::ResetEllipsoid{}.emit();
             }
         } else if (action_id == "crop.delete") {
             if (!sm)
                 return;
-            const core::NodeId id = is_cropbox ? sm->getSelectedNodeCropBoxId()
-                                               : sm->getSelectedNodeEllipsoidId();
+            const core::NodeId id = is_cropbox   ? sm->getSelectedNodeCropBoxId()
+                                    : is_polygon ? sm->getSelectedNodeCropPolygonId()
+                                                 : sm->getSelectedNodeEllipsoidId();
             if (id == core::NULL_NODE)
                 return;
             const auto* node = sm->getScene().getNodeById(id);

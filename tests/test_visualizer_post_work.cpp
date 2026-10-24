@@ -2682,6 +2682,45 @@ contract["check_selection_submode_follows_native_mode"](lf)
         op::undoHistory().clear();
     }
 
+    // The pie menu offers the crop actions for every crop shape, and Invert flips
+    // the selected polygon or ellipsoid in one undo step, as it does for a box.
+    TEST_F(VisualizerImplResetTest, CropPieInvertTogglesPolygonAndEllipsoidWithUndo) {
+        for (const std::string shape : {"polygon", "ellipsoid"}) {
+            SCOPED_TRACE(shape);
+            VisualizerImpl viewer(projectOptions());
+            auto& scene = viewer.getScene();
+            auto* manager = viewer.getSceneManager();
+            const auto target = scene.addSplat("target", lfs::test::licht::make_splat(4));
+            lfs::core::CropPolygonData polygon;
+            polygon.vertices = {{-0.5f, -0.5f}, {0.5f, -0.5f}, {0.5f, 0.5f}, {-0.5f, 0.5f}};
+            polygon.half_depth = 0.5f;
+            const auto volume = shape == "polygon" ? scene.addCropPolygon("volume", target, polygon)
+                                                   : scene.addEllipsoid("volume", target);
+            ASSERT_NE(volume, lfs::core::NULL_NODE);
+            const auto inverse = [&] {
+                const auto* node = scene.getNodeById(volume);
+                return shape == "polygon" ? node->crop_polygon->inverse : node->ellipsoid->inverse;
+            };
+            manager->selectNode(volume);
+            viewer.getEditorContext().update(manager, viewer.getTrainerManager());
+            op::undoHistory().clear();
+
+            // Nine crop items; sector i is centred at -90 + 40 i degrees, and Invert is the seventh.
+            auto& gizmo = viewer.getGuiManager()->gizmo();
+            const glm::vec2 centre(400.0f, 300.0f);
+            const float angle = glm::radians(-90.0f + 6.0f * 40.0f);
+            gizmo.openPieMenu(centre);
+            gizmo.onPieMenuClick(centre + 60.0f * glm::vec2(std::cos(angle), std::sin(angle)));
+            EXPECT_FALSE(gizmo.isPieMenuOpen());
+            EXPECT_TRUE(inverse());
+            EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+            ASSERT_TRUE(op::undoHistory().undo().success);
+            EXPECT_FALSE(inverse());
+            UnifiedToolRegistry::instance().setActiveTool("");
+            op::undoHistory().clear();
+        }
+    }
+
     TEST_F(VisualizerImplResetTest, CropToolRejectsUnrepresentableParentTransformWithoutMutation) {
         VisualizerImpl viewer(projectOptions());
         ASSERT_NE(viewer.getGuiManager(), nullptr);

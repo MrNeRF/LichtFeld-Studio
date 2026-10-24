@@ -4577,9 +4577,8 @@ namespace lfs::python {
                 if (auto* const gui = lfs::python::get_gui_manager()) {
                     const auto shape = gui->gizmo().cropToolShape();
                     if (shape == "polygon") {
-                        return; // The polygon keeps its drawn outline.
-                    }
-                    if (shape == "ellipsoid") {
+                        gui->gizmo().fitSelectedCropPolygon(use_percentile);
+                    } else if (shape == "ellipsoid") {
                         lfs::core::events::cmd::FitEllipsoidToScene{.use_percentile = use_percentile}.emit();
                     } else {
                         lfs::core::events::cmd::FitCropBoxToScene{.use_percentile = use_percentile}.emit();
@@ -4595,9 +4594,8 @@ namespace lfs::python {
                 if (auto* const gui = lfs::python::get_gui_manager()) {
                     const auto shape = gui->gizmo().cropToolShape();
                     if (shape == "polygon") {
-                        return; // The polygon keeps its drawn outline.
-                    }
-                    if (shape == "ellipsoid") {
+                        gui->gizmo().resetSelectedCropPolygon();
+                    } else if (shape == "ellipsoid") {
                         lfs::core::events::cmd::ResetEllipsoid{}.emit();
                     } else {
                         lfs::core::events::cmd::ResetCropBox{}.emit();

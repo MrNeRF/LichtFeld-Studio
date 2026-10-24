@@ -872,7 +872,7 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
     assert state.calls[-1] == ("delete_crop_tool_volume",)
 
 
-def test_crop_polygon_button_starts_drawing_and_disables_fit_and_reset(toolbar_module, monkeypatch):
+def test_crop_polygon_button_starts_drawing_and_enables_fit_and_reset(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
     lf_stub = sys.modules["lichtfeld"]
     state = SimpleNamespace(active_tool="builtin.cropbox", gizmo_type="translate", calls=[], crop_shape="box")
@@ -913,6 +913,10 @@ def test_crop_polygon_button_starts_drawing_and_disables_fit_and_reset(toolbar_m
     monkeypatch.setattr(lf_stub.ui, "start_crop_polygon", lambda: state.calls.append(("start_crop_polygon",)), raising=False)
     monkeypatch.setattr(lf_stub.ui, "add_cropbox", lambda name: state.calls.append(("add_cropbox", name)), raising=False)
     monkeypatch.setattr(lf_stub.ui, "apply_crop_tool", lambda: state.calls.append(("apply_crop_tool",)), raising=False)
+    monkeypatch.setattr(
+        lf_stub.ui, "fit_crop_tool", lambda trimmed: state.calls.append(("fit_crop_tool", trimmed)), raising=False
+    )
+    monkeypatch.setattr(lf_stub.ui, "reset_crop_tool", lambda: state.calls.append(("reset_crop_tool",)), raising=False)
     monkeypatch.setattr(lf_stub.ui, "delete_crop_tool_volume", lambda: state.calls.append(("delete_crop_tool_volume",)), raising=False)
     monkeypatch.setattr(module.ToolRegistry, "get_all", staticmethod(lambda: [crop_tool]), raising=False)
     monkeypatch.setattr(
@@ -941,16 +945,25 @@ def test_crop_polygon_button_starts_drawing_and_disables_fit_and_reset(toolbar_m
     assert next(button for button in snapshot["crop_object_buttons"] if button["value"] == "polygon")["selected"] is True
     actions = {button["action"]: button["enabled"] for button in snapshot["crop_action_buttons"]}
     assert actions == {
-        "crop_fit": False,
-        "crop_trim": False,
-        "crop_reset": False,
+        "crop_fit": True,
+        "crop_trim": True,
+        "crop_reset": True,
         "crop_apply": True,
         "crop_delete": True,
     }
 
+    controller.dispatch("crop_fit", "")
+    controller.dispatch("crop_trim", "")
+    controller.dispatch("crop_reset", "")
     controller.dispatch("crop_apply", "")
     controller.dispatch("crop_delete", "")
-    assert state.calls[-2:] == [("apply_crop_tool",), ("delete_crop_tool_volume",)]
+    assert state.calls[-5:] == [
+        ("fit_crop_tool", False),
+        ("fit_crop_tool", True),
+        ("reset_crop_tool",),
+        ("apply_crop_tool",),
+        ("delete_crop_tool_volume",),
+    ]
 
     # A selected polygon node reopens the tool on the polygon shape.
     polygon_node = SimpleNamespace(id=2, name="Model_crop_polygon", type=SimpleNamespace(name="CROP_POLYGON"), children=())

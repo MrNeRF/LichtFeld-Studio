@@ -214,6 +214,20 @@ namespace lfs::vis::cap {
         core::NodeId polygon_id,
         const CropPolygonUpdate& update);
 
+    // Keeps the outline and the node's rotation; scales each local axis and moves
+    // the prism so its local box is the parent's bounds (the trimmed bounds with
+    // use_percentile) seen from the unscaled polygon frame. One history entry.
+    [[nodiscard]] LFS_VIS_API lfs::Result<void> fitCropPolygonToParent(
+        SceneManager& scene_manager,
+        RenderingManager* rendering_manager,
+        core::NodeId polygon_id,
+        bool use_percentile);
+    // Back to the drawn size, scale 1 on every axis, keeping position and rotation.
+    [[nodiscard]] LFS_VIS_API lfs::Result<void> resetCropPolygon(
+        SceneManager& scene_manager,
+        RenderingManager* rendering_manager,
+        core::NodeId polygon_id);
+
     // Adds an enabled polygon under a splat in one history entry, replacing the
     // splat's existing crop box, ellipsoid or polygon.
     [[nodiscard]] LFS_VIS_API lfs::Result<core::NodeId> createCropPolygon(

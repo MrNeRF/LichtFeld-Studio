@@ -289,6 +289,61 @@ namespace lfs::vis::cap {
                 rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
         }
 
+        [[nodiscard]] lfs::Result<void> crop_polygon_failure(const lfs::ErrorCode code, std::string message) {
+            return lfs::Result<void>::failure(crop_polygon_error(code, std::move(message)));
+        }
+
+        [[nodiscard]] const core::SceneNode* find_crop_polygon(const core::Scene& scene, const core::NodeId polygon_id) {
+            const auto* const node = scene.getNodeById(polygon_id);
+            return node && node->type == core::NodeType::CROP_POLYGON && node->crop_polygon ? node : nullptr;
+        }
+
+        // The polygon node's transform without its scale: the frame its outline was drawn in.
+        [[nodiscard]] std::optional<glm::mat4> unscaled_crop_polygon_frame(const glm::mat4& transform) {
+            glm::mat4 frame = transform;
+            for (int axis = 0; axis < 3; ++axis) {
+                const float length = glm::length(glm::vec3(frame[axis]));
+                if (!std::isfinite(length) || !(length > 0.0f))
+                    return std::nullopt;
+                frame[axis] /= length;
+            }
+            return frame;
+        }
+
+        // A crop polygon edit as one history entry: its data and node transform change together.
+        [[nodiscard]] lfs::Result<void> commit_crop_polygon_edit(SceneManager& scene_manager,
+                                                                 RenderingManager* rendering_manager,
+                                                                 const core::SceneNode& node,
+                                                                 const core::CropPolygonData& data,
+                                                                 const glm::mat4& transform) {
+            for (int column = 0; column < 4; ++column) {
+                for (int row = 0; row < 4; ++row) {
+                    if (!std::isfinite(transform[column][row]))
+                        return crop_polygon_failure(lfs::ErrorCode::InvalidArgument,
+                                                    "The crop polygon transform is not finite");
+                }
+            }
+
+            auto& scene = scene_manager.getScene();
+            const std::string name = node.name;
+            const auto before_data = *node.crop_polygon;
+            const glm::mat4 before_transform = scene_manager.getNodeTransform(name);
+            const bool show_before = node.visible;
+            if (!scene.setCropPolygonData(node.id, data))
+                return crop_polygon_failure(lfs::ErrorCode::InvalidArgument,
+                                            "The crop polygon outline or depth is degenerate");
+            scene_manager.setNodeTransform(name, transform);
+            scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
+            if (rendering_manager)
+                rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
+
+            auto entry = std::make_unique<vis::op::CropPolygonUndoEntry>(
+                scene_manager, name, before_data, before_transform, show_before);
+            if (entry->hasChanges())
+                vis::op::undoHistory().push(std::move(entry));
+            return {};
+        }
+
         [[nodiscard]] bool is_float_nx3(const core::Tensor& tensor) {
             return tensor.is_valid() &&
                    tensor.ndim() == 2 &&
@@ -2017,6 +2072,71 @@ namespace lfs::vis::cap {
             vis::op::undoHistory().push(std::move(entry));
 
         return {};
+    }
+
+    lfs::Result<void> fitCropPolygonToParent(SceneManager& scene_manager,
+                                             RenderingManager* rendering_manager,
+                                             const core::NodeId polygon_id,
+                                             const bool use_percentile) {
+        auto& scene = scene_manager.getScene();
+        const auto* const polygon_node = find_crop_polygon(scene, polygon_id);
+        if (!polygon_node)
+            return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "Invalid crop polygon target");
+
+        const auto* const parent = scene.getNodeById(polygon_node->parent_id);
+        if (!parent)
+            return crop_polygon_failure(lfs::ErrorCode::NotFound, "Crop polygon parent not found");
+
+        glm::vec3 min_bounds, max_bounds;
+        bool bounds_valid = false;
+        if (parent->type == core::NodeType::SPLAT && parent->model && parent->model->size() > 0) {
+            bounds_valid = core::compute_bounds(*parent->model, min_bounds, max_bounds, 0.0f, use_percentile);
+        } else if (parent->type == core::NodeType::POINTCLOUD && parent->point_cloud && parent->point_cloud->size() > 0) {
+            bounds_valid = core::compute_bounds(*parent->point_cloud, min_bounds, max_bounds, 0.0f, use_percentile);
+        }
+        if (!bounds_valid)
+            return crop_polygon_failure(lfs::ErrorCode::FailedPrecondition, "Cannot compute bounds for node: " + parent->name);
+
+        const auto frame = unscaled_crop_polygon_frame(scene_manager.getNodeTransform(polygon_node->name));
+        if (!frame)
+            return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "The crop polygon transform is singular");
+
+        // The parent's bounds corners seen from the unscaled polygon frame; their box is the new prism box.
+        const glm::mat4 frame_from_parent = glm::inverse(*frame);
+        glm::vec3 lo(std::numeric_limits<float>::max());
+        glm::vec3 hi(std::numeric_limits<float>::lowest());
+        for (int corner = 0; corner < 8; ++corner) {
+            const glm::vec3 point((corner & 1) ? max_bounds.x : min_bounds.x,
+                                  (corner & 2) ? max_bounds.y : min_bounds.y,
+                                  (corner & 4) ? max_bounds.z : min_bounds.z);
+            const glm::vec3 local(frame_from_parent * glm::vec4(point, 1.0f));
+            lo = glm::min(lo, local);
+            hi = glm::max(hi, local);
+        }
+
+        const auto& polygon = *polygon_node->crop_polygon;
+        const glm::vec3 prism_half_extents(core::crop_polygon::outlineHalfExtents(polygon.vertices), polygon.half_depth);
+        const glm::vec3 fitted_half_extents =
+            glm::max((hi - lo) * 0.5f, glm::vec3(core::crop_polygon::kMinHalfDepth));
+        glm::mat4 fitted = *frame;
+        fitted[3] = *frame * glm::vec4((lo + hi) * 0.5f, 1.0f);
+        for (int axis = 0; axis < 3; ++axis)
+            fitted[axis] *= fitted_half_extents[axis] / prism_half_extents[axis];
+        return commit_crop_polygon_edit(scene_manager, rendering_manager, *polygon_node, polygon, fitted);
+    }
+
+    lfs::Result<void> resetCropPolygon(SceneManager& scene_manager,
+                                       RenderingManager* rendering_manager,
+                                       const core::NodeId polygon_id) {
+        const auto* const polygon_node = find_crop_polygon(scene_manager.getScene(), polygon_id);
+        if (!polygon_node)
+            return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "Invalid crop polygon target");
+
+        const auto frame = unscaled_crop_polygon_frame(scene_manager.getNodeTransform(polygon_node->name));
+        if (!frame)
+            return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "The crop polygon transform is singular");
+        return commit_crop_polygon_edit(scene_manager, rendering_manager, *polygon_node, *polygon_node->crop_polygon,
+                                        *frame);
     }
 
     lfs::Result<core::NodeId> createCropPolygon(SceneManager& scene_manager,

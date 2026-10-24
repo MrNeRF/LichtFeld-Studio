@@ -836,8 +836,6 @@ class _GizmoToolbarController:
 
     def _build_crop_action_records(self, active_tool_id):
         active = active_tool_id == self._CROP_TOOL_ID
-        # A drawn polygon has no fit or reset; it keeps its outline.
-        reshapable = active and self._active_crop_shape() != "polygon"
         return [
             _button_record(
                 "crop-fit",
@@ -846,7 +844,7 @@ class _GizmoToolbarController:
                 _icon_src("arrows-maximize"),
                 tooltip_key="scene.fit_to_scene",
                 tooltip_text="Fit to Scene",
-                enabled=reshapable,
+                enabled=active,
             ),
             _button_record(
                 "crop-trim",
@@ -855,7 +853,7 @@ class _GizmoToolbarController:
                 _icon_src("arrows-minimize"),
                 tooltip_key="scene.fit_to_scene_trimmed",
                 tooltip_text="Fit to Scene (Trimmed)",
-                enabled=reshapable,
+                enabled=active,
             ),
             _button_record(
                 "crop-reset",
@@ -864,7 +862,7 @@ class _GizmoToolbarController:
                 _icon_src("reset"),
                 tooltip_key="scene.reset_crop",
                 tooltip_text="Reset",
-                enabled=reshapable,
+                enabled=active,
             ),
             _button_record(
                 "crop-apply",
