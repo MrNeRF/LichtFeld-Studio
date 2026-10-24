@@ -20,6 +20,7 @@
   "io.dataset_image_unreadable_many": "Impossible de lire {} images du jeu de données (exemples : {}). Leurs caméras restent dans la scène, mais leur utilisation peut faire échouer l’entraînement.",
   "training.unreadable_image": "Une image d’entraînement n’a pas pu être lue. Ouvrez Détails pour voir le fichier et l’erreur du décodeur.",
   "training.reset_before_strategy_change": "Réinitialisez l’entraînement avant de changer de stratégie.",
+  "training.reset_before_param_change": "Réinitialisez l’entraînement avant de changer {}.",
   "io.mesh_no_triangle_faces": "Le fichier de maillage ne contient aucune face triangulaire.",
   "io.no_finite_seed_points": "Le nuage de points ne contient aucun point initial fini. Une initialisation aléatoire sera utilisée.",
   "io.dataset_camera_invalid_focal": "{} caméra(s) du jeu de données ont été ignorées car leur focale est nulle, négative ou non finie (exemples : {}).",

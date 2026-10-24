@@ -20,6 +20,7 @@
   "io.dataset_image_unreadable_many": "Nie można odczytać {} obrazów zestawu danych (przykłady: {}). Ich kamery pozostają w scenie, ale użycie tych obrazów może spowodować niepowodzenie treningu.",
   "training.unreadable_image": "Nie można odczytać obrazu treningowego. Otwórz Szczegóły, aby zobaczyć plik i błąd dekodera.",
   "training.reset_before_strategy_change": "Zresetuj trening przed zmianą strategii.",
+  "training.reset_before_param_change": "Zresetuj trening przed zmianą {}.",
   "io.mesh_no_triangle_faces": "Plik siatki nie zawiera trójkątnych ścian.",
   "io.no_finite_seed_points": "Chmura punktów nie zawiera punktów początkowych o skończonych współrzędnych. Zostanie użyta losowa inicjalizacja.",
   "io.dataset_camera_invalid_focal": "Pominięto {} kamer(y) zbioru danych z zerową, ujemną lub nieskończoną ogniskową (przykłady: {}).",
