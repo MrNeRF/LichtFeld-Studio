@@ -77,11 +77,16 @@ LFS_HIP_API int lfs_hip_marker_record(LfsHipContext*, LfsHipReadback*, LfsHipErr
 LFS_HIP_API int lfs_hip_readback_reserve(LfsHipContext*, LfsHipReadback*, size_t bytes, uint64_t* host, LfsHipError*);
 LFS_HIP_API int lfs_hip_readback_append(LfsHipContext*, LfsHipReadback*, const LfsHipBuffer*, size_t source_offset, size_t bytes, size_t destination_offset, LfsHipError*);
 LFS_HIP_API int lfs_hip_readback_wait(LfsHipContext*, LfsHipReadback*, LfsHipError*);
-/* Poll does not block. A non-null destination must have space for the bytes
- * requested by enqueue/upload, or the reservation size for packed readback.
+/* Poll does not block. destination_bytes must describe the writable destination
+ * extent; an insufficient extent fails without consuming the snapshot.
  * Completion is consumed only on success with ready=1; idle slots return 0.
- * wait alone does not consume completion or permit staging reuse. */
-LFS_HIP_API int lfs_hip_readback_poll(LfsHipContext*, LfsHipReadback*, void* destination, int32_t* ready, LfsHipError*);
+ * wait alone does not consume completion or permit staging reuse. A copy error
+ * stays latched: wait/poll report it and never return a successful snapshot.
+ * Once drained, poll(nullptr, 0) discards a failed result, returning that error
+ * with ready=0; the slot may then be reused. Event-record errors alone do not
+ * invalidate an accepted copy, whose completion is checked through the stream.
+ * Borrowed host subranges may overlap upload sources or poll destinations. */
+LFS_HIP_API int lfs_hip_readback_poll(LfsHipContext*, LfsHipReadback*, void* destination, size_t destination_bytes, int32_t* ready, LfsHipError*);
 LFS_HIP_API int lfs_hip_readback_destroy(LfsHipContext*, LfsHipReadback*, LfsHipError*);
 LFS_HIP_API int lfs_hip_fill_f32(LfsHipContext* context, LfsHipBuffer* buffer, size_t offset, size_t count, float value, LfsHipError* error);
 LFS_HIP_API int lfs_hip_affine_f32(LfsHipContext* context, const LfsHipBuffer* input, LfsHipBuffer* output, size_t count, float scale, float bias, LfsHipError* error);

@@ -19,6 +19,7 @@ struct LfsHipReadback {
     void* host = nullptr;
     size_t capacity = 0, bytes = 0, reserved_bytes = 0;
     hipEvent_t completion = nullptr;
+    hipError_t copy_error = hipSuccess;
     bool pending = false, recorded = false;
 };
 
@@ -314,10 +315,13 @@ int lfs_hip_readback_enqueue(LfsHipContext* context, LfsHipReadback* staging, co
         staging->bytes = bytes;
         staging->reserved_bytes = 0;
         staging->recorded = false;
+        staging->copy_error = hipSuccess;
         // Even an event-record failure must leave the copy owned until drained.
         staging->pending = true;
-        if (bytes)
-            check(hipMemcpyAsync(staging->host, static_cast<const char*>(source->data) + offset, bytes, hipMemcpyDeviceToHost, context->stream));
+        if (bytes) {
+            staging->copy_error = hipMemcpyAsync(staging->host, static_cast<const char*>(source->data) + offset, bytes, hipMemcpyDeviceToHost, context->stream);
+            check(staging->copy_error);
+        }
         check(hipEventRecord(staging->completion, context->stream));
         staging->recorded = true;
     });
@@ -334,13 +338,16 @@ int lfs_hip_staged_upload(LfsHipContext* context, LfsHipReadback* staging, LfsHi
         DeviceScope device(context->device);
         ensure_staging_capacity(staging, bytes);
         if (bytes)
-            std::memcpy(staging->host, source, bytes);
+            std::memmove(staging->host, source, bytes);
         staging->bytes = bytes;
         staging->reserved_bytes = 0;
         staging->recorded = false;
+        staging->copy_error = hipSuccess;
         staging->pending = true;
-        if (bytes)
-            check(hipMemcpyAsync(static_cast<char*>(destination->data) + offset, staging->host, bytes, hipMemcpyHostToDevice, context->stream));
+        if (bytes) {
+            staging->copy_error = hipMemcpyAsync(static_cast<char*>(destination->data) + offset, staging->host, bytes, hipMemcpyHostToDevice, context->stream);
+            check(staging->copy_error);
+        }
         check(hipEventRecord(staging->completion, context->stream));
         staging->recorded = true;
     });
@@ -373,6 +380,7 @@ int lfs_hip_readback_reserve(LfsHipContext* context, LfsHipReadback* staging, si
 int lfs_hip_readback_append(LfsHipContext* context, LfsHipReadback* staging, const LfsHipBuffer* source, size_t offset, size_t bytes, size_t destination_offset, LfsHipError* error) {
     return boundary(error, [&] {
         validate_readback(context, staging);
+        require(staging->copy_error == hipSuccess, "Discard failed HIP readback before appending");
         validate(context, source, offset, bytes);
         require(staging->reserved_bytes && destination_offset <= staging->reserved_bytes && bytes <= staging->reserved_bytes - destination_offset,
                 "HIP packed readback range exceeds reserved host slot");
@@ -380,8 +388,10 @@ int lfs_hip_readback_append(LfsHipContext* context, LfsHipReadback* staging, con
         staging->bytes = staging->reserved_bytes;
         staging->pending = true;
         staging->recorded = false;
-        if (bytes)
-            check(hipMemcpyAsync(static_cast<char*>(staging->host) + destination_offset, static_cast<const char*>(source->data) + offset, bytes, hipMemcpyDeviceToHost, context->stream));
+        if (bytes) {
+            staging->copy_error = hipMemcpyAsync(static_cast<char*>(staging->host) + destination_offset, static_cast<const char*>(source->data) + offset, bytes, hipMemcpyDeviceToHost, context->stream);
+            check(staging->copy_error);
+        }
         check(hipEventRecord(staging->completion, context->stream));
         staging->recorded = true;
     });
@@ -390,24 +400,37 @@ int lfs_hip_readback_wait(LfsHipContext* context, LfsHipReadback* staging, LfsHi
     return boundary(error, [&] {
         validate_readback(context, staging);
         DeviceScope device(context->device);
-        if (staging->pending)
+        if (staging->pending) {
             check(staging->recorded ? hipEventSynchronize(staging->completion) : hipStreamSynchronize(context->stream));
+            check(staging->copy_error);
+        }
     });
 }
-int lfs_hip_readback_poll(LfsHipContext* context, LfsHipReadback* staging, void* destination, int32_t* ready, LfsHipError* error) {
+int lfs_hip_readback_poll(LfsHipContext* context, LfsHipReadback* staging, void* destination, size_t destination_bytes, int32_t* ready, LfsHipError* error) {
     return boundary(error, [&] {
         require(ready, "Missing HIP readback readiness output");
         *ready = 0;
         validate_readback(context, staging);
         if (!staging->pending)
             return;
+        require(!destination || destination_bytes >= staging->bytes, "HIP readback destination is too small");
         DeviceScope device(context->device);
         const auto status = staging->recorded ? hipEventQuery(staging->completion) : hipStreamQuery(context->stream);
         if (status == hipErrorNotReady)
             return;
         check(status);
+        if (staging->copy_error != hipSuccess) {
+            const auto copy_error = staging->copy_error;
+            // Draining a failed copy must never expose stale or partial bytes.
+            // A null poll discards the failed result, but still reports its error.
+            if (!destination) {
+                staging->pending = false;
+                staging->copy_error = hipSuccess;
+            }
+            check(copy_error);
+        }
         if (destination && staging->bytes)
-            std::memcpy(destination, staging->host, staging->bytes);
+            std::memmove(destination, staging->host, staging->bytes);
         staging->pending = false;
         *ready = 1;
     });
