@@ -752,7 +752,11 @@ TEST(CollisionVoxelization, ParallelBricksMatchSerialIncludingPartialBoundaryCel
     settings.applyPreset(CollisionPreset::Object);
     settings.voxel_size = 0.07f;
     const auto serial = collision_detail::voxelizeSparse(source, settings, {}, {}, 1);
-    const auto parallel = collision_detail::voxelizeSparse(source, settings, {}, {}, 4);
+    std::vector<float> values;
+    const auto parallel = collision_detail::voxelizeSparse(source, settings, {}, recordProgress(values), 4);
+    ASSERT_FALSE(values.empty());
+    EXPECT_FLOAT_EQ(values.front(), 0);
+    EXPECT_FLOAT_EQ(values.back(), 1);
     ASSERT_EQ(serial.origin, parallel.origin);
     sameOccupancy(serial, parallel);
     try {
