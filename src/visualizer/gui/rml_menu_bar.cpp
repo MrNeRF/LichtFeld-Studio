@@ -2012,7 +2012,7 @@ namespace lfs::vis::gui {
                 {NavMode::Trackball, "world", 1},
                 {NavMode::FPV, "camera-fpv", 2},
                 {NavMode::Drone, "drone", 3},
-                {NavMode::Walk, "camera-fpv", 4},
+                {NavMode::Walk, "walk", 4},
             };
             const auto mode = ic->cameraNavigationMode();
             for (const auto& spec : kNavButtons) {

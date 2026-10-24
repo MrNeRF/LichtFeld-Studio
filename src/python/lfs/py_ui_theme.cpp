@@ -163,7 +163,7 @@ namespace lfs::python {
                                                 const auto& scene = manager->getScene();
                                                 const core::SceneNode* target = nullptr;
                                                 auto choose = [&](const core::SceneNode* node) {
-                                                    if (!node || !node->collision)
+                                                    if (!node || (!node->collision && !node->mesh))
                                                         return;
                                                     if (target)
                                                         throw std::runtime_error("Select one collision node in the scene graph to export.");
@@ -173,7 +173,8 @@ namespace lfs::python {
                                                     choose(scene.getNodeById(id));
                                                 if (!target)
                                                     for (const auto* node : scene.getNodes())
-                                                        choose(node);
+                                                        if (node->collision)
+                                                            choose(node);
                                                 if (!target)
                                                     throw std::runtime_error("No collision node exists. Generate one in Tools > Collision first.");
                                                 vis::gui::requestCollisionExport(target->uuid);
