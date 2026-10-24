@@ -286,6 +286,7 @@ namespace {
         case lfs::training::Family::Lpips: return table.lpips != nullptr;
         case lfs::training::Family::Structure: return table.structure != nullptr;
         case lfs::training::Family::Blob: return table.blob != nullptr;
+        case lfs::training::Family::Popspa: return table.popspa != nullptr;
         case lfs::training::Family::Count: return false;
         }
         return false;
@@ -2023,6 +2024,57 @@ namespace {
         return out;
     }
 
+    Capture capture_popspa(GpuBackend backend) {
+        Capture out;
+        const auto* table = lfs::training::training_ops(backend).popspa;
+        constexpr size_t n = 257;
+        std::vector<bool> active(n), frozen(n);
+        size_t active_count = 0;
+        size_t frozen_count = 0;
+        for (size_t i = 0; i < n; ++i) {
+            active[i] = i % 7 != 3;
+            frozen[i] = active[i] && i % 29 == 5;
+            active_count += active[i];
+            frozen_count += frozen[i];
+        }
+        const auto active_t = Tensor::from_vector(active, {n}, Device::GPU);
+        const auto frozen_t = Tensor::from_vector(frozen, {n}, Device::GPU);
+        const size_t k = (frozen_count + active_count) / 2;
+
+        // Few distinct scores force ties, broken by row id; the large ones differ only below
+        // float precision. Every value is exact in both score encodings.
+        auto scores = Tensor::empty({n, 8}, Device::CPU, DataType::UInt8);
+        for (size_t i = 0; i < n; ++i) {
+            const auto bucket = static_cast<int>((i * 37 + 11) % 9);
+            const double value = bucket < 6 ? bucket * 0.25 : 1.0e8 + 0.125 * (bucket - 6);
+            lfs::gpu_ops::encode_pop_score(value, static_cast<uint8_t*>(scores.data_ptr()) + 8 * i, table->score_encoding);
+        }
+        Tensor kept;
+        table->keep_indices(scores.gpu(), active_t, frozen_t, k, kept);
+        keep(out.snapshot, backend, "popspa.keep", kept, kExact);
+
+        const auto raw = pattern({n, 1}, 4.f, 3);
+        auto z = Tensor::zeros({n, 1}, Device::GPU);
+        auto u = pattern({n, 1}, 0.05f, 9) + 0.05f;
+        table->project(raw, z, u, active_t, frozen_t, k, true);
+        keep(out.snapshot, backend, "popspa.project.z", z, kReduce);
+        keep(out.snapshot, backend, "popspa.project.u", u, kReduce);
+
+        auto grad = Tensor::full({n, 1}, 0.25f, Device::GPU);
+        auto loss = Tensor::full({1}, 2.f, Device::GPU);
+        table->penalty(raw, z, u, active_t, frozen_t, grad, loss, 0.3f);
+        keep(out.snapshot, backend, "popspa.penalty.grad", grad, kReduce);
+        keep(out.snapshot, backend, "popspa.penalty.loss", loss, kReduce);
+
+        const auto log_scales = pattern({n, 3}, 2.f, 13) - 1.f;
+        auto scale_grad = Tensor::zeros({n, 3}, Device::GPU);
+        auto rank_loss = Tensor::zeros({1}, Device::GPU);
+        table->effective_rank(log_scales, scale_grad, active_t, frozen_t, rank_loss, active_count, 0.01f, 1.f, 1e-7f);
+        keep(out.snapshot, backend, "popspa.effective_rank.grad", scale_grad, kReduce);
+        keep(out.snapshot, backend, "popspa.effective_rank.loss", rank_loss, kReduce);
+        return out;
+    }
+
     Capture capture(lfs::training::Family family, GpuBackend backend) {
         const lfs::test::DefaultGpuBackendForTesting session(backend);
         if (!session.switched()) {
@@ -2050,6 +2102,7 @@ namespace {
         case lfs::training::Family::Session: return capture_session(backend);
         case lfs::training::Family::Structure: return capture_structure(backend);
         case lfs::training::Family::Blob: return capture_blob(backend);
+        case lfs::training::Family::Popspa: return capture_popspa(backend);
         case lfs::training::Family::Count: break;
         }
         Capture out;
@@ -2961,7 +3014,8 @@ namespace {
                                lfs::training::Family::SharedImage,
                                lfs::training::Family::Lpips,
                                lfs::training::Family::Structure,
-                               lfs::training::Family::Blob),
+                               lfs::training::Family::Blob,
+                               lfs::training::Family::Popspa),
                            ::testing::Values(GpuBackend::Vulkan, GpuBackend::Metal)),
         [](const ::testing::TestParamInfo<TrainingOpsFamilyParity::ParamType>& info) {
             return std::string(lfs::training::training_family_name(std::get<0>(info.param))) + "_" +
