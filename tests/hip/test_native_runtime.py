@@ -284,8 +284,9 @@ class RuntimeContract(unittest.TestCase):
                 (operations["AddScalar"], View(buffer, 0), View(), View(buffer, 0), c.c_size_t(-1).value),
                 (0xFFFFFFFF, View(buffer, 0), View(), View(buffer, 0), 8),
             ]
-            for operation, lhs, rhs, output, count in invalid:
-                self.assertNotEqual(self.calls["pointwise_f32"](context, operation, lhs, rhs, output, count, 2, c.byref(error)), 0)
+            for storage in ("f32", "f16"):
+                for operation, lhs, rhs, output, count in invalid:
+                    self.assertNotEqual(self.calls["pointwise_" + storage](context, operation, lhs, rhs, output, count, 2, c.byref(error)), 0)
             actual = (c.c_float * 16)()
             self.checked("download", context, buffer, 0, actual, c.sizeof(actual))
             self.assertEqual(list(actual), [3] * 16)
@@ -297,15 +298,30 @@ class RuntimeContract(unittest.TestCase):
     def test_pointwise_special_values_and_device_movement(self):
         operations = pointwise_operations()
         with self.staging_resources(size=8192, slots=0) as (context, buffer, _):
-            source = (c.c_float * 6)(-0.0, 0.0, -3, 2, float("nan"), float("inf"))
-            for operation in ("Relu", "Sign"):
-                self.checked("upload", context, buffer, 0, source, c.sizeof(source))
-                self.checked("pointwise_f32", context, operations[operation], View(buffer, 0), View(), View(buffer, 0), 6, 0)
-                actual = (c.c_float * 6)()
-                self.checked("download", context, buffer, 0, actual, c.sizeof(actual))
-                self.assertEqual(math.copysign(1, actual[0]), -1 if operation == "Relu" else 1)
-                self.assertTrue(math.isnan(actual[4]))
-                self.assertEqual(actual[2], 0 if operation == "Relu" else -1)
+            values = (-0.0, 0.0, -3, 2, float("nan"), float("inf"))
+            for storage, encoding in (("f32", "f"), ("f16", "e")):
+                raw = b"".join(struct.pack("<" + encoding, x) for x in values)
+                source = c.create_string_buffer(raw)
+                for operation in ("Relu", "Sign"):
+                    with self.subTest(storage=storage, operation=operation):
+                        self.checked("upload", context, buffer, 0, source, len(raw))
+                        self.checked("pointwise_" + storage, context, operations[operation], View(buffer, 0), View(), View(buffer, 0), 6, 0)
+                        actual = (c.c_ubyte * len(raw))()
+                        self.checked("download", context, buffer, 0, actual, len(actual))
+                        decoded = [x[0] for x in struct.iter_unpack("<" + encoding, bytes(actual))]
+                        self.assertEqual(math.copysign(1, decoded[0]), -1 if operation == "Relu" else 1)
+                        self.assertTrue(math.isnan(decoded[4]))
+                        self.assertEqual(decoded[2], 0 if operation == "Relu" else -1)
+                        self.assertEqual(decoded[5], float("inf") if operation == "Relu" else 1)
+                self.checked("upload", context, buffer, 0, source, len(raw))
+                for operation, expected in (("IsNan", [0, 0, 0, 0, 1, 0]), ("IsInf", [0, 0, 0, 0, 0, 1]), ("IsFinite", [1, 1, 1, 1, 0, 0])):
+                    self.checked("pointwise_" + storage, context, operations[operation], View(buffer, 0), View(), View(buffer, 64), 6, 0)
+                    mask = (c.c_ubyte * 6)()
+                    self.checked("download", context, buffer, 64, mask, 6)
+                    self.assertEqual(list(mask), expected)
+            error = Error()
+            self.assertNotEqual(self.calls["copy"](context, View(buffer, 0), View(buffer, 4), 16, c.byref(error)), 0)
+            self.checked("copy", context, View(buffer, 0), View(buffer, 0), 16)
             self.checked("arange_f32", context, View(buffer, 0), 513, -8, 0.25)
             self.checked("copy", context, View(buffer, 0), View(buffer, 2060), 513 * 4)
             actual = (c.c_float * 513)()
