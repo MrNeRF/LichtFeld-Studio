@@ -78,6 +78,27 @@ namespace lfs::core {
         friend bool operator==(const CollisionDisplay&, const CollisionDisplay&) = default;
     };
 
+    namespace collision_detail {
+        struct Leaf {
+            glm::ivec3 min;
+            int size;
+            uint32_t index;
+            bool solid;
+            glm::ivec3 max() const { return min + size; }
+        };
+        // Validated tree; p is relative to the supplied subtree root.
+        inline Leaf lookupLeaf(std::span<const uint32_t> nodes, glm::ivec3 p, int edge, uint32_t index = 0) {
+            glm::ivec3 min(0);
+            while (nodes[index] > 1) {
+                edge /= 2;
+                const auto bit = glm::ivec3(glm::greaterThanEqual(p, min + edge));
+                index = nodes[index] - 2 + bit.x + 2 * bit.y + 4 * bit.z;
+                min += bit * edge;
+            }
+            return {min, edge, index, nodes[index] != 0};
+        }
+    } // namespace collision_detail
+
     // Immutable once attached to a scene node. Coordinates are node-local, +Y up.
     using CollisionProgress = std::function<void(std::string)>;
 

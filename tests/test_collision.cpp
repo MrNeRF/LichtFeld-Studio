@@ -367,6 +367,30 @@ TEST(CollisionSparse, FacesAndSmoothRemainWatertightAcrossChunkAndBrickSeams) {
     watertight(g.mesh(CollisionShape::Smooth));
     EXPECT_EQ(faces * 6, mesh.indices.size());
 }
+TEST(CollisionSparse, PointLookupPreservesPartialDimensionsAndSubtreeCoordinates) {
+    auto dense = grid({9, 7, 11});
+    for (size_t i = 0; i < dense.solid.size(); ++i)
+        dense.solid[i] = i % 3 == 0;
+    const auto v = sparse(dense);
+    collision_detail::Tree tree(v.dimensions);
+    tree.nodes = v.tree;
+    for (int z = 0; z < dense.dimensions.z; ++z)
+        for (int y = 0; y < dense.dimensions.y; ++y)
+            for (int x = 0; x < dense.dimensions.x; ++x) {
+                const glm::ivec3 p(x, y, z), bit = p / (tree.size / 2), offset = bit * (tree.size / 2);
+                const auto leaf = tree.leaf(p);
+                const auto child = tree.nodes[0] - 2 + bit.x + 2 * bit.y + 4 * bit.z;
+                const auto local = collision_detail::lookupLeaf(tree.nodes, p - offset, tree.size / 2, child);
+                EXPECT_EQ(leaf.solid, dense.occupied(p));
+                EXPECT_EQ(v.occupied(p), dense.occupied(p));
+                EXPECT_EQ(leaf.min, local.min + offset);
+                EXPECT_EQ(leaf.size, local.size);
+                EXPECT_EQ(leaf.index, local.index);
+                EXPECT_EQ(leaf.solid, local.solid);
+            }
+    EXPECT_FALSE(v.occupied({9, 0, 0}));
+    EXPECT_FALSE(v.occupied({0, -1, 0}));
+}
 TEST(CollisionSparse, PersistenceRejectsMalformedTopologyAndCoordinateOverflow) {
     auto g = grid();
     box(g, {3, 3, 3}, {8, 8, 8});

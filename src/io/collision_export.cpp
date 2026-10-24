@@ -142,15 +142,6 @@ namespace lfs::io {
         }
         const auto owned = v.tree.empty() ? v.octreeOccupancy() : std::vector<uint32_t>{};
         const auto& source = v.tree.empty() ? owned : v.tree;
-        auto sample = [&](uint32_t index, int n, glm::ivec3 p) {
-            while (source[index] > 1) {
-                n /= 2;
-                const auto b = glm::ivec3(glm::greaterThanEqual(p, glm::ivec3(n)));
-                index = source[index] - 2 + b.x + 2 * b.y + 4 * b.z;
-                p -= b * n;
-            }
-            return source[index] != 0;
-        };
         auto remap = [&](glm::ivec3 p, int n) {
             glm::ivec3 q;
             for (int s = 0; s < 3; ++s)
@@ -185,7 +176,7 @@ namespace lfs::io {
                         for (int y = 0; y < 4; ++y)
                             for (int x = 0; x < 4; ++x) {
                                 const glm::ivec3 cell(x, y, z);
-                                if (small ? v.occupied(p.min + cell) : sample(p.source, 4, cell)) {
+                                if (small ? v.occupied(p.min + cell) : core::collision_detail::lookupLeaf(source, cell, 4, p.source).solid) {
                                     auto q = remap(cell, 4);
                                     mask |= uint64_t(1) << (q.x + 4 * q.y + 16 * q.z);
                                 }

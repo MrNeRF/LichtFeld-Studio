@@ -14,14 +14,6 @@
 #include <vector>
 
 namespace lfs::core::collision_detail {
-    struct Leaf {
-        glm::ivec3 min;
-        int size;
-        uint32_t index;
-        bool solid;
-        glm::ivec3 max() const { return min + size; }
-    };
-
     // 0/1 are uniform empty/solid; other words point to eight contiguous children.
     class Tree {
         std::vector<uint32_t> free_blocks_;
@@ -113,18 +105,7 @@ namespace lfs::core::collision_detail {
             while (size < std::max({dims.x, dims.y, dims.z}))
                 size *= 2;
         }
-        Leaf leaf(glm::ivec3 p) const {
-            uint32_t index = 0;
-            glm::ivec3 min(0);
-            int n = size;
-            while (nodes[index] > 1) {
-                n /= 2;
-                auto bit = glm::ivec3(glm::greaterThanEqual(p, min + n));
-                index = nodes[index] - 2 + bit.x + 2 * bit.y + 4 * bit.z;
-                min += bit * n;
-            }
-            return {min, n, index, nodes[index] != 0};
-        }
+        Leaf leaf(glm::ivec3 p) const { return lookupLeaf(nodes, p, size); }
         bool occupied(glm::ivec3 p) const {
             return glm::all(glm::greaterThanEqual(p, glm::ivec3(0))) &&
                    glm::all(glm::lessThan(p, dimensions)) && leaf(p).solid;

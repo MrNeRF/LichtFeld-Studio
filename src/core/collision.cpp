@@ -384,15 +384,7 @@ namespace lfs::core {
             return false;
         if (tree.empty())
             return solid[index(p)] != 0;
-        uint32_t i = 0;
-        int n = tree_size;
-        while (tree[i] > 1) {
-            n /= 2;
-            auto bit = glm::ivec3(glm::greaterThanEqual(p, glm::ivec3(n)));
-            i = tree[i] - 2 + bit.x + 2 * bit.y + 4 * bit.z;
-            p -= bit * n;
-        }
-        return tree[i] != 0;
+        return collision_detail::lookupLeaf(tree, p, tree_size).solid;
     }
     glm::ivec3 CollisionVolume::cell(glm::vec3 p) const {
         const auto q = glm::floor((p - origin) / settings.voxel_size);
@@ -1093,16 +1085,7 @@ namespace lfs::core {
                 for (int z = 0; z < edge; ++z)
                     for (int y = 0; y < edge; ++y)
                         for (int x = 0; x < edge; ++x) {
-                            auto i = src;
-                            int n = edge;
-                            glm::ivec3 p(x, y, z);
-                            while (source[i] > 1) {
-                                n /= 2;
-                                auto bit = glm::ivec3(glm::greaterThanEqual(p, glm::ivec3(n)));
-                                i = source[i] - 2 + bit.x + 2 * bit.y + 4 * bit.z;
-                                p -= bit * n;
-                            }
-                            if (source[i]) {
+                            if (collision_detail::lookupLeaf(source, {x, y, z}, edge, src).solid) {
                                 auto bit = x + 4 * y + 16 * z;
                                 result[base + bit / 32] |= uint32_t(1) << (bit % 32);
                             }
