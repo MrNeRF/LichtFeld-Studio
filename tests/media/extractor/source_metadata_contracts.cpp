@@ -232,6 +232,31 @@ int runSourceMetadataContracts() {
     invalid_heif.blocks[0].heif_item->metadata_item = 4;
     invalid_heif.blocks[0].inflated = std::vector<uint8_t>{1};
     require(!catalogSourceMetadata({}, {}, {}, invalid_heif), "HEIF decoded items cannot claim a separate PNG inflation buffer");
+    SourceXmp jxl_xmp;
+    XmpBlock jxl_block;
+    jxl_block.envelope = XmpEnvelope::JxlXml;
+    jxl_block.jxl_box = JxlXmpBox{3, true};
+    jxl_block.bytes = {0, 255, 60, 120, 47, 62};
+    jxl_xmp.blocks.push_back(std::move(jxl_block));
+    const auto* jxl_bytes = jxl_xmp.blocks[0].bytes.data();
+    auto jxl_catalog = catalogSourceMetadata({}, {}, {}, std::move(jxl_xmp));
+    require(jxl_catalog && jxl_catalog->xmpBytes({0})->data() == jxl_bytes,
+            "JXL XML payload moves into catalog storage without another copy");
+    const auto jxl_handle = jxl_catalog->bind(XmpBlockReference{0});
+    auto jxl_copy = *jxl_catalog;
+    jxl_catalog = SourceMetadataCatalog{};
+    require(jxl_handle && jxl_copy.resolve(*jxl_handle) && jxl_copy.xmpBytes({0})->data() == jxl_bytes,
+            "JXL bound handle retains the same immutable observation");
+    SourceXmp invalid_jxl;
+    invalid_jxl.blocks.push_back(XmpBlock{});
+    invalid_jxl.blocks[0].envelope = XmpEnvelope::JxlXml;
+    require(!catalogSourceMetadata({}, {}, {}, invalid_jxl), "JXL XML blocks require box provenance");
+    invalid_jxl.blocks[0].jxl_box = JxlXmpBox{};
+    invalid_jxl.blocks[0].heif_item = HeifXmpItem{2, 3, "application/rdf+xml", ""};
+    require(!catalogSourceMetadata({}, {}, {}, invalid_jxl), "JXL blocks reject HEIF provenance");
+    invalid_jxl.blocks[0].heif_item.reset();
+    invalid_jxl.blocks[0].inflated = std::vector<uint8_t>{1};
+    require(!catalogSourceMetadata({}, {}, {}, invalid_jxl), "JXL decoded bytes reject separate PNG inflation storage");
     auto original = description();
     const auto* payload = original.original.blocks[0].bytes.data();
     auto catalog = catalogSourceMetadata(std::move(original));

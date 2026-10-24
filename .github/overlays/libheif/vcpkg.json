@@ -1,13 +1,14 @@
 {
   "name": "libheif",
   "version": "1.21.2",
-  "port-version": 3,
+  "port-version": 4,
   "description": "HEIF/AVIF with dav1d decoding and optional AOM AVIF encoding; HEVC disabled",
   "homepage": "http://www.libheif.org/",
   "license": "LGPL-3.0-only",
   "supports": "!xbox",
   "dependencies": [
     "dav1d",
+    "zlib",
     {
       "host": true,
       "name": "vcpkg-cmake"
@@ -20,7 +21,9 @@
   "features": {
     "avif-encode": {
       "description": "Enable the built-in libaom AV1 encoder for AVIF output",
-      "dependencies": ["aom"]
+      "dependencies": [
+        "aom"
+      ]
     }
   }
 }

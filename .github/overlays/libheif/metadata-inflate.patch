@@ -1,0 +1,235 @@
+diff --git a/libheif/compression_zlib.cc b/libheif/compression_zlib.cc
+--- a/libheif/compression_zlib.cc
++++ b/libheif/compression_zlib.cc
+@@ -25,6 +25,8 @@
+ #if HAVE_ZLIB
+ 
+ #include <zlib.h>
++#include <array>
++#include <limits>
+ #include <cstring>
+ #include <iostream>
+ 
+@@ -80,78 +82,54 @@
+ }
+ 
+ 
+-Result<std::vector<uint8_t>> do_inflate(const std::vector<uint8_t>& compressed_input, int windowSize)
++Result<std::vector<uint8_t>> do_inflate(const std::vector<uint8_t>& compressed_input, int windowSize, size_t max_output)
+ {
+-  if (compressed_input.empty()) {
++  if (compressed_input.empty() || compressed_input.size() > std::numeric_limits<uInt>::max()) {
+     return Error(heif_error_Invalid_input, heif_suberror_Decompression_invalid_data,
+-                 "Empty zlib compressed data.");
++                 "Invalid zlib compressed input size.");
+   }
++  std::vector<uint8_t> output;
++  std::array<uint8_t, 8192> dst;
++  z_stream strm{};
++  strm.avail_in = static_cast<uInt>(compressed_input.size());
++  strm.next_in = const_cast<Bytef*>(compressed_input.data());
++  if (inflateInit2(&strm, windowSize) != Z_OK) {
++    return Error(heif_error_Memory_allocation_error, heif_suberror_Compression_initialisation_error,
++                 "Cannot initialize zlib decompression.");
++  }
++  struct EndInflate {
++    z_stream* stream;
++    ~EndInflate() { inflateEnd(stream); }
++  } cleanup{&strm};
++  for (;;) {
++    strm.next_out = dst.data();
++    strm.avail_out = static_cast<uInt>(dst.size());
++    const auto before = strm.avail_in;
++    const int err = inflate(&strm, Z_NO_FLUSH);
++    const size_t produced = dst.size() - strm.avail_out;
++    if (max_output && produced > max_output - output.size()) {
++      return Error(heif_error_Memory_allocation_error, heif_suberror_Security_limit_exceeded,
++                   "Metadata decompression output limit exceeded.");
++    }
++    if (err != Z_OK && err != Z_STREAM_END) {
++      return Error(err == Z_MEM_ERROR ? heif_error_Memory_allocation_error : heif_error_Invalid_input,
++                   heif_suberror_Decompression_invalid_data, "Invalid or truncated zlib compressed metadata.");
++    }
++    output.insert(output.end(), dst.begin(), dst.begin() + produced);
++    if (err == Z_STREAM_END) {
++      if (strm.avail_in) {
++        return Error(heif_error_Invalid_input, heif_suberror_Decompression_invalid_data,
++                     "Trailing compressed metadata bytes.");
++      }
++      return output;
++    }
++    if (!produced && strm.avail_in == before) {
++      return Error(heif_error_Invalid_input, heif_suberror_Decompression_invalid_data,
++                   "Incomplete compressed metadata stream.");
++    }
++  }
++}
+ 
+-  std::vector<uint8_t> output;
+-
+-  // decompress data with zlib
+-
+-  std::vector<uint8_t> dst;
+-  dst.resize(8192);
+-
+-  z_stream strm;
+-  memset(&strm, 0, sizeof(z_stream));
+-
+-  strm.avail_in = (int)compressed_input.size();
+-  strm.next_in = (Bytef*) compressed_input.data();
+-
+-  strm.avail_out = (uInt)dst.size();
+-  strm.next_out = (Bytef*) dst.data();
+-
+-  strm.zalloc = Z_NULL;
+-  strm.zfree = Z_NULL;
+-  strm.opaque = Z_NULL;
+-
+-  int err = -1;
+-
+-  err = inflateInit2(&strm, windowSize);
+-  if (err != Z_OK) {
+-    std::stringstream sstr;
+-    sstr << "Error initialising zlib inflate: " << (strm.msg ? strm.msg : "NULL") << " (" << err << ")\n";
+-    return Error(heif_error_Memory_allocation_error, heif_suberror_Compression_initialisation_error, sstr.str());
+-  }
+-
+-  do {
+-    strm.avail_out = (uInt)dst.size();
+-    strm.next_out = (Bytef*) dst.data();
+-
+-    err = inflate(&strm, Z_NO_FLUSH);
+-
+-    if (err == Z_BUF_ERROR) {
+-      if (dst.size() >= 65536) { // TODO: make this a security limit
+-        inflateEnd(&strm);
+-        std::stringstream sstr;
+-        sstr << "Error performing zlib inflate: maximum output buffer size exceeded\n";
+-        return Error(heif_error_Memory_allocation_error, heif_suberror_Compression_initialisation_error, sstr.str());
+-      }
+-
+-      dst.resize(dst.size() * 2);
+-      strm.next_out = dst.data();
+-      strm.avail_out = (uInt)dst.size();
+-      continue;
+-    }
+-
+-    if (err == Z_NEED_DICT || err == Z_DATA_ERROR || err == Z_STREAM_ERROR) {
+-      inflateEnd(&strm);
+-      std::stringstream sstr;
+-      sstr << "Error performing zlib inflate: " << (strm.msg ? strm.msg : "NULL") << " (" << err << ")\n";
+-      return Error(heif_error_Invalid_input, heif_suberror_Decompression_invalid_data, sstr.str());
+-    }
+-
+-    // append decoded data to output
+-    output.insert(output.end(), dst.begin(), dst.end() - strm.avail_out);
+-  } while (err != Z_STREAM_END);
+-
+-
+-  inflateEnd(&strm);
+-
+-  return output;
+-}
+ 
+ std::vector<uint8_t> compress_zlib(const uint8_t* input, size_t size)
+ {
+@@ -164,13 +142,13 @@
+ }
+ 
+ 
+-Result<std::vector<uint8_t>> decompress_zlib(const std::vector<uint8_t>& compressed_input)
++Result<std::vector<uint8_t>> decompress_zlib(const std::vector<uint8_t>& compressed_input, size_t max_output)
+ {
+-  return do_inflate(compressed_input, 15);
++  return do_inflate(compressed_input, 15, max_output);
+ }
+ 
+-Result<std::vector<uint8_t>> decompress_deflate(const std::vector<uint8_t>& compressed_input)
++Result<std::vector<uint8_t>> decompress_deflate(const std::vector<uint8_t>& compressed_input, size_t max_output)
+ {
+-  return do_inflate(compressed_input, -15);
++  return do_inflate(compressed_input, -15, max_output);
+ }
+ #endif
+diff --git a/libheif/compression.h b/libheif/compression.h
+--- a/libheif/compression.h
++++ b/libheif/compression.h
+@@ -61,7 +61,7 @@
+  * @sa decompress_deflate
+  * @sa compress_zlib
+  */
+-Result<std::vector<uint8_t>> decompress_zlib(const std::vector<uint8_t>& compressed_input);
++Result<std::vector<uint8_t>> decompress_zlib(const std::vector<uint8_t>& compressed_input, size_t max_output = 16u << 20);
+ 
+ /**
+  * Decompress "deflate" compressed data.
+@@ -75,7 +75,7 @@
+  * @sa decompress_zlib
+  * @sa compress_deflate
+  */
+-Result<std::vector<uint8_t>> decompress_deflate(const std::vector<uint8_t>& compressed_input);
++Result<std::vector<uint8_t>> decompress_deflate(const std::vector<uint8_t>& compressed_input, size_t max_output = 16u << 20);
+ 
+ #endif
+ 
+diff --git a/libheif/file.cc b/libheif/file.cc
+--- a/libheif/file.cc
++++ b/libheif/file.cc
+@@ -643,7 +643,7 @@
+         return error;
+       }
+ 
+-      return decompress_zlib(compressed_data);
++      return decompress_zlib(compressed_data, m_limits->max_memory_block_size ? std::min<uint64_t>(16u << 20, m_limits->max_memory_block_size) : 16u << 20);
+ #else
+       return Error(heif_error_Unsupported_feature,
+                    heif_suberror_Unsupported_header_compression_method,
+@@ -657,7 +657,7 @@
+       if (error) {
+         return error;
+       }
+-      return decompress_deflate(compressed_data);
++      return decompress_deflate(compressed_data, m_limits->max_memory_block_size ? std::min<uint64_t>(16u << 20, m_limits->max_memory_block_size) : 16u << 20);
+ #else
+       return Error(heif_error_Unsupported_feature,
+                    heif_suberror_Unsupported_header_compression_method,
+@@ -828,9 +828,9 @@
+   switch (compression) {
+ #if HAVE_ZLIB
+     case heif_metadata_compression_zlib:
+-      return decompress_zlib(compressed_data);
++      return decompress_zlib(compressed_data, m_limits->max_memory_block_size ? std::min<uint64_t>(16u << 20, m_limits->max_memory_block_size) : 16u << 20);
+     case heif_metadata_compression_deflate:
+-      return decompress_deflate(compressed_data);
++      return decompress_deflate(compressed_data, m_limits->max_memory_block_size ? std::min<uint64_t>(16u << 20, m_limits->max_memory_block_size) : 16u << 20);
+ #endif
+ #if HAVE_BROTLI
+     case heif_metadata_compression_brotli:
+diff --git a/libheif/context.cc b/libheif/context.cc
+--- a/libheif/context.cc
++++ b/libheif/context.cc
+@@ -942,6 +942,8 @@
+ 
+   // --- read metadata and assign to image
+ 
++  size_t compressed_metadata_bytes = 0;
++  constexpr size_t compressed_metadata_limit = 64u << 20;
+   for (heif_item_id id : image_IDs) {
+     uint32_t item_type = m_heif_file->get_item_type_4cc(id);
+     std::string content_type = m_heif_file->get_content_type(id);
+@@ -974,6 +976,15 @@
+       }
+     }
+     else {
++      const auto info = m_heif_file->get_infe_box(id);
++      const auto encoding = info ? info->get_content_encoding() : std::string{};
++      if (item_type == fourcc("mime") && (encoding == "compress_zlib" || encoding == "deflate")) {
++        if (metadataResult->size() > compressed_metadata_limit - compressed_metadata_bytes) {
++          return Error(heif_error_Memory_allocation_error, heif_suberror_Security_limit_exceeded,
++                       "Metadata decompression aggregate limit exceeded.");
++        }
++        compressed_metadata_bytes += metadataResult->size();
++      }
+       metadata->m_data = *metadataResult;
+     }
+ 

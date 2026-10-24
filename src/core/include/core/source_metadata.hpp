@@ -94,12 +94,14 @@ namespace lfs::core::image_codecs {
                              JpegExtendedApp1,
                              PngInternationalText,
                              TiffTag,
-                             HeifMime };
+                             HeifMime,
+                             JxlXml };
     struct XmpLimits {
         std::size_t blocks = 64;
         std::size_t block_bytes = 1024 * 1024;
         // Aggregate retained envelopes/payloads, inflated PNG text and HEIF MIME strings.
         std::size_t total_bytes = 4 * 1024 * 1024;
+        // Decoded output limit for compressed PNG text and JXL XML boxes.
         std::size_t inflated_bytes = 1024 * 1024;
     };
     struct TiffXmpReference {
@@ -112,9 +114,13 @@ namespace lfs::core::image_codecs {
         std::string content_type;
         std::string content_encoding;
     };
+    struct JxlXmpBox {
+        std::uint64_t ordinal = 0; // Provider box-event ordinal, including structural boxes.
+        bool brotli_compressed = false;
+    };
     struct XmpBlock {
         XmpEnvelope envelope = XmpEnvelope::JpegApp1;
-        // Exact APP1/iTXt data, or the libheif-decoded MIME item payload.
+        // Exact APP1/iTXt data, or provider-decoded HEIF MIME/JXL XML payloads.
         // TIFF packets reference library-decoded bytes owned by SourceExif.
         std::vector<std::uint8_t> bytes;
         // Used only for compressed PNG text; originals remain unchanged.
@@ -127,10 +133,11 @@ namespace lfs::core::image_codecs {
         std::optional<bool> crc_valid;
         std::optional<TiffXmpReference> tiff_tag;
         std::optional<HeifXmpItem> heif_item;
+        std::optional<JxlXmpBox> jxl_box;
     };
     // Resolves retained bytes; an empty span is a valid empty packet.
     // TIFF references borrow its library-decoded tag bytes; source ranges retain
-    // on-disk representations. HEIF owns provider-decoded bytes; JPEG/PNG own originals.
+    // on-disk representations. HEIF/JXL own provider-decoded bytes; JPEG/PNG own originals.
     [[nodiscard]] LFS_IMAGE_CODECS_API std::optional<std::span<const std::uint8_t>> source_xmp_bytes(
         const SourceExif&, const XmpBlock&) noexcept;
     struct SourceXmp {

@@ -155,7 +155,8 @@ namespace lfs::media::json_detail {
                 const char* envelope = block.envelope == XmpEnvelope::JpegApp1 ? "jpeg_app1" : block.envelope == XmpEnvelope::JpegExtendedApp1   ? "jpeg_extended_app1"
                                                                                            : block.envelope == XmpEnvelope::PngInternationalText ? "png_itxt"
                                                                                            : block.envelope == XmpEnvelope::TiffTag              ? "tiff_tag700"
-                                                                                                                                                 : "heif_mime";
+                                                                                           : block.envelope == XmpEnvelope::HeifMime             ? "heif_mime"
+                                                                                                                                                 : "jxl_xml";
                 json payload = nullptr;
                 if (block.status == core::image_codecs::MetadataStatus::Collected && original && block.payload_offset <= original->size())
                     payload = block.inflated ? hexBytes(*block.inflated) : hexBytes(original->subspan(block.payload_offset));
@@ -164,6 +165,10 @@ namespace lfs::media::json_detail {
                     const auto& item = *block.heif_item;
                     retained["blocks"].back()["representation"] = "libheif_decoded_bytes";
                     retained["blocks"].back()["heif_item"] = {{"image_item", item.image_item}, {"metadata_item", item.metadata_item}, {"content_type", item.content_type}, {"content_type_bytes", hexBytes(item.content_type)}, {"content_encoding", item.content_encoding}, {"content_encoding_bytes", hexBytes(item.content_encoding)}};
+                }
+                if (block.jxl_box) {
+                    retained["blocks"].back()["representation"] = "libjxl_decoded_bytes";
+                    retained["blocks"].back()["jxl_box"] = {{"ordinal", block.jxl_box->ordinal}, {"brotli_compressed", block.jxl_box->brotli_compressed}};
                 }
                 if (block.tiff_tag) {
                     retained["blocks"].back()["representation"] = "libtiff_decoded_bytes";
