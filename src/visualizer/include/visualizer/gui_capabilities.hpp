@@ -195,4 +195,13 @@ namespace lfs::vis::cap {
         RenderingManager* rendering_manager,
         core::NodeId ellipsoid_id);
 
+    // Adds an enabled polygon under a splat in one history entry, replacing the
+    // splat's existing crop box, ellipsoid or polygon.
+    [[nodiscard]] LFS_VIS_API lfs::Result<core::NodeId> createCropPolygon(
+        SceneManager& scene_manager,
+        RenderingManager* rendering_manager,
+        core::NodeId parent_id,
+        core::CropPolygonData data,
+        const glm::mat4& local_transform);
+
 } // namespace lfs::vis::cap

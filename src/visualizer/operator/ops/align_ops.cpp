@@ -36,7 +36,8 @@ namespace lfs::vis::op {
                                                         const core::SceneNode& node) {
             core::NodeId target_id = core::NULL_NODE;
             if ((node.type == core::NodeType::CROPBOX ||
-                 node.type == core::NodeType::ELLIPSOID) &&
+                 node.type == core::NodeType::ELLIPSOID ||
+                 node.type == core::NodeType::CROP_POLYGON) &&
                 node.parent_id != core::NULL_NODE) {
                 const auto* const parent = scene.getNodeById(node.parent_id);
                 if (parent && cap::isAlignTransformTargetType(parent->type)) {

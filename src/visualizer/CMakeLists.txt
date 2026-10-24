@@ -168,6 +168,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         operator/operator_id.cpp
         operator/operator_registry.cpp
         operator/ops/align_ops.cpp
+        operator/ops/crop_polygon_ops.cpp
         operator/ops/edit_ops.cpp
         operator/ops/scene_ops.cpp
         operator/ops/selection_ops.cpp

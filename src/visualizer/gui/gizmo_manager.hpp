@@ -85,6 +85,7 @@ namespace lfs::vis {
 
             [[nodiscard]] bool isCropboxGizmoActive() const;
             [[nodiscard]] bool isEllipsoidGizmoActive() const;
+            [[nodiscard]] bool isCropPolygonGizmoActive() const;
             LFS_VIS_API void setCropToolShape(const std::string& shape);
             [[nodiscard]] LFS_VIS_API std::string cropToolShape() const;
             LFS_VIS_API void setCropToolOperation(const std::string& operation);
@@ -94,6 +95,8 @@ namespace lfs::vis {
             [[nodiscard]] LFS_VIS_API std::string cropToolOperation() const;
             LFS_VIS_API void applyActiveCropTool();
             LFS_VIS_API void deleteActiveCropToolVolume();
+            // Polygon button: edit the selected splat's polygon, or start drawing one.
+            LFS_VIS_API void activateCropPolygonTool();
             [[nodiscard]] bool isViewportGizmoDragging() const { return viewport_gizmo_dragging_; }
             // The panel whose axis widget is pressed or dragged, and the pressed marker (-1 for the sphere).
             struct ViewportGizmoPress {
@@ -174,6 +177,7 @@ namespace lfs::vis {
             enum class CropToolShape {
                 Box,
                 Ellipsoid,
+                Polygon,
             };
 
             CropToolShape crop_tool_shape_ = CropToolShape::Box;
@@ -190,6 +194,10 @@ namespace lfs::vis {
             glm::vec3 crop_tool_box_max_{0.5f};
             glm::vec3 crop_tool_ellipsoid_radii_{1.0f};
             glm::mat4 crop_tool_visualizer_transform_{1.0f};
+            // The polygon tool edits only the transform: outline and depth stay as drawn.
+            std::vector<glm::vec2> crop_tool_polygon_vertices_;
+            float crop_tool_polygon_half_depth_ = 1.0f;
+            glm::vec3 crop_tool_polygon_half_extents_{1.0f};
             std::optional<glm::mat4> crop_tool_scale_start_;
             SelectionMode selection_volume_apply_mode_ = SelectionMode::Replace;
             uint64_t selection_volume_source_generation_ = 0;

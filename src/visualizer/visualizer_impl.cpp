@@ -32,6 +32,7 @@
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
 #include "operator/ops/align_ops.hpp"
+#include "operator/ops/crop_polygon_ops.hpp"
 #include "operator/ops/edit_ops.hpp"
 #include "operator/ops/scene_ops.hpp"
 #include "operator/ops/selection_ops.hpp"
@@ -208,7 +209,8 @@ namespace lfs::vis {
                    node.type == core::NodeType::POINTCLOUD ||
                    node.type == core::NodeType::SPLAT ||
                    node.type == core::NodeType::CROPBOX ||
-                   node.type == core::NodeType::ELLIPSOID;
+                   node.type == core::NodeType::ELLIPSOID ||
+                   node.type == core::NodeType::CROP_POLYGON;
         }
 
         [[nodiscard]] std::unordered_map<std::string, glm::mat4> collectResetTransforms(const core::Scene& scene) {
@@ -369,6 +371,7 @@ namespace lfs::vis {
         op::registerTransformOperators();
         op::registerAlignOperators();
         op::registerSelectionOperators();
+        op::registerCropPolygonOperators();
         op::registerEditOperators();
         op::registerSceneOperators();
 
@@ -401,6 +404,7 @@ namespace lfs::vis {
         // Clear operator system
         op::unregisterEditOperators();
         op::unregisterSceneOperators();
+        op::unregisterCropPolygonOperators();
         op::unregisterSelectionOperators();
         op::unregisterAlignOperators();
         op::unregisterTransformOperators();
@@ -2790,6 +2794,7 @@ namespace lfs::vis {
         if (gui_manager_) {
             rendering_manager_->setCropboxGizmoActive(gui_manager_->gizmo().isCropboxGizmoActive());
             rendering_manager_->setEllipsoidGizmoActive(gui_manager_->gizmo().isEllipsoidGizmoActive());
+            rendering_manager_->setCropPolygonGizmoActive(gui_manager_->gizmo().isCropPolygonGizmoActive());
         }
 
         bool store_dirty = false;

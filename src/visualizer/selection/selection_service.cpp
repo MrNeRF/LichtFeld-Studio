@@ -43,7 +43,6 @@
 namespace lfs::vis {
 
     namespace {
-        constexpr float POLYGON_CLOSE_DISTANCE_PX = 12.0f;
         constexpr float POLYGON_CURSOR_APPEND_EPSILON_PX = 0.5f;
         constexpr float POLYGON_VERTEX_HIT_RADIUS_PX = 8.0f;
         constexpr float POLYGON_EDGE_HIT_RADIUS_PX = 10.0f;
@@ -3552,18 +3551,26 @@ namespace lfs::vis {
             !session.viewport_context->info.valid()) {
             return std::nullopt;
         }
-        const glm::ivec2 rendered_size = rendering_manager_->getRenderedSize();
-        if (rendered_size.x <= 0 || rendered_size.y <= 0) {
+        return resolveViewerWorldPoint(*rendering_manager_, *session.viewport_context->viewport,
+                                       session.viewport_context->panel, session.viewport_context->info, screen_point);
+    }
+
+    std::optional<glm::vec3> SelectionService::resolveViewerWorldPoint(const RenderingManager& rendering_manager,
+                                                                       const Viewport& viewport,
+                                                                       const SplitViewPanelId panel,
+                                                                       const ViewportInfo& info,
+                                                                       const glm::vec2 screen_point) {
+        const glm::ivec2 rendered_size = rendering_manager.getRenderedSize();
+        if (!info.valid() || rendered_size.x <= 0 || rendered_size.y <= 0) {
             return std::nullopt;
         }
 
-        const auto settings = rendering_manager_->getSettings();
-        const auto& info = session.viewport_context->info;
-        Viewport projection_viewport = *session.viewport_context->viewport;
+        const auto settings = rendering_manager.getSettings();
+        Viewport projection_viewport = viewport;
         projection_viewport.windowSize = {info.render_width, info.render_height};
         const auto render_point = screenToRender(screen_point, info);
-        const float depth = rendering_manager_->getDepthAtPixel(
-            static_cast<int>(render_point.x), static_cast<int>(render_point.y), session.viewport_context->panel);
+        const float depth = rendering_manager.getDepthAtPixel(
+            static_cast<int>(render_point.x), static_cast<int>(render_point.y), panel);
         const float ortho_scale = projection_viewport.ortho_scale_override.value_or(settings.ortho_scale);
 
         if (depth > 0.0f) {

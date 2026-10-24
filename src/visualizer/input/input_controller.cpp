@@ -143,6 +143,14 @@ namespace lfs::vis {
                    action == input::Action::UNDO_POLYGON_VERTEX;
         }
 
+        // Polygon modals take their keys from the selection key map, where the
+        // polygon actions are bound, whatever tool mode is active.
+        [[nodiscard]] bool isPolygonModalActive() {
+            const auto modal_id = op::operators().activeModalId();
+            return modal_id == op::to_string(op::BuiltinOp::SelectionStroke) ||
+                   modal_id == op::to_string(op::BuiltinOp::CropPolygonDraw);
+        }
+
         [[nodiscard]] bool isAlignModalAction(const input::Action action) {
             return action == input::Action::CANCEL_POLYGON ||
                    action == input::Action::REMOVE_LAST_POINT ||
@@ -154,7 +162,9 @@ namespace lfs::vis {
                                    const double x, const double y) {
             const auto modal_id = op::operators().activeModalId();
             const bool accepted =
-                (modal_id == op::to_string(op::BuiltinOp::SelectionStroke) && isSelectionModalAction(action)) ||
+                ((modal_id == op::to_string(op::BuiltinOp::SelectionStroke) ||
+                  modal_id == op::to_string(op::BuiltinOp::CropPolygonDraw)) &&
+                 isSelectionModalAction(action)) ||
                 (modal_id == op::to_string(op::BuiltinOp::AlignPickPoint) && isAlignModalAction(action));
             if (!accepted) {
                 return false;
@@ -886,11 +896,10 @@ namespace lfs::vis {
         }
 
         const bool selection_pointer_blocked =
-            op::operators().activeModalId() == op::to_string(op::BuiltinOp::SelectionStroke) &&
-            (over_gui || (!input_router_ && !isInViewport(x, y)));
+            isPolygonModalActive() && (over_gui || (!input_router_ && !isInViewport(x, y)));
         if (!selection_pointer_blocked && action == input::ACTION_PRESS) {
             const auto mouse_btn = static_cast<input::MouseButton>(button);
-            const auto tool_mode = getCurrentToolMode();
+            const auto tool_mode = isPolygonModalActive() ? input::ToolMode::SELECTION : getCurrentToolMode();
             auto modal_action = bindings_.getActionForMouseButton(tool_mode, mouse_btn, mods, false);
             if (!isSelectionModalAction(modal_action)) {
                 modal_action = bindings_.getActionForDrag(tool_mode, mouse_btn, mods, held_keys_);
@@ -1968,8 +1977,13 @@ namespace lfs::vis {
         input::mouseStateInPixels(window_, &mx_f, &my_f);
         double mx = mx_f, my = my_f;
         const bool over_gui_hover = isPointerOverUiHover(mx, my);
+        const auto modal_action =
+            isPolygonModalActive()
+                ? bindings_.getActionForShortcut(input::ToolMode::SELECTION, physical_key, logical_key, mods,
+                                                 printed_punctuation, shift_needed_for_printed_key, nullptr)
+                : bound_action;
         if (action == input::ACTION_PRESS &&
-            dispatchActionToModal(bound_action, mods, mx, my)) {
+            dispatchActionToModal(modal_action, mods, mx, my)) {
             return;
         }
         if (dispatchKeyToModals(logical_key, scancode, action, mods, mx, my, over_gui_hover)) {
@@ -2323,9 +2337,13 @@ namespace lfs::vis {
                 return;
 
             case input::Action::APPLY_CROP_BOX: {
-                // Check if ellipsoid is selected, otherwise apply cropbox
+                // Apply the selected polygon or ellipsoid, otherwise the cropbox
                 if (tool_context_) {
                     if (auto* sm = tool_context_->getSceneManager()) {
+                        if (sm->getSelectedNodeCropPolygonId() != core::NULL_NODE) {
+                            cmd::ApplyCropPolygon{}.emit();
+                            return;
+                        }
                         const auto ellipsoid_id = sm->getSelectedNodeEllipsoidId();
                         if (ellipsoid_id != core::NULL_NODE) {
                             cmd::ApplyEllipsoid{}.emit();

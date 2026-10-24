@@ -28,7 +28,8 @@ namespace lfs::vis {
         // Switching tools leaves the crop tool and selects the volume's parent,
         // so a selected crop volume makes its parent the tool target.
         [[nodiscard]] const core::SceneNode* toolTargetNode(const core::Scene& scene, const core::SceneNode& node) {
-            if (node.type == core::NodeType::CROPBOX || node.type == core::NodeType::ELLIPSOID)
+            if (node.type == core::NodeType::CROPBOX || node.type == core::NodeType::ELLIPSOID ||
+                node.type == core::NodeType::CROP_POLYGON)
                 return scene.getNodeById(node.parent_id);
             return &node;
         }
