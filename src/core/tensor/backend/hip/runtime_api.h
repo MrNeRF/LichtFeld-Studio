@@ -11,7 +11,8 @@
  * Contexts must remain alive throughout their calls. Successfully released
  * handles are invalid and must not be reused, even if their address recurs.
  * A nonzero result leaves details in the optional caller-owned error buffer;
- * success clears it. native_code is a HIP error code, or -1 for a host exception. */
+ * success clears it. native_code is a HIP error code, -2 for an invalid index,
+ * or -1 for other host exceptions. */
 #if defined(__HIP_DEVICE_COMPILE__)
 #define LFS_HIP_API
 #elif defined(_WIN32)

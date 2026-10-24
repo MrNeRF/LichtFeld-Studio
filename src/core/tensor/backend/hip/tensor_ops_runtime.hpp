@@ -808,39 +808,37 @@ namespace {
         check(hipGetLastError());
     }
     __global__ void boolean_pointwise(uint32_t op, const uint8_t* lhs, const uint8_t* rhs, uint8_t* output, size_t count, float scalar) {
-        const size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
-        if (i >= count)
-            return;
-        const auto a = lhs[i];
-        const auto b = rhs ? rhs[i] : uint8_t(0);
-        bool result = false;
-        switch (op) {
-        case LFS_HIP_OP_LogicalNot: result = !a; break;
-        case LFS_HIP_OP_LogicalAndTensor: result = a && b; break;
-        case LFS_HIP_OP_LogicalOrTensor: result = a || b; break;
-        case LFS_HIP_OP_LogicalXorTensor: result = bool(a) != bool(b); break;
-        case LFS_HIP_OP_EqualTensor: result = a == b; break;
-        case LFS_HIP_OP_NotEqualTensor: result = a != b; break;
-        case LFS_HIP_OP_EqualScalar: result = float(a) == scalar; break;
-        case LFS_HIP_OP_NotEqualScalar: result = float(a) != scalar; break;
-        case LFS_HIP_OP_LessTensor: result = a < b; break;
-        case LFS_HIP_OP_LessEqualTensor: result = a <= b; break;
-        case LFS_HIP_OP_GreaterTensor: result = a > b; break;
-        case LFS_HIP_OP_GreaterEqualTensor: result = a >= b; break;
-        case LFS_HIP_OP_LessScalar: result = float(a) < scalar; break;
-        case LFS_HIP_OP_LessEqualScalar: result = float(a) <= scalar; break;
-        case LFS_HIP_OP_GreaterScalar: result = float(a) > scalar; break;
-        case LFS_HIP_OP_GreaterEqualScalar: result = float(a) >= scalar; break;
+        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += size_t(gridDim.x) * blockDim.x) {
+            const auto a = lhs[i];
+            const auto b = rhs ? rhs[i] : uint8_t(0);
+            bool result = false;
+            switch (op) {
+            case LFS_HIP_OP_LogicalNot: result = !a; break;
+            case LFS_HIP_OP_LogicalAndTensor: result = a && b; break;
+            case LFS_HIP_OP_LogicalOrTensor: result = a || b; break;
+            case LFS_HIP_OP_LogicalXorTensor: result = bool(a) != bool(b); break;
+            case LFS_HIP_OP_EqualTensor: result = a == b; break;
+            case LFS_HIP_OP_NotEqualTensor: result = a != b; break;
+            case LFS_HIP_OP_EqualScalar: result = float(a) == scalar; break;
+            case LFS_HIP_OP_NotEqualScalar: result = float(a) != scalar; break;
+            case LFS_HIP_OP_LessTensor: result = a < b; break;
+            case LFS_HIP_OP_LessEqualTensor: result = a <= b; break;
+            case LFS_HIP_OP_GreaterTensor: result = a > b; break;
+            case LFS_HIP_OP_GreaterEqualTensor: result = a >= b; break;
+            case LFS_HIP_OP_LessScalar: result = float(a) < scalar; break;
+            case LFS_HIP_OP_LessEqualScalar: result = float(a) <= scalar; break;
+            case LFS_HIP_OP_GreaterScalar: result = float(a) > scalar; break;
+            case LFS_HIP_OP_GreaterEqualScalar: result = float(a) >= scalar; break;
+            }
+            output[i] = result ? 1 : 0;
         }
-        output[i] = result ? 1 : 0;
     }
     __global__ void clamp_i32(int32_t* data, size_t count, int32_t minimum, int32_t maximum) {
-        const size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
-        if (i >= count)
-            return;
-        auto value = data[i];
-        value = value < minimum ? minimum : value;
-        data[i] = value > maximum ? maximum : value;
+        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += size_t(gridDim.x) * blockDim.x) {
+            auto value = data[i];
+            value = value < minimum ? minimum : value;
+            data[i] = value > maximum ? maximum : value;
+        }
     }
 
     void launch_integral_broadcast(LfsHipContext*, uint32_t, LfsHipView, LfsHipView, LfsHipView, LfsHipLayout, LfsHipLayout, LfsHipLayout, uint32_t);
@@ -855,6 +853,14 @@ int lfs_hip_boolean_pointwise(LfsHipContext* context, uint32_t op, LfsHipView lh
         validate(context, output.buffer, output.offset, count);
         if (binary)
             validate(context, rhs.buffer, rhs.offset, count);
+        const auto safe_alias = [&](LfsHipView input) {
+            require(input.buffer != output.buffer || input.offset == output.offset ||
+                        input.offset + count <= output.offset || output.offset + count <= input.offset,
+                    "HIP byte predicates require disjoint or identical views");
+        };
+        safe_alias(lhs);
+        if (binary)
+            safe_alias(rhs);
         if (!count)
             return;
         DeviceScope device(context->device);

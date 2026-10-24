@@ -271,6 +271,44 @@ class TensorOperations(native.RuntimeContract):
             self.checked("clamp_i32", context, integers, 3, -2, 4)
             self.assertEqual(self.read(context, integers, 3, 2), [-2, 0, 4])
 
+    def test_scalar_left_integer_and_half_predicate_edges(self):
+        with self.resources() as context:
+            for dtype in (2, 3, 6, 4):
+                source = self.tensor(context, [1, 2, 4], dtype)
+                output = self.tensor(context, [0] * 3, dtype)
+                p = Predicate(c.sizeof(Predicate), self.operations["SubScalar"], dtype, 1, 3, 8, 0, 1)
+                self.checked("integer_pointwise", context, source, View(), output, c.byref(p))
+                self.assertEqual(self.read(context, output, 3, dtype), [7, 6, 4])
+                if dtype in (2, 3, 6):
+                    mask = self.tensor(context, [99] * 3, 4)
+                    p.op, p.integer_scalar = self.operations["LessScalar"], 2
+                    self.checked("predicate_typed", context, source, View(), mask, c.byref(p))
+                    self.assertEqual(self.read(context, mask, 3, 4), [0, 0, 1])
+            half = self.tensor(context, [-0.0, -2, float("nan"), float("inf"), -float("inf")], 1)
+            mask = self.tensor(context, [99] * 5, 4)
+            for name, expected in (("IsNan", [0, 0, 1, 0, 0]), ("IsInf", [0, 0, 0, 1, 1]), ("IsFinite", [1, 1, 0, 0, 0])):
+                p = Predicate(c.sizeof(Predicate), self.operations[name], 1, 0, 5)
+                self.checked("predicate_typed", context, half, View(), mask, c.byref(p))
+                self.assertEqual(self.read(context, mask, 5, 4), expected)
+
+    def test_noncontiguous_multi_axis_reduction_and_long_strided_scans(self):
+        with self.resources() as context:
+            source = self.tensor(context, range(24))
+            output = self.tensor(context, [99, 99])
+            shape = layout([3, 2, 4], [4, 12, 1])
+            self.checked("reduce_layout_f32", context, source, output, c.byref(shape), 5, 0)
+            self.assertEqual(self.read(context, output, 2), [66, 210])
+            wide = self.tensor(context, [1, 2] * 10001)
+            shape = layout([10001, 2])
+            self.checked("reduce_layout_f32", context, wide, output, c.byref(shape), 1, 0)
+            self.assertEqual(self.read(context, output, 2), [10001, 20002])
+            for dtype in (0, 2, 3, 6):
+                source = self.tensor(context, [1, 2] * 513, dtype)
+                shape = layout([2, 513], [1, 2])
+                self.checked("cumsum", context, source, dtype, c.byref(shape), 1)
+                expected = [value for i in range(1, 514) for value in (i, 2 * i)]
+                self.assertEqual(self.read(context, source, 1026, dtype), expected)
+
     def test_scan_sort_and_stable_selection(self):
         with self.resources() as context:
             for dtype in (0, 2, 3, 6):
@@ -439,6 +477,26 @@ class TensorOperations(native.RuntimeContract):
             self.checked("index_cast", context, indices, cast, 2, 6)
             self.assertEqual(self.read(context, cast, 2, 2), [2, 0])
 
+    def test_byte_predicates_and_integer_clamp_cover_capped_grid_tail(self):
+        count = 4096 * 256 + 17
+        with self.resources() as context:
+            source = self.tensor(context, [0] * count, 4)
+            output = self.tensor(context, [77] * count, 4)
+            self.checked("boolean_pointwise", context, self.operations["LogicalNot"], source, View(), output, count, 0)
+            self.assertEqual(self.read(context, View(output.buffer, count - 17), 17, 4), [1] * 17)
+            integers = self.tensor(context, [-7] * count, 2)
+            self.checked("clamp_i32", context, integers, count, -2, 3)
+            self.assertEqual(self.read(context, View(integers.buffer, (count - 17) * 4), 17, 2), [-2] * 17)
+
+    def test_byte_predicates_reject_shifted_aliases_but_allow_exact_inplace(self):
+        with self.resources() as context:
+            values = self.tensor(context, [0, 1, 0, 1, 0], 4)
+            shifted = View(values.buffer, 1)
+            self.reject("boolean_pointwise", context, self.operations["LogicalNot"], values, View(), shifted, 4, 0)
+            self.assertEqual(self.read(context, values, 5, 4), [0, 1, 0, 1, 0])
+            self.checked("boolean_pointwise", context, self.operations["LogicalNot"], values, View(), values, 5, 0)
+            self.assertEqual(self.read(context, values, 5, 4), [1, 0, 1, 0, 1])
+
     def test_indexed_add_accumulates_duplicate_indices(self):
         with self.resources() as context:
             for dtype in (0, 2):
@@ -479,6 +537,30 @@ class TensorOperations(native.RuntimeContract):
             total = c.c_uint64()
             self.checked("count_nonzero", context, nonzero, 0, 5, c.byref(total))
             self.assertEqual(total.value, 3)
+
+    def test_cdist_short_and_tiled_norms_match_independent_reference(self):
+        with self.resources() as context:
+            for columns in (0, 3, 21):
+                a = [float(i % 9 - 4) / 4 for i in range(17 * columns)]
+                b = [float(i % 7 - 3) / 4 for i in range(19 * columns)]
+                lhs, rhs = self.tensor(context, a), self.tensor(context, b)
+                output = self.tensor(context, [99] * (17 * 19))
+                for norm in (0, 1, 2, float("inf"), 1.5):
+                    with self.subTest(columns=columns, norm=norm):
+                        self.checked("cdist_f32", context, lhs, rhs, output, 17, 19, columns, norm)
+                        expected = []
+                        for row in range(17):
+                            for column in range(19):
+                                differences = [abs(a[row * columns + k] - b[column * columns + k]) for k in range(columns)]
+                                if norm == 0:
+                                    value = sum(x != 0 for x in differences)
+                                elif math.isinf(norm):
+                                    value = max(differences, default=0)
+                                else:
+                                    value = sum(x ** norm for x in differences) ** (1 / norm)
+                                expected.append(value)
+                        for actual, reference in zip(self.read(context, output, 17 * 19), expected):
+                            self.assertAlmostEqual(actual, reference, delta=2e-5 * max(1, reference))
 
     def test_gemm_batches_transpose_skinny_and_tiled(self):
         with self.resources() as context:

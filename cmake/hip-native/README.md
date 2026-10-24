@@ -210,7 +210,8 @@ Integer comparisons preserve Int64 precision rather than converting to float.
 | Broadcast and conditional selection | Floating, integer and boolean storage; operation-specific validation |
 | Global scalar reduction and arg extrema | FP32; extrema indices use Int64 |
 | Axis reduction | FP32/FP16 and integer/boolean subsets; output type is validated |
-| Gather, selection, masks and index copy/fill | Typed storage; index arrays use Int32 or Int64 |
+| Gather, selection, masks and index copy | Typed storage; index arrays use Int32 or Int64 |
+| Indexed fill | FP32, Int32, UInt8, Bool; Int32 or Int64 indices |
 | Indexed addition | FP32 or Int32 |
 | Cumulative sum | FP32, Int32, Int64, UInt32 |
 | Stable sort | FP32 values and Int64 indices |
