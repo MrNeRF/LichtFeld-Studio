@@ -1,0 +1,15 @@
+#content-wrap { padding: 8dp 16dp 12dp; overflow: hidden; min-width: 0; min-height: 0; }
+#content { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+#export-scroll { flex: 1; min-height: 0; overflow: auto; }
+p { display: block; font-size: 12dp; line-height: 17dp; margin: 6dp 0; }
+.export-target { margin-bottom: 12dp; }
+.export-target > span:first-child { margin-right: 4dp; }
+.export-option { padding: 10dp; margin: 8dp 0; border-width: 1dp; border-radius: 5dp; }
+.export-option p, .export-note { font-size: 11dp; }
+.btn { display: inline-flex; align-items: center; justify-content: center; height: 30dp; min-height: 30dp; padding: 0 10dp; font-size: 12dp; }
+#export-job { margin: 10dp 0; padding: 10dp; border-radius: 5dp; }
+#export-stage { font-weight: bold; }
+#export-progress { display: block; width: 100%; height: 8dp; }
+#export-progress-fill { display: block; width: 0%; height: 100%; }
+.export-job-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 8dp; }
+#export-error { white-space: pre-wrap; padding: 10dp; border-width: 1dp; border-radius: 5dp; }

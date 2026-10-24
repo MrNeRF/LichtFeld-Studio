@@ -177,7 +177,7 @@ namespace lfs::python {
                                                 if (!target)
                                                     throw std::runtime_error("No collision node exists. Generate one in Tools > Collision first.");
                                                 vis::gui::requestCollisionExport(target->uuid);
-                                                vis::gui::PanelRegistry::instance().set_panel_enabled("native.collision", true);
+                                                vis::gui::PanelRegistry::instance().set_panel_enabled("native.collision_export", true);
                                             }); }, "Open collision export for the selected collider, or the scene's only collider. Multiple colliders require a selection.");
         m.def("get_splat_drag_preferences", []() {
             const auto s = lfs::vis::UserPreferences::instance().splatDrag();

@@ -6,10 +6,6 @@
 .collision-intro > div { flex: 1; min-width: 0; }
 .collision-intro p { margin: 0 0 3dp; }
 .collision-intro-title { font-size: 14dp; font-weight: bold; }
-.collision-export-option { padding: 8dp 10dp; margin: 7dp 0; border-width: 1dp; border-radius: 5dp; }
-.collision-export-option .btn { height: 30dp; padding: 0 10dp; margin-bottom: 3dp; }
-.collision-export-option p { margin: 3dp 0; }
-.collision-save-note { padding: 6dp 0; }
 .collision-toolbar, .collision-actions {
     display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8dp;
     padding: 8dp 12dp; flex-shrink: 0; min-width: 0;

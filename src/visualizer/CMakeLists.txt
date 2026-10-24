@@ -114,6 +114,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/html_viewer_export.cpp
         gui/scene_panel_native.cpp
         gui/collision_panel.cpp
+        gui/collision_export_panel.cpp
         gui/ui_widgets.cpp
         gui_capabilities.cpp
         gui/panels/windows_console_utils.cpp

@@ -8,7 +8,6 @@
 #include <RmlUi/Core/EventListener.h>
 #include <atomic>
 #include <chrono>
-#include <filesystem>
 #include <mutex>
 #include <thread>
 
@@ -21,7 +20,7 @@ namespace lfs::vis::gui {
         void preload(const PanelDrawContext& ctx) override;
         PanelRenderCapabilities renderCapabilities() const override { return {.direct = true}; }
         PanelDirectRenderResult renderDirect(const PanelDirectRenderRequest& request, const PanelDrawContext& ctx) override;
-        bool needsAnimationFrame() const override { return busy_ || scroll_to_export_ || host_.needsAnimationFrame(); }
+        bool needsAnimationFrame() const override { return busy_ || host_.needsAnimationFrame(); }
         void reloadRmlResources() override;
         void releaseRendererResources() override { host_.releaseRendererResources(); }
 
@@ -30,8 +29,6 @@ namespace lfs::vis::gui {
         bool prepare(const PanelDrawContext& ctx);
         void start(bool new_node);
         void buildSurface();
-        void chooseExport(bool voxels);
-        void startExport(bool voxels, std::filesystem::path path);
         void updateDisplay();
         void updateSummary();
         void resetSurfaceSettings();
@@ -48,7 +45,6 @@ namespace lfs::vis::gui {
         void clearError();
         void finishJob(std::string outcome);
         void updateProgressBar();
-        void revealExport();
         RmlPanelHost host_;
         Rml::ElementDocument* document_ = nullptr;
         core::Scene* scene_ = nullptr;
@@ -57,7 +53,6 @@ namespace lfs::vis::gui {
         core::CollisionSettings settings_;
         core::CollisionDisplay display_;
         bool updating_ = false;
-        bool scroll_to_export_ = false;
         std::string last_stats_;
         std::weak_ptr<const core::CollisionVolume> counted_volume_;
         uint64_t occupied_count_ = 0;
@@ -75,7 +70,6 @@ namespace lfs::vis::gui {
         std::string job_title_, job_context_, job_outcome_, error_report_;
         uint64_t job_graph_epoch_ = 0;
         std::string error_;
-        std::string exported_path_;
         struct Result {
             std::shared_ptr<const core::CollisionVolume> volume;
             std::shared_ptr<core::MeshData> mesh;

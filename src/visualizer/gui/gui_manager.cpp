@@ -34,6 +34,7 @@
 #include "core/user_paths.hpp"
 #include "gui/bounds_gizmo.hpp"
 #include "gui/camera_thumbnail_batch.hpp"
+#include "gui/collision_export_panel.hpp"
 #include "gui/collision_panel.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/error_event_bridge.hpp"
@@ -5172,6 +5173,13 @@ namespace lfs::vis::gui {
             native_panel_storage_.push_back(panel);
             reg_panel("native.collision", "Collision", panel, PanelSpace::Floating, 12,
                       static_cast<uint32_t>(PanelOption::DEFAULT_CLOSED), 540.0f, 680.0f);
+        }
+
+        {
+            auto panel = std::make_shared<CollisionExportPanel>(&rmlui_manager_);
+            native_panel_storage_.push_back(panel);
+            reg_panel("native.collision_export", "Export collision", panel, PanelSpace::Floating, 13,
+                      static_cast<uint32_t>(PanelOption::DEFAULT_CLOSED), 500.0f, 440.0f);
         }
 
         reg_panel("native.selection_overlay", "Selection Overlay",

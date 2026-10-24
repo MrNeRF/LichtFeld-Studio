@@ -3565,7 +3565,7 @@ namespace lfs::vis::gui {
                 return;
             scene_manager->selectNode(id);
             requestCollisionExport(node->uuid);
-            PanelRegistry::instance().set_panel_enabled("native.collision", true);
+            PanelRegistry::instance().set_panel_enabled("native.collision_export", true);
         } else if (kind == "export_splat" && parts.size() >= 2) {
             core::NodeId id = core::NULL_NODE;
             if (!parseNodeId(parts[1], id))

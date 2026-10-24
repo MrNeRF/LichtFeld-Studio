@@ -54,13 +54,6 @@
   <div class="collision-row" data-tooltip="collision.tip_speed"><span>@tr:collision.speed</span><input id="walk-speed" type="text" value="2.5"/></div>
   <div class="collision-row" data-tooltip="collision.tip_step"><span>@tr:collision.step_height</span><input id="walk-step" type="text" value="0.25"/></div>
   </div>
-  <button id="export-toggle" class="section-header collision-section-header" data-collision-section="export-section" aria-expanded="false"><span class="section-arrow">▶</span><span>@tr:collision.export_section</span></button>
-  <div id="export-section" class="collision-section collapsed">
-    <p class="collision-save-note">@tr:collision.project_storage</p>
-    <div class="collision-export-option"><button id="export-voxels" class="btn btn--primary"><span>@tr:collision.export_voxels</span></button><p class="collision-note">@tr:collision.export_voxels_help</p></div>
-    <div class="collision-export-option"><button id="export-glb" class="btn btn--secondary"><span>@tr:collision.export_glb</span></button><p class="collision-note">@tr:collision.export_glb_help</p></div>
-    <p class="collision-note">@tr:collision.export_coordinates</p>
-  </div>
   <button id="advanced-toggle" class="section-header collision-section-header" data-collision-section="advanced" aria-expanded="false"><span class="section-arrow">▶</span><span>@tr:collision.advanced</span></button>
   <div id="advanced" class="collision-section collapsed">
   <p class="collision-note">@tr:collision.shared_setup</p>

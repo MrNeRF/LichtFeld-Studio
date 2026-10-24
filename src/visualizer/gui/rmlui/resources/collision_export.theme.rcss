@@ -1,0 +1,6 @@
+.export-option { border-color: @{border}; }
+.export-option p, .export-note, #export-time { color: @{text_dim}; }
+#export-job { background-color: @{surface_bright}; }
+#export-progress { background-color: @{border}; }
+#export-progress-fill { background-color: @{primary}; }
+#export-error { border-color: @{error}; color: @{error}; }
