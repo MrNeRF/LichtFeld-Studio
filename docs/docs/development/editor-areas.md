@@ -61,9 +61,9 @@ pointer events + LayoutGeometry
 ```
 
 `ScreenHost` creates one `AreaFrame` per visible area. It renders editor
-headers and the screen chrome with the screen RML documents, forwards header
-actions to the matching `AreaEditor`, and lets panel-backed editors draw into
-their content rectangle. `View3DEditor` owns the 3D header actions;
+headers, the Properties category rail, and the screen chrome with the screen RML
+documents, forwards header actions to the matching `AreaEditor`, and lets
+panel-backed editors draw into their content rectangle. `View3DEditor` owns the 3D header actions;
 `PropertiesEditor`, `ScenePanelEditor`, `ConsoleEditor`, and `PanelEditor` host
 their corresponding panel content.
 

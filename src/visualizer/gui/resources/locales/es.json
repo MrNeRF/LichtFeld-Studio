@@ -2894,7 +2894,8 @@
     "selection_depth_offset_x": "X",
     "selection_depth_offset_y": "Y",
     "selection_depth_size": "Tamaño",
-    "all_panel_tabs": "Todos los paneles"
+    "scroll_panel_tabs_up": "Desplazar pestañas de panel hacia arriba",
+    "scroll_panel_tabs_down": "Desplazar pestañas de panel hacia abajo"
   },
   "runtime": {
     "environment_map_failed": "No se pudo leer el mapa de entorno «{}». Se ha conservado el entorno anterior.",

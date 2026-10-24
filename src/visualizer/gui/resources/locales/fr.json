@@ -2894,7 +2894,8 @@
     "selection_depth_offset_x": "X",
     "selection_depth_offset_y": "Y",
     "selection_depth_size": "Taille",
-    "all_panel_tabs": "Tous les panneaux"
+    "scroll_panel_tabs_up": "Faire défiler les onglets vers le haut",
+    "scroll_panel_tabs_down": "Faire défiler les onglets vers le bas"
   },
   "runtime": {
     "environment_map_failed": "Impossible de lire la carte d’environnement « {} ». L’environnement précédent a été conservé.",

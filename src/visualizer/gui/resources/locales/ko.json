@@ -2894,7 +2894,8 @@
     "selection_depth_offset_x": "X",
     "selection_depth_offset_y": "Y",
     "selection_depth_size": "크기",
-    "all_panel_tabs": "모든 패널"
+    "scroll_panel_tabs_up": "패널 탭 위로 스크롤",
+    "scroll_panel_tabs_down": "패널 탭 아래로 스크롤"
   },
   "runtime": {
     "environment_map_failed": "환경 맵 \"{}\"을(를) 읽을 수 없습니다. 이전 환경이 유지되었습니다.",

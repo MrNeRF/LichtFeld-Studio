@@ -693,8 +693,8 @@ namespace lfs::vis {
         }
         static constexpr std::array kPropertiesTabs{"test.tab_first", "test.tab_second", "test.tab_third",
                                                     "test.tab_fourth"};
-        // Draws the default screen with four properties tabs, more than its narrow properties
-        // area shows, and returns that area.
+        // Draws the default screen with four properties tabs, more than its short properties
+        // area shows, and returns that area. The last one is a closeable plugin tab.
         screen::AreaId drawOverflowingPropertiesTabs() {
             class Panel final : public gui::IPanel {
                 void draw(const gui::PanelDrawContext&) override {}
@@ -705,6 +705,7 @@ namespace lfs::vis {
                 info.id = id;
                 info.label = id;
                 info.space = gui::PanelSpace::MainPanelTab;
+                info.tab_closeable = std::string_view(id) == kPropertiesTabs.back();
                 info.panel = std::make_shared<Panel>();
                 EXPECT_TRUE(gui::PanelRegistry::instance().register_panel(std::move(info)));
             }
@@ -725,6 +726,69 @@ namespace lfs::vis {
         Rml::ElementDocument* screenChrome() {
             auto* const context = Rml::GetContext("screen_chrome");
             return context ? context->GetDocument(0) : nullptr;
+        }
+        Rml::Element* tabStrip(const screen::AreaId area) {
+            auto* const rail = screenChrome()->GetElementById("tab-rail-" + std::to_string(area.value));
+            return rail ? rail->QuerySelector(".tab-strip") : nullptr;
+        }
+        Rml::Element* railTab(const std::string& id) { return screenChrome()->GetElementById("tab-" + id); }
+        // The centre of the part of `element` the strip shows (the chrome covers the window here).
+        glm::vec2 shownCentre(Rml::Element* const element, Rml::Element* const strip) {
+            const auto position = element->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto size = element->GetBox().GetSize(Rml::BoxArea::Border);
+            const float strip_top = strip->GetAbsoluteOffset(Rml::BoxArea::Border).y;
+            const float top = std::max(position.y, strip_top);
+            const float bottom = std::min(position.y + size.y, strip_top + strip->GetClientHeight());
+            return {position.x + size.x * 0.5f, (top + bottom) * 0.5f};
+        }
+        // Whole in the strip, or down to its bottom when the tab is taller than the strip.
+        bool railShows(const screen::AreaId area, const std::string& id) {
+            auto* const strip = tabStrip(area);
+            auto* const tab = railTab(id);
+            const float top = tab->GetAbsoluteOffset(Rml::BoxArea::Border).y;
+            const float bottom = top + tab->GetBox().GetSize(Rml::BoxArea::Border).y;
+            const float strip_top = strip->GetAbsoluteOffset(Rml::BoxArea::Border).y;
+            const float strip_bottom = strip_top + strip->GetClientHeight();
+            return bottom <= strip_bottom + 0.5f && (top >= strip_top - 0.5f || bottom >= strip_bottom - 0.5f);
+        }
+        // A screen frame with the pointer at `at`. Native events sent after it reach the input
+        // handlers it registered.
+        void screenFrame(const glm::vec2 at, const float wheel = 0.0f) {
+            gui::PanelInputState input;
+            input.mouse_x = at.x;
+            input.mouse_y = at.y;
+            input.mouse_wheel = wheel;
+            manager().beginFrameCursorTracking();
+            gui_->screenHost().processInput(input, true);
+            const gui::UIContext ui{.viewer = viewer_.get(), .editor = &viewer_->getEditorContext()};
+            gui_->screenHost().draw(ui, {.ui = &ui}, input, false, {});
+        }
+        void clickScreen(const glm::vec2 at) {
+            screenFrame(at);
+            SDL_Event event{};
+            event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+            event.button.windowID = SDL_GetWindowID(window_->getWindow());
+            event.button.button = SDL_BUTTON_LEFT;
+            event.button.down = true;
+            event.button.x = at.x;
+            event.button.y = at.y;
+            (void)manager().dispatchInputEvent(event);
+            event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+            event.button.down = false;
+            (void)manager().dispatchInputEvent(event);
+            screenFrame(at);
+        }
+        // Scrolls the wheel at `at`; the frame after it carries the wheel to the editors.
+        void wheelScreen(const glm::vec2 at, const float wheel) {
+            screenFrame(at);
+            SDL_Event event{};
+            event.type = SDL_EVENT_MOUSE_WHEEL;
+            event.wheel.windowID = SDL_GetWindowID(window_->getWindow());
+            event.wheel.mouse_x = at.x;
+            event.wheel.mouse_y = at.y;
+            event.wheel.y = wheel;
+            (void)manager().dispatchInputEvent(event);
+            screenFrame(at, wheel);
         }
         RenderInterface_VK input_renderer_;
         // GuiManager keeps these listeners alive until their Rml context is shut down.
@@ -2969,6 +3033,9 @@ namespace lfs::vis {
         EXPECT_EQ(editor.activeTab(), first);
         EXPECT_TRUE(category_key(static_cast<SDL_Keymod>(SDL_KMOD_LCTRL | SDL_KMOD_LSHIFT)));
         EXPECT_EQ(editor.activeTab(), stepped(first, -1));
+        // The tab the key wrapped to scrolls into the rail.
+        hover(area->content.x + area->content.w * 0.5f, area->content.y + area->content.h * 0.5f);
+        EXPECT_TRUE(railShows(properties, editor.activeTab()));
 
         const auto other = std::ranges::find_if(gui_->screenHost().areas(), [](const gui::AreaFrame& frame) {
             return frame.editor != screen::editors::kProperties && !frame.content.empty();
@@ -2980,68 +3047,84 @@ namespace lfs::vis {
         EXPECT_EQ(editor.activeTab(), before);
     }
 
-    // Fails if a pointer event drops the open tab picker list from the overlay record, so the
-    // area under the list takes clicks meant for its options.
-    TEST_F(WindowInputDispatchTest, OpenTabPickerKeepsCoveringAreasDuringPointerEvents) {
+    // Fails if a tab selected elsewhere stays scrolled out of the overflowing rail.
+    TEST_F(WindowInputDispatchTest, ActiveTabScrollsIntoTheOverflowingRail) {
         const auto properties = drawOverflowingPropertiesTabs();
         ASSERT_TRUE(properties.valid());
-        auto* const document = screenChrome();
-        ASSERT_NE(document, nullptr);
-        auto* const picker = dynamic_cast<Rml::ElementFormControlSelect*>(
-            document->GetElementById("prop-picker-" + std::to_string(properties.value)));
-        ASSERT_NE(picker, nullptr);
-        picker->ShowSelectBox();
-        // The list is laid out when the chrome renders.
-        document->GetContext()->Update();
-        document->GetContext()->Render();
-        drawScreen();
-        Rml::Element* list = nullptr;
-        for (int i = 0; i < picker->GetNumChildren(true); ++i)
-            if (picker->GetChild(i)->GetTagName() == "selectbox")
-                list = picker->GetChild(i);
-        ASSERT_NE(list, nullptr);
-        const auto list_pos = list->GetAbsoluteOffset(Rml::BoxArea::Border);
-        const glm::vec2 point(list_pos.x + 10.0f, list_pos.y + 6.0f);
-        ASSERT_TRUE(manager().activeOverlayContainsPoint(point.x, point.y));
-
-        // SDL delivers the pointer to the screen before the next frame.
-        gui::PanelInputState input;
-        input.mouse_x = point.x;
-        input.mouse_y = point.y;
-        gui_->screenHost().processInput(input, true);
-        SDL_Event motion{};
-        motion.type = SDL_EVENT_MOUSE_MOTION;
-        motion.motion.x = point.x;
-        motion.motion.y = point.y;
-        dispatch(motion);
-        manager().beginFrameCursorTracking();
-        EXPECT_TRUE(picker->IsSelectBoxVisible());
-        EXPECT_TRUE(manager().activeOverlayOccludesContext(context_, point.x, point.y));
-    }
-
-    // Fails if a tab picked while the strip overflows stays scrolled out of view.
-    TEST_F(WindowInputDispatchTest, ActiveTabScrollsIntoTheOverflowingStrip) {
-        const auto properties = drawOverflowingPropertiesTabs();
-        ASSERT_TRUE(properties.valid());
-        auto* const document = screenChrome();
-        ASSERT_NE(document, nullptr);
-        auto* const strip = document->GetElementById("prop-tabs-" + std::to_string(properties.value));
+        auto* const strip = tabStrip(properties);
         ASSERT_NE(strip, nullptr);
         for (const char* active : {"test.tab_first", "test.tab_fourth", "test.tab_second"}) {
             SCOPED_TRACE(active);
             gui_->screenHost().properties().setActiveTab(active);
             drawScreen();
-            Rml::Element* tab = nullptr;
-            for (int i = 0; i < strip->GetNumChildren(); ++i)
-                if (strip->GetChild(i)->IsClassSet("active"))
-                    tab = strip->GetChild(i);
-            ASSERT_NE(tab, nullptr);
-            EXPECT_EQ(tab->GetAttribute<Rml::String>("title", ""), active);
-            EXPECT_GT(strip->GetScrollWidth(), strip->GetClientWidth());
-            EXPECT_GE(tab->GetOffsetLeft(), strip->GetScrollLeft() - 0.5f);
-            EXPECT_LE(tab->GetOffsetLeft() + tab->GetOffsetWidth(),
-                      strip->GetScrollLeft() + strip->GetClientWidth() + 0.5f);
+            EXPECT_TRUE(railTab(active)->IsClassSet("active"));
+            EXPECT_GT(strip->GetScrollHeight(), strip->GetClientHeight());
+            EXPECT_TRUE(railShows(properties, active));
         }
+    }
+
+    // Fails if a click on a rail tab stops selecting it, the wheel over the rail scrolls the panels
+    // or the selection instead of the tabs, the scroll buttons stop paging, or a plugin tab's
+    // close button selects the tab instead of handing it to the owner to unload.
+    TEST_F(WindowInputDispatchTest, PropertiesTabRailTakesClicksWheelAndCloseButtons) {
+        const auto properties = drawOverflowingPropertiesTabs();
+        ASSERT_TRUE(properties.valid());
+        auto& editor = gui_->screenHost().properties();
+        editor.setActiveTab(kPropertiesTabs[0]);
+        drawScreen();
+        auto* const strip = tabStrip(properties);
+        ASSERT_NE(strip, nullptr);
+        auto* const rail = strip->GetParentNode();
+        ASSERT_TRUE(rail->IsClassSet("overflow"));
+        EXPECT_EQ(strip->GetScrollTop(), 0.0f);
+
+        wheelScreen(shownCentre(strip, strip), -1.0f);
+        const float wheeled = strip->GetScrollTop();
+        EXPECT_GT(wheeled, 0.0f);
+        EXPECT_EQ(editor.activeTab(), kPropertiesTabs[0]);
+        EXPECT_EQ(editor.scroll(), 0.0f);
+
+        auto* const down = rail->QuerySelector(".tab-scroll-down");
+        clickScreen(shownCentre(down, down));
+        EXPECT_GT(strip->GetScrollTop(), wheeled);
+        EXPECT_EQ(editor.activeTab(), kPropertiesTabs[0]);
+        for (int i = 0; i < 8 && !down->HasAttribute("disabled"); ++i)
+            clickScreen(shownCentre(down, down));
+        EXPECT_TRUE(down->HasAttribute("disabled"));
+
+        // Tabs sort by label, so the third one ends the rail scrolled to its end.
+        clickScreen(shownCentre(railTab(kPropertiesTabs[2]), strip));
+        EXPECT_EQ(editor.activeTab(), kPropertiesTabs[2]);
+
+        auto* const close = railTab(kPropertiesTabs[3])->QuerySelector(".tab-close");
+        ASSERT_NE(close, nullptr);
+        strip->SetScrollTop(strip->GetScrollTop() + close->GetAbsoluteTop() - strip->GetAbsoluteTop() - 8.0f);
+        clickScreen(shownCentre(close, strip));
+        EXPECT_EQ(editor.takeClosedTab(), kPropertiesTabs[3]);
+        EXPECT_EQ(editor.activeTab(), kPropertiesTabs[2]);
+    }
+
+    // Fails if an idle frame lays the rail out again, which a pointer-free redraw does not need.
+    TEST_F(WindowInputDispatchTest, IdleFramesLeaveThePropertiesTabRailAlone) {
+        const auto properties = drawOverflowingPropertiesTabs();
+        ASSERT_TRUE(properties.valid());
+        gui::PanelInputState idle;
+        idle.mouse_x = idle.mouse_y = -1.0e9f;
+        drawScreen(idle);
+        gui_->screenHost().queueOverlay();
+        auto* const tab = railTab(kPropertiesTabs[0]);
+        // A stale height that only a new layout pass would replace.
+        tab->SetProperty("height", "3px");
+        for (int frame = 0; frame < 3; ++frame) {
+            drawScreen(idle);
+            gui_->screenHost().queueOverlay();
+        }
+        EXPECT_EQ(tab->GetLocalProperty("height")->Get<float>(), 3.0f);
+        EXPECT_FALSE(gui_->screenHost().needsAnimationFrame());
+        gui_->screenHost().properties().setActiveTab(kPropertiesTabs[1]);
+        drawScreen(idle);
+        EXPECT_NEAR(tab->GetBox().GetSize(Rml::BoxArea::Border).y,
+                    tab->GetFirstChild()->GetBox().GetSize().x + 18.0f, 1.0f);
     }
 
     TEST_F(WindowInputDispatchTest, SequencerEditShortcutsRespectTextFocusAndVisibility) {

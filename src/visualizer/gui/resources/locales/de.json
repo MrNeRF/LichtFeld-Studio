@@ -2894,7 +2894,8 @@
     "selection_depth_offset_x": "X",
     "selection_depth_offset_y": "Y",
     "selection_depth_size": "Größe",
-    "all_panel_tabs": "Alle Panels"
+    "scroll_panel_tabs_up": "Panel-Tabs nach oben scrollen",
+    "scroll_panel_tabs_down": "Panel-Tabs nach unten scrollen"
   },
   "runtime": {
     "environment_map_failed": "Die Umgebungskarte „{}“ konnte nicht gelesen werden. Die bisherige Umgebung wurde beibehalten.",

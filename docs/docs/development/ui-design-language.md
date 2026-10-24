@@ -135,20 +135,44 @@ design when it does.
 
 ### Properties area category tabs
 
-Rendering, Training, and plugins registered in `MAIN_PANEL_TAB` are tabs in the
-header of a Properties area. When they overflow, the header scrolls to the active
-tab and the picker lists every tab.
+Rendering, Training, and plugins registered in `MAIN_PANEL_TAB` are tabs in a
+vertical rail at the left of a Properties area's content, below its header. The
+header keeps the editor-type control and the area buttons. The active panel
+fills the rest of the area. Inactive tabs are recessed. The active tab fills the
+rail width and opens the rail edge beside its content; the edge continues above
+and below it.
+
+Labels read bottom to top and use the translated panel label. Tab height follows
+the measured text length, and labels are centered along the tab. Rotated labels
+use pixel-aligned origins and line boxes at fractional scales. Plugin authors do
+not need special dimensions or markup. Top-level plugin tabs have a close button
+below the label; built-in tabs cannot be closed. Closing a plugin tab unloads its
+plugin, the same as Unload in the Plugin Marketplace, so all of the plugin's
+panels go away. Loading the plugin again from the Marketplace brings its tabs
+back.
 
 - Click a tab to select its panel.
+- Scroll the wheel over the rail to reach overflowing tabs. Up/down buttons
+  appear when tabs overflow and the rail is at least three tabs tall; a shorter
+  rail scrolls with the wheel alone.
+- A tab selected another way, such as a keymap action or a script, scrolls into
+  view. A tab taller than the rail shows its bottom, where its label starts.
+  Scrolling the rail yourself keeps that offset until the selected tab moves.
 - Next/Previous Sidebar Category are keymap actions under Preferences > Input.
   Their defaults are Ctrl+Tab and Ctrl+Shift+Tab; both wrap. They apply while the
   pointer is over a Properties area, including when its content has focus. While
   a text field has focus, only bindings with Ctrl or Cmd and no Alt switch
   categories; other keys type into the field.
-- Top-level plugin tabs have a close button; built-in tabs cannot be closed.
-  Closing a plugin tab unloads its plugin, the same as Unload in the Plugin
-  Marketplace, so all of the plugin's panels go away. Loading the plugin again
-  from the Marketplace brings its tabs back.
+- The tabs take no keyboard focus of their own; use the keymap actions.
+
+The screen chrome (`screen_chrome.{rml,rcss,theme.rcss}`) draws the rail, and
+the panels draw right of `PropertiesEditor::kTabRailDp` at the current UI scale.
+`ScreenHost::syncTabRails` sizes the tabs only when the tabs, the selection, the
+area geometry, the theme, or the rail's scroll change, so idle frames do not lay
+the rail out. `test_properties_tab_rail.cpp` checks the real RmlUi geometry at
+1x, 1.25x, 1.5x, 1.75x, and 2x, including rendered glyph bounds;
+`WindowInputDispatchTest` covers clicks, the wheel, the scroll buttons, closing,
+the keymap actions, and idle frames.
 
 ### Docked panels
 

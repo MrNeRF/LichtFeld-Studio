@@ -2894,7 +2894,8 @@
     "selection_depth_offset_x": "X",
     "selection_depth_offset_y": "Y",
     "selection_depth_size": "Grootte",
-    "all_panel_tabs": "Alle panelen"
+    "scroll_panel_tabs_up": "Paneeltabbladen omhoog scrollen",
+    "scroll_panel_tabs_down": "Paneeltabbladen omlaag scrollen"
   },
   "runtime": {
     "environment_map_failed": "Omgevingskaart ‘{}’ kon niet worden gelezen. De vorige omgeving is behouden.",
