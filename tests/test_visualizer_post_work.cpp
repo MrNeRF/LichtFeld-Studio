@@ -2565,30 +2565,36 @@ contract["check_selection_submode_follows_native_mode"](lf)
     }
 
     TEST_F(VisualizerImplResetTest, CropApplyPreservesLockedTargetsAndHelpers) {
-        for (const bool ellipsoid : {false, true}) {
+        for (const std::string shape : {"box", "ellipsoid", "polygon"}) {
             for (const bool active_tool : {false, true}) {
                 for (const std::string locked_name : {"", "target", "inner", "outer"}) {
-                    SCOPED_TRACE(std::to_string(ellipsoid) + ":" + std::to_string(active_tool) + ":" + locked_name);
+                    SCOPED_TRACE(shape + ":" + std::to_string(active_tool) + ":" + locked_name);
                     VisualizerImpl viewer(projectOptions());
                     auto& scene = viewer.getScene();
                     auto* manager = viewer.getSceneManager();
                     const auto outer = scene.addGroup("outer");
                     const auto inner = scene.addGroup("inner", outer);
                     const auto target = scene.addSplat("target", lfs::test::licht::make_splat(4), inner);
-                    const auto helper = ellipsoid ? scene.addEllipsoid("helper", target) : scene.addCropBox("helper", target);
+                    lfs::core::CropPolygonData polygon;
+                    polygon.vertices = {{-0.5f, -0.5f}, {0.5f, -0.5f}, {0.5f, 0.5f}, {-0.5f, 0.5f}};
+                    polygon.half_depth = 0.5f;
+                    polygon.enabled = false;
+                    const auto helper = shape == "ellipsoid" ? scene.addEllipsoid("helper", target)
+                                        : shape == "polygon" ? scene.addCropPolygon("helper", target, polygon)
+                                                             : scene.addCropBox("helper", target);
                     scene.setNodeTransform(helper, glm::mat4(1.0f));
                     auto* volume = scene.getMutableNode("helper");
-                    if (ellipsoid) {
+                    if (shape == "ellipsoid") {
                         volume->ellipsoid->radii = glm::vec3(0.5f);
                         volume->ellipsoid->enabled = false;
-                    } else {
+                    } else if (shape == "box") {
                         volume->cropbox->min = glm::vec3(-0.5f);
                         volume->cropbox->max = glm::vec3(0.5f);
                         volume->cropbox->enabled = false;
                     }
                     manager->selectNode(target);
                     auto& gizmo = viewer.getGuiManager()->gizmo();
-                    gizmo.setCropToolShape(ellipsoid ? "ellipsoid" : "box");
+                    gizmo.setCropToolShape(shape);
                     ASSERT_TRUE(gizmo.ensureCropToolStateForRestore());
                     UnifiedToolRegistry::instance().setActiveTool(active_tool ? "builtin.cropbox" : "");
                     if (!locked_name.empty())
@@ -2597,8 +2603,10 @@ contract["check_selection_submode_follows_native_mode"](lf)
                     const auto before = scene.getNodeById(target)->model->means_raw().cpu().to_vector();
                     if (active_tool)
                         gizmo.applyActiveCropTool();
-                    else if (ellipsoid)
+                    else if (shape == "ellipsoid")
                         lfs::core::events::cmd::ApplyEllipsoid{}.emit();
+                    else if (shape == "polygon")
+                        lfs::core::events::cmd::ApplyCropPolygon{}.emit();
                     else
                         lfs::core::events::cmd::ApplyCropBox{}.emit();
                     const auto* node = scene.getNodeById(target);
@@ -2612,7 +2620,9 @@ contract["check_selection_submode_follows_native_mode"](lf)
                         EXPECT_NE(retained, nullptr);
                         if (retained) {
                             EXPECT_EQ(retained->local_transform.get(), glm::mat4(1.0f));
-                            EXPECT_FALSE(ellipsoid ? retained->ellipsoid->enabled : retained->cropbox->enabled);
+                            EXPECT_FALSE(shape == "ellipsoid" ? retained->ellipsoid->enabled
+                                         : shape == "polygon" ? retained->crop_polygon->enabled
+                                                              : retained->cropbox->enabled);
                         }
                     } else {
                         EXPECT_EQ(node->model->visible_count(), 1u);

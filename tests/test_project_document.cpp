@@ -36,6 +36,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <iostream>
 #include <iterator>
@@ -1062,6 +1063,73 @@ namespace {
         ASSERT_FALSE(restored);
         EXPECT_EQ(restored.error().code(), lfs::ErrorCode::DataLoss);
         EXPECT_EQ(live.getNodeCount(), 1u);
+        EXPECT_NE(live.getNode("Existing"), nullptr);
+    }
+
+    TEST(SceneChapterAdapterTest, CropPolygonSurvivesCaptureAndHydrationUnderItsSplat) {
+        Scene scene;
+        const auto splat = scene.addSplat("Model", make_splat(3));
+        lfs::core::CropPolygonData data;
+        data.vertices = {{-1.0f, -0.5f}, {1.0f, -0.5f}, {1.0f, 0.5f}, {0.25f, 0.5f}, {0.25f, 0.0f}, {-1.0f, 0.0f}};
+        data.half_depth = 2.5f;
+        data.inverse = true;
+        data.color = {0.2f, 0.4f, 0.6f};
+        data.line_width = 3.0f;
+        const glm::mat4 transform =
+            glm::scale(glm::rotate(glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)),
+                                   glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f)),
+                       glm::vec3(1.0f, 2.0f, 0.5f));
+        const auto polygon = scene.addCropPolygon("Model_crop_polygon", splat, data, transform);
+        ASSERT_NE(polygon, lfs::core::NULL_NODE);
+        const auto splat_uuid = scene.getNodeUuid(splat);
+        const auto polygon_uuid = scene.getNodeUuid(polygon);
+
+        const ScenePayloadBindings bindings{{splat_uuid, PayloadBinding{.fourcc = "DSRC",
+                                                                        .instance_uuid = splat_uuid,
+                                                                        .reference_uuid = std::nullopt,
+                                                                        .source_kind = "ply"}}};
+        auto captured = capture_scene_graph(scene, bindings);
+        ASSERT_TRUE(captured) << lfs::format_for_developer(captured.error());
+        auto decoded = SceneGraphChapter::from_bytes(captured->to_bytes());
+        ASSERT_TRUE(decoded) << lfs::format_for_developer(decoded.error());
+        const auto record = require_result(decoded->find(polygon_uuid));
+        ASSERT_TRUE(record && record->crop_polygon);
+        EXPECT_EQ(record->type, "crop_polygon");
+
+        Scene restored;
+        const ScenePayloadResolver resolver{
+            .splat = [](const PayloadBinding&) -> lfs::Result<std::unique_ptr<lfs::core::SplatData>> {
+                return make_splat(3);
+            }};
+        auto hydrated = hydrate_scene_graph(*decoded, restored, resolver);
+        ASSERT_TRUE(hydrated) << lfs::format_for_developer(hydrated.error());
+        const auto* node = restored.getNodeByUuid(polygon_uuid);
+        ASSERT_NE(node, nullptr);
+        EXPECT_EQ(node->type, NodeType::CROP_POLYGON);
+        EXPECT_EQ(node->parent_id, restored.getNodeIdByUuid(splat_uuid));
+        EXPECT_EQ(node->local_transform.get(), transform);
+        ASSERT_TRUE(node->crop_polygon);
+        EXPECT_EQ(node->crop_polygon->vertices, data.vertices);
+        EXPECT_EQ(node->crop_polygon->half_depth, data.half_depth);
+        EXPECT_TRUE(node->crop_polygon->inverse);
+        EXPECT_TRUE(node->crop_polygon->enabled);
+        EXPECT_EQ(node->crop_polygon->color, data.color);
+        EXPECT_EQ(node->crop_polygon->line_width, data.line_width);
+
+        // A polygon record on any other node type is refused before the live scene changes.
+        SceneGraphChapter mismatched;
+        require_status(mismatched.upsert_node(SceneNodeRecord{
+            .uuid = fixed_uuid(940),
+            .type = "group",
+            .name = "Malformed group",
+            .child_order = 0,
+            .crop_polygon = *record->crop_polygon,
+        }));
+        Scene live;
+        ASSERT_NE(live.addGroup("Existing"), lfs::core::NULL_NODE);
+        auto refused = hydrate_scene_graph(mismatched, live, ScenePayloadResolver{});
+        ASSERT_FALSE(refused);
+        EXPECT_EQ(refused.error().code(), lfs::ErrorCode::DataLoss);
         EXPECT_NE(live.getNode("Existing"), nullptr);
     }
 

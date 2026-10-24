@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <filesystem>
 #include <format>
@@ -881,6 +882,55 @@ namespace {
         auto invalid = SceneGraphChapter::parse(legacy.dump());
         ASSERT_FALSE(invalid);
         EXPECT_EQ(invalid.error().code(), lfs::ErrorCode::DataLoss);
+    }
+
+    TEST(ProjectChapterTest, SceneGraphCropPolygonRoundTripsAndRejectsMalformedOutlines) {
+        const auto id = uuid_literal("53000000-0000-4000-8000-000000000012");
+        const CropPolygonRecord polygon{
+            .vertices = {{-2.0f, -1.0f}, {2.0f, -1.0f}, {2.0f, 0.5f}, {0.0f, 1.0f}, {-2.0f, 0.5f}},
+            .half_depth = 1.25f,
+            .inverse = true,
+            .enabled = false,
+            .color = {0.1f, 0.2f, 0.3f},
+            .line_width = 3.0f,
+        };
+        SceneGraphChapter chapter;
+        ASSERT_TRUE(chapter.upsert_node(SceneNodeRecord{
+            .uuid = id,
+            .type = "crop_polygon",
+            .name = "Polygon region",
+            .crop_polygon = polygon,
+        }));
+        const auto json = lfs::io::JsonChapterDom::Json::parse(chapter.dom().dump());
+        auto parsed = SceneGraphChapter::parse(json.dump());
+        ASSERT_TRUE(parsed);
+        auto found = parsed->find(id);
+        ASSERT_TRUE(found && *found);
+        ASSERT_TRUE((*found)->crop_polygon);
+        EXPECT_EQ(*(*found)->crop_polygon, polygon);
+        EXPECT_FALSE((*found)->cropbox);
+        EXPECT_FALSE((*found)->ellipsoid);
+
+        using Json = lfs::io::JsonChapterDom::Json;
+        const auto expect_data_loss = [&](const auto& mutate) {
+            auto malformed = json;
+            mutate(malformed["nodes"][0]["crop_polygon"]);
+            auto result = SceneGraphChapter::parse(malformed.dump());
+            ASSERT_FALSE(result);
+            EXPECT_EQ(result.error().code(), lfs::ErrorCode::DataLoss);
+        };
+        expect_data_loss([](Json& value) {
+            Json vertices = Json::array();
+            for (int i = 0; i < 65; ++i) {
+                const float angle = 0.0966f * static_cast<float>(i);
+                vertices.push_back(Json::array({std::cos(angle), std::sin(angle)}));
+            }
+            value["vertices"] = std::move(vertices);
+        });
+        expect_data_loss([](Json& value) { value["vertices"][1][0] = nullptr; });
+        expect_data_loss([](Json& value) { value["vertices"] = Json::parse("[[0,0],[1,1],[2,2]]"); });
+        expect_data_loss([](Json& value) { value["half_depth"] = 0.0f; });
+        expect_data_loss([](Json& value) { value.erase("vertices"); });
     }
 
     TEST(ProjectChapterTest, SceneGraphCameraHasImageDefaultsTrueWhenAbsent) {
