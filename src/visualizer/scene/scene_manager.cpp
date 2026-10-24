@@ -3116,6 +3116,35 @@ namespace lfs::vis {
                    : core::NULL_NODE;
     }
 
+    core::NodeId SceneManager::getActiveSelectionCropPolygonId() const {
+        const auto renderable_polygons = scene_.getRenderableCropPolygons();
+
+        const core::NodeId selected_polygon_id = getSelectedNodeCropPolygonId();
+        if (selected_polygon_id != core::NULL_NODE &&
+            containsEnabledScopedRenderableNode(renderable_polygons, selected_polygon_id)) {
+            return selected_polygon_id;
+        }
+
+        std::shared_lock slock(selection_.mutex());
+        const auto& ids = selection_.selectedNodeIds();
+        if (!ids.empty()) {
+            return core::NULL_NODE;
+        }
+
+        core::NodeId single_id = core::NULL_NODE;
+        for (const auto& polygon : renderable_polygons) {
+            if (!polygon.data || !polygon.data->enabled || polygon.parent_node_index < 0) {
+                continue;
+            }
+            if (single_id != core::NULL_NODE) {
+                return core::NULL_NODE;
+            }
+            single_id = polygon.node_id;
+        }
+
+        return single_id;
+    }
+
     void SceneManager::syncDatasetCameraFrustumsToRenderSettings() {
         auto* rm = services().renderingOrNull();
         if (!rm || scene_.getAllCameras().empty())

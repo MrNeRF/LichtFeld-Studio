@@ -206,6 +206,7 @@ namespace lfs::vis {
 
         // The selected crop polygon, or the one attached to the selected splat.
         core::NodeId getSelectedNodeCropPolygonId() const;
+        core::NodeId getActiveSelectionCropPolygonId() const;
 
         std::expected<void, std::string> loadDataset(const std::filesystem::path& path,
                                                      const lfs::core::param::TrainingParameters& params);

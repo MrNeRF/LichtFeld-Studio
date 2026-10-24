@@ -1033,6 +1033,30 @@ TEST_F(SelectionServiceInteractionsTest, ComparisonSelectAllFilteredStillApplies
     EXPECT_TRUE(scene_manager_->getScene().hasPreparedCombinedModel());
 }
 
+TEST_F(SelectionServiceInteractionsTest, SelectAllFilteredKeepsGaussiansInsideTheCropPolygon) {
+    auto& scene = scene_manager_->getScene();
+    // Concave L; the frame puts the second point in its notch (1..2, 1..2).
+    lfs::core::CropPolygonData data;
+    data.vertices = {{-2.0f, -2.0f}, {2.0f, -2.0f}, {2.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 2.0f}, {-2.0f, 2.0f}};
+    data.half_depth = 1.0f;
+    const auto polygon = scene.addCropPolygon("test_crop_polygon", scene.getNodeIdByName("test"), data,
+                                              glm::translate(glm::mat4(1.0f), glm::vec3(-0.5f, -1.5f, 0.0f)));
+    ASSERT_NE(polygon, lfs::core::NULL_NODE);
+
+    auto settings = rendering_manager_->getSettings();
+    settings.crop_filter_for_selection = true;
+    rendering_manager_->updateSettings(settings);
+
+    for (const bool inverse : {false, true}) {
+        SCOPED_TRACE(inverse ? "inverse" : "inside");
+        scene.getCropPolygonData(polygon)->inverse = inverse;
+        const auto result = service_->selectAllFiltered();
+        ASSERT_TRUE(result.success) << result.error;
+        EXPECT_EQ(selection_values(*scene_manager_),
+                  inverse ? (std::vector<uint8_t>{0, 1}) : (std::vector<uint8_t>{1, 0}));
+    }
+}
+
 TEST_F(SelectionServiceInteractionsTest, ComparisonHoverKeepsOwnedPanelPositionsWithoutCombinedModel) {
     scene_manager_->getScene().addSplat("right", make_test_splat({0.0f, 0.0f, 0.0f}));
     auto settings = rendering_manager_->getSettings();

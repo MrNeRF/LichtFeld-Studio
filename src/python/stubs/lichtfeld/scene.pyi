@@ -639,7 +639,7 @@ class Scene:
 
     def apply_crop_filter(self, mask: lichtfeld.Tensor) -> None:
         """
-        Filter a combined-model CUDA bool mask in place by enabled render crop boxes and ellipsoids. Scene selection is unchanged.
+        Filter a combined-model CUDA bool mask in place by enabled render crop boxes, ellipsoids and polygons. Scene selection is unchanged.
         """
 
     def training_model(self) -> SplatData | None:

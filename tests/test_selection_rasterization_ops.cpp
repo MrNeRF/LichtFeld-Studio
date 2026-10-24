@@ -329,6 +329,30 @@ TEST_F(SelectionRasterizationOpsTest, ScopedEllipsoidIncludesBoundaryAndSupports
     }
 }
 
+TEST_F(SelectionRasterizationOpsTest, ScopedCropPolygonUsesEvenOddRuleAndDepthAndSupportsInverse) {
+    // Concave L in a frame moved by +10 on x: the notch (1..2, 1..2) is outside.
+    const auto vertices = make_float32_values({-2, -2, 2, -2, 2, 1, 1, 1, 1, 2, -2, 2}, {6, 2});
+    const auto world_to_local = make_float32_values(
+        {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -10, 0, 0, 1}, {4, 4});
+    // Inside, in the notch, outside the outline, beyond a cap, another node, already unselected.
+    const auto means = make_float32_values(
+        {10, 0, 0, 11.5f, 1.5f, 0, 13, 0, 0, 10, 0, 1.5f, 13, 0, 0, 10, 0, 0}, {6, 3});
+    const auto indices = make_int32_values({0, 0, 0, 0, 1, 0});
+    for (const bool inverse : {false, true}) {
+        const lfs::rendering::SelectionCropPolygon polygon{
+            .transform = &world_to_local,
+            .vertices = &vertices,
+            .half_depth = 1.0f,
+            .inverse = inverse};
+        auto selection = make_bool_mask({1, 1, 1, 1, 1, 0});
+        lfs::rendering::filter_selection_by_crop(
+            selection, means, nullptr, nullptr, nullptr, false,
+            nullptr, nullptr, false, nullptr, &indices, 0, &polygon);
+        EXPECT_EQ(selection.cpu().to_vector_bool(),
+                  (std::vector<bool>{!inverse, inverse, inverse, inverse, true, false}));
+    }
+}
+
 TEST_F(SelectionRasterizationOpsTest, ScopedCropDefaultsToFirstNodeWithoutIndexStorage) {
     const auto means = make_float32_values({0, 0, 0, 2, 0, 0}, {2, 3});
     const auto transform = make_float32_values(

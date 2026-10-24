@@ -3758,7 +3758,32 @@ namespace lfs::vis {
             }
         }
 
-        if (!crop_t_ptr && !ellip_t_ptr) {
+        // Polygons only come from the scene; the selection volumes are boxes and spheres.
+        core::Tensor polygon_t;
+        core::Tensor polygon_vertices;
+        std::optional<rendering::SelectionCropPolygon> polygon;
+        if (use_scene_filters) {
+            if (const auto* const cp = findRenderableByNodeId(render_state.crop_polygons,
+                                                              scene_manager_->getActiveSelectionCropPolygonId());
+                cp && cp->data) {
+                const glm::mat4 inv_transform = glm::inverse(cp->world_transform);
+                const float* const t_ptr = glm::value_ptr(inv_transform);
+                polygon_t = core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4});
+                std::vector<float> outline;
+                outline.reserve(cp->data->vertices.size() * 2);
+                for (const glm::vec2& vertex : cp->data->vertices)
+                    outline.insert(outline.end(), {vertex.x, vertex.y});
+                polygon_vertices = core::Tensor::from_vector(outline, {cp->data->vertices.size(), size_t{2}});
+                polygon = rendering::SelectionCropPolygon{
+                    .transform = &polygon_t,
+                    .vertices = &polygon_vertices,
+                    .half_depth = cp->data->half_depth,
+                    .inverse = cp->data->inverse,
+                };
+            }
+        }
+
+        if (!crop_t_ptr && !ellip_t_ptr && !polygon) {
             return;
         }
 
@@ -3795,7 +3820,9 @@ namespace lfs::vis {
                 ellip_radii_ptr,
                 ellipsoid_inverse,
                 model_transforms_ptr,
-                transform_indices_ptr);
+                transform_indices_ptr,
+                -1,
+                polygon ? &*polygon : nullptr);
         }
     }
 

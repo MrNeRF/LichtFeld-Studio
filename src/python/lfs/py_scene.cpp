@@ -1082,11 +1082,13 @@ namespace lfs::python {
             return;
         const auto boxes = scene_->getRenderableCropBoxes();
         const auto ellipsoids = scene_->getRenderableEllipsoids();
+        const auto polygons = scene_->getRenderableCropPolygons();
         const auto enabled = [](const auto& volume) {
             return volume.data && volume.data->enabled && volume.parent_node_index >= 0;
         };
         if (!std::any_of(boxes.begin(), boxes.end(), enabled) &&
-            !std::any_of(ellipsoids.begin(), ellipsoids.end(), enabled)) {
+            !std::any_of(ellipsoids.begin(), ellipsoids.end(), enabled) &&
+            !std::any_of(polygons.begin(), polygons.end(), enabled)) {
             return;
         }
 
@@ -1140,6 +1142,26 @@ namespace lfs::python {
             rendering::filter_selection_by_crop(selection, means, nullptr, nullptr, nullptr, false,
                                                 &transform, &radii, ellipsoid.data->inverse, &model_transforms,
                                                 indices.get(), ellipsoid.parent_node_index);
+        }
+        for (const auto& polygon : polygons) {
+            if (!enabled(polygon))
+                continue;
+            const auto transform = upload_transform(polygon.world_transform);
+            std::vector<float> outline;
+            outline.reserve(polygon.data->vertices.size() * 2);
+            for (const glm::vec2& vertex : polygon.data->vertices)
+                outline.insert(outline.end(), {vertex.x, vertex.y});
+            const auto vertices =
+                core::Tensor::from_vector(outline, {polygon.data->vertices.size(), size_t{2}}, core::Device::CUDA);
+            const rendering::SelectionCropPolygon filter{
+                .transform = &transform,
+                .vertices = &vertices,
+                .half_depth = polygon.data->half_depth,
+                .inverse = polygon.data->inverse,
+            };
+            rendering::filter_selection_by_crop(selection, means, nullptr, nullptr, nullptr, false,
+                                                nullptr, nullptr, false, &model_transforms, indices.get(),
+                                                polygon.parent_node_index, &filter);
         }
     }
 
@@ -1822,7 +1844,7 @@ Returns:
             .def("set_node_transform", &PyScene::set_node_transform, nb::arg("name"), nb::arg("transform"), "Set node local transform from a [4, 4] ndarray")
             // Combined/training model
             .def("combined_model", &PyScene::combined_model, "Get the merged SplatData for all visible splats (None if empty)")
-            .def("apply_crop_filter", &PyScene::apply_crop_filter, nb::arg("mask"), "Filter a combined-model CUDA bool mask in place by enabled render crop boxes and ellipsoids. Scene selection is unchanged.")
+            .def("apply_crop_filter", &PyScene::apply_crop_filter, nb::arg("mask"), "Filter a combined-model CUDA bool mask in place by enabled render crop boxes, ellipsoids and polygons. Scene selection is unchanged.")
             .def("training_model", &PyScene::training_model, "Get the SplatData used for training (None if unavailable)")
             .def("set_training_model_node", &PyScene::set_training_model_node, nb::arg("name"), "Set which node provides the training model. A transient node may not replace a saved training model (RuntimeError)")
             .def_prop_ro("training_model_node_name", &PyScene::training_model_node_name, "Name of the node providing the training model")
