@@ -3161,6 +3161,106 @@ namespace lfs::vis {
         EXPECT_NEAR(columnLengths(cloud_fit).x * prism_half.x, 0.5f, 1e-5f);
     }
 
+    // Moving, inserting and removing a vertex re-centres the outline on the node
+    // origin and moves the node to compensate: no other vertex moves in the world.
+    TEST_F(SceneManagerRenderStateTest, CropPolygonOutlineEditsKeepTheOtherVerticesInPlace) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto parent = scene.addSplat("Model", makeTwoPointTestSplat(0.0f, 2.0f));
+        scene.setNodeTransform(parent, glm::rotate(glm::translate(glm::mat4(1.0f), glm::vec3(0.5f, 1.0f, -2.0f)),
+                                                   glm::radians(20.0f), glm::vec3(0.0f, 0.0f, 1.0f)));
+        const auto data = makeCropPolygonData();
+        const auto polygon = scene.addCropPolygon(
+            "Model_crop_polygon", parent, data,
+            glm::scale(glm::rotate(glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, -1.0f, 3.0f)), glm::radians(40.0f),
+                                   glm::normalize(glm::vec3(1.0f, 0.0f, 1.0f))),
+                       glm::vec3(2.0f, 0.5f, 1.5f)));
+        ASSERT_NE(polygon, core::NULL_NODE);
+        op::undoHistory().clear();
+
+        const auto world = [&] {
+            std::vector<glm::vec3> points;
+            for (const glm::vec2& vertex : scene.getCropPolygonData(polygon)->vertices)
+                points.emplace_back(scene.getWorldTransform(polygon) * glm::vec4(vertex, data.half_depth, 1.0f));
+            return points;
+        };
+        const auto expectCentred = [&] {
+            const auto& vertices = scene.getCropPolygonData(polygon)->vertices;
+            glm::vec2 lo(std::numeric_limits<float>::max());
+            glm::vec2 hi(std::numeric_limits<float>::lowest());
+            for (const glm::vec2& vertex : vertices) {
+                lo = glm::min(lo, vertex);
+                hi = glm::max(hi, vertex);
+            }
+            EXPECT_NEAR(lo.x + hi.x, 0.0f, 1e-5f);
+            EXPECT_NEAR(lo.y + hi.y, 0.0f, 1e-5f);
+        };
+        const auto expectNearPoint = [](const glm::vec3& actual, const glm::vec3& expected) {
+            EXPECT_NEAR(glm::distance(actual, expected), 0.0f, 1e-4f);
+        };
+        const auto local_to_world = scene.getWorldTransform(polygon);
+        const auto at = [&](const glm::vec2 local) {
+            return glm::vec3(local_to_world * glm::vec4(local, data.half_depth, 1.0f));
+        };
+        const auto before = world();
+        const glm::mat4 drawn = scene.getNodeById(polygon)->local_transform.get();
+
+        // Move vertex 1 out to the right: the outline's box grows and shifts.
+        auto moved = data.vertices;
+        moved[1] = {2.5f, -1.0f};
+        ASSERT_TRUE(cap::setCropPolygonOutline(manager, nullptr, polygon, moved));
+        expectCentred();
+        auto after = world();
+        ASSERT_EQ(after.size(), before.size());
+        for (size_t i = 0; i < after.size(); ++i)
+            expectNearPoint(after[i], i == 1 ? at(moved[1]) : before[i]);
+        EXPECT_NE(scene.getNodeById(polygon)->local_transform.get(), drawn);
+        EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_EQ(scene.getCropPolygonData(polygon)->vertices, data.vertices);
+        EXPECT_EQ(scene.getNodeById(polygon)->local_transform.get(), drawn);
+
+        // Insert a vertex above the edge from vertex 2 to vertex 3.
+        auto inserted = data.vertices;
+        inserted.insert(inserted.begin() + 3, glm::vec2(0.75f, 1.75f));
+        ASSERT_TRUE(cap::setCropPolygonOutline(manager, nullptr, polygon, inserted));
+        expectCentred();
+        after = world();
+        ASSERT_EQ(after.size(), before.size() + 1);
+        for (size_t i = 0; i < after.size(); ++i)
+            expectNearPoint(after[i], i == 3 ? at(inserted[3]) : before[i < 3 ? i : i - 1]);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+
+        // Remove the top vertex: the box shrinks and the rest stay put.
+        auto removed = data.vertices;
+        removed.erase(removed.begin() + 3);
+        ASSERT_TRUE(cap::setCropPolygonOutline(manager, nullptr, polygon, removed));
+        expectCentred();
+        after = world();
+        ASSERT_EQ(after.size(), before.size() - 1);
+        for (size_t i = 0; i < after.size(); ++i)
+            expectNearPoint(after[i], before[i < 3 ? i : i + 1]);
+        EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_EQ(scene.getCropPolygonData(polygon)->vertices, data.vertices);
+        EXPECT_EQ(scene.getNodeById(polygon)->local_transform.get(), drawn);
+
+        // Invalid outlines leave the polygon and the history alone.
+        std::vector<glm::vec2> too_many(core::kMaxCropPolygonVertices + 1);
+        for (size_t i = 0; i < too_many.size(); ++i)
+            too_many[i] = {std::cos(0.09f * static_cast<float>(i)), std::sin(0.09f * static_cast<float>(i))};
+        for (const auto& invalid : {std::vector<glm::vec2>{{-1.0f, -1.0f}, {1.0f, -1.0f}},
+                                    std::vector<glm::vec2>{{0.0f, 0.0f}, {1.0f, 1.0f}, {2.0f, 2.0f}},
+                                    std::vector<glm::vec2>{{0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, 0.0f}},
+                                    too_many}) {
+            EXPECT_FALSE(cap::setCropPolygonOutline(manager, nullptr, polygon, invalid));
+        }
+        EXPECT_EQ(scene.getCropPolygonData(polygon)->vertices, data.vertices);
+        EXPECT_EQ(scene.getNodeById(polygon)->local_transform.get(), drawn);
+        EXPECT_EQ(op::undoHistory().undoCount(), 0u);
+        EXPECT_FALSE(cap::setCropPolygonOutline(manager, nullptr, parent, data.vertices));
+    }
+
     TEST_F(SceneManagerRenderStateTest, ViewportRequestCarriesEnabledCropPolygonsAndTheLiveTransform) {
         SceneManager manager;
         auto& scene = manager.getScene();

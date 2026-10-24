@@ -1792,6 +1792,8 @@
     "action.apply_crop_box": "应用裁剪框",
     "action.remove_last_point": "删除上一个点",
     "action.apply_alignment": "应用对齐",
+    "action.insert_crop_polygon_vertex": "插入裁剪多边形顶点",
+    "action.remove_crop_polygon_vertex": "删除裁剪多边形顶点",
     "action.node_pick": "选取节点",
     "action.node_rect_select": "矩形选择节点",
     "action.toggle_ui": "切换 UI",

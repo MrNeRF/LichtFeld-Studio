@@ -1792,6 +1792,8 @@
     "action.apply_crop_box": "Appliquer la boîte de recadrage",
     "action.remove_last_point": "Retirer le dernier point",
     "action.apply_alignment": "Appliquer l’alignement",
+    "action.insert_crop_polygon_vertex": "Insérer un sommet du polygone de recadrage",
+    "action.remove_crop_polygon_vertex": "Retirer un sommet du polygone de recadrage",
     "action.node_pick": "Sélectionner le nœud",
     "action.node_rect_select": "Sélection rectangulaire de nœuds",
     "action.toggle_ui": "Basculer l'interface",

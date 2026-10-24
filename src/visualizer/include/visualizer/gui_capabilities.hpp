@@ -207,7 +207,7 @@ namespace lfs::vis::cap {
     [[nodiscard]] LFS_VIS_API lfs::Result<core::NodeId> resolveCropPolygonId(
         const SceneManager& scene_manager,
         const std::optional<std::string>& requested_node);
-    // Sets the polygon's depth, inverse or enabled flag in one history entry; the outline stays as drawn.
+    // Sets the polygon's depth, inverse or enabled flag in one history entry; the outline is unchanged.
     [[nodiscard]] LFS_VIS_API lfs::Status updateCropPolygon(
         SceneManager& scene_manager,
         RenderingManager* rendering_manager,
@@ -227,6 +227,15 @@ namespace lfs::vis::cap {
         SceneManager& scene_manager,
         RenderingManager* rendering_manager,
         core::NodeId polygon_id);
+
+    // Replaces a polygon's outline (node-local XY) in one history entry. The outline's
+    // box is re-centred on the origin and the node moves to compensate, so the prism
+    // stays in place. Rejects fewer than 3 distinct vertices, no area or over 64 vertices.
+    [[nodiscard]] LFS_VIS_API lfs::Result<void> setCropPolygonOutline(
+        SceneManager& scene_manager,
+        RenderingManager* rendering_manager,
+        core::NodeId polygon_id,
+        std::vector<glm::vec2> vertices);
 
     // Adds an enabled polygon under a splat in one history entry, replacing the
     // splat's existing crop box, ellipsoid or polygon.

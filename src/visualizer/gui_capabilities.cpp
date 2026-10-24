@@ -2139,6 +2139,32 @@ namespace lfs::vis::cap {
                                         *frame);
     }
 
+    lfs::Result<void> setCropPolygonOutline(SceneManager& scene_manager,
+                                            RenderingManager* rendering_manager,
+                                            const core::NodeId polygon_id,
+                                            std::vector<glm::vec2> vertices) {
+        const auto* const polygon_node = find_crop_polygon(scene_manager.getScene(), polygon_id);
+        if (!polygon_node)
+            return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "Invalid crop polygon target");
+
+        // Scene::setCropPolygonData rejects an invalid outline before anything changes.
+        glm::vec2 lo(std::numeric_limits<float>::max());
+        glm::vec2 hi(std::numeric_limits<float>::lowest());
+        for (const glm::vec2& vertex : vertices) {
+            lo = glm::min(lo, vertex);
+            hi = glm::max(hi, vertex);
+        }
+        const glm::vec2 centre = (lo + hi) * 0.5f;
+        for (glm::vec2& vertex : vertices)
+            vertex -= centre;
+
+        auto data = *polygon_node->crop_polygon;
+        data.vertices = std::move(vertices);
+        const glm::mat4 transform =
+            glm::translate(scene_manager.getNodeTransform(polygon_node->name), glm::vec3(centre, 0.0f));
+        return commit_crop_polygon_edit(scene_manager, rendering_manager, *polygon_node, data, transform);
+    }
+
     lfs::Result<core::NodeId> createCropPolygon(SceneManager& scene_manager,
                                                 RenderingManager* rendering_manager,
                                                 const core::NodeId parent_id,

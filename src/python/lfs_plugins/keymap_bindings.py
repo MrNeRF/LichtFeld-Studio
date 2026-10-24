@@ -74,6 +74,8 @@ class KeymapBindingsSection:
         ],
         "crop_box": [
             lf.keymap.Action.APPLY_CROP_BOX,
+            lf.keymap.Action.INSERT_CROP_POLYGON_VERTEX,
+            lf.keymap.Action.REMOVE_CROP_POLYGON_VERTEX,
         ],
         "align": [
             lf.keymap.Action.APPLY_ALIGNMENT,

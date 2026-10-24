@@ -1805,6 +1805,8 @@
     "action.apply_crop_box": "Applica box di ritaglio",
     "action.remove_last_point": "Rimuovi l’ultimo punto",
     "action.apply_alignment": "Applica l’allineamento",
+    "action.insert_crop_polygon_vertex": "Inserisci vertice del poligono di ritaglio",
+    "action.remove_crop_polygon_vertex": "Rimuovi vertice del poligono di ritaglio",
     "action.node_pick": "Seleziona nodo",
     "action.node_rect_select": "Selezione rettangolare di nodi",
     "action.toggle_ui": "Attiva UI",

@@ -1803,6 +1803,8 @@
     "action.apply_crop_box": "Apply Crop Box",
     "action.remove_last_point": "Remove Last Point",
     "action.apply_alignment": "Apply Alignment",
+    "action.insert_crop_polygon_vertex": "Insert Crop Polygon Vertex",
+    "action.remove_crop_polygon_vertex": "Remove Crop Polygon Vertex",
     "action.node_pick": "Pick Node",
     "action.node_rect_select": "Rectangle Select Nodes",
     "action.toggle_ui": "Toggle UI",

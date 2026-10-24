@@ -44,8 +44,6 @@ namespace lfs::vis {
 
     namespace {
         constexpr float POLYGON_CURSOR_APPEND_EPSILON_PX = 0.5f;
-        constexpr float POLYGON_VERTEX_HIT_RADIUS_PX = 8.0f;
-        constexpr float POLYGON_EDGE_HIT_RADIUS_PX = 10.0f;
         constexpr float INVALID_SCREEN_POSITION = -1.0e8f;
         constexpr float HOVER_PICK_RADIUS_PX = 12.0f;
         constexpr float RING_PICK_PADDING_PX = 4.0f;

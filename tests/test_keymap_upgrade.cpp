@@ -111,6 +111,38 @@ namespace lfs::vis::input {
             fs::remove(path);
         }
 
+        TEST_F(KeymapTest, CropPolygonVertexClicksUpgradeAndPreserveRebinding) {
+            InputBindings defaults;
+            EXPECT_EQ(defaults.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_SHIFT),
+                      Action::INSERT_CROP_POLYGON_VERTEX);
+            EXPECT_EQ(defaults.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_CTRL),
+                      Action::REMOVE_CROP_POLYGON_VERTEX);
+
+            const auto path = fs::temp_directory_path() / "lfs_keymap_crop_polygon_vertex_upgrade.json";
+            test::writeProfile(path, test::historicalSavedProfile("v35"));
+            InputBindings upgraded;
+            ASSERT_TRUE(upgraded.loadProfileFromFile(path));
+            EXPECT_EQ(upgraded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_SHIFT),
+                      Action::INSERT_CROP_POLYGON_VERTEX);
+            EXPECT_EQ(upgraded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_CTRL),
+                      Action::REMOVE_CROP_POLYGON_VERTEX);
+            EXPECT_EQ(upgraded.getActionForKey(ToolMode::CROP_BOX, KEY_ENTER, 0), Action::APPLY_CROP_BOX);
+            EXPECT_EQ(upgraded.getActionForDrag(ToolMode::SELECTION, MouseButton::LEFT, MODIFIER_SHIFT),
+                      Action::SELECTION_ADD);
+            upgraded.setBinding(ToolMode::CROP_BOX, Action::REMOVE_CROP_POLYGON_VERTEX,
+                                MouseButtonTrigger{MouseButton::LEFT, MODIFIER_ALT});
+            ASSERT_TRUE(upgraded.saveProfileToFile(path));
+            InputBindings reloaded;
+            ASSERT_TRUE(reloaded.loadProfileFromFile(path));
+            EXPECT_EQ(reloaded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_ALT),
+                      Action::REMOVE_CROP_POLYGON_VERTEX);
+            EXPECT_EQ(reloaded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_CTRL),
+                      Action::NONE);
+            EXPECT_EQ(reloaded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_SHIFT),
+                      Action::INSERT_CROP_POLYGON_VERTEX);
+            fs::remove(path);
+        }
+
         TEST_F(KeymapTest, StaleFullListDoesNotOverrideFutureDefaults) {
             const fs::path path = fs::temp_directory_path() / "lfs_keymap_future_defaults.json";
             InputBindings current;

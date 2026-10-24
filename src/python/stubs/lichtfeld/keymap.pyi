@@ -191,6 +191,10 @@ class Action(enum.Enum):
 
     APPLY_ALIGNMENT = 95
 
+    INSERT_CROP_POLYGON_VERTEX = 96
+
+    REMOVE_CROP_POLYGON_VERTEX = 97
+
     UNGROUP_SELECTED_SCENE_NODE = 86
 
 class ToolMode(enum.Enum):

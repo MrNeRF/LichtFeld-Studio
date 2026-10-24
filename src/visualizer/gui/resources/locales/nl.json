@@ -1792,6 +1792,8 @@
     "action.apply_crop_box": "Bijsnijdvak toepassen",
     "action.remove_last_point": "Laatste punt verwijderen",
     "action.apply_alignment": "Uitlijning toepassen",
+    "action.insert_crop_polygon_vertex": "Hoekpunt in bijsnijpolygoon invoegen",
+    "action.remove_crop_polygon_vertex": "Hoekpunt uit bijsnijpolygoon verwijderen",
     "action.node_pick": "Knoop kiezen",
     "action.node_rect_select": "Knopen rechthoekig selecteren",
     "action.toggle_ui": "UI omschakelen",

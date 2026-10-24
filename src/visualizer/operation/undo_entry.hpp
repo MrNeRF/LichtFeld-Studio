@@ -401,7 +401,7 @@ namespace lfs::vis::op {
         bool use_after_ = false;
     };
 
-    // Crop tool edits of a polygon change its transform; the outline stays fixed.
+    // Crop tool edits of a polygon: its transform, or its outline from the vertex handles.
     class LFS_VIS_API CropPolygonUndoEntry : public UndoEntry {
     public:
         CropPolygonUndoEntry(SceneManager& scene,

@@ -33,6 +33,9 @@ namespace lfs::vis {
 
     // Screen distance from the first vertex within which a click closes a polygon.
     inline constexpr float POLYGON_CLOSE_DISTANCE_PX = 12.0f;
+    // Screen hit radii for the vertices and edges of a closed polygon being edited.
+    inline constexpr float POLYGON_VERTEX_HIT_RADIUS_PX = 8.0f;
+    inline constexpr float POLYGON_EDGE_HIT_RADIUS_PX = 10.0f;
 
     enum class SelectionMode {
         Replace,

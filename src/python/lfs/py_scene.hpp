@@ -134,7 +134,7 @@ namespace lfs::python {
         [[nodiscard]] bool has_prop(const std::string& name) const {
             return core::prop::PropertyRegistry::instance().get_property(prop_.group_id(), name).has_value();
         }
-        // The outline is fixed once drawn; it is read-only here.
+        // Read-only here; the crop tool's vertex handles edit the outline.
         [[nodiscard]] std::vector<std::tuple<float, float>> vertices() const {
             std::vector<std::tuple<float, float>> result;
             result.reserve(data_->vertices.size());

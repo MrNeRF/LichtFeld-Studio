@@ -1792,6 +1792,8 @@
     "action.apply_crop_box": "Aplicar caja de recorte",
     "action.remove_last_point": "Quitar el último punto",
     "action.apply_alignment": "Aplicar alineación",
+    "action.insert_crop_polygon_vertex": "Insertar vértice del polígono de recorte",
+    "action.remove_crop_polygon_vertex": "Quitar vértice del polígono de recorte",
     "action.node_pick": "Seleccionar nodo",
     "action.node_rect_select": "Selección rectangular de nodos",
     "action.toggle_ui": "Alternar UI",

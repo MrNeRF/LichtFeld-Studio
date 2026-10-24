@@ -1792,6 +1792,8 @@
     "action.apply_crop_box": "Zuschneidebox anwenden",
     "action.remove_last_point": "Letzten Punkt entfernen",
     "action.apply_alignment": "Ausrichtung anwenden",
+    "action.insert_crop_polygon_vertex": "Eckpunkt in Zuschneidepolygon einfügen",
+    "action.remove_crop_polygon_vertex": "Eckpunkt aus Zuschneidepolygon entfernen",
     "action.node_pick": "Knoten auswählen",
     "action.node_rect_select": "Knoten mit Rechteck auswählen",
     "action.toggle_ui": "UI umschalten",

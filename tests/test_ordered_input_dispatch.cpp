@@ -39,9 +39,11 @@
 #include "operator/operator_registry.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
+#include "rendering/render_constants.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
 #include "window/window_manager.hpp"
 #include <RmlUi/Core.h>
@@ -1624,6 +1626,162 @@ namespace lfs::vis {
 
     TEST_F(WindowInputDispatchTest, EscapeCancelsPassiveEllipsoidGizmoDragAndAddsNoUndo) {
         exerciseCropToolGizmoEscape(true, false);
+    }
+
+    // The polygon crop tool edits its outline from vertex handles on the cap facing the
+    // camera: a primary drag moves a vertex, winning over the bounds corner under it, and
+    // the key map's insert and remove clicks add a vertex on an edge and delete one. Each
+    // is one undo step, and the other vertices keep their world positions.
+    TEST_F(WindowInputDispatchTest, CropPolygonVertexHandlesMoveInsertAndRemoveVertices) {
+        auto& sm = *viewer_->getSceneManager();
+        auto& scene = sm.getScene();
+        auto& gizmo = gui_->gizmo();
+        auto& camera = viewer_->getViewport().camera;
+        camera.t = {0.0f, 0.0f, 12.0f};
+        camera.pivot = {0.0f, 0.0f, 0.0f};
+        camera.R = rendering::makeVisualizerLookAtRotation(camera.t, camera.pivot);
+
+        const auto parent = scene.addSplat("Polygon parent", lfs::test::licht::make_splat(3));
+        core::CropPolygonData data;
+        data.vertices = {{-3.0f, -2.0f}, {3.0f, -2.0f}, {3.0f, 2.0f}, {-3.0f, 2.0f}};
+        data.half_depth = 0.5f;
+        const auto polygon = scene.addCropPolygon("Polygon", parent, data);
+        ASSERT_NE(polygon, core::NULL_NODE);
+        sm.changeContentType(SceneManager::ContentType::SplatFiles);
+        sm.selectNode(polygon);
+        viewer_->getEditorContext().update(&sm, viewer_->getTrainerManager());
+        UnifiedToolRegistry::instance().setActiveTool("builtin.cropbox");
+        gizmo.setCropToolShape("polygon");
+        gizmo.setOperation(gui::GizmoOperation::Scale);
+        const gui::UIContext ui{.viewer = viewer_.get(), .editor = &viewer_->getEditorContext()};
+        gizmo.updateToolState(ui, false);
+        controller_->setViewer(viewer_.get());
+        controller_->updateViewportBounds(0.0f, 0.0f, 400.0f, 300.0f);
+        const gui::ViewportLayout layout{.pos = {0.0f, 0.0f}, .size = {400.0f, 300.0f}};
+
+        auto& frame = frameInput();
+        frame.mouse_down[0] = frame.mouse_clicked[0] = frame.mouse_released[0] = false;
+        frame.mouse_button_events.clear();
+        frame.key_mods = SDL_KMOD_NONE;
+        const auto render = [&] {
+            gui::guiFocusState().want_capture_mouse = false;
+            gizmo.renderEllipsoidGizmo(ui, layout);
+        };
+        // The handles as the tool projects them, on the cap facing the camera.
+        const auto handles = [&] {
+            const auto settings = viewer_->getRenderingManager()->getSettings();
+            const auto& viewport = viewer_->getViewport();
+            const glm::mat4 view = viewport.getViewMatrix();
+            const glm::mat4 view_projection =
+                rendering::createProjectionMatrixFromFocal(
+                    glm::ivec2(400, 300), settings.focal_length_mm, settings.orthographic,
+                    viewport.ortho_scale_override.value_or(settings.ortho_scale)) *
+                view;
+            const glm::mat4 to_world = scene_coords::nodeVisualizerWorldTransform(scene, polygon);
+            const glm::vec3 eye(glm::inverse(view)[3]);
+            const auto* const outline = scene.getCropPolygonData(polygon);
+            const float z = glm::dot(glm::vec3(to_world[2]), eye - glm::vec3(to_world[3])) >= 0.0f
+                                ? outline->half_depth
+                                : -outline->half_depth;
+            std::vector<glm::vec2> points;
+            for (const glm::vec2& vertex : outline->vertices) {
+                const glm::vec4 clip = view_projection * to_world * glm::vec4(vertex, z, 1.0f);
+                points.emplace_back((clip.x / clip.w * 0.5f + 0.5f) * 400.0f, (0.5f - clip.y / clip.w * 0.5f) * 300.0f);
+            }
+            return points;
+        };
+        const auto world = [&] {
+            std::vector<glm::vec3> points;
+            for (const glm::vec2& vertex : scene.getCropPolygonData(polygon)->vertices)
+                points.emplace_back(scene.getWorldTransform(polygon) * glm::vec4(vertex, 0.0f, 1.0f));
+            return points;
+        };
+        const auto expectSamePoint = [](const glm::vec3& actual, const glm::vec3& expected) {
+            EXPECT_NEAR(glm::distance(actual, expected), 0.0f, 1e-4f);
+        };
+        // Hover first, as a pointer does, then press with the given modifiers.
+        const auto press = [&](const glm::vec2 point, const SDL_Keymod mods) {
+            frame.mouse_x = point.x;
+            frame.mouse_y = point.y;
+            frame.key_mods = mods;
+            render();
+            frame.mouse_down[0] = frame.mouse_clicked[0] = true;
+            frame.mouse_button_events = {{.button = 0, .down = true, .x = point.x, .y = point.y}};
+            render();
+            frame.mouse_clicked[0] = false;
+            frame.mouse_button_events.clear();
+        };
+        const auto release = [&] {
+            frame.mouse_down[0] = false;
+            frame.mouse_released[0] = true;
+            frame.mouse_button_events = {{.button = 0, .down = false, .x = frame.mouse_x, .y = frame.mouse_y}};
+            render();
+            frame.mouse_released[0] = false;
+            frame.mouse_button_events.clear();
+            frame.key_mods = SDL_KMOD_NONE;
+        };
+
+        render();
+        op::undoHistory().clear();
+        const auto start = handles();
+        ASSERT_EQ(start.size(), 4u);
+        for (const glm::vec2& point : start) {
+            ASSERT_GT(point.x, 20.0f);
+            ASSERT_LT(point.x, 380.0f);
+            ASSERT_GT(point.y, 20.0f);
+            ASSERT_LT(point.y, 280.0f);
+        }
+        const auto drawn = world();
+
+        // A primary drag on vertex 0 moves it with the pointer, not the bounds corner.
+        press(start[0], SDL_KMOD_NONE);
+        EXPECT_FALSE(gui::isBoundsGizmoActive());
+        frame.mouse_x = start[0].x - 30.0f;
+        frame.mouse_y = start[0].y + 20.0f;
+        render();
+        release();
+        const auto moved = handles();
+        ASSERT_EQ(moved.size(), 4u);
+        EXPECT_NEAR(moved[0].x, start[0].x - 30.0f, 0.5f);
+        EXPECT_NEAR(moved[0].y, start[0].y + 20.0f, 0.5f);
+        const auto after_move = world();
+        for (size_t i = 1; i < 4; ++i)
+            expectSamePoint(after_move[i], drawn[i]);
+        const glm::mat4 transform = scene.getNodeById(polygon)->local_transform.get();
+        for (int axis = 0; axis < 3; ++axis)
+            EXPECT_NEAR(glm::length(glm::vec3(transform[axis])), 1.0f, 1e-5f);
+        EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+
+        // The insert click puts a vertex on the edge from vertex 1 to vertex 2, under the pointer.
+        const glm::vec2 on_edge = glm::mix(moved[1], moved[2], 0.25f);
+        press(on_edge, SDL_KMOD_SHIFT);
+        release();
+        const auto inserted = handles();
+        ASSERT_EQ(inserted.size(), 5u);
+        EXPECT_NEAR(inserted[2].x, on_edge.x, 0.5f);
+        EXPECT_NEAR(inserted[2].y, on_edge.y, 0.5f);
+        const auto after_insert = world();
+        for (size_t i = 0; i < 5; ++i) {
+            if (i != 2)
+                expectSamePoint(after_insert[i], after_move[i < 2 ? i : i - 1]);
+        }
+        EXPECT_EQ(op::undoHistory().undoCount(), 2u);
+
+        // The remove click deletes it again.
+        press(inserted[2], SDL_KMOD_CTRL);
+        release();
+        ASSERT_EQ(handles().size(), 4u);
+        const auto after_remove = world();
+        for (size_t i = 0; i < 4; ++i)
+            expectSamePoint(after_remove[i], after_move[i]);
+        EXPECT_EQ(op::undoHistory().undoCount(), 3u);
+
+        for (int step = 0; step < 3; ++step)
+            ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_EQ(scene.getCropPolygonData(polygon)->vertices, data.vertices);
+        EXPECT_EQ(scene.getNodeById(polygon)->local_transform.get(), glm::mat4(1.0f));
+        gizmo.deactivateAllTools();
+        op::undoHistory().clear();
     }
 
     TEST_F(WindowInputDispatchTest, EscapeCancelsViewportGizmoDragAndRestoresCamera) {

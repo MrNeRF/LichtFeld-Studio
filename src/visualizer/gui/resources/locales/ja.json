@@ -1792,6 +1792,8 @@
     "action.apply_crop_box": "クロップボックスを適用",
     "action.remove_last_point": "最後の点を削除",
     "action.apply_alignment": "整列を適用",
+    "action.insert_crop_polygon_vertex": "クロップポリゴンの頂点を挿入",
+    "action.remove_crop_polygon_vertex": "クロップポリゴンの頂点を削除",
     "action.node_pick": "ノードを選択",
     "action.node_rect_select": "ノードを矩形選択",
     "action.toggle_ui": "UI切替",

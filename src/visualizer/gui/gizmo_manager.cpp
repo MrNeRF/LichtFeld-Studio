@@ -16,6 +16,7 @@
 #include "gui/ui_widgets.hpp"
 #include "gui/viewport_gizmo_geometry.hpp"
 #include "input/input_controller.hpp"
+#include "input/sdl_key_mapping.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_id.hpp"
@@ -39,6 +40,7 @@
 #include <cassert>
 #include <cmath>
 #include <glm/gtc/matrix_transform.hpp>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -124,6 +126,89 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] bool nativeControlModifierDown(const lfs::vis::FrameInputBuffer& frame_input) {
             return (frame_input.key_mods & SDL_KMOD_CTRL) != 0;
+        }
+
+        constexpr float CROP_POLYGON_HANDLE_RADIUS_PX = 5.0f;
+        constexpr OverlayColor CROP_POLYGON_HANDLE_COLOR = overlayColor(255, 214, 10, 235);
+        constexpr OverlayColor CROP_POLYGON_HANDLE_HOT_COLOR = overlayColor(255, 128, 16, 245);
+        constexpr OverlayColor CROP_POLYGON_HANDLE_OUTLINE = overlayColor(0, 0, 0, 160);
+
+        // Projects like the native gizmos: visualizer world to panel pixels.
+        [[nodiscard]] std::optional<glm::vec2> projectToPanel(const glm::mat4& view_projection, const glm::vec2 panel_pos,
+                                                              const glm::vec2 panel_size, const glm::vec3& world) {
+            const glm::vec4 clip = view_projection * glm::vec4(world, 1.0f);
+            if (!(clip.w > std::numeric_limits<float>::epsilon()))
+                return std::nullopt;
+            const glm::vec2 ndc = glm::vec2(clip) / clip.w;
+            if (!std::isfinite(ndc.x) || !std::isfinite(ndc.y))
+                return std::nullopt;
+            return glm::vec2(panel_pos.x + (ndc.x * 0.5f + 0.5f) * panel_size.x,
+                             panel_pos.y + (-ndc.y * 0.5f + 0.5f) * panel_size.y);
+        }
+
+        // The polygon-local XY point under a panel pixel on the plane z = plane_z.
+        [[nodiscard]] std::optional<glm::vec2> pixelOnPolygonPlane(const glm::mat4& view_projection, const glm::vec2 panel_pos,
+                                                                   const glm::vec2 panel_size,
+                                                                   const glm::mat4& polygon_to_world,
+                                                                   const float plane_z, const glm::vec2 pixel) {
+            const glm::mat4 local_to_clip = view_projection * polygon_to_world;
+            const glm::mat4 clip_to_local = glm::inverse(local_to_clip);
+            const glm::vec2 ndc((pixel.x - panel_pos.x) / panel_size.x * 2.0f - 1.0f,
+                                1.0f - (pixel.y - panel_pos.y) / panel_size.y * 2.0f);
+            // Any two depths give the pixel's ray, in perspective and orthographic views alike.
+            const auto unproject = [&](const float depth) {
+                const glm::vec4 point = clip_to_local * glm::vec4(ndc, depth, 1.0f);
+                return glm::vec3(point) / point.w;
+            };
+            const glm::vec3 near_point = unproject(0.25f);
+            const glm::vec3 far_point = unproject(0.75f);
+            const float dz = far_point.z - near_point.z;
+            if (!std::isfinite(dz) || std::abs(dz) < 1e-12f)
+                return std::nullopt;
+            const glm::vec3 hit = glm::mix(near_point, far_point, (plane_z - near_point.z) / dz);
+            if (!std::isfinite(hit.x) || !std::isfinite(hit.y) || !((local_to_clip * glm::vec4(hit, 1.0f)).w > 0.0f))
+                return std::nullopt;
+            return glm::vec2(hit);
+        }
+
+        [[nodiscard]] float distanceSquaredToSegment(const glm::vec2 point, const glm::vec2 a, const glm::vec2 b,
+                                                     float* const t_out) {
+            const glm::vec2 ab = b - a;
+            const float length_sq = glm::dot(ab, ab);
+            const float t = length_sq > 0.0f ? std::clamp(glm::dot(point - a, ab) / length_sq, 0.0f, 1.0f) : 0.0f;
+            *t_out = t;
+            const glm::vec2 delta = point - (a + ab * t);
+            return glm::dot(delta, delta);
+        }
+
+        // Screen-space hits on the projected outline, with the selection polygon's radii.
+        [[nodiscard]] int findOutlineVertexAt(const std::vector<std::optional<glm::vec2>>& points, const glm::vec2 cursor) {
+            const float radius_sq = POLYGON_VERTEX_HIT_RADIUS_PX * POLYGON_VERTEX_HIT_RADIUS_PX;
+            for (size_t i = 0; i < points.size(); ++i) {
+                if (points[i] && glm::dot(cursor - *points[i], cursor - *points[i]) <= radius_sq)
+                    return static_cast<int>(i);
+            }
+            return -1;
+        }
+
+        [[nodiscard]] int findOutlineEdgeAt(const std::vector<std::optional<glm::vec2>>& points, const glm::vec2 cursor) {
+            const float vertex_radius_sq = POLYGON_VERTEX_HIT_RADIUS_PX * POLYGON_VERTEX_HIT_RADIUS_PX;
+            float best_distance_sq = POLYGON_EDGE_HIT_RADIUS_PX * POLYGON_EDGE_HIT_RADIUS_PX;
+            int best_edge = -1;
+            for (size_t i = 0; i < points.size(); ++i) {
+                const auto& start = points[i];
+                const auto& end = points[(i + 1) % points.size()];
+                if (!start || !end || glm::dot(cursor - *start, cursor - *start) <= vertex_radius_sq ||
+                    glm::dot(cursor - *end, cursor - *end) <= vertex_radius_sq)
+                    continue;
+                float t = 0.0f;
+                const float distance_sq = distanceSquaredToSegment(cursor, *start, *end, &t);
+                if (distance_sq <= best_distance_sq && t > 0.0f && t < 1.0f) {
+                    best_distance_sq = distance_sq;
+                    best_edge = static_cast<int>(i);
+                }
+            }
+            return best_edge;
         }
 
         // Gizmo hover is refreshed only while that gizmo is drawn. A tool change can stop
@@ -692,7 +777,7 @@ namespace lfs::vis::gui {
             return crop_tool_initialized_;
         }
 
-        if (crop_tool_drag_active_ && crop_tool_initialized_)
+        if ((crop_tool_drag_active_ || crop_polygon_vertex_drag_) && crop_tool_initialized_)
             return true;
 
         const auto target_id = selectedCropTargetNodeId();
@@ -737,6 +822,7 @@ namespace lfs::vis::gui {
         crop_tool_drag_active_ = false;
         crop_tool_scale_start_.reset();
         crop_tool_drag_changed_ = false;
+        crop_polygon_vertex_drag_.reset();
     }
 
     void GizmoManager::leaveCropTool(const bool hide_volume,
@@ -1132,6 +1218,151 @@ namespace lfs::vis::gui {
             return;
         if (auto result = cap::resetCropPolygon(*sm, viewer_->getRenderingManager(), polygon_id); !result)
             LOG_WARN("Failed to reset crop polygon: {}", result.error().user_message());
+    }
+
+    GizmoManager::CropPolygonHandles GizmoManager::updateCropPolygonVertexEdit(const glm::vec2 panel_pos,
+                                                                               const glm::vec2 panel_size,
+                                                                               const glm::mat4& view,
+                                                                               const glm::mat4& projection) {
+        CropPolygonHandles handles;
+        const glm::mat4 view_projection = projection * view;
+        const auto& frame_input = viewer_->getWindowManager()->frameInput();
+        const glm::vec2 mouse(frame_input.mouse_x, frame_input.mouse_y);
+        const auto project = [&](const std::vector<glm::vec2>& vertices, const glm::mat4& to_world, const float z) {
+            std::vector<std::optional<glm::vec2>> points;
+            points.reserve(vertices.size());
+            for (const glm::vec2& vertex : vertices)
+                points.push_back(projectToPanel(view_projection, panel_pos, panel_size,
+                                                glm::vec3(to_world * glm::vec4(vertex, z, 1.0f))));
+            return points;
+        };
+
+        if (crop_polygon_vertex_drag_) {
+            auto& drag = *crop_polygon_vertex_drag_;
+            if (frame_input.mouse_down[0]) {
+                if (const auto local = pixelOnPolygonPlane(view_projection, panel_pos, panel_size,
+                                                           drag.polygon_to_world, drag.plane_z, mouse);
+                    local && *local != drag.vertices[drag.index]) {
+                    drag.vertices[drag.index] = *local;
+                    drag.moved = true;
+                    previewCropPolygonOutline(drag.vertices, drag.polygon_to_world);
+                }
+                handles.screen = project(drag.vertices, drag.polygon_to_world, drag.plane_z);
+                handles.hot = static_cast<int>(drag.index);
+                handles.owns_pointer = true;
+                return handles;
+            }
+            // Released: the whole drag is one outline edit.
+            auto vertices = std::move(drag.vertices);
+            const bool moved = drag.moved;
+            crop_polygon_vertex_drag_.reset();
+            if (moved)
+                (void)commitCropPolygonOutline(std::move(vertices));
+            else
+                (void)ensureCropToolState();
+        }
+
+        auto* const sm = viewer_->getSceneManager();
+        if (!sm || !sm->getScene().isNodeEffectivelyVisible(crop_tool_volume_node_id_))
+            return handles;
+
+        // Handles sit on the cap that faces the camera.
+        const glm::mat4& to_world = crop_tool_visualizer_transform_;
+        const glm::vec3 camera(glm::inverse(view)[3]);
+        const float plane_z = glm::dot(glm::vec3(to_world[2]), camera - glm::vec3(to_world[3])) >= 0.0f
+                                  ? crop_tool_polygon_half_depth_
+                                  : -crop_tool_polygon_half_depth_;
+        handles.screen = project(crop_tool_polygon_vertices_, to_world, plane_z);
+
+        // A gizmo drag keeps the pointer; elsewhere the vertex handles win only on themselves.
+        if (crop_tool_drag_active_ || isBoundsGizmoActive() || isTranslationGizmoActive() ||
+            isRotationGizmoActive() || isScaleGizmoActive())
+            return handles;
+        const bool gizmo_hovered = isBoundsGizmoHovered() || isTranslationGizmoHovered() ||
+                                   isRotationGizmoHovered() || isScaleGizmoHovered();
+        handles.hot = findOutlineVertexAt(handles.screen, mouse);
+
+        // The key map of the controller that dispatches these presses decides insert and remove.
+        const auto* const input_controller = viewer_->getWindowManager()->inputController();
+        const int mods = input::sdlModsToAppMods(frame_input.key_mods);
+        for (const auto& press : frame_input.mouse_button_events) {
+            if (!press.down)
+                continue;
+            const glm::vec2 point(press.x, press.y);
+            const int vertex = findOutlineVertexAt(handles.screen, point);
+            const auto action = input_controller
+                                    ? input_controller->getBindings().getActionForMouseButton(
+                                          input::ToolMode::CROP_BOX, static_cast<input::MouseButton>(press.button), mods)
+                                    : input::Action::NONE;
+            if (action == input::Action::REMOVE_CROP_POLYGON_VERTEX) {
+                if (vertex >= 0 && crop_tool_polygon_vertices_.size() > core::crop_polygon::kMinVertices) {
+                    auto vertices = crop_tool_polygon_vertices_;
+                    vertices.erase(vertices.begin() + vertex);
+                    (void)commitCropPolygonOutline(std::move(vertices));
+                }
+                return handles;
+            }
+            if (action == input::Action::INSERT_CROP_POLYGON_VERTEX) {
+                const int edge = gizmo_hovered ? -1 : findOutlineEdgeAt(handles.screen, point);
+                const auto local = edge >= 0 ? pixelOnPolygonPlane(view_projection, panel_pos, panel_size, to_world,
+                                                                   plane_z, point)
+                                             : std::nullopt;
+                if (local) {
+                    auto vertices = crop_tool_polygon_vertices_;
+                    vertices.insert(vertices.begin() + edge + 1, *local);
+                    (void)commitCropPolygonOutline(std::move(vertices));
+                }
+                return handles;
+            }
+            if (press.button == static_cast<uint8_t>(input::AppMouseButton::LEFT) && vertex >= 0) {
+                crop_polygon_vertex_drag_ = CropPolygonVertexDrag{
+                    .index = static_cast<size_t>(vertex),
+                    .plane_z = plane_z,
+                    .polygon_to_world = to_world,
+                    .vertices = crop_tool_polygon_vertices_,
+                    .moved = false,
+                };
+                handles.hot = vertex;
+            }
+        }
+        handles.owns_pointer = handles.hot >= 0;
+        return handles;
+    }
+
+    void GizmoManager::previewCropPolygonOutline(const std::vector<glm::vec2>& vertices, const glm::mat4& polygon_to_world) {
+        // Shown re-centred like the commit will store it, so the prism does not jump on release.
+        glm::vec2 lo(std::numeric_limits<float>::max());
+        glm::vec2 hi(std::numeric_limits<float>::lowest());
+        for (const glm::vec2& vertex : vertices) {
+            lo = glm::min(lo, vertex);
+            hi = glm::max(hi, vertex);
+        }
+        const glm::vec2 centre = (lo + hi) * 0.5f;
+        crop_tool_polygon_vertices_.clear();
+        for (const glm::vec2& vertex : vertices)
+            crop_tool_polygon_vertices_.push_back(vertex - centre);
+        crop_tool_polygon_half_extents_ = glm::vec3(core::crop_polygon::outlineHalfExtents(crop_tool_polygon_vertices_),
+                                                    crop_tool_polygon_half_depth_);
+        crop_tool_visualizer_transform_ = glm::translate(polygon_to_world, glm::vec3(centre, 0.0f));
+        updateCropToolOverlayState();
+    }
+
+    bool GizmoManager::commitCropPolygonOutline(std::vector<glm::vec2> vertices) {
+        auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
+        bool committed = false;
+        if (sm && crop_tool_volume_node_id_ != core::NULL_NODE) {
+            if (auto result = cap::setCropPolygonOutline(*sm, viewer_->getRenderingManager(), crop_tool_volume_node_id_,
+                                                         std::move(vertices));
+                result) {
+                committed = true;
+            } else {
+                LOG_WARN("Crop polygon edit rejected: {}", result.error().user_message());
+            }
+        }
+        // Back to the stored outline, edited or not.
+        if (ensureCropToolState())
+            updateCropToolOverlayState();
+        return committed;
     }
 
     void GizmoManager::setupEvents() {
@@ -2810,6 +3041,11 @@ namespace lfs::vis::gui {
         const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
             vp_size, settings.focal_length_mm, settings.orthographic, vp.ortho_scale_override.value_or(settings.ortho_scale));
 
+        // Vertex handles take the pointer only on themselves; elsewhere the gizmos keep it.
+        CropPolygonHandles polygon_handles;
+        if (polygon && isCropToolActive())
+            polygon_handles = updateCropPolygonVertexEdit(active_panel->pos, active_panel->size, view, projection);
+
         const glm::vec3 world_scale = glm::max(extractScale(crop_tool_visualizer_transform_), glm::vec3(1e-6f));
         const glm::mat3 rotation = extractRotation(crop_tool_visualizer_transform_);
         const glm::vec3 pivot_world(crop_tool_visualizer_transform_[3]);
@@ -2832,7 +3068,11 @@ namespace lfs::vis::gui {
         const glm::vec2 clip_max(clip_min.x + active_panel->size.x, clip_min.y + active_panel->size.y);
         overlay_drawlist.PushClipRect(clip_min, clip_max, true);
         const auto& frame_input = viewer_->getWindowManager()->frameInput();
-        const NativeGizmoInput gizmo_input = nativeGizmoInputFromFrame(frame_input);
+        NativeGizmoInput gizmo_input = nativeGizmoInputFromFrame(frame_input);
+        if (polygon_handles.owns_pointer) {
+            gizmo_input.mouse_pos = glm::vec2(-1.0e6f);
+            gizmo_input.mouse_left_clicked = false;
+        }
         const bool snap_modifier = nativeControlModifierDown(frame_input);
 
         bool changed = false;
@@ -3008,6 +3248,15 @@ namespace lfs::vis::gui {
             crop_tool_drag_changed_ = false;
             if (should_persist)
                 (void)persistActiveCropToolToNode(false);
+        }
+
+        for (size_t i = 0; i < polygon_handles.screen.size(); ++i) {
+            if (const auto& point = polygon_handles.screen[i]) {
+                const bool hot = static_cast<int>(i) == polygon_handles.hot;
+                overlay_drawlist.AddCircleFilled(*point, CROP_POLYGON_HANDLE_RADIUS_PX,
+                                                 hot ? CROP_POLYGON_HANDLE_HOT_COLOR : CROP_POLYGON_HANDLE_COLOR);
+                overlay_drawlist.AddCircle(*point, CROP_POLYGON_HANDLE_RADIUS_PX, CROP_POLYGON_HANDLE_OUTLINE, 16, 1.0f);
+            }
         }
 
         overlay_drawlist.PopClipRect();
@@ -3621,6 +3870,13 @@ namespace lfs::vis::gui {
             ellipsoid_gizmo_active_ = false;
             ellipsoid_node_name_.clear();
             gizmo_context_.reset();
+            cancelled = true;
+        }
+
+        if (crop_polygon_vertex_drag_) {
+            crop_polygon_vertex_drag_.reset();
+            if (ensureCropToolState())
+                updateCropToolOverlayState();
             cancelled = true;
         }
 

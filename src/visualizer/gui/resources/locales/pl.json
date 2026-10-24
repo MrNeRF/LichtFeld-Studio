@@ -1792,6 +1792,8 @@
     "action.apply_crop_box": "Zastosuj pudełko przycinania",
     "action.remove_last_point": "Usuń ostatni punkt",
     "action.apply_alignment": "Zastosuj wyrównanie",
+    "action.insert_crop_polygon_vertex": "Wstaw wierzchołek wielokąta przycinania",
+    "action.remove_crop_polygon_vertex": "Usuń wierzchołek wielokąta przycinania",
     "action.node_pick": "Wybierz węzeł",
     "action.node_rect_select": "Prostokątne zaznaczenie węzłów",
     "action.toggle_ui": "Przełącz interfejs",
