@@ -542,6 +542,8 @@ if __name__ == "__main__":
     parser.add_argument("--abi-only", action="store_true")
     parser.add_argument("--faults", action="store_true")
     args = parser.parse_args()
+    if args.abi_only and args.faults:
+        parser.error("--abi-only and --faults are mutually exclusive")
     if not 0 <= args.device <= 2147483647:
         parser.error("--device must be an ordinal in 0..2147483647")
     native.options = argparse.Namespace(module=args.module, device=args.device, faults=args.faults)
