@@ -5,6 +5,7 @@
 #include "core/camera.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "fast_raster_test_helpers.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "masked_ssim_reference.hpp"
@@ -94,14 +95,7 @@ namespace {
         ASSERT_TRUE(shape.good());
     }
 
-    class MaskedSSIMWindowTest : public ::testing::Test {
-    protected:
-        void SetUp() override {
-            int count = 0;
-            if (cudaGetDeviceCount(&count) != cudaSuccess || count == 0)
-                GTEST_SKIP() << "No CUDA device available";
-        }
-    };
+    class MaskedSSIMWindowTest : public lfs::test::CudaBackendTest {};
 
     void expect_finite(const Result& result) {
         EXPECT_TRUE(std::isfinite(result.loss));
