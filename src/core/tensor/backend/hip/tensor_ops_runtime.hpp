@@ -136,7 +136,7 @@ namespace {
         __shared__ Counter partial[256];
         Counter local = 0;
         for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += size_t(gridDim.x) * blockDim.x)
-            local += static_cast<double>(input[i]) != 0;
+            local += static_cast<double>(input[static_cast<std::conditional_t<std::is_pointer_v<Input>, size_t, int64_t>>(i)]) != 0;
         partial[threadIdx.x] = local;
         __syncthreads();
         for (unsigned width = 128; width; width >>= 1) {

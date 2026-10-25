@@ -479,29 +479,22 @@ class TensorOperations(native.RuntimeContract):
             self.checked("masked_scatter", context, output, mask, source, 0, 5, 3)
             self.assertEqual(self.read(context, output, 5), [3, 99, 5, 99, 7])
 
-    def test_sort_preserves_nan_payloads_and_stable_signed_zeros(self):
+    def test_segmented_sort_preserves_payloads_and_stable_special_value_order(self):
+        payloads = [0, 0x80000000, 0x7FC00001, 0xFFC01234, 0x3F800000, 0xBF800000, 0x80000000, 0]
+        long_values = [float("nan"), -float("inf"), -0.0, 0.0, float("inf"), 3.0, -2.0] * 151
+        long_bits = [struct.unpack("<I", struct.pack("<f", x))[0] for x in long_values]
         with self.resources() as context:
-            bits = [0, 0x80000000, 0x7FC00001, 0xFFC01234, 0x3F800000, 0xBF800000, 0x80000000, 0]
-            values = [struct.unpack("<f", struct.pack("<I", x))[0] for x in bits]
-            for descending in (0, 1):
-                source = self.tensor(context, bits, 6)
-                indices = self.tensor(context, [99] * len(bits), 3)
-                self.checked("sort_pairs", context, source, indices, 1, len(bits), 1, descending)
-                key = lambda i: (math.isnan(values[i]), 0 if math.isnan(values[i]) else values[i])
-                expected = sorted(range(len(bits)), key=key, reverse=bool(descending))
-                self.assertEqual(self.read(context, indices, len(bits), 3), expected)
-                self.assertEqual(self.read(context, source, len(bits), 6), [bits[i] for i in expected])
-
-    def test_segmented_sort_orders_special_values_stably(self):
-        with self.resources() as context:
-            values = [float("nan"), -float("inf"), -0.0, 0.0, float("inf"), 3.0, -2.0] * 151
-            for descending in (0, 1):
-                source = self.tensor(context, values * 2)
-                indices = self.tensor(context, [0] * (2 * len(values)), 3)
-                self.checked("sort_pairs", context, source, indices, 2, len(values), 1, descending)
-                key = lambda i: (math.isnan(values[i]), 0 if math.isnan(values[i]) else values[i])
-                expected = sorted(range(len(values)), key=key, reverse=bool(descending))
-                self.assertEqual(self.read(context, indices, 2 * len(values), 3), expected * 2)
+            for bits, outer in ((payloads, 1), (long_bits, 2)):
+                values = [struct.unpack("<f", struct.pack("<I", x))[0] for x in bits]
+                for descending in (0, 1):
+                    with self.subTest(segments=outer, descending=descending):
+                        source = self.tensor(context, bits * outer, 6)
+                        indices = self.tensor(context, [99] * (len(bits) * outer), 3)
+                        self.checked("sort_pairs", context, source, indices, outer, len(bits), 1, descending)
+                        key = lambda i: (math.isnan(values[i]), 0 if math.isnan(values[i]) else values[i])
+                        expected = sorted(range(len(bits)), key=key, reverse=bool(descending))
+                        self.assertEqual(self.read(context, indices, len(bits) * outer, 3), expected * outer)
+                        self.assertEqual(self.read(context, source, len(bits) * outer, 6), [bits[i] for i in expected] * outer)
 
     def test_selection_preserves_all_storage_bits(self):
         with self.resources() as context:
@@ -832,6 +825,28 @@ class TensorFaultRecovery(TensorOperations):
             self.assertEqual(self.reject("context_synchronize", context).native_code, -2)
             self.checked("context_synchronize", context)
             self.assertEqual(self.read(context, output, 2), [99, 99])
+
+    def test_precounted_selection_and_scatter_do_not_drain_the_stream(self):
+        with self.resources() as context:
+            source = self.tensor(context, [1, 2, 3])
+            mask = self.tensor(context, [1, 0, 1], 4)
+            output = self.tensor(context, [99, 99])
+            selected = c.c_uint64()
+            self.select_checked(context, source, mask, output, 0, 0, 3, 2, c.byref(selected), known=2)
+            self.checked("context_synchronize", context)
+            self.fail_once(7)
+            self.select_checked(context, source, mask, output, 0, 0, 3, 2, c.byref(selected), known=2)
+            self.reject("context_synchronize", context)
+            self.checked("context_synchronize", context)
+            self.assertEqual(self.read(context, output, 2), [1, 3])
+            destination = self.tensor(context, [99, 99, 99])
+            self.checked("masked_scatter", context, destination, mask, output, 0, 3, 2)
+            self.checked("context_synchronize", context)
+            self.fail_once(7)
+            self.checked("masked_scatter", context, destination, mask, output, 0, 3, 2)
+            self.reject("context_synchronize", context)
+            self.checked("context_synchronize", context)
+            self.assertEqual(self.read(context, destination, 3), [1, 99, 3])
 
     def test_workspace_release_and_allocation_failure_are_retryable(self):
         with self.resources() as context:
