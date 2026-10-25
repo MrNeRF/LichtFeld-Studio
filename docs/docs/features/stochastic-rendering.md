@@ -20,7 +20,7 @@ How noisy the image is depends on the model: one trained with the [color varianc
 
 ## Limits
 
-The stochastic modes apply to 3DGS without LOD. 3DGUT, depth views, surface picking, camera-frustum occlusion, selection outlines, rings, center markers, previews and exports keep alpha blending. Grid and mesh compositing use the depth of the latest sample, so semi-transparent edges in front of them stay noisy.
+The stochastic modes apply to 3DGS without LOD. The viewport keeps alpha blending with 3DGUT, in depth views, while the scene contains a mesh, camera frustums are shown or the align tool picks surfaces, with selection outlines, rings or center markers, and for previews and exports. The grid is depth-tested against the latest sample only, so it looks noisy behind semi-transparent splats.
 
 ## SteadySplats
 
