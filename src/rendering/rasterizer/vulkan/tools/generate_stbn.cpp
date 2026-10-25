@@ -13,6 +13,8 @@
 // Writes a C initializer of side*side*frames bytes in Z/Y/X order.
 // Run: generate_stbn output.inc [side=128] [frames=64]
 
+#include "core/native_fs.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -189,12 +191,13 @@ int main(int argc, char** argv) {
         const auto side = argc > 2 ? static_cast<std::uint32_t>(std::stoul(argv[2])) : 128u;
         const auto frames = argc > 3 ? static_cast<std::uint32_t>(std::stoul(argv[3])) : 64u;
         const auto data = Mask(side, frames).generate();
-        std::ofstream output(argv[1]);
+        std::ofstream output(lfs::core::native_fs::native_path(argv[1]));
         for (std::size_t i = 0; i < data.size(); ++i)
             output << static_cast<unsigned>(data[i]) << ((i + 1) % 32 == 0 ? ",\n" : ",");
         if (!output)
             throw std::runtime_error("could not write output");
     } catch (const std::exception& e) {
+        // LFS-CENSUS-OK(empty-catch): a build tool reports on stderr and fails the build step.
         std::cerr << e.what() << '\n';
         return 1;
     }

@@ -46,6 +46,7 @@ target_compile_definitions(lfs_vulkan_rasterizer PRIVATE
 # being checked in: about 10 s with optimization, deterministic, cached.
 add_executable(lfs_generate_stbn tools/generate_stbn.cpp)
 target_compile_features(lfs_generate_stbn PRIVATE cxx_std_20)
+target_include_directories(lfs_generate_stbn PRIVATE ${CMAKE_SOURCE_DIR}/src/core/include)
 target_compile_options(lfs_generate_stbn PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-O2>)
 add_custom_command(
         OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/stbn_data.inc"
