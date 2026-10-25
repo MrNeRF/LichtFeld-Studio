@@ -487,17 +487,14 @@ namespace lfs::media {
                             fact.diagnostic = "Unique valid XMP altitude reference required";
                             fact.value = property.value;
                             fact.ambiguous |= duplicate;
+                        } else if (double signed_altitude = 0; !summary_detail::altitude(numeric, static_cast<int>(whole), signed_altitude)) {
+                            fact.state = MetadataValueState::Invalid;
                         } else {
-                            double signed_altitude = 0;
-                            if (!summary_detail::altitude(numeric, static_cast<int>(whole), signed_altitude)) {
-                                fact.state = MetadataValueState::Invalid;
-                            } else {
-                                fact.value = signed_altitude;
-                                fact.origin = MetadataValueOrigin::Derived;
-                                fact.inputs.push_back(*handle);
-                                provenance.inputs.push_back(ref->location());
-                                fact.derivation = "xmp_altitude_reference_0_1";
-                            }
+                            fact.value = signed_altitude;
+                            fact.origin = MetadataValueOrigin::Derived;
+                            fact.inputs.push_back(*handle);
+                            provenance.inputs.push_back(ref->location());
+                            fact.derivation = "xmp_altitude_reference_0_1";
                         }
                     }
                 } else if (field.kind == Kind::Latitude || field.kind == Kind::Longitude) {
