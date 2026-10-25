@@ -104,7 +104,9 @@ namespace {
             check(hipMemcpyAsync(context->index_error_host, context->index_error, sizeof(uint32_t), hipMemcpyDeviceToHost, context->stream));
             check(hipStreamSynchronize(context->stream));
             const uint32_t invalid = *context->index_error_host;
-            check(hipMemsetAsync(context->index_error, 0, sizeof(uint32_t), context->stream));
+            // Reset on the next checked submission, so a completed fence does
+            // not enqueue fresh work or leave a flag write pending at teardown.
+            context->index_error_initialized = false;
             context->index_work_pending = false;
             if (invalid & 2u)
                 throw std::invalid_argument("HIP masked scatter source count does not match mask");

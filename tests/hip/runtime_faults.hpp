@@ -109,3 +109,10 @@ static hipError_t lfs_hip_test_device_free(void* pointer) {
 }
 #define hipMalloc lfs_hip_test_device_malloc
 #define hipFree   lfs_hip_test_device_free
+
+static hipError_t lfs_hip_test_memset_async(void* pointer, int value, size_t bytes, hipStream_t stream) {
+    if (lfs_hip_test::fail(10))
+        return hipErrorUnknown;
+    return hipMemsetAsync(pointer, value, bytes, stream);
+}
+#define hipMemsetAsync lfs_hip_test_memset_async
