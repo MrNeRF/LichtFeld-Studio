@@ -34,6 +34,19 @@ endif()
 
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
+add_executable(lichtfeld_collision_tests test_collision.cpp test_collision_gpu.cpp test_collision_walk.cpp)
+target_compile_features(lichtfeld_collision_tests PRIVATE cxx_std_23)
+target_link_libraries(lichtfeld_collision_tests PRIVATE lfs_core GTest::gtest_main CUDA::cudart CUDA::cuda_driver)
+add_test(NAME lichtfeld.collision COMMAND lichtfeld_collision_tests --gtest_filter=-CollisionGpu.*)
+add_test(NAME lichtfeld.collision_gpu COMMAND lichtfeld_collision_tests --gtest_filter=CollisionGpu.*)
+set_tests_properties(lichtfeld.collision PROPERTIES LABELS "cpu;collision")
+set_tests_properties(lichtfeld.collision_gpu PROPERTIES LABELS "gpu;collision" TIMEOUT 120)
+add_executable(lichtfeld_voxelize_cli_tests test_voxelize_cli.cpp test_collision_export.cpp
+    ../src/app/voxelizer.cpp ../src/app/converter_overwrite.cpp)
+target_compile_features(lichtfeld_voxelize_cli_tests PRIVATE cxx_std_23)
+target_include_directories(lichtfeld_voxelize_cli_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/app/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/external)
+target_link_libraries(lichtfeld_voxelize_cli_tests PRIVATE lfs_io lfs_core GTest::gtest_main LibArchive::LibArchive)
+add_test(NAME lichtfeld.voxelize_cli COMMAND lichtfeld_voxelize_cli_tests)
 
 # Deliberately no executable opt-in: exercise extended-path I/O independently
 # of the user's/runner's LongPathsEnabled registry policy.
