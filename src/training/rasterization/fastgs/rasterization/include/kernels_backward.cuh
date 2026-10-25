@@ -369,7 +369,6 @@ namespace fast_lfs::rasterization::kernels::backward {
                                                         bc * dL_dconic.x - (ac + bb) * dL_dconic.y + ab * dL_dconic.z,
                                                         2.0f * ab * dL_dconic.y - bb * dL_dconic.x - aa * dL_dconic.z);
 
-            const float original_opacity = 1.0f / (1.0f + expf(-raw_opacities[primitive_idx]));
             const float grad_compensated_opacity = grad_opacity_helper[work_idx];
             float opacity_compensation = 1.0f;
             if constexpr (MIP_FILTER) {
@@ -381,7 +380,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                 }
             }
 
-            const float sigmoid_derivative = original_opacity * (1.0f - original_opacity);
+            const float sigmoid_derivative = lfs::core::sigmoid_derivative_from_logit(raw_opacities[primitive_idx]);
             opacity_grads[0] = grad_compensated_opacity * opacity_compensation * sigmoid_derivative +
                                opacity_extra_grad(fused_adam, fused_adam.opacity, primitive_idx);
 

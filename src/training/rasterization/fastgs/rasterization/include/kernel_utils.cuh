@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/cuda/sigmoid.cuh"
 #include "core/sh_value_codec.cuh"
 #include "fused_adam_types.h"
 #include "helper_math.h"
@@ -521,8 +522,8 @@ namespace fast_lfs::rasterization::kernels {
         const uint element_idx) {
         float grad = 0.0f;
         if (fused_adam.opacity_reg_weight > 0.0f && param.n_elements > 0) {
-            const float opa = sigmoid(param.param[element_idx]);
-            grad += fused_adam.opacity_reg_weight * opa * (1.0f - opa) /
+            const float derivative = lfs::core::sigmoid_derivative_from_logit(param.param[element_idx]);
+            grad += fused_adam.opacity_reg_weight * derivative /
                     static_cast<float>(param.n_elements);
         }
         return grad;
