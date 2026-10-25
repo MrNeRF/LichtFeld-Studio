@@ -4,6 +4,7 @@
 import argparse
 import array
 import ctypes
+import hashlib
 import importlib.util
 import json
 import os
@@ -410,6 +411,194 @@ class IngestCLI(unittest.TestCase):
                 fact, = summary["facts"]
                 self.assertEqual(fact["value"], "Unique")
                 self.assertFalse(fact["ambiguous"])
+    @staticmethod
+    def _extended_xmp(packet, step=19, guid=None):
+        guid = guid or hashlib.md5(packet, usedforsecurity=False).hexdigest().upper()
+        prefix = b"http://ns.adobe.com/xmp/extension/\0" + guid.encode("ascii")
+        return guid, [prefix + struct.pack(">II", len(packet), offset) + packet[offset:offset + step]
+                      for offset in range(0, len(packet), step)]
+
+    def _extended_standard(self, guid, body="", element=False):
+        note = 'xmlns:n="http://ns.adobe.com/xmp/note/" '
+        if element:
+            body = '<n:HasExtendedXMP>' + guid + '</n:HasExtendedXMP>' + body
+        else:
+            note += 'n:HasExtendedXMP="' + guid + '" '
+        return b"http://ns.adobe.com/xap/1.0/\0" + self._rdf_packet(body, note + 't:Make="standard"').encode()
+
+    def test_source_metadata_jpeg_extended_xmp_reassembly(self):
+        packet = self._rdf_packet('<t:Model>Body 日本語 🎥</t:Model><e:FNumber>28/10</e:FNumber>').encode()
+        guid, fragments = self._extended_xmp(packet)
+        path = self.root / "Extended XMP é 日本語.jpg"
+        for element in (False, True):
+            for standard_first in (False, True):
+                with self.subTest(element=element, standard_first=standard_first):
+                    standard = self._extended_standard(guid, element=element)
+                    blocks = [standard, *reversed(fragments)] if standard_first else [*reversed(fragments), standard]
+                    self._xmp_jpeg(path, blocks)
+                    original, stamp = path.read_bytes(), path.stat().st_mtime_ns
+                    result, _ = self.invoke("source-metadata", path)
+                    facts = {f["semantic"]: f for f in result["summary"]["facts"] if "xmp_property" in f}
+                    self.assertEqual(facts["camera.make"]["value"], "standard")
+                    self.assertEqual(facts["camera.model"]["value"], "Body 日本語 🎥")
+                    self.assertEqual(facts["lens.f_number"]["value"], {"numerator": 28, "denominator": 10})
+                    self.assertEqual(facts["camera.model"]["xmp_packet_kind"], "jpeg_extended_assembly")
+                    packets = [p for p in result["summary"]["xmp_packets"] if "extended_xmp" in p]
+                    self.assertEqual(len(packets), 1)
+                    self.assertEqual(packets[0]["state"], "parsed")
+                    assembly = next(a for a in result["summary"]["xmp_assemblies"] if a["guid"] == packets[0]["extended_xmp"])
+                    self.assertEqual((assembly["guid"], assembly["declared_bytes"], assembly["md5_verified"]), (guid, len(packet), True))
+                    ordered = assembly["fragments"]
+                    self.assertEqual([f["offset"] for f in ordered], list(range(0, len(packet), 19)))
+                    self.assertEqual(sum(f["bytes"] for f in ordered), len(packet))
+                    raw = result["metadata"]["image_xmp"]
+                    self.assertEqual([bytes.fromhex(b["bytes"]) for b in raw["blocks"]], blocks)
+                    self.assertEqual(raw["extended_assembly"], "not_performed")
+                    legacy, _ = self.invoke("source-exif", path)
+                    self.assertEqual(result["metadata"]["image_exif"], legacy["exif"])
+                    self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), (original, stamp))
+
+    def test_source_metadata_jpeg_extended_xmp_rejections(self):
+        packet = self._rdf_packet('<t:Model>extended</t:Model>').encode()
+        guid, fragments = self._extended_xmp(packet, step=len(packet) // 2)
+        standard = self._extended_standard(guid)
+        path = self.root / "broken-extended.jpg"
+        corrupt = fragments.copy()
+        corrupt[-1] = corrupt[-1][:-1] + bytes([corrupt[-1][-1] ^ 1])
+        overlap = fragments.copy()
+        overlap[1] = overlap[1][:71] + struct.pack(">I", 1) + overlap[1][75:]
+        inconsistent = fragments.copy()
+        inconsistent[1] = inconsistent[1][:67] + struct.pack(">I", len(packet) + 1) + inconsistent[1][71:]
+        for blocks, expected in [
+                ([standard, *fragments[:-1]], "malformed"),
+                ([standard, *fragments, fragments[0]], "malformed"),
+                ([standard, *corrupt], "malformed"),
+                ([standard, *overlap], "malformed"),
+                ([standard, *inconsistent], "malformed"),
+                ([standard], "malformed"),
+                ([*fragments], "unsupported"),
+                ([standard, standard, *fragments], "unsupported"),
+                ([self._extended_standard(guid, '<n:HasExtendedXMP>' + guid + '</n:HasExtendedXMP>'), *fragments], "unsupported"),
+        ]:
+            with self.subTest(expected=expected, blocks=len(blocks)):
+                self._xmp_jpeg(path, blocks)
+                result, _ = self.invoke("source-metadata", path)
+                facts = [f for f in result["summary"]["facts"] if "xmp_property" in f]
+                self.assertTrue(all(f["semantic"] == "camera.make" for f in facts), result)
+                packets = [p for p in result["summary"]["xmp_packets"] if "extended_xmp" in p]
+                self.assertEqual(packets[-1]["state"], expected, result)
+        self._xmp_jpeg(path, [standard, *fragments])
+        for options in ({"records": 2}, {"blocks": 2}):
+            limited = self._xmp_limited(path, **options)
+            self.assertTrue(limited["test_summary"]["limited"], limited)
+            self.assertFalse(any(f["semantic"] == "camera.model" for f in limited["test_summary"]["facts"]))
+
+    def test_source_metadata_jpeg_extended_xmp_cross_portion_altitude(self):
+        path = self.root / "split-altitude.jpg"
+        for altitude_in_extension in (False, True):
+            altitude, reference = '<e:GPSAltitude>25/2</e:GPSAltitude>', '<e:GPSAltitudeRef>1</e:GPSAltitudeRef>'
+            packet = self._rdf_packet(altitude if altitude_in_extension else reference).encode()
+            guid, fragments = self._extended_xmp(packet)
+            standard = self._extended_standard(guid, reference if altitude_in_extension else altitude)
+            self._xmp_jpeg(path, [standard, *fragments])
+            result, _ = self.invoke("source-metadata", path)
+            fact = next(f for f in result["summary"]["facts"] if f["semantic"] == "gps.altitude_sea_level")
+            self.assertEqual((fact["value"], fact["state"], fact["origin"]), (-12.5, "present", "derived"))
+            self.assertNotEqual(fact["xmp_inputs"][0]["source"], fact["source"])
+            self.assertEqual(fact["xmp_inputs"][0]["source"], fact["inputs"][0])
+            self.assertEqual(fact["xmp_assembly"]["guid"], guid)
+        packet = self._rdf_packet(reference).encode()
+        guid, fragments = self._extended_xmp(packet)
+        self._xmp_jpeg(path, [self._extended_standard(guid, altitude + reference), *fragments])
+        result, _ = self.invoke("source-metadata", path)
+        fact = next(f for f in result["summary"]["facts"] if f["semantic"] == "gps.altitude_sea_level")
+        self.assertEqual(fact["state"], "unsupported")
+        self.assertTrue(fact["ambiguous"])
+
+    def test_source_metadata_jpeg_extended_xmp_association_and_xml(self):
+        path = self.root / "association.jpg"
+        packet = self._rdf_packet('<t:Model>extended</t:Model>').encode()
+        guid, fragments = self._extended_xmp(packet)
+        standard = self._extended_standard(guid)
+        for changed in (
+                standard.replace(b'http://ns.adobe.com/xmp/note/', b'urn:unrelated/'),
+                self._extended_standard(guid.lower()),
+                self._extended_standard('0' * 32)):
+            self._xmp_jpeg(path, [changed, *fragments])
+            result, _ = self.invoke("source-metadata", path)
+            self.assertFalse(any(f["semantic"] == "camera.model" for f in result["summary"]["facts"]))
+            self.assertEqual(next(f for f in result["summary"]["facts"] if f["semantic"] == "camera.make")["value"], "standard")
+        # A different serialization of the same text still requires a different digest.
+        replacement = packet.replace(b'extended', b'exten&#100;ed')
+        _, altered = self._extended_xmp(replacement, guid=guid)
+        self._xmp_jpeg(path, [standard, *altered])
+        result, _ = self.invoke("source-metadata", path)
+        self.assertEqual(result["summary"]["xmp_assemblies"][0]["md5_verified"], False)
+        self.assertFalse(any(f["semantic"] == "camera.model" for f in result["summary"]["facts"]))
+        for bad, expected in ((packet[:-1], "malformed"),
+                              (packet.replace(b'extended', b'ext\0ended'), "malformed"),
+                              (b'<!DOCTYPE x SYSTEM "file:///must-not-open">' + packet, "unsupported"),
+                              (b'<!DOCTYPE x [<!ENTITY a "expanded">]>' + packet, "unsupported")):
+            bad_guid, bad_fragments = self._extended_xmp(bad)
+            self._xmp_jpeg(path, [self._extended_standard(bad_guid), *bad_fragments])
+            result, _ = self.invoke("source-metadata", path)
+            assembly_packet = next(p for p in result["summary"]["xmp_packets"] if "extended_xmp" in p)
+            self.assertEqual(assembly_packet["state"], expected, result)
+            self.assertTrue(result["summary"]["xmp_assemblies"][0]["md5_verified"])
+            self.assertFalse(any(f["semantic"] == "camera.model" for f in result["summary"]["facts"]))
+
+    def test_source_metadata_jpeg_extended_xmp_group_isolation(self):
+        path = self.root / "separate-groups.jpg"
+        packet_a = self._rdf_packet('<t:Model>A</t:Model>').encode()
+        packet_b = self._rdf_packet('<t:Model>B</t:Model><e:GPSAltitudeRef>1</e:GPSAltitudeRef>').encode()
+        guid_a, fragments_a = self._extended_xmp(packet_a)
+        guid_b, fragments_b = self._extended_xmp(packet_b)
+        standard_a = self._extended_standard(guid_a, '<e:GPSAltitude>25/2</e:GPSAltitude>')
+        self._xmp_jpeg(path, [standard_a, self._extended_standard(guid_b), *fragments_b, *fragments_a])
+        result, _ = self.invoke("source-metadata", path)
+        models = [f for f in result["summary"]["facts"] if f["semantic"] == "camera.model"]
+        self.assertEqual(sorted(f["value"] for f in models), ["A", "B"])
+        self.assertTrue(all(f["ambiguous"] for f in models))
+        altitude = next(f for f in result["summary"]["facts"] if f["semantic"] == "gps.altitude_sea_level")
+        self.assertEqual(altitude["state"], "unsupported")
+        self.assertEqual(altitude["inputs"], [])
+        corrupted = fragments_a.copy()
+        corrupted[-1] = corrupted[-1][:-1] + bytes([corrupted[-1][-1] ^ 1])
+        self._xmp_jpeg(path, [standard_a, self._extended_standard(guid_b), *corrupted, *fragments_b])
+        result, _ = self.invoke("source-metadata", path)
+        self.assertEqual([f["value"] for f in result["summary"]["facts"] if f["semantic"] == "camera.model"], ["B"])
+
+    def test_source_metadata_jpeg_extended_xmp_index_limits(self):
+        path = self.root / "output-limits.jpg"
+        packet = self._rdf_packet('<e:GPSAltitudeRef>1</e:GPSAltitudeRef>').encode()
+        guid, fragments = self._extended_xmp(packet)
+        self._xmp_jpeg(path, [self._extended_standard(guid, '<e:GPSAltitude>25/2</e:GPSAltitude>'), *fragments])
+        # Index omissions must not create dangling assembled provenance. Image
+        # summary fact/text quotas have separate C++ contracts.
+        for limit in (0, 1, 2, 4096):
+            observed = self._xmp_limited(path, records=limit)
+            summary = observed["test_summary"]
+            self.assertLessEqual(len(observed["records"]), limit)
+            for fact in summary["facts"]:
+                if "xmp_assembly" in fact:
+                    self.assertTrue(any(a["guid"] == fact["xmp_assembly"]["guid"] for a in summary["xmp_assemblies"]))
+
+    def test_source_metadata_jpeg_extended_xmp_digest_policy(self):
+        path = self.root / "digest-policy.jpg"
+        packet = self._rdf_packet('<t:Model>extended</t:Model>').encode()
+        guid, fragments = self._extended_xmp(packet)
+        self._xmp_jpeg(path, [self._extended_standard(guid), *fragments])
+        config = self.root / "openssl.cnf"
+        config.write_text('openssl_conf = init\n[init]\nalg_section = algorithms\n[algorithms]\ndefault_properties = fips=yes\n')
+        env = dict(os.environ, OPENSSL_CONF=str(config))
+        completed = subprocess.run([str(CLI), "source-metadata", str(path)], capture_output=True, text=True, env=env)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        assembly = next(p for p in result["summary"]["xmp_packets"] if "extended_xmp" in p)
+        self.assertEqual(assembly["state"], "unsupported", assembly)
+        value = next(a for a in result["summary"]["xmp_assemblies"] if a["guid"] == assembly["extended_xmp"])
+        self.assertFalse(value["md5_verified"])
+        self.assertFalse(any(f["semantic"] == "camera.model" for f in result["summary"]["facts"]))
 
     def test_source_metadata_xmp_interpretation_secondary_and_invalid(self):
         packet = self._rdf_packet('<t:Make>primary</t:Make>').encode()

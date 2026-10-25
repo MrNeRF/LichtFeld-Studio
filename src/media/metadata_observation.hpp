@@ -35,9 +35,23 @@ namespace lfs::media {
         std::size_t description = 0;
         std::size_t ordinal = 0;
     };
+    struct XmpFragmentInput {
+        MetadataRecordHandle source;
+        std::size_t offset = 0;
+        std::size_t bytes = 0;
+    };
+    struct XmpPacketAssembly {
+        std::string guid;
+        std::size_t declared_bytes = 0;
+        bool md5_verified = false;
+        std::optional<MetadataRecordHandle> standard_source;
+        std::vector<XmpFragmentInput> fragments;
+    };
     struct XmpFactProvenance {
         XmpPropertyLocation property;
         std::vector<XmpPropertyLocation> inputs;
+        std::shared_ptr<const XmpPacketAssembly> assembly;
+        bool extended_packet = false;
     };
     enum class XmpPacketState { Parsed,
                                 Malformed,
@@ -47,6 +61,7 @@ namespace lfs::media {
         MetadataRecordHandle source;
         XmpPacketState state = XmpPacketState::Parsed;
         std::string diagnostic;
+        std::shared_ptr<const XmpPacketAssembly> assembly;
     };
     struct MetadataFact {
         MetadataRecordHandle source;
