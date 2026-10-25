@@ -2,12 +2,16 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/point_cloud.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "point_cloud_style.hpp"
 #include "rendering/rendering.hpp"
+#include <array>
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <fstream>
+#include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
+#include <optional>
 #include <regex>
 #include <string>
 
@@ -77,3 +81,61 @@ TEST(PointCloudSelectionOverlay, SoftwareStyleMatchesViewportShader) {
     EXPECT_FLOAT_EQ(shader_value("SELECTION_COMMITTED_SCALE"), SELECTION_COMMITTED_SCALE);
     EXPECT_FLOAT_EQ(shader_value("SELECTION_PREVIEW_SCALE"), SELECTION_PREVIEW_SCALE);
 }
+
+namespace {
+    class PointCloudCropPolygonRender : public testing::TestWithParam<lfs::core::GpuBackend> {
+    protected:
+        void SetUp() override {
+            if (!lfs::core::gpu_backend_available(GetParam()))
+                GTEST_SKIP() << "Backend unavailable";
+            scope_.emplace(GetParam());
+        }
+        std::optional<lfs::core::GpuBackendScope> scope_;
+    };
+} // namespace
+
+// Catches a point-cloud render (video export, Python rendering) that ignores a crop polygon or crops by its bounds:
+// of an L outline only the point in its arm stays; the points in its notch and past its slab go. Vulkan renders
+// through the tensor rasterizer, which hides them through the deleted mask.
+TEST_P(PointCloudCropPolygonRender, KeepsOnlyPointsInsideThePrism) {
+    using namespace lfs::core;
+    using namespace lfs::rendering;
+    auto engine = RenderingEngine::create();
+    PointCloud cloud;
+    // Red in the bottom arm, green in the notch, blue over the upper arm but past the slab.
+    cloud.means = Tensor::from_vector(std::vector<float>{0.5f, -0.5f, -5.0f, 0.5f, 0.5f, -5.0f, -0.5f, 0.5f, -8.0f},
+                                      {size_t{3}, size_t{3}}, Device::CPU);
+    cloud.colors = Tensor::from_vector(std::vector<float>{1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+                                       {size_t{3}, size_t{3}}, Device::CPU);
+    PointCloudRenderRequest request;
+    request.frame_view.size = {64, 64};
+    // The prism sits at z = -5 with |z| <= 1.
+    request.filters.crop_polygon = CropPolygon{
+        .vertices = {{-1.0f, -1.0f}, {1.0f, -1.0f}, {1.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 1.0f}, {-1.0f, 1.0f}},
+        .half_depth = 1.0f,
+        .transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 5.0f))};
+    const auto seen = [&](const bool inverse) {
+        request.filters.crop_inverse = inverse;
+        auto result = engine->renderPointCloudImage(cloud, request);
+        EXPECT_TRUE(result) << (result ? "" : result.error());
+        std::array<bool, 3> visible{};
+        if (!result)
+            return visible;
+        for (size_t channel = 0; channel < 3; ++channel)
+            visible[channel] = result->image->slice(0, channel, channel + 1).max_scalar() > 0.5f;
+        return visible;
+    };
+    EXPECT_EQ(seen(false), (std::array<bool, 3>{true, false, false}));
+    EXPECT_EQ(seen(true), (std::array<bool, 3>{false, true, true}));
+    if (GetParam() != GpuBackend::CUDA) {
+        // Without a polygon crop of its own, the tensor rasterizer refuses to dim outside points.
+        request.filters.crop_desaturate = true;
+        EXPECT_FALSE(engine->renderPointCloudImage(cloud, request));
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(Backends, PointCloudCropPolygonRender,
+                         testing::Values(lfs::core::GpuBackend::CUDA, lfs::core::GpuBackend::Vulkan),
+                         [](const testing::TestParamInfo<lfs::core::GpuBackend>& info) {
+                             return std::string(lfs::core::gpu_backend_name(info.param));
+                         });

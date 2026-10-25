@@ -122,6 +122,25 @@ namespace lfs::python {
                 .build();
         }
 
+        void register_crop_polygon_properties() {
+            using namespace lfs::core::prop;
+            PropertyGroupBuilder<core::CropPolygonData>("crop_polygon", "Crop Polygon")
+                .float_prop(&core::CropPolygonData::half_depth, "half_depth", "Half Depth", 1.0f,
+                            core::crop_polygon::kMinHalfDepth, 1.0e6f,
+                            "Half the extrusion depth along the local z axis")
+                .bool_prop(&core::CropPolygonData::inverse, "inverse", "Invert", false,
+                           "Invert crop logic")
+                .bool_prop(&core::CropPolygonData::enabled, "enabled", "Enabled", true,
+                           "Enable crop filtering")
+                .color3_prop(&core::CropPolygonData::color, "color", "Color", glm::vec3(1.0f, 1.0f, 0.0f),
+                             "Visualization color")
+                .float_prop(&core::CropPolygonData::line_width, "line_width", "Line Width", 2.0f, 0.1f,
+                            10.0f, "Border line width")
+                .float_prop(&core::CropPolygonData::flash_intensity, "flash_intensity", "Flash", 0.0f,
+                            0.0f, 1.0f, "Flash effect intensity")
+                .build();
+        }
+
     } // namespace
 
     // Helper to convert glm::mat4 to nb::tuple (row-major for NumPy compatibility)
@@ -568,6 +587,14 @@ namespace lfs::python {
             return std::nullopt;
         }
         return PyEllipsoid(live.ellipsoid.get());
+    }
+
+    std::optional<PyCropPolygon> PySceneNode::crop_polygon() {
+        auto& live = node();
+        if (live.type != core::NodeType::CROP_POLYGON || !live.crop_polygon) {
+            return std::nullopt;
+        }
+        return PyCropPolygon(live.crop_polygon.get());
     }
 
     std::optional<PyKeyframeData> PySceneNode::keyframe_data() {
@@ -1126,11 +1153,13 @@ namespace lfs::python {
             return;
         const auto boxes = scene_->getRenderableCropBoxes();
         const auto ellipsoids = scene_->getRenderableEllipsoids();
+        const auto polygons = scene_->getRenderableCropPolygons();
         const auto enabled = [](const auto& volume) {
             return volume.data && volume.data->enabled && volume.parent_node_index >= 0;
         };
         if (!std::any_of(boxes.begin(), boxes.end(), enabled) &&
-            !std::any_of(ellipsoids.begin(), ellipsoids.end(), enabled)) {
+            !std::any_of(ellipsoids.begin(), ellipsoids.end(), enabled) &&
+            !std::any_of(polygons.begin(), polygons.end(), enabled)) {
             return;
         }
 
@@ -1188,6 +1217,26 @@ namespace lfs::python {
             rendering::filter_selection_by_crop(selection, means, nullptr, nullptr, nullptr, false,
                                                 &transform, &radii, ellipsoid.data->inverse, &model_transforms,
                                                 indices.get(), ellipsoid.parent_node_index);
+        }
+        for (const auto& polygon : polygons) {
+            if (!enabled(polygon))
+                continue;
+            const auto transform = upload_transform(polygon.world_transform);
+            std::vector<float> outline;
+            outline.reserve(polygon.data->vertices.size() * 2);
+            for (const glm::vec2& vertex : polygon.data->vertices)
+                outline.insert(outline.end(), {vertex.x, vertex.y});
+            const auto vertices =
+                core::Tensor::from_vector(outline, {polygon.data->vertices.size(), size_t{2}}, core::Device::CUDA);
+            const rendering::SelectionCropPolygon filter{
+                .transform = &transform,
+                .vertices = &vertices,
+                .half_depth = polygon.data->half_depth,
+                .inverse = polygon.data->inverse,
+            };
+            rendering::filter_selection_by_crop(selection, means, nullptr, nullptr, nullptr, false,
+                                                nullptr, nullptr, false, &model_transforms, indices.get(),
+                                                polygon.parent_node_index, &filter);
         }
     }
 
@@ -1511,6 +1560,7 @@ namespace lfs::python {
         register_scene_node_properties();
         register_cropbox_properties();
         register_ellipsoid_properties();
+        register_crop_polygon_properties();
 
         // NodeType enum
         nb::enum_<core::NodeType>(m, "NodeType")
@@ -1527,7 +1577,8 @@ namespace lfs::python {
             .value("IMAGE", core::NodeType::IMAGE)
             .value("MESH", core::NodeType::MESH)
             .value("KEYFRAME_GROUP", core::NodeType::KEYFRAME_GROUP)
-            .value("KEYFRAME", core::NodeType::KEYFRAME);
+            .value("KEYFRAME", core::NodeType::KEYFRAME)
+            .value("CROP_POLYGON", core::NodeType::CROP_POLYGON);
 
         nb::class_<PyMeshInfo>(m, "MeshInfo")
             .def_prop_ro("vertex_count", &PyMeshInfo::vertex_count)
@@ -1604,6 +1655,30 @@ namespace lfs::python {
             .def("cancel", &vis::PointCloudUpdateTicket::cancel,
                  "Cancel before publication. In-flight source memory remains retained until inputs_released.");
 
+        nb::class_<PyCropPolygon>(m, "CropPolygon")
+            .def_prop_ro("__property_group__", &PyCropPolygon::property_group, "Property group name for introspection")
+            .def_prop_ro("vertices", &PyCropPolygon::vertices, "Outline vertices (x, y) in the node's local XY plane")
+            .def("get", &PyCropPolygon::get, nb::arg("name"), "Get property value by name")
+            .def("set", &PyCropPolygon::set, nb::arg("name"), nb::arg("value"), "Set property value by name")
+            .def("prop_info", &PyCropPolygon::prop_info, nb::arg("name"), "Get metadata for a property")
+            .def(
+                "__getattr__",
+                [](PyCropPolygon& self, const std::string& name) -> nb::object {
+                    if (!self.has_prop(name)) {
+                        throw nb::attribute_error(("CropPolygon has no attribute '" + name + "'").c_str());
+                    }
+                    return self.prop_getattr(name);
+                })
+            .def(
+                "__setattr__",
+                [](PyCropPolygon& self, const std::string& name, nb::object value) {
+                    if (!self.has_prop(name)) {
+                        throw nb::attribute_error(("Cannot set attribute '" + name + "'").c_str());
+                    }
+                    self.prop_setattr(name, value);
+                })
+            .def("__dir__", &PyCropPolygon::python_dir, "List available attributes");
+
         // PointCloud class
         nb::class_<PyPointCloud>(m, "PointCloud",
                                  "Point-cloud data owned by a load result or referenced by scene node identity.\n\n"
@@ -1662,6 +1737,7 @@ namespace lfs::python {
             .def("mesh", &PySceneNode::mesh, "Get MeshInfo for MESH nodes (None otherwise)")
             .def("cropbox", &PySceneNode::cropbox, "Get CropBox for CROPBOX nodes (None otherwise)")
             .def("ellipsoid", &PySceneNode::ellipsoid, "Get Ellipsoid for ELLIPSOID nodes (None otherwise)")
+            .def("crop_polygon", &PySceneNode::crop_polygon, "Get CropPolygon for CROP_POLYGON nodes (None otherwise)")
             .def("keyframe_data", &PySceneNode::keyframe_data, "Get KeyframeData for KEYFRAME nodes (None otherwise)")
             // Camera specific (read-only)
             .def_prop_ro("camera_uid", &PySceneNode::camera_uid, "Camera unique identifier")
@@ -1854,7 +1930,7 @@ Returns:
             .def("set_node_transform", &PyScene::set_node_transform, nb::arg("name"), nb::arg("transform"), "Set node local transform from a [4, 4] ndarray")
             // Combined/training model
             .def("combined_model", &PyScene::combined_model, "Get the merged SplatData for all visible splats (None if empty)")
-            .def("apply_crop_filter", &PyScene::apply_crop_filter, nb::arg("mask"), "Filter a combined-model GPU bool mask in place by enabled render crop boxes and ellipsoids. Scene selection is unchanged.")
+            .def("apply_crop_filter", &PyScene::apply_crop_filter, nb::arg("mask"), "Filter a combined-model GPU bool mask in place by enabled render crop boxes, ellipsoids and polygons. Scene selection is unchanged.")
             .def("training_model", &PyScene::training_model, "Get the SplatData used for training (None if unavailable)")
             .def("set_training_model_node", &PyScene::set_training_model_node, nb::arg("name"), "Set which node provides the training model. A transient node may not replace a saved training model (RuntimeError)")
             .def_prop_ro("training_model_node_name", &PyScene::training_model_node_name, "Name of the node providing the training model")

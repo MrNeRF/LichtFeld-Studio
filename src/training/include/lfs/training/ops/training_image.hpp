@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 
 namespace lfs::gpu_ops {
 
@@ -18,6 +19,12 @@ namespace lfs::gpu_ops {
         std::array<float, 3> minimum, maximum;
         float outside_weight;
         bool inverse;
+        // A crop polygon prism instead of the box: the outline vertices (x, y pairs) in the crop
+        // frame over |z| <= maximum[2], which minimum and maximum bound. Empty for a box.
+        // polygon_device holds the same [count, 2] floats on the device for backends that read
+        // them there.
+        std::span<const float> polygon{};
+        Tensor polygon_device{};
     };
 
     struct TrainingImageOps {
@@ -39,6 +46,8 @@ namespace lfs::gpu_ops {
         Tensor (*quantize_to_grid)(In image, float levels) = nullptr;
         Tensor (*flip_error_map)(In reference, In test, float pixels_per_degree) = nullptr;
         Tensor (*flip_error_image)(In error_map) = nullptr;
+        // Whether roi takes RoiParams::polygon. Callers must not pass a polygon otherwise.
+        bool roi_polygon = false;
     };
 
 } // namespace lfs::gpu_ops

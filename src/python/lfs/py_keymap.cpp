@@ -210,7 +210,9 @@ namespace lfs::python {
             .value("NEXT_SIDEBAR_CATEGORY", Action::NEXT_SIDEBAR_CATEGORY)
             .value("PREVIOUS_SIDEBAR_CATEGORY", Action::PREVIOUS_SIDEBAR_CATEGORY)
             .value("REMOVE_LAST_POINT", Action::REMOVE_LAST_POINT)
-            .value("APPLY_ALIGNMENT", Action::APPLY_ALIGNMENT);
+            .value("APPLY_ALIGNMENT", Action::APPLY_ALIGNMENT)
+            .value("INSERT_CROP_POLYGON_VERTEX", Action::INSERT_CROP_POLYGON_VERTEX)
+            .value("REMOVE_CROP_POLYGON_VERTEX", Action::REMOVE_CROP_POLYGON_VERTEX);
 
         // Expose ToolMode enum
         nb::enum_<ToolMode>(keymap, "ToolMode")

@@ -39,6 +39,53 @@ static bool rayHitsBox(float3 origin, float3 direction, float3 lo, float3 hi) {
     }
     return leave >= 0.0f;
 }
+// Crop polygon ROI (operation 1 with slot = vertex count): the outline, x and y pairs at
+// secondary, in the crop frame over |z| <= cropMax.z; cropMin and cropMax bound it. Mirrors
+// the CUDA polygon kernel in kernels/roi_weight_map.cu.
+static float2 polygonVertex(Parameters p, uint i) {
+    Ptr<float, Access.Read> v = (Ptr<float, Access.Read>)p.secondary;
+    return float2(v[2u * i], v[2u * i + 1u]);
+}
+static bool outlineContains(Parameters p, float2 q) {
+    bool inside = false;
+    float2 b = polygonVertex(p, p.slot - 1u);
+    for (uint i = 0; i < p.slot; ++i) {
+        float2 a = polygonVertex(p, i);
+        if ((a.y > q.y) != (b.y > q.y) && q.x < (b.x - a.x) * (q.y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+        b = a;
+    }
+    return inside;
+}
+static float cross2(float2 a, float2 b) { return a.x * b.y - a.y * b.x; }
+// The ray (t >= 0) clipped to the slab and the outline bounds must leave a segment that
+// touches the outline: an endpoint inside it, or a crossing with one of its edges.
+static bool rayHitsPrism(Parameters p, float3 origin, float3 direction) {
+    float enter = 0.0f, leave = 3.402823466e+38f;
+    for (uint axis = 0; axis < 3; ++axis) {
+        if (abs(direction[axis]) < 1.0e-8f) {
+            if (origin[axis] < p.cropMin[axis] || origin[axis] > p.cropMax[axis]) return false;
+        } else {
+            float inverseDirection = 1.0f / direction[axis];
+            float a = (p.cropMin[axis] - origin[axis]) * inverseDirection;
+            float b = (p.cropMax[axis] - origin[axis]) * inverseDirection;
+            if (a > b) { float t = a; a = b; b = t; }
+            enter = max(enter, a); leave = min(leave, b);
+            if (leave < enter) return false;
+        }
+    }
+    if (leave == 3.402823466e+38f) leave = enter;
+    float2 p0 = origin.xy + enter * direction.xy, p1 = origin.xy + leave * direction.xy;
+    if (outlineContains(p, p0) || outlineContains(p, p1)) return true;
+    float2 d = p1 - p0;
+    float2 a = polygonVertex(p, p.slot - 1u);
+    for (uint i = 0; i < p.slot; ++i) {
+        float2 b = polygonVertex(p, i), e = b - a;
+        if (((cross2(d, a - p0) > 0.0f) != (cross2(d, b - p0) > 0.0f)) &&
+            ((cross2(e, p0 - a) > 0.0f) != (cross2(e, p1 - a) > 0.0f))) return true;
+        a = b;
+    }
+    return false;
+}
 static uint pcgHash(uint v) {
     uint state = v * 747796405u + 2891336453u;
     uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
@@ -103,9 +150,11 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Paramet
             // Below half coverage a pixel shows mostly background, so no surface in the box.
             float alpha = ((Ptr<float, Access.Read>)p.alpha)[index];
             float3 point = originInBox + (((Ptr<float, Access.Read>)p.depth)[index] / alpha) * directionInBox;
-            hit = alpha >= 0.5f && all(point >= p.cropMin.xyz) && all(point <= p.cropMax.xyz);
+            hit = alpha >= 0.5f && all(point >= p.cropMin.xyz) && all(point <= p.cropMax.xyz) &&
+                  (p.slot == 0 || outlineContains(p, point.xy));
         } else {
-            hit = rayHitsBox(originInBox, directionInBox, p.cropMin.xyz, p.cropMax.xyz);
+            hit = p.slot != 0 ? rayHitsPrism(p, originInBox, directionInBox)
+                              : rayHitsBox(originInBox, directionInBox, p.cropMin.xyz, p.cropMax.xyz);
         }
         output[index] = ((p.inverse != 0) != hit) ? 1.0f : p.outsideWeight;
         return;

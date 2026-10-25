@@ -88,6 +88,45 @@ namespace {
         EXPECT_EQ(bools(in_roi), (std::vector<bool>{false, true, true, true, true}));
     }
 
+    // An L outline: the square [-1, 1]^2 without its (0, 1) x (0, 1) quarter, the notch, over |z| <= 0.5.
+    const std::vector<float> kLOutline{-1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, -1.0f, 1.0f};
+    // Splat centres in polygon space: in the bottom arm, in the notch, below the bottom arm, beside the outline.
+    const std::vector<float> kPolygonCentres{0.5f, -0.5f, 0.0f, 0.5f, 0.5f, 0.0f, 0.5f, -0.5f, -5.0f, 5.0f, 0.0f, 0.0f};
+
+    lfs::training::RoiBox l_prism(const bool inverse) {
+        return {glm::mat4(1.0f), {-1.0f, -1.0f, -0.5f}, {1.0f, 1.0f, 0.5f}, inverse, Tensor::from_vector(kLOutline, {kLOutline.size() / 2, size_t{2}}, Device::GPU)};
+    }
+
+    // Catches polygon damping that tests the outline's bounds: seen from above, the notch splat is neither in nor
+    // in front of or behind the L, so it trains damped, while the splat under the bottom arm trains at full rate.
+    TEST_P(RoiMasks, PolygonViewMaskFollowsTheConcaveOutline) {
+        const auto means = Tensor::from_vector(kPolygonCentres, {size_t{4}, size_t{3}}, Device::GPU);
+        const auto camera = Tensor::from_vector({0.0f, 0.0f, 10.0f}, {size_t{1}, size_t{3}}, Device::GPU);
+        auto rejected = Tensor::empty({size_t{4}}, Device::GPU, DataType::Bool);
+        const auto run = [&](const float sigma, const bool inverse) {
+            const auto scaling = Tensor::from_vector(std::vector<float>(12, std::log(sigma)), {size_t{4}, size_t{3}},
+                                                     Device::GPU);
+            Tensor no_roi;
+            lfs::training::roi_reject_mask(means, scaling, {}, camera, l_prism(inverse), rejected, no_roi);
+            return bools(rejected);
+        };
+        EXPECT_EQ(run(0.01f, false), (std::vector<bool>{false, true, false, true}));
+        EXPECT_EQ(run(0.01f, true), (std::vector<bool>{true, false, true, false}));
+        // A footprint reaching over the notch edges keeps the notch splat at full rate.
+        EXPECT_EQ(run(0.2f, false), (std::vector<bool>{false, false, false, true}));
+    }
+
+    // Catches polygon refine scores or ROI rows that use the outline's bounds instead of the outline.
+    TEST_P(RoiMasks, PolygonRelevanceMaskAndRoiRowsFollowTheConcaveOutline) {
+        const auto means = Tensor::from_vector(kPolygonCentres, {size_t{4}, size_t{3}}, Device::GPU);
+        const auto cameras = Tensor::from_vector({0.0f, 0.0f, 10.0f}, {size_t{1}, size_t{3}}, Device::GPU);
+        auto rejected = Tensor::empty({size_t{4}}, Device::GPU, DataType::Bool);
+        auto in_roi = Tensor::empty({size_t{4}}, Device::GPU, DataType::Bool);
+        lfs::training::roi_reject_mask(means, {}, {}, cameras, l_prism(false), rejected, in_roi);
+        EXPECT_EQ(bools(rejected), (std::vector<bool>{false, true, false, true}));
+        EXPECT_EQ(bools(in_roi), (std::vector<bool>{true, false, false, false}));
+    }
+
     INSTANTIATE_TEST_SUITE_P(Backends, RoiMasks, testing::Values(GpuBackend::CUDA, GpuBackend::Vulkan, GpuBackend::Metal),
                              [](const auto& info) {
                                  return info.param == GpuBackend::Metal    ? "Metal"

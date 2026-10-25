@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "core/crop_polygon.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "python/python_runtime.hpp"
@@ -45,7 +46,8 @@ namespace lfs::vis {
         constexpr std::uint32_t kBindingSelectionColors = 5;
         constexpr std::uint32_t kBindingDeletedMask = 6;
         constexpr std::uint32_t kBindingVertexAddresses = 7;
-        constexpr std::uint32_t kDescriptorBindingCount = 8;
+        constexpr std::uint32_t kBindingCropPolygon = 8;
+        constexpr std::uint32_t kDescriptorBindingCount = 9;
 
         // Phase 7C-P2: point-cloud is the ResetPreWaitReplacement row only.
         constexpr lfs::rendering::SubmissionFencePolicy kPointCloudFencePolicy =
@@ -88,6 +90,7 @@ namespace lfs::vis {
             kFlagHasDeletedMask = 1 << 9,
             kFlagCropEllipsoid = 1 << 10,
             kFlagEquirectangular = 1 << 11,
+            kFlagCropPolygon = 1 << 12,
         };
         struct PushConstants {
             float view_proj[16];        // 64
@@ -305,7 +308,7 @@ namespace lfs::vis {
         void writePushConstants(PushConstants& pc, const PointCloudVulkanRenderer::RenderRequest& req,
                                 int max_point_size, int n_transforms, int n_visibility,
                                 bool has_transform_indices, bool has_selection,
-                                bool has_preview_selection, bool has_deleted_mask) {
+                                bool has_preview_selection, bool has_deleted_mask, bool has_polygon) {
             std::memcpy(pc.view_proj, glm::value_ptr(req.view_projection), sizeof(pc.view_proj));
             if (req.equirectangular) {
                 // Panorama XY comes from angles in view space. Project radial
@@ -316,16 +319,20 @@ namespace lfs::vis {
             }
             std::memcpy(pc.view, glm::value_ptr(req.view), sizeof(pc.view));
 
-            const bool has_crop = req.crop.has_value() || req.crop_ellipsoid.has_value();
+            // The polygon's vertices live in its storage buffer; crop_min carries (half depth, count).
+            const bool crop_is_polygon = !req.crop && !req.crop_ellipsoid && has_polygon;
+            const bool has_crop = req.crop.has_value() || req.crop_ellipsoid.has_value() || crop_is_polygon;
             const bool crop_is_ellipsoid = req.crop_ellipsoid.has_value();
-            const glm::mat4 crop_to_local = crop_is_ellipsoid
-                                                ? req.crop_ellipsoid->to_local
-                                                : (req.crop ? req.crop->to_local : glm::mat4(1.0f));
+            const glm::mat4 crop_to_local = crop_is_ellipsoid ? req.crop_ellipsoid->to_local
+                                            : crop_is_polygon ? req.crop_polygon->to_local
+                                                              : (req.crop ? req.crop->to_local : glm::mat4(1.0f));
             std::memcpy(pc.crop_to_local, glm::value_ptr(crop_to_local), sizeof(pc.crop_to_local));
 
-            const glm::vec3 crop_min = crop_is_ellipsoid
-                                           ? req.crop_ellipsoid->radii
-                                           : (req.crop ? req.crop->min : glm::vec3(0.0f));
+            const glm::vec3 crop_min =
+                crop_is_ellipsoid ? req.crop_ellipsoid->radii
+                : crop_is_polygon ? glm::vec3(req.crop_polygon->half_depth,
+                                              static_cast<float>(req.crop_polygon->vertices.size()), 0.0f)
+                                  : (req.crop ? req.crop->min : glm::vec3(0.0f));
             const glm::vec3 crop_max = req.crop ? req.crop->max : glm::vec3(0.0f);
             pc.crop_min[0] = crop_min.x;
             pc.crop_min[1] = crop_min.y;
@@ -348,14 +355,20 @@ namespace lfs::vis {
             int flags = 0;
             if (has_crop) {
                 flags |= kFlagHasCrop;
-                const bool inverse = crop_is_ellipsoid ? req.crop_ellipsoid->inverse : req.crop->inverse;
-                const bool desaturate = crop_is_ellipsoid ? req.crop_ellipsoid->desaturate : req.crop->desaturate;
+                const bool inverse = crop_is_ellipsoid ? req.crop_ellipsoid->inverse
+                                     : crop_is_polygon ? req.crop_polygon->inverse
+                                                       : req.crop->inverse;
+                const bool desaturate = crop_is_ellipsoid ? req.crop_ellipsoid->desaturate
+                                        : crop_is_polygon ? req.crop_polygon->desaturate
+                                                          : req.crop->desaturate;
                 if (inverse)
                     flags |= kFlagCropInverse;
                 if (desaturate)
                     flags |= kFlagCropDesaturate;
                 if (crop_is_ellipsoid)
                     flags |= kFlagCropEllipsoid;
+                if (crop_is_polygon)
+                    flags |= kFlagCropPolygon;
             }
             if (req.orthographic) {
                 flags |= kFlagOrthographic;
@@ -397,6 +410,12 @@ namespace lfs::vis {
             out.resize(n);
             std::memcpy(out.data(), host.ptr<float>(), n * sizeof(float));
             return true;
+        }
+
+        // A drawable polygon crop: 3 to 64 outline vertices.
+        [[nodiscard]] bool hasCropPolygon(const PointCloudVulkanRenderer::RenderRequest& req) {
+            return req.crop_polygon && req.crop_polygon->vertices.size() >= lfs::core::crop_polygon::kMinVertices &&
+                   req.crop_polygon->vertices.size() <= lfs::core::crop_polygon::kMaxVertices;
         }
 
         [[nodiscard]] bool hasPointMask(const lfs::core::Tensor* const mask,
@@ -459,6 +478,7 @@ namespace lfs::vis {
             ManagedBuffer selection_mask;
             ManagedBuffer preview_selection_mask;
             ManagedBuffer selection_colors;
+            ManagedBuffer crop_polygon;
 
             const void* cached_positions_ptr = nullptr;
             std::size_t cached_positions_count = 0;
@@ -488,6 +508,7 @@ namespace lfs::vis {
             std::uint64_t cached_preview_selection_revision = 0;
             std::array<glm::vec4, lfs::rendering::kSelectionColorTableCount> cached_selection_colors{};
             bool cached_selection_colors_valid = false;
+            std::vector<glm::vec2> cached_crop_polygon;
         };
         InputCache cache;
 
@@ -1509,6 +1530,7 @@ namespace lfs::vis {
             destroyBuffer(allocator, cache.selection_mask);
             destroyBuffer(allocator, cache.preview_selection_mask);
             destroyBuffer(allocator, cache.selection_colors);
+            destroyBuffer(allocator, cache.crop_polygon);
             destroyBuffer(allocator, placeholder);
             for (auto& s : pending_stagings) {
                 destroyBuffer(allocator, s);
@@ -1863,10 +1885,23 @@ namespace lfs::vis {
                 }
             }
 
+            // A few hundred bytes, uploaded only when the outline changes.
+            if (hasCropPolygon(req) &&
+                (cache.crop_polygon.buffer == VK_NULL_HANDLE ||
+                 !std::ranges::equal(cache.cached_crop_polygon, req.crop_polygon->vertices))) {
+                static_assert(sizeof(glm::vec2) == sizeof(float) * 2);
+                if (auto r = uploadInto(cb, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, req.crop_polygon->vertices.data(),
+                                        req.crop_polygon->vertices.size_bytes(), cache.crop_polygon, "crop polygon");
+                    !r) {
+                    return r;
+                }
+                cache.cached_crop_polygon.assign(req.crop_polygon->vertices.begin(), req.crop_polygon->vertices.end());
+            }
+
             return {};
         }
 
-        void updateDescriptorSet() {
+        void updateDescriptorSet(const bool has_polygon) {
             VkBuffer transforms_buf = (cache.cached_n_transforms > 0)
                                           ? cache.transforms.buffer
                                           : placeholder.buffer;
@@ -1891,6 +1926,7 @@ namespace lfs::vis {
             VkBuffer selection_colors_buf = has_selection_colors
                                                 ? cache.selection_colors.buffer
                                                 : placeholder.buffer;
+            VkBuffer crop_polygon_buf = has_polygon ? cache.crop_polygon.buffer : placeholder.buffer;
 
             std::array<VkDescriptorBufferInfo, kDescriptorBindingCount> infos{};
             infos[kBindingModelTransforms].buffer = transforms_buf;
@@ -1909,6 +1945,8 @@ namespace lfs::vis {
             infos[kBindingDeletedMask].range = VK_WHOLE_SIZE;
             infos[kBindingVertexAddresses].buffer = cache.vertex_addresses.buffer;
             infos[kBindingVertexAddresses].range = VK_WHOLE_SIZE;
+            infos[kBindingCropPolygon].buffer = crop_polygon_buf;
+            infos[kBindingCropPolygon].range = VK_WHOLE_SIZE;
 
             std::array<VkWriteDescriptorSet, kDescriptorBindingCount> writes{};
             for (std::uint32_t i = 0; i < writes.size(); ++i) {
@@ -2015,7 +2053,7 @@ namespace lfs::vis {
             xfer_dependency.pMemoryBarriers = &xfer_to_vert;
             vkCmdPipelineBarrier2(command_buffer, &xfer_dependency);
 
-            updateDescriptorSet();
+            updateDescriptorSet(hasCropPolygon(req));
 
             const auto& resident = cache.resident_buffers;
             const auto positions_bytes = resident ? resident->positions_buffer.bytes : cache.positions.size;
@@ -2120,7 +2158,8 @@ namespace lfs::vis {
                                cache.cached_transform_indices_count > 0,
                                cache.cached_selection_mask_count > 0,
                                cache.cached_preview_selection_mask_count > 0,
-                               cache.cached_deleted_mask_count > 0);
+                               cache.cached_deleted_mask_count > 0,
+                               hasCropPolygon(req));
             // Hash the depth-affecting state, not the frame counter: UI-only
             // redraws can reuse the completed snapshot while the mouse moves.
             std::uint64_t identity = 1469598103934665603ull;
@@ -2135,6 +2174,8 @@ namespace lfs::vis {
             hash(&req.deleted_mask_revision, sizeof(req.deleted_mask_revision));
             hash(&req.selection_revision, sizeof(req.selection_revision));
             hash(&req.preview_selection_revision, sizeof(req.preview_selection_revision));
+            if (hasCropPolygon(req))
+                hash(req.crop_polygon->vertices.data(), req.crop_polygon->vertices.size_bytes());
             if (req.model_transforms)
                 hash(req.model_transforms->data(), req.model_transforms->size() * sizeof(glm::mat4));
             if (req.node_visibility_mask)

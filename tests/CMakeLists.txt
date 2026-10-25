@@ -1173,6 +1173,7 @@ set(TEST_FILES
     test_rendered_structure.cpp
     test_gradient_residual.cpp
     test_fused_reg_loss.cpp
+    test_opacity_gradients.cpp
     test_fused_bg_blend.cpp
     test_photometric_hygiene.cpp
     test_photometric_ops.cpp
@@ -1354,6 +1355,7 @@ set(TEST_FILES
     test_video_export_utils.cpp
     test_viewport_point_cloud_export.cpp
     test_video_export_frame_schedule.cpp
+    test_video_resolution.cpp
     test_video_frame_extractor_naming.cpp
     test_video_cpu_rgb_conversion.cpp
     test_video_cuda_frame_handoff.cpp
@@ -1426,6 +1428,7 @@ set(TEST_FILES
     test_rendering_refactor_services.cpp
     test_view_render_state.cpp
     test_rml_pointer_routing.cpp
+    test_crop_polygon.cpp
     test_point_cloud_raster_orientation.cpp
     test_point_cloud_vulkan_projection.cpp
     test_point_cloud_selection_overlay.cpp
@@ -2869,3 +2872,4 @@ if(LFS_TENSOR_VULKAN AND BUILD_TESTS)
     endif()
     add_test(NAME GpuPushConstantContracts COMMAND gpu_push_constant_contracts)
 endif()
+

@@ -209,7 +209,6 @@ void gsplat_accumulate(GsplatAccumulateParams p, uint g) {
         return;
     Ptr<float, Access.ReadWrite> v = (Ptr<float, Access.ReadWrite>)(uint64_t(p.grads) + uint64_t(g) * kGsplatGradStride * 4);
     const float3 scale = exp(gsplat_load3(p.scales, g));
-    const float opacity = gsplat_sigmoid(p.opacities[g]);
     for (uint k = 0; k < 3u; ++k) {
         p.means_grad[g * 3u + k] += v[k];
         p.scaling_grad[g * 3u + k] += v[3u + k] * scale[k];
@@ -218,7 +217,7 @@ void gsplat_accumulate(GsplatAccumulateParams p, uint g) {
     p.scaling_grad[g*3+axis] += p.flatten_weight*scale[axis]/float(p.count);
     for (uint k = 0; k < 4u; ++k)
         p.rotation_grad[g * 4u + k] += v[6u + k];
-    p.opacity_grad[g] += v[10] * opacity * (1.0f - opacity);
+    p.opacity_grad[g] += v[10] * gsplat_sigmoid_derivative_from_logit(p.opacities[g]);
 
     float basis[16];
     gsplat_sh_basis(gsplat_load3(p.means, g) - gsplat_camera_load((Ptr<float, Access.ReadWrite>)p.camera).origin, p.degree, basis);

@@ -191,6 +191,8 @@ namespace lfs::training {
             install.has_preserved_cropbox = context.has_preserved_cropbox;
             install.preserved_cropbox_data = context.preserved_cropbox_data;
             install.preserved_cropbox_transform = context.preserved_cropbox_transform;
+            install.preserved_crop_polygon = context.preserved_crop_polygon;
+            install.preserved_crop_polygon_transform = context.preserved_crop_polygon_transform;
             return install;
         }
 
@@ -425,6 +427,18 @@ namespace lfs::training {
             return context;
         }
 
+        const auto local_to_point_cloud = [&](const lfs::core::SceneNode& volume) {
+            return volume.parent_id == context.point_cloud_node_id
+                       ? volume.transform()
+                       : glm::inverse(scene.getWorldTransform(context.point_cloud_node_id)) *
+                             scene.getWorldTransform(volume.id);
+        };
+        if (const auto* polygon_node = scene.getNodeById(scene.getCropPolygonForSplat(context.point_cloud_node_id));
+            polygon_node && polygon_node->crop_polygon) {
+            context.preserved_crop_polygon = *polygon_node->crop_polygon;
+            context.preserved_crop_polygon_transform = local_to_point_cloud(*polygon_node);
+        }
+
         const lfs::core::NodeId cropbox_id = scene.getCropBoxForSplat(context.point_cloud_node_id);
         if (cropbox_id == lfs::core::NULL_NODE) {
             return context;
@@ -434,11 +448,7 @@ namespace lfs::training {
             return context;
         }
         context.preserved_cropbox_data = *cropbox_node->cropbox;
-        context.preserved_cropbox_transform =
-            cropbox_node->parent_id == context.point_cloud_node_id
-                ? cropbox_node->transform()
-                : glm::inverse(scene.getWorldTransform(context.point_cloud_node_id)) *
-                      scene.getWorldTransform(cropbox_id);
+        context.preserved_cropbox_transform = local_to_point_cloud(*cropbox_node);
         context.has_preserved_cropbox = true;
         return context;
     }
@@ -632,6 +642,10 @@ namespace lfs::training {
                 scene.setCropBoxData(model_cropbox_id, install.preserved_cropbox_data);
                 scene.setNodeTransform(model_cropbox_id, install.preserved_cropbox_transform);
             }
+        }
+        if (install.preserved_crop_polygon) {
+            static_cast<void>(scene.addCropPolygon("Model_crop_polygon", model_id, *install.preserved_crop_polygon,
+                                                   install.preserved_crop_polygon_transform));
         }
         return {};
     }
@@ -951,7 +965,7 @@ namespace lfs::training {
                 return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
                     .code = lfs::ErrorCode::FailedPrecondition,
                     .domain = lfs::ErrorDomain::Training,
-                    .user_message = "Final export failed: no splat lies inside the crop box.",
+                    .user_message = "Final export failed: no splat lies inside the crop box or polygon.",
                     .detail = "--crop leaves no rows to export",
                     .detection = LFS_SOURCE_SITE_CURRENT(),
                 }));

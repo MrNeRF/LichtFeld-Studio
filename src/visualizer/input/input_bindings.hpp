@@ -175,6 +175,8 @@ namespace lfs::vis::input {
         PREVIOUS_SIDEBAR_CATEGORY,
         REMOVE_LAST_POINT,
         APPLY_ALIGNMENT,
+        INSERT_CROP_POLYGON_VERTEX,
+        REMOVE_CROP_POLYGON_VERTEX,
     };
 
     enum class ShortcutScope : uint8_t {
