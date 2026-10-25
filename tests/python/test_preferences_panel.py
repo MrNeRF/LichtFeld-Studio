@@ -419,6 +419,8 @@ def preferences_panel_module(monkeypatch):
             PREVIOUS_SIDEBAR_CATEGORY=SimpleNamespace(name="PREVIOUS_SIDEBAR_CATEGORY", value=106),
             REMOVE_LAST_POINT=SimpleNamespace(name="REMOVE_LAST_POINT", value=107),
             APPLY_ALIGNMENT=SimpleNamespace(name="APPLY_ALIGNMENT", value=108),
+            INSERT_CROP_POLYGON_VERTEX=SimpleNamespace(name="INSERT_CROP_POLYGON_VERTEX", value=109),
+            REMOVE_CROP_POLYGON_VERTEX=SimpleNamespace(name="REMOVE_CROP_POLYGON_VERTEX", value=110),
         ),
         get_available_profiles=lambda: ["Default"],
         get_current_profile=lambda: "Default",

@@ -226,6 +226,11 @@ namespace lfs::media {
         // occupy their original ordinal, as in MediaIngest::sourceExif.
         if (description.original.blocks.size() != description.interpretations.size())
             return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "EXIF interpretation count must match the original block count", .detection = LFS_SOURCE_SITE_CURRENT()});
+        for (const auto& block : description.original.blocks) {
+            if ((block.envelope == core::image_codecs::ExifEnvelope::JxlOffset) != block.jxl_box.has_value() ||
+                (block.jxl_box && (block.image_item || block.metadata_item)))
+                return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "EXIF box provenance does not match its carrier", .detection = LFS_SOURCE_SITE_CURRENT()});
+        }
         for (const auto& block : xmp.blocks)
             if (!core::image_codecs::source_xmp_bytes(description.original, block))
                 return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "XMP byte reference does not match its source observation", .detection = LFS_SOURCE_SITE_CURRENT()});

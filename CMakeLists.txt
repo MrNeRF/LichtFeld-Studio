@@ -1054,7 +1054,7 @@ endif()
 # =============================================================================
 # vcpkg's VCPKG_APPLOCAL_DEPS feature may not copy all needed DLLs.
 # This explicitly copies vcpkg DLLs to ensure they're available at runtime.
-# 
+#
 # IMPORTANT: For Release builds, copy ONLY release DLLs to avoid loading debug CRT.
 # For Debug builds, copy both because some vcpkg packages (e.g., zlib) are release-only.
 if(WIN32 AND DEFINED VCPKG_TARGET_TRIPLET)

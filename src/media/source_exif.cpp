@@ -208,10 +208,12 @@ namespace lfs::media {
                 return result;
             }
             offset = 6;
-        } else if (block.envelope == core::image_codecs::ExifEnvelope::HeifOffset) {
+        } else if (block.envelope == core::image_codecs::ExifEnvelope::HeifOffset ||
+                   block.envelope == core::image_codecs::ExifEnvelope::JxlOffset) {
+            const bool jxl = block.envelope == core::image_codecs::ExifEnvelope::JxlOffset;
             if (block.bytes.size() < 4) {
                 result.status = ExifParseStatus::Malformed;
-                result.diagnostic = "Truncated HEIF EXIF envelope";
+                result.diagnostic = jxl ? "Truncated JPEG XL EXIF envelope" : "Truncated HEIF EXIF envelope";
                 return result;
             }
             uint64_t skip = 4;
@@ -219,7 +221,7 @@ namespace lfs::media {
                 skip += uint64_t(block.bytes[i]) << (8 * (3 - i));
             if (skip > block.bytes.size()) {
                 result.status = ExifParseStatus::Malformed;
-                result.diagnostic = "HEIF EXIF offset outside payload";
+                result.diagnostic = jxl ? "JPEG XL EXIF offset outside payload" : "HEIF EXIF offset outside payload";
                 return result;
             }
             offset = static_cast<size_t>(skip);

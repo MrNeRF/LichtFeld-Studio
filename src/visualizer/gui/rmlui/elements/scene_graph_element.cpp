@@ -268,6 +268,7 @@ namespace lfs::vis::gui {
             case core::NodeType::CAMERA_GROUP: return "camera_group";
             case core::NodeType::CROPBOX: return "cropbox";
             case core::NodeType::ELLIPSOID: return "ellipsoid";
+            case core::NodeType::CROP_POLYGON: return "crop_polygon";
             case core::NodeType::POINTCLOUD: return "pointcloud";
             case core::NodeType::MESH: return "mesh";
             case core::NodeType::KEYFRAME_GROUP: return "keyframe_group";
@@ -287,7 +288,8 @@ namespace lfs::vis::gui {
             case core::NodeType::DATASET: return "icon-dataset";
             case core::NodeType::CAMERA:
             case core::NodeType::CAMERA_GROUP: return "icon-camera";
-            case core::NodeType::CROPBOX: return "icon-cropbox";
+            case core::NodeType::CROPBOX:
+            case core::NodeType::CROP_POLYGON: return "icon-cropbox";
             case core::NodeType::ELLIPSOID: return "icon-ellipsoid";
             case core::NodeType::MESH: return "icon-mesh";
             case core::NodeType::KEYFRAME_GROUP:
@@ -314,6 +316,7 @@ namespace lfs::vis::gui {
                    type != core::NodeType::KEYFRAME_GROUP &&
                    type != core::NodeType::CROPBOX &&
                    type != core::NodeType::ELLIPSOID &&
+                   type != core::NodeType::CROP_POLYGON &&
                    !parent_is_dataset;
         }
 
@@ -324,6 +327,7 @@ namespace lfs::vis::gui {
                    type != core::NodeType::KEYFRAME_GROUP &&
                    type != core::NodeType::CROPBOX &&
                    type != core::NodeType::ELLIPSOID &&
+                   type != core::NodeType::CROP_POLYGON &&
                    !parent_is_dataset;
         }
 
@@ -3249,6 +3253,7 @@ namespace lfs::vis::gui {
                 node->type != core::NodeType::CAMERA_GROUP &&
                 node->type != core::NodeType::CROPBOX &&
                 node->type != core::NodeType::ELLIPSOID &&
+                node->type != core::NodeType::CROP_POLYGON &&
                 !node_snapshots_.at(node_id).locked) {
                 items.push_back(makeAction(
                     tr("scene.duplicate"),

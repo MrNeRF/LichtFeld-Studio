@@ -23,6 +23,12 @@ bool row_frozen(uint i) {
 float sigmoid(float x) {
     return 1.0f / (1.0f + exp(-x));
 }
+// From the raw logit: sigmoid(x) * (1 - sigmoid(x)) is zero once sigmoid(x) rounds to one.
+float sigmoid_derivative_from_logit(float x) {
+    const float e = exp(-abs(x));
+    const float d = 1.0f + e;
+    return e / (d * d);
+}
 // Accurate log(1 + x) and exp(x) - 1 near zero (Goldberg, Kahan); they need the
 // precise floating-point mode this program is compiled with.
 float log_one_plus(float x) {
@@ -130,7 +136,7 @@ void penalty(uint3 id : SV_DispatchThreadID) {
     if (row_active(i) && !row_frozen(i)) {
         float a = sigmoid(p.a[i]);
         float d = a - p.b[i] + p.c[i];
-        p.out0[i] = p.out0[i] + p.rho * d * a * (1.0f - a);
+        p.out0[i] = p.out0[i] + p.rho * d * sigmoid_derivative_from_logit(p.a[i]);
         loss = 0.5f * p.rho * d * d;
     }
     p.out1[i] = loss;

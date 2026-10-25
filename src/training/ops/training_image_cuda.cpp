@@ -29,6 +29,19 @@ namespace lfs::training {
                  const Tensor& surface_depth, const Tensor& surface_alpha, Tensor& weights, const RoiParams& p) {
             const auto optional = [](const Tensor& t) { return t.is_valid() && t.numel() > 0 ? t.ptr<float>() : nullptr; };
             const bool surface = optional(surface_depth) && optional(surface_alpha);
+            if (!p.polygon.empty()) {
+                kernels::launch_roi_weight_map(
+                    view.ptr<float>(), camera_position.ptr<float>(),
+                    p.intrinsics.fx, p.intrinsics.fy, p.intrinsics.cx, p.intrinsics.cy,
+                    p.image.w, p.image.h, glm::make_mat4(p.world_to_cropbox.data()),
+                    kernels::RoiPolygon{.vertices = reinterpret_cast<const glm::vec2*>(p.polygon.data()),
+                                        .count = static_cast<int>(p.polygon.size() / 2),
+                                        .half_depth = p.maximum[2]},
+                    p.inverse, p.outside_weight, optional(camera_rays),
+                    surface ? surface_depth.ptr<float>() : nullptr, surface ? surface_alpha.ptr<float>() : nullptr,
+                    weights.ptr<float>(), core::getCurrentCUDAStream());
+                return;
+            }
             kernels::launch_roi_weight_map(
                 view.ptr<float>(), camera_position.ptr<float>(),
                 p.intrinsics.fx, p.intrinsics.fy, p.intrinsics.cx, p.intrinsics.cy,
@@ -85,6 +98,7 @@ namespace lfs::training {
             .quantize_to_grid = kernels::quantize_to_grid,
             .flip_error_map = cuda_flip_error_map,
             .flip_error_image = cuda_flip_error_image,
+            .roi_polygon = true,
         };
     } // namespace
 

@@ -531,6 +531,8 @@ namespace lfs::app {
                 return "crop_box";
             case core::NodeType::ELLIPSOID:
                 return "ellipsoid";
+            case core::NodeType::CROP_POLYGON:
+                return "crop_polygon";
             case core::NodeType::DATASET:
                 return "dataset";
             case core::NodeType::CAMERA_GROUP:
@@ -2961,7 +2963,7 @@ namespace lfs::app {
                             cropped = training::crop_copy_to_training_cropbox(*model, *crop);
 #endif
                         if (cropped && cropped->size() == 0)
-                            return std::unexpected("No splat lies inside the crop box");
+                            return std::unexpected("No splat lies inside the crop box or polygon");
 
                         io::PlySaveOptions options{.output_path = path, .binary = true, .provenance = stamp};
                         auto result = io::save_ply(cropped ? *cropped : *model, options);

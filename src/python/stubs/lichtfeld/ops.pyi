@@ -57,6 +57,10 @@ class BuiltinOp(enum.Enum):
 
     DepthWindowDrag = 20
 
+    CropPolygonDraw = 21
+
+    CropPolygonSet = 22
+
 class BuiltinTool(enum.Enum):
     Select = 0
 

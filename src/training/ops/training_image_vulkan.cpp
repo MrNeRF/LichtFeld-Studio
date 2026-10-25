@@ -185,6 +185,17 @@ namespace lfs::training {
             for (const Tensor* t : {&camera_rays, &surface_depth, &surface_alpha})
                 if (present(*t) && (t == &camera_rays ? rays : surface))
                     reads.push_back(ref(*t));
+            if (!params.polygon.empty()) {
+                // A crop polygon: the shader reads the outline at secondary, its vertex count in slot.
+                const auto& outline = params.polygon_device;
+                const size_t vertices = params.polygon.size() / 2;
+                LFS_ASSERT_MSG(vertices >= 3 && outline.is_valid() && outline.numel() == params.polygon.size() &&
+                                   outline.dtype() == core::DataType::Float32 && outline.is_contiguous(),
+                               std::format("ROI polygon needs its {} vertices as contiguous device floats", vertices));
+                p.secondary = vk::address(ref(outline));
+                p.slot = count32(vertices);
+                reads.push_back(ref(outline));
+            }
             const std::array writes{c};
             const auto context = acquire_vulkan_context();
             const uint32_t gx = static_cast<uint32_t>((p.count + 255) / 256);
@@ -266,7 +277,7 @@ namespace lfs::training {
         Tensor upload_image_chw(In cpu_hwc) {
             return cpu_hwc.to(core::Device::GPU).permute({2, 0, 1}).contiguous();
         }
-        const TrainingImageOps kVulkanTrainingImageOps{.heatmap = heatmap, .roi = roi, .resize_background = resize_background, .random_background = random_background, .canny = canny, .normalize_scalar = normalize_scalar, .upload_image_chw = upload_image_chw, .flip_error_map = vulkan_flip_error_map, .flip_error_image = vulkan_flip_error_image};
+        const TrainingImageOps kVulkanTrainingImageOps{.heatmap = heatmap, .roi = roi, .resize_background = resize_background, .random_background = random_background, .canny = canny, .normalize_scalar = normalize_scalar, .upload_image_chw = upload_image_chw, .flip_error_map = vulkan_flip_error_map, .flip_error_image = vulkan_flip_error_image, .roi_polygon = true};
     } // namespace
     const TrainingImageOps& vulkan_training_image_ops() { return kVulkanTrainingImageOps; }
 } // namespace lfs::training

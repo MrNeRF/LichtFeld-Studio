@@ -600,6 +600,8 @@ namespace lfs::training {
             std::optional<RawGradientResidual> raw_residual;
             lfs::core::Tensor grad_alpha;
             lfs::core::Tensor normal_pixel_weight;
+            // Already included in loss; retain it when replacing only the image terms for ROI reporting.
+            lfs::core::Tensor mask_regularization_loss;
         };
 
         // Masked photometric loss with optional alpha gradient
@@ -951,6 +953,18 @@ namespace lfs::training {
         core::Tensor normal_consistency_partials_;
         core::Tensor normal_prior_depth_scalar_;
         core::Tensor roi_weight_map_;
+        // The reported loss measures the image inside the crop box: its weight map (outside 0)
+        // and the forward-only L1/D-SSIM over it, on loss readback iterations.
+        core::Tensor roi_report_weight_map_;
+        lfs::gpu_ops::PhotoSaved roi_report_photo_{};
+        core::Tensor roi_report_region_sum_;
+        core::Tensor roi_report_unused_gradient_;
+        kernels::GradientResidualWorkspace roi_report_residual_;
+        losses::MaskPreprocessWorkspace roi_report_mask_;
+        core::Tensor roi_report_structure_weight_;
+        // A crop polygon region's outline on the device, re-uploaded when it changes.
+        core::Tensor cropbox_polygon_device_;
+        std::vector<glm::vec2> cropbox_polygon_uploaded_;
         // Dataset-level normal-prior convention, resolved once at startup
         bool normal_prior_flip_yz_ = false;
         bool normal_prior_world_space_ = false;
@@ -1098,9 +1112,15 @@ namespace lfs::training {
         // Async loss readback: periodic samples are polled on later iterations.
         // NaN/Inf detection lags by at most LOSS_RING * LOSS_SYNC_INTERVAL iterations.
         static constexpr size_t LOSS_RING = 4;
+        static constexpr int LOSS_SYNC_INTERVAL = 10;
+        [[nodiscard]] static bool is_loss_readback_iteration(const int iter) {
+            return iter % LOSS_SYNC_INTERVAL == 0 || iter == 1;
+        }
         struct LossReadbackSlot {
             lfs::core::TensorReadback readback;
-            std::array<float, 1> value{};
+            // [loss, pixel weight of the reported crop box region]; value_count is read back.
+            std::array<float, 2> value{};
+            size_t value_count = 1;
             int iter = 0;
             bool in_flight = false;
         };
@@ -1110,7 +1130,15 @@ namespace lfs::training {
         // Fault-injection seam used only by OOM recovery tests.
         std::function<void()> recovery_sync_for_testing_;
 
-        void submitLossReadback(const lfs::core::Tensor& total_loss, int iter);
+        // `region_weight` is the pixel weight behind a crop box loss; a sample whose view
+        // misses the box is not reported.
+        core::Tensor report_region_image_loss(const core::Tensor& corrected, const core::Tensor& raw,
+                                              const core::Tensor& target, const core::Tensor& mask,
+                                              const core::Tensor& region, const core::Tensor& structure_map,
+                                              const core::param::OptimizationParameters& params, int iteration,
+                                              const core::Tensor& mask_regularization_loss = {});
+        void submitLossReadback(const lfs::core::Tensor& total_loss, int iter,
+                                const lfs::core::Tensor& region_weight = {});
         std::expected<void, std::string> harvestLossReadbacks(bool drain, bool in_controller_phase);
 
         // Rasterizers cull non-finite primitives, so a NaN model renders nothing and

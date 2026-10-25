@@ -78,6 +78,13 @@ namespace lfs::rendering {
         glm::mat4 transform{1.0f};
     };
 
+    // Extruded polygon: outline in local XY, local z within +-half_depth.
+    struct CropPolygon {
+        std::vector<glm::vec2> vertices;
+        float half_depth = 1.0f;
+        glm::mat4 transform{1.0f}; // world -> local
+    };
+
     struct GaussianSceneState {
         const std::vector<glm::mat4>* model_transforms = nullptr;
         std::shared_ptr<lfs::core::Tensor> transform_indices;
@@ -107,11 +114,19 @@ namespace lfs::rendering {
         bool drag_preview = false;
     };
 
+    struct GaussianScopedCropPolygonFilter {
+        CropPolygon bounds;
+        bool inverse = false;
+        bool desaturate = false;
+        int parent_node_index = -1;
+    };
+
     struct GaussianFilterState {
         std::optional<GaussianScopedBoxFilter> crop_region;
         std::optional<GaussianScopedEllipsoidFilter> ellipsoid_region;
         std::vector<GaussianScopedBoxFilter> crop_regions;
         std::vector<GaussianScopedEllipsoidFilter> ellipsoid_regions;
+        std::vector<GaussianScopedCropPolygonFilter> crop_polygon_regions;
         std::optional<BoundingBox> view_volume;
         std::optional<SelectionScreenWindow> screen_window;
         bool cull_outside_view_volume = false;
@@ -269,6 +284,7 @@ namespace lfs::rendering {
     struct PointCloudFilterState {
         std::optional<BoundingBox> crop_box;
         std::optional<Ellipsoid> crop_ellipsoid;
+        std::optional<CropPolygon> crop_polygon;
         bool crop_inverse = false;
         bool crop_desaturate = false;
     };
