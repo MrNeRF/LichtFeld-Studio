@@ -279,7 +279,9 @@ class _GizmoToolbarController:
     _TRANSFORM_SPACE_IDS = {"local": 0, "world": 1}
     _MULTI_TRANSFORM_MODE_IDS = {"selection": 0, "individual": 1}
     _PIVOT_IDS = {"origin": 0, "bounds": 1}
-    _CROP_OBJECT_SHAPES = ("box", "ellipsoid")
+    _CROP_OBJECT_SHAPES = ("box", "ellipsoid", "polygon")
+    _CROP_SHAPE_NODE_TYPES = {"box": "CROPBOX", "ellipsoid": "ELLIPSOID", "polygon": "CROP_POLYGON"}
+    _CROP_ROI_ACCESSORS = {"CROPBOX": "cropbox", "CROP_POLYGON": "crop_polygon"}
     _CROP_TRANSFORM_GIZMOS = ("translate", "rotate", "scale")
     _SELECTION_VOLUME_MODES = {"box", "sphere"}
 
@@ -600,7 +602,7 @@ class _GizmoToolbarController:
         get_scene = getattr(lf, "get_scene", None)
         scene = get_scene() if callable(get_scene) else None
         node = scene.get_node(selected_nodes[0]) if scene else None
-        expected_type = "CROPBOX" if self._active_crop_shape() == "box" else "ELLIPSOID"
+        expected_type = self._CROP_SHAPE_NODE_TYPES.get(self._active_crop_shape(), "CROPBOX")
         return node is not None and self._node_type_name(node) == expected_type
 
     def _build_crop_object_records(self, active_tool_id):
@@ -625,6 +627,16 @@ class _GizmoToolbarController:
                 tooltip_key="toolbar.ellipsoid",
                 tooltip_text="Ellipsoid",
                 selected=active and active_shape == "ellipsoid",
+                enabled=active,
+            ),
+            _button_record(
+                "crop-object-polygon",
+                "crop_object",
+                "polygon",
+                _icon_src("polygon"),
+                tooltip_key="toolbar.crop_polygon",
+                tooltip_text="Crop Polygon",
+                selected=active and active_shape == "polygon",
                 enabled=active,
             ),
         ]
@@ -703,11 +715,13 @@ class _GizmoToolbarController:
                         return None
                     visited.add(node_id)
 
-                if self._node_type_name(node) == "CROPBOX":
-                    get_cropbox = getattr(node, "cropbox", None)
-                    cropbox = get_cropbox() if callable(get_cropbox) else None
-                    if cropbox is not None:
-                        return node, cropbox
+                # The training region is the model's crop box or crop polygon.
+                accessor = self._CROP_ROI_ACCESSORS.get(self._node_type_name(node))
+                if accessor:
+                    get_volume = getattr(node, accessor, None)
+                    volume = get_volume() if callable(get_volume) else None
+                    if volume is not None:
+                        return node, volume
 
                 for child_id in getattr(node, "children", []) or []:
                     child = self._scene_node_by_id(scene, child_id)
@@ -735,15 +749,16 @@ class _GizmoToolbarController:
         resolved = self._resolve_selected_cropbox()
         if resolved is None:
             return []
-        _node, cropbox = resolved
+        node, cropbox = resolved
+        polygon = self._node_type_name(node) == "CROP_POLYGON"
         return [
             _button_record(
                 "crop-enabled",
                 "crop_toggle_enabled",
                 "",
                 _icon_src("scene/visible"),
-                tooltip_key="toolbar.enable_crop_box",
-                tooltip_text="Enable Crop Box",
+                tooltip_key="toolbar.enable_crop_polygon" if polygon else "toolbar.enable_crop_box",
+                tooltip_text="Enable Crop Polygon" if polygon else "Enable Crop Box",
                 selected=bool(cropbox.enabled),
             )
         ]
@@ -820,7 +835,11 @@ class _GizmoToolbarController:
         ]
 
     def _build_crop_action_records(self, active_tool_id):
+        import lichtfeld as lf
+
         active = active_tool_id == self._CROP_TOOL_ID
+        get_inverse = getattr(lf.ui, "get_crop_tool_inverse", None)
+        inverse = get_inverse() if active and callable(get_inverse) else None
         return [
             _button_record(
                 "crop-fit",
@@ -848,6 +867,16 @@ class _GizmoToolbarController:
                 tooltip_key="scene.reset_crop",
                 tooltip_text="Reset",
                 enabled=active,
+            ),
+            _button_record(
+                "crop-invert",
+                "crop_toggle_inverse",
+                "",
+                _icon_src("select-invert"),
+                tooltip_key="toolbar.invert_crop",
+                tooltip_text="Invert Crop",
+                selected=bool(inverse),
+                enabled=inverse is not None,
             ),
             _button_record(
                 "crop-apply",
@@ -908,6 +937,8 @@ class _GizmoToolbarController:
                     return "ellipsoid"
                 if type_name == "CROPBOX":
                     return "box"
+                if type_name == "CROP_POLYGON":
+                    return "polygon"
                 for child_id in getattr(node, "children", []) or []:
                     child = self._scene_node_by_id(scene, child_id)
                     if child is None:
@@ -960,6 +991,11 @@ class _GizmoToolbarController:
             add_ellipsoid = getattr(lf.ui, "add_ellipsoid", None)
             if callable(add_ellipsoid):
                 add_ellipsoid(selected[0])
+        elif shape == "polygon" and selected:
+            # Edits the selected splat's or point cloud's polygon, or starts drawing one.
+            start_crop_polygon = getattr(lf.ui, "start_crop_polygon", None)
+            if callable(start_crop_polygon):
+                start_crop_polygon()
 
         lf.ui.set_active_operator(self._CROP_TOOL_ID, gizmo_type)
 
@@ -1148,6 +1184,12 @@ class _GizmoToolbarController:
             lf.ui.set_align_edge_to_axis(not lf.ui.get_align_edge_to_axis())
             return
 
+        if action == "crop_toggle_inverse":
+            toggle_inverse = getattr(lf.ui, "toggle_crop_tool_inverse", None)
+            if callable(toggle_inverse):
+                toggle_inverse()
+            return
+
         if action == "crop_delete":
             delete_crop_tool = getattr(lf.ui, "delete_crop_tool_volume", None)
             if callable(delete_crop_tool):
@@ -1159,8 +1201,9 @@ class _GizmoToolbarController:
             if resolved is None:
                 return
             node, cropbox = resolved
+            polygon = self._node_type_name(node) == "CROP_POLYGON"
             lf.ui.ops.invoke(
-                "crop_box.set",
+                "crop_polygon.set" if polygon else "crop_box.set",
                 node=str(node.name),
                 enabled=not bool(cropbox.enabled),
             )
@@ -1914,6 +1957,9 @@ class _ViewportToolbarController:
         gizmo_type = call("", getattr(lf.ui, "get_gizmo_type", None))
         crop_shape = call("box", getattr(lf.ui, "get_crop_tool_shape", None))
         crop_operation = call("translate", getattr(lf.ui, "get_crop_tool_operation", None))
+        crop_inverse = None
+        if active_tool == _GizmoToolbarController._CROP_TOOL_ID:
+            crop_inverse = call(None, getattr(lf.ui, "get_crop_tool_inverse", None))
         transform_space = _native_store_value("transform_space", _MISSING)
         if transform_space is _MISSING:
             transform_space = call(1, getattr(lf.ui, "get_transform_space", None))
@@ -1976,6 +2022,7 @@ class _ViewportToolbarController:
             gizmo_type,
             crop_shape,
             crop_operation,
+            crop_inverse,
             transform_space,
             pivot_mode,
             multi_transform_mode,
@@ -2046,6 +2093,7 @@ class _ViewportToolbarController:
             "crop_fit",
             "crop_trim",
             "crop_reset",
+            "crop_toggle_inverse",
             "crop_apply",
             "crop_delete",
             "crop_toggle_enabled",

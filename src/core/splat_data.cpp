@@ -2985,7 +2985,7 @@ namespace lfs::core {
                 } else {
                     auto nn_dist = compute_mean_neighbor_distances(means_).clamp_min(1e-7f);
                     std::vector<int> scale_expand_shape = {static_cast<int>(num_points), 3};
-                    scaling_.copy_from(nn_dist.sqrt()
+                    scaling_.copy_from(nn_dist
                                            .mul(params.optimization.init_scaling)
                                            .log()
                                            .unsqueeze(-1)
@@ -3022,7 +3022,7 @@ namespace lfs::core {
                 } else {
                     auto nn_dist = compute_mean_neighbor_distances(means_temp).clamp_min(1e-7f);
                     std::vector<int> scale_expand_shape = {static_cast<int>(num_points), 3};
-                    scaling_temp = nn_dist.sqrt()
+                    scaling_temp = nn_dist
                                        .mul(params.optimization.init_scaling)
                                        .log()
                                        .unsqueeze(-1)

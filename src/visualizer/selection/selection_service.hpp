@@ -31,6 +31,12 @@ namespace lfs::vis {
     class SceneManager;
     class RenderingManager;
 
+    // Screen distance from the first vertex within which a click closes a polygon.
+    inline constexpr float POLYGON_CLOSE_DISTANCE_PX = 12.0f;
+    // Screen hit radii for the vertices and edges of a closed polygon being edited.
+    inline constexpr float POLYGON_VERTEX_HIT_RADIUS_PX = 8.0f;
+    inline constexpr float POLYGON_EDGE_HIT_RADIUS_PX = 10.0f;
+
     enum class SelectionMode {
         Replace,
         Add,
@@ -82,6 +88,15 @@ namespace lfs::vis {
 
         SelectionService(SceneManager* scene_manager, RenderingManager* rendering_manager);
         ~SelectionService();
+
+        // World point under a viewer pixel: the depth-buffer hit, else the point at
+        // the camera's pivot distance. Shared by the selection and crop polygons.
+        [[nodiscard]] static std::optional<glm::vec3> resolveViewerWorldPoint(
+            const RenderingManager& rendering_manager,
+            const Viewport& viewport,
+            SplitViewPanelId panel,
+            const ViewportInfo& info,
+            glm::vec2 screen_point);
 
         SelectionService(const SelectionService&) = delete;
         SelectionService& operator=(const SelectionService&) = delete;

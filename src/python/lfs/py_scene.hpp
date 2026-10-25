@@ -114,6 +114,55 @@ namespace lfs::python {
         PyProp<core::EllipsoidData> prop_;
     };
 
+    class PyCropPolygon {
+    public:
+        explicit PyCropPolygon(core::CropPolygonData* data) : data_(data),
+                                                              prop_(data, "crop_polygon") {
+            assert(data_ != nullptr);
+        }
+
+        [[nodiscard]] const std::string& property_group() const { return prop_.group_id(); }
+        [[nodiscard]] nb::object get(const std::string& name) const { return prop_.getattr(name); }
+        void set(const std::string& name, nb::object value) { prop_.setattr(name, value); }
+        [[nodiscard]] nb::dict prop_info(const std::string& name) const {
+            return prop_.prop_info(name);
+        }
+        [[nodiscard]] nb::object prop_getattr(const std::string& name) const {
+            return prop_.getattr(name);
+        }
+        void prop_setattr(const std::string& name, nb::object value) { set(name, value); }
+        [[nodiscard]] bool has_prop(const std::string& name) const {
+            return core::prop::PropertyRegistry::instance().get_property(prop_.group_id(), name).has_value();
+        }
+        // Read-only here; the crop tool's vertex handles edit the outline.
+        [[nodiscard]] std::vector<std::tuple<float, float>> vertices() const {
+            std::vector<std::tuple<float, float>> result;
+            result.reserve(data_->vertices.size());
+            for (const auto& vertex : data_->vertices) {
+                result.emplace_back(vertex.x, vertex.y);
+            }
+            return result;
+        }
+        [[nodiscard]] nb::list python_dir() const {
+            nb::list result;
+            result.append("prop_info");
+            result.append("get");
+            result.append("set");
+            result.append("vertices");
+            const nb::list props = prop_.dir();
+            for (size_t i = 0; i < nb::len(props); ++i) {
+                result.append(props[i]);
+            }
+            return result;
+        }
+        [[nodiscard]] core::CropPolygonData* data() { return data_; }
+        [[nodiscard]] const core::CropPolygonData* data() const { return data_; }
+
+    private:
+        core::CropPolygonData* data_;
+        PyProp<core::CropPolygonData> prop_;
+    };
+
     class PyPointCloud {
     public:
         explicit PyPointCloud(std::shared_ptr<core::PointCloud> owner)
@@ -222,6 +271,7 @@ namespace lfs::python {
         std::optional<PyMeshInfo> mesh();
         std::optional<PyCropBox> cropbox();
         std::optional<PyEllipsoid> ellipsoid();
+        std::optional<PyCropPolygon> crop_polygon();
         std::optional<PyKeyframeData> keyframe_data();
 
         // Camera node specific
@@ -336,7 +386,8 @@ namespace lfs::python {
             for (const char* attr : {"id", "uuid", "parent_id", "children", "type",
                                      "local_transform", "world_transform", "set_local_transform",
                                      "gaussian_count", "centroid",
-                                     "splat_data", "point_cloud", "mesh", "cropbox", "ellipsoid", "keyframe_data",
+                                     "splat_data", "point_cloud", "mesh", "cropbox", "ellipsoid", "crop_polygon",
+                                     "keyframe_data",
                                      "camera_uid", "image_path", "mask_path", "depth_path", "has_camera",
                                      "has_mask", "has_depth", "load_mask", "load_depth",
                                      "camera_R", "camera_T", "camera_focal_x", "camera_focal_y",

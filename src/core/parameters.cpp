@@ -265,9 +265,17 @@ namespace lfs::core {
                         if (loading.contains(key) && !loading.at(key).is_boolean())
                             return std::format("Invalid type for dataset.loading_params.{}; expected boolean", key);
                     }
-                    for (const auto key : {"min_cpu_free_memory_ratio", "min_cpu_free_GB"}) {
+                    for (const auto key : {"min_cpu_free_memory_ratio", "min_cpu_free_GB", "sharpen_amount",
+                                           "sharpen_radius", "sharpen_threshold"}) {
                         if (loading.contains(key) && !loading.at(key).is_number())
                             return std::format("Invalid type for dataset.loading_params.{}; expected number", key);
+                    }
+                    if (loading.contains("sharpen_kernel")) {
+                        const auto& kernel = loading.at("sharpen_kernel");
+                        if (!kernel.is_string() || !sharpen_kernel_from_string(kernel.get<std::string>()))
+                            return std::format("Invalid value {} for dataset.loading_params.sharpen_kernel; expected "
+                                               "usm, laplacian4 or laplacian8",
+                                               kernel.dump());
                     }
                     if (loading.contains("print_status_freq_num") && !is_json_int32(loading.at("print_status_freq_num")))
                         return "Invalid type for dataset.loading_params.print_status_freq_num; expected integer";
@@ -569,6 +577,7 @@ namespace lfs::core {
             morton_reorder_interval = apply(morton_reorder_interval);
             sh_degree_interval = apply_interval(sh_degree_interval);
             grow_until_iter = apply(grow_until_iter);
+            color_variance_warmup_iters = apply(color_variance_warmup_iters);
 
             for (auto* steps : {&eval_steps, &save_steps}) {
                 std::set<size_t> unique;
@@ -578,6 +587,12 @@ namespace lfs::core {
                 }
                 steps->assign(unique.begin(), unique.end());
             }
+        }
+
+        float OptimizationParameters::color_variance_weight_at(const int iteration) const {
+            return iteration > 0 && static_cast<size_t>(iteration) > color_variance_warmup_iters
+                       ? color_variance_weight
+                       : 0.0f;
         }
 
         void OptimizationParameters::apply_step_scaling() {
@@ -692,6 +707,10 @@ namespace lfs::core {
                     return std::nullopt;
             }
             return box;
+        }
+
+        std::optional<std::array<float, 3>> parse_cropbox_rotation(const std::string_view spec) {
+            return parse_float_list<3>(spec);
         }
 
         bool is_eval_mask_depth(const std::string_view spec) {
@@ -950,6 +969,24 @@ namespace lfs::core {
                 return std::format("densify_structure_weight must be finite and within [0, 4] (got {})", densify_structure_weight);
             if (!std::isfinite(gradient_loss_weight) || gradient_loss_weight < 0.0f || gradient_loss_weight > 8.0f)
                 return std::format("gradient_loss_weight must be finite and within [0, 8] (got {})", gradient_loss_weight);
+            if (!std::isfinite(color_variance_weight) || color_variance_weight < 0.0f || color_variance_weight > 8.0f)
+                return "color_variance_weight must be finite and within [0, 8]";
+            if (color_variance_warmup_iters > MAX_ITERATION_VALUE)
+                return "color_variance_warmup_iters must fit in a signed int";
+            if (color_variance_weight > 0.0f) {
+                if (color_variance_warmup_iters >= iterations)
+                    return "color_variance_warmup_iters must be less than iterations when color variance is enabled";
+                if (gut)
+                    return "Color variance requires the FastGS training renderer (GUT is not supported)";
+                if (mip_filter)
+                    return "Color variance does not yet support mip filtering";
+                if (bilateral_grid_active() || ppisp_active())
+                    return "Color variance does not yet support appearance correction";
+                if (mask_mode != MaskMode::None)
+                    return "Color variance does not yet support masked training";
+                if (enable_sparsity)
+                    return "Color variance does not yet support POPSpa";
+            }
             if (!std::isfinite(thin_structure_weight) || thin_structure_weight < 0.0f || thin_structure_weight > 4.0f)
                 return std::format("thin_structure_weight must be finite and within [0, 4] (got {})", thin_structure_weight);
             if (!std::isfinite(late_lr_anneal) || late_lr_anneal <= 0.0f || late_lr_anneal > 1.0f)
@@ -1214,6 +1251,15 @@ namespace lfs::core {
             if (loading_params.print_status_freq_num <= 0)
                 return std::format("print_status_freq_num must be positive (got {})",
                                    loading_params.print_status_freq_num);
+            const auto& sharpen = loading_params.sharpen;
+            if (!std::isfinite(sharpen.amount) || sharpen.amount < 0.0f || sharpen.amount > kMaxSharpenAmount)
+                return std::format("sharpen_amount must be finite and within [0, {}] (got {})", kMaxSharpenAmount,
+                                   sharpen.amount);
+            if (!std::isfinite(sharpen.radius) || sharpen.radius < kMinSharpenRadius || sharpen.radius > kMaxSharpenRadius)
+                return std::format("sharpen_radius must be finite and within [{}, {}] (got {})", kMinSharpenRadius,
+                                   kMaxSharpenRadius, sharpen.radius);
+            if (!std::isfinite(sharpen.threshold) || sharpen.threshold < 0.0f || sharpen.threshold > 1.0f)
+                return std::format("sharpen_threshold must be finite and within [0, 1] (got {})", sharpen.threshold);
             return {};
         }
 
@@ -1513,6 +1559,8 @@ namespace lfs::core {
                 json["optimization"] = opt_copy.to_json();
                 if (params.cropbox)
                     json["cropbox"] = *params.cropbox;
+                if (params.cropbox_rotation)
+                    json["cropbox_rotation"] = *params.cropbox_rotation;
 
                 const auto now = std::chrono::system_clock::now();
                 const auto time_t_val = std::chrono::system_clock::to_time_t(now);
@@ -1565,6 +1613,19 @@ namespace lfs::core {
             } else if (j.contains("use_8bit_color")) {
                 params.use_16bit_color = !j["use_8bit_color"].get<bool>();
             }
+            if (j.contains("sharpen_kernel")) {
+                const auto name = j["sharpen_kernel"].get<std::string>();
+                if (const auto kernel = sharpen_kernel_from_string(name))
+                    params.sharpen.kernel = *kernel;
+                else
+                    LOG_WARN("Unknown sharpen kernel '{}' in loading parameters; using usm", name);
+            }
+            if (j.contains("sharpen_amount"))
+                params.sharpen.amount = j["sharpen_amount"].get<float>();
+            if (j.contains("sharpen_radius"))
+                params.sharpen.radius = j["sharpen_radius"].get<float>();
+            if (j.contains("sharpen_threshold"))
+                params.sharpen.threshold = j["sharpen_threshold"].get<float>();
 
             return params;
         }
@@ -1577,6 +1638,10 @@ namespace lfs::core {
             loading_json["print_cache_status"] = print_cache_status;
             loading_json["print_status_freq_num"] = print_status_freq_num;
             loading_json["use_16bit_color"] = use_16bit_color;
+            loading_json["sharpen_kernel"] = std::string(sharpen_kernel_name(sharpen.kernel));
+            loading_json["sharpen_amount"] = sharpen.amount;
+            loading_json["sharpen_radius"] = sharpen.radius;
+            loading_json["sharpen_threshold"] = sharpen.threshold;
 
             return loading_json;
         }

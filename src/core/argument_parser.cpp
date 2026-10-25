@@ -58,6 +58,8 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--late-lr-anneal", "late_lr_anneal", Float},
             OptimizationCliBinding{"--gradient-loss-weight", "gradient_loss_weight", Float},
             OptimizationCliBinding{"--densify-structure-weight", "densify_structure_weight", Float},
+            OptimizationCliBinding{"--color-variance-weight", "color_variance_weight", Float},
+            OptimizationCliBinding{"--color-variance-warmup-iters", "color_variance_warmup_iters", Integer},
             OptimizationCliBinding{"--opacity-decay-rendered-only", "opacity_decay_rendered_only", Bool},
             OptimizationCliBinding{"--no-opacity-decay-rendered-only", "opacity_decay_rendered_only", Bool, true},
             OptimizationCliBinding{"--steps-scaler", "steps_scaler", Float, false, "; cannot be combined with --iter"},
@@ -795,7 +797,8 @@ namespace {
             ::args::ValueFlag<int> morton_reorder_interval(training_group, "morton_reorder_interval", lfs::core::args::optimization_cli_help("--morton-reorder-interval"), {"morton-reorder-interval"});
             ::args::ValueFlag<int> max_cap(training_group, "max_cap", lfs::core::args::optimization_cli_help("--max-cap"), {"max-cap"});
             ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", lfs::core::args::optimization_cli_help("--min-opacity"), {"min-opacity"});
-            ::args::ValueFlag<std::string> cropbox(training_group, "x0,y0,z0,x1,y1,z1", "Train with a region of interest: an enabled crop box on the training model with that minimum and maximum corner in the dataset's coordinates. --cropbox-loss-weight 0 ignores every pixel outside it", {"cropbox"});
+            ::args::ValueFlag<std::string> cropbox(training_group, "x0,y0,z0,x1,y1,z1", "Train with a region of interest: an enabled crop box on the training model with that minimum and maximum corner in the dataset's coordinates, set up when a headless run starts a fresh model. --cropbox-rotation turns it, --cropbox-loss-weight 0 ignores every pixel outside it and --crop keeps only the splats inside it", {"cropbox"});
+            ::args::ValueFlag<std::string> cropbox_rotation(training_group, "rx,ry,rz", "Turn the --cropbox box about its centre, keeping its size, by rx, ry and rz degrees about the dataset's X, Y and Z axes, the frame of the --cropbox corners: the rotation Rx(rx)*Ry(ry)*Rz(rz), turning the box about Z first, then Y, then X. Without it the box stays axis-aligned. The GUI transform panel shows the box in the viewer's axes, with Y and Z flipped, so its Rotation fields show the same turn as rx+180, ry, rz rather than the same numbers", {"cropbox-rotation"});
             ::args::Flag crop(training_group, "crop", lfs::core::args::optimization_cli_help("--crop"), {"crop"});
             ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
             ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
@@ -804,6 +807,8 @@ namespace {
             ::args::ValueFlag<float> late_lr_anneal(training_group, "fraction", lfs::core::args::optimization_cli_help("--late-lr-anneal"), {"late-lr-anneal"});
             ::args::ValueFlag<float> gradient_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--gradient-loss-weight"), {"gradient-loss-weight"});
             ::args::ValueFlag<float> densify_structure_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--densify-structure-weight"), {"densify-structure-weight"});
+            ::args::ValueFlag<float> color_variance_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--color-variance-weight"), {"color-variance-weight"});
+            ::args::ValueFlag<int> color_variance_warmup_iters(training_group, "iterations", lfs::core::args::optimization_cli_help("--color-variance-warmup-iters"), {"color-variance-warmup-iters"});
             ::args::Flag opacity_decay_rendered_only(training_group, "enabled", lfs::core::args::optimization_cli_help("--opacity-decay-rendered-only"), {"opacity-decay-rendered-only"});
             ::args::Flag no_opacity_decay_rendered_only(training_group, "disabled", lfs::core::args::optimization_cli_help("--no-opacity-decay-rendered-only"), {"no-opacity-decay-rendered-only"});
             ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", lfs::core::args::optimization_cli_help("--steps-scaler"), {"steps-scaler"});
@@ -852,6 +857,16 @@ namespace {
             ::args::ValueFlag<int> min_track_length(dataset_group, "min_track_length", "Minimum point track length for COLMAP sparse point import; 0 disables filtering", {"min-track-length"});
             ::args::Flag no_cpu_cache(dataset_group, "no_cpu_cache", "Disable CPU memory caching (default: enabled)", {"no-cpu-cache"});
             ::args::Flag use_16bit(dataset_group, "use_16bit", "Train with 16-bit color images (HDR); caches losslessly as JPEG 2000 (default: 8-bit)", {"use-16bit"});
+            ::args::ValueFlag<float> sharpen_amount(dataset_group, "amount", "Sharpen training images once as they are loaded and cached, 0 to 5: 0 = off, 0.25-0.5 = subtle, 1 = strong. Only brightness is sharpened; evaluation and the GT view keep the original photos (default: 0)", {"sharpen-amount"});
+            ::args::MapFlag<std::string, lfs::core::SharpenKernel> sharpen_kernel(dataset_group, "kernel",
+                                                                                  "Sharpening filter used when --sharpen-amount is above 0: usm = unsharp mask with --sharpen-radius; laplacian4 / laplacian8 = 3x3 kernel over the 4 or 8 neighbours, much stronger per amount (default: usm)",
+                                                                                  {"sharpen-kernel"},
+                                                                                  std::unordered_map<std::string, lfs::core::SharpenKernel>{
+                                                                                      {"usm", lfs::core::SharpenKernel::Usm},
+                                                                                      {"laplacian4", lfs::core::SharpenKernel::Laplacian4},
+                                                                                      {"laplacian8", lfs::core::SharpenKernel::Laplacian8}});
+            ::args::ValueFlag<float> sharpen_radius(dataset_group, "px", "Unsharp mask blur radius (Gaussian sigma) in pixels of the resized training image, 0.3 to 10: small values sharpen fine detail, large values broader edges; usm only (default: 1)", {"sharpen-radius"});
+            ::args::ValueFlag<float> sharpen_threshold(dataset_group, "threshold", "Leave brightness differences below this value (0 to 1) unsharpened so flat areas and noise stay untouched; 0.01-0.02 suits noisy photos (default: 0)", {"sharpen-threshold"});
             ::args::Flag undistort(dataset_group, "undistort", lfs::core::args::optimization_cli_help("--undistort"), {"undistort"});
             ::args::MapFlag<std::string, std::string> centralize(dataset_group, "mode",
                                                                  "Centralize dataset origin: off, by_pointcloud, by_cameras (default: off)",
@@ -1277,10 +1292,20 @@ namespace {
                         ::args::get(cropbox)));
                 params.cropbox = *box;
             }
+            if (cropbox_rotation) {
+                if (!params.cropbox)
+                    return std::unexpected("--cropbox-rotation turns the --cropbox box about its centre: it needs --cropbox");
+                const auto rotation = lfs::core::param::parse_cropbox_rotation(::args::get(cropbox_rotation));
+                if (!rotation)
+                    return std::unexpected(std::format(
+                        "Invalid --cropbox-rotation '{}'. A rotation needs three finite numbers rx,ry,rz in degrees",
+                        ::args::get(cropbox_rotation)));
+                params.cropbox_rotation = *rotation;
+            }
             if (crop && !params.cropbox && !params.resume_checkpoint && !params.resume_project)
                 return std::unexpected(
-                    "--crop removes the splats outside the training crop box when training ends: it needs --cropbox, "
-                    "or a resumed project that has a crop box");
+                    "--crop removes the splats outside the training crop box when training completes and when exporting: "
+                    "it needs --cropbox, or a resumed project that has a crop box");
 
             auto add_splat_freeze = parse_add_splat_freeze_modifiers(args);
             if (!add_splat_freeze) {
@@ -1453,6 +1478,8 @@ namespace {
                     return std::unexpected("ERROR: --morton-reorder-interval must be >= 0 (0 disables)");
                 }
             }
+            if (color_variance_warmup_iters && ::args::get(color_variance_warmup_iters) < 0)
+                return std::unexpected("ERROR: --color-variance-warmup-iters must be >= 0");
 
             // Validate min_opacity (0.0-1.0)
             if (min_opacity) {
@@ -1536,6 +1563,10 @@ namespace {
                                         min_track_length_val = cli_option_present({"--min-track-length"}) ? std::optional<int>(::args::get(min_track_length)) : std::optional<int>(),
                                         no_cpu_cache_flag = static_cast<bool>(no_cpu_cache),
                                         use_16bit_flag = static_cast<bool>(use_16bit),
+                                        sharpen_kernel_val = cli_option_present({"--sharpen-kernel"}) ? std::optional<lfs::core::SharpenKernel>(::args::get(sharpen_kernel)) : std::optional<lfs::core::SharpenKernel>(),
+                                        sharpen_amount_val = cli_option_present({"--sharpen-amount"}) ? std::optional<float>(::args::get(sharpen_amount)) : std::optional<float>(),
+                                        sharpen_radius_val = cli_option_present({"--sharpen-radius"}) ? std::optional<float>(::args::get(sharpen_radius)) : std::optional<float>(),
+                                        sharpen_threshold_val = cli_option_present({"--sharpen-threshold"}) ? std::optional<float>(::args::get(sharpen_threshold)) : std::optional<float>(),
                                         tcp_server_connection_port_val = tcp_server_connection_port ? std::optional<int>(::args::get(tcp_server_connection_port)) : std::optional<int>(),
                                         tcp_broadcast_connection_port_val = tcp_broadcast_connection_port ? std::optional<int>(::args::get(tcp_broadcast_connection_port)) : std::optional<int>(),
                                         tcp_connection_flag = bool(tcp_connection),
@@ -1547,6 +1578,8 @@ namespace {
                                         late_lr_anneal_val = cli_option_present({"--late-lr-anneal"}) ? std::optional<float>(::args::get(late_lr_anneal)) : std::optional<float>(),
                                         gradient_loss_weight_val = cli_option_present({"--gradient-loss-weight"}) ? std::optional<float>(::args::get(gradient_loss_weight)) : std::optional<float>(),
                                         densify_structure_weight_val = cli_option_present({"--densify-structure-weight"}) ? std::optional<float>(::args::get(densify_structure_weight)) : std::optional<float>(),
+                                        color_variance_weight_val = cli_option_present({"--color-variance-weight"}) ? std::optional<float>(::args::get(color_variance_weight)) : std::optional<float>(),
+                                        color_variance_warmup_iters_val = cli_option_present({"--color-variance-warmup-iters"}) ? std::optional<int>(::args::get(color_variance_warmup_iters)) : std::optional<int>(),
                                         steps_scaler_val = cli_option_present({"--steps-scaler"}) ? std::optional<float>(::args::get(steps_scaler)) : std::optional<float>(),
                                         sh_degree_interval_val = cli_option_present({"--sh-degree-interval"}) ? std::optional<int>(::args::get(sh_degree_interval)) : std::optional<int>(),
                                         morton_reorder_interval_val = cli_option_present({"--morton-reorder-interval"}) ? std::optional<int>(::args::get(morton_reorder_interval)) : std::optional<int>(),
@@ -1692,6 +1725,7 @@ namespace {
                 params.cli_step_values_set = iterations_val.has_value() ||
                                              sh_degree_interval_val.has_value() ||
                                              morton_reorder_interval_val.has_value() ||
+                                             color_variance_warmup_iters_val.has_value() ||
                                              (eval_steps_val && !eval_steps_val->empty());
                 note_opt("iterations", iterations_val.has_value());
                 setVal(resize_factor_val, ds.resize_factor);
@@ -1703,6 +1737,13 @@ namespace {
                 if (no_cpu_cache_flag)
                     ds.loading_params.use_cpu_memory = false;
                 setFlag(use_16bit_flag, ds.loading_params.use_16bit_color);
+                setVal(sharpen_kernel_val, ds.loading_params.sharpen.kernel);
+                setVal(sharpen_amount_val, ds.loading_params.sharpen.amount);
+                setVal(sharpen_radius_val, ds.loading_params.sharpen.radius);
+                setVal(sharpen_threshold_val, ds.loading_params.sharpen.threshold);
+                if (sharpen_radius_val && ds.loading_params.sharpen.kernel != lfs::core::SharpenKernel::Usm)
+                    LOG_WARN("--sharpen-radius only applies to the usm kernel; {} ignores it",
+                             lfs::core::sharpen_kernel_name(ds.loading_params.sharpen.kernel));
                 setVal(max_cap_val, opt.max_cap);
                 setVal(tcp_server_connection_port_val, svs.tcp_server_connection_port);
                 setVal(tcp_broadcast_connection_port_val, svs.tcp_broadcast_connection_port);
@@ -1713,6 +1754,9 @@ namespace {
                 setVal(late_lr_anneal_val, opt.late_lr_anneal);
                 setVal(gradient_loss_weight_val, opt.gradient_loss_weight);
                 setVal(densify_structure_weight_val, opt.densify_structure_weight);
+                setVal(color_variance_weight_val, opt.color_variance_weight);
+                if (color_variance_warmup_iters_val)
+                    opt.color_variance_warmup_iters = static_cast<size_t>(*color_variance_warmup_iters_val);
                 if (opacity_decay_rendered_only_flag)
                     opt.opacity_decay_rendered_only = true;
                 if (crop_flag)
@@ -1871,6 +1915,8 @@ namespace {
                 note_opt("late_lr_anneal", late_lr_anneal_val.has_value());
                 note_opt("gradient_loss_weight", gradient_loss_weight_val.has_value());
                 note_opt("densify_structure_weight", densify_structure_weight_val.has_value());
+                note_opt("color_variance_weight", color_variance_weight_val.has_value());
+                note_opt("color_variance_warmup_iters", color_variance_warmup_iters_val.has_value());
                 note_opt("opacity_decay_rendered_only", opacity_decay_rendered_only_flag || no_opacity_decay_rendered_only_flag);
                 note_opt("steps_scaler", steps_scaler_val.has_value());
                 note_opt("sh_degree_interval", sh_degree_interval_val.has_value());
@@ -1956,7 +2002,9 @@ namespace {
                             params.overrides.optimization_json, cli_opt.dump());
                     }
                 }
-                if (!ds_keys.empty()) {
+                const bool sharpen_given = sharpen_kernel_val || sharpen_amount_val || sharpen_radius_val ||
+                                           sharpen_threshold_val;
+                if (!ds_keys.empty() || sharpen_given) {
                     const auto serialized = ds.to_json();
                     nlohmann::json cli_ds;
                     for (const char* key : ds_keys) {
@@ -1969,6 +2017,15 @@ namespace {
                         cli_ds["loading_params"]["use_cpu_memory"] = false;
                     if (use_16bit_flag)
                         cli_ds["loading_params"]["use_16bit_color"] = true;
+                    const auto& loading = serialized["loading_params"];
+                    if (sharpen_kernel_val)
+                        cli_ds["loading_params"]["sharpen_kernel"] = loading["sharpen_kernel"];
+                    if (sharpen_amount_val)
+                        cli_ds["loading_params"]["sharpen_amount"] = loading["sharpen_amount"];
+                    if (sharpen_radius_val)
+                        cli_ds["loading_params"]["sharpen_radius"] = loading["sharpen_radius"];
+                    if (sharpen_threshold_val)
+                        cli_ds["loading_params"]["sharpen_threshold"] = loading["sharpen_threshold"];
                     if (!cli_ds.empty()) {
                         lfs::core::param::merge_explicit_json_overlay(
                             params.overrides.dataset_json, cli_ds.dump());

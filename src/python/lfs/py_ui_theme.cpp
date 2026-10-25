@@ -183,11 +183,11 @@ namespace lfs::python {
         m.def("set_scene_graph_selection_markers", &lfs::vis::saveSceneGraphSelectionMarkersPreference,
               nb::arg("enabled"), "Show or hide Scene Graph selection markers");
         m.def("get_progress_bar_style", &lfs::vis::loadProgressBarStylePreference,
-              "Return the status bar progress style (classic or miner)");
+              "Return the status bar progress style (classic, miner, or tessle)");
         m.def(
             "set_progress_bar_style",
             [](const std::string& style) { lfs::vis::saveProgressBarStylePreference(style); },
-            nb::arg("style"), "Set the status bar progress style (classic or miner)");
+            nb::arg("style"), "Set the status bar progress style (classic, miner, or tessle)");
         m.def("get_viewport_chrome_style", &lfs::vis::loadViewportChromeStylePreference,
               "Return the viewport controls style (solid, translucent, or frosted)");
         m.def(

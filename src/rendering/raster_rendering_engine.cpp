@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/crop_polygon.hpp"
 #include "core/executable_path.hpp"
 #include "core/image_codecs.hpp"
 #include "core/image_io.hpp"
@@ -615,6 +616,21 @@ namespace lfs::rendering {
                 params.crop_ellipsoid.radii[2] = ellipsoid.radii.z;
                 params.crop_ellipsoid.inverse = request.filters.crop_inverse;
                 params.crop_ellipsoid.desaturate = request.filters.crop_desaturate;
+            }
+            static_assert(pcraster::kMaxCropPolygonVertices == lfs::core::crop_polygon::kMaxVertices);
+            const auto& polygon = request.filters.crop_polygon;
+            params.has_crop_polygon = polygon && polygon->vertices.size() >= lfs::core::crop_polygon::kMinVertices &&
+                                      polygon->vertices.size() <= lfs::core::crop_polygon::kMaxVertices;
+            if (params.has_crop_polygon) {
+                std::copy_n(glm::value_ptr(polygon->transform), 16, params.crop_polygon.to_local);
+                for (size_t i = 0; i < polygon->vertices.size(); ++i) {
+                    params.crop_polygon.vertices[2 * i] = polygon->vertices[i].x;
+                    params.crop_polygon.vertices[2 * i + 1] = polygon->vertices[i].y;
+                }
+                params.crop_polygon.count = static_cast<int>(polygon->vertices.size());
+                params.crop_polygon.half_depth = polygon->half_depth;
+                params.crop_polygon.inverse = request.filters.crop_inverse;
+                params.crop_polygon.desaturate = request.filters.crop_desaturate;
             }
             std::copy_n(glm::value_ptr(view), 16, params.view);
             std::copy_n(glm::value_ptr(view_proj), 16, params.view_proj);

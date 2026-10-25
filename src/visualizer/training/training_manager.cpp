@@ -419,6 +419,10 @@ namespace lfs::vis {
                             cropbox_node && cropbox_node->cropbox) {
                             cropbox = makeRestoreNodeDesc(*cropbox_node);
                         }
+                        if (const auto* polygon_node = scene.getNodeById(scene.getCropPolygonForSplat(node->id));
+                            polygon_node && polygon_node->crop_polygon) {
+                            crop_polygon = makeRestoreNodeDesc(*polygon_node);
+                        }
                     }
                 }
             }
@@ -470,6 +474,9 @@ namespace lfs::vis {
                 if (node.cropbox) {
                     result.cropbox = std::make_unique<lfs::core::CropBoxData>(*node.cropbox);
                 }
+                if (node.crop_polygon) {
+                    result.crop_polygon = std::make_unique<lfs::core::CropPolygonData>(*node.crop_polygon);
+                }
                 return result;
             }
 
@@ -498,6 +505,11 @@ namespace lfs::vis {
                                 restored_cropbox.parent = point_cloud_id;
                                 static_cast<void>(scene->restoreNodeWithUuid(std::move(restored_cropbox)));
                             }
+                            if (point_cloud_id != lfs::core::NULL_NODE && crop_polygon) {
+                                auto restored_polygon = std::move(*crop_polygon);
+                                restored_polygon.parent = point_cloud_id;
+                                static_cast<void>(scene->restoreNodeWithUuid(std::move(restored_polygon)));
+                            }
                         }
                         scene->setTrainingModelNode(scene->getNodeByUuid(transient_model_uuid)
                                                         ? transient_model_uuid
@@ -520,6 +532,7 @@ namespace lfs::vis {
             std::unique_ptr<lfs::core::SplatData> original_model;
             std::optional<lfs::core::Scene::RestoreNodeDesc> point_cloud;
             std::optional<lfs::core::Scene::RestoreNodeDesc> cropbox;
+            std::optional<lfs::core::Scene::RestoreNodeDesc> crop_polygon;
             std::shared_ptr<lfs::core::PointCloud> initial_point_cloud;
             bool point_cloud_modified = false;
             std::vector<std::pair<std::shared_ptr<lfs::core::Camera>, lfs::core::CameraSplit>> camera_splits;
@@ -1248,6 +1261,17 @@ namespace lfs::vis {
         if (!trainer_ || !scene_)
             return;
         trainer_->setCropBoxSnapshot(lfs::training::resolve_training_cropbox_geom(*scene_));
+    }
+
+    std::optional<lfs::training::TrainingCropBoxGeometry> TrainerManager::exportCropBox() const {
+        // The editable setting is what the toolbar shows; it reaches the trainer only while training runs.
+        const auto* const params = services().paramsOrNull();
+        const bool crop = params && params->isLoaded()
+                              ? params->getActiveParams().crop_to_cropbox
+                              : trainer_ && trainer_->getParams().optimization.crop_to_cropbox;
+        if (!crop || !scene_)
+            return std::nullopt;
+        return lfs::training::resolve_training_cropbox_geom(*scene_);
     }
 
     bool TrainerManager::startTraining() {
@@ -2798,6 +2822,9 @@ namespace lfs::vis {
 
     bool TrainerManager::canChangeStrategy(const std::string_view strategy) const {
         if (!trainer_)
+            return true;
+        // A finished run cannot continue: Start resets to a fresh trainer that takes the edited preset.
+        if (isFinished())
             return true;
         const auto canonical = core::param::canonical_strategy_name(strategy);
         if (trainer_->isInitialized())

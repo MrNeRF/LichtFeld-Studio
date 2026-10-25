@@ -364,7 +364,14 @@ class TransformControlsController:
             scene = lf.get_scene()
             node = scene.get_node(self._selected[0]) if scene and len(self._selected) == 1 else None
             shape = lf.ui.get_crop_tool_shape()
-            volume = (node.cropbox() if shape == "box" else node.ellipsoid()) if node else None
+            volume = None
+            if node:
+                if shape == "box":
+                    volume = node.cropbox()
+                elif shape == "polygon":
+                    volume = node.crop_polygon()
+                else:
+                    volume = node.ellipsoid()
             if volume is None:
                 self._selected = []
             else:

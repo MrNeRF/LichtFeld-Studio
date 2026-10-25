@@ -36,6 +36,8 @@ namespace lfs::vis::op {
             {"ellipsoid.set", "Set Ellipsoid"},
             {"ellipsoid.fit", "Fit Ellipsoid"},
             {"ellipsoid.reset", "Reset Ellipsoid"},
+            {"crop.draw_polygon", "Draw Crop Polygon"},
+            {"crop_polygon.set", "Set Crop Polygon"},
         }};
 
         struct ToolInfo {

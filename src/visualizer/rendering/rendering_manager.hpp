@@ -192,6 +192,11 @@ namespace lfs::vis {
                                                                   int reference_height = 0,
                                                                   bool equirectangular = false);
 
+        std::shared_ptr<lfs::core::Tensor> renderLightFieldViewRgb8(
+            SceneManager* scene_manager, const glm::mat3& rotation, const glm::vec3& position,
+            int width, int height, float fov_degrees, float principal_shift_x,
+            float near_distance, float far_distance);
+
         // Image + per-pixel linear depth from the same viewport render. When
         // expected_depth is true, depth is alpha-weighted expected depth instead
         // of median depth. image is [H,W,3] and depth is [H,W], both CPU float32.
@@ -670,6 +675,17 @@ namespace lfs::vis {
                                     int parent_node_index) {
             viewport_overlay_service_.setEllipsoid(active, radii, world_transform, affects_render, parent_node_index);
         }
+        void setCropPolygonGizmoState(bool active, const std::vector<glm::vec2>& vertices, float half_depth,
+                                      const glm::mat4& world_transform, bool affects_render,
+                                      int parent_node_index) {
+            viewport_overlay_service_.setCropPolygon(active, vertices, half_depth, world_transform, affects_render,
+                                                     parent_node_index);
+        }
+        void setCropPolygonGizmoActive(bool active) { viewport_overlay_service_.setCropPolygonActive(active); }
+        // Polygon outline being drawn (visualizer world); empty clears the preview.
+        void setCropPolygonDraft(std::vector<glm::vec3> points, std::optional<glm::vec3> cursor) {
+            viewport_overlay_service_.setCropPolygonDraft(std::move(points), cursor);
+        }
         void setCropboxGizmoActive(bool active) { viewport_overlay_service_.setCropboxActive(active); }
         void setEllipsoidGizmoActive(bool active) { viewport_overlay_service_.setEllipsoidActive(active); }
         [[nodiscard]] GizmoState getGizmoState() const { return viewport_overlay_service_.makeFrameGizmoState(); }
@@ -745,7 +761,9 @@ namespace lfs::vis {
             std::optional<glm::vec3> background_color_override,
             PreviewImageReadback readback,
             float rasterization_scale = 1.0f,
-            bool equirectangular = false);
+            bool equirectangular = false,
+            const RenderSettings* settings_override = nullptr,
+            bool gaussian_selection_visible = true);
         [[nodiscard]] std::expected<void, std::string> renderPreviewImageToPreviewSlotWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
@@ -765,7 +783,9 @@ namespace lfs::vis {
             std::optional<bool> transparent_background_override,
             float rasterization_scale = 1.0f,
             bool deterministic_export = false,
-            bool equirectangular = false);
+            bool equirectangular = false,
+            const RenderSettings* settings_override = nullptr,
+            bool gaussian_selection_visible = true);
         [[nodiscard]] std::expected<void, std::string> renderDepthCaptureToPreviewSlotWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,

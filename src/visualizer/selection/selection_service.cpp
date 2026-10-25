@@ -43,10 +43,7 @@
 namespace lfs::vis {
 
     namespace {
-        constexpr float POLYGON_CLOSE_DISTANCE_PX = 12.0f;
         constexpr float POLYGON_CURSOR_APPEND_EPSILON_PX = 0.5f;
-        constexpr float POLYGON_VERTEX_HIT_RADIUS_PX = 8.0f;
-        constexpr float POLYGON_EDGE_HIT_RADIUS_PX = 10.0f;
         constexpr float INVALID_SCREEN_POSITION = -1.0e8f;
         constexpr float HOVER_PICK_RADIUS_PX = 12.0f;
         constexpr float RING_PICK_PADDING_PX = 4.0f;
@@ -3552,18 +3549,26 @@ namespace lfs::vis {
             !session.viewport_context->info.valid()) {
             return std::nullopt;
         }
-        const glm::ivec2 rendered_size = rendering_manager_->getRenderedSize();
-        if (rendered_size.x <= 0 || rendered_size.y <= 0) {
+        return resolveViewerWorldPoint(*rendering_manager_, *session.viewport_context->viewport,
+                                       session.viewport_context->panel, session.viewport_context->info, screen_point);
+    }
+
+    std::optional<glm::vec3> SelectionService::resolveViewerWorldPoint(const RenderingManager& rendering_manager,
+                                                                       const Viewport& viewport,
+                                                                       const SplitViewPanelId panel,
+                                                                       const ViewportInfo& info,
+                                                                       const glm::vec2 screen_point) {
+        const glm::ivec2 rendered_size = rendering_manager.getRenderedSize();
+        if (!info.valid() || rendered_size.x <= 0 || rendered_size.y <= 0) {
             return std::nullopt;
         }
 
-        const auto settings = rendering_manager_->getSettings();
-        const auto& info = session.viewport_context->info;
-        Viewport projection_viewport = *session.viewport_context->viewport;
+        const auto settings = rendering_manager.getSettings();
+        Viewport projection_viewport = viewport;
         projection_viewport.windowSize = {info.render_width, info.render_height};
         const auto render_point = screenToRender(screen_point, info);
-        const float depth = rendering_manager_->getDepthAtPixel(
-            static_cast<int>(render_point.x), static_cast<int>(render_point.y), session.viewport_context->panel);
+        const float depth = rendering_manager.getDepthAtPixel(
+            static_cast<int>(render_point.x), static_cast<int>(render_point.y), panel);
         const float ortho_scale = projection_viewport.ortho_scale_override.value_or(settings.ortho_scale);
 
         if (depth > 0.0f) {
@@ -3751,7 +3756,32 @@ namespace lfs::vis {
             }
         }
 
-        if (!crop_t_ptr && !ellip_t_ptr) {
+        // Polygons only come from the scene; the selection volumes are boxes and spheres.
+        core::Tensor polygon_t;
+        core::Tensor polygon_vertices;
+        std::optional<rendering::SelectionCropPolygon> polygon;
+        if (use_scene_filters) {
+            if (const auto* const cp = findRenderableByNodeId(render_state.crop_polygons,
+                                                              scene_manager_->getActiveSelectionCropPolygonId());
+                cp && cp->data) {
+                const glm::mat4 inv_transform = glm::inverse(cp->world_transform);
+                const float* const t_ptr = glm::value_ptr(inv_transform);
+                polygon_t = core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4});
+                std::vector<float> outline;
+                outline.reserve(cp->data->vertices.size() * 2);
+                for (const glm::vec2& vertex : cp->data->vertices)
+                    outline.insert(outline.end(), {vertex.x, vertex.y});
+                polygon_vertices = core::Tensor::from_vector(outline, {cp->data->vertices.size(), size_t{2}});
+                polygon = rendering::SelectionCropPolygon{
+                    .transform = &polygon_t,
+                    .vertices = &polygon_vertices,
+                    .half_depth = cp->data->half_depth,
+                    .inverse = cp->data->inverse,
+                };
+            }
+        }
+
+        if (!crop_t_ptr && !ellip_t_ptr && !polygon) {
             return;
         }
 
@@ -3788,7 +3818,9 @@ namespace lfs::vis {
                 ellip_radii_ptr,
                 ellipsoid_inverse,
                 model_transforms_ptr,
-                transform_indices_ptr);
+                transform_indices_ptr,
+                -1,
+                polygon ? &*polygon : nullptr);
         }
     }
 

@@ -42,6 +42,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdlib>
+#include <cuda_runtime.h>
 #include <deque>
 #include <filesystem>
 #include <format>
@@ -733,6 +734,59 @@ TEST_F(PythonIntegrationTest, PythonTransientSplatsLeaveNoUndoHistory) {
     EXPECT_TRUE(lfs::vis::op::undoHistory().undo().success);
     EXPECT_TRUE(scene.getTrainingModelNodeUuid().is_nil());
     EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
+}
+
+// The histogram panel trims its samples with scene.apply_crop_filter: a crop
+// polygon trims its own splat by the even-odd rule and leaves the others alone.
+TEST_F(PythonIntegrationTest, PythonCropFilterTrimsOnlyTheCropPolygonsSplat) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0)
+        GTEST_SKIP() << "CUDA device unavailable";
+    struct PythonSceneContextReset {
+        ~PythonSceneContextReset() { lfs::python::set_application_scene(nullptr); }
+    } reset;
+
+    const auto make_splat = [](const std::vector<float>& means) {
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+        const size_t n = means.size() / 3;
+        std::vector<float> rotation(n * 4, 0.0f);
+        for (size_t i = 0; i < n; ++i)
+            rotation[i * 4] = 1.0f;
+        return std::make_unique<lfs::core::SplatData>(
+            1, Tensor::from_vector(means, {n, size_t{3}}, Device::CUDA),
+            Tensor::zeros({n, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32),
+            Tensor::zeros({n, size_t{3}, size_t{3}}, Device::CUDA, DataType::Float32),
+            Tensor::zeros({n, size_t{3}}, Device::CUDA, DataType::Float32),
+            Tensor::from_vector(rotation, {n, size_t{4}}, Device::CUDA),
+            Tensor::zeros({n, size_t{1}}, Device::CUDA, DataType::Float32), 1.0f);
+    };
+    lfs::core::Scene scene;
+    // Inside, in the notch of the L, beyond a cap; then the other splat's point.
+    const auto model = scene.addSplat("Model", make_splat({10.0f, 0.0f, 0.0f, 11.5f, 1.5f, 0.0f, 10.0f, 0.0f, 1.5f}));
+    ASSERT_NE(scene.addSplat("Other", make_splat({13.0f, 0.0f, 0.0f})), lfs::core::NULL_NODE);
+    scene.setNodeTransform(model, glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 5.0f)));
+    lfs::core::CropPolygonData polygon;
+    polygon.vertices = {{-2.0f, -2.0f}, {2.0f, -2.0f}, {2.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 2.0f}, {-2.0f, 2.0f}};
+    polygon.half_depth = 1.0f;
+    ASSERT_NE(scene.addCropPolygon("Model_crop_polygon", model, polygon,
+                                   glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 0.0f, 0.0f))),
+              lfs::core::NULL_NODE);
+    lfs::python::set_application_scene(&scene);
+
+    const lfs::python::GilAcquire gil;
+    ASSERT_EQ(PyRun_SimpleString(
+                  "import lichtfeld as lf\n"
+                  "scene = lf.get_scene()\n"
+                  "polygon = scene.get_node('Model_crop_polygon').crop_polygon()\n"
+                  "for inverse in (False, True):\n"
+                  "    polygon.inverse = inverse\n"
+                  "    mask = lf.Tensor.ones([4], dtype='bool', device='cuda')\n"
+                  "    scene.apply_crop_filter(mask)\n"
+                  "    kept = [bool(value) for value in mask.cpu().tolist()]\n"
+                  "    assert kept == [not inverse, inverse, inverse, True], (inverse, kept)\n"),
+              0);
 }
 
 TEST_F(PythonIntegrationTest, SceneTimeCallbackSupportsSetTickClearAndUnsetTick) {

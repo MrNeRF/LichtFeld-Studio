@@ -431,6 +431,25 @@ namespace lfs::vis::gui {
         return &*snapshot.active_ellipsoid;
     }
 
+    [[nodiscard]] const VideoExportCropPolygonSnapshot* activeVideoExportPointCloudCropPolygon(
+        const VideoExportSceneSnapshot& snapshot) {
+        if (snapshot.selected_crop_polygon_index >= 0) {
+            const auto& selected = snapshot.crop_polygons[static_cast<size_t>(snapshot.selected_crop_polygon_index)];
+            if (selected.data.enabled)
+                return &selected;
+        }
+
+        const VideoExportCropPolygonSnapshot* single = nullptr;
+        for (const auto& polygon : snapshot.crop_polygons) {
+            if (!polygon.data.enabled)
+                continue;
+            if (single)
+                return nullptr;
+            single = &polygon;
+        }
+        return single;
+    }
+
     void applyVideoExportPointCloudFilters(rendering::PointCloudFilterState& filters,
                                            const VideoExportSceneSnapshot& snapshot,
                                            const RenderSettings& render_settings) {
@@ -451,6 +470,18 @@ namespace lfs::vis::gui {
                 .transform = glm::inverse(el->world_transform)};
             filters.crop_box.reset();
             filters.crop_inverse = el->data.inverse;
+            filters.crop_desaturate = render_settings.desaturate_cropping;
+            return;
+        }
+
+        if (const auto* const polygon = activeVideoExportPointCloudCropPolygon(snapshot)) {
+            filters.crop_polygon = rendering::CropPolygon{
+                .vertices = polygon->data.vertices,
+                .half_depth = polygon->data.half_depth,
+                .transform = glm::inverse(polygon->world_transform)};
+            filters.crop_box.reset();
+            filters.crop_ellipsoid.reset();
+            filters.crop_inverse = polygon->data.inverse;
             filters.crop_desaturate = render_settings.desaturate_cropping;
         }
     }
@@ -510,6 +541,20 @@ namespace lfs::vis::gui {
                 .world_transform = el.world_transform,
                 .local_transform = glm::mat4(1.0f),
                 .effectively_visible = true,
+            });
+        }
+
+        state.crop_polygons.reserve(snapshot.crop_polygons.size());
+        for (const auto& polygon : snapshot.crop_polygons) {
+            state.crop_polygons.push_back(lfs::core::Scene::RenderableCropPolygon{
+                .node_id = polygon.node_id,
+                .parent_splat_id = polygon.parent_splat_id,
+                .parent_node_index = polygon.parent_node_index,
+                .data = &polygon.data,
+                .world_transform = polygon.world_transform,
+                .local_transform = glm::mat4(1.0f),
+                .effectively_visible = true,
+                .parent_effectively_visible = true,
             });
         }
         return state;
@@ -1794,6 +1839,8 @@ namespace lfs::vis::gui {
         }
 
         const auto& scene = scene_manager->getScene();
+        const auto* const trainer_manager = scene_manager->getTrainerManager();
+        const auto export_crop = trainer_manager ? trainer_manager->exportCropBox() : std::nullopt;
         std::vector<ExportSplatSource> splats;
         splats.reserve(node_names.size());
         for (const auto& name : node_names) {
@@ -1806,7 +1853,8 @@ namespace lfs::vis::gui {
                 }
                 splats.push_back(ExportSplatSource{
                     .data = node->model.get(),
-                    .transform = scene_coords::nodeDataWorldTransform(scene, node->id)});
+                    .transform = scene_coords::nodeDataWorldTransform(scene, node->id),
+                    .crop = node->uuid == scene.getTrainingModelNodeUuid() ? export_crop : std::nullopt});
             }
         }
         if (splats.empty()) {
@@ -2208,10 +2256,20 @@ namespace lfs::vis::gui {
                     if (!cancelled) {
                         std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>> merge_inputs;
                         merge_inputs.reserve(splats.size());
+                        // Cropped copies; the scene model stays whole so a stopped run can resume.
+                        std::deque<lfs::core::SplatData> cropped;
                         for (const auto& source : splats) {
-                            if (source.data) {
-                                merge_inputs.emplace_back(source.data, source.transform);
+                            if (!source.data)
+                                continue;
+                            const lfs::core::SplatData* data = source.data;
+                            if (source.crop) {
+                                if (auto kept = lfs::training::crop_copy_to_training_cropbox(*data, *source.crop)) {
+                                    if (kept->size() == 0)
+                                        continue;
+                                    data = &cropped.emplace_back(std::move(*kept));
+                                }
                             }
+                            merge_inputs.emplace_back(data, source.transform);
                         }
 
                         const auto storage_mode = borrow_single_identity

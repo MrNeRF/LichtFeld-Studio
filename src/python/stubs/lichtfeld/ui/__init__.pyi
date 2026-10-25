@@ -242,10 +242,10 @@ def set_scene_graph_selection_markers(enabled: bool) -> None:
     """Show or hide Scene Graph selection markers"""
 
 def get_progress_bar_style() -> str:
-    """Return the status bar progress style (classic or miner)"""
+    """Return the status bar progress style (classic, miner, or tessle)"""
 
 def set_progress_bar_style(style: str) -> None:
-    """Set the status bar progress style (classic or miner)"""
+    """Set the status bar progress style (classic, miner, or tessle)"""
 
 def get_viewport_chrome_style() -> str:
     """Return the viewport controls style (solid, translucent, or frosted)"""
@@ -2334,7 +2334,7 @@ def apply_cropbox() -> None:
     """Apply the selected cropbox"""
 
 def set_crop_tool_shape(shape: str) -> None:
-    """Set the active crop tool shape: box or ellipsoid"""
+    """Set the active crop tool shape: box, ellipsoid, or polygon"""
 
 def get_crop_tool_shape() -> str:
     """Get the active crop tool shape"""
@@ -2350,6 +2350,11 @@ def get_crop_tool_operation() -> str:
 def apply_crop_tool() -> None:
     """
     Apply the active crop tool primitive through the node-backed crop command path
+    """
+
+def start_crop_polygon() -> None:
+    """
+    Edit the selected splat's or point cloud's crop polygon, or start drawing one on a camera-facing plane
     """
 
 def can_apply_align() -> bool:
@@ -2391,6 +2396,16 @@ def reset_crop_tool() -> None:
 
 def delete_crop_tool_volume() -> None:
     """Delete the active crop tool primitive and leave the crop tool"""
+
+def toggle_crop_tool_inverse() -> None:
+    """
+    Invert the selected crop polygon, crop box or ellipsoid, as the pie menu's Invert does
+    """
+
+def get_crop_tool_inverse() -> bool | None:
+    """
+    Whether the crop volume Invert acts on is inverted, or None without one
+    """
 
 def fit_cropbox_to_scene(use_percentile: bool = False) -> None:
     """Fit cropbox to scene bounds"""

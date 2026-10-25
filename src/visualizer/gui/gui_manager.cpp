@@ -3190,6 +3190,27 @@ namespace lfs::vis::gui {
             }
         }
 
+        // Prism outline: the polygon at both caps plus one edge per vertex.
+        void appendProjectedCropPolygon(VulkanViewportPassParams& params,
+                                        const VulkanGuidePanelTarget& panel,
+                                        const RenderSettings& settings,
+                                        const std::vector<glm::vec2>& vertices,
+                                        const float half_depth,
+                                        const glm::mat4& polygon_to_world,
+                                        const glm::vec4& color,
+                                        const float thickness) {
+            const auto point = [&](const glm::vec2& vertex, const float z) {
+                return glm::vec3(polygon_to_world * glm::vec4(vertex, z, 1.0f));
+            };
+            for (size_t i = 0; i < vertices.size(); ++i) {
+                const glm::vec2& a = vertices[i];
+                const glm::vec2& b = vertices[(i + 1) % vertices.size()];
+                addProjectedOverlayLine(params, panel, settings, point(a, -half_depth), point(b, -half_depth), color, thickness);
+                addProjectedOverlayLine(params, panel, settings, point(a, half_depth), point(b, half_depth), color, thickness);
+                addProjectedOverlayLine(params, panel, settings, point(a, -half_depth), point(a, half_depth), color, thickness);
+            }
+        }
+
         void appendCropAndFilterOverlays(VulkanViewportPassParams& params,
                                          const VulkanGuidePanelTarget& panel,
                                          const RenderSettings& settings,
@@ -3248,6 +3269,30 @@ namespace lfs::vis::gui {
                                          2.0f);
             }
 
+            const auto selected_polygon_id = scene_manager ? scene_manager->getSelectedNodeCropPolygonId()
+                                                           : core::NULL_NODE;
+            if (gizmo.crop_polygon_active &&
+                (!scene_state || activeVolumeGuideVisible(gizmo.crop_polygon_affects_render, selected_polygon_id,
+                                                          scene_state->crop_polygons))) {
+                appendProjectedCropPolygon(params, panel, settings,
+                                           gizmo.crop_polygon_vertices,
+                                           gizmo.crop_polygon_half_depth,
+                                           gizmo.crop_polygon_transform,
+                                           cropGuideColor(glm::vec3(1.0f, 1.0f, 0.0f), false, 0.0f),
+                                           2.0f);
+            }
+
+            // Outline being drawn: placed vertices and a rubber band to the cursor on the plane.
+            if (!gizmo.crop_polygon_draft.empty()) {
+                const glm::vec4 draft_color = cropGuideColor(glm::vec3(1.0f, 1.0f, 0.0f), false, 0.0f);
+                const auto& draft = gizmo.crop_polygon_draft;
+                for (size_t i = 0; i + 1 < draft.size(); ++i)
+                    addProjectedOverlayLine(params, panel, settings, draft[i], draft[i + 1], draft_color, 2.0f);
+                if (gizmo.crop_polygon_draft_cursor)
+                    addProjectedOverlayLine(params, panel, settings, draft.back(), *gizmo.crop_polygon_draft_cursor,
+                                            glm::vec4(glm::vec3(draft_color), 0.6f), 1.5f);
+            }
+
             if (!scene_state || !scene_manager) {
                 return;
             }
@@ -3284,6 +3329,20 @@ namespace lfs::vis::gui {
                                          world_transform,
                                          cropGuideColor(el.data->color, el.data->inverse, flash),
                                          el.data->line_width + flash * 4.0f);
+            }
+
+            for (const auto& polygon : scene_state->crop_polygons) {
+                if (!polygon.data || !polygon.effectively_visible || polygon.node_id != selected_polygon_id) {
+                    continue;
+                }
+                const float flash = std::clamp(polygon.data->flash_intensity, 0.0f, 1.0f);
+                appendProjectedCropPolygon(params, panel, settings,
+                                           polygon.data->vertices,
+                                           polygon.data->half_depth,
+                                           gizmo.crop_polygon_active ? gizmo.crop_polygon_transform
+                                                                     : polygon.world_transform,
+                                           cropGuideColor(polygon.data->color, polygon.data->inverse, flash),
+                                           polygon.data->line_width + flash * 4.0f);
             }
         }
 
@@ -5278,7 +5337,9 @@ namespace lfs::vis::gui {
             if (viewer_) {
                 SceneManager* const scene_manager = viewer_->getSceneManager();
                 std::optional<SceneRenderState> overlay_scene_state;
-                if (scene_manager && (settings.show_crop_box || settings.show_ellipsoid)) {
+                // Polygons have no render setting; their outline follows the selection.
+                if (scene_manager && (settings.show_crop_box || settings.show_ellipsoid ||
+                                      scene_manager->getSelectedNodeCropPolygonId() != core::NULL_NODE)) {
                     overlay_scene_state =
                         scene_manager->buildRenderState({.metadata_only = true});
                 }

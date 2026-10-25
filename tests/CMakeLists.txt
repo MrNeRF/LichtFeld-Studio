@@ -608,6 +608,7 @@ set(TEST_FILES
     test_rendered_structure.cpp
     test_gradient_residual.cpp
     test_fused_reg_loss.cpp
+    test_opacity_gradients.cpp
     test_fused_bg_blend.cpp
     test_photometric_hygiene.cpp
     test_persistent_masks.cpp
@@ -749,6 +750,7 @@ set(TEST_FILES
     test_video_export_utils.cpp
     test_viewport_point_cloud_export.cpp
     test_video_export_frame_schedule.cpp
+    test_video_resolution.cpp
     test_video_frame_extractor_naming.cpp
     test_video_cpu_rgb_conversion.cpp
     test_video_cuda_frame_handoff.cpp
@@ -789,6 +791,7 @@ set(TEST_FILES
     test_tensor_kernels_6c_elem.cpp
     test_tensor_lazy_stateful_ops.cpp
     test_fastgs_kernels.cpp
+    test_color_variance.cpp
     fastgs_visibility_readback_cuda.cu
     test_fastgs_fuzz.cpp
     test_fastgs_tile_culling_boundary.cpp
@@ -809,6 +812,7 @@ set(TEST_FILES
     test_scene_upscaler_registry.cpp
     test_selection_rasterization_ops.cpp
     test_rendering_refactor_services.cpp
+    test_crop_polygon.cpp
     test_higs_exact_depth.cpp
     test_point_cloud_raster_orientation.cpp
     test_point_cloud_vulkan_projection.cpp
@@ -850,6 +854,7 @@ set(TEST_FILES
     test_pipelined_loader.cpp
     test_pipelined_loader_ledger.cpp
     test_pipelined_loader_sidecar_jpeg2k.cpp
+    test_image_sharpen.cpp
     test_operator_return_value.cpp
     test_sdl_rml_key_mapping.cpp
     test_rml_path_utils.cpp
@@ -931,6 +936,7 @@ set(TEST_FILES
     test_menu_bar_title.cpp
     test_guide_segment_clipping.cpp
     test_status_bar_mining.cpp
+    test_status_bar_tessle.cpp
     test_right_panel_tabs.cpp
     test_rotated_sh_correctness.cpp
     test_splat_raw_payload.cpp
@@ -2046,6 +2052,17 @@ if(TARGET lfs_vulkan_rasterizer)
 endif()
 
 # Focused CUDA renderer contracts.
+add_executable(color_variance_tests test_main.cpp test_color_variance.cpp)
+target_compile_features(color_variance_tests PRIVATE cxx_std_23)
+target_include_directories(color_variance_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/training ${CUDAToolkit_INCLUDE_DIRS})
+target_link_libraries(color_variance_tests PRIVATE lfs_training lfs_core GTest::gtest CUDA::cudart)
+if(COMMAND lfs_enable_fast_cxx_compile)
+    lfs_enable_fast_cxx_compile(color_variance_tests)
+endif()
+add_test(NAME ColorVarianceContracts COMMAND color_variance_tests)
+set_tests_properties(ColorVarianceContracts PROPERTIES LABELS "fast;gpu" TIMEOUT 120)
+
 add_executable(gsplat_tests test_main.cpp test_gsplat_rasterizer.cpp)
 target_compile_features(gsplat_tests PRIVATE cxx_std_23)
 target_include_directories(gsplat_tests PRIVATE
@@ -2053,4 +2070,20 @@ target_include_directories(gsplat_tests PRIVATE
 target_link_libraries(gsplat_tests PRIVATE lfs_training lfs_core GTest::gtest CUDA::cudart)
 if(COMMAND lfs_enable_fast_cxx_compile)
     lfs_enable_fast_cxx_compile(gsplat_tests)
+endif()
+
+add_executable(opacity_gradient_tests test_main.cpp test_opacity_gradients.cpp test_fused_reg_loss.cpp)
+target_compile_features(opacity_gradient_tests PRIVATE cxx_std_23)
+target_compile_definitions(opacity_gradient_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+target_include_directories(opacity_gradient_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/training ${CUDAToolkit_INCLUDE_DIRS})
+target_link_libraries(opacity_gradient_tests PRIVATE lfs_training lfs_core GTest::gtest CUDA::cudart)
+if(COMMAND lfs_enable_fast_cxx_compile)
+    lfs_enable_fast_cxx_compile(opacity_gradient_tests)
+endif()
+add_test(NAME OpacityGradients COMMAND opacity_gradient_tests)
+set_tests_properties(OpacityGradients PROPERTIES LABELS "fast;gpu" TIMEOUT 120)
+if(WIN32)
+    set_tests_properties(OpacityGradients PROPERTIES ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_core>")
 endif()

@@ -2266,7 +2266,8 @@ namespace lfs::vis {
         std::ifstream persisted(profile_path);
         ASSERT_TRUE(persisted.is_open());
         const std::string contents((std::istreambuf_iterator<char>(persisted)), {});
-        EXPECT_NE(contents.find("\"version\": 33"), std::string::npos); // PROFILE_VERSION
+        EXPECT_NE(contents.find("\"version\": " + std::to_string(input::test::currentProfileVersion())),
+                  std::string::npos);
         EXPECT_NE(contents.find("Gallery Primary Action"), std::string::npos);
         EXPECT_NE(contents.find("Copy Gallery Link"), std::string::npos);
         EXPECT_NE(contents.find("Refresh Assets"), std::string::npos);

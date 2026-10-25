@@ -323,3 +323,108 @@ TEST(RoiSplatMaskTest, RelevanceMaskKeepsSplatsAnyCameraSeesThroughTheBox) {
     // A second camera behind splat 4 sees it through the box: only splat 3 stays irrelevant.
     EXPECT_EQ(run({0, 0, 0, 0, -5, 0}), (std::vector<bool>{false, false, false, true, false}));
 }
+
+namespace {
+    // An L outline: the square [-1, 1]^2 without its (0, 1) x (0, 1) quarter, the notch, over |z| <= 0.5.
+    const std::vector<glm::vec2> kLOutline{{-1.0f, -1.0f}, {1.0f, -1.0f}, {1.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 1.0f}, {-1.0f, 1.0f}};
+    const lfs::training::kernels::RoiPolygon kLPrism{
+        .vertices = kLOutline.data(),
+        .count = static_cast<int>(kLOutline.size()),
+        .half_depth = 0.5f};
+
+    // Weights of a 1-row image whose pixels look along the given rays from the world origin, with the polygon
+    // frame placed so that the camera sits at camera_in_polygon.
+    std::vector<float> run_polygon_weight_map(const glm::vec3& camera_in_polygon, const std::vector<glm::vec3>& rays,
+                                              const bool inverse, const std::vector<float>& depth = {},
+                                              const std::vector<float>& alpha = {}) {
+        const int width = static_cast<int>(rays.size());
+        std::vector<float> values;
+        for (const auto& ray : rays)
+            values.insert(values.end(), {ray.x, ray.y, ray.z});
+        const std::vector<float> identity{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        const auto w2c = lfs::core::Tensor::from_vector(identity, {size_t{4}, size_t{4}}, lfs::core::Device::CUDA);
+        const auto camera_pos = lfs::core::Tensor::zeros({size_t{3}}, lfs::core::Device::CUDA);
+        const auto rays_tensor = lfs::core::Tensor::from_vector(
+            values, {size_t{1}, static_cast<size_t>(width), size_t{3}}, lfs::core::Device::CUDA);
+        lfs::core::Tensor depth_tensor, alpha_tensor;
+        if (!depth.empty()) {
+            depth_tensor = lfs::core::Tensor::from_vector(depth, {size_t{1}, static_cast<size_t>(width)}, lfs::core::Device::CUDA);
+            alpha_tensor = lfs::core::Tensor::from_vector(alpha, {size_t{1}, static_cast<size_t>(width)}, lfs::core::Device::CUDA);
+        }
+        auto output = lfs::core::Tensor::empty({size_t{1}, static_cast<size_t>(width)}, lfs::core::Device::CUDA);
+        lfs::training::kernels::launch_roi_weight_map(
+            w2c.ptr<float>(), camera_pos.ptr<float>(), 1.0f, 1.0f, 0.0f, 0.0f, width, 1,
+            glm::translate(glm::mat4(1.0f), camera_in_polygon), kLPrism, inverse, 0.25f, rays_tensor.ptr<float>(),
+            depth.empty() ? nullptr : depth_tensor.ptr<float>(), alpha.empty() ? nullptr : alpha_tensor.ptr<float>(),
+            output.ptr<float>(), output.stream());
+        return output.cpu().to_vector();
+    }
+} // namespace
+
+// Catches a polygon ROI taken from the convex hull or bounds of the outline instead of the prism itself: from
+// above, the ray through the notch meets neither the L nor its slab, though the hull of the projected corners
+// covers it; from the side, a ray just over the cap passes above the L.
+TEST(RoiWeightMapTest, PolygonRegionIsExactForAConcaveOutline) {
+    // Above the outline, looking down at the points (x, y, 0).
+    const std::vector<glm::vec3> down{{-0.5f, -0.5f, -10.0f}, {0.5f, 0.5f, -10.0f}, {0.5f, -0.5f, -10.0f}, {-0.5f, 0.5f, -10.0f}, {1.5f, 1.5f, -10.0f}};
+    EXPECT_EQ(run_polygon_weight_map({0.0f, 0.0f, 10.0f}, down, false),
+              (std::vector<float>{1.0f, 0.25f, 1.0f, 1.0f, 0.25f}));
+    EXPECT_EQ(run_polygon_weight_map({0.0f, 0.0f, 10.0f}, down, true),
+              (std::vector<float>{0.25f, 1.0f, 0.25f, 0.25f, 1.0f}));
+
+    // Beside the outline at y = -0.5, 0.1 above the cap: level rays pass over the L, rays tilted into the slab cross it.
+    const std::vector<glm::vec3> side{{1.0f, 0.0f, 0.0f}, {1.0f, 0.0f, -0.02f}, {1.0f, 0.0f, 0.02f}};
+    EXPECT_EQ(run_polygon_weight_map({-10.0f, -0.5f, 0.6f}, side, false), (std::vector<float>{0.25f, 1.0f, 0.25f}));
+}
+
+// Catches a camera inside a crop polygon weighing pixels by their rays instead of the surface they show, which
+// counts the notch of the outline as ROI.
+TEST(RoiWeightMapTest, CameraInsideThePolygonWeighsPixelsByTheSurfaceTheyShow) {
+    // From inside the bottom arm: surfaces in the bottom arm, in the notch, and one pixel with too little alpha.
+    const std::vector<glm::vec3> rays{{1.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}};
+    EXPECT_EQ(run_polygon_weight_map({-0.5f, -0.5f, 0.0f}, rays, false, {1.0f, 1.0f, 0.1f}, {1.0f, 1.0f, 0.2f}),
+              (std::vector<float>{1.0f, 0.25f, 0.25f}));
+}
+
+namespace {
+    // Splat centres in polygon space: in the bottom arm, in the notch, below the bottom arm, beside the outline.
+    const std::vector<float> kPolygonCentres{0.5f, -0.5f, 0.0f, 0.5f, 0.5f, 0.0f, 0.5f, -0.5f, -5.0f, 5.0f, 0.0f, 0.0f};
+
+    std::vector<bool> to_bools(const lfs::core::Tensor& mask) {
+        const auto values = mask.to(lfs::core::DataType::Float32).cpu().to_vector();
+        return {values.begin(), values.end()};
+    }
+} // namespace
+
+// Catches polygon damping that tests the outline's bounds: seen from above, the notch splat is neither in nor
+// in front of or behind the L, so it trains damped, while the splat under the bottom arm trains at full rate.
+TEST(RoiSplatMaskTest, PolygonViewMaskFollowsTheConcaveOutline) {
+    const auto means = lfs::core::Tensor::from_vector(kPolygonCentres, {size_t{4}, size_t{3}}, lfs::core::Device::CUDA);
+    const auto position = lfs::core::Tensor::from_vector({0.0f, 0.0f, 10.0f}, {size_t{3}}, lfs::core::Device::CUDA);
+    auto rejected = lfs::core::Tensor::empty({size_t{4}}, lfs::core::Device::CUDA, lfs::core::DataType::Bool);
+    const auto run = [&](const float sigma, const bool inverse) {
+        const auto scaling = lfs::core::Tensor::from_vector(std::vector<float>(12, std::log(sigma)), {size_t{4}, size_t{3}},
+                                                            lfs::core::Device::CUDA);
+        lfs::training::kernels::launch_roi_view_reject_mask(
+            means.ptr<float>(), scaling.ptr<float>(), 4, glm::mat4(1.0f), glm::mat4(1.0f), position.ptr<float>(),
+            kLPrism, inverse, nullptr, rejected.ptr<bool>(), nullptr);
+        return to_bools(rejected);
+    };
+    EXPECT_EQ(run(0.01f, false), (std::vector<bool>{false, true, false, true}));
+    EXPECT_EQ(run(0.01f, true), (std::vector<bool>{true, false, true, false}));
+    // A footprint reaching over the notch edges keeps the notch splat at full rate.
+    EXPECT_EQ(run(0.2f, false), (std::vector<bool>{false, false, false, true}));
+}
+
+// Catches polygon refine scores or ROI rows that use the outline's bounds instead of the outline.
+TEST(RoiSplatMaskTest, PolygonRelevanceMaskAndRoiRowsFollowTheConcaveOutline) {
+    const auto means = lfs::core::Tensor::from_vector(kPolygonCentres, {size_t{4}, size_t{3}}, lfs::core::Device::CUDA);
+    auto rejected = lfs::core::Tensor::empty({size_t{4}}, lfs::core::Device::CUDA, lfs::core::DataType::Bool);
+    auto in_roi = lfs::core::Tensor::empty({size_t{4}}, lfs::core::Device::CUDA, lfs::core::DataType::Bool);
+    const auto cameras = lfs::core::Tensor::from_vector({0.0f, 0.0f, 10.0f}, {size_t{1}, size_t{3}}, lfs::core::Device::CUDA);
+    lfs::training::kernels::launch_roi_relevance_reject_mask(
+        means.ptr<float>(), nullptr, 4, glm::mat4(1.0f), cameras.ptr<float>(), 1, kLPrism, false, nullptr,
+        rejected.ptr<bool>(), in_roi.ptr<bool>(), nullptr);
+    EXPECT_EQ(to_bools(rejected), (std::vector<bool>{false, true, false, true}));
+    EXPECT_EQ(to_bools(in_roi), (std::vector<bool>{true, false, false, false}));
+}

@@ -80,6 +80,7 @@ set(CORE_SOURCES
         argument_parser.cpp
         camera.cpp
         checkpoint_format.cpp
+        crop_polygon.cpp
         image_loader.cpp
         cuda_version.cpp
         image_io.cpp

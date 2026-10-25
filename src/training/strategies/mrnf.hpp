@@ -48,6 +48,7 @@ class MRNFStrategyTest_DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate_
 class MRNFStrategyTest_LineBoundsUseFiniteSceneScaleForMeanLearningRate_Test;
 class CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_Test;
 class CropDampingStrategyTest_RoiGrowthShareSplitsPicksAndSpillsLeftovers_Test;
+class CropDampingStrategyTest_RoiGrowthSplitCountsOnlySelectableWeights_Test;
 class MRNFStrategyTest_CompactSplatsCorrectAndPeakBelowThreeX_Test;
 class MRNFStrategyTest_CompactSplatsFusedPathLeavesGradsEmpty_Test;
 class MRNFStrategyTest_ApplyDecaySkipsFrozenRows_Test;
@@ -133,6 +134,7 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_LineBoundsUseFiniteSceneScaleForMeanLearningRate_Test;
         friend class ::CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_Test;
         friend class ::CropDampingStrategyTest_RoiGrowthShareSplitsPicksAndSpillsLeftovers_Test;
+        friend class ::CropDampingStrategyTest_RoiGrowthSplitCountsOnlySelectableWeights_Test;
         friend class ::MRNFStrategyTest_CompactSplatsCorrectAndPeakBelowThreeX_Test;
         friend class ::MRNFStrategyTest_CompactSplatsFusedPathLeavesGradsEmpty_Test;
         friend class ::MRNFStrategyTest_ApplyDecaySkipsFrozenRows_Test;

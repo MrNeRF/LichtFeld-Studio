@@ -90,6 +90,59 @@ namespace lfs::vis::input {
             fs::remove(path);
         }
 
+        TEST_F(KeymapTest, AlignPointControlsUpgradeAndPreserveRebinding) {
+            const auto path = fs::temp_directory_path() / "lfs_keymap_align_controls_upgrade.json";
+            test::writeProfile(path, test::historicalSavedProfile("v34"));
+            InputBindings upgraded;
+            ASSERT_TRUE(upgraded.loadProfileFromFile(path));
+            EXPECT_EQ(upgraded.getActionForKey(ToolMode::ALIGN, KEY_BACKSPACE, 0), Action::REMOVE_LAST_POINT);
+            EXPECT_EQ(upgraded.getActionForKey(ToolMode::ALIGN, KEY_ENTER, 0), Action::APPLY_ALIGNMENT);
+            EXPECT_EQ(upgraded.getActionForKey(ToolMode::ALIGN, KEY_KP_ENTER, 0), Action::APPLY_ALIGNMENT);
+            EXPECT_EQ(upgraded.getActionForKey(ToolMode::ALIGN, KEY_DELETE, 0), Action::DELETE_SELECTED);
+            EXPECT_EQ(upgraded.getActionForKey(ToolMode::ALIGN, KEY_ESCAPE, 0), Action::CANCEL_POLYGON);
+            EXPECT_EQ(upgraded.getActionForKey(ToolMode::SELECTION, KEY_ENTER, 0), Action::CONFIRM_POLYGON);
+            EXPECT_EQ(upgraded.getActionForKey(ToolMode::CROP_BOX, KEY_ENTER, 0), Action::APPLY_CROP_BOX);
+            upgraded.setBinding(ToolMode::ALIGN, Action::REMOVE_LAST_POINT, KeyTrigger{KEY_F9});
+            ASSERT_TRUE(upgraded.saveProfileToFile(path));
+            InputBindings reloaded;
+            ASSERT_TRUE(reloaded.loadProfileFromFile(path));
+            EXPECT_EQ(reloaded.getActionForKey(ToolMode::ALIGN, KEY_F9, 0), Action::REMOVE_LAST_POINT);
+            EXPECT_EQ(reloaded.getActionForKey(ToolMode::ALIGN, KEY_BACKSPACE, 0), Action::NONE);
+            fs::remove(path);
+        }
+
+        TEST_F(KeymapTest, CropPolygonVertexClicksUpgradeAndPreserveRebinding) {
+            InputBindings defaults;
+            EXPECT_EQ(defaults.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_SHIFT),
+                      Action::INSERT_CROP_POLYGON_VERTEX);
+            EXPECT_EQ(defaults.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_CTRL),
+                      Action::REMOVE_CROP_POLYGON_VERTEX);
+
+            const auto path = fs::temp_directory_path() / "lfs_keymap_crop_polygon_vertex_upgrade.json";
+            test::writeProfile(path, test::historicalSavedProfile("v35"));
+            InputBindings upgraded;
+            ASSERT_TRUE(upgraded.loadProfileFromFile(path));
+            EXPECT_EQ(upgraded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_SHIFT),
+                      Action::INSERT_CROP_POLYGON_VERTEX);
+            EXPECT_EQ(upgraded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_CTRL),
+                      Action::REMOVE_CROP_POLYGON_VERTEX);
+            EXPECT_EQ(upgraded.getActionForKey(ToolMode::CROP_BOX, KEY_ENTER, 0), Action::APPLY_CROP_BOX);
+            EXPECT_EQ(upgraded.getActionForDrag(ToolMode::SELECTION, MouseButton::LEFT, MODIFIER_SHIFT),
+                      Action::SELECTION_ADD);
+            upgraded.setBinding(ToolMode::CROP_BOX, Action::REMOVE_CROP_POLYGON_VERTEX,
+                                MouseButtonTrigger{MouseButton::LEFT, MODIFIER_ALT});
+            ASSERT_TRUE(upgraded.saveProfileToFile(path));
+            InputBindings reloaded;
+            ASSERT_TRUE(reloaded.loadProfileFromFile(path));
+            EXPECT_EQ(reloaded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_ALT),
+                      Action::REMOVE_CROP_POLYGON_VERTEX);
+            EXPECT_EQ(reloaded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_CTRL),
+                      Action::NONE);
+            EXPECT_EQ(reloaded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_SHIFT),
+                      Action::INSERT_CROP_POLYGON_VERTEX);
+            fs::remove(path);
+        }
+
         TEST_F(KeymapTest, StaleFullListDoesNotOverrideFutureDefaults) {
             const fs::path path = fs::temp_directory_path() / "lfs_keymap_future_defaults.json";
             InputBindings current;

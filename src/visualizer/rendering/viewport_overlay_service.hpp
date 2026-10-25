@@ -188,6 +188,32 @@ namespace lfs::vis {
             }
         }
 
+        void setCropPolygon(bool active, const std::vector<glm::vec2>& vertices, const float half_depth,
+                            const glm::mat4& world_transform, bool affects_render = true,
+                            int parent_node_index = -1) {
+            crop_polygon_active_ = active;
+            crop_polygon_affects_render_ = affects_render;
+            crop_polygon_parent_node_index_ = parent_node_index;
+            if (active) {
+                crop_polygon_vertices_ = vertices;
+                crop_polygon_half_depth_ = half_depth;
+                crop_polygon_transform_ = world_transform;
+            }
+        }
+
+        void setCropPolygonActive(bool active) {
+            crop_polygon_active_ = active;
+            if (!active) {
+                crop_polygon_affects_render_ = true;
+                crop_polygon_parent_node_index_ = -1;
+            }
+        }
+
+        void setCropPolygonDraft(std::vector<glm::vec3> points, std::optional<glm::vec3> cursor) {
+            crop_polygon_draft_ = std::move(points);
+            crop_polygon_draft_cursor_ = cursor;
+        }
+
         void setCropboxActive(bool active) {
             cropbox_active_ = active;
             if (!active) {
@@ -215,6 +241,14 @@ namespace lfs::vis {
                 .ellipsoid_transform = ellipsoid_transform_,
                 .ellipsoid_affects_render = ellipsoid_affects_render_,
                 .ellipsoid_parent_node_index = ellipsoid_parent_node_index_,
+                .crop_polygon_active = crop_polygon_active_,
+                .crop_polygon_vertices = crop_polygon_active_ ? crop_polygon_vertices_ : std::vector<glm::vec2>{},
+                .crop_polygon_half_depth = crop_polygon_half_depth_,
+                .crop_polygon_transform = crop_polygon_transform_,
+                .crop_polygon_affects_render = crop_polygon_affects_render_,
+                .crop_polygon_parent_node_index = crop_polygon_parent_node_index_,
+                .crop_polygon_draft = crop_polygon_draft_,
+                .crop_polygon_draft_cursor = crop_polygon_draft_cursor_,
             };
         }
 
@@ -265,6 +299,14 @@ namespace lfs::vis {
         glm::mat4 cropbox_transform_{1.0f};
         glm::vec3 ellipsoid_radii_{1.0f};
         glm::mat4 ellipsoid_transform_{1.0f};
+        bool crop_polygon_active_ = false;
+        bool crop_polygon_affects_render_ = true;
+        int crop_polygon_parent_node_index_ = -1;
+        std::vector<glm::vec2> crop_polygon_vertices_;
+        float crop_polygon_half_depth_ = 1.0f;
+        glm::mat4 crop_polygon_transform_{1.0f};
+        std::vector<glm::vec3> crop_polygon_draft_;
+        std::optional<glm::vec3> crop_polygon_draft_cursor_;
     };
 
 } // namespace lfs::vis

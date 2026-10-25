@@ -667,6 +667,8 @@ EXPECTED_ADVANCED_IDS = (
     "cropbox_loss_weight",
     "crop_to_cropbox",
     "cropbox_growth_inside",
+    "color_variance_weight",
+    "color_variance_warmup_iters",
     "scale_reg_decay_power",
     "erank_reg",
     "dc_reg",
@@ -728,7 +730,7 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 113
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 115
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 
@@ -776,15 +778,18 @@ def test_registry_placement_groups_auto_rows_and_leaves_new_ones_in_more_paramet
         for run_id in property_view.REGISTRY_PLACEMENT
         for prop_id in resolved[run_id]
     ]
-    expected_more_parameters = ("crop_to_cropbox",)
-    assert sorted(placed) == sorted(set(EXPECTED_ADVANCED_IDS) - set(expected_more_parameters))
-    assert resolved[property_view.AUTO_ADVANCED_RUN_ID] == expected_more_parameters
+    # Crop-at-end has no curated placement and remains in More Parameters.
+    assert sorted(placed) == sorted(set(EXPECTED_ADVANCED_IDS) - {"crop_to_cropbox"})
+    assert resolved[property_view.AUTO_ADVANCED_RUN_ID] == ("crop_to_cropbox",)
 
     future_group = {
         "properties": [*group_info["properties"], {"id": "future_scalar", "type": "float"}]
     }
     resolved = {run.id: run.prop_ids for run in property_view.resolve_runs(future_group)}
-    assert resolved[property_view.AUTO_ADVANCED_RUN_ID] == (*expected_more_parameters, "future_scalar")
+    assert resolved[property_view.AUTO_ADVANCED_RUN_ID] == (
+        "crop_to_cropbox",
+        "future_scalar",
+    )
 
 
 def test_strategy_applicability_filters_auto_rows_and_search(lf):

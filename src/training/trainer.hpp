@@ -335,6 +335,8 @@ namespace lfs::training {
         // training thread never reads scene nodes while they are being edited. Without a
         // publisher (headless) the trainer reads the scene itself at each step.
         void setCropBoxSnapshot(std::optional<TrainingCropBoxGeometry> geometry);
+        // With crop_to_cropbox on, the training crop box that exports of the trained model are cropped to.
+        [[nodiscard]] std::optional<TrainingCropBoxGeometry> export_cropbox() const;
         void set_lpips_weights_path(std::optional<std::filesystem::path> path);
         void setSplatTensorAllocator(lfs::core::SplatTensorAllocator allocator) {
             splat_tensor_allocator_ = std::move(allocator);
@@ -635,6 +637,8 @@ namespace lfs::training {
             std::optional<RawGradientResidual> raw_residual;
             lfs::core::Tensor grad_alpha;
             lfs::core::Tensor normal_pixel_weight;
+            // Already included in loss; retain it when replacing only the image terms for ROI reporting.
+            lfs::core::Tensor mask_regularization_loss;
         };
 
         // Masked photometric loss with optional alpha gradient
@@ -664,6 +668,8 @@ namespace lfs::training {
             AdamOptimizer& optimizer,
             const lfs::core::param::OptimizationParameters& opt_params);
 
+        // The crop box from the published snapshot or the scene.
+        [[nodiscard]] std::optional<TrainingCropBoxGeometry> current_cropbox() const;
         // Crop box for this step, from the published snapshot or the scene.
         void refresh_cropbox_snapshot();
         // Adam steps of splats that this view does not see inside, in front of or behind the
@@ -949,6 +955,7 @@ namespace lfs::training {
         core::Tensor fused_erank_reg_loss_;
         core::Tensor fused_dc_reg_loss_;
         core::Tensor fused_sh_rest_reg_loss_;
+        core::Tensor color_variance_loss_;
         float train_frame_scale_ = 1.0f;
         // Crop box (ROI) state: the snapshot for this step, the published one, and per-step masks.
         std::optional<TrainingCropBoxGeometry> cropbox_;
@@ -971,6 +978,13 @@ namespace lfs::training {
         core::Tensor normal_consistency_partials_;
         core::Tensor normal_prior_depth_scalar_;
         core::Tensor roi_weight_map_;
+        // The reported loss measures the image inside the crop box: its weight map (outside 0)
+        // and the forward-only L1/D-SSIM over it, on loss readback iterations.
+        core::Tensor roi_report_weight_map_;
+        lfs::training::kernels::MaskedL1SSIMValueWorkspace roi_report_loss_;
+        kernels::GradientResidualWorkspace roi_report_residual_;
+        losses::MaskPreprocessWorkspace roi_report_mask_;
+        core::Tensor roi_report_structure_weight_;
         // Dataset-level normal-prior convention, resolved once at startup
         bool normal_prior_flip_yz_ = false;
         bool normal_prior_world_space_ = false;
@@ -1125,8 +1139,12 @@ namespace lfs::training {
         // the pipeline with .item(). NaN/Inf detection lags by at most
         // LOSS_RING * LOSS_SYNC_INTERVAL iterations.
         static constexpr size_t LOSS_RING = 4;
+        static constexpr int LOSS_SYNC_INTERVAL = 10;
+        [[nodiscard]] static bool is_loss_readback_iteration(const int iter) {
+            return iter % LOSS_SYNC_INTERVAL == 0 || iter == 1;
+        }
         struct LossReadbackSlot {
-            float* pinned = nullptr;
+            float* pinned = nullptr; // [loss, weight of the reported region]
             cudaEvent_t done = nullptr;
             int iter = 0;
             bool in_flight = false;
@@ -1139,7 +1157,15 @@ namespace lfs::training {
         // called directly.
         std::function<cudaError_t()> recovery_sync_for_testing_;
 
-        void submitLossReadback(const lfs::core::Tensor& total_loss, int iter);
+        // `region_weight` is the pixel weight behind a crop box loss; a sample whose view
+        // misses the box is not reported.
+        core::Tensor report_region_image_loss(const core::Tensor& corrected, const core::Tensor& raw,
+                                              const core::Tensor& target, const core::Tensor& mask,
+                                              const core::Tensor& region, const core::Tensor& structure_map,
+                                              const core::param::OptimizationParameters& params, int iteration,
+                                              const core::Tensor& mask_regularization_loss = {});
+        void submitLossReadback(const lfs::core::Tensor& total_loss, int iter,
+                                const lfs::core::Tensor& region_weight = {});
         std::expected<void, std::string> harvestLossReadbacks(bool drain, bool in_controller_phase);
 
         int invisible_iteration_streak_ = 0;

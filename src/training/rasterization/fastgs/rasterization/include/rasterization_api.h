@@ -153,7 +153,8 @@ namespace fast_lfs::rasterization {
         const float* edge_weight_map = nullptr,
         float* edge_score_out = nullptr,
         float* impact_sum_out = nullptr,
-        float* impact_peak_out = nullptr);
+        float* impact_peak_out = nullptr,
+        const ColorVarianceLoss& color_variance = {});
 
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
     void warmup_kernels();

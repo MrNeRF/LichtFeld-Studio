@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "core/cuda/sigmoid.cuh"
 #include "core/cuda_error.hpp"
 #include "kernel_stream.hpp"
 #include "lfs/kernels/popspa.cuh"
@@ -52,7 +53,7 @@ namespace lfs::training::kernels {
             if (i < n && active[i] && !frozen[i]) {
                 const float a = 1.0f / (1.0f + expf(-raw[i]));
                 const float d = a - z[i] + u[i];
-                grad[i] += rho * d * a * (1.0f - a);
+                grad[i] += rho * d * lfs::core::sigmoid_derivative_from_logit(raw[i]);
                 contribution = 0.5f * rho * d * d;
             }
             partial[threadIdx.x] = contribution;

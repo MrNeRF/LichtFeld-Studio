@@ -197,6 +197,10 @@ namespace lfs::python {
             .value("TOGGLE_PYTHON_CONSOLE", Action::TOGGLE_PYTHON_CONSOLE)
             .value("NEXT_SIDEBAR_CATEGORY", Action::NEXT_SIDEBAR_CATEGORY)
             .value("PREVIOUS_SIDEBAR_CATEGORY", Action::PREVIOUS_SIDEBAR_CATEGORY)
+            .value("REMOVE_LAST_POINT", Action::REMOVE_LAST_POINT)
+            .value("APPLY_ALIGNMENT", Action::APPLY_ALIGNMENT)
+            .value("INSERT_CROP_POLYGON_VERTEX", Action::INSERT_CROP_POLYGON_VERTEX)
+            .value("REMOVE_CROP_POLYGON_VERTEX", Action::REMOVE_CROP_POLYGON_VERTEX)
             .value("UNGROUP_SELECTED_SCENE_NODE", Action::UNGROUP_SELECTED_SCENE_NODE);
 
         // Expose ToolMode enum

@@ -113,7 +113,8 @@ namespace lfs::io::video {
     }
 
     // Accepts "WxH" or "W x H" (x/X). Rejects empty, missing sides, signs, and trailing junk.
-    // Out-of-range and odd values are clamped to even [MIN_VIDEO_SIDE, MAX_VIDEO_SIDE].
+    // Positive dimensions must fit in int; out-of-range and odd values are clamped
+    // to even [MIN_VIDEO_SIDE, MAX_VIDEO_SIDE].
     [[nodiscard]] inline std::optional<VideoResolution> parseVideoResolution(const std::string_view text) {
         const char* p = text.data();
         const char* const end = p + text.size();
@@ -124,14 +125,15 @@ namespace lfs::io::video {
         const auto parse_uint = [&](int& out) -> bool {
             if (p >= end || *p < '0' || *p > '9')
                 return false;
-            long value = 0;
+            int value = 0;
             while (p < end && *p >= '0' && *p <= '9') {
-                value = value * 10 + (*p - '0');
-                if (value > static_cast<long>(std::numeric_limits<int>::max()))
+                const int digit = *p - '0';
+                if (value > (std::numeric_limits<int>::max() - digit) / 10)
                     return false;
+                value = value * 10 + digit;
                 ++p;
             }
-            out = static_cast<int>(value);
+            out = value;
             return true;
         };
 

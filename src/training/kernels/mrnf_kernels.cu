@@ -558,7 +558,8 @@ namespace lfs::training::mrnf_strategy {
             return;
 
         const float w = weights[idx];
-        if (w <= 0.0f) {
+        // NaN fails this test too: a NaN key would sort first.
+        if (!(w > 0.0f)) {
             keys[idx] = -1e30f;
             return;
         }
@@ -707,13 +708,17 @@ namespace lfs::training::mrnf_strategy {
         if (compact_active) {
             auto indices_ptr = thrust::device_pointer_cast(d_indices);
             auto counting_begin = thrust::make_counting_iterator<uint32_t>(0);
-            thrust::copy_if(
+            const auto indices_end = thrust::copy_if(
                 thrust::cuda::par.on(s),
                 counting_begin,
                 counting_begin + static_cast<std::ptrdiff_t>(N),
                 weights_ptr,
                 indices_ptr,
                 positive_weight{});
+            // known_nnz must count with the same predicate: a larger count makes the keys read
+            // indices that were never written, a smaller one overruns the scratch.
+            LFS_ASSERT_MSG(static_cast<size_t>(indices_end - indices_ptr) == sort_count,
+                           "Gumbel known_nnz must equal the number of positive weights");
             gumbel_key_for_indices_kernel<<<blocks, threads, 0, s>>>(
                 weights, d_indices, d_keys, sort_count, seed);
             LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.gumbel_keys_indices");

@@ -534,6 +534,8 @@ namespace lfs::app {
                 return "crop_box";
             case core::NodeType::ELLIPSOID:
                 return "ellipsoid";
+            case core::NodeType::CROP_POLYGON:
+                return "crop_polygon";
             case core::NodeType::DATASET:
                 return "dataset";
             case core::NodeType::CAMERA_GROUP:
@@ -1986,6 +1988,11 @@ namespace lfs::app {
                                             core::required_scene_export_extension(format)));
 
             const auto& scene = scene_manager.getScene();
+            auto borrow_plan = make_borrow_single_identity_export_plan(scene_manager, node_names, format);
+            const auto* const trainer_manager = scene_manager.getTrainerManager();
+            const auto export_crop = trainer_manager ? trainer_manager->exportCropBox() : std::nullopt;
+            // A cropped copy of the training model; the scene model stays whole so a stopped run can resume.
+            std::optional<core::SplatData> cropped;
             std::vector<std::pair<const core::SplatData*, glm::mat4>> splats;
             splats.reserve(node_names.size());
             for (const auto& name : node_names) {
@@ -1996,7 +2003,14 @@ namespace lfs::app {
                         return std::unexpected(std::format(
                             "Cannot export '{}': the model is too large to fit in memory and streams from disk", name));
                     }
-                    splats.emplace_back(node->model.get(), vis::scene_coords::nodeDataWorldTransform(scene, node->id));
+                    const core::SplatData* data = node->model.get();
+                    if (export_crop && node->uuid == scene.getTrainingModelNodeUuid() &&
+                        (cropped = training::crop_copy_to_training_cropbox(*data, *export_crop))) {
+                        if (cropped->size() == 0)
+                            continue;
+                        data = &*cropped;
+                    }
+                    splats.emplace_back(data, vis::scene_coords::nodeDataWorldTransform(scene, node->id));
                 }
             }
 
@@ -2012,7 +2026,6 @@ namespace lfs::app {
             const int effective_sh_degree = std::clamp(sh_degree.value_or(max_sh_degree), 0, max_sh_degree);
             const bool sh_degree_was_clamped = sh_degree && effective_sh_degree != *sh_degree;
 
-            auto borrow_plan = make_borrow_single_identity_export_plan(scene_manager, node_names, format);
             auto merged = core::Scene::mergeSplatsWithTransforms(splats, borrow_plan.storage_mode);
             if (!merged)
                 return std::unexpected("Failed to merge scene nodes for export");
@@ -2814,8 +2827,17 @@ namespace lfs::app {
                                                       : core::make_provenance_stamp())
                                                : core::make_minimal_provenance_stamp();
 
+                        // A cropped copy with "Crop to ROI at end" on; the model stays whole so a stopped run can resume.
+                        std::optional<core::SplatData> cropped;
+                        const auto* const trainer_manager =
+                            viewer->getSceneManager() ? viewer->getSceneManager()->getTrainerManager() : nullptr;
+                        if (const auto crop = trainer_manager ? trainer_manager->exportCropBox() : std::nullopt)
+                            cropped = training::crop_copy_to_training_cropbox(*model, *crop);
+                        if (cropped && cropped->size() == 0)
+                            return std::unexpected("No splat lies inside the crop box or polygon");
+
                         io::PlySaveOptions options{.output_path = path, .binary = true, .provenance = stamp};
-                        auto result = io::save_ply(*model, options);
+                        auto result = io::save_ply(cropped ? *cropped : *model, options);
                         if (!result)
                             return std::unexpected(result.error().message);
                         return {};

@@ -382,6 +382,18 @@ namespace lfs::io::project {
         friend bool operator==(const EllipsoidRecord&, const EllipsoidRecord&) = default;
     };
 
+    struct CropPolygonRecord {
+        // Outline in the node's local XY plane; 3 to 64 finite vertices.
+        std::vector<std::array<float, 2>> vertices;
+        float half_depth = 1.0f;
+        bool inverse = false;
+        bool enabled = true;
+        std::array<float, 3> color{1.0f, 1.0f, 0.0f};
+        float line_width = 2.0f;
+
+        friend bool operator==(const CropPolygonRecord&, const CropPolygonRecord&) = default;
+    };
+
     // Camera calibration in SCNG is always the source (pre-rectification) calibration
     // that belongs to the stored distortion model; rectified calibration is derived runtime state.
     struct CameraRecord {
@@ -439,6 +451,7 @@ namespace lfs::io::project {
         std::optional<CropBoxRecord> cropbox = std::nullopt;
         std::optional<EllipsoidRecord> ellipsoid = std::nullopt;
         std::optional<CameraRecord> camera = std::nullopt;
+        std::optional<CropPolygonRecord> crop_polygon = std::nullopt;
 
         friend bool operator==(const SceneNodeRecord&, const SceneNodeRecord&) = default;
     };
@@ -534,6 +547,11 @@ namespace lfs::io::project {
         }
     };
 
+    LFS_IO_API void resolve_parameter_path_references(
+        const ReferencesChapter& references,
+        const std::filesystem::path& project_root,
+        ParameterManagerSnapshot& snapshot);
+
     // Merge an untrained project's PRMS snapshot into the launch parameters
     // of a headless run. Stored dataset and active-strategy optimization
     // values replace the CLI defaults, the headless/auto_train/no_splash
@@ -544,7 +562,9 @@ namespace lfs::io::project {
         lfs::core::param::TrainingParameters& params,
         ParameterManagerSnapshot snapshot,
         std::filesystem::path dataset_root,
-        std::string images_folder);
+        std::string images_folder,
+        const ReferencesChapter& references,
+        const std::filesystem::path& project_root);
 
     class LFS_IO_API ParametersChapter {
     public:

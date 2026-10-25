@@ -2769,6 +2769,17 @@ namespace {
         EXPECT_EQ(prepared.unsupported_settings.size(), 8u);
     }
 
+    TEST(P5SessionChapterTest, PolygonCropShapeRestoresAndIsCapturedAgain) {
+        UnknownSessionValueFixture test;
+        auto prepared = test.restore("crop-polygon", [](Json& view, Json&, Json&) {
+            view["tools"]["crop_shape"] = "polygon";
+        });
+        EXPECT_TRUE(prepared.unsupported_settings.empty());
+        EXPECT_EQ(test.viewer->getGuiManager()->gizmo().cropToolShape(), "polygon");
+        auto captured = require_result(captureGuiSession(*test.viewer, ProjectSessionChapters{}, test.bookmarks));
+        EXPECT_EQ(json_root(captured.view.dom())["tools"]["crop_shape"], "polygon");
+    }
+
     TEST(P5SessionChapterTest, UnknownNavigationAxisWarnsAndUsesLegacyY) {
         UnknownSessionValueFixture test;
         auto prepared = test.restore("axis", [](Json& view, Json&, Json&) {

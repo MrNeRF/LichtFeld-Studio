@@ -276,6 +276,55 @@ void apply_ellipsoid_filter(
     }
 }
 
+// polygon_flags must already be loaded. Inside means |z| <= half_depth and the
+// even-odd rule over the outline, the same test as soft_crop_by_polygon.
+[ForceInline]
+void apply_crop_polygon_filter(
+    StructuredBuffer<float4> overlay_params,
+    uint flags_idx,
+    float4 polygon_flags,
+    int node_idx,
+    float3 mean_ws,
+    inout bool active,
+    inout uint overlay_flags)
+{
+    if (!active) return;
+    if (!overlay_enabled(polygon_flags.x)) return;
+
+    int parent_node_idx = overlay_int(polygon_flags.w);
+    bool applies = parent_node_idx < 0 || node_idx == parent_node_idx;
+    if (!applies) return;
+
+    float3 local = transform_point_rows(overlay_params, flags_idx + OVERLAY_PARAM_CROP_POLYGON_TRANSFORM, mean_ws);
+    float4 params = overlay_params[flags_idx + OVERLAY_PARAM_CROP_POLYGON_PARAMS];
+    uint count = min(uint(max(overlay_int(params.y), 0)), OVERLAY_PARAM_CROP_POLYGON_MAX_VERTICES);
+    bool inside = abs(local.z) <= params.x && count >= 3u;
+    if (inside) {
+        bool crossing = false;
+        float4 last_pair = overlay_params[flags_idx + OVERLAY_PARAM_CROP_POLYGON_VERTICES + (count - 1u) / 2u];
+        float2 b = ((count - 1u) & 1u) == 0u ? last_pair.xy : last_pair.zw;
+        for (uint i = 0u; i < count; ++i) {
+            float4 pair = overlay_params[flags_idx + OVERLAY_PARAM_CROP_POLYGON_VERTICES + i / 2u];
+            float2 a = (i & 1u) == 0u ? pair.xy : pair.zw;
+            if ((a.y > local.y) != (b.y > local.y) &&
+                local.x < (b.x - a.x) * (local.y - a.y) / (b.y - a.y) + a.x) {
+                crossing = !crossing;
+            }
+            b = a;
+        }
+        inside = crossing;
+    }
+    bool outside = inside == overlay_enabled(polygon_flags.y);
+    if (outside) {
+        overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
+        if (overlay_enabled(polygon_flags.z)) {
+            overlay_flags |= OVERLAY_FLAG_DIM;
+        } else {
+            active = false;
+        }
+    }
+}
+
 SplatActiveState compute_splat_active_state(
     uint logical_idx,
     float3 xyz_ws_in,
@@ -338,6 +387,17 @@ SplatActiveState compute_splat_active_state(
                                        active, overlay_flags);
             }
         }
+    }
+
+    // Densely packed like the boxes and ellipsoids: stop at the first disabled slot.
+    for (uint polygon_i = 0u; polygon_i < OVERLAY_PARAM_CROP_POLYGON_COUNT; ++polygon_i) {
+        const uint flags_idx = OVERLAY_PARAM_CROP_POLYGON_BASE + polygon_i * OVERLAY_PARAM_CROP_POLYGON_STRIDE;
+        float4 polygon_flags = overlay_params[flags_idx];
+        if (!overlay_enabled(polygon_flags.x))
+            break;
+        apply_crop_polygon_filter(overlay_params, flags_idx, polygon_flags,
+                                  node_idx, mean_ws,
+                                  active, overlay_flags);
     }
 
     float4 view_flags = overlay_params[OVERLAY_PARAM_VIEW_FLAGS];

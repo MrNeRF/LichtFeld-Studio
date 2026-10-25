@@ -18,6 +18,7 @@
 #include <array>
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -678,7 +679,8 @@ namespace lfs::training {
         const FastGSFusedExtraGradients& fused_extra_gradients,
         const core::Tensor& grad_depth,
         const core::Tensor& grad_normal,
-        const bool defer_optimizer_step) {
+        const bool defer_optimizer_step,
+        const FastGSColorVarianceLoss& color_variance) {
 
         if (grad_image.ndim() != 3 || grad_image.shape()[0] != 3) {
             throw std::runtime_error("FastGS backward expects a [3, H, W] image gradient");
@@ -686,6 +688,52 @@ namespace lfs::training {
         const int H = checked_dim_to_int(grad_image.shape()[1], "grad_image height");
         const int W = checked_dim_to_int(grad_image.shape()[2], "grad_image width");
         const cudaStream_t stream = grad_image.stream();
+
+        fast_lfs::rasterization::ColorVarianceLoss variance;
+        // Lives until the backward below is enqueued; freeing it then orders the kernel's read.
+        core::Tensor pixel_weight_sum;
+        if (!std::isfinite(color_variance.weight) || color_variance.weight < 0.0f)
+            throw std::runtime_error("Color variance weight must be finite and nonnegative");
+        if (color_variance.weight > 0.0f) {
+            if (ctx.mip_filter)
+                throw std::runtime_error("Color variance does not yet support mip filtering");
+            const auto& target = color_variance.target;
+            if (!target.is_valid() || target.shape() != grad_image.shape() ||
+                target.device() != core::Device::CUDA || !target.is_contiguous() ||
+                (target.dtype() != core::DataType::Float32 && target.dtype() != core::DataType::UInt8)) {
+                throw std::runtime_error("Color variance target must be contiguous CUDA Float32 or UInt8 [3, H, W]");
+            }
+            auto loss = color_variance.loss;
+            if (loss.is_valid() && (loss.numel() != 1 || loss.device() != core::Device::CUDA ||
+                                    loss.dtype() != core::DataType::Float32 || !loss.is_contiguous())) {
+                throw std::runtime_error("Color variance loss must be a CUDA Float32 scalar");
+            }
+            const auto& pixel_weight = color_variance.pixel_weight;
+            if (pixel_weight.is_valid()) {
+                if (pixel_weight.shape() != core::TensorShape{static_cast<size_t>(H), static_cast<size_t>(W)} ||
+                    pixel_weight.device() != core::Device::CUDA || !pixel_weight.is_contiguous() ||
+                    pixel_weight.dtype() != core::DataType::Float32) {
+                    throw std::runtime_error("Color variance pixel weights must be contiguous CUDA Float32 [H, W]");
+                }
+                pixel_weight_sum = pixel_weight.sum();
+            }
+            core::pin_operands({&grad_image, &target, &loss, &pixel_weight, &pixel_weight_sum});
+            target.sync_to_stream(ctx.forward_ctx.stream);
+            if (loss.is_valid())
+                loss.sync_to_stream(ctx.forward_ctx.stream);
+            if (target.dtype() == core::DataType::UInt8)
+                variance.target_u8 = target.ptr<std::uint8_t>();
+            else
+                variance.target = target.ptr<float>();
+            variance.weight = color_variance.weight;
+            if (pixel_weight.is_valid()) {
+                pixel_weight.sync_to_stream(ctx.forward_ctx.stream);
+                pixel_weight_sum.sync_to_stream(ctx.forward_ctx.stream);
+                variance.pixel_weight = pixel_weight.ptr<float>();
+                variance.pixel_weight_sum = pixel_weight_sum.ptr<float>();
+            }
+            variance.loss_out = loss.is_valid() ? loss.ptr<float>() : nullptr;
+        }
 
         // The blend backward derives the background alpha gradient per pixel
         // from grad_image and the background; no [H, W] map is materialized.
@@ -882,7 +930,8 @@ namespace lfs::training {
             fused_extra_gradients.edge_weight_map,
             fused_extra_gradients.edge_score_out,
             fused_extra_gradients.impact_sum_out,
-            fused_extra_gradients.impact_peak_out);
+            fused_extra_gradients.impact_peak_out,
+            variance);
 
         ctx.mark_forward_context_released();
         for (size_t i = 0; i < captured_count; ++i)

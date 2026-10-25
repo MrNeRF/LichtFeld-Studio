@@ -55,6 +55,10 @@ class BuiltinOp(enum.Enum):
 
     EllipsoidReset = 19
 
+    CropPolygonDraw = 20
+
+    CropPolygonSet = 21
+
 class BuiltinTool(enum.Enum):
     Select = 0
 

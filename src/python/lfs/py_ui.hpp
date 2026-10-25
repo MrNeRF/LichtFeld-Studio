@@ -34,7 +34,8 @@ namespace lfs::vis::gui {
 
 namespace lfs::vis::op {
     struct ModalEvent;
-}
+    class OperatorProperties;
+} // namespace lfs::vis::op
 
 namespace Rml {
     class ElementDocument;
@@ -270,6 +271,10 @@ namespace lfs::python {
 
     // Python operator instance registry - for property setting during invocation
     nb::object get_python_operator_instance(const std::string& id);
+
+    // Keyword arguments of an operator invoke as the properties of a C++ operator, typed by the arguments it
+    // registered. Raises TypeError for an argument it does not declare.
+    vis::op::OperatorProperties builtin_operator_properties(const std::string& id, const nb::kwargs& kwargs);
 
     // Forward declarations for scene types (defined in py_scene.hpp)
     class PyScene;

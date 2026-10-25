@@ -168,6 +168,17 @@ namespace {
         EXPECT_EQ(manager_.getTrainer()->getParams().optimization.to_json(), expected.to_json());
     }
 
+    // The panel unlocks after a finished run, and Start resets to a fresh trainer that takes the edited preset.
+    TEST_F(TrainingManagerPresentationTest, FinishedTrainerAcceptsDifferentStrategyForTheNextRun) {
+        installTrainer(true);
+        EXPECT_FALSE(manager_.canChangeStrategy("mcmc"));
+        auto& state_machine = const_cast<lfs::vis::TrainingStateMachine&>(manager_.getStateMachine());
+        ASSERT_TRUE(state_machine.transitionTo(lfs::vis::TrainingState::Stopping));
+        ASSERT_TRUE(state_machine.transitionToFinished(lfs::vis::FinishReason::Completed));
+        EXPECT_TRUE(manager_.canChangeStrategy("mcmc"));
+        EXPECT_TRUE(manager_.canChangeStrategy("mrnf"));
+    }
+
     TEST_F(TrainingManagerPresentationTest, ClearTrainerRunsHeapTrimOffThread) {
 #ifdef __GLIBC__
         installTrainer();

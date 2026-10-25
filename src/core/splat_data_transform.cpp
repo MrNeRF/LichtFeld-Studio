@@ -8,6 +8,7 @@
 #include "core/cuda/splat_transform.hpp"
 #include "core/logger.hpp"
 #include "core/point_cloud.hpp"
+#include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "geometry/bounding_box.hpp"
@@ -502,6 +503,49 @@ namespace lfs::core {
         return inside_both.all(std::span<const int>(reduce_dims), false);
     }
 
+    Tensor compute_crop_polygon_mask(const Tensor& means,
+                                     const std::span<const glm::vec2> vertices,
+                                     const float half_depth,
+                                     const glm::mat4& points_to_polygon) {
+        LFS_ASSERT_MSG(means.is_valid(), "crop polygon means must be valid");
+        LFS_ASSERT_MSG(means.dtype() == DataType::Float32, "crop polygon means must be Float32");
+        LFS_ASSERT_MSG(means.ndim() == 2, "crop polygon means must be a 2D tensor");
+        LFS_ASSERT_MSG(means.size(1) >= 3, "crop polygon means must have at least three columns");
+        LFS_ASSERT_MSG(crop_polygon::isValidOutline(vertices) && crop_polygon::isValidHalfDepth(half_depth),
+                       "crop polygon outline and depth must be valid");
+
+        const size_t num_points = static_cast<size_t>(means.size(0));
+        const auto device = means.device();
+        const auto rotation = Tensor::from_vector(
+            {points_to_polygon[0][0], points_to_polygon[1][0], points_to_polygon[2][0],
+             points_to_polygon[0][1], points_to_polygon[1][1], points_to_polygon[2][1],
+             points_to_polygon[0][2], points_to_polygon[1][2], points_to_polygon[2][2]},
+            {3, 3},
+            device);
+        const auto translation = Tensor::from_vector(
+            {points_to_polygon[3][0], points_to_polygon[3][1], points_to_polygon[3][2]},
+            {1, 3},
+            device);
+        const auto local_pos = means.slice(1, 0, 3).mm(rotation.t()).add(translation);
+        const auto x = local_pos.slice(1, 0, 1).squeeze(1);
+        const auto y = local_pos.slice(1, 1, 2).squeeze(1);
+        const auto z = local_pos.slice(1, 2, 3).squeeze(1);
+
+        // Even-odd rule, vectorised over points with one pass per edge.
+        auto crossings = Tensor::zeros({num_points}, device, DataType::Bool);
+        for (size_t i = 0, j = vertices.size() - 1; i < vertices.size(); j = i++) {
+            const glm::vec2 a = vertices[i];
+            const glm::vec2 b = vertices[j];
+            if (a.y == b.y)
+                continue; // A horizontal edge never straddles a scanline.
+            const float slope = (b.x - a.x) / (b.y - a.y);
+            const auto straddles = (y < a.y).logical_xor(y < b.y);
+            crossings = crossings.logical_xor(straddles.logical_and(x < (y - a.y) * slope + a.x));
+        }
+
+        return (z <= half_depth).logical_and(z >= -half_depth).logical_and(crossings);
+    }
+
     static Tensor compute_cropbox_mask(const Tensor& means,
                                        const lfs::geometry::BoundingBox& bounding_box) {
         const glm::mat4 points_to_cropbox = bounding_box.hasFullTransform()
@@ -683,6 +727,29 @@ namespace lfs::core {
         const auto dist_sq = x * x + y * y + z * z;
         const auto inside_mask = dist_sq <= 1.0f;
         const auto delete_mask = inverse ? inside_mask : inside_mask.logical_not();
+        const int points_to_delete = delete_mask.sum_scalar();
+
+        if (points_to_delete == 0) {
+            return Tensor();
+        }
+
+        return splat_data.soft_delete(delete_mask);
+    }
+
+    Tensor soft_crop_by_polygon(SplatData& splat_data,
+                                const glm::mat4& world_to_local,
+                                const CropPolygonData& polygon) {
+        LOG_TIMER("soft_crop_by_polygon");
+
+        const auto& means = splat_data.means();
+        if (!means.is_valid() || means.size(0) == 0 ||
+            !crop_polygon::isValidOutline(polygon.vertices) ||
+            !crop_polygon::isValidHalfDepth(polygon.half_depth)) {
+            return Tensor();
+        }
+
+        const auto inside_mask = compute_crop_polygon_mask(means, polygon.vertices, polygon.half_depth, world_to_local);
+        const auto delete_mask = polygon.inverse ? inside_mask : inside_mask.logical_not();
         const int points_to_delete = delete_mask.sum_scalar();
 
         if (points_to_delete == 0) {
