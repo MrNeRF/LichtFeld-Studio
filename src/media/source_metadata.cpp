@@ -38,6 +38,13 @@ namespace lfs::media {
         const auto* block = xmpBlock(reference);
         return block ? core::image_codecs::source_xmp_bytes(imageExif().original, *block) : std::nullopt;
     }
+    std::optional<std::span<const std::uint8_t>> SourceMetadataCatalog::xmpPayloadBytes(XmpBlockReference reference) const noexcept {
+        const auto* block = xmpBlock(reference);
+        const auto original = xmpBytes(reference);
+        if (!block || block->status != core::image_codecs::MetadataStatus::Collected || !original || block->payload_offset > original->size())
+            return std::nullopt;
+        return block->inflated ? std::span<const std::uint8_t>(*block->inflated) : original->subspan(block->payload_offset);
+    }
     const std::optional<MediaDescription>& SourceMetadataCatalog::container() const noexcept {
         static const std::optional<MediaDescription> empty;
         return storage_ ? storage_->container : empty;

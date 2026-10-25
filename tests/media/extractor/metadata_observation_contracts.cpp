@@ -4,6 +4,7 @@
 #include "media/media_ingest.hpp"
 #include "media/media_json.hpp"
 #include "media/metadata_observation.hpp"
+#include "media/metadata_summary_common.hpp"
 #include <algorithm>
 #include <cmath>
 #include <future>
@@ -462,7 +463,225 @@ namespace {
     }
 } // namespace
 
+namespace {
+    SourceMetadataCatalog xmpFixture(std::string_view xml, ImageExifDescription image = {}) {
+        using namespace lfs::core::image_codecs;
+        SourceXmp xmp;
+        xmp.status = MetadataStatus::Collected;
+        XmpBlock block;
+        block.envelope = XmpEnvelope::JxlXml;
+        block.jxl_box = JxlXmpBox{2, false};
+        block.bytes.assign(xml.begin(), xml.end());
+        xmp.blocks.push_back(std::move(block));
+        auto result = catalogSourceMetadata(std::move(image), {}, {}, std::move(xmp));
+        require(bool(result), "create XMP catalog");
+        return std::move(*result);
+    }
+    void xmpContracts() {
+        const std::string begin = R"(<r:RDF xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><r:Description r:about="" xmlns:t="http://ns.adobe.com/tiff/1.0/" xmlns:e="http://ns.adobe.com/exif/1.0/" )";
+        const std::string end = "</r:Description></r:RDF>";
+        const auto catalog = xmpFixture(begin + R"(t:Make="Camera &amp; Co" t:Model="body"><e:FNumber>28/10</e:FNumber><e:GPSLatitude>45,30.0N</e:GPSLatitude><e:GPSLongitude>90,10,30W</e:GPSLongitude><e:GPSAltitude>25/2</e:GPSAltitude><e:GPSAltitudeRef>1</e:GPSAltitudeRef><e:DateTimeOriginal>2024-02-29T10:20:30.120+02:00</e:DateTimeOriginal>)" + end);
+        const auto result = summarizeImageMetadata(catalog);
+        require(result && !result->limited && result->xmp_packets.size() == 1 && result->xmp_packets[0].state == XmpPacketState::Parsed && result->facts.size() == 8, "standard XMP scalar fields parsed");
+        require(std::get<std::string>(result->facts[0].value) == "Camera & Co", "namespace-aware abbreviated RDF and predefined entity");
+        require(std::get<ExifRational>(result->facts[2].value).denominator == 10, "XMP rational remains exact");
+        require(std::get<double>(result->facts[3].value) == 45.5 && std::abs(std::get<double>(result->facts[4].value) + 90.175) < 1e-12, "XMP coordinate forms and hemisphere");
+        require(std::get<double>(result->facts[5].value) == -12.5 && result->facts[5].xmp->inputs.size() == 1 && result->facts[5].xmp->inputs[0].ordinal == 7, "altitude qualifier identified within description");
+        const auto json = json_detail::metadataSummary(*result);
+        require(json["facts"][0]["xmp_property"]["namespace"] == "http://ns.adobe.com/tiff/1.0/" && json["facts"][0]["source"]["kind"] == "xmp_block", "property and source provenance serialized");
+        auto retained = result->facts[0].source;
+        require(catalog.resolve(retained).has_value(), "XMP fact binds immutable packet occurrence");
+        const auto invalid = [&](std::string xml, XmpPacketState expected) {
+            const auto summary = summarizeImageMetadata(xmpFixture(xml));
+            require(summary && summary->facts.empty() && summary->xmp_packets.size() == 1 && summary->xmp_packets[0].state == expected, "packet failure discards speculative fields");
+        };
+        invalid(begin + R"(t:Make="prefix">)" + end.substr(0, end.size() - 1), XmpPacketState::Malformed);
+        invalid(R"(<!DOCTYPE x [<!ENTITY a "expanded">]>)" + begin + R"(><t:Make>&a;</t:Make>)" + end, XmpPacketState::Unsupported);
+        invalid(R"(<!DOCTYPE x SYSTEM "file:///must-not-open">)" + begin + ">" + end, XmpPacketState::Unsupported);
+        invalid("<opaque/>", XmpPacketState::Unsupported);
+        invalid(R"(<r:RDF xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><r:Description r:about="other"/></r:RDF>)", XmpPacketState::Unsupported);
+        invalid(std::string(1024 * 1024 + 1, 'x'), XmpPacketState::Limited);
+        const auto aliases = summarizeImageMetadata(xmpFixture(begin + R"(t:Make="one"><t:Make>two</t:Make><x:Make xmlns:x="urn:wrong">ignored</x:Make><t:Model><r:Seq><r:li>structured</r:li></r:Seq></t:Model>)" + end));
+        require(aliases && aliases->facts.size() == 3 && aliases->facts[0].ambiguous && aliases->facts[1].ambiguous && aliases->facts[2].state == MetadataValueState::Unsupported, "duplicates retained, spoof namespace ignored, structure unsupported");
+        const auto limited = summarizeImageMetadata(catalog, 1);
+        require(limited && limited->limited && limited->facts.empty(), "property limit does not project partial packet");
+        const auto text_limited = summarizeImageMetadata(catalog, 4096, 1);
+        require(text_limited && text_limited->limited && text_limited->facts.empty(), "summary text budget bounds XMP decoding");
+        const auto conflicts = summarizeImageMetadata(xmpFixture(begin + R"(t:Make="different">)" + end, cameraFixture()));
+        require(conflicts && std::count_if(conflicts->facts.begin(), conflicts->facts.end(), [](const auto& f) { return f.semantic == "camera.make" && f.ambiguous; }) == 2, "EXIF/XMP values retained as unresolved occurrences");
+        const auto agreeing = summarizeImageMetadata(xmpFixture(begin + R"(t:Make="Test Camera" t:Orientation="6"><e:FocalLength>35/1</e:FocalLength><e:GPSLatitude>45,30S</e:GPSLatitude><e:GPSAltitude>12.5</e:GPSAltitude><e:GPSAltitudeRef>1</e:GPSAltitudeRef>)" + end, cameraFixture()));
+        for (const auto semantic : {"camera.make", "orientation.exif", "lens.focal_length", "gps.latitude", "gps.altitude_sea_level"}) {
+            std::size_t count = 0;
+            for (const auto& item : agreeing->facts)
+                if (item.semantic == semantic) {
+                    ++count;
+                    require(!item.ambiguous, "agreeing EXIF/XMP facts retain both sources without conflict");
+                }
+            require(count == 2, "both carriers contribute an agreeing value");
+        }
+        const auto orientation_conflict = summarizeImageMetadata(xmpFixture(begin + R"(t:Orientation="3">)" + end, cameraFixture()));
+        require(orientation_conflict && std::count_if(orientation_conflict->facts.begin(), orientation_conflict->facts.end(), [](const auto& item) { return item.semantic == "orientation.exif" && item.ambiguous; }) == 2,
+                "orientation disagreement marks both sources");
+        const auto invalid_orientation = summarizeImageMetadata(xmpFixture(begin + R"(t:Orientation="bad">)" + end, cameraFixture()));
+        require(invalid_orientation && std::count_if(invalid_orientation->facts.begin(), invalid_orientation->facts.end(), [](const auto& item) { return item.semantic == "orientation.exif" && item.ambiguous; }) == 2,
+                "invalid scalar is not equivalent to a valid scalar");
+        const auto shared_name = agreeing->facts.back().xmp->property.field;
+        auto copied_summary = *agreeing;
+        require(shared_name && copied_summary.facts.back().xmp->property.field == shared_name,
+                "copies share immutable field descriptors");
+        const auto again = summarizeImageMetadata(xmpFixture(begin + "><e:GPSAltitudeRef>1</e:GPSAltitudeRef>" + end));
+        require(again && again->facts[0].xmp->property.field == shared_name,
+                "field descriptor lifetime is independent of the parser and catalog");
+        using namespace lfs::core::image_codecs;
+        const auto independent = [&](std::string_view later, MetadataStatus status, ImageExifDescription exif = {}, bool reverse = false) {
+            SourceXmp xmp;
+            xmp.status = status;
+            const auto good = begin + R"(t:Make="Unique">)" + end;
+            for (const auto xml : {std::string_view(good), later}) {
+                XmpBlock block;
+                block.envelope = XmpEnvelope::JxlXml;
+                block.jxl_box = JxlXmpBox{static_cast<uint32_t>(xmp.blocks.size()), false};
+                block.bytes.assign(xml.begin(), xml.end());
+                xmp.blocks.push_back(std::move(block));
+            }
+            if (reverse)
+                std::reverse(xmp.blocks.begin(), xmp.blocks.end());
+            auto catalog = catalogSourceMetadata(std::move(exif), {}, {}, std::move(xmp));
+            require(bool(catalog), "mixed packet fixture");
+            return summarizeImageMetadata(*catalog);
+        };
+        const auto rejected = begin + "><u>" + std::string(1024 * 1024, 'x') + "</u>" + end;
+        for (const bool reverse : {false, true}) {
+            const auto partial = independent(rejected, MetadataStatus::Collected, {}, reverse);
+            require(partial && partial->limited && partial->facts.size() == 1 && !partial->facts[0].ambiguous,
+                    "unrelated input omission never changes a valid fact's ambiguity in either order");
+        }
+        const auto collection_limited = independent("<broken/>", MetadataStatus::Limited);
+        require(collection_limited && collection_limited->limited && collection_limited->facts.size() == 1 && !collection_limited->facts[0].ambiguous,
+                "collector incompleteness stays separate from value conflicts");
+        auto exif_limited = cameraFixture();
+        exif_limited.original.status = MetadataStatus::Limited;
+        auto& exif_entries = exif_limited.interpretations[0].entries;
+        std::erase_if(exif_entries, [](const auto& entry) { return entry.id == 0x010f; });
+        const auto partial_exif = independent("<broken/>", MetadataStatus::Collected, std::move(exif_limited));
+        require(partial_exif && partial_exif->limited && !fact(*partial_exif, "camera.make").ambiguous,
+                "EXIF limits do not make an independent XMP make ambiguous");
+        const auto same = independent(begin + R"(t:Make="Unique">)" + end, MetadataStatus::Collected);
+        require(same && same->facts.size() == 2 && !same->facts[0].ambiguous && !same->facts[1].ambiguous,
+                "equal independent packets retain their sources without conflict");
+        const auto different = independent(begin + R"(t:Make="Other">)" + end, MetadataStatus::Collected);
+        require(different && different->facts[0].ambiguous && different->facts[1].ambiguous,
+                "independent conflicting packets remain ambiguous");
+        std::array<std::string_view, 3> rounded_values{"0.6666666666666666", "2/3", "6004799503160661/9007199254740992"};
+        std::sort(rounded_values.begin(), rounded_values.end());
+        do {
+            SourceXmp packets;
+            packets.status = MetadataStatus::Collected;
+            for (const auto value : rounded_values) {
+                const auto xml = begin + "><e:ExposureTime>" + std::string(value) + "</e:ExposureTime>" + end;
+                XmpBlock block;
+                block.envelope = XmpEnvelope::JxlXml;
+                block.jxl_box = JxlXmpBox{static_cast<uint32_t>(packets.blocks.size()), false};
+                block.bytes.assign(xml.begin(), xml.end());
+                packets.blocks.push_back(std::move(block));
+            }
+            auto rounding_catalog = catalogSourceMetadata({}, {}, {}, std::move(packets));
+            require(bool(rounding_catalog), "rounding conflict catalog");
+            const auto summary = summarizeImageMetadata(*rounding_catalog);
+            require(summary && summary->facts.size() == 3 && std::all_of(summary->facts.begin(), summary->facts.end(), [](const auto& item) { return item.ambiguous; }),
+                    "distinct exact rationals remain conflicting in every order even if they round to the same double");
+        } while (std::next_permutation(rounded_values.begin(), rounded_values.end()));
+        require(summary_detail::equalValue(ExifRational{350, 10}, ExifRational{35, 1}) &&
+                    summary_detail::equalValue(ExifRational{1, 125}, 0.008) &&
+                    !summary_detail::equalValue(ExifRational{1, 3}, std::nextafter(1.0 / 3, 1.0)) &&
+                    !summary_detail::equalValue(int64_t{9007199254740993}, 9007199254740992.0) &&
+                    !summary_detail::equalValue(ExifRational{1, 0}, 0.0) &&
+                    !summary_detail::equalValue(std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity()),
+                "numeric equivalence has no epsilon, overflow or invalid-value equality");
+        for (const auto& value : {"2024", "2024-02", "2024-02-29", "2024-02-29T01:02", "2024-02-29T01:02Z", "2024-02-29T01:02:03.25-05:30"}) {
+            const auto summary = summarizeImageMetadata(xmpFixture(begin + "><e:DateTimeOriginal>" + value + "</e:DateTimeOriginal>" + end));
+            require(summary && summary->facts.size() == 1 && summary->facts[0].state == MetadataValueState::Present && std::get<std::string>(summary->facts[0].value) == value, "date precision and timezone preserved without inference");
+        }
+        for (const auto& value : {"2023-02-29", "2024-13", "2024-01-01T24:00", "2024-01-01T01:02:03.", "2024-01-01T01:02+24:00"}) {
+            const auto summary = summarizeImageMetadata(xmpFixture(begin + "><e:DateTimeOriginal>" + value + "</e:DateTimeOriginal>" + end));
+            require(summary && summary->facts.size() == 1 && summary->facts[0].state == MetadataValueState::Invalid, "malformed date never converted to a valid zero");
+        }
+        const auto leap = summarizeImageMetadata(xmpFixture(begin + "><e:DateTimeOriginal>2016-12-31T23:59:60Z</e:DateTimeOriginal>" + end));
+        require(leap && leap->facts[0].state == MetadataValueState::Unsupported, "leap second not silently normalized");
+        const auto missing_ref = summarizeImageMetadata(xmpFixture(begin + "><e:GPSAltitude>5/1</e:GPSAltitude>" + end));
+        require(missing_ref && missing_ref->facts[0].state == MetadataValueState::Unsupported, "altitude sign cannot be inferred");
+        const auto duplicate_ref = summarizeImageMetadata(xmpFixture(begin + "><e:GPSAltitude>5/1</e:GPSAltitude><e:GPSAltitudeRef>0</e:GPSAltitudeRef><e:GPSAltitudeRef>1</e:GPSAltitudeRef>" + end));
+        require(duplicate_ref && duplicate_ref->facts[0].state == MetadataValueState::Unsupported && duplicate_ref->facts[0].ambiguous, "ambiguous altitude operand cannot be chosen");
+        const auto complete = begin + R"(t:Make="valid">)" + end;
+        for (std::size_t i = 0; i < complete.size(); ++i) {
+            const auto prefix = summarizeImageMetadata(xmpFixture(std::string_view(complete).substr(0, i)));
+            require(prefix && prefix->facts.empty() && prefix->xmp_packets.size() == 1 && prefix->xmp_packets[0].state == XmpPacketState::Malformed,
+                    "every truncated XML prefix discards all speculative properties");
+        }
+        for (const auto size : {std::size_t{65536}, std::size_t{65537}}) {
+            const auto summary = summarizeImageMetadata(xmpFixture(begin + "><t:Make>" + std::string(size, 'x') + "</t:Make>" + end), 4096, 1024 * 1024);
+            require(summary && summary->xmp_packets[0].state == (size == 65536 ? XmpPacketState::Parsed : XmpPacketState::Limited), "decoded text exact boundary and overflow");
+            require(summary->facts.size() == (size == 65536 ? 1 : 0), "text overflow never leaks a partial property");
+        }
+        for (const auto count : {1024, 1025}) {
+            std::string properties;
+            for (int i = 0; i < count; ++i)
+                properties += "<t:Make>x</t:Make>";
+            const auto summary = summarizeImageMetadata(xmpFixture(begin + ">" + properties + end), 4096, 1024 * 1024);
+            require(summary && summary->xmp_packets[0].state == (count == 1024 ? XmpPacketState::Parsed : XmpPacketState::Limited), "property count boundary");
+            require(summary->facts.size() == (count == 1024 ? 1024 : 0), "property overflow discards packet");
+        }
+        auto padded = complete;
+        padded.resize(1024 * 1024, ' ');
+        const auto exact_input = summarizeImageMetadata(xmpFixture(padded));
+        require(exact_input && exact_input->xmp_packets[0].state == XmpPacketState::Parsed && exact_input->facts.size() == 1, "exact input byte budget accepted");
+        padded += ' ';
+        invalid(padded, XmpPacketState::Limited);
+        // Namespace declarations are not ordinary attributes. Exercise a full
+        // input budget with many bindings without depending on a timing limit.
+        std::string namespace_heavy = R"(<r:RDF xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:t="http://ns.adobe.com/tiff/1.0/")";
+        constexpr std::string_view namespace_tail = R"(><r:Description t:Make="namespace stress"/></r:RDF>)";
+        std::size_t bindings = 0;
+        for (;;) {
+            const auto declaration = " xmlns:n" + std::to_string(bindings) + "=\"urn:stress:" + std::to_string(bindings) + "\"";
+            if (declaration.size() + namespace_tail.size() > 1024 * 1024 - namespace_heavy.size())
+                break;
+            namespace_heavy += declaration;
+            ++bindings;
+        }
+        require(bindings > 16384, "namespace stress exercises many bindings on one element");
+        namespace_heavy += namespace_tail;
+        namespace_heavy.resize(1024 * 1024, ' ');
+        const auto namespace_catalog = xmpFixture(namespace_heavy);
+        const auto namespace_summary = summarizeImageMetadata(namespace_catalog);
+        require(namespace_summary && !namespace_summary->limited && namespace_summary->facts.size() == 1 &&
+                    namespace_summary->xmp_packets.size() == 1 && namespace_summary->xmp_packets[0].state == XmpPacketState::Parsed &&
+                    std::get<std::string>(namespace_summary->facts[0].value) == "namespace stress",
+                "namespace-heavy packet at the byte limit retains the correct scalar");
+        const auto namespace_payload = namespace_catalog.xmpPayloadBytes({0});
+        require(namespace_payload && namespace_payload->size() == namespace_heavy.size() &&
+                    std::equal(namespace_payload->begin(), namespace_payload->end(), namespace_heavy.begin()),
+                "namespace stress preserves original payload");
+        namespace_heavy += ' ';
+        invalid(namespace_heavy, XmpPacketState::Limited);
+        const auto recovered = summarizeImageMetadata(catalog);
+        require(recovered && recovered->facts.size() == result->facts.size(), "fresh parser recovers after namespace stress and byte rejection");
+        for (const auto count : {126, 127}) {
+            std::string attrs = R"(t:Make="valid" )";
+            for (int i = 0; i < count; ++i)
+                attrs += "a" + std::to_string(i) + R"(="x" )";
+            const auto summary = summarizeImageMetadata(xmpFixture(begin + attrs + ">" + end));
+            require(summary && summary->xmp_packets[0].state == (count == 126 ? XmpPacketState::Parsed : XmpPacketState::Limited), "attribute count includes rdf about but excludes namespace declarations");
+        }
+        const auto split_altitude = summarizeImageMetadata(xmpFixture(begin + "><e:GPSAltitude>5/1</e:GPSAltitude></r:Description><r:Description xmlns:e=\"http://ns.adobe.com/exif/1.0/\"><e:GPSAltitudeRef>0</e:GPSAltitudeRef>" + end));
+        require(split_altitude && split_altitude->facts[0].state == MetadataValueState::Unsupported, "altitude reference never borrowed across RDF descriptions");
+        auto future = std::async(std::launch::async, [&] { return summarizeImageMetadata(catalog); });
+        require(future.get()->facts.size() == result->facts.size(), "independent Expat parser supports concurrent catalog readers");
+    }
+} // namespace
+
 int runMetadataObservationContracts() {
+    xmpContracts();
     cameraContracts();
     require(!MediaIngest::sourceMetadata({}), "empty source path rejected before collection");
     require(!MediaIngest::sourceMetadata(std::filesystem::path(std::string("a\0b", 3))), "embedded NUL cannot redirect metadata collection");
