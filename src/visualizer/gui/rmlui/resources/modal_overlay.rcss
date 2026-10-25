@@ -192,6 +192,7 @@ body {
     overflow-y: auto;
 }
 .form-modal select option {
+    transition: none;
     box-sizing: border-box;
     display: block;
     height: 28dp;

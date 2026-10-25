@@ -26,6 +26,9 @@ namespace lfs::core {
         std::string button_label;
         std::string input_value;
         std::unordered_map<std::string, std::string> form_values;
+        // Named field/action that triggered a live form callback.
+        std::string changed_field;
+        std::string form_action;
     };
 
     struct ModalRequest {
@@ -42,6 +45,10 @@ namespace lfs::core {
         // a dismissed dialog or disturbing an unrelated modal.
         std::string key;
         std::function<void(const ModalResult&)> on_change;
+        // A keyed form can name its default action. If that action is disabled,
+        // Enter must not fall through to another action such as Cancel.
+        // Empty preserves the existing first-enabled-button behavior.
+        std::string submit_button_label;
     };
 
 } // namespace lfs::core

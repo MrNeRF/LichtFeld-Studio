@@ -869,6 +869,7 @@ set(TEST_FILES
     test_sequencer_regressions.cpp
     test_timeline_save_budget.cpp
     test_tensor_storage_version.cpp
+    test_modal_form_behavior.cpp
     test_modal_registry_regression.cpp
     test_training_notifications.cpp
     test_camera_training_notice.cpp
