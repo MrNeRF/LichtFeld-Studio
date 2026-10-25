@@ -7,10 +7,12 @@
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Elements/ElementFormControl.h>
 #include <RmlUi/Core/Elements/ElementFormControlSelect.h>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iterator>
+#include <thread>
 
 namespace lfs::vis::gui {
     class ModalFormBehaviorTest : public ::testing::Test {
@@ -41,6 +43,7 @@ namespace lfs::vis::gui {
         void TearDown() override {
             if (overlay.el_form_)
                 unbindForm();
+            manager.shutdown();
             if (context) {
                 overlay.rml_context_ = nullptr;
                 EXPECT_TRUE(Rml::RemoveContext("modal_form_behavior"));
@@ -65,6 +68,7 @@ namespace lfs::vis::gui {
             document->Show();
             context->Update();
             overlay.rml_context_ = context;
+            overlay.document_ = document;
             overlay.el_button_row_ = document->GetElementById("buttons");
             overlay.el_backdrop_ = document->GetElementById("backdrop");
             overlay.el_dialog_ = document->GetElementById("dialog");
@@ -78,8 +82,6 @@ namespace lfs::vis::gui {
             overlay.active_->submit_button_label = submit_button;
         }
         bool submit() { return overlay.dismissFirstEnabledButton(); }
-        bool hasDeferredBody() const { return overlay.deferred_form_body_.has_value(); }
-        std::string deferredBody() const { return overlay.deferred_form_body_->second; }
         void bindForm(Rml::Element* content) {
             overlay.el_content_ = content;
             overlay.el_form_ = content;
@@ -109,8 +111,6 @@ namespace lfs::vis::gui {
                     return found;
             return nullptr;
         }
-        static void clearDirty(RmlModalOverlay& modal) { modal.render_needed_ = false; }
-        static bool isDirty(const RmlModalOverlay& modal) { return modal.render_needed_; }
         void deliver(RmlModalOverlay& modal, const PanelInputState& input) {
             auto* manager = modal.rml_manager_;
             const bool cached = modal.elements_cached_;
@@ -135,6 +135,32 @@ namespace lfs::vis::gui {
             input.mouse_released[0] = true;
             deliver(modal, input);
         }
+
+        // Shared modal lifecycle helpers, also used by the full Sequencer suite.
+        void showVisibleTooltip() {
+            auto* target = document->GetElementById("resolution");
+            if (!target)
+                target = document->GetElementById("choices");
+            ASSERT_NE(target, nullptr);
+            overlay.tooltip_.setHover("Help for the current form", target);
+            std::this_thread::sleep_for(std::chrono::milliseconds(520));
+            ASSERT_TRUE(overlay.tooltip_.apply(document->GetElementById("body"), 20, 20, 800, 600));
+            ASSERT_TRUE(document->GetElementById("frame-tooltip")->IsClassSet("visible"));
+        }
+        void applyTooltip() { overlay.tooltip_.apply(document->GetElementById("body"), 20, 20, 800, 600); }
+        void pressNativeKey(SDL_Scancode scancode, SDL_Keycode keycode) {
+            PanelInputState input;
+            input.input_events.push_back({.kind = FrameInputEventKind::KeyDown, .scancode = scancode, .keycode = keycode});
+            const bool cached = overlay.elements_cached_;
+            overlay.elements_cached_ = true;
+            // Exercise the real dispatch scope: dismiss/cancel need the manager
+            // to remain available while the keyboard callback is running.
+            manager.routeInput(context, input, [&](const PanelInputState&) { overlay.processInput(input); }, true);
+            overlay.elements_cached_ = cached;
+            context->Update();
+            context->Render();
+        }
+        // End shared modal lifecycle helpers.
 
         void checkNativeDropdown(const float scale) {
             setForm();
@@ -243,19 +269,6 @@ namespace lfs::vis::gui {
         EXPECT_EQ(document->GetElementById("section"), section);
     }
 
-    TEST_F(ModalFormBehaviorTest, DeferredBodyBelongsOnlyToTheActiveKeyedForm) {
-        overlay.deferFormBody("test.form", "not active");
-        EXPECT_FALSE(hasDeferredBody());
-        setForm();
-        overlay.deferFormBody("other.form", "wrong key");
-        EXPECT_FALSE(hasDeferredBody());
-        overlay.deferFormBody("test.form", "new body");
-        EXPECT_TRUE(hasDeferredBody());
-        EXPECT_EQ(deferredBody(), "new body");
-        overlay.deferFormBody("test.form", "latest body");
-        EXPECT_EQ(deferredBody(), "latest body");
-    }
-
     TEST_F(ModalFormBehaviorTest, EscapeRestoresBothTheControlAndTheFormDraft) {
         setForm();
         installFormDocument();
@@ -272,20 +285,9 @@ namespace lfs::vis::gui {
         EXPECT_EQ(draft, "1920x1080");
     }
 
-    TEST_F(ModalFormBehaviorTest, DeferredBodyIsAppliedAfterInputDuringRender) {
+    TEST_F(ModalFormBehaviorTest, DismissReturnsCurrentValues) {
         setForm();
         installFormDocument();
-        overlay.deferFormBody("test.form", R"(<input type="text" name="resolution" id="resolution" value="3840x2160" />)");
-        EXPECT_EQ(document->GetElementById("resolution")->GetAttribute<Rml::String>("value", ""), "1920x1080");
-        overlay.render(800, 600);
-        EXPECT_FALSE(hasDeferredBody());
-        EXPECT_EQ(document->GetElementById("resolution")->GetAttribute<Rml::String>("value", ""), "3840x2160");
-    }
-
-    TEST_F(ModalFormBehaviorTest, DismissDiscardsPendingRefreshBeforeReturningCurrentValues) {
-        setForm();
-        installFormDocument();
-        overlay.deferFormBody("test.form", R"(<input type="text" name="resolution" value="3840x2160" />)");
         bool returned = false;
         onResult([&returned](const core::ModalResult& result) {
             returned = true;
@@ -294,19 +296,16 @@ namespace lfs::vis::gui {
         });
         EXPECT_TRUE(overlay.dismiss("Cancel"));
         EXPECT_TRUE(returned);
-        EXPECT_FALSE(hasDeferredBody());
         EXPECT_FALSE(overlay.current().has_value());
     }
 
-    TEST_F(ModalFormBehaviorTest, EscapeCancellationDoesNotSubmitOrRetainDeferredBody) {
+    TEST_F(ModalFormBehaviorTest, EscapeCancellationDoesNotSubmit) {
         setForm();
         installFormDocument();
         bool submitted = false;
         onResult([&submitted](const core::ModalResult&) { submitted = true; });
-        overlay.deferFormBody("test.form", "discarded");
         cancel();
         EXPECT_FALSE(submitted);
-        EXPECT_FALSE(hasDeferredBody());
         EXPECT_FALSE(overlay.current().has_value());
     }
     TEST_F(ModalFormBehaviorTest, ProgrammaticDependentValuesPreserveControlAndSuppressRecursiveChange) {
@@ -343,4 +342,147 @@ namespace lfs::vis::gui {
     TEST_F(ModalFormBehaviorTest, NativeDropdownReceivesWheelAndScrollbarAndSuppressesTooltip) { checkNativeDropdown(1.0f); }
     TEST_F(ModalFormBehaviorTest, NativeDropdownInputAtHighDpi) { checkNativeDropdown(1.5f); }
     TEST_F(ModalFormBehaviorTest, NativeDropdownInputAtDoubleScale) { checkNativeDropdown(2.0f); }
+
+    TEST_F(ModalFormBehaviorTest, VisibleTooltipIsHiddenWhenBodyChanges) {
+        setForm();
+        installFormDocument();
+        showVisibleTooltip();
+        ASSERT_TRUE(overlay.updateForm("test.form", std::string("<input name='replacement' type='text' />"), {{"Cancel", "secondary"}}));
+        applyTooltip();
+        EXPECT_FALSE(document->GetElementById("frame-tooltip")->IsClassSet("visible"));
+        EXPECT_FALSE(overlay.secondsUntilNextUpdate().has_value());
+    }
+
+    TEST_F(ModalFormBehaviorTest, VisibleTooltipIsHiddenOnCancel) {
+        setForm();
+        installFormDocument();
+        showVisibleTooltip();
+        cancel();
+        EXPECT_FALSE(document->GetElementById("frame-tooltip")->IsClassSet("visible"));
+    }
+
+    TEST_F(ModalFormBehaviorTest, VisibleTooltipIsHiddenOnDismiss) {
+        setForm();
+        installFormDocument();
+        showVisibleTooltip();
+        ASSERT_TRUE(overlay.dismiss("Cancel"));
+        EXPECT_FALSE(document->GetElementById("frame-tooltip")->IsClassSet("visible"));
+    }
+
+    TEST_F(ModalFormBehaviorTest, VisibleTooltipHidesWhenPointerLeavesWithoutClicking) {
+        setForm();
+        installFormDocument();
+        showVisibleTooltip();
+        PanelInputState input;
+        input.mouse_x = 790;
+        input.mouse_y = 590;
+        deliver(overlay, input);
+        applyTooltip();
+        EXPECT_FALSE(document->GetElementById("frame-tooltip")->IsClassSet("visible"));
+    }
+
+    TEST_F(ModalFormBehaviorTest, VisibleTooltipHidesWhileTyping) {
+        setForm();
+        installFormDocument();
+        auto* input = document->GetElementById("resolution");
+        input->Focus();
+        showVisibleTooltip();
+        pressNativeKey(SDL_SCANCODE_LEFT, SDLK_LEFT);
+        EXPECT_FALSE(document->GetElementById("frame-tooltip")->IsClassSet("visible"));
+    }
+
+    TEST_F(ModalFormBehaviorTest, OpeningNativePopupHidesVisibleTooltipBeforeSelection) {
+        setForm();
+        installFormDocument("<select id='choices' name='choices' title='Choose'><option value='a'>A</option><option value='b'>B</option><option value='c'>C</option></select>");
+        showVisibleTooltip();
+        auto* select = dynamic_cast<Rml::ElementFormControlSelect*>(document->GetElementById("choices"));
+        const auto pos = select->GetAbsoluteOffset(Rml::BoxArea::Border);
+        clickAt(overlay, pos.x + select->GetOffsetWidth() - 9, pos.y + select->GetOffsetHeight() * 0.5f);
+        ASSERT_TRUE(select->IsSelectBoxVisible());
+        EXPECT_FALSE(document->GetElementById("frame-tooltip")->IsClassSet("visible"));
+        auto* option = select->GetOption(2);
+        const auto option_pos = option->GetAbsoluteOffset(Rml::BoxArea::Border);
+        clickAt(overlay, option_pos.x + 10, option_pos.y + option->GetOffsetHeight() * 0.5f);
+        EXPECT_EQ(select->GetValue(), "c");
+    }
+
+    TEST_F(ModalFormBehaviorTest, RadioGroupUpdatesCheckedStateAndPreservesOptionValues) {
+        setForm();
+        installFormDocument("<input type='radio' name='mode' value='a' id='mode-a' checked='checked' /><input type='radio' name='mode' value='b' id='mode-b' />");
+        int changes = 0;
+        onChange([&](const core::ModalResult&) { ++changes; });
+        ASSERT_TRUE(overlay.setFormValues("test.form", {{"mode", "b"}}));
+        context->Update();
+        EXPECT_FALSE(document->GetElementById("mode-a")->HasAttribute("checked"));
+        EXPECT_TRUE(document->GetElementById("mode-b")->HasAttribute("checked"));
+        EXPECT_EQ(document->GetElementById("mode-a")->GetAttribute<Rml::String>("value", ""), "a");
+        EXPECT_EQ(document->GetElementById("mode-b")->GetAttribute<Rml::String>("value", ""), "b");
+        EXPECT_EQ(changes, 0);
+        EXPECT_FALSE(overlay.setFormValues("", {{"mode", "a"}}));
+    }
+
+    TEST_F(ModalFormBehaviorTest, NativeEnterHonorsDisabledDefaultInsteadOfCanceling) {
+        setForm();
+        installFormDocument();
+        int results = 0;
+        onResult([&](const core::ModalResult& result) { ++results; EXPECT_EQ(result.button_label, "Apply"); });
+        pressNativeKey(SDL_SCANCODE_RETURN, SDLK_RETURN);
+        EXPECT_TRUE(overlay.isOpen());
+        EXPECT_EQ(results, 0);
+        ASSERT_TRUE(overlay.updateForm("test.form", std::nullopt, {{"Apply", "primary"}, {"Cancel", "secondary"}}));
+        pressNativeKey(SDL_SCANCODE_RETURN, SDLK_RETURN);
+        EXPECT_FALSE(overlay.isOpen());
+        EXPECT_EQ(results, 1);
+    }
+
+    TEST_F(ModalFormBehaviorTest, NativeEscapeRestoresDraftThenCancelsOnSecondPress) {
+        setForm();
+        installFormDocument();
+        auto* input = document->GetElementById("resolution");
+        input->Focus();
+        input->SetAttribute("value", "invalid");
+        std::string restored;
+        onChange([&](const core::ModalResult& result) { restored = result.form_values.at("resolution"); });
+        pressNativeKey(SDL_SCANCODE_ESCAPE, SDLK_ESCAPE);
+        EXPECT_EQ(restored, "1920x1080");
+        EXPECT_TRUE(overlay.isOpen());
+        pressNativeKey(SDL_SCANCODE_ESCAPE, SDLK_ESCAPE);
+        EXPECT_FALSE(overlay.isOpen());
+    }
+
+    TEST_F(ModalFormBehaviorTest, EscapeCallbackCanDismissItsOwnForm) {
+        setForm();
+        installFormDocument();
+        auto* input = document->GetElementById("resolution");
+        input->Focus();
+        input->SetAttribute("value", "invalid");
+        onChange([&](const core::ModalResult&) { EXPECT_TRUE(overlay.dismiss("Cancel")); });
+        pressNativeKey(SDL_SCANCODE_ESCAPE, SDLK_ESCAPE);
+        EXPECT_FALSE(overlay.isOpen());
+    }
+
+    TEST_F(ModalFormBehaviorTest, RadioGroupsWithoutIdsKeepTheirOriginalOptionValues) {
+        setForm();
+        installFormDocument("<input type='radio' name='mode' value='a' checked='checked' /><input type='radio' name='mode' value='b' />");
+        ASSERT_TRUE(overlay.setFormValues("test.form", {{"mode", "b"}}));
+        Rml::ElementList radios;
+        document->QuerySelectorAll(radios, "input[type=radio]");
+        ASSERT_EQ(radios.size(), 2);
+        EXPECT_EQ(radios[0]->GetAttribute<Rml::String>("value", ""), "a");
+        EXPECT_EQ(radios[1]->GetAttribute<Rml::String>("value", ""), "b");
+        onResult([](const core::ModalResult& result) { EXPECT_EQ(result.form_values.at("mode"), "b"); });
+        EXPECT_TRUE(overlay.dismiss("Cancel"));
+    }
+
+    TEST_F(ModalFormBehaviorTest, EscapeCallbackCanReplaceTheFormBody) {
+        setForm();
+        installFormDocument();
+        document->GetElementById("resolution")->Focus();
+        onChange([&](const core::ModalResult&) {
+            EXPECT_TRUE(overlay.updateForm("test.form", std::string("<input id='replacement' type='text' />"), {{"Cancel", "secondary"}}));
+        });
+        pressNativeKey(SDL_SCANCODE_ESCAPE, SDLK_ESCAPE);
+        EXPECT_TRUE(overlay.isOpen());
+        EXPECT_NE(document->GetElementById("replacement"), nullptr);
+    }
 } // namespace lfs::vis::gui

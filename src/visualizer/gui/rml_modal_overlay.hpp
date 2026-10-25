@@ -17,7 +17,6 @@
 #include <mutex>
 #include <optional>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace Rml {
@@ -82,9 +81,6 @@ namespace lfs::vis::gui {
         bool dismiss(const std::string& button_label);
         bool updateForm(const std::string& key, const std::optional<std::string>& body_rml,
                         const std::vector<lfs::core::ModalButtonSpec>& buttons);
-        // Rebuild after input dispatch, without destroying the active control
-        // from inside its own Change event.
-        void deferFormBody(const std::string& key, std::string body_rml);
         bool setFormValues(const std::string& key, const std::unordered_map<std::string, std::string>& values);
         [[nodiscard]] bool hasPendingRequest() const;
         [[nodiscard]] bool hasPendingRenderWork() const;
@@ -120,6 +116,7 @@ namespace lfs::vis::gui {
         void updateButtons(const std::vector<lfs::core::ModalButtonSpec>& buttons);
         bool dismissFirstEnabledButton();
         void bindTextInputRevert();
+        void resetTooltip();
         void cancel();
         lfs::core::ModalResult collectFormValues() const;
 
@@ -129,7 +126,6 @@ namespace lfs::vis::gui {
         };
 
         RmlUIManager* rml_manager_;
-        std::optional<std::pair<std::string, std::string>> deferred_form_body_;
         OverlayEventListener listener_;
         bool setting_form_values_ = false;
         rml_input::TextInputEscapeRevertController text_input_revert_;
