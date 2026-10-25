@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """CPU-only HIP target configuration checks; no SDK, driver or GPU required."""
 import os
+import argparse
+import importlib.util
+from unittest import mock
 from pathlib import Path
 import shutil
 import subprocess
@@ -86,6 +89,17 @@ class HipConfiguration(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
                 self.assertIn("ordinal in 0..2147483647", result.stderr)
 
+    def test_module_revision_is_checked_before_transfer_exports(self):
+        script = ROOT / "tests/hip/test_native_runtime.py"
+        spec = importlib.util.spec_from_file_location("native_abi_contract", script)
+        native = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(native)
+        foundation_only = argparse.Namespace(lfs_hip_runtime_abi=lambda: 1)
+        native.options = argparse.Namespace(module=Path("unused-module"), faults=False)
+        with mock.patch.object(native.c, "CDLL", return_value=foundation_only):
+            with self.assertRaisesRegex(RuntimeError, "ABI mismatch: expected 2, got 1"):
+                native.RuntimeContract.setUpClass()
+
     def test_abi_only_requires_the_native_module(self):
         result = subprocess.run([
             sys.executable, str(ROOT / "tests/hip/test_native_runtime.py"),
@@ -94,6 +108,14 @@ class HipConfiguration(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("setUpClass", result.stderr)
         self.assertIn("FAILED", result.stderr)
+
+    def test_cpu_abi_mode_rejects_gpu_fault_mode_before_loading(self):
+        result = subprocess.run([
+            sys.executable, str(ROOT / "tests/hip/test_native_runtime.py"),
+            "missing-module.dll", "--abi-only", "--faults"],
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("mutually exclusive", result.stderr)
 
 
 if __name__ == "__main__":

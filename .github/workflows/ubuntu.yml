@@ -14,6 +14,80 @@ on:
   workflow_dispatch:
 
 jobs:
+  hip-native-changes:
+    name: Check native HIP paths
+    if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.paths.outputs.changed }}
+    steps:
+      - name: Checkout source and comparison history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check paths without installing the SDK
+        id: paths
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python3 tools/hip_native_ci_filter.py --event "$EVENT_NAME" \
+            --base "$BASE_SHA" --head "$HEAD_SHA" --output "$GITHUB_OUTPUT"
+
+  hip-native-compile:
+    name: HIP native compile (CPU runner)
+    needs: hip-native-changes
+    if: needs.hip-native-changes.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      HIP_VISIBLE_DEVICES: '-1'
+      ROCR_VISIBLE_DEVICES: '-1'
+      CUDA_VISIBLE_DEVICES: ''
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Set up Python and SDK download cache
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: cmake/hip-native/ci-requirements.txt
+
+      - name: Install native build tools
+        run: |
+          python -m pip install --index-url https://pypi.org/simple 'cmake==4.4.0'
+          sudo apt-get update
+          sudo apt-get install -y g++ ninja-build
+
+      - name: Install pinned ROCm development SDK
+        run: python -m pip install -r cmake/hip-native/ci-requirements.txt
+
+      - name: Compile native HIP module for all declared targets
+        run: |
+          sdk_root="$(rocm-sdk path --root)"
+          cmake -S cmake/hip-native -B "$RUNNER_TEMP/hip-native-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLFS_HIP_ROOT="$sdk_root" \
+            -DLFS_HIP_PORTABLE=ON \
+            -DLFS_HIP_OFFLOAD_COMPRESSION=ON \
+            -DLFS_HIP_NATIVE_GPU_TESTS=OFF \
+            -DPython3_EXECUTABLE="$(command -v python)"
+          cmake --build "$RUNNER_TEMP/hip-native-build" --parallel 2
+
+      - name: Check configuration and module ABI without a GPU
+        run: |
+          ctest --test-dir "$RUNNER_TEMP/hip-native-build" \
+            --output-on-failure --no-tests=error -L cpu
+
   build-ubuntu:
     if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
     runs-on: ubuntu-24.04
