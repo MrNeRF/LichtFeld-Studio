@@ -44,6 +44,9 @@ typedef struct LfsHipDevice {
     int32_t warp_size;
 } LfsHipDevice;
 
+/* Exact private ABI revision: 1 is the foundation; 2 adds owned transfers.
+ * Loaders must check this before binding revision-specific exports. */
+#define LFS_HIP_RUNTIME_ABI_VERSION 2u
 LFS_HIP_API uint32_t lfs_hip_runtime_abi(void);
 LFS_HIP_API int lfs_hip_device_count(int32_t* count, LfsHipError* error);
 LFS_HIP_API int lfs_hip_device_info(int32_t ordinal, LfsHipDevice* info, LfsHipError* error);

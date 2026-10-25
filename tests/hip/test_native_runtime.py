@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import unittest
 
+EXPECTED_ABI = 2
 options = None
 
 
@@ -34,6 +35,9 @@ class RuntimeContract(unittest.TestCase):
         if options is None:
             raise unittest.SkipTest("Native GPU checks require the explicit module CLI")
         cls.dll = c.CDLL(str(options.module.resolve()))
+        actual_abi = bind(cls.dll, "runtime_abi", [], c.c_uint32)()
+        if actual_abi != EXPECTED_ABI:
+            raise RuntimeError(f"Native HIP ABI mismatch: expected {EXPECTED_ABI}, got {actual_abi}")
         pointer = c.c_void_p
         error = c.POINTER(Error)
         signatures = {
@@ -68,7 +72,7 @@ class RuntimeContract(unittest.TestCase):
         self.assertEqual(status, 0, f"{name}: {error.native_code}: {error.message!r}")
 
     def test_abi(self):
-        self.assertEqual(self.calls["runtime_abi"](), 1)
+        self.assertEqual(self.calls["runtime_abi"](), EXPECTED_ABI)
         if not options.faults:
             self.assertFalse(hasattr(self.dll, "lfs_hip_test_fail_once"))
             self.assertFalse(hasattr(self.dll, "lfs_hip_test_live_resources"))

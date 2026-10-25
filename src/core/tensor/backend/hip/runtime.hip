@@ -128,7 +128,7 @@ namespace {
 } // namespace
 
 extern "C" {
-uint32_t lfs_hip_runtime_abi(void) { return 1; }
+uint32_t lfs_hip_runtime_abi(void) { return LFS_HIP_RUNTIME_ABI_VERSION; }
 
 int lfs_hip_device_count(int32_t* count, LfsHipError* error) {
     return boundary(error, [&] {

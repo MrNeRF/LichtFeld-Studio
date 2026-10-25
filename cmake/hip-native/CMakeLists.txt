@@ -11,6 +11,9 @@ add_subdirectory("${_root}/src/core/tensor/backend/hip" runtime)
 
 enable_testing()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(NAME HipNative.CiFilter
+    COMMAND "${Python3_EXECUTABLE}" "${_root}/tests/python/test_hip_native_ci_filter.py")
+set_tests_properties(HipNative.CiFilter PROPERTIES LABELS "cpu;hip" TIMEOUT 60)
 add_test(NAME HipNative.Configuration
     COMMAND "${Python3_EXECUTABLE}" "${_root}/tests/python/test_hip_runtime_configuration.py")
 set_tests_properties(HipNative.Configuration PROPERTIES

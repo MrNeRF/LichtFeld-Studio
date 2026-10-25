@@ -49,6 +49,12 @@ kept alive for the duration of the test. It does not modify PATH or the process-
 DLL search policy. This developer setup does not package SDK libraries. Application
 loading and distribution integration are separate work.
 
+The private C ABI revision is `LFS_HIP_RUNTIME_ABI_VERSION` (currently 2), returned
+by `lfs_hip_runtime_abi()`. Revision 1 provided only the foundation; revision 2
+adds owned asynchronous transfers. A future loader must check the exact revision
+before binding revision-specific exports; the boundary is private and does not
+promise binary compatibility between revisions.
+
 The private versioned C ABI exposes inventory, contexts, owned buffers, blocking
 host transfers, synchronization, fill and affine smoke kernels. No HIP types or C++
 exceptions cross the ABI. Calls on one context must be serialized by the caller;
@@ -97,7 +103,15 @@ runs only the CPU configuration/module-ABI tests. GPU visibility is disabled,
 GPU tests remain off, and no application, CUDA toolkit, submodules or driver
 installation is required. The pip download cache avoids downloading the SDK
 again when the runner can restore it. This compile check follows the existing
-Ubuntu workflow triggers; it is not a full HIP application or GPU training job.
+Ubuntu workflow triggers. A lightweight path check gates the SDK job: only changes
+in `cmake/hip-native/`, `src/core/tensor/backend/hip/`, `tests/hip/`, their CMake
+architecture/compression helpers, configuration/filter tests, the filter script
+or this Ubuntu workflow enable it. Pull requests compare against their merge
+base; pushes compare before/after trees, including deleted and renamed paths.
+Manual dispatch and the first push of a branch run the check unconditionally.
+Unrelated PRs do not start the SDK job or restore its pip cache. Other Ubuntu
+jobs and workflow triggers are unchanged. This is not a full HIP application
+or GPU training job.
 
 ## Owned asynchronous transfers
 
