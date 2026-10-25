@@ -3,6 +3,9 @@
 
 #include "../external/nanoflann.hpp"
 #include "core/cuda/initial_scales.hpp"
+#include "core/parameters.hpp"
+#include "core/point_cloud.hpp"
+#include "core/splat_data.hpp"
 #include "cuda_backend_test.hpp"
 #include "io/formats/colmap.hpp"
 
@@ -145,4 +148,30 @@ TEST_F(InitialScales, MatchesReplacedKdTree) {
         for (int c = 0; c < 3; ++c)
             ASSERT_NEAR(gpu[i * 3 + c], reference[i], 1e-6f) << "point " << i;
     }
+}
+
+// Fails if the neighbour-distance initialization (every strategy but MRNF) does not follow the scene's units: the same
+// real points ten times larger must start with Gaussians exactly ten times larger, as their neighbour distances are.
+TEST_F(InitialScales, NeighbourDistanceInitializationScalesWithTheScene) {
+    const auto points = garden_points();
+    ASSERT_GT(points.size() / 3, size_t{20000});
+    lfs::core::param::TrainingParameters params;
+    params.optimization.strategy = std::string(lfs::core::param::kStrategyMCMC);
+    const auto initial_scales = [&](const float factor) {
+        std::vector<float> scaled(points.begin(), points.begin() + 3 * 20000);
+        for (auto& value : scaled)
+            value *= factor;
+        lfs::core::PointCloud cloud;
+        cloud.means = Tensor::from_vector(scaled, {scaled.size() / 3, 3}, Device::GPU);
+        cloud.colors = Tensor::zeros({scaled.size() / 3, 3}, Device::GPU);
+        auto model = lfs::core::init_model_from_pointcloud(params, Tensor::zeros({3}, Device::GPU), cloud);
+        EXPECT_TRUE(model.has_value()) << (model ? "" : model.error());
+        return model ? model->get_scaling().cpu().to_vector() : std::vector<float>{};
+    };
+    const auto unit = initial_scales(1.0f);
+    const auto tenfold = initial_scales(10.0f);
+    ASSERT_EQ(unit.size(), tenfold.size());
+    ASSERT_FALSE(unit.empty());
+    for (size_t i = 0; i < unit.size(); i += 101)
+        ASSERT_NEAR(tenfold[i] / unit[i], 10.0f, 1e-3f) << "scale " << i;
 }

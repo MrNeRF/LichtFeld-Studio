@@ -18,10 +18,12 @@
 #include "gui/viewport_gizmo_geometry.hpp"
 #include "input/input_controller.hpp"
 #include "input/sdl_coordinate_utils.hpp"
+#include "input/sdl_key_mapping.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_id.hpp"
 #include "operator/operator_registry.hpp"
+#include "operator/ops/crop_polygon_ops.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
@@ -42,6 +44,7 @@
 #include <cassert>
 #include <cmath>
 #include <glm/gtc/matrix_transform.hpp>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -66,6 +69,22 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] bool isSelectionVolumeSubMode(const SelectionSubMode mode) {
             return mode == SelectionSubMode::Box || mode == SelectionSubMode::Sphere;
+        }
+
+        [[nodiscard]] bool isCropVolumeType(const core::NodeType type) {
+            return type == core::NodeType::CROPBOX || type == core::NodeType::ELLIPSOID ||
+                   type == core::NodeType::CROP_POLYGON;
+        }
+
+        void emitCropPolygon(const core::Scene& scene, const core::SceneNode& node) {
+            const auto& polygon = *node.crop_polygon;
+            lfs::core::events::cmd::CropPLYPolygon{
+                .world_transform = scene_coords::nodeDataWorldTransform(scene, node.id),
+                .vertices = polygon.vertices,
+                .half_depth = polygon.half_depth,
+                .inverse = polygon.inverse,
+                .target_node_id = node.parent_id}
+                .emit();
         }
 
         [[nodiscard]] const char* selectionSubModeId(const SelectionSubMode mode) {
@@ -112,6 +131,89 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] bool nativeControlModifierDown(const lfs::vis::FrameInputBuffer& frame_input) {
             return (frame_input.key_mods & SDL_KMOD_CTRL) != 0;
+        }
+
+        constexpr float CROP_POLYGON_HANDLE_RADIUS_PX = 5.0f;
+        constexpr OverlayColor CROP_POLYGON_HANDLE_COLOR = overlayColor(255, 214, 10, 235);
+        constexpr OverlayColor CROP_POLYGON_HANDLE_HOT_COLOR = overlayColor(255, 128, 16, 245);
+        constexpr OverlayColor CROP_POLYGON_HANDLE_OUTLINE = overlayColor(0, 0, 0, 160);
+
+        // Projects like the native gizmos: visualizer world to panel pixels.
+        [[nodiscard]] std::optional<glm::vec2> projectToPanel(const glm::mat4& view_projection, const glm::vec2 panel_pos,
+                                                              const glm::vec2 panel_size, const glm::vec3& world) {
+            const glm::vec4 clip = view_projection * glm::vec4(world, 1.0f);
+            if (!(clip.w > std::numeric_limits<float>::epsilon()))
+                return std::nullopt;
+            const glm::vec2 ndc = glm::vec2(clip) / clip.w;
+            if (!std::isfinite(ndc.x) || !std::isfinite(ndc.y))
+                return std::nullopt;
+            return glm::vec2(panel_pos.x + (ndc.x * 0.5f + 0.5f) * panel_size.x,
+                             panel_pos.y + (-ndc.y * 0.5f + 0.5f) * panel_size.y);
+        }
+
+        // The polygon-local XY point under a panel pixel on the plane z = plane_z.
+        [[nodiscard]] std::optional<glm::vec2> pixelOnPolygonPlane(const glm::mat4& view_projection, const glm::vec2 panel_pos,
+                                                                   const glm::vec2 panel_size,
+                                                                   const glm::mat4& polygon_to_world,
+                                                                   const float plane_z, const glm::vec2 pixel) {
+            const glm::mat4 local_to_clip = view_projection * polygon_to_world;
+            const glm::mat4 clip_to_local = glm::inverse(local_to_clip);
+            const glm::vec2 ndc((pixel.x - panel_pos.x) / panel_size.x * 2.0f - 1.0f,
+                                1.0f - (pixel.y - panel_pos.y) / panel_size.y * 2.0f);
+            // Any two depths give the pixel's ray, in perspective and orthographic views alike.
+            const auto unproject = [&](const float depth) {
+                const glm::vec4 point = clip_to_local * glm::vec4(ndc, depth, 1.0f);
+                return glm::vec3(point) / point.w;
+            };
+            const glm::vec3 near_point = unproject(0.25f);
+            const glm::vec3 far_point = unproject(0.75f);
+            const float dz = far_point.z - near_point.z;
+            if (!std::isfinite(dz) || std::abs(dz) < 1e-12f)
+                return std::nullopt;
+            const glm::vec3 hit = glm::mix(near_point, far_point, (plane_z - near_point.z) / dz);
+            if (!std::isfinite(hit.x) || !std::isfinite(hit.y) || !((local_to_clip * glm::vec4(hit, 1.0f)).w > 0.0f))
+                return std::nullopt;
+            return glm::vec2(hit);
+        }
+
+        [[nodiscard]] float distanceSquaredToSegment(const glm::vec2 point, const glm::vec2 a, const glm::vec2 b,
+                                                     float* const t_out) {
+            const glm::vec2 ab = b - a;
+            const float length_sq = glm::dot(ab, ab);
+            const float t = length_sq > 0.0f ? std::clamp(glm::dot(point - a, ab) / length_sq, 0.0f, 1.0f) : 0.0f;
+            *t_out = t;
+            const glm::vec2 delta = point - (a + ab * t);
+            return glm::dot(delta, delta);
+        }
+
+        // Screen-space hits on the projected outline, with the selection polygon's radii.
+        [[nodiscard]] int findOutlineVertexAt(const std::vector<std::optional<glm::vec2>>& points, const glm::vec2 cursor) {
+            const float radius_sq = POLYGON_VERTEX_HIT_RADIUS_PX * POLYGON_VERTEX_HIT_RADIUS_PX;
+            for (size_t i = 0; i < points.size(); ++i) {
+                if (points[i] && glm::dot(cursor - *points[i], cursor - *points[i]) <= radius_sq)
+                    return static_cast<int>(i);
+            }
+            return -1;
+        }
+
+        [[nodiscard]] int findOutlineEdgeAt(const std::vector<std::optional<glm::vec2>>& points, const glm::vec2 cursor) {
+            const float vertex_radius_sq = POLYGON_VERTEX_HIT_RADIUS_PX * POLYGON_VERTEX_HIT_RADIUS_PX;
+            float best_distance_sq = POLYGON_EDGE_HIT_RADIUS_PX * POLYGON_EDGE_HIT_RADIUS_PX;
+            int best_edge = -1;
+            for (size_t i = 0; i < points.size(); ++i) {
+                const auto& start = points[i];
+                const auto& end = points[(i + 1) % points.size()];
+                if (!start || !end || glm::dot(cursor - *start, cursor - *start) <= vertex_radius_sq ||
+                    glm::dot(cursor - *end, cursor - *end) <= vertex_radius_sq)
+                    continue;
+                float t = 0.0f;
+                const float distance_sq = distanceSquaredToSegment(cursor, *start, *end, &t);
+                if (distance_sq <= best_distance_sq && t > 0.0f && t < 1.0f) {
+                    best_distance_sq = distance_sq;
+                    best_edge = static_cast<int>(i);
+                }
+            }
+            return best_edge;
         }
 
         // Gizmo hover is refreshed only while that gizmo is drawn. A tool change can stop
@@ -416,6 +518,10 @@ namespace lfs::vis::gui {
                (isVolumeGizmoToolActive() && crop_tool_initialized_ && crop_tool_shape_ == CropToolShape::Ellipsoid);
     }
 
+    bool GizmoManager::isCropPolygonGizmoActive() const {
+        return isCropToolActive() && crop_tool_initialized_ && crop_tool_shape_ == CropToolShape::Polygon;
+    }
+
     std::optional<core::NodeId> GizmoManager::selectedCropTargetNodeId() const {
         const auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
         if (!sm)
@@ -445,7 +551,8 @@ namespace lfs::vis::gui {
                 continue;
             if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD)
                 return node->id;
-            if (node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID) {
+            if (node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID ||
+                node->type == core::NodeType::CROP_POLYGON) {
                 const auto* parent = scene.getNodeById(node->parent_id);
                 if (parent && (parent->type == core::NodeType::SPLAT || parent->type == core::NodeType::POINTCLOUD))
                     return parent->id;
@@ -472,9 +579,22 @@ namespace lfs::vis::gui {
             return std::nullopt;
 
         const auto& scene = sm->getScene();
-        const core::NodeId selected_id = crop_tool_shape_ == CropToolShape::Box
-                                             ? sm->getSelectedNodeCropBoxId()
-                                             : sm->getSelectedNodeEllipsoidId();
+        core::NodeId selected_id = core::NULL_NODE;
+        core::NodeId attached_id = core::NULL_NODE;
+        switch (crop_tool_shape_) {
+        case CropToolShape::Box:
+            selected_id = sm->getSelectedNodeCropBoxId();
+            attached_id = scene.getCropBoxForSplat(target_id);
+            break;
+        case CropToolShape::Ellipsoid:
+            selected_id = sm->getSelectedNodeEllipsoidId();
+            attached_id = scene.getEllipsoidForSplat(target_id);
+            break;
+        case CropToolShape::Polygon:
+            selected_id = sm->getSelectedNodeCropPolygonId();
+            attached_id = scene.getCropPolygonForSplat(target_id);
+            break;
+        }
         if (selected_id != core::NULL_NODE) {
             const auto* const selected_node = scene.getNodeById(selected_id);
             if (selected_node && selected_node->parent_id == target_id) {
@@ -482,9 +602,6 @@ namespace lfs::vis::gui {
             }
         }
 
-        const core::NodeId attached_id = crop_tool_shape_ == CropToolShape::Box
-                                             ? scene.getCropBoxForSplat(target_id)
-                                             : scene.getEllipsoidForSplat(target_id);
         if (attached_id != core::NULL_NODE) {
             return attached_id;
         }
@@ -498,7 +615,8 @@ namespace lfs::vis::gui {
             return false;
 
         const auto target_id = selectedCropTargetNodeId();
-        if (!target_id)
+        // A polygon exists only once drawn; there is no default one to create.
+        if (!target_id || crop_tool_shape_ == CropToolShape::Polygon)
             return false;
 
         auto* const rm = viewer_ ? viewer_->getRenderingManager() : nullptr;
@@ -544,6 +662,16 @@ namespace lfs::vis::gui {
                             !nearlyEqual(crop_tool_box_max_, node->cropbox->max);
             crop_tool_box_min_ = node->cropbox->min;
             crop_tool_box_max_ = node->cropbox->max;
+        } else if (crop_tool_shape_ == CropToolShape::Polygon) {
+            if (!node->crop_polygon)
+                return false;
+            const auto& polygon = *node->crop_polygon;
+            const glm::vec3 half_extents(core::crop_polygon::outlineHalfExtents(polygon.vertices), polygon.half_depth);
+            state_changed = state_changed || crop_tool_polygon_vertices_ != polygon.vertices ||
+                            !nearlyEqual(crop_tool_polygon_half_extents_, half_extents);
+            crop_tool_polygon_vertices_ = polygon.vertices;
+            crop_tool_polygon_half_depth_ = polygon.half_depth;
+            crop_tool_polygon_half_extents_ = half_extents;
         } else {
             if (!node->ellipsoid)
                 return false;
@@ -620,6 +748,28 @@ namespace lfs::vis::gui {
             return true;
         }
 
+        if (crop_tool_shape_ == CropToolShape::Polygon) {
+            if (!node->crop_polygon)
+                return false;
+
+            // Outline and depth are as drawn; the bounds gizmo writes the transform's scale.
+            const auto before_data = *node->crop_polygon;
+            const auto before_transform = sm->getNodeTransform(node->name);
+            const bool show_before = node->visible;
+            if (enable)
+                node->crop_polygon->enabled = true;
+            sm->setNodeTransform(node->name, *local_transform);
+            scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
+            if (rm)
+                rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
+
+            auto entry = std::make_unique<op::CropPolygonUndoEntry>(
+                *sm, node->name, before_data, before_transform, show_before);
+            if (entry->hasChanges())
+                op::undoHistory().push(std::move(entry));
+            return true;
+        }
+
         if (!node->ellipsoid)
             return false;
 
@@ -663,7 +813,7 @@ namespace lfs::vis::gui {
             return crop_tool_initialized_;
         }
 
-        if (crop_tool_drag_active_ && crop_tool_initialized_)
+        if ((crop_tool_drag_active_ || crop_polygon_vertex_drag_) && crop_tool_initialized_)
             return true;
 
         const auto target_id = selectedCropTargetNodeId();
@@ -702,11 +852,13 @@ namespace lfs::vis::gui {
         if (auto* const rm = viewer_ ? viewer_->getRenderingManager() : nullptr) {
             rm->setCropboxGizmoActive(false);
             rm->setEllipsoidGizmoActive(false);
+            rm->setCropPolygonGizmoActive(false);
         }
         crop_tool_volume_node_id_ = core::NULL_NODE;
         crop_tool_drag_active_ = false;
         crop_tool_scale_start_.reset();
         crop_tool_drag_changed_ = false;
+        crop_polygon_vertex_drag_.reset();
     }
 
     void GizmoManager::leaveCropTool(const bool hide_volume,
@@ -721,17 +873,21 @@ namespace lfs::vis::gui {
             if (volume_node_id == core::NULL_NODE) {
                 const core::NodeId cropbox_id = sm->getSelectedNodeCropBoxId();
                 const core::NodeId ellipsoid_id = sm->getSelectedNodeEllipsoidId();
+                const core::NodeId polygon_id = sm->getSelectedNodeCropPolygonId();
                 const auto* cropbox_node = scene.getNodeById(cropbox_id);
                 const auto* ellipsoid_node = scene.getNodeById(ellipsoid_id);
                 if (cropbox_node && cropbox_node->type == core::NodeType::CROPBOX) {
                     volume_node_id = cropbox_id;
                 } else if (ellipsoid_node && ellipsoid_node->type == core::NodeType::ELLIPSOID) {
                     volume_node_id = ellipsoid_id;
+                } else if (polygon_id != core::NULL_NODE) {
+                    volume_node_id = polygon_id;
                 }
             }
 
             const auto* const node = scene.getNodeById(volume_node_id);
-            if (node && (node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID)) {
+            if (node && (node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID ||
+                         node->type == core::NodeType::CROP_POLYGON)) {
                 parent_node_id = node->parent_id;
                 if (hide_volume && node->visible) {
                     sm->setNodeVisibilityTransient(volume_node_id, false);
@@ -763,7 +919,8 @@ namespace lfs::vis::gui {
         }
 
         const auto* const node = sm->getScene().getNodeById(volume_node_id);
-        if (!node || (node->type != core::NodeType::CROPBOX && node->type != core::NodeType::ELLIPSOID)) {
+        if (!node || (node->type != core::NodeType::CROPBOX && node->type != core::NodeType::ELLIPSOID &&
+                      node->type != core::NodeType::CROP_POLYGON)) {
             leaveCropTool(false, true, true);
             return;
         }
@@ -894,38 +1051,55 @@ namespace lfs::vis::gui {
                 if (const auto* const node = scene.getNodeById(crop_tool_volume_node_id_)) {
                     effectively_visible = scene.isNodeEffectivelyVisible(crop_tool_volume_node_id_);
                     parent_node_index = scene.getVisibleNodeIndex(node->parent_id);
-                    affects_render = crop_tool_shape_ == CropToolShape::Box
-                                         ? (node->cropbox && node->cropbox->enabled)
-                                         : (node->ellipsoid && node->ellipsoid->enabled);
+                    switch (crop_tool_shape_) {
+                    case CropToolShape::Box: affects_render = node->cropbox && node->cropbox->enabled; break;
+                    case CropToolShape::Ellipsoid: affects_render = node->ellipsoid && node->ellipsoid->enabled; break;
+                    case CropToolShape::Polygon:
+                        affects_render = node->crop_polygon && node->crop_polygon->enabled;
+                        break;
+                    }
                 }
             }
         }
+        rm->setCropboxGizmoActive(false);
+        rm->setEllipsoidGizmoActive(false);
+        rm->setCropPolygonGizmoActive(false);
         if (!effectively_visible) {
-            rm->setCropboxGizmoActive(false);
-            rm->setEllipsoidGizmoActive(false);
             rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
             return;
         }
-        if (crop_tool_shape_ == CropToolShape::Box) {
+        switch (crop_tool_shape_) {
+        case CropToolShape::Box:
             rm->setCropboxGizmoState(
                 true, crop_tool_box_min_, crop_tool_box_max_, crop_tool_visualizer_transform_, affects_render, parent_node_index);
-            rm->setEllipsoidGizmoActive(false);
-        } else {
+            break;
+        case CropToolShape::Ellipsoid:
             rm->setEllipsoidGizmoState(
                 true, crop_tool_ellipsoid_radii_, crop_tool_visualizer_transform_, affects_render, parent_node_index);
-            rm->setCropboxGizmoActive(false);
+            break;
+        case CropToolShape::Polygon:
+            rm->setCropPolygonGizmoState(true, crop_tool_polygon_vertices_, crop_tool_polygon_half_depth_,
+                                         crop_tool_visualizer_transform_, affects_render, parent_node_index);
+            break;
         }
         rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
     }
 
     void GizmoManager::setCropToolShape(const std::string& shape) {
-        crop_tool_shape_ = (shape == "ellipsoid") ? CropToolShape::Ellipsoid : CropToolShape::Box;
+        crop_tool_shape_ = shape == "ellipsoid" ? CropToolShape::Ellipsoid
+                           : shape == "polygon" ? CropToolShape::Polygon
+                                                : CropToolShape::Box;
         if (ensureCropToolState())
             updateCropToolOverlayState();
     }
 
     std::string GizmoManager::cropToolShape() const {
-        return crop_tool_shape_ == CropToolShape::Ellipsoid ? "ellipsoid" : "box";
+        switch (crop_tool_shape_) {
+        case CropToolShape::Ellipsoid: return "ellipsoid";
+        case CropToolShape::Polygon: return "polygon";
+        case CropToolShape::Box: break;
+        }
+        return "box";
     }
 
     void GizmoManager::setCropToolOperation(const std::string& operation) {
@@ -973,7 +1147,9 @@ namespace lfs::vis::gui {
 
         // Committing the volume, cropping and removing the volume are one user action,
         // so a single undo restores the splat and the volume.
-        op::TransactionGuard transaction(crop_tool_shape_ == CropToolShape::Box ? "Crop Box" : "Crop Ellipsoid");
+        op::TransactionGuard transaction(crop_tool_shape_ == CropToolShape::Box       ? "Crop Box"
+                                         : crop_tool_shape_ == CropToolShape::Polygon ? "Crop Polygon"
+                                                                                      : "Crop Ellipsoid");
         if (!persistActiveCropToolToNode(true))
             return;
 
@@ -990,6 +1166,13 @@ namespace lfs::vis::gui {
             crop_box.setBounds(cropbox_node->cropbox->min, cropbox_node->cropbox->max);
             crop_box.setworld2BBox(glm::inverse(scene_coords::nodeDataWorldTransform(scene, cropbox_node->id)));
             cmd::CropPLY{.crop_box = crop_box, .inverse = cropbox_node->cropbox->inverse, .target_node_id = cropbox_node->parent_id}.emit();
+        } else if (crop_tool_shape_ == CropToolShape::Polygon) {
+            const auto* polygon_node = scene.getNodeById(crop_tool_volume_node_id_);
+            if (!polygon_node || !polygon_node->crop_polygon) {
+                LOG_WARN("Failed to apply active crop tool: crop polygon node is invalid");
+                return;
+            }
+            emitCropPolygon(scene, *polygon_node);
         } else {
             const auto* ellipsoid_node = scene.getNodeById(crop_tool_volume_node_id_);
             if (!ellipsoid_node || !ellipsoid_node->ellipsoid) {
@@ -1015,15 +1198,284 @@ namespace lfs::vis::gui {
         deleteCropVolumeAfterApply(crop_tool_volume_node_id_);
     }
 
+    void GizmoManager::activateCropPolygonTool() {
+        auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
+        const auto target_id = selectedCropTargetNodeId();
+        if (!sm || !target_id)
+            return;
+        const auto* const target = sm->getScene().getNodeById(*target_id);
+        if (!target || !op::isCropPolygonTarget(target->type)) {
+            LOG_WARN("Crop polygons can only be drawn for splat or point cloud nodes");
+            return;
+        }
+
+        const auto activate = [this] {
+            viewer_->getEditorContext().setActiveOperator("builtin.cropbox", "translate");
+            UnifiedToolRegistry::instance().setActiveTool("builtin.cropbox");
+            setCropToolShape("polygon");
+        };
+        if (op::operators().activeModalId() == op::to_string(op::BuiltinOp::CropPolygonDraw)) {
+            activate();
+            return;
+        }
+
+        if (const core::NodeId polygon_id = sm->getScene().getCropPolygonForSplat(*target_id);
+            polygon_id != core::NULL_NODE) {
+            python::cancel_active_operator();
+            activate();
+            if (!sm->getScene().getNodeById(polygon_id)->visible)
+                sm->setNodeVisibilityTransient(polygon_id, true);
+            sm->selectNode(polygon_id);
+            return;
+        }
+
+        // The draw operator enters the polygon tool itself and restores the scene on cancel.
+        python::cancel_active_operator();
+        op::OperatorProperties props;
+        props.set("target_node_id", static_cast<int>(*target_id));
+        if (op::operators().invoke(op::BuiltinOp::CropPolygonDraw, &props).status != op::OperatorResult::RUNNING_MODAL)
+            LOG_WARN("Cannot start drawing a crop polygon");
+    }
+
+    void GizmoManager::fitSelectedCropPolygon(const bool use_percentile) {
+        auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
+        const core::NodeId polygon_id = sm ? sm->getSelectedNodeCropPolygonId() : core::NULL_NODE;
+        if (polygon_id == core::NULL_NODE)
+            return;
+        if (auto result = cap::fitCropPolygonToParent(*sm, viewer_->getRenderingManager(), polygon_id, use_percentile);
+            !result)
+            LOG_WARN("Failed to fit crop polygon: {}", result.error().user_message());
+    }
+
+    void GizmoManager::toggleSelectedCropInverse() {
+        auto* const sm = viewer_->getSceneManager();
+        if (!sm)
+            return;
+
+        if (const core::NodeId polygon_id = sm->getSelectedNodeCropPolygonId(); polygon_id != core::NULL_NODE) {
+            auto* const node = sm->getScene().getNodeById(polygon_id);
+            if (!node || !node->crop_polygon)
+                return;
+            const auto before = *node->crop_polygon;
+            const auto before_transform = sm->getNodeTransform(node->name);
+            node->crop_polygon->inverse = !node->crop_polygon->inverse;
+            sm->getScene().notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
+            if (auto* const rm = viewer_->getRenderingManager())
+                rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
+            auto entry = std::make_unique<op::CropPolygonUndoEntry>(
+                *sm, node->name, before, before_transform, node->visible.get());
+            if (entry->hasChanges())
+                op::undoHistory().push(std::move(entry));
+            return;
+        }
+
+        if (auto cropbox_id = cap::resolveCropBoxId(*sm, std::nullopt)) {
+            const auto* node = sm->getScene().getNodeById(*cropbox_id);
+            if (!node || !node->cropbox)
+                return;
+
+            cap::CropBoxUpdate update;
+            update.has_inverse = true;
+            update.inverse = !node->cropbox->inverse;
+            if (auto result = cap::updateCropBox(*sm, viewer_->getRenderingManager(), *cropbox_id, update); !result) {
+                LOG_WARN("Failed to toggle crop inverse: {}", result.error());
+            }
+            return;
+        }
+
+        const auto ellipsoid_id = cap::resolveEllipsoidId(*sm, std::nullopt);
+        const auto* const ellipsoid_node = ellipsoid_id ? sm->getScene().getNodeById(*ellipsoid_id) : nullptr;
+        if (!ellipsoid_node || !ellipsoid_node->ellipsoid)
+            return;
+
+        cap::EllipsoidUpdate update;
+        update.has_inverse = true;
+        update.inverse = !ellipsoid_node->ellipsoid->inverse;
+        if (auto result = cap::updateEllipsoid(*sm, viewer_->getRenderingManager(), *ellipsoid_id, update); !result) {
+            LOG_WARN("Failed to toggle ellipsoid inverse: {}", result.error());
+        }
+    }
+
+    std::optional<bool> GizmoManager::selectedCropInverse() const {
+        auto* const sm = viewer_->getSceneManager();
+        if (!sm)
+            return std::nullopt;
+        if (const core::NodeId polygon_id = sm->getSelectedNodeCropPolygonId(); polygon_id != core::NULL_NODE) {
+            const auto* const node = sm->getScene().getNodeById(polygon_id);
+            return node && node->crop_polygon ? std::optional<bool>(node->crop_polygon->inverse) : std::nullopt;
+        }
+        if (const auto cropbox_id = cap::resolveCropBoxId(*sm, std::nullopt)) {
+            const auto* const node = sm->getScene().getNodeById(*cropbox_id);
+            return node && node->cropbox ? std::optional<bool>(node->cropbox->inverse) : std::nullopt;
+        }
+        if (const auto ellipsoid_id = cap::resolveEllipsoidId(*sm, std::nullopt)) {
+            const auto* const node = sm->getScene().getNodeById(*ellipsoid_id);
+            return node && node->ellipsoid ? std::optional<bool>(node->ellipsoid->inverse) : std::nullopt;
+        }
+        return std::nullopt;
+    }
+
+    void GizmoManager::resetSelectedCropPolygon() {
+        auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
+        const core::NodeId polygon_id = sm ? sm->getSelectedNodeCropPolygonId() : core::NULL_NODE;
+        if (polygon_id == core::NULL_NODE)
+            return;
+        if (auto result = cap::resetCropPolygon(*sm, viewer_->getRenderingManager(), polygon_id); !result)
+            LOG_WARN("Failed to reset crop polygon: {}", result.error().user_message());
+    }
+
+    GizmoManager::CropPolygonHandles GizmoManager::updateCropPolygonVertexEdit(const glm::vec2 panel_pos,
+                                                                               const glm::vec2 panel_size,
+                                                                               const glm::mat4& view,
+                                                                               const glm::mat4& projection) {
+        CropPolygonHandles handles;
+        const glm::mat4 view_projection = projection * view;
+        const auto& frame_input = viewer_->getWindowManager()->frameInput();
+        const glm::vec2 mouse(frame_input.mouse_x, frame_input.mouse_y);
+        const auto project = [&](const std::vector<glm::vec2>& vertices, const glm::mat4& to_world, const float z) {
+            std::vector<std::optional<glm::vec2>> points;
+            points.reserve(vertices.size());
+            for (const glm::vec2& vertex : vertices)
+                points.push_back(projectToPanel(view_projection, panel_pos, panel_size,
+                                                glm::vec3(to_world * glm::vec4(vertex, z, 1.0f))));
+            return points;
+        };
+
+        if (crop_polygon_vertex_drag_) {
+            auto& drag = *crop_polygon_vertex_drag_;
+            if (frame_input.mouse_down[0]) {
+                if (const auto local = pixelOnPolygonPlane(view_projection, panel_pos, panel_size,
+                                                           drag.polygon_to_world, drag.plane_z, mouse);
+                    local && *local != drag.vertices[drag.index]) {
+                    drag.vertices[drag.index] = *local;
+                    drag.moved = true;
+                    previewCropPolygonOutline(drag.vertices, drag.polygon_to_world);
+                }
+                handles.screen = project(drag.vertices, drag.polygon_to_world, drag.plane_z);
+                handles.hot = static_cast<int>(drag.index);
+                handles.owns_pointer = true;
+                return handles;
+            }
+            // Released: the whole drag is one outline edit.
+            auto vertices = std::move(drag.vertices);
+            const bool moved = drag.moved;
+            crop_polygon_vertex_drag_.reset();
+            if (moved)
+                (void)commitCropPolygonOutline(std::move(vertices));
+            else
+                (void)ensureCropToolState();
+        }
+
+        auto* const sm = viewer_->getSceneManager();
+        if (!sm || !sm->getScene().isNodeEffectivelyVisible(crop_tool_volume_node_id_))
+            return handles;
+
+        // Handles sit on the cap that faces the camera.
+        const glm::mat4& to_world = crop_tool_visualizer_transform_;
+        const glm::vec3 camera(glm::inverse(view)[3]);
+        const float plane_z = glm::dot(glm::vec3(to_world[2]), camera - glm::vec3(to_world[3])) >= 0.0f
+                                  ? crop_tool_polygon_half_depth_
+                                  : -crop_tool_polygon_half_depth_;
+        handles.screen = project(crop_tool_polygon_vertices_, to_world, plane_z);
+
+        // A gizmo drag keeps the pointer; elsewhere the vertex handles win only on themselves.
+        if (crop_tool_drag_active_ || isBoundsGizmoActive() || isTranslationGizmoActive() ||
+            isRotationGizmoActive() || isScaleGizmoActive())
+            return handles;
+        const bool gizmo_hovered = isBoundsGizmoHovered() || isTranslationGizmoHovered() ||
+                                   isRotationGizmoHovered() || isScaleGizmoHovered();
+        handles.hot = findOutlineVertexAt(handles.screen, mouse);
+
+        // The key map of the controller that dispatches these presses decides insert and remove.
+        const auto* const input_controller = viewer_->getWindowManager()->inputController();
+        const int mods = input::sdlModsToAppMods(frame_input.key_mods);
+        for (const auto& press : frame_input.mouse_button_events) {
+            if (!press.down)
+                continue;
+            const glm::vec2 point(press.x, press.y);
+            const int vertex = findOutlineVertexAt(handles.screen, point);
+            const auto action = input_controller
+                                    ? input_controller->getBindings().getActionForMouseButton(
+                                          input::ToolMode::CROP_BOX, static_cast<input::MouseButton>(press.button), mods)
+                                    : input::Action::NONE;
+            if (action == input::Action::REMOVE_CROP_POLYGON_VERTEX) {
+                if (vertex >= 0 && crop_tool_polygon_vertices_.size() > core::crop_polygon::kMinVertices) {
+                    auto vertices = crop_tool_polygon_vertices_;
+                    vertices.erase(vertices.begin() + vertex);
+                    (void)commitCropPolygonOutline(std::move(vertices));
+                }
+                return handles;
+            }
+            if (action == input::Action::INSERT_CROP_POLYGON_VERTEX) {
+                const int edge = gizmo_hovered ? -1 : findOutlineEdgeAt(handles.screen, point);
+                const auto local = edge >= 0 ? pixelOnPolygonPlane(view_projection, panel_pos, panel_size, to_world,
+                                                                   plane_z, point)
+                                             : std::nullopt;
+                if (local) {
+                    auto vertices = crop_tool_polygon_vertices_;
+                    vertices.insert(vertices.begin() + edge + 1, *local);
+                    (void)commitCropPolygonOutline(std::move(vertices));
+                }
+                return handles;
+            }
+            if (press.button == static_cast<uint8_t>(input::AppMouseButton::LEFT) && vertex >= 0) {
+                crop_polygon_vertex_drag_ = CropPolygonVertexDrag{
+                    .index = static_cast<size_t>(vertex),
+                    .plane_z = plane_z,
+                    .polygon_to_world = to_world,
+                    .vertices = crop_tool_polygon_vertices_,
+                    .moved = false,
+                };
+                handles.hot = vertex;
+            }
+        }
+        handles.owns_pointer = handles.hot >= 0;
+        return handles;
+    }
+
+    void GizmoManager::previewCropPolygonOutline(const std::vector<glm::vec2>& vertices, const glm::mat4& polygon_to_world) {
+        // Shown re-centred like the commit will store it, so the prism does not jump on release.
+        glm::vec2 lo(std::numeric_limits<float>::max());
+        glm::vec2 hi(std::numeric_limits<float>::lowest());
+        for (const glm::vec2& vertex : vertices) {
+            lo = glm::min(lo, vertex);
+            hi = glm::max(hi, vertex);
+        }
+        const glm::vec2 centre = (lo + hi) * 0.5f;
+        crop_tool_polygon_vertices_.clear();
+        for (const glm::vec2& vertex : vertices)
+            crop_tool_polygon_vertices_.push_back(vertex - centre);
+        crop_tool_polygon_half_extents_ = glm::vec3(core::crop_polygon::outlineHalfExtents(crop_tool_polygon_vertices_),
+                                                    crop_tool_polygon_half_depth_);
+        crop_tool_visualizer_transform_ = glm::translate(polygon_to_world, glm::vec3(centre, 0.0f));
+        updateCropToolOverlayState();
+    }
+
+    bool GizmoManager::commitCropPolygonOutline(std::vector<glm::vec2> vertices) {
+        auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
+        bool committed = false;
+        if (sm && crop_tool_volume_node_id_ != core::NULL_NODE) {
+            if (auto result = cap::setCropPolygonOutline(*sm, viewer_->getRenderingManager(), crop_tool_volume_node_id_,
+                                                         std::move(vertices));
+                result) {
+                committed = true;
+            } else {
+                LOG_WARN("Crop polygon edit rejected: {}", result.error().user_message());
+            }
+        }
+        // Back to the stored outline, edited or not.
+        if (ensureCropToolState())
+            updateCropToolOverlayState();
+        return committed;
+    }
+
     void GizmoManager::setupEvents() {
         using namespace lfs::core::events;
 
         ui::NodeSelected::when([this](const auto& event) {
             auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
             const auto* const selected_node = sm ? sm->getScene().getNode(event.path) : nullptr;
-            const bool selected_crop_volume = selected_node &&
-                                              (selected_node->type == core::NodeType::CROPBOX ||
-                                               selected_node->type == core::NodeType::ELLIPSOID);
+            const bool selected_crop_volume = selected_node && isCropVolumeType(selected_node->type);
             const bool selected_crop_target = selected_node &&
                                               (selected_node->type == core::NodeType::SPLAT ||
                                                selected_node->type == core::NodeType::POINTCLOUD);
@@ -1037,7 +1489,9 @@ namespace lfs::vis::gui {
                         sm->setNodeVisibilityTransient(selected_node->id, true);
                     viewer_->getEditorContext().setActiveOperator("builtin.cropbox", "translate");
                     UnifiedToolRegistry::instance().setActiveTool("builtin.cropbox");
-                    setCropToolShape(selected_node->type == core::NodeType::ELLIPSOID ? "ellipsoid" : "box");
+                    setCropToolShape(selected_node->type == core::NodeType::ELLIPSOID      ? "ellipsoid"
+                                     : selected_node->type == core::NodeType::CROP_POLYGON ? "polygon"
+                                                                                           : "box");
                     if (ensureCropToolState())
                         updateCropToolOverlayState();
                 } else {
@@ -1055,6 +1509,9 @@ namespace lfs::vis::gui {
                             sm->setNodeVisibilityTransient(cropbox_id, false);
                         if (const auto* ellipsoid = scene.getNodeById(ellipsoid_id); ellipsoid && ellipsoid->visible)
                             sm->setNodeVisibilityTransient(ellipsoid_id, false);
+                        const core::NodeId polygon_id = scene.getCropPolygonForSplat(selected_node->id);
+                        if (const auto* polygon = scene.getNodeById(polygon_id); polygon && polygon->visible)
+                            sm->setNodeVisibilityTransient(polygon_id, false);
                     }
                 }
             }
@@ -1086,8 +1543,7 @@ namespace lfs::vis::gui {
             // Undo can reselect a crop volume without entering the crop tool.
             const auto* const sm = viewer_->getSceneManager();
             const bool selected_crop_volume = sm && sm->hasSelectedNode() &&
-                                              (sm->getSelectedNodeType() == core::NodeType::CROPBOX ||
-                                               sm->getSelectedNodeType() == core::NodeType::ELLIPSOID);
+                                              isCropVolumeType(sm->getSelectedNodeType());
             if (registry.getActiveTool() == "builtin.cropbox" ||
                 (tool != ToolType::None && selected_crop_volume)) {
                 leaveCropTool(true, true, true);
@@ -1265,26 +1721,26 @@ namespace lfs::vis::gui {
             deleteCropVolumeAfterApply(ellipsoid_id);
         });
 
-        cmd::ToggleCropInverse::when([this](const auto&) {
-            auto* const sm = viewer_->getSceneManager();
-            if (!sm)
+        cmd::ApplyCropPolygon::when([this](const auto&) {
+            if (isCropToolActive()) {
+                applyActiveCropTool();
                 return;
-
-            auto cropbox_id = cap::resolveCropBoxId(*sm, std::nullopt);
-            if (!cropbox_id)
-                return;
-
-            const auto* node = sm->getScene().getNodeById(*cropbox_id);
-            if (!node || !node->cropbox)
-                return;
-
-            cap::CropBoxUpdate update;
-            update.has_inverse = true;
-            update.inverse = !node->cropbox->inverse;
-            if (auto result = cap::updateCropBox(*sm, viewer_->getRenderingManager(), *cropbox_id, update); !result) {
-                LOG_WARN("Failed to toggle crop inverse: {}", result.error());
             }
+
+            auto* const sm = viewer_->getSceneManager();
+            const core::NodeId polygon_id = sm ? sm->getSelectedNodeCropPolygonId() : core::NULL_NODE;
+            const auto* polygon_node = sm ? sm->getScene().getNodeById(polygon_id) : nullptr;
+            if (!polygon_node || !polygon_node->crop_polygon || !sm->canApplyCropToNode(polygon_node->parent_id))
+                return;
+
+            op::TransactionGuard transaction("Crop Polygon");
+            emitCropPolygon(sm->getScene(), *polygon_node);
+            triggerCropFlash();
+            deleteCropVolumeAfterApply(polygon_id);
+            transaction.commit();
         });
+
+        cmd::ToggleCropInverse::when([this](const auto&) { toggleSelectedCropInverse(); });
 
         cmd::CycleSelectionVisualization::when([this](const auto&) {
             if (viewer_->getEditorContext().getActiveTool() != ToolType::Selection)
@@ -1325,8 +1781,7 @@ namespace lfs::vis::gui {
         const bool is_selection_mode = active_tool_id == "builtin.select";
         const bool is_selection_volume_tool = is_selection_mode && isSelectionVolumeSubMode(selection_mode_);
         const bool selected_crop_volume = has_selected_node && scene_manager &&
-                                          (scene_manager->getSelectedNodeType() == core::NodeType::CROPBOX ||
-                                           scene_manager->getSelectedNodeType() == core::NodeType::ELLIPSOID);
+                                          isCropVolumeType(scene_manager->getSelectedNodeType());
 
         ToolStateStamp stamp;
         stamp.valid = true;
@@ -1438,7 +1893,7 @@ namespace lfs::vis::gui {
             return;
 
         const auto selected_type = scene_manager->getSelectedNodeType();
-        if (selected_type == core::NodeType::CROPBOX || selected_type == core::NodeType::ELLIPSOID ||
+        if (isCropVolumeType(selected_type) ||
             selected_type == core::NodeType::KEYFRAME || selected_type == core::NodeType::KEYFRAME_GROUP)
             return;
 
@@ -2807,10 +3262,15 @@ namespace lfs::vis::gui {
         overlay_drawlist.PopClipRect();
     }
 
+    // Shared by the ellipsoid and the polygon prism: both are centred on their
+    // local origin, so the bounds gizmo works on their half extents.
     void GizmoManager::renderCropToolEllipsoidGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
         auto* const render_manager = ctx.viewer->getRenderingManager();
-        if (!render_manager || crop_tool_shape_ != CropToolShape::Ellipsoid || !ensureCropToolState())
+        const bool polygon = crop_tool_shape_ == CropToolShape::Polygon;
+        if (!render_manager || (crop_tool_shape_ != CropToolShape::Ellipsoid && !polygon) || !ensureCropToolState())
             return;
+        // The polygon tool only scales the transform, so its half extents stay as drawn.
+        glm::vec3& half_extents = polygon ? crop_tool_polygon_half_extents_ : crop_tool_ellipsoid_radii_;
 
         const auto active_panel = resolveActiveGizmoPanel(ctx.viewer, viewport);
         if (!active_panel || !active_panel->valid())
@@ -2822,6 +3282,11 @@ namespace lfs::vis::gui {
         const glm::ivec2 vp_size(static_cast<int>(active_panel->size.x), static_cast<int>(active_panel->size.y));
         const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
             vp_size, settings.focal_length_mm, settings.orthographic, settings.ortho_scale);
+
+        // Vertex handles take the pointer only on themselves; elsewhere the gizmos keep it.
+        CropPolygonHandles polygon_handles;
+        if (polygon && isCropToolActive())
+            polygon_handles = updateCropPolygonVertexEdit(active_panel->pos, active_panel->size, view, projection);
 
         const glm::vec3 world_scale = glm::max(extractScale(crop_tool_visualizer_transform_), glm::vec3(1e-6f));
         const glm::mat3 rotation = extractRotation(crop_tool_visualizer_transform_);
@@ -2835,7 +3300,7 @@ namespace lfs::vis::gui {
         glm::mat4 gizmo_matrix = glm::translate(glm::mat4(1.0f), pivot_world);
         if (local_aligned)
             gizmo_matrix *= glm::mat4(rotation);
-        gizmo_matrix = glm::scale(gizmo_matrix, crop_tool_ellipsoid_radii_ * world_scale);
+        gizmo_matrix = glm::scale(gizmo_matrix, half_extents * world_scale);
         const glm::mat3 local_orientation = isSelectionVolumeMode()
                                                 ? selectionVolumeLocalRotation(gizmo_matrix)
                                                 : userFacingLocalRotation(gizmo_matrix);
@@ -2852,6 +3317,10 @@ namespace lfs::vis::gui {
         if (!interactive_view) {
             gizmo_input.mouse_left_clicked = false;
             gizmo_input.mouse_left_down = false;
+        }
+        if (polygon_handles.owns_pointer) {
+            gizmo_input.mouse_pos = glm::vec2(-1.0e6f);
+            gizmo_input.mouse_left_clicked = false;
         }
         const bool snap_modifier = nativeControlModifierDown(frame_input);
 
@@ -2871,7 +3340,7 @@ namespace lfs::vis::gui {
             bounds_config.center_world = glm::vec3(gizmo_matrix[3]);
             bounds_config.orientation_world = local_orientation;
             bounds_config.half_extents_world = extractScale(gizmo_matrix);
-            const glm::vec3 radii = glm::max(crop_tool_ellipsoid_radii_, glm::vec3(1e-6f));
+            const glm::vec3 radii = glm::max(half_extents, glm::vec3(1e-6f));
             bounds_config.min_half_extents_world =
                 isCropToolActive() ? radii * gizmo_ops::MIN_VOLUME_AXIS_SCALE : world_scale * MIN_GIZMO_SCALE;
             bounds_config.draw_list = &overlay_drawlist;
@@ -2889,7 +3358,7 @@ namespace lfs::vis::gui {
                     for (int axis = 0; axis < 3; ++axis)
                         crop_tool_visualizer_transform_[axis] *= ratio[axis];
                 } else {
-                    crop_tool_ellipsoid_radii_ =
+                    half_extents =
                         glm::max(bounds_result.half_extents_world / world_scale, glm::vec3(MIN_GIZMO_SCALE));
                 }
                 crop_tool_visualizer_transform_[3] = glm::vec4(bounds_result.center_world, 1.0f);
@@ -2970,7 +3439,7 @@ namespace lfs::vis::gui {
                 if (isCropToolActive()) {
                     scaleCropToolTransform(scale_result.total_scale);
                 } else {
-                    crop_tool_ellipsoid_radii_ *= scale_result.delta_scale;
+                    half_extents *= scale_result.delta_scale;
                 }
             }
             if (scale_result.hovered || scale_result.active)
@@ -3015,16 +3484,22 @@ namespace lfs::vis::gui {
                 if (auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr) {
                     if (const auto* const node = sm->getScene().getNodeById(crop_tool_volume_node_id_)) {
                         effectively_visible = sm->getScene().isNodeEffectivelyVisible(crop_tool_volume_node_id_);
-                        affects_render = node->ellipsoid && node->ellipsoid->enabled;
+                        affects_render = polygon ? node->crop_polygon && node->crop_polygon->enabled
+                                                 : node->ellipsoid && node->ellipsoid->enabled;
                         parent_node_index = sm->getScene().getVisibleNodeIndex(node->parent_id);
                     }
                 }
             }
-            if (effectively_visible) {
+            if (!effectively_visible) {
+                render_manager->setEllipsoidGizmoActive(false);
+                render_manager->setCropPolygonGizmoActive(false);
+            } else if (polygon) {
+                render_manager->setCropPolygonGizmoState(true, crop_tool_polygon_vertices_, crop_tool_polygon_half_depth_,
+                                                         crop_tool_visualizer_transform_, affects_render,
+                                                         parent_node_index);
+            } else {
                 render_manager->setEllipsoidGizmoState(
                     true, crop_tool_ellipsoid_radii_, crop_tool_visualizer_transform_, affects_render, parent_node_index);
-            } else {
-                render_manager->setEllipsoidGizmoActive(false);
             }
         }
 
@@ -3039,11 +3514,22 @@ namespace lfs::vis::gui {
                 (void)persistActiveCropToolToNode(false);
         }
 
+        for (size_t i = 0; i < polygon_handles.screen.size(); ++i) {
+            if (const auto& point = polygon_handles.screen[i]) {
+                const bool hot = static_cast<int>(i) == polygon_handles.hot;
+                overlay_drawlist.AddCircleFilled(*point, CROP_POLYGON_HANDLE_RADIUS_PX,
+                                                 hot ? CROP_POLYGON_HANDLE_HOT_COLOR : CROP_POLYGON_HANDLE_COLOR);
+                overlay_drawlist.AddCircle(*point, CROP_POLYGON_HANDLE_RADIUS_PX, CROP_POLYGON_HANDLE_OUTLINE, 16, 1.0f);
+            }
+        }
+
         overlay_drawlist.PopClipRect();
     }
 
     void GizmoManager::renderEllipsoidGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
-        if (isVolumeGizmoToolActive() && crop_tool_shape_ == CropToolShape::Ellipsoid) {
+        // The polygon prism is centred like the ellipsoid and shares its crop tool gizmo.
+        if (isVolumeGizmoToolActive() &&
+            (crop_tool_shape_ == CropToolShape::Ellipsoid || crop_tool_shape_ == CropToolShape::Polygon)) {
             renderCropToolEllipsoidGizmo(ctx, viewport);
             return;
         }
@@ -3623,6 +4109,13 @@ namespace lfs::vis::gui {
             cancelled = true;
         }
 
+        if (crop_polygon_vertex_drag_) {
+            crop_polygon_vertex_drag_.reset();
+            if (ensureCropToolState())
+                updateCropToolOverlayState();
+            cancelled = true;
+        }
+
         if (crop_tool_drag_active_ || selection_volume_gizmo_active_) {
             crop_tool_box_min_ = crop_tool_box_min_before_drag_;
             crop_tool_box_max_ = crop_tool_box_max_before_drag_;
@@ -3905,7 +4398,9 @@ namespace lfs::vis::gui {
         using namespace lfs::core::events;
 
         auto* sm = viewer_->getSceneManager();
-        const bool is_cropbox = sm && sm->getSelectedNodeType() == core::NodeType::CROPBOX;
+        const auto selected_type = sm ? sm->getSelectedNodeType() : core::NodeType::SPLAT;
+        const bool is_cropbox = selected_type == core::NodeType::CROPBOX;
+        const bool is_polygon = selected_type == core::NodeType::CROP_POLYGON;
 
         if (action_id == "crop.translate") {
             current_operation_ = GizmoOperation::Translate;
@@ -3916,35 +4411,27 @@ namespace lfs::vis::gui {
         } else if (action_id == "crop.apply") {
             if (is_cropbox)
                 cmd::ApplyCropBox{}.emit();
+            else if (is_polygon)
+                cmd::ApplyCropPolygon{}.emit();
             else
                 cmd::ApplyEllipsoid{}.emit();
-        } else if (action_id == "crop.fit") {
+        } else if (action_id == "crop.fit" || action_id == "crop.fit_trim") {
+            const bool use_percentile = action_id == "crop.fit_trim";
             if (is_cropbox) {
                 auto cropbox_id = cap::resolveCropBoxId(*sm, std::nullopt);
                 if (!cropbox_id)
                     return;
-                if (auto result = cap::fitCropBoxToParent(*sm, viewer_->getRenderingManager(), *cropbox_id, false);
+                if (auto result =
+                        cap::fitCropBoxToParent(*sm, viewer_->getRenderingManager(), *cropbox_id, use_percentile);
                     !result) {
                     LOG_WARN("Failed to fit cropbox: {}", result.error());
                 }
+            } else if (is_polygon) {
+                fitSelectedCropPolygon(use_percentile);
             } else {
-                cmd::FitEllipsoidToScene{.use_percentile = false}.emit();
-            }
-        } else if (action_id == "crop.fit_trim") {
-            if (is_cropbox) {
-                auto cropbox_id = cap::resolveCropBoxId(*sm, std::nullopt);
-                if (!cropbox_id)
-                    return;
-                if (auto result = cap::fitCropBoxToParent(*sm, viewer_->getRenderingManager(), *cropbox_id, true);
-                    !result) {
-                    LOG_WARN("Failed to trim-fit cropbox: {}", result.error());
-                }
-            } else {
-                cmd::FitEllipsoidToScene{.use_percentile = true}.emit();
+                cmd::FitEllipsoidToScene{.use_percentile = use_percentile}.emit();
             }
         } else if (action_id == "crop.invert") {
-            if (!is_cropbox)
-                return;
             cmd::ToggleCropInverse{}.emit();
         } else if (action_id == "crop.reset") {
             if (is_cropbox) {
@@ -3954,14 +4441,17 @@ namespace lfs::vis::gui {
                 if (auto result = cap::resetCropBox(*sm, viewer_->getRenderingManager(), *cropbox_id); !result) {
                     LOG_WARN("Failed to reset cropbox: {}", result.error());
                 }
+            } else if (is_polygon) {
+                resetSelectedCropPolygon();
             } else {
                 cmd::ResetEllipsoid{}.emit();
             }
         } else if (action_id == "crop.delete") {
             if (!sm)
                 return;
-            const core::NodeId id = is_cropbox ? sm->getSelectedNodeCropBoxId()
-                                               : sm->getSelectedNodeEllipsoidId();
+            const core::NodeId id = is_cropbox   ? sm->getSelectedNodeCropBoxId()
+                                    : is_polygon ? sm->getSelectedNodeCropPolygonId()
+                                                 : sm->getSelectedNodeEllipsoidId();
             if (id == core::NULL_NODE)
                 return;
             const auto* node = sm->getScene().getNodeById(id);

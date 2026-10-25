@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "core/crop_polygon.hpp"
 #include "core/export.hpp"
 #include "rendering/rendering.hpp"
 #include <expected>
@@ -36,10 +37,23 @@ namespace lfs::vis {
             EllipsoidParamStride = 5,
             EllipsoidExtraCount = 15,
             ViewWindow = EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount,
+            // The desktop overlay table the tensor splat projector reads (Metal viewport).
             ParamCount = ViewWindow + 1,
+            // Crop polygon slots, read by the VkSplat shaders only: flags, (half_depth,
+            // vertex_count), world->local rows, then two vertices per float4. Packed densely;
+            // the first disabled slot ends the list. utils.slang mirrors every index.
+            CropPolygonBase = ParamCount,
+            CropPolygonParams = 1,
+            CropPolygonTransform = 2,
+            CropPolygonVertices = 6,
+            CropPolygonParamStride = CropPolygonVertices + lfs::core::crop_polygon::kMaxVertices / 2,
+            CropPolygonCount = 16,
+            // The whole table buildOverlayParamsCpuFloats returns.
+            TableParamCount = CropPolygonBase + CropPolygonParamStride * CropPolygonCount,
         };
         static_assert(EllipsoidFlags + EllipsoidParamStride <= ViewIntrinsics);
         static_assert(EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount == ViewWindow);
+        static_assert(CropPolygonTransform + 4 == CropPolygonVertices);
 
         // Exposed for tests (O4): pure function over the request, no device state.
         [[nodiscard]] LFS_VIS_API std::expected<std::vector<float>, std::string>

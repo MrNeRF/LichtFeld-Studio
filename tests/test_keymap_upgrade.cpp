@@ -144,6 +144,77 @@ namespace lfs::vis::input {
             fs::remove(path);
         }
 
+        TEST_F(KeymapTest, CropPolygonVertexClicksUpgradeAndPreserveRebinding) {
+            InputBindings defaults;
+            EXPECT_EQ(defaults.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_SHIFT),
+                      Action::INSERT_CROP_POLYGON_VERTEX);
+            EXPECT_EQ(defaults.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_CTRL),
+                      Action::REMOVE_CROP_POLYGON_VERTEX);
+
+            const auto path = fs::temp_directory_path() / "lfs_keymap_crop_polygon_vertex_upgrade.json";
+            // Dev's key maps before the clicks, including its v36 that master's v36 shares a number with.
+            for (const auto* const version : {"v35", "v36"}) {
+                SCOPED_TRACE(version);
+                test::writeProfile(path, test::historicalSavedProfile(version));
+                InputBindings upgraded;
+                ASSERT_TRUE(upgraded.loadProfileFromFile(path));
+                EXPECT_EQ(upgraded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_SHIFT),
+                          Action::INSERT_CROP_POLYGON_VERTEX);
+                EXPECT_EQ(upgraded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_CTRL),
+                          Action::REMOVE_CROP_POLYGON_VERTEX);
+                EXPECT_EQ(upgraded.getActionForKey(ToolMode::CROP_BOX, KEY_ENTER, 0), Action::APPLY_CROP_BOX);
+                EXPECT_EQ(upgraded.getActionForDrag(ToolMode::SELECTION, MouseButton::LEFT, MODIFIER_SHIFT),
+                          Action::SELECTION_ADD);
+                upgraded.setBinding(ToolMode::CROP_BOX, Action::REMOVE_CROP_POLYGON_VERTEX,
+                                    MouseButtonTrigger{MouseButton::LEFT, MODIFIER_ALT});
+                ASSERT_TRUE(upgraded.saveProfileToFile(path));
+                InputBindings reloaded;
+                ASSERT_TRUE(reloaded.loadProfileFromFile(path));
+                EXPECT_EQ(reloaded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_ALT),
+                          Action::REMOVE_CROP_POLYGON_VERTEX);
+                EXPECT_EQ(reloaded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_CTRL),
+                          Action::NONE);
+                EXPECT_EQ(reloaded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_SHIFT),
+                          Action::INSERT_CROP_POLYGON_VERTEX);
+            }
+            fs::remove(path);
+        }
+
+        // Fails if a key map saved by master's v36, which has the vertex clicks under master's action
+        // numbers, loses them or its user changes, or misses dev's defaults on this build.
+        TEST_F(KeymapTest, MasterV36ProfileKeepsVertexClicksAndChangesAndGainsDevDefaults) {
+            const auto path = fs::temp_directory_path() / "lfs_keymap_master_v36_upgrade.json";
+            auto saved = test::historicalSavedProfile("v36_master");
+            ASSERT_EQ(saved.at("version"), 36);
+            bool rebound = false;
+            for (auto& binding : saved["bindings"]) {
+                if (binding.value("mode", -1) == static_cast<int>(ToolMode::ALIGN) &&
+                    binding.value("description", std::string{}) == "Remove last point") {
+                    binding["key"] = KEY_F9;
+                    rebound = true;
+                }
+            }
+            ASSERT_TRUE(rebound);
+            test::writeProfile(path, saved);
+            InputBindings upgraded;
+            ASSERT_TRUE(upgraded.loadProfileFromFile(path));
+            EXPECT_EQ(upgraded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_SHIFT),
+                      Action::INSERT_CROP_POLYGON_VERTEX);
+            EXPECT_EQ(upgraded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_CTRL),
+                      Action::REMOVE_CROP_POLYGON_VERTEX);
+            EXPECT_EQ(upgraded.getActionForKey(ToolMode::ALIGN, KEY_F9, 0), Action::REMOVE_LAST_POINT);
+            EXPECT_EQ(upgraded.getActionForKey(ToolMode::ALIGN, KEY_BACKSPACE, 0), Action::NONE);
+            EXPECT_EQ(upgraded.getActionForKey(ToolMode::ALIGN, KEY_ENTER, 0), Action::APPLY_ALIGNMENT);
+            InputBindings defaults;
+            for (const auto action : {Action::VIEW_AXIS_TOP, Action::VIEW_FRAME_ALL, Action::TOGGLE_NODE_EDITOR,
+                                      Action::CAMERA_RESTORE_HOME, Action::DEPTH_WINDOW_DRAG}) {
+                SCOPED_TRACE(static_cast<int>(action));
+                EXPECT_EQ(upgraded.getTriggerForAction(action).has_value(),
+                          defaults.getTriggerForAction(action).has_value());
+            }
+            fs::remove(path);
+        }
+
         TEST_F(KeymapTest, StaleFullListDoesNotOverrideFutureDefaults) {
             const fs::path path = fs::temp_directory_path() / "lfs_keymap_future_defaults.json";
             InputBindings current;

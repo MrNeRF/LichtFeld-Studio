@@ -4080,12 +4080,16 @@ namespace lfs::vis {
             request.filters.ellipsoid_region.has_value() && request.filters.ellipsoid_region->desaturate;
         const bool view_volume_dims =
             request.filters.view_volume.has_value() && request.filters.dim_outside_view_volume;
+        const bool polygon_dims =
+            std::any_of(request.filters.crop_polygon_regions.begin(), request.filters.crop_polygon_regions.end(),
+                        [](const auto& polygon) { return polygon.desaturate; });
         const bool raster_overlays_active =
             selection_enabled ||
             preview_enabled ||
             crop_dims ||
             ellipsoid_dims ||
             view_volume_dims ||
+            polygon_dims ||
             emphasis.dim_non_emphasized ||
             emphasis.focused_gaussian_id >= 0 ||
             request.overlay.cursor.enabled ||
@@ -4110,7 +4114,7 @@ namespace lfs::vis {
         const std::size_t node_mask_region_bytes =
             alignUp(std::max<std::size_t>(node_mask_count, 1), 4);
         const std::size_t overlay_params_region_bytes =
-            static_cast<std::size_t>(detail::ParamCount) * 4 * sizeof(float);
+            static_cast<std::size_t>(detail::TableParamCount) * 4 * sizeof(float);
         const std::size_t model_transforms_region_bytes =
             modelTransformCount(request.scene.model_transforms) * 16 * sizeof(float);
         std::array<std::size_t, kOverlayRegionCount> region_bytes{};
@@ -9100,6 +9104,7 @@ namespace lfs::vis {
                                                  request.scene.node_visibility_mask.size() <= 1u &&
                                                  !request.filters.crop_region && !request.filters.ellipsoid_region &&
                                                  request.filters.crop_regions.empty() && request.filters.ellipsoid_regions.empty() &&
+                                                 request.filters.crop_polygon_regions.empty() &&
                                                  !request.filters.view_volume;
                 if (higs_active) {
                     renderer_.executeMacroDepthWaves(

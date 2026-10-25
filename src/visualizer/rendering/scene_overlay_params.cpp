@@ -50,7 +50,7 @@ namespace lfs::vis {
             const std::size_t node_mask_count,
             const bool node_visibility_cull) {
             try {
-                std::vector<float> cpu(static_cast<std::size_t>(ParamCount) * 4u, 0.0f);
+                std::vector<float> cpu(static_cast<std::size_t>(TableParamCount) * 4u, 0.0f);
                 float* const dst = cpu.data();
 
                 const auto write_crop = [&](const lfs::rendering::GaussianScopedBoxFilter& crop,
@@ -97,6 +97,30 @@ namespace lfs::vis {
                     }
                 } else if (request.filters.ellipsoid_region) {
                     write_ellipsoid(*request.filters.ellipsoid_region, EllipsoidFlags);
+                }
+
+                std::size_t polygon_slot = 0;
+                for (const auto& polygon : request.filters.crop_polygon_regions) {
+                    const auto& vertices = polygon.bounds.vertices;
+                    if (polygon_slot >= CropPolygonCount ||
+                        vertices.size() < lfs::core::crop_polygon::kMinVertices ||
+                        vertices.size() > lfs::core::crop_polygon::kMaxVertices) {
+                        continue;
+                    }
+                    const std::size_t flags_index = CropPolygonBase + polygon_slot++ * CropPolygonParamStride;
+                    writeVec4(dst,
+                              flags_index,
+                              glm::vec4(1.0f,
+                                        polygon.inverse ? 1.0f : 0.0f,
+                                        polygon.desaturate ? 1.0f : 0.0f,
+                                        static_cast<float>(polygon.parent_node_index)));
+                    writeVec4(dst, flags_index + CropPolygonParams,
+                              glm::vec4(polygon.bounds.half_depth, static_cast<float>(vertices.size()), 0.0f, 0.0f));
+                    writeMat4Rows(dst, flags_index + CropPolygonTransform, polygon.bounds.transform);
+                    for (std::size_t i = 0; i < vertices.size(); i += 2) {
+                        const glm::vec2 next = i + 1 < vertices.size() ? vertices[i + 1] : glm::vec2(0.0f);
+                        writeVec4(dst, flags_index + CropPolygonVertices + i / 2, glm::vec4(vertices[i], next));
+                    }
                 }
 
                 if (request.filters.view_volume) {

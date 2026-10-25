@@ -820,6 +820,14 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
     monkeypatch.setattr(lf_stub.ui, "apply_crop_tool", lambda: state.calls.append(("apply_crop_tool",)), raising=False)
     monkeypatch.setattr(lf_stub.ui, "reset_crop_tool", lambda: state.calls.append(("reset_crop_tool",)), raising=False)
     monkeypatch.setattr(lf_stub.ui, "delete_crop_tool_volume", lambda: state.calls.append(("delete_crop_tool_volume",)), raising=False)
+    state.crop_inverse = False
+
+    def toggle_crop_tool_inverse():
+        state.calls.append(("toggle_crop_tool_inverse",))
+        state.crop_inverse = not state.crop_inverse
+
+    monkeypatch.setattr(lf_stub.ui, "get_crop_tool_inverse", lambda: state.crop_inverse, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "toggle_crop_tool_inverse", toggle_crop_tool_inverse, raising=False)
     monkeypatch.setattr(module.ToolRegistry, "get_all", staticmethod(lambda: [crop_tool]), raising=False)
     monkeypatch.setattr(
         module.ToolRegistry,
@@ -833,12 +841,13 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
 
     assert snapshot["show_crop_toolbar"] is True
     assert snapshot["crop_group_buttons"][0]["selected"] is True
-    assert [button["value"] for button in snapshot["crop_object_buttons"]] == ["box", "ellipsoid"]
+    assert [button["value"] for button in snapshot["crop_object_buttons"]] == ["box", "ellipsoid", "polygon"]
     assert [button["value"] for button in snapshot["crop_transform_buttons"]] == ["translate", "rotate", "scale"]
     assert [button["action"] for button in snapshot["crop_action_buttons"]] == [
         "crop_fit",
         "crop_trim",
         "crop_reset",
+        "crop_toggle_inverse",
         "crop_apply",
         "crop_delete",
     ]
@@ -847,6 +856,7 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
         "../icon/arrows-maximize.png",
         "../icon/arrows-minimize.png",
         "../icon/reset.png",
+        "../icon/select-invert.png",
         "../icon/check.png",
         "../icon/scene/trash.png",
     ]
@@ -854,6 +864,7 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
         "scene.fit_to_scene",
         "scene.fit_to_scene_trimmed",
         "scene.reset_crop",
+        "toolbar.invert_crop",
         "common.apply",
         "scene.delete",
     ]
@@ -892,6 +903,127 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
     controller.dispatch("crop_delete", "")
 
     assert state.calls[-1] == ("delete_crop_tool_volume",)
+
+    # Invert shows the crop volume's state and toggles it like the pie menu's Invert.
+    invert = next(button for button in controller.snapshot()["crop_action_buttons"] if button["action"] == "crop_toggle_inverse")
+    assert invert["enabled"] is True
+    assert invert["selected"] is False
+    controller.dispatch("crop_toggle_inverse", "")
+    assert state.calls[-1] == ("toggle_crop_tool_inverse",)
+    invert = next(button for button in controller.snapshot()["crop_action_buttons"] if button["action"] == "crop_toggle_inverse")
+    assert invert["selected"] is True
+    # Without a crop volume to invert, the button is disabled.
+    state.crop_inverse = None
+    invert = next(button for button in controller.snapshot()["crop_action_buttons"] if button["action"] == "crop_toggle_inverse")
+    assert invert["enabled"] is False
+
+
+def test_crop_polygon_button_starts_drawing_and_enables_fit_and_reset(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    state = SimpleNamespace(active_tool="builtin.cropbox", gizmo_type="translate", calls=[], crop_shape="box")
+    crop_tool = SimpleNamespace(
+        id="builtin.cropbox",
+        icon="cropbox",
+        label="Crop",
+        shortcut="",
+        group="utility",
+        submodes=(),
+        pivot_modes=(),
+        selected=None,
+        can_activate=lambda _context: True,
+    )
+    splat = SimpleNamespace(id=1, name="Model", type=SimpleNamespace(name="SPLAT"), children=())
+    scene = SimpleNamespace(
+        get_node=lambda name: splat if name == splat.name else None,
+        get_node_by_id=lambda node_id: splat if node_id == splat.id else None,
+    )
+
+    def set_active_operator(tool_id, gizmo_type=""):
+        state.calls.append(("set_active_operator", tool_id, gizmo_type))
+        state.active_tool = tool_id
+        state.gizmo_type = gizmo_type
+
+    monkeypatch.setattr(lf_stub, "get_scene", lambda: scene, raising=False)
+    monkeypatch.setattr(lf_stub, "get_selected_node_names", lambda: [splat.name], raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: state.active_tool, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_gizmo_type", lambda: state.gizmo_type, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "set_active_operator", set_active_operator, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_crop_tool_shape", lambda: state.crop_shape, raising=False)
+    monkeypatch.setattr(
+        lf_stub.ui,
+        "set_crop_tool_shape",
+        lambda shape: (state.calls.append(("set_crop_tool_shape", shape)), setattr(state, "crop_shape", shape)),
+        raising=False,
+    )
+    monkeypatch.setattr(lf_stub.ui, "start_crop_polygon", lambda: state.calls.append(("start_crop_polygon",)), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "add_cropbox", lambda name: state.calls.append(("add_cropbox", name)), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "apply_crop_tool", lambda: state.calls.append(("apply_crop_tool",)), raising=False)
+    monkeypatch.setattr(
+        lf_stub.ui, "fit_crop_tool", lambda trimmed: state.calls.append(("fit_crop_tool", trimmed)), raising=False
+    )
+    monkeypatch.setattr(lf_stub.ui, "get_crop_tool_inverse", lambda: False, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "reset_crop_tool", lambda: state.calls.append(("reset_crop_tool",)), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "delete_crop_tool_volume", lambda: state.calls.append(("delete_crop_tool_volume",)), raising=False)
+    monkeypatch.setattr(module.ToolRegistry, "get_all", staticmethod(lambda: [crop_tool]), raising=False)
+    monkeypatch.setattr(
+        module.ToolRegistry,
+        "get",
+        staticmethod(lambda tool_id: crop_tool if tool_id == "builtin.cropbox" else None),
+        raising=False,
+    )
+
+    controller = module._GizmoToolbarController()
+    polygon_button = next(button for button in controller.snapshot()["crop_object_buttons"] if button["value"] == "polygon")
+    # The selection tool's polygon icon is reused; the label is localized.
+    assert polygon_button["icon_src"] == "../icon/polygon.png"
+    assert polygon_button["tooltip_key"] == "toolbar.crop_polygon"
+    assert polygon_button["enabled"] is True
+    assert polygon_button["selected"] is False
+
+    controller.dispatch("crop_object", "polygon")
+
+    assert state.calls == [
+        ("set_crop_tool_shape", "polygon"),
+        ("start_crop_polygon",),
+        ("set_active_operator", "builtin.cropbox", "translate"),
+    ]
+    snapshot = controller.snapshot()
+    assert next(button for button in snapshot["crop_object_buttons"] if button["value"] == "polygon")["selected"] is True
+    actions = {button["action"]: button["enabled"] for button in snapshot["crop_action_buttons"]}
+    assert actions == {
+        "crop_fit": True,
+        "crop_trim": True,
+        "crop_reset": True,
+        "crop_toggle_inverse": True,
+        "crop_apply": True,
+        "crop_delete": True,
+    }
+
+    controller.dispatch("crop_fit", "")
+    controller.dispatch("crop_trim", "")
+    controller.dispatch("crop_reset", "")
+    controller.dispatch("crop_apply", "")
+    controller.dispatch("crop_delete", "")
+    assert state.calls[-5:] == [
+        ("fit_crop_tool", False),
+        ("fit_crop_tool", True),
+        ("reset_crop_tool",),
+        ("apply_crop_tool",),
+        ("delete_crop_tool_volume",),
+    ]
+
+    # A selected polygon node reopens the tool on the polygon shape.
+    polygon_node = SimpleNamespace(id=2, name="Model_crop_polygon", type=SimpleNamespace(name="CROP_POLYGON"), children=())
+    splat.children = (polygon_node.id,)
+    scene.get_node_by_id = lambda node_id: {1: splat, 2: polygon_node}.get(node_id)
+    state.crop_shape = "box"
+    state.calls.clear()
+    state.active_tool = ""
+    controller.dispatch("tool", "builtin.cropbox")
+    assert ("set_crop_tool_shape", "polygon") in state.calls
+    assert ("start_crop_polygon",) in state.calls
+    assert ("add_cropbox", "Model") not in state.calls
 
 
 def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
@@ -1155,6 +1287,59 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
     params.cropbox_growth_inside = 0.0
     controller._sync_crop_roi_params(controller._gizmo.cropbox_toolbar_signature())
     assert growth_percent() == "Auto"
+
+
+def test_crop_roi_controls_and_enable_toggle_serve_a_crop_polygon(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    operator_calls = []
+    polygon = SimpleNamespace(enabled=True)
+    polygon_node = SimpleNamespace(
+        id=8,
+        name="Model_crop_polygon",
+        type=SimpleNamespace(name="CROP_POLYGON"),
+        children=(),
+        crop_polygon=lambda: polygon,
+    )
+    model_node = SimpleNamespace(id=7, name="Model", type=SimpleNamespace(name="SPLAT"), children=(8,))
+    nodes = {7: model_node, 8: polygon_node}
+    scene = SimpleNamespace(
+        get_node=lambda name: next((node for node in nodes.values() if node.name == name), None),
+        get_node_by_id=nodes.get,
+    )
+    params = SimpleNamespace(
+        cropbox_lr_scale=0.2,
+        cropbox_loss_weight=0.3,
+        cropbox_growth_inside=0.5,
+        has_params=lambda: True,
+        get=lambda name: False,
+    )
+
+    def invoke(operator_id, **kwargs):
+        operator_calls.append((operator_id, kwargs))
+        polygon.enabled = kwargs["enabled"]
+
+    monkeypatch.setattr(lf_stub, "optimization_params", lambda: params, raising=False)
+    monkeypatch.setattr(lf_stub, "get_scene", lambda: scene, raising=False)
+    monkeypatch.setattr(lf_stub, "get_selected_node_names", lambda: ["Model"], raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_content_type", lambda: "dataset", raising=False)
+    monkeypatch.setattr(lf_stub.ui, "ops", SimpleNamespace(invoke=invoke), raising=False)
+
+    controller = module._GizmoToolbarController()
+    # The selected training model's polygon is its region of interest, like a crop box.
+    assert controller.cropbox_toolbar_signature() == ("Model_crop_polygon", True, True, 0.2, 0.3, 0.5, False)
+    assert controller._build_crop_settings_records(False)[0]["button_id"] == "crop-roi-settings"
+    enable = controller._build_crop_enable_records()[0]
+    assert (enable["tooltip_key"], enable["tooltip_text"], enable["selected"]) == (
+        "toolbar.enable_crop_polygon",
+        "Enable Crop Polygon",
+        True,
+    )
+
+    controller.dispatch("crop_toggle_enabled", "")
+
+    assert operator_calls == [("crop_polygon.set", {"node": "Model_crop_polygon", "enabled": False})]
+    assert controller._build_crop_enable_records()[0]["selected"] is False
 
 
 @pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1, 0.8, False)])

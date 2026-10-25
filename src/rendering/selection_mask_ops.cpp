@@ -5,6 +5,8 @@
 #include "selection_ops.hpp"
 #include "selection_tensor_utils.hpp"
 
+#include "core/crop_polygon.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_filters.hpp"
 #include "core/tensor_labels.hpp"
@@ -13,6 +15,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <glm/gtc/type_ptr.hpp>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -147,16 +151,66 @@ namespace lfs::rendering {
         }
     } // namespace
 
+    namespace {
+        // The crop polygon on the host: its outline and world-to-polygon matrix (column-major,
+        // like the crop box transform). Empty when the tensors do not describe a valid prism.
+        struct HostCropPolygon {
+            std::vector<glm::vec2> vertices;
+            glm::mat4 world_to_polygon{1.0f};
+            float half_depth = 0.0f;
+            bool inverse = false;
+        };
+
+        [[nodiscard]] std::optional<HostCropPolygon> hostCropPolygon(const SelectionCropPolygon* polygon) {
+            if (!polygon || !polygon->transform || !polygon->transform->is_valid() || polygon->transform->numel() < 16 ||
+                !polygon->vertices || !polygon->vertices->is_valid() || polygon->vertices->ndim() != 2 ||
+                polygon->vertices->size(1) != 2 ||
+                !core::crop_polygon::isValidHalfDepth(polygon->half_depth))
+                return std::nullopt;
+            const auto matrix = polygon->transform->to(DataType::Float32).cpu().contiguous().to_vector();
+            const auto outline = polygon->vertices->to(DataType::Float32).cpu().contiguous().to_vector();
+            HostCropPolygon host{.world_to_polygon = glm::make_mat4(matrix.data()),
+                                 .half_depth = polygon->half_depth,
+                                 .inverse = polygon->inverse};
+            host.vertices.reserve(outline.size() / 2);
+            for (size_t i = 0; i + 1 < outline.size(); i += 2)
+                host.vertices.emplace_back(outline[i], outline[i + 1]);
+            if (!core::crop_polygon::isValidOutline(host.vertices))
+                return std::nullopt;
+            return host;
+        }
+
+        // Points in world space as filter_points places them: row-major [T,4,4] model transforms
+        // picked per point by its index, clamped to [0, T-1], or the first without indices.
+        [[nodiscard]] Tensor worldPoints(const Tensor& points, const Tensor& matrices, const Tensor& ids) {
+            if (!matrices.is_valid() || matrices.numel() < 16)
+                return points;
+            const int count = static_cast<int>(matrices.numel() / 16);
+            const auto rows = matrices.reshape({count, 16});
+            const int n = static_cast<int>(points.size(0));
+            const auto picked = ids.is_valid() ? rows.index_select(0, ids.clamp(0, count - 1))
+                                               : rows.slice(0, 0, 1).expand({n, 16});
+            const auto x = points.slice(1, 0, 1), y = points.slice(1, 1, 2), z = points.slice(1, 2, 3);
+            const auto row = [&](const size_t r) {
+                return picked.slice(1, 4 * r, 4 * r + 1) * x + picked.slice(1, 4 * r + 1, 4 * r + 2) * y +
+                       picked.slice(1, 4 * r + 2, 4 * r + 3) * z + picked.slice(1, 4 * r + 3, 4 * r + 4);
+            };
+            return Tensor::cat({row(0), row(1), row(2)}, 1).contiguous();
+        }
+    } // namespace
+
     void filter_selection_by_crop(Tensor& selection, const Tensor& means, const Tensor* box_transform,
                                   const Tensor* box_min, const Tensor* box_max, bool box_inverse,
                                   const Tensor* ellipsoid_transform, const Tensor* ellipsoid_radii,
-                                  bool ellipsoid_inverse, const Tensor* transforms, const Tensor* indices, const int scope_node_index) {
+                                  bool ellipsoid_inverse, const Tensor* transforms, const Tensor* indices, const int scope_node_index,
+                                  const SelectionCropPolygon* crop_polygon) {
         if (!selection.is_valid() || !means.is_valid() || selection.numel() == 0 || means.size(0) != selection.numel())
             return;
         const auto complete = [](const Tensor* t, size_t n) { return t && t->is_valid() && t->numel() >= n; };
         const bool box = complete(box_transform, 16) && complete(box_min, 3) && complete(box_max, 3);
         const bool ellipsoid = complete(ellipsoid_transform, 16) && complete(ellipsoid_radii, 3);
-        if (!box && !ellipsoid)
+        const auto polygon = hostCropPolygon(crop_polygon);
+        if (!box && !ellipsoid && !polygon)
             return;
         const auto backend = requireGpuBackend(selection, "crop filtering requires a GPU mask");
         const GpuBackendScope scope(backend);
@@ -184,7 +238,14 @@ namespace lfs::rendering {
         if (scope_node_index >= 0 && !ids.is_valid() && scope_node_index != 0)
             return;
         const auto original = scope_node_index >= 0 && ids.is_valid() ? selection.clone() : Tensor{};
-        lfs::core::filter_points(selection, &points, filter);
+        if (box || ellipsoid)
+            lfs::core::filter_points(selection, &points, filter);
+        if (polygon) {
+            // |z| <= half_depth in the polygon frame and the even-odd rule over the outline.
+            const auto inside = lfs::core::compute_crop_polygon_mask(worldPoints(points, matrices, ids), polygon->vertices,
+                                                                     polygon->half_depth, polygon->world_to_polygon);
+            selection.masked_fill_(polygon->inverse ? inside : inside.logical_not(), 0.0f);
+        }
         if (original.is_valid())
             selection.copy_from(Tensor::where(ids == scope_node_index, selection, original));
     }

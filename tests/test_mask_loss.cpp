@@ -562,10 +562,24 @@ namespace lfs::training {
     struct TrainerMaskSupervisionTestAccess {
         static auto loss(Trainer& trainer, const Tensor& image, const Tensor& target,
                          const Tensor& mask, const param::OptimizationParameters& params,
-                         const Tensor& raw = {}, const Tensor& structure = {}) {
+                         const Tensor& raw = {}, const Tensor& structure = {},
+                         const Tensor& alpha = {}, const Tensor& roi = {}) {
             trainer.bind_training_ops();
             return trainer.compute_photometric_loss_with_mask(
-                image, target, mask, {}, {}, params, raw, structure);
+                image, target, mask, roi, alpha, params, raw, structure);
+        }
+
+        static auto report(Trainer& trainer, const Tensor& image, const Tensor& target,
+                           const Tensor& mask, const Tensor& region,
+                           const param::OptimizationParameters& params, const Tensor& raw,
+                           const Tensor& mask_regularization_loss = {}) {
+            trainer.bind_training_ops();
+            return trainer.report_region_image_loss(
+                image, raw, target, mask, region, {}, params, 0, mask_regularization_loss);
+        }
+
+        static float region_sum(const Trainer& trainer) {
+            return trainer.roi_report_region_sum_.item<float>();
         }
     };
 } // namespace lfs::training
@@ -687,3 +701,102 @@ TEST_P(TrainerMaskSupervisionTest, MeasureWarmLossUpdates) {
 }
 
 INSTANTIATE_TEST_SUITE_P(LossBranches, TrainerMaskSupervisionTest, ::testing::Values(0, 1, 2));
+
+TEST_P(TrainerMaskSupervisionTest, FullRegionRetainsMaskPenaltiesWithoutChangingGradients) {
+    target = image.clone();
+    params.mask_opacity_penalty_weight = 10.0f;
+    params.mask_opacity_penalty_power = 2.0f;
+    const auto alpha = Tensor::full({32, 32}, 0.5f, Device::GPU);
+    const auto region = Tensor::ones({32, 32}, Device::GPU);
+    for (const auto mode : {param::MaskMode::Segment, param::MaskMode::SegmentAndIgnore,
+                            param::MaskMode::AlphaConsistent}) {
+        SCOPED_TRACE(static_cast<int>(mode));
+        params.mask_mode = mode;
+        auto mask = Tensor::ones({32, 32}, Device::GPU);
+        if (mode != param::MaskMode::AlphaConsistent)
+            mask.slice(0, 16, 32).fill_(mode == param::MaskMode::Segment ? 0.0f : 0.75f);
+        const auto result = lfs::training::TrainerMaskSupervisionTestAccess::loss(
+            *trainer, image, target, mask, params, raw, {}, alpha, region);
+        ASSERT_TRUE(result);
+        ASSERT_TRUE(result->mask_regularization_loss.is_valid());
+        const float expected_penalty = mode == param::MaskMode::AlphaConsistent ? 5.0f : 2.5f;
+        EXPECT_NEAR(result->mask_regularization_loss.item<float>(), expected_penalty, 1e-6f);
+        const auto rgb_gradient = result->grad_corrected.clone();
+        const auto alpha_gradient = result->grad_alpha.clone();
+        EXPECT_GT(alpha_gradient.abs().max().item<float>(), 0.0f);
+        const auto report = lfs::training::TrainerMaskSupervisionTestAccess::report(
+            *trainer, image, target, mask, region, params, raw, result->mask_regularization_loss);
+        EXPECT_NEAR(report.item<float>(), result->loss.item<float>(), 1e-5f);
+        EXPECT_NEAR(report.item<float>(), expected_penalty, 1e-5f);
+        EXPECT_EQ(result->grad_corrected.cpu().to_vector(), rgb_gradient.cpu().to_vector());
+        EXPECT_EQ(result->grad_alpha.cpu().to_vector(), alpha_gradient.cpu().to_vector());
+    }
+}
+
+TEST_P(TrainerMaskSupervisionTest, PartialRegionRetainsTrainingWeightedMaskPenalty) {
+    params.mask_mode = param::MaskMode::Segment;
+    params.mask_opacity_penalty_weight = 10.0f;
+    params.mask_opacity_penalty_power = 2.0f;
+    const auto alpha = Tensor::full({32, 32}, 0.5f, Device::GPU);
+    auto mask = Tensor::ones({32, 32}, Device::GPU);
+    mask.slice(0, 16, 32).fill_(0.0f);
+    auto region = Tensor::ones({32, 32}, Device::GPU);
+    region.slice(0, 16, 32).fill_(0.0f);
+    auto training_weight = Tensor::ones({32, 32}, Device::GPU);
+    training_weight.slice(0, 16, 32).fill_(0.25f);
+    const auto result = lfs::training::TrainerMaskSupervisionTestAccess::loss(
+        *trainer, image, target, mask, params, raw, {}, alpha, training_weight);
+    ASSERT_TRUE(result);
+    EXPECT_NEAR(result->mask_regularization_loss.item<float>(), 0.625f, 1e-6f);
+    const auto image_only = lfs::training::TrainerMaskSupervisionTestAccess::report(
+        *trainer, image, target, mask, region, params, raw);
+    const float image_value = image_only.item<float>();
+    const auto report = lfs::training::TrainerMaskSupervisionTestAccess::report(
+        *trainer, image, target, mask, region, params, raw, result->mask_regularization_loss);
+    EXPECT_NEAR(report.item<float>(), image_value + 0.625f, 1e-5f);
+}
+
+TEST_P(TrainerMaskSupervisionTest, RegionReportWithoutMaskPenaltyKeepsImageLoss) {
+    const auto mask = Tensor::ones({32, 32}, Device::GPU);
+    const auto region = Tensor::ones({32, 32}, Device::GPU);
+    const auto result = loss(mask);
+    ASSERT_TRUE(result);
+    EXPECT_FALSE(result->mask_regularization_loss.is_valid());
+    const auto report = lfs::training::TrainerMaskSupervisionTestAccess::report(
+        *trainer, image, target, mask, region, params, raw, result->mask_regularization_loss);
+    EXPECT_NEAR(report.item<float>(), result->loss.item<float>(), 1e-5f);
+}
+
+TEST_P(TrainerMaskSupervisionTest, AlphaConsistencyWithoutTrainingRoiStillKeepsPenalty) {
+    params.mask_mode = param::MaskMode::AlphaConsistent;
+    target = image.clone();
+    const auto mask = Tensor::ones({32, 32}, Device::GPU);
+    const auto alpha = Tensor::full({32, 32}, 0.5f, Device::GPU);
+    const auto region = Tensor::ones({32, 32}, Device::GPU);
+    // --cropbox-loss-weight 1 disables ROI weighting for training, but not ROI reporting.
+    const auto result = lfs::training::TrainerMaskSupervisionTestAccess::loss(
+        *trainer, image, target, mask, params, raw, {}, alpha);
+    ASSERT_TRUE(result);
+    ASSERT_TRUE(result->mask_regularization_loss.is_valid());
+    const auto report = lfs::training::TrainerMaskSupervisionTestAccess::report(
+        *trainer, image, target, mask, region, params, raw, result->mask_regularization_loss);
+    EXPECT_NEAR(report.item<float>(), 5.0f, 1e-5f);
+    EXPECT_NEAR(report.item<float>(), result->loss.item<float>(), 1e-5f);
+}
+
+// The crop box loss report evaluates the masked training photometric loss over the region on
+// its own workspace. Its pixel weight is the region's, and below one pixel when no pixel counts,
+// which is how the trainer skips views that miss the box.
+TEST_P(TrainerMaskSupervisionTest, RegionReportCarriesTheRegionPixelWeight) {
+    const auto mask = Tensor::ones({32, 32}, Device::GPU);
+    auto region = Tensor::ones({32, 32}, Device::GPU);
+    region.slice(0, 16, 32).fill_(0.0f);
+    const auto half = lfs::training::TrainerMaskSupervisionTestAccess::report(*trainer, image, target, mask, region,
+                                                                              params, raw);
+    EXPECT_TRUE(std::isfinite(half.item<float>()));
+    EXPECT_FLOAT_EQ(lfs::training::TrainerMaskSupervisionTestAccess::region_sum(*trainer), 512.0f);
+    const auto none = lfs::training::TrainerMaskSupervisionTestAccess::report(
+        *trainer, image, target, mask, Tensor::zeros({32, 32}, Device::GPU), params, raw);
+    static_cast<void>(none);
+    EXPECT_LT(lfs::training::TrainerMaskSupervisionTestAccess::region_sum(*trainer), 1.0f);
+}

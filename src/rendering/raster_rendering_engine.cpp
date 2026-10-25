@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/crop_polygon.hpp"
 #include "core/environment_math.hpp"
 #include "core/executable_path.hpp"
 #include "core/image_codecs.hpp"
@@ -12,6 +13,7 @@
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_spatial.hpp"
@@ -583,6 +585,37 @@ namespace lfs::rendering {
             const auto point_backend = lfs::core::gpu_backend_of(positions_cuda);
             // Vulkan and Metal splat through the tensor backend's rasterizer.
             if (point_backend != lfs::core::GpuBackend::CUDA) {
+                // It has no polygon crop: the points the polygon hides join the deleted mask.
+                if (const auto& polygon = request.filters.crop_polygon;
+                    polygon && lfs::core::crop_polygon::isValidOutline(polygon->vertices) &&
+                    lfs::core::crop_polygon::isValidHalfDepth(polygon->half_depth)) {
+                    if (request.filters.crop_desaturate)
+                        return std::unexpected(std::format(
+                            "{} point-cloud rendering cannot dim the points outside a crop polygon; "
+                            "turn off desaturated cropping or render with the CUDA backend",
+                            lfs::core::gpu_backend_name(point_backend.value_or(lfs::core::GpuBackend::Vulkan))));
+                    Tensor world = positions_cuda;
+                    if (transforms_cuda.is_valid()) {
+                        // Column-major model transforms, picked per point like the rasterizer does.
+                        const auto count = static_cast<int>(transforms_cuda.size(0));
+                        const auto matrices =
+                            transform_indices_cuda.is_valid()
+                                ? transforms_cuda.index_select(0, transform_indices_cuda.clamp(0, count - 1))
+                                : transforms_cuda.slice(0, 0, 1).expand({static_cast<int>(positions_cuda.size(0)), 16});
+                        const auto x = positions_cuda.slice(1, 0, 1), y = positions_cuda.slice(1, 1, 2),
+                                   z = positions_cuda.slice(1, 2, 3);
+                        const auto row = [&](const size_t r) {
+                            return matrices.slice(1, r, r + 1) * x + matrices.slice(1, r + 4, r + 5) * y +
+                                   matrices.slice(1, r + 8, r + 9) * z + matrices.slice(1, r + 12, r + 13);
+                        };
+                        world = Tensor::cat({row(0), row(1), row(2)}, 1).contiguous();
+                    }
+                    const auto inside = lfs::core::compute_crop_polygon_mask(world, polygon->vertices,
+                                                                             polygon->half_depth, polygon->transform);
+                    const auto hidden = request.filters.crop_inverse ? inside : inside.logical_not();
+                    deleted_mask_cuda = deleted_mask_cuda.is_valid() ? deleted_mask_cuda.logical_or(hidden).contiguous()
+                                                                     : hidden.contiguous();
+                }
                 // The backend rasterizer maps the whole camera onto its target. For a
                 // clipped target, a projective camera remaps NDC so the target window spans
                 // [-1, 1]; an equirectangular one renders the full camera and keeps the window.
@@ -714,6 +747,21 @@ namespace lfs::rendering {
                 params.crop_ellipsoid.radii[2] = ellipsoid.radii.z;
                 params.crop_ellipsoid.inverse = request.filters.crop_inverse;
                 params.crop_ellipsoid.desaturate = request.filters.crop_desaturate;
+            }
+            static_assert(pcraster::kMaxCropPolygonVertices == lfs::core::crop_polygon::kMaxVertices);
+            const auto& polygon = request.filters.crop_polygon;
+            params.has_crop_polygon = polygon && polygon->vertices.size() >= lfs::core::crop_polygon::kMinVertices &&
+                                      polygon->vertices.size() <= lfs::core::crop_polygon::kMaxVertices;
+            if (params.has_crop_polygon) {
+                std::copy_n(glm::value_ptr(polygon->transform), 16, params.crop_polygon.to_local);
+                for (size_t i = 0; i < polygon->vertices.size(); ++i) {
+                    params.crop_polygon.vertices[2 * i] = polygon->vertices[i].x;
+                    params.crop_polygon.vertices[2 * i + 1] = polygon->vertices[i].y;
+                }
+                params.crop_polygon.count = static_cast<int>(polygon->vertices.size());
+                params.crop_polygon.half_depth = polygon->half_depth;
+                params.crop_polygon.inverse = request.filters.crop_inverse;
+                params.crop_polygon.desaturate = request.filters.crop_desaturate;
             }
             std::copy_n(glm::value_ptr(view), 16, params.view);
             std::copy_n(glm::value_ptr(view_proj), 16, params.view_proj);

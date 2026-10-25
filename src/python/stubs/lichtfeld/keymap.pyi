@@ -219,6 +219,10 @@ class Action(enum.Enum):
 
     APPLY_ALIGNMENT = 108
 
+    INSERT_CROP_POLYGON_VERTEX = 109
+
+    REMOVE_CROP_POLYGON_VERTEX = 110
+
 class ToolMode(enum.Enum):
     GLOBAL = 0
 
