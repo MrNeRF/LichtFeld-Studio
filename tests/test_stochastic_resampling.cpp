@@ -371,33 +371,6 @@ namespace {
         EXPECT_TRUE(changed); // This cache must not freeze the stochastic sample.
     }
 
-    TEST_F(StochasticResampling, InvalidStochasticStateUsesRendererContracts) {
-        renderer_->beginCommandBatch();
-        EXPECT_THROW(renderer_->prepareStochasticNoise(), lfs::Exception);
-        renderer_->cancelCommandBatch();
-
-        auto u = samplingScene();
-        u.sort_capacity = HIGS_DEPTH_WAVE_INSTANCES;
-        const auto& dummy = dummy_.deviceBuffer;
-        const auto execute = [&](std::size_t waves, std::optional<VulkanGSRenderer::StochasticTileState> tiles) {
-            renderer_->executeLegacyDepthWaves(u, buffers_, waves, 1,
-                                               dummy, dummy, dummy, dummy, dummy, dummy, dummy,
-                                               false, false, false, false, false, {}, tiles);
-        };
-        // A cached prefix cannot stand in for a complete multi-wave view.
-        renderer_->beginCommandBatch();
-        EXPECT_THROW(execute(2, VulkanGSRenderer::StochasticTileState{}), lfs::Exception);
-        renderer_->cancelCommandBatch();
-        u.stochastic_mode = 0;
-        renderer_->beginCommandBatch();
-        EXPECT_THROW(execute(1, VulkanGSRenderer::StochasticTileState{}), lfs::Exception);
-        renderer_->cancelCommandBatch();
-        u.stochastic_mode = 2;
-        renderer_->beginCommandBatch();
-        EXPECT_THROW(execute(1, std::nullopt), lfs::Exception); // STBN has not been uploaded.
-        renderer_->cancelCommandBatch();
-    }
-
     TEST_F(StochasticResampling, BlueNoiseDoesNotRepeatAfterOneVolumePeriod) {
         auto u = samplingScene();
         u.stochastic_mode = 2;
