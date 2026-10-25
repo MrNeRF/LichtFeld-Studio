@@ -848,6 +848,21 @@ class TensorFaultRecovery(TensorOperations):
             self.checked("context_synchronize", context)
             self.assertEqual(self.read(context, destination, 3), [1, 99, 3])
 
+    def test_completed_fence_does_not_enqueue_an_error_flag_reset(self):
+        with self.resources() as context:
+            source = self.tensor(context, [1, 2, 3])
+            indices = self.tensor(context, [2, 0], 3)
+            output = self.tensor(context, [99, 99])
+            p = Gather(c.sizeof(Gather), 0, 3, 0, 0, 1, layout([3]), layout([2]))
+            self.checked("gather", context, source, indices, output, c.byref(p))
+            self.fail_once(10)
+            self.checked("context_synchronize", context)
+            # The reset belongs to the next submission, not the completed fence.
+            self.reject("gather", context, source, indices, output, c.byref(p))
+            self.assertEqual(self.read(context, output, 2), [3, 1])
+            self.checked("gather", context, source, indices, output, c.byref(p))
+            self.assertEqual(self.read(context, output, 2), [3, 1])
+
     def test_workspace_release_and_allocation_failure_are_retryable(self):
         with self.resources() as context:
             source = self.tensor(context, [3, 1, 2, 0])
