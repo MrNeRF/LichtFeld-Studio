@@ -560,7 +560,7 @@ protected:
     _ComputePipelinePair pipeline_rasterize_stochastic = _ComputePipelinePair(17);
     _ComputePipelinePair pipeline_rasterize_stochastic_plain = _ComputePipelinePair(17);
     _VulkanBuffer stochastic_noise_;
-    _ComputePipeline pipeline_stochastic_reuse = _ComputePipeline(7);
+    _ComputePipeline pipeline_stochastic_reuse = _ComputePipeline(6);
     _ComputePipeline pipeline_stochastic_resolve = _ComputePipeline(6);
     _ComputePipelinePair pipeline_rasterize_forward_3dgut_plain = _ComputePipelinePair(24);
     _ComputePipelinePair pipeline_rasterize_forward_3dgut_rad = _ComputePipelinePair(24);

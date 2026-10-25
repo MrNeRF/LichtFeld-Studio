@@ -21,6 +21,26 @@
 namespace {
     using lfs::rendering::vulkan::BufferUse;
 
+    constexpr uint32_t EMPTY_ID = 0xfffffffeu;
+    constexpr uint32_t BACKGROUND_ID = 0xffffffffu;
+    constexpr std::array<std::array<double, 2>, 4> NEIGHBORS{{{0, 0}, {2, 0}, {1, -1}, {1, 1}}};
+
+    // Mirrors stochastic_reuse.slang: a squared radial distance keeps its
+    // exponent within [2^-28, 2^36) and the top 10 mantissa bits.
+    uint32_t depthKey(const float metric) {
+        constexpr uint32_t low = (127u - 28u) << 23;
+        const auto bits = std::bit_cast<uint32_t>(metric);
+        return bits < low ? 0u : std::min((bits - low) >> 13, 0xffffu);
+    }
+
+    // A ratio is stored in steps of 1/15 within [0, 1]. Test data keeps its
+    // scaled value away from a rounding boundary, where float and double differ.
+    uint32_t ratioCode(const double ratio) {
+        const double scaled = std::clamp(ratio, 0.0, 1.0) * 15.0;
+        EXPECT_GT(std::abs(scaled - std::floor(scaled) - 0.5), 1e-3) << "ratio " << ratio;
+        return static_cast<uint32_t>(scaled + 0.5);
+    }
+
     class StochasticRenderer : public VulkanGSRenderer {
     public:
         void initialize(VkInstance instance, VkPhysicalDevice physical, VkDevice device,
@@ -162,8 +182,7 @@ namespace {
                 vkDeviceWaitIdle(device_);
                 renderer_->cleanupBuffers(buffers_);
                 renderer_->destroyBuffer(dummy_.deviceBuffer);
-                renderer_->destroyBuffer(history_.ids_depths.deviceBuffer);
-                renderer_->destroyBuffer(history_.occlusion.deviceBuffer);
+                renderer_->destroyBuffer(history_.occluders.deviceBuffer);
                 renderer_->destroyBuffer(history_.outgoing_weights.deviceBuffer);
                 for (auto& color : history_.color)
                     renderer_->destroyBuffer(color.deviceBuffer);
@@ -450,7 +469,10 @@ namespace {
             const double value = conics[4 * id + 3] * std::exp(-0.5 * conics[4 * id] * (dx * dx + y * y));
             return value >= 0.5 / 255.0 ? std::min(0.999, value) : 0.0;
         };
-        const std::array<std::array<double, 2>, 4> targets{{{0, 0}, {2, 0}, {1, -1}, {1, 1}}};
+        const auto& targets = NEIGHBORS;
+        const auto ratio = [&](const uint32_t occluder, const size_t d) {
+            return (1.0 - alpha(occluder, targets[d][0], targets[d][1])) / (1.0 - alpha(occluder, 1, 0));
+        };
         std::deque<uint32_t> fifo;
         for (const uint32_t id : {0u, 0u, 1u, 0u, 2u, 3u, 4u, 5u, 1u, 6u, 0xffffffffu}) {
             const float depth = id == 0xffffffffu ? 1.0e10f : static_cast<float>(id + 1u);
@@ -462,8 +484,7 @@ namespace {
                 expected[d] = alpha(id, targets[d][0], targets[d][1]) / alpha(id, 1, 0);
                 for (const auto occluder : fifo)
                     if (occluder + 1u < depth)
-                        expected[d] *= (1.0 - alpha(occluder, targets[d][0], targets[d][1])) /
-                                       (1.0 - alpha(occluder, 1, 0));
+                        expected[d] *= ratioCode(ratio(occluder, d)) / 15.0;
             }
             renderer_->executeStochasticReuse(u, buffers_, history_);
             const auto weights = read<float>(history_.outgoing_weights.deviceBuffer, 12);
@@ -474,9 +495,14 @@ namespace {
                 if (fifo.size() > 4)
                     fifo.pop_back();
             }
-            const auto stored = read<uint32_t>(history_.ids_depths.deviceBuffer, 24);
-            for (size_t k = 0; k < fifo.size(); ++k)
+            const auto stored = read<uint32_t>(history_.occluders.deviceBuffer, 24);
+            for (size_t k = 0; k < fifo.size(); ++k) {
+                uint32_t codes = 0;
+                for (size_t d = 0; d < 4; ++d)
+                    codes |= ratioCode(ratio(fifo[k], d)) << (4 * d);
                 EXPECT_EQ(stored[8 + k * 2], fifo[k]);
+                EXPECT_EQ(stored[9 + k * 2], depthKey(static_cast<float>(fifo[k] + 1u)) | codes << 16);
+            }
             u.stochastic_history_valid = 1;
         }
     }
@@ -507,7 +533,101 @@ namespace {
         const double source_occluder_alpha = static_cast<double>(0.3f) * std::exp(-0.5);
         const double target_occluder_alpha = static_cast<double>(0.3f);
         const double sample_ratio = std::exp(-0.5);
-        EXPECT_NEAR(tied[4], sample_ratio * (1 - target_occluder_alpha) / (1 - source_occluder_alpha), 1e-6);
+        const auto code = ratioCode((1 - target_occluder_alpha) / (1 - source_occluder_alpha));
+        EXPECT_EQ(code, 13u);
+        EXPECT_NEAR(tied[4], sample_ratio * code / 15.0, 1e-6);
+    }
+
+    TEST_F(StochasticResampling, PackedOccludersRoundTripIdsDepthKeysRatiosAndSentinels) {
+        // 0 sits on the middle pixel, so its opacity falls toward every
+        // neighbor; those ratios exceed one and clamp to code 15. The narrow,
+        // opaque 1 sits on the left pixel; the ratio toward it rounds to 0.
+        // 2 and 3 are off center, so some ratios fall between the steps.
+        const std::vector<float> positions{1.0f, 0.0f, 0.0f, 0.0f, 1.8f, 0.4f, 0.4f, -0.7f};
+        const std::vector<float> conics{0.5f, 0.0f, 0.5f, 0.5f, 8.0f, 0.0f, 8.0f, 0.999f,
+                                        1.2f, 0.2f, 0.6f, 0.9f, 0.5f, 0.0f, 0.9f, 0.8f};
+        upload(buffers_.xy_vs, positions);
+        upload(buffers_.inv_cov_vs_opacity, conics);
+        VulkanGSRendererUniforms u{};
+        u.image_width = 3;
+        u.image_height = 1;
+        u.stochastic_mode = 2;
+        const auto alpha = [&](const uint32_t id, const double x, const double y) {
+            if (id == BACKGROUND_ID)
+                return 1.0;
+            const double dx = x - positions[2 * id];
+            const double dy = y - positions[2 * id + 1];
+            const float* conic = &conics[4 * id];
+            const double value = conic[3] * std::exp(-0.5 * (conic[0] * dx * dx + conic[2] * dy * dy) -
+                                                     conic[1] * dx * dy);
+            return value >= 0.5 / 255.0 ? std::min(0.999, value) : 0.0;
+        };
+        const auto packed = [&](const uint32_t id, const float depth) {
+            uint32_t codes = 0;
+            for (size_t d = 0; d < 4; ++d)
+                codes |= ratioCode((1.0 - alpha(id, NEIGHBORS[d][0], NEIGHBORS[d][1])) / (1.0 - alpha(id, 1, 0)))
+                         << (4 * d);
+            return std::array<uint32_t, 2>{id, depthKey(depth) | codes << 16};
+        };
+        EXPECT_EQ(packed(0, 1).at(1) >> 16, 0xffffu);
+        EXPECT_EQ(packed(1, 1).at(1) >> 16, 0xfff0u);
+        EXPECT_EQ(packed(2, 1).at(1) >> 16, 0xdf5fu);
+        EXPECT_EQ(packed(3, 1).at(1) >> 16, 0xfbfeu);
+
+        const auto empty = std::array<uint32_t, 2>{EMPTY_ID, 0xffffffffu};
+        std::deque<std::array<uint32_t, 2>> fifo;
+        const auto check = [&](const uint32_t id, const float depth) {
+            upload(buffers_.n_contributors, std::vector<int32_t>(3, std::bit_cast<int32_t>(id)));
+            upload(buffers_.pixel_depth_weight, std::vector<float>(3, depth));
+            std::array<double, 4> expected{};
+            for (size_t d = 0; d < 4; ++d) {
+                expected[d] = alpha(id, NEIGHBORS[d][0], NEIGHBORS[d][1]) / alpha(id, 1, 0);
+                // Occluders compare by depth key, then by the lower ID.
+                for (const auto& [occluder, data] : fifo)
+                    if (occluder != id && ((data & 0xffffu) < depthKey(depth) ||
+                                           ((data & 0xffffu) == depthKey(depth) && occluder < id)))
+                        expected[d] *= ((data >> (16 + 4 * d)) & 15u) / 15.0;
+            }
+            renderer_->executeStochasticReuse(u, buffers_, history_);
+            const auto weights = read<float>(history_.outgoing_weights.deviceBuffer, 12);
+            for (size_t d = 0; d < 4; ++d)
+                EXPECT_NEAR(weights[4 + d], expected[d], 2e-5 * std::max(1.0, expected[d])) << "direction " << d;
+            if (id != BACKGROUND_ID && std::ranges::none_of(fifo, [&](const auto& e) { return e[0] == id; })) {
+                fifo.push_front(packed(id, depth));
+                if (fifo.size() > 4)
+                    fifo.pop_back();
+            }
+            const auto stored = read<uint32_t>(history_.occluders.deviceBuffer, 24);
+            for (size_t k = 0; k < 4; ++k) {
+                const auto expected_entry = k < fifo.size() ? fifo[k] : empty;
+                EXPECT_EQ(stored[8 + 2 * k], expected_entry[0]) << "entry " << k;
+                EXPECT_EQ(stored[9 + 2 * k], expected_entry[1]) << "entry " << k;
+            }
+            u.stochastic_history_valid = 1;
+        };
+        // A reset leaves the empty sentinel: farthest, ratios of exactly one.
+        check(0, 4.0f);
+        EXPECT_EQ(depthKey(0.0f), 0u);
+        check(1, 0.0f);
+        check(0, 4.0f); // A repeat neither refreshes nor duplicates its entry.
+        EXPECT_EQ(depthKey(1.0e12f), 0xffffu);
+        check(2, 1.0e12f); // Beyond 2^18 units the key saturates...
+        // ...but such an occluder still precedes the background by ID.
+        check(BACKGROUND_ID, std::numeric_limits<float>::infinity());
+        EXPECT_EQ(depthKey(4.002f), depthKey(4.0f));
+        EXPECT_LT(depthKey(4.0f), depthKey(4.005f));
+        check(3, 4.002f); // Tied with 0's key; the lower ID occludes.
+        check(3, 4.005f);
+
+        // An invalid history clears every pixel to the sentinel and occludes nothing.
+        u.stochastic_history_valid = 0;
+        fifo.clear();
+        check(BACKGROUND_ID, std::numeric_limits<float>::infinity());
+        const auto cleared = read<uint32_t>(history_.occluders.deviceBuffer, 24);
+        for (size_t i = 0; i < cleared.size(); i += 2) {
+            EXPECT_EQ(cleared[i], EMPTY_ID);
+            EXPECT_EQ(cleared[i + 1], 0xffffffffu);
+        }
     }
 
     TEST_F(StochasticResampling, SpatialGatherMatchesOracleAcrossWorkgroupAndViewportEdges) {
