@@ -5,6 +5,7 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "lfs/kernels/popspa.cuh"
 #include "training/losses/regularization.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
@@ -71,6 +72,29 @@ namespace {
             EXPECT_NEAR(actual / expected, 1.0, 5e-6);
         }
         RecordProperty("max_relative_error", std::format("{:.9e}", max_relative_error));
+    }
+
+    TEST_F(OpacityGradientTest, PopspaPenaltyPreservesSaturatedOpacityGradient) {
+        constexpr float logit = 17.f, rho = 2.f;
+        auto raw = Tensor::full({1}, logit, Device::CUDA);
+        auto proxy = Tensor::zeros_like(raw);
+        auto dual = Tensor::zeros_like(raw);
+        auto active = Tensor::from_vector(std::vector<bool>{true}, {1}, Device::CUDA);
+        auto frozen = Tensor::from_vector(std::vector<bool>{false}, {1}, Device::CUDA);
+        auto grad = Tensor::zeros_like(raw);
+        auto loss = Tensor::zeros({1}, Device::CUDA);
+        // A zero proxy asks POPSpa to remove this saturated Gaussian.
+        kernels::launch_popspa_penalty(raw.ptr<float>(), proxy.ptr<float>(), dual.ptr<float>(),
+                                       active.ptr<bool>(), frozen.ptr<bool>(), grad.ptr<float>(),
+                                       loss.ptr<float>(), 1, rho, nullptr);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        const double opacity = 1.0 / (1.0 + std::exp(-static_cast<double>(logit)));
+        const double expected = rho * opacity * sigmoid_derivative_reference(logit);
+        const float actual = grad.cpu().item<float>();
+        RecordProperty("penalty_gradient", std::format("{:.9e}", actual));
+        EXPECT_GT(actual, 0.f);
+        EXPECT_NEAR(actual / expected, 1.0, 5e-6);
+        EXPECT_FLOAT_EQ(loss.cpu().item<float>(), 0.5f * rho);
     }
 
     TEST_F(OpacityGradientTest, FusedRegularizationMovesSaturatedOpacity) {
