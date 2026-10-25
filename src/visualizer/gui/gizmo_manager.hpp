@@ -100,6 +100,10 @@ namespace lfs::vis {
             // Fit or reset the selected crop polygon, or the selected splat's or point cloud's.
             LFS_VIS_API void fitSelectedCropPolygon(bool use_percentile);
             LFS_VIS_API void resetSelectedCropPolygon();
+            // Invert the selected crop polygon, else crop box, else ellipsoid, in one undo step.
+            LFS_VIS_API void toggleSelectedCropInverse();
+            // Whether that crop volume is inverted; empty without one.
+            [[nodiscard]] LFS_VIS_API std::optional<bool> selectedCropInverse() const;
             [[nodiscard]] bool isViewportGizmoDragging() const { return viewport_gizmo_dragging_; }
             // The panel whose axis widget is pressed or dragged, and the pressed marker (-1 for the sphere).
             struct ViewportGizmoPress {

@@ -1219,6 +1219,7 @@
     "crop_box": "Zuschneidebox",
     "enable_crop_box": "Zuschneidebox aktivieren",
     "enable_crop_polygon": "Zuschneidepolygon aktivieren",
+    "invert_crop": "Zuschnitt umkehren",
     "crop_roi_settings": "Crop-ROI-Einstellungen",
     "rejected_splat_lr_scale": "LR-Skalierung abgelehnter Splats",
     "outside_roi_loss_weight": "Verlustgewicht außerhalb der ROI",

@@ -1230,6 +1230,7 @@
     "crop_box": "Crop Box",
     "enable_crop_box": "Enable Crop Box",
     "enable_crop_polygon": "Enable Crop Polygon",
+    "invert_crop": "Invert Crop",
     "crop_roi_settings": "Crop ROI Settings",
     "rejected_splat_lr_scale": "Rejected splat LR scale",
     "outside_roi_loss_weight": "Outside ROI loss weight",

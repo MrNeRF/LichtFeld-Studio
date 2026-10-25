@@ -1219,6 +1219,7 @@
     "crop_box": "Boîte de Recadrage",
     "enable_crop_box": "Activer la boîte de recadrage",
     "enable_crop_polygon": "Activer le polygone de recadrage",
+    "invert_crop": "Inverser le recadrage",
     "crop_roi_settings": "Paramètres de ROI de recadrage",
     "rejected_splat_lr_scale": "Échelle de LR des splats rejetés",
     "outside_roi_loss_weight": "Poids de perte hors ROI",

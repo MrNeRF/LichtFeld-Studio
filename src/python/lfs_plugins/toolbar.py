@@ -835,7 +835,11 @@ class _GizmoToolbarController:
         ]
 
     def _build_crop_action_records(self, active_tool_id):
+        import lichtfeld as lf
+
         active = active_tool_id == self._CROP_TOOL_ID
+        get_inverse = getattr(lf.ui, "get_crop_tool_inverse", None)
+        inverse = get_inverse() if active and callable(get_inverse) else None
         return [
             _button_record(
                 "crop-fit",
@@ -863,6 +867,16 @@ class _GizmoToolbarController:
                 tooltip_key="scene.reset_crop",
                 tooltip_text="Reset",
                 enabled=active,
+            ),
+            _button_record(
+                "crop-invert",
+                "crop_toggle_inverse",
+                "",
+                _icon_src("select-invert"),
+                tooltip_key="toolbar.invert_crop",
+                tooltip_text="Invert Crop",
+                selected=bool(inverse),
+                enabled=inverse is not None,
             ),
             _button_record(
                 "crop-apply",
@@ -1168,6 +1182,12 @@ class _GizmoToolbarController:
 
         if action == "align_toggle_edge_to_axis":
             lf.ui.set_align_edge_to_axis(not lf.ui.get_align_edge_to_axis())
+            return
+
+        if action == "crop_toggle_inverse":
+            toggle_inverse = getattr(lf.ui, "toggle_crop_tool_inverse", None)
+            if callable(toggle_inverse):
+                toggle_inverse()
             return
 
         if action == "crop_delete":
@@ -1937,6 +1957,9 @@ class _ViewportToolbarController:
         gizmo_type = call("", getattr(lf.ui, "get_gizmo_type", None))
         crop_shape = call("box", getattr(lf.ui, "get_crop_tool_shape", None))
         crop_operation = call("translate", getattr(lf.ui, "get_crop_tool_operation", None))
+        crop_inverse = None
+        if active_tool == _GizmoToolbarController._CROP_TOOL_ID:
+            crop_inverse = call(None, getattr(lf.ui, "get_crop_tool_inverse", None))
         transform_space = _native_store_value("transform_space", _MISSING)
         if transform_space is _MISSING:
             transform_space = call(1, getattr(lf.ui, "get_transform_space", None))
@@ -1999,6 +2022,7 @@ class _ViewportToolbarController:
             gizmo_type,
             crop_shape,
             crop_operation,
+            crop_inverse,
             transform_space,
             pivot_mode,
             multi_transform_mode,
@@ -2069,6 +2093,7 @@ class _ViewportToolbarController:
             "crop_fit",
             "crop_trim",
             "crop_reset",
+            "crop_toggle_inverse",
             "crop_apply",
             "crop_delete",
             "crop_toggle_enabled",

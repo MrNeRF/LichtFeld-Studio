@@ -1219,6 +1219,7 @@
     "crop_box": "자르기 상자",
     "enable_crop_box": "자르기 상자 활성화",
     "enable_crop_polygon": "자르기 다각형 활성화",
+    "invert_crop": "자르기 반전",
     "crop_roi_settings": "자르기 ROI 설정",
     "rejected_splat_lr_scale": "제외된 스플랫 LR 배율",
     "outside_roi_loss_weight": "ROI 외부 손실 가중치",

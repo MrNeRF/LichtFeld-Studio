@@ -1219,6 +1219,7 @@
     "crop_box": "裁剪框",
     "enable_crop_box": "启用裁剪框",
     "enable_crop_polygon": "启用裁剪多边形",
+    "invert_crop": "反转裁剪",
     "crop_roi_settings": "裁剪 ROI 设置",
     "rejected_splat_lr_scale": "被排除点的学习率缩放",
     "outside_roi_loss_weight": "ROI 外损失权重",

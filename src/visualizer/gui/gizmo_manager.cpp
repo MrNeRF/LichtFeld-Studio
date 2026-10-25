@@ -1211,6 +1211,74 @@ namespace lfs::vis::gui {
             LOG_WARN("Failed to fit crop polygon: {}", result.error().user_message());
     }
 
+    void GizmoManager::toggleSelectedCropInverse() {
+        auto* const sm = viewer_->getSceneManager();
+        if (!sm)
+            return;
+
+        if (const core::NodeId polygon_id = sm->getSelectedNodeCropPolygonId(); polygon_id != core::NULL_NODE) {
+            auto* const node = sm->getScene().getNodeById(polygon_id);
+            if (!node || !node->crop_polygon)
+                return;
+            const auto before = *node->crop_polygon;
+            const auto before_transform = sm->getNodeTransform(node->name);
+            node->crop_polygon->inverse = !node->crop_polygon->inverse;
+            sm->getScene().notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
+            if (auto* const rm = viewer_->getRenderingManager())
+                rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
+            auto entry = std::make_unique<op::CropPolygonUndoEntry>(
+                *sm, node->name, before, before_transform, node->visible.get());
+            if (entry->hasChanges())
+                op::undoHistory().push(std::move(entry));
+            return;
+        }
+
+        if (auto cropbox_id = cap::resolveCropBoxId(*sm, std::nullopt)) {
+            const auto* node = sm->getScene().getNodeById(*cropbox_id);
+            if (!node || !node->cropbox)
+                return;
+
+            cap::CropBoxUpdate update;
+            update.has_inverse = true;
+            update.inverse = !node->cropbox->inverse;
+            if (auto result = cap::updateCropBox(*sm, viewer_->getRenderingManager(), *cropbox_id, update); !result) {
+                LOG_WARN("Failed to toggle crop inverse: {}", result.error());
+            }
+            return;
+        }
+
+        const auto ellipsoid_id = cap::resolveEllipsoidId(*sm, std::nullopt);
+        const auto* const ellipsoid_node = ellipsoid_id ? sm->getScene().getNodeById(*ellipsoid_id) : nullptr;
+        if (!ellipsoid_node || !ellipsoid_node->ellipsoid)
+            return;
+
+        cap::EllipsoidUpdate update;
+        update.has_inverse = true;
+        update.inverse = !ellipsoid_node->ellipsoid->inverse;
+        if (auto result = cap::updateEllipsoid(*sm, viewer_->getRenderingManager(), *ellipsoid_id, update); !result) {
+            LOG_WARN("Failed to toggle ellipsoid inverse: {}", result.error());
+        }
+    }
+
+    std::optional<bool> GizmoManager::selectedCropInverse() const {
+        auto* const sm = viewer_->getSceneManager();
+        if (!sm)
+            return std::nullopt;
+        if (const core::NodeId polygon_id = sm->getSelectedNodeCropPolygonId(); polygon_id != core::NULL_NODE) {
+            const auto* const node = sm->getScene().getNodeById(polygon_id);
+            return node && node->crop_polygon ? std::optional<bool>(node->crop_polygon->inverse) : std::nullopt;
+        }
+        if (const auto cropbox_id = cap::resolveCropBoxId(*sm, std::nullopt)) {
+            const auto* const node = sm->getScene().getNodeById(*cropbox_id);
+            return node && node->cropbox ? std::optional<bool>(node->cropbox->inverse) : std::nullopt;
+        }
+        if (const auto ellipsoid_id = cap::resolveEllipsoidId(*sm, std::nullopt)) {
+            const auto* const node = sm->getScene().getNodeById(*ellipsoid_id);
+            return node && node->ellipsoid ? std::optional<bool>(node->ellipsoid->inverse) : std::nullopt;
+        }
+        return std::nullopt;
+    }
+
     void GizmoManager::resetSelectedCropPolygon() {
         auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
         const core::NodeId polygon_id = sm ? sm->getSelectedNodeCropPolygonId() : core::NULL_NODE;
@@ -1636,54 +1704,7 @@ namespace lfs::vis::gui {
             transaction.commit();
         });
 
-        cmd::ToggleCropInverse::when([this](const auto&) {
-            auto* const sm = viewer_->getSceneManager();
-            if (!sm)
-                return;
-
-            if (const core::NodeId polygon_id = sm->getSelectedNodeCropPolygonId(); polygon_id != core::NULL_NODE) {
-                auto* const node = sm->getScene().getNodeById(polygon_id);
-                if (!node || !node->crop_polygon)
-                    return;
-                const auto before = *node->crop_polygon;
-                const auto before_transform = sm->getNodeTransform(node->name);
-                node->crop_polygon->inverse = !node->crop_polygon->inverse;
-                sm->getScene().notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
-                if (auto* const rm = viewer_->getRenderingManager())
-                    rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
-                auto entry = std::make_unique<op::CropPolygonUndoEntry>(
-                    *sm, node->name, before, before_transform, node->visible.get());
-                if (entry->hasChanges())
-                    op::undoHistory().push(std::move(entry));
-                return;
-            }
-
-            if (auto cropbox_id = cap::resolveCropBoxId(*sm, std::nullopt)) {
-                const auto* node = sm->getScene().getNodeById(*cropbox_id);
-                if (!node || !node->cropbox)
-                    return;
-
-                cap::CropBoxUpdate update;
-                update.has_inverse = true;
-                update.inverse = !node->cropbox->inverse;
-                if (auto result = cap::updateCropBox(*sm, viewer_->getRenderingManager(), *cropbox_id, update); !result) {
-                    LOG_WARN("Failed to toggle crop inverse: {}", result.error());
-                }
-                return;
-            }
-
-            const auto ellipsoid_id = cap::resolveEllipsoidId(*sm, std::nullopt);
-            const auto* const ellipsoid_node = ellipsoid_id ? sm->getScene().getNodeById(*ellipsoid_id) : nullptr;
-            if (!ellipsoid_node || !ellipsoid_node->ellipsoid)
-                return;
-
-            cap::EllipsoidUpdate update;
-            update.has_inverse = true;
-            update.inverse = !ellipsoid_node->ellipsoid->inverse;
-            if (auto result = cap::updateEllipsoid(*sm, viewer_->getRenderingManager(), *ellipsoid_id, update); !result) {
-                LOG_WARN("Failed to toggle ellipsoid inverse: {}", result.error());
-            }
-        });
+        cmd::ToggleCropInverse::when([this](const auto&) { toggleSelectedCropInverse(); });
 
         cmd::CycleSelectionVisualization::when([this](const auto&) {
             if (viewer_->getEditorContext().getActiveTool() != ToolType::Selection)

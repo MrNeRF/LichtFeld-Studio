@@ -1219,6 +1219,7 @@
     "crop_box": "クロップボックス",
     "enable_crop_box": "クロップボックスを有効化",
     "enable_crop_polygon": "クロップポリゴンを有効化",
+    "invert_crop": "クロップを反転",
     "crop_roi_settings": "クロップ ROI 設定",
     "rejected_splat_lr_scale": "除外スプラットの LR スケール",
     "outside_roi_loss_weight": "ROI 外の損失の重み",

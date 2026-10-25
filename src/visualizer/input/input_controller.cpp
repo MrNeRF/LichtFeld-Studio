@@ -1994,7 +1994,8 @@ namespace lfs::vis {
         if (gui && gui->gizmo().isPieMenuOpen()) {
             if (action == input::ACTION_RELEASE) {
                 const auto pie_key = bindings_.getKeyForAction(input::Action::PIE_MENU, getCurrentToolMode());
-                if (pie_key >= 0 && logical_key == pie_key) {
+                // The press can match the binding by physical key on another layout, so the release must too.
+                if (pie_key >= 0 && (logical_key == pie_key || physical_key == pie_key)) {
                     gui->gizmo().onPieMenuKeyRelease();
                     return;
                 }

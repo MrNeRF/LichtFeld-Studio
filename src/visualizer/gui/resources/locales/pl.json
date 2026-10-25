@@ -1219,6 +1219,7 @@
     "crop_box": "Pole Przycinania",
     "enable_crop_box": "Włącz pole przycinania",
     "enable_crop_polygon": "Włącz wielokąt przycinania",
+    "invert_crop": "Odwróć przycinanie",
     "crop_roi_settings": "Ustawienia ROI przycinania",
     "rejected_splat_lr_scale": "Skala LR odrzuconych splatów",
     "outside_roi_loss_weight": "Waga straty poza ROI",

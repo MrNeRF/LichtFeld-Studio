@@ -4614,6 +4614,22 @@ namespace lfs::python {
             "Delete the active crop tool primitive and leave the crop tool");
 
         m.def(
+            "toggle_crop_tool_inverse",
+            []() {
+                if (auto* const gui = lfs::python::get_gui_manager())
+                    gui->gizmo().toggleSelectedCropInverse();
+            },
+            "Invert the selected crop polygon, crop box or ellipsoid, as the pie menu's Invert does");
+
+        m.def(
+            "get_crop_tool_inverse",
+            []() -> std::optional<bool> {
+                auto* const gui = lfs::python::get_gui_manager();
+                return gui ? gui->gizmo().selectedCropInverse() : std::nullopt;
+            },
+            "Whether the crop volume Invert acts on is inverted, or None without one");
+
+        m.def(
             "fit_cropbox_to_scene",
             [](bool use_percentile) { lfs::core::events::cmd::FitCropBoxToScene{.use_percentile = use_percentile}.emit(); },
             nb::arg("use_percentile") = false, "Fit cropbox to scene bounds");

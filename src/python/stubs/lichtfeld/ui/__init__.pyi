@@ -2397,6 +2397,16 @@ def reset_crop_tool() -> None:
 def delete_crop_tool_volume() -> None:
     """Delete the active crop tool primitive and leave the crop tool"""
 
+def toggle_crop_tool_inverse() -> None:
+    """
+    Invert the selected crop polygon, crop box or ellipsoid, as the pie menu's Invert does
+    """
+
+def get_crop_tool_inverse() -> bool | None:
+    """
+    Whether the crop volume Invert acts on is inverted, or None without one
+    """
+
 def fit_cropbox_to_scene(use_percentile: bool = False) -> None:
     """Fit cropbox to scene bounds"""
 

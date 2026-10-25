@@ -1232,6 +1232,7 @@
     "crop_box": "Scatola di Ritaglio",
     "enable_crop_box": "Attiva scatola di ritaglio",
     "enable_crop_polygon": "Attiva poligono di ritaglio",
+    "invert_crop": "Inverti ritaglio",
     "crop_roi_settings": "Impostazioni ROI di ritaglio",
     "rejected_splat_lr_scale": "Scala LR degli splat esclusi",
     "outside_roi_loss_weight": "Peso della loss fuori dalla ROI",

@@ -2721,6 +2721,63 @@ contract["check_selection_submode_follows_native_mode"](lf)
         }
     }
 
+    // The crop toolbar's Invert calls lf.ui.toggle_crop_tool_inverse(), which flips the selected crop box like the
+    // pie menu's Invert, in one undo step; get_crop_tool_inverse() gives the toggle its state.
+    TEST_F(VisualizerImplResetTest, PythonCropToolInverseTogglesTheSelectedCropBoxWithUndo) {
+        ASSERT_TRUE(lfs::python::ensure_initialized());
+        VisualizerImpl viewer(projectOptions());
+        auto& scene = viewer.getScene();
+        auto* manager = viewer.getSceneManager();
+        const auto target = scene.addSplat("target", lfs::test::licht::make_splat(4));
+        const auto box = scene.addCropBox("box", target);
+        ASSERT_NE(box, lfs::core::NULL_NODE);
+        manager->selectNode(box);
+        viewer.getEditorContext().update(manager, viewer.getTrainerManager());
+        op::undoHistory().clear();
+        {
+            const lfs::python::GilAcquire gil;
+            EXPECT_EQ(PyRun_SimpleString(R"PY(
+import lichtfeld as lf
+assert lf.ui.get_crop_tool_inverse() is False
+lf.ui.toggle_crop_tool_inverse()
+assert lf.ui.get_crop_tool_inverse() is True
+)PY"),
+                      0);
+        }
+        EXPECT_TRUE(scene.getNodeById(box)->cropbox->inverse);
+        EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_FALSE(scene.getNodeById(box)->cropbox->inverse);
+        op::undoHistory().clear();
+    }
+
+    // On layouts where the pie menu's default key prints another character (a backslash on Italian), the press
+    // reaches the pie menu by physical key. The release must match it too, or releasing over Invert does nothing.
+    TEST_F(VisualizerImplResetTest, PieMenuReleaseMatchesThePhysicalKey) {
+        VisualizerImpl viewer(projectOptions());
+        installSessionTestInputController(viewer);
+        auto& scene = viewer.getScene();
+        auto* manager = viewer.getSceneManager();
+        const auto target = scene.addSplat("target", lfs::test::licht::make_splat(4));
+        const auto volume = scene.addEllipsoid("volume", target);
+        ASSERT_NE(volume, lfs::core::NULL_NODE);
+        manager->selectNode(volume);
+        viewer.getEditorContext().update(manager, viewer.getTrainerManager());
+        op::undoHistory().clear();
+
+        auto& gizmo = viewer.getGuiManager()->gizmo();
+        const glm::vec2 centre(400.0f, 300.0f);
+        const float angle = glm::radians(-90.0f + 6.0f * 40.0f);
+        gizmo.openPieMenu(centre);
+        gizmo.onPieMenuMouseMove(centre + 60.0f * glm::vec2(std::cos(angle), std::sin(angle)));
+        viewer.getInputController()->handleKey(input::KEY_GRAVE_ACCENT, input::KEY_BACKSLASH, SDL_SCANCODE_GRAVE,
+                                               input::ACTION_RELEASE, input::KEYMOD_NONE);
+        EXPECT_FALSE(gizmo.isPieMenuOpen());
+        EXPECT_TRUE(scene.getNodeById(volume)->ellipsoid->inverse);
+        UnifiedToolRegistry::instance().setActiveTool("");
+        op::undoHistory().clear();
+    }
+
     TEST_F(VisualizerImplResetTest, CropToolRejectsUnrepresentableParentTransformWithoutMutation) {
         VisualizerImpl viewer(projectOptions());
         ASSERT_NE(viewer.getGuiManager(), nullptr);

@@ -798,6 +798,14 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
     monkeypatch.setattr(lf_stub.ui, "apply_crop_tool", lambda: state.calls.append(("apply_crop_tool",)), raising=False)
     monkeypatch.setattr(lf_stub.ui, "reset_crop_tool", lambda: state.calls.append(("reset_crop_tool",)), raising=False)
     monkeypatch.setattr(lf_stub.ui, "delete_crop_tool_volume", lambda: state.calls.append(("delete_crop_tool_volume",)), raising=False)
+    state.crop_inverse = False
+
+    def toggle_crop_tool_inverse():
+        state.calls.append(("toggle_crop_tool_inverse",))
+        state.crop_inverse = not state.crop_inverse
+
+    monkeypatch.setattr(lf_stub.ui, "get_crop_tool_inverse", lambda: state.crop_inverse, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "toggle_crop_tool_inverse", toggle_crop_tool_inverse, raising=False)
     monkeypatch.setattr(module.ToolRegistry, "get_all", staticmethod(lambda: [crop_tool]), raising=False)
     monkeypatch.setattr(
         module.ToolRegistry,
@@ -817,6 +825,7 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
         "crop_fit",
         "crop_trim",
         "crop_reset",
+        "crop_toggle_inverse",
         "crop_apply",
         "crop_delete",
     ]
@@ -825,6 +834,7 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
         "../icon/arrows-maximize.png",
         "../icon/arrows-minimize.png",
         "../icon/reset.png",
+        "../icon/select-invert.png",
         "../icon/check.png",
         "../icon/scene/trash.png",
     ]
@@ -832,6 +842,7 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
         "scene.fit_to_scene",
         "scene.fit_to_scene_trimmed",
         "scene.reset_crop",
+        "toolbar.invert_crop",
         "common.apply",
         "scene.delete",
     ]
@@ -870,6 +881,19 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
     controller.dispatch("crop_delete", "")
 
     assert state.calls[-1] == ("delete_crop_tool_volume",)
+
+    # Invert shows the crop volume's state and toggles it like the pie menu's Invert.
+    invert = next(button for button in controller.snapshot()["crop_action_buttons"] if button["action"] == "crop_toggle_inverse")
+    assert invert["enabled"] is True
+    assert invert["selected"] is False
+    controller.dispatch("crop_toggle_inverse", "")
+    assert state.calls[-1] == ("toggle_crop_tool_inverse",)
+    invert = next(button for button in controller.snapshot()["crop_action_buttons"] if button["action"] == "crop_toggle_inverse")
+    assert invert["selected"] is True
+    # Without a crop volume to invert, the button is disabled.
+    state.crop_inverse = None
+    invert = next(button for button in controller.snapshot()["crop_action_buttons"] if button["action"] == "crop_toggle_inverse")
+    assert invert["enabled"] is False
 
 
 def test_crop_polygon_button_starts_drawing_and_enables_fit_and_reset(toolbar_module, monkeypatch):
@@ -916,6 +940,7 @@ def test_crop_polygon_button_starts_drawing_and_enables_fit_and_reset(toolbar_mo
     monkeypatch.setattr(
         lf_stub.ui, "fit_crop_tool", lambda trimmed: state.calls.append(("fit_crop_tool", trimmed)), raising=False
     )
+    monkeypatch.setattr(lf_stub.ui, "get_crop_tool_inverse", lambda: False, raising=False)
     monkeypatch.setattr(lf_stub.ui, "reset_crop_tool", lambda: state.calls.append(("reset_crop_tool",)), raising=False)
     monkeypatch.setattr(lf_stub.ui, "delete_crop_tool_volume", lambda: state.calls.append(("delete_crop_tool_volume",)), raising=False)
     monkeypatch.setattr(module.ToolRegistry, "get_all", staticmethod(lambda: [crop_tool]), raising=False)
@@ -948,6 +973,7 @@ def test_crop_polygon_button_starts_drawing_and_enables_fit_and_reset(toolbar_mo
         "crop_fit": True,
         "crop_trim": True,
         "crop_reset": True,
+        "crop_toggle_inverse": True,
         "crop_apply": True,
         "crop_delete": True,
     }
