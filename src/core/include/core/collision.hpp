@@ -5,7 +5,6 @@
 #include "core/progress.hpp"
 #include "core/tensor.hpp"
 #include <glm/glm.hpp>
-#include <span>
 #include <vector>
 namespace lfs::core {
     class SplatData;
@@ -31,10 +30,9 @@ namespace lfs::core {
         // 0/1 uniform; branch = child base + 2; tagged leaf = two mask words.
         std::vector<uint32_t> words;
         bool occupied(glm::ivec3 cell) const;
-        uint64_t brickMask(glm::ivec3 cell) const;
         void validate() const;
     };
-    LFS_CORE_API CollisionVolume generateCollision(std::span<const CollisionSource>, CollisionSettings,
+    LFS_CORE_API CollisionVolume generateCollision(const CollisionSource&, CollisionSettings,
                                                    std::stop_token = {}, ProgressCallback = {}, std::function<void(float)> resolution = {},
                                                    std::function<void(uint64_t)> mixed_blocks = {});
 } // namespace lfs::core

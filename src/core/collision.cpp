@@ -70,19 +70,17 @@ namespace lfs::core {
         return source;
     }
     bool CollisionVolume::occupied(glm::ivec3 p) const {
-        return (brickMask(p) >> ((p.x & 3) + 4 * (p.y & 3) + 16 * (p.z & 3))) & 1;
-    }
-    uint64_t CollisionVolume::brickMask(glm::ivec3 p) const {
         if (glm::any(glm::lessThan(p, glm::ivec3(0))) || glm::any(glm::greaterThanEqual(p, dimensions)))
             return false;
         uint32_t index = 0;
         for (int size = edge;; size /= 2) {
             const auto value = words[index];
             if (value <= 1)
-                return value ? UINT64_MAX : 0;
+                return value;
             if (value & brick_tag) {
                 const auto base = value & ~brick_tag;
-                return uint64_t(words[base]) | (uint64_t(words[base + 1]) << 32);
+                const auto mask = uint64_t(words[base]) | (uint64_t(words[base + 1]) << 32);
+                return (mask >> ((p.x & 3) + 4 * (p.y & 3) + 16 * (p.z & 3))) & 1;
             }
             const auto b = glm::ivec3(glm::greaterThanEqual(p, glm::ivec3(size / 2)));
             index = value - 2 + b.x + 2 * b.y + 4 * b.z;
@@ -133,10 +131,10 @@ namespace lfs::core {
         if (count != occupied_count || std::find(seen.begin(), seen.end(), false) != seen.end())
             throw std::invalid_argument("Collision occupancy count or topology is invalid");
     }
-    CollisionVolume generateCollision(std::span<const CollisionSource> sources, CollisionSettings settings,
+    CollisionVolume generateCollision(const CollisionSource& source, CollisionSettings settings,
                                       std::stop_token stop, ProgressCallback progress, std::function<void(float)> resolution, std::function<void(uint64_t)> mixed_blocks) {
         settings.validate();
-        auto output = cuda::voxelizeCollision(sources, settings, stop, progress, resolution, mixed_blocks);
+        auto output = cuda::voxelizeCollision(source, settings, stop, progress, resolution, mixed_blocks);
         auto& v = output.volume;
         auto& bricks = output.bricks;
         v.words.assign(1, 0);

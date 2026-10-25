@@ -24,73 +24,27 @@ namespace lfs::core::cuda {
                     return false;
             return true;
         }
-        // Conservative density bound over entire voxel volumes, including float
-        // coordinate error. No ellipsoid/voxel-center truncation of thin splats.
-        __device__ bool possible(Region p, int n, const Grid grid,
-                                 const CollisionGaussianGpu* gs, const CollisionBvhNode* nodes) {
+        // Both conservative proofs share BVH traversal. The lower bound requires
+        // complete Gaussian support and never marks logical padding solid.
+        template <bool solid>
+        __device__ bool region_bound(Region p, int n, const Grid grid,
+                                     const CollisionGaussianGpu* gs, const CollisionBvhNode* nodes) {
+            if constexpr (solid)
+                for (int a = 0; a < 3; ++a)
+                    if (int(component(p, a)) + n > grid.dimensions[a])
+                        return false;
             uint32_t stack[32];
             int top = 0;
             stack[top++] = 0;
-            float upper = 0;
-            while (top) {
-                const auto node = nodes[stack[--top]];
-                if (!overlaps(node, p, n, grid))
-                    continue;
-                if (!node.count) {
-                    stack[top++] = node.left;
-                    stack[top++] = node.right;
-                    continue;
-                }
-                for (uint32_t i = node.begin; i < node.begin + node.count; ++i) {
-                    const auto& g = gs[i];
-                    float d[3], h[3];
-                    bool overlap = true;
-                    for (int a = 0; a < 3; ++a) {
-                        int low = int(component(p, a)), high = min(low + n, grid.dimensions[a]);
-                        overlap &= low < g.max[a] && high > g.min[a];
-                        const float middle = grid.origin[a] + (float(low) + float(high)) * (grid.size * .5f);
-                        d[a] = middle - g.center[a];
-                        h[a] = (high - low) * grid.size * .5f + (fabsf(middle) + fabsf(grid.origin[a]) + fabsf(g.center[a]) + 1) * 1e-6f;
-                    }
-                    if (!overlap)
-                        continue;
-                    float distance = 0;
-                    for (int a = 0; a < 3; ++a) {
-                        const float q = g.inverse[a] * d[0] + g.inverse[a + 3] * d[1] + g.inverse[a + 6] * d[2];
-                        const float r = fabsf(g.inverse[a]) * h[0] + fabsf(g.inverse[a + 3]) * h[1] + fabsf(g.inverse[a + 6]) * h[2] + fabsf(q) * 1e-6f;
-                        const float nearest_distance = fmaxf(fabsf(q) - r, 0);
-                        distance += nearest_distance * nearest_distance;
-                    }
-                    upper += g.opacity * expf(-.5f * distance) + 1e-6f;
-                    if (double(upper) >= grid.cutoff)
-                        return true;
-                }
-            }
-            return false;
-        }
-        static_assert(morton_encode((1u << 19) - 1, (1u << 19) - 1, (1u << 19) - 1) == (uint64_t(1) << 57) - 1);
-        __device__ bool certain(Region p, int n, const Grid grid,
-                                const CollisionGaussianGpu* gs, const CollisionBvhNode* nodes) {
-            // Never mark padding solid: clipped root regions keep exact bounds.
-            for (int a = 0; a < 3; ++a)
-                if (int(component(p, a)) + n > grid.dimensions[a])
-                    return false;
-            uint32_t stack[32];
-            int top = 0;
-            stack[top++] = 0;
-            float lower = 0;
+            float density = 0;
             const float minimum_support = (float(n) * grid.size * .5f) * .99999f;
             while (top) {
                 const auto node = nodes[stack[--top]];
                 if (!overlaps(node, p, n, grid))
                     continue;
-                // Every contributing Gaussian must support the whole cube on
-                // all three axes. A smaller subtree-wide maximum proves that
-                // this lower-bound search cannot contribute, even before the
-                // more selective centre/rotation tests. The margin only makes
-                // rejection less aggressive near floating-point boundaries.
-                if (__uint_as_float(node.count ? node.left : node.begin) < minimum_support)
-                    continue;
+                if constexpr (solid)
+                    if (__uint_as_float(node.count ? node.left : node.begin) < minimum_support)
+                        continue;
                 if (!node.count) {
                     stack[top++] = node.left;
                     stack[top++] = node.right;
@@ -101,29 +55,45 @@ namespace lfs::core::cuda {
                     float d[3], h[3];
                     bool supported = true;
                     for (int a = 0; a < 3; ++a) {
-                        const float middle = grid.origin[a] + (component(p, a) + float(n) * .5f) * grid.size;
-                        d[a] = middle - g.center[a];
-                        h[a] = float(n) * grid.size * .5f + (fabsf(middle) + fabsf(grid.origin[a]) + fabsf(g.center[a]) + 1) * 2e-6f;
-                        supported &= fabsf(d[a]) + h[a] <= g.extent[a];
+                        if constexpr (solid) {
+                            const float middle = grid.origin[a] + (component(p, a) + float(n) * .5f) * grid.size;
+                            d[a] = middle - g.center[a];
+                            h[a] = float(n) * grid.size * .5f + (fabsf(middle) + fabsf(grid.origin[a]) + fabsf(g.center[a]) + 1) * 2e-6f;
+                            supported &= fabsf(d[a]) + h[a] <= g.extent[a];
+                        } else {
+                            const int low = int(component(p, a)), high = min(low + n, grid.dimensions[a]);
+                            supported &= low < g.max[a] && high > g.min[a];
+                            const float middle = grid.origin[a] + (float(low) + float(high)) * (grid.size * .5f);
+                            d[a] = middle - g.center[a];
+                            h[a] = (high - low) * grid.size * .5f + (fabsf(middle) + fabsf(grid.origin[a]) + fabsf(g.center[a]) + 1) * 1e-6f;
+                        }
                     }
                     if (!supported)
                         continue;
-                    float far2 = 0;
+                    float distance = 0;
                     for (int a = 0; a < 3; ++a) {
                         const float q = g.inverse[a] * d[0] + g.inverse[a + 3] * d[1] + g.inverse[a + 6] * d[2];
                         const float r = fabsf(g.inverse[a]) * h[0] + fabsf(g.inverse[a + 3]) * h[1] + fabsf(g.inverse[a + 6]) * h[2];
-                        const float farthest_distance = fabsf(q) + r + (fabsf(q) + r + 1) * 2e-6f;
-                        far2 += farthest_distance * farthest_distance;
+                        const float axis_distance = solid ? fabsf(q) + r + (fabsf(q) + r + 1) * 2e-6f
+                                                          : fmaxf(fabsf(q) - (r + fabsf(q) * 1e-6f), 0);
+                        distance += axis_distance * axis_distance;
                     }
-                    lower = __fadd_rd(lower, g.opacity * expf(-.5f * far2) * .99999f);
-                    // Reserve float summation error as well as coordinate error.
-                    // A failed proof merely falls back to the exact cell kernel.
-                    if (lower > grid.cutoff * 1.001 + 1e-5)
-                        return true;
+                    // Reserve coordinate and float-summation error. A failed
+                    // proof falls back to the unchanged cell-density kernel.
+                    if constexpr (solid) {
+                        density = __fadd_rd(density, g.opacity * expf(-.5f * distance) * .99999f);
+                        if (density > grid.cutoff * 1.001 + 1e-5)
+                            return true;
+                    } else {
+                        density += g.opacity * expf(-.5f * distance) + 1e-6f;
+                        if (double(density) >= grid.cutoff)
+                            return true;
+                    }
                 }
             }
             return false;
         }
+        static_assert(morton_encode((1u << 19) - 1, (1u << 19) - 1, (1u << 19) - 1) == (uint64_t(1) << 57) - 1);
         __global__ void split_regions(const Region* input, uint32_t offset, uint32_t count, int size, Grid grid,
                                       const CollisionGaussianGpu* gs, const CollisionBvhNode* nodes,
                                       Region* output, uint32_t* output_count,
@@ -134,12 +104,10 @@ namespace lfs::core::cuda {
             const auto parent = input[offset + i / 8];
             const int child = i & 7, half = size / 2;
             const Region p{parent.x + (child & 1) * half, parent.y + ((child >> 1) & 1) * half, parent.z + (child >> 2) * half};
-            // Reject children before appending. Previously eight children were
-            // counted for every plausible parent, so empty padding alone could
-            // exhaust the frontier budget before the next rejection pass.
-            if (!possible(p, half, grid, gs, nodes))
+            // Reject empty children before they consume frontier storage.
+            if (!region_bound<false>(p, half, grid, gs, nodes))
                 return;
-            if (half <= 128 && certain(p, half, grid, gs, nodes)) {
+            if (half <= 128 && region_bound<true>(p, half, grid, gs, nodes)) {
                 const auto row = atomicAdd(solid_count, 1u);
                 if (row < max_regions) {
                     int exponent = 0;

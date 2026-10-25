@@ -17,10 +17,9 @@ namespace lfs::core::cuda {
         return bytes;
     }
     LFS_CORE_API size_t collisionSortWorkspaceBytes(size_t count);
-    size_t queryCollisionSortWorkspaceBytes(size_t count);
     struct CollisionBricks {
         CollisionVolume volume;
         std::vector<CollisionBrick> bricks;
     };
-    CollisionBricks voxelizeCollision(std::span<const CollisionSource>, CollisionSettings, std::stop_token, ProgressCallback, const std::function<void(float)>&, const std::function<void(uint64_t)>&);
+    CollisionBricks voxelizeCollision(const CollisionSource&, CollisionSettings, std::stop_token, ProgressCallback, const std::function<void(float)>&, const std::function<void(uint64_t)>&);
 } // namespace lfs::core::cuda

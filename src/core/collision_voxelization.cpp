@@ -26,14 +26,11 @@ namespace lfs::core::cuda {
             }
         };
     } // namespace
-    CollisionBricks voxelizeCollision(std::span<const CollisionSource> sources, CollisionSettings settings, std::stop_token stop, ProgressCallback progress, const std::function<void(float)>& resolution, const std::function<void(uint64_t)>& mixed_blocks) {
+    CollisionBricks voxelizeCollision(const CollisionSource& s, CollisionSettings settings, std::stop_token stop, ProgressCallback progress, const std::function<void(float)>& resolution, const std::function<void(uint64_t)>& mixed_blocks) {
         reportProgress(stop, progress, 0, "Preparing collision geometry");
-        size_t total = 0;
-        for (const auto& source : sources) {
-            if (!source.means.is_valid() || source.means.ndim() != 2 || source.means.shape()[1] != 3)
-                throw std::invalid_argument("Collision means must have shape [N,3]");
-            total = saturating_add(total, source.means.shape()[0]);
-        }
+        if (!s.means.is_valid() || s.means.ndim() != 2 || s.means.shape()[1] != 3)
+            throw std::invalid_argument("Collision means must have shape [N,3]");
+        const auto total = s.means.shape()[0];
         if (!total || total > size_t(INT_MAX))
             throw std::invalid_argument("Collision source count exceeds the signed tensor index range or is empty");
         const auto stream = getCurrentCUDAStream();
@@ -48,37 +45,31 @@ namespace lfs::core::cuda {
         auto bounds = Tensor::empty({6, total}, Device::CUDA);
         auto errors = Tensor::empty({1}, Device::CUDA, DataType::UInt32);
         LFS_CUDA_CHECK(cudaMemsetAsync(errors.ptr<uint32_t>(), 0, sizeof(uint32_t), stream));
-        size_t offset = 0;
-        for (const auto& s : sources) {
-            const auto n = s.means.shape()[0];
-            if (!n)
-                continue;
-            auto host_check = [&](const Tensor& t, size_t count, DataType type) {
-                if (!t.is_valid() || t.numel() != count || t.dtype() != type)
-                    throw std::invalid_argument("Invalid collision geometry tensor");
-            };
-            host_check(s.means, n * 3, DataType::Float32);
-            host_check(s.scales, n * 3, DataType::Float32);
-            host_check(s.rotations, n * 4, DataType::Float32);
-            host_check(s.opacity, n, DataType::Float32);
-            if (s.deleted.is_valid())
-                host_check(s.deleted, n, DataType::Bool);
-            for (int c = 0; c < 4; ++c)
-                for (int r = 0; r < 4; ++r)
-                    if (!std::isfinite(s.transform[c][r]))
-                        throw std::invalid_argument("Non-finite collision source transform");
-            if (s.transform[0][3] != 0 || s.transform[1][3] != 0 || s.transform[2][3] != 0 || s.transform[3][3] != 1 ||
-                glm::determinant(glm::dmat3(s.transform)) == 0)
-                throw std::invalid_argument("Collision source transform must be invertible and affine");
+        auto host_check = [&](const Tensor& t, size_t count, DataType type) {
+            if (!t.is_valid() || t.numel() != count || t.dtype() != type)
+                throw std::invalid_argument("Invalid collision geometry tensor");
+        };
+        host_check(s.means, total * 3, DataType::Float32);
+        host_check(s.scales, total * 3, DataType::Float32);
+        host_check(s.rotations, total * 4, DataType::Float32);
+        host_check(s.opacity, total, DataType::Float32);
+        if (s.deleted.is_valid())
+            host_check(s.deleted, total, DataType::Bool);
+        for (int c = 0; c < 4; ++c)
+            for (int r = 0; r < 4; ++r)
+                if (!std::isfinite(s.transform[c][r]))
+                    throw std::invalid_argument("Non-finite collision source transform");
+        if (s.transform[0][3] != 0 || s.transform[1][3] != 0 || s.transform[2][3] != 0 || s.transform[3][3] != 1 ||
+            glm::determinant(glm::dmat3(s.transform)) == 0)
+            throw std::invalid_argument("Collision source transform must be invertible and affine");
+        {
             auto means = s.means.to(Device::CUDA, stream).contiguous(), scales = s.scales.to(Device::CUDA, stream).contiguous();
             auto rotation = s.rotations.to(Device::CUDA, stream).contiguous(), opacity = s.opacity.to(Device::CUDA, stream).contiguous();
             auto deleted = s.deleted.is_valid() ? s.deleted.to(Device::CUDA, stream).contiguous() : Tensor{};
             prepare_inputs_for_stream({&means, &scales, &rotation, &opacity}, stream);
             if (deleted.is_valid())
                 prepare_inputs_for_stream({&deleted}, stream);
-            launch_prepare(blocks(n), 256, stream, means.ptr<float>(), scales.ptr<float>(), rotation.ptr<float>(), opacity.ptr<float>(), deleted.is_valid() ? deleted.ptr<bool>() : nullptr, n, offset, s.transform, gs.data, metrics.ptr<float>(), errors.ptr<uint32_t>());
-
-            offset += n;
+            launch_prepare(blocks(total), 256, stream, means.ptr<float>(), scales.ptr<float>(), rotation.ptr<float>(), opacity.ptr<float>(), deleted.is_valid() ? deleted.ptr<bool>() : nullptr, total, 0, s.transform, gs.data, metrics.ptr<float>(), errors.ptr<uint32_t>());
         }
         if (errors.to(Device::CPU).ptr<uint32_t>()[0])
             throw std::invalid_argument("Non-finite Gaussian geometry");
@@ -200,9 +191,8 @@ namespace lfs::core::cuda {
         frames[0].regions.reserve(1);
         frames[0].count = 1;
         LFS_CUDA_CHECK(cudaMemsetAsync(frames[0].regions.data, 0, sizeof(Region), stream));
-        Buffer<uint32_t> count, solid_count;
+        Buffer<uint32_t> count;
         count.reserve(2);
-        solid_count.reserve(1);
         Buffer<CollisionBrick> output;
         std::vector<Buffer<CollisionBrick>> chunks;
         size_t result_size = 0;
@@ -245,12 +235,11 @@ namespace lfs::core::cuda {
                 auto& child = frames[depth + 1];
                 child.regions.reserve(size_t(batch) * 8);
                 output.reserve(size_t(batch) * 8);
-                LFS_CUDA_CHECK(cudaMemsetAsync(count.data, 0, 4, stream));
-                LFS_CUDA_CHECK(cudaMemsetAsync(solid_count.data, 0, 4, stream));
-                launch_split_regions((uint64_t(batch) * 8 + 127) / 128, 128, stream, frame.regions.data, frame.offset, batch, frame.edge, grid, gs.data, bvh.data, child.regions.data, count.data, output.data, solid_count.data);
+                LFS_CUDA_CHECK(cudaMemsetAsync(count.data, 0, 2 * sizeof(uint32_t), stream));
+                launch_split_regions((uint64_t(batch) * 8 + 127) / 128, 128, stream, frame.regions.data, frame.offset, batch, frame.edge, grid, gs.data, bvh.data, child.regions.data, count.data, output.data, count.data + 1);
 
                 LFS_CUDA_CHECK(cudaMemcpyAsync(&child.count, count.data, 4, cudaMemcpyDeviceToHost, stream));
-                LFS_CUDA_CHECK(cudaMemcpyAsync(&occupied, solid_count.data, 4, cudaMemcpyDeviceToHost, stream));
+                LFS_CUDA_CHECK(cudaMemcpyAsync(&occupied, count.data + 1, 4, cudaMemcpyDeviceToHost, stream));
                 LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
                 append(occupied);
                 const double half = frame.edge / 2;
@@ -262,8 +251,7 @@ namespace lfs::core::cuda {
             } else {
                 const auto batch = std::min(frame.count - frame.offset, 65536u);
                 output.reserve(batch);
-                LFS_CUDA_CHECK(cudaMemsetAsync(count.data, 0, 4, stream));
-                LFS_CUDA_CHECK(cudaMemsetAsync(count.data + 1, 0, 4, stream));
+                LFS_CUDA_CHECK(cudaMemsetAsync(count.data, 0, 2 * sizeof(uint32_t), stream));
                 launch_evaluate_bricks(batch, 64, stream, frame.regions.data, frame.offset, grid, gs.data, bvh.data, output.data, count.data);
 
                 uint32_t mixed = 0;
@@ -292,7 +280,7 @@ namespace lfs::core::cuda {
         preflight("Collision compaction", compact_bytes, result_size, peak_bytes);
         try {
             compact.reserve(result_size);
-            offset = 0;
+            size_t offset = 0;
             for (auto& chunk : chunks) {
                 LFS_CUDA_CHECK(cudaMemcpyAsync(compact.data + offset, chunk.data, chunk.capacity * sizeof(CollisionBrick), cudaMemcpyDeviceToDevice, stream));
                 offset += chunk.capacity;

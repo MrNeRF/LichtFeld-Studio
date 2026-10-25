@@ -2882,8 +2882,6 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
             if (filter && ::args::get(filter) != "cleanup" && ::args::get(filter) != "none")
                 return std::unexpected("--filter supports cleanup or none; connected filtering is deferred");
             mode.settings.cleanup = !filter || ::args::get(filter) == "cleanup";
-            if (area && !mode.settings.cleanup)
-                return std::unexpected("--max-gaussian-area requires --filter cleanup");
             mode.settings.auto_resolution = automatic;
             if (size)
                 mode.settings.voxel_size = ::args::get(size);

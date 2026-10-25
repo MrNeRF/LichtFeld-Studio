@@ -11,31 +11,18 @@ LichtFeld-Studio voxelize scene.ply -o scene.voxel.json --voxel-size 0.05
 LichtFeld-Studio voxelize scene.sog scene.voxel.json --auto --overwrite
 ```
 
-Writes a SuperSplat v1.1 `.voxel.json` / `.voxel.bin` pair. Cell size uses scene units;
-`--auto` chooses a scale-relative size from median transformed splat footprint and source count,
-without a fixed metre floor; the resolved cell size is reported. `--voxel-opacity` sets accumulated opacity
-(default 0.1, range [0,1)). `--filter cleanup` (default) rejects source outliers;
-`--filter none` disables cleanup. `--max-gaussian-area` is in squared scene units,
-with zero selecting automatic rejection. Bounds still cover the entire retained source.
-There is no hidden region of interest or resolution coarsening.
+Writes a SuperSplat v1.1 `.voxel.json` / `.voxel.bin` pair.
 
-All shared Gaussian splat formats, including SOG `meta.json` and SSOG folders, are accepted.
-Original LOD leaves are used; partially resident out-of-core models fail explicitly.
-Datasets, point clouds and meshes are not Gaussian inputs.
-Connected filtering, seed/cluster flags, fill/carve, surfaces and GLB export are deferred;
-unsupported options are errors. Overwrite approval covers both files once.
-Cancellation and ordinary publication failures restore the previous pair; this is not
-crash-atomic or atomic for concurrent readers. Export requires a uniformly scaled,
-signed-axis-aligned affine grid. Export aligns storage bounds to four-cell blocks
-with empty padding; scene bounds retain the logical extent and reflections preserve
-world-space cell positions. Generation stops before retaining more than 64 million
-sparse output records, and may stop sooner if GPU memory is insufficient. Choose a
-larger cell size or Auto after a limit error; explicit resolution is never changed.
+`--voxel-opacity` sets accumulated opacity (default 0.1, range [0,1)). `--filter cleanup` rejects
+outliers; `--filter none` disables cleanup. `--max-gaussian-area` is a three-sigma projected area in
+squared scene units (0 disables the manual cap). Cleanup may still apply its automatic limit.
 
-Python uses `lichtfeld.io.generate_voxels(path, settings)` and
-`lichtfeld.io.save_voxels(volume, path, overwrite=False, transform=[])`.
-`VoxelSettings` exposes the generation controls above. A progress callback returning
-`False` cancels. The optional transform is 16 column-major data-world matrix values.
+See [Collision](features/collision.md) for Auto resolution, full-source coverage, memory/format limits
+and cancellation guarantees. Overwrite approval covers both outputs once.
+
+Python: `lichtfeld.io.generate_voxels(path, settings)` and `lichtfeld.io.save_voxels(volume, path,
+overwrite=False, transform=[])`. `VoxelSettings` exposes these controls; a progress callback
+returning `False` cancels. Optional transforms are 16 column-major data-world values.
 
 ## Embed a dataset in a project
 

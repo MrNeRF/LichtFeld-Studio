@@ -42,7 +42,7 @@ namespace lfs::app {
                 return !stop.stop_requested();
             };
             auto source = io::loadCollisionSource(options.input_path, stop, io::scale_export_progress(progress, 0, .2f));
-            auto volume = core::generateCollision({&source, 1}, options.settings, stop, io::scale_export_progress(progress, .2f, .8f), {}, io::checkCollisionExportMixedBlocks);
+            auto volume = core::generateCollision(source, options.settings, stop, io::scale_export_progress(progress, .2f, .8f), {}, io::checkCollisionExportMixedBlocks);
             source = {};
             io::exportCollision(volume, options.output_path, glm::mat4(1), stop, io::scale_export_progress(progress, .8f, 1));
             bar.complete();
