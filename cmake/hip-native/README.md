@@ -66,9 +66,9 @@ context queue. Callers must keep borrowed host storage alive until a transfer
 completes; a failed synchronization must not be interpreted as successful drainage.
 
 The mathematical smoke checks cover non-aligned lengths and exact FP32 values;
-they are not performance benchmarks or training-quality claims. Public Tensor
-contracts, advanced operators, HIPRTC, renderer interop and trainer integration
-belong to later changes. CPU-only configuration regressions can run without an SDK:
+they are not performance benchmarks or training-quality claims. The standalone
+target does not register an application Tensor backend or enable training.
+CPU-only configuration checks need no SDK:
 
 ```sh
 python tests/python/test_hip_runtime_configuration.py
@@ -207,6 +207,8 @@ Integer comparisons preserve Int64 precision rather than converting to float.
 | Matrix multiplication and pairwise distance | FP32 |
 
 Unsupported combinations fail explicitly rather than running a CPU fallback.
+Numeric-to-Bool casts can use comparison against zero through `pointwise_f32`
+or `predicate_typed`, preserving nonzero and NaN truth semantics.
 Floating reductions and indexed atomic addition may differ in rounding order
 between devices. RNG seeds are reproducible for this implementation; no claim
 is made that another backend produces the same seeded sequence.
