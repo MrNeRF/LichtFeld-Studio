@@ -3,58 +3,40 @@
 #pragma once
 #include "integer_reduce_api.h"
 namespace {
-    template <class In, class Out, unsigned Op>
-    __global__ void typed_axis_reduce(const In* input, Out* output, LfsHipLayout kept, LfsHipLayout reduced) {
-        __shared__ uint64_t scratch[256];
-        for (size_t row = blockIdx.x; row < kept.elements; row += gridDim.x) {
-            uint64_t value = Op == LFS_HIP_REDUCE_ALL ? 1 : 0;
+    template <class Out, unsigned Op>
+    struct IntegerReduction {
+        using Accumulator = uint64_t;
+        __device__ uint64_t identity() const {
             if constexpr (Op == LFS_HIP_REDUCE_MAX)
-                value = static_cast<uint64_t>(std::numeric_limits<Out>::lowest());
+                return static_cast<uint64_t>(std::numeric_limits<Out>::lowest());
             if constexpr (Op == LFS_HIP_REDUCE_MIN)
-                value = static_cast<uint64_t>(std::numeric_limits<Out>::max());
-            const auto offset = layout_index(row, kept);
-            for (size_t i = threadIdx.x; i < reduced.elements; i += blockDim.x) {
-                const auto source = input[offset + layout_index(i, reduced)];
-                if constexpr (Op == LFS_HIP_REDUCE_SUM)
-                    value += static_cast<uint64_t>(source);
-                if constexpr (Op == LFS_HIP_REDUCE_MAX) {
-                    const Out a = static_cast<Out>(value), b = static_cast<Out>(source);
-                    value = static_cast<uint64_t>(a > b ? a : b);
-                }
-                if constexpr (Op == LFS_HIP_REDUCE_MIN) {
-                    const Out a = static_cast<Out>(value), b = static_cast<Out>(source);
-                    value = static_cast<uint64_t>(a < b ? a : b);
-                }
-                if constexpr (Op == LFS_HIP_REDUCE_ANY)
-                    value |= source != In(0);
-                if constexpr (Op == LFS_HIP_REDUCE_ALL)
-                    value &= source != In(0);
-            }
-            scratch[threadIdx.x] = value;
-            __syncthreads();
-            for (unsigned step = 128; step; step >>= 1) {
-                if (threadIdx.x < step) {
-                    const auto other = scratch[threadIdx.x + step];
-                    value = scratch[threadIdx.x];
-                    if constexpr (Op == LFS_HIP_REDUCE_SUM)
-                        value += other;
-                    if constexpr (Op == LFS_HIP_REDUCE_MAX)
-                        value = static_cast<uint64_t>(static_cast<Out>(value) > static_cast<Out>(other) ? static_cast<Out>(value) : static_cast<Out>(other));
-                    if constexpr (Op == LFS_HIP_REDUCE_MIN)
-                        value = static_cast<uint64_t>(static_cast<Out>(value) < static_cast<Out>(other) ? static_cast<Out>(value) : static_cast<Out>(other));
-                    if constexpr (Op == LFS_HIP_REDUCE_ANY)
-                        value |= other;
-                    if constexpr (Op == LFS_HIP_REDUCE_ALL)
-                        value &= other;
-                    scratch[threadIdx.x] = value;
-                }
-                __syncthreads();
-            }
-            if (threadIdx.x == 0)
-                output[row] = static_cast<Out>(scratch[0]);
-            __syncthreads();
+                return static_cast<uint64_t>(std::numeric_limits<Out>::max());
+            return Op == LFS_HIP_REDUCE_ALL ? 1 : 0;
         }
-    }
+        __device__ uint64_t operator()(uint64_t a, uint64_t b) const {
+            if constexpr (Op == LFS_HIP_REDUCE_MAX)
+                return static_cast<uint64_t>(lfs::core::ops::maximum_op{}(static_cast<Out>(a), static_cast<Out>(b)));
+            if constexpr (Op == LFS_HIP_REDUCE_MIN)
+                return static_cast<uint64_t>(lfs::core::ops::minimum_op{}(static_cast<Out>(a), static_cast<Out>(b)));
+            if constexpr (Op == LFS_HIP_REDUCE_ANY)
+                return a | b;
+            if constexpr (Op == LFS_HIP_REDUCE_ALL)
+                return a & b;
+            return a + b;
+        }
+    };
+    template <class In, class Out, unsigned Op>
+    struct IntegerLayoutReduction {
+        const In* input;
+        LfsHipLayout kept, reduced;
+        __device__ uint64_t operator()(size_t row, size_t index) const {
+            const In value = input[layout_index(row, kept) + layout_index(index, reduced)];
+            if constexpr (Op == LFS_HIP_REDUCE_ANY || Op == LFS_HIP_REDUCE_ALL)
+                return value != In(0);
+            else
+                return static_cast<uint64_t>(value);
+        }
+    };
 } // namespace
 extern "C" int lfs_hip_reduce_typed_layout(LfsHipContext* context, LfsHipView input, LfsHipView output, const LfsHipLayout* source, uint32_t axes, uint32_t operation, uint32_t input_dtype, uint32_t output_dtype, LfsHipError* error) {
     return boundary(error, [&] {
@@ -100,7 +82,10 @@ extern "C" int lfs_hip_reduce_typed_layout(LfsHipContext* context, LfsHipView in
             return;
         }
         auto launch = [&]<class I, class O, unsigned Op>() {
-            hipLaunchKernelGGL((typed_axis_reduce<I, O, Op>), dim3(unsigned(std::min<size_t>(kept.elements, 65535))), dim3(256), 0, context->stream, static_cast<const I*>(in), static_cast<O*>(out), kept, reduced);
+            using Reader = IntegerLayoutReduction<I, O, Op>;
+            using Store = ReductionStore<O, false>;
+            hipLaunchKernelGGL((block_reduction<Reader, IntegerReduction<O, Op>, Store>), dim3(unsigned(std::min<size_t>(kept.elements, 65535))), dim3(256), 0, context->stream,
+                               (Reader{static_cast<const I*>(in), kept, reduced}), (Store{static_cast<O*>(out)}), kept.elements, reduced.elements, 1u);
         };
         auto numeric = [&]<class I, class O>() {
             switch (operation) {

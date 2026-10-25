@@ -47,14 +47,10 @@ extern "C" int lfs_hip_predicate_typed(LfsHipContext* context, LfsHipView lhs, L
         validate(context, lhs.buffer, lhs.offset, bytes);
         validate(context, output.buffer, output.offset, p->count);
         require(lhs.offset % width == 0 && (!binary || rhs.offset % width == 0), "Misaligned HIP typed predicate input");
-        const auto no_alias = [&](LfsHipView input) {
-            require((width == 1 && input.offset == output.offset) || input.buffer != output.buffer || input.offset >= output.offset + p->count || output.offset >= input.offset + bytes,
-                    "HIP typed predicate output aliases an input");
-        };
-        no_alias(lhs);
+        require_compatible_views(lhs, bytes, output, p->count, width == 1, "HIP typed predicate output aliases an input");
         if (binary) {
             validate(context, rhs.buffer, rhs.offset, bytes);
-            no_alias(rhs);
+            require_compatible_views(rhs, bytes, output, p->count, width == 1, "HIP typed predicate output aliases an input");
         }
         if (!p->count)
             return;

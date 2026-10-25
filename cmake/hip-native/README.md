@@ -222,6 +222,14 @@ Integer comparisons preserve Int64 precision rather than converting to float.
 | Matrix multiplication and pairwise distance | FP32 |
 
 Unsupported combinations fail explicitly rather than running a CPU fallback.
+Scalar, strided-axis, fused-chain and typed integer reductions share one block
+kernel. Readers describe the input addressing, policies retain the appropriate
+floating or integer accumulator, and stores handle output conversion. Short
+floating reductions retain a serial fast path. Axis and chain reductions share
+parts selection while preserving their respective final-pass accumulation order.
+Buffer overlap checks and lazy reduction workspace ownership are centralized.
+The floating convenience exports forward to the typed implementations.
+
 Floating reductions and indexed atomic addition may differ in rounding order
 between devices. RNG seeds are reproducible for this implementation; no claim
 is made that another backend produces the same seeded sequence.

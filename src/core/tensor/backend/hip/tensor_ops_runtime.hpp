@@ -249,48 +249,97 @@ namespace {
             return a + b;
     }
     template <unsigned Mode>
-    __device__ float block_reduce_float(float value, float* shared) {
-        shared[threadIdx.x] = value;
-        __syncthreads();
-        for (unsigned stride = 128; stride; stride >>= 1) {
-            if (threadIdx.x < stride)
-                shared[threadIdx.x] = combine_reduce<Mode>(shared[threadIdx.x], shared[threadIdx.x + stride]);
+    struct FloatReduction {
+        using Accumulator = float;
+        __device__ float identity() const {
+            if constexpr (Mode == LFS_HIP_REDUCE_MIN)
+                return INFINITY;
+            if constexpr (Mode == LFS_HIP_REDUCE_MAX)
+                return -INFINITY;
+            return 0;
+        }
+        __device__ float operator()(float a, float b) const { return combine_reduce<Mode>(a, b); }
+    };
+    template <class Out, bool Scaled = true>
+    struct ReductionStore {
+        Out* output;
+        float scale = 1;
+        template <class T>
+        __device__ void operator()(size_t index, T value) const {
+            if constexpr (Scaled) {
+                if constexpr (std::is_same_v<Out, __half>) {
+                    volatile float rounded = value * scale;
+                    output[index] = __float2half_rn(rounded);
+                } else
+                    output[index] = value * scale;
+            } else
+                output[index] = static_cast<Out>(value);
+        }
+    };
+    template <class Reader, class Policy, class Store>
+    __global__ void block_reduction(Reader input, Store output, size_t rows, size_t size, unsigned parts) {
+        using Acc = typename Policy::Accumulator;
+        __shared__ Acc scratch[256];
+        const Policy policy{};
+        for (size_t group = blockIdx.x; group < rows * parts; group += gridDim.x) {
+            const size_t row = group / parts, part = group % parts;
+            Acc value = policy.identity();
+            for (size_t i = part * 256 + threadIdx.x; i < size; i += size_t(parts) * 256)
+                value = policy(value, input(row, i));
+            scratch[threadIdx.x] = value;
+            __syncthreads();
+            for (unsigned offset = 128; offset; offset >>= 1) {
+                if (threadIdx.x < offset)
+                    scratch[threadIdx.x] = policy(scratch[threadIdx.x], scratch[threadIdx.x + offset]);
+                __syncthreads();
+            }
+            if (!threadIdx.x)
+                output(group, scratch[0]);
             __syncthreads();
         }
-        return shared[0];
     }
+    template <class Reader, class Policy, class Store>
+    __global__ void serial_reduction(Reader input, Store output, size_t rows, size_t size) {
+        const Policy policy{};
+        for (size_t row = size_t(blockIdx.x) * blockDim.x + threadIdx.x; row < rows; row += size_t(gridDim.x) * blockDim.x) {
+            auto value = policy.identity();
+            for (size_t i = 0; i < size; ++i)
+                value = policy(value, input(row, i));
+            output(row, value);
+        }
+    }
+    struct ContiguousReduction {
+        const float* input;
+        size_t stride;
+        __device__ float operator()(size_t row, size_t index) const { return input[row * stride + index]; }
+    };
+    template <unsigned Mode, bool Final>
+    struct ScalarReduction {
+        const float* input;
+        __device__ float operator()(size_t, size_t index) const {
+            const float value = input[index];
+            if constexpr (!Final && Mode == LFS_HIP_REDUCE_HAS_NAN)
+                return isnan(value) ? 1.f : 0.f;
+            if constexpr (!Final && Mode == LFS_HIP_REDUCE_HAS_INF)
+                return isinf(value) ? 1.f : 0.f;
+            return value;
+        }
+    };
     void ensure_reduction_workspace(LfsHipContext* context) {
         if (!context->reduction_workspace)
             check(hipMalloc(&context->reduction_workspace, reduction_workspace_floats * sizeof(float)));
-    }
-    template <unsigned Mode, bool Final>
-    __global__ void reduction_kernel(const float* in, size_t count, float* out) {
-        __shared__ float shared[256];
-        float value = 0;
-        if constexpr (Mode == LFS_HIP_REDUCE_MIN)
-            value = INFINITY;
-        if constexpr (Mode == LFS_HIP_REDUCE_MAX)
-            value = -INFINITY;
-        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += size_t(gridDim.x) * blockDim.x) {
-            float input = in[i];
-            if constexpr (!Final && Mode == LFS_HIP_REDUCE_HAS_NAN)
-                input = isnan(input) ? 1.f : 0.f;
-            if constexpr (!Final && Mode == LFS_HIP_REDUCE_HAS_INF)
-                input = isinf(input) ? 1.f : 0.f;
-            value = combine_reduce<Mode>(value, input);
-        }
-        const float result = block_reduce_float<Mode>(value, shared);
-        if (!threadIdx.x)
-            out[blockIdx.x] = result;
     }
     template <unsigned Mode>
     void launch_reduce(LfsHipContext* context, LfsHipView input, size_t count) {
         const auto* data = reinterpret_cast<const float*>(static_cast<const char*>(input.buffer->data) + input.offset);
         const unsigned groups = blocks(count);
-        hipLaunchKernelGGL((reduction_kernel<Mode, false>), dim3(groups), dim3(256), 0, context->stream, data, count, context->reduction_workspace);
+        hipLaunchKernelGGL((block_reduction<ScalarReduction<Mode, false>, FloatReduction<Mode>, ReductionStore<float, false>>),
+                           dim3(groups), dim3(256), 0, context->stream, (ScalarReduction<Mode, false>{data}),
+                           (ReductionStore<float, false>{context->reduction_workspace}), size_t(1), count, groups);
         check(hipGetLastError());
-        hipLaunchKernelGGL((reduction_kernel<Mode, true>), dim3(1), dim3(256), 0, context->stream,
-                           context->reduction_workspace, groups, context->reduction_workspace + 4096);
+        hipLaunchKernelGGL((block_reduction<ScalarReduction<Mode, true>, FloatReduction<Mode>, ReductionStore<float, false>>),
+                           dim3(1), dim3(256), 0, context->stream, (ScalarReduction<Mode, true>{context->reduction_workspace}),
+                           (ReductionStore<float, false>{context->reduction_workspace + 4096}), size_t(1), size_t(groups), 1u);
         check(hipGetLastError());
     }
 
@@ -403,85 +452,57 @@ namespace {
             check(hipGetLastError());
         }
     }
-    template <unsigned Mode>
-    __device__ float reduce_identity() {
-        if constexpr (Mode == LFS_HIP_REDUCE_MIN)
-            return INFINITY;
-        if constexpr (Mode == LFS_HIP_REDUCE_MAX)
-            return -INFINITY;
-        return 0;
-    }
-    // Short attribute reductions use one lane per output, avoiding a whole
-    // workgroup for each three/four-component Gaussian attribute.
-    template <unsigned Mode, class In = float, class Out = float>
-    __global__ void short_axis_kernel(const In* input, Out* output, LfsHipLayout kept, LfsHipLayout reduced, float scale) {
-#pragma clang fp contract(off)
-        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < kept.elements; i += size_t(gridDim.x) * blockDim.x) {
-            float value = reduce_identity<Mode>();
-            const size_t base = layout_index(i, kept);
-            for (size_t r = 0; r < reduced.elements; ++r)
-                value = combine_reduce<Mode>(value, float(input[base + layout_index(r, reduced)]));
-            if constexpr (std::is_same_v<Out, __half>) {
-                // Materialize FP32 before rounding to Half: combining the
-                // multiply and cast can change midpoint tie-breaking.
-                volatile float scaled = value * scale;
-                output[i] = __float2half_rn(scaled);
-            } else
-                output[i] = value * scale;
+    template <class In>
+    struct LayoutReduction {
+        const In* input;
+        LfsHipLayout kept, reduced;
+        __device__ float operator()(size_t row, size_t index) const {
+            return float(input[layout_index(row, kept) + layout_index(index, reduced)]);
         }
+    };
+    unsigned reduction_parts(size_t rows, size_t size) {
+        return rows < 64 && size > 4096
+                   ? static_cast<unsigned>(std::min<size_t>(4096 / rows, (size - 1) / 1024 + 1))
+                   : 1;
     }
-    template <unsigned Mode, class In = float, class Out = float>
-    __global__ void axis_kernel(const In* input, Out* output, LfsHipLayout kept, LfsHipLayout reduced, uint32_t parts, float scale) {
-#pragma clang fp contract(off)
-        __shared__ float values[256];
-        for (size_t group = blockIdx.x; group < kept.elements * parts; group += gridDim.x) {
-            const size_t item = group / parts, part = group % parts;
-            const size_t base = layout_index(item, kept);
-            float value = reduce_identity<Mode>();
-            for (size_t r = part * 256 + threadIdx.x; r < reduced.elements; r += size_t(parts) * 256)
-                value = combine_reduce<Mode>(value, float(input[base + layout_index(r, reduced)]));
-            const float result = block_reduce_float<Mode>(value, values);
-            if (!threadIdx.x) {
-                if constexpr (std::is_same_v<Out, __half>) {
-                    volatile float scaled = result * scale;
-                    output[group] = __float2half_rn(scaled);
-                } else
-                    output[group] = result * scale;
-            }
-            __syncthreads();
+    template <unsigned Mode, class Out, bool BlockFinal = true, class Reader>
+    void launch_float_reduction(LfsHipContext* context, Reader input, Out* output, size_t rows, size_t size, bool mean) {
+        const float scale = mean ? (size ? 1.f / float(size) : NAN) : 1.f;
+        using Policy = FloatReduction<Mode>;
+        using Store = ReductionStore<Out>;
+        if (size <= 32) {
+            hipLaunchKernelGGL((serial_reduction<Reader, Policy, Store>), dim3(blocks(rows)), dim3(256), 0, context->stream,
+                               input, (Store{output, scale}), rows, size);
+            check(hipGetLastError());
+            return;
+        }
+        const unsigned parts = reduction_parts(rows, size);
+        const unsigned groups = static_cast<unsigned>(std::min<size_t>(4096, rows * parts));
+        if (parts > 1) {
+            ensure_reduction_workspace(context);
+            hipLaunchKernelGGL((block_reduction<Reader, Policy, ReductionStore<float>>), dim3(groups), dim3(256), 0, context->stream,
+                               input, (ReductionStore<float>{context->reduction_workspace}), rows, size, parts);
+        } else {
+            hipLaunchKernelGGL((block_reduction<Reader, Policy, Store>), dim3(groups), dim3(256), 0, context->stream,
+                               input, (Store{output, scale}), rows, size, parts);
+        }
+        check(hipGetLastError());
+        if (parts > 1) {
+            const ContiguousReduction partial{context->reduction_workspace, parts};
+            // Keep the original final-pass order: axis reductions use a block,
+            // while contiguous fused chains sum the bounded partials serially.
+            if constexpr (BlockFinal)
+                hipLaunchKernelGGL((block_reduction<ContiguousReduction, Policy, Store>), dim3(static_cast<unsigned>(rows)), dim3(256), 0, context->stream,
+                                   partial, (Store{output, scale}), rows, size_t(parts), 1u);
+            else
+                hipLaunchKernelGGL((serial_reduction<ContiguousReduction, Policy, Store>), dim3(blocks(rows)), dim3(256), 0, context->stream,
+                                   partial, (Store{output, scale}), rows, size_t(parts));
+            check(hipGetLastError());
         }
     }
     template <unsigned Mode, class In = float, class Out = float>
     void launch_axis(LfsHipContext* context, const In* input, Out* output, LfsHipLayout kept, LfsHipLayout reduced, bool mean) {
-        const float scale = mean ? (reduced.elements ? 1.f / float(reduced.elements) : NAN) : 1.f;
-        if (reduced.elements <= 32) {
-            hipLaunchKernelGGL((short_axis_kernel<Mode, In, Out>), dim3(blocks(kept.elements)), dim3(256), 0, context->stream, input, output, kept, reduced, scale);
-            check(hipGetLastError());
-            return;
-        }
-        // Split long reductions with few outputs, e.g. N-by-3 column sums.
-        // At most 4096 partial floats are needed regardless of model size.
-        const uint32_t parts = kept.elements < 64 && reduced.elements > 4096
-                                   ? static_cast<uint32_t>(std::min<size_t>(4096 / kept.elements, (reduced.elements - 1) / 1024 + 1))
-                                   : 1;
-        float* destination = context->reduction_workspace;
-        const unsigned groups = static_cast<unsigned>(std::min<size_t>(4096, kept.elements * parts));
-        if (parts > 1)
-            hipLaunchKernelGGL((axis_kernel<Mode, In, float>), dim3(groups), dim3(256), 0, context->stream, input, destination, kept, reduced, parts, 1.f);
-        else
-            hipLaunchKernelGGL((axis_kernel<Mode, In, Out>), dim3(groups), dim3(256), 0, context->stream, input, output, kept, reduced, parts, scale);
-        check(hipGetLastError());
-        if (parts > 1) {
-            LfsHipLayout partial_kept{}, partial_reduced{};
-            partial_kept.rank = partial_reduced.rank = 1;
-            partial_kept.dims[0] = partial_kept.elements = kept.elements;
-            partial_kept.strides[0] = parts;
-            partial_reduced.dims[0] = partial_reduced.elements = parts;
-            partial_reduced.strides[0] = 1;
-            hipLaunchKernelGGL((axis_kernel<Mode, float, Out>), dim3(static_cast<unsigned>(kept.elements)), dim3(256), 0, context->stream,
-                               destination, output, partial_kept, partial_reduced, 1, scale);
-            check(hipGetLastError());
-        }
+        launch_float_reduction<Mode>(context, LayoutReduction<In>{input, kept, reduced}, output, kept.elements, reduced.elements, mean);
     }
     template <class Index>
     __global__ void validate_strided_indices(const Index* indices, LfsHipLayout layout, size_t extent, uint32_t* invalid) {
@@ -548,13 +569,8 @@ namespace {
         validate(context, output.buffer, output.offset, output_bytes);
         require(input.offset % sizeof(float) == 0 && output.offset % sizeof(float) == 0 && indices.offset % index_width == 0,
                 "Unaligned HIP flat index views");
-        const auto disjoint = [&](LfsHipView source, size_t bytes) {
-            require(source.buffer != output.buffer || !bytes || !output_bytes ||
-                        source.offset >= output.offset + output_bytes || output.offset >= source.offset + bytes,
-                    "HIP flat index output overlaps an input");
-        };
-        disjoint(input, input_bytes);
-        disjoint(indices, index_bytes);
+        require_disjoint(input, input_bytes, output, output_bytes, "HIP flat index output overlaps an input");
+        require_disjoint(indices, index_bytes, output, output_bytes, "HIP flat index output overlaps an input");
         if (!count)
             return;
         DeviceScope device(context->device);
@@ -966,12 +982,8 @@ int lfs_hip_broadcast_typed(LfsHipContext* context, uint32_t op, LfsHipView lhs,
         validate(context, rhs.buffer, rhs.offset, b_bytes);
         validate(context, output.buffer, output.offset, out_bytes);
         require(lhs.offset % width == 0 && rhs.offset % width == 0 && output.offset % output_element_bytes == 0, "Unaligned HIP broadcast view");
-        auto disjoint = [&](LfsHipView input, size_t bytes) {
-            require(input.buffer != output.buffer || !bytes || !out_bytes || input.offset >= output.offset + out_bytes || output.offset >= input.offset + bytes,
-                    "HIP broadcast output must not overlap an input");
-        };
-        disjoint(lhs, a_bytes);
-        disjoint(rhs, b_bytes);
+        require_disjoint(lhs, a_bytes, output, out_bytes, "HIP broadcast output must not overlap an input");
+        require_disjoint(rhs, b_bytes, output, out_bytes, "HIP broadcast output must not overlap an input");
         DeviceScope device(context->device);
         using namespace lfs::core;
         if (input_dtype != LFS_HIP_F32 && input_dtype != LFS_HIP_F16) {
@@ -1115,14 +1127,9 @@ int lfs_hip_masked_scatter(LfsHipContext* context, LfsHipView output, LfsHipView
         validate(context, source.buffer, source.offset, source_bytes);
         require(output.offset % width == 0 && source.offset % width == 0,
                 "Unaligned HIP masked scatter view");
-        const auto disjoint = [](LfsHipView a, size_t a_bytes, LfsHipView b, size_t b_bytes) {
-            return a.buffer != b.buffer || !a_bytes || !b_bytes ||
-                   a.offset + a_bytes <= b.offset || b.offset + b_bytes <= a.offset;
-        };
-        require(disjoint(output, output_bytes, source, source_bytes) &&
-                    disjoint(output, output_bytes, mask, count) &&
-                    disjoint(source, source_bytes, mask, count),
-                "HIP masked scatter operands overlap");
+        require_disjoint(output, output_bytes, source, source_bytes, "HIP masked scatter operands overlap");
+        require_disjoint(output, output_bytes, mask, count, "HIP masked scatter operands overlap");
+        require_disjoint(source, source_bytes, mask, count, "HIP masked scatter operands overlap");
         if (!count)
             return;
         DeviceScope device(context->device);
@@ -1276,11 +1283,7 @@ int lfs_hip_chain_f32(LfsHipContext* context, LfsHipView input, LfsHipView outpu
         validate(context, input.buffer, input.offset, bytes);
         validate(context, output.buffer, output.offset, bytes);
         require(input.offset % 4 == 0 && output.offset % 4 == 0, "Unaligned HIP Tensor chain");
-        auto validate_alias = [&](LfsHipView source) {
-            require(source.buffer != output.buffer || source.offset == output.offset || source.offset + bytes <= output.offset || output.offset + bytes <= source.offset,
-                    "Overlapping HIP Tensor chain views require identical ranges");
-        };
-        validate_alias(input);
+        require_compatible_views(input, bytes, output, bytes, true, "Overlapping HIP Tensor chain views require identical ranges");
         Chain chain{};
         chain.count = source->count;
         for (uint32_t i = 0; i < chain.count; ++i) {
@@ -1291,7 +1294,7 @@ int lfs_hip_chain_f32(LfsHipContext* context, LfsHipView input, LfsHipView outpu
             if ((pointwise_flags[op.op] & 3) == 2) {
                 validate(context, op.rhs.buffer, op.rhs.offset, bytes);
                 require(op.rhs.offset % 4 == 0, "Unaligned HIP Tensor chain rhs");
-                validate_alias(op.rhs);
+                require_compatible_views(op.rhs, bytes, output, bytes, true, "Overlapping HIP Tensor chain views require identical ranges");
                 chain.ops[i].rhs = reinterpret_cast<const float*>(static_cast<const char*>(op.rhs.buffer->data) + op.rhs.offset);
             }
         }
@@ -1492,9 +1495,8 @@ int lfs_hip_index_update(LfsHipContext* context, LfsHipView output, uint32_t dty
         validate(context, source.buffer, source.offset, source_bytes);
         validate(context, indices.buffer, indices.offset, index_bytes);
         require(output.offset % width == 0 && source.offset % width == 0 && indices.offset % iw == 0, "Unaligned HIP indexed update");
-        auto disjoint = [&](LfsHipView input, size_t bytes) { require(input.buffer != output.buffer || !bytes || !output_span || input.offset >= output.offset + output_span || output.offset >= input.offset + bytes, "HIP update output overlaps an input"); };
-        disjoint(source, source_bytes);
-        disjoint(indices, index_bytes);
+        require_disjoint(source, source_bytes, output, output_span, "HIP update output overlaps an input");
+        require_disjoint(indices, index_bytes, output, output_span, "HIP update output overlaps an input");
         if (!source_layout.elements)
             return;
         require(destination.dims[dim] > 0, "HIP indexed update cannot write an empty axis");
@@ -1585,9 +1587,8 @@ int lfs_hip_gather(LfsHipContext* context, LfsHipView input, uint32_t dtype, Lfs
         validate(context, indices.buffer, indices.offset, index_span);
         validate(context, output.buffer, output.offset, output_bytes);
         require(input.offset % width == 0 && indices.offset % index_width == 0 && output.offset % width == 0, "Unaligned HIP gather views");
-        auto disjoint = [&](LfsHipView value, size_t bytes) { require(value.buffer != output.buffer || !bytes || !output_bytes || value.offset >= output.offset + output_bytes || output.offset >= value.offset + bytes, "HIP gather output overlaps an input"); };
-        disjoint(input, input_span);
-        disjoint(indices, index_span);
+        require_disjoint(input, input_span, output, output_bytes, "HIP gather output overlaps an input");
+        require_disjoint(indices, index_span, output, output_bytes, "HIP gather output overlaps an input");
         if (!count)
             return;
         DeviceScope device(context->device);

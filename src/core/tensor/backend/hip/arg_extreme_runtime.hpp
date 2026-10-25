@@ -125,13 +125,9 @@ int lfs_hip_arg_extreme_f32(LfsHipContext* context, LfsHipView input, LfsHipView
         validate(context, values.buffer, values.offset, value_bytes);
         validate(context, indices.buffer, indices.offset, index_bytes);
         require(input.offset % 4 == 0 && values.offset % 4 == 0 && indices.offset % 8 == 0, "Unaligned HIP indexed extrema views");
-        const auto disjoint = [](LfsHipView a, size_t a_bytes, LfsHipView b, size_t b_bytes) {
-            require(a.buffer != b.buffer || !a_bytes || !b_bytes || a.offset >= b.offset + b_bytes || b.offset >= a.offset + a_bytes,
-                    "HIP indexed extrema operands overlap");
-        };
-        disjoint(input, input_bytes, values, value_bytes);
-        disjoint(input, input_bytes, indices, index_bytes);
-        disjoint(values, value_bytes, indices, index_bytes);
+        require_disjoint(input, input_bytes, values, value_bytes, "HIP indexed extrema operands overlap");
+        require_disjoint(input, input_bytes, indices, index_bytes, "HIP indexed extrema operands overlap");
+        require_disjoint(values, value_bytes, indices, index_bytes, "HIP indexed extrema operands overlap");
         if (!outputs)
             return;
         DeviceScope device(context->device);

@@ -205,6 +205,50 @@ class TensorOperations(native.RuntimeContract):
                         c.byref(layout([2])), c.byref(layout([3])), c.byref(layout([3])), 0, 4)
             self.reject("fill_strided_f32", context, holes, c.byref(layout([2, 2], [0, 1])), 8)
 
+    def test_integer_unary_functors_preserve_precision_and_wraparound(self):
+        with self.resources() as context:
+            for dtype, values in ((2, [-2**31, -1, 0, 2**31-1]), (3, [-2**63, -1, 0, 2**63-1]),
+                                  (4, [0, 1, 127, 255]), (6, [0, 1, 2**31, 2**32-1])):
+                source = self.tensor(context, values, dtype)
+                output = self.tensor(context, [0] * len(values), dtype)
+                bits = 8 * struct.calcsize(FORMATS[dtype])
+                signed = dtype in (2, 3)
+                def wrap(value):
+                    value %= 1 << bits
+                    return value - (1 << bits) if signed and value >= 1 << (bits - 1) else value
+                for operation, reference in (("Abs", abs), ("Neg", lambda x: -x), ("Square", lambda x: x*x),
+                                             ("Relu", lambda x: max(x, 0)), ("Sign", lambda x: (x > 0) - (x < 0))):
+                    p = Predicate(c.sizeof(Predicate), self.operations[operation], dtype, 0, len(values))
+                    self.checked("integer_pointwise", context, source, View(), output, c.byref(p))
+                    self.assertEqual(self.read(context, output, len(values), dtype), [wrap(reference(x)) for x in values])
+
+    def test_reduction_dispatch_thresholds(self):
+        with self.resources() as context:
+            for size in (1, 31, 32, 33, 257, 4097, 10001):
+                values = [(i % 5 - 2) * 0.125 for i in range(2 * size)]
+                shape = layout([2, size])
+                for dtype in (0, 1):
+                    source = self.tensor(context, values, dtype)
+                    output = self.tensor(context, [0, 0], dtype)
+                    for operation, reference in ((0, sum), (1, lambda x: sum(x)/len(x)), (2, min), (3, max)):
+                        if dtype:
+                            self.checked("reduce_typed_layout", context, source, output, c.byref(shape), 2, operation, 1, 1)
+                        else:
+                            self.checked("reduce_layout_f32", context, source, output, c.byref(shape), 2, operation)
+                        expected = [reference(values[r*size:(r+1)*size]) for r in range(2)]
+                        if dtype:
+                            expected = [struct.unpack("<e", struct.pack("<e", x))[0] for x in expected]
+                        for actual, wanted in zip(self.read(context, output, 2, dtype), expected):
+                            self.assertAlmostEqual(actual, wanted, delta=1e-7)
+                large = [2**53 + 1 + i % 2 for i in range(2 * size)]
+                source = self.tensor(context, large, 3)
+                output = self.tensor(context, [0, 0], 3)
+                for operation, reference in ((0, sum), (2, min), (3, max)):
+                    self.checked("reduce_typed_layout", context, source, output, c.byref(shape), 2, operation, 3, 3)
+                    expected = [reference(large[r*size:(r+1)*size]) for r in range(2)]
+                    expected = [(x + 2**63) % 2**64 - 2**63 for x in expected]
+                    self.assertEqual(self.read(context, output, 2, 3), expected)
+
     def test_reductions_chains_and_workspace_lifetime(self):
         with self.resources() as context:
             values = [float(i % 11 - 5) for i in range(8201)]

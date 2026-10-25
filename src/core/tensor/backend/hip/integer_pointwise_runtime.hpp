@@ -37,15 +37,12 @@ namespace {
         case LFS_HIP_OP_MinimumTensor: return lfs::core::ops::minimum_op{}(a, b);
         case LFS_HIP_OP_MaximumScalar:
         case LFS_HIP_OP_MaximumTensor: return lfs::core::ops::maximum_op{}(a, b);
-        case LFS_HIP_OP_Abs:
-            if constexpr (std::is_signed_v<T>)
-                return a < 0 ? integer_bits_native<T>(U(0) - U(a)) : a;
-            else
-                return a;
-        case LFS_HIP_OP_Neg: return integer_bits_native<T>(U(0) - U(a));
-        case LFS_HIP_OP_Square: return integer_bits_native<T>(U(a) * U(a));
-        case LFS_HIP_OP_Relu: return a < T(0) ? T(0) : a;
-        case LFS_HIP_OP_Sign: return T((a > T(0)) - (a < T(0)));
+        case LFS_HIP_OP_Abs: return lfs::core::ops::abs_op{}(a);
+        // Operate on unsigned storage so signed overflow remains defined.
+        case LFS_HIP_OP_Neg: return integer_bits_native<T>(static_cast<U>(lfs::core::ops::neg_op{}(uint64_t(U(a)))));
+        case LFS_HIP_OP_Square: return integer_bits_native<T>(lfs::core::ops::square_op{}(U(a)));
+        case LFS_HIP_OP_Relu: return lfs::core::ops::relu_op{}(a);
+        case LFS_HIP_OP_Sign: return lfs::core::ops::sign_op{}(a);
         default: return a;
         }
     }
@@ -64,15 +61,11 @@ namespace {
         validate(context, lhs.buffer, lhs.offset, bytes);
         validate(context, output.buffer, output.offset, bytes);
         require(lhs.offset % alignof(T) == 0 && output.offset % alignof(T) == 0, "Misaligned HIP integer pointwise view");
-        const auto check_input = [&](LfsHipView in) {
-            require(in.buffer != output.buffer || in.offset == output.offset || in.offset >= output.offset + bytes || output.offset >= in.offset + bytes,
-                    "HIP integer pointwise partially aliases input");
-        };
-        check_input(lhs);
+        require_compatible_views(lhs, bytes, output, bytes, true, "HIP integer pointwise partially aliases input");
         if (binary) {
             validate(context, rhs.buffer, rhs.offset, bytes);
             require(rhs.offset % alignof(T) == 0, "Misaligned HIP integer rhs");
-            check_input(rhs);
+            require_compatible_views(rhs, bytes, output, bytes, true, "HIP integer pointwise partially aliases input");
         }
         const bool scalar_op = p.op <= LFS_HIP_OP_DivScalar || p.op == LFS_HIP_OP_PowScalar || p.op == LFS_HIP_OP_ModScalar ||
                                p.op == LFS_HIP_OP_MinimumScalar || p.op == LFS_HIP_OP_MaximumScalar;
