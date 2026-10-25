@@ -223,10 +223,12 @@ namespace {
         settings.max_gaussian_area = 0;
         EXPECT_NO_THROW(settings.validate());
     }
-    TEST_F(CollisionGpu, PlansLargeOutputSortWithoutAllocatingRecords) {
-        // Exercise the real CUB storage query above the former output cap.
-        // The production append path uses the same checked record-byte layout.
-        const auto bytes = cuda::collisionOutputBytes(64'000'000, 1'000'000);
+    TEST_F(CollisionGpu, BoundsOutputBeforeAllocationAndPlansSortWorkspace) {
+        // Exercise the production append guard and CUB query without allocating records.
+        const auto bytes = cuda::collisionOutputBytes(63'999'999, 1);
+        EXPECT_EQ(bytes, size_t(64'000'000) * sizeof(cuda::CollisionBrick));
+        EXPECT_THROW(cuda::collisionOutputBytes(64'000'000, 1), std::length_error);
+        EXPECT_THROW(cuda::collisionOutputBytes(SIZE_MAX, 1), std::length_error);
         const auto records = bytes / sizeof(cuda::CollisionBrick);
         const auto workspace = cuda::collisionSortWorkspaceBytes(records);
         EXPECT_GT(workspace, 0u);

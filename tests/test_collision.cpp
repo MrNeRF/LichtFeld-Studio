@@ -52,12 +52,15 @@ TEST(Collision, MalformedTopologyAndSettings) {
 
 TEST(Collision, OutputLayoutAcrossDispatchesAndAddressOverflow) {
     size_t records = 0;
-    for (size_t batch = 0; batch < 65; ++batch) {
+    for (size_t batch = 0; batch < 61; ++batch) {
         const auto bytes = cuda::collisionOutputBytes(records, 1u << 20);
         records = bytes / sizeof(cuda::CollisionBrick);
         EXPECT_EQ(bytes, (batch + 1) * (1u << 20) * sizeof(cuda::CollisionBrick));
     }
-    EXPECT_EQ(records, 68'157'440u);
+    EXPECT_EQ(records, 63'963'136u);
+    EXPECT_THROW(cuda::collisionOutputBytes(records, 1u << 20), std::length_error);
+    EXPECT_EQ(cuda::collisionOutputBytes(records, 36'864), size_t(64'000'000) * sizeof(cuda::CollisionBrick));
+    EXPECT_THROW(cuda::collisionOutputBytes(records, 36'865), std::length_error);
     EXPECT_EQ(cuda::collisionOutputBytes(records, 17), cuda::collisionOutputBytes(records + 17));
     EXPECT_THROW(cuda::collisionOutputBytes(SIZE_MAX, 1), std::length_error);
     EXPECT_THROW(cuda::collisionOutputBytes(std::vector<cuda::CollisionBrick>().max_size(), 1), std::length_error);

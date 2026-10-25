@@ -173,7 +173,7 @@ namespace lfs::core::cuda {
         if (glm::any(glm::lessThan(dimensions, glm::dvec3(1))) || glm::any(glm::greaterThan(dimensions, glm::dvec3(1 << 21))) || !std::isfinite(dimensions.x + dimensions.y + dimensions.z))
             throw std::runtime_error("Collision bounds exceed coordinate limits; increase cell size or remove remote outliers");
         v.dimensions = glm::ivec3(dimensions);
-        LOG_INFO("Collision grid {} x {} x {} at {} scene units; sparse storage grows on demand", v.dimensions.x, v.dimensions.y, v.dimensions.z, settings.voxel_size);
+        LOG_INFO("Collision grid {} x {} x {} at {} scene units; output limit {} sparse records", v.dimensions.x, v.dimensions.y, v.dimensions.z, settings.voxel_size, max_collision_records);
         v.edge = std::max(4u, std::bit_ceil(unsigned(std::max({v.dimensions.x, v.dimensions.y, v.dimensions.z}))));
         for (int a = 0; a < 3; ++a) {
             grid.origin[a] = v.origin[a];
@@ -207,14 +207,25 @@ namespace lfs::core::cuda {
         std::vector<Buffer<CollisionBrick>> chunks;
         size_t result_size = 0;
         uint64_t mixed_total = 0;
+        auto preflight = [&](const char* phase, size_t additional, size_t records, size_t peak_bytes) {
+            const auto memory = MemoryPressureCoordinator::instance().preflight({.operation = phase, .temporary_device_bytes = additional});
+            if (!memory.ok)
+                throw std::runtime_error(std::format("{} needs {} additional bytes ({} available including reusable pools); {} records at cell size {}, output peak {} bytes. Free GPU memory or explicitly choose a larger cell size", phase, additional, memory.effective_free_bytes, records, settings.voxel_size, peak_bytes));
+        };
         auto append = [&](uint32_t n) {
             if (n > output.capacity)
                 throw std::runtime_error("Collision dispatch exceeded its output buffer");
             const auto bytes = collisionOutputBytes(result_size, n);
             if (!n)
                 return;
+            const auto chunk_bytes = size_t(n) * sizeof(CollisionBrick);
+            preflight("Collision output growth", chunk_bytes, bytes / sizeof(CollisionBrick), bytes);
             chunks.emplace_back();
-            chunks.back().reserve(n);
+            try {
+                chunks.back().reserve(n);
+            } catch (const MemoryAllocationError& error) {
+                throw std::runtime_error(std::format("Collision output growth failed at {} records ({} bytes, limit {}): {}. Free GPU memory or choose a larger cell size", bytes / sizeof(CollisionBrick), bytes, max_collision_records, error.what()));
+            }
             LFS_CUDA_CHECK(cudaMemcpyAsync(chunks.back().data, output.data, size_t(n) * sizeof(CollisionBrick), cudaMemcpyDeviceToDevice, stream));
             result_size = bytes / sizeof(CollisionBrick);
         };
@@ -278,12 +289,7 @@ namespace lfs::core::cuda {
         const auto compact_bytes = collisionOutputBytes(result_size);
         const auto peak_bytes = saturating_add(compact_bytes, std::max(compact_bytes, sort_bytes));
         LOG_INFO("Collision compaction: {} records, {} bytes chunks + compact; sort peak {} bytes ({} workspace)", result_size, saturating_add(compact_bytes, compact_bytes), saturating_add(compact_bytes, sort_bytes), sort_bytes);
-        auto preflight = [&](const char* phase, size_t additional) {
-            const auto memory = MemoryPressureCoordinator::instance().preflight({.operation = phase, .temporary_device_bytes = additional});
-            if (!memory.ok)
-                throw std::runtime_error(std::format("{} needs {} additional bytes ({} available including reusable pools); {} records at cell size {}, output peak {} bytes. Free GPU memory or explicitly choose a larger cell size", phase, additional, memory.effective_free_bytes, result_size, settings.voxel_size, peak_bytes));
-        };
-        preflight("Collision compaction", compact_bytes);
+        preflight("Collision compaction", compact_bytes, result_size, peak_bytes);
         try {
             compact.reserve(result_size);
             offset = 0;
@@ -294,7 +300,7 @@ namespace lfs::core::cuda {
             }
             // Complete copies and releases before accounting the next phase's pool capacity.
             LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
-            preflight("Collision sorting", sort_bytes);
+            preflight("Collision sorting", sort_bytes, result_size, peak_bytes);
             if (result_size)
                 sortCollisionBricks(compact.data, result_size, stream);
         } catch (const MemoryAllocationError& error) {

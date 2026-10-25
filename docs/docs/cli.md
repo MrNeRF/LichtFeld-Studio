@@ -26,7 +26,11 @@ Connected filtering, seed/cluster flags, fill/carve, surfaces and GLB export are
 unsupported options are errors. Overwrite approval covers both files once.
 Cancellation and ordinary publication failures restore the previous pair; this is not
 crash-atomic or atomic for concurrent readers. Export requires a uniformly scaled,
-signed-axis-aligned affine grid and reflects cells relative to logical dimensions.
+signed-axis-aligned affine grid. Export aligns storage bounds to four-cell blocks
+with empty padding; scene bounds retain the logical extent and reflections preserve
+world-space cell positions. Generation stops before retaining more than 64 million
+sparse output records, and may stop sooner if GPU memory is insufficient. Choose a
+larger cell size or Auto after a limit error; explicit resolution is never changed.
 
 Python uses `lichtfeld.io.generate_voxels(path, settings)` and
 `lichtfeld.io.save_voxels(volume, path, overwrite=False, transform=[])`.
