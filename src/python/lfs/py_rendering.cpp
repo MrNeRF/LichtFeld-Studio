@@ -832,7 +832,8 @@ namespace lfs::python {
                       {"SteadySplats", "steady_splats", 2}},
                      0);
         add_int(&Proxy::stochastic_max_frames, "stochastic_max_frames", "Refinement Frames",
-                "Maximum new samples after the view or scene changes", 32, 1, 1024);
+                "Maximum new samples after the view or scene changes",
+                lfs::rendering::DEFAULT_STOCHASTIC_REFINEMENT_FRAMES, 1, 1024);
         add_bool(&Proxy::mip_filter, "mip_filter", "Mip Filter", "Enable mip-map filtering", false);
         add_float(&Proxy::render_scale, "render_scale", "Render Scale", "Render resolution scale", 1.0, 0.25, 1.0);
         add_string(&Proxy::scene_upscaler,
