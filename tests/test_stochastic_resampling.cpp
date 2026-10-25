@@ -685,6 +685,19 @@ namespace {
         const auto fractional = resolve();
         EXPECT_NEAR(fractional[center], 0.2 + 0.7 * 0.00005 * 6.25 * 6.25, 1e-6);
         EXPECT_NEAR(fractional[center + 1], 0.2 - 0.7 * 0.00005 * 6.25 * 6.25, 1e-6);
+
+        // Catmull-Rom undershoots next to a step. Negative radiance must not
+        // enter the history, as in the authors' viewer.
+        for (size_t p = 0; p < pixels; ++p)
+            for (size_t c = 0; c < 4; ++c) {
+                current[4 * p + c] = 0.0f;
+                previous[4 * p + c] = p % width >= 8 ? 1.0f : 0.0f;
+            }
+        upload(buffers_.pixel_state, current);
+        upload(history_.color[1], previous);
+        const auto step = resolve();
+        for (size_t c = 0; c < 4; ++c)
+            EXPECT_GE(step[center + c], 0.0f) << "channel " << c;
     }
 
     TEST_F(StochasticResampling, StationaryWarmupFadesIntoRawVisibilityAverage) {

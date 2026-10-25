@@ -75,7 +75,8 @@ float4 fetch_history(float2 position, ResolveUniforms u) {
     for (int y = 0; y < 4; ++y)
         for (int x = 0; x < 4; ++x)
             result += previous_color[pixel_index(base + int2(x - 1, y - 1), u)] * wx[x] * wy[y];
-    return result;
+    // The filter undershoots next to steps; keep radiance non-negative.
+    return max(result, float4(0.0f));
 }
 
 [shader("compute")]
