@@ -2,14 +2,16 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Offline scalar STBN generator. No third-party code or textures are used.
-// Implements the generalized void-and-cluster construction in Wolfe et al.,
-// Spatiotemporal Blue Noise Masks (2022), supplemental section 4.2:
+// Build-time generator of the scalar STBN volume used by SteadySplats sampling.
+// No third-party code or textures are used. Implements the generalized
+// void-and-cluster construction in Wolfe et al., Spatiotemporal Blue Noise
+// Masks (2022), supplemental section 4.2:
 // https://cseweb.ucsd.edu/~ravir/stbn_supplemental.pdf
 // The energy is a toroidal XY Gaussian plus a toroidal Z Gaussian, NOT a 3D
-// Gaussian. Each XY slice and each pixel's temporal sequence are optimized.
-// Build: c++ -O3 -std=c++20 scripts/generate_stbn.cpp -o generate_stbn
-// Run:   generate_stbn output.bin [side=128] [frames=64]
+// Gaussian, so each XY slice and each pixel's temporal sequence are blue.
+// Sigma 1.9, radius 8, integer weights and a fixed seed make it deterministic.
+// Writes a C initializer of side*side*frames bytes in Z/Y/X order.
+// Run: generate_stbn output.inc [side=128] [frames=64]
 
 #include <algorithm>
 #include <bit>
@@ -50,15 +52,13 @@ namespace {
             for (std::uint32_t i = 0; i < initial_count; ++i)
                 occupied_[order[i]] = true;
             rebuild();
-            for (std::uint32_t iteration = 0;; ++iteration) {
+            for (;;) {
                 const auto cluster = extrema_[1].maximum;
                 set(cluster, false);
                 const auto empty = extrema_[1].minimum;
                 set(empty, true);
                 if (cluster == empty)
                     break;
-                if (iteration % 10000 == 0)
-                    std::cerr << "relax " << iteration << '\n';
             }
             const auto initial = occupied_;
             std::vector<std::uint32_t> ranks(count_);
@@ -73,8 +73,6 @@ namespace {
                 const auto empty = extrema_[1].minimum;
                 ranks[empty] = rank;
                 set(empty, true);
-                if (rank % 65536 == 0)
-                    std::cerr << "rank " << rank << '/' << count_ << '\n';
             }
             for (auto& bit : occupied_)
                 bit = !bit;
@@ -83,13 +81,15 @@ namespace {
                 const auto cluster = extrema_[1].maximum;
                 ranks[cluster] = rank;
                 set(cluster, false);
-                if (rank % 65536 == 0)
-                    std::cerr << "rank " << rank << '/' << count_ << '\n';
             }
             std::vector<std::uint8_t> result(count_);
+            std::vector<std::uint32_t> histogram(256);
             const auto shift = std::bit_width(count_) - 1u - 8u;
             for (std::uint32_t i = 0; i < count_; ++i)
-                result[i] = static_cast<std::uint8_t>(ranks[i] >> shift);
+                ++histogram[result[i] = static_cast<std::uint8_t>(ranks[i] >> shift)];
+            // Ranks form a permutation, so every byte value is equally common.
+            if (std::ranges::any_of(histogram, [&](auto n) { return n != count_ / 256u; }))
+                throw std::runtime_error("the ranks are not a permutation");
             return result;
         }
 
@@ -185,12 +185,13 @@ namespace {
 int main(int argc, char** argv) {
     try {
         if (argc < 2 || argc > 4)
-            throw std::runtime_error("usage: generate_stbn output.bin [side=128] [frames=64]");
+            throw std::runtime_error("usage: generate_stbn output.inc [side=128] [frames=64]");
         const auto side = argc > 2 ? static_cast<std::uint32_t>(std::stoul(argv[2])) : 128u;
         const auto frames = argc > 3 ? static_cast<std::uint32_t>(std::stoul(argv[3])) : 64u;
         const auto data = Mask(side, frames).generate();
-        std::ofstream output(argv[1], std::ios::binary);
-        output.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+        std::ofstream output(argv[1]);
+        for (std::size_t i = 0; i < data.size(); ++i)
+            output << static_cast<unsigned>(data[i]) << ((i + 1) % 32 == 0 ? ",\n" : ",");
         if (!output)
             throw std::runtime_error("could not write output");
     } catch (const std::exception& e) {
