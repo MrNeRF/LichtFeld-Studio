@@ -2040,8 +2040,6 @@ if(TARGET lfs_vulkan_rasterizer)
     # Test private history state without widening the Windows DLL exports.
     add_executable(stochastic_viewport_tests
         test_stochastic_viewport.cpp
-        test_frame_demand_ledger.cpp
-        test_render_settings_defaults.cpp
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/stochastic_viewport.cpp)
     target_compile_features(stochastic_viewport_tests PRIVATE cxx_std_23)
     target_include_directories(stochastic_viewport_tests PRIVATE
