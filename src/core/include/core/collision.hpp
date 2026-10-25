@@ -35,5 +35,6 @@ namespace lfs::core {
         void validate() const;
     };
     LFS_CORE_API CollisionVolume generateCollision(std::span<const CollisionSource>, CollisionSettings,
-                                                   std::stop_token = {}, ProgressCallback = {}, std::function<void(float)> resolution = {});
+                                                   std::stop_token = {}, ProgressCallback = {}, std::function<void(float)> resolution = {},
+                                                   std::function<void(uint64_t)> mixed_blocks = {});
 } // namespace lfs::core

@@ -11,7 +11,7 @@ namespace {
         return lfs::core::args::parse_args(int(args.size()), args.begin());
     }
     TEST(VoxelizeCli, ParsesControlsAndRejectsDeferredOrInvalidOptions) {
-        const auto source = __FILE__;
+        const auto source = PROJECT_ROOT_PATH "/tests/test_voxelize_cli.cpp";
         auto result = parse({"lfs", "voxelize", source, "out.voxel.json", "--auto", "--filter", "none"});
         ASSERT_TRUE(result) << result.error();
         const auto& mode = std::get<lfs::core::args::VoxelizeMode>(*result);

@@ -12,7 +12,8 @@ LichtFeld-Studio voxelize scene.sog scene.voxel.json --auto --overwrite
 ```
 
 Writes a SuperSplat v1.1 `.voxel.json` / `.voxel.bin` pair. Cell size uses scene units;
-`--auto` chooses a scale-relative size. `--voxel-opacity` sets accumulated opacity
+`--auto` chooses a scale-relative size from median transformed splat footprint and source count,
+without a fixed metre floor; the resolved cell size is reported. `--voxel-opacity` sets accumulated opacity
 (default 0.1, range [0,1)). `--filter cleanup` (default) rejects source outliers;
 `--filter none` disables cleanup. `--max-gaussian-area` is in squared scene units,
 with zero selecting automatic rejection. Bounds still cover the entire retained source.

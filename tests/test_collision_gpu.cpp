@@ -4,10 +4,13 @@
 #include "core/cuda/collision_voxelization.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include <atomic>
+#include <chrono>
 #include <cuda_runtime.h>
 #include <glm/gtc/quaternion.hpp>
 #include <gtest/gtest.h>
 #include <random>
+#include <thread>
 using namespace lfs::core;
 namespace {
     struct Gaussian {
@@ -63,7 +66,26 @@ namespace {
             gs.push_back({{.8f, .1f, 0}, {.04f, .04f, .04f}, {1, 0, 0, 0}, .01f});
         auto input = source(gs);
         CollisionSettings settings{.04f, .1f, 0, false, false};
-        const auto volume = generateCollision({&input, 1}, settings);
+        uint64_t mixed = 0;
+        const auto volume = generateCollision({&input, 1}, settings, {}, {}, {}, [&](uint64_t value) {
+            EXPECT_GE(value, mixed);
+            mixed = value;
+        });
+        uint64_t expected_mixed = 0;
+        for (int z = 0; z < volume.dimensions.z; z += 4)
+            for (int y = 0; y < volume.dimensions.y; y += 4)
+                for (int x = 0; x < volume.dimensions.x; x += 4) {
+                    unsigned cells = 0;
+                    for (int bit = 0; bit < 64; ++bit)
+                        cells += volume.occupied({x + (bit & 3), y + ((bit >> 2) & 3), z + (bit >> 4)});
+                    expected_mixed += cells > 0 && cells < 64;
+                }
+        EXPECT_EQ(mixed, expected_mixed);
+        EXPECT_THROW(generateCollision({&input, 1}, settings, {}, {}, {}, [](uint64_t value) {
+                         if (value)
+                             throw OperationCancelled();
+                     }),
+                     OperationCancelled);
         uint64_t count = 0;
         for (int z = 0; z < volume.dimensions.z; ++z)
             for (int y = 0; y < volume.dimensions.y; ++y)
@@ -97,28 +119,109 @@ namespace {
         cudaStream_t writer, reader;
         ASSERT_EQ(cudaStreamCreateWithFlags(&writer, cudaStreamNonBlocking), cudaSuccess);
         ASSERT_EQ(cudaStreamCreateWithFlags(&reader, cudaStreamNonBlocking), cudaSuccess);
-        {
+        for (const auto capture_stream : {reader, cudaStream_t{nullptr}}) {
             CUDAStreamGuard writing(writer);
             constexpr size_t n = 100000;
             std::vector<float> rotations(n * 4);
             for (size_t i = 0; i < n; ++i)
-                rotations[i * 4] = 1;
+                rotations[i * 4] = 2;
             SplatData model(0, Tensor::ones({n, 3}, Device::CUDA), Tensor::zeros({n, 1, 3}, Device::CUDA), {},
-                            Tensor::zeros({n, 3}, Device::CUDA), Tensor::from_vector(rotations, {n, 4}, Device::CUDA),
+                            Tensor::full({n, 3}, std::log(2.f), Device::CUDA), Tensor::from_vector(rotations, {n, 4}, Device::CUDA),
                             Tensor::zeros({n, 1}, Device::CUDA), 1);
+            model.deleted() = Tensor::zeros({n}, Device::CUDA, DataType::Bool);
             CollisionSource captured;
             {
-                CUDAStreamGuard reading(reader);
+                CUDAStreamGuard reading(capture_stream);
                 captured = captureCollisionSource(model);
             }
-            EXPECT_EQ(cudaStreamQuery(reader), cudaSuccess);
+            EXPECT_EQ(cudaStreamQuery(capture_stream), cudaSuccess);
             EXPECT_EQ(cudaStreamQuery(writer), cudaSuccess);
-            ASSERT_EQ(cudaMemsetAsync(model.means_raw().ptr<float>(), 0, n * 3 * sizeof(float), writer), cudaSuccess);
-            EXPECT_EQ(captured.means.to(Device::CPU).ptr<float>()[0], 1);
+            for (auto* tensor : {&model.means_raw(), &model.scaling_raw(), &model.rotation_raw(), &model.opacity_raw()})
+                ASSERT_EQ(cudaMemsetAsync(tensor->data_ptr(), 0, tensor->bytes(), writer), cudaSuccess);
+            ASSERT_EQ(cudaMemsetAsync(model.deleted().data_ptr(), 1, model.deleted().bytes(), writer), cudaSuccess);
+            const auto means = captured.means.to(Device::CPU), scales = captured.scales.to(Device::CPU),
+                       rotation = captured.rotations.to(Device::CPU), opacity = captured.opacity.to(Device::CPU),
+                       deleted = captured.deleted.to(Device::CPU);
+            for (const auto i : {size_t{0}, n / 2, n - 1}) {
+                for (size_t a = 0; a < 3; ++a) {
+                    EXPECT_FLOAT_EQ(means.ptr<float>()[i * 3 + a], 1);
+                    EXPECT_FLOAT_EQ(scales.ptr<float>()[i * 3 + a], 2);
+                }
+                for (size_t a = 0; a < 4; ++a)
+                    EXPECT_FLOAT_EQ(rotation.ptr<float>()[i * 4 + a], a == 0 ? 1 : 0);
+                EXPECT_FLOAT_EQ(opacity.ptr<float>()[i], .5f);
+                EXPECT_EQ(deleted.ptr<unsigned char>()[i], 0);
+            }
             ASSERT_EQ(cudaStreamSynchronize(writer), cudaSuccess);
         }
         EXPECT_EQ(cudaStreamDestroy(reader), cudaSuccess);
         EXPECT_EQ(cudaStreamDestroy(writer), cudaSuccess);
+    }
+    TEST_F(CollisionGpu, CaptureExceptionCompletesHomeStreamReadsBeforeWriterUnlock) {
+        cudaStream_t writer, reader;
+        ASSERT_EQ(cudaStreamCreateWithFlags(&writer, cudaStreamNonBlocking), cudaSuccess);
+        ASSERT_EQ(cudaStreamCreateWithFlags(&reader, cudaStreamNonBlocking), cudaSuccess);
+        {
+            CUDAStreamGuard writing(writer);
+            constexpr size_t n = 100000;
+            auto raw_rotation = Tensor::ones({n, 4}, Device::CUDA);
+            SplatData model(0, Tensor::ones({n, 3}, Device::CUDA), Tensor::zeros({n, 1, 3}, Device::CUDA), {},
+                            Tensor::zeros({n, 3}, Device::CUDA), raw_rotation, Tensor::zeros({n, 1}, Device::CUDA), 1);
+            Tensor partial_copy;
+            std::atomic<bool> read_completed{false};
+            struct FailingRead : TensorExpr<FailingRead> {
+                Tensor input;
+                Tensor* copy;
+                std::atomic<bool>* completed;
+                const TensorShape& shape_impl() const { return input.shape(); }
+                Device device_impl() const { return input.device(); }
+                DataType dtype_impl() const { return input.dtype(); }
+                cudaStream_t stream_hint_impl() const { return input.stream(); }
+                FailingRead snapshot_impl() const { return *this; }
+                Tensor eval_impl() const {
+                    CUDAStreamGuard home(input.stream());
+                    const auto delay = [](void*) { std::this_thread::sleep_for(std::chrono::milliseconds(100)); };
+                    LFS_ENSURE_CUDA_SUCCESS(cudaLaunchHostFunc(input.stream(), delay, nullptr), "delay partial snapshot read");
+                    *copy = input.clone();
+                    const auto mark_completed = [](void* state) { static_cast<std::atomic<bool>*>(state)->store(true); };
+                    LFS_ENSURE_CUDA_SUCCESS(cudaLaunchHostFunc(input.stream(), mark_completed, completed), "observe partial snapshot read");
+                    throw std::runtime_error("injected snapshot failure");
+                }
+            };
+            struct ForceDeferred {
+                ForceDeferred() { internal::lazy_executor_set_size_heuristic_override_for_testing(false); }
+                ~ForceDeferred() { internal::lazy_executor_set_size_heuristic_override_for_testing(std::nullopt); }
+            } force_deferred;
+            model.rotation_raw() = FailingRead{{}, raw_rotation, &partial_copy, &read_completed};
+            ASSERT_TRUE(model.rotation_raw().is_deferred());
+            {
+                CUDAStreamGuard reading(reader);
+                try {
+                    (void)captureCollisionSource(model);
+                    FAIL() << "Expected the deferred input to fail";
+                } catch (const std::runtime_error& e) {
+                    EXPECT_STREQ(e.what(), "injected snapshot failure");
+                }
+            }
+            EXPECT_TRUE(read_completed.load());
+            EXPECT_EQ(cudaStreamQuery(writer), cudaSuccess);
+            ASSERT_EQ(cudaMemsetAsync(raw_rotation.data_ptr(), 0, raw_rotation.bytes(), writer), cudaSuccess);
+            ASSERT_TRUE(partial_copy.is_valid());
+            EXPECT_FLOAT_EQ(partial_copy.to(Device::CPU).ptr<float>()[0], 1);
+            ASSERT_EQ(cudaStreamSynchronize(writer), cudaSuccess);
+        }
+        EXPECT_EQ(cudaStreamDestroy(reader), cudaSuccess);
+        EXPECT_EQ(cudaStreamDestroy(writer), cudaSuccess);
+    }
+    TEST(CollisionSnapshotSettings, AreaRequiresCleanupButDefaultsRemainValid) {
+        CollisionSettings settings;
+        EXPECT_NO_THROW(settings.validate());
+        settings.max_gaussian_area = 1;
+        EXPECT_NO_THROW(settings.validate());
+        settings.cleanup = false;
+        EXPECT_THROW(settings.validate(), std::invalid_argument);
+        settings.max_gaussian_area = 0;
+        EXPECT_NO_THROW(settings.validate());
     }
     TEST_F(CollisionGpu, PlansLargeOutputSortWithoutAllocatingRecords) {
         // Exercise the real CUB storage query above the former output cap.

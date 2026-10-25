@@ -13,16 +13,34 @@ namespace lfs::io {
     namespace {
         namespace fs = core::native_fs;
         using I3 = glm::ivec3;
+        struct Cursor {
+            uint32_t index;
+            I3 p;
+            int size;
+            Cursor child(uint32_t base, int c) const {
+                return {base + c, p + I3(c & 1, (c >> 1) & 1, c >> 2) * (size / 2), size / 2};
+            }
+            void descend(const core::CollisionVolume& v, I3 lo, I3 hi) {
+                // Reflected logical bounds need not align with native octants.
+                while (v.words[index] > 1 && !(v.words[index] & core::CollisionVolume::brick_tag)) {
+                    const auto mid = p + size / 2;
+                    const auto lower = glm::greaterThanEqual(lo, mid);
+                    if (lower != glm::greaterThanEqual(hi - 1, mid))
+                        break;
+                    *this = child(v.words[index] - 2, int(lower.x) + 2 * int(lower.y) + 4 * int(lower.z));
+                }
+            }
+        };
         // Classify only the intersecting region; stop as soon as it is mixed.
-        int classify(const core::CollisionVolume& v, uint32_t index, I3 p, int size,
+        int classify(const core::CollisionVolume& v, Cursor cursor,
                      I3 lo, I3 hi, const std::stop_token& stop) {
             if (stop.stop_requested())
                 throw core::OperationCancelled();
-            lo = glm::max(lo, p);
-            hi = glm::min(hi, p + size);
+            lo = glm::max(lo, cursor.p);
+            hi = glm::min(hi, cursor.p + cursor.size);
             if (glm::any(glm::greaterThanEqual(lo, hi)))
                 return -1;
-            const auto value = v.words[index];
+            const auto value = v.words[cursor.index];
             if (value <= 1)
                 return int(value);
             int result = -1;
@@ -39,12 +57,11 @@ namespace lfs::io {
                 for (int z = lo.z; z < hi.z; ++z)
                     for (int y = lo.y; y < hi.y; ++y)
                         for (int x = lo.x; x < hi.x; ++x)
-                            if (merge((mask >> ((x - p.x) + 4 * (y - p.y) + 16 * (z - p.z))) & 1))
+                            if (merge((mask >> ((x - cursor.p.x) + 4 * (y - cursor.p.y) + 16 * (z - cursor.p.z))) & 1))
                                 return 2;
             } else {
                 for (int c = 0; c < 8; ++c)
-                    if (merge(classify(v, value - 2 + c, p + I3(c & 1, (c >> 1) & 1, c >> 2) * (size / 2),
-                                       size / 2, lo, hi, stop)))
+                    if (merge(classify(v, cursor.child(value - 2, c), lo, hi, stop)))
                         return 2;
             }
             return result;
@@ -111,33 +128,40 @@ namespace lfs::io {
         }
         if (transform[0][3] != 0 || transform[1][3] != 0 || transform[2][3] != 0 || transform[3][3] != 1)
             throw std::invalid_argument("Voxel export requires an affine grid transform");
-        I3 dims;
-        glm::vec3 lo(transform * glm::vec4(v.origin, 1));
+        const auto padded = ((v.dimensions + 3) / 4) * 4;
+        I3 dims{0}, logical_dims{0};
+        glm::vec3 lo(transform * glm::vec4(v.origin, 1)), scene_lo = lo;
         for (int s = 0; s < 3; ++s) {
-            dims[axis[s]] = v.dimensions[s];
-            if (sign[s] < 0)
-                lo[axis[s]] -= scale * v.settings.voxel_size * v.dimensions[s];
+            dims[axis[s]] = padded[s];
+            logical_dims[axis[s]] = v.dimensions[s];
+            if (sign[s] < 0) {
+                lo[axis[s]] -= scale * v.settings.voxel_size * padded[s];
+                scene_lo[axis[s]] -= scale * v.settings.voxel_size * v.dimensions[s];
+            }
         }
         const float resolution = scale * v.settings.voxel_size;
         const auto hi = lo + glm::vec3(dims) * resolution;
+        const auto scene_hi = scene_lo + glm::vec3(logical_dims) * resolution;
         for (int k = 0; k < 3; ++k)
-            if (!std::isfinite(lo[k]) || !std::isfinite(hi[k]) || !(hi[k] > lo[k]) || !(resolution > 0))
+            if (!std::isfinite(lo[k]) || !std::isfinite(hi[k]) || !(hi[k] > lo[k]) ||
+                !std::isfinite(scene_lo[k]) || !std::isfinite(scene_hi[k]) || !(scene_hi[k] > scene_lo[k]) || !(resolution > 0))
                 throw std::invalid_argument("Transformed grid bounds are not representable; reduce translation or scale and regenerate");
         auto source_min = [&](I3 p, int size) {
             I3 q;
             for (int s = 0; s < 3; ++s)
-                q[s] = sign[s] > 0 ? p[axis[s]] : v.dimensions[s] - p[axis[s]] - size;
+                q[s] = sign[s] > 0 ? p[axis[s]] : padded[s] - p[axis[s]] - size;
             return q;
         };
         int edge = 8, depth = 1;
         while (edge < std::max({dims.x, dims.y, dims.z}))
             edge *= 2, ++depth;
-        auto region = [&](I3 p, int size) {
+        auto region = [&](I3 p, int size, Cursor& cursor) {
             const auto q = source_min(p, size);
             const auto lo = glm::max(q, I3(0)), hi = glm::min(q + size, v.dimensions);
             if (glm::any(glm::greaterThanEqual(lo, hi)))
                 return 0;
-            const auto state = classify(v, 0, {}, v.edge, lo, hi, stop);
+            cursor.descend(v, lo, hi);
+            const auto state = classify(v, cursor, lo, hi, stop);
             return state == 1 && (lo != q || hi != q + size) ? 2 : state;
         };
         struct Pending {
@@ -145,11 +169,15 @@ namespace lfs::io {
             I3 p;
             int size;
             int state;
+            Cursor source;
         };
         std::vector<uint32_t> nodes(v.occupied_count ? 1 : 0), leaves;
         std::vector<Pending> queue;
-        if (v.occupied_count)
-            queue.push_back({0, {}, edge, region({}, edge)});
+        if (v.occupied_count) {
+            Cursor source{0, {}, v.edge};
+            const auto state = region({}, edge, source);
+            queue.push_back({0, {}, edge, state, source});
+        }
         uint32_t interiors = 0;
         float completed = .1f;
         for (size_t i = 0; i < queue.size(); ++i) {
@@ -159,16 +187,17 @@ namespace lfs::io {
             if (item.state == 1) {
                 nodes[item.index] = 0xff000000u;
             } else if (item.size == 4) {
-                uint64_t mask = 0, source_masks[8];
-                const auto first = I3(glm::floor(glm::vec3(source_min(item.p, 4)) / 4.f)) * 4;
-                for (int c = 0; c < 8; ++c)
-                    source_masks[c] = v.brickMask(first + I3(c & 1, (c >> 1) & 1, c >> 2) * 4);
+                uint64_t mask = 0;
+                // Block-aligned reflection leaves exactly one native brick or a uniform subtree.
+                const auto value = v.words[item.source.index];
+                const auto base = value & ~core::CollisionVolume::brick_tag;
+                const uint64_t source_mask = value <= 1 ? (value ? UINT64_MAX : 0)
+                                                        : v.words[base] | (uint64_t(v.words[base + 1]) << 32);
                 for (int b = 0; b < 64; ++b) {
                     const auto p = source_min(item.p + I3(b & 3, (b >> 2) & 3, b >> 4), 1);
                     if (glm::any(glm::lessThan(p, I3(0))) || glm::any(glm::greaterThanEqual(p, v.dimensions)))
                         continue;
-                    const auto c = (p - first) / 4;
-                    if ((source_masks[c.x + 2 * c.y + 4 * c.z] >> ((p.x & 3) + 4 * (p.y & 3) + 16 * (p.z & 3))) & 1)
+                    if ((source_mask >> ((p.x & 3) + 4 * (p.y & 3) + 16 * (p.z & 3))) & 1)
                         mask |= uint64_t(1) << b;
                 }
                 if (leaves.size() / 2 >= (1u << 24))
@@ -181,10 +210,11 @@ namespace lfs::io {
                 const auto base = uint32_t(nodes.size());
                 for (int c = 0; c < 8; ++c) {
                     const auto p = item.p + I3(c & 1, (c >> 1) & 1, c >> 2) * (item.size / 2);
-                    const auto state = region(p, item.size / 2);
+                    auto source = item.source;
+                    const auto state = region(p, item.size / 2, source);
                     if (state) {
                         mask |= 1u << c;
-                        queue.push_back({uint32_t(nodes.size()), p, item.size / 2, state});
+                        queue.push_back({uint32_t(nodes.size()), p, item.size / 2, state, source});
                         nodes.push_back(0);
                     }
                 }
@@ -196,7 +226,8 @@ namespace lfs::io {
         }
         auto xyz = [](glm::vec3 p) { return nlohmann::json::array({p.x, p.y, p.z}); };
         const nlohmann::json bounds{{"min", xyz(lo)}, {"max", xyz(hi)}};
-        const nlohmann::json metadata{{"version", "1.1"}, {"asset", {{"generator", "LichtFeld Studio"}}}, {"gridBounds", bounds}, {"sceneBounds", bounds}, {"voxelResolution", resolution}, {"leafSize", 4}, {"treeDepth", depth}, {"numInteriorNodes", interiors}, {"numMixedLeaves", leaves.size() / 2}, {"nodeCount", nodes.size()}, {"leafDataCount", leaves.size()}};
+        const nlohmann::json scene_bounds{{"min", xyz(scene_lo)}, {"max", xyz(scene_hi)}};
+        const nlohmann::json metadata{{"version", "1.1"}, {"asset", {{"generator", "LichtFeld Studio"}}}, {"gridBounds", bounds}, {"sceneBounds", scene_bounds}, {"voxelResolution", resolution}, {"leafSize", 4}, {"treeDepth", depth}, {"numInteriorNodes", interiors}, {"numMixedLeaves", leaves.size() / 2}, {"nodeCount", nodes.size()}, {"leafDataCount", leaves.size()}};
         if (auto result = ensure_output_parent_directory(path); !result)
             throw std::runtime_error(result.error().format());
         ScopedAtomicOutputFile bin(binary), json(path);

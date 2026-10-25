@@ -3,6 +3,7 @@
 #include "io/atomic_output.hpp"
 #include "io/collision_export.hpp"
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -11,6 +12,18 @@
 namespace {
     namespace fs = lfs::core::native_fs;
     using lfs::core::CollisionVolume;
+    TEST(CollisionExportLimits, MixedLeafLowerBoundAllowsExactlyRepresentableOctree) {
+        // A full eight-way tree has leaves = 7 * interiors + 1. At this boundary
+        // the minimal tree exactly fills the format; another mixed leaf cannot fit.
+        constexpr uint64_t interior = ((uint64_t(1) << 24) - 1) / 8;
+        constexpr uint64_t leaves = 7 * interior + 1;
+        EXPECT_NO_THROW(lfs::io::checkCollisionExportMixedBlocks(0));
+        EXPECT_NO_THROW(lfs::io::checkCollisionExportMixedBlocks(leaves));
+        EXPECT_THROW(lfs::io::checkCollisionExportMixedBlocks(leaves + 8), std::runtime_error);
+        EXPECT_NO_THROW(lfs::io::checkCollisionExportMixedBlocks(14'680'064));
+        EXPECT_THROW(lfs::io::checkCollisionExportMixedBlocks(14'680'065), std::runtime_error);
+        EXPECT_THROW(lfs::io::checkCollisionExportMixedBlocks(UINT64_MAX), std::runtime_error);
+    }
     struct CollisionExportTest : testing::Test {
         fs::path directory = lfs::io::make_atomic_temp_output_path(fs::temp_directory_path() / "voxel_test");
         fs::path path = directory / "scene.voxel.json", binary = directory / "scene.voxel.bin";
@@ -89,19 +102,21 @@ namespace {
             return result;
         }
     };
-    TEST_F(CollisionExportTest, ClippedSolidHasLogicalBoundsAndNoPadding) {
+    TEST_F(CollisionExportTest, ClippedSolidHasBlockBoundsAndEmptyPadding) {
         const auto v = volume();
         lfs::io::exportCollision(v, path);
         const auto decoded = decode();
         for (int z = 0; z < 8; ++z)
             for (int y = 0; y < 8; ++y)
                 for (int x = 0; x < 8; ++x)
-                    EXPECT_EQ(decoded[x + 8 * (y + 8 * z)], x < 5 && y < 3 && z < 2);
+                    EXPECT_EQ(decoded[x + 8 * (y + 8 * z)], x >= 3 && y >= 1 && y < 4 && z < 2);
         const auto j = nlohmann::json::parse(read(path));
-        EXPECT_EQ(j["gridBounds"]["min"], nlohmann::json::array({-3.25, -4.75, 6}));
-        EXPECT_EQ(j["gridBounds"]["max"], nlohmann::json::array({-2, -4, 6.5}));
+        EXPECT_EQ(j["gridBounds"]["min"], nlohmann::json::array({-4, -5, 6}));
+        EXPECT_EQ(j["gridBounds"]["max"], nlohmann::json::array({-2, -4, 7}));
+        EXPECT_EQ(j["sceneBounds"]["min"], nlohmann::json::array({-3.25, -4.75, 6}));
+        EXPECT_EQ(j["sceneBounds"]["max"], nlohmann::json::array({-2, -4, 6.5}));
     }
-    TEST_F(CollisionExportTest, ReflectionAndPermutationUseLogicalDimensions) {
+    TEST_F(CollisionExportTest, ReflectionAndPermutationPreserveLogicalScene) {
         auto v = volume({5, 3, 2});
         v.words.assign(9, 0);
         v.words[0] = 3;
@@ -118,8 +133,140 @@ namespace {
         lfs::io::exportCollision(v, path, transform);
         const auto decoded = decode();
         EXPECT_EQ(std::count(decoded.begin(), decoded.end(), true), 1);
-        EXPECT_TRUE(decoded[0 + 8 * (4 + 8 * 1)]);
+        EXPECT_TRUE(decoded[2 + 8 * (4 + 8 * 1)]);
         EXPECT_EQ(nlohmann::json::parse(read(path))["voxelResolution"], .5);
+    }
+    TEST_F(CollisionExportTest, EverySignedPermutationMatchesIndependentBreadthFirstBytes) {
+        for (const auto dims : {glm::ivec3(24, 16, 12), glm::ivec3(21, 13, 9)}) {
+            auto v = volume(dims);
+            const auto padded = ((dims + 3) / 4) * 4;
+            auto occupied = [&](glm::ivec3 p) {
+                return glm::all(glm::lessThan(p, v.dimensions)) &&
+                       ((p.x < 8 && p.y < 8 && p.z < 8) || (p.x + 3 * p.y + 5 * p.z) % 11 < 3);
+            };
+            v.words = {0};
+            v.occupied_count = 0;
+            size_t mixed = 0;
+            auto build = [&](auto&& self, uint32_t index, glm::ivec3 p, int size) -> void {
+                uint64_t count = 0, mask = 0;
+                for (int z = 0; z < size; ++z)
+                    for (int y = 0; y < size; ++y)
+                        for (int x = 0; x < size; ++x)
+                            if (occupied(p + glm::ivec3(x, y, z))) {
+                                ++count;
+                                if (size == 4)
+                                    mask |= uint64_t(1) << (x + 4 * y + 16 * z);
+                            }
+                if (!count)
+                    return;
+                if (count == uint64_t(size) * size * size) {
+                    v.words[index] = 1;
+                    v.occupied_count += count;
+                } else if (size == 4) {
+                    ++mixed;
+                    v.words[index] = CollisionVolume::brick_tag | uint32_t(v.words.size());
+                    v.words.push_back(uint32_t(mask));
+                    v.words.push_back(uint32_t(mask >> 32));
+                    v.occupied_count += count;
+                } else {
+                    const auto base = uint32_t(v.words.size());
+                    v.words[index] = base + 2;
+                    v.words.resize(base + 8);
+                    for (int c = 0; c < 8; ++c)
+                        self(self, base + c, p + glm::ivec3(c & 1, (c >> 1) & 1, c >> 2) * (size / 2), size / 2);
+                }
+            };
+            build(build, 0, {}, v.edge);
+            v.validate();
+            std::array axes{0, 1, 2};
+            do {
+                for (int signs = 0; signs < 8; ++signs) {
+                    SCOPED_TRACE(::testing::Message() << axes[0] << axes[1] << axes[2] << ":" << signs);
+                    glm::mat4 world(0);
+                    world[3] = {3, 4, 5, 1};
+                    std::vector<bool> expected(size_t(v.edge) * v.edge * v.edge);
+                    for (int s = 0; s < 3; ++s)
+                        world[s][axes[s]] = 2.f * ((signs & (1 << s)) ? -1 : 1) * (axes[s] < 2 ? -1 : 1);
+                    for (int z = 0; z < v.dimensions.z; ++z)
+                        for (int y = 0; y < v.dimensions.y; ++y)
+                            for (int x = 0; x < v.dimensions.x; ++x) {
+                                const glm::ivec3 source(x, y, z);
+                                glm::ivec3 p;
+                                for (int s = 0; s < 3; ++s)
+                                    p[axes[s]] = signs & (1 << s) ? padded[s] - 1 - source[s] : source[s];
+                                expected[p.x + v.edge * (p.y + v.edge * p.z)] = occupied(source);
+                            }
+                    // Reference packing scans dense output cells, never native tree pointers.
+                    auto count = [&](glm::ivec3 p, int size) {
+                        size_t result = 0;
+                        for (int z = p.z; z < p.z + size; ++z)
+                            for (int y = p.y; y < p.y + size; ++y)
+                                for (int x = p.x; x < p.x + size; ++x)
+                                    result += expected[x + v.edge * (y + v.edge * z)];
+                        return result;
+                    };
+                    struct Cell {
+                        glm::ivec3 p;
+                        int size;
+                    };
+                    std::vector<Cell> pending{{{}, v.edge}};
+                    std::vector<uint32_t> nodes(1), leaves;
+                    for (size_t i = 0; i < pending.size(); ++i) {
+                        const auto [p, size] = pending[i];
+                        if (count(p, size) == size_t(size) * size * size) {
+                            nodes[i] = 0xff000000u;
+                        } else if (size == 4) {
+                            uint64_t mask = 0;
+                            for (int b = 0; b < 64; ++b) {
+                                const auto q = p + glm::ivec3(b & 3, (b >> 2) & 3, b >> 4);
+                                if (expected[q.x + v.edge * (q.y + v.edge * q.z)])
+                                    mask |= uint64_t(1) << b;
+                            }
+                            nodes[i] = uint32_t(leaves.size() / 2);
+                            leaves.push_back(uint32_t(mask));
+                            leaves.push_back(uint32_t(mask >> 32));
+                        } else {
+                            const auto base = uint32_t(nodes.size());
+                            uint32_t mask = 0;
+                            for (int c = 0; c < 8; ++c) {
+                                const auto q = p + glm::ivec3(c & 1, (c >> 1) & 1, c >> 2) * (size / 2);
+                                if (count(q, size / 2)) {
+                                    mask |= 1u << c;
+                                    pending.push_back({q, size / 2});
+                                    nodes.push_back(0);
+                                }
+                            }
+                            nodes[i] = (mask << 24) | base;
+                        }
+                    }
+                    std::string bytes;
+                    for (const auto* words : {&nodes, &leaves})
+                        for (const auto word : *words)
+                            for (int b = 0; b < 4; ++b)
+                                bytes.push_back(char(word >> (8 * b)));
+                    lfs::io::exportCollision(v, path, world);
+                    EXPECT_EQ(read(binary), bytes);
+                    EXPECT_EQ(decode(), expected);
+                    auto bounds = [&](glm::ivec3 size) {
+                        glm::vec3 lo(std::numeric_limits<float>::max()), hi(-std::numeric_limits<float>::max());
+                        for (int c = 0; c < 8; ++c) {
+                            const auto corner = v.origin + v.settings.voxel_size *
+                                                               glm::vec3(glm::ivec3(c & 1, (c >> 1) & 1, c >> 2) * size);
+                            auto p = glm::vec3(world * glm::vec4(corner, 1));
+                            p.x = -p.x;
+                            p.y = -p.y;
+                            lo = glm::min(lo, p);
+                            hi = glm::max(hi, p);
+                        }
+                        return nlohmann::json{{"min", {lo.x, lo.y, lo.z}}, {"max", {hi.x, hi.y, hi.z}}};
+                    };
+                    const auto j = nlohmann::json::parse(read(path));
+                    EXPECT_EQ(j["gridBounds"], bounds(padded));
+                    EXPECT_EQ(j["sceneBounds"], bounds(v.dimensions));
+                    EXPECT_EQ(j["numMixedLeaves"], mixed);
+                }
+            } while (std::next_permutation(axes.begin(), axes.end()));
+        }
     }
     TEST_F(CollisionExportTest, RejectsNonrepresentableTransformsBeforeReplacingFiles) {
         write(path, "old-json");

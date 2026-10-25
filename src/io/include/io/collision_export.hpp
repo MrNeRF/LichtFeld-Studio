@@ -5,6 +5,14 @@
 #include "io/export_progress.hpp"
 #include <filesystem>
 namespace lfs::io {
+    // Mixed blocks cannot collapse. An octree with M leaves needs at least
+    // ceil((M-1)/7) internal nodes; solid records are intentionally not counted.
+    inline void checkCollisionExportMixedBlocks(uint64_t mixed) {
+        constexpr uint64_t limit = uint64_t(1) << 24;
+        if (mixed > limit || (mixed && mixed + (mixed + 5) / 7 > limit))
+            throw std::runtime_error("SuperSplat v1.1 cannot represent these mixed blocks in its 24-bit node index range. Increase the export cell size; native collision generation remains unrestricted");
+    }
+
     LFS_IO_API core::CollisionSource loadCollisionSource(const std::filesystem::path&,
                                                          std::stop_token = {}, ExportProgressCallback = {});
     // Validated immutable volume and captured data-world transform.

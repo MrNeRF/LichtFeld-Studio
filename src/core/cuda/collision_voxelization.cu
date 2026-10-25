@@ -1,54 +1,19 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "collision_voxelization.hpp"
+#include "collision_voxelization_kernels.hpp"
 #include "core/cuda/morton.cuh"
-#include "core/logger.hpp"
-#include "core/memory_pressure.hpp"
 #include "core/tensor/internal/cub_workspace.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
-#include <bit>
 #include <cfloat>
-#include <climits>
 #include <cub/device/device_merge_sort.cuh>
 #include <cub/device/device_radix_sort.cuh>
 #include <glm/gtc/quaternion.hpp>
-#include <numbers>
 namespace lfs::core::cuda {
     namespace {
-        constexpr uint32_t max_regions = 1'048'576;
-        struct CollisionGaussianGpu {
-            float center[3], inverse[9], extent[3], opacity;
-            int min[3], max[3];
-        };
-        struct CollisionBvhNode {
-            float min[3], max[3];
-            uint32_t left, right, begin, count;
-        };
-        template <class T>
-        struct Buffer {
-            tensor_ops::ScopedDeviceBuffer storage;
-            T* data = nullptr;
-            size_t capacity = 0;
-            void reserve(size_t n) {
-                if (n <= capacity)
-                    return;
-                storage = tensor_ops::ScopedDeviceBuffer(checked_product(n, sizeof(T), "Collision allocation"), getCurrentCUDAStream(), "collision");
-                data = storage.template as<T>();
-                capacity = n;
-            }
-        };
         struct BrickLess {
             __host__ __device__ bool operator()(CollisionBrick a, CollisionBrick b) const {
                 return (a.morton & CollisionBrick::key_mask) < (b.morton & CollisionBrick::key_mask);
             }
-        };
-        struct Region {
-            int x, y, z;
-        };
-        struct Grid {
-            float origin[3], size;
-            int dimensions[3];
-            double cutoff;
         };
         __device__ float component(const Region p, int a) { return a == 0 ? p.x : a == 1 ? p.y
                                                                                          : p.z; }
@@ -240,6 +205,8 @@ namespace lfs::core::cuda {
             __syncthreads();
             if (lane == 0 && (masks[0] | masks[1])) {
                 const auto row = atomicAdd(count, 1u);
+                if (masks[0] != UINT32_MAX || masks[1] != UINT32_MAX)
+                    atomicAdd(count + 1, 1u);
                 output[row] = {morton_encode(tile.x >> 2, tile.y >> 2, tile.z >> 2), uint64_t(masks[0]) | (uint64_t(masks[1]) << 32)};
             }
         }
@@ -297,8 +264,8 @@ namespace lfs::core::cuda {
             if (!g.opacity)
                 metrics[3 * i] = NAN;
             for (int a = 0; a < 3; ++a) {
-                bounds[6 * i + a] = g.opacity ? g.center[a] - g.extent[a] : INFINITY;
-                bounds[6 * i + a + 3] = g.opacity ? g.center[a] + g.extent[a] : -INFINITY;
+                bounds[size_t(a) * n + i] = g.opacity ? g.center[a] - g.extent[a] : INFINITY;
+                bounds[size_t(a + 3) * n + i] = g.opacity ? g.center[a] + g.extent[a] : -INFINITY;
             }
         }
         __global__ void keys(const CollisionGaussianGpu* gs, uint64_t* morton, uint32_t* order, uint32_t n, glm::vec3 low, glm::vec3 multiplier) {
@@ -405,8 +372,8 @@ namespace lfs::core::cuda {
             if (keep && !keep[i])
                 g.opacity = 0;
             for (int a = 0; a < 3; ++a) {
-                bounds[6 * i + a] = g.opacity ? g.center[a] - g.extent[a] : INFINITY;
-                bounds[6 * i + a + 3] = g.opacity ? g.center[a] + g.extent[a] : -INFINITY;
+                bounds[size_t(a) * n + i] = g.opacity ? g.center[a] - g.extent[a] : INFINITY;
+                bounds[size_t(a + 3) * n + i] = g.opacity ? g.center[a] + g.extent[a] : -INFINITY;
                 if (!keep) {
                     g.min[a] = g.opacity ? int(fmaxf(0, floorf((g.center[a] - g.extent[a] - grid.origin[a]) / grid.size - .5f))) : 0;
                     g.max[a] = g.opacity ? int(fminf(float(grid.dimensions[a]), ceilf((g.center[a] + g.extent[a] - grid.origin[a]) / grid.size + .5f))) : 0;
@@ -414,276 +381,56 @@ namespace lfs::core::cuda {
             }
         }
     } // namespace
+    void launch_split_regions(dim3 blocks, dim3 threads, cudaStream_t stream, const Region* input, uint32_t offset, uint32_t count, int size, Grid grid, const CollisionGaussianGpu* gs, const CollisionBvhNode* nodes, Region* output, uint32_t* output_count, CollisionBrick* solids, uint32_t* solid_count) {
+        split_regions<<<blocks, threads, 0, stream>>>(input, offset, count, size, grid, gs, nodes, output, output_count, solids, solid_count);
+        LFS_CUDA_LAUNCH_CHECK(stream, "collision.split_regions");
+    }
+    void launch_evaluate_bricks(dim3 blocks, dim3 threads, cudaStream_t stream, const Region* regions, uint32_t offset, Grid grid, const CollisionGaussianGpu* gs, const CollisionBvhNode* nodes, CollisionBrick* output, uint32_t* count) {
+        evaluate_bricks<<<blocks, threads, 0, stream>>>(regions, offset, grid, gs, nodes, output, count);
+        LFS_CUDA_LAUNCH_CHECK(stream, "collision.evaluate_bricks");
+    }
+    void launch_prepare(dim3 blocks, dim3 threads, cudaStream_t stream, const float* means, const float* scales, const float* rotations, const float* opacity, const bool* deleted, size_t count, size_t offset, glm::mat4 transform, CollisionGaussianGpu* output, float* metrics, uint32_t* errors) {
+        prepare<<<blocks, threads, 0, stream>>>(means, scales, rotations, opacity, deleted, count, offset, transform, output, metrics, errors);
+        LFS_CUDA_LAUNCH_CHECK(stream, "collision.prepare");
+    }
+    void launch_filter(dim3 blocks, dim3 threads, cudaStream_t stream, CollisionGaussianGpu* gs, float* metrics, float* bounds, uint32_t n, float area_limit, float thickness, float volume, float thin_guard) {
+        filter<<<blocks, threads, 0, stream>>>(gs, metrics, bounds, n, area_limit, thickness, volume, thin_guard);
+        LFS_CUDA_LAUNCH_CHECK(stream, "collision.filter");
+    }
+    void launch_keys(dim3 blocks, dim3 threads, cudaStream_t stream, const CollisionGaussianGpu* gs, uint64_t* morton, uint32_t* order, uint32_t n, glm::vec3 low, glm::vec3 multiplier) {
+        keys<<<blocks, threads, 0, stream>>>(gs, morton, order, n, low, multiplier);
+        LFS_CUDA_LAUNCH_CHECK(stream, "collision.keys");
+    }
+    void launch_gather(dim3 blocks, dim3 threads, cudaStream_t stream, const CollisionGaussianGpu* source, CollisionGaussianGpu* dest, const uint32_t* order, uint32_t n) {
+        gather<<<blocks, threads, 0, stream>>>(source, dest, order, n);
+        LFS_CUDA_LAUNCH_CHECK(stream, "collision.gather");
+    }
+    void launch_leaf_bounds(dim3 blocks, dim3 threads, cudaStream_t stream, const CollisionGaussianGpu* gs, CollisionBvhNode* nodes, uint32_t n, uint32_t leaves, float cell) {
+        leaf_bounds<<<blocks, threads, 0, stream>>>(gs, nodes, n, leaves, cell);
+        LFS_CUDA_LAUNCH_CHECK(stream, "collision.leaf_bounds");
+    }
+    void launch_parent_bounds(dim3 blocks, dim3 threads, cudaStream_t stream, CollisionBvhNode* nodes, uint32_t first) {
+        parent_bounds<<<blocks, threads, 0, stream>>>(nodes, first);
+        LFS_CUDA_LAUNCH_CHECK(stream, "collision.parent_bounds");
+    }
+    void launch_eligible(dim3 blocks, dim3 threads, cudaStream_t stream, const CollisionGaussianGpu* gs, const CollisionBvhNode* nodes, bool* keep, uint32_t n, double cutoff, float cell) {
+        eligible<<<blocks, threads, 0, stream>>>(gs, nodes, keep, n, cutoff, cell);
+        LFS_CUDA_LAUNCH_CHECK(stream, "collision.eligible");
+    }
+    void launch_grid_indices(dim3 blocks, dim3 threads, cudaStream_t stream, CollisionGaussianGpu* gs, float* bounds, const bool* keep, uint32_t n, Grid grid) {
+        grid_indices<<<blocks, threads, 0, stream>>>(gs, bounds, keep, n, grid);
+        LFS_CUDA_LAUNCH_CHECK(stream, "collision.grid_indices");
+    }
     size_t queryCollisionSortWorkspaceBytes(size_t count) {
-        (void)collisionOutputBytes(count);
         size_t bytes = 0;
         if (count)
             LFS_CUDA_CHECK(cub::DeviceMergeSort::SortKeys(nullptr, bytes, static_cast<CollisionBrick*>(nullptr), count, BrickLess{}, getCurrentCUDAStream()));
         return bytes;
     }
-    CollisionBricks voxelizeCollision(std::span<const CollisionSource> sources, CollisionSettings settings, std::stop_token stop, ProgressCallback progress, const std::function<void(float)>& resolution) {
-        reportProgress(stop, progress, 0, "collision.prepare");
-        size_t total = 0;
-        for (const auto& source : sources) {
-            if (!source.means.is_valid() || source.means.ndim() != 2 || source.means.shape()[1] != 3)
-                throw std::invalid_argument("Collision means must have shape [N,3]");
-            total = saturating_add(total, source.means.shape()[0]);
-        }
-        if (!total || total > size_t(INT_MAX))
-            throw std::invalid_argument("Collision source count exceeds the signed tensor index range or is empty");
-        const auto stream = getCurrentCUDAStream();
-        if (!MemoryPressureCoordinator::instance().preflight({.operation = "Collision geometry",
-                                                              .temporary_device_bytes = checked_product(total, 2 * sizeof(CollisionGaussianGpu) + 72, "Collision geometry")})
-                 .ok)
-            throw std::runtime_error("Insufficient GPU memory for collision geometry; free memory and retry");
-        const auto blocks = [](size_t n) { return unsigned((n + 255) / 256); };
-        Buffer<CollisionGaussianGpu> gs;
-        gs.reserve(total);
-        auto metrics = Tensor::empty({total, 3}, Device::CUDA);
-        auto bounds = Tensor::empty({total, 6}, Device::CUDA);
-        auto errors = Tensor::empty({1}, Device::CUDA, DataType::UInt32);
-        LFS_CUDA_CHECK(cudaMemsetAsync(errors.ptr<uint32_t>(), 0, sizeof(uint32_t), stream));
-        size_t offset = 0;
-        for (const auto& s : sources) {
-            const auto n = s.means.shape()[0];
-            if (!n)
-                continue;
-            auto host_check = [&](const Tensor& t, size_t count, DataType type) {
-                if (!t.is_valid() || t.numel() != count || t.dtype() != type)
-                    throw std::invalid_argument("Invalid collision geometry tensor");
-            };
-            host_check(s.means, n * 3, DataType::Float32);
-            host_check(s.scales, n * 3, DataType::Float32);
-            host_check(s.rotations, n * 4, DataType::Float32);
-            host_check(s.opacity, n, DataType::Float32);
-            if (s.deleted.is_valid())
-                host_check(s.deleted, n, DataType::Bool);
-            for (int c = 0; c < 4; ++c)
-                for (int r = 0; r < 4; ++r)
-                    if (!std::isfinite(s.transform[c][r]))
-                        throw std::invalid_argument("Non-finite collision source transform");
-            if (s.transform[0][3] != 0 || s.transform[1][3] != 0 || s.transform[2][3] != 0 || s.transform[3][3] != 1 ||
-                glm::determinant(glm::dmat3(s.transform)) == 0)
-                throw std::invalid_argument("Collision source transform must be invertible and affine");
-            auto means = s.means.to(Device::CUDA, stream).contiguous(), scales = s.scales.to(Device::CUDA, stream).contiguous();
-            auto rotation = s.rotations.to(Device::CUDA, stream).contiguous(), opacity = s.opacity.to(Device::CUDA, stream).contiguous();
-            auto deleted = s.deleted.is_valid() ? s.deleted.to(Device::CUDA, stream).contiguous() : Tensor{};
-            prepare_inputs_for_stream({&means, &scales, &rotation, &opacity}, stream);
-            if (deleted.is_valid())
-                prepare_inputs_for_stream({&deleted}, stream);
-            prepare<<<blocks(n), 256, 0, stream>>>(means.ptr<float>(), scales.ptr<float>(), rotation.ptr<float>(), opacity.ptr<float>(), deleted.is_valid() ? deleted.ptr<bool>() : nullptr, n, offset, s.transform, gs.data, metrics.ptr<float>(), errors.ptr<uint32_t>());
-            LFS_CUDA_LAUNCH_CHECK(stream, "collision.prepare");
-            offset += n;
-        }
-        if (errors.to(Device::CPU).ptr<uint32_t>()[0])
-            throw std::invalid_argument("Non-finite Gaussian geometry");
-        reportProgress(stop, progress, .04f, "collision.filter");
-        std::array<float, 3> fences{INFINITY, INFINITY, INFINITY};
-        float thin = -INFINITY;
-        for (int a = 0; a < 3; ++a) {
-            auto column = metrics.slice(1, a, a + 1).contiguous().reshape({int(total)});
-            auto samples = column.masked_select(column.isfinite());
-            if (!settings.cleanup || samples.numel() < size_t(a ? 128 : 16))
-                continue;
-            const auto sorted = samples.sort(0).first;
-            const auto q1 = sorted.slice(0, samples.numel() / 4, samples.numel() / 4 + 1).item<float>();
-            const auto q3 = sorted.slice(0, 3 * samples.numel() / 4, 3 * samples.numel() / 4 + 1).item<float>();
-            fences[a] = q3 + std::max(3 * (q3 - q1), std::log(a ? 8.f : 64.f));
-            if (a == 1)
-                thin = q1 - std::log(4.f);
-        }
-        if (settings.max_gaussian_area)
-            fences[0] = std::log(settings.max_gaussian_area / float(9 * std::numbers::pi));
-        filter<<<blocks(total), 256, 0, stream>>>(gs.data, metrics.ptr<float>(), bounds.ptr<float>(), total, fences[0], fences[1], fences[2], thin);
-        LFS_CUDA_LAUNCH_CHECK(stream, "collision.filter");
-        auto area = metrics.slice(1, 0, 1).contiguous().reshape({int(total)});
-        auto retained = area.masked_select(area.isfinite());
-        if (!retained.numel())
-            throw std::runtime_error("Source cleanup excluded all splats; disable cleanup or increase maximum area");
-        if (retained.numel() * 10 < total)
-            LOG_WARN("Collision source filtering retained %zu of %zu Gaussians; reduce filtering if coverage is incomplete", retained.numel(), total);
-        if (settings.auto_resolution) {
-            const auto sorted = retained.sort(0).first;
-            const auto median = sorted.slice(0, retained.numel() / 2, retained.numel() / 2 + 1).item<float>();
-            settings.voxel_size = std::exp(median * .5f) * std::max(.05f, float(std::sqrt(retained.numel() * 4 * std::numbers::pi / 32'000'000)));
-            settings.validate();
-        }
-        if (resolution)
-            resolution(settings.voxel_size);
-        auto bound = [&](bool high) {
-            auto column = bounds.slice(1, high ? 3 : 0, high ? 6 : 3);
-            auto reduced = (high ? column.max(0) : column.min(0)).to(Device::CPU).contiguous();
-            return glm::vec3(reduced.ptr<float>()[0], reduced.ptr<float>()[1], reduced.ptr<float>()[2]);
-        };
-        auto low = bound(false), high = bound(true);
-        Buffer<uint64_t> key_in, key_out;
-        Buffer<uint32_t> order_in, order_out;
-        key_in.reserve(total);
-        key_out.reserve(total);
-        order_in.reserve(total);
-        order_out.reserve(total);
-        keys<<<blocks(total), 256, 0, stream>>>(gs.data, key_in.data, order_in.data, total, low,
-                                                {morton_multiplier(high.x - low.x), morton_multiplier(high.y - low.y), morton_multiplier(high.z - low.z)});
-        LFS_CUDA_LAUNCH_CHECK(stream, "collision.keys");
-        tensor_ops::run_cub_operation("collision.sort_sources", stream, [&](void* p, size_t& bytes) { return cub::DeviceRadixSort::SortPairs(p, bytes, key_in.data, key_out.data, order_in.data, order_out.data, total, 0, 63, stream); });
-        Buffer<CollisionGaussianGpu> sorted;
-        sorted.reserve(total);
-        gather<<<blocks(total), 256, 0, stream>>>(gs.data, sorted.data, order_out.data, total);
-        LFS_CUDA_LAUNCH_CHECK(stream, "collision.gather");
-        gs = std::move(sorted);
-        key_in = {};
-        key_out = {};
-        order_in = {};
-        order_out = {};
-        metrics = {};
-        area = {};
-        retained = {};
-        const auto leaves = std::bit_ceil(uint32_t((total + 7) / 8));
-        Buffer<CollisionBvhNode> bvh;
-        bvh.reserve(2 * leaves - 1);
-        auto build_bvh = [&] {
-            leaf_bounds<<<blocks(leaves), 256, 0, stream>>>(gs.data, bvh.data, total, leaves, settings.voxel_size);
-            LFS_CUDA_LAUNCH_CHECK(stream, "collision.leaf_bounds");
-            for (auto first = leaves / 2; first; first /= 2) {
-                parent_bounds<<<blocks(first), 256, 0, stream>>>(bvh.data, first);
-                LFS_CUDA_LAUNCH_CHECK(stream, "collision.parent_bounds");
-            }
-        };
-        build_bvh();
-        auto keep = Tensor::empty({total}, Device::CUDA, DataType::Bool);
-        const auto cutoff = -std::log1p(-double(settings.opacity));
-        eligible<<<blocks(total), 256, 0, stream>>>(gs.data, bvh.data, keep.ptr<bool>(), total, cutoff, settings.voxel_size);
-        LFS_CUDA_LAUNCH_CHECK(stream, "collision.support_bounds");
-        Grid grid{{0, 0, 0}, settings.voxel_size, {1, 1, 1}, cutoff};
-        grid_indices<<<blocks(total), 256, 0, stream>>>(gs.data, bounds.ptr<float>(), keep.ptr<bool>(), total, grid);
-        LFS_CUDA_LAUNCH_CHECK(stream, "collision.support_selection");
-        low = bound(false);
-        high = bound(true);
-        if (!std::isfinite(low.x + low.y + low.z + high.x + high.y + high.z))
-            throw std::runtime_error("No occupied support; lower opacity or check the source");
-        CollisionBricks result;
-        auto& v = result.volume;
-        v.settings = settings;
-        v.origin = glm::floor((low - settings.voxel_size * .5f) / settings.voxel_size) * settings.voxel_size - 2 * settings.voxel_size;
-        const auto dimensions = glm::ceil((glm::dvec3(high) + settings.voxel_size * .5 - glm::dvec3(v.origin)) / double(settings.voxel_size)) + 3.;
-        if (glm::any(glm::lessThan(dimensions, glm::dvec3(1))) || glm::any(glm::greaterThan(dimensions, glm::dvec3(1 << 21))) || !std::isfinite(dimensions.x + dimensions.y + dimensions.z))
-            throw std::runtime_error("Collision bounds exceed coordinate limits; increase cell size or remove remote outliers");
-        v.dimensions = glm::ivec3(dimensions);
-        LOG_INFO("Collision grid %d x %d x %d at %g scene units; sparse storage grows on demand", v.dimensions.x, v.dimensions.y, v.dimensions.z, settings.voxel_size);
-        v.edge = std::max(4u, std::bit_ceil(unsigned(std::max({v.dimensions.x, v.dimensions.y, v.dimensions.z}))));
-        for (int a = 0; a < 3; ++a) {
-            grid.origin[a] = v.origin[a];
-            grid.dimensions[a] = v.dimensions[a];
-        }
-        grid_indices<<<blocks(total), 256, 0, stream>>>(gs.data, bounds.ptr<float>(), nullptr, total, grid);
-        LFS_CUDA_LAUNCH_CHECK(stream, "collision.grid_indices");
-        build_bvh();
-        bounds = {};
-        keep = {};
-        errors = {};
-        struct Frame {
-            Buffer<Region> regions;
-            uint32_t count = 0, offset = 0;
-            int edge = 0;
-        };
-        std::vector<Frame> frames;
-        for (int n = v.edge;; n /= 2) {
-            frames.emplace_back();
-            frames.back().edge = n;
-            if (n == 4)
-                break;
-        }
-        frames[0].regions.reserve(1);
-        frames[0].count = 1;
-        LFS_CUDA_CHECK(cudaMemsetAsync(frames[0].regions.data, 0, sizeof(Region), stream));
-        Buffer<uint32_t> count, solid_count;
-        count.reserve(1);
-        solid_count.reserve(1);
-        Buffer<CollisionBrick> output;
-        std::vector<Buffer<CollisionBrick>> chunks;
-        size_t result_size = 0;
-        auto append = [&](uint32_t n) {
-            if (n > output.capacity)
-                throw std::runtime_error("Collision dispatch exceeded its output buffer");
-            const auto bytes = collisionOutputBytes(result_size, n);
-            if (!n)
-                return;
-            chunks.emplace_back();
-            chunks.back().reserve(n);
-            LFS_CUDA_CHECK(cudaMemcpyAsync(chunks.back().data, output.data, size_t(n) * sizeof(CollisionBrick), cudaMemcpyDeviceToDevice, stream));
-            result_size = bytes / sizeof(CollisionBrick);
-        };
-        const double volume = double(v.edge) * v.edge * v.edge;
-        double completed = 0;
-        int depth = 0;
-        while (depth >= 0) {
-            reportProgress(stop, progress, .2f + .72f * float(std::clamp(completed / volume, 0., 1.)), "collision.voxelize");
-            auto& frame = frames[depth];
-            if (frame.offset == frame.count) {
-                --depth;
-                continue;
-            }
-            uint32_t occupied = 0;
-            if (frame.edge > 4) {
-                const auto batch = std::min(frame.count - frame.offset, max_regions / 8);
-                auto& child = frames[depth + 1];
-                child.regions.reserve(size_t(batch) * 8);
-                output.reserve(size_t(batch) * 8);
-                LFS_CUDA_CHECK(cudaMemsetAsync(count.data, 0, 4, stream));
-                LFS_CUDA_CHECK(cudaMemsetAsync(solid_count.data, 0, 4, stream));
-                split_regions<<<(uint64_t(batch) * 8 + 127) / 128, 128, 0, stream>>>(frame.regions.data, frame.offset, batch, frame.edge, grid, gs.data, bvh.data, child.regions.data, count.data, output.data, solid_count.data);
-                LFS_CUDA_LAUNCH_CHECK(stream, "collision.split_regions");
-                LFS_CUDA_CHECK(cudaMemcpyAsync(&child.count, count.data, 4, cudaMemcpyDeviceToHost, stream));
-                LFS_CUDA_CHECK(cudaMemcpyAsync(&occupied, solid_count.data, 4, cudaMemcpyDeviceToHost, stream));
-                LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
-                append(occupied);
-                const double half = frame.edge / 2;
-                completed += (uint64_t(batch) * 8 - child.count) * half * half * half;
-                frame.offset += batch;
-                child.offset = 0;
-                if (child.count)
-                    ++depth;
-            } else {
-                const auto batch = std::min(frame.count - frame.offset, 65536u);
-                output.reserve(batch);
-                LFS_CUDA_CHECK(cudaMemsetAsync(count.data, 0, 4, stream));
-                evaluate_bricks<<<batch, 64, 0, stream>>>(frame.regions.data, frame.offset, grid, gs.data, bvh.data, output.data, count.data);
-                LFS_CUDA_LAUNCH_CHECK(stream, "collision.evaluate_bricks");
-                LFS_CUDA_CHECK(cudaMemcpyAsync(&occupied, count.data, 4, cudaMemcpyDeviceToHost, stream));
-                LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
-                append(occupied);
-                completed += batch * double(frame.edge) * frame.edge * frame.edge;
-                frame.offset += batch;
-            }
-        }
-        reportProgress(stop, progress, .93f, "collision.sort");
-        frames.clear();
-        gs = {};
-        bvh = {};
-        output = {};
-        Buffer<CollisionBrick> compact;
-        LOG_INFO("Collision generated %zu sparse records", result_size);
-        const auto sort_bytes = queryCollisionSortWorkspaceBytes(result_size);
-        const auto compact_bytes = collisionOutputBytes(result_size);
-        // Chunks coexist with the compact copy, then are released before sorting.
-        // Charge the larger additional phase, including reclaimable allocator pools.
-        if (!MemoryPressureCoordinator::instance().preflight({.operation = "Collision compaction",
-                                                              .temporary_device_bytes = std::max(compact_bytes, sort_bytes)})
-                 .ok)
-            throw std::runtime_error("Insufficient GPU memory to compact collision; free memory and retry");
-        compact.reserve(result_size);
-        offset = 0;
-        for (auto& chunk : chunks) {
-            LFS_CUDA_CHECK(cudaMemcpyAsync(compact.data + offset, chunk.data, chunk.capacity * sizeof(CollisionBrick), cudaMemcpyDeviceToDevice, stream));
-            offset += chunk.capacity;
-            chunk = {};
-        }
-        if (result_size)
-            tensor_ops::run_cub_operation("collision.sort_bricks", stream, [&](void* p, size_t& bytes) { return cub::DeviceMergeSort::SortKeys(p, bytes, compact.data, result_size, BrickLess{}, stream); });
-        result.bricks.resize(result_size);
-        if (result_size)
-            LFS_CUDA_CHECK(cudaMemcpyAsync(result.bricks.data(), compact.data, result_size * sizeof(CollisionBrick), cudaMemcpyDeviceToHost, stream));
-        LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
-        return result;
+    void sortCollisionSources(const uint64_t* keys, uint64_t* sorted_keys, const uint32_t* indices, uint32_t* sorted_indices, size_t count, cudaStream_t stream) {
+        tensor_ops::run_cub_operation("collision.sort_sources", stream, [&](void* p, size_t& bytes) { return cub::DeviceRadixSort::SortPairs(p, bytes, keys, sorted_keys, indices, sorted_indices, count, 0, 63, stream); });
+    }
+    void sortCollisionBricks(CollisionBrick* records, size_t count, cudaStream_t stream) {
+        tensor_ops::run_cub_operation("collision.sort_bricks", stream, [&](void* p, size_t& bytes) { return cub::DeviceMergeSort::SortKeys(p, bytes, records, count, BrickLess{}, stream); });
     }
 } // namespace lfs::core::cuda

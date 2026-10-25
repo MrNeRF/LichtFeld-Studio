@@ -1,13 +1,10 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "collision_voxelization_kernels.hpp"
 #include "core/checked_arithmetic.hpp"
 #include "core/collision.hpp"
 namespace lfs::core::cuda {
-    struct CollisionBrick {
-        static constexpr uint64_t key_mask = (uint64_t(1) << 57) - 1;
-        uint64_t morton, mask;
-    };
     inline size_t collisionOutputBytes(size_t count, size_t additional = 0) {
         const auto total = saturating_add(count, additional);
         if (total > std::vector<CollisionBrick>().max_size())
@@ -20,5 +17,5 @@ namespace lfs::core::cuda {
         CollisionVolume volume;
         std::vector<CollisionBrick> bricks;
     };
-    CollisionBricks voxelizeCollision(std::span<const CollisionSource>, CollisionSettings, std::stop_token, ProgressCallback, const std::function<void(float)>&);
+    CollisionBricks voxelizeCollision(std::span<const CollisionSource>, CollisionSettings, std::stop_token, ProgressCallback, const std::function<void(float)>&, const std::function<void(uint64_t)>&);
 } // namespace lfs::core::cuda

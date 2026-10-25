@@ -10,40 +10,63 @@
 #include <cuda_runtime.h>
 namespace lfs::core {
     size_t cuda::collisionSortWorkspaceBytes(size_t count) {
+        (void)collisionOutputBytes(count);
         return queryCollisionSortWorkspaceBytes(count);
     }
     void CollisionSettings::validate() const {
         if (!std::isfinite(voxel_size) || voxel_size <= 0 || !std::isfinite(opacity) || opacity < 0 || opacity >= 1 ||
             !std::isfinite(max_gaussian_area) || max_gaussian_area < 0)
             throw std::invalid_argument("Cell size must be positive, opacity must be in [0,1), and maximum area must be nonnegative");
+        if (!cleanup && max_gaussian_area > 0)
+            throw std::invalid_argument("Maximum Gaussian area requires cleanup filtering");
     }
     CollisionSource captureCollisionSource(const SplatData& data, const glm::mat4& transform) {
+        struct ReadFence {
+            std::vector<cudaStream_t> streams;
+            cudaError_t finish() noexcept {
+                auto first_error = cudaSuccess;
+                for (const auto stream : streams) {
+                    const auto status = cudaStreamSynchronize(stream);
+                    if (status != cudaSuccess) {
+                        if (first_error == cudaSuccess)
+                            first_error = status;
+                        ensure_cuda_success(status, "cudaStreamSynchronize(collision capture)",
+                                            "Finishing source reads before releasing the caller's writer exclusion",
+                                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    }
+                }
+                streams.clear();
+                return first_error;
+            }
+            ~ReadFence() { (void)finish(); }
+        } fence;
+        fence.streams.reserve(6);
+        for (const auto* tensor : {&data.means_raw(), &data.scaling_raw(), &data.rotation_raw(),
+                                   &data.opacity_raw(), &data.deleted()})
+            if (tensor->is_valid() && tensor->device() == Device::CUDA &&
+                std::find(fence.streams.begin(), fence.streams.end(), tensor->stream()) == fence.streams.end())
+                fence.streams.push_back(tensor->stream());
+        if (!fence.streams.empty() &&
+            std::find(fence.streams.begin(), fence.streams.end(), getCurrentCUDAStream()) == fence.streams.end())
+            fence.streams.push_back(getCurrentCUDAStream());
+        // Clones use the allocation/current stream; activations and deferred inputs
+        // may use their home streams. Fence all of them, including partial LOD work.
+        CollisionSource source;
         if (data.lod_tree && data.lod_tree->has_tree()) {
             if (data.size() != data.lod_tree->total_nodes())
                 throw std::runtime_error("Collision requires resident original LOD leaves; load the complete model first");
             auto leaves = make_lod_leaf_view(data);
-            return captureCollisionSource(*leaves, transform);
-        }
-        const bool gpu = data.means_raw().device() == Device::CUDA;
-        struct ReadFence {
-            bool gpu;
-            ~ReadFence() {
-                if (gpu)
-                    (void)cudaDeviceSynchronize();
-            }
-        } fence{gpu}; // Also finish pending reads before exceptional writer unlock.
-        CollisionSource source{data.means_raw().to(DataType::Float32).clone(), data.get_scaling().to(DataType::Float32),
-                               data.get_rotation().to(DataType::Float32), data.get_opacity().to(DataType::Float32),
-                               data.deleted().is_valid() ? data.deleted().clone() : Tensor{}, transform};
+            source = captureCollisionSource(*leaves, transform);
+        } else
+            source = {data.means_raw().to(DataType::Float32), data.get_scaling().to(DataType::Float32),
+                      data.get_rotation().to(DataType::Float32), data.get_opacity().to(DataType::Float32),
+                      data.deleted().is_valid() ? data.deleted().clone() : Tensor{}, transform};
         // Materialize lazy activations while the caller still excludes source writers.
         for (const auto* tensor : {&source.means, &source.scales, &source.rotations, &source.opacity})
             (void)tensor->data_ptr();
-        if (gpu) {
-            const auto status = cudaDeviceSynchronize();
-            if (status != cudaSuccess)
-                throw std::runtime_error(std::string("Collision capture failed: ") + cudaGetErrorString(status));
-            fence.gpu = false;
-        }
+        const auto status = fence.finish();
+        if (status != cudaSuccess)
+            throw std::runtime_error(std::string("Collision capture failed: ") + cudaGetErrorString(status));
         return source;
     }
     bool CollisionVolume::occupied(glm::ivec3 p) const {
@@ -111,9 +134,9 @@ namespace lfs::core {
             throw std::invalid_argument("Collision occupancy count or topology is invalid");
     }
     CollisionVolume generateCollision(std::span<const CollisionSource> sources, CollisionSettings settings,
-                                      std::stop_token stop, ProgressCallback progress, std::function<void(float)> resolution) {
+                                      std::stop_token stop, ProgressCallback progress, std::function<void(float)> resolution, std::function<void(uint64_t)> mixed_blocks) {
         settings.validate();
-        auto output = cuda::voxelizeCollision(sources, settings, stop, progress, resolution);
+        auto output = cuda::voxelizeCollision(sources, settings, stop, progress, resolution, mixed_blocks);
         auto& v = output.volume;
         auto& bricks = output.bricks;
         v.words.assign(1, 0);
