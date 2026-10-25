@@ -1173,6 +1173,7 @@ set(TEST_FILES
     test_rendered_structure.cpp
     test_gradient_residual.cpp
     test_fused_reg_loss.cpp
+    test_opacity_gradients.cpp
     test_fused_bg_blend.cpp
     test_photometric_hygiene.cpp
     test_photometric_ops.cpp
@@ -2871,3 +2872,4 @@ if(LFS_TENSOR_VULKAN AND BUILD_TESTS)
     endif()
     add_test(NAME GpuPushConstantContracts COMMAND gpu_push_constant_contracts)
 endif()
+
