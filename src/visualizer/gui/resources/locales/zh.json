@@ -1592,6 +1592,8 @@
     "overwrite": "覆盖",
     "invalid_name": "请输入有效的项目名称。",
     "source_invalid": "来源不是受支持的数据集或 splat 文件。",
+    "no_images": "未找到图像。请在高级中选择图像文件夹。",
+    "choose_images": "选择图像文件夹",
     "advanced": "高级",
     "embed_dataset": "将数据集复制到项目",
     "embed_dataset_description": "保留与原始文件逐字节相同的数据集文件。",

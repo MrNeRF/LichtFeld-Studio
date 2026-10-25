@@ -1603,6 +1603,8 @@
     "overwrite": "Overwrite",
     "invalid_name": "Enter a valid project name.",
     "source_invalid": "Source is not a supported dataset or splat file.",
+    "no_images": "No images found. Choose the images folder under Advanced.",
+    "choose_images": "Choose images folder",
     "advanced": "Advanced",
     "embed_dataset": "Copy dataset into project",
     "embed_dataset_description": "Keep byte-identical dataset files with this project.",

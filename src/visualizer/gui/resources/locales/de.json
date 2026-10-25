@@ -1592,6 +1592,8 @@
     "overwrite": "Überschreiben",
     "invalid_name": "Geben Sie einen gültigen Projektnamen ein.",
     "source_invalid": "Die Quelle ist kein unterstützter Datensatz und keine unterstützte Splat-Datei.",
+    "no_images": "Keine Bilder gefunden. Wählen Sie den Bilderordner unter Erweitert.",
+    "choose_images": "Bilderordner wählen",
     "advanced": "Erweitert",
     "embed_dataset": "Datensatz ins Projekt kopieren",
     "embed_dataset_description": "Byte-identische Datensatzdateien mit diesem Projekt speichern.",

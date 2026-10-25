@@ -3968,12 +3968,14 @@ Example:
 
     m.def(
         "detect_dataset_info",
-        [](const std::string& path) {
+        [](const std::string& path, const std::optional<std::string>& images_path) {
             const auto native_path = python_utf8_path(path);
+            const auto native_images = images_path ? python_utf8_path(*images_path) : std::filesystem::path{};
             nb::gil_scoped_release release;
-            return lfs::io::detect_dataset_info(native_path);
+            return lfs::io::detect_dataset_info(native_path, native_images);
         },
-        nb::arg("path"), "Detect dataset information from a directory path");
+        nb::arg("path"), nb::arg("images_path") = nb::none(),
+        "Detect dataset information from a directory path; images_path replaces the detected images folder");
     m.def(
         "is_dataset_path",
         [](const std::string& path) {

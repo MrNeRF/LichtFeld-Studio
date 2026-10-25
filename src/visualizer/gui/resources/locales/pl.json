@@ -1592,6 +1592,8 @@
     "overwrite": "Nadpisz",
     "invalid_name": "Wprowadź prawidłową nazwę projektu.",
     "source_invalid": "Źródło nie jest obsługiwanym zbiorem danych ani plikiem splat.",
+    "no_images": "Nie znaleziono obrazów. Wybierz folder obrazów w sekcji Zaawansowane.",
+    "choose_images": "Wybierz folder obrazów",
     "advanced": "Zaawansowane",
     "embed_dataset": "Kopiuj zbiór danych do projektu",
     "embed_dataset_description": "Zachowaj pliki zbioru danych identyczne bajt po bajcie z oryginałami.",

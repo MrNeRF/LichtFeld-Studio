@@ -2977,8 +2977,10 @@ def build_splat_lod_hierarchy(source: object | None = None, ratio: float = 0.5, 
     Build a script-side multi-level LOD hierarchy from SplatData or a scene node.
     """
 
-def detect_dataset_info(path: str) -> DatasetInfo:
-    """Detect dataset information from a directory path"""
+def detect_dataset_info(path: str, images_path: str | None = None) -> DatasetInfo:
+    """
+    Detect dataset information from a directory path; images_path replaces the detected images folder
+    """
 
 def is_dataset_path(path: str) -> bool:
     """Check whether a path can be treated as a dataset source"""

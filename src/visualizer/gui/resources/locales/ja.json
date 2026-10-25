@@ -1592,6 +1592,8 @@
     "overwrite": "上書き",
     "invalid_name": "有効なプロジェクト名を入力してください。",
     "source_invalid": "ソースは対応するデータセットまたはスプラットファイルではありません。",
+    "no_images": "画像が見つかりません。詳細設定で画像フォルダーを選択してください。",
+    "choose_images": "画像フォルダーを選択",
     "advanced": "詳細設定",
     "embed_dataset": "データセットをプロジェクトにコピー",
     "embed_dataset_description": "元データとバイト単位で同一のファイルを保存します。",

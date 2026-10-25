@@ -1592,6 +1592,8 @@
     "overwrite": "Écraser",
     "invalid_name": "Saisissez un nom de projet valide.",
     "source_invalid": "La source n'est pas un dataset ni un fichier splat pris en charge.",
+    "no_images": "Aucune image trouvée. Choisissez le dossier d'images dans Avancé.",
+    "choose_images": "Choisir le dossier d'images",
     "advanced": "Avancé",
     "embed_dataset": "Copier le jeu de données dans le projet",
     "embed_dataset_description": "Conserver les fichiers du jeu de données identiques aux originaux.",

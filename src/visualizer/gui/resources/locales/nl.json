@@ -1592,6 +1592,8 @@
     "overwrite": "Overschrijven",
     "invalid_name": "Voer een geldige projectnaam in.",
     "source_invalid": "De bron is geen ondersteunde dataset of splatbestand.",
+    "no_images": "Geen afbeeldingen gevonden. Kies de afbeeldingenmap onder Geavanceerd.",
+    "choose_images": "Afbeeldingenmap kiezen",
     "advanced": "Geavanceerd",
     "embed_dataset": "Dataset naar project kopiëren",
     "embed_dataset_description": "Byte-identieke datasetbestanden bij dit project bewaren.",

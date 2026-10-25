@@ -1592,6 +1592,8 @@
     "overwrite": "덮어쓰기",
     "invalid_name": "올바른 프로젝트 이름을 입력하세요.",
     "source_invalid": "소스가 지원되는 데이터셋 또는 스플랫 파일이 아닙니다.",
+    "no_images": "이미지를 찾을 수 없습니다. 고급에서 이미지 폴더를 선택하세요.",
+    "choose_images": "이미지 폴더 선택",
     "advanced": "고급",
     "embed_dataset": "프로젝트에 데이터셋 복사",
     "embed_dataset_description": "원본과 바이트 단위로 동일한 데이터셋 파일을 보관합니다.",

@@ -1605,6 +1605,8 @@
     "overwrite": "Sovrascrivi",
     "invalid_name": "Inserisci un nome progetto valido.",
     "source_invalid": "L'origine non è un dataset o un file splat supportato.",
+    "no_images": "Nessuna immagine trovata. Scegli la cartella delle immagini in Avanzate.",
+    "choose_images": "Scegli cartella immagini",
     "advanced": "Avanzate",
     "embed_dataset": "Copia dataset nel progetto",
     "embed_dataset_description": "Conserva i file del dataset identici agli originali.",
