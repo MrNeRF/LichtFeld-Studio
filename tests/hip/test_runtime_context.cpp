@@ -134,12 +134,16 @@ namespace {
     }
 } // namespace
 
+#ifdef _WIN32
+int wmain(int argc, wchar_t** argv) {
+#else
 int main(int argc, char** argv) {
+#endif
     try {
         if (argc != 3 && argc != 4)
             throw std::runtime_error("Expected explicit module and SDK directory");
-        RuntimeDirectory directory(argv[2]);
-        const auto path = std::filesystem::u8path(argv[1]);
+        RuntimeDirectory directory{std::filesystem::path(argv[2])};
+        const auto path = std::filesystem::path(argv[1]);
         auto module = std::make_shared<HipRuntimeModule>(path);
         HipRuntimeContext context(module, 0);
         native_math(context);

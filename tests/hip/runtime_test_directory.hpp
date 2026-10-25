@@ -17,10 +17,10 @@ struct RuntimeDirectory {
 #ifdef _WIN32
     DLL_DIRECTORY_COOKIE cookie = nullptr;
 #endif
-    explicit RuntimeDirectory(const char* path) {
+    explicit RuntimeDirectory(const std::filesystem::path& path) {
 #ifdef _WIN32
-        if (path && *path) {
-            cookie = AddDllDirectory(std::filesystem::u8path(path).c_str());
+        if (!path.empty()) {
+            cookie = AddDllDirectory(path.c_str());
             if (!cookie)
                 throw std::runtime_error("Cannot add explicit test SDK directory");
         }
