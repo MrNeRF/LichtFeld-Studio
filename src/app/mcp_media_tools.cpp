@@ -320,7 +320,7 @@ namespace lfs::app {
     void register_media_tools(mcp::ToolRegistry& registry) {
         registry.register_tool(mcp::McpTool{
                                    .name = "media.source_exif",
-                                   .description = "Read original JPEG/PNG/primary HEIF EXIF, or TIFF decoded tags and observed source ranges without decoding pixels; binary values use hex and MakerNotes remain opaque",
+                                   .description = "Read original JPEG/PNG/primary HEIF EXIF, provider-decoded JPEG XL EXIF, or TIFF decoded tags and observed source ranges without decoding pixels; binary values use hex and MakerNotes remain opaque",
                                    .input_schema = {.type = "object", .properties = {{"input", {{"type", "string"}}}}, .required = {"input"}},
                                    .metadata = {.category = "media", .kind = "query", .runtime = "process"}},
                                [](const json& args) {

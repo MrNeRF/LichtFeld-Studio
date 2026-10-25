@@ -575,15 +575,42 @@ namespace lfs::core::image_codecs {
         return signature == JXL_SIG_CODESTREAM || signature == JXL_SIG_CONTAINER;
     }
 
-    SourceXmp read_jxl_xmp(const std::filesystem::path& path, const XmpLimits& limits) {
-        SourceXmp result;
-        result.scope = "jxl-container-xml";
-        result.status = MetadataStatus::Absent;
+    namespace {
+        enum class MetadataCarrier { None,
+                                     Exif,
+                                     Xml };
+    } // namespace
+
+    static SourceImageMetadata scan_jxl_metadata(Input& input, const MetadataLimits& exif_limits, const XmpLimits* xml_limits,
+                                                 bool collect_exif, MetadataCarrier& damaged) {
+        SourceImageMetadata result;
+        result.exif.scope = "jxl-container-exif";
+        result.exif.status = MetadataStatus::Absent;
+        if (xml_limits) {
+            result.xmp.scope = "jxl-container-xml";
+            result.xmp.status = MetadataStatus::Absent;
+        }
+        bool exif_stopped = !collect_exif, xml_stopped = !xml_limits;
         const auto failure = [&](MetadataStatus status, const char* message) {
-            result.status = status;
-            result.diagnostic = message;
+            // A carrier stopped at its own quota retains that completed snapshot.
+            if (!exif_stopped) {
+                result.exif.status = status;
+                result.exif.diagnostic = message;
+            }
+            if (!xml_stopped) {
+                result.xmp.status = status;
+                result.xmp.diagnostic = message;
+            }
         };
-        Input input(path);
+        if (collect_exif && (!exif_limits.block_bytes || exif_limits.block_bytes > 16u << 20 ||
+                             !exif_limits.total_bytes || exif_limits.total_bytes > 64u << 20 ||
+                             !exif_limits.blocks || exif_limits.blocks > 4096)) {
+            result.exif.status = MetadataStatus::Limited;
+            result.exif.diagnostic = "Invalid JPEG XL EXIF collection limits";
+            exif_stopped = true;
+            if (xml_stopped)
+                return result;
+        }
         if (!input.opened) {
             failure(MetadataStatus::IoError, "JXL: cannot open metadata source");
             return result;
@@ -612,28 +639,61 @@ namespace lfs::core::image_codecs {
             failure(MetadataStatus::Limited, "JXL: metadata decoder allocation limit exhausted");
             return result;
         }
-        if (JxlDecoderSubscribeEvents(decoder.get(), JXL_DEC_BOX) != JXL_DEC_SUCCESS) {
+        if (JxlDecoderSubscribeEvents(decoder.get(), JXL_DEC_BOX | JXL_DEC_BOX_COMPLETE) != JXL_DEC_SUCCESS) {
             failure(MetadataStatus::Malformed, "JXL: cannot configure box collection");
             return result;
         }
         // Configure before processing: libjxl starts each box decoder before emitting its box event.
         const bool decompress = JxlDecoderSetDecompressBoxes(decoder.get(), JXL_TRUE) == JXL_DEC_SUCCESS;
-        size_t retained = 0, boxes = 0, budget = 0, written = 0, supplied = 0;
-        bool active = false, compressed = false;
+        using Carrier = MetadataCarrier;
+        Carrier active = Carrier::None;
+        size_t exif_retained = 0, xml_retained = 0, boxes = 0, budget = 0, written = 0, supplied = 0;
+        bool compressed = false;
         uint64_t ordinal = 0;
+        const auto carrier_failure = [&](Carrier carrier, MetadataStatus status, const char* message, bool stop) {
+            if (carrier == Carrier::Exif) {
+                result.exif.status = status;
+                result.exif.diagnostic = message;
+                exif_stopped = stop;
+            } else {
+                result.xmp.status = status;
+                result.xmp.diagnostic = message;
+                xml_stopped = stop;
+            }
+        };
         const auto finish = [&] {
-            if (!active)
-                return;
             pending.resize(written);
-            XmpBlock block;
-            block.envelope = XmpEnvelope::JxlXml;
-            block.jxl_box = JxlXmpBox{ordinal, compressed};
-            block.bytes = std::move(pending);
-            retained += written;
-            result.blocks.push_back(std::move(block));
-            if (result.status == MetadataStatus::Absent)
-                result.status = MetadataStatus::Collected;
-            active = false;
+            if (active == Carrier::Exif) {
+                ExifBlock block;
+                block.envelope = ExifEnvelope::JxlOffset;
+                block.jxl_box = JxlBox{ordinal, compressed};
+                block.bytes = std::move(pending);
+                exif_retained += written;
+                result.exif.blocks.push_back(std::move(block));
+                if (result.exif.status == MetadataStatus::Absent)
+                    result.exif.status = MetadataStatus::Collected;
+            } else {
+                XmpBlock block;
+                block.envelope = XmpEnvelope::JxlXml;
+                block.jxl_box = JxlBox{ordinal, compressed};
+                block.bytes = std::move(pending);
+                xml_retained += written;
+                result.xmp.blocks.push_back(std::move(block));
+                if (result.xmp.status == MetadataStatus::Absent)
+                    result.xmp.status = MetadataStatus::Collected;
+            }
+            active = Carrier::None;
+        };
+        const auto release_output = [&] {
+            const auto unused = JxlDecoderReleaseBoxBuffer(decoder.get());
+            written += supplied - unused;
+            supplied = 0;
+            if (written <= budget)
+                return true;
+            carrier_failure(active, MetadataStatus::Limited,
+                            active == Carrier::Exif ? "JXL: EXIF decoded-byte budget exhausted" : "JXL: XMP decoded-byte budget exhausted", true);
+            active = Carrier::None;
+            return false;
         };
         for (;;) {
             const auto status = JxlDecoderProcessInput(decoder.get());
@@ -644,23 +704,22 @@ namespace lfs::core::image_codecs {
             if (status == JXL_DEC_NEED_MORE_INPUT) {
                 std::string error;
                 if (!input.refill(decoder.get(), 4u << 20, error)) {
-                    result.status = input.file.bad() ? MetadataStatus::IoError : error == "JXL: buffered input byte limit exhausted" ? MetadataStatus::Limited
-                                                                                                                                     : MetadataStatus::Malformed;
-                    result.diagnostic = std::move(error);
+                    failure(input.file.bad() ? MetadataStatus::IoError : error == "JXL: buffered input byte limit exhausted" ? MetadataStatus::Limited
+                                                                                                                             : MetadataStatus::Malformed,
+                            error.c_str());
                     return result;
                 }
-            } else if (status == JXL_DEC_BOX || status == JXL_DEC_SUCCESS) {
-                if (active) {
-                    const auto unused = JxlDecoderReleaseBoxBuffer(decoder.get());
-                    written += supplied - unused;
-                    supplied = 0;
-                    if (written > budget) {
-                        failure(MetadataStatus::Limited, "JXL: XMP decoded-byte budget exhausted");
-                        return result;
-                    }
+            } else if (status == JXL_DEC_BOX_COMPLETE) {
+                // Commit before parsing the next header: it may be malformed.
+                // Completion events are not new boxes and must not change ordinals.
+                if (active != Carrier::None && release_output())
                     finish();
-                }
-                if (status == JXL_DEC_SUCCESS)
+                if (exif_stopped && xml_stopped)
+                    return result;
+            } else if (status == JXL_DEC_BOX || status == JXL_DEC_SUCCESS) {
+                if (active != Carrier::None && release_output())
+                    finish();
+                if (status == JXL_DEC_SUCCESS || (exif_stopped && xml_stopped))
                     return result;
                 if (boxes++ >= 4096) {
                     failure(MetadataStatus::Limited, "JXL: metadata box enumeration limit exhausted");
@@ -672,29 +731,40 @@ namespace lfs::core::image_codecs {
                     failure(MetadataStatus::Malformed, "JXL: invalid metadata box type");
                     return result;
                 }
-                if (std::memcmp(type, "xml ", 4))
+                const Carrier carrier = !std::memcmp(type, "Exif", 4) ? Carrier::Exif : !std::memcmp(type, "xml ", 4) ? Carrier::Xml
+                                                                                                                      : Carrier::None;
+                if (carrier == Carrier::None || (carrier == Carrier::Exif ? exif_stopped : xml_stopped))
                     continue;
-                if (result.blocks.size() >= limits.blocks) {
-                    failure(MetadataStatus::Limited, "JXL: XMP block count budget exhausted");
-                    return result;
+                const bool exif = carrier == Carrier::Exif;
+                const auto count_limit = exif ? exif_limits.blocks : xml_limits->blocks;
+                if ((exif ? result.exif.blocks.size() : result.xmp.blocks.size()) >= count_limit) {
+                    carrier_failure(carrier, MetadataStatus::Limited,
+                                    exif ? "JXL: EXIF block count budget exhausted" : "JXL: XMP block count budget exhausted", true);
+                    if (exif_stopped && xml_stopped)
+                        return result;
+                    continue;
                 }
                 compressed = !std::memcmp(raw, "brob", 4);
                 ordinal = boxes - 1;
-                budget = std::min(limits.block_bytes, limits.total_bytes - retained);
-                if (compressed)
-                    budget = std::min(budget, limits.inflated_bytes);
+                budget = exif ? std::min(exif_limits.block_bytes, exif_limits.total_bytes - exif_retained)
+                              : std::min(xml_limits->block_bytes, xml_limits->total_bytes - xml_retained);
+                if (compressed && !exif)
+                    budget = std::min(budget, xml_limits->inflated_bytes);
                 uint64_t contents = 0;
                 if (JxlDecoderGetBoxSizeContents(decoder.get(), &contents) != JXL_DEC_SUCCESS) {
                     failure(MetadataStatus::Malformed, "JXL: invalid metadata box size");
                     return result;
                 }
                 if (!compressed && contents > budget) {
-                    failure(MetadataStatus::Limited, "JXL: XMP collection byte budget exhausted");
+                    carrier_failure(carrier, MetadataStatus::Limited,
+                                    exif ? "JXL: EXIF collection byte budget exhausted" : "JXL: XMP collection byte budget exhausted", false);
                     continue;
                 }
                 if (compressed && !decompress) {
-                    failure(MetadataStatus::Unsupported, "JXL: compressed metadata is unsupported by this provider");
-                    return result;
+                    carrier_failure(carrier, MetadataStatus::Unsupported, "JXL: compressed metadata is unsupported by this provider", true);
+                    if (exif_stopped && xml_stopped)
+                        return result;
+                    continue;
                 }
                 written = 0;
                 pending.resize(std::min(size_t{4096}, compressed ? budget + 1 : static_cast<size_t>(std::min<uint64_t>(contents, budget)) + 1));
@@ -703,13 +773,12 @@ namespace lfs::core::image_codecs {
                     failure(MetadataStatus::Malformed, "JXL: cannot set metadata box buffer");
                     return result;
                 }
-                active = true;
-            } else if (status == JXL_DEC_BOX_NEED_MORE_OUTPUT && active) {
-                const auto unused = JxlDecoderReleaseBoxBuffer(decoder.get());
-                written += supplied - unused;
-                if (written > budget) {
-                    failure(MetadataStatus::Limited, "JXL: XMP decoded-byte budget exhausted");
-                    return result;
+                active = carrier;
+            } else if (status == JXL_DEC_BOX_NEED_MORE_OUTPUT && active != Carrier::None) {
+                if (!release_output()) {
+                    if (exif_stopped && xml_stopped)
+                        return result;
+                    continue;
                 }
                 const auto next = std::min(budget + 1, std::max(pending.size() + 1, pending.size() * 2));
                 pending.resize(next);
@@ -719,10 +788,53 @@ namespace lfs::core::image_codecs {
                     return result;
                 }
             } else {
+                if (status == JXL_DEC_ERROR && active != Carrier::None && compressed) {
+                    carrier_failure(active, MetadataStatus::Malformed, "JXL: invalid or incomplete compressed metadata box", true);
+                    if (active == Carrier::Exif ? !xml_stopped : !exif_stopped)
+                        damaged = active;
+                    return result;
+                }
                 failure(MetadataStatus::Malformed, "JXL: invalid or incomplete metadata container");
                 return result;
             }
         }
+    }
+
+    SourceImageMetadata read_jxl_metadata(const std::filesystem::path& path, const MetadataLimits& exif_limits, const XmpLimits* xml_limits) {
+        Input input(path);
+        const auto encoded_bytes = input.remaining;
+        MetadataCarrier damaged = MetadataCarrier::None;
+        auto result = scan_jxl_metadata(input, exif_limits, xml_limits, true, damaged);
+        if (damaged == MetadataCarrier::None)
+            return result;
+
+        // A fresh decoder can skip the damaged carrier without decompressing it.
+        // Retry only the other carrier, once, with the same limits and open file.
+        input.file.clear();
+        input.file.seekg(0);
+        if (!input.file) {
+            if (damaged == MetadataCarrier::Exif) {
+                result.xmp.status = MetadataStatus::IoError;
+                result.xmp.diagnostic = "JXL: cannot rewind metadata source";
+            } else {
+                result.exif.status = MetadataStatus::IoError;
+                result.exif.diagnostic = "JXL: cannot rewind metadata source";
+            }
+            return result;
+        }
+        input.remaining = encoded_bytes;
+        input.window_size = 0;
+        input.supplied = false;
+        MetadataCarrier ignored = MetadataCarrier::None;
+        if (damaged == MetadataCarrier::Exif) {
+            // Release the superseded payloads before collecting replacements.
+            result.xmp = {};
+            result.xmp = scan_jxl_metadata(input, exif_limits, xml_limits, false, ignored).xmp;
+        } else {
+            result.exif = {};
+            result.exif = scan_jxl_metadata(input, exif_limits, nullptr, true, ignored).exif;
+        }
+        return result;
     }
 
     uint32_t jxl_encoder_version() { return JxlEncoderVersion(); }

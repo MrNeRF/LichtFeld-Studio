@@ -60,6 +60,7 @@ namespace lfs::media::json_detail {
         case ExifEnvelope::JpegApp1: return "jpeg_app1";
         case ExifEnvelope::HeifOffset: return "heif_offset";
         case ExifEnvelope::PngExif: return "png_exif";
+        case ExifEnvelope::JxlOffset: return "jxl_offset";
         default: return "unknown";
         }
     }
@@ -73,6 +74,10 @@ namespace lfs::media::json_detail {
                       {"metadata_item", optional(block.metadata_item)},
                       {"bytes", hexBytes(block.bytes)},
                       {"interpretation", nullptr}};
+            if (block.jxl_box) {
+                item["representation"] = "libjxl_decoded_bytes";
+                item["jxl_box"] = {{"ordinal", block.jxl_box->ordinal}, {"brotli_compressed", block.jxl_box->brotli_compressed}};
+            }
             if (i < description.interpretations.size()) {
                 const auto& parsed = description.interpretations[i];
                 json interpretation{{"status", exifParseStatus(parsed.status)}, {"diagnostic", parsed.diagnostic}, {"entries", json::array()}};
