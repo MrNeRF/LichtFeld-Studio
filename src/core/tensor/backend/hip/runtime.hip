@@ -59,6 +59,10 @@ namespace {
             throw HipFailure(status);
     }
 
+    // Call only after validating both ranges against their owning buffers.
+    bool views_overlap(LfsHipView a, size_t an, LfsHipView b, size_t bn) {
+        return an && bn && a.buffer == b.buffer && a.offset < b.offset + bn && b.offset < a.offset + an;
+    }
     template <class F>
     int boundary(LfsHipError* error, F&& function) noexcept {
         if (error)

@@ -245,6 +245,22 @@ class TensorOperations(native.RuntimeContract):
             self.checked("memory_info", context, c.byref(info))
             self.assertEqual(info.workspace, 0)
 
+    def test_byte_scalar_cast_matches_typed_comparison(self):
+        with self.resources() as context:
+            for dtype, values, scalar, expected in (
+                (4, [0, 2, 3], 2.5, [1, 0, 0]),
+                (4, [0, 1, 2], 0.5, [0, 0, 0]),
+                (5, [0, 1, 1], 0.5, [1, 0, 0]),
+            ):
+                source = self.tensor(context, values, dtype)
+                output = self.tensor(context, [99] * 3, 4)
+                p = Predicate(c.sizeof(Predicate), self.operations["LessScalar"], dtype, 0, 3, 0, scalar, 0)
+                self.checked("predicate_typed", context, source, View(), output, c.byref(p))
+                self.assertEqual(self.read(context, output, 3, 4), expected)
+            source = self.tensor(context, [0, 1, 2], 4)
+            self.checked("boolean_pointwise", context, self.operations["EqualScalar"], source, View(), output, 3, 0.5)
+            self.assertEqual(self.read(context, output, 3, 4), [1, 0, 0])
+
     def test_integer_precision_predicates_and_boolean_masks(self):
         with self.resources() as context:
             for dtype, values in ((2, [-3, 0, 7]), (3, [2**53 + 1, 2**53 + 2, -2**53 - 1]), (6, [0, 2**31, 2**32 - 1]), (4, [0, 127, 255])):
@@ -357,6 +373,61 @@ class TensorOperations(native.RuntimeContract):
                 self.assertEqual(self.read(context, indices, len(bits), 3), expected)
                 self.assertEqual(self.read(context, source, len(bits), 6), [bits[i] for i in expected])
 
+    def test_segmented_sort_orders_special_values_stably(self):
+        with self.resources() as context:
+            values = [float("nan"), -float("inf"), -0.0, 0.0, float("inf"), 3.0, -2.0] * 151
+            for descending in (0, 1):
+                source = self.tensor(context, values * 2)
+                indices = self.tensor(context, [0] * (2 * len(values)), 3)
+                self.checked("sort_pairs", context, source, indices, 2, len(values), 1, descending)
+                key = lambda i: (math.isnan(values[i]), 0 if math.isnan(values[i]) else values[i])
+                expected = sorted(range(len(values)), key=key, reverse=bool(descending))
+                self.assertEqual(self.read(context, indices, 2 * len(values), 3), expected * 2)
+
+    def test_selection_preserves_all_storage_bits(self):
+        with self.resources() as context:
+            for dtype in range(7):
+                values = [0, 1, 0, 1] if dtype == 5 else [0, 3, 0, 7]
+                source = self.tensor(context, values, dtype)
+                mask = self.tensor(context, [0, 1, 0, 1], 4)
+                output = self.tensor(context, [0, 0], dtype)
+                selected = c.c_uint64()
+                self.checked("select", context, source, mask, output, dtype, 0, 4, 2, c.byref(selected))
+                self.assertEqual(self.read(context, output, 2, dtype), [values[1], values[3]])
+            bits = [0xffc12345, 0x80000000, 0x7fc54321, 0]
+            source = self.tensor(context, bits, 6)
+            output = self.tensor(context, [0, 0], 6)
+            mask = self.tensor(context, [1, 1, 0, 0], 4)
+            self.checked("select", context, source, mask, output, 0, 0, 4, 2, c.byref(selected))
+            self.assertEqual(self.read(context, output, 2, 6), bits[:2])
+
+    def test_sparse_selection_retains_no_full_result_scratch(self):
+        with self.resources() as context:
+            size = 100003
+            source = self.tensor(context, [float(i) for i in range(size)])
+            mask = self.tensor(context, [1] + [0] * (size - 2) + [1], 4)
+            output = self.tensor(context, [99, 99])
+            selected = c.c_uint64()
+            self.checked("select", context, source, mask, output, 0, 0, size, 2, c.byref(selected))
+            self.assertEqual(selected.value, 2)
+            self.assertEqual(self.read(context, output, 2), [0, size - 1])
+            info = MemoryInfo()
+            self.checked("memory_info", context, c.byref(info))
+            self.assertLess(info.workspace, size * 4)
+
+    def test_reduction_opcodes_are_shared_across_dtypes(self):
+        with self.resources() as context:
+            for dtype in (1, 2, 3, 4, 6):
+                source = self.tensor(context, [3, 0, 7, 2], dtype)
+                for operation, expected in ((2, 0), (3, 7)):
+                    output = self.tensor(context, [99], dtype)
+                    self.checked("reduce_typed_layout", context, source, output, c.byref(layout([4])), 1, operation, dtype, dtype)
+                    self.assertEqual(self.read(context, output, 1, dtype), [expected])
+                for operation, expected in ((6, 1), (7, 0)):
+                    output = self.tensor(context, [99], 5)
+                    self.checked("reduce_typed_layout", context, source, output, c.byref(layout([4])), 1, operation, dtype, 5)
+                    self.assertEqual(self.read(context, output, 1, 5), [expected])
+
     def test_selection_capacity_and_all_dtype_nonzero(self):
         with self.resources() as context:
             count = c.c_uint64(123)
@@ -421,7 +492,7 @@ class TensorOperations(native.RuntimeContract):
             self.assertTrue(math.isnan(result.value))
             self.reject("reduce_f32", context, empty, 0, 2, c.byref(result))
             shape = layout([2, 0])
-            for operation, expected in ((5, [0, 0]), (6, [1, 1])):
+            for operation, expected in ((6, [0, 0]), (7, [1, 1])):
                 output = self.tensor(context, [99, 99], 5)
                 self.checked("reduce_typed_layout", context, empty, output, c.byref(shape), 2, operation, 5, 5)
                 self.assertEqual(self.read(context, output, 2, 5), expected)

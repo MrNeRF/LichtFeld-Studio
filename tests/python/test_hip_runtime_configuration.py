@@ -95,10 +95,10 @@ class HipConfiguration(unittest.TestCase):
         native = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(native)
         native.options = argparse.Namespace(module=Path("unused-module"), faults=False)
-        for revision in (1, 2):
+        for revision in (1, 2, 3):
             older_module = argparse.Namespace(lfs_hip_runtime_abi=lambda: revision)
             with self.subTest(revision=revision), mock.patch.object(native.c, "CDLL", return_value=older_module):
-                with self.assertRaisesRegex(RuntimeError, f"ABI mismatch: expected 3, got {revision}"):
+                with self.assertRaisesRegex(RuntimeError, f"ABI mismatch: expected 4, got {revision}"):
                     native.RuntimeContract.setUpClass()
 
     def test_abi_only_requires_the_native_module(self):

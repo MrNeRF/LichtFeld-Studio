@@ -11,7 +11,7 @@ import re
 import struct
 import unittest
 
-EXPECTED_ABI = 3
+EXPECTED_ABI = 4
 options = None
 
 
@@ -309,7 +309,7 @@ class RuntimeContract(unittest.TestCase):
                         actual = (c.c_ubyte * len(raw))()
                         self.checked("download", context, buffer, 0, actual, len(actual))
                         decoded = [x[0] for x in struct.iter_unpack("<" + encoding, bytes(actual))]
-                        self.assertEqual(math.copysign(1, decoded[0]), -1 if operation == "Relu" else 1)
+                        self.assertEqual(math.copysign(1, decoded[0]), 1)
                         self.assertTrue(math.isnan(decoded[4]))
                         self.assertEqual(decoded[2], 0 if operation == "Relu" else -1)
                         self.assertEqual(decoded[5], float("inf") if operation == "Relu" else 1)

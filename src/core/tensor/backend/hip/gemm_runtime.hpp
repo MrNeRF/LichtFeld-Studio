@@ -82,8 +82,7 @@ int lfs_hip_gemm_f32(LfsHipContext* context, LfsHipView a, LfsHipView b, LfsHipV
         if (biasn)
             validate(context, bias.buffer, bias.offset, biasn);
         require(a.offset % 4 == 0 && b.offset % 4 == 0 && bias.offset % 4 == 0 && output.offset % 4 == 0, "Misaligned HIP GEMM views");
-        auto overlap = [](LfsHipView x, size_t xn, LfsHipView y, size_t yn) { return xn && yn && x.buffer == y.buffer && x.offset < y.offset + yn && y.offset < x.offset + xn; };
-        require(!overlap(a, an, output, cn) && !overlap(b, bn, output, cn) && !overlap(bias, biasn, output, cn), "HIP GEMM output overlaps input");
+        require(!views_overlap(a, an, output, cn) && !views_overlap(b, bn, output, cn) && !views_overlap(bias, biasn, output, cn), "HIP GEMM output overlaps input");
         DeviceScope device(context->device);
         auto ptr = [](LfsHipView v) { return v.buffer ? reinterpret_cast<float*>(static_cast<char*>(v.buffer->data) + v.offset) : nullptr; };
         for (size_t batch = 0; batch < p->batch; batch += 65535) {
@@ -91,13 +90,13 @@ int lfs_hip_gemm_f32(LfsHipContext* context, LfsHipView a, LfsHipView b, LfsHipV
             auto* aa = an ? ptr(a) + batch * p->m * p->k : nullptr;
             auto* bb = bn ? ptr(b) + batch * p->k * p->n : nullptr;
             auto* cc = ptr(output) + batch * p->m * p->n;
-            const dim3 grid((p->n + 63) / 64, (p->m + 63) / 64, chunk), block(16, 16);
-#define LFS_GEMM_LAUNCH(T, R)                                                                                                                                                                    \
-    do {                                                                                                                                                                                         \
-        if (p->m <= 4)                                                                                                                                                                           \
-            hipLaunchKernelGGL((hip_gemm::skinny<T, R>), dim3((p->n + 255) / 256, p->m, chunk), dim3(256), 0, context->stream, aa, bb, ptr(bias), cc, size_t(p->m), size_t(p->n), size_t(p->k)); \
-        else                                                                                                                                                                                     \
-            hipLaunchKernelGGL((hip_gemm::tiled<T, R>), grid, block, 0, context->stream, aa, bb, ptr(bias), cc, size_t(p->m), size_t(p->n), size_t(p->k));                                       \
+            const dim3 grid(static_cast<unsigned>((p->n + 63) / 64), static_cast<unsigned>((p->m + 63) / 64), static_cast<unsigned>(chunk)), block(16, 16);
+#define LFS_GEMM_LAUNCH(T, R)                                                                                                                                                                                                                                         \
+    do {                                                                                                                                                                                                                                                              \
+        if (p->m <= 4)                                                                                                                                                                                                                                                \
+            hipLaunchKernelGGL((hip_gemm::skinny<T, R>), dim3(static_cast<unsigned>((p->n + 255) / 256), static_cast<unsigned>(p->m), static_cast<unsigned>(chunk)), dim3(256), 0, context->stream, aa, bb, ptr(bias), cc, size_t(p->m), size_t(p->n), size_t(p->k)); \
+        else                                                                                                                                                                                                                                                          \
+            hipLaunchKernelGGL((hip_gemm::tiled<T, R>), grid, block, 0, context->stream, aa, bb, ptr(bias), cc, size_t(p->m), size_t(p->n), size_t(p->k));                                                                                                            \
     } while (false)
             if (p->transpose_b) {
                 if (p->relu)

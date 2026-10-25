@@ -49,9 +49,10 @@ kept alive for the duration of the test. It does not modify PATH or the process-
 DLL search policy. This developer setup does not package SDK libraries. Application
 loading and distribution integration are separate work.
 
-The private C ABI revision is `LFS_HIP_RUNTIME_ABI_VERSION` (currently 3), returned
+The private C ABI revision is `LFS_HIP_RUNTIME_ABI_VERSION` (currently 4), returned
 by `lfs_hip_runtime_abi()`. Revision 1 provided only the foundation; revision 2
-adds owned asynchronous transfers, and revision 3 adds native Tensor operators.
+adds owned asynchronous transfers, revision 3 adds native Tensor operators, and
+revision 4 unifies all reduction operation numbers.
 A future loader must check the exact revision
 before binding revision-specific exports; the boundary is private and does not
 promise binary compatibility between revisions.
@@ -185,7 +186,7 @@ permits identical source/destination as a no-op and rejects shifted overlap.
 The build generates HIP dispatch and a HIP-adapted copy of the shared functors
 inside the build directory. It does not edit CUDA, Metal, Vulkan or host sources.
 The generator rejects malformed, empty or duplicate catalog entries, unsupported
-scalar forms and changes to the explicit ReLU signed-zero adaptation, so future
+scalar forms and changes to the shared device ReLU contract, so future
 catalog changes cannot silently omit an operation. CPU generator regressions
 run without the SDK and are included in the existing Python fast suite.
 
@@ -225,7 +226,15 @@ Floating reductions and indexed atomic addition may differ in rounding order
 between devices. RNG seeds are reproducible for this implementation; no claim
 is made that another backend produces the same seeded sequence.
 
+All reduction entry points use `LfsHipReduceOp`, including typed axis reductions;
+Core Tensor enum ordinals must be mapped explicitly. Byte scalar predicates cast
+the scalar to the input dtype before comparison. HIP device ReLU canonicalizes
+negative zero to positive zero, matching its fused GEMM activation.
+
 Sort preserves input payload bits and stable ordering of NaNs and signed zeros.
+Selection validates output capacity before writing and retains only its counter
+and library workspace, rather than a full input-sized result. DeviceSelect is
+instantiated by storage width; it preserves floating payload bits unchanged.
 
 Temporary workspaces belong to a context. Growth drains previous operations and
 releases disposable storage before replacing it; failed releases retain ownership

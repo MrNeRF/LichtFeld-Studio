@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "predicate_api.h"
 
 namespace {
     // Workspace data are disposable once prior users have drained. Release
@@ -30,7 +31,7 @@ namespace {
         int dimension;
         __host__ __device__ int operator()(int index) const { return index * dimension; }
     };
-    __global__ void sort_pack(const float* input, float* keys, float* originals, int64_t* indices, size_t count, size_t dimension, size_t inner) {
+    __global__ void sort_pack(const float* input, float* keys, float* originals, int64_t* indices, size_t count, size_t dimension, size_t inner, bool descending) {
         for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += size_t(gridDim.x) * blockDim.x) {
             const size_t segment = i / dimension, column = i % dimension;
             const float value = input[(segment / inner * dimension + column) * inner + segment % inner];
@@ -39,14 +40,16 @@ namespace {
             // as equivalent keys. Keep their original bits in separate storage.
             keys[i] = isnan(value) ? __uint_as_float(0x7fc00000u) : value == 0.f ? 0.f
                                                                                  : value;
-            indices[i] = column;
+            if (descending)
+                keys[i] = -keys[i];
+            indices[i] = static_cast<int64_t>(column);
         }
     }
     __global__ void sort_unpack(const float* originals, const int64_t* indices, float* output, int64_t* order, size_t count, size_t dimension, size_t inner) {
         for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += size_t(gridDim.x) * blockDim.x) {
             const size_t segment = i / dimension, column = i % dimension;
             const size_t destination = (segment / inner * dimension + column) * inner + segment % inner;
-            output[destination] = originals[segment * dimension + indices[i]];
+            output[destination] = originals[segment * dimension + static_cast<size_t>(indices[i])];
             order[destination] = indices[i];
         }
     }
@@ -210,6 +213,29 @@ namespace {
                            static_cast<char*>(output.buffer->data) + output.offset, program);
         check(hipGetLastError());
     }
+    void split_reduction_layout(const LfsHipLayout& source, uint32_t axes, LfsHipLayout& kept, LfsHipLayout& reduced) {
+        kept = {};
+        reduced = {};
+        kept.elements = reduced.elements = 1;
+        for (unsigned axis = 0; axis < source.rank; ++axis) {
+            auto& layout = (axes & (1u << axis)) ? reduced : kept;
+            layout.dims[layout.rank] = source.dims[axis];
+            layout.strides[layout.rank++] = source.strides[axis];
+        }
+        const auto product = [](LfsHipLayout& layout) {
+            for (unsigned i = 0; i < layout.rank; ++i)
+                if (!layout.dims[i]) {
+                    layout.elements = 0;
+                    return;
+                }
+            for (unsigned i = 0; i < layout.rank; ++i) {
+                require(layout.dims[i] <= SIZE_MAX / layout.elements, "HIP reduction shape overflow");
+                layout.elements *= layout.dims[i];
+            }
+        };
+        product(kept);
+        product(reduced);
+    }
     constexpr size_t reduction_workspace_floats = LFS_HIP_REDUCTION_WORKSPACE_FLOATS;
     template <unsigned Mode>
     __device__ float combine_reduce(float a, float b) {
@@ -221,6 +247,21 @@ namespace {
             return fmaxf(a, b);
         else
             return a + b;
+    }
+    template <unsigned Mode>
+    __device__ float block_reduce_float(float value, float* shared) {
+        shared[threadIdx.x] = value;
+        __syncthreads();
+        for (unsigned stride = 128; stride; stride >>= 1) {
+            if (threadIdx.x < stride)
+                shared[threadIdx.x] = combine_reduce<Mode>(shared[threadIdx.x], shared[threadIdx.x + stride]);
+            __syncthreads();
+        }
+        return shared[0];
+    }
+    void ensure_reduction_workspace(LfsHipContext* context) {
+        if (!context->reduction_workspace)
+            check(hipMalloc(&context->reduction_workspace, reduction_workspace_floats * sizeof(float)));
     }
     template <unsigned Mode, bool Final>
     __global__ void reduction_kernel(const float* in, size_t count, float* out) {
@@ -238,15 +279,9 @@ namespace {
                 input = isinf(input) ? 1.f : 0.f;
             value = combine_reduce<Mode>(value, input);
         }
-        shared[threadIdx.x] = value;
-        __syncthreads();
-        for (unsigned stride = 128; stride; stride >>= 1) {
-            if (threadIdx.x < stride)
-                shared[threadIdx.x] = combine_reduce<Mode>(shared[threadIdx.x], shared[threadIdx.x + stride]);
-            __syncthreads();
-        }
+        const float result = block_reduce_float<Mode>(value, shared);
         if (!threadIdx.x)
-            out[blockIdx.x] = shared[0];
+            out[blockIdx.x] = result;
     }
     template <unsigned Mode>
     void launch_reduce(LfsHipContext* context, LfsHipView input, size_t count) {
@@ -405,19 +440,13 @@ namespace {
             float value = reduce_identity<Mode>();
             for (size_t r = part * 256 + threadIdx.x; r < reduced.elements; r += size_t(parts) * 256)
                 value = combine_reduce<Mode>(value, float(input[base + layout_index(r, reduced)]));
-            values[threadIdx.x] = value;
-            __syncthreads();
-            for (unsigned width = 128; width; width >>= 1) {
-                if (threadIdx.x < width)
-                    values[threadIdx.x] = combine_reduce<Mode>(values[threadIdx.x], values[threadIdx.x + width]);
-                __syncthreads();
-            }
+            const float result = block_reduce_float<Mode>(value, values);
             if (!threadIdx.x) {
                 if constexpr (std::is_same_v<Out, __half>) {
-                    volatile float scaled = values[0] * scale;
+                    volatile float scaled = result * scale;
                     output[group] = __float2half_rn(scaled);
                 } else
-                    output[group] = values[0] * scale;
+                    output[group] = result * scale;
             }
             __syncthreads();
         }
@@ -573,8 +602,7 @@ namespace {
     }
     template <class Index>
     void check_indices(LfsHipContext* context, LfsHipView indices, LfsHipLayout index_layout, size_t extent) {
-        if (!context->reduction_workspace)
-            check(hipMalloc(&context->reduction_workspace, reduction_workspace_floats * sizeof(float)));
+        ensure_reduction_workspace(context);
         auto* flag = reinterpret_cast<uint32_t*>(context->reduction_workspace + 4096);
         check(hipMemsetAsync(flag, 0, sizeof(uint32_t), context->stream));
         hipLaunchKernelGGL((validate_strided_indices<Index>), dim3(blocks(index_layout.elements)), dim3(256), 0, context->stream,
@@ -759,37 +787,96 @@ namespace {
     struct NonzeroFlag {
         __host__ __device__ uint8_t operator()(T value) const { return value != T(0); }
     };
+    struct SelectionFlag {
+        const void* data;
+        uint32_t dtype;
+        __host__ __device__ uint8_t operator()(int64_t index) const {
+            switch (dtype) {
+            case LFS_HIP_F32: return static_cast<const float*>(data)[index] != 0;
+            case LFS_HIP_F16: return static_cast<const __half*>(data)[index] != __half(0);
+            case LFS_HIP_I32: return static_cast<const int32_t*>(data)[index] != 0;
+            case LFS_HIP_I64: return static_cast<const int64_t*>(data)[index] != 0;
+            case LFS_HIP_U32: return static_cast<const uint32_t*>(data)[index] != 0;
+            default: return static_cast<const uint8_t*>(data)[index] != 0;
+            }
+        }
+    };
+    template <class T>
+    struct SelectionValue {
+        const uint8_t* data;
+        __host__ __device__ T operator()(int64_t index) const {
+            T result;
+            if (data)
+                __builtin_memcpy(&result, data + size_t(index) * sizeof(T), sizeof(T));
+            else
+                result = static_cast<T>(index);
+            return result;
+        }
+    };
+    template <class Flags>
+    __global__ void selection_count(Flags flags, size_t count, int* total) {
+        unsigned local = 0;
+        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += size_t(gridDim.x) * blockDim.x)
+            local += flags[static_cast<int64_t>(i)] != 0;
+        __shared__ unsigned partial[256];
+        partial[threadIdx.x] = local;
+        __syncthreads();
+        for (unsigned offset = 128; offset; offset >>= 1) {
+            if (threadIdx.x < offset)
+                partial[threadIdx.x] += partial[threadIdx.x + offset];
+            __syncthreads();
+        }
+        if (threadIdx.x == 0)
+            atomicAdd(total, static_cast<int>(partial[0]));
+    }
     template <class Input, class Flags, class T>
     void select_stable(LfsHipContext* context, Input input, Flags flags, T* output, size_t count, size_t capacity, uint64_t* selected) {
         size_t temporary_bytes = 0;
         check(hipcub::DeviceSelect::Flagged(nullptr, temporary_bytes, input, flags, output, static_cast<int*>(nullptr), static_cast<int>(count), context->stream));
-        // Write directly only when every input item fits. Otherwise retain
-        // results in scratch until the actual count proves capacity is safe.
-        const bool direct = capacity >= count;
-        const size_t result_bytes = direct ? 0 : ((count * sizeof(T) + 255) / 256) * 256;
-        require(temporary_bytes <= SIZE_MAX - result_bytes - 256, "HIP selection workspace overflow");
-        const size_t required = temporary_bytes + result_bytes + 256;
-        ensure_workspace(context, context->sort_workspace, context->sort_workspace_bytes, required);
+        require(temporary_bytes <= SIZE_MAX - 256, "HIP selection workspace overflow");
+        ensure_workspace(context, context->sort_workspace, context->sort_workspace_bytes, temporary_bytes + 256);
         auto* memory = static_cast<char*>(context->sort_workspace);
         auto* total = reinterpret_cast<int*>(memory);
-        auto* destination = direct ? output : reinterpret_cast<T*>(memory + 256);
-        check(hipcub::DeviceSelect::Flagged(memory + 256 + result_bytes, temporary_bytes, input, flags, destination, total, static_cast<int>(count), context->stream));
+        // Validate an exact-sized output before allowing DeviceSelect to write.
+        // The extra pass uses a scalar counter instead of a full-sized result copy.
+        if (capacity < count) {
+            check(hipMemsetAsync(total, 0, sizeof(*total), context->stream));
+            hipLaunchKernelGGL((selection_count<Flags>), dim3(blocks(count)), dim3(256), 0, context->stream, flags, count, total);
+            check(hipGetLastError());
+            int actual = 0;
+            read_device_scalar(context, &actual, total, sizeof(actual));
+            require(actual >= 0 && static_cast<size_t>(actual) <= capacity, "HIP selection output capacity is too small");
+            if (!actual) {
+                *selected = 0;
+                return;
+            }
+        }
+        check(hipcub::DeviceSelect::Flagged(memory + 256, temporary_bytes, input, flags, output, total, static_cast<int>(count), context->stream));
         int actual = 0;
         read_device_scalar(context, &actual, total, sizeof(actual));
         require(actual >= 0 && static_cast<size_t>(actual) <= capacity, "HIP selection output capacity is too small");
-        if (!direct && actual)
-            check(hipMemcpyAsync(output, destination, size_t(actual) * sizeof(T), hipMemcpyDeviceToDevice, context->stream));
         *selected = static_cast<uint64_t>(actual);
     }
     template <class T>
+    void select_width(LfsHipContext* context, const void* input, const void* flags, uint32_t flag_dtype, void* output, size_t count, size_t capacity, uint64_t* selected) {
+        hipcub::CountingInputIterator<int64_t> counting(0);
+        hipcub::TransformInputIterator<T, SelectionValue<T>, decltype(counting)> values(counting, SelectionValue<T>{static_cast<const uint8_t*>(input)});
+        hipcub::TransformInputIterator<uint8_t, SelectionFlag, decltype(counting)> mask(counting, SelectionFlag{flags, flag_dtype});
+        select_stable(context, values, mask, static_cast<T*>(output), count, capacity, selected);
+    }
+    template <class T>
     void select_values(LfsHipContext* context, const void* input, const uint8_t* flags, void* output, size_t count, size_t capacity, uint64_t* selected) {
-        select_stable(context, static_cast<const T*>(input), flags, static_cast<T*>(output), count, capacity, selected);
+        using Bits = std::conditional_t<sizeof(T) == 1, uint8_t, std::conditional_t<sizeof(T) == 2, uint16_t, std::conditional_t<sizeof(T) == 4, uint32_t, uint64_t>>>;
+        select_width<Bits>(context, input, flags, LFS_HIP_U8, output, count, capacity, selected);
     }
     template <class T>
     void select_positions(LfsHipContext* context, const void* input, void* output, size_t count, size_t capacity, uint64_t* selected) {
-        hipcub::CountingInputIterator<int64_t> positions(0);
-        hipcub::TransformInputIterator<uint8_t, NonzeroFlag<T>, const T*> flags(static_cast<const T*>(input), NonzeroFlag<T>{});
-        select_stable(context, positions, flags, static_cast<int64_t*>(output), count, capacity, selected);
+        constexpr uint32_t dtype = std::is_same_v<T, float> ? LFS_HIP_F32 : std::is_same_v<T, __half> ? LFS_HIP_F16
+                                                                        : std::is_same_v<T, int32_t>  ? LFS_HIP_I32
+                                                                        : std::is_same_v<T, int64_t>  ? LFS_HIP_I64
+                                                                        : std::is_same_v<T, uint32_t> ? LFS_HIP_U32
+                                                                                                      : LFS_HIP_U8;
+        select_width<uint64_t>(context, nullptr, input, dtype, output, count, capacity, selected);
     }
     template <class T>
     __global__ void masked_scatter_kernel(T* output, const uint8_t* mask, const T* source,
@@ -807,37 +894,9 @@ namespace {
                            static_cast<const T*>(source), prefix, count);
         check(hipGetLastError());
     }
-    __global__ void boolean_pointwise(uint32_t op, const uint8_t* lhs, const uint8_t* rhs, uint8_t* output, size_t count, float scalar) {
-        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += size_t(gridDim.x) * blockDim.x) {
-            const auto a = lhs[i];
-            const auto b = rhs ? rhs[i] : uint8_t(0);
-            bool result = false;
-            switch (op) {
-            case LFS_HIP_OP_LogicalNot: result = !a; break;
-            case LFS_HIP_OP_LogicalAndTensor: result = a && b; break;
-            case LFS_HIP_OP_LogicalOrTensor: result = a || b; break;
-            case LFS_HIP_OP_LogicalXorTensor: result = bool(a) != bool(b); break;
-            case LFS_HIP_OP_EqualTensor: result = a == b; break;
-            case LFS_HIP_OP_NotEqualTensor: result = a != b; break;
-            case LFS_HIP_OP_EqualScalar: result = float(a) == scalar; break;
-            case LFS_HIP_OP_NotEqualScalar: result = float(a) != scalar; break;
-            case LFS_HIP_OP_LessTensor: result = a < b; break;
-            case LFS_HIP_OP_LessEqualTensor: result = a <= b; break;
-            case LFS_HIP_OP_GreaterTensor: result = a > b; break;
-            case LFS_HIP_OP_GreaterEqualTensor: result = a >= b; break;
-            case LFS_HIP_OP_LessScalar: result = float(a) < scalar; break;
-            case LFS_HIP_OP_LessEqualScalar: result = float(a) <= scalar; break;
-            case LFS_HIP_OP_GreaterScalar: result = float(a) > scalar; break;
-            case LFS_HIP_OP_GreaterEqualScalar: result = float(a) >= scalar; break;
-            }
-            output[i] = result ? 1 : 0;
-        }
-    }
     __global__ void clamp_i32(int32_t* data, size_t count, int32_t minimum, int32_t maximum) {
         for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += size_t(gridDim.x) * blockDim.x) {
-            auto value = data[i];
-            value = value < minimum ? minimum : value;
-            data[i] = value > maximum ? maximum : value;
+            data[i] = lfs::core::ops::clamp_range_op<int32_t>{minimum, maximum}(data[i]);
         }
     }
 
@@ -846,30 +905,8 @@ namespace {
 } // namespace
 
 int lfs_hip_boolean_pointwise(LfsHipContext* context, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, size_t count, float scalar, LfsHipError* error) {
-    return boundary(error, [&] {
-        const bool binary = op >= LFS_HIP_OP_EqualTensor && op <= LFS_HIP_OP_LogicalXorTensor;
-        require(binary || op == LFS_HIP_OP_LogicalNot || (op >= LFS_HIP_OP_EqualScalar && op <= LFS_HIP_OP_GreaterEqualScalar), "Unsupported HIP byte predicate");
-        validate(context, lhs.buffer, lhs.offset, count);
-        validate(context, output.buffer, output.offset, count);
-        if (binary)
-            validate(context, rhs.buffer, rhs.offset, count);
-        const auto safe_alias = [&](LfsHipView input) {
-            require(input.buffer != output.buffer || input.offset == output.offset ||
-                        input.offset + count <= output.offset || output.offset + count <= input.offset,
-                    "HIP byte predicates require disjoint or identical views");
-        };
-        safe_alias(lhs);
-        if (binary)
-            safe_alias(rhs);
-        if (!count)
-            return;
-        DeviceScope device(context->device);
-        hipLaunchKernelGGL(boolean_pointwise, dim3(blocks(count)), dim3(256), 0, context->stream, op,
-                           static_cast<const uint8_t*>(lhs.buffer->data) + lhs.offset,
-                           binary ? static_cast<const uint8_t*>(rhs.buffer->data) + rhs.offset : nullptr,
-                           static_cast<uint8_t*>(output.buffer->data) + output.offset, count, scalar);
-        check(hipGetLastError());
-    });
+    const LfsHipPredicate predicate{sizeof(LfsHipPredicate), op, LFS_HIP_U8, 0, count, 0, scalar, 0};
+    return lfs_hip_predicate_typed(context, lhs, rhs, output, &predicate, error);
 }
 
 int lfs_hip_clamp_i32(LfsHipContext* context, LfsHipView data, size_t count, int32_t minimum, int32_t maximum, LfsHipError* error) {
@@ -968,8 +1005,7 @@ int lfs_hip_reduce_f32(LfsHipContext* context, LfsHipView input, size_t count, u
             return;
         }
         DeviceScope device(context->device);
-        if (!context->reduction_workspace)
-            check(hipMalloc(&context->reduction_workspace, reduction_workspace_floats * sizeof(float)));
+        ensure_reduction_workspace(context);
         switch (operation) {
         case LFS_HIP_REDUCE_SUM:
         case LFS_HIP_REDUCE_MEAN: launch_reduce<LFS_HIP_REDUCE_SUM>(context, input, count); break;
@@ -1147,12 +1183,8 @@ int lfs_hip_sort_pairs(LfsHipContext* context, LfsHipView values, LfsHipView ind
         hipcub::TransformInputIterator<int, SegmentOffset, decltype(counting)> offsets(counting, SegmentOffset{static_cast<int>(dimension)});
         auto sort = [&](void* temporary, size_t& bytes, float* input_keys, float* output_keys, int64_t* input_indices, int64_t* output_indices) {
             if (segments == 1) {
-                if (descending)
-                    return hipcub::DeviceRadixSort::SortPairsDescending(temporary, bytes, input_keys, output_keys, input_indices, output_indices, static_cast<int>(count), 0, 32, context->stream);
                 return hipcub::DeviceRadixSort::SortPairs(temporary, bytes, input_keys, output_keys, input_indices, output_indices, static_cast<int>(count), 0, 32, context->stream);
             }
-            if (descending)
-                return hipcub::DeviceSegmentedRadixSort::SortPairsDescending(temporary, bytes, input_keys, output_keys, input_indices, output_indices, static_cast<int>(count), static_cast<int>(segments), offsets, offsets + 1, 0, 32, context->stream);
             return hipcub::DeviceSegmentedRadixSort::SortPairs(temporary, bytes, input_keys, output_keys, input_indices, output_indices, static_cast<int>(count), static_cast<int>(segments), offsets, offsets + 1, 0, 32, context->stream);
         };
         size_t temporary_bytes = 0;
@@ -1166,7 +1198,7 @@ int lfs_hip_sort_pairs(LfsHipContext* context, LfsHipView values, LfsHipView ind
         auto* originals = reinterpret_cast<float*>(memory + key_bytes * 2);
         auto* input_indices = reinterpret_cast<int64_t*>(memory + key_bytes * 3);
         auto* output_indices = reinterpret_cast<int64_t*>(memory + key_bytes * 3 + index_bytes);
-        hipLaunchKernelGGL(sort_pack, dim3(blocks(count)), dim3(256), 0, context->stream, output, input_keys, originals, input_indices, count, dimension, inner);
+        hipLaunchKernelGGL(sort_pack, dim3(blocks(count)), dim3(256), 0, context->stream, output, input_keys, originals, input_indices, count, dimension, inner, descending);
         check(hipGetLastError());
         check(sort(memory + buffers, temporary_bytes, input_keys, output_keys, input_indices, output_indices));
         hipLaunchKernelGGL(sort_unpack, dim3(blocks(count)), dim3(256), 0, context->stream, originals, output_indices, output, order, count, dimension, inner);
@@ -1364,8 +1396,7 @@ int lfs_hip_count_nonzero(LfsHipContext* context, LfsHipView input, uint32_t dty
         if (!count)
             return;
         DeviceScope device(context->device);
-        if (!context->reduction_workspace)
-            check(hipMalloc(&context->reduction_workspace, reduction_workspace_floats * sizeof(float)));
+        ensure_reduction_workspace(context);
         auto* total = reinterpret_cast<unsigned long long*>(context->reduction_workspace);
         static_assert(sizeof(*total) == sizeof(*result));
         check(hipMemsetAsync(total, 0, sizeof(*total), context->stream));
@@ -1422,8 +1453,7 @@ int lfs_hip_index_cast(LfsHipContext* context, LfsHipView input, LfsHipView outp
         if (!count)
             return;
         DeviceScope device(context->device);
-        if (!context->reduction_workspace)
-            check(hipMalloc(&context->reduction_workspace, reduction_workspace_floats * sizeof(float)));
+        ensure_reduction_workspace(context);
         auto* flag = reinterpret_cast<uint32_t*>(context->reduction_workspace + 4096);
         check(hipMemsetAsync(flag, 0, sizeof(uint32_t), context->stream));
         hipLaunchKernelGGL(validate_indices, dim3(blocks(count)), dim3(256), 0, context->stream,
@@ -1504,9 +1534,9 @@ int lfs_hip_index_fill(LfsHipContext* context, LfsHipView output, uint32_t dtype
         require(destination.dims[dim] > 0, "HIP index fill cannot write an empty axis");
         DeviceScope device(context->device);
         if (index_dtype == LFS_HIP_I32)
-            dispatch_index_fill<int32_t>(context, output, indices, width, destination, source_layout, dim, index_count, value_bits);
+            dispatch_index_fill<int32_t>(context, output, indices, static_cast<unsigned>(width), destination, source_layout, dim, index_count, value_bits);
         else
-            dispatch_index_fill<int64_t>(context, output, indices, width, destination, source_layout, dim, index_count, value_bits);
+            dispatch_index_fill<int64_t>(context, output, indices, static_cast<unsigned>(width), destination, source_layout, dim, index_count, value_bits);
     });
 }
 
@@ -1576,27 +1606,7 @@ int lfs_hip_reduce_layout_f32(LfsHipContext* context, LfsHipView input, LfsHipVi
         if (!axes_mask)
             axes_mask = (1u << source->rank) - 1;
         LfsHipLayout kept{}, reduced{};
-        kept.elements = reduced.elements = 1;
-        auto append = [&](LfsHipLayout& layout, unsigned axis) {
-            layout.dims[layout.rank] = source->dims[axis];
-            layout.strides[layout.rank++] = source->strides[axis];
-        };
-        for (unsigned axis = 0; axis < source->rank; ++axis)
-            append(axes_mask & (1u << axis) ? reduced : kept, axis);
-        auto product = [](LfsHipLayout& layout) {
-            for (unsigned i = 0; i < layout.rank; ++i) {
-                if (!layout.dims[i]) {
-                    layout.elements = 0;
-                    return;
-                }
-            }
-            for (unsigned i = 0; i < layout.rank; ++i) {
-                require(layout.dims[i] <= SIZE_MAX / layout.elements, "HIP reduction shape overflow");
-                layout.elements *= layout.dims[i];
-            }
-        };
-        product(kept);
-        product(reduced);
+        split_reduction_layout(*source, axes_mask, kept, reduced);
         require(!kept.elements || reduced.elements || (operation != LFS_HIP_REDUCE_MIN && operation != LFS_HIP_REDUCE_MAX), "HIP extrema reduction requires nonempty axis");
         const size_t output_bytes = float_bytes(kept.elements);
         validate(context, input.buffer, input.offset, input_bytes);
@@ -1606,8 +1616,7 @@ int lfs_hip_reduce_layout_f32(LfsHipContext* context, LfsHipView input, LfsHipVi
         if (!kept.elements)
             return;
         DeviceScope device(context->device);
-        if (!context->reduction_workspace)
-            check(hipMalloc(&context->reduction_workspace, reduction_workspace_floats * sizeof(float)));
+        ensure_reduction_workspace(context);
         const auto* in = reinterpret_cast<const float*>(static_cast<const char*>(input.buffer->data) + input.offset);
         auto* out = reinterpret_cast<float*>(static_cast<char*>(output.buffer->data) + output.offset);
         switch (operation) {
@@ -1643,18 +1652,9 @@ int lfs_hip_fill_layout_bits(LfsHipContext* context, LfsHipView output, const Lf
 }
 
 int lfs_hip_fill_strided_f32(LfsHipContext* context, LfsHipView output, const LfsHipLayout* source, float value, LfsHipError* error) {
-    return boundary(error, [&] {
-        require(source, "Missing HIP strided fill layout");
-        const size_t span = layout_span(*source, 4, true);
-        validate(context, output.buffer, output.offset, span);
-        require(output.offset % 4 == 0, "Unaligned HIP strided fill");
-        if (!source->elements)
-            return;
-        DeviceScope device(context->device);
-        hipLaunchKernelGGL((strided_kernel<float, true>), dim3(blocks(source->elements)), dim3(256), 0, context->stream,
-                           nullptr, reinterpret_cast<float*>(static_cast<char*>(output.buffer->data) + output.offset), *source, value);
-        check(hipGetLastError());
-    });
+    uint32_t bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return lfs_hip_fill_layout_bits(context, output, source, sizeof(value), bits, error);
 }
 
 #include "arg_extreme_runtime.hpp"

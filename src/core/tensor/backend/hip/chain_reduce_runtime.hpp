@@ -27,15 +27,9 @@ namespace {
             float value = reduce_identity<Mode>();
             for (size_t i = part * 256 + threadIdx.x; i < size; i += size_t(parts) * 256)
                 value = combine_reduce<Mode>(value, chain_value(input, segment * size + i, chain));
-            values[threadIdx.x] = value;
-            __syncthreads();
-            for (unsigned offset = 128; offset; offset >>= 1) {
-                if (threadIdx.x < offset)
-                    values[threadIdx.x] = combine_reduce<Mode>(values[threadIdx.x], values[threadIdx.x + offset]);
-                __syncthreads();
-            }
+            const float result = block_reduce_float<Mode>(value, values);
             if (!threadIdx.x)
-                output[group] = values[0] * scale;
+                output[group] = result * scale;
             __syncthreads();
         }
     }
@@ -46,8 +40,8 @@ namespace {
             hipLaunchKernelGGL((chain_short_reduce<Mode>), dim3(blocks(segments)), dim3(256), 0, context->stream, input, output, segments, size, chain, scale);
         } else {
             const unsigned parts = segments < 64 && size > 4096 ? unsigned(std::min<size_t>(4096 / segments, (size - 1) / 1024 + 1)) : 1;
-            if (parts > 1 && !context->reduction_workspace)
-                check(hipMalloc(&context->reduction_workspace, reduction_workspace_floats * sizeof(float)));
+            if (parts > 1)
+                ensure_reduction_workspace(context);
             auto* destination = parts > 1 ? context->reduction_workspace : output;
             hipLaunchKernelGGL((chain_block_reduce<Mode>), dim3(unsigned(std::min<size_t>(4096, segments * parts))), dim3(256), 0, context->stream, input, destination, segments, size, chain, parts, parts > 1 ? 1.f : scale);
             check(hipGetLastError());
