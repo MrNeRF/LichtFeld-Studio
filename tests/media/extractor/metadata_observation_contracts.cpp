@@ -4,6 +4,7 @@
 #include "media/media_ingest.hpp"
 #include "media/media_json.hpp"
 #include "media/metadata_observation.hpp"
+#include "media/metadata_summary_common.hpp"
 #include <algorithm>
 #include <cmath>
 #include <future>
@@ -508,6 +509,95 @@ namespace {
         require(text_limited && text_limited->limited && text_limited->facts.empty(), "summary text budget bounds XMP decoding");
         const auto conflicts = summarizeImageMetadata(xmpFixture(begin + R"(t:Make="different">)" + end, cameraFixture()));
         require(conflicts && std::count_if(conflicts->facts.begin(), conflicts->facts.end(), [](const auto& f) { return f.semantic == "camera.make" && f.ambiguous; }) == 2, "EXIF/XMP values retained as unresolved occurrences");
+        const auto agreeing = summarizeImageMetadata(xmpFixture(begin + R"(t:Make="Test Camera" t:Orientation="6"><e:FocalLength>35/1</e:FocalLength><e:GPSLatitude>45,30S</e:GPSLatitude><e:GPSAltitude>12.5</e:GPSAltitude><e:GPSAltitudeRef>1</e:GPSAltitudeRef>)" + end, cameraFixture()));
+        for (const auto semantic : {"camera.make", "orientation.exif", "lens.focal_length", "gps.latitude", "gps.altitude_sea_level"}) {
+            std::size_t count = 0;
+            for (const auto& item : agreeing->facts)
+                if (item.semantic == semantic) {
+                    ++count;
+                    require(!item.ambiguous, "agreeing EXIF/XMP facts retain both sources without conflict");
+                }
+            require(count == 2, "both carriers contribute an agreeing value");
+        }
+        const auto orientation_conflict = summarizeImageMetadata(xmpFixture(begin + R"(t:Orientation="3">)" + end, cameraFixture()));
+        require(orientation_conflict && std::count_if(orientation_conflict->facts.begin(), orientation_conflict->facts.end(), [](const auto& item) { return item.semantic == "orientation.exif" && item.ambiguous; }) == 2,
+                "orientation disagreement marks both sources");
+        const auto invalid_orientation = summarizeImageMetadata(xmpFixture(begin + R"(t:Orientation="bad">)" + end, cameraFixture()));
+        require(invalid_orientation && std::count_if(invalid_orientation->facts.begin(), invalid_orientation->facts.end(), [](const auto& item) { return item.semantic == "orientation.exif" && item.ambiguous; }) == 2,
+                "invalid scalar is not equivalent to a valid scalar");
+        const auto shared_name = agreeing->facts.back().xmp->property.field;
+        auto copied_summary = *agreeing;
+        require(shared_name && copied_summary.facts.back().xmp->property.field == shared_name,
+                "copies share immutable field descriptors");
+        const auto again = summarizeImageMetadata(xmpFixture(begin + "><e:GPSAltitudeRef>1</e:GPSAltitudeRef>" + end));
+        require(again && again->facts[0].xmp->property.field == shared_name,
+                "field descriptor lifetime is independent of the parser and catalog");
+        using namespace lfs::core::image_codecs;
+        const auto independent = [&](std::string_view later, MetadataStatus status, ImageExifDescription exif = {}, bool reverse = false) {
+            SourceXmp xmp;
+            xmp.status = status;
+            const auto good = begin + R"(t:Make="Unique">)" + end;
+            for (const auto xml : {std::string_view(good), later}) {
+                XmpBlock block;
+                block.envelope = XmpEnvelope::JxlXml;
+                block.jxl_box = JxlXmpBox{static_cast<uint32_t>(xmp.blocks.size()), false};
+                block.bytes.assign(xml.begin(), xml.end());
+                xmp.blocks.push_back(std::move(block));
+            }
+            if (reverse)
+                std::reverse(xmp.blocks.begin(), xmp.blocks.end());
+            auto catalog = catalogSourceMetadata(std::move(exif), {}, {}, std::move(xmp));
+            require(bool(catalog), "mixed packet fixture");
+            return summarizeImageMetadata(*catalog);
+        };
+        const auto rejected = begin + "><u>" + std::string(1024 * 1024, 'x') + "</u>" + end;
+        for (const bool reverse : {false, true}) {
+            const auto partial = independent(rejected, MetadataStatus::Collected, {}, reverse);
+            require(partial && partial->limited && partial->facts.size() == 1 && !partial->facts[0].ambiguous,
+                    "unrelated input omission never changes a valid fact's ambiguity in either order");
+        }
+        const auto collection_limited = independent("<broken/>", MetadataStatus::Limited);
+        require(collection_limited && collection_limited->limited && collection_limited->facts.size() == 1 && !collection_limited->facts[0].ambiguous,
+                "collector incompleteness stays separate from value conflicts");
+        auto exif_limited = cameraFixture();
+        exif_limited.original.status = MetadataStatus::Limited;
+        auto& exif_entries = exif_limited.interpretations[0].entries;
+        std::erase_if(exif_entries, [](const auto& entry) { return entry.id == 0x010f; });
+        const auto partial_exif = independent("<broken/>", MetadataStatus::Collected, std::move(exif_limited));
+        require(partial_exif && partial_exif->limited && !fact(*partial_exif, "camera.make").ambiguous,
+                "EXIF limits do not make an independent XMP make ambiguous");
+        const auto same = independent(begin + R"(t:Make="Unique">)" + end, MetadataStatus::Collected);
+        require(same && same->facts.size() == 2 && !same->facts[0].ambiguous && !same->facts[1].ambiguous,
+                "equal independent packets retain their sources without conflict");
+        const auto different = independent(begin + R"(t:Make="Other">)" + end, MetadataStatus::Collected);
+        require(different && different->facts[0].ambiguous && different->facts[1].ambiguous,
+                "independent conflicting packets remain ambiguous");
+        std::array<std::string_view, 3> rounded_values{"0.6666666666666666", "2/3", "6004799503160661/9007199254740992"};
+        std::sort(rounded_values.begin(), rounded_values.end());
+        do {
+            SourceXmp packets;
+            packets.status = MetadataStatus::Collected;
+            for (const auto value : rounded_values) {
+                const auto xml = begin + "><e:ExposureTime>" + std::string(value) + "</e:ExposureTime>" + end;
+                XmpBlock block;
+                block.envelope = XmpEnvelope::JxlXml;
+                block.jxl_box = JxlXmpBox{static_cast<uint32_t>(packets.blocks.size()), false};
+                block.bytes.assign(xml.begin(), xml.end());
+                packets.blocks.push_back(std::move(block));
+            }
+            auto catalog = catalogSourceMetadata({}, {}, {}, std::move(packets));
+            require(bool(catalog), "rounding conflict catalog");
+            const auto summary = summarizeImageMetadata(*catalog);
+            require(summary && summary->facts.size() == 3 && std::all_of(summary->facts.begin(), summary->facts.end(), [](const auto& item) { return item.ambiguous; }),
+                    "distinct exact rationals remain conflicting in every order even if they round to the same double");
+        } while (std::next_permutation(rounded_values.begin(), rounded_values.end()));
+        require(summary_detail::equalValue(ExifRational{350, 10}, ExifRational{35, 1}) &&
+                    summary_detail::equalValue(ExifRational{1, 125}, 0.008) &&
+                    !summary_detail::equalValue(ExifRational{1, 3}, std::nextafter(1.0 / 3, 1.0)) &&
+                    !summary_detail::equalValue(int64_t{9007199254740993}, 9007199254740992.0) &&
+                    !summary_detail::equalValue(ExifRational{1, 0}, 0.0) &&
+                    !summary_detail::equalValue(std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity()),
+                "numeric equivalence has no epsilon, overflow or invalid-value equality");
         for (const auto& value : {"2024", "2024-02", "2024-02-29", "2024-02-29T01:02", "2024-02-29T01:02Z", "2024-02-29T01:02:03.25-05:30"}) {
             const auto summary = summarizeImageMetadata(xmpFixture(begin + "><e:DateTimeOriginal>" + value + "</e:DateTimeOriginal>" + end));
             require(summary && summary->facts.size() == 1 && summary->facts[0].state == MetadataValueState::Present && std::get<std::string>(summary->facts[0].value) == value, "date precision and timezone preserved without inference");

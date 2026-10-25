@@ -381,6 +381,36 @@ class IngestCLI(unittest.TestCase):
                 self.assertEqual(facts["camera.make"]["xmp_property"], {"namespace": "http://ns.adobe.com/tiff/1.0/", "name": "Make", "description": 0, "ordinal": 1})
                 self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), (original, stamp))
 
+    def test_source_metadata_xmp_agreement_and_independent_limits(self):
+        path = self.root / "xmp-agreement.jpg"
+        for orientation in ("6", "3", "invalid"):
+            with self.subTest(orientation=orientation):
+                source_exif_fixture.write_camera_metadata(path, carrier="jpeg")
+                packet = self._rdf_packet("", f't:Orientation="{orientation}" t:Make="Test Camera"').encode()
+                envelope = b"http://ns.adobe.com/xap/1.0/\0" + packet
+                original = path.read_bytes()
+                path.write_bytes(original[:2] + b"\xff\xe1" + struct.pack(">H", len(envelope) + 2) + envelope + original[2:])
+                saved = path.read_bytes(), path.stat().st_mtime_ns
+                result, _ = self.invoke("source-metadata", path)
+                for semantic, conflict in (("orientation.exif", orientation != "6"), ("camera.make", False)):
+                    facts = [f for f in result["summary"]["facts"] if f["semantic"] == semantic]
+                    self.assertEqual(len(facts), 2)
+                    self.assertTrue(all(f["ambiguous"] == conflict for f in facts))
+                    self.assertEqual(sum("xmp_property" in f for f in facts), 1)
+                self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), saved)
+        good = self._rdf_packet('<t:Make>Unique</t:Make>').encode()
+        attrs = " ".join(f'a{i}="x"' for i in range(129))
+        failures = (self._rdf_packet("", attrs).encode(), b"x" * (1024 * 1024 + 1))
+        for bad in failures:
+            for packets in ((good, bad), (bad, good)):
+                self._xmp_jxl(path, [(b"xml ", packet) for packet in packets])
+                result, _ = self.invoke("source-metadata", path)
+                summary = result["summary"]
+                self.assertTrue(summary["limited"])
+                fact, = summary["facts"]
+                self.assertEqual(fact["value"], "Unique")
+                self.assertFalse(fact["ambiguous"])
+
     def test_source_metadata_xmp_interpretation_secondary_and_invalid(self):
         packet = self._rdf_packet('<t:Make>primary</t:Make>').encode()
         child = self._rdf_packet('<t:Make>secondary</t:Make>').encode()

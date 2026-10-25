@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "xmp_metadata.hpp"
+#include "metadata_summary_common.hpp"
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -30,36 +31,37 @@ namespace lfs::media {
                           AltitudeRef,
                           Date };
         struct Field {
-            std::string_view uri, name, semantic;
+            XmpPropertyName property;
+            std::string_view semantic;
             Kind kind = Kind::Text;
             MetadataUnit unit = MetadataUnit::Unspecified;
         };
         constexpr Field fields[]{
-            {tiff, "Make", "camera.make"},
-            {tiff, "Model", "camera.model"},
-            {tiff, "Orientation", "orientation.exif", Kind::Orientation, MetadataUnit::Unitless},
-            {aux, "Lens", "lens.model"},
-            {exif_ex, "LensModel", "lens.model"},
-            {exif_ex, "LensMake", "lens.make"},
-            {exif, "ExposureTime", "exposure.duration", Kind::Number, MetadataUnit::Seconds},
-            {exif, "FNumber", "lens.f_number", Kind::Number, MetadataUnit::Unitless},
-            {exif, "FocalLength", "lens.focal_length", Kind::Number, MetadataUnit::Millimetres},
-            {exif, "GPSLatitude", "gps.latitude", Kind::Latitude, MetadataUnit::Degrees},
-            {exif, "GPSLongitude", "gps.longitude", Kind::Longitude, MetadataUnit::Degrees},
-            {exif, "GPSAltitude", "gps.altitude_sea_level", Kind::Altitude, MetadataUnit::Metres},
-            {exif, "GPSAltitudeRef", "gps.altitude_reference", Kind::AltitudeRef, MetadataUnit::Unitless},
-            {exif, "GPSMapDatum", "gps.map_datum"},
-            {exif, "DateTimeOriginal", "time.original", Kind::Date},
-            {exif, "DateTimeDigitized", "time.digitized", Kind::Date},
-            {xmp, "CreateDate", "time.digitized", Kind::Date},
-            {xmp, "ModifyDate", "time.modified", Kind::Date}};
+            {{tiff, "Make"}, summary_detail::semantic::make},
+            {{tiff, "Model"}, summary_detail::semantic::model},
+            {{tiff, "Orientation"}, summary_detail::semantic::orientation, Kind::Orientation, MetadataUnit::Unitless},
+            {{aux, "Lens"}, summary_detail::semantic::lens_model},
+            {{exif_ex, "LensModel"}, summary_detail::semantic::lens_model},
+            {{exif_ex, "LensMake"}, summary_detail::semantic::lens_make},
+            {{exif, "ExposureTime"}, summary_detail::semantic::exposure, Kind::Number, MetadataUnit::Seconds},
+            {{exif, "FNumber"}, summary_detail::semantic::f_number, Kind::Number, MetadataUnit::Unitless},
+            {{exif, "FocalLength"}, summary_detail::semantic::focal_length, Kind::Number, MetadataUnit::Millimetres},
+            {{exif, "GPSLatitude"}, summary_detail::semantic::latitude, Kind::Latitude, MetadataUnit::Degrees},
+            {{exif, "GPSLongitude"}, summary_detail::semantic::longitude, Kind::Longitude, MetadataUnit::Degrees},
+            {{exif, "GPSAltitude"}, summary_detail::semantic::altitude, Kind::Altitude, MetadataUnit::Metres},
+            {{exif, "GPSAltitudeRef"}, "gps.altitude_reference", Kind::AltitudeRef, MetadataUnit::Unitless},
+            {{exif, "GPSMapDatum"}, summary_detail::semantic::datum},
+            {{exif, "DateTimeOriginal"}, summary_detail::semantic::original, Kind::Date},
+            {{exif, "DateTimeDigitized"}, summary_detail::semantic::digitized, Kind::Date},
+            {{xmp, "CreateDate"}, summary_detail::semantic::digitized, Kind::Date},
+            {{xmp, "ModifyDate"}, summary_detail::semantic::modified, Kind::Date}};
         bool named(std::string_view expanded, std::string_view uri, std::string_view name) {
             return expanded.size() == uri.size() + name.size() + 1 && expanded.starts_with(uri) &&
                    expanded[uri.size()] == '\x1f' && expanded.substr(uri.size() + 1) == name;
         }
         const Field* field(std::string_view name) {
             for (const auto& candidate : fields)
-                if (named(name, candidate.uri, candidate.name))
+                if (named(name, candidate.property.namespace_uri, candidate.property.name))
                     return &candidate;
             return nullptr;
         }
@@ -73,7 +75,7 @@ namespace lfs::media {
             std::size_t description, ordinal;
             bool structured = false;
             XmpPropertyLocation location() const {
-                return {std::string(field->uri), std::string(field->name), description, ordinal};
+                return {&field->property, description, ordinal};
             }
         };
         enum class Role { Wrapper,
@@ -306,15 +308,9 @@ namespace lfs::media {
                     return false;
                 minutes = double(whole_minutes);
             }
-            const double maximum = latitude ? 90 : 180;
-            if (minutes < 0 || minutes >= 60 || seconds < 0 || seconds >= 60 || degrees > maximum ||
-                (degrees == maximum && (minutes != 0 || seconds != 0)))
-                return false;
-            result = double(degrees) + minutes / 60 + seconds / 3600;
-            if (direction == 'S' || direction == 'W')
-                result = -result;
-            return true;
+            return summary_detail::coordinate(double(degrees), minutes, seconds, latitude, direction, result);
         }
+
         MetadataValueState date(std::string_view value) {
             const auto digits = [](std::string_view part) { return !part.empty() && std::all_of(part.begin(), part.end(), [](char c) { return c >= '0' && c <= '9'; }); };
             const auto decimal = [](std::string_view part) { int n = 0; for (char c : part) n = n * 10 + c - '0'; return n; };
@@ -371,15 +367,33 @@ namespace lfs::media {
         const auto mark_ambiguous = [&] {
             if (summary.facts.size() == first_xmp_fact)
                 return;
-            std::map<std::string_view, std::pair<std::size_t, bool>> counts;
+            struct Group {
+                const MetadataFact* first = nullptr;
+                const MetadataFact* exact = nullptr;
+                bool xmp = false, conflict = false;
+            };
+            std::map<std::string_view, Group> groups;
             for (const auto& fact : summary.facts) {
-                auto& count = counts[fact.semantic];
-                ++count.first;
-                count.second |= bool(fact.xmp);
+                auto& group = groups[fact.semantic];
+                if (group.first)
+                    group.conflict |= !summary_detail::equivalent(*group.first, fact);
+                else
+                    group.first = &fact;
+                // Floating equality alone is not transitive between two exact
+                // rationals that round to the same double. Compare those too,
+                // independently of which carrier was encountered first.
+                if (fact.state == MetadataValueState::Present &&
+                    (std::holds_alternative<int64_t>(fact.value) || std::holds_alternative<ExifRational>(fact.value))) {
+                    if (group.exact)
+                        group.conflict |= !summary_detail::equivalent(*group.exact, fact);
+                    else
+                        group.exact = &fact;
+                }
+                group.xmp |= bool(fact.xmp);
             }
             for (auto& fact : summary.facts) {
-                const auto& count = counts.at(fact.semantic);
-                if ((count.second && count.first > 1) || (fact.xmp && summary.limited))
+                const auto& group = groups.at(fact.semantic);
+                if (group.xmp && group.conflict)
                     fact.ambiguous = true;
             }
         };
@@ -434,9 +448,12 @@ namespace lfs::media {
                     ref.second |= ref.first != nullptr;
                     ref.first = &candidate;
                 }
+            std::map<std::pair<std::size_t, std::string_view>, std::size_t> occurrences;
+            for (const auto& property : packet.properties)
+                ++occurrences[{property.description, property.field->semantic}];
             for (const auto& property : packet.properties) {
                 const auto& field = *property.field;
-                if (summary.facts.size() >= max_facts || field.semantic.size() + field.uri.size() + field.name.size() > max_text_bytes - charged) {
+                if (summary.facts.size() >= max_facts || field.semantic.size() + field.property.namespace_uri.size() + field.property.name.size() > max_text_bytes - charged) {
                     summary.limited = true;
                     mark_ambiguous();
                     return;
@@ -444,6 +461,7 @@ namespace lfs::media {
                 const auto value = trim(property.value);
                 MetadataFact fact{*handle, std::string(field.semantic), std::string{}, field.unit,
                                   MetadataValueState::Present, MetadataValueOrigin::InterpretedSource};
+                fact.ambiguous = occurrences.at({property.description, field.semantic}) > 1;
                 XmpFactProvenance provenance{property.location(), {}};
                 double numeric = 0;
                 int64_t whole = 0;
@@ -460,7 +478,7 @@ namespace lfs::media {
                     else
                         fact.value = whole;
                 } else if (field.kind == Kind::Number || field.kind == Kind::Altitude) {
-                    if (!number(value, numeric, fact.value) || (field.kind == Kind::Number && field.name == "ExposureTime" && numeric == 0))
+                    if (!number(value, numeric, fact.value) || (field.kind == Kind::Number && field.property.name == "ExposureTime" && numeric == 0))
                         fact.state = MetadataValueState::Invalid;
                     else if (field.kind == Kind::Number && numeric == 0)
                         fact.state = MetadataValueState::Absent;
@@ -472,9 +490,11 @@ namespace lfs::media {
                             fact.state = MetadataValueState::Unsupported;
                             fact.diagnostic = "Unique valid XMP altitude reference required";
                             fact.value = property.value;
-                            fact.ambiguous = duplicate;
+                            fact.ambiguous |= duplicate;
                         } else {
-                            fact.value = whole == 1 ? -numeric : numeric;
+                            double signed_altitude = 0;
+                            summary_detail::altitude(numeric, static_cast<int>(whole), signed_altitude);
+                            fact.value = signed_altitude;
                             fact.origin = MetadataValueOrigin::Derived;
                             fact.inputs.push_back(*handle);
                             provenance.inputs.push_back(ref->location());
@@ -501,18 +521,17 @@ namespace lfs::media {
                     fact.value = property.value;
                     fact.diagnostic = "Invalid XMP field value";
                 }
-                std::size_t cost = fact.semantic.size() + fact.diagnostic.size() + fact.derivation.size() + field.uri.size() + field.name.size();
-                if (const auto* text = std::get_if<std::string>(&fact.value))
-                    cost += text->size();
+                std::size_t provenance_bytes = field.property.namespace_uri.size() + field.property.name.size();
                 for (const auto& input : provenance.inputs)
-                    cost += input.namespace_uri.size() + input.name.size();
-                if (summary.facts.size() >= max_facts || cost > max_text_bytes - charged) {
-                    summary.limited = true;
+                    provenance_bytes += input.field->namespace_uri.size() + input.field->name.size();
+                const auto cost = summary_detail::factCost(summary, max_facts, max_text_bytes, charged,
+                                                           fact.semantic, fact.value, fact.diagnostic, fact.derivation, provenance_bytes);
+                if (!cost) {
                     mark_ambiguous();
                     return;
                 }
                 fact.xmp = std::make_shared<const XmpFactProvenance>(std::move(provenance));
-                charged += cost;
+                charged += *cost;
                 summary.facts.push_back(std::move(fact));
             }
         }
