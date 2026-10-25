@@ -585,9 +585,9 @@ namespace {
                 block.bytes.assign(xml.begin(), xml.end());
                 packets.blocks.push_back(std::move(block));
             }
-            auto catalog = catalogSourceMetadata({}, {}, {}, std::move(packets));
-            require(bool(catalog), "rounding conflict catalog");
-            const auto summary = summarizeImageMetadata(*catalog);
+            auto rounding_catalog = catalogSourceMetadata({}, {}, {}, std::move(packets));
+            require(bool(rounding_catalog), "rounding conflict catalog");
+            const auto summary = summarizeImageMetadata(*rounding_catalog);
             require(summary && summary->facts.size() == 3 && std::all_of(summary->facts.begin(), summary->facts.end(), [](const auto& item) { return item.ambiguous; }),
                     "distinct exact rationals remain conflicting in every order even if they round to the same double");
         } while (std::next_permutation(rounded_values.begin(), rounded_values.end()));
