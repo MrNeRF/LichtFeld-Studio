@@ -511,6 +511,77 @@ class IngestCLI(unittest.TestCase):
                             legacy, _ = self.invoke("source-exif", path)
                             self.assertEqual(legacy["exif"], observed)
 
+    def test_source_metadata_jxl_damaged_carrier_recovers_other(self):
+        path = self.root / "damaged carrier \u00e9 \u65e5\u672c\u8a9e.jxl"
+        exif = bytes.fromhex("0000000049492a0008000000010012010300010000000600000000000000")
+        carriers = [
+            (b"Exif", exif, bytes.fromhex("1b1d00000471633b82982dd1d44c4a60f12503273dfc9f790164538216"), "image_exif"),
+            (b"xml ", b"<xmp/>\x00\xff", bytes.fromhex("8b03803c786d702f3e00ff03"), "image_xmp"),
+        ]
+        for index, (damaged_kind, damaged_value, damaged_brotli, damaged_key) in enumerate(carriers):
+            healthy_kind, healthy_value, healthy_brotli, healthy_key = carriers[1 - index]
+            for bad in (b"broken", damaged_brotli[:-1]):
+                for compressed in (False, True):
+                    with self.subTest(damaged=damaged_kind, bad=bad, compressed=compressed):
+                        healthy_box = (b"brob", healthy_kind + healthy_brotli) if compressed else (healthy_kind, healthy_value)
+                        self._xmp_jxl(path, [healthy_box, (damaged_kind, damaged_value), (b"brob", damaged_kind + bad)],
+                                      [healthy_box, (damaged_kind, b"not examined")])
+                        original, stamp = path.read_bytes(), path.stat().st_mtime_ns
+                        result, _ = self.invoke("source-metadata", path)
+                        metadata = result["metadata"]
+                        damaged, healthy = metadata[damaged_key], metadata[healthy_key]
+                        self.assertEqual(damaged["status"], "malformed", damaged)
+                        self.assertEqual([bytes.fromhex(b["bytes"]) for b in damaged["blocks"]], [damaged_value])
+                        self.assertEqual(healthy["status"], "collected", healthy)
+                        self.assertEqual([bytes.fromhex(b["bytes"]) for b in healthy["blocks"]], [healthy_value, healthy_value])
+                        self.assertEqual([b["jxl_box"] for b in healthy["blocks"]],
+                                         [{"ordinal": 2, "brotli_compressed": compressed}, {"ordinal": 6, "brotli_compressed": compressed}])
+                        legacy, _ = self.invoke("source-exif", path)
+                        self.assertEqual(metadata["image_exif"], legacy["exif"])
+                        self.assertEqual(path.read_bytes(), original)
+                        self.assertEqual(path.stat().st_mtime_ns, stamp)
+
+    def test_source_metadata_jxl_damaged_carrier_retry_limits(self):
+        path = self.root / "retry-limits.jxl"
+        for damaged_kind, healthy_kind, healthy_key in [(b"Exif", b"xml ", "image_xmp"), (b"xml ", b"Exif", "image_exif")]:
+            self._xmp_jxl(path, [(healthy_kind, b"one"), (b"brob", damaged_kind + b"broken")], [(healthy_kind, b"two")])
+            options = {"blocks": 1} if healthy_key == "image_xmp" else {"collection_limits": {"blocks": 1}}
+            result = self._xmp_limited(path, **options)
+            self.assertEqual(result[healthy_key]["status"], "limited", result)
+            self.assertEqual([bytes.fromhex(b["bytes"]) for b in result[healthy_key]["blocks"]], [b"one"])
+            # Container framing errors remain failures even after skipping the damaged carrier.
+            path.write_bytes(path.read_bytes() + struct.pack(">I4s", 7, b"junk"))
+            result, _ = self.invoke("source-metadata", path)
+            self.assertEqual(result["metadata"][healthy_key]["status"], "malformed", result)
+            self.assertEqual([bytes.fromhex(b["bytes"]) for b in result["metadata"][healthy_key]["blocks"]], [b"one", b"two"])
+        # A second damaged carrier fails without triggering an unbounded retry.
+        self._xmp_jxl(path, [(b"Exif", b"one"), (b"xml ", b"two"), (b"brob", b"Exifbroken")], [(b"brob", b"xml broken")])
+        result, _ = self.invoke("source-metadata", path)
+        for key, prefix in [("image_exif", b"one"), ("image_xmp", b"two")]:
+            self.assertEqual(result["metadata"][key]["status"], "malformed", result)
+            self.assertEqual([bytes.fromhex(b["bytes"]) for b in result["metadata"][key]["blocks"]], [prefix])
+
+    def test_source_metadata_jxl_damaged_carrier_refill_and_totals(self):
+        path = self.root / "retry-refill.jxl"
+        for damaged_kind, healthy_kind, healthy_key in [(b"Exif", b"xml ", "image_xmp"), (b"xml ", b"Exif", "image_exif")]:
+            # Both passes must refill beyond the initial 64 KiB input window.
+            self._xmp_jxl(path, [(b"junk", bytes(70000)), (healthy_kind, b"one"), (b"brob", damaged_kind + b"broken")],
+                          [(b"junk", bytes(70000)), (healthy_kind, b"two")])
+            for budget in (5, 6):
+                options = {"total_bytes": budget} if healthy_key == "image_xmp" else {"collection_limits": {"total_bytes": budget}}
+                result = self._xmp_limited(path, **options)
+                healthy = result[healthy_key]
+                self.assertEqual(healthy["status"], "limited" if budget == 5 else "collected", healthy)
+                self.assertEqual([bytes.fromhex(b["bytes"]) for b in healthy["blocks"]], [b"one"] if budget == 5 else [b"one", b"two"])
+                self.assertEqual([b["jxl_box"]["ordinal"] for b in healthy["blocks"]], [3] if budget == 5 else [3, 7])
+            # A carrier already stopped at its quota keeps that snapshot.
+            self._xmp_jxl(path, [(healthy_kind, b"one"), (healthy_kind, b"two"), (b"brob", damaged_kind + b"broken")],
+                          [(healthy_kind, b"three")])
+            options = {"blocks": 1} if healthy_key == "image_xmp" else {"collection_limits": {"blocks": 1}}
+            result = self._xmp_limited(path, **options)
+            self.assertEqual(result[healthy_key]["status"], "limited", result)
+            self.assertEqual([bytes.fromhex(b["bytes"]) for b in result[healthy_key]["blocks"]], [b"one"])
+
     def test_source_metadata_xmp_jxl_boxes_and_legacy(self):
         path = self.root / "XMP JPEG XL \u00e9 \u65e5\u672c\u8a9e.jxl"
         packet = b'<x xmlns="urn:unknown">\x00\xff</x>'
