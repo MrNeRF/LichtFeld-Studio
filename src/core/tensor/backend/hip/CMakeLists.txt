@@ -21,7 +21,8 @@ if(WIN32 OR CMAKE_HOST_WIN32)
 else()
     set(_compiler "${LFS_HIP_ROOT}/lib/llvm/bin/clang++")
     set(_library "${CMAKE_CURRENT_BINARY_DIR}/liblfs_hip_runtime.so")
-    set(_platform_flags -fPIC "-Wl,-rpath,$ORIGIN/.."
+    set(_compile_platform_flags -fPIC)
+    set(_platform_flags "-Wl,-rpath,$ORIGIN/.."
         "-Wl,-rpath,${LFS_HIP_ROOT}/lib" "-Wl,-rpath,${LFS_HIP_ROOT}/lib64")
 endif()
 if(NOT EXISTS "${_compiler}" OR NOT EXISTS "${LFS_HIP_ROOT}/include/hip/hip_runtime.h")
@@ -78,7 +79,7 @@ add_custom_command(OUTPUT "${_tensor_generated}/hip_inference.hpp" BYPRODUCTS "$
 add_custom_command(OUTPUT "${_tensor_generated}/hip_pointwise_functors.hpp" "${_tensor_generated}/hip_pointwise_f32.inc" "${_tensor_generated}/hip_pointwise_f16.inc" "${_tensor_generated}/hip_pointwise_eval.inc" "${_tensor_generated}/hip_pointwise_flags.inc" "${_tensor_generated}/hip_pointwise_broadcast.inc" "${_tensor_generated}/hip_pointwise_half_broadcast.inc" "${_tensor_generated}/hip_pointwise_scalar_left.inc"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/prepare_pointwise.py"
         --source "${_tensor_source}" --output "${_tensor_generated}"
-    DEPENDS prepare_pointwise.py "${_tensor_source}/tensor_functors.hpp" "${_tensor_source}/pointwise_ops.def" VERBATIM)
+    DEPENDS prepare_pointwise.py "${_tensor_source}/tensor_functors.hpp" "${_tensor_source}/pointwise_ops.def" "${_tensor_source}/pointwise_lowering.hpp" VERBATIM)
 set(_lens_source "${CMAKE_CURRENT_SOURCE_DIR}/../../../cuda/undistort/undistort.cu")
 set(_lens_model "${CMAKE_CURRENT_SOURCE_DIR}/../../../cuda/undistort/distortion_model.cuh")
 add_custom_command(OUTPUT "${_tensor_generated}/hip_lens.hpp"
@@ -106,23 +107,67 @@ add_custom_command(OUTPUT "${_tensor_generated}/hip_export.hpp"
         "${_export_shaders}/export_decimate.slang" "${_export_shaders}/export_decimate_cost.slang"
         "${_export_shaders}/export_decimate_merge.slang" "${_export_shaders}/df64.slangh" "${_export_shaders}/point_raster.slang" "${_export_shaders}/byte_read.slangh"
         "${_point_source}/include/core/rounded_math.slangh" "${LFS_HIP_CORE_SLANGC}" VERBATIM)
-file(GLOB _runtime_headers CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*_runtime.hpp" "${CMAKE_CURRENT_SOURCE_DIR}/*_api.h")
-add_custom_command(OUTPUT "${_library}"
-    COMMAND "${_compiler}" -x hip -std=c++20 -O3 -shared
-        ${_platform_flags} ${LFS_HIP_COMPRESSION_FLAGS}
-        "-DLFS_HIP_COMPILED_ARCH=\"${LFS_HIP_COMPILED_ARCHITECTURES}\""
-        "-I${_tensor_generated}" "-I${CMAKE_CURRENT_SOURCE_DIR}" "-I${CMAKE_CURRENT_SOURCE_DIR}/../../../include" -DLFS_HIP_RUNTIME_EXPORTS ${LFS_HIP_OFFLOAD_FLAGS}
-        "--hip-path=${LFS_HIP_ROOT}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/runtime.hip" -x none "${_rtc_library}" -o "${_library}"
-    DEPENDS ${_runtime_headers} "${_point_source}/include/core/environment_math.hpp" architecture_runtime.hpp runtime.hip runtime_api.h expression_api.h expression_runtime.hpp "${_rtc_library}" bias_api.h bias_runtime.hpp integer_reduce_api.h integer_reduce_runtime.hpp inference_api.h inference_runtime.hpp gemm_api.h gemm_runtime.hpp "${_tensor_generated}/hip_inference.hpp" inverse_warp_api.h inverse_warp_runtime.hpp pool_runtime.hpp where_runtime.hpp where_api.h device_identity_api.h device_identity_runtime.hpp chain_reduce_runtime.hpp sh_codec_api.h sh_codec_runtime.hpp shared_warp_runtime.hpp shared_image_runtime.hpp shared_resize_runtime.hpp "${_tensor_generated}/hip_shared_resize.hpp" "${_tensor_generated}/hip_shared_image.hpp" "${_tensor_generated}/hip_lens.hpp" "${_lens_model}" "${_tensor_generated}/hip_pointwise_functors.hpp" "${_tensor_generated}/hip_pointwise_f32.inc" "${_tensor_generated}/hip_pointwise_f16.inc" "${_tensor_generated}/hip_pointwise_eval.inc" "${_tensor_generated}/hip_pointwise_flags.inc" "${_tensor_generated}/hip_pointwise_broadcast.inc" "${_tensor_generated}/hip_pointwise_half_broadcast.inc" "${_tensor_generated}/hip_pointwise_scalar_left.inc" "${_compiler}"
-        simplify_runtime.hpp point_filter_api.h point_filter_runtime.hpp "${_tensor_generated}/hip_point_filter.hpp" "${_tensor_generated}/hip_spatial_components.hpp"
-        point_tree_api.h point_tree_runtime.hpp ppisp_runtime.hpp affine_runtime.hpp morton_runtime.hpp multinomial_runtime.hpp export_runtime.hpp nn_api.h nn_runtime.hpp nn_linear_runtime.hpp nn_attention_runtime.hpp nn_conv_runtime.hpp "${_tensor_generated}/hip_export.hpp" predicate_api.h predicate_runtime.hpp integer_pointwise_runtime.hpp arg_extreme_runtime.hpp cdist_runtime.hpp spatial_runtime.hpp
-        timing_api.h timing_runtime.hpp integral_broadcast_runtime.hpp
-        "${LFS_HIP_ROOT}/include/hip/hip_runtime.h"
-    VERBATIM)
-add_custom_target(lfs_hip_runtime_build ALL DEPENDS "${_library}")
-# Consumers load this module explicitly; it cannot replace a CUDA runtime or
-# register an incomplete tensor/training backend merely by being built.
+set(_pointwise_source "${_tensor_source}")
+set(_pointwise_generated "${_tensor_generated}")
+set(_pointwise_outputs
+    "${_tensor_generated}/hip_pointwise_functors.hpp"
+    "${_tensor_generated}/hip_pointwise_f32.inc"
+    "${_tensor_generated}/hip_pointwise_f16.inc"
+    "${_tensor_generated}/hip_pointwise_eval.inc"
+    "${_tensor_generated}/hip_pointwise_flags.inc"
+    "${_tensor_generated}/hip_pointwise_broadcast.inc"
+    "${_tensor_generated}/hip_pointwise_half_broadcast.inc"
+    "${_tensor_generated}/hip_pointwise_scalar_left.inc"
+)
+set(_extended_outputs
+    "${_tensor_generated}/hip_point_filter.hpp"
+    "${_tensor_generated}/hip_spatial_components.hpp"
+    "${_tensor_generated}/hip_inference.hpp"
+    "${_tensor_generated}/hip_lens.hpp"
+    "${_tensor_generated}/hip_shared_image.hpp"
+    "${_tensor_generated}/hip_shared_resize.hpp"
+    "${_tensor_generated}/hip_export.hpp"
+)
+set(LFS_HIP_OFFLOAD_JOBS 2 CACHE STRING "Maximum concurrent GPU target compilations per HIP source")
+if(NOT LFS_HIP_OFFLOAD_JOBS MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR "LFS_HIP_OFFLOAD_JOBS must be a positive integer")
+endif()
+function(lfs_hip_native_module target output)
+    set(_objects)
+    foreach(_unit IN ITEMS runtime pointwise operators)
+        set(_object "${CMAKE_CURRENT_BINARY_DIR}/${target}/${_unit}.o")
+        set(_defines)
+        if(ARGN)
+            list(APPEND _defines -include "${ARGN}")
+            if(_unit STREQUAL "runtime")
+                list(APPEND _defines -DLFS_HIP_TEST_EXPORTS)
+            endif()
+        endif()
+        add_custom_command(OUTPUT "${_object}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/${target}"
+            COMMAND "${_compiler}" -x hip -std=c++20 -O3 -c
+                ${_compile_platform_flags} ${LFS_HIP_COMPRESSION_FLAGS}
+                "--offload-jobs=${LFS_HIP_OFFLOAD_JOBS}"
+                "-DLFS_HIP_COMPILED_ARCH=\"${LFS_HIP_COMPILED_ARCHITECTURES}\""
+                -DLFS_HIP_RUNTIME_EXPORTS "-I${CMAKE_CURRENT_SOURCE_DIR}" "-I${_pointwise_generated}" "-I${_pointwise_source}" "-I${CMAKE_CURRENT_SOURCE_DIR}/../../../include" ${LFS_HIP_OFFLOAD_FLAGS}
+                "--hip-path=${LFS_HIP_ROOT}" ${_defines}
+                -MMD -MF "${_object}.d"
+                "${CMAKE_CURRENT_SOURCE_DIR}/${_unit}.hip" -o "${_object}"
+            DEPENDS "${_unit}.hip" ${_pointwise_outputs} ${_extended_outputs} ${ARGN}
+                "${_compiler}" "${LFS_HIP_ROOT}/include/hip/hip_runtime.h"
+            DEPFILE "${_object}.d"
+            VERBATIM)
+        list(APPEND _objects "${_object}")
+    endforeach()
+    add_custom_command(OUTPUT "${output}"
+        COMMAND "${_compiler}" --hip-link -shared ${_platform_flags}
+            ${LFS_HIP_COMPRESSION_FLAGS} ${LFS_HIP_OFFLOAD_FLAGS}
+            "--hip-path=${LFS_HIP_ROOT}" ${_objects} "${_rtc_library}" -o "${output}"
+        DEPENDS ${_objects}
+        VERBATIM)
+    add_custom_target(${target} ALL DEPENDS "${output}")
+endfunction()
+lfs_hip_native_module(lfs_hip_runtime_build "${_library}")
 set(LFS_HIP_RUNTIME_LIBRARY "${_library}" PARENT_SCOPE)
 
 if(LFS_TENSOR_HIP)
@@ -150,16 +195,6 @@ if(LFS_HIP_NATIVE_GPU_TESTS)
     else()
         set(_fault_library "${_runtime_directory}/liblfs_hip_runtime_faults.so")
     endif()
-    add_custom_command(OUTPUT "${_fault_library}"
-        COMMAND "${_compiler}" -x hip -std=c++20 -O3 -shared
-            ${_platform_flags} ${LFS_HIP_COMPRESSION_FLAGS}
-            "-DLFS_HIP_COMPILED_ARCH=\"${LFS_HIP_COMPILED_ARCHITECTURES}\""
-            -DLFS_HIP_RUNTIME_EXPORTS "-I${_tensor_generated}" "-I${CMAKE_CURRENT_SOURCE_DIR}/../../../include" ${LFS_HIP_OFFLOAD_FLAGS}
-            "--hip-path=${LFS_HIP_ROOT}" "-I${CMAKE_CURRENT_SOURCE_DIR}"
-            -include "${_fault_header}" "${CMAKE_CURRENT_SOURCE_DIR}/runtime.hip" -x none "${_rtc_library}" -o "${_fault_library}"
-        DEPENDS runtime.hip runtime_api.h architecture_runtime.hpp "${_fault_header}" ${_runtime_headers} "${_library}" ${_runtime_headers}
-            "${_compiler}" "${LFS_HIP_ROOT}/include/hip/hip_runtime.h"
-        VERBATIM)
-    add_custom_target(lfs_hip_runtime_faults ALL DEPENDS "${_fault_library}")
+    lfs_hip_native_module(lfs_hip_runtime_faults "${_fault_library}" "${_fault_header}")
     set(LFS_HIP_FAULT_LIBRARY "${_fault_library}" PARENT_SCOPE)
 endif()

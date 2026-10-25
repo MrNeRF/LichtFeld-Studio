@@ -45,11 +45,8 @@ typedef struct LfsHipDevice {
     int32_t warp_size;
 } LfsHipDevice;
 
-/* Exact private ABI revision: 1 is the foundation; 2 adds owned transfers;
- * 3 adds native Tensor operators; 4 unifies reduction opcodes;
- * 5 completes the host Tensor adapter APIs.
- * Loaders must check this before binding revision-specific exports. */
-#define LFS_HIP_RUNTIME_ABI_VERSION 5u
+/* Exact private ABI revision; check before binding any revision-specific exports. */
+#define LFS_HIP_RUNTIME_ABI_VERSION 6u
 LFS_HIP_API uint32_t lfs_hip_runtime_abi(void);
 LFS_HIP_API int lfs_hip_device_count(int32_t* count, LfsHipError* error);
 LFS_HIP_API int lfs_hip_device_info(int32_t ordinal, LfsHipDevice* info, LfsHipError* error);
@@ -167,16 +164,22 @@ enum LfsHipRandomKind { LFS_HIP_RANDOM_UNIFORM,
                         LFS_HIP_RANDOM_BERNOULLI,
                         LFS_HIP_RANDOM_INTEGER,
                         LFS_HIP_RANDOM_NORMAL };
-enum { LFS_HIP_REDUCTION_WORKSPACE_FLOATS = 4097 };
 enum { LFS_HIP_ERROR_INVALID_INDEX = -2 };
-LFS_HIP_API int lfs_hip_boolean_pointwise(LfsHipContext*, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, size_t count, float scalar, LfsHipError*);
+/* Invalid device indices are skipped and reported by context synchronization or
+ * blocking host reads. Valid lanes may complete before that asynchronous error. */
 LFS_HIP_API int lfs_hip_clamp_i32(LfsHipContext*, LfsHipView data, size_t count, int32_t minimum, int32_t maximum, LfsHipError*);
 LFS_HIP_API int lfs_hip_scalar_left_typed(LfsHipContext*, uint32_t op, LfsHipView lhs, LfsHipView output, size_t count, float scalar, uint32_t dtype, LfsHipError*);
 LFS_HIP_API int lfs_hip_broadcast_typed(LfsHipContext*, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, const LfsHipLayout* lhs_layout, const LfsHipLayout* rhs_layout, const LfsHipLayout* output_layout, uint32_t input_dtype, uint32_t output_element_bytes, LfsHipError*);
-LFS_HIP_API int lfs_hip_broadcast_f32(LfsHipContext*, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, const LfsHipLayout* lhs_layout, const LfsHipLayout* rhs_layout, const LfsHipLayout* output_layout, uint32_t output_element_bytes, LfsHipError*);
 LFS_HIP_API int lfs_hip_reduce_f32(LfsHipContext*, LfsHipView input, size_t count, uint32_t operation, float* output, LfsHipError*);
 LFS_HIP_API int lfs_hip_copy_layouts(LfsHipContext*, const LfsHipLayoutCopy*, size_t count, LfsHipError*);
-LFS_HIP_API int lfs_hip_select(LfsHipContext*, LfsHipView input, LfsHipView mask, LfsHipView output, uint32_t dtype, uint32_t kind, size_t count, size_t capacity, uint64_t* selected, LfsHipError*);
+typedef struct LfsHipSelection {
+    uint32_t struct_bytes, dtype, kind, count_known;
+    uint64_t count, capacity, selected_count;
+} LfsHipSelection;
+/* count_known requires selected_count to describe this unchanged mask exactly.
+ * It skips host count reads, matching the Tensor frontend's pre-counted contract. */
+LFS_HIP_API int lfs_hip_select(LfsHipContext*, LfsHipView input, LfsHipView mask, LfsHipView output,
+                               const LfsHipSelection*, uint64_t* selected, LfsHipError*);
 LFS_HIP_API int lfs_hip_masked_scatter(LfsHipContext*, LfsHipView output, LfsHipView mask, LfsHipView source,
                                        uint32_t dtype, size_t count, size_t selected_count, LfsHipError*);
 LFS_HIP_API int lfs_hip_sort_pairs(LfsHipContext*, LfsHipView values, LfsHipView indices, size_t outer, size_t dimension, size_t inner, uint32_t descending, LfsHipError*);
@@ -190,20 +193,33 @@ LFS_HIP_API int lfs_hip_random(LfsHipContext*, LfsHipView output, const LfsHipRa
 LFS_HIP_API int lfs_hip_count_nonzero(LfsHipContext*, LfsHipView input, uint32_t dtype, size_t count, uint64_t* result, LfsHipError*);
 LFS_HIP_API int lfs_hip_convert(LfsHipContext*, LfsHipView input, uint32_t input_dtype, LfsHipView output, uint32_t output_dtype, size_t count, LfsHipError*);
 LFS_HIP_API int lfs_hip_index_cast(LfsHipContext*, LfsHipView input, LfsHipView output, size_t count, size_t extent, LfsHipError*);
-LFS_HIP_API int lfs_hip_index_update(LfsHipContext*, LfsHipView output, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, LfsHipView source, const LfsHipLayout* output_layout, uint32_t dim, size_t index_count, uint32_t add, LfsHipError*);
-LFS_HIP_API int lfs_hip_index_fill(LfsHipContext*, LfsHipView output, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, const LfsHipLayout* output_layout, uint32_t dim, size_t index_count, uint64_t value_bits, LfsHipError*);
+typedef struct LfsHipIndexUpdate {
+    uint32_t struct_bytes, dtype, index_dtype, dim, add;
+    uint64_t index_count;
+    LfsHipLayout output_layout;
+} LfsHipIndexUpdate;
+typedef struct LfsHipIndexFill {
+    uint32_t struct_bytes, dtype, index_dtype, dim;
+    uint64_t index_count, value_bits;
+    LfsHipLayout output_layout;
+} LfsHipIndexFill;
+typedef struct LfsHipGather {
+    uint32_t struct_bytes, dtype, index_dtype, dim, boundary_mode, index_select;
+    LfsHipLayout input_layout, index_layout;
+} LfsHipGather;
+LFS_HIP_API int lfs_hip_index_update(LfsHipContext*, LfsHipView output, LfsHipView indices, LfsHipView source, const LfsHipIndexUpdate*, LfsHipError*);
+LFS_HIP_API int lfs_hip_index_fill(LfsHipContext*, LfsHipView output, LfsHipView indices, const LfsHipIndexFill*, LfsHipError*);
 LFS_HIP_API int lfs_hip_gather_unary_f32(LfsHipContext*, LfsHipView input, LfsHipView indices, uint32_t index_dtype,
                                          LfsHipView output, size_t input_size, size_t index_count, uint32_t operation, LfsHipError*);
 LFS_HIP_API int lfs_hip_index_put_f32(LfsHipContext*, LfsHipView output, LfsHipView indices, uint32_t index_dtype,
                                       LfsHipView values, size_t output_size, size_t index_count, LfsHipError*);
-LFS_HIP_API int lfs_hip_gather(LfsHipContext*, LfsHipView input, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, LfsHipView output, const LfsHipLayout* input_layout, const LfsHipLayout* index_layout, uint32_t dim, uint32_t boundary_mode, uint32_t index_select, LfsHipError*);
+LFS_HIP_API int lfs_hip_gather(LfsHipContext*, LfsHipView input, LfsHipView indices, LfsHipView output, const LfsHipGather*, LfsHipError*);
 LFS_HIP_API int lfs_hip_reduce_layout_f32(LfsHipContext*, LfsHipView input, LfsHipView output, const LfsHipLayout*, uint32_t axes_mask, uint32_t operation, LfsHipError*);
 LFS_HIP_API int lfs_hip_fill_layout_bits(LfsHipContext*, LfsHipView output, const LfsHipLayout*, uint32_t element_bytes, uint64_t value_bits, LfsHipError*);
-LFS_HIP_API int lfs_hip_fill_strided_f32(LfsHipContext*, LfsHipView output, const LfsHipLayout*, float value, LfsHipError*);
 LFS_HIP_API int lfs_hip_chain_reduce_f32(LfsHipContext*, LfsHipView input, LfsHipView output, size_t segments, size_t segment_size, const LfsHipChain*, uint32_t operation, LfsHipError*);
 LFS_HIP_API int lfs_hip_arg_extreme_f32(LfsHipContext*, LfsHipView input, LfsHipView values, LfsHipView indices,
                                         size_t outer, size_t reduced, size_t inner, uint32_t maximum,
-                                        size_t* workspace_growth_bytes, LfsHipError*);
+                                        LfsHipError*);
 LFS_HIP_API int lfs_hip_cdist_f32(LfsHipContext*, LfsHipView lhs, LfsHipView rhs, LfsHipView output,
                                   size_t lhs_rows, size_t rhs_rows, size_t columns, float p, LfsHipError*);
 

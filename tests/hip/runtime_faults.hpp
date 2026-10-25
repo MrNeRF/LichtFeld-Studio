@@ -9,8 +9,8 @@
 #include <hipcub/hipcub.hpp>
 
 namespace lfs_hip_test {
-    static int fault = 0, pinned = 0, events = 0, device_allocations = 0;
-    bool fail(int operation) {
+    inline int fault = 0, pinned = 0, events = 0, device_allocations = 0;
+    inline bool fail(int operation) {
         if (fault != operation)
             return false;
         fault = 0;
@@ -18,6 +18,7 @@ namespace lfs_hip_test {
     }
 } // namespace lfs_hip_test
 
+#ifdef LFS_HIP_TEST_EXPORTS
 extern "C" LFS_HIP_API void lfs_hip_test_fail_once(int operation) {
     lfs_hip_test::fault = operation;
 }
@@ -25,6 +26,8 @@ extern "C" LFS_HIP_API int lfs_hip_test_live_resources() {
     // Check each category independently, including accidental negative counts.
     return (lfs_hip_test::pinned != 0 ? 1 : 0) | (lfs_hip_test::events != 0 ? 2 : 0) | (lfs_hip_test::device_allocations != 0 ? 4 : 0);
 }
+
+#endif
 
 static hipError_t lfs_hip_test_host_malloc(void** pointer, size_t bytes, unsigned flags) {
     if (lfs_hip_test::fail(1))

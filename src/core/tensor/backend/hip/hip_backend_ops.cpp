@@ -283,20 +283,14 @@ namespace lfs::core::internal {
             return true;
         }
         void refresh_algorithm_workspace() {
-            const bool reduction_exists = workspace_bytes > algorithm_workspace_bytes;
             LfsHipMemoryInfo memory{};
             LfsHipError error{};
             check(api.memory_info(context, &memory, &error), error);
-            algorithm_workspace_bytes = memory.workspace_bytes - (reduction_exists ? LFS_HIP_REDUCTION_WORKSPACE_FLOATS * sizeof(float) : 0);
-            workspace_bytes = memory.workspace_bytes;
+            workspace_bytes = algorithm_workspace_bytes = memory.workspace_bytes;
             peak = std::max(peak, live + workspace_bytes);
             reserved_peak = std::max(reserved_peak, live + cached_bytes + workspace_bytes);
         }
-        void observed_workspace() {
-            workspace_bytes = algorithm_workspace_bytes + LFS_HIP_REDUCTION_WORKSPACE_FLOATS * sizeof(float);
-            peak = std::max(peak, live + workspace_bytes);
-            reserved_peak = std::max(reserved_peak, live + cached_bytes + workspace_bytes);
-        }
+        void observed_workspace() { refresh_algorithm_workspace(); }
         void gather(StorageRef input, StorageRef indices, StorageRef output, const StridedLayout& input_layout, const StridedLayout& index_layout, const IndexProgram& program, bool select) {
             require(input.dtype == output.dtype, "HIP gather input/output dtype mismatch");
             require(program.dim >= 0 && size_t(program.dim) < input_layout.rank && program.boundary_mode >= 0 && program.boundary_mode <= 2, "Invalid HIP gather dimension or boundary");
@@ -321,9 +315,8 @@ namespace lfs::core::internal {
             require(select || count == program.total_elements, "HIP gather output count mismatch");
             const auto in = view(input), ix = view(indices), out = view(output);
             LfsHipError error{};
-            const int status = api.gather(context, in, static_cast<uint32_t>(input.dtype), ix, static_cast<uint32_t>(indices.dtype), out, &source, &idx, static_cast<uint32_t>(program.dim), static_cast<uint32_t>(program.boundary_mode), select ? 1 : 0, &error);
-            if (count && program.boundary_mode == 0 && (status == 0 || error.native_code == LFS_HIP_ERROR_INVALID_INDEX))
-                observed_workspace();
+            const LfsHipGather descriptor{sizeof(LfsHipGather), uint32_t(input.dtype), uint32_t(indices.dtype), uint32_t(program.dim), uint32_t(program.boundary_mode), select ? 1u : 0u, source, idx};
+            const int status = api.gather(context, in, ix, out, &descriptor, &error);
             check(status, error);
         }
         void index_update(StorageRef output, StorageRef indices, StorageRef source, const StridedLayout& layout, const IndexProgram& program, bool add) {
@@ -332,13 +325,8 @@ namespace lfs::core::internal {
             const auto destination = native_layout(layout);
             const auto out = view(output), idx = view(indices), src = view(source);
             LfsHipError error{};
-            const int status = api.index_update(context, out, static_cast<uint32_t>(output.dtype), idx, static_cast<uint32_t>(indices.dtype), src, &destination, static_cast<uint32_t>(program.dim), program.index_size, add ? 1 : 0, &error);
-            bool nonempty = program.index_size != 0;
-            for (size_t r = 0; r < layout.rank; ++r)
-                if (r != size_t(program.dim) && !layout.dims[r])
-                    nonempty = false;
-            if (nonempty && (status == 0 || error.native_code == LFS_HIP_ERROR_INVALID_INDEX))
-                observed_workspace();
+            const LfsHipIndexUpdate descriptor{sizeof(LfsHipIndexUpdate), uint32_t(output.dtype), uint32_t(indices.dtype), uint32_t(program.dim), add ? 1u : 0u, program.index_size, destination};
+            const int status = api.index_update(context, out, idx, src, &descriptor, &error);
             check(status, error);
         }
         void random(StorageRef output, const RandomProgram& program, uint32_t kind) {
@@ -370,7 +358,7 @@ namespace lfs::core::internal {
             float result = 0;
             check(api.reduce_f32(context, src, count, mode, &result, &error), error);
             if (count)
-                workspace_bytes = algorithm_workspace_bytes + LFS_HIP_REDUCTION_WORKSPACE_FLOATS * sizeof(float);
+                observed_workspace();
             peak = std::max(peak, live + workspace_bytes);
             reserved_peak = std::max(reserved_peak, live + cached_bytes + workspace_bytes);
             return result;
@@ -404,13 +392,13 @@ namespace lfs::core::internal {
             }
             if ((a.dtype == DataType::Int32 || a.dtype == DataType::Int64 || a.dtype == DataType::UInt32 || a.dtype == DataType::UInt8) && out.dtype == a.dtype) {
                 require(program.in_dtype == a.dtype && program.out_dtype == out.dtype && (!binary || b.dtype == a.dtype), "HIP integer arithmetic dtype mismatch");
-                LfsHipPredicate native{};
+                LfsHipIntegerPointwise native{};
                 native.struct_bytes = sizeof(native);
                 native.op = uint32_t(program.op);
                 native.dtype = uint32_t(a.dtype);
                 native.count = count;
                 native.scalar_kind = uint32_t(program.scalar.kind);
-                native.reserved = program.scalar.scalar_on_right ? 0 : 1;
+                native.scalar_left = program.scalar.scalar_on_right ? 0 : 1;
                 switch (program.scalar.kind) {
                 case ScalarKind::Float: native.float_scalar = program.scalar.value.float_value; break;
                 case ScalarKind::Int32: native.integer_scalar = program.scalar.value.int32_value; break;
@@ -424,7 +412,7 @@ namespace lfs::core::internal {
                 check(api.integer_pointwise(context, lhs, rhs, result, &native, &error), error);
                 return;
             }
-            if (out.dtype == DataType::Bool && (a.dtype == DataType::Int32 || a.dtype == DataType::Int64 || a.dtype == DataType::UInt32 || a.dtype == DataType::Float16)) {
+            if (out.dtype == DataType::Bool && (a.dtype == DataType::Int32 || a.dtype == DataType::Int64 || a.dtype == DataType::UInt32 || a.dtype == DataType::Float16 || a.dtype == DataType::UInt8 || a.dtype == DataType::Bool)) {
                 require(program.in_dtype == a.dtype && program.out_dtype == DataType::Bool && (!binary || b.dtype == a.dtype),
                         "HIP typed predicate dtype mismatch");
                 LfsHipPredicate native{};
@@ -433,7 +421,7 @@ namespace lfs::core::internal {
                 native.dtype = uint32_t(a.dtype);
                 native.count = count;
                 native.scalar_kind = uint32_t(program.scalar.kind);
-                native.reserved = program.scalar.scalar_on_right ? 0 : 1;
+                native.scalar_left = program.scalar.scalar_on_right ? 0 : 1;
                 switch (program.scalar.kind) {
                 case ScalarKind::Float: native.float_scalar = program.scalar.value.float_value; break;
                 case ScalarKind::Int32: native.integer_scalar = program.scalar.value.int32_value; break;
@@ -464,27 +452,6 @@ namespace lfs::core::internal {
                       error);
                 return;
             }
-            if (a.dtype == DataType::Bool || a.dtype == DataType::UInt8) {
-                require(program.in_dtype == a.dtype && out.dtype == DataType::Bool && program.out_dtype == DataType::Bool &&
-                            (!binary || b.dtype == a.dtype),
-                        "HIP byte predicate dtype mismatch");
-                const auto lhs = view(a, count), output = view(out, count);
-                const auto rhs = binary ? view(b, count) : LfsHipView{};
-                LfsHipError error{};
-                auto op = program.op;
-                if (!binary && !program.scalar.scalar_on_right) {
-                    switch (op) {
-                    case PointwiseOp::LessScalar: op = PointwiseOp::GreaterScalar; break;
-                    case PointwiseOp::LessEqualScalar: op = PointwiseOp::GreaterEqualScalar; break;
-                    case PointwiseOp::GreaterScalar: op = PointwiseOp::LessScalar; break;
-                    case PointwiseOp::GreaterEqualScalar: op = PointwiseOp::LessEqualScalar; break;
-                    default: break;
-                    }
-                }
-                check(api.boolean_pointwise(context, static_cast<uint32_t>(op), lhs, rhs, output, count, scalar_value(program.scalar), &error), error);
-                return;
-            }
-
             if (!binary && !program.scalar.scalar_on_right && (a.dtype == DataType::Float16 || a.dtype == DataType::Float32)) {
                 bool scalar_op = false;
                 switch (program.op) {
@@ -785,7 +752,7 @@ namespace lfs::core::internal {
             LfsHipError error{};
             check(impl_->api.reduce_typed_layout(impl_->context, in, out, &native, mask, native_reduce_op(program.op), static_cast<uint32_t>(input.dtype), static_cast<uint32_t>(output.dtype), &error), error);
             if (input.dtype == DataType::Float16 && program.op != ReduceOp::Any && program.op != ReduceOp::All) {
-                impl_->workspace_bytes = impl_->algorithm_workspace_bytes + LFS_HIP_REDUCTION_WORKSPACE_FLOATS * sizeof(float);
+                impl_->observed_workspace();
                 impl_->peak = std::max(impl_->peak, impl_->live + impl_->workspace_bytes);
                 impl_->reserved_peak = std::max(impl_->reserved_peak, impl_->live + impl_->cached_bytes + impl_->workspace_bytes);
             }
@@ -819,7 +786,7 @@ namespace lfs::core::internal {
             if (program.axis_count && !(mask & (1u << axis)) && !layout.dims[axis])
                 nonempty_output = false;
         if (nonempty_output)
-            impl_->workspace_bytes = impl_->algorithm_workspace_bytes + LFS_HIP_REDUCTION_WORKSPACE_FLOATS * sizeof(float);
+            impl_->observed_workspace();
         impl_->peak = std::max(impl_->peak, impl_->live + impl_->workspace_bytes);
         impl_->reserved_peak = std::max(impl_->reserved_peak, impl_->live + impl_->cached_bytes + impl_->workspace_bytes);
     }
@@ -847,14 +814,10 @@ namespace lfs::core::internal {
                 "HIP indexed extrema require Float32 input/values and Int64 indices");
         std::lock_guard lock(impl_->mutex);
         const auto in = impl_->view(input), val = impl_->view(values), idx = impl_->view(indices);
-        size_t growth = 0;
         LfsHipError error{};
         const int status = impl_->api.arg_extreme_f32(impl_->context, in, val, idx, program.outer, program.reduce,
-                                                      program.inner, program.maximum ? 1u : 0u, &growth, &error);
-        impl_->algorithm_workspace_bytes += growth;
-        impl_->workspace_bytes += growth;
-        impl_->peak = std::max(impl_->peak, impl_->live + impl_->workspace_bytes);
-        impl_->reserved_peak = std::max(impl_->reserved_peak, impl_->live + impl_->cached_bytes + impl_->workspace_bytes);
+                                                      program.inner, program.maximum ? 1u : 0u, &error);
+        impl_->refresh_algorithm_workspace();
         check(status, error);
         return true;
     }
@@ -893,6 +856,15 @@ namespace lfs::core::internal {
         std::lock_guard lock(impl_->mutex);
         const auto in = impl_->view(input), out = impl_->view(output);
         LfsHipError error{};
+        if (output.dtype == DataType::Bool && input.dtype != DataType::Bool) {
+            if (input.dtype == DataType::Float32) {
+                check(impl_->api.pointwise_f32(impl_->context, LFS_HIP_OP_NotEqualScalar, in, {}, out, count, 0.f, &error), error);
+            } else {
+                const LfsHipPredicate predicate{sizeof(LfsHipPredicate), LFS_HIP_OP_NotEqualScalar, uint32_t(input.dtype), 0, count, 0, 0.f, 0};
+                check(impl_->api.predicate_typed(impl_->context, in, {}, out, &predicate, &error), error);
+            }
+            return;
+        }
         check(impl_->api.convert(impl_->context, in, static_cast<uint32_t>(input.dtype), out, static_cast<uint32_t>(output.dtype), count, &error), error);
     }
     void HipBackendOps::index_cast(StorageRef input, StorageRef output, size_t count, size_t extent, ExecContext execution) {
@@ -903,7 +875,7 @@ namespace lfs::core::internal {
         LfsHipError error{};
         const int status = impl_->api.index_cast(impl_->context, in, out, count, extent, &error);
         if (count && (status == 0 || error.native_code == LFS_HIP_ERROR_INVALID_INDEX)) {
-            impl_->workspace_bytes = impl_->algorithm_workspace_bytes + LFS_HIP_REDUCTION_WORKSPACE_FLOATS * sizeof(float);
+            impl_->observed_workspace();
             impl_->peak = std::max(impl_->peak, impl_->live + impl_->workspace_bytes);
             impl_->reserved_peak = std::max(impl_->reserved_peak, impl_->live + impl_->cached_bytes + impl_->workspace_bytes);
         }
@@ -1003,10 +975,8 @@ namespace lfs::core::internal {
         std::lock_guard lock(impl_->mutex);
         const auto out = impl_->view(output), idx = impl_->view(indices);
         LfsHipError error{};
-        check(impl_->api.index_fill(impl_->context, out, static_cast<uint32_t>(output.dtype), idx,
-                                    static_cast<uint32_t>(indices.dtype), &destination, static_cast<uint32_t>(program.dim),
-                                    program.index_size, bits, &error),
-              error);
+        const LfsHipIndexFill descriptor{sizeof(LfsHipIndexFill), uint32_t(output.dtype), uint32_t(indices.dtype), uint32_t(program.dim), program.index_size, bits, destination};
+        check(impl_->api.index_fill(impl_->context, out, idx, &descriptor, &error), error);
     }
     void HipBackendOps::environment_composite(StorageRef rgb, StorageRef alpha, StorageRef environment,
                                               StorageRef output, const EnvironmentCompositeParams& params,
@@ -1837,7 +1807,7 @@ namespace lfs::core::internal {
         LfsHipError error{};
         check(impl_->api.chain_reduce_f32(impl_->context, src, dst, segments, size, &chain, operation, &error), error);
         if (segments < 64 && size > 4096)
-            impl_->workspace_bytes = impl_->algorithm_workspace_bytes + LFS_HIP_REDUCTION_WORKSPACE_FLOATS * sizeof(float);
+            impl_->observed_workspace();
         impl_->peak = std::max(impl_->peak, impl_->live + impl_->workspace_bytes);
         impl_->reserved_peak = std::max(impl_->reserved_peak, impl_->live + impl_->cached_bytes + impl_->workspace_bytes);
     }
@@ -1988,10 +1958,7 @@ namespace lfs::core::internal {
         const auto dst = impl_->view(output);
         const auto descriptor = native_layout(layout);
         LfsHipError error{};
-        if (output.dtype == DataType::Float32)
-            check(impl_->api.fill_strided_f32(impl_->context, dst, &descriptor, scalar_value(value), &error), error);
-        else
-            check(impl_->api.fill_layout_bits(impl_->context, dst, &descriptor, static_cast<uint32_t>(dtype_size(output.dtype)), typed_scalar_bits(output.dtype, value), &error), error);
+        check(impl_->api.fill_layout_bits(impl_->context, dst, &descriptor, static_cast<uint32_t>(dtype_size(output.dtype)), typed_scalar_bits(output.dtype, value), &error), error);
     }
     void HipBackendOps::clamp_fused(StorageRef input, StorageRef output, ScalarOperand minimum, ScalarOperand maximum, size_t count, ExecContext execution) {
         queue(execution);
@@ -2164,7 +2131,8 @@ namespace lfs::core::internal {
         const auto source = impl_->view(input), flags = impl_->view(mask), destination = impl_->view(output);
         uint64_t selected = 0;
         LfsHipError error{};
-        const int status = impl_->api.select(impl_->context, source, flags, destination, static_cast<uint32_t>(input.dtype), 0, program.count, program.selected_count, &selected, &error);
+        const LfsHipSelection descriptor{sizeof(LfsHipSelection), uint32_t(input.dtype), 0, 1, program.count, program.selected_count, program.selected_count};
+        const int status = impl_->api.select(impl_->context, source, flags, destination, &descriptor, &selected, &error);
         impl_->refresh_algorithm_workspace();
         check(status, error);
         return static_cast<size_t>(selected);
@@ -2191,7 +2159,8 @@ namespace lfs::core::internal {
         const auto source = impl_->view(input), destination = impl_->view(output);
         uint64_t selected = 0;
         LfsHipError error{};
-        const int status = impl_->api.select(impl_->context, source, {}, destination, static_cast<uint32_t>(input.dtype), 1, program.count, program.selected_count, &selected, &error);
+        const LfsHipSelection descriptor{sizeof(LfsHipSelection), uint32_t(input.dtype), 1, 1, program.count, program.selected_count, program.selected_count};
+        const int status = impl_->api.select(impl_->context, source, {}, destination, &descriptor, &selected, &error);
         impl_->refresh_algorithm_workspace();
         check(status, error);
         return static_cast<size_t>(selected);

@@ -2,41 +2,20 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include "predicate_api.h"
+#include "predicate_value_runtime.hpp"
 namespace {
     template <class T>
     __global__ void predicate_typed(uint32_t op, const T* lhs, const T* rhs, uint8_t* output, size_t count, T scalar, bool scalar_left) {
         for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += size_t(gridDim.x) * blockDim.x) {
             const T a = scalar_left ? scalar : lhs[i], b = rhs ? rhs[i] : (scalar_left ? lhs[i] : scalar);
-            bool value = false;
-            switch (op) {
-            case LFS_HIP_OP_EqualTensor:
-            case LFS_HIP_OP_EqualScalar: value = a == b; break;
-            case LFS_HIP_OP_NotEqualTensor:
-            case LFS_HIP_OP_NotEqualScalar: value = a != b; break;
-            case LFS_HIP_OP_LessTensor:
-            case LFS_HIP_OP_LessScalar: value = a < b; break;
-            case LFS_HIP_OP_LessEqualTensor:
-            case LFS_HIP_OP_LessEqualScalar: value = a <= b; break;
-            case LFS_HIP_OP_GreaterTensor:
-            case LFS_HIP_OP_GreaterScalar: value = a > b; break;
-            case LFS_HIP_OP_GreaterEqualTensor:
-            case LFS_HIP_OP_GreaterEqualScalar: value = a >= b; break;
-            case LFS_HIP_OP_LogicalAndTensor: value = (a != T{}) && (b != T{}); break;
-            case LFS_HIP_OP_LogicalOrTensor: value = (a != T{}) || (b != T{}); break;
-            case LFS_HIP_OP_LogicalXorTensor: value = (a != T{}) != (b != T{}); break;
-            case LFS_HIP_OP_LogicalNot: value = a == T{}; break;
-            case LFS_HIP_OP_IsNan: value = isnan(float(a)); break;
-            case LFS_HIP_OP_IsInf: value = isinf(float(a)); break;
-            case LFS_HIP_OP_IsFinite: value = isfinite(float(a)); break;
-            }
-            output[i] = value ? 1 : 0;
+            output[i] = predicate_value(op, a, b) ? 1 : 0;
         }
     }
 } // namespace
 extern "C" int lfs_hip_predicate_typed(LfsHipContext* context, LfsHipView lhs, LfsHipView rhs, LfsHipView output,
                                        const LfsHipPredicate* p, LfsHipError* error) {
     return boundary(error, [&] {
-        require(context && p && p->struct_bytes == sizeof(*p) && p->reserved <= 1 && p->count <= SIZE_MAX && p->scalar_kind <= 3,
+        require(context && p && p->struct_bytes == sizeof(*p) && p->scalar_left <= 1 && p->count <= SIZE_MAX && p->scalar_kind <= 3,
                 "Invalid HIP typed predicate descriptor");
         const bool binary = p->op >= LFS_HIP_OP_EqualTensor && p->op <= LFS_HIP_OP_LogicalXorTensor;
         const bool scalar = p->op >= LFS_HIP_OP_EqualScalar && p->op <= LFS_HIP_OP_GreaterEqualScalar;
@@ -78,7 +57,7 @@ extern "C" int lfs_hip_predicate_typed(LfsHipContext* context, LfsHipView lhs, L
             hipLaunchKernelGGL((predicate_typed<T>), dim3(blocks(p->count)), dim3(256), 0, context->stream, p->op,
                                reinterpret_cast<const T*>(static_cast<const char*>(lhs.buffer->data) + lhs.offset),
                                binary ? reinterpret_cast<const T*>(static_cast<const char*>(rhs.buffer->data) + rhs.offset) : nullptr,
-                               static_cast<uint8_t*>(output.buffer->data) + output.offset, size_t(p->count), value, scalar && p->reserved == 1);
+                               static_cast<uint8_t*>(output.buffer->data) + output.offset, size_t(p->count), value, scalar && p->scalar_left == 1);
         };
         switch (p->dtype) {
         case LFS_HIP_I32: launch.template operator()<int32_t>(); break;

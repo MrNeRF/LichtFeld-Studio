@@ -24,17 +24,17 @@ class HipPointwiseGeneration(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.source = Path(self.temporary.name) / "source"
         self.source.mkdir()
-        for name in ("pointwise_ops.def", "tensor_functors.hpp"):
+        for name in ("pointwise_ops.def", "tensor_functors.hpp", "pointwise_lowering.hpp"):
             (self.source / name).write_bytes((SOURCE / name).read_bytes())
 
-    def test_every_shared_operation_has_both_dispatches(self):
+    def test_shared_catalog_and_reachable_half_dispatch(self):
         names = re.findall(r'LFS_POINTWISE_OP\((\w+),', (SOURCE / "pointwise_ops.def").read_text())
         generated = generator.generate(self.source)
         for dtype in ("f32", "f16"):
             actual = re.findall(r'case LFS_HIP_OP_(\w+):', generated[f"hip_pointwise_{dtype}.inc"])
-            self.assertEqual(actual, names)
-        self.assertIn("__HIP_DEVICE_COMPILE__", generated["hip_pointwise_functors.hpp"])
-        self.assertNotIn("__CUDA_ARCH__", generated["hip_pointwise_functors.hpp"])
+            self.assertEqual(actual, names if dtype == "f32" else [name for name in names if name in generator.HALF_OPERATIONS])
+        self.assertEqual(len(generator.HALF_OPERATIONS), 17)
+        self.assertEqual(generated["hip_pointwise_functors.hpp"], '#pragma once\n#include "tensor_functors.hpp"\n')
         self.assertEqual((self.source / "tensor_functors.hpp").read_bytes(), (SOURCE / "tensor_functors.hpp").read_bytes())
 
     def test_duplicate_catalog_entry_is_rejected(self):
@@ -57,11 +57,10 @@ class HipPointwiseGeneration(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unsupported scalar"):
             generator.generate(self.source)
 
-    def test_changed_relu_requires_review(self):
-        functors = self.source / "tensor_functors.hpp"
-        functors.write_text(functors.read_text().replace(
-            "isnan(static_cast<float>(x)) ? x : fmaxf(x, T(0))", "changed_relu_expression"))
-        with self.assertRaisesRegex(ValueError, "Shared ReLU changed"):
+    def test_unsupported_shared_lowering_is_rejected(self):
+        lowering = self.source / "pointwise_lowering.hpp"
+        lowering.write_text(lowering.read_text().replace("ops::scalar_right_op<ops::add_op, float>", "unknown_binding"))
+        with self.assertRaisesRegex(ValueError, "Unsupported scalar"):
             generator.generate(self.source)
 
     def test_cli_preserves_unchanged_output_timestamps(self):

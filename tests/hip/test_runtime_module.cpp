@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Relative startup dependency was accepted");
         if (revision) {
             const std::string expected = revision == LFS_HIP_RUNTIME_ABI_VERSION ? "Missing HIP runtime export: lfs_hip_device_count"
-                                                                                 : "HIP runtime ABI mismatch: expected 5, got " + std::to_string(revision);
+                                                                                 : "HIP runtime ABI mismatch: expected 6, got " + std::to_string(revision);
             std::unique_ptr<UnicodeModuleFixture> fixture;
             if (revision == 1)
                 fixture = std::make_unique<UnicodeModuleFixture>(path);

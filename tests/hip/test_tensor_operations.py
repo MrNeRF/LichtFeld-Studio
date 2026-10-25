@@ -57,7 +57,7 @@ class Random(c.Structure):
 class Predicate(c.Structure):
     _fields_ = [("struct_bytes", c.c_uint32), ("op", c.c_uint32), ("dtype", c.c_uint32),
                 ("scalar_kind", c.c_uint32), ("count", c.c_uint64), ("integer_scalar", c.c_int64),
-                ("float_scalar", c.c_float), ("reserved", c.c_uint32)]
+                ("float_scalar", c.c_float), ("scalar_left", c.c_uint32)]
 
 
 class Gemm(c.Structure):
@@ -68,6 +68,24 @@ class Gemm(c.Structure):
 class Where(c.Structure):
     _fields_ = [("struct_bytes", c.c_uint32), ("dtype", c.c_uint32),
                 ("condition", Layout), ("x", Layout), ("y", Layout), ("output", Layout)]
+
+
+class Selection(c.Structure):
+    _fields_ = [("struct_bytes", c.c_uint32), ("dtype", c.c_uint32), ("kind", c.c_uint32),
+                ("count_known", c.c_uint32), ("count", c.c_uint64),
+                ("capacity", c.c_uint64), ("selected_count", c.c_uint64)]
+
+
+class Gather(c.Structure):
+    _fields_ = [(name, c.c_uint32) for name in ("struct_bytes", "dtype", "index_dtype", "dim", "boundary_mode", "index_select")] + [("input_layout", Layout), ("index_layout", Layout)]
+
+
+class IndexUpdate(c.Structure):
+    _fields_ = [(name, c.c_uint32) for name in ("struct_bytes", "dtype", "index_dtype", "dim", "add")] + [("index_count", c.c_uint64), ("output_layout", Layout)]
+
+
+class IndexFill(c.Structure):
+    _fields_ = [(name, c.c_uint32) for name in ("struct_bytes", "dtype", "index_dtype", "dim")] + [("index_count", c.c_uint64), ("value_bits", c.c_uint64), ("output_layout", Layout)]
 
 
 class TensorOperations(native.RuntimeContract):
@@ -84,20 +102,18 @@ class TensorOperations(native.RuntimeContract):
             "strided_copy": [P, View, View, L, U, E],
             "strided_scatter": [P, View, View, L, U, U, E],
             "fill_layout_bits": [P, View, L, U, c.c_uint64, E],
-            "fill_strided_f32": [P, View, L, c.c_float, E],
             "reduce_f32": [P, View, Z, U, c.POINTER(c.c_float), E],
             "reduce_layout_f32": [P, View, View, L, U, U, E],
             "reduce_typed_layout": [P, View, View, L, U, U, U, U, E],
-            "arg_extreme_f32": [P, View, View, View, Z, Z, Z, U, c.POINTER(Z), E],
+            "arg_extreme_f32": [P, View, View, View, Z, Z, Z, U, E],
             "chain_f32": [P, View, View, Z, c.POINTER(Chain), E],
             "chain_reduce_f32": [P, View, View, Z, Z, c.POINTER(Chain), U, E],
             "integer_pointwise": [P, View, View, View, c.POINTER(Predicate), E],
             "predicate_typed": [P, View, View, View, c.POINTER(Predicate), E],
-            "boolean_pointwise": [P, U, View, View, View, Z, c.c_float, E],
             "clamp_i32": [P, View, Z, c.c_int32, c.c_int32, E],
             "cumsum": [P, View, U, L, U, E],
             "sort_pairs": [P, View, View, Z, Z, Z, U, E],
-            "select": [P, View, View, View, U, U, Z, Z, c.POINTER(c.c_uint64), E],
+            "select": [P, View, View, View, c.POINTER(Selection), c.POINTER(c.c_uint64), E],
             "masked_scatter": [P, View, View, View, U, Z, Z, E],
             "where_layout": [P, View, View, View, View, c.POINTER(Where), E],
             "masked_fill": [P, View, View, c.c_uint64, U, c.c_float, E],
@@ -105,11 +121,11 @@ class TensorOperations(native.RuntimeContract):
             "random": [P, View, c.POINTER(Random), E],
             "count_nonzero": [P, View, U, Z, c.POINTER(c.c_uint64), E],
             "index_cast": [P, View, View, Z, Z, E],
-            "gather": [P, View, U, View, U, View, L, L, U, U, U, E],
+            "gather": [P, View, View, View, c.POINTER(Gather), E],
             "gather_unary_f32": [P, View, View, U, View, Z, Z, U, E],
             "index_put_f32": [P, View, View, U, View, Z, Z, E],
-            "index_update": [P, View, U, View, U, View, L, U, Z, U, E],
-            "index_fill": [P, View, U, View, U, L, U, Z, c.c_uint64, E],
+            "index_update": [P, View, View, View, c.POINTER(IndexUpdate), E],
+            "index_fill": [P, View, View, c.POINTER(IndexFill), E],
             "gemm_f32": [P, View, View, View, View, c.POINTER(Gemm), E],
             "cdist_f32": [P, View, View, View, Z, Z, Z, c.c_float, E],
             "memory_info": [P, c.POINTER(MemoryInfo), E],
@@ -151,6 +167,30 @@ class TensorOperations(native.RuntimeContract):
         self.assertTrue(error.message)
         return error
 
+    def gather_checked(self, context, source, dtype, indices, index_dtype, output, source_layout, index_layout, dim, boundary, select):
+        p = Gather(c.sizeof(Gather), dtype, index_dtype, dim, boundary, select, c.cast(source_layout, c.POINTER(Layout)).contents, c.cast(index_layout, c.POINTER(Layout)).contents)
+        self.checked("gather", context, source, indices, output, c.byref(p))
+
+    def index_update_checked(self, context, output, dtype, indices, index_dtype, source, shape, dim, count, add):
+        p = IndexUpdate(c.sizeof(IndexUpdate), dtype, index_dtype, dim, add, count, c.cast(shape, c.POINTER(Layout)).contents)
+        self.checked("index_update", context, output, indices, source, c.byref(p))
+
+    def index_fill_checked(self, context, output, dtype, indices, index_dtype, shape, dim, count, bits):
+        p = IndexFill(c.sizeof(IndexFill), dtype, index_dtype, dim, count, bits, c.cast(shape, c.POINTER(Layout)).contents)
+        self.checked("index_fill", context, output, indices, c.byref(p))
+
+    def select_checked(self, context, source, mask, output, dtype, kind, count, capacity, selected, *, known=None):
+        p = Selection(c.sizeof(Selection), dtype, kind, known is not None, count, capacity, known or 0)
+        self.checked("select", context, source, mask, output, c.byref(p), selected)
+
+    def select_reject(self, context, source, mask, output, dtype, kind, count, capacity, selected):
+        p = Selection(c.sizeof(Selection), dtype, kind, 0, count, capacity, 0)
+        return self.reject("select", context, source, mask, output, c.byref(p), selected)
+
+    def fill_float(self, action, context, output, shape, value):
+        bits = struct.unpack("<I", struct.pack("<f", value))[0]
+        return getattr(self, action)("fill_layout_bits", context, output, shape, 4, bits)
+
     def test_all_conversion_pairs_and_scalar_left(self):
         with self.resources() as context:
             for input_dtype in range(7):
@@ -159,10 +199,16 @@ class TensorOperations(native.RuntimeContract):
                 for output_dtype in range(7):
                     with self.subTest(source=input_dtype, destination=output_dtype):
                         output = self.tensor(context, [99] * len(values), output_dtype)
+                        targets = {0: {0, 1, 2, 3, 4, 6}, 1: {0, 1, 2, 3, 4}, 2: {0, 1, 2, 3, 4},
+                                   3: {0, 1, 2, 3, 4}, 4: {0, 1, 2, 3, 4, 5}, 5: {0, 1, 2, 3, 4, 5}, 6: {0, 3, 6}}
+                        if output_dtype not in targets[input_dtype]:
+                            self.reject("convert", context, source, input_dtype, output, output_dtype, len(values))
+                            self.assertEqual(self.read(context, output, len(values), output_dtype), [99] * len(values))
+                            continue
                         self.checked("convert", context, source, input_dtype, output, output_dtype, len(values))
                         expected = [int(bool(x)) for x in values] if output_dtype == 5 else values
                         self.assertEqual(self.read(context, output, len(values), output_dtype), expected)
-            for dtype in (0, 1):
+            for dtype in (0,):
                 source = self.tensor(context, [1, 2, 4], dtype)
                 output = self.tensor(context, [0, 0, 0], dtype)
                 self.checked("scalar_left_typed", context, self.operations["DivScalar"], source, output, 3, 8, dtype)
@@ -196,14 +242,14 @@ class TensorOperations(native.RuntimeContract):
             self.assertEqual(self.read(context, output, 6), [0, 3, 1, 4, 2, 5])
             holes = self.tensor(context, [99] * 8)
             sparse = layout([2, 2], [4, 1])
-            self.checked("fill_strided_f32", context, holes, c.byref(sparse), 7)
+            self.fill_float("checked", context, holes, c.byref(sparse), 7)
             self.assertEqual(self.read(context, holes, 8), [7, 7, 99, 99, 7, 7, 99, 99])
             bits = struct.unpack("<I", struct.pack("<f", 3))[0]
             self.checked("fill_layout_bits", context, holes, c.byref(sparse), 4, bits)
             self.assertEqual(self.read(context, holes, 8), [3, 3, 99, 99, 3, 3, 99, 99])
             self.reject("broadcast_typed", context, self.operations["AddTensor"], source, output, holes,
                         c.byref(layout([2])), c.byref(layout([3])), c.byref(layout([3])), 0, 4)
-            self.reject("fill_strided_f32", context, holes, c.byref(layout([2, 2], [0, 1])), 8)
+            self.fill_float("reject", context, holes, c.byref(layout([2, 2], [0, 1])), 8)
 
     def test_integer_unary_functors_preserve_precision_and_wraparound(self):
         with self.resources() as context:
@@ -289,6 +335,10 @@ class TensorOperations(native.RuntimeContract):
             self.checked("memory_info", context, c.byref(info))
             self.assertEqual(info.workspace, 0)
 
+    def byte_predicate(self, action, context, operation, source, output, count, scalar, dtype=4):
+        p = Predicate(c.sizeof(Predicate), self.operations[operation], dtype, 0, count, 0, scalar, 0)
+        getattr(self, action)("predicate_typed", context, source, View(), output, c.byref(p))
+
     def test_byte_scalar_cast_matches_typed_comparison(self):
         with self.resources() as context:
             for dtype, values, scalar, expected in (
@@ -302,7 +352,7 @@ class TensorOperations(native.RuntimeContract):
                 self.checked("predicate_typed", context, source, View(), output, c.byref(p))
                 self.assertEqual(self.read(context, output, 3, 4), expected)
             source = self.tensor(context, [0, 1, 2], 4)
-            self.checked("boolean_pointwise", context, self.operations["EqualScalar"], source, View(), output, 3, 0.5)
+            self.byte_predicate("checked", context, "EqualScalar", source, output, 3, 0.5)
             self.assertEqual(self.read(context, output, 3, 4), [1, 0, 0])
 
     def test_integer_precision_predicates_and_boolean_masks(self):
@@ -325,7 +375,7 @@ class TensorOperations(native.RuntimeContract):
             self.checked("predicate_typed", context, source, View(), mask, c.byref(p))
             self.assertEqual(self.read(context, mask, 3, 4), [0, 1, 0])
             boolean = self.tensor(context, [0, 1, 1], 5)
-            self.checked("boolean_pointwise", context, self.operations["LogicalNot"], boolean, View(), mask, 3, 0)
+            self.byte_predicate("checked", context, "LogicalNot", boolean, mask, 3, 0, dtype=5)
             self.assertEqual(self.read(context, mask, 3, 4), [1, 0, 0])
             integers = self.tensor(context, [-9, 0, 9], 2)
             self.checked("clamp_i32", context, integers, 3, -2, 4)
@@ -392,11 +442,11 @@ class TensorOperations(native.RuntimeContract):
             mask = self.tensor(context, [1, 0, 1, 0, 1], 4)
             output = self.tensor(context, [99] * 5)
             selected = c.c_uint64()
-            self.checked("select", context, source, mask, output, 0, 0, 5, 5, c.byref(selected))
+            self.select_checked(context, source, mask, output, 0, 0, 5, 5, c.byref(selected))
             self.assertEqual(selected.value, 3)
             self.assertEqual(self.read(context, output, 3), [7, 4, 1])
             positions = self.tensor(context, [99] * 5, 3)
-            self.checked("select", context, mask, View(), positions, 4, 1, 5, 5, c.byref(selected))
+            self.select_checked(context, mask, View(), positions, 4, 1, 5, 5, c.byref(selected))
             self.assertEqual(self.read(context, positions, 3, 3), [0, 2, 4])
             replacement = self.tensor(context, [10, 20, 30])
             self.checked("masked_scatter", context, source, mask, replacement, 0, 5, 3)
@@ -404,29 +454,47 @@ class TensorOperations(native.RuntimeContract):
             self.checked("masked_fill", context, mask, source, 5, 0, -2)
             self.assertEqual(self.read(context, source, 5), [-2, 9, -2, 8, -2])
 
-    def test_sort_preserves_nan_payloads_and_stable_signed_zeros(self):
+    def test_precounted_selection_and_scatter_count_errors(self):
         with self.resources() as context:
-            bits = [0, 0x80000000, 0x7FC00001, 0xFFC01234, 0x3F800000, 0xBF800000, 0x80000000, 0]
-            values = [struct.unpack("<f", struct.pack("<I", x))[0] for x in bits]
-            for descending in (0, 1):
-                source = self.tensor(context, bits, 6)
-                indices = self.tensor(context, [99] * len(bits), 3)
-                self.checked("sort_pairs", context, source, indices, 1, len(bits), 1, descending)
-                key = lambda i: (math.isnan(values[i]), 0 if math.isnan(values[i]) else values[i])
-                expected = sorted(range(len(bits)), key=key, reverse=bool(descending))
-                self.assertEqual(self.read(context, indices, len(bits), 3), expected)
-                self.assertEqual(self.read(context, source, len(bits), 6), [bits[i] for i in expected])
+            mask = self.tensor(context, [1, 0, 1, 0, 1], 4)
+            source = self.tensor(context, [3, 8, 5, 9, 7])
+            result = self.tensor(context, [99] * 4)
+            selected = c.c_uint64(99)
+            self.select_checked(context, source, mask, result, 0, 0, 5, 3, c.byref(selected), known=3)
+            self.assertEqual(selected.value, 3)
+            self.assertEqual(self.read(context, result, 4), [3, 5, 7, 99])
+            positions = self.tensor(context, [99] * 4, 3)
+            self.select_checked(context, mask, View(), positions, 4, 1, 5, 3, c.byref(selected), known=3)
+            self.assertEqual(self.read(context, positions, 4, 3), [0, 2, 4, 99])
 
-    def test_segmented_sort_orders_special_values_stably(self):
+    def test_invalid_scatter_count_is_asynchronous_and_preserves_output(self):
         with self.resources() as context:
-            values = [float("nan"), -float("inf"), -0.0, 0.0, float("inf"), 3.0, -2.0] * 151
-            for descending in (0, 1):
-                source = self.tensor(context, values * 2)
-                indices = self.tensor(context, [0] * (2 * len(values)), 3)
-                self.checked("sort_pairs", context, source, indices, 2, len(values), 1, descending)
-                key = lambda i: (math.isnan(values[i]), 0 if math.isnan(values[i]) else values[i])
-                expected = sorted(range(len(values)), key=key, reverse=bool(descending))
-                self.assertEqual(self.read(context, indices, 2 * len(values), 3), expected * 2)
+            output = self.tensor(context, [99] * 5)
+            mask = self.tensor(context, [1, 0, 1, 0, 1], 4)
+            source = self.tensor(context, [3, 5])
+            self.checked("masked_scatter", context, output, mask, source, 0, 5, 2)
+            self.reject("context_synchronize", context)
+            self.assertEqual(self.read(context, output, 5), [99] * 5)
+            source = self.tensor(context, [3, 5, 7])
+            self.checked("masked_scatter", context, output, mask, source, 0, 5, 3)
+            self.assertEqual(self.read(context, output, 5), [3, 99, 5, 99, 7])
+
+    def test_segmented_sort_preserves_payloads_and_stable_special_value_order(self):
+        payloads = [0, 0x80000000, 0x7FC00001, 0xFFC01234, 0x3F800000, 0xBF800000, 0x80000000, 0]
+        long_values = [float("nan"), -float("inf"), -0.0, 0.0, float("inf"), 3.0, -2.0] * 151
+        long_bits = [struct.unpack("<I", struct.pack("<f", x))[0] for x in long_values]
+        with self.resources() as context:
+            for bits, outer in ((payloads, 1), (long_bits, 2)):
+                values = [struct.unpack("<f", struct.pack("<I", x))[0] for x in bits]
+                for descending in (0, 1):
+                    with self.subTest(segments=outer, descending=descending):
+                        source = self.tensor(context, bits * outer, 6)
+                        indices = self.tensor(context, [99] * (len(bits) * outer), 3)
+                        self.checked("sort_pairs", context, source, indices, outer, len(bits), 1, descending)
+                        key = lambda i: (math.isnan(values[i]), 0 if math.isnan(values[i]) else values[i])
+                        expected = sorted(range(len(bits)), key=key, reverse=bool(descending))
+                        self.assertEqual(self.read(context, indices, len(bits) * outer, 3), expected * outer)
+                        self.assertEqual(self.read(context, source, len(bits) * outer, 6), [bits[i] for i in expected] * outer)
 
     def test_selection_preserves_all_storage_bits(self):
         with self.resources() as context:
@@ -436,13 +504,13 @@ class TensorOperations(native.RuntimeContract):
                 mask = self.tensor(context, [0, 1, 0, 1], 4)
                 output = self.tensor(context, [0, 0], dtype)
                 selected = c.c_uint64()
-                self.checked("select", context, source, mask, output, dtype, 0, 4, 2, c.byref(selected))
+                self.select_checked(context, source, mask, output, dtype, 0, 4, 2, c.byref(selected))
                 self.assertEqual(self.read(context, output, 2, dtype), [values[1], values[3]])
             bits = [0xffc12345, 0x80000000, 0x7fc54321, 0]
             source = self.tensor(context, bits, 6)
             output = self.tensor(context, [0, 0], 6)
             mask = self.tensor(context, [1, 1, 0, 0], 4)
-            self.checked("select", context, source, mask, output, 0, 0, 4, 2, c.byref(selected))
+            self.select_checked(context, source, mask, output, 0, 0, 4, 2, c.byref(selected))
             self.assertEqual(self.read(context, output, 2, 6), bits[:2])
 
     def test_sparse_selection_retains_no_full_result_scratch(self):
@@ -452,7 +520,7 @@ class TensorOperations(native.RuntimeContract):
             mask = self.tensor(context, [1] + [0] * (size - 2) + [1], 4)
             output = self.tensor(context, [99, 99])
             selected = c.c_uint64()
-            self.checked("select", context, source, mask, output, 0, 0, size, 2, c.byref(selected))
+            self.select_checked(context, source, mask, output, 0, 0, size, 2, c.byref(selected))
             self.assertEqual(selected.value, 2)
             self.assertEqual(self.read(context, output, 2), [0, size - 1])
             info = MemoryInfo()
@@ -481,10 +549,10 @@ class TensorOperations(native.RuntimeContract):
                 output = self.tensor(context, [99] * 4, 3)
                 self.checked("count_nonzero", context, source, dtype, 4, c.byref(count))
                 self.assertEqual(count.value, 2)
-                self.checked("select", context, source, View(), output, dtype, 1, 4, 4, c.byref(count))
+                self.select_checked(context, source, View(), output, dtype, 1, 4, 4, c.byref(count))
                 self.assertEqual(self.read(context, output, 2, 3), [1, 3])
                 output = self.tensor(context, [99], 3)
-                self.reject("select", context, source, View(), output, dtype, 1, 4, 1, c.byref(count))
+                self.select_reject(context, source, View(), output, dtype, 1, 4, 1, c.byref(count))
                 self.assertEqual(count.value, 0)
                 self.assertEqual(self.read(context, output, 1, 3), [99])
 
@@ -514,8 +582,7 @@ class TensorOperations(native.RuntimeContract):
                     original[reduced + 1] = float("nan")
                     source = self.tensor(context, original)
                     values, indices = self.tensor(context, [99, 99]), self.tensor(context, [99, 99], 3)
-                    growth = c.c_size_t(123)
-                    self.checked("arg_extreme_f32", context, source, values, indices, 2, reduced, 1, maximum, c.byref(growth))
+                    self.checked("arg_extreme_f32", context, source, values, indices, 2, reduced, 1, maximum)
                     self.assertEqual(self.read(context, indices, 2, 3), [1, 1])
                     actual = self.read(context, values, 2)
                     self.assertEqual(actual[0], 9 if maximum else -9)
@@ -561,26 +628,28 @@ class TensorOperations(native.RuntimeContract):
             self.reject("gemm_f32", context, source, source, View(), output, c.byref(Gemm(0, 0, 0, 1, 2, 2, 2)))
             self.assertEqual(self.read(context, output, 4), [99] * 4)
 
-    def test_indexing_and_invalid_indices_preserve_outputs(self):
+    def test_indexing_and_asynchronous_invalid_indices(self):
         with self.resources() as context:
             source = self.tensor(context, [10, 20, 30, 40, 50, 60])
             indices = self.tensor(context, [2, 0], 3)
             output = self.tensor(context, [99] * 4)
             matrix, index_layout = layout([2, 3]), layout([2])
-            self.checked("gather", context, source, 0, indices, 3, output,
+            self.gather_checked(context, source, 0, indices, 3, output,
                          c.byref(matrix), c.byref(index_layout), 1, 0, 1)
             self.assertEqual(self.read(context, output, 4), [30, 10, 60, 40])
             invalid = self.tensor(context, [0, 5], 3)
-            before = self.read(context, output, 4)
-            error = self.reject("gather", context, source, 0, invalid, 3, output,
-                                c.byref(matrix), c.byref(index_layout), 1, 0, 1)
+            self.gather_checked(context, source, 0, invalid, 3, output,
+                         c.byref(matrix), c.byref(index_layout), 1, 0, 1)
+            error = self.reject("context_synchronize", context)
             self.assertEqual(error.native_code, -2)
-            self.assertEqual(self.read(context, output, 4), before)
+            # Valid elements may complete; invalid elements never access source/output.
+            self.assertEqual(self.read(context, output, 4), [10, 10, 40, 40])
+            self.checked("context_synchronize", context)
             values = self.tensor(context, [3, 4, 5, 6])
-            self.checked("index_update", context, source, 0, indices, 3, values, c.byref(matrix), 1, 2, 0)
+            self.index_update_checked(context, source, 0, indices, 3, values, c.byref(matrix), 1, 2, 0)
             self.assertEqual(self.read(context, source, 6), [4, 20, 3, 6, 50, 5])
             bits = struct.unpack("<I", struct.pack("<f", 7))[0]
-            self.checked("index_fill", context, source, 0, indices, 3, c.byref(matrix), 1, 2, bits)
+            self.index_fill_checked(context, source, 0, indices, 3, c.byref(matrix), 1, 2, bits)
             self.assertEqual(self.read(context, source, 6), [7, 20, 7, 7, 50, 7])
             flat_indices = self.tensor(context, [-1, 0, 100], 3)
             flat_output = self.tensor(context, [0] * 3)
@@ -592,12 +661,29 @@ class TensorOperations(native.RuntimeContract):
             self.checked("index_cast", context, indices, cast, 2, 6)
             self.assertEqual(self.read(context, cast, 2, 2), [2, 0])
 
+    def test_invalid_update_fill_and_cast_skip_out_of_range_lanes(self):
+        with self.resources() as context:
+            output = self.tensor(context, [99] * 6)
+            indices = self.tensor(context, [-1, 3], 3)
+            values = self.tensor(context, [1, 2, 3, 4])
+            for add in (0, 1):
+                self.index_update_checked(context, output, 0, indices, 3, values, c.byref(layout([2, 3])), 1, 2, add)
+                self.assertEqual(self.reject("context_synchronize", context).native_code, -2)
+                self.assertEqual(self.read(context, output, 6), [99] * 6)
+            self.index_fill_checked(context, output, 0, indices, 3, c.byref(layout([2, 3])), 1, 2, 0)
+            self.assertEqual(self.reject("context_synchronize", context).native_code, -2)
+            self.assertEqual(self.read(context, output, 6), [99] * 6)
+            cast = self.tensor(context, [77, 77], 2)
+            self.checked("index_cast", context, indices, cast, 2, 3)
+            self.assertEqual(self.reject("context_synchronize", context).native_code, -2)
+            self.assertEqual(self.read(context, cast, 2, 2), [77, 77])
+
     def test_byte_predicates_and_integer_clamp_cover_capped_grid_tail(self):
         count = 4096 * 256 + 17
         with self.resources() as context:
             source = self.tensor(context, [0] * count, 4)
             output = self.tensor(context, [77] * count, 4)
-            self.checked("boolean_pointwise", context, self.operations["LogicalNot"], source, View(), output, count, 0)
+            self.byte_predicate("checked", context, "LogicalNot", source, output, count, 0)
             self.assertEqual(self.read(context, View(output.buffer, count - 17), 17, 4), [1] * 17)
             integers = self.tensor(context, [-7] * count, 2)
             self.checked("clamp_i32", context, integers, count, -2, 3)
@@ -607,9 +693,9 @@ class TensorOperations(native.RuntimeContract):
         with self.resources() as context:
             values = self.tensor(context, [0, 1, 0, 1, 0], 4)
             shifted = View(values.buffer, 1)
-            self.reject("boolean_pointwise", context, self.operations["LogicalNot"], values, View(), shifted, 4, 0)
+            self.byte_predicate("reject", context, "LogicalNot", values, shifted, 4, 0)
             self.assertEqual(self.read(context, values, 5, 4), [0, 1, 0, 1, 0])
-            self.checked("boolean_pointwise", context, self.operations["LogicalNot"], values, View(), values, 5, 0)
+            self.byte_predicate("checked", context, "LogicalNot", values, values, 5, 0)
             self.assertEqual(self.read(context, values, 5, 4), [1, 0, 1, 0, 1])
 
     def test_indexed_add_accumulates_duplicate_indices(self):
@@ -620,7 +706,7 @@ class TensorOperations(native.RuntimeContract):
                     indices = self.tensor(context, [2, 2, 0], 2)
                     values = self.tensor(context, [1, 2, 3, 4, 5, 6], dtype)
                     shape = layout([2, 3])
-                    self.checked("index_update", context, destination, dtype, indices, 2,
+                    self.index_update_checked(context, destination, dtype, indices, 2,
                                  values, c.byref(shape), 1, 3, 1)
                     self.assertEqual(self.read(context, destination, 6, dtype), [3, 0, 3, 6, 0, 9])
 
@@ -710,6 +796,57 @@ class TensorFaultRecovery(TensorOperations):
     def tearDown(self):
         self.fail_once(0)
         self.assertEqual(self.live_resources(), 0)
+
+    def test_index_error_storage_allocation_and_cleanup_can_retry(self):
+        for fault in (1, 8):
+            with self.subTest(fault=fault), self.resources() as context:
+                source = self.tensor(context, [1, 2, 3])
+                indices = self.tensor(context, [2, 0], 3)
+                output = self.tensor(context, [99, 99])
+                p = Gather(c.sizeof(Gather), 0, 3, 0, 0, 1, layout([3]), layout([2]))
+                self.fail_once(fault)
+                self.reject("gather", context, source, indices, output, c.byref(p))
+                self.assertEqual(self.read(context, output, 2), [99, 99])
+                self.checked("gather", context, source, indices, output, c.byref(p))
+                self.assertEqual(self.read(context, output, 2), [3, 1])
+                self.fail_once(2)
+                self.reject("context_destroy", context)
+                # The context retains only resources whose release failed;
+                # the resources() finalizer retries destruction.
+
+    def test_index_error_survives_failed_sync_and_is_consumed_once(self):
+        with self.resources() as context:
+            source = self.tensor(context, [1, 2, 3])
+            indices = self.tensor(context, [-1, 3], 3)
+            output = self.tensor(context, [99, 99])
+            self.gather_checked(context, source, 0, indices, 3, output, c.byref(layout([3])), c.byref(layout([2])), 0, 0, 1)
+            self.fail_once(7)
+            self.reject("context_synchronize", context)
+            self.assertEqual(self.reject("context_synchronize", context).native_code, -2)
+            self.checked("context_synchronize", context)
+            self.assertEqual(self.read(context, output, 2), [99, 99])
+
+    def test_precounted_selection_and_scatter_do_not_drain_the_stream(self):
+        with self.resources() as context:
+            source = self.tensor(context, [1, 2, 3])
+            mask = self.tensor(context, [1, 0, 1], 4)
+            output = self.tensor(context, [99, 99])
+            selected = c.c_uint64()
+            self.select_checked(context, source, mask, output, 0, 0, 3, 2, c.byref(selected), known=2)
+            self.checked("context_synchronize", context)
+            self.fail_once(7)
+            self.select_checked(context, source, mask, output, 0, 0, 3, 2, c.byref(selected), known=2)
+            self.reject("context_synchronize", context)
+            self.checked("context_synchronize", context)
+            self.assertEqual(self.read(context, output, 2), [1, 3])
+            destination = self.tensor(context, [99, 99, 99])
+            self.checked("masked_scatter", context, destination, mask, output, 0, 3, 2)
+            self.checked("context_synchronize", context)
+            self.fail_once(7)
+            self.checked("masked_scatter", context, destination, mask, output, 0, 3, 2)
+            self.reject("context_synchronize", context)
+            self.checked("context_synchronize", context)
+            self.assertEqual(self.read(context, destination, 3), [1, 99, 3])
 
     def test_workspace_release_and_allocation_failure_are_retryable(self):
         with self.resources() as context:

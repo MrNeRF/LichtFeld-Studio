@@ -11,7 +11,7 @@ import re
 import struct
 import unittest
 
-EXPECTED_ABI = 5
+EXPECTED_ABI = 6
 options = None
 
 
@@ -250,7 +250,14 @@ class RuntimeContract(unittest.TestCase):
                 other = c.create_string_buffer(right)
                 self.checked("upload", context, lhs, 0, source, len(raw))
                 self.checked("upload", context, rhs, 0, other, len(right))
+                half_operations = {"AddTensor", "SubTensor", "MulTensor", "DivTensor", "EqualTensor", "NotEqualTensor",
+                                   "LessTensor", "LessEqualTensor", "GreaterTensor", "GreaterEqualTensor", "LogicalAndTensor",
+                                   "LogicalOrTensor", "LogicalXorTensor", "IsNan", "IsInf", "IsFinite", "LogicalNot"}
                 for name, operation in operations.items():
+                    if storage == "f16" and name not in half_operations:
+                        error = Error()
+                        self.assertNotEqual(self.calls["pointwise_f16"](context, operation, View(lhs, 0), View(rhs, 0), View(output, 0), count, 0.5, c.byref(error)), 0)
+                        continue
                     with self.subTest(storage=storage, operation=name):
                         self.checked("memset", context, View(output, 0), 4096, 0xA5)
                         self.checked("pointwise_" + storage, context, operation,
@@ -299,7 +306,7 @@ class RuntimeContract(unittest.TestCase):
         operations = pointwise_operations()
         with self.staging_resources(size=8192, slots=0) as (context, buffer, _):
             values = (-0.0, 0.0, -3, 2, float("nan"), float("inf"))
-            for storage, encoding in (("f32", "f"), ("f16", "e")):
+            for storage, encoding in (("f32", "f"),):
                 raw = b"".join(struct.pack("<" + encoding, x) for x in values)
                 source = c.create_string_buffer(raw)
                 for operation in ("Relu", "Sign"):

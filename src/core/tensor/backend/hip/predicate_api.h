@@ -10,11 +10,17 @@ typedef struct LfsHipPredicate {
     uint64_t count;
     int64_t integer_scalar;
     float float_scalar;
-    uint32_t reserved;
+    uint32_t scalar_left;
 } LfsHipPredicate;
-/* Integer arithmetic and typed predicates use reserved=1 for a scalar on the left, 0 otherwise. */
+typedef struct LfsHipIntegerPointwise {
+    uint32_t struct_bytes, op, dtype, scalar_kind;
+    uint64_t count;
+    int64_t integer_scalar;
+    float float_scalar;
+    uint32_t scalar_left;
+} LfsHipIntegerPointwise;
 LFS_HIP_API int lfs_hip_integer_pointwise(LfsHipContext*, LfsHipView lhs, LfsHipView rhs,
-                                          LfsHipView output, const LfsHipPredicate*, LfsHipError*);
+                                          LfsHipView output, const LfsHipIntegerPointwise*, LfsHipError*);
 LFS_HIP_API int lfs_hip_predicate_typed(LfsHipContext*, LfsHipView lhs, LfsHipView rhs,
                                         LfsHipView output, const LfsHipPredicate*, LfsHipError*);
 #ifdef __cplusplus

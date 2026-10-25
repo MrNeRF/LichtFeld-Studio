@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include "predicate_api.h"
+#include <hipcub/hipcub.hpp>
 
 namespace {
     // Workspace data are disposable once prior users have drained. Release
@@ -9,14 +10,14 @@ namespace {
     // Drain before a blocking host read: no queued write may outlive a caller's
     // stack storage if stream synchronization fails.
     void read_device_scalar(LfsHipContext* context, void* output, const void* input, size_t bytes) {
-        check(hipStreamSynchronize(context->stream));
+        synchronize_context(context);
         check(hipMemcpy(output, input, bytes, hipMemcpyDeviceToHost));
     }
 
     void ensure_workspace(LfsHipContext* context, void*& memory, size_t& capacity, size_t required) {
         if (required <= capacity)
             return;
-        check(hipStreamSynchronize(context->stream));
+        synchronize_context(context);
         if (memory) {
             check(hipFree(memory));
             memory = nullptr;
@@ -99,29 +100,43 @@ namespace {
                            reinterpret_cast<To*>(static_cast<char*>(output.buffer->data) + output.offset), count);
         check(hipGetLastError());
     }
+    template <class To, class From>
+    void convert_supported(LfsHipContext* context, LfsHipView input, LfsHipView output, size_t count) {
+        constexpr bool floating_target = std::is_same_v<To, float> || std::is_same_v<To, __half>;
+        constexpr bool integer_target = std::is_same_v<To, int32_t> || std::is_same_v<To, int64_t> || std::is_same_v<To, uint8_t>;
+        constexpr bool supported =
+            (std::is_same_v<From, float> && (integer_target || std::is_same_v<To, __half> || std::is_same_v<To, uint32_t>)) ||
+            ((std::is_same_v<From, __half> || std::is_same_v<From, int32_t> || std::is_same_v<From, int64_t>) && (floating_target || integer_target) && !std::is_same_v<From, To>) ||
+            (std::is_same_v<From, uint8_t> && (floating_target || std::is_same_v<To, int32_t> || std::is_same_v<To, int64_t> || std::is_same_v<To, bool>)) ||
+            (std::is_same_v<From, uint32_t> && (std::is_same_v<To, float> || std::is_same_v<To, int64_t>));
+        if constexpr (supported)
+            launch_convert<To, From>(context, input, output, count);
+        else
+            throw std::invalid_argument("Unsupported HIP Tensor conversion pair");
+    }
     template <class From>
     void dispatch_convert(LfsHipContext* context, LfsHipView input, LfsHipView output, uint32_t dtype, size_t count) {
         switch (dtype) {
-        case LFS_HIP_F32: launch_convert<float, From>(context, input, output, count); break;
-        case LFS_HIP_F16: launch_convert<__half, From>(context, input, output, count); break;
-        case LFS_HIP_I32: launch_convert<int32_t, From>(context, input, output, count); break;
-        case LFS_HIP_I64: launch_convert<int64_t, From>(context, input, output, count); break;
-        case LFS_HIP_U8: launch_convert<uint8_t, From>(context, input, output, count); break;
-        case LFS_HIP_BOOL: launch_convert<bool, From>(context, input, output, count); break;
-        case LFS_HIP_U32: launch_convert<uint32_t, From>(context, input, output, count); break;
+        case LFS_HIP_F32: convert_supported<float, From>(context, input, output, count); break;
+        case LFS_HIP_F16: convert_supported<__half, From>(context, input, output, count); break;
+        case LFS_HIP_I32: convert_supported<int32_t, From>(context, input, output, count); break;
+        case LFS_HIP_I64: convert_supported<int64_t, From>(context, input, output, count); break;
+        case LFS_HIP_U8: convert_supported<uint8_t, From>(context, input, output, count); break;
+        case LFS_HIP_BOOL: convert_supported<bool, From>(context, input, output, count); break;
+        case LFS_HIP_U32: convert_supported<uint32_t, From>(context, input, output, count); break;
         }
     }
-    __global__ void validate_indices(const int64_t* input, size_t count, size_t extent, uint32_t* invalid) {
+    __global__ void index_cast_kernel(const int64_t* input, int32_t* output, size_t count, size_t extent, uint32_t* invalid) {
         for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += size_t(gridDim.x) * blockDim.x)
-            if (input[i] < 0 || uint64_t(input[i]) >= extent)
-                atomicOr(invalid, 1u);
+            if (checked_index(input[i], extent, invalid))
+                output[i] = static_cast<int32_t>(input[i]);
     }
-    template <class T>
-    __global__ void count_nonzero_kernel(const T* input, size_t count, unsigned long long* total) {
-        __shared__ unsigned long long partial[256];
-        unsigned long long local = 0;
+    template <class Input, class Counter>
+    __global__ void count_nonzero_kernel(Input input, size_t count, Counter* total) {
+        __shared__ Counter partial[256];
+        Counter local = 0;
         for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += size_t(gridDim.x) * blockDim.x)
-            local += input[i] != T(0);
+            local += static_cast<double>(input[static_cast<std::conditional_t<std::is_pointer_v<Input>, size_t, int64_t>>(i)]) != 0;
         partial[threadIdx.x] = local;
         __syncthreads();
         for (unsigned width = 128; width; width >>= 1) {
@@ -134,7 +149,7 @@ namespace {
     }
     template <class T>
     void launch_count_nonzero(LfsHipContext* context, LfsHipView input, size_t count, unsigned long long* total) {
-        hipLaunchKernelGGL((count_nonzero_kernel<T>), dim3(blocks(count)), dim3(256), 0, context->stream,
+        hipLaunchKernelGGL((count_nonzero_kernel<const T*, unsigned long long>), dim3(blocks(count)), dim3(256), 0, context->stream,
                            reinterpret_cast<const T*>(static_cast<const char*>(input.buffer->data) + input.offset), count, total);
         check(hipGetLastError());
     }
@@ -213,6 +228,27 @@ namespace {
                            static_cast<char*>(output.buffer->data) + output.offset, program);
         check(hipGetLastError());
     }
+    size_t shape_elements(const LfsHipLayout& layout) {
+        require(layout.rank <= 8, "HIP Tensor rank exceeds eight dimensions");
+        for (uint32_t i = 0; i < layout.rank; ++i)
+            if (!layout.dims[i])
+                return 0;
+        size_t count = 1;
+        for (uint32_t i = 0; i < layout.rank; ++i) {
+            require(layout.dims[i] <= SIZE_MAX / count, "HIP Tensor shape overflow");
+            count *= layout.dims[i];
+        }
+        return count;
+    }
+    LfsHipLayout contiguous_layout(LfsHipLayout layout) {
+        size_t stride = 1;
+        for (uint32_t i = layout.rank; i; --i) {
+            layout.strides[i - 1] = stride;
+            if (layout.elements)
+                stride *= layout.dims[i - 1];
+        }
+        return layout;
+    }
     void split_reduction_layout(const LfsHipLayout& source, uint32_t axes, LfsHipLayout& kept, LfsHipLayout& reduced) {
         kept = {};
         reduced = {};
@@ -222,21 +258,10 @@ namespace {
             layout.dims[layout.rank] = source.dims[axis];
             layout.strides[layout.rank++] = source.strides[axis];
         }
-        const auto product = [](LfsHipLayout& layout) {
-            for (unsigned i = 0; i < layout.rank; ++i)
-                if (!layout.dims[i]) {
-                    layout.elements = 0;
-                    return;
-                }
-            for (unsigned i = 0; i < layout.rank; ++i) {
-                require(layout.dims[i] <= SIZE_MAX / layout.elements, "HIP reduction shape overflow");
-                layout.elements *= layout.dims[i];
-            }
-        };
-        product(kept);
-        product(reduced);
+        kept.elements = shape_elements(kept);
+        reduced.elements = shape_elements(reduced);
     }
-    constexpr size_t reduction_workspace_floats = LFS_HIP_REDUCTION_WORKSPACE_FLOATS;
+    constexpr size_t reduction_workspace_floats = 4097;
     template <unsigned Mode>
     __device__ float combine_reduce(float a, float b) {
         if constexpr (Mode == LFS_HIP_REDUCE_MIN)
@@ -504,14 +529,6 @@ namespace {
     void launch_axis(LfsHipContext* context, const In* input, Out* output, LfsHipLayout kept, LfsHipLayout reduced, bool mean) {
         launch_float_reduction<Mode>(context, LayoutReduction<In>{input, kept, reduced}, output, kept.elements, reduced.elements, mean);
     }
-    template <class Index>
-    __global__ void validate_strided_indices(const Index* indices, LfsHipLayout layout, size_t extent, uint32_t* invalid) {
-        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < layout.elements; i += size_t(gridDim.x) * blockDim.x) {
-            const int64_t index = indices[layout_index(i, layout)];
-            if (index < 0 || uint64_t(index) >= extent)
-                atomicOr(invalid, 1u);
-        }
-    }
     template <class Index, unsigned Operation, bool Put>
     __global__ void flat_index_kernel(const float* input, const Index* indices, float* output, size_t extent, size_t count) {
         for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += size_t(gridDim.x) * blockDim.x) {
@@ -580,7 +597,7 @@ namespace {
             dispatch_flat_index<int64_t, Put>(context, input, indices, output, extent, count, operation);
     }
     template <class Value, class Index>
-    __global__ void gather_kernel(const Value* input, const Index* indices, Value* output, LfsHipLayout source, LfsHipLayout index_layout, LfsHipLayout destination, unsigned dim, unsigned boundary, bool select) {
+    __global__ void gather_kernel(const Value* input, const Index* indices, Value* output, LfsHipLayout source, LfsHipLayout index_layout, LfsHipLayout destination, unsigned dim, unsigned boundary, bool select, uint32_t* invalid) {
         for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < destination.elements; i += size_t(gridDim.x) * blockDim.x) {
             size_t coordinates = i, source_offset = 0, index_offset = 0;
             for (unsigned r = destination.rank; r; --r) {
@@ -605,34 +622,22 @@ namespace {
                 if (index < 0)
                     index += extent;
             }
+            if (boundary == 0 && !checked_index(index, static_cast<size_t>(extent), invalid))
+                continue;
             output[i] = input[source_offset + size_t(index) * source.strides[dim]];
         }
     }
     template <class Value, class Index>
     void launch_gather(LfsHipContext* context, LfsHipView input, LfsHipView indices, LfsHipView output, LfsHipLayout source, LfsHipLayout index_layout, LfsHipLayout destination, unsigned dim, unsigned boundary, bool select) {
+        auto* invalid = index_error_flag(context);
         hipLaunchKernelGGL((gather_kernel<Value, Index>), dim3(blocks(destination.elements)), dim3(256), 0, context->stream,
                            reinterpret_cast<const Value*>(static_cast<const char*>(input.buffer->data) + input.offset),
                            reinterpret_cast<const Index*>(static_cast<const char*>(indices.buffer->data) + indices.offset),
-                           reinterpret_cast<Value*>(static_cast<char*>(output.buffer->data) + output.offset), source, index_layout, destination, dim, boundary, select);
+                           reinterpret_cast<Value*>(static_cast<char*>(output.buffer->data) + output.offset), source, index_layout, destination, dim, boundary, select, invalid);
         check(hipGetLastError());
-    }
-    template <class Index>
-    void check_indices(LfsHipContext* context, LfsHipView indices, LfsHipLayout index_layout, size_t extent) {
-        ensure_reduction_workspace(context);
-        auto* flag = reinterpret_cast<uint32_t*>(context->reduction_workspace + 4096);
-        check(hipMemsetAsync(flag, 0, sizeof(uint32_t), context->stream));
-        hipLaunchKernelGGL((validate_strided_indices<Index>), dim3(blocks(index_layout.elements)), dim3(256), 0, context->stream,
-                           reinterpret_cast<const Index*>(static_cast<const char*>(indices.buffer->data) + indices.offset), index_layout, extent, flag);
-        check(hipGetLastError());
-        uint32_t invalid = 0;
-        read_device_scalar(context, &invalid, flag, sizeof(invalid));
-        if (invalid)
-            throw InvalidIndex("HIP index is negative or outside its extent");
     }
     template <class Index>
     void dispatch_gather(LfsHipContext* context, LfsHipView input, LfsHipView indices, LfsHipView output, unsigned width, LfsHipLayout source, LfsHipLayout index_layout, LfsHipLayout destination, unsigned dim, unsigned boundary, bool select) {
-        if (boundary == 0)
-            check_indices<Index>(context, indices, index_layout, source.dims[dim]);
         switch (width) {
         case 1: launch_gather<uint8_t, Index>(context, input, indices, output, source, index_layout, destination, dim, boundary, select); break;
         case 2: launch_gather<uint16_t, Index>(context, input, indices, output, source, index_layout, destination, dim, boundary, select); break;
@@ -640,8 +645,8 @@ namespace {
         case 8: launch_gather<uint64_t, Index>(context, input, indices, output, source, index_layout, destination, dim, boundary, select); break;
         }
     }
-    template <class Value, class Index, bool Add>
-    __global__ void index_update_kernel(Value* output, const Index* indices, const Value* source, LfsHipLayout destination, LfsHipLayout source_layout, unsigned dim) {
+    template <class Value, class Index, bool Add, bool Fill = false>
+    __global__ void index_update_kernel(Value* output, const Index* indices, const Value* source, LfsHipLayout destination, LfsHipLayout source_layout, unsigned dim, uint32_t* invalid, Value constant) {
         for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < source_layout.elements; i += size_t(gridDim.x) * blockDim.x) {
             size_t remaining = i, offset = 0, selected = 0;
             for (unsigned r = source_layout.rank; r; --r) {
@@ -652,43 +657,27 @@ namespace {
                 else
                     offset += coordinate * destination.strides[r - 1];
             }
-            offset += size_t(indices[selected]) * destination.strides[dim];
+            const int64_t index = indices[selected];
+            if (!checked_index(index, destination.dims[dim], invalid))
+                continue;
+            offset += size_t(index) * destination.strides[dim];
             if constexpr (Add)
                 atomicAdd(output + offset, source[i]);
             else
-                output[offset] = source[i];
-        }
-    }
-    template <class Value, class Index>
-    __global__ void index_fill_kernel(Value* output, const Index* indices, Value value, LfsHipLayout destination, LfsHipLayout source_layout, unsigned dim) {
-        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < source_layout.elements; i += size_t(gridDim.x) * blockDim.x) {
-            size_t remaining = i, offset = 0, selected = 0;
-            for (unsigned r = source_layout.rank; r; --r) {
-                const size_t coordinate = remaining % source_layout.dims[r - 1];
-                remaining /= source_layout.dims[r - 1];
-                if (r - 1 == dim)
-                    selected = coordinate;
-                else
-                    offset += coordinate * destination.strides[r - 1];
-            }
-            output[offset + size_t(indices[selected]) * destination.strides[dim]] = value;
+                output[offset] = Fill ? constant : source[i];
         }
     }
     template <class Value, class Index>
     void launch_index_fill(LfsHipContext* context, LfsHipView output, LfsHipView indices, LfsHipLayout destination, LfsHipLayout source_layout, unsigned dim, uint64_t value_bits) {
-        hipLaunchKernelGGL((index_fill_kernel<Value, Index>), dim3(blocks(source_layout.elements)), dim3(256), 0, context->stream,
+        auto* invalid = index_error_flag(context);
+        hipLaunchKernelGGL((index_update_kernel<Value, Index, false, true>), dim3(blocks(source_layout.elements)), dim3(256), 0, context->stream,
                            reinterpret_cast<Value*>(static_cast<char*>(output.buffer->data) + output.offset),
                            reinterpret_cast<const Index*>(static_cast<const char*>(indices.buffer->data) + indices.offset),
-                           static_cast<Value>(value_bits), destination, source_layout, dim);
+                           static_cast<const Value*>(nullptr), destination, source_layout, dim, invalid, static_cast<Value>(value_bits));
         check(hipGetLastError());
     }
     template <class Index>
-    void dispatch_index_fill(LfsHipContext* context, LfsHipView output, LfsHipView indices, unsigned width, LfsHipLayout destination, LfsHipLayout source_layout, unsigned dim, size_t index_count, uint64_t value_bits) {
-        LfsHipLayout index_layout{};
-        index_layout.rank = 1;
-        index_layout.dims[0] = index_layout.elements = index_count;
-        index_layout.strides[0] = 1;
-        check_indices<Index>(context, indices, index_layout, destination.dims[dim]);
+    void dispatch_index_fill(LfsHipContext* context, LfsHipView output, LfsHipView indices, unsigned width, LfsHipLayout destination, LfsHipLayout source_layout, unsigned dim, uint64_t value_bits) {
         switch (width) {
         case 1: launch_index_fill<uint8_t, Index>(context, output, indices, destination, source_layout, dim, value_bits); break;
         case 4: launch_index_fill<uint32_t, Index>(context, output, indices, destination, source_layout, dim, value_bits); break;
@@ -696,19 +685,15 @@ namespace {
     }
     template <class Value, class Index, bool Add>
     void launch_index_update(LfsHipContext* context, LfsHipView output, LfsHipView indices, LfsHipView source, LfsHipLayout destination, LfsHipLayout source_layout, unsigned dim) {
+        auto* invalid = index_error_flag(context);
         hipLaunchKernelGGL((index_update_kernel<Value, Index, Add>), dim3(blocks(source_layout.elements)), dim3(256), 0, context->stream,
                            reinterpret_cast<Value*>(static_cast<char*>(output.buffer->data) + output.offset),
                            reinterpret_cast<const Index*>(static_cast<const char*>(indices.buffer->data) + indices.offset),
-                           reinterpret_cast<const Value*>(static_cast<const char*>(source.buffer->data) + source.offset), destination, source_layout, dim);
+                           reinterpret_cast<const Value*>(static_cast<const char*>(source.buffer->data) + source.offset), destination, source_layout, dim, invalid, Value{});
         check(hipGetLastError());
     }
     template <class Index>
-    void dispatch_index_update(LfsHipContext* context, LfsHipView output, LfsHipView indices, LfsHipView source, unsigned dtype, LfsHipLayout destination, LfsHipLayout source_layout, unsigned dim, size_t index_count, bool add) {
-        LfsHipLayout index_layout{};
-        index_layout.rank = 1;
-        index_layout.dims[0] = index_layout.elements = index_count;
-        index_layout.strides[0] = 1;
-        check_indices<Index>(context, indices, index_layout, destination.dims[dim]);
+    void dispatch_index_update(LfsHipContext* context, LfsHipView output, LfsHipView indices, LfsHipView source, unsigned dtype, LfsHipLayout destination, LfsHipLayout source_layout, unsigned dim, bool add) {
         if (add) {
             if (dtype == LFS_HIP_F32)
                 launch_index_update<float, Index, true>(context, output, indices, source, destination, source_layout, dim);
@@ -750,33 +735,10 @@ namespace {
                            reinterpret_cast<Out*>(static_cast<char*>(output.buffer->data) + output.offset), a, b, out, op);
         check(hipGetLastError());
     }
-    template <class T, bool Fill>
-    __global__ void strided_kernel(const T* input, T* output, LfsHipLayout layout, T value) {
-        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < layout.elements; i += size_t(gridDim.x) * blockDim.x) {
-            if constexpr (Fill)
-                output[layout_index(i, layout)] = value;
-            else
-                output[i] = input[layout_index(i, layout)];
-        }
-    }
-    template <class Input, class Output>
-    __global__ void scatter_strided_kernel(const Input* input, Output* output, LfsHipLayout layout) {
-        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < layout.elements; i += size_t(gridDim.x) * blockDim.x)
-            output[layout_index(i, layout)] = static_cast<Output>(input[i]);
-    }
-    template <class Input, class Output = Input>
-    void launch_strided_scatter(LfsHipContext* context, LfsHipView input, LfsHipView output, LfsHipLayout layout) {
-        hipLaunchKernelGGL((scatter_strided_kernel<Input, Output>), dim3(blocks(layout.elements)), dim3(256), 0, context->stream,
-                           reinterpret_cast<const Input*>(static_cast<const char*>(input.buffer->data) + input.offset),
-                           reinterpret_cast<Output*>(static_cast<char*>(output.buffer->data) + output.offset), layout);
-        check(hipGetLastError());
-    }
     template <class T>
-    void launch_strided_copy(LfsHipContext* context, LfsHipView input, LfsHipView output, LfsHipLayout layout) {
-        hipLaunchKernelGGL((strided_kernel<T, false>), dim3(blocks(layout.elements)), dim3(256), 0, context->stream,
-                           reinterpret_cast<const T*>(static_cast<const char*>(input.buffer->data) + input.offset),
-                           reinterpret_cast<T*>(static_cast<char*>(output.buffer->data) + output.offset), layout, T{});
-        check(hipGetLastError());
+    __global__ void fill_layout_kernel(T* output, LfsHipLayout layout, T value) {
+        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < layout.elements; i += size_t(gridDim.x) * blockDim.x)
+            output[layout_index(i, layout)] = value;
     }
     bool dense_layout(const LfsHipLayout& layout) {
         size_t stride = 1;
@@ -787,10 +749,10 @@ namespace {
         }
         return true;
     }
-    template <class T>
-    __global__ void copy_layout_kernel(const T* input, T* output, LfsHipLayout source, LfsHipLayout destination) {
+    template <class T, class Out = T>
+    __global__ void copy_layout_kernel(const T* input, Out* output, LfsHipLayout source, LfsHipLayout destination) {
         for (size_t index = size_t(blockIdx.x) * blockDim.x + threadIdx.x; index < source.elements; index += size_t(gridDim.x) * blockDim.x)
-            output[layout_index(index, destination)] = input[layout_index(index, source)];
+            output[layout_index(index, destination)] = static_cast<Out>(input[layout_index(index, source)]);
     }
     template <class T>
     void launch_layout_copy(LfsHipContext* context, const LfsHipLayoutCopy& copy) {
@@ -798,6 +760,17 @@ namespace {
         auto* output = reinterpret_cast<T*>(static_cast<char*>(copy.output.buffer->data) + copy.output.offset);
         hipLaunchKernelGGL((copy_layout_kernel<T>), dim3(blocks(copy.input_layout.elements)), dim3(256), 0, context->stream, input, output, copy.input_layout, copy.output_layout);
         check(hipGetLastError());
+    }
+    template <class Input, class Output = Input>
+    void launch_strided_scatter(LfsHipContext* context, LfsHipView input, LfsHipView output, LfsHipLayout layout) {
+        hipLaunchKernelGGL((copy_layout_kernel<Input, Output>), dim3(blocks(layout.elements)), dim3(256), 0, context->stream,
+                           reinterpret_cast<const Input*>(static_cast<const char*>(input.buffer->data) + input.offset),
+                           reinterpret_cast<Output*>(static_cast<char*>(output.buffer->data) + output.offset), contiguous_layout(layout), layout);
+        check(hipGetLastError());
+    }
+    template <class T>
+    void launch_strided_copy(LfsHipContext* context, LfsHipView input, LfsHipView output, LfsHipLayout layout) {
+        launch_layout_copy<T>(context, LfsHipLayoutCopy{input, output, layout, contiguous_layout(layout), sizeof(T)});
     }
     template <class T>
     struct NonzeroFlag {
@@ -817,36 +790,8 @@ namespace {
             }
         }
     };
-    template <class T>
-    struct SelectionValue {
-        const uint8_t* data;
-        __host__ __device__ T operator()(int64_t index) const {
-            T result;
-            if (data)
-                __builtin_memcpy(&result, data + size_t(index) * sizeof(T), sizeof(T));
-            else
-                result = static_cast<T>(index);
-            return result;
-        }
-    };
-    template <class Flags>
-    __global__ void selection_count(Flags flags, size_t count, int* total) {
-        unsigned local = 0;
-        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += size_t(gridDim.x) * blockDim.x)
-            local += flags[static_cast<int64_t>(i)] != 0;
-        __shared__ unsigned partial[256];
-        partial[threadIdx.x] = local;
-        __syncthreads();
-        for (unsigned offset = 128; offset; offset >>= 1) {
-            if (threadIdx.x < offset)
-                partial[threadIdx.x] += partial[threadIdx.x + offset];
-            __syncthreads();
-        }
-        if (threadIdx.x == 0)
-            atomicAdd(total, static_cast<int>(partial[0]));
-    }
     template <class Input, class Flags, class T>
-    void select_stable(LfsHipContext* context, Input input, Flags flags, T* output, size_t count, size_t capacity, uint64_t* selected) {
+    void select_stable(LfsHipContext* context, Input input, Flags flags, T* output, size_t count, size_t capacity, uint64_t* selected, size_t known_count) {
         size_t temporary_bytes = 0;
         check(hipcub::DeviceSelect::Flagged(nullptr, temporary_bytes, input, flags, output, static_cast<int*>(nullptr), static_cast<int>(count), context->stream));
         require(temporary_bytes <= SIZE_MAX - 256, "HIP selection workspace overflow");
@@ -855,9 +800,9 @@ namespace {
         auto* total = reinterpret_cast<int*>(memory);
         // Validate an exact-sized output before allowing DeviceSelect to write.
         // The extra pass uses a scalar counter instead of a full-sized result copy.
-        if (capacity < count) {
+        if (known_count == SIZE_MAX && capacity < count) {
             check(hipMemsetAsync(total, 0, sizeof(*total), context->stream));
-            hipLaunchKernelGGL((selection_count<Flags>), dim3(blocks(count)), dim3(256), 0, context->stream, flags, count, total);
+            hipLaunchKernelGGL((count_nonzero_kernel<Flags, int>), dim3(blocks(count)), dim3(256), 0, context->stream, flags, count, total);
             check(hipGetLastError());
             int actual = 0;
             read_device_scalar(context, &actual, total, sizeof(actual));
@@ -868,35 +813,37 @@ namespace {
             }
         }
         check(hipcub::DeviceSelect::Flagged(memory + 256, temporary_bytes, input, flags, output, total, static_cast<int>(count), context->stream));
+        if (known_count != SIZE_MAX) {
+            *selected = known_count;
+            return;
+        }
         int actual = 0;
         read_device_scalar(context, &actual, total, sizeof(actual));
         require(actual >= 0 && static_cast<size_t>(actual) <= capacity, "HIP selection output capacity is too small");
         *selected = static_cast<uint64_t>(actual);
     }
     template <class T>
-    void select_width(LfsHipContext* context, const void* input, const void* flags, uint32_t flag_dtype, void* output, size_t count, size_t capacity, uint64_t* selected) {
-        hipcub::CountingInputIterator<int64_t> counting(0);
-        hipcub::TransformInputIterator<T, SelectionValue<T>, decltype(counting)> values(counting, SelectionValue<T>{static_cast<const uint8_t*>(input)});
-        hipcub::TransformInputIterator<uint8_t, SelectionFlag, decltype(counting)> mask(counting, SelectionFlag{flags, flag_dtype});
-        select_stable(context, values, mask, static_cast<T*>(output), count, capacity, selected);
+    void select_values(LfsHipContext* context, const void* input, const uint8_t* flags, void* output, size_t count, size_t capacity, uint64_t* selected, size_t known_count) {
+        select_stable(context, static_cast<const T*>(input), flags, static_cast<T*>(output), count, capacity, selected, known_count);
     }
     template <class T>
-    void select_values(LfsHipContext* context, const void* input, const uint8_t* flags, void* output, size_t count, size_t capacity, uint64_t* selected) {
-        using Bits = std::conditional_t<sizeof(T) == 1, uint8_t, std::conditional_t<sizeof(T) == 2, uint16_t, std::conditional_t<sizeof(T) == 4, uint32_t, uint64_t>>>;
-        select_width<Bits>(context, input, flags, LFS_HIP_U8, output, count, capacity, selected);
-    }
-    template <class T>
-    void select_positions(LfsHipContext* context, const void* input, void* output, size_t count, size_t capacity, uint64_t* selected) {
+    void select_positions(LfsHipContext* context, const void* input, void* output, size_t count, size_t capacity, uint64_t* selected, size_t known_count) {
         constexpr uint32_t dtype = std::is_same_v<T, float> ? LFS_HIP_F32 : std::is_same_v<T, __half> ? LFS_HIP_F16
                                                                         : std::is_same_v<T, int32_t>  ? LFS_HIP_I32
                                                                         : std::is_same_v<T, int64_t>  ? LFS_HIP_I64
                                                                         : std::is_same_v<T, uint32_t> ? LFS_HIP_U32
                                                                                                       : LFS_HIP_U8;
-        select_width<uint64_t>(context, nullptr, input, dtype, output, count, capacity, selected);
+        hipcub::CountingInputIterator<int64_t> counting(0);
+        hipcub::TransformInputIterator<uint8_t, SelectionFlag, decltype(counting)> flags(counting, SelectionFlag{input, dtype});
+        select_stable(context, counting, flags, static_cast<int64_t*>(output), count, capacity, selected, known_count);
     }
     template <class T>
     __global__ void masked_scatter_kernel(T* output, const uint8_t* mask, const T* source,
-                                          const int* prefix, size_t count) {
+                                          const int* prefix, size_t count, size_t selected_count, uint32_t* invalid) {
+        if (size_t(prefix[count - 1]) + size_t(mask[count - 1] != 0) != selected_count) {
+            atomicOr(invalid, 2u);
+            return;
+        }
         for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
              i < count; i += size_t(gridDim.x) * blockDim.x)
             if (mask[i])
@@ -904,10 +851,11 @@ namespace {
     }
     template <class T>
     void launch_masked_scatter(LfsHipContext* context, void* output, const uint8_t* mask,
-                               const void* source, const int* prefix, size_t count) {
+                               const void* source, const int* prefix, size_t count, size_t selected_count) {
+        auto* invalid = index_error_flag(context);
         hipLaunchKernelGGL((masked_scatter_kernel<T>), dim3(blocks(count)), dim3(256), 0,
                            context->stream, static_cast<T*>(output), mask,
-                           static_cast<const T*>(source), prefix, count);
+                           static_cast<const T*>(source), prefix, count, selected_count, invalid);
         check(hipGetLastError());
     }
     __global__ void clamp_i32(int32_t* data, size_t count, int32_t minimum, int32_t maximum) {
@@ -919,11 +867,6 @@ namespace {
     void launch_integral_broadcast(LfsHipContext*, uint32_t, LfsHipView, LfsHipView, LfsHipView, LfsHipLayout, LfsHipLayout, LfsHipLayout, uint32_t);
 
 } // namespace
-
-int lfs_hip_boolean_pointwise(LfsHipContext* context, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, size_t count, float scalar, LfsHipError* error) {
-    const LfsHipPredicate predicate{sizeof(LfsHipPredicate), op, LFS_HIP_U8, 0, count, 0, scalar, 0};
-    return lfs_hip_predicate_typed(context, lhs, rhs, output, &predicate, error);
-}
 
 int lfs_hip_clamp_i32(LfsHipContext* context, LfsHipView data, size_t count, int32_t minimum, int32_t maximum, LfsHipError* error) {
     return boundary(error, [&] {
@@ -941,7 +884,7 @@ int lfs_hip_clamp_i32(LfsHipContext* context, LfsHipView data, size_t count, int
 int lfs_hip_scalar_left_typed(LfsHipContext* context, uint32_t op, LfsHipView lhs, LfsHipView output, size_t count, float scalar, uint32_t dtype, LfsHipError* error) {
     return boundary(error, [&] {
         require(context && op < LFS_HIP_OP_COUNT && (pointwise_flags[op] & 3) == 1 &&
-                    (dtype == LFS_HIP_F32 || dtype == LFS_HIP_F16),
+                    dtype == LFS_HIP_F32,
                 "Invalid HIP scalar-left descriptor");
         DeviceScope device(context->device);
         using namespace lfs::core;
@@ -951,10 +894,7 @@ int lfs_hip_scalar_left_typed(LfsHipContext* context, uint32_t op, LfsHipView lh
             default: throw std::invalid_argument("Unsupported HIP scalar-left operation");
             }
         };
-        if (dtype == LFS_HIP_F16)
-            dispatch.template operator()<__half>();
-        else
-            dispatch.template operator()<float>();
+        dispatch.template operator()<float>();
     });
 }
 
@@ -1002,10 +942,6 @@ int lfs_hip_broadcast_typed(LfsHipContext* context, uint32_t op, LfsHipView lhs,
     });
 }
 
-int lfs_hip_broadcast_f32(LfsHipContext* context, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, const LfsHipLayout* lhs_layout, const LfsHipLayout* rhs_layout, const LfsHipLayout* output_layout, uint32_t output_element_bytes, LfsHipError* error) {
-    return lfs_hip_broadcast_typed(context, op, lhs, rhs, output, lhs_layout, rhs_layout, output_layout, LFS_HIP_F32, output_element_bytes, error);
-}
-
 int lfs_hip_reduce_f32(LfsHipContext* context, LfsHipView input, size_t count, uint32_t operation, float* output, LfsHipError* error) {
     return boundary(error, [&] {
         require(output && operation <= LFS_HIP_REDUCE_HAS_INF, "Invalid HIP reduction descriptor");
@@ -1045,8 +981,7 @@ int lfs_hip_copy_layouts(LfsHipContext* context, const LfsHipLayoutCopy* copies,
             validate(context, copy.input.buffer, copy.input.offset, source_bytes);
             validate(context, copy.output.buffer, copy.output.offset, destination_bytes);
             require(copy.input.offset % width == 0 && copy.output.offset % width == 0, "Unaligned HIP layout copy");
-            require(!source_bytes || copy.input.buffer != copy.output.buffer || copy.input.offset + source_bytes <= copy.output.offset || copy.output.offset + destination_bytes <= copy.input.offset,
-                    "HIP layout copy ranges overlap");
+            require_disjoint(copy.input, source_bytes, copy.output, destination_bytes, "HIP layout copy ranges overlap");
         }
         if (!count)
             return;
@@ -1071,8 +1006,14 @@ int lfs_hip_copy_layouts(LfsHipContext* context, const LfsHipLayoutCopy* copies,
     });
 }
 
-int lfs_hip_select(LfsHipContext* context, LfsHipView input, LfsHipView mask, LfsHipView output, uint32_t dtype, uint32_t kind, size_t count, size_t capacity, uint64_t* selected, LfsHipError* error) {
+int lfs_hip_select(LfsHipContext* context, LfsHipView input, LfsHipView mask, LfsHipView output, const LfsHipSelection* p, uint64_t* selected, LfsHipError* error) {
     return boundary(error, [&] {
+        require(p && p->struct_bytes == sizeof(*p) && p->count_known <= 1 && p->count <= SIZE_MAX && p->capacity <= SIZE_MAX,
+                "Invalid HIP selection descriptor");
+        const auto dtype = p->dtype, kind = p->kind;
+        const size_t count = size_t(p->count), capacity = size_t(p->capacity);
+        require(!p->count_known || p->selected_count <= capacity, "HIP selection known count exceeds capacity");
+        const size_t known_count = p->count_known ? size_t(p->selected_count) : SIZE_MAX;
         require(selected, "Missing HIP selection count output");
         *selected = 0;
         require(kind <= 1 && count <= INT32_MAX && capacity <= count, "Invalid HIP selection descriptor");
@@ -1081,12 +1022,10 @@ int lfs_hip_select(LfsHipContext* context, LfsHipView input, LfsHipView mask, Lf
         validate(context, input.buffer, input.offset, source_bytes);
         validate(context, output.buffer, output.offset, output_bytes);
         require(input.offset % width == 0 && output.offset % output_width == 0, "Unaligned HIP selection view");
-        require(input.buffer != output.buffer || input.offset + source_bytes <= output.offset || output.offset + output_bytes <= input.offset,
-                "HIP selection input and output overlap");
+        require_disjoint(input, source_bytes, output, output_bytes, "HIP selection input and output overlap");
         if (!kind) {
             validate(context, mask.buffer, mask.offset, count);
-            require(mask.buffer != output.buffer || mask.offset + count <= output.offset || output.offset + output_bytes <= mask.offset,
-                    "HIP selection mask and output overlap");
+            require_disjoint(mask, count, output, output_bytes, "HIP selection mask and output overlap");
         }
         if (!count)
             return;
@@ -1095,20 +1034,20 @@ int lfs_hip_select(LfsHipContext* context, LfsHipView input, LfsHipView mask, Lf
         void* destination = static_cast<char*>(output.buffer->data) + output.offset;
         if (kind) {
             switch (dtype) {
-            case LFS_HIP_F32: select_positions<float>(context, source, destination, count, capacity, selected); break;
-            case LFS_HIP_F16: select_positions<__half>(context, source, destination, count, capacity, selected); break;
-            case LFS_HIP_I32: select_positions<int32_t>(context, source, destination, count, capacity, selected); break;
-            case LFS_HIP_I64: select_positions<int64_t>(context, source, destination, count, capacity, selected); break;
-            case LFS_HIP_U32: select_positions<uint32_t>(context, source, destination, count, capacity, selected); break;
-            default: select_positions<uint8_t>(context, source, destination, count, capacity, selected); break;
+            case LFS_HIP_F32: select_positions<float>(context, source, destination, count, capacity, selected, known_count); break;
+            case LFS_HIP_F16: select_positions<__half>(context, source, destination, count, capacity, selected, known_count); break;
+            case LFS_HIP_I32: select_positions<int32_t>(context, source, destination, count, capacity, selected, known_count); break;
+            case LFS_HIP_I64: select_positions<int64_t>(context, source, destination, count, capacity, selected, known_count); break;
+            case LFS_HIP_U32: select_positions<uint32_t>(context, source, destination, count, capacity, selected, known_count); break;
+            default: select_positions<uint8_t>(context, source, destination, count, capacity, selected, known_count); break;
             }
         } else {
             const auto* flags = reinterpret_cast<const uint8_t*>(static_cast<char*>(mask.buffer->data) + mask.offset);
             switch (width) {
-            case 1: select_values<uint8_t>(context, source, flags, destination, count, capacity, selected); break;
-            case 2: select_values<uint16_t>(context, source, flags, destination, count, capacity, selected); break;
-            case 4: select_values<uint32_t>(context, source, flags, destination, count, capacity, selected); break;
-            case 8: select_values<uint64_t>(context, source, flags, destination, count, capacity, selected); break;
+            case 1: select_values<uint8_t>(context, source, flags, destination, count, capacity, selected, known_count); break;
+            case 2: select_values<uint16_t>(context, source, flags, destination, count, capacity, selected, known_count); break;
+            case 4: select_values<uint32_t>(context, source, flags, destination, count, capacity, selected, known_count); break;
+            case 8: select_values<uint64_t>(context, source, flags, destination, count, capacity, selected, known_count); break;
             }
         }
     });
@@ -1146,22 +1085,13 @@ int lfs_hip_masked_scatter(LfsHipContext* context, LfsHipView output, LfsHipView
         auto* scratch = static_cast<char*>(context->sort_workspace) + prefix_bytes;
         check(hipcub::DeviceScan::ExclusiveSum(scratch, temporary_bytes, predicate, prefix,
                                                static_cast<int>(count), context->stream));
-        check(hipStreamSynchronize(context->stream));
-        int last_prefix = 0;
-        uint8_t last_flag = 0;
-        check(hipMemcpy(&last_prefix, prefix + count - 1, sizeof(last_prefix), hipMemcpyDeviceToHost));
-        check(hipMemcpy(&last_flag, flags + count - 1, sizeof(last_flag), hipMemcpyDeviceToHost));
-        require(size_t(last_prefix) + size_t(last_flag != 0) == selected_count,
-                "HIP masked scatter source count does not match mask");
-        if (!selected_count)
-            return;
         auto* destination = static_cast<char*>(output.buffer->data) + output.offset;
         const auto* values = static_cast<const char*>(source.buffer->data) + source.offset;
         switch (width) {
-        case 1: launch_masked_scatter<uint8_t>(context, destination, flags, values, prefix, count); break;
-        case 2: launch_masked_scatter<uint16_t>(context, destination, flags, values, prefix, count); break;
-        case 4: launch_masked_scatter<uint32_t>(context, destination, flags, values, prefix, count); break;
-        case 8: launch_masked_scatter<uint64_t>(context, destination, flags, values, prefix, count); break;
+        case 1: launch_masked_scatter<uint8_t>(context, destination, flags, values, prefix, count, selected_count); break;
+        case 2: launch_masked_scatter<uint16_t>(context, destination, flags, values, prefix, count, selected_count); break;
+        case 4: launch_masked_scatter<uint32_t>(context, destination, flags, values, prefix, count, selected_count); break;
+        case 8: launch_masked_scatter<uint64_t>(context, destination, flags, values, prefix, count, selected_count); break;
         }
     });
 }
@@ -1176,8 +1106,7 @@ int lfs_hip_sort_pairs(LfsHipContext* context, LfsHipView values, LfsHipView ind
         validate(context, values.buffer, values.offset, count * 4);
         validate(context, indices.buffer, indices.offset, count * 8);
         require(values.offset % 4 == 0 && indices.offset % 8 == 0, "Unaligned HIP sort view");
-        require(values.buffer != indices.buffer || values.offset + count * 4 <= indices.offset || indices.offset + count * 8 <= values.offset,
-                "HIP sort values and indices overlap");
+        require_disjoint(values, count * 4, indices, count * 8, "HIP sort values and indices overlap");
         if (!count)
             return;
         DeviceScope device(context->device);
@@ -1239,7 +1168,7 @@ int lfs_hip_trim_workspace(LfsHipContext* context, LfsHipError* error) {
         if (!context->scan_workspace && !context->sort_workspace && !context->reduction_workspace)
             return;
         DeviceScope device(context->device);
-        check(hipStreamSynchronize(context->stream));
+        synchronize_context(context);
         if (context->reduction_workspace) {
             check(hipFree(context->reduction_workspace));
             context->reduction_workspace = nullptr;
@@ -1270,7 +1199,7 @@ int lfs_hip_memory_info(LfsHipContext* context, LfsHipMemoryInfo* output, LfsHip
         output->workspace_bytes = context->reduction_workspace ? reduction_workspace_floats * sizeof(float) : 0;
         output->workspace_bytes += context->scan_workspace_bytes;
         output->workspace_bytes += context->sort_workspace_bytes;
-        output->owned_bytes = output->workspace_bytes;
+        output->owned_bytes = output->workspace_bytes + (context->index_error ? sizeof(uint32_t) : 0);
         for (const auto* buffer : context->buffers)
             output->owned_bytes += buffer->bytes;
     });
@@ -1317,7 +1246,7 @@ int lfs_hip_strided_scatter(LfsHipContext* context, LfsHipView input, LfsHipView
         validate(context, input.buffer, input.offset, bytes);
         validate(context, output.buffer, output.offset, span);
         require(input.offset % element_bytes == 0 && output.offset % element_bytes == 0, "Unaligned HIP strided scatter");
-        require(input.buffer != output.buffer || !bytes || input.offset >= output.offset + span || output.offset >= input.offset + bytes, "HIP strided scatter input/output overlap");
+        require_disjoint(input, bytes, output, span, "HIP strided scatter input/output overlap");
         if (!source->elements)
             return;
         DeviceScope device(context->device);
@@ -1342,7 +1271,7 @@ int lfs_hip_strided_copy(LfsHipContext* context, LfsHipView input, LfsHipView ou
         validate(context, input.buffer, input.offset, span);
         validate(context, output.buffer, output.offset, bytes);
         require(input.offset % element_bytes == 0 && output.offset % element_bytes == 0, "Unaligned HIP strided copy");
-        require(input.buffer != output.buffer || input.offset + span <= output.offset || output.offset + bytes <= input.offset, "HIP strided copy input/output overlap");
+        require_disjoint(input, span, output, bytes, "HIP strided copy input/output overlap");
         if (!source->elements)
             return;
         DeviceScope device(context->device);
@@ -1422,13 +1351,11 @@ int lfs_hip_convert(LfsHipContext* context, LfsHipView input, uint32_t input_dty
         validate(context, input.buffer, input.offset, in_bytes);
         validate(context, output.buffer, output.offset, out_bytes);
         require(input.offset % in_width == 0 && output.offset % out_width == 0, "Unaligned HIP conversion");
-        require(input.buffer != output.buffer || !count || input.offset >= output.offset + out_bytes || output.offset >= input.offset + in_bytes ||
-                    (input_dtype == output_dtype && input.offset == output.offset),
-                "HIP conversion ranges overlap");
+        require_compatible_views(input, in_bytes, output, out_bytes, input_dtype == output_dtype, "HIP conversion ranges overlap");
         if (!count)
             return;
         DeviceScope device(context->device);
-        if (input_dtype == output_dtype) {
+        if (input_dtype == output_dtype || (input_dtype == LFS_HIP_BOOL && output_dtype == LFS_HIP_U8)) {
             if (input.buffer != output.buffer || input.offset != output.offset)
                 check(hipMemcpyAsync(static_cast<char*>(output.buffer->data) + output.offset, static_cast<const char*>(input.buffer->data) + input.offset, in_bytes, hipMemcpyDeviceToDevice, context->stream));
             return;
@@ -1452,26 +1379,26 @@ int lfs_hip_index_cast(LfsHipContext* context, LfsHipView input, LfsHipView outp
         validate(context, input.buffer, input.offset, in_bytes);
         validate(context, output.buffer, output.offset, out_bytes);
         require(input.offset % 8 == 0 && output.offset % 4 == 0, "Unaligned HIP index cast");
-        require(input.buffer != output.buffer || !count || input.offset >= output.offset + out_bytes || output.offset >= input.offset + in_bytes, "HIP index cast ranges overlap");
+        require_disjoint(input, in_bytes, output, out_bytes, "HIP index cast ranges overlap");
         if (!count)
             return;
         DeviceScope device(context->device);
-        ensure_reduction_workspace(context);
-        auto* flag = reinterpret_cast<uint32_t*>(context->reduction_workspace + 4096);
-        check(hipMemsetAsync(flag, 0, sizeof(uint32_t), context->stream));
-        hipLaunchKernelGGL(validate_indices, dim3(blocks(count)), dim3(256), 0, context->stream,
-                           reinterpret_cast<const int64_t*>(static_cast<const char*>(input.buffer->data) + input.offset), count, extent, flag);
+        auto* invalid = index_error_flag(context);
+        hipLaunchKernelGGL(index_cast_kernel, dim3(blocks(count)), dim3(256), 0, context->stream,
+                           reinterpret_cast<const int64_t*>(static_cast<const char*>(input.buffer->data) + input.offset),
+                           reinterpret_cast<int32_t*>(static_cast<char*>(output.buffer->data) + output.offset), count, extent, invalid);
         check(hipGetLastError());
-        uint32_t invalid = 0;
-        read_device_scalar(context, &invalid, flag, sizeof(invalid));
-        if (invalid)
-            throw InvalidIndex("HIP index is negative or outside its extent");
-        launch_convert<int32_t, int64_t>(context, input, output, count);
     });
 }
 
-int lfs_hip_index_update(LfsHipContext* context, LfsHipView output, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, LfsHipView source, const LfsHipLayout* output_layout, uint32_t dim, size_t index_count, uint32_t add, LfsHipError* error) {
+int lfs_hip_index_update(LfsHipContext* context, LfsHipView output, LfsHipView indices, LfsHipView source, const LfsHipIndexUpdate* p, LfsHipError* error) {
     return boundary(error, [&] {
+        require(p && p->struct_bytes == sizeof(*p), "Invalid HIP index_update descriptor size");
+        const auto dtype = p->dtype, index_dtype = p->index_dtype, dim = p->dim, add = p->add;
+        require(p->index_count <= SIZE_MAX, "HIP update index count overflow");
+        const size_t index_count = size_t(p->index_count);
+        const auto* output_layout = &p->output_layout;
+
         require(output_layout && dim < output_layout->rank && add <= 1, "Invalid HIP indexed update descriptor");
         require(index_dtype == LFS_HIP_I32 || index_dtype == LFS_HIP_I64, "HIP update indices must be int32 or int64");
         require(!add || dtype == LFS_HIP_F32 || dtype == LFS_HIP_I32, "HIP index_add supports float32 and int32");
@@ -1481,15 +1408,7 @@ int lfs_hip_index_update(LfsHipContext* context, LfsHipView output, uint32_t dty
         require(destination.dims[dim] <= uint64_t(INT64_MAX), "HIP update extent exceeds signed index range");
         auto source_layout = destination;
         source_layout.dims[dim] = index_count;
-        source_layout.elements = 1;
-        for (unsigned r = 0; r < source_layout.rank; ++r)
-            if (!source_layout.dims[r])
-                source_layout.elements = 0;
-        if (source_layout.elements)
-            for (unsigned r = 0; r < source_layout.rank; ++r) {
-                require(source_layout.dims[r] <= SIZE_MAX / source_layout.elements, "HIP indexed update source shape overflow");
-                source_layout.elements *= source_layout.dims[r];
-            }
+        source_layout.elements = shape_elements(source_layout);
         const size_t source_bytes = typed_bytes(dtype, source_layout.elements), index_bytes = typed_bytes(index_dtype, index_count);
         validate(context, output.buffer, output.offset, output_span);
         validate(context, source.buffer, source.offset, source_bytes);
@@ -1502,14 +1421,21 @@ int lfs_hip_index_update(LfsHipContext* context, LfsHipView output, uint32_t dty
         require(destination.dims[dim] > 0, "HIP indexed update cannot write an empty axis");
         DeviceScope device(context->device);
         if (index_dtype == LFS_HIP_I32)
-            dispatch_index_update<int32_t>(context, output, indices, source, dtype, destination, source_layout, dim, index_count, add != 0);
+            dispatch_index_update<int32_t>(context, output, indices, source, dtype, destination, source_layout, dim, add != 0);
         else
-            dispatch_index_update<int64_t>(context, output, indices, source, dtype, destination, source_layout, dim, index_count, add != 0);
+            dispatch_index_update<int64_t>(context, output, indices, source, dtype, destination, source_layout, dim, add != 0);
     });
 }
 
-int lfs_hip_index_fill(LfsHipContext* context, LfsHipView output, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, const LfsHipLayout* output_layout, uint32_t dim, size_t index_count, uint64_t value_bits, LfsHipError* error) {
+int lfs_hip_index_fill(LfsHipContext* context, LfsHipView output, LfsHipView indices, const LfsHipIndexFill* p, LfsHipError* error) {
     return boundary(error, [&] {
+        require(p && p->struct_bytes == sizeof(*p), "Invalid HIP index_fill descriptor size");
+        const auto dtype = p->dtype, index_dtype = p->index_dtype, dim = p->dim;
+        require(p->index_count <= SIZE_MAX, "HIP fill index count overflow");
+        const size_t index_count = size_t(p->index_count);
+        const auto value_bits = p->value_bits;
+        const auto* output_layout = &p->output_layout;
+
         require(output_layout && dim < output_layout->rank, "Invalid HIP index fill descriptor");
         require(dtype == LFS_HIP_F32 || dtype == LFS_HIP_I32 || dtype == LFS_HIP_U8 || dtype == LFS_HIP_BOOL,
                 "HIP index fill supports Float32, Int32 and byte data");
@@ -1519,26 +1445,19 @@ int lfs_hip_index_fill(LfsHipContext* context, LfsHipView output, uint32_t dtype
         const size_t output_span = layout_span(destination, static_cast<unsigned>(width), true);
         auto source_layout = destination;
         source_layout.dims[dim] = index_count;
-        source_layout.elements = index_count;
-        for (unsigned r = 0; r < source_layout.rank; ++r)
-            if (r != dim) {
-                require(source_layout.dims[r] == 0 || source_layout.elements <= SIZE_MAX / source_layout.dims[r], "HIP index fill shape overflow");
-                source_layout.elements *= source_layout.dims[r];
-            }
+        source_layout.elements = shape_elements(source_layout);
         validate(context, output.buffer, output.offset, output_span);
         validate(context, indices.buffer, indices.offset, typed_bytes(index_dtype, index_count));
         require(output.offset % width == 0 && indices.offset % iw == 0, "Unaligned HIP index fill");
-        require(output.buffer != indices.buffer || !output_span || !index_count ||
-                    indices.offset >= output.offset + output_span || output.offset >= indices.offset + typed_bytes(index_dtype, index_count),
-                "HIP fill output overlaps indices");
+        require_disjoint(output, output_span, indices, typed_bytes(index_dtype, index_count), "HIP fill output overlaps indices");
         if (!source_layout.elements)
             return;
         require(destination.dims[dim] > 0, "HIP index fill cannot write an empty axis");
         DeviceScope device(context->device);
         if (index_dtype == LFS_HIP_I32)
-            dispatch_index_fill<int32_t>(context, output, indices, static_cast<unsigned>(width), destination, source_layout, dim, index_count, value_bits);
+            dispatch_index_fill<int32_t>(context, output, indices, static_cast<unsigned>(width), destination, source_layout, dim, value_bits);
         else
-            dispatch_index_fill<int64_t>(context, output, indices, static_cast<unsigned>(width), destination, source_layout, dim, index_count, value_bits);
+            dispatch_index_fill<int64_t>(context, output, indices, static_cast<unsigned>(width), destination, source_layout, dim, value_bits);
     });
 }
 
@@ -1552,8 +1471,14 @@ int lfs_hip_index_put_f32(LfsHipContext* context, LfsHipView output, LfsHipView 
     return boundary(error, [&] { flat_index<true>(context, values, indices, index_dtype, output, output_size, index_count, 0); });
 }
 
-int lfs_hip_gather(LfsHipContext* context, LfsHipView input, uint32_t dtype, LfsHipView indices, uint32_t index_dtype, LfsHipView output, const LfsHipLayout* input_layout, const LfsHipLayout* index_layout, uint32_t dim, uint32_t boundary_mode, uint32_t index_select, LfsHipError* error) {
+int lfs_hip_gather(LfsHipContext* context, LfsHipView input, LfsHipView indices, LfsHipView output, const LfsHipGather* p, LfsHipError* error) {
     return boundary(error, [&] {
+        require(p && p->struct_bytes == sizeof(*p), "Invalid HIP gather descriptor size");
+        const auto dtype = p->dtype, index_dtype = p->index_dtype, dim = p->dim;
+        const auto boundary_mode = p->boundary_mode, index_select = p->index_select;
+        const auto* input_layout = &p->input_layout;
+        const auto* index_layout = &p->index_layout;
+
         require(input_layout && index_layout && dim < input_layout->rank && boundary_mode <= 2 && index_select <= 1, "Invalid HIP gather descriptor");
         require(index_dtype == LFS_HIP_I32 || index_dtype == LFS_HIP_I64, "HIP indices must be int32 or int64");
         const auto source = *input_layout, idx = *index_layout;
@@ -1570,15 +1495,7 @@ int lfs_hip_gather(LfsHipContext* context, LfsHipView input, uint32_t dtype, Lfs
                 if (r != dim)
                     require(idx.dims[r] <= source.dims[r], "HIP gather non-index axis exceeds input");
         }
-        size_t count = 1;
-        for (unsigned r = 0; r < destination.rank; ++r)
-            if (!destination.dims[r])
-                count = 0;
-        if (count)
-            for (unsigned r = 0; r < destination.rank; ++r) {
-                require(destination.dims[r] <= SIZE_MAX / count, "HIP gather output shape overflow");
-                count *= destination.dims[r];
-            }
+        const size_t count = shape_elements(destination);
         destination.elements = count;
         require(source.dims[dim] <= uint64_t(INT64_MAX), "HIP gather extent exceeds signed index range");
         require(!count || source.dims[dim] > 0, "HIP gather cannot index an empty axis");
@@ -1613,7 +1530,7 @@ int lfs_hip_reduce_layout_f32(LfsHipContext* context, LfsHipView input, LfsHipVi
         validate(context, input.buffer, input.offset, input_bytes);
         validate(context, output.buffer, output.offset, output_bytes);
         require(input.offset % 4 == 0 && output.offset % 4 == 0, "Unaligned HIP reduction view");
-        require(input.buffer != output.buffer || !input_bytes || !output_bytes || input.offset >= output.offset + output_bytes || output.offset >= input.offset + input_bytes, "HIP reduction input/output overlap");
+        require_disjoint(input, input_bytes, output, output_bytes, "HIP reduction input/output overlap");
         if (!kept.elements)
             return;
         DeviceScope device(context->device);
@@ -1639,8 +1556,8 @@ int lfs_hip_fill_layout_bits(LfsHipContext* context, LfsHipView output, const Lf
             return;
         DeviceScope device(context->device);
         auto launch = [&]<class T>() {
-            hipLaunchKernelGGL((strided_kernel<T, true>), dim3(blocks(layout->elements)), dim3(256), 0, context->stream,
-                               static_cast<const T*>(nullptr), reinterpret_cast<T*>(static_cast<char*>(output.buffer->data) + output.offset), *layout, static_cast<T>(bits));
+            hipLaunchKernelGGL((fill_layout_kernel<T>), dim3(blocks(layout->elements)), dim3(256), 0, context->stream,
+                               reinterpret_cast<T*>(static_cast<char*>(output.buffer->data) + output.offset), *layout, static_cast<T>(bits));
         };
         switch (width) {
         case 1: launch.template operator()<uint8_t>(); break;
@@ -1650,12 +1567,6 @@ int lfs_hip_fill_layout_bits(LfsHipContext* context, LfsHipView output, const Lf
         }
         check(hipGetLastError());
     });
-}
-
-int lfs_hip_fill_strided_f32(LfsHipContext* context, LfsHipView output, const LfsHipLayout* source, float value, LfsHipError* error) {
-    uint32_t bits;
-    std::memcpy(&bits, &value, sizeof(bits));
-    return lfs_hip_fill_layout_bits(context, output, source, sizeof(value), bits, error);
 }
 
 #include "arg_extreme_runtime.hpp"

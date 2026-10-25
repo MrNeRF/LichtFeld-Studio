@@ -51,14 +51,9 @@ DLL search policy. Development builds place required SDK runtime DLL families be
 module. This is not a distribution profile. The opt-in application Tensor adapter
 is described in `docs/docs/development/hip-tensor-backend.md`.
 
-The private C ABI revision is `LFS_HIP_RUNTIME_ABI_VERSION` (currently 5), returned
-by `lfs_hip_runtime_abi()`. Revision 1 provided only the foundation; revision 2
-adds owned asynchronous transfers, revision 3 adds native Tensor operators, and
-revision 4 unifies all reduction operation numbers. Revision 5 adds the complete
-Tensor adapter APIs (expressions, images, NN, geometry and events).
-The host loader checks the exact revision
-before binding revision-specific exports; the boundary is private and does not
-promise binary compatibility between revisions.
+The private C ABI revision is `LFS_HIP_RUNTIME_ABI_VERSION`, returned by
+`lfs_hip_runtime_abi()`. A loader must check this exact revision before binding
+any other export. Binary compatibility between private revisions is not promised.
 
 The private versioned C ABI exposes inventory, contexts, owned buffers, blocking
 host transfers, synchronization, fill and affine smoke kernels. No HIP types or C++
@@ -177,27 +172,16 @@ real device, not physical device-loss or GPU-hang recovery.
 
 ## Native contiguous pointwise operators
 
-The private runtime also provides FP32 and FP16 pointwise operations from the
-shared `pointwise_ops.def` catalog, plus FP32 arange, device copy and byte fill.
+The private runtime provides the FP32 pointwise catalog and the FP16 subset used
+by the Tensor backend: four binary arithmetic operations, nine binary predicates
+and four unary predicates. Other FP16 operations fail explicitly. FP32 arange,
+device copy and byte fill are also available.
 Predicates write byte booleans for either floating input type. Views carry a
 context-owned buffer and a byte offset; the runtime validates ownership, complete
 extents, element alignment and overlapping ranges before launching a kernel.
 Same-type pointwise operations allow exact in-place views; shifted overlap and
 predicate outputs overlapping their floating input are rejected. Device copy
 permits identical source/destination as a no-op and rejects shifted overlap.
-
-The build generates HIP dispatch and a HIP-adapted copy of the shared functors
-inside the build directory. It does not edit CUDA, Metal, Vulkan or host sources.
-The generator rejects malformed, empty or duplicate catalog entries, unsupported
-scalar forms and changes to the shared device ReLU contract, so future
-catalog changes cannot silently omit an operation. CPU generator regressions
-run without the SDK and are included in the existing Python fast suite.
-
-The GPU contract compares every catalog operation in both storage types to
-independent scalar expectations over 513 elements, checks byte predicates and
-output canaries, and exercises invalid views, exact in-place updates, NaN and
-signed-zero behavior. Floating comparisons use bounded tolerances, not a claim
-of bitwise equality between different devices or mathematical libraries.
 
 ## Generic native Tensor operators
 
@@ -211,8 +195,8 @@ Integer comparisons preserve Int64 precision rather than converting to float.
 
 | Operator family | Native storage support |
 | --- | --- |
-| Catalog pointwise, scalar-left, fused chains | FP32/FP16 pointwise and scalar-left; FP32 chains |
-| Typed conversion and layout copy/fill | All seven dtypes |
+| Pointwise, scalar-left, fused chains | FP32 catalog and chains; FP16 subset above; FP32 scalar-left add/subtract/multiply/divide |
+| Typed conversion and layout copy/fill | Seven storage dtypes; conversions use the standard Tensor backend pair matrix |
 | Broadcast and conditional selection | Floating, integer and boolean storage; operation-specific validation |
 | Global scalar reduction and arg extrema | FP32; extrema indices use Int64 |
 | Axis reduction | FP32/FP16 and integer/boolean subsets; output type is validated |
@@ -225,27 +209,20 @@ Integer comparisons preserve Int64 precision rather than converting to float.
 | Matrix multiplication and pairwise distance | FP32 |
 
 Unsupported combinations fail explicitly rather than running a CPU fallback.
-Scalar, strided-axis, fused-chain and typed integer reductions share one block
-kernel. Readers describe the input addressing, policies retain the appropriate
-floating or integer accumulator, and stores handle output conversion. Short
-floating reductions retain a serial fast path. Axis and chain reductions share
-parts selection while preserving their respective final-pass accumulation order.
-Buffer overlap checks and lazy reduction workspace ownership are centralized.
-The floating convenience exports forward to the typed implementations.
-
 Floating reductions and indexed atomic addition may differ in rounding order
 between devices. RNG seeds are reproducible for this implementation; no claim
 is made that another backend produces the same seeded sequence.
 
-All reduction entry points use `LfsHipReduceOp`, including typed axis reductions;
-Core Tensor enum ordinals must be mapped explicitly. Byte scalar predicates cast
-the scalar to the input dtype before comparison. HIP device ReLU canonicalizes
-negative zero to positive zero, matching its fused GEMM activation.
+All reduction entry points accept `LfsHipReduceOp`. Typed scalar predicates
+convert the scalar to the declared input dtype; Bool uses boolean conversion.
+HIP device ReLU canonicalizes negative zero to positive zero.
 
 Sort preserves input payload bits and stable ordering of NaNs and signed zeros.
-Selection validates output capacity before writing and retains only its counter
-and library workspace, rather than a full input-sized result. DeviceSelect is
-instantiated by storage width; it preserves floating payload bits unchanged.
+Selection with an unknown count validates output capacity before writing.
+For a pre-counted mask, set `LfsHipSelection::count_known` and provide the exact
+`selected_count`; the mask must remain unchanged on its context queue between
+counting and selection. This path enqueues selection without reading a host
+count. Selection retains only its counter and library workspace. Floating payload bits are preserved unchanged.
 
 Temporary workspaces belong to a context. Growth drains previous operations and
 releases disposable storage before replacing it; failed releases retain ownership
@@ -263,3 +240,13 @@ workspace release and synchronization failures and balanced resources.
 The public application Tensor adapter and backend registration are opt-in;
 training integration remains separate work.
 No CUDA, Metal or Vulkan implementation is replaced or modified.
+
+Checked indexing skips out-of-range device indices and reports the error at
+context synchronization or a blocking host read. Valid lanes may already have
+completed; these operations do not promise transactional rollback. Masked scatter
+validates its supplied count on the device before updating elements. Consuming an
+asynchronous error clears it, allowing subsequent valid operations on the context.
+
+The build compiles runtime services, pointwise kernels and Tensor operators as
+separate objects. `LFS_HIP_OFFLOAD_JOBS` controls concurrent architecture
+compilations per source (default `2`); lower it on memory-constrained builders.

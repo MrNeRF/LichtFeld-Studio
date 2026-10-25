@@ -254,6 +254,18 @@ namespace {
         EXPECT_NEAR(host<float>(sums).back(), 4000.f, 4000.f * 1e-6f);
     }
 
+    TEST_P(TensorBackendSemantics, BoolCastsUseNonzeroSemantics) {
+        const Tensor floats = make<float>(DataType::Float32, {6}, {-1.f, -0.f, 0.f, 1.f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()});
+        const std::vector<uint8_t> expected{1, 0, 0, 1, 1, 1};
+        EXPECT_EQ(host<uint8_t>(floats.to(DataType::Bool)), expected);
+        EXPECT_EQ(host<uint8_t>(floats.to(DataType::Float16).to(DataType::Bool)), expected);
+        const Tensor integers = make<int32_t>(DataType::Int32, {3}, {-7, 0, 9});
+        EXPECT_EQ(host<uint8_t>(integers.to(DataType::Bool)), (std::vector<uint8_t>{1, 0, 1}));
+        EXPECT_EQ(host<uint8_t>(integers.to(DataType::Int64).to(DataType::Bool)), (std::vector<uint8_t>{1, 0, 1}));
+        const Tensor bytes = make<uint8_t>(DataType::UInt8, {4}, {0, 1, 2, 255});
+        EXPECT_EQ(host<uint8_t>(bytes.to(DataType::Bool)), (std::vector<uint8_t>{0, 1, 1, 1}));
+    }
+
     TEST_P(TensorBackendSemantics, ScalarBoolCastKeepsRank) {
         const Tensor flag = make<int32_t>(DataType::Int32, {}, {5}).to(DataType::Bool);
         EXPECT_EQ(flag.ndim(), 0u);
