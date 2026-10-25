@@ -195,6 +195,21 @@ namespace {
         expect_floats(host<float>(base.pow(cube)), {-8.f, -27.f, 0.f, -kInf, 0.f, kNan, -512.f});
     }
 
+    TEST_P(TensorBackendSemantics, TypedAxisReductionOperationsAreDistinct) {
+        const Tensor integers = make<int32_t>(DataType::Int32, {2, 3}, {3, 0, 7, 0, 0, 0});
+        EXPECT_EQ(host<int32_t>(integers.min(1)), (std::vector<int32_t>{0, 0}));
+        EXPECT_EQ(host<int32_t>(integers.max(1)), (std::vector<int32_t>{7, 0}));
+        EXPECT_EQ(host<uint8_t>(integers.any(1)), (std::vector<uint8_t>{1, 0}));
+        EXPECT_EQ(host<uint8_t>(integers.all(1)), (std::vector<uint8_t>{0, 0}));
+        constexpr int64_t base = (int64_t{1} << 53) + 1;
+        const Tensor wide = make<int64_t>(DataType::Int64, {2, 2}, {base, base + 2, base + 4, base + 1});
+        EXPECT_EQ(host<int64_t>(wide.min(1)), (std::vector<int64_t>{base, base + 1}));
+        EXPECT_EQ(host<int64_t>(wide.max(1)), (std::vector<int64_t>{base + 2, base + 4}));
+        const Tensor half = make<float>(DataType::Float32, {2, 3}, {3, 0, 7, -2, -5, -1}).to(DataType::Float16);
+        expect_floats(host<float>(half.min(1).to(DataType::Float32)), {0, -5});
+        expect_floats(host<float>(half.max(1).to(DataType::Float32)), {7, -1});
+    }
+
     TEST_P(TensorBackendSemantics, FloatScalarMinimumAndMaximum) {
         const Tensor x = make<float>(DataType::Float32, {4}, {-2.f, 0.25f, 3.f, 0.5f});
         expect_floats(host<float>(x.minimum(0.5f)), {-2.f, 0.25f, 0.5f, 0.5f});

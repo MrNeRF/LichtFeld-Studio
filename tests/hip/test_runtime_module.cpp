@@ -1,12 +1,55 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "runtime_module.hpp"
+#include <chrono>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
 #include "runtime_test_directory.hpp"
 using lfs::core::internal::HipRuntimeModule;
+
+// Each invocation owns a freshly created directory. Never overwrite or
+// recursively remove a pre-existing fixture directory.
+class UnicodeModuleFixture {
+public:
+    explicit UnicodeModuleFixture(const std::filesystem::path& source) {
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        for (unsigned attempt = 0; attempt < 64; ++attempt) {
+            auto candidate = source.parent_path() / std::filesystem::path(u8"Unicode-\u00e9-\u6e2c\u8a66");
+            candidate += "-" + std::to_string(stamp) + "-" + std::to_string(attempt);
+            if (!std::filesystem::create_directory(candidate))
+                continue;
+            directory_ = candidate;
+            path_ = directory_ / source.filename();
+            std::error_code error;
+            copied_ = std::filesystem::copy_file(source, path_, error);
+            if (error || !copied_) {
+                std::error_code cleanup_error;
+                std::filesystem::remove(directory_, cleanup_error);
+                throw std::runtime_error("Cannot copy Unicode module fixture: " + error.message());
+            }
+            return;
+        }
+        throw std::runtime_error("Cannot reserve a unique Unicode fixture directory");
+    }
+    UnicodeModuleFixture(const UnicodeModuleFixture&) = delete;
+    UnicodeModuleFixture& operator=(const UnicodeModuleFixture&) = delete;
+    ~UnicodeModuleFixture() {
+        std::error_code error;
+        if (copied_)
+            std::filesystem::remove(path_, error);
+        if (!directory_.empty())
+            std::filesystem::remove(directory_, error);
+    }
+    const std::filesystem::path& path() const { return path_; }
+    const std::filesystem::path& directory() const { return directory_; }
+
+private:
+    std::filesystem::path path_, directory_;
+    bool copied_ = false;
+};
 
 std::string rejection(const std::filesystem::path& path) {
     try {
@@ -46,17 +89,17 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Relative startup dependency was accepted");
         if (revision) {
             const std::string expected = revision == LFS_HIP_RUNTIME_ABI_VERSION ? "Missing HIP runtime export: lfs_hip_device_count"
-                                                                                 : "HIP runtime ABI mismatch: expected 4, got " + std::to_string(revision);
-            auto checked_path = path;
-            if (revision == 1) {
-                checked_path = path.parent_path() / std::filesystem::path(u8"Unicode-\u00e9-\u6e2c\u8a66") / path.filename();
-                if (!std::filesystem::create_directory(checked_path.parent_path()))
-                    throw std::runtime_error("Refusing to overwrite an existing Unicode fixture directory");
-                std::filesystem::copy_file(path, checked_path);
-            }
-            const auto actual = rejection(checked_path);
+                                                                                 : "HIP runtime ABI mismatch: expected 5, got " + std::to_string(revision);
+            std::unique_ptr<UnicodeModuleFixture> fixture;
             if (revision == 1)
-                std::filesystem::remove(checked_path);
+                fixture = std::make_unique<UnicodeModuleFixture>(path);
+            const auto actual = rejection(fixture ? fixture->path() : path);
+            if (fixture) {
+                const auto directory_path = fixture->directory();
+                fixture.reset();
+                if (std::filesystem::exists(directory_path))
+                    throw std::runtime_error("Unicode module fixture cleanup failed");
+            }
             if (actual != expected)
                 throw std::runtime_error("Unexpected loader diagnostic: [" + actual + "] expected [" + expected + "]");
         } else {

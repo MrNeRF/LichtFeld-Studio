@@ -46,9 +46,10 @@ typedef struct LfsHipDevice {
 } LfsHipDevice;
 
 /* Exact private ABI revision: 1 is the foundation; 2 adds owned transfers;
- * 3 adds native Tensor operators; 4 completes the host Tensor adapter APIs.
+ * 3 adds native Tensor operators; 4 unifies reduction opcodes;
+ * 5 completes the host Tensor adapter APIs.
  * Loaders must check this before binding revision-specific exports. */
-#define LFS_HIP_RUNTIME_ABI_VERSION 4u
+#define LFS_HIP_RUNTIME_ABI_VERSION 5u
 LFS_HIP_API uint32_t lfs_hip_runtime_abi(void);
 LFS_HIP_API int lfs_hip_device_count(int32_t* count, LfsHipError* error);
 LFS_HIP_API int lfs_hip_device_info(int32_t ordinal, LfsHipDevice* info, LfsHipError* error);
@@ -146,12 +147,15 @@ typedef struct LfsHipRandom {
     float first, second;
     int32_t low, high;
 } LfsHipRandom;
+/* One opcode domain for every reduction entry point; never Core ReduceOp ordinals. */
 enum LfsHipReduceOp { LFS_HIP_REDUCE_SUM,
                       LFS_HIP_REDUCE_MEAN,
                       LFS_HIP_REDUCE_MIN,
                       LFS_HIP_REDUCE_MAX,
                       LFS_HIP_REDUCE_HAS_NAN,
-                      LFS_HIP_REDUCE_HAS_INF };
+                      LFS_HIP_REDUCE_HAS_INF,
+                      LFS_HIP_REDUCE_ANY,
+                      LFS_HIP_REDUCE_ALL };
 enum LfsHipDtype { LFS_HIP_F32 = 0,
                    LFS_HIP_F16 = 1,
                    LFS_HIP_I32 = 2,

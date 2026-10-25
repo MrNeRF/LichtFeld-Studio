@@ -74,6 +74,10 @@ namespace {
             throw HipFailure(status);
     }
 
+    // Call only after validating both ranges against their owning buffers.
+    bool views_overlap(LfsHipView a, size_t an, LfsHipView b, size_t bn) {
+        return an && bn && a.buffer == b.buffer && a.offset < b.offset + bn && b.offset < a.offset + an;
+    }
     template <class F>
     int boundary(LfsHipError* error, F&& function) noexcept {
         if (error)
@@ -110,6 +114,12 @@ namespace {
             throw std::invalid_argument(message);
     }
 
+    void require_disjoint(LfsHipView a, size_t an, LfsHipView b, size_t bn, const char* message) {
+        require(!views_overlap(a, an, b, bn), message);
+    }
+    void require_compatible_views(LfsHipView a, size_t an, LfsHipView b, size_t bn, bool allow_identical, const char* message) {
+        require(!views_overlap(a, an, b, bn) || (allow_identical && a.offset == b.offset && an == bn), message);
+    }
     void validate_device(int ordinal) {
         int count = 0;
         check(hipGetDeviceCount(&count));
@@ -190,17 +200,9 @@ namespace {
             validate(context, b.buffer, b.offset, input_bytes);
             require(b.offset % alignof(In) == 0, "Unaligned pointwise rhs");
         }
-        auto overlap = [&](LfsHipView input, size_t bytes) {
-            if (input.buffer != out.buffer || !bytes)
-                return;
-            const size_t end = input.offset + bytes, output_end = out.offset + count * sizeof(Out);
-            require(input.offset >= output_end || out.offset >= end ||
-                        (sizeof(Out) == sizeof(In) && input.offset == out.offset),
-                    "Overlapping pointwise views require identical typed ranges");
-        };
-        overlap(a, input_bytes);
+        require_compatible_views(a, input_bytes, out, count * sizeof(Out), sizeof(Out) == sizeof(In), "Overlapping pointwise views require identical typed ranges");
         if constexpr (Mode == 2)
-            overlap(b, input_bytes);
+            require_compatible_views(b, input_bytes, out, count * sizeof(Out), sizeof(Out) == sizeof(In), "Overlapping pointwise views require identical typed ranges");
         if (!count)
             return;
         auto* lhs = reinterpret_cast<const In*>(static_cast<const char*>(a.buffer->data) + a.offset);

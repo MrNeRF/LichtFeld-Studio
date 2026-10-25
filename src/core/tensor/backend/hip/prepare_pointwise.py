@@ -23,11 +23,11 @@ def generate(source):
     functors = (source / "tensor_functors.hpp").read_text(encoding="utf-8")
     functors = functors.replace("__CUDACC__", "__HIPCC__").replace(
         "__CUDA_ARCH__", "__HIP_DEVICE_COMPILE__")
-    # HIP fmaxf selects +0 for (-0,+0); keep the public CPU ReLU's signed zero.
-    original = "isnan(static_cast<float>(x)) ? x : fmaxf(x, T(0))"
-    if functors.count(original) != 1:
-        raise ValueError("Shared ReLU changed: review the HIP signed-zero adaptation")
-    functors = functors.replace(original, "isnan(static_cast<float>(x)) ? x : (x < T(0) ? T(0) : x)")
+    # Retain the shared device ReLU, including CUDA's +0 result for -0.
+    if functors.count("isnan(static_cast<float>(x)) ? x : fmaxf(x, T(0))") != 1:
+        raise ValueError("Shared ReLU changed: review the HIP device contract")
+    # Explicit contextual conversions preserve the shared logical semantics.
+    functors = functors.replace("(a && b)", "(bool(a) && bool(b))").replace("(a || b)", "(bool(a) || bool(b))").replace("return !x;", "return !bool(x);")
     dispatch = {"f32": [], "f16": []}
     flags, evaluation, broadcast, half_broadcast, scalar_left = [], [], [], [], []
     identifiers = set()

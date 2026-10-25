@@ -41,20 +41,16 @@ extern "C" int lfs_hip_predicate_typed(LfsHipContext* context, LfsHipView lhs, L
         const bool binary = p->op >= LFS_HIP_OP_EqualTensor && p->op <= LFS_HIP_OP_LogicalXorTensor;
         const bool scalar = p->op >= LFS_HIP_OP_EqualScalar && p->op <= LFS_HIP_OP_GreaterEqualScalar;
         require(binary || scalar || (p->op >= LFS_HIP_OP_IsNan && p->op <= LFS_HIP_OP_LogicalNot), "Invalid HIP typed predicate operation");
-        require(p->dtype == LFS_HIP_I32 || p->dtype == LFS_HIP_I64 || p->dtype == LFS_HIP_U32 || p->dtype == LFS_HIP_F16,
+        require(p->dtype == LFS_HIP_I32 || p->dtype == LFS_HIP_I64 || p->dtype == LFS_HIP_U32 || p->dtype == LFS_HIP_F16 || p->dtype == LFS_HIP_U8 || p->dtype == LFS_HIP_BOOL,
                 "Unsupported HIP typed predicate dtype");
         const size_t width = typed_bytes(p->dtype, 1), bytes = typed_bytes(p->dtype, p->count);
         validate(context, lhs.buffer, lhs.offset, bytes);
         validate(context, output.buffer, output.offset, p->count);
         require(lhs.offset % width == 0 && (!binary || rhs.offset % width == 0), "Misaligned HIP typed predicate input");
-        const auto no_alias = [&](LfsHipView input) {
-            require(input.buffer != output.buffer || input.offset >= output.offset + p->count || output.offset >= input.offset + bytes,
-                    "HIP typed predicate output aliases an input");
-        };
-        no_alias(lhs);
+        require_compatible_views(lhs, bytes, output, p->count, width == 1, "HIP typed predicate output aliases an input");
         if (binary) {
             validate(context, rhs.buffer, rhs.offset, bytes);
-            no_alias(rhs);
+            require_compatible_views(rhs, bytes, output, p->count, width == 1, "HIP typed predicate output aliases an input");
         }
         if (!p->count)
             return;
@@ -63,7 +59,7 @@ extern "C" int lfs_hip_predicate_typed(LfsHipContext* context, LfsHipView lhs, L
             T value{};
             if (scalar) {
                 if (p->scalar_kind == 0) {
-                    if constexpr (std::is_integral_v<T>) {
+                    if constexpr (std::is_integral_v<T> && !std::is_same_v<T, bool>) {
                         const double v = std::trunc(double(p->float_scalar));
                         if constexpr (std::is_same_v<T, int64_t>)
                             require(std::isfinite(v) && v >= -9223372036854775808. && v < 9223372036854775808., "HIP predicate scalar is outside Int64");
@@ -89,6 +85,8 @@ extern "C" int lfs_hip_predicate_typed(LfsHipContext* context, LfsHipView lhs, L
         case LFS_HIP_I64: launch.template operator()<int64_t>(); break;
         case LFS_HIP_U32: launch.template operator()<uint32_t>(); break;
         case LFS_HIP_F16: launch.template operator()<__half>(); break;
+        case LFS_HIP_U8: launch.template operator()<uint8_t>(); break;
+        case LFS_HIP_BOOL: launch.template operator()<bool>(); break;
         }
         check(hipGetLastError());
     });

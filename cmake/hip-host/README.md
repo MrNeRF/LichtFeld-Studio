@@ -11,13 +11,13 @@ cmake --build build-hip-host
 ctest --test-dir build-hip-host --output-on-failure
 ```
 
-Four deliberately incomplete libraries test early rejection of ABI revisions
-1/2/3 and missing revision-4 exports. The host resolves the ABI first, then binds
+Five deliberately incomplete libraries test early rejection of ABI revisions
+1/2/3/4 and missing revision-5 exports. The host resolves the ABI first, then binds
 the typed export table. Module paths must be absolute. Windows uses a Unicode
 path and explicit DLL-directory/default-directory lookup, rather than the
 working directory. SDK dependencies must be installed or packaged appropriately.
 
-For a CPU-only export check against a real revision-4 module, configure
+For a CPU-only export check against a real revision-5 module, configure
 `LFS_HIP_HOST_TEST_MODULE` with its absolute path. On Windows the test can add an
 explicit SDK dependency directory through `LFS_HIP_HOST_TEST_RUNTIME_DIR` for
 its lifetime, without changing the process-wide DLL search policy.

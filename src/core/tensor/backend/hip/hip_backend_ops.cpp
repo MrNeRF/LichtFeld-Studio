@@ -755,6 +755,19 @@ namespace lfs::core::internal {
         LfsHipError error{};
         check(impl_->api.broadcast_typed(impl_->context, static_cast<uint32_t>(program.op), av, bv, ov, &a, &b, &out, uint32_t(lhs.dtype), uint32_t(dtype_size(output.dtype)), &error), error);
     }
+    namespace {
+        uint32_t native_reduce_op(ReduceOp operation) {
+            switch (operation) {
+            case ReduceOp::Sum: return LFS_HIP_REDUCE_SUM;
+            case ReduceOp::Mean: return LFS_HIP_REDUCE_MEAN;
+            case ReduceOp::Min: return LFS_HIP_REDUCE_MIN;
+            case ReduceOp::Max: return LFS_HIP_REDUCE_MAX;
+            case ReduceOp::Any: return LFS_HIP_REDUCE_ANY;
+            case ReduceOp::All: return LFS_HIP_REDUCE_ALL;
+            default: throw std::invalid_argument("Unsupported HIP reduction operation");
+            }
+        }
+    } // namespace
     void HipBackendOps::reduce(StorageRef input, StorageRef output, const StridedLayout& layout, const ReduceProgram& program, ExecContext execution) {
         queue(execution);
         if (input.dtype != DataType::Float32 || program.op == ReduceOp::Any || program.op == ReduceOp::All) {
@@ -770,7 +783,7 @@ namespace lfs::core::internal {
             std::lock_guard lock(impl_->mutex);
             const auto in = impl_->view(input), out = impl_->view(output);
             LfsHipError error{};
-            check(impl_->api.reduce_typed_layout(impl_->context, in, out, &native, mask, static_cast<uint32_t>(program.op), static_cast<uint32_t>(input.dtype), static_cast<uint32_t>(output.dtype), &error), error);
+            check(impl_->api.reduce_typed_layout(impl_->context, in, out, &native, mask, native_reduce_op(program.op), static_cast<uint32_t>(input.dtype), static_cast<uint32_t>(output.dtype), &error), error);
             if (input.dtype == DataType::Float16 && program.op != ReduceOp::Any && program.op != ReduceOp::All) {
                 impl_->workspace_bytes = impl_->algorithm_workspace_bytes + LFS_HIP_REDUCTION_WORKSPACE_FLOATS * sizeof(float);
                 impl_->peak = std::max(impl_->peak, impl_->live + impl_->workspace_bytes);

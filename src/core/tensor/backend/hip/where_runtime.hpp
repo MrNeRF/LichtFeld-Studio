@@ -3,9 +3,19 @@
 #pragma once
 #include "where_api.h"
 namespace {
+    void require_layout_alias(LfsHipView input, size_t bytes, const LfsHipLayout& layout,
+                              LfsHipView output, size_t out_bytes, const LfsHipLayout& out) {
+        if (!views_overlap(input, bytes, output, out_bytes))
+            return;
+        bool identical = input.offset == output.offset && layout.rank == out.rank;
+        for (uint32_t r = 0; r < out.rank && identical; ++r)
+            identical = layout.dims[r] == out.dims[r] && layout.strides[r] == out.strides[r];
+        require(identical, "HIP where output partially overlaps or broadcasts an aliased input");
+    }
+
     template <class T>
     __global__ void viewer_where(const uint8_t*, const T*, T*, size_t, T);
-}
+} // namespace
 extern "C" int lfs_hip_masked_fill(LfsHipContext* context, LfsHipView mask, LfsHipView output, uint64_t count, uint32_t dtype, float value, LfsHipError* error) {
     return boundary(error, [&] {
         require(context && count <= SIZE_MAX, "Invalid HIP masked fill descriptor");
@@ -85,18 +95,9 @@ extern "C" int lfs_hip_where_layout(LfsHipContext* context, LfsHipView condition
         validate(context, y.buffer, y.offset, y_bytes);
         validate(context, output.buffer, output.offset, out_bytes);
         require(x.offset % width == 0 && y.offset % width == 0 && output.offset % width == 0, "Misaligned HIP where view");
-        auto overlap = [&](LfsHipView input, size_t bytes) { return input.buffer == output.buffer && input.offset < output.offset + out_bytes && output.offset < input.offset + bytes; };
-        require(!overlap(condition, mask_bytes), "HIP where output aliases its condition");
-        auto disjoint_or_identical = [&](LfsHipView input, size_t bytes, const LfsHipLayout& layout) {
-            if (!overlap(input, bytes))
-                return;
-            bool identical = input.offset == output.offset && layout.rank == out.rank;
-            for (uint32_t r = 0; r < out.rank && identical; ++r)
-                identical = layout.dims[r] == out.dims[r] && layout.strides[r] == out.strides[r];
-            require(identical, "HIP where output partially overlaps or broadcasts an aliased input");
-        };
-        disjoint_or_identical(x, x_bytes, p->x);
-        disjoint_or_identical(y, y_bytes, p->y);
+        require_disjoint(condition, mask_bytes, output, out_bytes, "HIP where output aliases its condition");
+        require_layout_alias(x, x_bytes, p->x, output, out_bytes, out);
+        require_layout_alias(y, y_bytes, p->y, output, out_bytes, out);
         DeviceScope selected(context->device);
         const auto address = [](LfsHipView view) { return static_cast<char*>(view.buffer->data) + view.offset; };
         auto launch = [&]<class T>() {
@@ -126,9 +127,8 @@ extern "C" int lfs_hip_where_scalar(LfsHipContext* context, LfsHipView mask, Lfs
         validate(context, source.buffer, source.offset, count * width);
         validate(context, output.buffer, output.offset, count * width);
         require(source.offset % width == 0 && output.offset % width == 0, "Misaligned HIP renderer selection");
-        const auto overlaps = [](LfsHipView a, size_t an, LfsHipView b, size_t bn) { return a.buffer == b.buffer && a.offset < b.offset + bn && b.offset < a.offset + an; };
-        require(!overlaps(mask, count, output, count * width), "HIP renderer selection output aliases its mask");
-        require(!overlaps(source, count * width, output, count * width) || source.offset == output.offset, "HIP renderer selection source partially overlaps output");
+        require(!views_overlap(mask, count, output, count * width), "HIP renderer selection output aliases its mask");
+        require(!views_overlap(source, count * width, output, count * width) || source.offset == output.offset, "HIP renderer selection source partially overlaps output");
         DeviceScope selected(context->device);
         const auto address = [](LfsHipView view) { return static_cast<char*>(view.buffer->data) + view.offset; };
         const auto* m = reinterpret_cast<const uint8_t*>(address(mask));

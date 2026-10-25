@@ -5,7 +5,8 @@ the application, changing its C++ compiler, or requiring CUDA or PyTorch. It doe
 not register an application Tensor backend or enable training. Standard application
 builds do not traverse this project and retain their existing configuration.
 
-With CMake 3.30 or newer, Ninja, Python 3 the project's Slang compiler (or `LFS_HIP_CORE_SLANGC`) and a complete ROCm development SDK:
+With CMake 3.30 or newer, Ninja, Python 3, the project Slang compiler (or `LFS_HIP_CORE_SLANGC`),
+and a complete ROCm development SDK:
 
 ```sh
 cmake -S cmake/hip-native -B build-hip-native -G Ninja \
@@ -46,14 +47,15 @@ to another device occurs.
 
 The test uses an absolute module path and, on Windows, an explicit SDK DLL directory
 kept alive for the duration of the test. It does not modify PATH or the process-wide
-DLL search policy. Development builds place the required SDK runtime DLL families beside the
-Windows module. This is not a distribution profile. The opt-in application Tensor
-adapter is described in `docs/docs/development/hip-tensor-backend.md`.
+DLL search policy. Development builds place required SDK runtime DLL families beside the Windows
+module. This is not a distribution profile. The opt-in application Tensor adapter
+is described in `docs/docs/development/hip-tensor-backend.md`.
 
-The private C ABI revision is `LFS_HIP_RUNTIME_ABI_VERSION` (currently 4), returned
+The private C ABI revision is `LFS_HIP_RUNTIME_ABI_VERSION` (currently 5), returned
 by `lfs_hip_runtime_abi()`. Revision 1 provided only the foundation; revision 2
-adds owned asynchronous transfers, revision 3 adds native Tensor operators, and revision 4 completes the Tensor
-adapter API (expressions, images, NN, geometry and events).
+adds owned asynchronous transfers, revision 3 adds native Tensor operators, and
+revision 4 unifies all reduction operation numbers. Revision 5 adds the complete
+Tensor adapter APIs (expressions, images, NN, geometry and events).
 The host loader checks the exact revision
 before binding revision-specific exports; the boundary is private and does not
 promise binary compatibility between revisions.
@@ -187,7 +189,7 @@ permits identical source/destination as a no-op and rejects shifted overlap.
 The build generates HIP dispatch and a HIP-adapted copy of the shared functors
 inside the build directory. It does not edit CUDA, Metal, Vulkan or host sources.
 The generator rejects malformed, empty or duplicate catalog entries, unsupported
-scalar forms and changes to the explicit ReLU signed-zero adaptation, so future
+scalar forms and changes to the shared device ReLU contract, so future
 catalog changes cannot silently omit an operation. CPU generator regressions
 run without the SDK and are included in the existing Python fast suite.
 
@@ -223,11 +225,27 @@ Integer comparisons preserve Int64 precision rather than converting to float.
 | Matrix multiplication and pairwise distance | FP32 |
 
 Unsupported combinations fail explicitly rather than running a CPU fallback.
+Scalar, strided-axis, fused-chain and typed integer reductions share one block
+kernel. Readers describe the input addressing, policies retain the appropriate
+floating or integer accumulator, and stores handle output conversion. Short
+floating reductions retain a serial fast path. Axis and chain reductions share
+parts selection while preserving their respective final-pass accumulation order.
+Buffer overlap checks and lazy reduction workspace ownership are centralized.
+The floating convenience exports forward to the typed implementations.
+
 Floating reductions and indexed atomic addition may differ in rounding order
 between devices. RNG seeds are reproducible for this implementation; no claim
 is made that another backend produces the same seeded sequence.
 
+All reduction entry points use `LfsHipReduceOp`, including typed axis reductions;
+Core Tensor enum ordinals must be mapped explicitly. Byte scalar predicates cast
+the scalar to the input dtype before comparison. HIP device ReLU canonicalizes
+negative zero to positive zero, matching its fused GEMM activation.
+
 Sort preserves input payload bits and stable ordering of NaNs and signed zeros.
+Selection validates output capacity before writing and retains only its counter
+and library workspace, rather than a full input-sized result. DeviceSelect is
+instantiated by storage width; it preserves floating payload bits unchanged.
 
 Temporary workspaces belong to a context. Growth drains previous operations and
 releases disposable storage before replacing it; failed releases retain ownership
@@ -242,6 +260,6 @@ references, including invalid descriptors, output preservation, precision, empty
 axes and numeric edge cases. The separate instrumented module checks allocation,
 workspace release and synchronization failures and balanced resources.
 
-This is native implementation infrastructure: the public application Tensor
-adapter, backend registration and training integration remain separate work.
+The public application Tensor adapter and backend registration are opt-in;
+training integration remains separate work.
 No CUDA, Metal or Vulkan implementation is replaced or modified.

@@ -99,13 +99,8 @@ int lfs_hip_cdist_f32(LfsHipContext* context, LfsHipView lhs, LfsHipView rhs, Lf
         validate(context, rhs.buffer, rhs.offset, b_bytes);
         validate(context, output.buffer, output.offset, out_bytes);
         require(lhs.offset % 4 == 0 && rhs.offset % 4 == 0 && output.offset % 4 == 0, "Unaligned HIP cdist view");
-        const auto disjoint = [&](LfsHipView source, size_t count) {
-            require(source.buffer != output.buffer || !count || !out_bytes ||
-                        source.offset >= output.offset + out_bytes || output.offset >= source.offset + count,
-                    "HIP cdist output overlaps an input");
-        };
-        disjoint(lhs, a_bytes);
-        disjoint(rhs, b_bytes);
+        require_disjoint(lhs, a_bytes, output, out_bytes, "HIP cdist output overlaps an input");
+        require_disjoint(rhs, b_bytes, output, out_bytes, "HIP cdist output overlaps an input");
         if (!out_bytes)
             return;
         DeviceScope device(context->device);
