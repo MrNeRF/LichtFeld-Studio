@@ -7,13 +7,14 @@ import re
 import subprocess
 
 
-PREFIXES = ("cmake/hip-native/", "src/core/tensor/backend/hip/", "tests/hip/")
+PREFIXES = ("cmake/hip-native/", "cmake/hip-host/", "src/core/tensor/backend/hip/", "tests/hip/")
 FILES = {
     "cmake/HipArchitectures.cmake", "cmake/HipOffloadCompression.cmake",
     ".github/workflows/ubuntu.yml", "tools/hip_native_ci_filter.py",
     "tests/python/test_hip_native_ci_filter.py",
     "tests/python/test_hip_runtime_configuration.py",
     "tests/python/test_hip_pointwise_generation.py",
+    "tests/python/test_hip_host_contracts.py",
     "src/core/include/core/detail/pointwise_ops.def",
     "src/core/include/core/detail/tensor_functors.hpp",
 }

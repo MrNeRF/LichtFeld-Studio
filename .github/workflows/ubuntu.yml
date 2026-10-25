@@ -88,6 +88,15 @@ jobs:
           ctest --test-dir "$RUNNER_TEMP/hip-native-build" \
             --output-on-failure --no-tests=error -L cpu
 
+      - name: Compile SDK-free host loader and check native exports
+        run: |
+          cmake -S cmake/hip-host -B "$RUNNER_TEMP/hip-host-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLFS_HIP_HOST_TEST_MODULE="$RUNNER_TEMP/hip-native-build/runtime/liblfs_hip_runtime.so"
+          cmake --build "$RUNNER_TEMP/hip-host-build" --parallel 2
+          ctest --test-dir "$RUNNER_TEMP/hip-host-build" \
+            --output-on-failure --no-tests=error -L cpu
+
   build-ubuntu:
     if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
     runs-on: ubuntu-24.04

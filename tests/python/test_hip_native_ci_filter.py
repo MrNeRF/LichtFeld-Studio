@@ -51,6 +51,7 @@ class HipCiFilter(unittest.TestCase):
                      "tools/hip_native_ci_filter.py", "tests/python/test_hip_native_ci_filter.py",
                      "tests/python/test_hip_runtime_configuration.py",
                      "tests/python/test_hip_pointwise_generation.py",
+                     "cmake/hip-host/CMakeLists.txt", "tests/python/test_hip_host_contracts.py",
                      "src/core/include/core/detail/pointwise_ops.def",
                      "src/core/include/core/detail/tensor_functors.hpp"):
             with self.subTest(path=path):
