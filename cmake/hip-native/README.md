@@ -5,7 +5,7 @@ the application, changing its C++ compiler, or requiring CUDA or PyTorch. It doe
 not register an application Tensor backend or enable training. Standard application
 builds do not traverse this project and retain their existing configuration.
 
-With CMake 3.30 or newer, Ninja, Python 3 and a complete ROCm development SDK:
+With CMake 3.30 or newer, Ninja, Python 3 the project's Slang compiler (or `LFS_HIP_CORE_SLANGC`) and a complete ROCm development SDK:
 
 ```sh
 cmake -S cmake/hip-native -B build-hip-native -G Ninja \
@@ -46,13 +46,15 @@ to another device occurs.
 
 The test uses an absolute module path and, on Windows, an explicit SDK DLL directory
 kept alive for the duration of the test. It does not modify PATH or the process-wide
-DLL search policy. This developer setup does not package SDK libraries. Application
-loading and distribution integration are separate work.
+DLL search policy. Development builds place the required SDK runtime DLL families beside the
+Windows module. This is not a distribution profile. The opt-in application Tensor
+adapter is described in `docs/docs/development/hip-tensor-backend.md`.
 
-The private C ABI revision is `LFS_HIP_RUNTIME_ABI_VERSION` (currently 3), returned
+The private C ABI revision is `LFS_HIP_RUNTIME_ABI_VERSION` (currently 4), returned
 by `lfs_hip_runtime_abi()`. Revision 1 provided only the foundation; revision 2
-adds owned asynchronous transfers, and revision 3 adds native Tensor operators.
-A future loader must check the exact revision
+adds owned asynchronous transfers, revision 3 adds native Tensor operators, and revision 4 completes the Tensor
+adapter API (expressions, images, NN, geometry and events).
+The host loader checks the exact revision
 before binding revision-specific exports; the boundary is private and does not
 promise binary compatibility between revisions.
 

@@ -1,0 +1,104 @@
+# AMD HIP/ROCm Tensor backend
+
+The optional HIP backend implements Core's `GpuBackendOps` contract. All HIP
+execution, allocation and SDK loading stays inside the Tensor implementation.
+Public Tensor headers do not include HIP SDK headers, and the host compiler does
+not link a HIP import library. The private native module uses the selected ROCm
+compiler independently of the application's C++ and CUDA compilers.
+
+## Build
+
+`LFS_TENSOR_HIP` defaults to `OFF`. Standard CUDA, Vulkan and Metal build defaults
+and backend preference order remain unchanged. The option supports Windows and
+Linux; macOS rejects it at configuration time.
+
+Add these arguments to a normal application configuration:
+
+```sh
+-DLFS_TENSOR_HIP=ON -DLFS_HIP_ROOT=/absolute/path/to/rocm-sdk -DLFS_HIP_ARCHITECTURE=gfx1150
+```
+
+A HIP-only Tensor validation build can additionally use `LFS_ENABLE_CUDA=OFF`
+and `LFS_BUILD_TRAINER=OFF`; the native module never requires a CUDA toolkit or
+PyTorch. Normal application dependencies, Python and the project's Slang compiler
+are still required. `LFS_HIP_CORE_SLANGC` can explicitly select that compiler.
+The development SDK reference is ROCm SDK 10.1.0; its package version is separate
+from the HIP runtime API version. HIPRTC is required for fused expressions.
+
+`LFS_HIP_ARCHITECTURES` accepts an explicit semicolon-separated list and takes
+precedence over the single development target. `LFS_HIP_PORTABLE=ON` requests the
+complete declared architecture list in `cmake/HipArchitectures.cmake`.
+`LFS_HIP_OFFLOAD_COMPRESSION=ON` requires compiler support and fails configuration
+rather than silently ignoring an unsupported request. These are compilation
+targets, not a claim that every corresponding GPU/driver has been qualified.
+Wave32 and wave64 code objects can be compiled; each requires hardware validation.
+
+This Tensor integration does not enable the HIP trainer, add preferences controls,
+or define distribution profiles. Those integrations must independently admit
+supported capabilities rather than infer them from Tensor availability.
+
+## Selection and execution
+
+`GpuBackend::HIP` is available only in HIP-enabled builds. Existing backend enum
+values remain stable. `GpuBackendScope` or `TensorExecutionTarget::default_queue`
+selects HIP through the same Tensor facade used by other backends.
+`TensorBackendOptions::hip_device` accepts a nonnegative decimal device ordinal;
+an empty value selects the first compatible device. Inventory and availability
+checks do not create an execution context. Selection is frozen at startup with
+the existing backend options. An incompatible explicit selection does not switch
+to a different GPU or CPU backend.
+
+The adapter owns one nonblocking HIP queue for the selected device and serializes
+host submissions. It rejects CUDA streams and foreign storage before dispatch.
+Each native call restores the calling thread's previous HIP device. Tensor
+readback, upload, fences, completion and timestamp facilities use HIP-owned
+resources; CUDA availability is irrelevant to those paths.
+
+Generic pointwise, strided, indexing, reduction, scan, sorting, GEMM and sampling
+operations use the private native operators. Image, geometry and NN operations
+are also implemented inside the Tensor backend. Shared source generators adapt
+project-owned mathematical kernels and Slang programs without changing the CUDA,
+Metal or Vulkan implementations. Fused expression source is lowered separately
+and compiled with HIPRTC; unsupported inputs fail explicitly.
+
+## Ownership and memory
+
+HIP device allocations use the appended `MemoryDomain::HipDevice`. The allocator
+caches exact requested sizes up to a bounded cache limit and trims optional cached
+allocations before retrying an allocation failure once. Live tensors are retained.
+Memory information separates live allocations, cached allocations and native
+algorithm workspaces. Device heap statistics from APIs using the same physical
+GPU must not be summed.
+
+Storage views validate backend, owner, byte ranges, dtype and layout before native
+use. Borrowed raw views require a live allocation and retain the existing raw-view
+lifetime contract. External-owner views retain the supplied owner and do not
+account the same borrowed allocation twice.
+
+The private C ABI is exact-versioned. The loader checks the revision before
+resolving the typed export inventory and accepts only absolute module paths.
+Windows uses Unicode paths and explicit module/default dependency directories;
+Linux uses local, eager symbol resolution. SDK dependencies must be installed
+correctly. Development builds copy only the runtime DLL families used by the
+module, rather than the full SDK.
+
+Explicit shutdown rejects outstanding Tensor allocations and transfer/queue
+leases. Cleanup failure retains the native context and loaded module, reports a
+CLI diagnostic, and permits retry. Transfer/event cleanup uses preallocated
+retirement nodes so a failed destructor release can be retried before context
+teardown. An unrecoverable driver failure retains ownership until process exit
+rather than unloading code beneath pending GPU work.
+
+## Validation
+
+Build `tensor_operation_contracts` and run `TensorOperationContracts.HIP` for
+required GPU execution; an unavailable required backend is a failure. The same
+operation and edge-case tests run against CPU and each compiled GPU backend.
+CPU runners execute the CPU contracts and runner validation without claiming GPU
+coverage. The SDK-only and SDK-free checks are documented in
+`cmake/hip-native/README.md` and `cmake/hip-host/README.md`.
+
+The HIP compile CI is path-filtered, uses a pinned SDK and source-generation
+compiler, builds declared native targets, and checks module exports without a
+GPU. Windows hardware execution and Linux compilation cover different properties;
+compilation alone does not validate device results or driver behavior.

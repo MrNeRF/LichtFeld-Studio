@@ -1,10 +1,15 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/nn/ops.hpp"
+#include "core/tensor_fused.hpp"
+#include "core/tensor_readback.hpp"
+#include "core/tensor_upload.hpp"
 #include "tensor_backend_contract.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <gtest/gtest-spi.h>
 #include <string>
 #include <vector>
@@ -141,6 +146,92 @@ namespace {
         ASSERT_EQ(result.dtype(), DataType::Int64);
         expect_placement(result);
         EXPECT_EQ(result.to_vector_int64(), std::vector<int64_t>(17, 1));
+    }
+
+    TEST_P(TensorOperationContracts, ReadbackRetainsStridedSourceAndCanBeReused) {
+        TensorReadback download;
+        for (const float offset : {0.f, 8.f}) {
+            auto source = values({1 + offset, 2 + offset, 3 + offset, 4 + offset, 5 + offset, 6 + offset}, {2, 3}).transpose(0, 1);
+            download.enqueue(source);
+            source = {};
+            std::array<float, 6> actual{};
+            download.wait(std::as_writable_bytes(std::span(actual)));
+            EXPECT_FALSE(download.pending());
+            EXPECT_EQ(actual, (std::array<float, 6>{1 + offset, 4 + offset, 2 + offset, 5 + offset, 3 + offset, 6 + offset}));
+        }
+    }
+
+    TEST_P(TensorOperationContracts, PackedReadbackReusesSlotsAndPreservesStagedRanges) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Packed pinned slots target GPU queues";
+        const auto backend = *GetParam().backend;
+        TensorWorkQueue queue(backend, static_cast<void*>(nullptr));
+        TensorReadbackRing ring(backend, 1, 6 * sizeof(float), queue);
+        for (const float offset : {0.f, 8.f}) {
+            auto source = values({1 + offset, 2 + offset, 3 + offset, 4 + offset, 5 + offset, 6 + offset}, {6});
+            ring.enqueue(source, 0, 3 * sizeof(float), 0, 0);
+            ring.enqueue(source, 3 * sizeof(float), 3 * sizeof(float), 0, 3 * sizeof(float), true);
+            source = {};
+            ring.seal(0).wait();
+            ASSERT_TRUE(ring.poll(0));
+            std::array<float, 6> actual{};
+            const auto bytes = ring.slot_bytes(0);
+            ASSERT_EQ(bytes.size(), sizeof(actual));
+            std::memcpy(actual.data(), bytes.data(), sizeof(actual));
+            EXPECT_EQ(actual, (std::array<float, 6>{1 + offset, 2 + offset, 3 + offset, 4 + offset, 5 + offset, 6 + offset}));
+            ring.release(0);
+        }
+    }
+
+    TEST_P(TensorOperationContracts, CompiledExpressionsUseHostParametersAndTerminalFolds) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Compiled expression kernels target GPU backends";
+        fused::Builder builder(2);
+        const auto input = builder.input(DataType::Float32, 2);
+        const auto gain = builder.input(DataType::Float32, 1);
+        builder.output(input.load() * gain.at({0}) + builder.iota(1).cast(DataType::Float32), DataType::Float32);
+        const fused::Kernel kernel(builder);
+        const auto host_gain = Tensor::from_vector(std::vector<float>{2.f}, {1}, Device::CPU);
+        const auto image = values({1, 2, 3, 4, 5, 6}, {2, 3});
+        const auto output = Tensor::empty({2, 3}, Device::GPU);
+        kernel.prepare({2, 3}, {image, host_gain}, {output});
+        for (int repeat = 0; repeat < 2; ++repeat) {
+            kernel({2, 3}, {image, host_gain}, {output});
+            ASSERT_NO_FATAL_FAILURE(expect_values(output, {2, 3}, {2, 5, 8, 8, 11, 14}));
+        }
+        fused::Builder reduction(2);
+        const auto term = reduction.input(DataType::Float32, 2).load();
+        reduction.output(reduction.fold(fused::Fold::Sum, term, 1), DataType::Float32);
+        const fused::Kernel sum(reduction);
+        ASSERT_NO_FATAL_FAILURE(expect_values(sum({2, 3}, {image})[0], {2}, {6, 15}));
+    }
+
+    TEST_P(TensorOperationContracts, BackendSelftestCanRecreateItsExecutionContext) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Backend lifecycle self-tests target GPU contexts";
+        const auto status = tensor_backend_selftest(*GetParam().backend);
+        ASSERT_TRUE(status) << "Tensor backend self-test failed across shutdown/recreation";
+        ASSERT_NO_FATAL_FAILURE(expect_values(values({1, 2, 3}, {3}).mul(2.f), {3}, {2, 4, 6}));
+    }
+
+    TEST_P(TensorOperationContracts, NeuralOperatorsMatchIndependentSmallReferences) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Native NN operators require GPU storage";
+        const auto input = values({1, 2, 3, 4, 5, 6}, {2, 3});
+        const auto weight = values({2, 0, 1, -1, 1, 0}, {2, 3});
+        const auto bias = values({0.5f, -0.5f}, {2});
+        ASSERT_NO_FATAL_FAILURE(expect_values(nn::linear(input, weight, &bias), {2, 2}, {5.5f, 0.5f, 14.5f, 0.5f}));
+        const auto image = values({1, 2, 3, 4, 5, 6, 7, 8, 9}, {1, 1, 3, 3});
+        const auto filter = values({1, 2, 3, 4}, {1, 1, 2, 2});
+        const auto conv_bias = values({0.5f}, {1});
+        ASSERT_NO_FATAL_FAILURE(expect_values(nn::conv2d(image, filter, &conv_bias, {}), {1, 1, 2, 2}, {37.5f, 47.5f, 67.5f, 77.5f}));
+        const auto norm_input = values({1, 3, -1, 1}, {2, 2});
+        const auto norm_weight = values({2, 3}, {2});
+        ASSERT_NO_FATAL_FAILURE(expect_values(nn::layer_norm(norm_input, norm_weight, bias, 0.f), {2, 2}, {-1.5f, 2.5f, -1.5f, 2.5f}, 1e-6f));
+        const auto query = values(std::vector<float>(4, 0.f), {1, 1, 2, 2});
+        const auto key = values(std::vector<float>(6, 0.f), {1, 1, 3, 2});
+        const auto value = values({1, 2, 3, 4, 5, 6}, {1, 1, 3, 2});
+        ASSERT_NO_FATAL_FAILURE(expect_values(nn::attention(query, key, value), {1, 1, 2, 2}, {3, 4, 3, 4}, 1e-6f));
     }
 
     INSTANTIATE_TEST_SUITE_P(Backends, TensorOperationContracts,

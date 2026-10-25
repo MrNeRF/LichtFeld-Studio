@@ -31,7 +31,7 @@ endif()
 # Event bridge shared library
 add_subdirectory(event_bridge)
 
-# Logger shared library (leaf dep, breaks lfs_core ↔ lfs_event_bridge cycle)
+# Logger shared library (leaf dep, breaks lfs_core â†” lfs_event_bridge cycle)
 add_subdirectory(logger)
 add_subdirectory(error)
 add_subdirectory(file_io)
@@ -180,7 +180,7 @@ endif()
 
 # The GPU export driver, shared by the Vulkan and Metal backends. Its host edge
 # refinement uses the same independent double rounding as decimation.
-if(LFS_TENSOR_VULKAN OR LFS_TENSOR_METAL)
+if(LFS_TENSOR_VULKAN OR LFS_TENSOR_METAL OR LFS_TENSOR_HIP)
     list(APPEND TENSOR_SOURCES tensor/backend/export_pipeline.cpp)
     set_source_files_properties(tensor/backend/export_pipeline.cpp PROPERTIES
         COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-ffp-contract=off>")

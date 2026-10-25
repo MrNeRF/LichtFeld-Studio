@@ -271,7 +271,11 @@ namespace lfs::core {
                 .first = mean,
                 .second = std,
                 .seed = seed};
-            if (n % 2 == 1) {
+            if (n % 2 == 1
+#ifdef LFS_TENSOR_HIP
+                && internal::gpu_backend_tag(*this) != GpuBackend::HIP
+#endif
+            ) {
                 auto scratch = internal::allocate_like(
                     *this, TensorShape{n + 1}, DataType::Float32);
                 internal::backend_ops_for(*this).normal(

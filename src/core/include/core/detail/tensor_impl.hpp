@@ -483,6 +483,9 @@ namespace lfs::core {
         VulkanOwned,
         VulkanExternal,
         MetalOwned,
+#ifdef LFS_TENSOR_HIP
+        HipOwned,
+#endif
     };
 
     struct GpuStorageDescriptor {

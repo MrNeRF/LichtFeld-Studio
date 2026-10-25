@@ -11,6 +11,7 @@ Development docs in this section are organized around execution workflows rather
 - [Editor areas](editor-areas)
 - [Developer flags and diagnostics](flags)
 - [Native model inference on GPU backends](native-inference)
+- [AMD HIP/ROCm Tensor backend](hip-tensor-backend)
 - [Windows build preflight](windows-build-preflight)
 - [Preferences and user storage](preferences-and-user-storage)
 - [Scene reconstruction](scene-reconstruction)

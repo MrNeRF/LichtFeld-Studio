@@ -38,6 +38,14 @@ else()
     set(_lfs_default_tensor_vulkan ON)
 endif()
 option(LFS_TENSOR_VULKAN "Build the Vulkan tensor backend" "${_lfs_default_tensor_vulkan}")
+option(LFS_TENSOR_HIP "Build the opt-in HIP Tensor backend (no trainer integration)" OFF)
+if(LFS_TENSOR_HIP)
+    if(NOT CMAKE_HOST_SYSTEM_NAME MATCHES "^(Windows|Linux)$")
+        message(FATAL_ERROR "LFS_TENSOR_HIP is supported only on Windows and Linux")
+    endif()
+    add_compile_definitions(LFS_TENSOR_HIP=1)
+endif()
+
 # Metal tensor backend, Metal trainer kernels and the native Metal viewer.
 # Apple only. OFF with Vulkan graphics gives the pure-MoltenVK build.
 option(LFS_TENSOR_METAL "Build the Metal tensor backend and native Metal viewer" "${CMAKE_HOST_APPLE}")
@@ -229,7 +237,7 @@ add_compile_options($<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:--static-global-templat
 
 # On Windows with a multi-config generator (MSVC/Visual Studio, Ninja Multi-Config),
 # route all build outputs to build/<Config>/ so Debug and Release binaries are
-# separated. Single-config generators (Ninja, NMake) use a flat binary dir —
+# separated. Single-config generators (Ninja, NMake) use a flat binary dir â€”
 # the selected CMAKE_BUILD_TYPE is baked in at configure time, so no subdirectory
 # is needed; each target's per-target RUNTIME_OUTPUT_DIRECTORY (set to
 # ${CMAKE_BINARY_DIR}) ensures a flat layout under build/.
@@ -698,6 +706,7 @@ add_custom_target(lfs_core_abi_stamp ALL
         "-DLFS_VCPKG_TARGET_TRIPLET=${VCPKG_TARGET_TRIPLET}"
         "-DLFS_BUILD_TRAINER=${LFS_BUILD_TRAINER}"
         "-DLFS_HAS_CUDA=${LFS_HAS_CUDA}"
+        "-DLFS_TENSOR_HIP=${LFS_TENSOR_HIP}"
         -P "${CMAKE_SOURCE_DIR}/cmake/GenerateCoreAbiStamp.cmake"
     COMMENT "Refreshing lfs_core ABI stamp"
     VERBATIM
@@ -749,6 +758,22 @@ add_compile_definitions(
 # =============================================================================
 add_subdirectory(src/diagnostics) # Shared diagnostics/profiling module
 add_subdirectory(src/core)       # Core module (lfs::core namespace)
+if(LFS_TENSOR_HIP)
+    add_subdirectory(src/core/tensor/backend/hip)
+    target_sources(lfs_core PRIVATE
+        src/core/tensor/backend/hip/hip_backend_ops.cpp
+        src/core/tensor/backend/hip/hip_image_ops.cpp
+        src/core/tensor/backend/hip/hip_movement_ops.cpp
+        src/core/tensor/backend/hip/runtime_module.cpp
+        src/core/tensor/backend/hip/runtime_context.cpp)
+    target_compile_definitions(lfs_core PUBLIC LFS_TENSOR_HIP=1)
+    target_compile_definitions(lfs_core PRIVATE "LFS_HIP_RUNTIME_DEFAULT_MODULE=\"${LFS_HIP_RUNTIME_LIBRARY}\"")
+    if(CMAKE_DL_LIBS)
+        target_link_libraries(lfs_core PRIVATE ${CMAKE_DL_LIBS})
+    endif()
+    add_dependencies(lfs_core lfs_hip_runtime_build)
+endif()
+
 if(LFS_BUILD_TRAINER)
     add_subdirectory(src/training)
     add_subdirectory(src/tcp)
@@ -1207,7 +1232,7 @@ if(TARGET lfs_vulkan_rasterizer AND NOT LFS_TENSOR_METAL)
     if(_LFS_VULKAN_RASTERIZER_SPV_DIR)
         # The runtime loads SPIR-V from the resource dir first, so staging must
         # follow every shader rebuild. A POST_BUILD on the executable misses
-        # shader-only edits (no relink → stale staged shaders); an always-run
+        # shader-only edits (no relink â†’ stale staged shaders); an always-run
         # staging target costs one timestamp compare per build.
         add_custom_target(lfs_stage_vulkan_shaders ALL
             COMMAND ${CMAKE_COMMAND} -E make_directory

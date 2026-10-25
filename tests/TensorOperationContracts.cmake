@@ -30,6 +30,9 @@ endif()
 if(LFS_TENSOR_METAL)
     list(APPEND _tensor_contract_backends Metal)
 endif()
+if(LFS_TENSOR_HIP)
+    list(APPEND _tensor_contract_backends HIP)
+endif()
 foreach(_backend IN LISTS _tensor_contract_backends)
     add_test(NAME TensorOperationContracts.${_backend}
         COMMAND tensor_operation_contracts "--require-tensor-backend=${_backend}"

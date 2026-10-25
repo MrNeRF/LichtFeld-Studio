@@ -119,12 +119,16 @@ namespace {
             GTEST_SKIP() << "GPU indexing limits do not apply to CPU sampling";
         const auto weights = Tensor::ones({1}, device());
         const auto output = Tensor::empty({1}, device(), DataType::Int64);
-        const bool cuda = *GetParam().backend == GpuBackend::CUDA;
+        const bool signed_counts = *GetParam().backend == GpuBackend::CUDA
+#ifdef LFS_TENSOR_HIP
+                                   || *GetParam().backend == GpuBackend::HIP
+#endif
+            ;
         const size_t maximum = std::numeric_limits<uint32_t>::max();
         // The last safe count solves count + ceil(count / 1024) <= UINT32_MAX.
         const size_t last_safe = (maximum / 1025) * 1024 + (maximum % 1025) - 1;
         for (const bool replacement : {false, true}) {
-            for (const size_t count : {cuda ? size_t{std::numeric_limits<int>::max()} + 1 : last_safe + 1,
+            for (const size_t count : {signed_counts ? size_t{std::numeric_limits<int>::max()} + 1 : last_safe + 1,
                                        size_t{4294000000}, maximum}) {
                 SCOPED_TRACE(count);
                 try {
@@ -138,7 +142,7 @@ namespace {
                 }
             }
         }
-        if (cuda) {
+        if (signed_counts) {
             EXPECT_THROW(lfs::core::internal::backend_ops_for(weights).multinomial(
                              lfs::core::internal::storage_ref(weights), lfs::core::internal::storage_ref(output),
                              {.count = 1, .sample_count = size_t{std::numeric_limits<int>::max()} + 1, .replacement = true}, {}),

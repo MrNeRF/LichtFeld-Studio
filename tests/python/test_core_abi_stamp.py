@@ -104,6 +104,14 @@ class CoreAbiStampTests(unittest.TestCase):
         self.initialize()
         self.assertNotEqual(full, self.header("Release").read_bytes())
 
+    def test_hip_build_modes_have_distinct_stamps(self):
+        self.metadata["LFS_TENSOR_HIP"] = "ON"
+        self.initialize()
+        enabled = self.header("Release").read_bytes()
+        self.metadata["LFS_TENSOR_HIP"] = "OFF"
+        self.initialize()
+        self.assertNotEqual(enabled, self.header("Release").read_bytes())
+
     def test_build_refresh_matches_configure_seed(self):
         self.initialize()
         header = self.header("Release")

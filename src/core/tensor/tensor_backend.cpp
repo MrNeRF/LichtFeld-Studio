@@ -6,6 +6,7 @@
 #include "core/cuda/driver_entry.hpp"
 #include "core/tensor_backend_vulkan.hpp"
 #include "core/tensor_completion.hpp"
+#include <charconv>
 
 #if LFS_HAS_CUDA
 #include "backend/cuda/runtime/cuda_event_pool.hpp"
@@ -50,6 +51,12 @@
 #include "backend/vulkan/vk_memory.hpp"
 #include "backend/vulkan/vk_recorder.hpp"
 #include "core/vulkan_helpers.hpp"
+#endif
+
+#ifdef LFS_TENSOR_HIP
+#include "backend/hip/architecture_runtime.hpp"
+#include "backend/hip/hip_backend_ops.hpp"
+#include "backend/readback_buffer.hpp"
 #endif
 
 namespace lfs::core::tensor_ops {
@@ -112,6 +119,7 @@ namespace lfs::core {
             auto& entry = result.back();
             entry.vendor_id = props.properties.vendorID;
             entry.software = props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU;
+
             entry.shared_memory = props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
             VkPhysicalDeviceMemoryProperties memory{};
             vkGetPhysicalDeviceMemoryProperties(devices.devices[index], &memory);
@@ -169,6 +177,10 @@ namespace lfs::core {
     }
 
     int gpu_device_count(const GpuBackend backend) {
+#ifdef LFS_TENSOR_HIP
+        if (backend == GpuBackend::HIP)
+            return internal::hip_device_count(LFS_HIP_RUNTIME_DEFAULT_MODULE);
+#endif
         if (backend == GpuBackend::CUDA) {
 #if LFS_HAS_CUDA
             int count = 0;
@@ -213,6 +225,12 @@ namespace lfs::core {
     }
 
     size_t gpu_allocation_bytes(const GpuBackend backend, const size_t bytes) {
+#ifdef LFS_TENSOR_HIP
+        // The native HIP allocator caches exact requested byte sizes; unlike
+        // CUDA's bucketed pool it does not expand the logical allocation.
+        if (backend == GpuBackend::HIP)
+            return bytes;
+#endif
         if (backend == GpuBackend::CUDA)
             return cuda_allocation_size(bytes);
 #ifdef LFS_TENSOR_METAL
@@ -255,6 +273,15 @@ namespace lfs::core {
                 throw TensorError("Metal tensor interop is unavailable in this build");
 #endif
             }
+#ifdef LFS_TENSOR_HIP
+            if (!result && backend == GpuBackend::HIP) {
+#ifdef LFS_TENSOR_VULKAN
+                result = internal::make_host_vulkan_interop(device, backend);
+#else
+                throw TensorError("HIP/Vulkan tensor interop is unavailable in this build");
+#endif
+            }
+#endif
             if (!result) {
 #ifdef LFS_TENSOR_VULKAN
 #if LFS_HAS_CUDA
@@ -444,6 +471,14 @@ namespace lfs::core {
             where_into(output, condition, value, snapshot);
             return;
         }
+#ifdef LFS_TENSOR_HIP
+        if (*backend == GpuBackend::HIP) {
+            auto& ops = static_cast<internal::HipBackendOps&>(internal::backend_ops(GpuBackend::HIP));
+            pin_operands({&output, &condition, &source});
+            ops.where_scalar(internal::storage_ref(condition), internal::storage_ref(source), internal::storage_ref(output), output.numel(), value, {});
+            return;
+        }
+#endif
         if (*backend == GpuBackend::CUDA) {
 #if LFS_HAS_CUDA
             internal::cuda_where_into(output, condition, value, source);
@@ -476,6 +511,9 @@ namespace lfs::core {
         TensorBackendOptions backend_options;
         bool options_frozen = false;
         std::atomic<int> explicit_cuda_device{-1};
+#ifdef LFS_TENSOR_HIP
+        int selected_hip_ordinal = -1; // Protected by options_mutex.
+#endif
 
         bool is_resolved(const int state) {
             return state >= 0 && state < static_cast<int>(kGpuBackendCount);
@@ -502,6 +540,8 @@ namespace lfs::core {
             return GpuBackend::Vulkan;
 #elif defined(LFS_TENSOR_METAL)
             return GpuBackend::Metal;
+#elif defined(LFS_TENSOR_HIP)
+            return GpuBackend::HIP;
 #else
             return GpuBackend::CUDA;
 #endif
@@ -557,10 +597,56 @@ namespace lfs::core {
             cuda_ordinal = devices[*selected].index;
         }
 #endif
+#ifdef LFS_TENSOR_HIP
+        if (!options.hip_device.empty()) {
+            int ordinal = -1;
+            const auto& value = options.hip_device;
+            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), ordinal);
+            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || ordinal < 0)
+                return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::InvalidArgument,
+                    .domain = lfs::ErrorDomain::Core,
+                    .user_message = "HIP Tensor device selection requires a nonnegative device ordinal",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
+        }
+#endif
         backend_options = options;
         explicit_cuda_device.store(cuda_ordinal, std::memory_order_release);
+#ifdef LFS_TENSOR_HIP
+        selected_hip_ordinal = -1;
+#endif
         return {};
     }
+
+#ifdef LFS_TENSOR_HIP
+    int selected_hip_device() {
+        std::lock_guard lock(options_mutex);
+        if (selected_hip_ordinal >= 0)
+            return selected_hip_ordinal;
+        int requested = -1;
+        if (!backend_options.hip_device.empty()) {
+            const auto& value = backend_options.hip_device;
+            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), requested);
+            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || requested < 0)
+                throw TensorError("HIP Tensor device selection requires a nonnegative device ordinal");
+        }
+        const auto count = internal::hip_device_count(LFS_HIP_RUNTIME_DEFAULT_MODULE);
+        for (int ordinal = 0; ordinal < count; ++ordinal) {
+            if (requested >= 0 && requested != ordinal)
+                continue;
+            const auto info = internal::hip_device_info(LFS_HIP_RUNTIME_DEFAULT_MODULE, ordinal);
+            const auto identity = internal::hip_device_identity(LFS_HIP_RUNTIME_DEFAULT_MODULE, ordinal);
+            if ((info.warp_size == 32 || info.warp_size == 64) &&
+                lfs_hip_has_architecture(identity.compiled_architecture, info.architecture)) {
+                selected_hip_ordinal = ordinal;
+                return ordinal;
+            }
+        }
+        throw TensorError("No compatible HIP GPU is available for this Tensor runtime build");
+    }
+
+#endif
 
     int selected_cuda_device() {
         const int selected = explicit_cuda_device.load(std::memory_order_acquire);
@@ -602,6 +688,9 @@ namespace lfs::core {
         case GpuBackend::CUDA: return "CUDA";
         case GpuBackend::Vulkan: return "Vulkan";
         case GpuBackend::Metal: return "Metal";
+#ifdef LFS_TENSOR_HIP
+        case GpuBackend::HIP: return "HIP";
+#endif
         }
         return "Unknown";
     }
@@ -624,8 +713,7 @@ namespace lfs::core {
     }
 
     lfs::Status set_default_gpu_backend(const GpuBackend backend) {
-        if (std::ranges::find(kCompiledGpuBackends, backend) ==
-            kCompiledGpuBackends.end()) {
+        if (std::ranges::find(kCompiledGpuBackends, backend) == kCompiledGpuBackends.end()) {
             return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::InvalidArgument,
                 .domain = lfs::ErrorDomain::Core,
@@ -655,6 +743,15 @@ namespace lfs::core {
     }
 
     bool gpu_backend_available(const GpuBackend backend) {
+#ifdef LFS_TENSOR_HIP
+        if (backend == GpuBackend::HIP) {
+            try {
+                return selected_hip_device() >= 0;
+            } catch (...) { /* LFS-CENSUS-OK(empty-catch): Availability probes return unavailable without initializing a Tensor context. */
+                return false;
+            }
+        }
+#endif
         if (backend == GpuBackend::Vulkan) {
 #ifdef LFS_TENSOR_VULKAN
             return internal::vulkan_backend_probe_available();
@@ -687,6 +784,10 @@ namespace lfs::core {
     }
 
     bool gpu_backend_live(const GpuBackend backend) {
+#ifdef LFS_TENSOR_HIP
+        if (backend == GpuBackend::HIP)
+            return internal::hip_backend_is_live();
+#endif
         if (backend == GpuBackend::Vulkan) {
 #ifdef LFS_TENSOR_VULKAN
             return internal::vulkan_backend_live();
@@ -741,6 +842,10 @@ namespace lfs::core {
     }
 
     MemoryInfo gpu_backend_memory_info(const GpuBackend backend, const bool include_pool_stats) {
+#ifdef LFS_TENSOR_HIP
+        if (backend == GpuBackend::HIP)
+            return internal::backend_ops(backend).stats();
+#endif
         if (backend == GpuBackend::CUDA) {
 #if LFS_HAS_CUDA
             MemoryInfo result = MemoryInfo::cuda();
@@ -794,9 +899,15 @@ namespace lfs::core {
         uint64_t value = 0;
 #endif
         uint64_t metal_value = 0;
+#ifdef LFS_TENSOR_HIP
+        std::vector<std::pair<std::unique_ptr<internal::ReadbackBuffer>, bool>> hip_markers;
+#endif
 
         void capture(const std::span<const Tensor* const> tensors) {
             std::vector<cudaStream_t> streams;
+#ifdef LFS_TENSOR_HIP
+            bool capture_hip = false;
+#endif
 #ifdef LFS_TENSOR_VULKAN
             internal::StorageRef latest{};
             uint64_t pending = 0;
@@ -808,6 +919,9 @@ namespace lfs::core {
                 if (!backend)
                     continue;
                 const auto storage = internal::storage_ref(*tensor);
+#ifdef LFS_TENSOR_HIP
+                capture_hip |= *backend == GpuBackend::HIP;
+#endif
                 if (*backend == GpuBackend::CUDA) {
 #if LFS_HAS_CUDA
                     if (std::find(streams.begin(), streams.end(), tensor->stream()) == streams.end())
@@ -828,6 +942,13 @@ namespace lfs::core {
                 }
 #endif
             }
+#ifdef LFS_TENSOR_HIP
+            if (capture_hip) {
+                auto marker = internal::backend_ops(GpuBackend::HIP).create_readback_buffer();
+                marker->enqueue({GpuBackend::HIP, nullptr, 0, DataType::Float32, nullptr}, 0, {});
+                hip_markers.emplace_back(std::move(marker), false);
+            }
+#endif
 #if LFS_HAS_CUDA
             for (const auto stream : streams) {
                 auto found = std::find_if(events.begin(), events.end(),
@@ -932,6 +1053,14 @@ namespace lfs::core {
         if (impl_->metal_value != 0 && internal::metal_completed_serial() < impl_->metal_value)
             return false;
 #endif
+#ifdef LFS_TENSOR_HIP
+        for (auto& [marker, complete] : impl_->hip_markers) {
+            if (!complete)
+                complete = marker->poll(nullptr);
+            if (!complete)
+                return false;
+        }
+#endif
         return true;
     }
 
@@ -971,6 +1100,13 @@ namespace lfs::core {
         }
 #endif
         impl_->events.clear();
+#ifdef LFS_TENSOR_HIP
+        for (auto& [marker, complete] : impl_->hip_markers)
+            if (!complete)
+                settle([&] { marker->wait(); complete = marker->poll(nullptr); });
+        impl_->hip_markers.clear();
+#endif
+
 #ifdef LFS_TENSOR_VULKAN
         if (impl_->device && impl_->point.value) {
             settle([&] {
@@ -1016,6 +1152,17 @@ namespace lfs::core {
             LOG_WARN("Tensor work cleanup failed");
         }
     }
+
+#ifdef LFS_TENSOR_HIP
+    TensorCompletion TensorCompletionAccess::hip() {
+        TensorCompletion result;
+        result.impl_ = std::make_shared<TensorCompletion::Impl>();
+        auto marker = internal::backend_ops(GpuBackend::HIP).create_readback_buffer();
+        marker->enqueue({GpuBackend::HIP, nullptr, 0, DataType::Float32, nullptr}, 0, {});
+        result.impl_->hip_markers.emplace_back(std::move(marker), false);
+        return result;
+    }
+#endif
 
     TensorCompletion TensorCompletionAccess::cuda(cudaStream_t stream, VulkanTimelinePoint point) {
 #if LFS_HAS_CUDA
@@ -1066,6 +1213,16 @@ namespace lfs::core {
     }
 
     std::optional<GpuDeviceInfo> gpu_backend_device_info(const GpuBackend backend) {
+#ifdef LFS_TENSOR_HIP
+        if (backend == GpuBackend::HIP) {
+            try {
+                const auto ordinal = selected_hip_device();
+                return internal::hip_gpu_device_info(LFS_HIP_RUNTIME_DEFAULT_MODULE, ordinal);
+            } catch (...) { /* LFS-CENSUS-OK(empty-catch): Availability probes return unavailable without initializing a Tensor context. */
+                return std::nullopt;
+            }
+        }
+#endif
         if (backend == GpuBackend::CUDA) {
 #if LFS_HAS_CUDA
             return gpu_backend_device_info(backend, selected_cuda_device());
@@ -1139,6 +1296,10 @@ namespace lfs::core {
 #if !LFS_HAS_CUDA
     std::optional<GpuDeviceInfo> gpu_backend_device_info(const GpuBackend backend,
                                                          const int device_index) {
+#ifdef LFS_TENSOR_HIP
+        if (backend == GpuBackend::HIP)
+            return internal::hip_gpu_device_info(LFS_HIP_RUNTIME_DEFAULT_MODULE, device_index);
+#endif
         if (backend == GpuBackend::CUDA || device_index != 0)
             return std::nullopt;
         return gpu_backend_device_info(backend);
@@ -1146,6 +1307,24 @@ namespace lfs::core {
 #endif
 
     lfs::Status shutdown_gpu_backend(const GpuBackend backend) {
+#ifdef LFS_TENSOR_HIP
+        if (backend == GpuBackend::HIP) {
+            if (!internal::hip_backend_is_live())
+                return {};
+            try {
+                internal::backend_ops(backend).shutdown();
+            } catch (const std::exception& error) {
+                return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::Internal,
+                    .domain = lfs::ErrorDomain::Core,
+                    .user_message = "HIP tensor backend shutdown failed",
+                    .detail = error.what(),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
+            }
+            return {};
+        }
+#endif
 #ifdef LFS_TENSOR_METAL
         if (backend == GpuBackend::Metal) {
             try {
@@ -1242,10 +1421,18 @@ namespace lfs::core {
     }
 
     bool tensor_backend_shares_vulkan_device() {
+#ifdef LFS_TENSOR_HIP
+        if (default_gpu_backend() == GpuBackend::HIP)
+            return false;
+#endif
         return default_gpu_backend() != GpuBackend::Metal;
     }
 
     bool tensor_backend_needs_vulkan_interop() {
+#ifdef LFS_TENSOR_HIP
+        if (default_gpu_backend() == GpuBackend::HIP)
+            return true;
+#endif
         return default_gpu_backend() == GpuBackend::CUDA;
     }
 
@@ -1575,6 +1762,9 @@ namespace lfs::core {
             std::lock_guard lock(options_mutex);
             options_frozen = false;
             explicit_cuda_device.store(-1, std::memory_order_release);
+#ifdef LFS_TENSOR_HIP
+            selected_hip_ordinal = -1;
+#endif
             set_cuda_vulkan_direct_interop(true);
         }
 

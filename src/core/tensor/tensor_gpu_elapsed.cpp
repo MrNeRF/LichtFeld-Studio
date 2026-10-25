@@ -4,6 +4,10 @@
 #include "core/gpu_elapsed.hpp"
 
 #include "backend/metal/metal_queue.hpp"
+#ifdef LFS_TENSOR_HIP
+#include "backend/hip/hip_backend_ops.hpp"
+#include <cstdio>
+#endif
 #ifdef LFS_TENSOR_VULKAN
 #include "backend/vulkan/vk_context.hpp"
 #include "backend/vulkan/vk_recorder.hpp"
@@ -32,6 +36,9 @@ namespace lfs::core {
         std::vector<cudaEvent_t> events;
 #endif
         std::unique_ptr<internal::metal_queue::Timestamps> metal;
+#ifdef LFS_TENSOR_HIP
+        std::unique_ptr<internal::HipTimestamps> hip;
+#endif
 #ifdef LFS_TENSOR_VULKAN
         std::shared_ptr<internal::VulkanContext> vulkan;
         VkQueryPool queries = VK_NULL_HANDLE;
@@ -51,6 +58,18 @@ namespace lfs::core {
         impl_->backend = backend;
         if (event_count == 0)
             return;
+#ifdef LFS_TENSOR_HIP
+        if (backend == GpuBackend::HIP) {
+            try {
+                auto& ops = static_cast<internal::HipBackendOps&>(internal::backend_ops(backend));
+                impl_->hip = ops.create_timestamps(event_count);
+                impl_->ready = impl_->hip != nullptr;
+            } catch (const std::exception& error) { /* LFS-CENSUS-OK(empty-catch): Report optional timestamp unavailability without disrupting training. */
+                std::fprintf(stderr, "[warn] HIP GPU timestamps unavailable: %s\n", error.what());
+            }
+            return;
+        }
+#endif
         if (backend == GpuBackend::Metal) {
             impl_->metal = internal::metal_queue::timestamps(event_count);
             impl_->marks.resize(event_count);
@@ -131,6 +150,10 @@ namespace lfs::core {
     }
 
     bool GpuElapsed::mark(const std::size_t index, void* const execution_target) {
+#ifdef LFS_TENSOR_HIP
+        if (impl_->backend == GpuBackend::HIP)
+            return ready() && impl_->hip->mark(index, execution_target);
+#endif
         if (impl_->backend == GpuBackend::Metal) {
             const auto id = reinterpret_cast<uint64_t>(execution_target);
             if (!internal::metal_queue::valid(id))
@@ -168,6 +191,10 @@ namespace lfs::core {
     }
 
     bool GpuElapsed::wait_queue(void* const execution_target) {
+#ifdef LFS_TENSOR_HIP
+        if (impl_->backend == GpuBackend::HIP)
+            return ready() && impl_->hip->wait_queue(execution_target);
+#endif
         if (impl_->backend == GpuBackend::Metal) {
             if (!internal::metal_queue::valid(reinterpret_cast<uint64_t>(execution_target)))
                 throw std::invalid_argument("GpuElapsed target is not a Metal tensor queue");
@@ -212,6 +239,10 @@ namespace lfs::core {
     }
 
     bool GpuElapsed::wait_event(const std::size_t index) {
+#ifdef LFS_TENSOR_HIP
+        if (impl_->backend == GpuBackend::HIP)
+            return ready() && impl_->hip->wait_event(index);
+#endif
         if (impl_->backend == GpuBackend::Metal) {
             if (!ready() || index >= impl_->marks.size() || !impl_->marks[index].written)
                 return false;
@@ -247,6 +278,10 @@ namespace lfs::core {
 
     std::optional<float> GpuElapsed::milliseconds(const std::size_t begin,
                                                   const std::size_t end) const {
+#ifdef LFS_TENSOR_HIP
+        if (impl_->backend == GpuBackend::HIP)
+            return ready() ? impl_->hip->milliseconds(begin, end) : std::nullopt;
+#endif
         if (impl_->backend == GpuBackend::Metal)
             return ready() ? impl_->metal->milliseconds(begin, end) : std::nullopt;
 #ifdef LFS_TENSOR_VULKAN

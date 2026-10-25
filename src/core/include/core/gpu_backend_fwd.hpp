@@ -16,28 +16,46 @@ namespace lfs::core {
         CUDA = 0,
         Vulkan = 1,
         Metal = 2,
+#ifdef LFS_TENSOR_HIP
+        HIP = 3,
+#endif
     };
 
     // Dense enum-index table used by fixed per-backend state. Keep its shape
     // stable even when a backend is not compiled.
-    inline constexpr std::array kGpuBackends{
-        GpuBackend::CUDA, GpuBackend::Vulkan, GpuBackend::Metal};
+#ifdef LFS_TENSOR_HIP
+    inline constexpr std::array kGpuBackends{GpuBackend::CUDA, GpuBackend::Vulkan, GpuBackend::Metal, GpuBackend::HIP};
+#else
+    inline constexpr std::array kGpuBackends{GpuBackend::CUDA, GpuBackend::Vulkan, GpuBackend::Metal};
+#endif
     inline constexpr size_t kGpuBackendCount = kGpuBackends.size();
 
     // Availability/candidate enumeration excludes backends not compiled into
     // this build. The Vulkan enum remains ABI-stable without being advertised.
 #if LFS_HAS_CUDA && defined(LFS_TENSOR_VULKAN)
-    inline constexpr std::array kCompiledGpuBackends{GpuBackend::CUDA, GpuBackend::Vulkan};
+    inline constexpr std::array kStandardGpuBackends{GpuBackend::CUDA, GpuBackend::Vulkan};
 #elif LFS_HAS_CUDA
-    inline constexpr std::array kCompiledGpuBackends{GpuBackend::CUDA};
+    inline constexpr std::array kStandardGpuBackends{GpuBackend::CUDA};
 #elif defined(LFS_TENSOR_VULKAN) && defined(LFS_TENSOR_METAL)
-    inline constexpr std::array kCompiledGpuBackends{GpuBackend::Vulkan, GpuBackend::Metal};
+    inline constexpr std::array kStandardGpuBackends{GpuBackend::Vulkan, GpuBackend::Metal};
 #elif defined(LFS_TENSOR_VULKAN)
-    inline constexpr std::array kCompiledGpuBackends{GpuBackend::Vulkan};
+    inline constexpr std::array kStandardGpuBackends{GpuBackend::Vulkan};
 #elif defined(LFS_TENSOR_METAL)
-    inline constexpr std::array kCompiledGpuBackends{GpuBackend::Metal};
+    inline constexpr std::array kStandardGpuBackends{GpuBackend::Metal};
 #else
-    inline constexpr std::array<GpuBackend, 0> kCompiledGpuBackends{};
+    inline constexpr std::array<GpuBackend, 0> kStandardGpuBackends{};
+#endif
+
+#ifdef LFS_TENSOR_HIP
+    inline constexpr auto kCompiledGpuBackends = [] {
+        std::array<GpuBackend, kStandardGpuBackends.size() + 1> result{};
+        for (size_t i = 0; i < kStandardGpuBackends.size(); ++i)
+            result[i] = kStandardGpuBackends[i];
+        result.back() = GpuBackend::HIP;
+        return result;
+    }();
+#else
+    inline constexpr auto kCompiledGpuBackends = kStandardGpuBackends;
 #endif
 
     LFS_CORE_API const char* gpu_backend_name(GpuBackend backend);
