@@ -25,9 +25,13 @@ namespace lfs::media {
                               Metres,
                               Millimetres };
     using MetadataScalar = std::variant<std::int64_t, double, ExifRational, std::string>;
+    struct XmpPropertyName {
+        std::string_view namespace_uri;
+        std::string_view name;
+    };
     struct XmpPropertyLocation {
-        std::string namespace_uri;
-        std::string name;
+        // Points into the static supported-field table; no catalog storage is borrowed.
+        const XmpPropertyName* field = nullptr;
         std::size_t description = 0;
         std::size_t ordinal = 0;
     };

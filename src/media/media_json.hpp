@@ -259,7 +259,7 @@ namespace lfs::media::json_detail {
                 item["diagnostic"] = fact.diagnostic;
                 item["ambiguous"] = fact.ambiguous;
                 const auto location = [](const XmpPropertyLocation& value) {
-                    return json{{"namespace", value.namespace_uri}, {"name", value.name}, {"description", value.description}, {"ordinal", value.ordinal}};
+                    return json{{"namespace", value.field ? value.field->namespace_uri : std::string_view{}}, {"name", value.field ? value.field->name : std::string_view{}}, {"description", value.description}, {"ordinal", value.ordinal}};
                 };
                 if (fact.xmp) {
                     item["xmp_property"] = location(fact.xmp->property);
