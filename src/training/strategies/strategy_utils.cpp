@@ -321,8 +321,9 @@ namespace lfs::training {
         RoiGrowthSplit split;
         split.roi_weights = weights.masked_fill(in_roi.logical_not(), 0.0f);
         split.rest_weights = weights.masked_fill(in_roi, 0.0f);
-        split.roi_nnz = static_cast<int64_t>(split.roi_weights.count_nonzero());
-        split.rest_nnz = static_cast<int64_t>(split.rest_weights.count_nonzero());
+        // Count only what Gumbel top-k can select: NaN and negative weights are not candidates.
+        split.roi_nnz = static_cast<int64_t>(split.roi_weights.gt(0.0f).count_nonzero());
+        split.rest_nnz = static_cast<int64_t>(split.rest_weights.gt(0.0f).count_nonzero());
         const int64_t roi_quota = std::llround(static_cast<double>(share) * static_cast<double>(k));
         const int64_t rest_quota = k - roi_quota;
         const int64_t roi_first = std::min(roi_quota, split.roi_nnz);

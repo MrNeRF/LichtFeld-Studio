@@ -549,6 +549,34 @@ TEST(CropDampingStrategyTest, RoiGrowthShareSplitsPicksAndSpillsLeftovers) {
         EXPECT_LT(index, 4) << "a 100 % share picked a row outside the box";
 }
 
+// Catches the crop box split counting NaN and negative weights as candidates (#3806): the sampler then
+// read Gumbel scratch indices that compaction never wrote, which picked stale rows or faulted.
+TEST(CropDampingStrategyTest, RoiGrowthSplitCountsOnlySelectableWeights) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    auto opt_params = vanilla_mrnf_params();
+    opt_params.max_cap = 32;
+    strategy.initialize(opt_params);
+    auto& optimizer = strategy.get_optimizer();
+    optimizer.set_crop_roi_rows(roi_rows({0, 1, 2, 3}, 10), 1.0f);
+
+    // Leaves rows 0..3 in the scratch the next draw reuses.
+    ASSERT_EQ(strategy.sample_with_roi_share(Tensor::ones({10}, Device::CUDA), 4, 7, 10).numel(), 4u);
+
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const auto weights = Tensor::from_vector(
+        std::vector<float>{nan, 1.0f, 2.0f, -1.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f, 10.0f}, TensorShape({10}), Device::CUDA);
+    const auto split = split_growth_by_roi(optimizer, weights, 8);
+    ASSERT_TRUE(split.has_value());
+    EXPECT_EQ(split->roi_nnz, 2);
+    EXPECT_EQ(split->rest_nnz, 6);
+    EXPECT_EQ(split->roi_count, 2);
+
+    auto picks = strategy.sample_with_roi_share(weights, 8, 11, 8).cpu().to_vector_int64();
+    std::sort(picks.begin(), picks.end());
+    EXPECT_EQ(picks, (std::vector<int64_t>{1, 2}));
+}
+
 // Catches MCMC sampling weights that do not give the ROI its share of the probability mass.
 TEST(CropDampingStrategyTest, RoiShareSamplingWeightsHoldTheShareOfTheMass) {
     auto splat_data = create_mrnf_test_splat_data();
