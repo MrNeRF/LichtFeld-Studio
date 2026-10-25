@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "predicate_value_runtime.hpp"
 
 namespace {
     // Keep integer indices and mask operands in their native type. The floating
@@ -13,19 +14,7 @@ namespace {
             const T x = lhs[broadcast_index(i, a, out)], y = rhs[broadcast_index(i, b, out)];
             const auto target = layout_index(i, out);
             if constexpr (Predicate) {
-                bool value = false;
-                switch (op) {
-                case LFS_HIP_OP_EqualTensor: value = x == y; break;
-                case LFS_HIP_OP_NotEqualTensor: value = x != y; break;
-                case LFS_HIP_OP_LessTensor: value = x < y; break;
-                case LFS_HIP_OP_LessEqualTensor: value = x <= y; break;
-                case LFS_HIP_OP_GreaterTensor: value = x > y; break;
-                case LFS_HIP_OP_GreaterEqualTensor: value = x >= y; break;
-                case LFS_HIP_OP_LogicalAndTensor: value = bool(x) && bool(y); break;
-                case LFS_HIP_OP_LogicalOrTensor: value = bool(x) || bool(y); break;
-                case LFS_HIP_OP_LogicalXorTensor: value = bool(x) != bool(y); break;
-                }
-                static_cast<uint8_t*>(output)[target] = uint8_t(value);
+                static_cast<uint8_t*>(output)[target] = uint8_t(predicate_value(op, x, y));
             } else {
                 static_cast<T*>(output)[target] = integer_math_native(op, x, y);
             }

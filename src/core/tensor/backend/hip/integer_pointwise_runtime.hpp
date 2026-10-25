@@ -55,7 +55,7 @@ namespace {
     }
     template <class T>
     void launch_integer_pointwise_native(LfsHipContext* context, LfsHipView lhs, LfsHipView rhs, LfsHipView output,
-                                         const LfsHipPredicate& p, bool binary) {
+                                         const LfsHipIntegerPointwise& p, bool binary) {
         require(p.count <= SIZE_MAX / sizeof(T), "HIP integer pointwise range overflow");
         const size_t bytes = size_t(p.count) * sizeof(T);
         validate(context, lhs.buffer, lhs.offset, bytes);
@@ -82,14 +82,14 @@ namespace {
         const auto* a = reinterpret_cast<const T*>(static_cast<const char*>(lhs.buffer->data) + lhs.offset);
         const auto* b = binary ? reinterpret_cast<const T*>(static_cast<const char*>(rhs.buffer->data) + rhs.offset) : nullptr;
         auto* out = reinterpret_cast<T*>(static_cast<char*>(output.buffer->data) + output.offset);
-        hipLaunchKernelGGL((integer_pointwise_native<T>), dim3(blocks(p.count)), dim3(256), 0, context->stream, a, b, out, size_t(p.count), scalar, p.op, scalar_op && bool(p.reserved));
+        hipLaunchKernelGGL((integer_pointwise_native<T>), dim3(blocks(p.count)), dim3(256), 0, context->stream, a, b, out, size_t(p.count), scalar, p.op, scalar_op && bool(p.scalar_left));
         check(hipGetLastError());
     }
 } // namespace
 extern "C" int lfs_hip_integer_pointwise(LfsHipContext* context, LfsHipView lhs, LfsHipView rhs, LfsHipView output,
-                                         const LfsHipPredicate* p, LfsHipError* error) {
+                                         const LfsHipIntegerPointwise* p, LfsHipError* error) {
     return boundary(error, [&] {
-        require(context && p && p->struct_bytes == sizeof(*p) && p->reserved <= 1 && p->scalar_kind <= 3, "Invalid HIP integer pointwise descriptor");
+        require(context && p && p->struct_bytes == sizeof(*p) && p->scalar_left <= 1 && p->scalar_kind <= 3, "Invalid HIP integer pointwise descriptor");
         bool binary = false;
         switch (p->op) {
         case LFS_HIP_OP_AddTensor:

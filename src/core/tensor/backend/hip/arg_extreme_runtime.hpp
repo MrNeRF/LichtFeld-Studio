@@ -110,11 +110,9 @@ namespace {
 
 int lfs_hip_arg_extreme_f32(LfsHipContext* context, LfsHipView input, LfsHipView values, LfsHipView indices,
                             size_t outer, size_t reduced, size_t inner, uint32_t maximum,
-                            size_t* workspace_growth_bytes, LfsHipError* error) {
-    if (workspace_growth_bytes)
-        *workspace_growth_bytes = 0;
+                            LfsHipError* error) {
     return boundary(error, [&] {
-        require(workspace_growth_bytes && maximum <= 1 && reduced <= INT32_MAX, "Invalid HIP indexed extrema descriptor");
+        require(maximum <= 1 && reduced <= INT32_MAX, "Invalid HIP indexed extrema descriptor");
         require(!inner || outer <= SIZE_MAX / inner, "HIP indexed extrema output shape overflow");
         const size_t outputs = outer * inner;
         require(!outputs || reduced > 0, "HIP indexed extrema cannot reduce an empty axis");
@@ -136,11 +134,7 @@ int lfs_hip_arg_extreme_f32(LfsHipContext* context, LfsHipView input, LfsHipView
                                    : 1;
         if (parts > 1) {
             const size_t required = outputs * parts * sizeof(uint64_t); // At most 32 KiB.
-            if (required > context->sort_workspace_bytes) {
-                const auto previous = context->sort_workspace_bytes;
-                ensure_workspace(context, context->sort_workspace, context->sort_workspace_bytes, required);
-                *workspace_growth_bytes = required - previous;
-            }
+            ensure_workspace(context, context->sort_workspace, context->sort_workspace_bytes, required);
         }
         if (maximum)
             launch_indexed_extreme<true>(context, input, values, indices, outputs, reduced, inner, parts);

@@ -1,210 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "architecture_runtime.hpp"
-#include "hip_pointwise_functors.hpp"
-#include "runtime_api.h"
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstdio>
-#include <cstring>
-#include <exception>
-#include <hip/hip_fp16.h>
-#include <hip/hip_runtime.h>
-#include <hipcub/hipcub.hpp>
-#include <limits>
-#include <memory>
-#include <stdexcept>
-#include <type_traits>
-#include <unordered_set>
-#include <vector>
-
-struct LfsHipBuffer {
-    void* data = nullptr;
-    size_t bytes = 0;
-};
-struct LfsHipReadback {
-    void* host = nullptr;
-    size_t capacity = 0, bytes = 0, reserved_bytes = 0;
-    hipEvent_t completion = nullptr;
-    hipError_t copy_error = hipSuccess;
-    bool pending = false, recorded = false;
-};
-
-struct LfsHipContext {
-    int device = 0;
-    hipStream_t stream = nullptr;
-    std::unordered_set<LfsHipBuffer*> buffers;
-    std::unordered_set<LfsHipReadback*> readbacks;
-    float* reduction_workspace = nullptr;
-    void* scan_workspace = nullptr;
-    size_t scan_workspace_bytes = 0;
-    void* sort_workspace = nullptr;
-    size_t sort_workspace_bytes = 0;
-};
-
-namespace {
-    struct HipFailure : std::exception {
-        hipError_t code;
-        explicit HipFailure(hipError_t value) : code(value) {}
-        const char* what() const noexcept override { return hipGetErrorString(code); }
-    };
-
-    struct InvalidIndex : std::invalid_argument {
-        using std::invalid_argument::invalid_argument;
-    };
-
-    void check(hipError_t status) {
-        if (status != hipSuccess)
-            throw HipFailure(status);
-    }
-
-    // Call only after validating both ranges against their owning buffers.
-    bool views_overlap(LfsHipView a, size_t an, LfsHipView b, size_t bn) {
-        return an && bn && a.buffer == b.buffer && a.offset < b.offset + bn && b.offset < a.offset + an;
-    }
-    template <class F>
-    int boundary(LfsHipError* error, F&& function) noexcept {
-        if (error)
-            *error = {};
-        try {
-            function();
-            return 0;
-        } catch (const HipFailure& failure) {
-            if (error) {
-                error->native_code = static_cast<int32_t>(failure.code);
-                std::snprintf(error->message, sizeof(error->message), "%s", failure.what());
-            }
-        } catch (const InvalidIndex& failure) {
-            if (error) {
-                error->native_code = LFS_HIP_ERROR_INVALID_INDEX;
-                std::snprintf(error->message, sizeof(error->message), "%s", failure.what());
-            }
-        } catch (const std::exception& failure) {
-            if (error) {
-                error->native_code = -1;
-                std::snprintf(error->message, sizeof(error->message), "%s", failure.what());
-            }
-        } catch (...) {
-            if (error) {
-                error->native_code = -1;
-                std::snprintf(error->message, sizeof(error->message), "Unknown HIP module failure");
-            }
-        }
-        return 1;
-    }
-
-    void require(bool condition, const char* message) {
-        if (!condition)
-            throw std::invalid_argument(message);
-    }
-
-    void require_disjoint(LfsHipView a, size_t an, LfsHipView b, size_t bn, const char* message) {
-        require(!views_overlap(a, an, b, bn), message);
-    }
-    void require_compatible_views(LfsHipView a, size_t an, LfsHipView b, size_t bn, bool allow_identical, const char* message) {
-        require(!views_overlap(a, an, b, bn) || (allow_identical && a.offset == b.offset && an == bn), message);
-    }
-    void validate_device(int ordinal) {
-        int count = 0;
-        check(hipGetDeviceCount(&count));
-        require(ordinal >= 0 && ordinal < count, "HIP device ordinal is out of range");
-    }
-
-    struct DeviceScope {
-        int previous = 0;
-        explicit DeviceScope(int selected) {
-            check(hipGetDevice(&previous));
-            check(hipSetDevice(selected));
-        }
-        ~DeviceScope() { (void)hipSetDevice(previous); }
-    };
-
-    void validate(LfsHipContext* context, const LfsHipBuffer* buffer, size_t offset, size_t bytes) {
-        require(context && buffer, "Missing HIP context or buffer");
-        // Membership is checked before dereferencing a foreign/released handle.
-        require(context->buffers.contains(const_cast<LfsHipBuffer*>(buffer)), "Buffer does not belong to this HIP context");
-        require(offset <= buffer->bytes && bytes <= buffer->bytes - offset, "HIP buffer range is out of bounds");
-        require(bytes == 0 || buffer->data != nullptr, "HIP buffer mapping was already released");
-    }
-
-    // Clear ownership only after the driver accepts the release.
-    void release_buffer_resources(LfsHipBuffer* buffer) {
-        if (buffer->data) {
-            check(hipFree(buffer->data));
-            buffer->data = nullptr;
-        }
-    }
-
-    size_t float_bytes(size_t count) {
-        require(count <= SIZE_MAX / sizeof(float), "Float element count overflows");
-        return count * sizeof(float);
-    }
-
-    unsigned blocks(size_t count) {
-        return static_cast<unsigned>(std::min<size_t>((count - 1) / 256 + 1, 4096));
-    }
-
-    __global__ void fill(float* output, size_t count, float value) {
-        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
-             i < count; i += size_t(gridDim.x) * blockDim.x)
-            output[i] = value;
-    }
-
-    __global__ void affine(const float* input, float* output, size_t count, float scale, float bias) {
-        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
-             i < count; i += size_t(gridDim.x) * blockDim.x)
-            output[i] = input[i] * scale + bias;
-    }
-
-    template <unsigned Mode, class In, class Out, class Op>
-    __global__ void pointwise_kernel(const In* a, const In* b, Out* out, size_t count, float scalar, Op op) {
-        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += size_t(gridDim.x) * blockDim.x) {
-            const float x = static_cast<float>(a[i]);
-            float value;
-            if constexpr (Mode == 0)
-                value = op(x);
-            else if constexpr (Mode == 1)
-                value = op(x, scalar);
-            else
-                value = op(x, static_cast<float>(b[i]));
-            if constexpr (std::is_same_v<Out, __half>)
-                out[i] = __float2half_rn(value);
-            else
-                out[i] = static_cast<Out>(value);
-        }
-    }
-    template <unsigned Mode, class Out, class In = float, class Op>
-    void launch_pointwise(LfsHipContext* context, LfsHipView a, LfsHipView b, LfsHipView out, size_t count, float scalar, Op op) {
-        require(count <= SIZE_MAX / sizeof(In) && count <= SIZE_MAX / sizeof(Out), "Pointwise element count overflows");
-        const size_t input_bytes = count * sizeof(In);
-        validate(context, a.buffer, a.offset, input_bytes);
-        validate(context, out.buffer, out.offset, count * sizeof(Out));
-        require(a.offset % alignof(In) == 0 && out.offset % alignof(Out) == 0, "Unaligned pointwise view");
-        if constexpr (Mode == 2) {
-            validate(context, b.buffer, b.offset, input_bytes);
-            require(b.offset % alignof(In) == 0, "Unaligned pointwise rhs");
-        }
-        require_compatible_views(a, input_bytes, out, count * sizeof(Out), sizeof(Out) == sizeof(In), "Overlapping pointwise views require identical typed ranges");
-        if constexpr (Mode == 2)
-            require_compatible_views(b, input_bytes, out, count * sizeof(Out), sizeof(Out) == sizeof(In), "Overlapping pointwise views require identical typed ranges");
-        if (!count)
-            return;
-        auto* lhs = reinterpret_cast<const In*>(static_cast<const char*>(a.buffer->data) + a.offset);
-        const In* rhs = nullptr;
-        if constexpr (Mode == 2)
-            rhs = reinterpret_cast<const In*>(static_cast<const char*>(b.buffer->data) + b.offset);
-        auto* output = reinterpret_cast<Out*>(static_cast<char*>(out.buffer->data) + out.offset);
-        hipLaunchKernelGGL((pointwise_kernel<Mode, In, Out, Op>), dim3(blocks(count)), dim3(256), 0, context->stream, lhs, rhs, output, count, scalar, op);
-        check(hipGetLastError());
-    }
-    __global__ void arange_kernel(float* out, size_t n, float start, float step) {
-        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < n; i += size_t(gridDim.x) * blockDim.x)
-            out[i] = start + static_cast<float>(i) * step;
-    }
-
-} // namespace
-
+#include "runtime_common.hpp"
 extern "C" {
 uint32_t lfs_hip_runtime_abi(void) { return LFS_HIP_RUNTIME_ABI_VERSION; }
 
@@ -255,7 +51,7 @@ int lfs_hip_context_synchronize(LfsHipContext* context, LfsHipError* error) {
     return boundary(error, [&] {
         require(context, "Missing HIP context");
         DeviceScope device(context->device);
-        check(hipStreamSynchronize(context->stream));
+        synchronize_context(context);
     });
 }
 
@@ -283,7 +79,7 @@ int lfs_hip_buffer_release(LfsHipContext* context, LfsHipBuffer* buffer, LfsHipE
     return boundary(error, [&] {
         validate(context, buffer, 0, 0);
         DeviceScope device(context->device);
-        check(hipStreamSynchronize(context->stream));
+        synchronize_context(context);
         release_buffer_resources(buffer);
         context->buffers.erase(buffer);
         delete buffer;
@@ -297,7 +93,7 @@ int lfs_hip_context_destroy(LfsHipContext* context, LfsHipError* error) {
         DeviceScope device(context->device);
         // On a runtime failure, retain the handle and unfreed allocations
         // for explicit recovery; never claim that queued work was drained.
-        check(hipStreamSynchronize(context->stream));
+        synchronize_context(context);
         while (!context->buffers.empty()) {
             auto* buffer = *context->buffers.begin();
             release_buffer_resources(buffer);
@@ -318,6 +114,14 @@ int lfs_hip_context_destroy(LfsHipContext* context, LfsHipError* error) {
             context->sort_workspace = nullptr;
             context->sort_workspace_bytes = 0;
         }
+        if (context->index_error) {
+            check(hipFree(context->index_error));
+            context->index_error = nullptr;
+        }
+        if (context->index_error_host) {
+            check(hipHostFree(context->index_error_host));
+            context->index_error_host = nullptr;
+        }
         check(hipStreamDestroy(context->stream));
         delete context;
     });
@@ -333,10 +137,10 @@ int lfs_hip_upload(LfsHipContext* context, LfsHipBuffer* buffer, size_t offset, 
         // (AMD rocm-systems #12571). This API is blocking already: complete the
         // producer before enqueueing the copy, not only after the copy.
         if (bytes)
-            check(hipStreamSynchronize(context->stream));
+            synchronize_context(context);
         if (bytes)
             check(hipMemcpyAsync(static_cast<char*>(buffer->data) + offset, host, bytes, hipMemcpyHostToDevice, context->stream));
-        check(hipStreamSynchronize(context->stream));
+        synchronize_context(context);
     });
 }
 
@@ -350,10 +154,10 @@ int lfs_hip_download(LfsHipContext* context, const LfsHipBuffer* buffer, size_t 
         // (AMD rocm-systems #12571). This API is blocking already: complete the
         // producer before enqueueing the copy, not only after the copy.
         if (bytes)
-            check(hipStreamSynchronize(context->stream));
+            synchronize_context(context);
         if (bytes)
             check(hipMemcpyAsync(host, static_cast<const char*>(buffer->data) + offset, bytes, hipMemcpyDeviceToHost, context->stream));
-        check(hipStreamSynchronize(context->stream));
+        synchronize_context(context);
     });
 }
 
@@ -532,7 +336,7 @@ int lfs_hip_readback_destroy(LfsHipContext* context, LfsHipReadback* staging, Lf
         validate_readback(context, staging);
         DeviceScope device(context->device);
         if (staging->pending)
-            check(hipStreamSynchronize(context->stream));
+            synchronize_context(context);
         if (staging->completion) {
             check(hipEventDestroy(staging->completion));
             staging->completion = nullptr;
@@ -593,43 +397,4 @@ int lfs_hip_memset(LfsHipContext* context, LfsHipView dst, size_t bytes, uint8_t
     });
 }
 
-int lfs_hip_pointwise_f32(LfsHipContext* context, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, size_t count, float scalar, LfsHipError* error) {
-    return boundary(error, [&] {
-        require(context && op < LFS_HIP_OP_COUNT, "Unknown HIP pointwise operation");
-        DeviceScope device(context->device);
-        using namespace lfs::core;
-        switch (op) {
-#include "hip_pointwise_f32.inc"
-        default: throw std::invalid_argument("Unknown HIP pointwise operation");
-        }
-    });
-}
-
-int lfs_hip_pointwise_f16(LfsHipContext* context, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, size_t count, float scalar, LfsHipError* error) {
-    return boundary(error, [&] {
-        require(context && op < LFS_HIP_OP_COUNT, "Unknown HIP pointwise operation");
-        DeviceScope device(context->device);
-        using namespace lfs::core;
-        switch (op) {
-#include "hip_pointwise_f16.inc"
-        default: throw std::invalid_argument("Unknown HIP pointwise operation");
-        }
-    });
-}
-
-int lfs_hip_arange_f32(LfsHipContext* context, LfsHipView dst, size_t count, float start, float step, LfsHipError* error) {
-    return boundary(error, [&] {
-        validate(context, dst.buffer, dst.offset, float_bytes(count));
-        require(dst.offset % 4 == 0, "Unaligned arange output");
-        DeviceScope device(context->device);
-        if (!count)
-            return;
-        hipLaunchKernelGGL(arange_kernel, dim3(blocks(count)), dim3(256), 0, context->stream,
-                           reinterpret_cast<float*>(static_cast<char*>(dst.buffer->data) + dst.offset), count, start, step);
-        check(hipGetLastError());
-    });
-}
-
 } // extern "C"
-
-#include "tensor_ops_runtime.hpp"
