@@ -9214,6 +9214,13 @@ namespace lfs::vis {
                                        !guides.show_rings && !guides.show_center_markers &&
                                        !guides.show_object_outline;
         uniforms.stochastic_mode = stochastic_active ? static_cast<std::uint32_t>(requested_mode) : 0u;
+        // The setting is global: switching it off frees every view's history.
+        if (requested_mode == 0) {
+            for (std::size_t slot = 0; slot < kOutputSlotCount; ++slot)
+                releaseUnusedStochasticBuffers(static_cast<OutputSlot>(slot), 0u);
+        } else {
+            releaseUnusedStochasticBuffers(output_slot, uniforms.stochastic_mode);
+        }
 
         // HiGS requires compact-slot-safe indexing, 16-bit storage, and immutable
         // input. 3DGUT and live training use the legacy per-render-tile chain.
@@ -9604,6 +9611,7 @@ namespace lfs::vis {
                         {
                             LOG_TIMER("vksplat.render.record.executeSortPrimitivesByDepth");
                             renderer_.executeSortPrimitivesByDepth(uniforms, buffers_, !stochastic_active);
+                            stochastic_sort_indices_owned_ |= stochastic_active;
                         }
                         {
                             LOG_TIMER("vksplat.render.record.executeApplyDepthOrdering");

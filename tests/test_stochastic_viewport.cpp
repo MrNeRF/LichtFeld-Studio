@@ -35,13 +35,45 @@ namespace lfs::vis {
                                     const VulkanGSRenderer::TileInstanceStats& stats) {
             VksplatViewportRenderer::updateStochasticProjectionStats(cache, stats);
         }
-        static bool allocated(const VksplatViewportRenderer& renderer) {
-            for (const auto& history : renderer.stochastic_histories_)
-                if (history.buffers.color[0].deviceBuffer.buffer != VK_NULL_HANDLE ||
-                    history.buffers.rest_average.deviceBuffer.buffer != VK_NULL_HANDLE ||
-                    history.buffers.ids_depths.deviceBuffer.buffer != VK_NULL_HANDLE)
-                    return true;
-            return false;
+        static void checkUnusedBuffersAreRetired() {
+            using Slot = VksplatViewportRenderer::OutputSlot;
+            VksplatViewportRenderer renderer;
+            std::uintptr_t next = 0x100;
+            const auto fake = [&](_VulkanBuffer& buffer) {
+                buffer.buffer = reinterpret_cast<VkBuffer>(next++);
+                buffer.allocation = reinterpret_cast<VmaAllocation>(next++);
+                buffer.size = buffer.capacity = buffer.allocSize = 64;
+            };
+            auto& main = renderer.stochastic_histories_[0].buffers;
+            for (auto* buffer : {&main.ids_depths.deviceBuffer, &main.occlusion.deviceBuffer,
+                                 &main.outgoing_weights.deviceBuffer, &main.rest_average.deviceBuffer,
+                                 &main.color[0].deviceBuffer, &main.color[1].deviceBuffer})
+                fake(*buffer);
+            fake(renderer.stochastic_histories_[1].buffers.color[0].deviceBuffer);
+            fake(renderer.buffers_.primitive_sort_indices.deviceBuffer);
+            renderer.stochastic_sort_indices_owned_ = true;
+            renderer.render_complete_timeline_ = reinterpret_cast<VkSemaphore>(0x301);
+            renderer.last_submitted_render_value_ = 7;
+            const auto& retired = renderer.retired_private_scratch_buffers_;
+
+            renderer.releaseUnusedStochasticBuffers(Slot::Main, 2);
+            EXPECT_TRUE(retired.empty());
+            // Basic accumulation keeps only its color history.
+            renderer.releaseUnusedStochasticBuffers(Slot::Main, 1);
+            EXPECT_EQ(retired.size(), 4u);
+            EXPECT_NE(main.color[0].deviceBuffer.buffer, VK_NULL_HANDLE);
+            // Another view still holds history, so the sort-index copy stays.
+            renderer.releaseUnusedStochasticBuffers(Slot::Main, 0);
+            EXPECT_EQ(retired.size(), 6u);
+            EXPECT_NE(renderer.buffers_.primitive_sort_indices.deviceBuffer.buffer, VK_NULL_HANDLE);
+            renderer.releaseUnusedStochasticBuffers(Slot::SplitLeft, 0);
+            EXPECT_EQ(retired.size(), 8u);
+            EXPECT_EQ(renderer.buffers_.primitive_sort_indices.deviceBuffer.buffer, VK_NULL_HANDLE);
+            for (const auto& [value, buffer] : retired)
+                EXPECT_EQ(value, 7u); // Destroyed once the last submitted frame retires.
+            // The handles above are scripted; they must never reach Vulkan teardown.
+            renderer.retired_private_scratch_buffers_.clear();
+            renderer.render_complete_timeline_ = VK_NULL_HANDLE;
         }
     };
 } // namespace lfs::vis
@@ -134,7 +166,6 @@ namespace {
         EXPECT_FALSE(Access::prepare(renderer, u, model, Slot::Main, true).history_valid);
         renderer.invalidateStochasticHistory();
         EXPECT_FALSE(Access::prepare(renderer, u, model, Slot::Main).history_valid);
-        EXPECT_FALSE(Access::allocated(renderer));
     }
 
     TEST(StochasticViewport, SteadySplatsReprojectsAcrossMotionAndResetsForResizeModelAndMode) {
@@ -183,7 +214,10 @@ namespace {
         Access::commit(renderer, candidate, Slot::Main);
         u.stochastic_mode = 2;
         EXPECT_FALSE(Access::prepare(renderer, u, model, Slot::Main).history_valid);
-        EXPECT_FALSE(Access::allocated(renderer));
+    }
+
+    TEST(StochasticViewport, DisabledModesRetireUnusedBuffers) {
+        Access::checkUnusedBuffersAreRetired();
     }
 
     TEST(StochasticViewport, SettingsDefaultToAlphaBlendAndRoundTripThroughTheProxy) {

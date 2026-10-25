@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
+#include <utility>
 #include <vector>
 
 struct VulkanGSOutlineStyle {
@@ -392,6 +393,8 @@ public:
     // One immutable volume per renderer/device, uploaded before recording a
     // SteadySplats frame. Basic stochastic sampling retains white noise.
     const _VulkanBuffer& prepareStochasticNoise();
+    // Hands the volume to the caller, which destroys it once no frame uses it.
+    [[nodiscard]] _VulkanBuffer releaseStochasticNoise() noexcept { return std::exchange(stochastic_noise_, {}); }
     // When set, forward forces the non-batched per-pixel rasterizer: the
     // load-balanced batched compose only covers a subset of pixels, leaving the
     // rest with shared-buffer residue, which corrupts a one-shot depth readback.

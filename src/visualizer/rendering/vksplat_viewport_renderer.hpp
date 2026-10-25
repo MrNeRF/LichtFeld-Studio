@@ -440,6 +440,8 @@ namespace lfs::vis {
             const VulkanGSRendererUniforms& uniforms, const StochasticFrame& frame,
             OutputSlot slot, const glm::vec3& background);
         void commitStochasticFrame(const StochasticFrame& frame, OutputSlot slot);
+        void retireStochasticBuffer(_VulkanBuffer& buffer, bool destroy_now);
+        void releaseUnusedStochasticBuffers(OutputSlot slot, std::uint32_t mode);
         void releaseStochasticBuffers();
         [[nodiscard]] lfs::Status waitForRingSlot(
             std::size_t ring_slot,
@@ -729,6 +731,9 @@ namespace lfs::vis {
         std::uint64_t stochastic_history_generation_ = 1;
         std::array<std::uint32_t, kOutputSlotCount> stochastic_sample_serials_{};
         StochasticProjectionCache stochastic_projection_cache_;
+        // Stochastic frames keep depth keys alive, so the sort-index copy owns
+        // its own allocation instead of aliasing them.
+        bool stochastic_sort_indices_owned_ = false;
         OutputSlotRing ring_{};
         OutputImagePool output_pool_{};
         struct PublishedOutput {
