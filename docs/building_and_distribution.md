@@ -52,6 +52,93 @@ Without it configure fails with `pkg-config could not locate `gtk+-3.0``.
 The configure step now fails early if neither a usable X11 stack nor a usable Wayland stack is present.
 If you intentionally want a headless or experimental build, pass `-DLFS_ENFORCE_LINUX_GUI_BACKENDS=OFF`.
 
+## NixOS
+
+The repository's flake provides an x86_64 Linux FHS development environment
+with GCC 14, CUDA 12.8, and the Linux GUI prerequisites. It uses the existing
+vcpkg manifest and CMake presets without changing the upstream build.
+`flake.lock` pins Nixpkgs; `LFS_VCPKG_REV` in `flake.nix` pins the vcpkg checkout.
+CUDA is unfree, so the flake enables unfree packages for its own package set.
+
+Enable Nix's `nix-command` and `flakes` experimental features. Configure the
+host's NVIDIA driver and graphics support through NixOS, then confirm that
+`nvidia-smi` works. The documented minimum driver is 570. The flake uses the
+host driver through `/run/opengl-driver`; it does not install a kernel driver.
+Bubblewrap must be allowed to create user namespaces.
+
+From the repository root, initialize the submodule and enter the environment:
+
+```bash
+git submodule update --init --recursive
+nix develop
+```
+
+For a local, uncommitted flake, Git must track `flake.nix` and `flake.lock`
+before `nix develop` can see them. Alternatively, use `nix develop path:.`.
+
+Inside the environment, set up vcpkg once, then configure and compile:
+
+```bash
+git clone https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+git -C "$VCPKG_ROOT" checkout "$LFS_VCPKG_REV"
+"$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+cmake --preset linux-release
+cmake --build --preset linux-release
+./build-linux-release/LichtFeld-Studio --help
+./build-linux-release/LichtFeld-Studio
+```
+
+If `vcpkg/` already exists, skip the clone. Fetch before checking out the
+pinned revision if necessary. The shell defaults `VCPKG_ROOT` to `vcpkg/` in
+the directory where you entered it, but respects an existing `VCPKG_ROOT`.
+Build and run inside this environment, including on subsequent sessions.
+The first configure downloads and compiles dependencies and can take a long
+time. Allow tens of gigabytes for CUDA, vcpkg, and build artifacts. The build
+preset limits compilation to six jobs; reduce it with `--parallel 2` if needed.
+
+For noninteractive commands, use the FHS launcher directly:
+
+```bash
+nix run . -- -c 'cmake --preset linux-release'
+nix run . -- -c 'cmake --build --preset linux-release'
+nix run . -- -c './build-linux-release/LichtFeld-Studio --help'
+```
+
+`nix build` builds the environment launcher, not LichtFeld Studio. This is
+not a sandboxed, offline application derivation: vcpkg and CMake still need
+network access during configuration. `nix develop --command` is not supported
+by this FHS shell; use `nix run . -- -c` instead.
+
+### Keeping a fork current
+
+For a checkout whose `origin` is still `MrNeRF/LichtFeld-Studio`, GitHub CLI
+can create your fork without changing the upstream remote:
+
+```bash
+gh repo fork --remote --remote-name fork
+git remote rename origin upstream
+git switch -c nixos-flake
+git add flake.nix flake.lock docs/building_and_distribution.md
+git commit -m "Add NixOS development flake"
+git push -u fork nixos-flake
+```
+
+To bring upstream changes into that branch, fetch and merge explicitly:
+
+```bash
+git fetch upstream
+git merge upstream/master
+git submodule update --init --recursive
+```
+
+The build uses the source in your checkout, not a separately pinned copy of
+LichtFeld Studio. Upstream merges therefore update the application normally.
+Update the toolchain separately with `nix flake update nixpkgs` and commit the
+resulting lockfile after testing. If upstream dependency pins require a newer
+vcpkg checkout, update `LFS_VCPKG_REV`, fetch and check out that revision, and
+rerun bootstrap before configuring. Open the upstream PR from `nixos-flake`
+after the application build and GUI tests pass.
+
 ## Build Options
 
 ### 1. Native Build (Development)
