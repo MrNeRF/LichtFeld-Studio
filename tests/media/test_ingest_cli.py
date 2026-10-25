@@ -411,6 +411,42 @@ class IngestCLI(unittest.TestCase):
                 self.assertEqual(fact["value"], "Unique")
                 self.assertFalse(fact["ambiguous"])
 
+    def test_source_metadata_xmp_equal_aliases(self):
+        namespaces = ('xmlns:x="http://ns.adobe.com/xap/1.0/" '
+                      'xmlns:a="http://ns.adobe.com/exif/1.0/aux/" '
+                      'xmlns:c="http://cipa.jp/exif/1.0/"')
+        for attributes in (False, True):
+            for conflict in (False, True):
+                with self.subTest(attributes=attributes, conflict=conflict):
+                    lens = "Lens Two" if conflict else "Lens One"
+                    values = (("e:DateTimeDigitized", "2024-02-29T12:34:56"),
+                              ("x:CreateDate", "2024-02-29T12:34:56"),
+                              ("a:Lens", "Lens One"), ("c:LensModel", lens))
+                    if attributes:
+                        packet = self._rdf_packet("", namespaces + " " + " ".join(
+                            f'{name}="{value}"' for name, value in values)).encode()
+                    else:
+                        packet = self._rdf_packet("".join(
+                            f'<{name}>{value}</{name}>' for name, value in values), namespaces).encode()
+                    for carrier in ("jpeg", "jxl"):
+                        path = self.root / ("alias." + carrier)
+                        if carrier == "jpeg":
+                            self._xmp_jpeg(path, [b"http://ns.adobe.com/xap/1.0/\0" + packet])
+                        else:
+                            self._xmp_jxl(path, [(b"xml ", packet)])
+                        saved = path.read_bytes(), path.stat().st_mtime_ns
+                        result, _ = self.invoke("source-metadata", path)
+                        facts = [f for f in result["summary"]["facts"]
+                                 if f["semantic"] in ("time.digitized", "lens.model")]
+                        self.assertEqual(len(facts), 4)
+                        self.assertEqual({f["xmp_property"]["name"] for f in facts},
+                                         {"DateTimeDigitized", "CreateDate", "Lens", "LensModel"})
+                        self.assertEqual(len({f["xmp_property"]["ordinal"] for f in facts}), 4)
+                        for fact in facts:
+                            self.assertEqual(fact["state"], "present")
+                            self.assertEqual(fact["ambiguous"], conflict and fact["semantic"] == "lens.model")
+                        self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), saved)
+
     def test_source_metadata_xmp_interpretation_secondary_and_invalid(self):
         packet = self._rdf_packet('<t:Make>primary</t:Make>').encode()
         child = self._rdf_packet('<t:Make>secondary</t:Make>').encode()

@@ -448,9 +448,6 @@ namespace lfs::media {
                     ref.second |= ref.first != nullptr;
                     ref.first = &candidate;
                 }
-            std::map<std::pair<std::size_t, std::string_view>, std::size_t> occurrences;
-            for (const auto& property : packet.properties)
-                ++occurrences[{property.description, property.field->semantic}];
             for (const auto& property : packet.properties) {
                 const auto& field = *property.field;
                 if (summary.facts.size() >= max_facts || field.semantic.size() + field.property.namespace_uri.size() + field.property.name.size() > max_text_bytes - charged) {
@@ -461,7 +458,6 @@ namespace lfs::media {
                 const auto value = trim(property.value);
                 MetadataFact fact{*handle, std::string(field.semantic), std::string{}, field.unit,
                                   MetadataValueState::Present, MetadataValueOrigin::InterpretedSource};
-                fact.ambiguous = occurrences.at({property.description, field.semantic}) > 1;
                 XmpFactProvenance provenance{property.location(), {}};
                 double numeric = 0;
                 int64_t whole = 0;
@@ -493,12 +489,15 @@ namespace lfs::media {
                             fact.ambiguous |= duplicate;
                         } else {
                             double signed_altitude = 0;
-                            summary_detail::altitude(numeric, static_cast<int>(whole), signed_altitude);
-                            fact.value = signed_altitude;
-                            fact.origin = MetadataValueOrigin::Derived;
-                            fact.inputs.push_back(*handle);
-                            provenance.inputs.push_back(ref->location());
-                            fact.derivation = "xmp_altitude_reference_0_1";
+                            if (!summary_detail::altitude(numeric, static_cast<int>(whole), signed_altitude)) {
+                                fact.state = MetadataValueState::Invalid;
+                            } else {
+                                fact.value = signed_altitude;
+                                fact.origin = MetadataValueOrigin::Derived;
+                                fact.inputs.push_back(*handle);
+                                provenance.inputs.push_back(ref->location());
+                                fact.derivation = "xmp_altitude_reference_0_1";
+                            }
                         }
                     }
                 } else if (field.kind == Kind::Latitude || field.kind == Kind::Longitude) {

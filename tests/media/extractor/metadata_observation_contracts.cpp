@@ -6,6 +6,7 @@
 #include "media/metadata_observation.hpp"
 #include "media/metadata_summary_common.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <future>
 #include <limits>
@@ -477,7 +478,80 @@ namespace {
         require(bool(result), "create XMP catalog");
         return std::move(*result);
     }
+    void xmpAliasContracts() {
+        const std::string begin = R"(<r:RDF xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><r:Description xmlns:t="http://ns.adobe.com/tiff/1.0/" xmlns:e="http://ns.adobe.com/exif/1.0/" xmlns:x="http://ns.adobe.com/xap/1.0/" xmlns:a="http://ns.adobe.com/exif/1.0/aux/" xmlns:c="http://cipa.jp/exif/1.0/">)";
+        const std::string end = "</r:Description></r:RDF>";
+        const std::array<std::string, 4> properties{
+            "<e:DateTimeDigitized>2024-02-29T12:34:56</e:DateTimeDigitized>",
+            "<x:CreateDate>2024-02-29T12:34:56</x:CreateDate>",
+            "<a:Lens>Lens One</a:Lens>", "<c:LensModel>Lens One</c:LensModel>"};
+        const auto matching_exif = [] {
+            auto image = cameraFixture();
+            auto& entries = image.interpretations[0].entries;
+            for (const auto& [id, value] : {std::pair{0x9004, "2024:02:29 12:34:56"}, std::pair{0xa434, "Lens One"}}) {
+                ExifEntry entry;
+                entry.id = static_cast<uint16_t>(id);
+                entry.type = 2;
+                entry.directory_path = {0, 1};
+                entry.entry_index = static_cast<uint32_t>(std::count_if(entries.begin(), entries.end(), [&](const auto& other) { return other.directory_path == entry.directory_path; }));
+                const std::string text(value);
+                entry.bytes.assign(text.begin(), text.end());
+                entry.bytes.push_back(0);
+                entry.count = static_cast<uint32_t>(entry.bytes.size());
+                entries.push_back(std::move(entry));
+            }
+            return image;
+        };
+        std::array<std::size_t, 4> order{0, 1, 2, 3};
+        do {
+            std::string packet = begin;
+            for (const auto index : order)
+                packet += properties[index];
+            packet += end;
+            for (const bool with_exif : {false, true}) {
+                const auto summary = summarizeImageMetadata(xmpFixture(packet, with_exif ? matching_exif() : ImageExifDescription{}));
+                require(bool(summary), "alias summary");
+                for (const auto semantic : {"time.digitized", "lens.model"}) {
+                    std::size_t count = 0, xmp_count = 0;
+                    for (const auto& item : summary->facts)
+                        if (item.semantic == semantic) {
+                            ++count;
+                            xmp_count += bool(item.xmp);
+                            require(item.state == MetadataValueState::Present && !item.ambiguous,
+                                    "identical aliases and matching EXIF observations stay unambiguous in every order");
+                        }
+                    require(count == (with_exif ? 3 : 2) && xmp_count == 2, "all alias occurrences and source provenance remain separate");
+                }
+            }
+        } while (std::next_permutation(order.begin(), order.end()));
+        for (const int change : {0, 1, 2}) {
+            auto values = properties;
+            if (change == 0)
+                values[1] = "<x:CreateDate>2024-02-29T12:34:57</x:CreateDate>";
+            else if (change == 1)
+                values[3] = "<c:LensModel>Lens Two</c:LensModel>";
+            else
+                values[1] = "<x:CreateDate>invalid</x:CreateDate>";
+            std::string packet = begin;
+            for (const auto& value : values)
+                packet += value;
+            const auto summary = summarizeImageMetadata(xmpFixture(packet + end, matching_exif()));
+            require(bool(summary), "conflicting alias summary");
+            for (const auto& item : summary->facts)
+                if (item.semantic == "time.digitized" || item.semantic == "lens.model")
+                    require(item.ambiguous == (item.semantic == (change == 1 ? "lens.model" : "time.digitized")),
+                            "different or invalid alias values flag their semantic group only");
+        }
+        const auto repeated = summarizeImageMetadata(xmpFixture(begin + "<t:Make>Same</t:Make><t:Make>Same</t:Make>" + end));
+        require(repeated && repeated->facts.size() == 2 && !repeated->facts[0].ambiguous && !repeated->facts[1].ambiguous,
+                "identical occurrences of one property use value agreement too");
+        const auto duplicate_reference = summarizeImageMetadata(xmpFixture(begin + "<e:GPSAltitude>5/1</e:GPSAltitude><e:GPSAltitudeRef>0</e:GPSAltitudeRef><e:GPSAltitudeRef>0</e:GPSAltitudeRef>" + end));
+        require(duplicate_reference && duplicate_reference->facts[0].state == MetadataValueState::Unsupported &&
+                    duplicate_reference->facts[0].ambiguous && duplicate_reference->facts[0].inputs.empty(),
+                "equal duplicate altitude operands do not bypass the unique-reference contract");
+    }
     void xmpContracts() {
+        xmpAliasContracts();
         const std::string begin = R"(<r:RDF xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><r:Description r:about="" xmlns:t="http://ns.adobe.com/tiff/1.0/" xmlns:e="http://ns.adobe.com/exif/1.0/" )";
         const std::string end = "</r:Description></r:RDF>";
         const auto catalog = xmpFixture(begin + R"(t:Make="Camera &amp; Co" t:Model="body"><e:FNumber>28/10</e:FNumber><e:GPSLatitude>45,30.0N</e:GPSLatitude><e:GPSLongitude>90,10,30W</e:GPSLongitude><e:GPSAltitude>25/2</e:GPSAltitude><e:GPSAltitudeRef>1</e:GPSAltitudeRef><e:DateTimeOriginal>2024-02-29T10:20:30.120+02:00</e:DateTimeOriginal>)" + end);
