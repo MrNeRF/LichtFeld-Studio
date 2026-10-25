@@ -109,35 +109,12 @@ not a sandboxed, offline application derivation: vcpkg and CMake still need
 network access during configuration. `nix develop --command` is not supported
 by this FHS shell; use `nix run . -- -c` instead.
 
-### Keeping a fork current
+### Updating the development environment
 
-For a checkout whose `origin` is still `MrNeRF/LichtFeld-Studio`, GitHub CLI
-can create your fork without changing the upstream remote:
-
-```bash
-gh repo fork --remote --remote-name fork
-git remote rename origin upstream
-git switch -c nixos-flake
-git add flake.nix flake.lock docs/building_and_distribution.md
-git commit -m "Add NixOS development flake"
-git push -u fork nixos-flake
-```
-
-To bring upstream changes into that branch, fetch and merge explicitly:
-
-```bash
-git fetch upstream
-git merge upstream/master
-git submodule update --init --recursive
-```
-
-The build uses the source in your checkout, not a separately pinned copy of
-LichtFeld Studio. Upstream merges therefore update the application normally.
-Update the toolchain separately with `nix flake update nixpkgs` and commit the
-resulting lockfile after testing. If upstream dependency pins require a newer
-vcpkg checkout, update `LFS_VCPKG_REV`, fetch and check out that revision, and
-rerun bootstrap before configuring. Open the upstream PR from `nixos-flake`
-after the application build and GUI tests pass.
+Update Nixpkgs with `nix flake update nixpkgs` and commit the resulting lockfile
+after testing. If dependency changes require a newer vcpkg checkout, update
+`LFS_VCPKG_REV` in `flake.nix`, fetch and check out that revision, and rerun
+bootstrap before configuring.
 
 ## Build Options
 
