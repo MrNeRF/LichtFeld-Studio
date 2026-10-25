@@ -42,7 +42,7 @@ namespace lfs::core::internal {
             LfsHipError error{};
             if (!owner->module->api().context_destroy(owner->context, &error))
                 return;
-            std::fprintf(stderr, "[error] HIP Tensor context cleanup deferred: %s\n", error.message);
+            std::fprintf(stderr, "[error] HIP Tensor context cleanup deferred: %s (%d)\n", error.message, error.native_code);
             auto& queue = retirement_queue();
             std::lock_guard lock(queue.mutex);
             owner->next = std::move(queue.head);
@@ -60,7 +60,7 @@ namespace lfs::core::internal {
             std::lock_guard lock(context->mutex);
             LfsHipError error{};
             if (context->owner->module->api().buffer_release(context->owner->context, handle, &error))
-                std::fprintf(stderr, "[error] HIP Tensor buffer cleanup retained by context: %s\n", error.message);
+                std::fprintf(stderr, "[error] HIP Tensor buffer cleanup retained by context: %s (%d)\n", error.message, error.native_code);
             --context->live_buffers;
         }
     };

@@ -84,6 +84,17 @@ namespace {
             context.close();
         }
         require(faults.resources() == 0, "Explicit retry leaked native resources");
+        {
+            auto module = std::make_shared<HipRuntimeModule>(path);
+            HipRuntimeContext context(module, 0);
+            {
+                auto retained = context.allocate(16);
+                faults.arm(9);
+            }
+            require(faults.resources() != 0, "Failed buffer destruction lost its owned allocation");
+            context.close();
+        }
+        require(faults.resources() == 0, "Context failed to release retained buffer storage");
         std::weak_ptr<HipRuntimeModule> weak;
         {
             auto module = std::make_shared<HipRuntimeModule>(path);
