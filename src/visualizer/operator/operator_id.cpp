@@ -36,6 +36,8 @@ namespace lfs::vis::op {
             {"ellipsoid.fit"},
             {"ellipsoid.reset"},
             {"selection.depth_window_drag"},
+            {"crop.draw_polygon"},
+            {"crop_polygon.set"},
         }};
 
     } // namespace

@@ -97,7 +97,7 @@ namespace lfs::vis {
         [[nodiscard]] bool usesEventDrivenTitlebarDrag() const { return native_titlebar_move_available_; }
         void setFullscreen(bool fullscreen);
         void setInputController(InputController* ic);
-        [[nodiscard]] InputController* inputController() { return input_controller_; }
+        [[nodiscard]] InputController* inputController() const { return input_controller_; }
         [[nodiscard]] const FrameInputBuffer& frameInput() const { return frame_input_; }
         [[nodiscard]] const input::InputRouter& inputRouter() const { return input_router_; }
 

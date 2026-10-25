@@ -59,6 +59,16 @@ namespace lfs::vis {
         glm::mat4 node_ellipsoid_transform{1};
         glm::mat4 node_ellipsoid_falloff_transform{1};
         bool node_ellipsoid_has_falloff = false;
+        bool crop_polygon_active = false;
+        std::vector<glm::vec2> crop_polygon_vertices;
+        float crop_polygon_half_depth = 1.0f;
+        glm::mat4 crop_polygon_transform{1};
+        bool crop_polygon_affects_render = true;
+        int crop_polygon_parent_node_index = -1;
+        // Outline being drawn, in visualizer world space; the cursor point
+        // lies on the drawing plane and trails the last placed vertex.
+        std::vector<glm::vec3> crop_polygon_draft;
+        std::optional<glm::vec3> crop_polygon_draft_cursor;
     };
 
     struct FrameViewPanel {

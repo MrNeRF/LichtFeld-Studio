@@ -53,6 +53,7 @@
 #include "io/splat_chapter.hpp"
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
+#include "operator/operator_registry.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
@@ -2575,30 +2576,36 @@ contract["check_selection_submode_follows_native_mode"](lf)
     }
 
     TEST_F(VisualizerImplResetTest, CropApplyPreservesLockedTargetsAndHelpers) {
-        for (const bool ellipsoid : {false, true}) {
+        for (const std::string shape : {"box", "ellipsoid", "polygon"}) {
             for (const bool active_tool : {false, true}) {
                 for (const std::string locked_name : {"", "target", "inner", "outer"}) {
-                    SCOPED_TRACE(std::to_string(ellipsoid) + ":" + std::to_string(active_tool) + ":" + locked_name);
+                    SCOPED_TRACE(shape + ":" + std::to_string(active_tool) + ":" + locked_name);
                     VisualizerImpl viewer(projectOptions());
                     auto& scene = viewer.getScene();
                     auto* manager = viewer.getSceneManager();
                     const auto outer = scene.addGroup("outer");
                     const auto inner = scene.addGroup("inner", outer);
                     const auto target = scene.addSplat("target", lfs::test::licht::make_splat(4), inner);
-                    const auto helper = ellipsoid ? scene.addEllipsoid("helper", target) : scene.addCropBox("helper", target);
+                    lfs::core::CropPolygonData polygon;
+                    polygon.vertices = {{-0.5f, -0.5f}, {0.5f, -0.5f}, {0.5f, 0.5f}, {-0.5f, 0.5f}};
+                    polygon.half_depth = 0.5f;
+                    polygon.enabled = false;
+                    const auto helper = shape == "ellipsoid" ? scene.addEllipsoid("helper", target)
+                                        : shape == "polygon" ? scene.addCropPolygon("helper", target, polygon)
+                                                             : scene.addCropBox("helper", target);
                     scene.setNodeTransform(helper, glm::mat4(1.0f));
                     auto* volume = scene.getMutableNode("helper");
-                    if (ellipsoid) {
+                    if (shape == "ellipsoid") {
                         volume->ellipsoid->radii = glm::vec3(0.5f);
                         volume->ellipsoid->enabled = false;
-                    } else {
+                    } else if (shape == "box") {
                         volume->cropbox->min = glm::vec3(-0.5f);
                         volume->cropbox->max = glm::vec3(0.5f);
                         volume->cropbox->enabled = false;
                     }
                     manager->selectNode(target);
                     auto& gizmo = viewer.getGuiManager()->gizmo();
-                    gizmo.setCropToolShape(ellipsoid ? "ellipsoid" : "box");
+                    gizmo.setCropToolShape(shape);
                     ASSERT_TRUE(gizmo.ensureCropToolStateForRestore());
                     UnifiedToolRegistry::instance().setActiveTool(active_tool ? "builtin.cropbox" : "");
                     if (!locked_name.empty())
@@ -2607,8 +2614,10 @@ contract["check_selection_submode_follows_native_mode"](lf)
                     const auto before = scene.getNodeById(target)->model->means_raw().cpu().to_vector();
                     if (active_tool)
                         gizmo.applyActiveCropTool();
-                    else if (ellipsoid)
+                    else if (shape == "ellipsoid")
                         lfs::core::events::cmd::ApplyEllipsoid{}.emit();
+                    else if (shape == "polygon")
+                        lfs::core::events::cmd::ApplyCropPolygon{}.emit();
                     else
                         lfs::core::events::cmd::ApplyCropBox{}.emit();
                     const auto* node = scene.getNodeById(target);
@@ -2622,7 +2631,9 @@ contract["check_selection_submode_follows_native_mode"](lf)
                         EXPECT_NE(retained, nullptr);
                         if (retained) {
                             EXPECT_EQ(retained->local_transform.get(), glm::mat4(1.0f));
-                            EXPECT_FALSE(ellipsoid ? retained->ellipsoid->enabled : retained->cropbox->enabled);
+                            EXPECT_FALSE(shape == "ellipsoid" ? retained->ellipsoid->enabled
+                                         : shape == "polygon" ? retained->crop_polygon->enabled
+                                                              : retained->cropbox->enabled);
                         }
                     } else {
                         EXPECT_EQ(node->model->visible_count(), 1u);
@@ -2642,6 +2653,139 @@ contract["check_selection_submode_follows_native_mode"](lf)
                 }
             }
         }
+    }
+
+    // Drawing hides the splat's crop box so its gizmo cannot take the clicks;
+    // cancelling must hand the box, the selection and the tool back unchanged.
+    TEST_F(VisualizerImplResetTest, CancelledCropPolygonDrawRestoresTheVolumeSelectionAndTool) {
+        VisualizerImpl viewer(projectOptions());
+        auto& scene = viewer.getScene();
+        auto* manager = viewer.getSceneManager();
+        auto& gizmo = viewer.getGuiManager()->gizmo();
+        const auto target = scene.addSplat("target", lfs::test::licht::make_splat(4));
+        const auto box = scene.addCropBox("target_cropbox", target);
+        manager->selectNode(box);
+        ASSERT_EQ(UnifiedToolRegistry::instance().getActiveTool(), "builtin.cropbox");
+        ASSERT_EQ(gizmo.cropToolShape(), "box");
+        ASSERT_TRUE(scene.getNodeById(box)->visible.get());
+
+        for (const auto action : {input::Action::CANCEL_POLYGON, input::Action::UNDO_POLYGON_VERTEX}) {
+            SCOPED_TRACE(static_cast<int>(action));
+            // The toolbar picks the shape before it starts the drawing.
+            gizmo.setCropToolShape("polygon");
+            gizmo.activateCropPolygonTool();
+            ASSERT_EQ(op::operators().activeModalId(), op::to_string(op::BuiltinOp::CropPolygonDraw));
+            EXPECT_FALSE(scene.getNodeById(box)->visible.get());
+            EXPECT_EQ(manager->getSelectedNodeIds(), std::vector<lfs::core::NodeId>{target});
+
+            op::ModalEvent event{};
+            event.type = op::ModalEvent::Type::ACTION;
+            event.data = op::ActionEvent{action, 0, {0.0, 0.0}};
+            EXPECT_EQ(op::operators().dispatchModalEvent(event), op::OperatorResult::CANCELLED);
+            EXPECT_FALSE(op::operators().hasModalOperator());
+            EXPECT_TRUE(scene.getNodeById(box)->visible.get());
+            EXPECT_EQ(manager->getSelectedNodeIds(), std::vector<lfs::core::NodeId>{box});
+            EXPECT_EQ(UnifiedToolRegistry::instance().getActiveTool(), "builtin.cropbox");
+            EXPECT_EQ(gizmo.cropToolShape(), "box");
+        }
+        UnifiedToolRegistry::instance().setActiveTool("");
+        op::undoHistory().clear();
+    }
+
+    // The pie menu offers the crop actions for every crop shape, and Invert flips
+    // the selected polygon or ellipsoid in one undo step, as it does for a box.
+    TEST_F(VisualizerImplResetTest, CropPieInvertTogglesPolygonAndEllipsoidWithUndo) {
+        for (const std::string shape : {"polygon", "ellipsoid"}) {
+            SCOPED_TRACE(shape);
+            VisualizerImpl viewer(projectOptions());
+            auto& scene = viewer.getScene();
+            auto* manager = viewer.getSceneManager();
+            const auto target = scene.addSplat("target", lfs::test::licht::make_splat(4));
+            lfs::core::CropPolygonData polygon;
+            polygon.vertices = {{-0.5f, -0.5f}, {0.5f, -0.5f}, {0.5f, 0.5f}, {-0.5f, 0.5f}};
+            polygon.half_depth = 0.5f;
+            const auto volume = shape == "polygon" ? scene.addCropPolygon("volume", target, polygon)
+                                                   : scene.addEllipsoid("volume", target);
+            ASSERT_NE(volume, lfs::core::NULL_NODE);
+            const auto inverse = [&] {
+                const auto* node = scene.getNodeById(volume);
+                return shape == "polygon" ? node->crop_polygon->inverse : node->ellipsoid->inverse;
+            };
+            manager->selectNode(volume);
+            viewer.getEditorContext().update(manager, viewer.getTrainerManager());
+            op::undoHistory().clear();
+
+            // Nine crop items; sector i is centred at -90 + 40 i degrees, and Invert is the seventh.
+            auto& gizmo = viewer.getGuiManager()->gizmo();
+            const glm::vec2 centre(400.0f, 300.0f);
+            const float angle = glm::radians(-90.0f + 6.0f * 40.0f);
+            gizmo.openPieMenu(centre);
+            gizmo.onPieMenuClick(centre + 60.0f * glm::vec2(std::cos(angle), std::sin(angle)));
+            EXPECT_FALSE(gizmo.isPieMenuOpen());
+            EXPECT_TRUE(inverse());
+            EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+            ASSERT_TRUE(op::undoHistory().undo().success);
+            EXPECT_FALSE(inverse());
+            UnifiedToolRegistry::instance().setActiveTool("");
+            op::undoHistory().clear();
+        }
+    }
+
+    // The crop toolbar's Invert calls lf.ui.toggle_crop_tool_inverse(), which flips the selected crop box like the
+    // pie menu's Invert, in one undo step; get_crop_tool_inverse() gives the toggle its state.
+    TEST_F(VisualizerImplResetTest, PythonCropToolInverseTogglesTheSelectedCropBoxWithUndo) {
+        ASSERT_TRUE(lfs::python::ensure_initialized());
+        VisualizerImpl viewer(projectOptions());
+        auto& scene = viewer.getScene();
+        auto* manager = viewer.getSceneManager();
+        const auto target = scene.addSplat("target", lfs::test::licht::make_splat(4));
+        const auto box = scene.addCropBox("box", target);
+        ASSERT_NE(box, lfs::core::NULL_NODE);
+        manager->selectNode(box);
+        viewer.getEditorContext().update(manager, viewer.getTrainerManager());
+        op::undoHistory().clear();
+        {
+            const lfs::python::GilAcquire gil;
+            EXPECT_EQ(PyRun_SimpleString(R"PY(
+import lichtfeld as lf
+assert lf.ui.get_crop_tool_inverse() is False
+lf.ui.toggle_crop_tool_inverse()
+assert lf.ui.get_crop_tool_inverse() is True
+)PY"),
+                      0);
+        }
+        EXPECT_TRUE(scene.getNodeById(box)->cropbox->inverse);
+        EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_FALSE(scene.getNodeById(box)->cropbox->inverse);
+        op::undoHistory().clear();
+    }
+
+    // On layouts where the pie menu's default key prints another character (a backslash on Italian), the press
+    // reaches the pie menu by physical key. The release must match it too, or releasing over Invert does nothing.
+    TEST_F(VisualizerImplResetTest, PieMenuReleaseMatchesThePhysicalKey) {
+        VisualizerImpl viewer(projectOptions());
+        P5SessionCaptureTestAccess::initializeInputController(viewer);
+        auto& scene = viewer.getScene();
+        auto* manager = viewer.getSceneManager();
+        const auto target = scene.addSplat("target", lfs::test::licht::make_splat(4));
+        const auto volume = scene.addEllipsoid("volume", target);
+        ASSERT_NE(volume, lfs::core::NULL_NODE);
+        manager->selectNode(volume);
+        viewer.getEditorContext().update(manager, viewer.getTrainerManager());
+        op::undoHistory().clear();
+
+        auto& gizmo = viewer.getGuiManager()->gizmo();
+        const glm::vec2 centre(400.0f, 300.0f);
+        const float angle = glm::radians(-90.0f + 6.0f * 40.0f);
+        gizmo.openPieMenu(centre);
+        gizmo.onPieMenuMouseMove(centre + 60.0f * glm::vec2(std::cos(angle), std::sin(angle)));
+        viewer.getInputController()->handleKey(input::KEY_GRAVE_ACCENT, input::KEY_BACKSLASH, SDL_SCANCODE_GRAVE,
+                                               input::ACTION_RELEASE, input::KEYMOD_NONE);
+        EXPECT_FALSE(gizmo.isPieMenuOpen());
+        EXPECT_TRUE(scene.getNodeById(volume)->ellipsoid->inverse);
+        UnifiedToolRegistry::instance().setActiveTool("");
+        op::undoHistory().clear();
     }
 
     TEST_F(VisualizerImplResetTest, CropToolRejectsUnrepresentableParentTransformWithoutMutation) {
@@ -2943,6 +3087,59 @@ contract["check_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(restored->ellipsoid->radii, glm::vec3(0.75f, 0.5f, 0.25f));
         EXPECT_TRUE(restored->ellipsoid->inverse);
         EXPECT_EQ(restored->local_transform.get(), edited_transform);
+    }
+
+    // Catches the toolbar's crop box enable toggle doing nothing: lf.ui.ops.invoke must hand its keyword arguments
+    // to the C++ crop_box.set operator, which flips the flag in one undo step.
+    TEST_F(CropVolumeSourceTest, PythonOpsInvokeTogglesCropBoxEnabledWithUndo) {
+        ASSERT_TRUE(lfs::python::ensure_initialized());
+        VisualizerImpl viewer(projectOptions());
+        const auto splat_id = open(viewer);
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        const auto cropbox_id = cap::ensureCropBox(*viewer.getSceneManager(), viewer.getRenderingManager(), splat_id);
+        ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+        const auto* const node = viewer.getScene().getNodeById(*cropbox_id);
+        ASSERT_TRUE(node->cropbox->enabled);
+        {
+            const lfs::python::GilAcquire gil;
+            const auto script = std::format(R"PY(
+import lichtfeld as lf
+assert lf.ui.ops.invoke("crop_box.set", node="{}", enabled=False).finished
+)PY",
+                                            node->name);
+            EXPECT_EQ(PyRun_SimpleString(script.c_str()), 0);
+        }
+        EXPECT_FALSE(viewer.getScene().getNodeById(*cropbox_id)->cropbox->enabled);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_TRUE(viewer.getScene().getNodeById(*cropbox_id)->cropbox->enabled);
+    }
+
+    // Catches the toolbar's enable toggle for a crop polygon doing nothing: lf.ui.ops.invoke must hand its keyword
+    // arguments to the C++ crop_polygon.set operator, which flips the flag in one undo step.
+    TEST_F(CropVolumeSourceTest, PythonOpsInvokeTogglesCropPolygonEnabledWithUndo) {
+        ASSERT_TRUE(lfs::python::ensure_initialized());
+        VisualizerImpl viewer(projectOptions());
+        const auto splat_id = open(viewer);
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        const auto polygon_id = cap::createCropPolygon(
+            *viewer.getSceneManager(), viewer.getRenderingManager(), splat_id,
+            lfs::core::CropPolygonData{.vertices = {{-1.0f, -1.0f}, {1.0f, -1.0f}, {0.0f, 1.0f}}, .half_depth = 1.0f},
+            glm::mat4(1.0f));
+        ASSERT_TRUE(polygon_id);
+        const auto& polygon = *viewer.getScene().getNodeById(*polygon_id)->crop_polygon;
+        ASSERT_TRUE(polygon.enabled);
+        {
+            const lfs::python::GilAcquire gil;
+            const auto script = std::format(R"PY(
+import lichtfeld as lf
+assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
+)PY",
+                                            viewer.getScene().getNodeById(*polygon_id)->name);
+            EXPECT_EQ(PyRun_SimpleString(script.c_str()), 0);
+        }
+        EXPECT_FALSE(polygon.enabled);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_TRUE(viewer.getScene().getNodeById(*polygon_id)->crop_polygon->enabled);
     }
 
     TEST_F(CropVolumeSourceTest, CropBoxUndoRedoMarksProjectModified) {

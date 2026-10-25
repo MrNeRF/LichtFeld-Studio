@@ -19,6 +19,7 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 #include <vulkan/vulkan.h>
@@ -38,6 +39,7 @@ namespace lfs::vis {
         using RenderRequest = PointSceneRenderer::RenderRequest;
         using CropBox = PointSceneRenderer::CropBox;
         using CropEllipsoid = PointSceneRenderer::CropEllipsoid;
+        using CropPolygon = PointSceneRenderer::CropPolygon;
 
         static constexpr float kDepthSamplePending = PointSceneRenderer::kDepthSamplePending;
         using DepthSampleRequest = PointSceneRenderer::DepthSampleRequest;

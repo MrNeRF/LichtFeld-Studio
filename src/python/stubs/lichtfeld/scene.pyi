@@ -153,6 +153,8 @@ class NodeType(enum.Enum):
 
     KEYFRAME = 12
 
+    CROP_POLYGON = 14
+
 class MeshInfo:
     @property
     def vertex_count(self) -> int: ...
@@ -262,6 +264,31 @@ class PointCloudUpdateTicket:
         """
         Cancel before publication. In-flight source memory remains retained until inputs_released.
         """
+
+class CropPolygon:
+    @property
+    def __property_group__(self) -> str:
+        """Property group name for introspection"""
+
+    @property
+    def vertices(self) -> list[tuple[float, float]]:
+        """Outline vertices (x, y) in the node's local XY plane"""
+
+    def get(self, name: str) -> object:
+        """Get property value by name"""
+
+    def set(self, name: str, value: object) -> None:
+        """Set property value by name"""
+
+    def prop_info(self, name: str) -> dict:
+        """Get metadata for a property"""
+
+    def __getattr__(self, arg: str, /) -> object: ...
+
+    def __setattr__(self, arg0: str, arg1: object, /) -> None: ...
+
+    def __dir__(self) -> list:
+        """List available attributes"""
 
 class PointCloud:
     """
@@ -404,6 +431,9 @@ class SceneNode:
 
     def ellipsoid(self) -> Ellipsoid | None:
         """Get Ellipsoid for ELLIPSOID nodes (None otherwise)"""
+
+    def crop_polygon(self) -> CropPolygon | None:
+        """Get CropPolygon for CROP_POLYGON nodes (None otherwise)"""
 
     def keyframe_data(self) -> KeyframeData | None:
         """Get KeyframeData for KEYFRAME nodes (None otherwise)"""
@@ -629,7 +659,7 @@ class Scene:
 
     def apply_crop_filter(self, mask: lichtfeld.Tensor) -> None:
         """
-        Filter a combined-model GPU bool mask in place by enabled render crop boxes and ellipsoids. Scene selection is unchanged.
+        Filter a combined-model GPU bool mask in place by enabled render crop boxes, ellipsoids and polygons. Scene selection is unchanged.
         """
 
     def training_model(self) -> SplatData | None:

@@ -1743,65 +1743,6 @@ namespace lfs::vis::project {
             }
         }
 
-        void resolveParameterPathReferences(
-            const lfs::io::project::ReferencesChapter&
-                references,
-            const std::filesystem::path& project_root,
-            lfs::io::project::ParameterManagerSnapshot&
-                snapshot) {
-            using Role = std::tuple<
-                lfs::core::param::OptimizationParameters*,
-                const lfs::io::project::
-                    ParameterManagerSnapshot::
-                        ReferenceBindings*>;
-            const std::array roles{
-                Role{&snapshot.mcmc_session,
-                     &snapshot.mcmc_session_references},
-                Role{&snapshot.mrnf_session,
-                     &snapshot.mrnf_session_references},
-                Role{&snapshot.igs_session,
-                     &snapshot.igs_session_references},
-                Role{&snapshot.mcmc_current,
-                     &snapshot.mcmc_current_references},
-                Role{&snapshot.mrnf_current,
-                     &snapshot.mrnf_current_references},
-                Role{&snapshot.igs_current,
-                     &snapshot.igs_current_references},
-            };
-            for (const auto& [params, bindings] :
-                 roles) {
-                if (bindings
-                        ->background_image_reference) {
-                    if (auto resolved =
-                            lfs::io::project::
-                                resolve_path_reference(
-                                    references,
-                                    project_root,
-                                    *bindings
-                                         ->background_image_reference,
-                                    params
-                                        ->bg_image_path)) {
-                        params->bg_image_path =
-                            *resolved;
-                    }
-                }
-                if (bindings->ppisp_reference) {
-                    if (auto resolved =
-                            lfs::io::project::
-                                resolve_path_reference(
-                                    references,
-                                    project_root,
-                                    *bindings
-                                         ->ppisp_reference,
-                                    params
-                                        ->ppisp_sidecar_path)) {
-                        params->ppisp_sidecar_path =
-                            *resolved;
-                    }
-                }
-            }
-        }
-
         [[nodiscard]] std::vector<lfs::core::Uuid>
         selectedNodeUuids(VisualizerImpl& viewer);
 
@@ -8423,7 +8364,7 @@ namespace lfs::vis::project {
             return lfs::Status::failure(
                 std::move(parameters).error());
         }
-        resolveParameterPathReferences(
+        lfs::io::project::resolve_parameter_path_references(
             candidate->references(), project_root,
             *parameters);
         auto* parameter_manager =

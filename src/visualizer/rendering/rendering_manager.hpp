@@ -689,6 +689,33 @@ namespace lfs::vis {
             gizmo_state_.ellipsoid_affects_render = affects_render;
             gizmo_state_.ellipsoid_parent_node_index = parent_node_index;
         }
+        void setCropPolygonGizmoState(bool active, const std::vector<glm::vec2>& vertices, float half_depth,
+                                      const glm::mat4& world_transform, bool affects_render,
+                                      int parent_node_index) {
+            gizmo_state_.crop_polygon_active = active;
+            gizmo_state_.crop_polygon_affects_render = affects_render;
+            gizmo_state_.crop_polygon_parent_node_index = parent_node_index;
+            if (active) {
+                gizmo_state_.crop_polygon_vertices = vertices;
+                gizmo_state_.crop_polygon_half_depth = half_depth;
+                gizmo_state_.crop_polygon_transform = world_transform;
+            } else {
+                gizmo_state_.crop_polygon_vertices.clear();
+            }
+        }
+        void setCropPolygonGizmoActive(bool active) {
+            gizmo_state_.crop_polygon_active = active;
+            if (!active) {
+                gizmo_state_.crop_polygon_vertices.clear();
+                gizmo_state_.crop_polygon_affects_render = true;
+                gizmo_state_.crop_polygon_parent_node_index = -1;
+            }
+        }
+        // Polygon outline being drawn (visualizer world); empty clears the preview.
+        void setCropPolygonDraft(std::vector<glm::vec3> points, std::optional<glm::vec3> cursor) {
+            gizmo_state_.crop_polygon_draft = std::move(points);
+            gizmo_state_.crop_polygon_draft_cursor = cursor;
+        }
         void setCropboxGizmoActive(bool active) { gizmo_state_.cropbox_active = active; }
         void setEllipsoidGizmoActive(bool active) { gizmo_state_.ellipsoid_active = active; }
         // Return whether the drawn state changed, so callers redraw only then.

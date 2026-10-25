@@ -418,6 +418,8 @@ namespace lfs::vis {
                 return "CropBox";
             case core::NodeType::ELLIPSOID:
                 return "Ellipsoid";
+            case core::NodeType::CROP_POLYGON:
+                return "CropPolygon";
             case core::NodeType::IMAGE_GROUP:
                 return "ImageGroup";
             case core::NodeType::IMAGE:
@@ -840,6 +842,14 @@ namespace lfs::vis {
 
         event_handlers_.subscribe<cmd::CropPLYEllipsoid>([this](const auto& cmd) {
             handleCropByEllipsoid(cmd.world_transform, cmd.radii, cmd.inverse, cmd.target_node_id);
+        });
+
+        event_handlers_.subscribe<cmd::CropPLYPolygon>([this](const auto& cmd) {
+            core::CropPolygonData polygon;
+            polygon.vertices = cmd.vertices;
+            polygon.half_depth = cmd.half_depth;
+            polygon.inverse = cmd.inverse;
+            handleCropByPolygon(cmd.world_transform, polygon, cmd.target_node_id);
         });
 
         event_handlers_.subscribe<cmd::FitCropBoxToScene>([this](const auto& cmd) {
@@ -1874,7 +1884,8 @@ namespace lfs::vis {
         const core::NodeId removed_parent_id = node_to_remove->parent_id;
         const core::NodeType removed_type = node_to_remove->type;
         const bool removed_selected_crop_volume =
-            (removed_type == core::NodeType::CROPBOX || removed_type == core::NodeType::ELLIPSOID) &&
+            (removed_type == core::NodeType::CROPBOX || removed_type == core::NodeType::ELLIPSOID ||
+             removed_type == core::NodeType::CROP_POLYGON) &&
             selection_.isNodeSelected(id);
         bool removes_camera_nodes = false;
         bool removes_scene_model_resources =
@@ -3146,6 +3157,51 @@ namespace lfs::vis {
         return single_id;
     }
 
+    core::NodeId SceneManager::getSelectedNodeCropPolygonId() const {
+        std::shared_lock slock(selection_.mutex());
+        const auto& ids = selection_.selectedNodeIds();
+        if (ids.empty())
+            return core::NULL_NODE;
+
+        const auto* node = scene_.getNodeById(*ids.begin());
+        if (!node)
+            return core::NULL_NODE;
+        if (node->type == core::NodeType::CROP_POLYGON)
+            return node->id;
+        return node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD
+                   ? scene_.getCropPolygonForSplat(node->id)
+                   : core::NULL_NODE;
+    }
+
+    core::NodeId SceneManager::getActiveSelectionCropPolygonId() const {
+        const auto renderable_polygons = scene_.getRenderableCropPolygons();
+
+        const core::NodeId selected_polygon_id = getSelectedNodeCropPolygonId();
+        if (selected_polygon_id != core::NULL_NODE &&
+            containsEnabledScopedRenderableNode(renderable_polygons, selected_polygon_id)) {
+            return selected_polygon_id;
+        }
+
+        std::shared_lock slock(selection_.mutex());
+        const auto& ids = selection_.selectedNodeIds();
+        if (!ids.empty()) {
+            return core::NULL_NODE;
+        }
+
+        core::NodeId single_id = core::NULL_NODE;
+        for (const auto& polygon : renderable_polygons) {
+            if (!polygon.data || !polygon.data->enabled || polygon.parent_node_index < 0) {
+                continue;
+            }
+            if (single_id != core::NULL_NODE) {
+                return core::NULL_NODE;
+            }
+            single_id = polygon.node_id;
+        }
+
+        return single_id;
+    }
+
     void SceneManager::syncDatasetCameraFrustumsToRenderSettings() {
         auto* rm = services().renderingOrNull();
         if (!rm || scene_.getAllCameras().empty())
@@ -4019,6 +4075,10 @@ namespace lfs::vis {
         for (auto& ellipsoid : state.ellipsoids) {
             ellipsoid.world_transform = rendering::dataWorldTransformToVisualizerWorld(ellipsoid.world_transform);
         }
+        state.crop_polygons = scene_.getRenderableCropPolygons();
+        for (auto& polygon : state.crop_polygons) {
+            polygon.world_transform = rendering::dataWorldTransformToVisualizerWorld(polygon.world_transform);
+        }
 
         // Read selection-dependent state
         {
@@ -4162,7 +4222,8 @@ namespace lfs::vis {
             if (!selected)
                 return;
 
-            if (selected->type == core::NodeType::CROPBOX || selected->type == core::NodeType::ELLIPSOID) {
+            if (selected->type == core::NodeType::CROPBOX || selected->type == core::NodeType::ELLIPSOID ||
+                selected->type == core::NodeType::CROP_POLYGON) {
                 selected = scene_.getNodeById(selected->parent_id);
                 if (!selected)
                     return;
@@ -4360,7 +4421,8 @@ namespace lfs::vis {
             if (!selected)
                 return;
 
-            if (selected->type == core::NodeType::CROPBOX || selected->type == core::NodeType::ELLIPSOID) {
+            if (selected->type == core::NodeType::CROPBOX || selected->type == core::NodeType::ELLIPSOID ||
+                selected->type == core::NodeType::CROP_POLYGON) {
                 selected = scene_.getNodeById(selected->parent_id);
                 if (!selected)
                     return;
@@ -4509,6 +4571,113 @@ namespace lfs::vis {
         op::pushSceneSnapshotIfChanged(std::move(snapshot));
 
         scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+    }
+
+    void SceneManager::handleCropByPolygon(const glm::mat4& world_transform,
+                                           const core::CropPolygonData& polygon,
+                                           const core::NodeId target_node_id) {
+        const auto* target = scene_.getNodeById(target_node_id);
+        if (target && target->type == core::NodeType::CROP_POLYGON)
+            target = scene_.getNodeById(target->parent_id);
+        if (target && target->type == core::NodeType::POINTCLOUD) {
+            cropPointCloudByPolygon(target->id, world_transform, polygon);
+            return;
+        }
+        if (target && target->type == core::NodeType::SPLAT && target->model_streamed) {
+            LOG_WARN("'{}' is a streamed model and cannot be edited.", target->name);
+            return;
+        }
+        if (!target || target->type != core::NodeType::SPLAT || !target->model)
+            return;
+        if (!canApplyCropToNode(target->id))
+            return;
+
+        const std::string node_name = target->name;
+        changeContentType(ContentType::SplatFiles);
+
+        auto snapshot = std::make_unique<op::SceneSnapshot>(*this, "Crop Polygon");
+        snapshot->captureTopology();
+
+        auto* node = scene_.getMutableNode(node_name);
+        try {
+            const size_t original_visible = node->model->visible_count();
+            const glm::mat4 world_to_local =
+                glm::inverse(world_transform) * scene_coords::nodeDataWorldTransform(scene_, node->id);
+            const auto applied_mask = lfs::core::soft_crop_by_polygon(*node->model, world_to_local, polygon);
+            const size_t new_visible = node->model->visible_count();
+            LOG_INFO("Polygon cropped '{}': {} -> {} visible", node_name, original_visible, new_visible);
+            if (applied_mask.is_valid() && new_visible != original_visible) {
+                scene_.markPayloadDiverged(node->id);
+                state::PLYAdded{
+                    .name = node_name,
+                    .uuid = node->uuid,
+                    .node_gaussians = new_visible,
+                    .total_gaussians = scene_.getTotalGaussianCount(),
+                    .is_visible = true,
+                    .parent_name = "",
+                    .is_group = false,
+                    .node_type = static_cast<int>(core::NodeType::SPLAT)}
+                    .emit();
+            }
+        } catch (const std::exception& e) {
+            LOG_ERROR("Failed to polygon crop '{}': {}", node_name, e.what());
+        }
+
+        snapshot->captureAfter();
+        op::pushSceneSnapshotIfChanged(std::move(snapshot));
+
+        scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+    }
+
+    void SceneManager::cropPointCloudByPolygon(const core::NodeId node_id,
+                                               const glm::mat4& world_transform,
+                                               const core::CropPolygonData& polygon) {
+        const auto* target = scene_.getNodeById(node_id);
+        if (!target || !target->point_cloud || target->point_cloud->size() == 0 ||
+            !core::crop_polygon::isValidOutline(polygon.vertices) ||
+            !core::crop_polygon::isValidHalfDepth(polygon.half_depth))
+            return;
+
+        // A hard filter like the box and ellipsoid crops of point clouds. One history entry
+        // restores the points and the polygon the crop disables.
+        const std::string node_name = target->name;
+        const op::SceneGraphCaptureOptions history_options{
+            .mode = op::SceneGraphCaptureMode::FULL,
+            .include_selected_nodes = false,
+            .include_scene_context = false,
+        };
+        auto history_before = op::SceneGraphPatchEntry::captureState(*this, {node_name}, history_options);
+
+        auto* node = scene_.getMutableNode(node_name);
+        const auto& means = node->point_cloud->means;
+        const size_t num_points = node->point_cloud->size();
+        const glm::mat4 points_to_polygon =
+            glm::inverse(world_transform) * scene_coords::nodeDataWorldTransform(scene_, node->id);
+        auto mask = lfs::core::compute_crop_polygon_mask(means, polygon.vertices, polygon.half_depth, points_to_polygon);
+        if (polygon.inverse)
+            mask = mask.logical_not();
+        const auto indices = mask.nonzero().squeeze(1);
+        const size_t filtered_count = indices.size(0);
+        if (filtered_count == 0 || filtered_count == num_points)
+            return;
+
+        node->point_cloud = std::make_shared<lfs::core::PointCloud>(
+            means.index_select(0, indices), node->point_cloud->colors.index_select(0, indices));
+        node->gaussian_count.store(filtered_count, std::memory_order_release);
+        scene_.markPayloadDiverged(node->id);
+        LOG_INFO("Polygon cropped PointCloud '{}': {} -> {} points", node_name, num_points, filtered_count);
+
+        // Like the crop box, the polygon stops filtering the cloud it cropped.
+        if (auto* const data = scene_.getCropPolygonData(scene_.getCropPolygonForSplat(node->id)))
+            data->enabled = false;
+
+        op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
+            *this, "Crop Polygon", std::move(history_before),
+            op::SceneGraphPatchEntry::captureState(*this, {node_name}, history_options)));
+        scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        if (services().renderingOrNull())
+            services().renderingOrNull()->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY,
+                                                    lfs::vis::FrameReason::SceneChange);
     }
 
     size_t SceneManager::applyDeleted() {
@@ -5399,7 +5568,10 @@ namespace lfs::vis {
         if (!target)
             return;
         const core::NodeId parent_id =
-            (target->type == core::NodeType::CROPBOX || target->type == core::NodeType::ELLIPSOID) ? target->parent_id : node_id;
+            (target->type == core::NodeType::CROPBOX || target->type == core::NodeType::ELLIPSOID ||
+             target->type == core::NodeType::CROP_POLYGON)
+                ? target->parent_id
+                : node_id;
 
         auto cropbox_id = cap::ensureCropBox(*this, services().renderingOrNull(), parent_id);
         if (!cropbox_id) {
@@ -5437,7 +5609,10 @@ namespace lfs::vis {
         if (!target)
             return;
         const core::NodeId parent_id =
-            (target->type == core::NodeType::CROPBOX || target->type == core::NodeType::ELLIPSOID) ? target->parent_id : node_id;
+            (target->type == core::NodeType::CROPBOX || target->type == core::NodeType::ELLIPSOID ||
+             target->type == core::NodeType::CROP_POLYGON)
+                ? target->parent_id
+                : node_id;
 
         auto ellipsoid_id = cap::ensureEllipsoid(*this, services().renderingOrNull(), parent_id);
         if (!ellipsoid_id) {
@@ -5917,7 +6092,8 @@ namespace lfs::vis {
                     continue;
                 if (node->type == core::NodeType::SPLAT && node->model)
                     nodes.push_back(node);
-                else if (node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID)
+                else if (node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID ||
+                         node->type == core::NodeType::CROP_POLYGON)
                     pending.push_back(node->parent_id);
                 else
                     pending.insert(pending.end(), node->children.begin(), node->children.end());
@@ -6224,7 +6400,8 @@ namespace lfs::vis {
             std::shared_lock slock(selection_.mutex());
             for (const auto node_id : selection_.selectedNodeIds()) {
                 const auto* node = scene_.getNodeById(node_id);
-                if (node && (node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID)) {
+                if (node && (node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID ||
+                             node->type == core::NodeType::CROP_POLYGON)) {
                     return true;
                 }
             }

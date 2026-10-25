@@ -178,7 +178,8 @@ namespace lfs::vis::gui {
         items_.clear();
 
         const auto node_type = editor.getSelectedNodeType();
-        if (node_type == core::NodeType::CROPBOX || node_type == core::NodeType::ELLIPSOID) {
+        if (node_type == core::NodeType::CROPBOX || node_type == core::NodeType::ELLIPSOID ||
+            node_type == core::NodeType::CROP_POLYGON) {
             items_.reserve(CROP_COUNT);
             for (const auto& entry : CROP_ITEMS) {
                 PieMenuItem item;

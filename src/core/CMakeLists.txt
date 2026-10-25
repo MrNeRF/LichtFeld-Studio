@@ -242,6 +242,7 @@ set(CORE_SOURCES
         camera.cpp
         undistort_params.cpp
         checkpoint_format.cpp
+        crop_polygon.cpp
         image_loader.cpp
         cuda_version.cpp
         image_io.cpp
