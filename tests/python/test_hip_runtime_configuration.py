@@ -89,16 +89,17 @@ class HipConfiguration(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
                 self.assertIn("ordinal in 0..2147483647", result.stderr)
 
-    def test_module_revision_is_checked_before_transfer_exports(self):
+    def test_module_revision_is_checked_before_operator_exports(self):
         script = ROOT / "tests/hip/test_native_runtime.py"
         spec = importlib.util.spec_from_file_location("native_abi_contract", script)
         native = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(native)
-        foundation_only = argparse.Namespace(lfs_hip_runtime_abi=lambda: 1)
         native.options = argparse.Namespace(module=Path("unused-module"), faults=False)
-        with mock.patch.object(native.c, "CDLL", return_value=foundation_only):
-            with self.assertRaisesRegex(RuntimeError, "ABI mismatch: expected 2, got 1"):
-                native.RuntimeContract.setUpClass()
+        for revision in (1, 2):
+            older_module = argparse.Namespace(lfs_hip_runtime_abi=lambda: revision)
+            with self.subTest(revision=revision), mock.patch.object(native.c, "CDLL", return_value=older_module):
+                with self.assertRaisesRegex(RuntimeError, f"ABI mismatch: expected 3, got {revision}"):
+                    native.RuntimeContract.setUpClass()
 
     def test_abi_only_requires_the_native_module(self):
         result = subprocess.run([

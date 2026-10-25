@@ -49,9 +49,10 @@ kept alive for the duration of the test. It does not modify PATH or the process-
 DLL search policy. This developer setup does not package SDK libraries. Application
 loading and distribution integration are separate work.
 
-The private C ABI revision is `LFS_HIP_RUNTIME_ABI_VERSION` (currently 2), returned
+The private C ABI revision is `LFS_HIP_RUNTIME_ABI_VERSION` (currently 3), returned
 by `lfs_hip_runtime_abi()`. Revision 1 provided only the foundation; revision 2
-adds owned asynchronous transfers. A future loader must check the exact revision
+adds owned asynchronous transfers, and revision 3 adds native Tensor operators.
+A future loader must check the exact revision
 before binding revision-specific exports; the boundary is private and does not
 promise binary compatibility between revisions.
 
@@ -105,7 +106,8 @@ installation is required. The pip download cache avoids downloading the SDK
 again when the runner can restore it. This compile check follows the existing
 Ubuntu workflow triggers. A lightweight path check gates the SDK job: only changes
 in `cmake/hip-native/`, `src/core/tensor/backend/hip/`, `tests/hip/`, their CMake
-architecture/compression helpers, configuration/filter tests, the filter script
+architecture/compression helpers, shared pointwise catalog/functors, native
+configuration/filter/generator tests, the filter script
 or this Ubuntu workflow enable it. Pull requests compare against their merge
 base; pushes compare before/after trees, including deleted and renamed paths.
 Manual dispatch and the first push of a branch run the check unconditionally.

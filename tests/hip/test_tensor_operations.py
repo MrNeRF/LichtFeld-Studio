@@ -120,7 +120,7 @@ class TensorOperations(native.RuntimeContract):
 
     def test_exported_operator_boundary_without_gpu_queries(self):
         self.assertGreaterEqual(len(self.calls), 60)
-        self.assertEqual(self.calls["runtime_abi"](), 1)
+        self.assertEqual(self.calls["runtime_abi"](), native.EXPECTED_ABI)
 
     @contextmanager
     def resources(self):
