@@ -44,7 +44,7 @@ jobs:
     needs: hip-native-changes
     if: needs.hip-native-changes.outputs.changed == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 90
     permissions:
       contents: read
     env:
@@ -66,10 +66,21 @@ jobs:
         run: |
           python -m pip install --index-url https://pypi.org/simple 'cmake==4.4.0'
           sudo apt-get update
-          sudo apt-get install -y g++ ninja-build
+          sudo apt-get install -y g++ ninja-build curl unzip
 
       - name: Install pinned ROCm development SDK
         run: python -m pip install -r cmake/hip-native/ci-requirements.txt
+
+      - name: Install pinned Slang source-generation compiler
+        run: |
+          curl --fail --location --retry 3 \
+            https://github.com/shader-slang/slang/releases/download/v2026.5/slang-2026.5-linux-x86_64.zip \
+            -o "$RUNNER_TEMP/hip-slang.zip"
+          printf '%s  %s\n' 11d3327ced3f18aacd94e062acb23848e5aca4c52f80306133ecf09f4a49a75659266475a19fc5efb81b90889d6c82d18d53367338e714f5c66accbe089f9498 "$RUNNER_TEMP/hip-slang.zip" | sha512sum --check -
+          mkdir -p "$RUNNER_TEMP/hip-slang"
+          unzip -q "$RUNNER_TEMP/hip-slang.zip" -d "$RUNNER_TEMP/hip-slang"
+          chmod +x "$RUNNER_TEMP/hip-slang/bin/slangc"
+          echo "$RUNNER_TEMP/hip-slang/bin" >> "$GITHUB_PATH"
 
       - name: Compile native HIP module for all declared targets
         run: |

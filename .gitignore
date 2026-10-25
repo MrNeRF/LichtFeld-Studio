@@ -63,6 +63,7 @@ tests/data/nn/*
 !docs/plugins/examples/**/*.py
 !docs/docs/development/node-graph/examples/*.py
 !tools/*.py
+!src/core/tensor/backend/hip/prepare_*.py
 !tools/nn_export/export_lpips_weights.py
 .venv/
 *.png

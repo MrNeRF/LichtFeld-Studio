@@ -10,7 +10,22 @@ namespace lfs::core::internal {
             std::shared_ptr<HipRuntimeModule> module;
             LfsHipContext* context = nullptr;
             std::unique_ptr<ContextOwner> next;
+            std::unique_ptr<HipRetiredResource> resources;
         };
+        int drain_resources(ContextOwner& owner, LfsHipError& error) noexcept {
+            while (owner.resources) {
+                auto& node = *owner.resources;
+                const auto& api = owner.module->api();
+                const int status = node.kind == HipRetiredResource::Kind::Readback
+                                       ? api.readback_destroy(owner.context, static_cast<LfsHipReadback*>(node.handle), &error)
+                                       : api.timing_destroy(owner.context, static_cast<LfsHipTiming*>(node.handle), &error);
+                if (status)
+                    return status;
+                auto released = std::move(owner.resources);
+                owner.resources = std::move(released->next);
+            }
+            return 0;
+        }
         struct RetirementQueue {
             std::mutex mutex;
             std::unique_ptr<ContextOwner> head;
@@ -40,7 +55,7 @@ namespace lfs::core::internal {
             if (!owner->context)
                 return;
             LfsHipError error{};
-            if (!owner->module->api().context_destroy(owner->context, &error))
+            if (!drain_resources(*owner, error) && !owner->module->api().context_destroy(owner->context, &error))
                 return;
             std::fprintf(stderr, "[error] HIP Tensor context cleanup deferred: %s (%d)\n", error.message, error.native_code);
             auto& queue = retirement_queue();
@@ -116,8 +131,30 @@ namespace lfs::core::internal {
         if (state_->live_buffers)
             throw std::logic_error("HIP Tensor context still has live buffer leases");
         LfsHipError error{};
+        hip_runtime_check(drain_resources(*state_->owner, error), error, "retired_resource_release");
         hip_runtime_check(state_->owner->module->api().context_destroy(state_->owner->context, &error), error, "context_destroy");
         state_->owner->context = nullptr;
+    }
+
+    void HipRuntimeContext::release_readback(LfsHipReadback* handle, std::unique_ptr<HipRetiredResource> node) noexcept {
+        std::lock_guard lock(state_->mutex);
+        node->kind = HipRetiredResource::Kind::Readback;
+        node->handle = handle;
+        node->next = std::move(state_->owner->resources);
+        state_->owner->resources = std::move(node);
+        LfsHipError error{};
+        if (drain_resources(*state_->owner, error))
+            std::fprintf(stderr, "[error] HIP Tensor readback cleanup deferred: %s (%d)\n", error.message, error.native_code);
+    }
+    void HipRuntimeContext::release_timing(LfsHipTiming* handle, std::unique_ptr<HipRetiredResource> node) noexcept {
+        std::lock_guard lock(state_->mutex);
+        node->kind = HipRetiredResource::Kind::Timing;
+        node->handle = handle;
+        node->next = std::move(state_->owner->resources);
+        state_->owner->resources = std::move(node);
+        LfsHipError error{};
+        if (drain_resources(*state_->owner, error))
+            std::fprintf(stderr, "[error] HIP Tensor timing cleanup deferred: %s (%d)\n", error.message, error.native_code);
     }
 
     size_t HipRuntimeBuffer::bytes() const noexcept { return state_ ? state_->size : 0; }
@@ -156,7 +193,7 @@ namespace lfs::core::internal {
         while (*node) {
             LfsHipError error{};
             auto& owner = **node;
-            if (!owner.module->api().context_destroy(owner.context, &error)) {
+            if (!drain_resources(owner, error) && !owner.module->api().context_destroy(owner.context, &error)) {
                 auto released = std::move(*node);
                 *node = std::move(released->next);
             } else {

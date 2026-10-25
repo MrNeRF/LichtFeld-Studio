@@ -53,7 +53,11 @@ class HipCiFilter(unittest.TestCase):
                      "tests/python/test_hip_pointwise_generation.py",
                      "cmake/hip-host/CMakeLists.txt", "tests/python/test_hip_host_contracts.py",
                      "src/core/include/core/detail/pointwise_ops.def",
-                     "src/core/include/core/detail/tensor_functors.hpp"):
+                     "src/core/include/core/detail/tensor_functors.hpp",
+                     "src/core/tensor/backend/vulkan/shaders/inference.slang",
+                     "src/core/cuda/undistort/distortion_model.cuh",
+                     "src/core/tensor/backend/metal/expression_msl.cpp",
+                     "src/io/cuda/image_format_kernels.cu"):
             with self.subTest(path=path):
                 self.write(path)
                 head = self.commit()

@@ -21,6 +21,15 @@ namespace lfs::core::internal {
     struct HipBufferState;
     class HipRuntimeContext;
 
+    // Allocate the node before acquiring a native resource. Destruction can
+    // then retain a failed release without allocating in a noexcept path.
+    struct HipRetiredResource {
+        enum class Kind { Readback,
+                          Timing } kind = Kind::Readback;
+        void* handle = nullptr;
+        std::unique_ptr<HipRetiredResource> next;
+    };
+
     class HipRuntimeBuffer {
     public:
         HipRuntimeBuffer() = default;
@@ -59,6 +68,8 @@ namespace lfs::core::internal {
         void synchronize() const;
         void close(); // Rejects live buffer leases, rather than invalidating them.
         static size_t retry_retired_contexts();
+        void release_readback(LfsHipReadback*, std::unique_ptr<HipRetiredResource>) noexcept;
+        void release_timing(LfsHipTiming*, std::unique_ptr<HipRetiredResource>) noexcept;
 
     private:
         std::shared_ptr<HipContextState> state_;

@@ -11,7 +11,7 @@ import re
 import struct
 import unittest
 
-EXPECTED_ABI = 3
+EXPECTED_ABI = 4
 options = None
 
 

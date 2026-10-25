@@ -29,13 +29,29 @@ namespace lfs::core::internal {
         }
     } // namespace
 
-    HipRuntimeModule::HipRuntimeModule(const std::filesystem::path& path) {
+    HipRuntimeModule::HipRuntimeModule(const std::filesystem::path& path, const std::filesystem::path& startup_dependency) {
         if (!path.is_absolute())
             throw std::invalid_argument("HIP runtime module requires an absolute path");
 #ifdef _WIN32
-        module_ = LoadLibraryExW(path.c_str(), nullptr,
-                                 LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+        constexpr auto flags = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
+        HMODULE startup = nullptr;
+        if (!startup_dependency.empty()) {
+            if (!startup_dependency.is_absolute())
+                throw std::invalid_argument("HIP startup dependency requires an absolute path");
+            // HIPRTC must be initialized before the combined module registers
+            // device images when the executable is in another directory.
+            startup = LoadLibraryExW(startup_dependency.c_str(), nullptr, flags);
+            if (!startup)
+                throw std::runtime_error("Cannot load HIP startup dependency: " + loader_error());
+        }
+        module_ = LoadLibraryExW(path.c_str(), nullptr, flags);
+        const auto error = GetLastError();
+        if (startup)
+            FreeLibrary(startup); // The module's import owns the successful dependency.
+        SetLastError(error);
 #else
+        if (!startup_dependency.empty())
+            throw std::invalid_argument("Explicit HIP startup dependencies are Windows-only");
         module_ = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
 #endif
         if (!module_)

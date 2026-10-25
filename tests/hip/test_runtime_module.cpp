@@ -36,14 +36,23 @@ int main(int argc, char** argv) {
         if (!rejected_relative)
             throw std::runtime_error("Relative module path was accepted");
         const auto path = std::filesystem::path(argv[1]);
+        bool rejected_dependency = false;
+        try {
+            HipRuntimeModule invalid(path, "relative-startup-dependency");
+        } catch (const std::invalid_argument&) {
+            rejected_dependency = true;
+        }
+        if (!rejected_dependency)
+            throw std::runtime_error("Relative startup dependency was accepted");
         if (revision) {
-            const std::string expected = revision == 3 ? "Missing HIP runtime export: lfs_hip_device_count"
-                                                       : "HIP runtime ABI mismatch: expected 3, got " + std::to_string(revision);
+            const std::string expected = revision == LFS_HIP_RUNTIME_ABI_VERSION ? "Missing HIP runtime export: lfs_hip_device_count"
+                                                                                 : "HIP runtime ABI mismatch: expected 4, got " + std::to_string(revision);
             auto checked_path = path;
             if (revision == 1) {
                 checked_path = path.parent_path() / std::filesystem::path(u8"Unicode-\u00e9-\u6e2c\u8a66") / path.filename();
-                std::filesystem::create_directories(checked_path.parent_path());
-                std::filesystem::copy_file(path, checked_path, std::filesystem::copy_options::overwrite_existing);
+                if (!std::filesystem::create_directory(checked_path.parent_path()))
+                    throw std::runtime_error("Refusing to overwrite an existing Unicode fixture directory");
+                std::filesystem::copy_file(path, checked_path);
             }
             const auto actual = rejection(checked_path);
             if (revision == 1)

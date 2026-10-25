@@ -95,6 +95,31 @@ namespace {
             context.close();
         }
         require(faults.resources() == 0, "Context failed to release retained buffer storage");
+        for (const bool timing : {false, true}) {
+            auto module = std::make_shared<HipRuntimeModule>(path);
+            HipRuntimeContext context(module, 0);
+            auto retirement = std::make_unique<HipRetiredResource>();
+            LfsHipReadback* readback = nullptr;
+            LfsHipTiming* events = nullptr;
+            {
+                auto queue = context.lock();
+                LfsHipError error{};
+                if (timing)
+                    hip_runtime_check(queue.api().timing_create(queue.handle(), 2, &events, &error), error, "timing_create");
+                else
+                    hip_runtime_check(queue.api().readback_create(queue.handle(), &readback, &error), error, "readback_create");
+            }
+            faults.arm(4);
+            if (timing)
+                context.release_timing(events, std::move(retirement));
+            else
+                context.release_readback(readback, std::move(retirement));
+            require(faults.resources() != 0, "Failed transfer/timing cleanup lost its resources");
+            faults.arm(4);
+            require(rejects<HipRuntimeError>([&] { context.close(); }), "Failed resource retry lost its error");
+            context.close();
+            require(faults.resources() == 0, "Resource cleanup retry leaked native events");
+        }
         std::weak_ptr<HipRuntimeModule> weak;
         {
             auto module = std::make_shared<HipRuntimeModule>(path);

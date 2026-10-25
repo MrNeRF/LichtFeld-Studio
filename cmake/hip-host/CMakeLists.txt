@@ -11,7 +11,7 @@ target_compile_features(hip_host_module PUBLIC cxx_std_20)
 target_link_libraries(hip_host_module PRIVATE ${CMAKE_DL_LIBS})
 add_executable(hip_host_module_tests "${_root}/tests/hip/test_runtime_module.cpp")
 target_link_libraries(hip_host_module_tests PRIVATE hip_host_module)
-foreach(_revision 1 2 3)
+foreach(_revision 1 2 3 4)
     add_library(hip_module_fixture_${_revision} SHARED "${_root}/tests/hip/module_fixture.cpp")
     target_compile_definitions(hip_module_fixture_${_revision} PRIVATE HIP_FIXTURE_ABI=${_revision})
     add_test(NAME HipHost.RejectRevision${_revision}
