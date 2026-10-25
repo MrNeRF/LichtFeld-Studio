@@ -6,6 +6,7 @@
 #include "media/metadata_observation.hpp"
 #include "media/metadata_summary_common.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <future>
 #include <limits>
@@ -494,11 +495,12 @@ namespace {
     }
     SourceMetadataCatalog extendedCatalog(std::vector<lfs::core::image_codecs::XmpBlock> blocks,
                                           std::size_t records = 4096,
-                                          lfs::core::image_codecs::MetadataStatus status = lfs::core::image_codecs::MetadataStatus::Collected) {
+                                          lfs::core::image_codecs::MetadataStatus status = lfs::core::image_codecs::MetadataStatus::Collected,
+                                          ImageExifDescription image = {}) {
         lfs::core::image_codecs::SourceXmp xmp;
         xmp.status = status;
         xmp.blocks = std::move(blocks);
-        auto result = catalogSourceMetadata({}, {.records = records}, {}, std::move(xmp));
+        auto result = catalogSourceMetadata(std::move(image), {.records = records}, {}, std::move(xmp));
         require(bool(result), "create extended XMP source catalog");
         return std::move(*result);
     }
@@ -540,6 +542,62 @@ namespace {
             const auto packet = std::find_if(summary->xmp_packets.begin(), summary->xmp_packets.end(), [](const auto& value) { return bool(value.assembly); });
             require(packet != summary->xmp_packets.end() && packet->state == state, "extension failure state is explicit");
         };
+        const auto third = length / 3;
+        const std::array<XmpBlock, 4> permutation_blocks{standardPacket(extendedGuid),
+                                                         extendedSegment(extendedGuid, length, 0, extendedXml.substr(0, third)),
+                                                         extendedSegment(extendedGuid, length, third, extendedXml.substr(third, third)),
+                                                         extendedSegment(extendedGuid, length, third * 2, extendedXml.substr(third * 2))};
+        std::array<std::size_t, 4> permutation{0, 1, 2, 3};
+        do {
+            std::vector<XmpBlock> input;
+            for (const auto index : permutation)
+                input.push_back(permutation_blocks[index]);
+            const auto ordered_catalog = extendedCatalog(std::move(input));
+            const auto ordered_summary = summarizeImageMetadata(ordered_catalog);
+            require(ordered_summary && !ordered_summary->limited && ordered_summary->facts.size() == 2,
+                    "every marker permutation reassembles the same two observations");
+            for (const auto& item : ordered_summary->facts) {
+                require(item.state == MetadataValueState::Present && !item.ambiguous, "marker order does not alter the values' validity");
+                if (!item.xmp->extended_packet)
+                    continue;
+                require(std::get<std::string>(item.value) == "extended", "all marker permutations preserve the exact model");
+                const auto& inputs = item.xmp->assembly->fragments;
+                require(inputs.size() == 3 && inputs[0].offset == 0 && inputs[1].offset == third && inputs[2].offset == third * 2,
+                        "assembly provenance is always in payload order");
+                for (const auto& fragment : inputs)
+                    require(ordered_catalog.resolve(fragment.source).has_value(), "permuted fragment provenance resolves in its original catalog");
+            }
+        } while (std::next_permutation(permutation.begin(), permutation.end()));
+        for (const auto model : {"extended", "different"}) {
+            auto input = blocks;
+            auto& standard = input[0];
+            std::string xml(standard.bytes.begin(), standard.bytes.end());
+            const std::string existing = R"(t:Make="standard")";
+            const auto position = xml.find(existing);
+            require(position != xml.npos, "standard test property found");
+            xml.replace(position, existing.size(), std::string(R"(t:Make="standard" t:Model=")") + model + '"');
+            standard.bytes.assign(xml.begin(), xml.end());
+            const auto combined = summarizeImageMetadata(extendedCatalog(input));
+            require(combined && combined->facts.size() == 3, "both portions retain their model occurrences");
+            for (const auto& item : combined->facts)
+                require(item.ambiguous == (item.semantic == "camera.model" && std::string_view(model) != "extended"),
+                        "standard/extended agreement obeys the same conflict policy as ordinary packets");
+            const auto incomplete = summarizeImageMetadata(extendedCatalog(std::move(input), 4096, MetadataStatus::Limited));
+            require(incomplete && incomplete->limited && incomplete->facts.size() == 2 &&
+                        std::none_of(incomplete->facts.begin(), incomplete->facts.end(), [](const auto& item) { return item.ambiguous; }),
+                    "unavailable extension cannot turn the standard model into a conflict");
+        }
+        auto image = cameraFixture();
+        for (auto& entry : image.interpretations[0].entries)
+            if (entry.id == 0x0110 && entry.directory_path == std::vector<uint32_t>{0}) {
+                entry.bytes = {'e', 'x', 't', 'e', 'n', 'd', 'e', 'd', 0};
+                entry.count = static_cast<uint32_t>(entry.bytes.size());
+            }
+        const auto exif_extension = summarizeImageMetadata(extendedCatalog(blocks, 4096, MetadataStatus::Collected, std::move(image)));
+        require(exif_extension && std::count_if(exif_extension->facts.begin(), exif_extension->facts.end(), [](const auto& item) {
+                                      return item.semantic == "camera.model" && !item.ambiguous && std::get<std::string>(item.value) == "extended";
+                                  }) == 2,
+                "EXIF and assembled XMP model agreement retains both independent sources");
         auto damaged = blocks;
         damaged.pop_back();
         reject(damaged, XmpPacketState::Malformed);
