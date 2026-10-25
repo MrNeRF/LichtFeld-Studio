@@ -81,7 +81,6 @@ namespace lfs::vis::gui {
         bool dismiss(const std::string& button_label);
         bool updateForm(const std::string& key, const std::optional<std::string>& body_rml,
                         const std::vector<lfs::core::ModalButtonSpec>& buttons);
-        bool setFormValues(const std::string& key, const std::unordered_map<std::string, std::string>& values);
         [[nodiscard]] bool hasPendingRequest() const;
         [[nodiscard]] bool hasPendingRenderWork() const;
         [[nodiscard]] bool needsAnimationFrame() const;
@@ -127,7 +126,6 @@ namespace lfs::vis::gui {
 
         RmlUIManager* rml_manager_;
         OverlayEventListener listener_;
-        bool setting_form_values_ = false;
         rml_input::TextInputEscapeRevertController text_input_revert_;
 
         Rml::Context* rml_context_ = nullptr;
@@ -155,6 +153,7 @@ namespace lfs::vis::gui {
         int height_ = 0;
         CachedVulkanContextRender direct_cache_;
         RmlTooltipController tooltip_;
+        Rml::Element* tooltip_suppressed_target_ = nullptr;
         bool render_needed_ = true;
         std::optional<std::chrono::steady_clock::time_point> next_update_at_;
         bool dialog_position_valid_ = false;

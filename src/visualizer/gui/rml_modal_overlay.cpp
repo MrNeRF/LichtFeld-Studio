@@ -324,7 +324,6 @@ namespace lfs::vis::gui {
         el_backdrop_->AddEventListener(Rml::EventId::Click, &listener_);
         el_form_->AddEventListener(Rml::EventId::Submit, &listener_);
         el_form_->AddEventListener(Rml::EventId::Change, &listener_);
-        el_form_->AddEventListener(Rml::EventId::Click, &listener_);
         el_button_row_->AddEventListener(Rml::EventId::Click, &listener_);
     }
 
@@ -433,59 +432,11 @@ namespace lfs::vis::gui {
             el_content_->SetInnerRML(*body_rml);
             bindTextInputRevert();
         }
-        const bool buttons_changed = !std::equal(active_->buttons.begin(), active_->buttons.end(), buttons.begin(), buttons.end(),
-                                                 [](const auto& a, const auto& b) { return a.label == b.label && a.style == b.style && a.disabled == b.disabled; });
-        if (buttons_changed) {
-            active_->buttons = buttons;
-            updateButtons(buttons);
-        }
+        active_->buttons = buttons;
+        updateButtons(buttons);
         lfs::python::request_redraw();
         render_needed_ = true;
         dialog_position_valid_ = false;
-        return true;
-    }
-
-    bool RmlModalOverlay::setFormValues(const std::string& key, const std::unordered_map<std::string, std::string>& values) {
-        if (key.empty() || !active_ || active_->key != key || !el_content_)
-            return false;
-        Rml::ElementList controls;
-        el_content_->QuerySelectorAll(controls, "input, select, textarea, [data-form-value], [data-form-visible]");
-        setting_form_values_ = true;
-        for (auto* element : controls) {
-            auto* control = dynamic_cast<Rml::ElementFormControl*>(element);
-            if (!control) {
-                const auto visibility = element->GetAttribute<Rml::String>("data-form-visible", "");
-                if (!visibility.empty()) {
-                    if (const auto it = values.find(visibility); it != values.end())
-                        element->SetProperty("display", it->second.empty() ? "none" : "block");
-                    continue;
-                }
-                const auto name = element->GetAttribute<Rml::String>("data-form-value", "");
-                if (const auto it = values.find(name); it != values.end())
-                    element->SetInnerRML(Rml::StringUtilities::EncodeRml(it->second));
-                continue;
-            }
-            const auto type = element->GetAttribute<Rml::String>("type", "");
-            const auto name = type == "radio" ? control->GetName()
-                                              : (!element->GetId().empty() ? element->GetId() : control->GetName());
-            if (const auto it = values.find(name); it != values.end()) {
-                if (type == "radio") {
-                    if (control->GetValue() == it->second)
-                        element->SetAttribute("checked", "checked");
-                    else
-                        element->RemoveAttribute("checked");
-                } else if (type == "checkbox") {
-                    if (it->second.empty())
-                        element->RemoveAttribute("checked");
-                    else
-                        element->SetAttribute("checked", "checked");
-                } else if (control->GetValue() != it->second) {
-                    control->SetValue(it->second);
-                }
-            }
-        }
-        setting_form_values_ = false;
-        render_needed_ = true;
         return true;
     }
 
@@ -568,9 +519,6 @@ namespace lfs::vis::gui {
         if (!active_)
             return false;
 
-        if (!active_->submit_button_label.empty())
-            return dismiss(active_->submit_button_label);
-
         for (const auto& button : active_->buttons) {
             if (!button.disabled) {
                 dismiss(button.label);
@@ -613,20 +561,19 @@ namespace lfs::vis::gui {
             }
         }
         tooltip_ = {};
+        tooltip_suppressed_target_ = nullptr;
         render_needed_ |= changed;
     }
 
     void RmlModalOverlay::bindTextInputRevert() {
         text_input_revert_.bind(el_input_);
         rml_input::forEachTextEditableElement(el_content_, [this](Rml::Element& element) {
-            text_input_revert_.bind(&element, [this](Rml::Element& element) {
+            text_input_revert_.bind(&element, [this](Rml::Element&) {
                 // Escape restores the control without a native Change event.
                 // Keep a keyed form's draft and validation in sync as well.
                 if (active_ && active_->on_change) {
                     auto callback = active_->on_change;
-                    auto result = collectFormValues();
-                    result.changed_field = element.GetAttribute<Rml::String>("name", "");
-                    callback(result);
+                    callback(collectFormValues());
                 }
             });
         });
@@ -679,10 +626,21 @@ namespace lfs::vis::gui {
         const bool interacting = input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2] ||
                                  input.mouse_clicked[0] || input.mouse_released[0] ||
                                  !input.input_events.empty() || rml_input::hasOpenKeyboardPopup(rml_context_);
-        if (interacting)
+        auto* tooltip_target = hover;
+        while (tooltip_target && tooltip_target->GetAttribute<Rml::String>("data-tooltip", "").empty() &&
+               tooltip_target->GetAttribute<Rml::String>("title", "").empty())
+            tooltip_target = tooltip_target->GetParentNode();
+        if (interacting) {
             resetTooltip();
-        else
-            tooltip_.setHover(resolveRmlTooltip(hover), hover);
+            tooltip_suppressed_target_ = tooltip_target;
+        } else {
+            if (tooltip_target != tooltip_suppressed_target_)
+                tooltip_suppressed_target_ = nullptr;
+            if (tooltip_target && tooltip_target == tooltip_suppressed_target_)
+                tooltip_.setHover({}, nullptr);
+            else
+                tooltip_.setHover(resolveRmlTooltip(hover), tooltip_target ? tooltip_target : hover);
+        }
 
         auto* const text_input_handler =
             rml_manager_ ? rml_manager_->getTextInputHandler() : nullptr;
@@ -702,7 +660,7 @@ namespace lfs::vis::gui {
             // A key can dismiss the modal synchronously.
             if (!active_)
                 return;
-            if (!composing && down && !active_->has_input && !rml_input::hasFocusedKeyboardTarget(rml_context_->GetFocusElement()) &&
+            if (!composing && down && !active_->has_input && rml_context_->GetFocusElement() == nullptr &&
                 (event.scancode == SDL_SCANCODE_RETURN || event.scancode == SDL_SCANCODE_KP_ENTER)) {
                 if (dismissFirstEnabledButton())
                     return;
@@ -841,33 +799,14 @@ namespace lfs::vis::gui {
 
         if (event == Rml::EventId::Change && event.GetCurrentElement() == overlay->el_form_) {
             overlay->render_needed_ = true;
-            if (!overlay->setting_form_values_ && overlay->active_ && overlay->active_->on_change) {
+            if (overlay->active_ && overlay->active_->on_change) {
                 auto callback = overlay->active_->on_change;
-                auto result = overlay->collectFormValues();
-                result.changed_field = target->GetAttribute<Rml::String>("name", "");
-                callback(result);
+                callback(overlay->collectFormValues());
             }
             if (event.GetParameter<bool>("linebreak", false) &&
                 rml_input::isTextEditableElement(event.GetTargetElement())) {
                 overlay->dismissFirstEnabledButton();
                 event.StopPropagation();
-            }
-            return;
-        }
-
-        if (event == Rml::EventId::Click && event.GetCurrentElement() == overlay->el_form_) {
-            for (auto* element = target; element && element != overlay->el_form_; element = element->GetParentNode()) {
-                const auto action = element->GetAttribute<Rml::String>("data-form-action", "");
-                if (action.empty())
-                    continue;
-                if (overlay->active_ && overlay->active_->on_change) {
-                    auto callback = overlay->active_->on_change;
-                    auto result = overlay->collectFormValues();
-                    result.form_action = action;
-                    callback(result);
-                }
-                event.StopPropagation();
-                return;
             }
             return;
         }
