@@ -547,6 +547,35 @@ namespace {
         require(exact_input && exact_input->xmp_packets[0].state == XmpPacketState::Parsed && exact_input->facts.size() == 1, "exact input byte budget accepted");
         padded += ' ';
         invalid(padded, XmpPacketState::Limited);
+        // Namespace declarations are not ordinary attributes. Exercise a full
+        // input budget with many bindings without depending on a timing limit.
+        std::string namespace_heavy = R"(<r:RDF xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:t="http://ns.adobe.com/tiff/1.0/")";
+        constexpr std::string_view namespace_tail = R"(><r:Description t:Make="namespace stress"/></r:RDF>)";
+        std::size_t bindings = 0;
+        for (;;) {
+            const auto declaration = " xmlns:n" + std::to_string(bindings) + "=\"urn:stress:" + std::to_string(bindings) + "\"";
+            if (declaration.size() + namespace_tail.size() > 1024 * 1024 - namespace_heavy.size())
+                break;
+            namespace_heavy += declaration;
+            ++bindings;
+        }
+        require(bindings > 16384, "namespace stress exercises many bindings on one element");
+        namespace_heavy += namespace_tail;
+        namespace_heavy.resize(1024 * 1024, ' ');
+        const auto namespace_catalog = xmpFixture(namespace_heavy);
+        const auto namespace_summary = summarizeImageMetadata(namespace_catalog);
+        require(namespace_summary && !namespace_summary->limited && namespace_summary->facts.size() == 1 &&
+                    namespace_summary->xmp_packets.size() == 1 && namespace_summary->xmp_packets[0].state == XmpPacketState::Parsed &&
+                    std::get<std::string>(namespace_summary->facts[0].value) == "namespace stress",
+                "namespace-heavy packet at the byte limit retains the correct scalar");
+        const auto namespace_payload = namespace_catalog.xmpPayloadBytes({0});
+        require(namespace_payload && namespace_payload->size() == namespace_heavy.size() &&
+                    std::equal(namespace_payload->begin(), namespace_payload->end(), namespace_heavy.begin()),
+                "namespace stress preserves original payload");
+        namespace_heavy += ' ';
+        invalid(namespace_heavy, XmpPacketState::Limited);
+        const auto recovered = summarizeImageMetadata(catalog);
+        require(recovered && recovered->facts.size() == result->facts.size(), "fresh parser recovers after namespace stress and byte rejection");
         for (const auto count : {126, 127}) {
             std::string attrs = R"(t:Make="valid" )";
             for (int i = 0; i < count; ++i)

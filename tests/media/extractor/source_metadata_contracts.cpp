@@ -167,8 +167,11 @@ int runSourceMetadataContracts() {
     packet.payload_offset = 4;
     decoded_xmp.blocks.push_back(packet);
     auto decoded_catalog = catalogSourceMetadata({}, {}, std::nullopt, std::move(decoded_xmp));
-    require(decoded_catalog && decoded_catalog->xmpPayloadBytes({0})->data() == decoded_catalog->xmpBlock({0})->inflated->data() &&
-                decoded_catalog->xmpPayloadBytes({0})->size() == 4 && !decoded_catalog->xmpPayloadBytes({1}) && !decoded_catalog->xmpPayloadBytes({2}),
+    require(bool(decoded_catalog), "decoded XMP catalog constructed");
+    const auto decoded_view = decoded_catalog->xmpPayloadBytes({0});
+    const auto* decoded_block = decoded_catalog->xmpBlock({0});
+    require(decoded_view && decoded_block && decoded_block->inflated && decoded_view->data() == decoded_block->inflated->data() &&
+                decoded_view->size() == 4 && !decoded_catalog->xmpPayloadBytes({1}) && !decoded_catalog->xmpPayloadBytes({2}),
             "decoded view borrows inflated storage and never exposes invalid status or offset");
     const auto handle = with_xmp->bind(XmpBlockReference{1});
     require(handle && with_xmp->resolve(*handle) && !with_xmp->xmpBlock({2}) &&
