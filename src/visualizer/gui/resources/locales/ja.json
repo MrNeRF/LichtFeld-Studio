@@ -1830,6 +1830,7 @@
     "action.tool_scale": "スケールツール",
     "action.tool_mirror": "ミラーツール",
     "action.tool_align": "整列ツール",
+    "action.tool_scale_distance": "距離スケールツール",
     "action.pie_menu": "パイメニュー",
     "action.group_selected_scene_nodes": "選択したシーンノードをグループ化",
     "action.ungroup_selected_scene_node": "選択したシーンノードのグループを解除",

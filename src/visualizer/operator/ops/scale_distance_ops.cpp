@@ -336,6 +336,11 @@ namespace lfs::vis::op {
     }
 
     void ScaleDistancePickPointOperator::removeLastPoint() {
+        pending_pick_.reset();
+        press_active_ = false;
+        press_button_ = -1;
+        press_point_index_.reset();
+        drag_active_ = false;
         if (picked_points_.empty()) {
             return;
         }
@@ -348,6 +353,11 @@ namespace lfs::vis::op {
     }
 
     void ScaleDistancePickPointOperator::removeSelectedPoint() {
+        pending_pick_.reset();
+        press_active_ = false;
+        press_button_ = -1;
+        press_point_index_.reset();
+        drag_active_ = false;
         if (!selected_point_ || static_cast<size_t>(*selected_point_) >= picked_points_.size()) {
             return;
         }

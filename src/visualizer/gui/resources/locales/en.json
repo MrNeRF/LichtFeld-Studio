@@ -1841,6 +1841,7 @@
     "action.tool_scale": "Scale Tool",
     "action.tool_mirror": "Mirror Tool",
     "action.tool_align": "Align Tool",
+    "action.tool_scale_distance": "Scale Distance Tool",
     "action.pie_menu": "Pie Menu",
     "action.group_selected_scene_nodes": "Group Selected Scene Nodes",
     "action.ungroup_selected_scene_node": "Ungroup Selected Scene Node",

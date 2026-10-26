@@ -1830,6 +1830,7 @@
     "action.tool_scale": "Schaalgereedschap",
     "action.tool_mirror": "Spiegelgereedschap",
     "action.tool_align": "Uitlijngereedschap",
+    "action.tool_scale_distance": "Afstand-schaalgereedschap",
     "action.pie_menu": "Cirkelmenu",
     "action.group_selected_scene_nodes": "Geselecteerde sceneknooppunten groeperen",
     "action.ungroup_selected_scene_node": "Geselecteerd sceneknooppunt degroeperen",

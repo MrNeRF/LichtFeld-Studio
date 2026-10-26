@@ -2727,20 +2727,34 @@ def test_walk_entry_rejection_is_already_surfaced_and_other_errors_propagate(too
     lf.set_camera_navigation_mode.assert_called_once_with(mode)
 
 
-def test_scale_distance_toolbar_actions_and_snapshot(toolbar_module, monkeypatch):
+@pytest.mark.parametrize("accepted", [True, False])
+def test_scale_distance_toolbar_actions_and_snapshot(toolbar_module, monkeypatch, accepted):
     module, _hook_calls, _remove_calls = toolbar_module
     lf_stub = sys.modules["lichtfeld"]
     applied_targets = []
     cleared = {"count": 0}
+    points = [[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]]
 
-    lf_stub.ui.can_apply_scale_distance = lambda: True
-    lf_stub.ui.get_scale_distance_measured = lambda: 2.5
-    lf_stub.ui.get_scale_distance_points = lambda: [[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]]
-    lf_stub.ui.apply_scale_distance = lambda target: applied_targets.append(target) or True
-    lf_stub.ui.clear_scale_distance = lambda: cleared.__setitem__("count", cleared["count"] + 1)
+    def apply(target):
+        applied_targets.append(target)
+        if accepted:
+            points.clear()
+        return accepted
 
-    controller = module._GizmoToolbarController()
-    snapshot = controller.snapshot()
+    def clear():
+        cleared["count"] += 1
+        points.clear()
+
+    lf_stub.ui.can_apply_scale_distance = lambda: len(points) == 2
+    lf_stub.ui.get_scale_distance_measured = lambda: 2.5 if len(points) == 2 else 0.0
+    lf_stub.ui.get_scale_distance_points = lambda: points
+    lf_stub.ui.apply_scale_distance = apply
+    lf_stub.ui.clear_scale_distance = clear
+
+    controller = module._ViewportToolbarController()
+    model = _DataModelStub()
+    controller.bind_model(model)
+    snapshot = controller._gizmo.snapshot()
     assert snapshot["show_scale_distance_toolbar"] is False
 
     tool_def = SimpleNamespace(
@@ -2754,12 +2768,31 @@ def test_scale_distance_toolbar_actions_and_snapshot(toolbar_module, monkeypatch
     monkeypatch.setattr(module.ToolRegistry, "get", lambda tool_id: tool_def if tool_id == "builtin.scale_distance" else None)
     monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: "builtin.scale_distance")
 
-    snapshot = controller.snapshot()
+    snapshot = controller._gizmo.snapshot()
     assert snapshot["show_scale_distance_toolbar"] is True
 
-    controller.dispatch("scale_distance_apply", "3.0")
-    assert applied_targets == [3.0]
+    controller._sync_scale_distance()
+    get_target, set_target = model.bound_binds["scale_distance_target_str"]
+    assert get_target() == "2.5000"
+    assert model.bound_funcs["scale_distance_measured_str"]() == "2.5000"
+    assert model.bound_funcs["scale_distance_can_apply"]() is True
 
-    controller.dispatch("scale_distance_reset", "")
+    set_target("3.0")
+    model.bound_events["toolbar_action"](None, None, ["scale_distance_apply", ""])
+    assert applied_targets == [3.0]
+    assert get_target() == ("" if accepted else "3.0")
+    controller._sync_scale_distance()
+    assert get_target() == ("" if accepted else "3.0")
+    assert model.bound_funcs["scale_distance_can_apply"]() is (not accepted)
+
+    points[:] = [[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]]
+    controller._sync_scale_distance()
+    set_target("4.0")
+
+    model.bound_events["toolbar_action"](None, None, ["scale_distance_reset", ""])
     assert cleared["count"] == 1
+    assert get_target() == ""
+    controller._sync_scale_distance()
+    assert model.bound_funcs["scale_distance_can_apply"]() is False
+    assert model.bound_funcs["scale_distance_can_reset"]() is False
 

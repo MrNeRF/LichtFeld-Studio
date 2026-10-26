@@ -66,6 +66,7 @@
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/Core.h>
+#include <nanobind/stl/array.h>
 #include <stdexcept>
 #include <typeinfo>
 
@@ -3672,6 +3673,7 @@ namespace lfs::python {
                     {"scale", ToolType::Scale},
                     {"mirror", ToolType::Mirror},
                     {"align", ToolType::Align},
+                    {"scale_distance", ToolType::ScaleDistance},
                 };
 
                 std::string lower_name = tool_name;
@@ -4062,6 +4064,7 @@ namespace lfs::python {
                 case vis::ToolType::Scale: return "builtin.scale";
                 case vis::ToolType::Mirror: return "builtin.mirror";
                 case vis::ToolType::Align: return "builtin.align";
+                case vis::ToolType::ScaleDistance: return "builtin.scale_distance";
                 default: return "";
                 }
             },
@@ -4084,6 +4087,7 @@ namespace lfs::python {
                     {"builtin.scale", vis::ToolType::Scale},
                     {"builtin.mirror", vis::ToolType::Mirror},
                     {"builtin.align", vis::ToolType::Align},
+                    {"builtin.scale_distance", vis::ToolType::ScaleDistance},
                 };
                 const auto it = tool_map.find(id);
                 if (it == tool_map.end()) {
@@ -4103,6 +4107,7 @@ namespace lfs::python {
                     {"builtin.scale", vis::ToolType::Scale},
                     {"builtin.mirror", vis::ToolType::Mirror},
                     {"builtin.align", vis::ToolType::Align},
+                    {"builtin.scale_distance", vis::ToolType::ScaleDistance},
                 };
                 auto it = tool_map.find(id);
                 if (it != tool_map.end()) {

@@ -205,6 +205,47 @@ namespace lfs::vis::op {
             operation_.syncPickedPointsToServices();
         }
 
+        void startPendingInteraction(const std::optional<int> selected, const bool dragging) {
+            operation_.selected_point_ = selected;
+            services().setScaleDistanceSelectedPoint(selected);
+            operation_.pending_pick_ = ScaleDistancePickPointOperator::PendingPick{
+                .screen_position = {10.0, 20.0},
+                .point_index = selected,
+            };
+            operation_.press_active_ = true;
+            operation_.press_button_ = operation_.pick_button_;
+            operation_.press_point_index_ = selected;
+            operation_.drag_active_ = dragging;
+        }
+
+        void removePoint(const bool selected) {
+            if (selected) {
+                operation_.removeSelectedPoint();
+            } else {
+                operation_.removeLastPoint();
+            }
+        }
+
+        void expectInteractionCancelled() {
+            EXPECT_FALSE(operation_.pending_pick_.has_value());
+            EXPECT_FALSE(operation_.press_active_);
+            EXPECT_EQ(operation_.press_button_, -1);
+            EXPECT_FALSE(operation_.press_point_index_.has_value());
+            EXPECT_FALSE(operation_.drag_active_);
+
+            context_->setModalEvent({
+                .type = ModalEvent::Type::MOUSE_BUTTON,
+                .data = MouseButtonEvent{
+                    .button = operation_.pick_button_,
+                    .action = input::ACTION_RELEASE,
+                    .mods = 0,
+                    .position = {10.0, 20.0},
+                },
+            });
+            OperatorProperties properties;
+            EXPECT_EQ(operation_.modal(*context_, properties), OperatorResult::PASS_THROUGH);
+        }
+
         std::unique_ptr<SceneManager> manager_;
         std::unique_ptr<OperatorContext> context_;
         ScaleDistancePickPointOperator operation_;
@@ -259,6 +300,49 @@ namespace lfs::vis::op {
         EXPECT_EQ(services().getScaleDistancePickedPoints().size(), 2u);
 
         requestAction(Services::ScaleDistanceUiAction::Clear);
+        EXPECT_TRUE(services().getScaleDistancePickedPoints().empty());
+    }
+
+    TEST_F(ScaleDistanceOperatorTest, RemoveLastCancelsPendingPickAndPress) {
+        setPickedPoints({{0.0f, 0.0f, 0.0f}, {1.0f, 2.0f, 3.0f}});
+        startPendingInteraction(std::nullopt, false);
+
+        removePoint(false);
+        expectInteractionCancelled();
+
+        const auto& points = services().getScaleDistancePickedPoints();
+        ASSERT_EQ(points.size(), 1u);
+        EXPECT_EQ(points.front(), glm::vec3(0.0f));
+    }
+
+    TEST_F(ScaleDistanceOperatorTest, RemoveSelectedCancelsPendingPickAndDrag) {
+        setPickedPoints({{0.0f, 0.0f, 0.0f}, {1.0f, 2.0f, 3.0f}});
+        startPendingInteraction(0, true);
+
+        removePoint(true);
+        expectInteractionCancelled();
+
+        const auto& points = services().getScaleDistancePickedPoints();
+        ASSERT_EQ(points.size(), 1u);
+        EXPECT_EQ(points.front(), glm::vec3(1.0f, 2.0f, 3.0f));
+        EXPECT_FALSE(services().getScaleDistanceSelectedPoint().has_value());
+    }
+
+    TEST_F(ScaleDistanceOperatorTest, RemoveLastCancelsPendingFirstPick) {
+        startPendingInteraction(std::nullopt, false);
+
+        removePoint(false);
+        expectInteractionCancelled();
+
+        EXPECT_TRUE(services().getScaleDistancePickedPoints().empty());
+    }
+
+    TEST_F(ScaleDistanceOperatorTest, RemoveMissingSelectionCancelsPendingInteraction) {
+        startPendingInteraction(std::nullopt, true);
+
+        removePoint(true);
+        expectInteractionCancelled();
+
         EXPECT_TRUE(services().getScaleDistancePickedPoints().empty());
     }
 
@@ -327,4 +411,3 @@ namespace lfs::vis::op {
     }
 
 } // namespace lfs::vis::op
-

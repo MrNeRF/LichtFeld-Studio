@@ -1830,6 +1830,7 @@
     "action.tool_scale": "크기 조정 도구",
     "action.tool_mirror": "거울 도구",
     "action.tool_align": "정렬 도구",
+    "action.tool_scale_distance": "거리 스케일 도구",
     "action.pie_menu": "파이 메뉴",
     "action.group_selected_scene_nodes": "선택한 장면 노드 그룹화",
     "action.ungroup_selected_scene_node": "선택한 장면 노드 그룹 해제",

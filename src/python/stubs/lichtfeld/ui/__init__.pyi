@@ -2396,7 +2396,7 @@ def apply_scale_distance(target_distance: float) -> bool:
 def clear_scale_distance() -> None:
     """Request scale distance modal to clear picked points"""
 
-def get_scale_distance_points() -> list["std::array<float, 3ul>"]:
+def get_scale_distance_points() -> list[list[float]]:
     """Get picked points for scale distance tool"""
 
 def fit_crop_tool(use_percentile: bool = False) -> None:

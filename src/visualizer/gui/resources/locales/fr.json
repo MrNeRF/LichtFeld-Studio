@@ -1830,6 +1830,7 @@
     "action.tool_scale": "Outil de mise à l'échelle",
     "action.tool_mirror": "Outil miroir",
     "action.tool_align": "Outil d'alignement",
+    "action.tool_scale_distance": "Outil de mise à l’échelle par distance",
     "action.pie_menu": "Menu radial",
     "action.group_selected_scene_nodes": "Grouper les nœuds de scène sélectionnés",
     "action.ungroup_selected_scene_node": "Dissocier le nœud de scène sélectionné",

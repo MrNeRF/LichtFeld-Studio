@@ -1843,6 +1843,7 @@
     "action.tool_scale": "Strumento di scala",
     "action.tool_mirror": "Strumento specchio",
     "action.tool_align": "Strumento di allineamento",
+    "action.tool_scale_distance": "Strumento scala distanza",
     "action.pie_menu": "Menu a torta",
     "action.group_selected_scene_nodes": "Raggruppa nodi scena selezionati",
     "action.ungroup_selected_scene_node": "Separa nodo scena selezionato",

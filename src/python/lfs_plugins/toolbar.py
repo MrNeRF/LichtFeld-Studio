@@ -1182,23 +1182,6 @@ class _GizmoToolbarController:
             lf.ui.clear_align_points()
             return
 
-        if action == "scale_distance_apply":
-            apply_fn = getattr(lf.ui, "apply_scale_distance", None)
-            if callable(apply_fn):
-                try:
-                    val = float(value) if value else 0.0
-                except (ValueError, TypeError):
-                    val = 0.0
-                if val > 0.0:
-                    apply_fn(val)
-            return
-
-        if action == "scale_distance_reset":
-            clear_fn = getattr(lf.ui, "clear_scale_distance", None)
-            if callable(clear_fn):
-                clear_fn()
-            return
-
         if action == "align_toggle_snap":
             lf.ui.set_align_axis_snap(not lf.ui.get_align_axis_snap())
             return
